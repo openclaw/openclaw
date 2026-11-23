@@ -58,15 +58,9 @@ import { createReplyTurnParticipants } from "./session-controller.tool-authority
 afterEach(() => testing.resetSessionControllerForTest());
 
 it("copies private turn participants and freezes only their shared command target", () => {
-  let current = true;
   const authority = createTestOperatorAuthority({
     profileId: "participant",
     scopes: ["operator.read"],
-    assertCurrent() {
-      if (!current) {
-        throw new Error("revoked");
-      }
-    },
   });
   const freeze = vi.spyOn(Object, "freeze");
   const participants = createReplyTurnParticipants({
@@ -83,8 +77,8 @@ it("copies private turn participants and freezes only their shared command targe
       senderId: "original",
       gatewayUiCommandTarget: { connId: "original", profileId: "participant" },
     });
-    current = false;
-    expect(() => exposed.assertCurrent()).toThrow("access changed");
+    participants.close();
+    expect(() => exposed.assertCurrent()).toThrow("This turn has ended");
   } finally {
     freeze.mockRestore();
     participants.close();
