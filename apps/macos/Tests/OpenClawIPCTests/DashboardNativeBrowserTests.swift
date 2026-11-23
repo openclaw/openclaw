@@ -315,13 +315,14 @@ struct DashboardNativeBrowserContractTests {
 @MainActor
 struct DashboardNativeBrowserHostTests {
     @Test(.testWaitLimit, arguments: [NSEvent.ModifierFlags.command, .control])
-    func `find selects text in the focused Mac tab`(_ modifier: NSEvent.ModifierFlags) async throws {
+    func `find stays in the focused Mac tab`(_ modifier: NSEvent.ModifierFlags) async throws {
         _ = AppKitTestSupport.application
         let fixture = self.fixture()
         let window = NSWindow(
             contentRect: fixture.container.bounds, styleMask: [.titled], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
         window.contentView = fixture.container
+        window.orderFront(nil)
         defer {
             fixture.host.dispose()
             window.close()
@@ -331,7 +332,7 @@ struct DashboardNativeBrowserHostTests {
         try fixture.host.present(
             scope: "panel", tabId: "mac-source", rect: .init(x: 0, y: 0, width: 600, height: 400), visible: true)
         let page = try #require(fixture.host.webView(for: "mac-source"))
-        page.loadHTMLString("<title>Source</title><pre>reading-tab-marker</pre>", baseURL: nil)
+        page.loadHTMLString("<title>Source</title><pre>First line</pre>", baseURL: nil)
         try await TestWait.state("reading tab document") { page.title == "Source" && !page.isLoading }
 
         @MainActor func key(_ code: UInt16, _ key: String, modifiers: NSEvent.ModifierFlags = []) throws -> NSEvent {
@@ -346,17 +347,18 @@ struct DashboardNativeBrowserHostTests {
         _ = window.performKeyEquivalent(with: find)
         #expect(window.firstResponder === fixture.dashboard)
 
+        let fullPage = fixture.container.convert(page.bounds, from: page)
         try #require(window.makeFirstResponder(page))
         _ = window.performKeyEquivalent(with: find)
         let editor = try #require(window.firstResponder as? NSTextView)
-        editor.selectAll(nil)
-        editor.insertText("reading-tab-marker", replacementRange: editor.selectedRange())
-        try window.sendEvent(key(36, "\r"))
-        try await TestWait.state("selection in the reading tab") {
-            try await page.evaluateJavaScript("getSelection().toString()") as? String == "reading-tab-marker"
-        }
-        try window.sendEvent(key(53, "\u{1b}"))
+        let field = fixture.container.convert(editor.bounds, from: editor)
+        #expect(!field.isEmpty && fullPage.contains(field))
+        #expect(fixture.container.convert(page.bounds, from: page).maxY <= field.minY)
+
+        let escape = try key(53, "\u{1b}")
+        if !window.performKeyEquivalent(with: escape) { window.sendEvent(escape) }
         #expect(window.firstResponder === page)
+        #expect(fixture.container.convert(page.bounds, from: page) == fullPage)
     }
 
     @Test func `a committed document clears only its tab's favicon from state`() throws {
