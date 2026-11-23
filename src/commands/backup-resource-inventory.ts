@@ -85,6 +85,8 @@ const MANAGED_STATE_ROOTS = [
   "git-install",
   "npm",
   "npm-runtime",
+  // Legacy bundled-plugin dependency cache (before 2026.5.2): never read, kept on disk.
+  "plugin-runtime-deps",
   "tmp",
   "tools",
 ] as const;

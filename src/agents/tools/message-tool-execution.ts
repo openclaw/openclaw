@@ -10,7 +10,10 @@ import { getScopedChannelsCommandSecretTargets } from "../../cli/command-secret-
 import { resolveMessageSecretScope } from "../../cli/message-secret-scope.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import { getRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
-import { composeSessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
+import {
+  composePreparedOnlySessionSource,
+  composeSessionSourceAssertion,
+} from "../../config/sessions/session-source-authority.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import * as messageActionTurnCapability from "../../gateway/message-action-turn-capability.js";
 import type { MessageActionAuthorization } from "../../gateway/message-action-turn-capability.js";
@@ -38,7 +41,7 @@ import { resolveMessageToolSourceReplyFinal } from "../embedded-agent-message-to
 import { createSandboxBridgeReadFile } from "../sandbox-media-paths.js";
 import { captureAgentWorkspaceReadiness } from "../workspace-readiness.js";
 import { type AnyAgentTool, jsonResult, readToolStringParam } from "./common.js";
-import { captureGatewayToolCallerAssertion } from "./gateway-caller-context.js";
+import { getGatewayToolCallerIdentity } from "./gateway-caller-context.js";
 import {
   createMessageToolDecisionRecorder,
   resolveTrustedDecisionChannel,
@@ -231,7 +234,9 @@ function* createMessageToolSteps(
     prepareBeforeToolCallParams: explicitTargetGuard?.prepareBeforeToolCallParams,
     finalizeBeforeToolCallParams: explicitTargetGuard?.finalizeBeforeToolCallParams,
     execute: async (toolCallId, args, signal) => {
-      const assertCaller = turnAuthority.captureCaller(signal, captureGatewayToolCallerAssertion);
+      const assertCaller = turnAuthority.captureCaller(signal, () =>
+        composePreparedOnlySessionSource(getGatewayToolCallerIdentity()),
+      );
       // Shallow-copy so we don't mutate the original event args (used for logging/dedup).
       const params = { ...(args as Record<string, unknown>) };
       const action = readToolStringParam(params, "action", {
