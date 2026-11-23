@@ -220,10 +220,12 @@ describe("running installation replacement", () => {
   it("waits for the package lifecycle before restarting into a package manager's write", async () => {
     const handoff = registerReplacement();
     const marker = path.join(fixture.root, ".openclaw-lifecycle-pending");
-    // npm retires the old tree, then extracts the pending marker long before the remaining files.
-    await fs.writeFile(marker, "");
-    // A request hits a retired chunk before any maintenance check saw the marker.
+    // npm has retired the running tree: a request hits a retired chunk before anything new exists.
     expect(owner.classifyGatewayStaleInstall(missingChunk("dist/cron-old.js"))).not.toBeNull();
+    await owner.checkGatewayInstallationReplacement();
+    expectPending(handoff);
+    // The pending marker lands long before build metadata and the remaining files.
+    await fs.writeFile(marker, "");
     await owner.checkGatewayInstallationReplacement();
     expectPending(handoff);
     await writeIdentity();
@@ -349,6 +351,7 @@ describe("running installation replacement", () => {
   });
 
   it("reports missing runtime chunks without taking over a held suspension", async () => {
+    await writeIdentity("2026.9.4", "build-before");
     const restart = registerReplacement();
     const suspension = tryBeginGatewaySuspendAdmission(vi.fn());
     expect(suspension?.drain()).toBe(true);
@@ -365,6 +368,7 @@ describe("running installation replacement", () => {
   it.each(["ENOENT", "ERR_MODULE_NOT_FOUND"])(
     "uses the same handoff for a missing own chunk (%s), excluding dependencies and data",
     async (code) => {
+      await writeIdentity("2026.9.4", "build-before");
       const handoff = registerReplacement();
       const missing = (relative: string) => missingChunk(relative, code);
       expect(owner.classifyGatewayStaleInstall(missing("dist/data.json"))).toBeNull();

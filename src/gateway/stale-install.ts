@@ -79,16 +79,16 @@ type InstallationObserver = {
   replacement?: GatewayInstallationReplacement;
   check?: Promise<void>;
   trialSettled?: boolean;
-  /** When a check first saw the installation's package lifecycle pending. */
-  lifecyclePendingSince?: number;
+  /** When a check first saw the installation mid-write. */
+  unsettledSince?: number;
   /** A request failed to load an own runtime chunk; the next check decides the restart. */
   runtimeMissing?: boolean;
 };
 
-// Package managers write the tree before lifecycle scripts remove the pending marker; a
-// restart before then lands on a half-written tree (#203897). Installs with blocked scripts
-// keep the marker until the launcher completes it, so stop waiting after this bound.
-const INSTALLATION_LIFECYCLE_SETTLE_MS = 10 * 60_000;
+// npm retires the old tree, extracts the new one, then lifecycle scripts remove the pending
+// marker; a restart before then lands on a half-written tree (#203897). Installs with blocked
+// scripts keep the marker until the launcher completes it, so stop waiting after this bound.
+const INSTALLATION_SETTLE_MS = 10 * 60_000;
 
 // SDK chunks and the Gateway share one process owner without loading restart machinery.
 const installationState = resolveGlobalSingleton<{ observer?: InstallationObserver }>(
@@ -232,19 +232,19 @@ export function checkGatewayInstallationReplacement(): Promise<void> {
           () => true,
           () => false,
         );
-      if (!lifecyclePending) {
-        observer.lifecyclePendingSince = undefined;
-      } else {
-        observer.lifecyclePendingSince ??= Date.now();
-        if (Date.now() - observer.lifecyclePendingSince < INSTALLATION_LIFECYCLE_SETTLE_MS) {
-          return;
-        }
-      }
       const metadata = asNullableRecord(value);
       const version = normalizeNullableString(metadata?.version);
       const buildId = normalizeNullableString(metadata?.buildId);
       // npm can temporarily remove or partially replace metadata. Wait for a complete identity.
       const complete = version && version.length <= 96 && buildId && buildId.length <= 96;
+      if (!lifecyclePending && (complete || !observer.running.buildId)) {
+        observer.unsettledSince = undefined;
+      } else {
+        observer.unsettledSince ??= Date.now();
+        if (Date.now() - observer.unsettledSince < INSTALLATION_SETTLE_MS) {
+          return;
+        }
+      }
       if (
         complete &&
         observer.running.buildId &&
