@@ -19,6 +19,10 @@ enum DashboardBrowserAction: String, Equatable, Sendable {
     case back, forward, reload, stop, close, snapshot, download
 }
 
+enum DashboardBrowserColorScheme: String, Equatable, Sendable {
+    case light, dark
+}
+
 enum DashboardBrowserRequest: Equatable, Sendable {
     case open(tabId: String, url: URL, sessionKey: String?, activate: Bool)
     case navigate(tabId: String, url: URL)
@@ -26,6 +30,7 @@ enum DashboardBrowserRequest: Equatable, Sendable {
     case present(scope: String, tabId: String?, rect: DashboardBrowserRect?, visible: Bool)
     case overlayCutouts([DashboardBrowserCutout])
     case releaseScope(String)
+    case setColorScheme(DashboardBrowserColorScheme)
     case inspect(tabId: String, x: Double, y: Double)
 }
 
@@ -123,6 +128,11 @@ final class DashboardBrowserMessageHandler: NSObject, WKScriptMessageHandlerWith
             })
         case "release-scope":
             return try .releaseScope(Self.identifier(payload["scope"]))
+        case "set-color-scheme":
+            guard let value = payload["colorScheme"] as? String,
+                  let colorScheme = DashboardBrowserColorScheme(rawValue: value)
+            else { throw DashboardBrowserError.invalidRequest }
+            return .setColorScheme(colorScheme)
         case "inspect":
             let x = try Self.number(payload["x"])
             let y = try Self.number(payload["y"])

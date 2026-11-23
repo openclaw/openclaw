@@ -17,7 +17,7 @@ export type AgentHarnessContextMedia = {
 /** maxChars=0 classifies the user source without hydrating attachment content. */
 export type AgentHarnessContextMediaRequest = { message: AgentMessage; maxChars: number };
 
-type AgentHarnessHostApprovalResult = Readonly<{
+export type AgentHarnessHostApprovalResult = Readonly<{
   decision: ApprovalDecision | null | undefined;
   terminalReason: ApprovalTerminalReason | null | undefined;
 }>;
@@ -248,3 +248,7 @@ export type AgentHarnessHostCapabilities = Readonly<{
     signal?: AbortSignal;
   }) => Promise<AgentHarnessHostApprovalResult | undefined>;
 }>;
+
+export type HostToolSurfaceOptions = Parameters<
+  NonNullable<AgentHarnessHostCapabilities["createToolSurfaceAsync"]>
+>[0];

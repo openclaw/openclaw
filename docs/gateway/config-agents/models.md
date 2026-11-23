@@ -17,11 +17,11 @@ title: "Configuration — agent models"
     defaults: {
       models: {
         "anthropic/claude-opus-4-6": { alias: "opus" },
-        "minimax/MiniMax-M2.7": { alias: "minimax" },
+        "minimax/MiniMax-M3": { alias: "minimax" },
       },
       model: {
         primary: "anthropic/claude-opus-4-6",
-        fallbacks: ["minimax/MiniMax-M2.7"],
+        fallbacks: ["minimax/MiniMax-M3"],
       },
       utilityModel: {
         primary: "openai/gpt-5.4-mini",

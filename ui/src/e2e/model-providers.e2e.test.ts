@@ -410,6 +410,44 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
     }
   });
 
+  it("preserves ready setup after a no-model access probe", async () => {
+    const context = await browser.newContext(providerPageOptions(1280, 1000));
+    const page = await context.newPage();
+    const config = { models: { providers: { openai: providerConfig(redactedConfigValue) } } };
+    const models = [catalogModel("openai", "example-model", "Example model")];
+    const gateway = await installMockGateway(page, {
+      featureMethods: [...defaultControlUiFeatureMethods, "models.probe"],
+      models,
+      methodResponses: {
+        "config.get": sourceConfigSnapshot(config, "no-model-probe"),
+        "models.list": { models, providerOutcomes: [{ provider: "openai", status: "ready" }] },
+        "models.authStatus": {
+          ts: NOW,
+          providerCapabilities: keyCapabilities("openai"),
+          providers: [configAuth("openai", { displayName: "OpenAI", status: "static" })],
+        },
+        "models.probe": { provider: "openai", status: "no_model", results: [] },
+        ...emptyUsage(NOW),
+      },
+    });
+    try {
+      await page.goto(`${server.baseUrl}settings/model-providers`);
+      const row = await expandProvider(page, "openai");
+      await row.getByRole("button", { name: "Test access: OpenAI", exact: true }).click();
+      await gateway.waitForRequest("models.probe");
+      await expect
+        .poll(() => row.locator(".model-providers__probe-summary").textContent())
+        .toBe("No models available");
+      if (recordVisuals) {
+        await captureProviderProof("no-model-status.png", row);
+        console.info(`No-model status proof: ${path.join(artifactDir, "no-model-status.png")}`);
+      }
+      expect(await row.locator(".provider-row__status").textContent()).toBe("Ready");
+    } finally {
+      await context.close();
+    }
+  });
+
   it("configures credentials, probes a provider, and changes default models", async () => {
     const context = await recordedContext(1200);
     const page = await context.newPage();

@@ -118,9 +118,6 @@ export const cronHandlers: GatewayRequestHandlers = {
     hasCurrentClientAuthority,
   }) => {
     sessionMutationCommitGuard?.();
-    if (hasCurrentClientAuthority?.() === false) {
-      throw new Error("Automation caller authority is no longer active");
-    }
     let candidate: unknown;
     let normalizedPatch: CronJobPatch | null;
     try {
@@ -391,7 +388,6 @@ export const cronHandlers: GatewayRequestHandlers = {
           client,
           callerScope,
           sessionMutationCommitGuard,
-          hasCurrentClientAuthority,
           retainExecutionPolicy: true,
         });
         if (!updateOptions) {
@@ -558,7 +554,9 @@ export const cronHandlers: GatewayRequestHandlers = {
             commitGuard,
             () => {
               if (readCronCallerScope(client)?.currentJobId !== jobId) {
-                throw new TypeError("cron self-removal authority is no longer active");
+                throw new TypeError(
+                  "This cron run no longer owns the job; remove it from the Cron page.",
+                );
               }
             },
           );

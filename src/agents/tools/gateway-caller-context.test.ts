@@ -11,6 +11,7 @@ import {
   captureCommandOwnerAssertion,
 } from "../../auto-reply/command-owner-authority.js";
 import {
+  composePreparedOnlySessionSource,
   composeSessionSourceAssertion,
   prepareSessionSourceEffect,
 } from "../../config/sessions/session-source-authority.js";
@@ -34,8 +35,8 @@ import {
 } from "../tool-terminal-presentation.js";
 import type { AnyAgentTool } from "./common.js";
 import {
-  captureGatewayToolCallerAssertion,
   getGatewayToolCallerIdentity as getCaller,
+  prepareGatewayToolCallerAssertion,
   withGatewayToolApprovalOwner,
   withGatewayToolCallerIdentity,
   wrapToolWithGatewayCallerIdentity,
@@ -107,7 +108,10 @@ describe("gateway caller context wrapper", () => {
     await withCallers(
       [{ operationalRunInstance: runInstance("prepared-owner"), receiptAuthority: receipt }, {}],
       async () => {
-        const assertion = expectDefined(captureGatewayToolCallerAssertion(), "caller assertion");
+        const assertion = expectDefined(
+          composePreparedOnlySessionSource(getCaller()),
+          "caller assertion",
+        );
         const prepared = await prepareSessionSourceEffect(assertion);
         try {
           prepared.assertCurrent();
@@ -119,6 +123,23 @@ describe("gateway caller context wrapper", () => {
           await prepared.release?.();
         }
         expect(released).toHaveBeenCalledOnce();
+      },
+    );
+  });
+
+  it("lets Stop on the caller refuse a prepared watch admission", async () => {
+    const stop = new AbortController();
+    await withCaller(
+      { operationalRunInstance: runInstance("watch-stop"), approvalSignals: [stop.signal] },
+      async () => {
+        const prepared = await prepareGatewayToolCallerAssertion();
+        try {
+          prepared.assertCurrent?.();
+          stop.abort(new Error("synthetic Stop"));
+          expect(() => prepared.assertCurrent?.()).toThrow("synthetic Stop");
+        } finally {
+          prepared.release();
+        }
       },
     );
   });

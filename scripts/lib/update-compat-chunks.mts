@@ -24,7 +24,8 @@ import {
 
 export { isUpdateCompatibilityChunk } from "./update-compat-contract.mjs";
 const HASHED_CHUNK = /-[A-Za-z0-9_-]{8}\.m?js$/;
-const POST_SWAP_OWNER = /^src\/(?:cli\/update-cli\/|daemon\/|cli\/runtime-cleanup(?:-scope)?\.ts$)/;
+const POST_SWAP_OWNER =
+  /^src\/(?:cli\/update-cli\/|daemon\/|cli\/runtime-cleanup(?:-scope)?\.ts$|infra\/deferred-plugin-migrations\.ts$)/;
 const STANDALONE_CHUNK_PREFIXES = Object.keys(standaloneRuntimeProcessBuildEntries).flatMap(
   (name) => {
     const { chunkFileNames } = getStandaloneRuntimeProcessOutputOptions(name);
@@ -583,7 +584,7 @@ export function isInlineUpdateCompatibilityExport(origin: UpdateCompatibilityOri
 }
 
 /** Follow the old owner's current lexical binding when its implementation moves. */
-function currentOrigin(
+export function resolveUpdateCompatibilityOrigin(
   origin: UpdateCompatibilityOrigin,
   sourceDir: string,
   graph: ModuleGraph,
@@ -599,6 +600,18 @@ function currentOrigin(
   const info = graph.info(file);
   if (info.imports.has(origin.symbol) || info.exports.has(origin.symbol)) {
     throw new Error(`Cannot resolve current source binding ${origin.module}:${origin.symbol}`);
+  }
+  // The published 9.36 dispatcher moved in 5b4fdfcb22cf without a runtime
+  // re-export, keeping storage independent of dispatch. Remove this relocation
+  // when 9.36 leaves the supported first-hop inventory.
+  if (
+    origin.module === "src/state/openclaw-state-lease-worker-storage.ts" &&
+    origin.symbol === "runWithOpenClawStateLeaseWorker"
+  ) {
+    const operation = path.join(sourceDir, "src/state/openclaw-state-lease-worker-operation.ts");
+    if (fs.existsSync(operation)) {
+      return graph.origin(operation, origin.symbol) ?? origin;
+    }
   }
   return origin;
 }
@@ -618,7 +631,7 @@ export function writeUpdateCompatibilityChunks(params: {
   const origins = new Map<string, UpdateCompatibilityOrigin>();
   for (const chunk of required) {
     for (const entry of chunk.exports) {
-      const origin = currentOrigin(entry.origin, params.sourceDir, sourceGraph);
+      const origin = resolveUpdateCompatibilityOrigin(entry.origin, params.sourceDir, sourceGraph);
       origins.set(`${entry.origin.module}:${entry.origin.symbol}`, origin);
     }
   }

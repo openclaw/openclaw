@@ -2,13 +2,18 @@ import { createHash } from "node:crypto";
 import path from "node:path";
 import { expect, it } from "vitest";
 import { installNativePluginMockGateway } from "../test-helpers/control-ui-plugin-e2e.ts";
-import { requireRecord, requireString } from "./chat-flow.test-support.ts";
+import {
+  chatMessage,
+  controlUiSessionUrl,
+  requireRecord,
+  requireString,
+} from "./chat-flow.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Knowledge reader wording" });
 suite.define(() => {
   it.each(["citations", "identity-request"])(
-    "describes the %s outcome accurately",
+    "opens the %s reader with accurate outcomes",
     async (scenario) => {
       await suite.withPage(
         {
@@ -18,6 +23,8 @@ suite.define(() => {
           reducedMotion: "reduce",
         },
         async ({ page }) => {
+          const readerPath =
+            "/plugin?plugin=knowledge&id=overview&p.agent=main&p.vault=fixture-vault&p.record=reader_record";
           const source = Array.from(
             { length: 25 },
             (_, index) => "Rollout note " + (index + 1) + ": Atlas will evaluate the pilot.",
@@ -62,6 +69,7 @@ suite.define(() => {
           await installNativePluginMockGateway(
             page,
             {
+              historyMessages: [chatMessage("assistant", "[Saved preference](" + readerPath + ")")],
               nativePlugins: [
                 {
                   pluginId: "knowledge",
@@ -130,13 +138,20 @@ suite.define(() => {
               },
             },
           );
-          await page.goto(
-            new URL(
-              "/plugin?plugin=knowledge&id=overview&p.record=reader_record",
-              suite.server.baseUrl,
-            ).toString(),
-          );
+          let documentStartedAt: number | undefined;
+          if (scenario === "citations") {
+            await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
+            const link = page.getByRole("link", { name: "Saved preference", exact: true });
+            await link.waitFor();
+            documentStartedAt = await page.evaluate(() => performance.timeOrigin);
+            await link.click();
+          } else {
+            await page.goto(new URL(readerPath, suite.server.baseUrl).toString());
+          }
           await page.getByRole("heading", { name: record.title, exact: true }).waitFor();
+          if (documentStartedAt !== undefined) {
+            expect(await page.evaluate(() => performance.timeOrigin)).toBe(documentStartedAt);
+          }
           await page.getByText("No connections recorded.", { exact: true }).waitFor();
           if (scenario === "citations") {
             await page.locator(".knowledge-source-group > summary").click();
@@ -164,6 +179,15 @@ suite.define(() => {
               .toContain("25 citations");
             expect(await page.locator(".knowledge-source-group").count()).toBe(1);
             expect(offsets).toContain(20);
+            const params = new URL(page.url()).searchParams;
+            expect([params.get("p.agent"), params.get("p.vault"), params.get("p.record")]).toEqual([
+              "main",
+              "fixture-vault",
+              "reader_record",
+            ]);
+            await page.goBack();
+            await page.getByRole("link", { name: "Saved preference", exact: true }).waitFor();
+            expect(await page.evaluate(() => performance.timeOrigin)).toBe(documentStartedAt);
           }
         },
       );

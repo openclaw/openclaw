@@ -146,11 +146,6 @@ export function captureReplyToolAuthorityContinuation({
           assertAdmittedRunOperatorAuthority(shared);
           shared.assertCurrent();
         }
-        if (!collaborative && owner?.isCurrent() !== true) {
-          throw new MessageInjectionAuthorityError({
-            cause: new Error("Channel owner authority is no longer current"),
-          });
-        }
       };
     })();
   const continuationKind = backgroundOwner

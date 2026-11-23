@@ -271,6 +271,11 @@ storage, and publishes the correlation only after the row commits. It is not
 provider replay data. This worker-only field travels between the exact
 builds admitted by the bundle, version, and feature checks above.
 
+Historical assistant messages in launch history, inference context, and transcript
+commits may omit `usage.cost` when no price was recorded. Missing cost remains
+unknown, not zero. Fresh inference terminal messages retain required cost fields;
+this history distinction does not enable older worker builds.
+
 For an identity-audited attached run, the live turn capability can record the
 credential, build, owner-epoch, and placement checks as one enforced admission
 receipt. The receipt contains none of the credential, build hashes, tokens,

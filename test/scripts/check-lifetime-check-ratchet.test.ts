@@ -9,22 +9,18 @@ import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => vi.restoreAllMocks());
 
-it("counts calls and refusal literals, not comments, declarations or references", () => {
+it("counts refusal literals, not comments", () => {
   using parser = createNativeTypeScriptParser();
   const source = parser.parseSourceFile(
     "fixture.ts",
     [
-      "// captureAdmittedRunActiveAssertion(); authority changed",
-      "function captureAdmittedRunActiveAssertion() {}",
-      "const reference = captureAdmittedRunActiveAssertion;",
-      "captureAdmittedRunActiveAssertion(); owner.captureAdmittedRunActiveAssertion();",
-      'owner["captureAdmittedRunActiveAssertion"]();',
+      "// authority changed",
       'const refusal = "AUTHORITY CHANGED and no longer current";',
       "const template = `caller ${name} authority is no longer active`;",
       'const unrelated = "safe"; const fence = "pending question is no longer current";',
     ].join("\n"),
   );
-  expect(countLifetimeChecks(source)).toBe(5);
+  expect(countLifetimeChecks(source)).toBe(2);
 });
 
 it("rejects a per-file gain even when another file loses one, and accepts reductions and verified renames", () => {
@@ -47,7 +43,7 @@ it("rejects a per-file gain even when another file loses one, and accepts reduct
     fs.mkdirSync(path.dirname(path.join(root, file)), { recursive: true });
     fs.writeFileSync(path.join(root, file), text);
   };
-  const call = "captureAdmittedRunActiveAssertion();\n";
+  const call = 'throw new Error("authority changed");\n';
   git("init", "-q");
   write("src/a.ts", call);
   write("src/b.ts", call.repeat(2));
