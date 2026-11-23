@@ -229,15 +229,20 @@ globalThis.fetch = async (input, init) => {
     api(`actions/runs/${path}`, workflowRun(overrides));
   const jobsApi = (attempt: number, jobs: unknown[]) =>
     list(`actions/runs/81/attempts/${attempt}/jobs?per_page=100&page=1`, "jobs", jobs);
-  const run = (command: string, env: NodeJS.ProcessEnv = {}, script = SCRIPT) => {
+  const run = (
+    command: string,
+    env: NodeJS.ProcessEnv = {},
+    script = SCRIPT,
+    { preloadFetch = true, executable = process.execPath } = {},
+  ) => {
     const directory = join(root, `invocation-${++invocation}`);
     mkdirSync(directory);
     const outputPath = join(directory, "github-output");
     const callsPath = join(directory, "calls.jsonl");
     writeFileSync(responsesPath, JSON.stringify({ responses, downloads, calls: {} }));
     const result = spawnSync(
-      process.execPath,
-      ["--import", pathToFileURL(preloadPath).href, script, command],
+      executable,
+      [...(preloadFetch ? ["--import", pathToFileURL(preloadPath).href] : []), script, command],
       {
         cwd: root,
         encoding: "utf8",
@@ -1600,6 +1605,29 @@ function selectionFixture(
 }
 
 describe("explicit publication artifact selection", () => {
+  it("runs explicit selection through the direct CLI and reports asynchronous evidence rejection", () => {
+    const test = fixture();
+    // Match the workflow node command, without preloads or the test runner's Bun executable.
+    const result = test.run(
+      "reuse",
+      {
+        SOURCE_ADMISSION_JSON: JSON.stringify({
+          coverage: {
+            publication_artifact_source_json: JSON.stringify({ runId: "51", runAttempt: 1 }),
+          },
+        }),
+      },
+      SCRIPT,
+      { preloadFetch: false, executable: "node" },
+    );
+    expect(result.status, result.stderr).toBe(1);
+    expectRejected(
+      result,
+      "Selected publication artifact parent attempt changed or is not terminal",
+    );
+    expect(result.apiCalls[`repos/${REPOSITORY}/actions/runs/51`]).toBe(1);
+    expect(result.outputs).toEqual({});
+  });
   it("rejects a caller release tag that differs from the sealed candidate", async () => {
     const { client, env } = selectionFixture();
     await expect(

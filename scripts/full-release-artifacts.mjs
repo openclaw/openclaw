@@ -1354,5 +1354,11 @@ async function main() {
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  await main();
+  // Finish module evaluation before the selector imports the summary, which imports this module.
+  void main().catch(
+    /** @param {unknown} error */ (error) => {
+      console.error(error);
+      process.exitCode = 1;
+    },
+  );
 }
