@@ -1,15 +1,29 @@
 import { expect, it, vi } from "vitest";
 import { createSubagentRunRecord } from "../agents/subagent-test-fixtures.test-helpers.js";
+import { hasPrivateRequesterInput } from "../agents/subagents/registry/subagent-delivery-state.js";
 import { createLifecycleControllerFixture } from "../agents/subagents/registry/subagent-registry-lifecycle-controller.test-support.js";
 import { subagentRuns } from "../agents/subagents/registry/subagent-registry-memory.js";
+import { restoreSubagentRunsFromDisk } from "../agents/subagents/registry/subagent-registry-persistence.js";
 import { saveSubagentRegistryChangesToSqlite } from "../agents/subagents/registry/subagent-registry-state.fixture.test-support.js";
+import { clearSubagentRunsReadCacheForTest } from "../agents/subagents/registry/subagent-registry-state.js";
 import { settleRestartInterruptedSubagentRun } from "../agents/subagents/registry/subagent-registry-sweep-settle.js";
 import { observeRootWork } from "../agents/subagents/registry/subagent-registry.browser-cleanup.test-support.js";
+import { writeSubagentRunValuesInDatabase } from "../agents/subagents/registry/subagent-registry.store.kernel.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import { replaceSessionEntrySync } from "../config/sessions/session-accessor.sqlite-entry.js";
+import { readSessionQueuedInputPage } from "../config/sessions/session-pending-input-history.js";
 import type { InternalSessionEntry } from "../config/sessions/types.js";
 import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
+import {
+  closeOpenClawAgentDatabasesForTest,
+  openOpenClawAgentDatabase,
+} from "../state/openclaw-agent-db.js";
+import { ensureSessionPendingInputsSchema } from "../state/openclaw-agent-pending-inputs-schema.js";
+import {
+  closeOpenClawStateDatabaseForTest,
+  runOpenClawStateWriteTransaction,
+} from "../state/openclaw-state-db.js";
 import { ensureGatewayOwnerProfile, ensureProfileForEmail } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import type { QueuedOperatorRecoverySource } from "./operator-run-recovery-source.codec.js";
@@ -19,12 +33,182 @@ import {
   pairedOperator,
 } from "./operator-run-recovery.test-support.js";
 import { ADMIN_SCOPE, READ_SCOPE, WRITE_SCOPE } from "./operator-scopes.js";
+import { continueSessionQueuedInputs } from "./queued-chat-inputs.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 import { createContext } from "./server-plugin-in-process-dispatch.test-support.js";
 import { prepareRestartCompletionCustody } from "./session-restart-resume-custody.js";
 import { prepareRestartStores } from "./session-restart-resume-discovery.js";
 
 type WokenAs = { profileId?: string; scopes?: readonly string[] };
+
+it.each([false, true])("recovers v2026.11.7 private queued input unless ended=%s", (ended) =>
+  withOpenClawTestState(
+    {
+      scenario: "minimal",
+      env: { OPENCLAW_TEST_READ_SUBAGENT_RUNS_FROM_SQLITE: "1" },
+    },
+    async ({ stateDir }) => {
+      setRuntimeConfigSnapshot({});
+      const target = {
+        agentId: "main",
+        physicalAgentId: "main",
+        storePath: resolveSessionStorePathCore(undefined, { agentId: "main" }),
+        sessionKey: "agent:main:dashboard:queued-completion",
+        sessionId: "queued-completion",
+      };
+      const entry = {
+        sessionId: target.sessionId,
+        lifecycleRevision: "queued-revision",
+        updatedAt: 1,
+      };
+      replaceSessionEntrySync(target, entry);
+      const runId = `announce:requester-settle:main:${target.sessionKey}:queued-child`;
+      const raw = "Accepted private completion";
+      // Literal writer shapes from v2026.11.7 (e31bbf056de3), not current fixture factories.
+      // Its privateInput has no discriminator; its pending table has no source/end-cause columns.
+      const storedChild = {
+        runId: "queued-child",
+        childSessionKey: "agent:main:subagent:queued-child",
+        childAgentId: "main",
+        childSessionIdentity: { sessionId: "queued-child" },
+        requesterSessionKey: target.sessionKey,
+        requesterAgentId: target.agentId,
+        requesterStorePath: target.storePath,
+        completionRequesterSessionId: entry.sessionId,
+        completionRequesterLifecycleRevision: entry.lifecycleRevision,
+        completionTarget: "parent",
+        task: "Preserve the private completion",
+        cleanup: "keep",
+        createdAt: 1,
+        expectsCompletionMessage: true,
+        execution: { status: "terminal", startedAt: 1, endedAt: 2 },
+        completion: { required: true },
+        delivery: {
+          status: "pending",
+          requesterDelivery: { state: "waiting", runId, at: 2 },
+        },
+        requesterSettleWake: {
+          status: "dispatching",
+          attemptCount: 1,
+          batchRunIds: ["queued-child"],
+          privateInput: { runId, message: raw },
+        },
+      };
+      runOpenClawStateWriteTransaction((database) =>
+        writeSubagentRunValuesInDatabase(
+          database,
+          [
+            {
+              run_id: storedChild.runId,
+              child_session_key: storedChild.childSessionKey,
+              requester_session_key: target.sessionKey,
+              controller_session_key: null,
+              requester_store_path: target.storePath,
+              controller_store_path: null,
+              created_at: 1,
+              payload_json: JSON.stringify({ parentCompletion: storedChild }),
+            },
+          ],
+          [],
+        ),
+      );
+      const messageJson = JSON.stringify({
+        role: "user",
+        content: raw,
+        timestamp: 2,
+        idempotencyKey: `${runId}:user`,
+        provenance: {
+          kind: "inter_session",
+          sourceTool: "subagent_settle",
+          sourceSessionKey: storedChild.childSessionKey,
+        },
+      });
+      const database = openOpenClawAgentDatabase({ agentId: target.agentId });
+      ensureSessionPendingInputsSchema(database.db);
+      database.db
+        .prepare(`INSERT INTO session_pending_inputs (
+      input_id, session_key, session_id, idempotency_key, run_id, request_hash,
+      message_json, lifecycle_generation, state, accepted_at, consumed_event_id
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?, NULL)`)
+        .run(
+          "queued-input",
+          target.sessionKey,
+          target.sessionId,
+          `${runId}:user`,
+          runId,
+          "request:release-request-hash",
+          messageJson,
+          "release-generation",
+          2,
+        );
+      closeOpenClawAgentDatabasesForTest(stateDir);
+      closeOpenClawStateDatabaseForTest();
+      clearSubagentRunsReadCacheForTest();
+      try {
+        expect(await restoreSubagentRunsFromDisk({ runs: subagentRuns })).toBe(1);
+        const child = subagentRuns.get(storedChild.runId)!;
+        expect(child.requesterSettleWake?.privateInput).toEqual({ runId, message: raw });
+        expect(hasPrivateRequesterInput(child)).toBe(true);
+        expect(subagentRuns.isCompletionAuthorityRetired(child)).toBe(true);
+        const context = createContext();
+        context.resolveGatewayContext = () => context;
+        const restart = { context, signal: new AbortController().signal, log: { warn: vi.fn() } };
+        const custody = await prepareRestartCompletionCustody(restart, {
+          target,
+          entries: [{ sessionKey: target.sessionKey, entry }],
+        });
+        const before = (await readSessionQueuedInputPage(target)).rows;
+        expect(before).toHaveLength(1);
+        const row = before[0]!;
+        expect(row).toMatchObject({
+          message_json: messageJson,
+          request_hash: "request:release-request-hash",
+          origin_source_json: null,
+          end_cause: null,
+        });
+        expect(custody.ownsInput(row, target.agentId)).toBe(true);
+        expect(
+          custody.ownsInput(
+            { ...row, run_id: `${runId}:other`, idempotency_key: `${runId}:other:user` },
+            target.agentId,
+          ),
+        ).toBe(false);
+        expect(custody.ownsInput(row, "other-agent")).toBe(false);
+        const foreignSource = JSON.parse(row.message_json);
+        foreignSource.provenance.sourceSessionKey = "agent:main:subagent:unrelated";
+        expect(
+          custody.ownsInput(
+            { ...row, message_json: JSON.stringify(foreignSource) },
+            target.agentId,
+          ),
+        ).toBe(false);
+        await continueSessionQueuedInputs(context, target, {
+          ...restart,
+          assertCurrent: custody.assertCurrent,
+          ownsInput: (queued) => custody.ownsInput(queued, target.agentId),
+          ...(ended ? { endCause: "restart-unrecoverable" as const } : {}),
+        });
+        expect((await readSessionQueuedInputPage(target)).rows).toEqual(ended ? [] : before);
+        expect(context.logGateway.warn).not.toHaveBeenCalled();
+        subagentRuns.retireCompletionAuthority(child);
+        expect(custody.ownsInput(row, target.agentId)).toBe(false);
+        const replacement = { ...child, generation: (child.generation ?? 0) + 1 };
+        subagentRuns.set(child.runId, replacement);
+        expect(subagentRuns.isCompletionAuthorityRetired(replacement)).toBe(false);
+        expect(custody.ownsInput(row, target.agentId)).toBe(false);
+        replaceSessionEntrySync(target, { sessionId: "replacement", updatedAt: 2 });
+        expect((await readSessionQueuedInputPage(target)).rows).toEqual([]);
+      } finally {
+        const child = subagentRuns.get(storedChild.runId);
+        if (child) {
+          subagentRuns.retireCompletionAuthority(child);
+        }
+        subagentRuns.delete(storedChild.runId);
+        clearSubagentRunsReadCacheForTest();
+      }
+    },
+  ),
+);
 
 /** Restores one owed child after a restart and returns the authority its woken parent turn had. */
 async function deliverOwedNoticeAfterRestart(params: {

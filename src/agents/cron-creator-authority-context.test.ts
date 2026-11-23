@@ -145,7 +145,9 @@ it("retains the original caller predicate and rejects resolver use after revocat
   await runWithCronCreatorAuthorityCapability(capability, async () => {
     const { creator, resolve } = creatorFixture(capability, "message");
     current = false;
-    await expect(creator!()).rejects.toThrow("Automation caller authority is no longer active");
+    await expect(creator!()).rejects.toThrow(
+      "This agent run is no longer active. Start a new turn to retry.",
+    );
     expect(resolve).not.toHaveBeenCalled();
   });
 });

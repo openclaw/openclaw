@@ -180,11 +180,11 @@ export async function captureSessionEventTargetForHost(
     }
     if (preparedCaller) {
       preparedCaller.assertCurrent?.();
-    } else if (
-      caller.receiptAuthority?.() === false ||
-      caller.approvalSignals?.some((signal) => signal.aborted)
-    ) {
-      throw new Error("Session event producer no longer owns its invocation");
+    } else {
+      caller.receiptAuthority?.();
+      if (caller.approvalSignals?.some((signal) => signal.aborted)) {
+        throw new Error("Session event producer no longer owns its invocation");
+      }
     }
   };
   try {

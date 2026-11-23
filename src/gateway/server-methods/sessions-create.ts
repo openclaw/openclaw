@@ -41,7 +41,10 @@ import {
   resolveSessionCreateAgentId,
 } from "../session-request-agent.js";
 import { loadGatewaySessionEntryReadOnlyInWorker } from "../session-utils-store-worker.js";
-import { prepareSessionWorktreeCreation } from "../session-worktree-preparation.js";
+import {
+  canRunSessionWorktreeSetup,
+  prepareSessionWorktreeCreation,
+} from "../session-worktree-preparation.js";
 import { prepareSkillLibrarySessionCreation } from "../skill-library-session.js";
 import { gatewayClientUploadPolicyError } from "../upload-policy.js";
 import { scheduleCreatedDashboardSessionTitle } from "./chat-send-background.js";
@@ -402,7 +405,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
     if (repository) {
       prepareLifecycle = prepareSessionRepositoryWorkspace(repository, {
         branchPrefix: cfg.repositoryBranchPrefix,
-        runSetupScript: !requiredProfile && clientScopes.includes(ADMIN_SCOPE),
+        runSetupScript: canRunSessionWorktreeSetup(requiredProfile, clientScopes),
         assertCurrent: commitGuard,
       });
     }
@@ -465,7 +468,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
           titleSource: buildDashboardSessionTitleSource({ message: message ?? "", attachments }),
           currentUserMessage: message,
           useRequestedTitleSelection: Boolean(requestedModel && !personalModelSelection),
-          runSetupScript: !requiredProfile && clientScopes.includes(ADMIN_SCOPE),
+          runSetupScript: canRunSessionWorktreeSetup(requiredProfile, clientScopes),
           signal,
           commitGuard,
           onTitleError: (error) =>

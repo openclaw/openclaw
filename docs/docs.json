@@ -2059,6 +2059,7 @@
                       "tools/llm-task",
                       "tools/lobster",
                       "tools/mcp",
+                      "tools/session-project",
                       "tools/tool-search"
                     ]
                   },

@@ -492,8 +492,8 @@ export const updateHandlers: GatewayRequestHandlers = {
               const assertMayPark = (claimed: boolean) => {
                 retainedRequesterAuthority.assertCurrent();
                 assertForegroundRespawnEnabled();
-                if (!claimed || (foregroundOrigin && !isRestartEnabled(getConfig()))) {
-                  throw new Error("Foreground update authority changed before parking.");
+                if (!claimed) {
+                  throw new Error("The update handoff ended. Start a new update to retry.");
                 }
               };
               assertMayPark(await claimMayPark());

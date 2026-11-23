@@ -232,7 +232,7 @@ This audited record covers the complete v2026.11.5..d02df984730d764d613988d86a50
 </ul>
 <p><a href="https://github.com/openclaw/openclaw/blob/main/CHANGELOG.md">View full changelog</a></p>
 ]]></description>
-            <enclosure url="https://github.com/openclaw/openclaw/releases/download/v2026.11.6/OpenClaw-2026.11.6-x86_64.zip" length="512246876" type="application/octet-stream" sparkle:edSignature="5PQOzPJTrCBgLrfz/ZSUWpIYytVueU8cylPn0Dls9b1O4AbwKzWAs+gRVf38zlzt3mBcjn2CyZvmZANckS9HDQ=="/>
+            <enclosure url="https://github.com/openclaw/openclaw/releases/download/v2026.11.6/OpenClaw-2026.11.6-x86_64.zip" length="512247262" type="application/octet-stream" sparkle:edSignature="WZ8bJ94Gr6O/Lbq5zyTnEwJpp3oYlFnft/VilXW96pfkS0iYk+kO8uLefpbWOXjnXNBk7M80pkybF16pduIdBA=="/>
         </item>
         <item>
             <title>2026.11.5</title>

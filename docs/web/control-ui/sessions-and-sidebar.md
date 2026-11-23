@@ -674,14 +674,15 @@ Select the agent to open its session and workspace context: rename the session,
 open its parent conversation, or use the workspace actions. **Details** also
 keeps workspace information available. The regular session view and external
 CLI catalog headers keep their workspace/session breadcrumbs.
+An ordinary **New Session** chat starts without a parent. When you explicitly
+create a child session or fork a conversation, the header links to its parent.
 
 ### Session menu
 
 Root sessions and ordinary Home-linked dashboard sessions can be pinned. Spawned and nested-child sessions reject pin requests, including when they appear as top-level threads. Subagent runs also reject pin requests and remain outside sidebar navigation.
 
-An ordinary conversation's **Actions** menu also offers **Move to group**, even
-when its header links back to Home. That breadcrumb does not make the
-conversation a nested child.
+An ordinary conversation's **Actions** menu also offers **Move to group**.
+Existing ordinary chats that still link to Home remain top-level sessions.
 
 A pinned parent is a single rail shortcut. Its indented child tree and expand/collapse controls remain in the Sessions list, subject to the current filters.
 
@@ -793,6 +794,10 @@ single-line and shortened to 50 characters or fewer, or cleared. Between 51 and
 59 characters, the palette keeps its current mode to avoid flickering while you
 edit. Counts exclude leading and trailing whitespace. Session-creation errors and
 recovery actions remain visible in either mode.
+
+The palette leaves your text as typed: it turns off automatic corrections,
+capitalization, and writing suggestions. Compose still marks possible spelling
+mistakes when the browser supports it; Search does not.
 
 Pasted images appear as small, removable thumbnails below the text. Pasting or
 removing them leaves the input, **New session** action, and settings control in

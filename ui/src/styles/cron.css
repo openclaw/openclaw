@@ -390,14 +390,17 @@
   padding-block: 1px;
 }
 
+/* The saved summary wraps its text, not its clock or Edit action. */
+.cron-page[data-view="detail"] .cron-prompt__controls {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+}
+
 .cron-prompt__facts {
-  flex: 1 1 auto;
-  min-width: 0;
-  overflow: hidden;
+  padding-block: calc((30px - 1lh) / 2);
   color: var(--muted-strong);
   font-size: 12.5px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
 }
 
 .cron-prompt__run-controls {
@@ -1298,6 +1301,11 @@
   font-size: 12.5px;
 }
 
+/* Delivery failures can name an unbroken destination ID. Keep the full note in its run. */
+.cron-run-entry__delivery-error {
+  overflow-wrap: anywhere;
+}
+
 .cron-run-entry__details:empty,
 .cron-run-entry__details[hidden] {
   display: none;
@@ -1356,6 +1364,11 @@
 @media (max-width: 560px) {
   .cron-admin-note {
     align-self: flex-start;
+  }
+
+  /* The query shares a line with filters on wider screens. On phones, keep its hint readable. */
+  .cron-run-filter-search {
+    flex-basis: 100%;
   }
 
   .cron-run-filter-search input:placeholder-shown {

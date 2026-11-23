@@ -19,10 +19,7 @@ import { createSessionGoalFixture } from "../../gateway/session-goal.test-suppor
 import { createReplyOperation, type ReplyOperation } from "../../sessions/session-controller.js";
 import { releaseSessionControllerClaim } from "../../sessions/session-controller.mailbox.js";
 import * as configuredOwners from "../../state/user-channel-identity-operations.js";
-import {
-  bindCommandOwnerAuthority,
-  captureCommandOwnerAssertion,
-} from "../command-owner-authority.js";
+import { bindCommandOwnerAuthority, getCommandOwnerAuthority } from "../command-owner-authority.js";
 import type { FollowupRun } from "./queue/types.js";
 import { createPreparationRun } from "./reply-agent-turn-preparation.test-support.js";
 import type { ScheduledSessionAutomation } from "./session-event-contract.js";
@@ -327,15 +324,11 @@ it.each([
         traceAuthorized: admittedOwner,
       });
       expect(execution.run.config).toEqual(admittedConfig);
-      const assertOwner = captureCommandOwnerAssertion(execution.run);
-      if (admittedOwner) {
-        expect(assertOwner).toBeDefined();
-        expect(assertOwner).not.toThrow();
-        setRuntimeConfigSnapshot({ commands: { ownerAllowFrom: [] } });
-        expect(assertOwner).not.toThrow();
-      } else {
-        expect(assertOwner).toThrow("Channel operator authority changed");
-      }
+      const owner = getCommandOwnerAuthority(execution.run);
+      expect(owner?.isCurrent()).toBe(admittedOwner);
+      // The owner decision is fixed at admission; a later config change does not flip it.
+      setRuntimeConfigSnapshot({ commands: { ownerAllowFrom: [] } });
+      expect(owner?.isCurrent()).toBe(admittedOwner);
       expect(queued.run).toMatchObject({
         requesterOrigin: { senderId, senderE164 },
         senderIsOwner: enqueuedOwner,
@@ -382,16 +375,9 @@ it.each([
       senderIsOwner: allowed,
       traceAuthorized: allowed,
     });
-    const effect = vi.fn();
-    const assertOwner = captureCommandOwnerAssertion(turn.queued.run);
-    if (allowed) {
-      Atomics.store(generation, 0, 0);
-      assertOwner?.();
-      effect();
-    } else {
-      expect(assertOwner).toThrow();
-    }
-    expect(effect).toHaveBeenCalledTimes(allowed ? 1 : 0);
+    const owner = getCommandOwnerAuthority(turn.queued.run);
+    Atomics.store(generation, 0, 0);
+    expect(owner?.isCurrent()).toBe(allowed);
   },
 );
 

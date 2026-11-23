@@ -171,7 +171,7 @@ function assertOperatorMemoryAccess(params: {
 
 /** Neutral reads deliberately do not use workspace RPCs or Memory Core artifacts. */
 async function handleMemoryProviderRequest(options: GatewayRequestHandlerOptions) {
-  const { params, req, respond, context, client, signal, hasCurrentClientAuthority } = options;
+  const { params, req, respond, context, client, signal } = options;
   const cfg = context.getRuntimeConfig();
   let agentId: string;
   let operation: ReturnType<typeof parseOperation>;
@@ -201,8 +201,8 @@ async function handleMemoryProviderRequest(options: GatewayRequestHandlerOptions
   const assertRequestCurrent = () => {
     signal?.throwIfAborted();
     client?.connectionSignal?.throwIfAborted();
-    if (!open || client?.invalidated || hasCurrentClientAuthority?.() === false) {
-      throw new Error("Memory request authority is no longer active");
+    if (!open) {
+      throw new Error("Memory request ended. Start a new request to retry.");
     }
   };
   let captured: Awaited<ReturnType<typeof captureMemoryReadAuthority>> | undefined;
@@ -210,19 +210,8 @@ async function handleMemoryProviderRequest(options: GatewayRequestHandlerOptions
   try {
     assertRequestCurrent();
     captured = await captureMemoryReadAuthority(options, assertRequestCurrent);
-    const { scopes, assertCurrent: assertCapturedCurrent } = captured;
-    // The provider calls this right before each effect, so a role or roster
-    // change during open or search still refuses a read the policy now forbids.
-    const assertCurrent = () => {
-      assertCapturedCurrent();
-      assertOperatorMemoryAccess({
-        client,
-        cfg: context.getRuntimeConfig(),
-        agentId,
-        operation,
-        scopes,
-      });
-    };
+    const { scopes, assertCurrent } = captured;
+    assertOperatorMemoryAccess({ client, cfg, agentId, operation, scopes });
     assertCurrent();
     const acquired = await getActiveMemoryProviderCore({
       cfg,

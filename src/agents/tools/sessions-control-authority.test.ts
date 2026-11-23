@@ -86,12 +86,8 @@ describe("session control source capability", () => {
     );
   });
 
-  const ambientScope = (
-    authority: AdmittedRunOperatorAuthority,
-    hasCurrentClientAuthority?: () => boolean,
-  ) => ({
+  const ambientScope = (authority: AdmittedRunOperatorAuthority) => ({
     isWebchatConnect: () => false,
-    hasCurrentClientAuthority,
     client: createSyntheticPluginRuntimeClient({
       operatorRoleActor: { kind: "operator", profileId: "control-profile" },
       operatorRunAuthority: authority,
@@ -108,22 +104,6 @@ describe("session control source capability", () => {
       // Without an admitted run the ambient client is still the caller's authority.
       expect(() => captureSessionControlAuthority()).toThrow("session control source revoked");
     });
-  });
-
-  it("keeps the live client check when the ambient authority is passed back as prepared", () => {
-    const { authority } = issueAuthority("control-profile");
-    let connected = true;
-    withPluginRuntimeGatewayRequestScope(
-      ambientScope(authority, () => connected),
-      () => {
-        const target = captureSessionControlAuthority();
-        expect(() => captureSessionControlAuthority(target?.authority)).not.toThrow();
-        connected = false;
-        expect(() => captureSessionControlAuthority(target?.authority)).toThrow(
-          "Session control caller authority is no longer active.",
-        );
-      },
-    );
   });
 });
 

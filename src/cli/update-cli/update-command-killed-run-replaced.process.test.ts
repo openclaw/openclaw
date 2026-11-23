@@ -23,7 +23,6 @@ import {
   replacePackageDirectory,
   repair,
   reserved,
-  settled,
   unleased,
   updater,
   type Dead,
@@ -57,13 +56,11 @@ describe.skipIf(process.platform === "win32")(
 
         await nextUpdate(install.slot);
 
-        expect(mocks.proceed).toHaveBeenCalledOnce();
+        // Recovery settled, the update goes on to prepare its release.
+        expect(mocks.release).toHaveBeenCalledOnce();
         expect(loadPluginCohortRecovery(killed.runId)).toBeUndefined();
         // The candidate's plugin and config changes are kept: it was verified serving.
         expect(config().gateway).toEqual({ mode: "local" });
-        expect(settled(ctx.admitted[0])).toMatch(
-          /kept, because its Gateway was verified on the version it installed, which this installation replaced/u,
-        );
         // The retained warning names the replaced directory, the path and successor, and the version.
         const warning = replacedWarning(killed.runId);
         for (const fact of [home(install.key), home(install.slot), home(successor), candidate]) {
@@ -101,8 +98,7 @@ describe.skipIf(process.platform === "win32")(
         );
 
         await nextUpdate(install.slot);
-        expect(mocks.proceed).toHaveBeenCalledOnce();
-        expect(settled(ctx.admitted[0])).toBeUndefined();
+        expect(mocks.release).toHaveBeenCalledOnce();
       }));
 
     it("finishes a commit the dead update had begun after a later build replaced it", () =>

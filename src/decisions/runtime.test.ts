@@ -344,7 +344,7 @@ describe("registered decision capability", () => {
             ),
       ).rejects.toThrow(
         source === "unbound-operator"
-          ? "requires original Gateway authority"
+          ? "Decision evaluation requires its current Gateway binding."
           : "cannot use this model",
       );
       expect(evaluate).not.toHaveBeenCalled();

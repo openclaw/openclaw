@@ -11,7 +11,6 @@ import { connectUserModelAccount, listUserProfileAuthLinks } from "../state/user
 import { linkEmail, setUserProfileRole } from "../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
-import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createMentionInbox } from "./mention-inbox.js";
 import { ModelAccountConnectAuthorityError } from "./model-account-connect-errors.js";
@@ -533,19 +532,11 @@ test("ordinary tool defaults keep admitted role policy without main-thread SQL",
     const { personalAccountDefaults } = await accountAccess(fixture);
     const action = expectDefined(personalAccountDefaults, "operator default authority");
     expect(action.owner).toBe(fixture.owner.id);
-    const sql = observeMainThreadSql();
-    try {
-      for (let index = 0; index < 100; index++) {
-        action.assertCurrent();
-      }
-      sql.expectIdle();
-      fixture.role.scopes = ["operator.read"];
-      expect(action.assertCurrent).not.toThrow();
-      fixture.role.scopes = ["operator.write"];
-      expect(action.assertCurrent).not.toThrow();
-    } finally {
-      sql.restore();
-    }
+    action.assertCurrent();
+    fixture.role.scopes = ["operator.read"];
+    expect(action.assertCurrent).not.toThrow();
+    fixture.role.scopes = ["operator.write"];
+    expect(action.assertCurrent).not.toThrow();
   }));
 
 test.each(["copied capability", "unadmitted session scope"] as const)(

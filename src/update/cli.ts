@@ -1,13 +1,19 @@
-// `openclaw update` for Git installs, after the update command's refusals: a client of the
+// `openclaw update`, after the update command's refusals: a client of the
 // running Gateway's `update.run`, or the same steps in-process when no Gateway answers.
 import { setTimeout as sleep } from "node:timers/promises";
+import type { UpdateRunParams } from "../../packages/gateway-protocol/src/index.js";
+import { GATEWAY_SERVER_CAPS } from "../../packages/gateway-protocol/src/server-capabilities.js";
+import { requestUpdateDowngradeConfirmation } from "../cli/update-cli/shared.js";
 import { mutateConfigFileWithRetry } from "../config/mutate.js";
 import {
   callGateway,
+  isGatewayCredentialsRequiredError,
   isGatewayTransportError,
   isImplicitLocalGatewayTarget,
 } from "../gateway/call.js";
 import { GatewayClientRequestError } from "../gateway/client.js";
+import { formatErrorMessage } from "../infra/errors.js";
+import { compareSemverStrings } from "../infra/npm-registry-spec.js";
 import { resolveEffectiveUpdateChannel, type UpdateChannel } from "../infra/update-channels.js";
 import { resolveStartupInstallStatus } from "../infra/update-install-status.js";
 import { getUpdateRunAsync } from "../infra/update-run-reader.js";
@@ -15,30 +21,85 @@ import type { UpdateRunRecord } from "../infra/update-run-record.js";
 import { createUpdateRunAsync } from "../infra/update-run-write.async.js";
 import { defaultRuntime } from "../runtime.js";
 import { VERSION } from "../version.js";
+import {
+  checkUpdateInstallationSlot,
+  resolveUpdateInstallationIdentity,
+} from "./installation-identity.js";
 import { PREPARE_DEADLINE_MS, prepareUpdate } from "./run.js";
+import { resolveTarget } from "./target.js";
 
 const POLL_MS = 2_000;
+/** Earlier updaters' runtime cleanup is advisory: no new deletion starts after this. */
+const RETAINED_RUNTIME_BUDGET_MS = 2 * 60_000;
+/** Below this `--timeout`, cleanup could take more than a tenth of the update's budget. */
+const RETAINED_RUNTIME_MIN_TIMEOUT_MS = 10 * RETAINED_RUNTIME_BUDGET_MS;
 /** Prepare, plus a trial that includes the boot migration. */
 const RUN_DEADLINE_MS = PREPARE_DEADLINE_MS + 30 * 60_000;
 
 export type ReleaseUpdateOptions = {
   json: boolean;
   restart: boolean;
-  /** The Git checkout the update command admitted. */
+  /** The installation the update command admitted. */
   runningRoot: string;
   /** Requested with --channel; persisted before the update. */
   channel?: UpdateChannel;
   /** The saved `update.channel`, used when nothing was requested. */
   storedChannel?: UpdateChannel;
   sha?: string;
+  /** Explicit package target; the current RPC has no package-target field. */
+  tag?: string;
   /** `--timeout`: one overall budget for preparing and following the run. */
   timeoutMs?: number;
-  /** `--accept-capabilities`, for plugin maintenance in this process. */
+  /** `--accept-capabilities`, including plugin maintenance through the running Gateway. */
   acceptCapabilities?: boolean;
+  yes?: boolean;
 };
 
 export async function runReleaseUpdateCli(opts: ReleaseUpdateOptions): Promise<void> {
+  const startedAt = Date.now();
+  await checkUpdateInstallationSlot(opts.runningRoot);
   const { channel } = opts;
+  let timeoutMs = opts.timeoutMs;
+  if (!opts.yes) {
+    const { status } = await resolveStartupInstallStatus(false, new AbortController().signal);
+    if (status.installKind === "package") {
+      const selected = await resolveTarget({
+        kind: "package",
+        channel: resolveEffectiveUpdateChannel({
+          configChannel: channel ?? opts.storedChannel,
+          currentVersion: VERSION,
+          installKind: "package",
+        }).channel,
+        tag: opts.tag,
+        timeoutMs: opts.timeoutMs,
+      });
+      if ((compareSemverStrings(VERSION, selected.version) ?? 0) > 0) {
+        const decision = await requestUpdateDowngradeConfirmation({
+          json: opts.json,
+          currentVersion: VERSION,
+          targetVersion: selected.version,
+          tag: opts.tag ?? selected.version,
+        });
+        if (decision !== "confirmed") {
+          const reason = decision === "cancelled" ? "cancelled" : "downgrade-confirmation-required";
+          if (opts.json) {
+            defaultRuntime.writeJson({ status: "skipped", reason });
+          } else if (decision === "cancelled") {
+            defaultRuntime.log("Update cancelled.");
+          } else {
+            defaultRuntime.error(
+              "Downgrade confirmation required.\nDowngrading can break configuration. Re-run in a TTY to confirm.",
+            );
+          }
+          process.exitCode = decision === "cancelled" ? 0 : 1;
+          return;
+        }
+      }
+      if (timeoutMs !== undefined) {
+        timeoutMs = Math.max(1, timeoutMs - (Date.now() - startedAt));
+      }
+    }
+  }
   if (channel) {
     await mutateConfigFileWithRetry({
       base: "source",
@@ -61,11 +122,68 @@ export async function runReleaseUpdateCli(opts: ReleaseUpdateOptions): Promise<v
     opts.sha && upstreamRef
       ? { kind: "git" as const, upstreamRef, upstreamSha: opts.sha }
       : undefined;
+  // Like the releases prepareUpdate collects, an earlier updater's leftover is removed before
+  // this update starts; afterwards the release launcher would count as a possible holder.
+  // A census cannot be interrupted (Windows allows it 15 s), so a short --timeout skips cleanup.
+  if (timeoutMs === undefined || timeoutMs >= RETAINED_RUNTIME_MIN_TIMEOUT_MS) {
+    for (const line of await reclaimRetainedUpdateRuntimes(opts.runningRoot)) {
+      // The cleanup owner already logs each runtime it keeps.
+      if (line.startsWith("Runtime retained at ")) {
+        continue;
+      }
+      if (opts.json) {
+        defaultRuntime.error(line);
+      } else {
+        defaultRuntime.log(line);
+      }
+    }
+  }
+  if (opts.timeoutMs !== undefined) {
+    timeoutMs = Math.max(1, opts.timeoutMs - (Date.now() - startedAt));
+  }
+  // Explicit package targets stay local: update.run cannot carry them without a protocol change.
   // --no-restart prepares in this process; the release starts at the Gateway's next start.
-  const runId = opts.restart ? await requestGatewayUpdate(target, opts.timeoutMs) : null;
-  const record = runId
-    ? await followRun(runId, opts.json, opts.timeoutMs ?? RUN_DEADLINE_MS)
-    : await updateWithoutGateway(opts);
+  const request =
+    opts.restart && !opts.tag ? await requestGatewayUpdate(target, { ...opts, timeoutMs }) : null;
+  let record = request
+    ? await followRun(
+        request.runId,
+        opts.json,
+        Math.max(0, (opts.timeoutMs ?? RUN_DEADLINE_MS) - (Date.now() - startedAt)),
+      )
+    : await updateWithoutGateway({ ...opts, timeoutMs });
+  if (
+    request &&
+    !request.supportsConsent &&
+    opts.acceptCapabilities &&
+    (record?.status === "succeeded" || record?.status === "skipped")
+  ) {
+    // Shipped Gateways reject unknown fields. Update once with the old request, then
+    // apply consent through the now-new Gateway's existing already-current/plugin path.
+    const retry = await requestGatewayUpdate(target, { ...opts, timeoutMs }, record);
+    record = retry
+      ? await followRun(
+          retry.runId,
+          opts.json,
+          Math.max(0, (opts.timeoutMs ?? RUN_DEADLINE_MS) - (Date.now() - startedAt)),
+        )
+      : record;
+  }
+  if (
+    opts.tag &&
+    opts.restart &&
+    isPendingActivation(record) &&
+    (await requestLocalGatewayRestart(
+      Math.max(1, (opts.timeoutMs ?? RUN_DEADLINE_MS) - (Date.now() - startedAt)),
+    )) &&
+    record
+  ) {
+    record = await followRun(
+      record.runId,
+      opts.json,
+      Math.max(0, (opts.timeoutMs ?? RUN_DEADLINE_MS) - (Date.now() - startedAt)),
+    );
+  }
   report(record, opts.json);
   process.exitCode =
     record?.status === "succeeded" || record?.status === "skipped" || isPendingActivation(record)
@@ -73,27 +191,120 @@ export async function runReleaseUpdateCli(opts: ReleaseUpdateOptions): Promise<v
       : 1;
 }
 
+/**
+ * Removes the runtime an earlier in-place updater retained (shipped updaters promise that the
+ * next update does). Doctor's owner decides custody from the runtime's owner record and the
+ * process census. It runs in this command, not the Gateway: the census is synchronous, and
+ * without an owner record it cannot tell the requesting `openclaw update` from an old updater.
+ */
+async function reclaimRetainedUpdateRuntimes(runningRoot: string): Promise<string[]> {
+  const deadline = Date.now() + RETAINED_RUNTIME_BUDGET_MS;
+  try {
+    const { prepareRetainedUpdateRuntimeMaintenance } =
+      await import("../commands/doctor-retained-runtime.js");
+    // This command's temp directories and the system one; Doctor also reads the service's.
+    const maintain = await prepareRetainedUpdateRuntimeMaintenance(process.env, {
+      inspectService: false,
+      packageRoots: [runningRoot],
+    });
+    // Doctor also fences its own process's workers; this command never loads code from
+    // another updater's runtime.
+    return await maintain(true, {
+      assertCurrent: () => {
+        if (Date.now() >= deadline) {
+          throw new Error("cleanup ran out of time; the next update retries");
+        }
+      },
+    });
+  } catch (error) {
+    return [`Could not inspect retained updater runtimes: ${formatErrorMessage(error)}`];
+  }
+}
+
+async function requestLocalGatewayRestart(timeoutMs = 30_000): Promise<boolean> {
+  if (!(await isImplicitLocalGatewayTarget({}))) {
+    return false;
+  }
+  try {
+    const response = await callGateway<{ ok: boolean }>({
+      method: "gateway.restart.request",
+      params: { reason: "update.run" },
+      timeoutMs: Math.min(30_000, timeoutMs),
+    });
+    if (!response.ok) {
+      throw new Error("The Gateway refused to restart into the prepared release.");
+    }
+    return true;
+  } catch (error) {
+    if (isGatewayTransportError(error) || isGatewayCredentialsRequiredError(error)) {
+      return false;
+    }
+    throw error;
+  }
+}
+
 async function requestGatewayUpdate(
   target: { kind: "git"; upstreamRef: string; upstreamSha: string } | undefined,
-  timeoutMs: number | undefined,
-): Promise<string | null> {
+  opts: ReleaseUpdateOptions,
+  consentRetry?: UpdateRunRecord,
+): Promise<{ runId: string; supportsConsent: boolean } | null> {
   // Only the local Gateway serves this checkout; a remote or overridden target would update
   // another installation, so this checkout prepares its release here instead.
   if (!(await isImplicitLocalGatewayTarget({}))) {
+    if (consentRetry) {
+      throw new Error(
+        `Capability consent was not applied because the updated Gateway is no longer local. ${consentRetry.origin.nextAction ?? "Run `openclaw update --accept-capabilities` against that installation to retry."}`,
+      );
+    }
     return null;
   }
+  const checkout = await resolveUpdateInstallationIdentity(opts.runningRoot);
+  const params: UpdateRunParams = {
+    ...(target ? { target } : {}),
+    ...(opts.timeoutMs ? { timeoutMs: opts.timeoutMs } : {}),
+  };
+  let supportsConsent = false;
   try {
-    const response = await callGateway<{ runId: string | null; ok: boolean; message?: string }>({
+    const response = await callGateway<{
+      runId: string | null;
+      ok: boolean;
+      code?: string;
+      message?: string;
+    }>({
       method: "update.run",
-      params: { ...(target ? { target } : {}), ...(timeoutMs ? { timeoutMs } : {}) },
+      params,
+      onHelloOk: (hello) => {
+        supportsConsent =
+          hello.features.capabilities?.includes(GATEWAY_SERVER_CAPS.UPDATE_RUN_CONSENT_IDENTITY) ??
+          false;
+        if (supportsConsent) {
+          params.checkout = checkout;
+          params.acceptCapabilities = opts.acceptCapabilities;
+        }
+      },
+      assertDispatchCurrent: () => {
+        if (consentRetry && !supportsConsent) {
+          throw new Error(
+            `Capability consent was not applied because the updated Gateway does not support it. ${consentRetry.origin.nextAction ?? "Run `openclaw update --accept-capabilities` to retry."}`,
+          );
+        }
+      },
       timeoutMs: 30_000,
     });
     if (!response.runId) {
-      throw new Error(response.message ?? "The Gateway refused the update.");
+      // update.run reads the saved channel, so --channel was written before the Gateway refused.
+      const savedChannel =
+        response.code === "installation-mismatch" && opts.channel
+          ? ` Only the requested update channel was saved: update.channel is now "${opts.channel}" for this state directory. Run \`openclaw config set update.channel <previous channel>\` to restore it.`
+          : "";
+      throw new Error(`${response.message ?? "The Gateway refused the update."}${savedChannel}`);
     }
-    return response.runId;
+    return { runId: response.runId, supportsConsent };
   } catch (error) {
-    if (isGatewayTransportError(error)) {
+    if (
+      !consentRetry &&
+      (isGatewayTransportError(error) || isGatewayCredentialsRequiredError(error))
+    ) {
       return null;
     }
     throw error;
@@ -155,7 +366,7 @@ async function updateWithoutGateway(
   const channel = resolveEffectiveUpdateChannel({
     configChannel: opts.channel ?? opts.storedChannel,
     currentVersion: VERSION,
-    installKind: "git",
+    installKind: status.installKind,
     git: status.git,
   }).channel;
   const outcome = await prepareUpdate({
@@ -164,9 +375,13 @@ async function updateWithoutGateway(
     runningVersion: VERSION,
     channel,
     sha: opts.sha,
+    tag: opts.tag,
     timeoutMs: opts.timeoutMs,
     acceptCapabilities: opts.acceptCapabilities,
   });
+  if (opts.tag && opts.restart && outcome.status === "current" && outcome.pluginsChanged) {
+    await requestLocalGatewayRestart();
+  }
   if (outcome.status === "pending" && !opts.json) {
     defaultRuntime.log(
       `OpenClaw ${outcome.target.version} is ready and starts the next time the Gateway starts.`,

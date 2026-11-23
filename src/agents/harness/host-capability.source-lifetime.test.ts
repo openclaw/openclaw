@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, expect, it } from "vitest";
 import { rotateAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import {
   resetAgentRunRegistryForTest,
@@ -13,12 +13,6 @@ import {
 import type { AdmittedRunOperatorAuthority } from "../admitted-run-context.js";
 import { createTestOperatorAuthority } from "../admitted-run-context.test-support.js";
 import { prepareOperatorModelPolicy } from "../operator-model-policy.js";
-import {
-  createAdmittedGatewayToolCallerIdentity,
-  withGatewayToolCallerIdentity,
-} from "../tools/gateway-caller-context.js";
-import { createAgentHarnessHostCapabilities } from "./host-capability.js";
-import { testTool } from "./host-capability.shard.test-support.js";
 import { createAdmittedHostCapabilityTestFixture } from "./host-capability.test-support.js";
 
 const cleanup: Array<() => void> = [];
@@ -63,41 +57,6 @@ it("returns no retained source authority without an operator", async () => {
   expect(host.hostCapabilities.retainSourceAuthority?.()).toBeUndefined();
   host.closeHost();
   expect(() => host.hostCapabilities.retainSourceAuthority?.()).toThrow("no longer active");
-});
-
-it("records completed turn bookkeeping while revocation blocks the next tool effect", async () => {
-  let current = true;
-  const source = createTestOperatorAuthority({
-    profileId: "bookkeeping-source",
-    scopes: ["operator.write"],
-    assertCurrent: () => {
-      if (!current) {
-        throw new Error("operator source revoked");
-      }
-    },
-  });
-  const recorder = { recordEvent: vi.fn(), flush: vi.fn(async () => {}) };
-  const fixture = await createSourceHost(source, undefined, undefined, {
-    runId: "bookkeeping-source",
-    agentId: "main",
-    sessionKey: "agent:main:bookkeeping",
-    trajectoryRecorder: recorder,
-  });
-  const host = await withGatewayToolCallerIdentity(
-    createAdmittedGatewayToolCallerIdentity(fixture.attempt),
-    () => createAgentHarnessHostCapabilities({ attempt: fixture.attempt, pluginId: "codex" }),
-  );
-  cleanup.push(host.close);
-  const { tool, execute } = testTool();
-  const bound = host.capabilities.bindToolSurface([tool])[0]!;
-  await bound.execute("before-revocation", {});
-  await Promise.resolve();
-  current = false;
-  host.capabilities.reportOutputTokens?.(12);
-  host.capabilities.trajectory!.recordEvent("completed-output", { outputTokens: 12 });
-  expect(recorder.recordEvent).toHaveBeenCalledWith("completed-output", { outputTokens: 12 });
-  await expect(bound.execute("after-revocation", {})).rejects.toThrow("no longer active");
-  expect(execute).toHaveBeenCalledOnce();
 });
 
 it.each([

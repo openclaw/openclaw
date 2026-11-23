@@ -283,7 +283,11 @@ it.each(["retired-draining", "released", "requester-replaced", "uncaptured"] as 
             sessionKey: requesterSessionKey,
             operationalRunInstance:
               createTestAdmittedRunContext("parent-run").operationalRunInstance,
-            receiptAuthority: () => !retired,
+            receiptAuthority: () => {
+              if (retired) {
+                throw new Error("agent tool caller authority is no longer active");
+              }
+            },
             gatewayContextResolver: resolveGatewayContext,
           },
           async () => {

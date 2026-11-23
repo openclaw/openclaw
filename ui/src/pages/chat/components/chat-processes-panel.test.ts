@@ -536,3 +536,42 @@ it("keeps history in the panel and recovers legacy Details after access denial",
   expect(details.querySelector('[role="alert"]')).toBeNull();
   expect(details.textContent).toContain("Live watch");
 });
+
+it("recovers Details when a session change arrives before an access denial settles", async () => {
+  const denied = createDeferred<SessionsProcessesListResult>();
+  const current = createDeferred<SessionsProcessesListResult>();
+  const message = "Session process access changed; refresh the conversation.";
+  const request = vi
+    .fn()
+    .mockResolvedValueOnce({ ...completeList, processes: [process()] })
+    .mockReturnValueOnce(denied.promise)
+    .mockReturnValueOnce(current.promise);
+  const { connection, mountDetails } = mountProcesses(request);
+  const panel = document.createElement("openclaw-chat-processes-panel");
+  panel.sessionKey = "agent:main:parent";
+  const details = mountDetails(panel);
+  await settle(details, 0);
+  expect(details.textContent).toContain("Build app");
+
+  const sharingChanged = () =>
+    connection.publishEvent("sessions.changed", {
+      reason: "sharing",
+      sessionKey: panel.sessionKey,
+      agentId: "main",
+    });
+  sharingChanged();
+  expect(request).toHaveBeenCalledTimes(2);
+  sharingChanged();
+  sharingChanged();
+  denied.reject(new GatewayProtocolRequestError({ code: "FORBIDDEN", message }));
+  await settle(details, 0);
+  expect(details.textContent).toContain(message);
+  expect(details.textContent).not.toContain("Build app");
+  expect(request.mock.calls).toEqual([mainRead, mainRead, mainRead]);
+
+  current.resolve({ ...completeList, processes: [process({ name: "Current build" })] });
+  await settle(details, 0);
+  expect(details.querySelector('[role="alert"]')).toBeNull();
+  expect(details.textContent).toContain("Current build");
+  expect(panel.textContent).toContain("Current build");
+});

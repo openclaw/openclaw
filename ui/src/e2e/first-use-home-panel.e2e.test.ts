@@ -163,6 +163,11 @@ suite.define(() => {
           })),
         ).toEqual({ dock: savedDock, target: savedTarget });
 
+        await page.reload();
+        await waitForControlUiRoute(page, { pathname: "/chat/main", routeId: "chat" });
+        await page.getByRole("button", { name: "Add attachment", exact: true }).waitFor();
+        expect(await page.locator(".community-invite-card").count()).toBe(0);
+
         // Reopening restores the established choice.
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, WORK_SESSION_KEY));
         await dock.getByRole("button", { name: "Home", exact: true }).waitFor();

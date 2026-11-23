@@ -392,7 +392,7 @@ describe("runtime-only session authority", () => {
               undefined,
               {
                 message: expect.stringContaining(
-                  "Personal-tool turn authority is no longer active",
+                  "This agent run is no longer active. Start a new turn to retry.",
                 ),
               },
             ],

@@ -736,7 +736,6 @@ async function resolveReplyFromConfig(
       await resolvedOpts?.awaitSessionDiffBaseline?.();
       assertReplyPreprocessingActive(resolvedOpts?.abortSignal);
       resolvedOpts?.operatorAuthority?.assertCurrent();
-      command.assertOwnerCurrent?.();
       await emitResetCommandHooks({
         action,
         agentId,

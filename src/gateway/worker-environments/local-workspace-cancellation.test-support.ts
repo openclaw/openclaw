@@ -39,7 +39,7 @@ import type { LocalWorkspaceOwner } from "./local-workspace-types.js";
 
 const command = () => ({ command: "true", env: {}, usePty: false });
 const failedOutcome = { status: "failed" as const, exitCode: 0, timedOut: false };
-const authorityChanged = "Local sandbox workspace authority changed";
+const workspaceChanged = /Local sandbox workspace (changed|was released)/;
 const writeSource = (dir: string, data: string) => fs.writeFile(path.join(dir, "source.txt"), data);
 const expectSource = async (dir: string, data: string) =>
   expect(await fs.readFile(path.join(dir, "source.txt"), "utf8")).toBe(data);
@@ -189,7 +189,7 @@ export async function proveStoppedLocalWorkspaceCheckpoint(
     await writeSource(projection.workspaceDir, "last stopped guest edit\n");
     await finish(backend, laterSpec.finalizeToken);
     await expectSource(owner.worktree.path, "last stopped guest edit\n");
-    await expect(projection.checkpoint()).rejects.toThrow(authorityChanged);
+    await expect(projection.checkpoint()).rejects.toThrow(workspaceChanged);
     return;
   }
   hostCurrent = false;
@@ -201,7 +201,7 @@ export async function proveStoppedLocalWorkspaceCheckpoint(
   await writeSource(owner.worktree.path, "stopped guest edit\n");
   await projection.checkpoint();
   await replaceSessionEntry(scope, { ...entry, sessionId: randomUUID(), updatedAt: 2 });
-  await expect(projection.checkpoint()).rejects.toThrow(authorityChanged);
+  await expect(projection.checkpoint()).rejects.toThrow(workspaceChanged);
 }
 
 export async function proveStoppedSandboxAuthority(
@@ -514,9 +514,9 @@ export async function proveStoppedSandboxAuthority(
               await expect(
                 sandbox.fsBridge.writeFile({ filePath: "revoked.txt", data: "must not write" }),
               ).rejects.toMatchObject({
-                message: "admitted run authority is no longer active",
+                message: "This agent run is no longer active. Start a new turn to retry.",
                 cause: expect.objectContaining({
-                  message: expect.stringMatching(/operator|source execution authority/),
+                  message: expect.stringMatching(/operator|This agent run is no longer active/),
                 }),
               });
               expect(shell).not.toHaveBeenCalled();

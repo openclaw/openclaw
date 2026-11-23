@@ -32,8 +32,8 @@ export async function respondProviderMemoryStatus(params: ProviderStatusRequest)
   const assertRequestCurrent = () => {
     params.signal?.throwIfAborted();
     params.client?.connectionSignal?.throwIfAborted();
-    if (!open || params.client?.invalidated || params.hasCurrentClientAuthority?.() === false) {
-      throw new Error("Memory status authority is no longer active");
+    if (!open) {
+      throw new Error("Memory status request ended. Start a new request to retry.");
     }
   };
   let captured: Awaited<ReturnType<typeof prepareGatewayOperatorRunAuthority>> = undefined;

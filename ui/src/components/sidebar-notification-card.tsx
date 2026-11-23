@@ -50,6 +50,7 @@ export function SidebarRowHeading(props: { title: string; timestampMs?: number |
 export function SidebarNotificationCard(props: {
   title: string;
   detail: string;
+  detailRole?: "alert";
   timestampMs?: number | null;
   icon: JSX.Element;
   severity?: "error" | "warning";
@@ -78,7 +79,7 @@ export function SidebarNotificationCard(props: {
         </span>
         <span class="sidebar-issues-panel__content">
           <SidebarRowHeading title={props.title} timestampMs={props.timestampMs} />
-          <span class="sidebar-issues-panel__state" title={props.detail}>
+          <span class="sidebar-issues-panel__state" title={props.detail} role={props.detailRole}>
             {props.detail}
           </span>
         </span>

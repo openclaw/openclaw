@@ -13,6 +13,7 @@ import {
   UNADVERTISED_OBSERVATION,
 } from "./core-descriptor-options.js";
 import type { CoreGatewayMethodSpecRow } from "./core-descriptor-types.js";
+import { CORE_GATEWAY_METHOD_SPECS_APPENDED } from "./core-descriptors.appended.js";
 import { cronListShareKey, operatorReadShareKey } from "./read-share-keys.js";
 
 // Canonical append-only method table; derived lookup and dispatch policy lives in core-method-policy.ts.
@@ -738,17 +739,5 @@ export const CORE_GATEWAY_METHOD_SPECS = [
   ["users.channelIdentity", "users", "operator.sessions.read", "2026.10", PROFILE_DEPENDENT],
   ["sessions.groups.create", "sessions-groups", "operator.write", "2026.10"],
   ["sessions.catalog.resolve", "session-catalog", "operator.read", "2026.10"],
-  ["openclawId.status", "openclaw-id", "operator.read", "2026.11"],
-  ["openclawId.people", "openclaw-id", "operator.admin", "2026.11"],
-  ["openclawId.authority", "openclaw-id", "operator.admin", "2026.11", CONTROL_PLANE_WRITE],
-  ["openclawId.account", "openclaw-id", "operator.read", "2026.11"],
-  ["chat.steerNow", "chat", "operator.write", "2026.11", OWN_SESSION_WRITE],
-  ["toolUsage.status", "tool-usage", "operator.admin", "2026.11"],
-  ["toolUsage.import", "tool-usage", "operator.admin", "2026.11", CONTROL_PLANE_WRITE],
-  ["toolUsage.reset", "tool-usage", "operator.admin", "2026.11", CONTROL_PLANE_WRITE],
-  ["sessions.steerTarget", "sessions-messaging", "operator.write", "2026.11", OWN_SESSION_WRITE],
-  ["sessions.steerActive", "sessions-messaging", "operator.write", "2026.11", OWN_SESSION_WRITE],
-  ["openclaw.setup.options", "system-agent", "operator.admin", "2026.11"],
-  ["sessions.files.stat", "sessions-files", "operator.read", "2026.11"],
-  ["skills.categories", "skills", "operator.read", "2026.11"],
+  ...CORE_GATEWAY_METHOD_SPECS_APPENDED,
 ] as const satisfies readonly CoreGatewayMethodSpecRow[];

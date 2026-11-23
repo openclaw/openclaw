@@ -188,7 +188,7 @@ export function enqueueSessionEventForHost(
         createDynamicSessionSourceAssertion(
           () => generationLease?.assertCurrent,
           () => {
-            throw new Error("Session event destination authority changed");
+            throw new Error("The session event destination changed. Start a new turn to retry.");
           },
         ),
       ],

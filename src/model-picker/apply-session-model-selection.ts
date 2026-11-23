@@ -172,12 +172,21 @@ export async function applySessionModelSelectionInternal(
   if (isModelSelectionLocked(startingEntry)) {
     return { status: "rejected", reason: "locked", message: MODEL_SELECTION_LOCKED_MESSAGE };
   }
-  const operatorScope = params.operatorAuthority
+  const invocation = params.operatorAuthority
     ? undefined
-    : (
-        await import("../gateway/operator-invocation-authority.js")
-      ).captureOperatorToolGatewayAuthority();
-  const operatorAuthority = params.operatorAuthority ?? operatorScope?.authority;
+    : await import("../gateway/operator-invocation-authority.js");
+  const operatorAuthority = params.operatorAuthority ?? invocation?.readOperatorToolRunAuthority();
+  let admissionError: string | undefined;
+  try {
+    if (!operatorAuthority && invocation?.hasOperatorToolGatewayAuthority()) {
+      admissionError = "Operator model selection requires original Gateway authority.";
+    }
+  } catch (error) {
+    admissionError = formatErrorMessage(error);
+  }
+  if (admissionError) {
+    return { status: "rejected", reason: "not-allowed", message: admissionError };
+  }
 
   const resetToDefault = params.request.resetToDefault === true;
   const policy =
@@ -202,7 +211,6 @@ export async function applySessionModelSelectionInternal(
     : params.request;
   const validateOperatorSelection = () => {
     try {
-      operatorScope?.assertCurrent();
       assertOperatorModelAllowed(operatorAuthority, selectedRef);
       return undefined;
     } catch (error) {
@@ -379,7 +387,6 @@ export async function applySessionModelSelectionInternal(
       requireModelSelectionUnlocked: true,
       touchedFields: SESSION_MODEL_OVERRIDE_TRANSACTION_FIELDS,
       commitGuard: composeSessionSourceAssertion([
-        operatorScope?.assertCurrent,
         createOperatorModelSelectionAssertion(operatorAuthority, selectedRef),
       ]),
       validateCommit,
@@ -458,7 +465,6 @@ export async function applySessionModelSelectionInternal(
   const provider = request.provider;
   const model = request.model;
   const effectiveModelRef = `${provider}/${model}`;
-  operatorScope?.assertCurrent();
   assertOperatorModelAllowed(operatorAuthority, request);
   const configuredDefaultUpdate =
     params.canPersistStickyModelSelection === true &&

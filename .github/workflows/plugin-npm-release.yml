@@ -280,10 +280,6 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p .local
-          EVIDENCE_ARGS=()
-          if [[ -n "$PREPARED_NPM_FRV_RUN_ID" && -n "$PREPARED_NPM_PARENT_RUN_ID" ]]; then
-            EVIDENCE_ARGS=(--evidence-output "$RUNNER_TEMP/plugin-npm-evidence.json")
-          fi
           node .release-tooling/scripts/plugin-npm-prepared-release.mjs load \
             --report-capacity true \
             --artifact "$PREPARED_ARTIFACT" \
@@ -296,14 +292,13 @@ jobs:
             --prune-published true \
             --cache-dir "$RUNNER_TEMP/plugin-npm-preview-downloads" \
             --output-dir "$RUNNER_TEMP/plugin-npm-preview-packages" \
-            "${EVIDENCE_ARGS[@]}" \
+            --evidence-output "$RUNNER_TEMP/plugin-npm-evidence.json" \
             --output .local/plugin-npm-prepared.json \
             --github-output "$GITHUB_OUTPUT"
-          echo "evidence_attempt=$GITHUB_RUN_ATTEMPT" >> "$GITHUB_OUTPUT"
 
       - name: Upload immutable publication evidence
         id: evidence_upload
-        if: inputs.prepared_artifact != '' && inputs.full_release_validation_run_id != '' && inputs.release_publish_run_id != ''
+        if: steps.prepared_plan.outputs.evidence_attempt != ''
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: plugin-npm-evidence-${{ github.run_id }}-${{ github.run_attempt }}

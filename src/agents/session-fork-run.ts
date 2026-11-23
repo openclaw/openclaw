@@ -24,7 +24,7 @@ import {
   sqliteSessionIdWriteScope,
 } from "../infra/sqlite-database-admission.js";
 import { assertExistingDatabaseIdentity } from "../infra/sqlite-worker-identity.js";
-import type { AssistantMessage } from "../llm/types.js";
+import type { AssistantHistoryMessage } from "../llm/types.js";
 import type { RuntimePluginToolGrant } from "../plugins/runtime/tool-grant.js";
 import { getBackgroundOwnerLane } from "../process/background-work.js";
 import { isExpectedRunCancellation } from "../process/expected-run-cancellation.js";
@@ -269,7 +269,7 @@ async function readSessionForkPin(
 async function markRunningToolCalls(manager: SessionManager): Promise<void> {
   // The latest batch is the last assistant message plus the tool results recorded after it.
   const completed = new Set<string>();
-  let batch: AssistantMessage | undefined;
+  let batch: AssistantHistoryMessage | undefined;
   for (const entry of manager.getBranch().toReversed()) {
     if (entry.type !== "message") {
       continue;
@@ -439,7 +439,9 @@ async function runSessionForkInner(params: SessionForkRunParams, abortSignal: Ab
   const assertScopeCurrent = () => {
     assertPhysicalCurrent();
     if (sourceLifetime.entry && !sourceLifetime.entry.isCurrent()) {
-      throw new SessionTranscriptReadFenceError("Session fork authority changed");
+      throw new SessionTranscriptReadFenceError(
+        "Session fork source changed. Retry in a new turn.",
+      );
     }
     params.assertCallerCurrent?.();
   };

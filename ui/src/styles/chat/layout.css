@@ -592,6 +592,16 @@ openclaw-pending-session-create {
   width: 100%;
   contain: content;
 
+  /* WebKit paints the row's trailing margin when a native range crosses turns.
+     Keep the range intact; only its content should paint the selection. */
+  &::selection {
+    background-color: transparent;
+  }
+
+  > *::selection {
+    background-color: var(--selection-bg);
+  }
+
   /* WebKit restyles hidden parked subtrees that retain layout boxes.
      Chromium needs those boxes for timely forecast paint. */
   @supports (-webkit-nbsp-mode: space) {

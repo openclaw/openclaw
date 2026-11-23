@@ -464,6 +464,21 @@ describe("gateway client capability tool filtering", () => {
     ).toBe(true);
   });
 
+  it("offers session_project only for a session admitted in the default workspace", () => {
+    const built = (eligible?: boolean, tools?: OpenClawConfig["tools"]) =>
+      hasTool(
+        createTestOpenClawTools({
+          agentSessionKey: "agent:main:main",
+          config: { tools },
+          sessionProjectMoveEligible: eligible,
+        }),
+        "session_project",
+      );
+    expect(built()).toBe(false);
+    expect(built(true)).toBe(true);
+    expect(built(false, { alsoAllow: ["session_project"] })).toBe(false);
+  });
+
   it("negotiates GitHub reconnect guidance with the requesting Control UI", () => {
     const olderTools = createOpenClawTools({
       githubPublicationAvailable: false,

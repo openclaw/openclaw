@@ -251,7 +251,7 @@ describe("CLI model-routing receipt authority", () => {
     // History preparation now admits before the final routing producer. Reusing
     // that context rejects the retired claim before any receipt or dispatch.
     expect.soft(preparationError).toMatchObject({
-      message: "prepared execution authority is no longer active",
+      message: "This agent run is no longer active. Start a new turn to retry.",
     });
     expect.soft(decisionWork).toEqual([]);
     expect.soft(dispatch).not.toHaveBeenCalled();

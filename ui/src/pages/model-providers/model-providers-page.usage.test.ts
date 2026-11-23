@@ -56,6 +56,7 @@ describe("ModelProvidersPage usage convergence", () => {
     });
     const plan = () => page.querySelector(".provider-row__plan")?.textContent;
     await waitForSolid(() => expect(plan()).toBe("Original"));
+    await waitForProviders(page);
     expect(requestCount(harness.request, "usage.status")).toBe(0);
     harness.request.mockClear();
 

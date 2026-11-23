@@ -411,7 +411,14 @@ describe("request-shaped in-process Gateway dispatch", () => {
         {
           ...(replaced ? mainCaller : foregroundCaller),
           ...(!replaced
-            ? { receiptAuthority: () => currentCaller, approvalSignals: [controller.signal] }
+            ? {
+                receiptAuthority: () => {
+                  if (!currentCaller) {
+                    throw new Error("agent tool caller authority is no longer active");
+                  }
+                },
+                approvalSignals: [controller.signal],
+              }
             : {}),
           gatewayContextResolver: gateway.resolve,
         },
@@ -605,8 +612,16 @@ function createCaller(request: Parameters<typeof callAgentToolGatewayRequest>[0]
       current = false;
     },
     invoke: () =>
-      asCaller({ ...foregroundCaller, receiptAuthority: () => current }, () =>
-        callAgentToolGatewayRequest(request),
+      asCaller(
+        {
+          ...foregroundCaller,
+          receiptAuthority: () => {
+            if (!current) {
+              throw new Error("agent tool caller authority is no longer active");
+            }
+          },
+        },
+        () => callAgentToolGatewayRequest(request),
       ),
   };
 }

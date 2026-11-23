@@ -56,7 +56,6 @@ const mocks = vi.hoisted(() => ({
   sandboxRequired: false,
   sandboxed: false,
   ambient: undefined as unknown,
-  assertAmbient: vi.fn(),
 }));
 vi.mock("../state/user-channel-identity-operations.js", () => ({
   prepareUserProfileRoleAuthority: mocks.prepare,
@@ -64,7 +63,6 @@ vi.mock("../state/user-channel-identity-operations.js", () => ({
 vi.mock("../agents/tools/gateway-caller-context.js", async (original) => ({
   ...(await original<typeof import("../agents/tools/gateway-caller-context.js")>()),
   getGatewayToolCallerIdentity: () => mocks.ambient,
-  captureGatewayToolCallerAssertion: () => mocks.assertAmbient,
 }));
 vi.mock("./session-resource-tool-policy.js", () => ({
   resolveSessionResourceToolPolicy: () => {
@@ -254,7 +252,6 @@ beforeEach(() => {
   mocks.sandboxRequired = false;
   mocks.sandboxed = false;
   mocks.ambient = undefined;
-  mocks.assertAmbient.mockReset();
   mocks.prepareIdentity.mockReset().mockImplementation(async (profileId) => {
     const lease = {};
     mocks.profileLeases.add(lease);
@@ -422,39 +419,6 @@ describe("session resource admission", () => {
         stage === "aliases" ? "Session access changed" : /authority|Session access changed/,
       );
       expect(mocks.profileLeases.size).toBe(0);
-    },
-  );
-
-  it.each([{ scopes: ["operator.sessions.write"], reason: "changed admission alternative" }])(
-    "releases prepared authority after final $reason denial",
-    async ({ scopes }) => {
-      const test = fixture(["operator.write", "operator.sessions.write"], "alice");
-      const prepare = sessionAccess.prepareGatewaySessionAccessAuthority;
-      const release = vi.fn();
-      using _ = vi
-        .spyOn(sessionAccess, "prepareGatewaySessionAccessAuthority")
-        .mockImplementation(async (params) => {
-          const prepared = await prepare(params);
-          const authority = prepared.authority;
-          release.mockImplementation(authority.release);
-          return {
-            ...prepared,
-            assertPreparationCurrent: () => {
-              prepared.assertPreparationCurrent();
-              test.client.connect.scopes = scopes;
-            },
-            authority: { ...authority, release },
-          };
-        });
-      const handler = vi.fn<GatewayRequestHandler>();
-      const respond = vi.fn();
-      await dispatchSession(test, handler, {
-        respond,
-        allowOwnSessionScope: true,
-      });
-      expect(handler).not.toHaveBeenCalled();
-      expect(respond.mock.calls[0]?.[0]).toBe(false);
-      expect(release).toHaveBeenCalledOnce();
     },
   );
 

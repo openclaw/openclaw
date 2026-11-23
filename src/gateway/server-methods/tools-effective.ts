@@ -21,6 +21,7 @@ import { applyFinalEffectiveToolPolicy } from "../../agents/embedded-agent-runne
 import { readGitHubPublicationConfiguration } from "../../agents/github-tool-identity-config.js";
 import { getRegisteredAgentHarness } from "../../agents/harness/registry.js";
 import { agentHarnessExposesOpenClawTools } from "../../agents/harness/tool-surface.js";
+import { isSessionProjectMoveEligible } from "../../agents/session-project-guidance.js";
 import { resolveEffectiveAgentRuntime } from "../../agents/thinking-runtime.js";
 import { readToolAllowlistIntersection } from "../../agents/tool-policy-shared.js";
 import type { ToolPolicyLike } from "../../agents/tool-policy.js";
@@ -116,6 +117,7 @@ function buildToolsEffectiveCacheKey(context: TrustedToolsEffectiveContext): str
     replyToMode: optionalCacheString(context.replyToMode),
     webSearchEnabled: context.toolOverrides?.webSearch !== false,
     githubPublicationAvailable: context.githubPublicationAvailable,
+    sessionProjectMoveEligible: context.sessionProjectMoveEligible,
     githubPublicationConfiguration:
       !context.agentRuntime || context.agentRuntime === "openclaw"
         ? readGitHubPublicationConfiguration({ config: context.cfg, agentId: context.agentId })
@@ -301,6 +303,7 @@ async function resolveBaseToolsEffectiveInventory(
         replyToMode: context.replyToMode,
         webSearchEnabled: context.toolOverrides?.webSearch,
         githubPublicationAvailable: context.githubPublicationAvailable,
+        sessionProjectMoveEligible: context.sessionProjectMoveEligible,
       }),
     );
   } finally {
@@ -564,6 +567,11 @@ async function resolveTrustedToolsEffectiveContext(
     spawnedBy: normalizeOptionalString(loaded.entry.spawnedBy),
     agentHarnessId: normalizeOptionalString(loaded.entry.agentHarnessId),
     githubPublicationAvailable,
+    sessionProjectMoveEligible: isSessionProjectMoveEligible(
+      loaded.cfg,
+      sessionAgentId,
+      loaded.entry,
+    ),
     toolOverrides: loaded.entry.toolOverrides,
     replyToMode: resolveReplyToMode(
       loaded.cfg,

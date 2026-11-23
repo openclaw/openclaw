@@ -40,7 +40,7 @@ import { createModelProviderLogin } from "./login-controller.ts";
 import type { ModelProvidersState } from "./page-state.ts";
 import { createModelProviderProfileActions } from "./profile-actions-controller.ts";
 import { updateRecordEntry } from "./record-state.ts";
-import type { ModelProvidersRouteData } from "./route.ts";
+import { modelConnectAction, type ModelProvidersRouteData } from "./route.ts";
 import { ModelProviderSupplementalLoader } from "./supplemental-load.ts";
 
 export function createModelProviders(
@@ -78,7 +78,7 @@ export function createModelProviders(
     mutationBlockedReason() === null && !modelProviderConfigBusy(context);
   let loaderPending = false;
   let connected = false;
-  let pendingConnection = false;
+  let pendingConnection: string | null = null;
   let pendingCredentialInvalidation = false;
   let profilesVisible = false;
   let readAccess = false;
@@ -162,10 +162,7 @@ export function createModelProviders(
     },
     onPageActivation: () => void refreshPolicy.request("focus"),
   });
-  const installedAgents = createInstalledAgents({
-    gateway,
-    context,
-  });
+  const installedAgents = createInstalledAgents({ gateway, context });
   const mutations = createModelProviderMutationPresentation({
     readScope: () => {
       projection.read();
@@ -273,8 +270,8 @@ export function createModelProviders(
     previousRouteData = data;
     previousLoaderPending = pending;
     if (routeChanged && data) {
-      if (data.connect && !previous?.connect) {
-        pendingConnection = true;
+      if (data.connect !== previous?.connect || data.pluginId !== previous?.pluginId) {
+        pendingConnection = data.connect ? (data.pluginId ?? "") : null;
       }
       // Revalidation must not replace a search edited after navigation.
       if (data.provider !== previous?.provider) {
@@ -335,11 +332,10 @@ export function createModelProviders(
         return;
       }
       syncConfig();
-      // A connect link lands on the page's provider catalog, ready to search.
-      if (pendingConnection && state.data && canMutate() && !core.loading && catalogSearch) {
-        pendingConnection = false;
-        catalogSearch.scrollIntoView({ block: "center" });
-        catalogSearch.focus({ preventScroll: true });
+      const connect = modelConnectAction(pendingConnection, loginBusy, login.open, catalogSearch);
+      if (connect && state.data && canMutate() && !core.loading) {
+        pendingConnection = null;
+        connect();
       }
       if (pendingCredentialInvalidation && !loginBusy) {
         void refresh("replacement");

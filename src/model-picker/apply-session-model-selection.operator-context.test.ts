@@ -104,30 +104,27 @@ it.each([
   },
 );
 
-it.each(["caller", "profiled"] as const)(
-  "rechecks %s authority after model preparation before mutation",
-  async (source) => {
-    let current = true;
-    const message =
-      source === "caller" ? "operator policy changed" : "direct invocation authority expired";
-    const assertCurrent = () => {
-      if (!current) {
-        throw new Error(message);
-      }
-    };
-    const { params, run, expectUnchanged } = restrictedSelection(
-      source === "caller" ? { assertCurrent } : {},
-    );
-    params.request.runtime = { kind: "set", runtime: "openclaw" };
-    prepareRuntime.mockImplementationOnce(async () => {
-      current = false;
-      return { kind: "ready", runtimeId: "openclaw", validate: () => undefined };
-    });
-    const result = await run(source, assertCurrent);
-    expect(result).toMatchObject({ status: "rejected", reason: "not-allowed", message });
-    expectUnchanged();
-  },
-);
+it("rechecks caller authority after model preparation before mutation", async () => {
+  let current = true;
+  const assertCurrent = () => {
+    if (!current) {
+      throw new Error("operator policy changed");
+    }
+  };
+  const { params, run, expectUnchanged } = restrictedSelection({ assertCurrent });
+  params.request.runtime = { kind: "set", runtime: "openclaw" };
+  prepareRuntime.mockImplementationOnce(async () => {
+    current = false;
+    return { kind: "ready", runtimeId: "openclaw", validate: () => undefined };
+  });
+  const result = await run("caller", assertCurrent);
+  expect(result).toMatchObject({
+    status: "rejected",
+    reason: "not-allowed",
+    message: "operator policy changed",
+  });
+  expectUnchanged();
+});
 
 it.each(["request", "profiled", "unbound"] as const)(
   "the public SDK cannot omit operator model policy in %s context",

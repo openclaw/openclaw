@@ -22,12 +22,14 @@ import {
 } from "../../gateway/device-revocation.js";
 import { errorShapeFromError } from "../../gateway/error-shape.js";
 import { prepareGatewayOperatorRunAuthority } from "../../gateway/operator-run-authority.js";
+import { captureOperatorToolGatewayContinuationContext } from "../../gateway/server-plugin-in-process-dispatch.js";
 import {
   createContext,
   createOperatorClient,
 } from "../../gateway/server-plugin-in-process-dispatch.test-support.js";
 import { PluginInstance, type PluginReplacementOutcome } from "../../plugins/plugin-instance.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
+import { withPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
 import { createReplyTurnParticipants } from "../../sessions/session-controller.tool-authority.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
@@ -43,6 +45,12 @@ import { captureRequesterOrigin } from "../requester-origin.js";
 import * as sandboxRuntime from "../sandbox/runtime-status.js";
 import { createSubagentRunRecord } from "../subagent-test-fixtures.test-helpers.js";
 import { subagentRuns } from "../subagents/registry/subagent-registry-memory.js";
+import { adoptSubagentRunForRequesterTurnInRuns } from "../subagents/registry/subagent-registry-requester-yield.js";
+import { settleUnreachableYieldedSubagentRun } from "../subagents/registry/subagent-registry-sweep-settle.js";
+import {
+  bindSubagentRunRuntimeKey,
+  copySubagentRunRuntimeOwner,
+} from "../subagents/registry/subagent-run-generation.js";
 import { isSubagentEnvelopeSession } from "../subagents/spawn/subagent-capabilities.js";
 import { isSubagentSessionFromEntry } from "../subagents/spawn/subagent-depth-policy.js";
 import * as capabilityStore from "../subagents/spawn/subagent-session-store.js";
@@ -55,7 +63,11 @@ import {
 } from "./gateway-caller-context.js";
 import * as gateway from "./in-process-gateway.js";
 import * as handoff from "./session-tool-handoff.js";
-import { createSelfHeldSendRetainer, stopRetainedSessionSends } from "./sessions-send-self-hold.js";
+import {
+  createSelfHeldSendRetainer,
+  hasRetainedSessionSendForSubagent,
+  stopRetainedSessionSends,
+} from "./sessions-send-self-hold.js";
 import * as delivery from "./sessions-send-tool.delivery.js";
 import * as input from "./sessions-send-tool.input.js";
 import { createSessionsSendTool } from "./sessions-send-tool.js";
@@ -107,14 +119,18 @@ async function refuseSelfHeldAdmission(cause: unknown) {
 }
 
 it.each([
-  [true, false, false],
-  [false, false, false],
-  [false, true, false],
-  [false, false, true],
+  [true, false, false, "live"],
+  [false, false, false, "live"],
+  [false, true, false, "live"],
+  [false, false, true, "live"],
+  [false, false, true, "cancelled"],
+  [false, false, true, "revoked"],
+  [false, false, true, "released"],
+  [false, false, true, "replaced"],
 ] as const)(
-  "classifies the real factory caller before retention (parent-owned=%s, unobserved async=%s, implicit resume=%s)",
-  async (parentOwned, unobserved, implicitResume) =>
-    withOpenClawTestState({ scenario: "minimal" }, async () => {
+  "classifies the real factory caller before retention (parent-owned=%s, unobserved async=%s, implicit resume=%s, handoff=%s)",
+  async (parentOwned, unobserved, implicitResume, handoffState) =>
+    withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
       const config: OpenClawConfig = {
         agents: { ownership: "explicit", entries: { main: {} } },
         tools: { sessions: { visibility: "all" } },
@@ -145,11 +161,12 @@ it.each([
         ...(implicitResume ? { spawnedBy: sourceKey, parentSessionId: sourceId } : {}),
       });
       if (implicitResume) {
-        // A paused registry row is fixture input; this test does not claim a registry write.
+        // A previously claimed paused row is fixture input; adoption below binds its live runtime.
         subagentRuns.set(
           "paused-resume",
           createSubagentRunRecord({
             runId: "paused-resume",
+            requesterTurnRunId: "source-run",
             requesterAgentId: "main",
             requesterStorePath: resolveSessionStorePathCore(undefined, { agentId: "main" }),
             controllerStorePath: resolveSessionStorePathCore(undefined, { agentId: "main" }),
@@ -178,13 +195,50 @@ it.each([
       });
       const handle = createEmbeddedRunHandle({ runId: "source-run" });
       const operation = registerTestEmbeddedRun(sourceId, handle, sourceKey, undefined, "main");
+      const captureCompletion = () => {
+        const context = createContext();
+        context.resolveGatewayContext = () => context;
+        const client = createOperatorClient({ profileName: "sender", scopes: ["operator.write"] });
+        return withPluginRuntimeGatewayRequestScope(
+          { client, context, resolveGatewayContext: () => context, isWebchatConnect: () => false },
+          () => captureOperatorToolGatewayContinuationContext(),
+        );
+      };
+      if (implicitResume) {
+        const completion = await captureCompletion();
+        assert(completion);
+        const child = subagentRuns.get("paused-resume");
+        assert(child);
+        child.delivery = { status: "pending" };
+        child.waitForMessage = true;
+        subagentRuns.bindCompletionAuthority(child, completion);
+        expect(
+          await adoptSubagentRunForRequesterTurnInRuns({
+            expected: child,
+            requesterSessionKey: sourceKey,
+            requesterAgentId: "main",
+            requesterTurnRunId: "source-run",
+            requesterRunInstance: createOperationalRunInstanceRef("source-run"),
+            assertCurrent() {},
+            runs: subagentRuns,
+          }),
+        ).toMatchObject({ runId: "paused-resume" });
+      }
       const onYield = vi.fn();
+      const cancellation = new AbortController();
+      const assertHandoffCurrent = vi.fn(() => {});
+      let releaseWork: (() => void) | undefined;
       let work: Parameters<typeof handoff.handoffSessionTool>[0] | undefined;
       const timeout = vi.spyOn(input, "readSessionsSendTimeout");
       const handoffs = vi
         .spyOn(handoff, "handoffSessionTool")
         .mockImplementation(async (params) => {
           work = params;
+          // Transport/handoff are ports; retain the real send owner's live scope before yielding.
+          releaseWork = params.retainWork?.({
+            signal: cancellation.signal,
+            assertCurrent: assertHandoffCurrent,
+          });
           await params.onYield?.("fixture handoff admitted");
           return jsonResult({ status: "started", async: true, message: "fixture handoff started" });
         });
@@ -196,6 +250,14 @@ it.each([
         .mockImplementation(async () => {
           try {
             assertPreparedModelRuntimeAdmissionCanWait();
+            if (implicitResume) {
+              const child = subagentRuns.get("paused-resume");
+              assert(child);
+              expect(hasRetainedSessionSendForSubagent(child)).toBe(true);
+              // Stopping another chat must not prune this in-flight replay from the owner.
+              stopRetainedSessionSends({ agentId: "main", sessionKeys: ["other-chat"] }, "reset");
+              expect(hasRetainedSessionSendForSubagent(child)).toBe(true);
+            }
             effect();
             return { status: "accepted", runId: "resumed", taskRunId: "paused-resume" };
           } catch (error) {
@@ -261,6 +323,63 @@ it.each([
               }
             : { status: "started", retained: { acceptance: "not_accepted" } },
         );
+        if (implicitResume) {
+          subagentRuns.recordRequesterCompletion(sourceKey, "main", "source-run");
+          await upsertSessionEntryCore(
+            { agentId: "main", sessionKey: sourceKey },
+            {
+              status: "done",
+              lastRunId: "source-run",
+            },
+          );
+          let child = subagentRuns.get("paused-resume");
+          assert(child);
+          expect(subagentRuns.getRequesterCompletion(child)).toEqual({
+            runId: "source-run",
+            ended: true,
+          });
+          expect(hasRetainedSessionSendForSubagent(child)).toBe(true);
+          expect(
+            hasRetainedSessionSendForSubagent(copySubagentRunRuntimeOwner(child, { ...child })),
+          ).toBe(true);
+          if (handoffState === "cancelled") {
+            cancellation.abort(new Error("Stopped"));
+          } else if (handoffState === "revoked") {
+            assertHandoffCurrent.mockImplementation(() => {
+              throw new Error("Requester authority revoked");
+            });
+          } else if (handoffState === "released") {
+            releaseWork?.();
+          } else if (handoffState === "replaced") {
+            // Identical durable identity is not the same host incarnation after adoption.
+            const replacement = { ...child };
+            bindSubagentRunRuntimeKey(replacement, {});
+            subagentRuns.set(child.runId, replacement);
+            const completion = await captureCompletion();
+            assert(completion);
+            subagentRuns.bindCompletionAuthority(
+              replacement,
+              completion,
+              createOperationalRunInstanceRef("source-run"),
+            );
+            subagentRuns.recordRequesterCompletion(sourceKey, "main", "source-run");
+            child = replacement;
+          }
+          expect(hasRetainedSessionSendForSubagent(child)).toBe(handoffState === "live");
+          const complete = vi.fn(async () => {});
+          expect(
+            await settleUnreachableYieldedSubagentRun({
+              runId: child.runId,
+              entry: child,
+              complete,
+            }),
+          ).toBe(handoffState !== "live");
+          expect(complete).toHaveBeenCalledTimes(handoffState === "live" ? 0 : 1);
+          if (handoffState !== "live") {
+            expect(effect).not.toHaveBeenCalled();
+            return;
+          }
+        }
         release();
         consumer.release();
         settled.resolve({ kind: "applied", committed: true, unavailablePluginIds: [] });
@@ -290,6 +409,9 @@ it.each([
           ]);
           expect(effect).toHaveBeenCalledOnce();
           expect(dispatch).toHaveBeenCalledTimes(2);
+          const child = subagentRuns.get("paused-resume");
+          assert(child);
+          expect(hasRetainedSessionSendForSubagent(child)).toBe(false);
           for (const invalid of [{ timeoutSeconds: 1 }, { watch: true }]) {
             await expect(
               withGatewayToolCallerIdentity(caller, () =>
@@ -309,6 +431,7 @@ it.each([
           expect(dispatch).toHaveBeenCalledTimes(2);
         }
       } finally {
+        releaseWork?.();
         release();
         consumer.release();
         settled.resolve({ kind: "failed", committed: false, unavailablePluginIds: [] });

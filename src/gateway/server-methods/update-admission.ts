@@ -37,16 +37,34 @@ import {
   createSystemPackageOwnershipInspection,
   SystemPackageOwnershipError,
 } from "../../infra/update-system-package-ownership.js";
+import { updateInstallationMismatch } from "../../update/installation-identity.js";
 import { isInternalMessageChannel } from "../../utils/message-channel.js";
 import { readGatewayRequestMutationAuthority } from "./session-mutation-guards.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
 /** Native params are returned only when this request still belongs to the native updater. */
-export async function admitGatewayUpdateRequest(request: GatewayRequestHandlerOptions) {
+export async function admitGatewayUpdateRequest(
+  request: GatewayRequestHandlerOptions,
+  installedRoot?: string | null,
+) {
   const { params, respond, context } = request;
   if (!assertValidParams(params, validateUpdateRunParams, "update.run", respond)) {
     return null;
+  }
+  // Before any owner takes the request: a CLI from another installation must not update this one.
+  if (params.checkout && installedRoot) {
+    const mismatch = await updateInstallationMismatch(params.checkout, installedRoot);
+    if (mismatch) {
+      respond(true, {
+        runId: null,
+        ok: false,
+        code: "installation-mismatch",
+        message: mismatch,
+        result: { status: "skipped", reason: "installation-mismatch" },
+      });
+      return null;
+    }
   }
   const authority = readGatewayRequestMutationAuthority(request);
   const root = await resolveOpenClawPackageRoot({
@@ -90,6 +108,17 @@ export async function admitGatewayUpdateRequest(request: GatewayRequestHandlerOp
       errorShape(
         ErrorCodes.INVALID_REQUEST,
         "This OCM version does not support an explicit Git update target.",
+      ),
+    );
+    return null;
+  }
+  if (params.acceptCapabilities) {
+    respond(
+      false,
+      undefined,
+      errorShape(
+        ErrorCodes.INVALID_REQUEST,
+        "OCM owns this update and cannot apply capability consent. Run the update without --accept-capabilities.",
       ),
     );
     return null;

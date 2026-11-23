@@ -66,7 +66,7 @@ const sessionKey = "agent:main:discord:group:policy-adoption";
 const sessionId = "scheduled-policy-session";
 const accountId = "work";
 const cfg: OpenClawConfig = {
-  agents: { entries: { main: {} } },
+  agents: { entries: { main: { model: "openai/gpt-4.1" } } },
   commands: { ownerAllowFrom: ["discord:owner-1", "telegram:owner-1", "slack:owner-1"] },
 };
 const accountPolicy = cronAccountPolicy(sessionKey, accountId);

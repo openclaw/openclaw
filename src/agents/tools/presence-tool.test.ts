@@ -124,7 +124,7 @@ describe("presence tool source authority", () => {
           const tool = createPresenceTool({ runId: "presence-channel-run" });
           expect((await tool.execute("owner", {})).details).toMatchObject(adaPresence);
           current = false;
-          await expect(tool.execute("revoked-owner", {})).rejects.toThrow(/authority|source/i);
+          await expect(tool.execute("revoked-owner", {})).rejects.toThrow(/turn has ended/);
         }),
       );
       expect(snapshot).toHaveBeenCalledOnce();
