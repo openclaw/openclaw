@@ -488,7 +488,10 @@ suite.define(() => {
             // The sidebar can fetch lineage concurrently; identify this query
             // by its metadata-search intent, not by arrival time alone.
             const listRequests = traffic.filter((entry) => entry.method === "sessions.list");
-            const metadata = listRequests.filter((entry) => entry.params.search === query);
+            const queryLists = listRequests.filter((entry) => entry.params.search === query);
+            const metadata = queryLists.filter((entry) => entry.params.archived === undefined);
+            // Archived titles are a separate best-effort lookup (#200301).
+            const archived = queryLists.filter((entry) => entry.params.archived === true);
             const visibleResults = await results.getByRole("option").count();
             queryCount++;
             // Capture the settled state before assertions too, retaining useful
