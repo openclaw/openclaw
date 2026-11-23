@@ -2,7 +2,10 @@ import { spawn, type ChildProcessByStdio } from "node:child_process";
 import { EventEmitter } from "node:events";
 import type { Readable, Writable } from "node:stream";
 import { MessageChannel, type MessagePort } from "node:worker_threads";
-import { raiseChildOomScore, shouldAdjustChildOomScore } from "../process/linux-oom-score-spawn.js";
+import {
+  raiseChildOomScoreInBackground,
+  shouldAdjustChildOomScore,
+} from "../process/linux-oom-score-spawn.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { resolveRuntimeProcessEntrypointUrl } from "./runtime-process-url.js";
 import { resolveRuntimeWorkerArgv } from "./runtime-worker-url.js";
@@ -62,7 +65,7 @@ function startHost(): Host {
   // Under memory pressure the kernel should end this recoverable helper, not its caller:
   // lost watches fall back to scans and the next watch starts a fresh helper.
   if (shouldAdjustChildOomScore({ env })) {
-    raiseChildOomScore(child.pid);
+    raiseChildOomScoreInBackground(child.pid);
   }
   const started: Host = { child, watches: new Map(), retired: 0 };
   let buffered = "";

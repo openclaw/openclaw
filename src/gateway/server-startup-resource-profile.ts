@@ -6,7 +6,9 @@ import {
 } from "../infra/gateway-resource-profile.js";
 import type { GatewayServerOptions } from "./server-public.js";
 
-const CONFIGURED_PROFILES: ReadonlySet<unknown> = new Set(["auto", "standard", "lean"]);
+function isConfiguredProfile(value: unknown): value is GatewayResourceProfile["configured"] {
+  return value === "auto" || value === "standard" || value === "lean";
+}
 
 async function readStartupSourceConfig(): Promise<OpenClawConfig> {
   const [{ createConfigIO }, { cloneEnvWithPlatformSemantics }, { loadDotEnv }] = await Promise.all(
@@ -35,9 +37,5 @@ export async function predictGatewayStartupResourceProfile(
     ? startupConfigSnapshotRead.snapshot.config
     : await readSourceConfig().catch(() => undefined);
   const configured: unknown = config?.gateway?.resources?.profile;
-  return predictGatewayResourceProfile(
-    CONFIGURED_PROFILES.has(configured)
-      ? (configured as GatewayResourceProfile["configured"])
-      : undefined,
-  );
+  return predictGatewayResourceProfile(isConfiguredProfile(configured) ? configured : undefined);
 }

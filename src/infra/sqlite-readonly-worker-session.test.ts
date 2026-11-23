@@ -433,7 +433,8 @@ it.each([
     } else {
       process.env.OPENCLAW_CHILD_OOM_SCORE_ADJ = optOut;
     }
-    const write = vi.spyOn(fs, "writeFileSync").mockImplementation(() => {});
+    const write = vi.spyOn(fs.promises, "writeFile").mockResolvedValue();
+    const syncWrite = vi.spyOn(fs, "writeFileSync");
     const child = Object.assign(new MockChild(), { pid: 4242 });
     mock.spawn.mockReturnValueOnce(child);
     try {
@@ -451,11 +452,16 @@ it.each([
         closeTimeoutMs: 60_000,
       });
       sessions.push({ session, child });
-      expect(write.mock.calls.filter(([file]) => String(file).endsWith("/oom_score_adj"))).toEqual(
-        adjusted ? [["/proc/4242/oom_score_adj", "1000"]] : [],
-      );
+      expect(
+        write.mock.calls.filter(
+          ([file]) => typeof file === "string" && file.endsWith("/oom_score_adj"),
+        ),
+      ).toEqual(adjusted ? [["/proc/4242/oom_score_adj", "1000"]] : []);
+      // Readers spawn on request paths, so the score write stays off the event loop.
+      expect(syncWrite).not.toHaveBeenCalled();
     } finally {
       write.mockRestore();
+      syncWrite.mockRestore();
       platform.mockRestore();
       if (previous === undefined) {
         delete process.env.OPENCLAW_CHILD_OOM_SCORE_ADJ;

@@ -4,7 +4,10 @@ import { startGatewaySpawnBroker } from "./context.js";
 import type { SpawnBrokerHost } from "./host.js";
 
 const createSpawnBrokerHost = vi.hoisted(() => vi.fn());
-vi.mock("./host.js", () => ({ createSpawnBrokerHost }));
+vi.mock("./host.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./host.js")>()),
+  createSpawnBrokerHost,
+}));
 
 afterEach(() => {
   gatewaySpawnBrokerState.host = undefined;

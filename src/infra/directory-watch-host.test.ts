@@ -303,8 +303,10 @@ describe("directory watch host", () => {
       try {
         await live.promise;
         const helper = spawned.mock.results[0]!.value as childProcess.ChildProcess;
-        const score = fs.readFileSync(`/proc/${helper.pid}/oom_score_adj`, "utf8").trim();
-        expect(score).toBe(expected ?? fs.readFileSync("/proc/self/oom_score_adj", "utf8").trim());
+        const want = expected ?? fs.readFileSync("/proc/self/oom_score_adj", "utf8").trim();
+        await vi.waitFor(() =>
+          expect(fs.readFileSync(`/proc/${helper.pid}/oom_score_adj`, "utf8").trim()).toBe(want),
+        );
       } finally {
         watch.close();
         if (previous === undefined) {
