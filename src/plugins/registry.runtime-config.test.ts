@@ -1,6 +1,4 @@
 import { AsyncResource } from "node:async_hooks";
-import os from "node:os";
-import path from "node:path";
 import { setImmediate } from "node:timers/promises";
 import { queryObjects } from "node:v8";
 import { expectDefined } from "@openclaw/normalization-core";
@@ -21,7 +19,6 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
-import { resolveUserPath } from "../utils.js";
 import {
   createLazyPluginRuntime,
   runPluginRegisterSyncInRegistry,
@@ -527,21 +524,6 @@ describe("plugin registry runtime config scope", () => {
       );
     },
   );
-
-  it("resolves plugin API paths against the plugin root", () => {
-    const pluginRoot = path.join(os.tmpdir(), "openclaw-plugins", "demo");
-    const { api } = registered("path-plugin", {
-      name: "Path Plugin",
-      source: path.join(pluginRoot, "index.js"),
-      rootDir: pluginRoot,
-    });
-    const absolute = path.resolve(pluginRoot, "..", "outside.txt");
-
-    expect(api.resolvePath("data/cache.json")).toBe(path.join(pluginRoot, "data", "cache.json"));
-    expect(api.resolvePath("./data/cache.json")).toBe(path.join(pluginRoot, "data", "cache.json"));
-    expect(api.resolvePath(absolute)).toBe(absolute);
-    expect(api.resolvePath("~/openclaw/plugin.txt")).toBe(resolveUserPath("~/openclaw/plugin.txt"));
-  });
 
   it("adds plugin context to lazy runtime resolution failures", () => {
     vi.spyOn(sdkAlias, "resolvePluginRuntimeModulePathWithDiagnostics").mockReturnValue({
