@@ -123,7 +123,6 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/health/collector.deadline.test.ts",
   "src/gateway/health/collector.session-store-reuse.test.ts",
   "src/gateway/health/delivery-queue-cache.test.ts",
-  "src/gateway/http-auth-utils.openclaw-id-tunnel.test.ts",
   "src/gateway/http-auth-utils.paired-device.test.ts",
   "src/gateway/http-auth-utils.test.ts",
   "src/gateway/http-session-control.incognito.test.ts",
@@ -136,6 +135,7 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/managed-image-attachments.authority.test.ts",
   "src/gateway/managed-image-attachments.branch-retention.test.ts",
   "src/gateway/managed-image-attachments.conditional.test.ts",
+  "src/gateway/managed-image-attachments.playback.test.ts",
   "src/gateway/managed-image-attachments.recovery.test.ts",
   "src/gateway/managed-image-attachments.sqlite-visibility.test.ts",
   "src/gateway/managed-image-attachments.test.ts",
@@ -178,7 +178,6 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/operator-approval-store.execution-identity.test.ts",
   "src/gateway/operator-approval-store.test.ts",
   "src/gateway/operator-approval-store.worker.test.ts",
-  "src/gateway/operator-role-member-subject.test.ts",
   "src/gateway/operator-run-authority.policy-recovery.test.ts",
   "src/gateway/operator-run-authority.principal.test.ts",
   "src/gateway/operator-run-authority.reconnect.test.ts",
@@ -187,6 +186,7 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/operator-run-recovery.channel.test.ts",
   "src/gateway/operator-run-recovery.effects.test.ts",
   "src/gateway/operator-run-recovery.native.test.ts",
+  "src/gateway/operator-run-recovery.start-grant.test.ts",
   "src/gateway/operator-run-recovery.test.ts",
   "src/gateway/probe.device-auth-scope.test.ts",
   "src/gateway/progress-card-store.worker.test.ts",
@@ -309,6 +309,7 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/session-message-events.test.ts",
   "src/gateway/session-pr-workspace-adoption.test.ts",
   "src/gateway/session-produced-media-delivery.test.ts",
+  "src/gateway/session-project-move.test.ts",
   "src/gateway/session-repository-materialization.test.ts",
   "src/gateway/session-repository-publication-handoff.test.ts",
   "src/gateway/session-restart-resume-custody.test.ts",
@@ -358,6 +359,7 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/session-utils.subagent-payloads.test.ts",
   "src/gateway/session-utils.subagent.test.ts",
   "src/gateway/session-utils.test.ts",
+  "src/gateway/session-workspace-carry.test.ts",
   "src/gateway/session-yield-sweep.test.ts",
   "src/gateway/sessions-history-http.membership.test.ts",
   "src/gateway/sessions-history-http.model-policy.test.ts",
@@ -674,6 +676,8 @@ export const gatewayMethodsTestInclude = [
 ];
 // Gateway server tests that need private process state or a private module graph.
 export const gatewayServerIsolatedTestFiles = [
+  // Real Gateway startup requires the host-owned shared-state broker.
+  "src/gateway/operator-admission.table.test.ts",
   // Real provider and subagent lifecycle registrations must survive the whole scenario.
   "src/gateway/gateway.prompt-cache.test.ts",
   "src/gateway/gateway-plugin-notice.prompt-cache.test.ts",
@@ -702,6 +706,7 @@ export const gatewayServerIsolatedTestFiles = [
   "src/gateway/server.chat-attachment-recovery.product.test.ts",
   "src/gateway/server.chat-membership-authority.product.test.ts",
   "src/gateway/server.chat-workspace-readiness.product.test.ts",
+  "src/gateway/session-restart-resume.visible-chat.product.test.ts",
   "src/gateway/session-restart-resume.workspace.test.ts",
   "src/gateway/server.chat-queued-followup-operator-authority.product.test.ts",
   "src/gateway/server-chat.retired-projection.test.ts",

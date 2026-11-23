@@ -236,13 +236,22 @@ export function hasConsumedRequesterInput(entry: SubagentRunRecord): boolean {
   return entry.delivery?.requesterDelivery?.state === "consumed";
 }
 
+/** Captured private findings stay internal unless their admitted wake owes a visible final. */
+export function hasPrivateRequesterInput(entry: SubagentRunRecord): boolean {
+  return (
+    entry.requesterSettleWake?.yieldedFinalDeliverable !== true &&
+    (entry.completionTarget === "parent" ||
+      (entry.requesterSettleWake?.privateInput !== undefined &&
+        entry.requesterSettleWake.privateInput.privateOnly !== false))
+  );
+}
+
 /** A committed private result can settle delivery when there is no uncertain send to resolve. */
 export function hasConsumedPrivateRequesterInput(entry: SubagentRunRecord): boolean {
   return (
     entry.delivery?.disposition !== "ambiguous" &&
     hasConsumedRequesterInput(entry) &&
-    entry.requesterSettleWake?.yieldedFinalDeliverable !== true &&
-    (entry.completionTarget === "parent" || entry.requesterSettleWake?.privateInput !== undefined)
+    hasPrivateRequesterInput(entry)
   );
 }
 
@@ -287,6 +296,20 @@ export function recordRequesterHandoff(entry: SubagentRunRecord, blockingRunId?:
     state: "waiting",
     blockingRunId: blockingRunId ?? entry.delivery?.requesterDelivery?.blockingRunId,
   });
+}
+
+export function isDeliveryTerminalForRequesterSettle(
+  entry: Pick<SubagentRunRecord, "delivery" | "pauseReason">,
+): boolean {
+  return (
+    isDeliverySuspended(entry) ||
+    entry.delivery?.status === "delivered" ||
+    (entry.delivery?.status === "not_required" && entry.pauseReason !== "sessions_yield") ||
+    entry.delivery?.status === "discarded" ||
+    entry.delivery?.disposition === "delivered" ||
+    entry.delivery?.disposition === "intentional_non_delivery" ||
+    entry.delivery?.disposition === "permanent_failure"
+  );
 }
 
 export function isDeliverySuspended(entry: Pick<SubagentRunRecord, "delivery">): boolean {

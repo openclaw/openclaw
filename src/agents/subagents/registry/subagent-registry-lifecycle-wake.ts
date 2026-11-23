@@ -57,7 +57,7 @@ import {
   getSubagentRunRuntimeKey,
   isSameSubagentRunOwner,
 } from "./subagent-run-generation.js";
-import { hasSubagentRunEnded, isEndedSubagentMessageWait } from "./subagent-run-liveness.js";
+import { hasSubagentRunEnded, isRequesterSettleMemberReady } from "./subagent-run-liveness.js";
 
 const pendingRequesterTransitions = new WeakMap<
   object,
@@ -336,13 +336,13 @@ export function scheduleRequesterSettleWake(
     }
   };
   const pauseNotice = entry.pauseReason === "sessions_yield" && admittedWake?.pauseNotice;
-  // Failure settlement owns offered results, not a message wait's future completion.
+  // Failure settlement owns offered results, never a still-working member's future completion.
   const offeredBatch = (pauseNotice ? [runId] : (admittedWake?.batchRunIds ?? [runId])).flatMap(
     (id) => {
       const member = params.runs.get(id);
       return member?.requesterSettleWake &&
         member.requesterSettleWake.rearmGeneration === admittedWake?.rearmGeneration &&
-        (pauseNotice || !isEndedSubagentMessageWait(member))
+        (pauseNotice || isRequesterSettleMemberReady(member))
         ? [member]
         : [];
     },

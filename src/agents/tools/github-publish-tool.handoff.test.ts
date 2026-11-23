@@ -11,6 +11,7 @@ import {
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
+import { composePreparedOnlySessionSource } from "../../config/sessions/session-source-authority.js";
 import * as transcript from "../../config/sessions/transcript.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { prepareGitHubPublicationRequesterV2 } from "../../gateway/github-publication-requester.js";
@@ -46,7 +47,6 @@ import { createOperationalRunInstanceRef } from "../operational-run-instance.js"
 import { createSandboxTestContext } from "../sandbox/test-fixtures.js";
 import { clearToolSearchCatalog } from "../tool-search.js";
 import {
-  captureGatewayToolCallerAssertion,
   createAdmittedGatewayToolCallerIdentity,
   getGatewayToolCallerIdentity,
   resolveGatewayToolOperatorSelection,
@@ -269,7 +269,7 @@ it.for([
         });
         let receipt: ReturnType<typeof events.enqueueSessionEventForHost> | undefined;
         const enqueueReal = events.enqueueSessionEventForHost;
-        let resumedCaller: { identity: unknown; error?: unknown } | undefined;
+        let resumedCallerError: unknown;
         const noticed = createDeferredCore();
         const released = createDeferredCore();
         if (outcome === "interrupted") {
@@ -316,13 +316,12 @@ it.for([
             expect(
               getSessionControllerEntryForOperation(operation).successorBarrier,
             ).toBeUndefined();
-            // Resume dispatch consults the ambient caller before its own run binds tools; the
-            // yielded turn's retired receipt and aborted signal must not be ambient here.
-            resumedCaller = { identity: getGatewayToolCallerIdentity() };
+            // The continuation may retain admitted policy, but never the yielded
+            // invocation's retired receipt or aborted signal.
             try {
-              captureGatewayToolCallerAssertion()?.();
+              composePreparedOnlySessionSource(getGatewayToolCallerIdentity())?.();
             } catch (error) {
-              resumedCaller.error = error;
+              resumedCallerError = error;
             }
             order.push("resume");
             resumed.resolve(text);
@@ -442,7 +441,7 @@ it.for([
             );
             expect(order).toEqual(["yield", "cleanup", "prepare", "resume"]);
             expect(enqueue).toHaveBeenCalledOnce();
-            expect(resumedCaller).toEqual({ identity: undefined });
+            expect(resumedCallerError).toBeUndefined();
             if (outcome === "prepared" || localPublication) {
               const settled = await withinTest(
                 expectDefined(receipt, "actual event receipt").settled,
@@ -509,7 +508,7 @@ it.for([
                     {
                       ...scope,
                       operationalRunInstance: createOperationalRunInstanceRef(runId),
-                      receiptAuthority: () => !runAbort.signal.aborted,
+                      receiptAuthority: () => runAbort.signal.throwIfAborted(),
                       approvalSignals: [runAbort.signal],
                     },
                     exercise,

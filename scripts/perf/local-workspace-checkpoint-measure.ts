@@ -2273,7 +2273,7 @@ measurement: try {
       () => true,
     );
     try {
-      const captured = await authorityRuntime.captureGatewayOperatorRunAuthority({
+      const captured = await authorityRuntime.prepareGatewayOperatorRunAuthority({
         client: {
           connId: `synthetic-${++admissions}`,
           connect: {

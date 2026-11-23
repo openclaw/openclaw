@@ -6,7 +6,7 @@ import { lstatIfExists } from "openclaw/plugin-sdk/path-existence-runtime";
 import type { SpawnResult } from "openclaw/plugin-sdk/process-runtime";
 import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
 import { runCrabboxProcess } from "./crabbox-process.js";
-import { crabboxExecutionError, type CrabboxCommandRunner } from "./crabbox-worker-command.js";
+import type { CrabboxCommandRunner } from "./crabbox-worker-command.js";
 
 export const CRABBOX_MIN_VERSION = "0.83.2";
 export const CRABBOX_NONBLOCKING_CAPTURE_VERSION = "0.79.0";
@@ -60,6 +60,8 @@ export async function probeCrabboxVersion(
       ...(signal ? { signal } : {}),
     });
   } catch (error) {
+    signal?.throwIfAborted();
+    const { crabboxExecutionError } = await import("./crabbox-worker-command.js");
     signal?.throwIfAborted();
     return {
       status: "indeterminate",

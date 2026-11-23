@@ -551,6 +551,8 @@ const PluginOverviewCapabilitiesSchema = closedObject({
 /** Consent snapshot plus the installed-version presentation projection used by Control UI. */
 export const PluginsInspectResultSchema = closedObject({
   ok: Type.Literal(true),
+  /** The installed plugin offers a guided provider sign-in in Models. */
+  providerSignIn: Type.Optional(Type.Literal(true)),
   overview: Type.Optional(
     closedObject({
       /** Selected inspected manifest declares native browser code, independently of UI capabilities. */

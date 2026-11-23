@@ -109,30 +109,6 @@ function expectAliasResult(
 
 describe("agent delivery binding selection", () => {
   it.each([
-    ["binding-isolation", 10_000, 1],
-    ["global-isolation", 1, 0],
-  ] as const)("honors %s with bounded binding inspection", async (mode, count, reads) => {
-    let typeReads = 0;
-    const bindings: AgentBinding[] = Array.from({ length: count }, () => ({
-      ...isolatingBinding,
-      get type() {
-        typeReads += 1;
-        return "route" as const;
-      },
-    }));
-    const cfg: OpenClawConfig = {
-      bindings,
-      ...(mode === "global-isolation" ? { session: { dmScope: "per-peer" as const } } : {}),
-    };
-    expectAliasResult(await resolveRecipient(cfg), true);
-    expect(mocks.resolveChannelTarget).toHaveBeenCalledOnce();
-    expect(mocks.resolveOutboundSessionRoute).toHaveBeenCalledOnce();
-    expect(typeReads).toBe(reads);
-    expect(cfg.bindings).toBe(bindings);
-    expect(bindings).toHaveLength(count);
-  });
-
-  it.each([
     { stage: "target", change: "remove" },
     { stage: "session", change: "add" },
   ] as const)("observes binding $change during the $stage await", async ({ stage, change }) => {

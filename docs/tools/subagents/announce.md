@@ -23,6 +23,10 @@ have no terminal non-delivery disposition. Once the transcript owner commits the
 input, it immediately records `state: "consumed"` and the consuming run in the
 registry, before the requester source settles. Registry readers use that stored
 fact directly.
+The 30-minute idle delivery deadline does not discard a result waiting behind its
+recorded blocker while that execution still belongs to the live requester. When
+the turn ends or yields, normal completion admission resumes. Dead or unknown
+blockers retain the expiry notice path.
 An ordinary requester run ending or a later follow-up taking over does not discard
 the waiting results. An accepted completion turn keeps its delivery; findings not
 yet accepted remain pending for the requester's next turn.
@@ -69,8 +73,25 @@ the original result.
 Results that no turn committed stay owed. Cancellation before dispatch, worker
 timeout, preparation invalidation and other retryable refusals keep the wake pending
 with its last error, and the sweeper wakes it again. There is no attempt limit,
-retry ladder or expiry. A permanent refusal withholds the result with that error;
-it stays readable in the child session and is not dispatched again.
+retry ladder or expiry. A permanent refusal stops automatic dispatch and records a visible failure notice
+with captured child results that owe a visible reply. Revoked authority or a changed
+source lifecycle uses this same notice without running a revoked continuation.
+Expiry notices include the same results, including when a drain-interrupted child
+reaches its delivery deadline while the requester remains idle. Both idle expiry
+and suspended-delivery retirement record the notice and an operator warning. Private-only handoffs retain identity/status notices without exposing
+their captured answers; an admitted visible-final yield retains its fallback. These
+notices sort children by run ID, cap each result at 2,000 characters, and cap the
+entire notice at 32,000 characters including framing and recovery instructions.
+Oversized batches share the space between result heads; any omitted children are
+counted explicitly. Truncation is marked, and the stored result is unchanged.
+The normal visible-result fallback keeps its existing behavior.
+
+For a truncated result, use the existing Gateway `chat.history` read with the child
+session key and `maxChars: 500000`; page with `offset` to locate the run's final
+message. Use `chat.message.get` with that message's `messageId`, `sessionId`, and
+`maxChars: 8000000` to retrieve retained full text. These reads retain normal
+session access and retention limits. `sessions_history` alone still truncates
+text fields to 4,000 characters and cannot retrieve an omitted tail losslessly.
 A requester bound to a removed managed worktree is a permanent refusal and needs
 an explicit worktree restore before it can accept new work. An in-progress removal
 is transient and keeps the wake pending.
@@ -78,6 +99,16 @@ Ordinary completion delivery retains its existing frozen-result retry policy and
 delivery identity; it does not start a new requester-settle attempt.
 Explicit Stop, retired work, and intentional delivery suppression still take
 precedence; cancellation does not revive work those owners have closed.
+
+If Gateway shutdown aborts the requester while a completed child's delivery is in
+flight, an unconsumed result remains pending for startup recovery. A result already
+committed to the requester keeps its receipt and is not delivered again. An
+unconfirmed channel send retains its ambiguous outcome.
+This includes private continuation turns. A consumed private result stays in the
+requester's saved model context even if shutdown aborts the turn before it replies.
+Eligible root requesters resume through normal restart recovery. Spawned requesters
+are not independently resumed; their next turn reads the saved result without
+another completion delivery.
 
 By default, delivery depends on requester depth:
 
@@ -128,11 +159,14 @@ account, or thread, or perform actions other than `send`. Explicit `replyTo` sta
 limited to the current message or thread; inline reply and audio directives remain
 restricted. See [message tool access](/tools#configure-access-and-approvals).
 
-After `sessions_yield`, the frozen batch waits for its own children and their
-descendants to settle. Children paused to wait for a message remain resumable and
-retain their completion wake, while the batch offers its ready results. A
-still-running child from an earlier requester turn does not delay that batch's
-result; the earlier batch retains its own completion wake.
+After `sessions_yield`, each finished child result in the frozen batch wakes the
+parent as soon as it and its descendants settle. Siblings that are still running,
+or paused on their own `sessions_yield`, keep their completion wake and wake the
+parent again when they finish; a result is delivered once. The wake names the
+siblings that are still working, so the parent can act on the ready results or
+call `sessions_yield` again to wait for the rest. A still-running child from an
+earlier requester turn does not delay that batch's result; the earlier batch
+retains its own completion wake.
 
 Private results are addressed to the current requester chat by its recorded agent
 and session key, regardless of the session store path recorded at spawn. If a new
@@ -235,6 +269,11 @@ the original requester turn and use after-turn self-archive when appropriate,
 rather than asking a notification-only turn to acquire owner privileges.
 Use `sessions_send` with `mode: "notify"` for context-only updates; a normal peer
 follow-up still follows the destination conversation’s reply requirements.
+
+Child follow-up results retain access to the same requester session when its
+lifecycle revision advances. Each delivery attempt still checks current session
+access and requester authority; revoked authority cannot receive the continuation.
+Private completions continue to wait behind an active requester turn.
 
 Use a build that supports this option throughout the run. Older builds cannot
 resume private completion handoffs and may discard them after a downgrade;

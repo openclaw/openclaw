@@ -71,6 +71,12 @@ describe("setup inference install options", () => {
     expect(listSetupInferenceInstallOptions([metaEntry], [metaEntry])).toEqual([]);
   });
 
+  it("uses the choice label for a guided prepare action without an override", () => {
+    expect(listSetupInferencePrepareOptions([{ ...metaEntry, appGuidedDiscovery: true }])).toEqual([
+      { ...presentation, actionLabel: metaEntry.choiceLabel },
+    ]);
+  });
+
   it("preserves the shared presentation fields across guided setup surfaces", () => {
     const choice = {
       ...metaEntry,
@@ -87,7 +93,15 @@ describe("setup inference install options", () => {
       auth: listSetupInferenceAuthOptions([choice]),
       prepare: listSetupInferencePrepareOptions([choice]),
     }).toEqual({
-      auth: [{ ...guided, groupLabel: "Meta", kind: "oauth", featured: false }],
+      auth: [
+        {
+          ...guided,
+          groupLabel: "Meta",
+          actionLabel: "Connect Meta",
+          kind: "oauth",
+          featured: false,
+        },
+      ],
       prepare: [{ ...guided, actionLabel: "Connect Meta" }],
     });
     for (const list of [listSetupInferenceEnableOptions, listSetupInferenceManualProviders]) {

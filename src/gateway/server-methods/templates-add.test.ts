@@ -156,7 +156,7 @@ async function applyThrough(
 }
 
 it.each(["plan", "apply"] as const)(
-  "templates.add.%s requires its scope and Labs",
+  "templates.add.%s requires its scope and Templates availability",
   async (operation) => {
     const method = `templates.add.${operation}`;
     expect(coreGatewayHandlers[method]).toBeDefined();
@@ -166,7 +166,9 @@ it.each(["plan", "apply"] as const)(
       allowed: false,
       missingScope: operation === "plan" ? "operator.read" : "operator.admin",
     });
-    const request = await callAdd(operation, () => ({}));
+    const request = await callAdd(operation, () => ({
+      gateway: { controlUi: { experimental: { templates: false } } },
+    }));
     expect(request[0]?.[2]).toMatchObject({ code: "FORBIDDEN" });
     expect(operation === "plan" ? planAdd : applyAdd).not.toHaveBeenCalled();
   },
@@ -187,10 +189,12 @@ it("plans from the persisted roster, not a stale Gateway cache", async () => {
   expect(request).toEqual([[true, plan]]);
 });
 
-it("drops a preview if Labs is switched off mid-request", async () => {
+it("drops a preview if Templates availability is switched off mid-request", async () => {
   let calls = 0;
   planAdd.mockResolvedValue(plan);
-  const request = await callAdd("plan", () => (calls++ === 0 ? enabled : {}));
+  const request = await callAdd("plan", () =>
+    calls++ === 0 ? enabled : { gateway: { controlUi: { experimental: { templates: false } } } },
+  );
   expect(request[0]?.[2]).toMatchObject({
     code: "FORBIDDEN",
     details: { mutationAccepted: false },
@@ -361,29 +365,8 @@ it.each(["matching", "stale"] as const)(
   },
 );
 
-it("guards live authority while leaving post-admission Labs policy to the Add service", async () => {
-  let authorized = true;
-  const revoked = await applyThrough(
-    (input) => {
-      authorized = false;
-      input.assertCurrent();
-    },
-    { hasCurrentClientAuthority: () => authorized },
-  );
-  expect(revoked[0]?.[2]).toMatchObject({ code: "FORBIDDEN" });
-
-  let labsEnabled = true;
-  applyAdd.mockImplementation(async (input) => {
-    labsEnabled = false;
-    input.assertCurrent();
-    return complete;
-  });
-  const switchedOff = await callAdd("apply", () => (labsEnabled ? enabled : {}));
-  expect(switchedOff).toEqual([[true, complete]]);
-});
-
-it("blocks Add when persisted Labs is off despite a stale Gateway cache", async () => {
-  readPolicy.mockResolvedValue({});
+it("blocks Add when persisted Templates availability is off despite a stale Gateway cache", async () => {
+  readPolicy.mockResolvedValue({ gateway: { controlUi: { experimental: { templates: false } } } });
 
   const request = await callAdd("apply");
 
@@ -489,43 +472,6 @@ it("rolls back only the unchanged new agent and its scheduled work", async () =>
   );
   expect(request[0]?.[0]).toBe(true);
 });
-
-it.each(["scratch", "enable"] as const)(
-  "rechecks live Add authority at the %s commit",
-  async (operation) => {
-    let authorized = true;
-    const persisted = vi.fn();
-    const cron = makeCron({
-      writeScratch: vi.fn(async (_id, options) => {
-        authorized = false;
-        options.commitGuard();
-        persisted();
-        return { ok: true };
-      }),
-      updateWithPrecondition: vi.fn(async (_id, _patch, _precondition, options) => {
-        authorized = false;
-        options.commitGuard();
-        persisted();
-      }),
-    });
-    const request = await applyThrough(
-      async (input) => {
-        if (operation === "scratch") {
-          await input.cronGateway!.writeScratch!("job-1", "Checklist", () => {});
-        } else {
-          await input.cronGateway!.enable!("job-1", "reviewed-revision", () => {});
-        }
-      },
-      {
-        cron,
-        hasCurrentClientAuthority: () => authorized,
-      },
-    );
-
-    expect(persisted).not.toHaveBeenCalled();
-    expect(request[0]?.[2]).toMatchObject({ code: "FORBIDDEN" });
-  },
-);
 
 it("keeps the new agent when another automation appears before rollback", async () => {
   const cron = makeCron({

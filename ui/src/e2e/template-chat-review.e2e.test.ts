@@ -109,7 +109,7 @@ it.skipIf(!available).each([true, false])(
       if (!templatesEnabled) {
         await inline
           .getByText(
-            "Your private draft is saved. Turn on Templates in Settings → Labs to review it.",
+            "Your private draft is saved. Templates is disabled in Gateway configuration; ask an administrator to enable it to review your draft.",
             { exact: true },
           )
           .waitFor();

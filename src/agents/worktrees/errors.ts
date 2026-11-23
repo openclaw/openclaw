@@ -68,6 +68,16 @@ export class SessionWorktreeSourceChangedError extends Error {}
 /** The id names no managed worktree record that the requested operation can act on. */
 export class WorktreeRecordNotFoundError extends Error {}
 
+export class WorktreeRestoreError extends Error {
+  constructor(
+    readonly reason: "snapshot-invalid" | "base-invalid" | "conflict",
+    message: string,
+    options?: ErrorOptions,
+  ) {
+    super(message, options);
+  }
+}
+
 export class SessionWorktreeLifecycleError extends Error {
   constructor(
     message: string,

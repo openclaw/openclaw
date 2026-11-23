@@ -42,7 +42,7 @@ export function extractEnvVarFromSourceLabel(source: string): string | undefined
   return match?.[1];
 }
 
-function resolveDefaultProviderEnvVar(
+export function resolveDefaultProviderEnvVar(
   provider: string,
   config?: OpenClawConfig,
 ): string | undefined {

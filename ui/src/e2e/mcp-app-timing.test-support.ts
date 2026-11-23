@@ -89,5 +89,5 @@ export function assertMcpAppTimingEvents(
   expect(written.monotonicMs - incoming.monotonicMs).toBeLessThan(10_000);
   expect(sent.monotonicMs - ready.monotonicMs).toBeGreaterThanOrEqual(7900);
   expect(sent.monotonicMs - ready.monotonicMs).toBeLessThan(10_000);
-  expect(start.monotonicMs).toBeGreaterThanOrEqual(written.monotonicMs);
+  expect(start.monotonicMs).toBeLessThan(written.monotonicMs);
 }

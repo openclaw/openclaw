@@ -36,7 +36,7 @@ it("retains resident rows across projection-neutral commits and unchanged admiss
   withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const count = 16;
     await state.writeConfig({
-      agents: { entries: { main: {} } },
+      agents: { defaults: { model: { primary: "openai/gpt-6-astra" } }, entries: { main: {} } },
       channels: { slack: { streaming: { mode: "off" } } },
     });
     const readSnapshot = () => readConfigFileSnapshot({ observe: false });

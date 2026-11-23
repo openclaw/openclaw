@@ -80,16 +80,18 @@ export async function startModelSetupFirstRunRedirectAfterLocation(params: {
             void import("./first-run-activation-receipt.ts")
               .then(({ readFirstRunActivationReceipt }) => {
                 const current = context.gateway.snapshot;
-                if (
+                const receipt =
                   !initialDecisionSettled &&
                   current.phase === "connected" &&
                   current.client === snapshot.client &&
                   current.hello === snapshot.hello &&
                   context.gateway.connectionRevision === ownerRevision &&
                   (context.agentSelection.state.selectedId?.trim() || null) === selectedAgentId &&
-                  isStillDefaultLanding() &&
-                  readFirstRunActivationReceipt(context) !== null
-                ) {
+                  isStillDefaultLanding()
+                    ? readFirstRunActivationReceipt(context)
+                    : null;
+                // A Models sign-in record reopens its own dialog, not first-run setup.
+                if (receipt && receipt.kind !== "provider-login") {
                   redirect();
                 }
                 settleInitialDecision();

@@ -6,7 +6,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { recordSessionRowPartitionRevision } from "../infra/gateway-work-metrics.js";
 import {
   projectSessionOwner,
-  resolveSessionProfileId,
+  projectSessionRelatedProfileIds,
   projectSessionProfileInvolvements,
 } from "./session-identity-projection.js";
 import { compareSessionEntryPairs, type SessionEntryPair } from "./session-list-order.js";
@@ -140,31 +140,17 @@ export function createSessionRowSelection(
     const identities = context.userProfileIdentityById;
     for (const key of changedInvolvements) {
       const { entry } = winners.get(key)!.row;
-      let related: Set<string> | undefined;
       const owner = (context.identityProjection?.owner ?? projectSessionOwner)(
         entry,
         identities,
         cfg,
         configuredAgentIds,
       )?.actor;
-      if (owner?.identity?.type === "profile") {
-        (related ??= new Set()).add(owner.identity.id);
-      }
-      // Membership needs canonical IDs, not participant labels, avatars, or display map keys.
-      for (const { identity } of entry.participants ?? []) {
-        if (identity.type === "profile") {
-          (related ??= new Set()).add(resolveSessionProfileId(identity.id, identities));
-        }
-      }
       const states = (context.identityProjection?.involvement ?? projectSessionProfileInvolvements)(
         entry,
         identities,
       );
-      for (const [profileId, state] of states) {
-        if (state.lastMention) {
-          (related ??= new Set()).add(profileId);
-        }
-      }
+      const related = projectSessionRelatedProfileIds(entry, identities, owner, states);
       // Most rows have identical facets; copy only when a personal override changes membership.
       let personal = related;
       for (const [profileId, state] of states) {

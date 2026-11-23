@@ -24,6 +24,7 @@ export const publicationSourceToolingPaths = new Set([
   "scripts/lib/pnpm-lockfile-documents.mjs",
   "scripts/lib/record-shared.mjs",
   "scripts/lib/release-validation-waivers.mjs",
+  "scripts/lib/release-validation-waivers.json",
   "scripts/lib/release-version.mjs",
   "scripts/release-plan-producer.mts",
   "scripts/release-plan-producer.types.mts",

@@ -11,7 +11,9 @@ import {
 import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
 import { initializeGatewayExecCgroup } from "./linux-exec-cgroup-startup.js";
 import {
+  applyAgentExecMemoryBudget,
   getAgentExecCgroup,
+  releaseAgentExecCgroupScope,
   reclaimAgentExecCgroup,
   startAgentExecCgroupCleanup,
   sweepAgentExecCgroups,
@@ -22,6 +24,7 @@ import { createStubChildAdapter } from "./supervisor/supervisor.test-support.js"
 
 const fixture = vi.hoisted(() => ({
   files: {} as Record<string, string>,
+  memoryBytes: 1800 * 1024 ** 2,
   devices: ["9:127", "8:0"],
   denied: "",
   writable: true,
@@ -75,7 +78,7 @@ vi.mock("./linux-exec-cgroup-device.js", async (importOriginal) => ({
 }));
 vi.mock("./child-memory.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./child-memory.js")>()),
-  getHostExecMemoryBudget: () => ({ memoryBytes: 1800 * 1024 ** 2, swapBytes: 0 }),
+  getHostExecMemoryBudget: () => ({ memoryBytes: fixture.memoryBytes, swapBytes: 0 }),
 }));
 vi.mock("./supervisor/adapters/child.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./supervisor/adapters/child.js")>()),
@@ -122,6 +125,7 @@ beforeEach(() => {
   vi.spyOn(os, "totalmem").mockReturnValue(2400 * MiB);
   vi.spyOn(process, "constrainedMemory").mockReturnValue(0);
   vi.spyOn(process.memoryUsage, "rss").mockReturnValue(0);
+  fixture.memoryBytes = 1800 * MiB;
   fixture.devices = ["9:127", "8:0"];
   fixture.denied = "";
   fixture.writable = true;
@@ -157,6 +161,51 @@ afterEach(async () => {
     mock.mockReset();
   }
 });
+
+it.each([true, false])(
+  "reuses service discovery across exec start/release (delegated=%s)",
+  async (delegated) => {
+    if (!delegated) {
+      fixture.files[`${root}/cgroup.controllers`] = "cpu memory";
+    }
+    await initializeGatewayExecCgroup("/state");
+    const warning = vi.spyOn(process, "emitWarning").mockImplementation(() => undefined);
+    await applyAgentExecMemoryBudget();
+    getAgentExecCgroup("warmup");
+    const reads = vi.spyOn(fs, "readFileSync");
+    const access = vi.spyOn(fs, "accessSync");
+    fixture.write.mockClear();
+    const supervisor = createProcessSupervisor();
+    fixture.spawn.mockImplementation(async () => {
+      const adapter = createStubChildAdapter();
+      adapter.pid = undefined;
+      adapter.settle(0);
+      return { adapter, ready: Promise.resolve() };
+    });
+    try {
+      for (let index = 0; index < 3; index++) {
+        const scope = `cycle-${index}`;
+        const directory = getAgentExecCgroup(scope);
+        expect(Boolean(directory)).toBe(delegated);
+        const run = await supervisor.spawn({
+          mode: "child",
+          argv: ["fixture"],
+          executionIntent: "agent-tool",
+        });
+        expect((await run.wait()).exitCode).toBe(0);
+        await releaseAgentExecCgroupScope(scope);
+      }
+      expect(reads.mock.calls.filter(([file]) => file !== `${exec}/io.max`)).toEqual([]);
+      expect(access).not.toHaveBeenCalled();
+      expect(fixture.write.mock.calls.filter(([file]) => file === `${exec}/memory.high`)).toEqual(
+        [],
+      );
+    } finally {
+      await supervisor.shutdown();
+      warning.mockRestore();
+    }
+  },
+);
 
 it("retires a leaf that is populated at command close and becomes idle later", async () => {
   vi.useFakeTimers();
@@ -457,7 +506,7 @@ it.for(["cancellation", "authority revocation"])(
       scopeKey: "scope",
     };
     const active = await supervisor.spawn(input);
-    fixture.files[`${exec}/memory.high`] = "max";
+    fixture.memoryBytes += MiB;
     const entered = createDeferred();
     const release = createDeferred();
     vi.spyOn(fs.promises, "writeFile").mockImplementationOnce(async (file, value) => {
@@ -617,13 +666,14 @@ it("preserves working IO and helper placement when state-device resolution is un
   expect(getAgentExecCgroup()).toBe(unscoped);
 });
 
-it("discovers helper placement from its own delegated service and rechecks writability", async () => {
+it("discovers helper placement once and refreshes only through startup", async () => {
   expect(getAgentExecCgroup()).toBeUndefined();
   await initializeGatewayExecCgroup("/state");
   expect(getAgentExecCgroup()).toBe(unscoped);
   fixture.files["/proc/self/cgroup"] = "0::/system.slice/openclaw.service/agent-exec\n";
   expect(getAgentExecCgroup()).toBe(unscoped);
   fixture.writable = false;
+  await initializeGatewayExecCgroup("/state");
   expect(getAgentExecCgroup()).toBeUndefined();
 });
 

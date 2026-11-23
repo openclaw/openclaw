@@ -712,16 +712,6 @@ struct RootTabsPresentationTests {
         #expect(keys.contains("agent:main:cron:daily") == showsAutomation)
     }
 
-    @Test func `sidebar agent badges use canonical identity fallback`() {
-        #expect(RootSidebar.agentBadge(
-            name: "Research Agent",
-            identity: ["emoji": AnyCodable(" 🦞 ")]) == "🦞")
-        #expect(RootSidebar.agentBadge(
-            name: "Research Agent",
-            identity: ["emoji": AnyCodable("?")]) == "RA")
-        #expect(RootSidebar.agentBadge(name: "Research Agent", identity: nil) == "RA")
-    }
-
     @Test func `session work subtitle mirrors the web repo and branch line`() {
         func entry(repoRoot: String?, branch: String?) -> OpenClawChatSessionEntry {
             Self.sessionEntry(

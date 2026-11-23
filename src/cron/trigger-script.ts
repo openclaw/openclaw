@@ -60,6 +60,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { restoreCronScriptOperatorSource } from "../gateway/cron-operator-source.js";
 import type { GatewayContextResolver } from "../gateway/server-methods/types.js";
 import { formatErrorMessageWithCode } from "../infra/errors.js";
+import { isOperatorAuthorityUnavailable } from "../infra/operator-authority-error.js";
 import { logWarn } from "../logger.js";
 import {
   capturePluginLifecycleAuthority,
@@ -71,6 +72,7 @@ import { getPluginToolMeta } from "../plugins/tool-metadata.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { resolveCronAgentConfig } from "./isolated-agent/run-config.js";
 import { resolveCronAgentSessionKey } from "./isolated-agent/session-key.js";
+import { CronOperatorSourceError } from "./operator-source-error.js";
 import { prepareCronRunAdmission } from "./run-admission.js";
 import {
   resolveCronScheduledToolPolicy,
@@ -276,6 +278,7 @@ async function prepareTriggerRuntime(
         signal,
         messageActionTurnCapability,
       ) => {
+        const assertSource = resolveAdmittedRunActiveAssertion(admitted, signal);
         const allTools = toolPlan.constructTools
           ? await createOpenClawCodingToolsInternalAsync({
               agentId,
@@ -283,7 +286,9 @@ async function prepareTriggerRuntime(
               operationalRunInstance: admitted.operationalRunInstance,
               messageActionTurnCapability,
               abortSignal: signal,
-              exec: { config },
+              prepareHostFileMutation: assertSource?.prepareSessionSourceStorageEffect,
+              // No conversation collects a backgrounded command, so exec waits for its result.
+              exec: { config, allowBackground: false },
               sandbox,
               sessionKey,
               trigger: "cron",
@@ -535,7 +540,7 @@ function createCronCodeModeRunner(deps: CronTriggerEvaluatorDeps) {
       });
       releaseRuntime = release;
       admission = prepareCronRunAdmission({
-        scheduledExecution: params.occurrence.mint({
+        scheduledExecution: await params.occurrence.mint({
           cfg: runtime.context.config,
           agentId: runtime.context.agentId,
           runId,
@@ -658,6 +663,10 @@ function createCronCodeModeRunner(deps: CronTriggerEvaluatorDeps) {
         return { kind: "completed" as const, result };
       });
     } catch (error) {
+      // A refused or unavailable operator source is not a script failure; the caller owns it.
+      if (isOperatorAuthorityUnavailable(error) || error instanceof CronOperatorSourceError) {
+        throw error;
+      }
       return scriptFailure(
         formatErrorMessageWithCode(error),
         error instanceof CodeModeHeadlessTimeoutError

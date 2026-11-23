@@ -1,7 +1,5 @@
-import { createHash } from "node:crypto";
 import { readFile, writeFile } from "node:fs/promises";
-import { dirname, join } from "node:path";
-import { create as createTar } from "tar/raw";
+import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { templatesAddHandlers } from "../gateway/server-methods/templates-add.js";
 import { defaultRuntime } from "../runtime.js";
@@ -21,58 +19,7 @@ async function invalidManifestRegistry(tempDirs: { make(prefix: string): string 
   manifest.skills = [];
   manifest["evil\u202ekey\u009b31m"] = true;
   await writeFile(manifestPath, `---\n${JSON.stringify(manifest)}\n---\n`);
-  const archive = join(tempDirs.make("openclaw-registry-archive-"), "package.tgz");
-  await createTar({ gzip: true, file: archive, cwd: dirname(root) }, [root.split("/").at(-1)!]);
-  const bytes = await readFile(archive);
-  const sha256 = createHash("sha256").update(bytes).digest("hex");
-  const npmIntegrity = "sha512-" + createHash("sha512").update(bytes).digest("base64");
-  const pkg = {
-    name: packageName,
-    family: "template",
-    displayName: "Demo",
-    channel: "community",
-    isOfficial: false,
-    updatedAt: 1,
-    latestVersion: "1.2.3",
-  };
-  const artifact = { kind: "npm-pack", sha256, npmIntegrity };
-  vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
-    const route = decodeURIComponent(
-      new URL(input instanceof Request ? input.url : String(input)).pathname,
-    );
-    if (route.endsWith("/artifact/download")) {
-      return new Response(bytes, { headers: { "X-ClawHub-Artifact-Sha256": sha256 } });
-    }
-    if (route.endsWith("/artifact")) {
-      return Response.json({ package: pkg, version: "1.2.3", artifact });
-    }
-    if (route.endsWith("/security")) {
-      return Response.json({
-        package: pkg,
-        release: {
-          version: "1.2.3",
-          artifactKind: "npm-pack",
-          artifactSha256: sha256,
-          npmIntegrity,
-        },
-        overview: "Synthetic security review.",
-        securityAuditUrl: "https://clawhub.ai/acme/templates/demo-agent/security-audit",
-        verdict: "benign",
-        trust: {
-          scanStatus: "clean",
-          moderationState: "approved",
-          blockedFromDownload: false,
-          reasons: [],
-          pending: false,
-          stale: false,
-        },
-      });
-    }
-    if (route === "/api/v1/packages/" + packageName) {
-      return Response.json({ package: pkg, owner: { handle: "acme" } });
-    }
-    throw new Error("Unexpected registry request: " + route);
-  });
+  await cliTestHelpers.mockRegistryPackage(tempDirs, root);
 }
 
 describe("Template Add CLI through the Gateway owner", () => {

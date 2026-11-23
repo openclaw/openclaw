@@ -220,6 +220,7 @@ export async function runExecProcess({
   githubProfileDir?: string;
   pathPrepend?: string[];
   sandbox?: BashSandboxConfig;
+  workerMemoryBoundary?: "sandbox";
   containerWorkdir?: string | null;
   usePty: boolean;
   warnings: string[];
@@ -439,7 +440,7 @@ export async function runExecProcess({
     session.finalizing = true;
     try {
       if (!opts.sandbox && managedRun?.waitForExtinction) {
-        finalOutcome = await settleHostExecDescendants(session, managedRun, outcome);
+        finalOutcome = await settleHostExecDescendants(session, managedRun, outcome, opts.warnings);
       }
       if (outcome.exitReason !== "exit") {
         beginSandboxTermination();
@@ -634,6 +635,7 @@ export async function runExecProcess({
       cwd: spawnSpec.cwd ?? opts.workdir,
       env: spawnSpec.env,
       timeoutMs,
+      workerMemoryBoundary: opts.workerMemoryBoundary,
       captureOutput: false,
       onStdout: handleOutput("stdout", sanitizeStdout),
       onStderr: handleOutput("stderr", sanitizeStderr),

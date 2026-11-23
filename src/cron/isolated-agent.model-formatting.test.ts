@@ -1,5 +1,4 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
@@ -14,8 +13,8 @@ const mocks = vi.hoisted(() => ({
   status: vi.fn(),
   subagent: vi.fn(),
 }));
+// mock-isolation: selection inputs are scripted per case; real catalog owners would load plugins.
 vi.mock("./isolated-agent/run-model-selection.runtime.js", () => ({
-  DEFAULT_MODEL: "claude-opus-4-6",
   DEFAULT_PROVIDER: "anthropic",
   loadResolvedPublishedModelCatalogOwner: mocks.loadOwner,
   resolveAllowedModelRefCore: mocks.allowed,
@@ -34,7 +33,7 @@ import { resolveCronModelSelection } from "./isolated-agent/model-selection.js";
 import { resolveCronAgentConfig } from "./isolated-agent/run-config.js";
 
 type SelectionParams = Parameters<typeof resolveCronModelSelection>[0];
-const defaultRef = { provider: DEFAULT_PROVIDER, model: DEFAULT_MODEL };
+const defaultRef = { provider: "anthropic", model: "claude-opus-4-6" };
 const selectedRef = { provider: "openai", model: "gpt-4.1-mini" };
 const selectedModel = "openai/gpt-4.1-mini";
 const select = (overrides: Partial<SelectionParams> = {}) =>

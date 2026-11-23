@@ -37,7 +37,6 @@ import { resolveNestedAgentLaneForSession } from "../lanes.js";
 import { resolveSenderRestrictedSpawnError } from "../spawn-requester-policy.js";
 import { jsonResult } from "./common.js";
 import {
-  captureGatewayToolCallerAssertion,
   getGatewayToolCallerIdentity,
   resolveGatewayToolOperatorSelection,
 } from "./gateway-caller-context.js";
@@ -204,7 +203,7 @@ export async function trySessionsSendActiveRunDelivery(
   params: SessionsSendDeliveryParams,
   ownChild: boolean,
 ): Promise<SessionsSendStart | { fallbackSessionKey?: string }> {
-  const assertCaller = captureGatewayToolCallerAssertion();
+  const admittedCaller = Boolean(getGatewayToolCallerIdentity()?.operationalRunInstance);
   try {
     const selection = resolveGatewayToolOperatorSelection({ requireRequesterOrigin: true });
     selection.assertCurrent();
@@ -258,7 +257,7 @@ export async function trySessionsSendActiveRunDelivery(
           }
         };
         const guarded = Boolean(
-          selection.operatorAuthority || assertCaller || params.assertSendCurrent,
+          selection.operatorAuthority || admittedCaller || params.assertSendCurrent,
         );
         assertInputCurrent();
         const queueOptions: ReplyMessageInjectionOptions = {
@@ -275,16 +274,7 @@ export async function trySessionsSendActiveRunDelivery(
             lifecycle.onQueueAccepted?.(value);
           },
           // Source-bound authority admits only guarded (V2) injection.
-          ...(guarded
-            ? {
-                assertCurrent: () => {
-                  assertInputCurrent();
-                  if (!selection.operatorAuthority) {
-                    assertCaller?.("sessions.send");
-                  }
-                },
-              }
-            : {}),
+          ...(guarded ? { assertCurrent: assertInputCurrent } : {}),
           // Admission is the receipt; the receiving run owns commit or withdrawal.
           waitForTranscriptCommit: false,
           // The receiving runtime owns transcript writes to this exact incarnation.

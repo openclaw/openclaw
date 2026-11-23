@@ -175,7 +175,7 @@ export function captureCliRunToolAuthority(
                 boundOperation.toolAuthorityRoute.model !== route.model ||
                 boundOperation.toolAuthorityFingerprint !== fingerprint)
             ) {
-              throw new Error("question creator reply authority is no longer active");
+              throw new Error("The message turn has ended. Start a new turn to retry.");
             }
             assertActive();
           },

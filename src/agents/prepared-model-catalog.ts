@@ -401,8 +401,12 @@ async function withPreparedModelCatalogOwnerPolicy<T>(
     ...params,
     readOnly: params.readOnly ?? params.refreshFullCatalog !== true,
   };
+  // Published readers accept the owner after a config republish, so they must also find it here;
+  // an exact lookup would miss it and leave them with configured rows instead of its inventory.
   const publishedReadOnlyOwner = request.readOnly
-    ? getPreparedModelCatalogOwnerSnapshot(request)
+    ? configPolicy === "published"
+      ? getPublishedPreparedModelCatalogOwnerSnapshot(request)
+      : getPreparedModelCatalogOwnerSnapshot(request)
     : undefined;
   const { snapshot, run, release, refreshed } =
     await resolvePreparedModelCatalogOwnerSnapshotWithPolicy(
@@ -613,7 +617,11 @@ export async function prewarmDefaultNativeModelCatalog(config: OpenClawConfig): 
   if (!agentId) {
     return;
   }
-  const { provider, model } = resolveDefaultModelForAgent({ cfg: config, agentId });
+  const defaultModel = resolveDefaultModelForAgent({ cfg: config, agentId });
+  if (!defaultModel) {
+    return;
+  }
+  const { provider, model } = defaultModel;
   const owner = getPublishedPreparedModelCatalogOwnerSnapshot({ config, agentId });
   // A built-in fallback is not startup demand. Keep warmup for configured models/runtimes and
   // signed-in defaults, without probing native auth or starting discovery to decide.

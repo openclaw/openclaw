@@ -1,6 +1,7 @@
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, onTestFinished, vi, type Mock } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import * as sessionEvents from "../../../auto-reply/reply/session-event-handoff.js";
 import * as sessionAccessor from "../../../config/sessions/session-accessor.js";
 import {
@@ -12,6 +13,10 @@ import { persistGatewaySessionLifecycleEvent } from "../../../gateway/session-li
 import { resumeMarkedSessions } from "../../../gateway/session-restart-resume.js";
 import { claimAgentRunContext, releaseAgentRunContext } from "../../../infra/agent-run-registry.js";
 import { bindGatewayContextResolver } from "../../../plugins/runtime/gateway-request-scope.js";
+import {
+  markGatewayRestartDraining,
+  resetGatewayWorkAdmission,
+} from "../../../process/gateway-work-admission.js";
 import { sessionControllerMailboxes } from "../../../sessions/session-controller.mailbox.js";
 import { createSubagentRunParams } from "../../subagent-test-fixtures.test-helpers.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
@@ -49,6 +54,120 @@ export function registerRequesterRestartDeliveryTests<Response>({
   | "createGatewayContext"
   | "getLifecycleHandler"
 > & { callGatewayMock: Mock<(request: GatewayRequest) => Promise<Response>> }): void {
+  it.each([false, true])(
+    "retains an ended child's restart-aborted delivery without replay (consumed=%s)",
+    async (consumed) => {
+      const context = createGatewayContext();
+      await registry.initSubagentRegistry();
+      await registry.activateSubagentRegistry(() => context);
+      const child = visibleChild("ended-before-shutdown");
+      const sessionEntry = await prepareChildSession(child.childSessionKey, "sess-ended-child");
+      const requester = {
+        agentId: "main",
+        sessionKey: requesterSessionKey,
+        storePath: getFixture().sessionStorePath,
+        sessionId: getFixture().sessionStore[requesterSessionKey]!.sessionId,
+      };
+      const entered = createDeferred();
+      const aborted = createDeferred();
+      const dispatch = callGatewayMock.getMockImplementation()!;
+      let attempts = 0;
+      let deliveries = 0;
+      callGatewayMock.mockImplementation(async (request) => {
+        if (request.method !== "agent") {
+          return dispatch(request);
+        }
+        attempts++;
+        if (consumed || attempts > 1) {
+          const committed = await appendSessionTranscriptReport(requester, {
+            kind: "custom",
+            customTypes: ["synthetic-child-input"],
+            selectReport: () => ({
+              customType: "synthetic-child-input",
+              content: String(request.params?.message),
+              display: false,
+            }),
+          });
+          expect(committed.ok).toBe(true);
+          const runId = request.params?.idempotencyKey;
+          const input = [...sessionControllerMailboxes()]
+            .flatMap((mailbox) => mailbox.entries)
+            .find((entry) => entry.protocolRunId === runId);
+          await expectDefined(input?.onTranscriptCommitted, "input commit callback")(String(runId));
+          deliveries++;
+        }
+        if (attempts > 1) {
+          return dispatch(request);
+        }
+        entered.resolve();
+        await aborted.promise;
+        return { status: "timeout", stopReason: "restart" } as Response;
+      });
+      onTestFinished(() => {
+        aborted.resolve();
+        resetGatewayWorkAdmission();
+        callGatewayMock.mockImplementation(dispatch);
+      });
+      await registry.registerSubagentRun(
+        createSubagentRunParams({
+          ...child,
+          sessionEntry,
+          requesterSessionKey,
+          requesterAgentId: "main",
+          cleanup: "keep",
+          gatewayContextResolver: context.resolveGatewayContext,
+        }),
+      );
+      getLifecycleHandler()!({
+        stream: "lifecycle",
+        runId: child.runId,
+        seq: 1,
+        ts: Date.now(),
+        sessionKey: child.childSessionKey,
+        data: {
+          phase: "end",
+          endedAt: Date.now(),
+          terminalReply: {
+            disposition: "visible",
+            text: "SAVED_COMPLETED_CHILD_RESULT",
+          },
+        },
+      });
+      await entered.promise;
+      expect(loadSubagentRegistryFromSqlite().get(child.runId)?.completion?.resultText).toBe(
+        "SAVED_COMPLETED_CHILD_RESULT",
+      );
+      markGatewayRestartDraining();
+      aborted.resolve();
+      await flushOwnedWork();
+      expect(loadSubagentRegistryFromSqlite().get(child.runId)?.delivery?.status).toBe(
+        consumed ? "delivered" : "pending",
+      );
+      await registry.resetSubagentRegistryForTests({ persist: false });
+      resetGatewayWorkAdmission();
+      const restarted = createGatewayContext();
+      await registry.initSubagentRegistry();
+      await registry.activateSubagentRegistry(() => restarted);
+      await resumeMarkedSessions({
+        context: restarted,
+        signal: new AbortController().signal,
+        log: { warn: vi.fn() },
+      });
+      await vi.advanceTimersByTimeAsync(30_000);
+      await registry.testing.sweepOnceForTests();
+      await flushOwnedWork();
+      expect(loadSubagentRegistryFromSqlite().get(child.runId)?.delivery?.status).toBe("delivered");
+      await registry.testing.sweepOnceForTests();
+      await flushOwnedWork();
+      expect(deliveries).toBe(1);
+      expect(attempts).toBe(consumed ? 1 : 2);
+      const events = await loadTranscriptEvents(requester);
+      expect(
+        events.filter((event) => isRecord(event) && event.customType === "synthetic-child-input"),
+      ).toHaveLength(1);
+    },
+  );
+
   it("shows every consumed result when a frozen batch settles in separate owner partitions", async () => {
     const contexts = [createGatewayContext(), createGatewayContext()];
     await registry.initSubagentRegistry();

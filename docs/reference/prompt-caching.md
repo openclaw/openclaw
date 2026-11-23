@@ -204,6 +204,26 @@ explicit key. Operator, WebChat, private subagent completion, requester-settle,
 and recovery turns share this session-boundary identity. The current client and
 reply delivery route do not select a different cache key.
 
+## Warm compaction requests
+
+Automatic compaction at a request boundary sends its summary request as the
+session's next normal request: the same system prompt, tools, `tool_choice`,
+output limit, thinking settings, cache key and every earlier message, plus one
+appended user item that asks for the summary. The provider therefore reads the
+prompt prefix it already cached instead of processing a separate summarizer
+request. The appended item is sent once and is never replayed, so the Anthropic
+and Chat Completions transports place no cache marker on it. The history markers
+are the ones the normal request would carry, so the request writes only what that
+request would have written, such as a new user message. On routes without prompt
+caching the request is still correct and costs ordinary input.
+
+This applies on every built-in route except the native ChatGPT sign-in route,
+which uses its provider checkpoint at the same boundary, and sessions whose
+compaction belongs to a context engine, a registered compaction provider, or a
+separate `agents.defaults.compaction.model`. Manual `/compact` and overflow
+recovery keep their existing paths. See
+[Compaction](/concepts/compaction#warm-request-compaction).
+
 ## Primary knobs
 
 ### Worker turns
@@ -665,7 +685,7 @@ History baselines share a 16 MiB budget for fingerprint strings and container ov
 
 The comparison baseline resets when the session ID changes, even if an isolated cron job reuses its provider cache key. Session reset, deletion, shutdown, and completion of a detached Skill Workshop review release the retired session's diagnostic fingerprints; resident sessions keep their cross-turn baselines. A fresh transcript can legitimately reuse fewer tokens than the previous run's final request. Within a session, `no tracked cache input change` means the tracked fingerprints stayed stable; it does not prove identical final provider payloads or diagnose cache expiry. Compare request timing and final payloads before attributing a drop to provider caching.
 
-For encoded provider requests, `providerPrefix` compares the serialized instructions, tools, and up to 512 input items. It names the first changed item, with bounded protocol fields for the first 32 items, such as `message:3.encrypted_content`, plus changed request parameters such as `parameters:prompt_cache_key`. Values and unknown field names are never logged. `order` means object key order changed without a tracked field-value change; it is wire evidence, not proof that the provider rendered different tokens. Beyond the item limit, a tail digest can detect changes but cannot locate the first differing item.
+For encoded provider requests, `providerPrefix` compares the serialized instructions, tools, and up to 512 input items. It names the first changed item, with bounded protocol fields for the first 32 items, such as `message:3.encrypted_content`, plus changed request parameters such as `parameters:prompt_cache_key`. Output caps (`max_tokens`, `max_completion_tokens`, `max_output_tokens`) are not compared: they do not change the prompt a prefix cache keys on, and Chat Completions routes re-clamp them from the remaining context on most requests, so a drop where only the cap changed reports `prefix-match`. Values and unknown field names are never logged. `order` means object key order changed without a tracked field-value change; it is wire evidence, not proof that the provider rendered different tokens. Beyond the item limit, a tail digest can detect changes but cannot locate the first differing item.
 
 A `continuation:` prefix means either request used `previous_response_id`. Its `wire-input` items are deltas, so differences between them do not establish rewritten conversation history. Compare the separate `historyRewrite` signal and the changed request parameters before attributing a cache miss. A matching full-history wire prefix also does not guarantee a hit: OpenAI must find an available matching cache boundary.
 
@@ -695,6 +715,8 @@ The session prompt rebuilds only at these points:
 
 - A new session: the first request, `/new`, or `/reset`.
 - An explicit compaction (`/compact` or automatic compaction).
+- A move from the default workspace into a project when the session had the
+  project move tool. The fresh series removes that tool and its guidance.
 - A model or provider switch, including a change of API, base URL, agent
   harness, tool surface (direct tools, tool search, or Code Mode), or the
   session's selected personal profile. The selection is a session fact (its

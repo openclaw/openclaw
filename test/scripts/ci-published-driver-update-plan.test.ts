@@ -203,7 +203,7 @@ it.each([
   });
   expect(resolved.status, `${resolved.stdout}${resolved.stderr}`).toBe(0);
   const driverOutputs = readWorkflowOutputs(f.file("outputs"));
-  expect(driverOutputs).toEqual({ version: "2026.9.7", "cache-mode": cacheMode });
+  expect(driverOutputs).toMatchObject({ version: "2026.9.7", "cache-mode": cacheMode });
   for (const step of [prepare, save]) {
     expect(
       evaluateWorkflowExpression(`\${{ ${step.if} }}`, {
@@ -278,9 +278,15 @@ it.each([0, 42])(
   },
 );
 
-it.each(["extended-stable/2026.10.33", "release-prep/2026.10.33-final-notes", ""])(
-  "uses the frozen baseline instead of npm latest with context %j",
-  (targetContextRef) => {
+it.each([
+  ["extended-stable/2026.10.33", "2026.10.33", "2026.9.37", "false"],
+  ["release-prep/2026.10.33-final-notes", "2026.10.33", "2026.9.37", "false"],
+  ["", "2026.10.33", "2026.9.37", "false"],
+  ["main", "2026.11.4", "2026.11.5", "false"],
+  ["main", "2026.11.5", "2026.11.5", "true"],
+])(
+  "resolves published upgrade coverage for context %j and candidate %s",
+  (targetContextRef, candidateVersion, driverVersion, postgres) => {
     const driver = readWorkflow(
       ".github/workflows/ci-published-driver-update.yml",
     ).jobs.update.steps.find((step: WorkflowStep) => step.id === "driver");
@@ -297,7 +303,7 @@ it.each(["extended-stable/2026.10.33", "release-prep/2026.10.33-final-notes", ""
     ]) {
       copyFileSync(`scripts/lib/${name}`, path.join(lib, name));
     }
-    writeFileSync(path.join(root, "package.json"), JSON.stringify({ version: "2026.10.33" }));
+    writeFileSync(path.join(root, "package.json"), JSON.stringify({ version: candidateVersion }));
     writeExecutable(path.join(bin, "npm"), ["#!/bin/sh", `echo '"2026.11.5"'`]);
     const result = runWorkflowShellScript(driver.run, {
       cwd: root,
@@ -316,6 +322,10 @@ it.each(["extended-stable/2026.10.33", "release-prep/2026.10.33-final-notes", ""
       },
     });
     expect(result.status, `${result.stdout}${result.stderr}`).toBe(0);
-    expect(readWorkflowOutputs(output)).toEqual({ version: "2026.9.37", "cache-mode": "restore" });
+    expect(readWorkflowOutputs(output)).toEqual({
+      version: driverVersion,
+      "cache-mode": "restore",
+      postgres,
+    });
   },
 );

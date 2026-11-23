@@ -1,4 +1,3 @@
-import { formatCliCommand } from "../../cli/command-format.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { isNamedOperatorRoleEnforcementEnabled } from "../../gateway/operator-role-enforcement.js";
 import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
@@ -35,7 +34,8 @@ export async function showModelsAuthScopeNote(prompter: WizardPrompter, agentId:
       "Scope: System / agent",
       `Agent: ${agentId}`,
       "Location: the machine running OpenClaw",
-      `For personal model accounts on a Gateway, run ${formatCliCommand("openclaw models accounts login --help")}.`,
+      // Chat /login and the Control UI show this too, so it names no terminal command.
+      "Personal model accounts are managed in Settings → Profile → Connected accounts.",
     ].join("\n"),
     "Provider sign-in",
   );

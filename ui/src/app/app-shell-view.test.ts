@@ -23,9 +23,9 @@ import { NATIVE_HISTORY_STATE_EVENT } from "./native-web-chrome.ts";
 import { registerRouteElement } from "./route-elements.ts";
 import { loadSettings } from "./settings.ts";
 
-const sidebarImport = vi.hoisted(() => Promise.withResolvers<void>());
+const sidebarImport = vi.hoisted((): { delay?: Promise<void> } => ({}));
 vi.mock("../components/app-sidebar.tsx", async (importOriginal) => {
-  await sidebarImport.promise;
+  await sidebarImport.delay;
   return importOriginal();
 });
 
@@ -51,6 +51,8 @@ function mockPhone() {
 }
 
 it("publishes readiness when the retained sidebar's delayed module commits", async () => {
+  const { promise, resolve } = Promise.withResolvers<void>();
+  sidebarImport.delay = promise;
   try {
     const { owner, runtime, view, query, refresh } = await mountShell(false);
     const sidebar = owner.navigationSidebar;
@@ -87,7 +89,7 @@ it("publishes readiness when the retained sidebar's delayed module commits", asy
       expect(readiness.hook.snapshot()).toMatchObject({ booted: true, routeReady: false });
     });
     expect(sidebar.isConnected).toBe(false);
-    sidebarImport.resolve();
+    resolve();
     await vi.dynamicImportSettled();
     await customElements.whenDefined("openclaw-app-sidebar");
     await waitForSolid(() => {
@@ -96,7 +98,8 @@ it("publishes readiness when the retained sidebar's delayed module commits", asy
       expect(readiness.hook.snapshot()).toMatchObject({ routeReady: true });
     });
   } finally {
-    sidebarImport.resolve();
+    resolve();
+    delete sidebarImport.delay;
   }
 });
 
@@ -155,17 +158,17 @@ it("shows the read-only banner only for the serving Gateway while its configurat
   expect(getBanner()).toBeNull();
 });
 
-it("exposes the Templates navigation entry only while its Labs toggle is enabled", async () => {
+it("exposes Templates by default and honors its advanced opt-out", async () => {
   const { owner, runtime } = await mountShell();
   const initial = runtime.context.runtimeConfig.state;
   const config = vi.spyOn(runtime.context.runtimeConfig, "state", "get");
-  for (const enabled of [false, true, false]) {
+  for (const enabled of [undefined, false, true, false]) {
     config.mockReturnValue({
       ...initial,
       bootstrapConfig: { gateway: { controlUi: { experimental: { templates: enabled } } } },
     });
     expect(readShellView(owner).sidebarProperties.enabledRouteIds.includes("templates")).toBe(
-      enabled,
+      enabled !== false,
     );
     expect(readShellView(owner).sidebarProperties.enabledRouteIds).toContain("agents");
   }
@@ -372,7 +375,6 @@ it("keeps one sidebar through drawer and settings takeover transitions", async (
 });
 
 it("commits mobile drawer changes without republishing the full shell", async () => {
-  sidebarImport.resolve();
   mockMobile(() => true);
   const { owner, query } = await mountShell();
   const fullCommit = vi.spyOn(owner, "afterCommit");
@@ -777,7 +779,8 @@ it("checks writing-surface clearance only when the avatar flag would open", asyn
   publish({ phase: "offline", offlineStable: true });
   await settle();
   expect(flag.hasAttribute("data-open")).toBe(false);
-  expect(card.title).toBe(card.getAttribute("aria-label"));
+  expect(card.title).toBe("Disconnected");
+  expect(card.getAttribute("aria-label")).toBe("Identity and app menu for Owner: Disconnected");
   expect(measure).toHaveBeenCalledOnce();
   publish({
     phase: "offline",
@@ -792,7 +795,7 @@ it("checks writing-surface clearance only when the avatar flag would open", asyn
   anchor.dispatchEvent(new Event("pointerenter"));
   flush();
   expect(flag.hasAttribute("data-open")).toBe(false);
-  expect(card.title).toBe(card.getAttribute("aria-label"));
+  expect(card.title).toBe("Disconnected");
   anchor.dispatchEvent(new Event("pointerleave"));
   flush();
   visible = false;
@@ -817,7 +820,7 @@ it("checks writing-surface clearance only when the avatar flag would open", asyn
   card.focus();
   flush();
   expect(flag.hasAttribute("data-open")).toBe(false);
-  expect(card.title).toBe(card.getAttribute("aria-label"));
+  expect(card.title).toBe("Disconnected");
 });
 
 it("restores the delegated shell after a pending update and can select another workspace", async () => {

@@ -107,6 +107,7 @@ export function buildSessionListParams(options: SessionListOptions = {}): Sessio
     "includeOwnerSessionCounts",
     "ownerFirst",
     "involvingMe",
+    "searchTitlesOnly",
   ] as const) {
     if (options[key] === true) {
       params[key] = true;

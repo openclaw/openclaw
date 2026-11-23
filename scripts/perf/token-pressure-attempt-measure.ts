@@ -67,7 +67,7 @@ const ownerPaths = [
   "src/agents/embedded-agent-runner/run/attempt-prompt-submit.ts",
   "src/agents/embedded-agent-runner/run/attempt-prompt-phase.ts",
   "src/agents/embedded-agent-runner/run/attempt-prompt-preflight.ts",
-  "src/agents/embedded-agent-runner/run/chatgpt-v2-compaction.ts",
+  "src/agents/embedded-agent-runner/run/request-boundary-compaction.ts",
 ];
 const root = new URL("../../", import.meta.url);
 const owners = new Set(ownerPaths.map((path) => new URL(path, root).href));
@@ -255,7 +255,6 @@ const { session } = await createAgentSession({
   tools: customTools.map(({ name }) => name),
   customTools,
   contextOverflowRecoveryOwner: "caller",
-  cleanupProviderSessionResourcesOnDispose: false,
 });
 const attempt = {
   config: {

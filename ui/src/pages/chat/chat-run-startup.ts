@@ -22,7 +22,7 @@ export type ChatRunStartupState =
   | {
       state: "status";
       runId: string;
-      phase: "answer" | "finishing" | "preparing_tool";
+      phase: "answer" | "finishing";
       seq?: number;
     }
   | {
@@ -76,7 +76,6 @@ export function reconcileChatRunStartup(
       (next.state === "status" &&
         next.phase !== "finishing" &&
         next.phase !== "answer" &&
-        next.phase !== "preparing_tool" &&
         !isModelWaitTransition &&
         !isChatRunRecoveryStatus(next) &&
         (current.state === "activity" ||
@@ -146,9 +145,6 @@ export function chatStartupStatusLabel(
   if (run) {
     if (run.phase === "waiting_for_model" && run.waitReason === "slot") {
       return t("chat.startupStatus.waitingForModelSlot");
-    }
-    if (run.phase === "preparing_tool") {
-      return t("chat.startupStatus.preparingTool");
     }
     if (run.phase === "finishing" || run.phase === "answer") {
       return undefined;

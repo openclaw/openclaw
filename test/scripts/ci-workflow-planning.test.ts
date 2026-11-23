@@ -10999,6 +10999,58 @@ describe("ci workflow guards", () => {
     ).toEqual([target]);
   });
 
+  it("partitions grant-only target-context UI only with target native sharding", () => {
+    const run = (uiNativeSharding: boolean) =>
+      runCiManifestFixture({
+        bundledPlanner: false,
+        historicalCompatibility: false,
+        targetContextCompatibility: true,
+        uiNativeSharding,
+        scopeEnv: {
+          OPENCLAW_CI_CHECKOUT_REVISION: "6c6ae42ea8c3b17d092cd62027ba8962cb23c805",
+          OPENCLAW_CI_WORKFLOW_REVISION: "a4b20f00709b83d193946f6451d2f3569374549f",
+          OPENCLAW_CI_RUN_UI_TESTS: "true",
+        },
+      });
+    const supported = run(true);
+    const unknown = run(false);
+    for (const result of [supported, unknown]) {
+      expect(result.status, result.output).toBe(0);
+      expect(result.outputs.compatibility_target).toBe("true");
+      expect(result.outputs.ui_test_groups_gzip_base64).toBe("");
+    }
+    expect(supported.outputs.ui_test_shard_count).toBe("3");
+    expect(readJsonOutput(supported.outputs, "ui_test_matrix").include).toEqual([
+      { shard: 1 },
+      { shard: 2 },
+      { shard: 3 },
+    ]);
+    expect(unknown.outputs.ui_test_shard_count).toBe("1");
+    const nonUiOutputs = (outputs: Record<string, string>) =>
+      Object.fromEntries(Object.entries(outputs).filter(([key]) => !key.startsWith("ui_test_")));
+    expect(nonUiOutputs(supported.outputs)).toEqual(nonUiOutputs(unknown.outputs));
+  });
+
+  it.each(["node", "bun-all", "dual-all"])(
+    "retains singleton compatibility for an explicit %s runtime override",
+    (policy) => {
+      const result = runCiManifestFixture({
+        bundledPlanner: true,
+        historicalCompatibility: false,
+        targetContextCompatibility: true,
+        uiNativeSharding: true,
+        bunTestRuntime: true,
+        bunUiTestRuntime: true,
+        runtimeJobs: true,
+        scopeEnv: { OPENCLAW_CI_TEST_RUNTIME_POLICY: policy, OPENCLAW_CI_RUN_UI_TESTS: "true" },
+      });
+      expect(result.status, result.output).toBe(0);
+      expect(result.outputs.compatibility_target).toBe("true");
+      expect(result.outputs.ui_test_shard_count).toBe("1");
+      expect(result.outputs.ui_test_runtime_policy).toBe(policy);
+    },
+  );
+
   it("uses target-owned CI plans and capabilities for older release checkouts", () => {
     const androidRun = requiredWorkflowStep(
       readCiWorkflow().jobs.android.steps,

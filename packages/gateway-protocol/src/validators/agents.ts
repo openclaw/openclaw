@@ -162,6 +162,10 @@ export const validateSkillsUpdateParams = createProtocolValidator(
   S.SkillsUpdateParamsSchema,
   Checks.isSkillsUpdateParams,
 );
+export const validateSkillsCategoriesParams = createProtocolValidator(
+  S.SkillsCategoriesParamsSchema,
+  Checks.isSkillsCategoriesParams,
+);
 export const validateSkillsSearchParams = createProtocolValidator(
   S.SkillsSearchParamsSchema,
   Checks.isSkillsSearchParams,

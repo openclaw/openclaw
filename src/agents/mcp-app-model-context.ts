@@ -248,7 +248,7 @@ export function leaseMcpAppModelContextForTurn(params: {
         params.runtime.mcpAppModelContextRevoked ||
         snapshots.some(([view, snapshot]) => views?.get(view) !== snapshot)
       ) {
-        throw new Error("MCP App context authority changed before input custody");
+        throw new Error("MCP App context changed before input custody. Start a new turn to retry.");
       }
     },
     commit: () => {

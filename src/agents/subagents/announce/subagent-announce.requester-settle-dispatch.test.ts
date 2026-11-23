@@ -763,6 +763,7 @@ describe("requester settle dispatch deadline", () => {
 
   it.each([
     ["removed", "managed worktree was removed: /synthetic/requester", true],
+    ["removed session", "This session's worktree was removed by cleanup or deletion.", true],
     ["removing", "managed worktree removal is in progress: /synthetic/requester", false],
   ] as const)(
     "settles a worktree refusal only when permanent: %s",

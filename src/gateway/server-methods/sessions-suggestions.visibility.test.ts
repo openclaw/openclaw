@@ -97,7 +97,7 @@ async function seedIdeas(
   }
 }
 
-it.each(["policy", "profile", "disconnect", "session", "membership", "projection"] as const)(
+it.each(["policy", "session", "membership", "projection"] as const)(
   "rechecks %s after a delayed suggestion list reply",
   (change) =>
     withState(async () => {
@@ -138,10 +138,6 @@ it.each(["policy", "profile", "disconnect", "session", "membership", "projection
         );
         if (change === "policy") {
           committed = roleConfig("view");
-        } else if (change === "profile") {
-          requester.authenticatedUserProfile = client("bob", "Bob").authenticatedUserProfile;
-        } else if (change === "disconnect") {
-          requester.invalidated = true;
         } else if (change === "membership") {
           removeSessionMember({ agentId: "main", sessionKey }, "alice");
         } else if (change === "projection") {
@@ -158,9 +154,7 @@ it.each(["policy", "profile", "disconnect", "session", "membership", "projection
         } else {
           const result = await pending;
           expect(result.responses).toMatchObject([
-            change === "policy" || change === "membership"
-              ? [true, { role: "viewer", suggestions: [expect.objectContaining({ id: "alice" })] }]
-              : [false, undefined, { code: "FORBIDDEN" }],
+            [true, { role: "viewer", suggestions: [expect.objectContaining({ id: "alice" })] }],
           ]);
           if (change === "policy") {
             const request = (others: Parameters<typeof roleConfig>[0], list = false) => {

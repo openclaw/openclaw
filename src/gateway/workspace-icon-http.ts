@@ -181,7 +181,6 @@ export async function handleWorkspaceIconHttpRequest(
   if (!requestAuth) {
     return true;
   }
-  requestAuth.assertCurrent();
 
   if (!parsed.value) {
     res.setHeader("cache-control", "no-store");
@@ -217,10 +216,8 @@ export async function handleWorkspaceIconHttpRequest(
     };
   };
   const selected = await withReadySessionRows(projection, queries, select);
-  requestAuth.assertCurrent();
   const icon = selected.root ? await resolveWorkspaceIcon(selected.root) : null;
   await withReadySessionRows(projection, queries, (read) => {
-    requestAuth.assertCurrent();
     const current = select(read);
     if (
       current.generation !== selected.generation ||
@@ -271,7 +268,6 @@ export async function handleProjectIconHttpRequest(
   if (!auth) {
     return true;
   }
-  auth.assertCurrent();
   const project = parsed.value
     ? await resolveRequesterProject(opts.config, parsed.value, {
         kind: "operator",
@@ -280,8 +276,6 @@ export async function handleProjectIconHttpRequest(
     : undefined;
   const root = localWorkspaceRoot(project?.repoRoot);
   const icon = root ? await resolveWorkspaceIcon(root) : null;
-  // Paired device tokens can be revoked while the registry and icon reads are pending.
-  await auth.revalidate();
   if (!icon) {
     res.setHeader("cache-control", root ? "private, max-age=60" : "no-store");
     res.setHeader("vary", "Authorization, Cookie");

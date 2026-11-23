@@ -139,6 +139,24 @@ export type DiagnosticWorkerRetainedData = {
   truncated?: boolean;
 };
 
+/** Direct physical workers; unknown external policies and missing heap samples stay explicit. */
+export type DiagnosticWorkerCensus = {
+  kind: string;
+  poolId?: number;
+  workerClass: WorkerPoolClass | "other";
+  count: number;
+  floor: number | null;
+  cap: number | null;
+  pointReadCap?: number;
+  idlePolicy: "timeout" | "retain-one" | "until-close" | "unknown";
+  idleTimeoutMs?: number;
+  burstIdleTimeoutMs?: number;
+  heapUsedBytes: number | null;
+  heapSampledCount: number;
+  /** Logical endpoints inside a shared worker host; they are not additional workers. */
+  hostedEndpoints?: number;
+};
+
 export type DiagnosticMemoryUsage = {
   rssBytes: number;
   /** Linux RssAnon: resident anonymous pages, including managed heaps and buffers. */
