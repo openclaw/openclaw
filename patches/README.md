@@ -86,6 +86,20 @@ The published integrity is `sha512-5wjcYMIX1aqhJC9hSUGjfSW+7SWEaLC8NUaek0xH5KGXq
 
 Remove the Matrix patch, its registration, and its exact-version guard exception when an upstream release passes `node scripts/run-vitest.mjs extensions/matrix/src/matrix/client/file-sync-store.test.ts` and the full Matrix QA catalog, including the original DM SAS-to-QR sequence. The regression exercises the real SQLite sync store, SDK cache hydration, and crypto event wiring; it observes crypto input rather than substituting for native verification proof.
 
+`tinyglobby@0.2.17` has an approved coordinate-matching repair in both published
+module formats. Absolute include and ignore patterns match absolute filesystem
+paths; relative patterns keep the caller's `cwd` as their origin. Traversal-root
+selection and directory pruning preserve those origins without changing the
+requested output format. POSIX backslashes remain literal filename characters.
+This prevents ancestor globs from omitting files inside `cwd` and prevents
+absolute exclusions from admitting files under a different discovery directory.
+
+Remove this patch, its registration, and exact-version guard when an upstream
+release passes `test/scripts/native-glob-coordinates.test.ts` without it. Preserve
+the fixed filesystem expectations for sync/async discovery, CJS/ESM, both output
+formats, ancestor patterns, exclusions, and literal POSIX backslashes. The native
+watch cases also require the paired Vitest behavior below.
+
 `vitest@5.0.5` has one approved exact-version pnpm patch. Vitest 5 bundles the
 runner, and `@vitest/runner@5.0.0` is not published, so no standalone runner
 dependency or patch remains. The published package integrity is
@@ -115,6 +129,14 @@ repairs. The split runtime keeps cache integrity initialization with upstream
 share the checked generation. The patch does not reintroduce the retired `_fsCache` owner.
 The patch owns these temporary invariants and removal gates:
 
+- **Watch discovery coordinates (`index.1TqnEahn.js`):** new-file matching uses
+  absolute module paths for absolute patterns and discovery-directory-relative
+  paths for relative patterns across include, exclude, and includeSource.
+  Cached test admission, exclusion precedence, and lazy source inspection stay
+  with their existing owners. Remove this hunk when unpatched Vitest passes the
+  native watch cases in `test/scripts/native-glob-coordinates.test.ts`: create
+  files after watcher readiness, then edit and unlink/recreate them while
+  preserving exact ordinary, isolated, and Docker project ownership.
 - **Mock resolution (`index.CK-t0WMg.js`):** module fetches join the mocker's
   serialized resolution before reading its registry, even after the pending-id
   queue is emptied by an in-flight pass. Resolution drains ids queued during a
