@@ -141,6 +141,10 @@ Rules for update changes:
 Add a note here when a change alters a contract. A note about the in-place update
 flow names the shipped-updater contract or unmoved route that it serves.
 
+At Gateway start, a preparation lock whose owner is dead or has the new Gateway's
+PID is released after its run is recorded as failed with reason `interrupted`.
+A live preparation owner in another process is left untouched.
+
 Candidate Doctor removes empty snapshot directories left by cancellation between
 private directory creation and native-token acquisition, after its inspection
 workers have settled. Unconfirmed worker cleanup and unowned snapshot payloads
