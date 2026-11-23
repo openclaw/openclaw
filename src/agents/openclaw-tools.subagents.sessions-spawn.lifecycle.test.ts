@@ -65,7 +65,12 @@ beforeEach(async () => {
   const config = {
     session: { mainKey: "main", scope: "per-sender" },
     messages: { queue: {} },
-    agents: { defaults: { subagents: { runTimeoutSeconds: 1 } } },
+    agents: {
+      defaults: {
+        model: { primary: "openai/gpt-6-astra" },
+        subagents: { runTimeoutSeconds: 1 },
+      },
+    },
   } satisfies Parameters<typeof setSessionsSpawnConfigOverride>[0];
   setSessionsSpawnConfigOverride(config);
   setRuntimeConfigSnapshot(config);
@@ -191,7 +196,10 @@ it("uses the target agent's bound account for a Matrix room", async () => {
     session: { mainKey: "main", scope: "per-sender" },
     messages: { queue: {} },
     agents: {
-      defaults: { subagents: { allowAgents: ["bot-alpha"] } },
+      defaults: {
+        model: { primary: "openai/gpt-6-astra" },
+        subagents: { allowAgents: ["bot-alpha"] },
+      },
       entries: { main: {}, "bot-alpha": {} },
     },
     bindings: [
