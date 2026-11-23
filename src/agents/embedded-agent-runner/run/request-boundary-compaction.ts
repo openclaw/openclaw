@@ -1,11 +1,11 @@
 import { isDeepStrictEqual } from "node:util";
+import { resolveCompactionThreshold } from "@openclaw/ai/internal/shared";
 import {
   captureOpenAIResponsesCompaction,
   requestPreparedOpenAIResponsesCompaction,
   usesNativeOpenAICodexResponsesBackend,
 } from "@openclaw/ai/transports";
 import type { AssistantHistoryMessage, Context, Model } from "@openclaw/llm-core";
-import { resolveCompactionThreshold } from "../../../../packages/agent-core/src/harness/compaction/compaction-threshold.js";
 import { extractSummaryText } from "../../../../packages/agent-core/src/harness/compaction/utils.js";
 import { consumeAgentCoreStream } from "../../../../packages/agent-core/src/runtime-deps.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
