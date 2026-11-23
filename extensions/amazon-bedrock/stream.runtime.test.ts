@@ -1004,9 +1004,15 @@ describe("Bedrock stream client lifecycle", () => {
   });
 });
 
-it.each(["us.xai.grok-4.6", "global.xai.grok-4.6"])("omits unsupported temperature for %s", async (id) => {
-  const send = mockStream();
-  await streamBedrockForTest(bedrockModel({ id }), userContext(), { temperature: 0.2, maxTokens: 64 }).result();
-  expect(send.mock.calls[0]?.[0]).not.toHaveProperty("input.inferenceConfig.temperature");
-  expect(send.mock.calls[0]?.[0]).toHaveProperty("input.inferenceConfig.maxTokens", 64);
-});
+it.each(["us.xai.grok-4.6", "global.xai.grok-4.6"])(
+  "omits unsupported temperature for %s",
+  async (id) => {
+    const send = mockStream();
+    await streamBedrockForTest(bedrockModel({ id }), userContext(), {
+      temperature: 0.2,
+      maxTokens: 64,
+    }).result();
+    expect(send.mock.calls[0]?.[0]).not.toHaveProperty("input.inferenceConfig.temperature");
+    expect(send.mock.calls[0]?.[0]).toHaveProperty("input.inferenceConfig.maxTokens", 64);
+  },
+);
