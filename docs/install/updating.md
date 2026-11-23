@@ -41,7 +41,7 @@ entries and stages an owned user service's launcher definition with a backup.
 System-owned service definitions keep their forwarding entries.
 
 Plugin maintenance failures are warnings, not failed core updates. Retry them
-with `openclaw plugins update`. An already-current installation still maintains
+with `openclaw plugins update --all`. An already-current installation still maintains
 plugins and restarts only when needed and restart was requested.
 
 Older installed updaters still perform their first hop with their shipped update
@@ -193,12 +193,12 @@ existing trial record carries explicit `--accept-capabilities` consent; an absen
 field does not approve new capabilities. Maintenance has a ten-minute command
 budget. A Gateway stop during that work can leave no plugin result for that
 update. Published compatible plugin versions load at the next Gateway start;
-`openclaw plugins update` finishes the rest. The next core update also retries.
+`openclaw plugins update --all` finishes the rest. The next core update also retries.
 Core rollback does not wait for plugin maintenance, and a candidate that fails
 before readiness does not update plugins on an upgrade. The candidate must contain
 the post-ready maintenance call; the installed updater must contain the version-aware
 pre-restart decision. A Git target with the same version string but an older revision
-does not receive plugin maintenance; run `openclaw plugins update` in that case.
+does not receive plugin maintenance; run `openclaw plugins update --all` in that case.
 The internal maintenance-command result carries exact install-record hashes into
 the existing batch reload check. A record changed again before reload is refused.
 Removed records do not hot-unload a running plugin; the existing metadata-only

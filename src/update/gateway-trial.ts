@@ -92,7 +92,7 @@ async function maintainTrialPlugins(trial: Trial): Promise<void> {
         String(error),
         pluginIds.length > 0
           ? `Run \`openclaw plugins reload ${pluginIds.join(" ")}\` to retry activation.`
-          : "Run `openclaw plugins update` to retry.",
+          : "Run `openclaw plugins update --all` to retry.",
       ]
         .filter(Boolean)
         .join("\n"),

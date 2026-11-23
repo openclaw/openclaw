@@ -722,7 +722,7 @@ describe("already-current update", () => {
       name: "a plugin failure without failing the core update",
       result: pluginResult({ status: "error", reason: "fixture plugin update failed" }),
       changed: false,
-      detail: "fixture plugin update failed\nRun `openclaw plugins update` to retry.",
+      detail: "fixture plugin update failed\nRun `openclaw plugins update --all` to retry.",
       exitCode: 0,
     },
     {
@@ -730,7 +730,7 @@ describe("already-current update", () => {
       result: pluginResult({ status: "error" }),
       changed: false,
       detail:
-        "OpenClaw refused shared state schema mutation because another Gateway owns that state directory.\nRun `openclaw plugins update` to retry.",
+        "OpenClaw refused shared state schema mutation because another Gateway owns that state directory.\nRun `openclaw plugins update --all` to retry.",
       exitCode: 1,
     },
   ])("still maintains plugins with the serving code and records $name", async (expected) => {

@@ -552,7 +552,7 @@ export async function runPluginMaintenance(params: {
   }
   if (failed && !plugins?.warnings?.some((warning) => warning.guidance.length > 0)) {
     const ids = failures.map((outcome) => outcome.pluginId).join(" ");
-    messages.push(`Run \`openclaw plugins update${ids ? ` ${ids}` : ""}\` to retry.`);
+    messages.push(`Run \`openclaw plugins update ${ids || "--all"}\` to retry.`);
   }
   return {
     plugins,
