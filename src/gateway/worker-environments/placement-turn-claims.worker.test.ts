@@ -873,7 +873,7 @@ it.each(["prepare", "release"] as const)(
       expect(placements.validateWorkspaceResultClaim(next)).toBe(true);
       if (operation === "prepare") {
         await expect(placements.prepareWorkspaceResultClaim(previous)).rejects.toThrow(
-          "workspace result authority changed",
+          "workspace result changed",
         );
       } else {
         await placements.releaseTurnIfOwned(previous);

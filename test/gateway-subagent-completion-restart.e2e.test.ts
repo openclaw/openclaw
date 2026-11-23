@@ -51,6 +51,9 @@ it
   async (kind, { signal, onTestFailed, onTestFinished }) => {
     const interruptAnnounce = kind.includes("announcing");
     const preparingAnnounce = kind === "preparing-announcing";
+    const rewriteRequesterMarkers =
+      kind === "unmarked-requester" || kind === "stale-settle-requester";
+    const holdCompletionPreparation = preparingAnnounce || rewriteRequesterMarkers;
     const queuedPrivateAnnounce = kind === "private-queued-announcing";
     const unconsumedAnnounce = preparingAnnounce || queuedPrivateAnnounce;
     const privateContinuation = kind.includes("private-");
@@ -75,7 +78,6 @@ it
     let finishChild: (() => void) | undefined;
     let announcing = false;
     let releasePreparation: (() => void) | undefined;
-    let completedReplies = 0;
     let rootReceivedRecovery = false;
     let rootReceivedChildError = false;
     let resumedChildRequests = 0;
@@ -187,7 +189,6 @@ it
                   announcing = true;
                   return;
                 }
-                completedReplies++;
                 if (spawnedRequester) {
                   expect(capturedCompletionInputs).toHaveLength(1);
                 }
@@ -316,7 +317,7 @@ it
       },
       env: { ...restartEnv, OPENCLAW_NO_RESPAWN: "1", OPENCLAW_GATEWAY_RESTART_TRACE: "1" },
     });
-    if (preparingAnnounce) {
+    if (holdCompletionPreparation) {
       const pluginDir = instance.state.path("held-completion-preparation");
       await writeRestartPlugin(
         pluginDir,
@@ -368,7 +369,7 @@ it
         db.close();
       }
     };
-    const readCapturedInputs = () => {
+    const readRequesterEvents = () => {
       const agentDir = instance.state.agentDir("main");
       const session = readRestartSession(agentDir, rootKey);
       assert(typeof session?.sessionId === "string");
@@ -377,7 +378,10 @@ it
         sessionKey: rootKey,
         sessionId: session.sessionId,
         storePath: path.join(agentDir, "openclaw-agent.sqlite"),
-      })?.events.filter((event) => {
+      })?.events;
+    };
+    const readCapturedInputs = () =>
+      readRequesterEvents()?.filter((event) => {
         if (!isRecord(event)) {
           return false;
         }
@@ -413,7 +417,6 @@ it
             : undefined;
         return message && JSON.stringify(message.content).includes("CAPTURED_CUSTODY_RESULT");
       });
-    };
     let client: GatewayClient | undefined;
     let phase = "startup";
     onTestFailed(() => {
@@ -550,11 +553,13 @@ it
           );
         }
         if (interruptAnnounce) {
-          phase = "requester announce in flight";
           assert(finishChild);
           if (!privateContinuation) {
             finishChild();
           }
+        }
+        if (interruptAnnounce || holdCompletionPreparation) {
+          phase = "requester announce in flight";
           await vi.waitFor(() => expect(announcing).toBe(true), { timeout: 15_000 });
           await vi.waitFor(
             () =>
@@ -562,7 +567,7 @@ it
                 delivery: {
                   status: "pending",
                   requesterDelivery: {
-                    state: unconsumedAnnounce ? "waiting" : "consumed",
+                    state: unconsumedAnnounce || rewriteRequesterMarkers ? "waiting" : "consumed",
                     ...(queuedPrivateAnnounce ? {} : { runId: expect.any(String) }),
                   },
                 },
@@ -584,7 +589,7 @@ it
           await instance.crashGateway();
         } else {
           const stopping = instance.stopGateway();
-          if (preparingAnnounce) {
+          if (holdCompletionPreparation) {
             await vi.waitFor(
               () => expect(instance.logs()).toContain("restart.close.session-abort "),
               {
@@ -600,15 +605,17 @@ it
         client = undefined;
         expect(readRun(capturedRunId)).toMatchObject({
           completion: { resultText: "CAPTURED_CUSTODY_RESULT" },
-          // Shutdown can checkpoint custody before terminal delivery settlement finishes.
+          // Ready child partitions can settle during graceful shutdown. A committed
+          // result must already have its one captured input; pending custody stays owed.
           delivery: {
-            status: interruptAnnounce
-              ? expect.stringMatching(/^(pending|delivered)$/)
-              : retryingRequester
-                ? "delivered"
-                : "pending",
+            status: retryingRequester
+              ? "delivered"
+              : expect.stringMatching(/^(pending|delivered)$/),
           },
         });
+        if (asRecord(readRun(capturedRunId).delivery).status === "delivered") {
+          expect(readCapturedInputs()).toHaveLength(1);
+        }
         if (unconsumedAnnounce) {
           expect(readCapturedInputs()).toHaveLength(0);
           expect(readRun(capturedRunId).delivery).toMatchObject({ status: "pending" });
@@ -629,9 +636,10 @@ it
             execution: { outcome: { status: "error", error: "Gateway stopped" } },
           });
         }
-        if (kind === "unmarked-requester" || kind === "stale-settle-requester") {
+        if (rewriteRequesterMarkers) {
           // Recreate the persisted incident state: a settled, unmarked requester still owes
-          // this real child result. Change only the stopped fixture's requester markers.
+          // this real child result. The preparation barrier prevents graceful shutdown
+          // from delivering it before we change the stopped fixture's requester markers.
           const db = openNodeSqliteDatabase(
             path.join(instance.state.agentDir("main"), "openclaw-agent.sqlite"),
           );
@@ -695,12 +703,36 @@ it
             if (busyRequester || retryingRequester) {
               expect(readRun(childRunId!)).toMatchObject({ delivery: { status: "delivered" } });
             }
-            if (interruptAnnounce) {
-              expect(completedReplies).toBe(1);
-              if (!unconsumedAnnounce) {
-                expect(rootReceivedRecovery).toBe(!spawnedRequester);
-              }
+            if (kind === "captured" || kind === "stale-settle-requester") {
+              expect(readRun(childRunId!)).toMatchObject({ delivery: { status: "delivered" } });
+              // A stopped-child outcome may be a notice instead of another model request.
+              // Batch metadata names one member; match this child's rendered status.
+              expect(
+                rootReceivedChildError ||
+                  readRequesterEvents()?.some(
+                    (event) =>
+                      isRecord(event) &&
+                      event.type === "custom_message" &&
+                      event.display === true &&
+                      typeof event.content === "string" &&
+                      (event.content.includes(
+                        `(run ${childRunId})\nInterrupted by Gateway restart; not resumed.`,
+                      ) ||
+                        event.content.includes(
+                          `(run ${childRunId})\n\nInterrupted by Gateway restart; not resumed.`,
+                        )),
+                  ),
+              ).toBe(true);
             }
+            if (interruptAnnounce && !unconsumedAnnounce) {
+              expect(rootReceivedRecovery).toBe(!spawnedRequester);
+            }
+            // Later child partitions legitimately run with earlier results in history.
+            // Join those turns before the second restart tests settled-receipt idempotence.
+            const requester = readRestartSession(instance.state.agentDir("main"), rootKey);
+            expect(requester).toBeDefined();
+            expect(requester?.lifecycleRunId).toBeUndefined();
+            expect(requester?.resumeAfterRestart).toBeUndefined();
           },
           { timeout: 30_000 },
         );
@@ -726,10 +758,7 @@ it
           expect(rootReceivedRecovery).toBe(false);
         }
         expect(readCapturedInputs()).toHaveLength(1);
-        if (interruptAnnounce) {
-          expect(completedReplies).toBe(1);
-        } else if (kind === "captured") {
-          expect(rootReceivedChildError).toBe(true);
+        if (kind === "captured") {
           expect(resumedChildRequests).toBe(0);
         }
       },

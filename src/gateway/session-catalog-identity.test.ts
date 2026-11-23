@@ -6,6 +6,8 @@ import * as nativeProfiles from "../state/user-profile-list.native.js";
 import { linkEmail, syncGitHubIdentity } from "../state/user-profile-writes.worker.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
+  resolveSessionCatalogProfileRelation,
+  prepareSessionCatalogRelationIdentity,
   createSessionCatalogGitHubLinker as createLinker,
   createSessionCatalogSourceActorProjector as createActorProjector,
   prepareSessionCatalogGitHubLinker as prepareLinker,
@@ -107,5 +109,32 @@ it("projects lazy, merged and refreshed identities through legacy and prepared r
     });
     expect(changed.resolveOwner("github:SECONDARY")).toBeUndefined();
     expect(changed.resolveOwner("github:RENAMED-SECONDARY")?.label).toBe("Changed Person");
+  });
+});
+
+it("resolves me through verified numeric identity and rejects an unknown source target", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const person = profile(5151, "relation-person");
+    const query = { relationship: "involving", target: { type: "me" } } as const;
+    await expect(resolveSessionCatalogProfileRelation(query)).rejects.toThrow(
+      "authenticated human",
+    );
+    const portable = await resolveSessionCatalogProfileRelation(query, person.id);
+    expect(portable).toEqual({
+      relationship: "involving",
+      target: { type: "github-account", id: "5151" },
+    });
+    const source = await prepareSessionCatalogRelationIdentity(portable!);
+    expect(source.profile.profileId).toBe(person.id);
+    source.assertCurrent();
+    await expect(
+      prepareSessionCatalogRelationIdentity({
+        relationship: "owned",
+        target: { type: "github-account", id: "9191" },
+      }),
+    ).rejects.toThrow("unresolved or ambiguous");
+    await expect(resolveSessionCatalogProfileRelation(query, "missing")).rejects.toThrow(
+      "verified GitHub",
+    );
   });
 });

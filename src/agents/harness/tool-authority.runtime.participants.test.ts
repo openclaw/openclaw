@@ -154,7 +154,7 @@ it("isolates overlapping participant sessions", async ({ onTestFinished }) => {
     expect(messageCapture?.participants?.resolve()?.profileId).toBe("alice");
     const wrongExecutionIdentity = await resolveMessageIdentity("agent:main:another-run");
     expect(() => captureParticipants(wrongExecutionIdentity)).toThrow(
-      "Personal-tool turn authority is no longer active",
+      "This agent run is no longer active. Start a new turn to retry.",
     );
     await withParticipants("bob", async (bob) => {
       const second = captureParticipants(bob.identity);

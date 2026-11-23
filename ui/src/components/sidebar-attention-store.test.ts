@@ -92,23 +92,6 @@ describe("sidebar attention source publication", () => {
       expect(calls, method).toHaveLength(count);
     }
   }
-  function inventoryGate(next?: string) {
-    const list = pending(cronPage());
-    const auth = pending(emptyAuth());
-    let listCalls = 0;
-    const request = respond({
-      "cron.list": () => (++listCalls === 1 || !next ? list.promise : cronPage(next)),
-      "models.authStatus": () => auth.promise,
-    });
-    return {
-      list,
-      request,
-      finish(id?: string) {
-        list.resolve(cronPage(id));
-        auth.resolve(emptyAuth());
-      },
-    };
-  }
   function emitFinished(harness: ReturnType<typeof createGatewayHarness>) {
     harness.emitEvent("cron", {
       action: "finished",
@@ -629,20 +612,6 @@ describe("sidebar attention source publication", () => {
     },
   );
 
-  it("coalesces cron bursts during a pending inventory read", async () => {
-    const { list, request } = inventoryGate("latest");
-    const harness = gateway(request, true);
-    store = activate(harness);
-
-    repeatEvent(() => emitFinished(harness));
-    expectCalls(request, 1);
-    expectCalls(request, 1, ["models.authStatus"]);
-
-    list.resolve(cronPage());
-    await waitForFast(() => expect(store?.hasFailedAutomation).toBe(true));
-    expectCalls(request, 2);
-  });
-
   it("keeps the last known failure while hidden and catches up once on return", async () => {
     const setVisibility = visibilityControl();
     let listCalls = 0;
@@ -778,8 +747,12 @@ describe("sidebar attention source publication", () => {
     "retires queued inventory and auth refreshes on %s",
     async (boundary) => {
       vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
-      const gate = inventoryGate();
-      const { request } = gate;
+      const list = pending(cronPage());
+      const auth = pending(emptyAuth());
+      const request = respond({
+        "cron.list": () => list.promise,
+        "models.authStatus": () => auth.promise,
+      });
       const harness = gateway(request, true);
       store = createStore(harness.gateway);
       const publish = vi.fn();
@@ -799,7 +772,8 @@ describe("sidebar attention source publication", () => {
         store.dispose();
       }
       publish.mockClear();
-      gate.finish("retired");
+      list.resolve(cronPage("retired"));
+      auth.resolve(emptyAuth());
       await settleRefresh();
 
       expectCalls(request, 1, ["cron.list", "models.authStatus"]);

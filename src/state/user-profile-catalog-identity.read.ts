@@ -90,7 +90,7 @@ function readCatalogIdentity(db: EngineConnection, input: UserProfileCatalogIden
   if (input.kind === "source") {
     return { profiles: readProfiles(db, [...new Set(input.profileIds)], true), accounts, owners };
   }
-  const byAccount = new Map<string, string>();
+  const byAccount = new Map<string, string | undefined>();
   const byLogin = new Map<string, string>();
   for (const [profileId, identity] of readIdentities(db)) {
     for (const account of identity.accounts) {
@@ -98,6 +98,8 @@ function readCatalogIdentity(db: EngineConnection, input: UserProfileCatalogIden
       const login = account.login.toLowerCase();
       if (!byAccount.has(id)) {
         byAccount.set(id, profileId);
+      } else if (byAccount.get(id) !== profileId) {
+        byAccount.set(id, undefined);
       }
       if (!byLogin.has(login)) {
         byLogin.set(login, profileId);

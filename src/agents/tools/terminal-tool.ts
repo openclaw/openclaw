@@ -272,13 +272,10 @@ export function createTerminalTool(opts: TerminalToolOptions = {}): AnyAgentTool
       const delegatedAuthority = operationalRunInstance
         ? getActiveAgentRunDelegatedAuthority(operationalRunInstance)
         : undefined;
-      if (
-        !operationalRunInstance ||
-        !delegatedAuthority ||
-        callerIdentity?.receiptAuthority?.() === false
-      ) {
+      if (!operationalRunInstance || !delegatedAuthority) {
         throw new ToolInputError("Terminal input denied: agent run is no longer active");
       }
+      callerIdentity?.receiptAuthority?.();
       if (manager.snapshotAgent(owner, sessionId) === undefined) {
         throw new ToolInputError(TERMINAL_UNAVAILABLE_MESSAGE);
       }
@@ -316,12 +313,10 @@ export function createTerminalTool(opts: TerminalToolOptions = {}): AnyAgentTool
       assertSessionCurrent();
       // Every write, including unprompted Full access, is bound to its exact live
       // run and Gateway immediately before synchronous PTY I/O.
-      if (
-        getActiveAgentRunDelegatedAuthority(operationalRunInstance) !== delegatedAuthority ||
-        callerIdentity.receiptAuthority?.() === false
-      ) {
+      if (getActiveAgentRunDelegatedAuthority(operationalRunInstance) !== delegatedAuthority) {
         throw new ToolInputError("Terminal input denied: agent run is no longer active");
       }
+      callerIdentity.receiptAuthority?.();
       if (getContext()?.terminalSessions !== manager) {
         throw new ToolInputError(TERMINAL_UNAVAILABLE_MESSAGE);
       }

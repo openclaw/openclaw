@@ -61,6 +61,7 @@ export function createLoginSignIn(
   // The record of the running sign-in, cleared once the Gateway no longer has it.
   let record: FirstRunActivationReceipt | null = null;
   let restoring = false;
+  let resumeAdmission: object | undefined;
 
   const receiptContext = ({ context, agentId }: LoginScope) => ({
     gateway: context.gateway,
@@ -158,13 +159,30 @@ export function createLoginSignIn(
 
   /** Any error after a resume means the Gateway no longer has the sign-in: forget it. */
   function resume(): void {
+    if (resumeAdmission) {
+      return;
+    }
+    // Admission publishes before the runner clears its suspended state. Claim it
+    // first so those publications cannot enqueue another resume of the same sign-in.
+    const admission = {};
+    resumeAdmission = admission;
+    const release = () => {
+      if (resumeAdmission === admission) {
+        resumeAdmission = undefined;
+      }
+    };
     void host
-      .run(() => runner.resume(), true)
+      .run(() => {
+        const completion = runner.resume();
+        release();
+        return completion;
+      }, true)
       .then(() => {
         if (runner.state.phase === "error" && !runner.hasAdmittedSession) {
           clearFirstRunActivationReceipt(record);
         }
-      });
+      })
+      .finally(release);
   }
 
   /** A sign-in recorded before a reload reopens once this page can continue it. */

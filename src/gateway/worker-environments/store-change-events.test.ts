@@ -196,7 +196,7 @@ describe("worker store session change publications", () => {
         if (isClaimCommit(request)) {
           checkedCommit = true;
           expect(authority.isCurrent()).toBe(true);
-          expect(() => observation.assertCurrent()).toThrow("placement authority changed");
+          expect(() => observation.assertCurrent()).toThrow("placement changed");
           expect(observed).toEqual([]);
         }
         return grant();
@@ -206,7 +206,7 @@ describe("worker store session change publications", () => {
     successfulAdmission.mockRestore();
     expect(checkedCommit).toBe(true);
     expect(authority.isCurrent()).toBe(true);
-    expect(() => observation.assertCurrent()).toThrow("placement authority changed");
+    expect(() => observation.assertCurrent()).toThrow("placement changed");
     expect(observed.at(-1)).toEqual([true, false, false]);
     store.recordWorkspaceResultConflict(claim, { paths: ["conflict.txt"], stagedResultRef: ref });
     expect(observed.at(-1)).toEqual([true, true, false]);

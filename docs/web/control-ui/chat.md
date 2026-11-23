@@ -124,8 +124,10 @@ and on to retry; the error’s details retain the technical failure.
 A tool stops showing **Running** when its completion arrives, even while the
 parent turn continues. If that completion does not establish success or failure,
 the row keeps the tool's known purpose and shows **Outcome unknown** separately.
-Reloading history preserves the recorded purpose. A saved call without a loaded
-result shows **No result available** rather than counting as an unknown outcome.
+Reloading history preserves the recorded purpose. In imported Claude CLI history,
+a tool result without an error flag counts as completed, just as it does live.
+A saved call without a loaded result shows **No result available** rather than
+counting as an unknown outcome.
 Live execution facts and the active run’s replay snapshot establish **Running**;
 the run being active alone does not. Refreshing the same session retains those
 facts until history records an outcome. Partial output alone does not finish a
@@ -1522,7 +1524,10 @@ Closing the sheet hides it without clearing the conversation or its draft.
 On wide chat panes it opens automatically as a docked right-hand column, with
 the transcript and composer centered in the remaining space. Docking uses the
 space left after navigation, split panes, and other panels—not the window width
-alone. The column scrolls independently and never covers the conversation.
+alone. Details and the Home agent sidebar can both stay open if the remaining
+chat pane fits its default reading column and Details. The column scrolls
+independently and never covers the conversation. If the session has no details
+to show, the open panel says so instead of leaving an empty column.
 
 When the pane becomes too narrow, automatically opened Details collapses. Select
 **Details** to open it as an overlay on narrower screens. Closing it explicitly

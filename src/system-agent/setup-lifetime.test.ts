@@ -199,15 +199,15 @@ it.each([
     }
     const closed = loss !== "live" && loss !== "direct";
     if (closed) {
-      expect(beforePersistentApply).toThrow("authority is no longer active");
+      expect(beforePersistentApply).toThrow("This agent run is no longer active");
     }
     resume.resolve();
     const outcome = await completion;
     const afterRaw = await fs.readFile(state.configPath, "utf8");
     if (closed) {
-      expect
-        .soft(outcome)
-        .toMatchObject({ error: new Error("admitted run authority is no longer active") });
+      expect.soft(outcome).toMatchObject({
+        error: new Error("This agent run is no longer active. Start a new turn to retry."),
+      });
       expect.soft(afterRaw).toBe(pauseRaw);
       expect.soft((await fs.readdir(workspace)).toSorted()).toEqual(pauseFiles);
       if (phase !== "exec-approval") {
