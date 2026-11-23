@@ -75,7 +75,6 @@ it
     let finishChild: (() => void) | undefined;
     let announcing = false;
     let releasePreparation: (() => void) | undefined;
-    let completedReplies = 0;
     let rootReceivedRecovery = false;
     let rootReceivedChildError = false;
     let resumedChildRequests = 0;
@@ -187,7 +186,6 @@ it
                   announcing = true;
                   return;
                 }
-                completedReplies++;
                 if (spawnedRequester) {
                   expect(capturedCompletionInputs).toHaveLength(1);
                 }
@@ -368,7 +366,7 @@ it
         db.close();
       }
     };
-    const readCapturedInputs = () => {
+    const readRequesterEvents = () => {
       const agentDir = instance.state.agentDir("main");
       const session = readRestartSession(agentDir, rootKey);
       assert(typeof session?.sessionId === "string");
@@ -377,7 +375,10 @@ it
         sessionKey: rootKey,
         sessionId: session.sessionId,
         storePath: path.join(agentDir, "openclaw-agent.sqlite"),
-      })?.events.filter((event) => {
+      })?.events;
+    };
+    const readCapturedInputs = () =>
+      readRequesterEvents()?.filter((event) => {
         if (!isRecord(event)) {
           return false;
         }
@@ -413,7 +414,6 @@ it
             : undefined;
         return message && JSON.stringify(message.content).includes("CAPTURED_CUSTODY_RESULT");
       });
-    };
     let client: GatewayClient | undefined;
     let phase = "startup";
     onTestFailed(() => {
@@ -600,15 +600,17 @@ it
         client = undefined;
         expect(readRun(capturedRunId)).toMatchObject({
           completion: { resultText: "CAPTURED_CUSTODY_RESULT" },
-          // Shutdown can checkpoint custody before terminal delivery settlement finishes.
+          // Ready child partitions can settle during graceful shutdown. A committed
+          // result must already have its one captured input; pending custody stays owed.
           delivery: {
-            status: interruptAnnounce
-              ? expect.stringMatching(/^(pending|delivered)$/)
-              : retryingRequester
-                ? "delivered"
-                : "pending",
+            status: retryingRequester
+              ? "delivered"
+              : expect.stringMatching(/^(pending|delivered)$/),
           },
         });
+        if (readRun(capturedRunId).delivery?.status === "delivered") {
+          expect(readCapturedInputs()).toHaveLength(1);
+        }
         if (unconsumedAnnounce) {
           expect(readCapturedInputs()).toHaveLength(0);
           expect(readRun(capturedRunId).delivery).toMatchObject({ status: "pending" });
@@ -695,12 +697,33 @@ it
             if (busyRequester || retryingRequester) {
               expect(readRun(childRunId!)).toMatchObject({ delivery: { status: "delivered" } });
             }
-            if (interruptAnnounce) {
-              expect(completedReplies).toBe(1);
-              if (!unconsumedAnnounce) {
-                expect(rootReceivedRecovery).toBe(!spawnedRequester);
-              }
+            if (kind === "captured" || kind === "stale-settle-requester") {
+              expect(readRun(childRunId!)).toMatchObject({ delivery: { status: "delivered" } });
+              // A stopped child's visible outcome may be a committed notice rather
+              // than another model request after the earlier result finished the turn.
+              expect(
+                rootReceivedChildError ||
+                  readRequesterEvents()?.some(
+                    (event) =>
+                      isRecord(event) &&
+                      event.type === "custom_message" &&
+                      event.display === true &&
+                      isRecord(event.details) &&
+                      event.details.childRunId === childRunId &&
+                      typeof event.content === "string" &&
+                      event.content.includes("Interrupted by Gateway restart; not resumed."),
+                  ),
+              ).toBe(true);
             }
+            if (interruptAnnounce && !unconsumedAnnounce) {
+              expect(rootReceivedRecovery).toBe(!spawnedRequester);
+            }
+            // Later child partitions legitimately run with earlier results in history.
+            // Join those turns before the second restart tests settled-receipt idempotence.
+            const requester = readRestartSession(instance.state.agentDir("main"), rootKey);
+            expect(requester).toBeDefined();
+            expect(requester?.lifecycleRunId).toBeUndefined();
+            expect(requester?.resumeAfterRestart).toBeUndefined();
           },
           { timeout: 30_000 },
         );
@@ -726,10 +749,7 @@ it
           expect(rootReceivedRecovery).toBe(false);
         }
         expect(readCapturedInputs()).toHaveLength(1);
-        if (interruptAnnounce) {
-          expect(completedReplies).toBe(1);
-        } else if (kind === "captured") {
-          expect(rootReceivedChildError).toBe(true);
+        if (kind === "captured") {
           expect(resumedChildRequests).toBe(0);
         }
       },
