@@ -39,7 +39,11 @@ describe.runIf(browserMode)("Review layout", () => {
             sessionKey: "main",
             additions: 1,
             deletions: 0,
-            files: [{ path: "src/" + name, status: "added", additions: 1, deletions: 0 }],
+            files: [
+              { path: "src/" + name, status: "added", additions: 1, deletions: 0 },
+              { path: "src/chat.ts", status: "modified", additions: 1, deletions: 0 },
+              { path: "src/map.png", status: "added", additions: 1, deletions: 0 },
+            ],
           }),
         }),
       );
@@ -60,6 +64,15 @@ describe.runIf(browserMode)("Review layout", () => {
       expect(suffix.width).toBeGreaterThan(0);
       expect(suffix.left).toBeGreaterThanOrEqual(bounds.left - 1);
       expect(suffix.right).toBeLessThanOrEqual(bounds.right + 1);
+      for (const short of ["chat.ts", "map.png"]) {
+        const extension = panel.querySelector<HTMLElement>(
+          `.session-diff__filename[title="${short}"] .session-diff__extension`,
+        )!;
+        range.selectNodeContents(extension);
+        expect(range.getBoundingClientRect().right).toBeLessThanOrEqual(
+          extension.getBoundingClientRect().right + 1,
+        );
+      }
       const toggle = panel.querySelector<HTMLButtonElement>(".session-diff__file-toggle")!;
       const initial = toggle.getAttribute("aria-expanded");
       await userEvent.click(toggle);
