@@ -34,10 +34,10 @@ function inspectWorkboardPortSource(db: DatabaseSync) {
   return {
     version,
     migrationRequired: version < SCHEMA_VERSION,
-    pendingColumns:
-      version < SCHEMA_VERSION
-        ? { workboard_boards: ["automation_job_id", "kind", "sessions_spec"] }
-        : { workboard_boards: [] },
+    pendingColumns: {
+      workboard_boards: version < 4 ? ["automation_job_id", "kind", "sessions_spec"] : [],
+      workboard_cards: version < 5 ? ["common_work_json"] : [],
+    },
   };
 }
 

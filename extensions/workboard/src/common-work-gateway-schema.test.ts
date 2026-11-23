@@ -110,7 +110,11 @@ describe("common-work Gateway boundary", () => {
       }),
       4,
     );
-    record = applyCommonWorkOperation(record, { ...guardedAttach, expectedRevision: 4 }, 5);
+    record = applyCommonWorkOperation(
+      record,
+      parseCommonWorkOperation({ ...guardedAttach, expectedRevision: 4 }),
+      5,
+    );
     record = applyCommonWorkOperation(
       record,
       parseCommonWorkOperation({

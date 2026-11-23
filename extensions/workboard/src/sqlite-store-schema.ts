@@ -36,6 +36,7 @@ function ensureWorkboardSchema(db: DatabaseSync): void {
   if (getSqliteDatabaseAdmission(db, schemaAdmission)) {
     return;
   }
+  const existingCardSql = getAdmittedSqliteSchemaFacts(db)?.tableSql.get("workboard_cards");
   db.exec(WORKBOARD_SCHEMA_SQL);
   const columns = new Set(
     db
@@ -48,13 +49,7 @@ function ensureWorkboardSchema(db: DatabaseSync): void {
       db.exec(`ALTER TABLE workboard_boards ADD COLUMN ${column} TEXT`);
     }
   }
-  const cardColumns = new Set(
-    db
-      .prepare("PRAGMA table_info(workboard_cards)")
-      .all()
-      .flatMap((row) => (typeof row.name === "string" ? [row.name] : [])),
-  );
-  if (!cardColumns.has("common_work_json")) {
+  if (existingCardSql && !existingCardSql.includes("common_work_json")) {
     db.exec("ALTER TABLE workboard_cards ADD COLUMN common_work_json TEXT");
   }
   const migrationId = `schema-${SCHEMA_VERSION}`;

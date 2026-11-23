@@ -117,5 +117,7 @@ export function applyCommonWorkOperation(
       return recordCommonWorkCallback(existing, operation, now);
     case "delivery":
       return recordCommonWorkDelivery(existing, operation, now);
+    default:
+      throw new CommonWorkConflictError("unsupported common-work operation");
   }
 }
