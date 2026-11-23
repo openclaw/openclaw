@@ -1097,7 +1097,11 @@ Explicit repair uses the package journal's verified historical lease store when
 it still exists, so uncertain-handoff recovery and publication settlement share
 one repair claim even when the default per-user store is empty. Recovery checks
 and ordinary update admission remain unchanged. The repairing CLI must contain
-this fix; no lease schema or update protocol change is required.
+this fix; no lease schema or update protocol change is required. When an older
+CLI is blocked, install a CLI with this fix through the
+[manual procedure](/install/updating/update-methods#alternative-manual-npm-pnpm-or-bun)
+and run the repair while the Gateway is stopped; a Gateway started during the
+handoff's recovery grace counts as possible handoff work and keeps repair refusing.
 
 A successful foreground update hands completion to the replacement Gateway.
 Automatic history reconciliation preserves that handoff while startup verifies
