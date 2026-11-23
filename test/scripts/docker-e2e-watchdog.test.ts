@@ -74,8 +74,15 @@ describe("docker E2E watchdog entrypoint", () => {
 
   it("arms the timeout the CLI duration names", () => {
     const watchdogUrl = pathToFileURL(path.resolve("scripts/lib/docker-e2e-watchdog.mjs")).href;
+    // Files, not `-e` flags: the Bun lane runs this test with Bun as process.execPath.
+    const root = harness.createTempDir("openclaw-watchdog-durations-");
+    const child = path.join(root, "child.mjs");
+    const probe = path.join(root, "probe.mjs");
+    fs.writeFileSync(child, "");
     // Record the armed delay; the trivial child exits first and settles the watchdog.
-    const source = `
+    fs.writeFileSync(
+      probe,
+      `
       const delays = [];
       const setTimer = globalThis.setTimeout;
       globalThis.setTimeout = (callback, ms, ...rest) => {
@@ -84,10 +91,11 @@ describe("docker E2E watchdog entrypoint", () => {
       };
       process.on("exit", () => console.log(JSON.stringify(delays[0])));
       const { runWatchdog } = await import(${JSON.stringify(watchdogUrl)});
-      await runWatchdog("e2e", process.argv[1], [process.execPath, "-e", ""]);
-    `;
+      await runWatchdog("e2e", process.argv[2], [process.execPath, ${JSON.stringify(child)}]);
+    `,
+    );
     const run = (value: string) =>
-      spawnSync(process.execPath, ["--input-type=module", "-e", source, value], {
+      spawnSync(process.execPath, [probe, value], {
         encoding: "utf8",
         env: testRunnerFixtureEnv(),
         timeout: 5_000,
