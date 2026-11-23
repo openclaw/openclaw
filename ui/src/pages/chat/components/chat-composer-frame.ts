@@ -74,7 +74,11 @@ export function createChatComposerContext(
   props: ChatComposerProps,
   interaction: ComposerInteraction,
   goalComposer: GoalComposer,
-  voice: { dictation: ComposerDictationOwner; picker: ComposerMicrophoneOwner },
+  voice: {
+    dictation: ComposerDictationOwner;
+    picker: ComposerMicrophoneOwner;
+    openModelProvider?: (provider: string) => void;
+  },
   prediction: ComposerPrediction | undefined,
   questionPanelProps: QuestionPanelProps | null,
   streaming: boolean,
@@ -506,7 +510,11 @@ export function createChatComposerContext(
   const startRealtimeTalk = () => {
     // Catalog help does not require history; only starting Talk does.
     if (devicePicker.realtimeStatus !== "ready") {
-      devicePicker.handleOpen();
+      if (devicePicker.apiKeyProviders.talk && voice.openModelProvider) {
+        devicePicker.setTalkApiKeyNotice(true);
+      } else {
+        devicePicker.handleOpen();
+      }
       return;
     }
     if (props.submitDisabledReason) {
@@ -555,6 +563,8 @@ export function createChatComposerContext(
         onOpenDictationSettings: devicePicker.canConfigure
           ? props.onOpenDictationSettings
           : undefined,
+        apiKeyProviders: devicePicker.apiKeyProviders,
+        onOpenModelProvider: devicePicker.canConfigure ? voice.openModelProvider : undefined,
       }
     : undefined;
   const dictationOptions = createComposerDictationOptions(
@@ -620,6 +630,14 @@ export function createChatComposerContext(
     onToggleVoice: props.onToggleRealtimeTalk ? handleVoicePrimaryAction : undefined,
     onToggleCamera: props.onToggleRealtimeCamera,
     microphonePicker,
+    talkApiKeyNotice:
+      devicePicker.talkApiKeyNotice && devicePicker.apiKeyProviders.talk
+        ? {
+            provider: devicePicker.apiKeyProviders.talk,
+            onConfigure: voice.openModelProvider,
+            onDismiss: () => devicePicker.setTalkApiKeyNotice(false),
+          }
+        : undefined,
     readDictation: dictation ? () => dictation : undefined,
     onDictationPointerDown: handleDictationStart,
     onDirectDictationStart: handleDictationStart,

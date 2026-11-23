@@ -19,6 +19,7 @@ import { useApplication, useOptionalApplication } from "../../../lib/reactive/co
 import { t } from "../../../lib/reactive/i18n.ts";
 import { sharedRuntimeConfigProjection } from "../../../lib/reactive/shared-application-projections.ts";
 import { GatewaySpeechPlayback, resolveSpeechTextLimit } from "../../../lib/speech-playback.ts";
+import { useVoiceApiKey, VoiceApiKeyNotice } from "../voice-api-key.tsx";
 
 type ReadAloudProps = { text: string; buttonRef?: (element: HTMLButtonElement) => void };
 
@@ -168,12 +169,15 @@ function ReadAloudPlayback(
     await presentPlayback(pending, isCurrent).catch(() => {});
   };
   const label = () => t(playing() ? "chat.messages.stopReading" : "chat.messages.readAloud");
+  const voiceApiKey = useVoiceApiKey();
+  // A failure caused by a sign-in without voice names its fix instead of the provider error.
+  const keyedProvider = () => voiceApiKey.provider("speech");
   return (
     <Show when={playing() || props.available}>
       <openclaw-tooltip>
         <span slot="content">
           <Show when={!playing()} fallback={label()}>
-            <Errored fallback={(error) => formatUiError(error())}>
+            <Errored fallback={(error) => (keyedProvider() ? label() : formatUiError(error()))}>
               {outcome()}
               {label()}
             </Errored>
@@ -190,7 +194,23 @@ function ReadAloudPlayback(
           <Icon name={playing() ? "square" : "volume2"} />
         </button>
         <Show when={!playing()}>
-          <Errored fallback={(error) => <span role="status">{formatUiError(error())}</span>}>
+          <Errored
+            fallback={(error) => (
+              <Show
+                when={keyedProvider()}
+                fallback={<span role="status">{formatUiError(error())}</span>}
+              >
+                {(provider) => (
+                  <VoiceApiKeyNotice
+                    compact
+                    kind="speech"
+                    provider={provider()}
+                    onConfigure={voiceApiKey.configure}
+                  />
+                )}
+              </Show>
+            )}
+          >
             {outcome()}
           </Errored>
         </Show>

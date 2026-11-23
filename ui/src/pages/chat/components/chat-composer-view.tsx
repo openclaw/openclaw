@@ -19,6 +19,7 @@ import type {
 } from "../../../plugins/control-ui-actions.ts";
 import type { ChatComposerPlusMenuView } from "../composer-capability-types.ts";
 import "../../../styles/chat/composer-context-strip.css";
+import { VoiceApiKeyNotice } from "../voice-api-key.tsx";
 import { hasVisibleChatActivityPills } from "./chat-activity-pills-visibility.ts";
 import { createChatAttachmentInputHandle } from "./chat-attachment-inputs.ts";
 import { ChatAttachmentInputs } from "./chat-attachment-inputs.tsx";
@@ -26,9 +27,9 @@ import { AttachmentPreview, AttachmentReadStatus } from "./chat-attachments.tsx"
 import { ComposerContent } from "./chat-composer-content.tsx";
 import { ContextNotice } from "./chat-composer-context.tsx";
 import { renderChatPrimaryActionsSolid as ChatPrimaryActions } from "./chat-composer-controls.tsx";
-import { ChatComposerDisabledBanner } from "./chat-composer-disabled-banner.tsx";
 import "../../../styles/chat/emoji-menu.css";
 import "../../../styles/chat/mention-menu.css";
+import { ChatComposerDisabledBanner } from "./chat-composer-disabled-banner.tsx";
 import { focusComposerFromChrome, paneDomId } from "./chat-composer-dom.ts";
 import type { createChatComposerContext } from "./chat-composer-frame.ts";
 import { createComposerMobileInteraction } from "./chat-composer-mobile-interaction.tsx";
@@ -174,6 +175,17 @@ export function renderChatComposerView(
             props.realtimeTalkCameraError ? undefined : props.onDismissRealtimeTalkError
           }
         />
+        <Show when={context().runControlsProps.talkApiKeyNotice}>
+          {(notice) => (
+            <VoiceApiKeyNotice
+              class="agent-chat__composer-alert"
+              kind="talk"
+              provider={notice().provider}
+              onConfigure={notice().onConfigure}
+              onDismiss={notice().onDismiss}
+            />
+          )}
+        </Show>
         {props.realtimeTalkInputNotice ? (
           <ChatVoiceStatus
             status="error"

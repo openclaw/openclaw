@@ -10,6 +10,31 @@ import {
   type RealtimeTalkInputDevice,
 } from "./talk/input.ts";
 
+/** Per voice surface, the provider whose sign-in doesn't cover it and needs an API key. */
+export type VoiceApiKeyProviders = Partial<
+  Record<"talk" | "dictation" | "speech" | "voiceNotes", string>
+>;
+
+type CatalogEntries = TalkCatalogResult["realtime"]["providers"] | undefined;
+const keyed = (entries: CatalogEntries, ready?: boolean) =>
+  ready ? undefined : entries?.find((entry) => entry.apiKeyRequired)?.id;
+
+/** The Gateway marks providers whose saved sign-in can't do voice; nothing else implies it. */
+function voiceApiKeyProviders({ realtime, transcription, speech }: TalkCatalogResult) {
+  // Voice notes use configured audio models when listed, else automatic selection over the
+  // credentials Talk transcription checks. A local model elsewhere could still succeed.
+  const notes = transcription?.mediaProviders ?? transcription?.providers;
+  return {
+    talk: keyed(realtime?.providers, realtime?.ready),
+    dictation: keyed(transcription?.providers, transcription?.ready),
+    speech: keyed(speech?.providers),
+    voiceNotes: keyed(
+      notes,
+      notes?.some((entry) => entry.configured),
+    ),
+  };
+}
+
 export type ComposerTalkCapabilityStatus = "checking" | "ready" | "unavailable" | "unknown";
 
 export type MicrophonePickerProps = {
@@ -29,6 +54,8 @@ export type MicrophonePickerProps = {
   onHoldToDictateChange?: (enabled: boolean) => void;
   onOpenTalkSettings?: () => void;
   onOpenDictationSettings?: () => void;
+  apiKeyProviders?: VoiceApiKeyProviders;
+  onOpenModelProvider?: (provider: string) => void;
 };
 
 // Each composer owns discovery and the devicechange subscription; delayed results
@@ -48,6 +75,9 @@ export class ComposerMicrophoneOwner extends EventTarget {
   canConfigure = true;
   realtimeStatus: ComposerTalkCapabilityStatus = "unknown";
   dictationStatus: ComposerTalkCapabilityStatus = "unknown";
+  apiKeyProviders: VoiceApiKeyProviders = {};
+  /** Tapping Talk without its key explains why instead of opening the picker. */
+  talkApiKeyNotice = false;
   // Terminal login changes credentials without replacing the Gateway connection.
   private readonly refreshOnFocus = (): void => void this.loadCatalog();
 
@@ -82,6 +112,8 @@ export class ComposerMicrophoneOwner extends EventTarget {
     this.catalogRequest++;
     this.realtimeStatus = canRead ? "unknown" : "unavailable";
     this.dictationStatus = canRead || canDictate ? "unknown" : "unavailable";
+    this.apiKeyProviders = {};
+    this.talkApiKeyNotice = false;
     if (!client || !catalogConnected) {
       return;
     }
@@ -107,6 +139,13 @@ export class ComposerMicrophoneOwner extends EventTarget {
     this.open = false;
     this.dispatchEvent(new Event("change"));
   };
+
+  setTalkApiKeyNotice(open: boolean): void {
+    if (this.talkApiKeyNotice !== open) {
+      this.talkApiKeyNotice = open;
+      this.dispatchEvent(new Event("change"));
+    }
+  }
 
   /** Drops the devicechange subscription so a closed picker stops refreshing. */
   release(): void {
@@ -171,6 +210,8 @@ export class ComposerMicrophoneOwner extends EventTarget {
         return;
       }
       this.dictationStatus = catalog.transcription?.ready === true ? "ready" : "unavailable";
+      this.apiKeyProviders = voiceApiKeyProviders(catalog);
+      this.talkApiKeyNotice &&= this.apiKeyProviders.talk !== undefined;
       if (!config) {
         this.realtimeStatus = "unavailable";
         return;

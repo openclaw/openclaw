@@ -1242,6 +1242,12 @@ const enSettings = {
         "API key saved, but OpenClaw couldn’t check it. Use Test access to try again.",
       authModeBlocked: "API key changes aren’t available with the current sign-in method.",
     },
+    voice: {
+      title: "Talk, speech, and transcription",
+      detail:
+        "Sign in with ChatGPT doesn’t include {provider} voice. API usage is billed separately from your ChatGPT plan.",
+      status: "API key needed",
+    },
     probe: {
       test: "Test access",
       testing: "Testing…",

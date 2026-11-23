@@ -8,11 +8,14 @@ import {
   Show,
   untrack,
 } from "solid-js";
+import { useOptionalApplication } from "../../../lib/reactive/context.ts";
 import { listen } from "../../../lib/reactive/listener.ts";
 import { projectOwner } from "../../../lib/reactive/projection.ts";
+import { navigateToModelProvider } from "../../model-providers/navigation.ts";
 import { isChatRunWorking } from "../chat-run-working.ts";
 import { ComposerDictationOwner } from "../composer-dictation.ts";
 import { ComposerMicrophoneOwner } from "../composer-microphone-picker.ts";
+import { publishVoiceApiKeys } from "../voice-api-key.tsx";
 import { createComposerDictationOptions } from "./chat-composer-dictation-options.ts";
 import { createChatComposerContext } from "./chat-composer-frame.ts";
 import { createGoalComposer } from "./chat-composer-goal-mode.tsx";
@@ -74,7 +77,16 @@ function PaneComposer(props: ChatComposerProps & { questions: ComposerQuestions 
     );
     state.dictation = new ComposerDictationOwner(initialDictationOptions);
   }
-  const voice = { dictation: state.dictation, picker: microphonePicker };
+  const application = useOptionalApplication();
+  const voice = {
+    dictation: state.dictation,
+    picker: microphonePicker,
+    // A voice surface whose sign-in lacks an API key opens that provider in Settings → Models.
+    openModelProvider: application
+      ? (provider: string) =>
+          navigateToModelProvider(application, currentProps.currentAgentId || null, provider)
+      : undefined,
+  };
   // Dictation admission invalidates edits and dismisses errors before the next input event.
   onSettled(() =>
     voice.dictation.subscribe(() => {
@@ -157,6 +169,7 @@ function PaneComposer(props: ChatComposerProps & { questions: ComposerQuestions 
       state.tasks()?.syncDraft(current.visibleDraft);
       const options = current.dictationOptions;
       voice.picker.syncCatalog(options.client, options.connected, options.sessionKey);
+      publishVoiceApiKeys(voice.picker, voice.openModelProvider);
       voice.dictation.update(options);
       prediction.sync(predictions);
       if (current.queuedSubmitDue) {

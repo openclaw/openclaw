@@ -8,6 +8,7 @@ import { SwitchIndicator } from "../../../components/solid/switch.tsx";
 import { t } from "../../../lib/reactive/i18n.ts";
 import type { MicrophonePickerProps } from "../composer-microphone-picker.ts";
 import { type RealtimeTalkDeviceIssue, realtimeTalkDeviceIssueMessage } from "../talk/input.ts";
+import { voiceApiKeyDetail, voiceApiKeyTitle } from "../voice-api-key-notice.tsx";
 
 export function MicrophoneMenu(props: {
   picker: MicrophonePickerProps;
@@ -17,26 +18,58 @@ export function MicrophoneMenu(props: {
 }) {
   const items = createMemo(
     () => {
-      const capabilities = [
-        {
-          key: "realtime",
+      const openProvider = props.picker.onOpenModelProvider;
+      const keyed = props.picker.apiKeyProviders ?? {};
+      const capabilityRow = (
+        key: "realtime" | "dictation",
+        status: MicrophonePickerProps["realtimeStatus"],
+        provider: string | undefined,
+        fallback: {
+          label: string;
+          unavailableReason: string;
+          onOpenSettings?: () => void;
+        },
+      ) =>
+        // A sign-in without voice names its fix: that provider's API key.
+        provider && openProvider && status === "unavailable"
+          ? {
+              key,
+              status,
+              label: voiceApiKeyTitle(key === "realtime" ? "talk" : "dictation", provider),
+              unavailableReason: voiceApiKeyDetail(),
+              onOpenSettings: () => openProvider(provider),
+              provider,
+            }
+          : { key, status, ...fallback, provider: undefined };
+      let capabilities = [
+        capabilityRow("realtime", props.picker.realtimeStatus, keyed.talk, {
           label: t("chat.composer.realtimeTalkCapability"),
-          status: props.picker.realtimeStatus,
           unavailableReason: t("chat.composer.realtimeTalkProviderUnavailable"),
           onOpenSettings: props.picker.onOpenTalkSettings,
-        },
-        {
-          key: "dictation",
+        }),
+        capabilityRow("dictation", props.picker.dictationStatus, keyed.dictation, {
           label: t("chat.composer.dictationCapability"),
-          status: props.picker.dictationStatus,
           unavailableReason: t("chat.composer.dictationProviderUnavailableShort"),
           onOpenSettings: props.picker.onOpenDictationSettings,
-        },
+        }),
       ].filter(
         (capability) =>
           capability.status !== "ready" &&
           (capability.key !== "realtime" || props.picker.showRealtimeCapability !== false),
       );
+      // Talk and dictation missing the same key read as one fix, not two.
+      if (
+        capabilities.length === 2 &&
+        capabilities[0]!.provider &&
+        capabilities[0]!.provider === capabilities[1]!.provider
+      ) {
+        capabilities = [
+          {
+            ...capabilities[1]!,
+            label: voiceApiKeyTitle("voice", capabilities[1]!.provider),
+          },
+        ];
+      }
       const entries: MenuEntry[] = [
         {
           kind: "content",
@@ -142,7 +175,9 @@ export function MicrophoneMenu(props: {
               ? t("chat.composer.talkCapabilityUnknown")
               : capability.unavailableReason;
         entries.push({
-          id: `capability:${capability.key}`,
+          id: capability.provider
+            ? `api-key:${capability.provider}`
+            : `capability:${capability.key}`,
           label: [
             capability.label,
             detail,

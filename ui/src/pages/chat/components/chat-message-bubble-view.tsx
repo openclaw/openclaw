@@ -32,6 +32,7 @@ import { assistantMessageIsInterrupted } from "../chat-assistant-reply.ts";
 import "../../../components/solid/person-reference.tsx";
 import { usePanePresentation } from "../chat-pane-presentation.ts";
 import { persistedMessageEntryId } from "../chat-thread-items.ts";
+import { useVoiceApiKey, VoiceApiKeyNotice } from "../voice-api-key.tsx";
 import { AsyncQuestionSummary } from "./chat-async-question-summary.tsx";
 import { ChatBubbleActivity } from "./chat-bubble-activity-view.tsx";
 import { ChatLazyBoundary } from "./chat-lazy-boundary.tsx";
@@ -223,6 +224,22 @@ export function GroupedMessage(props: {
         }}
       </Show>
     </ChatRowDisplayContext>
+  );
+}
+
+/** A recording the selected provider can't transcribe because its sign-in doesn't cover voice. */
+function RecordingApiKeyNotice() {
+  const voiceApiKey = useVoiceApiKey();
+  return (
+    <Show when={voiceApiKey.provider("voiceNotes")}>
+      {(provider) => (
+        <VoiceApiKeyNotice
+          kind="recording"
+          provider={provider()}
+          onConfigure={voiceApiKey.configure}
+        />
+      )}
+    </Show>
   );
 }
 
@@ -421,6 +438,18 @@ function BubbleContents(props: ContentProps) {
         inlinePlayback={props.state().normalizedRole === "assistant"}
         inlineComments={props.state().inlineComments}
       />
+      <Show
+        when={
+          props.state().normalizedRole === "user" &&
+          props
+            .state()
+            .cardAttachments.some(
+              (item) => item.type === "attachment" && item.attachment.kind === "audio",
+            )
+        }
+      >
+        <RecordingApiKeyNotice />
+      </Show>
       <Show
         when={props.state().isStandaloneToolMessage && props.state().assistantViewBlocks.length > 0}
       >
