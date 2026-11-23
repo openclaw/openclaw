@@ -181,8 +181,8 @@ it.each([true, false])(
   },
 );
 
-it.each(["dead", "same-pid", "live"] as const)(
-  "settles interrupted preparation at Gateway start without taking a live CLI lock (%s)",
+it.each(["dead", "same-pid", "own-live", "live"] as const)(
+  "settles interrupted preparation at Gateway start without taking a live lock (%s)",
   async (ownerState) => {
     const state = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-trial-"));
     directories.push(state);
@@ -211,15 +211,28 @@ it.each(["dead", "same-pid", "live"] as const)(
       }
       await acquireUpdateLock({
         runId: run.runId,
-        pid: ownerState === "same-pid" ? process.pid : owner.pid!,
+        pid: ownerState === "same-pid" || ownerState === "own-live" ? process.pid : owner.pid!,
         deadlineMs: 60_000,
       });
+      if (ownerState === "same-pid") {
+        // A previous Gateway with this PID took the lock before this process started.
+        const file = path.join(resolvePrefix(), "releases", ".update.lock");
+        const lock = JSON.parse(await fs.readFile(file, "utf8"));
+        await fs.writeFile(
+          file,
+          JSON.stringify({ ...lock, startedAt: Date.now() - process.uptime() * 1000 - 1000 }),
+        );
+      }
 
       await announceReady(null);
 
-      if (ownerState === "live") {
+      if (ownerState === "live" || ownerState === "own-live") {
+        // This Gateway's own update in progress (or a live CLI) keeps running and keeps its lock.
         expect(await getUpdateRunAsync(run.runId, options)).toMatchObject({ status: "running" });
-        expect(await readUpdateLock()).toMatchObject({ runId: run.runId, pid: owner.pid });
+        expect(await readUpdateLock()).toMatchObject({
+          runId: run.runId,
+          pid: ownerState === "live" ? owner.pid : process.pid,
+        });
       } else {
         expect(await getUpdateRunAsync(run.runId, options)).toMatchObject({
           status: "failed",
