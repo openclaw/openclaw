@@ -8,6 +8,7 @@ import { intersectOperatorScopes } from "../shared/operator-scope-compat.js";
 import {
   AUTH_RATE_LIMIT_SCOPE_DEVICE_TOKEN,
   AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET,
+  buildRateLimitIdentityKey,
 } from "./auth-rate-limit.js";
 import {
   authorizeControlUiReadHttpGatewayConnect,
@@ -126,13 +127,9 @@ export function resolveHttpBrowserOriginPolicy(
   return resolveBrowserOriginPolicy({ req, cfg });
 }
 
-function resolveControlUiReadAuthToken(
-  req: IncomingMessage,
-  allowQueryToken: boolean | undefined,
-): string | undefined {
-  const bearer = getBearerToken(req);
-  if (bearer || !allowQueryToken || !req.url) {
-    return bearer;
+function readControlUiQueryToken(req: IncomingMessage): string | undefined {
+  if (!req.url) {
+    return undefined;
   }
   try {
     return normalizeOptionalString(new URL(req.url, "http://localhost").searchParams.get("token"));
@@ -172,6 +169,7 @@ async function checkHttpOperatorCredentials(
   params: Omit<GatewayHttpRequestAuthParams, "res"> & {
     token: string | undefined;
     requiredDeviceScopes?: readonly string[];
+    usesQueryToken?: boolean;
   },
   authorizeConnect: typeof authorizeHttpGatewayConnect,
 ): Promise<HttpOperatorCredentialResult> {
@@ -199,24 +197,44 @@ async function checkHttpOperatorCredentials(
   if (ingressAttribution.kind === "unattributable-proxy") {
     return { authResult: { ok: false, reason: ingressAttribution.reason } };
   }
+  const browserOriginPolicy = resolveHttpBrowserOriginPolicy(params.req, params.cfg);
   const clientIp = ingressAttribution.rateLimit.subject.key;
   const canUseDeviceTokenFallback =
     Boolean(token) &&
     auth.mode !== "trusted-proxy" &&
     auth.mode !== "none" &&
     ingressAttribution.kind !== "openclaw-id-tunnel";
-  const run = async (): Promise<HttpOperatorCredentialResult> => {
+  const queryKey =
+    params.usesQueryToken && ingressAttribution.kind === "direct-local" && auth.mode !== "none"
+      ? buildRateLimitIdentityKey(
+          browserOriginPolicy.fetchSite === "same-origin"
+            ? "control-ui-url-same-origin"
+            : "control-ui-url",
+          clientIp,
+        )
+      : undefined;
+  const limiter = params.rateLimiter;
+  const recordCredentialFailure = async (scope: string) => {
+    // URL attempts have a hard lockout. Keep IP history without imposing a
+    // different response delay on a correct and an incorrect URL credential.
+    if (queryKey) {
+      limiter?.recordFailure(clientIp, scope);
+    } else {
+      await limiter?.recordFailureAndDelay(clientIp, scope);
+    }
+  };
+  const verify = async (): Promise<HttpOperatorCredentialResult> => {
     const authResult = await authorizeConnect({
       auth,
       connectAuth: token ? { token, password: token } : null,
       req: params.req,
-      browserOriginPolicy: resolveHttpBrowserOriginPolicy(params.req, params.cfg),
+      browserOriginPolicy,
       trustedProxies: params.trustedProxies,
       allowRealIpFallback: params.allowRealIpFallback,
-      rateLimiter: params.rateLimiter,
+      rateLimiter: limiter,
       clientIp,
       rateLimitScope: AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET,
-      deferRateLimitFailure: canUseDeviceTokenFallback,
+      deferRateLimitFailure: canUseDeviceTokenFallback || Boolean(queryKey),
     });
     const authGeneration = resolveSharedGatewaySessionGeneration(auth, params.trustedProxies);
     let resolvedAuthResult = authResult;
@@ -230,16 +248,10 @@ async function checkHttpOperatorCredentials(
     ) {
       const recordSharedSecretFailure = async () => {
         if (authResult.reason === "token_mismatch" || authResult.reason === "password_mismatch") {
-          await params.rateLimiter?.recordFailureAndDelay(
-            clientIp,
-            AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET,
-          );
+          await recordCredentialFailure(AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET);
         }
       };
-      const deviceRateCheck = params.rateLimiter?.check(
-        clientIp,
-        AUTH_RATE_LIMIT_SCOPE_DEVICE_TOKEN,
-      );
+      const deviceRateCheck = limiter?.check(clientIp, AUTH_RATE_LIMIT_SCOPE_DEVICE_TOKEN);
       if (deviceRateCheck && !deviceRateCheck.allowed) {
         await recordSharedSecretFailure();
         resolvedAuthResult = {
@@ -256,14 +268,11 @@ async function checkHttpOperatorCredentials(
         );
         if (verifiedScopes) {
           deviceScopes = verifiedScopes;
-          params.rateLimiter?.reset(clientIp, AUTH_RATE_LIMIT_SCOPE_DEVICE_TOKEN);
+          limiter?.reset(clientIp, AUTH_RATE_LIMIT_SCOPE_DEVICE_TOKEN);
           resolvedAuthResult = { ok: true, method: "device-token" };
         } else {
           await recordSharedSecretFailure();
-          await params.rateLimiter?.recordFailureAndDelay(
-            clientIp,
-            AUTH_RATE_LIMIT_SCOPE_DEVICE_TOKEN,
-          );
+          await recordCredentialFailure(AUTH_RATE_LIMIT_SCOPE_DEVICE_TOKEN);
         }
       }
     }
@@ -274,15 +283,46 @@ async function checkHttpOperatorCredentials(
     };
   };
 
-  if (!canUseDeviceTokenFallback || !params.rateLimiter) {
-    return await run();
+  const checkCredentials = () =>
+    canUseDeviceTokenFallback && limiter
+      ? withSerializedCredentialFallbackAttempt({ limiter, ip: clientIp, run: verify })
+      : verify();
+  if (!queryKey || !params.rateLimiter) {
+    return await checkCredentials();
   }
-  // Shared and device credentials form one terminal auth attempt. Keep their
-  // async checks together so concurrent fallbacks cannot outrun either bucket.
+  const queryLimiter = params.rateLimiter;
   return await withSerializedCredentialFallbackAttempt({
-    limiter: params.rateLimiter,
-    ip: clientIp,
-    run,
+    limiter: queryLimiter,
+    ip: queryKey,
+    run: async () => {
+      const scope = "control-ui-url-credential";
+      const budget = queryLimiter.check(queryKey, scope);
+      if (!budget.allowed) {
+        return {
+          authResult: {
+            ok: false,
+            reason: "rate_limited",
+            rateLimited: true,
+            retryAfterMs: budget.retryAfterMs,
+          },
+        };
+      }
+      const result = await checkCredentials();
+      if (result.authResult.ok) {
+        queryLimiter.reset(queryKey, scope);
+      } else if (
+        result.authResult.reason === "token_mismatch" ||
+        result.authResult.reason === "password_mismatch"
+      ) {
+        queryLimiter.recordFailure(queryKey, scope);
+        // Trusted-proxy local password authentication has no device fallback
+        // to finish the deferred shared-secret accounting.
+        if (!canUseDeviceTokenFallback) {
+          queryLimiter.recordFailure(clientIp, AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET);
+        }
+      }
+      return result;
+    },
   });
 }
 
@@ -308,9 +348,18 @@ export async function authorizeControlUiReadRequestOrReply(
       hasCurrentClientAuthority,
     );
   }
-  const token = resolveControlUiReadAuthToken(params.req, params.allowQueryToken);
+  const bearer = getBearerToken(params.req);
+  const token =
+    bearer ?? (params.allowQueryToken ? readControlUiQueryToken(params.req) : undefined);
   const { authResult, authGeneration, deviceOperatorScopes } = await checkHttpOperatorCredentials(
-    { ...params, cfg, auth, token, rateLimiter: token ? params.rateLimiter : undefined },
+    {
+      ...params,
+      cfg,
+      auth,
+      token,
+      usesQueryToken: Boolean(token && !bearer),
+      rateLimiter: token ? params.rateLimiter : undefined,
+    },
     authorizeControlUiReadHttpGatewayConnect,
   );
   if (!authResult.ok) {
