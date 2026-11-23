@@ -11,7 +11,10 @@ import {
   prepareRunModelRuntimeProjects,
 } from "./prepared-runtime-context.js";
 
-vi.mock("../../prompt-projects.js", () => ({ prepareAgentPromptProjects: vi.fn() }));
+vi.mock("../../prompt-projects.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../prompt-projects.js")>()),
+  prepareAgentPromptProjects: vi.fn(),
+}));
 
 it("preserves the private admitted policy reader when capturing turn projects", async () => {
   const run = { sessionId: "project-turn" } as RunEmbeddedAgentParamsWithSessionFile;

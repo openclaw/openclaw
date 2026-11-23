@@ -61,8 +61,12 @@ it.each(["allowed", "denied", "oversized", "oversized-multiline"])(
       tools,
       signal: new AbortController().signal,
       loading: "direct",
-      contextWindowTokens: params.model.contextWindow,
-      hookContext: { sessionKey: params.sessionKey, runId: params.runId, workspaceDir },
+      hookContext: {
+        sessionKey: params.sessionKey,
+        runId: params.runId,
+        workspaceDir,
+        contextWindowTokens: params.model.contextWindow,
+      },
     });
     const guidance = renderCodexSkillsInstructions({
       attempt: params,

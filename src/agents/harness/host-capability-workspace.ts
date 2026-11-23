@@ -13,8 +13,8 @@ import { getPreparedModelRuntimePolicyConfigReader } from "../prepared-model-run
 import { normalizeToolPolicyName } from "../tool-policy-shared.js";
 import type { AnyAgentTool } from "../tools/common.js";
 import { captureAgentWorkspaceReadiness } from "../workspace-readiness.js";
+import type { AgentHarnessHostAttempt } from "./host-capability-internal.types.js";
 import type {
-  AgentHarnessHostAttempt,
   AgentHarnessHostCapabilities,
   HostToolSurfaceOptions,
 } from "./host-capability-types.js";

@@ -59,7 +59,9 @@ beforeAll(async () => {
     optionalDependencies: Record<string, string>;
   };
   for (const name of Object.keys(metadata.optionalDependencies)) {
-    if (!name.startsWith("@openclaw/fs-safe-")) continue;
+    if (!name.startsWith("@openclaw/fs-safe-")) {
+      continue;
+    }
     let native: string;
     try {
       native = require.resolve(name + "/package.json");

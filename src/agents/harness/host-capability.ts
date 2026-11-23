@@ -49,8 +49,8 @@ import {
   transferCoreTtsToolResultProvenance,
 } from "../tools/tts-tool-result-provenance.js";
 import { bindHostToolSurface } from "./host-bound-tool.js";
+import type { AgentHarnessHostCapabilityParams } from "./host-capability-internal.types.js";
 import type {
-  AgentHarnessHostCapabilityParams,
   AgentHarnessHostApprovalResult,
   AgentHarnessHostCapabilities,
   HostToolSurfaceOptions,

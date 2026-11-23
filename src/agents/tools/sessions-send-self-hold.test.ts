@@ -328,7 +328,7 @@ it.each([
           await upsertSessionEntryCore(
             { agentId: "main", sessionKey: sourceKey },
             {
-              status: "completed",
+              status: "done",
               lastRunId: "source-run",
             },
           );

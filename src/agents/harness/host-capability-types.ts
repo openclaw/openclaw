@@ -4,7 +4,6 @@ import type {
   ApprovalTerminalReason,
 } from "../../../packages/gateway-protocol/src/schema/approvals.js";
 import type { ImageContent } from "../../../packages/llm-core/src/types.js";
-import type { EmbeddedRunAttemptInternalParams } from "../embedded-agent-runner/run/internal-params.js";
 import type { AnyAgentTool } from "../tools/common.js";
 
 export type AgentHarnessContextMedia = {
@@ -250,17 +249,6 @@ export type AgentHarnessHostCapabilities = Readonly<{
   }) => Promise<AgentHarnessHostApprovalResult | undefined>;
 }>;
 
-export type AgentHarnessHostAttempt = Partial<EmbeddedRunAttemptInternalParams> &
-  Pick<EmbeddedRunAttemptInternalParams, "admittedRunContext" | "runId">;
-
 export type HostToolSurfaceOptions = Parameters<
   NonNullable<AgentHarnessHostCapabilities["createToolSurfaceAsync"]>
 >[0];
-
-export type AgentHarnessHostCapabilityParams = {
-  attempt: AgentHarnessHostAttempt;
-  pluginId: string;
-  requiredNodeCommands?: readonly string[];
-  nativeModelPolicySupport?: "exact";
-  toolCalls?: "deny";
-};
