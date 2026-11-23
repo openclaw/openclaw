@@ -79,8 +79,7 @@ it("refuses a schema change for the early release updater and names the rebuild"
   );
   expect(refusal).toContain("the Gateway was not touched");
   // The early updater redacts state and home paths out of this output; the step names none.
-  const rebuild = refusal.split("
-").at(-1);
+  const rebuild = refusal.split("\n").at(-1);
   expect(rebuild).toBe(REBUILD);
   expect(rebuild).not.toMatch(/[\s~]\//u);
 
