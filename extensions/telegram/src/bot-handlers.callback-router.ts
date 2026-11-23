@@ -553,9 +553,9 @@ export function createTelegramCallbackRouter({
                   ? [[{ text: "🔐 Sign in", callback_data: signInCallback }]]
                   : [];
               const offerSignIn = signInRow.length > 0;
-              // A chat sign-in from this button applies the blocked selection. An API
-              // key is entered in the app instead, so nothing in chat finishes it.
-              const signInSwitches = offerSignIn && !authBlock.apiKeyLogin;
+              // Only a sign-in that finishes in this chat can apply the blocked
+              // selection; app sign-ins and key entry complete elsewhere.
+              const signInSwitches = offerSignIn && authBlock.chatLogin;
               if (signInSwitches) {
                 recordPendingPickerSelection(
                   {

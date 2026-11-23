@@ -411,15 +411,23 @@ describe("Telegram model callback loopback", () => {
 
   it.each([
     {
-      kind: "device-code",
-      login: { methodId: "device-code", label: "Device code" },
+      kind: "chat device-code",
+      login: { methodId: "device-code", label: "Device code", mode: "chat" },
       step: `Connect with /login ${PROVIDER}`,
       next: "Sign in below and this chat switches to it.",
       queued: true,
     },
     {
+      // App-only OAuth hands off to the app, which never applies the selection.
+      kind: "app OAuth",
+      login: { methodId: "oauth", label: "OAuth", mode: "sign-in" },
+      step: `Connect with /login ${PROVIDER}`,
+      next: "Sign in below, then select the model again.",
+      queued: false,
+    },
+    {
       kind: "API-key",
-      login: { methodId: "api-key", label: "API key" },
+      login: { methodId: "api-key", label: "API key", mode: "secret" },
       step: "Add the API key in the OpenClaw app under Models → Connect provider.",
       next: "Sign in below, then select the model again.",
       queued: false,

@@ -8,7 +8,7 @@ import {
 function buildMenu(params: {
   readiness: Record<string, ModelReadiness>;
   loginProviders?: string[];
-  providerLogins?: Record<string, { methodId: string; label: string }>;
+  providerLogins?: Record<string, { methodId: string; label: string; mode?: string }>;
 }) {
   const byProvider = new Map<string, Set<string>>();
   for (const key of Object.keys(params.readiness)) {
@@ -33,6 +33,7 @@ describe("resolveModelSelectionAuthBlock", () => {
         "meta/muse-spark-1.3": { availability: false, unavailableReason: "missing-auth" },
       },
       loginProviders: ["meta"],
+      providerLogins: { meta: { methodId: "muse-code", label: "Muse Code", mode: "chat" } },
     });
     const block = resolveModelSelectionAuthBlock({
       menu,
@@ -41,7 +42,8 @@ describe("resolveModelSelectionAuthBlock", () => {
     });
     expect(block?.label).toBe("Sign-in needed");
     expect(block?.notice).toBe("meta: Sign-in needed. Connect with /login meta.");
-    expect(block?.apiKeyLogin).toBe(false);
+    // The sign-in finishes in chat, so it can apply the selection.
+    expect(block?.chatLogin).toBe(true);
   });
 
   it("blocks a model whose saved sign-in failed", () => {
@@ -62,7 +64,7 @@ describe("resolveModelSelectionAuthBlock", () => {
       },
       loginProviders: ["opencode-go"],
       providerLogins: {
-        "opencode-go": { methodId: "api-key", label: "OpenCode Go catalog" },
+        "opencode-go": { methodId: "api-key", label: "OpenCode Go catalog", mode: "secret" },
       },
     });
     const block = resolveModelSelectionAuthBlock({
@@ -76,7 +78,7 @@ describe("resolveModelSelectionAuthBlock", () => {
     expect(block?.notice).not.toContain("openclaw models auth login");
     expect(block?.notice).not.toContain("/login");
     // The key is entered in the app, so a chat sign-in cannot finish the selection.
-    expect(block?.apiKeyLogin).toBe(true);
+    expect(block?.chatLogin).toBe(false);
   });
 
   it("gives API-key update instructions when a saved key fails", () => {
@@ -86,7 +88,7 @@ describe("resolveModelSelectionAuthBlock", () => {
       },
       loginProviders: ["opencode-go"],
       providerLogins: {
-        "opencode-go": { methodId: "api-key", label: "OpenCode Go catalog" },
+        "opencode-go": { methodId: "api-key", label: "OpenCode Go catalog", mode: "secret" },
       },
     });
     const block = resolveModelSelectionAuthBlock({

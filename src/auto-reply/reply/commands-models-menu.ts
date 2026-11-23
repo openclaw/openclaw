@@ -45,8 +45,9 @@ export type ModelSelectionAuthBlock = {
   notice: string;
   // A chat `/login <provider>` route exists and may be offered as a button.
   loginSupported: boolean;
-  // The key is entered outside chat, so a chat sign-in never finishes the selection.
-  apiKeyLogin: boolean;
+  // The resolved route signs in inside this chat, so finishing it can apply the
+  // selection. App sign-ins, key entry, and unresolved routes finish elsewhere.
+  chatLogin: boolean;
 };
 
 function isApiKeyLogin(login: ModelProviderLogin | undefined): boolean {
@@ -148,20 +149,19 @@ export function resolveModelSelectionAuthBlock(params: {
   const loginSupported =
     params.menu?.loginProviders?.has(params.provider) === true && route !== "claudeCli";
   const login = params.menu?.providerLogins?.get(params.provider);
-  const apiKeyLogin = isApiKeyLogin(login);
   const { label, recovery } = describeUnavailableModel({
     provider: params.provider,
     state,
     route,
     loginSupported,
-    apiKeyLogin,
+    apiKeyLogin: isApiKeyLogin(login),
   });
   return {
     label,
     recovery,
     notice: `${params.provider}: ${label}. ${recovery}`,
     loginSupported,
-    apiKeyLogin,
+    chatLogin: login?.mode === "chat",
   };
 }
 
