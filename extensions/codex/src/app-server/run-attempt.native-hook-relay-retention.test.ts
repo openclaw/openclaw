@@ -63,6 +63,13 @@ function childTool(agentId: string, command?: string): JsonObject {
 }
 
 const relaySuccess = { stdout: "", stderr: "", exitCode: 0 };
+// Delivery removes the stable credential name before it writes, so only removals
+// after the last write clear a delivered credential.
+function credentialRemovalsAfterDelivery(requests: ReadonlyArray<{ method: string }>) {
+  const methods = requests.map(({ method }) => method);
+  return methods.slice(methods.lastIndexOf("fs/writeFile") + 1).filter((m) => m === "fs/remove")
+    .length;
+}
 const registration = (relayId: string) =>
   nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(relayId);
 
@@ -707,7 +714,7 @@ describe("runCodexAppServerAttempt native hook relay retention", () => {
         });
         expect(registration(relayId)).toBeDefined();
         if (remote) {
-          expect(harness.requests.some(({ method }) => method === "fs/remove")).toBe(false);
+          expect(credentialRemovalsAfterDelivery(harness.requests)).toBe(0);
         }
         fixture.closeHost();
         fixture.closeAdmission();
@@ -737,7 +744,7 @@ describe("runCodexAppServerAttempt native hook relay retention", () => {
         await harness.notify(childTerminal);
         await nativeHookRelayUnregisterQueue.flush();
         if (remote) {
-          expect(harness.requests.filter(({ method }) => method === "fs/remove")).toHaveLength(1);
+          expect(credentialRemovalsAfterDelivery(harness.requests)).toBe(1);
         }
         expect(registration(relayId)).toBeUndefined();
         await expect(invokeRelay(relayId, childTool(childThreadId, "allow-child"))).rejects.toThrow(

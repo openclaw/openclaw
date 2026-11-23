@@ -1,5 +1,3 @@
-import { stableStringify } from "@openclaw/normalization-core";
-import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import { withOwnedSessionTranscriptWrites } from "../../../config/sessions/transcript-write-context.js";
 import type { ContextEngine } from "../../../context-engine/types.js";
 import { buildTrajectoryRunMetadata } from "../../../trajectory/metadata.js";
@@ -9,7 +7,6 @@ import { createAnthropicPayloadLogger } from "../../anthropic-payload-log.js";
 import { createCacheTrace } from "../../cache-trace.js";
 import { bindCodeModeSessionStore } from "../../code-mode-session-store.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../defaults.js";
-import { readGitHubPublicationToolSelection } from "../../github-tool-identity-config.js";
 import { getOpenClawSystemUpdateKind } from "../../internal-runtime-context.js";
 import type { AgentSession } from "../../sessions/index.js";
 import { withSessionManagerAppend } from "../../sessions/session-manager-append-admission.js";
@@ -18,7 +15,6 @@ import {
   sessionManagerReadTranscriptBranch,
 } from "../../sessions/session-manager-view-types.js";
 import { resolveToolSearchConfig } from "../../tool-search-config.js";
-import { applyUsageRankedMcpToolSearchDirectory } from "../../tool-search.js";
 import {
   readToolUsageRankingSnapshot,
   type ToolUsageRankingSnapshot,
@@ -42,6 +38,8 @@ import {
   prepareSessionPublicationToolListing,
   retireSessionSystemPrompt,
 } from "../session-prompt-state.js";
+import { retireUserRowPromptUpdates } from "../session-prompt-update.js";
+import { resolveSessionToolPolicyDigest } from "../session-tool-checkpoint.js";
 import { restoreCacheTtlToolResultProjections } from "../tool-result-truncation.js";
 import type { prepareEmbeddedAttemptBundleTools } from "./attempt-bundle-tools.js";
 import type { SystemPromptUpdatePreparation } from "./attempt-permission-prompt.js";
@@ -167,6 +165,13 @@ export async function prepareEmbeddedAttemptSessionRuntime(input: {
   // prepareSessionSystemPrompt for the closed set of rebuild points.
   const usesSystemPromptSeries =
     !input.isRawModelRun && attempt.operation !== "settled-tool-finalization";
+  const toolSurface = codeModeControlsEnabledForRun
+    ? "code-mode"
+    : toolBase.toolSearchControlsEnabledForRun
+      ? resolveToolSearchConfig(toolSearchRuntimeConfig).mode
+      : "direct";
+  // A move ends the default-workspace series, retiring its guidance and tool pin.
+  const offersProjectMove = effectiveTools.some((tool) => tool.name === "session_project");
   const promptRouteKey = buildSystemPromptRouteKey({
     provider: attempt.provider,
     model: attempt.modelId,
@@ -176,11 +181,7 @@ export async function prepareEmbeddedAttemptSessionRuntime(input: {
     // The session's selected human, never the current turn's sender classification.
     personalProfile: attempt.sessionUserProfileId,
     harness: attempt.agentHarnessRuntimeOverride ?? attempt.agentHarnessId ?? "openclaw",
-    surface: codeModeControlsEnabledForRun
-      ? "code-mode"
-      : toolBase.toolSearchControlsEnabledForRun
-        ? resolveToolSearchConfig(toolSearchRuntimeConfig).mode
-        : "direct",
+    surface: offersProjectMove ? `${toolSurface}:project-move` : toolSurface,
   });
   const rankingEnabled =
     usesSystemPromptSeries &&
@@ -249,15 +250,7 @@ export async function prepareEmbeddedAttemptSessionRuntime(input: {
   if (usesSystemPromptSeries) {
     beginSessionSystemPrompt(sessionPromptState);
   }
-  const toolPolicyDigest = sha256Hex(
-    stableStringify([
-      attempt.config?.tools,
-      attempt.config?.agents?.entries?.[sessionAgentId]?.tools,
-      attempt.config?.plugins,
-      attempt.config?.desktop,
-      readGitHubPublicationToolSelection(attempt.config ?? {}),
-    ]),
-  );
+  const toolPolicyDigest = resolveSessionToolPolicyDigest(attempt.config, sessionAgentId);
   if (usesSystemPromptSeries) {
     const changed = await input.toolCatalog.installToolListingPin((tools, refresh) =>
       prepareSessionPublicationToolListing({
@@ -303,8 +296,8 @@ export async function prepareEmbeddedAttemptSessionRuntime(input: {
           const previousRanking = usageRanking;
           await prepareUsageRanking();
           if (usageRanking !== previousRanking) {
-            // A refreshed snapshot starts a new series: re-pin the tool definitions, including
-            // the ranked MCP directory, before the first request that uses it.
+            // A refreshed snapshot starts a new series: re-pin the tool definitions before
+            // the first request that uses it.
             sessionTools.refresh?.();
           }
           if (usageRanking !== previousRanking && systemPrompt.prepareToolPrompt) {
@@ -317,11 +310,12 @@ export async function prepareEmbeddedAttemptSessionRuntime(input: {
           if (wasFreshlyRendered || preparedPrompt !== projectedSystemPrompt) {
             freshSystemPrompt = preparedPrompt;
           }
+          const entries = sessionManager[sessionManagerReadTranscriptBranch]();
           const prepared = prepareSessionSystemPrompt({
             state: sessionPromptState,
             routeKey: promptRouteKey,
             systemPrompt: freshSystemPrompt,
-            entries: sessionManager[sessionManagerReadTranscriptBranch](),
+            entries,
             historyBoundaryCount: sessionManager.getBoundaryCount(),
           });
           // Keep an attempt's restart visible through subsequent continuation preparations.
@@ -339,6 +333,13 @@ export async function prepareEmbeddedAttemptSessionRuntime(input: {
             restartRecorded = true;
             resources.session.agent.state.messages = resources.session.messages.filter(
               (message) => getOpenClawSystemUpdateKind(message) !== "prompt-update",
+            );
+          }
+          if (resources.session) {
+            resources.session.agent.state.messages = retireUserRowPromptUpdates(
+              resources.session.agent.state.messages,
+              entries,
+              prepared.restart,
             );
           }
           projectedSystemPrompt = prepared.systemPrompt;
@@ -362,12 +363,8 @@ export async function prepareEmbeddedAttemptSessionRuntime(input: {
           toolPolicy: toolPolicyDigest,
           entries: sessionManager[sessionManagerReadTranscriptBranch](),
           historyBoundaryCount: sessionManager.getBoundaryCount(),
-          // The pin freezes this description with the series, like the ranking itself.
-          tools: applyUsageRankedMcpToolSearchDirectory(
-            tools,
-            toolSearchCatalogRef?.current,
-            usageRanking,
-          ),
+          tools,
+          admitNewTools: !toolBase.fixedListing,
         });
         if (sessionPromptState.pendingToolSurface !== pending) {
           declarePromptToolPin(attempt);
@@ -629,6 +626,10 @@ export async function prepareEmbeddedAttemptSessionRuntime(input: {
     sandboxSessionKey,
     ...(sandbox !== undefined ? { sandbox } : {}),
     codeModeControlsEnabled: codeModeControlsEnabledForRun,
+    getDeferredToolEntries: () =>
+      input.toolCatalog.deferredDirectoryToolsCallable
+        ? toolSearchCatalogRef?.current?.entries
+        : undefined,
     providerPromptState: {
       state: getProviderPromptState(attempt.runId),
       effectiveContextTokenBudget: Math.max(

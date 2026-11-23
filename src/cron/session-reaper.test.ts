@@ -283,30 +283,30 @@ describe("sweepCronRunSessions", () => {
     let foregroundRead:
       | ReturnType<typeof sessionEntryReader.readSessionEntriesFromStoreInWorker>
       | undefined;
-    const closeResources = sessionStoreLane.pool.closeResources.bind(sessionStoreLane.pool);
-    const closeObservation = keepsMaintenanceWorker
-      ? vi.spyOn(sessionStoreLane.pool, "closeResources").mockImplementationOnce((key) => {
-          const closing = closeResources(key);
-          foregroundRead = sessionEntryReader.readSessionEntriesFromStoreInWorker({
-            agentId: "main",
-            storePath: exactStorePath,
-            sessionKeys: [mainKey],
-          });
-          void foregroundRead.catch(() => {});
-          return closing;
-        })
-      : undefined;
+    const read = maintenanceReads.readExpiredCronRunEntriesInWorker;
+    const readObservation = vi
+      .spyOn(maintenanceReads, "readExpiredCronRunEntriesInWorker")
+      .mockImplementationOnce(async (input) => {
+        const candidates = await read(input);
+        foregroundRead = sessionEntryReader.readSessionEntriesFromStoreInWorker({
+          agentId: "main",
+          storePath: exactStorePath,
+          sessionKeys: [mainKey],
+        });
+        void foregroundRead.catch(() => {});
+        return candidates;
+      });
     try {
       expect(await sweepShared("ops", now + 5 * 60_000)).toEqual({ swept: true, pruned: 1 });
+      expect(foregroundRead).toBeDefined();
+      expect(await foregroundRead).toMatchObject({
+        entries: [{ sessionKey: mainKey, entry: foregroundEntry }],
+      });
       if (keepsMaintenanceWorker) {
-        expect(foregroundRead).toBeDefined();
-        expect(await foregroundRead).toMatchObject({
-          entries: [{ sessionKey: mainKey, entry: foregroundEntry }],
-        });
         expect(sessionStoreLane.pool.getSnapshot().workersCreated).toBe(workersCreated);
       }
     } finally {
-      closeObservation?.mockRestore();
+      readObservation.mockRestore();
       await Promise.allSettled([foregroundRead]);
     }
     expect(sessionAccessor.loadSessionEntry(mainScope)).toMatchObject({ sessionId: "main-run" });

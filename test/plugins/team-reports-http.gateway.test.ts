@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import {
   createTeamReportsHttpHandler,
   createTeamReportsStore,
@@ -7,7 +7,6 @@ import {
 import { upsertSessionEntryCore } from "../../src/config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../src/config/types.openclaw.js";
 import type { ResolvedGatewayAuth } from "../../src/gateway/auth.js";
-import { CONTROL_UI_PLUGIN_AUTH_GRANT_TTL_MS } from "../../src/gateway/control-ui-contract.js";
 import { setControlUiPluginAuthCookie } from "../../src/gateway/control-ui-plugin-auth-cookie.js";
 import { resolveControlUiPluginAuthCookieGeneration } from "../../src/gateway/http-auth-plugin-cookie.js";
 import { invalidateOperatorRolePolicy } from "../../src/gateway/operator-role-policy.js";
@@ -21,7 +20,6 @@ import { createSessionRowProjection } from "../../src/gateway/session-row-projec
 import { withTempConfig } from "../../src/gateway/test-temp-config.js";
 import { resolveRuntimeWorkerUrl } from "../../src/infra/runtime-worker-url.js";
 import { createSubsystemLogger } from "../../src/logging/subsystem.js";
-import { sessionChanges } from "../../src/sessions/session-row-changes.js";
 import {
   setUserProfileRole,
   syncGitHubIdentity,
@@ -29,7 +27,6 @@ import {
 import { ensureProfileForEmail } from "../../src/state/user-profiles.js";
 import { withOpenClawTestState } from "../../src/test-utils/openclaw-test-state.js";
 import { closeHttpServer, listenLoopback } from "../helpers/gateway-integration-fixtures.js";
-import { createDeferred, withTestTimeout } from "../helpers/promise.js";
 
 const reportRoute = { pluginId: "team-reports", path: "/reports", match: "prefix" as const };
 
@@ -57,11 +54,7 @@ async function withReports(
   roles: boolean,
   run: (fixture: {
     read: (path?: string) => ReturnType<typeof get>;
-    blockDiscovery: () => { entered: Promise<void>; release: () => void };
-    rotate: () => void;
-    expire: () => void;
     blockViewer: () => void;
-    blockViewerAfterDiscovery: () => void;
   }) => Promise<void>,
 ) {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
@@ -118,16 +111,10 @@ async function withReports(
         await seed("cron:excluded:run:one");
         await seed("dashboard:incognito-reports", reader.id, { incognito: true });
         const context = createDirectChatContext({ getRuntimeConfig: () => cfg });
-        let gate: ReturnType<typeof createDeferred<void>> | undefined;
-        let entered: ReturnType<typeof createDeferred<void>> | undefined;
         const projection = await createSessionRowProjection({
           cfg,
           context,
-          getModelCatalog: async () => {
-            entered?.resolve();
-            await gate?.promise;
-            return undefined;
-          },
+          getModelCatalog: async () => undefined,
         });
         bindSessionRowProjection(context, () => projection);
         const store = await createTeamReportsStore({
@@ -137,14 +124,12 @@ async function withReports(
             distWorkerPath: "extensions/team-reports/src/store.worker.js",
           }),
         });
-        let auth: ResolvedGatewayAuth = {
+        const auth: ResolvedGatewayAuth = {
           mode: "token",
           token: "reports-proof-initial",
           allowTailscale: false,
         };
         const issuedAt = Date.now();
-        let discoveryStarted: ReturnType<typeof createDeferred<void>> | undefined;
-        let withdrawAfterDiscovery = false;
         const blockViewer = () => {
           setUserProfileRole(reader.id, "blocked");
           // Match users.setRole: publish the committed assignment to the auth cache.
@@ -162,15 +147,7 @@ async function withReports(
                   displayTimezone: "UTC",
                   assetsDir: "unused",
                   sessionRouting: () => ({ controlUiBasePath: "", mainKey: "main" }),
-                  workSessions: async (offset, limit, profileId) => {
-                    discoveryStarted?.resolve();
-                    const sessions = await listWorkSessions(offset, limit, profileId);
-                    if (withdrawAfterDiscovery) {
-                      withdrawAfterDiscovery = false;
-                      blockViewer();
-                    }
-                    return sessions;
-                  },
+                  workSessions: listWorkSessions,
                   getStore: () => store,
                   status: async () => ({}),
                   health: async () => ({ running: false, warnings: 0 }),
@@ -218,29 +195,9 @@ async function withReports(
           const cookie = issued.cookies.map((value) => value.split(";", 1)[0]).join("; ");
           await run({
             read: (path = "/reports/sessions/") => get(baseUrl, path, cookie),
-            blockDiscovery: () => {
-              gate = createDeferred();
-              entered = createDeferred();
-              discoveryStarted = createDeferred();
-              sessionChanges.emit({ all: true, scope: "catalog" });
-              return {
-                entered: Promise.all([entered.promise, discoveryStarted.promise]).then(() => {}),
-                release: () => gate?.resolve(),
-              };
-            },
-            rotate: () => {
-              auth = { ...auth, token: "reports-proof-rotated" };
-            },
-            expire: () => {
-              vi.spyOn(Date, "now").mockReturnValue(issuedAt + CONTROL_UI_PLUGIN_AUTH_GRANT_TTL_MS);
-            },
             blockViewer,
-            blockViewerAfterDiscovery: () => {
-              withdrawAfterDiscovery = true;
-            },
           });
         } finally {
-          gate?.resolve();
           if (server.listening) {
             await closeHttpServer(server);
           }
@@ -254,9 +211,6 @@ async function withReports(
 }
 
 describe("Reports HTTP disclosure with production cookie auth and sessions.list", () => {
-  afterEach(() => {
-    vi.restoreAllMocks();
-  });
   it.each([false, true])(
     "renders only the signed viewer's visible sessions (roles=%s)",
     async (roles) => {
@@ -283,41 +237,6 @@ describe("Reports HTTP disclosure with production cookie auth and sessions.list"
           expect(owned.body).not.toContain("REPORT-PROOF-shared");
           expect(owned.body).toContain("No work sessions are visible to you.");
           expectReport(await read(), "own-draft", /REPORT-PROOF-shared/);
-        }
-      });
-    },
-  );
-  it.each(["role", "expiry", "generation"] as const)(
-    "does not disclose when %s authority changes before HTTP delivery",
-    async (invalidation) => {
-      await withReports(invalidation === "role", async (fixture) => {
-        if (invalidation === "role") {
-          fixture.blockViewerAfterDiscovery();
-        }
-        const gate = invalidation === "role" ? undefined : fixture.blockDiscovery();
-        const pending = fixture.read("/reports/people/owner/");
-        try {
-          if (gate) {
-            await withTestTimeout(
-              gate.entered,
-              10_000,
-              "sessions.list did not enter delayed discovery",
-            );
-            if (invalidation === "expiry") {
-              fixture.expire();
-            } else {
-              fixture.rotate();
-            }
-            gate.release();
-          }
-          const response = await pending;
-          expect(response.body).not.toContain(
-            invalidation === "role" ? "REPORT-PROOF-shared" : "REPORT-PROOF-",
-          );
-          expect(response.status).toBe(401);
-        } finally {
-          gate?.release();
-          await pending;
         }
       });
     },

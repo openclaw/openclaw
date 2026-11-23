@@ -1,5 +1,6 @@
 import type { ResponsesInputItem, StreamEvent } from "./mock-openai-contracts.js";
 import { buildAssistantEvents } from "./mock-openai-events.js";
+import { countCurrentToolOutputs } from "./mock-openai-input.js";
 
 const QA_HOOK_AUTOMATIONS_SCOPE_PROMPT_RE = /Hook automations scope QA check: target=(\S+)/;
 const QA_HOOK_AUTOMATIONS_SCOPE_DONE_MARKER = "QA-HOOK-AUTOMATIONS-SCOPE-DONE";
@@ -18,7 +19,7 @@ export function planHookAutomationsScopeTurn(params: {
   if (!target) {
     return null;
   }
-  const completed = params.input.filter((item) => item.type === "function_call_output").length;
+  const completed = countCurrentToolOutputs(params.input);
   // Deferred catalogs route these through dispatch_action.
   if (completed === 0) {
     return params.buildToolCall("automations", { action: "remove", jobId: target });

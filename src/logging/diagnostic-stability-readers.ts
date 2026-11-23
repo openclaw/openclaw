@@ -85,3 +85,15 @@ export function assignOptionalFields<T extends object, K extends keyof T & strin
     }
   }
 }
+
+export function readNumberMap(value: unknown, label: string): Record<string, number> {
+  const source = readObject(value, label);
+  const result: Record<string, number> = {};
+  for (const [key, entry] of Object.entries(source)) {
+    if (!SAFE_REASON_CODE.test(key)) {
+      continue;
+    }
+    result[key] = readRequiredNumber(entry, `${label}.${key}`);
+  }
+  return result;
+}

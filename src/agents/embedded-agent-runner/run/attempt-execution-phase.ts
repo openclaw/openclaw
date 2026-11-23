@@ -10,6 +10,7 @@ import {
   projectAgentRunAttemptTerminal,
   type AgentRunAttemptTerminal,
 } from "../../agent-run-terminal-outcome.js";
+import { isToolBatchBoundarySafe } from "../../context-pressure.js";
 import { agentSessionSetContextReplacementHook } from "../../sessions/agent-session-compaction.js";
 import { getGatewayToolCallerIdentity } from "../../tools/gateway-caller-context.js";
 import { log } from "../logger.js";
@@ -27,6 +28,7 @@ import { runEmbeddedAttemptSettledPhase } from "./attempt-settle.js";
 import { prepareEmbeddedAttemptStream } from "./attempt-stream-prepare.js";
 import { installEmbeddedAttemptStreamGuards } from "./attempt-stream.js";
 import { cleanupEmbeddedAttemptResources } from "./attempt-subscription-cleanup.js";
+import { hasAsyncActivity } from "./attempt-terminal-evidence.js";
 import { prepareEmbeddedAttemptTimeout } from "./attempt-timeout-prepare.js";
 import type { EmbeddedRunAttemptResult } from "./types.js";
 
@@ -65,6 +67,8 @@ export async function runEmbeddedAttemptExecutionPhase(
   };
 
   const idleTimeoutTriggerRef: { current?: (error: Error) => void } = {};
+  // The stream subscription records tool lifecycle; it is created after the stream guards.
+  const toolBoundaryRef: { current?: () => boolean } = {};
   const {
     normalizeToolCallIds,
     onModelRequest,
@@ -83,6 +87,7 @@ export async function runEmbeddedAttemptExecutionPhase(
       }
     },
     diagnosticOwner,
+    isToolBoundarySafe: () => toolBoundaryRef.current?.() ?? false,
   });
   input.setup.prepStages.mark("stream-setup");
   input.setup.emitPrepStageSummary("stream-ready");
@@ -190,6 +195,16 @@ export async function runEmbeddedAttemptExecutionPhase(
     trajectoryRecorder: sessionRuntime.trajectoryRecorder,
   });
   state.deferredLifecycleOwner = preparedStream.deferredLifecycleOwner;
+  toolBoundaryRef.current = () =>
+    isToolBatchBoundarySafe({
+      pendingToolCalls: activeSession.agent.state.pendingToolCalls.size,
+      itemLifecycle: preparedStream.subscription.getItemLifecycle(),
+      asyncActivity: hasAsyncActivity(preparedStream.subscription.toolMetas),
+      parkedCodeModeRun: preparedStream.subscription.toolMetas.some(
+        (entry) => entry.codeModeSuspended === true,
+      ),
+      approvalPromptSent: preparedStream.subscription.didSendDeterministicApprovalPrompt(),
+    });
   input.lifecycle.setToolSearchCatalogExecutor(preparedStream.toolSearchCatalogExecutor);
   input.externalAbortController.setCompactionState({
     isPendingOrRetrying: preparedStream.subscription.isCompacting,
@@ -210,6 +225,7 @@ export async function runEmbeddedAttemptExecutionPhase(
     markTimedOutByRunBudget: () =>
       mergeTerminal({ kind: "timeout", phase: "prompt", source: "run_budget" }),
   });
+  toolBase.bindRunAbortDeadline(attemptTimeout.getRunAbortDeadlineAtMs);
 
   const preparedStreamRuntime = {
     abortable,
@@ -220,6 +236,7 @@ export async function runEmbeddedAttemptExecutionPhase(
     },
     history: preparedHistory,
     isProbeSession,
+    isToolBoundarySafe: () => toolBoundaryRef.current?.() ?? false,
     onBlockReplyFlush,
     promptActiveSession,
     stream: preparedStream,

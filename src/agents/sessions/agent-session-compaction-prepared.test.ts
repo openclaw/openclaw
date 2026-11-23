@@ -1,9 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import {
-  commitCompactionSummary,
-  prepareCompactionFloor,
-} from "../../../packages/agent-core/src/harness/compaction/compaction-floor.js";
-import { compactWithoutSummary } from "../../../packages/agent-core/src/harness/compaction/compaction.js";
+import { commitCompactionSummary } from "../../../packages/agent-core/src/harness/compaction/compaction-floor.js";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { makeUserMessage } from "../../../test/helpers/user-message.js";
 import { setCompactionSafeguardCancellation } from "../agent-hooks/compaction-safeguard-runtime.js";
@@ -18,10 +14,6 @@ import {
   testModel,
 } from "./agent-session-loop-correctness.test-support.js";
 import { prepareAgentCompactionWork } from "./compaction/preparation.js";
-import {
-  preparedSessionCompactionWork,
-  type PreparedSessionCompactionWork,
-} from "./compaction/prepared-work.js";
 import { SessionManager } from "./session-manager.js";
 import { SettingsManager } from "./settings-manager.js";
 
@@ -55,17 +47,17 @@ async function fixture() {
   if (full.status !== "prepared") {
     throw new Error("Expected fixture preparation");
   }
-  const fallback = compactWithoutSummary(full.preparation);
-  if (!fallback.ok) {
-    throw fallback.error;
-  }
-  const first = branch.findIndex((entry) => entry.id === full.preparation.firstKeptEntryId);
-  const header = original.getHeader();
-  if (!header || first < 0) {
-    throw new Error("Expected retained fixture suffix");
-  }
-  const manager = SessionManager.fromEntries([header, ...branch.slice(first)]);
-  const publicBefore = vi.fn();
+  const manager = original;
+  const result = {
+    summary: "Prepared summary.",
+    firstKeptEntryId: full.preparation.firstKeptEntryId,
+    tokensBefore: full.preparation.tokensBefore,
+  };
+  const execute = vi.fn(
+    async (_event: unknown, _ctx: { sessionManager: object }) =>
+      ({ compaction: result }) as { compaction?: typeof result; cancel?: true },
+  );
+  const publicBefore = vi.fn(execute);
   const publicAfter = vi.fn();
   const { session } = await createTestSession({
     sessionManager: manager,
@@ -75,42 +67,20 @@ async function fixture() {
       api.on("session_compact", publicAfter);
     },
   });
-  const result = {
-    summary: "Prepared summary.",
-    firstKeptEntryId: full.preparation.firstKeptEntryId,
-    tokensBefore: full.preparation.tokensBefore,
-  };
-  const execute = vi
-    .fn<PreparedSessionCompactionWork["execute"]>()
-    .mockResolvedValue({ compaction: result });
-  const deterministic = vi.fn(() => fallback);
-  const work: PreparedSessionCompactionWork = {
-    preparation: { ...full.preparation, messagesToSummarize: [], turnPrefixMessages: [] },
-    requestBudget: full.requestBudget,
-    requestTokenLimit: full.requestTokenLimit,
-    floor: prepareCompactionFloor([
-      ...full.preparation.messagesToSummarize,
-      ...full.preparation.turnPrefixMessages,
-    ]),
-    deterministic,
-    execute,
-  };
   return {
     session,
     manager,
     full,
     result,
-    work,
     execute,
-    deterministic,
     publicBefore,
     publicAfter,
   };
 }
 
-describe("private prepared SDK compaction", () => {
+describe("public SDK compaction adapter", () => {
   it.each(["summary", "deterministic", "required-cancellation"] as const)(
-    "settles %s with the original floor and existing durable executor",
+    "settles %s with complete public preparation and existing durable executor",
     async (mode) => {
       const f = await fixture();
       if (mode === "required-cancellation") {
@@ -127,16 +97,13 @@ describe("private prepared SDK compaction", () => {
         undefined,
         undefined,
         mode === "deterministic" ? "deterministic" : "none",
-        {
-          [preparedSessionCompactionWork]: f.work,
-          ...(mode === "required-cancellation" ? { requestRequiresCompaction: true } : {}),
-        },
+        mode === "required-cancellation" ? { requestRequiresCompaction: true } : {},
       );
       expect(outcome.status).toBe("completed");
       if (outcome.status !== "completed") {
         throw new Error("Expected compaction receipt");
       }
-      expect(f.publicBefore).not.toHaveBeenCalled();
+      expect(f.publicBefore).toHaveBeenCalledTimes(mode === "deterministic" ? 0 : 1);
       expect(f.publicAfter).toHaveBeenCalledOnce();
       expect(f.manager.getBranch().filter((entry) => entry.type === "compaction")).toHaveLength(1);
       expect(
@@ -154,9 +121,7 @@ describe("private prepared SDK compaction", () => {
           commitCompactionSummary(f.result, f.full.preparation, false),
         );
         expect(f.execute).toHaveBeenCalledOnce();
-        expect(f.deterministic).not.toHaveBeenCalled();
       } else {
-        expect(f.deterministic).toHaveBeenCalledOnce();
         expect(outcome.result.summary).toContain("removed without a summary");
         expect(f.execute).toHaveBeenCalledTimes(mode === "deterministic" ? 0 : 1);
       }
@@ -182,9 +147,7 @@ describe("private prepared SDK compaction", () => {
       });
       const before = f.manager.getPersistedEntries();
       const append = vi.spyOn(f.manager, "appendCompactionAsync");
-      const attempt = f.session[agentSessionAutomaticCompaction](undefined, undefined, "none", {
-        [preparedSessionCompactionWork]: f.work,
-      });
+      const attempt = f.session[agentSessionAutomaticCompaction](undefined, undefined, "none");
       const rejected = expect(attempt).rejects.toThrow(
         mode === "abort" ? "cancelled" : "retired fixture owner",
       );
@@ -202,7 +165,7 @@ describe("private prepared SDK compaction", () => {
       await rejected;
       expect(append).not.toHaveBeenCalled();
       expect(f.manager.getPersistedEntries()).toEqual(before);
-      expect(f.publicBefore).not.toHaveBeenCalled();
+      expect(f.publicBefore).toHaveBeenCalledOnce();
       expect(f.publicAfter).not.toHaveBeenCalled();
     },
   );

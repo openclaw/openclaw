@@ -126,3 +126,13 @@ it.each(["mine", "adopted"])("filters by effective %s owner", (id) => {
     ),
   ).toEqual([]);
 });
+
+it("keeps a partially filtered catalog visible when every row is excluded", () => {
+  const [host] = catalog([session("shared")]).hosts;
+  const partial: SessionCatalog = {
+    ...catalog([]),
+    hosts: [{ ...host!, error: { code: "FILTER_PARTIAL", message: "Filtering is partial" } }],
+  };
+  const [projected] = projectSidebarSessionCatalogs([partial], null, [], undefined, new Set());
+  expect(projected?.visibleHosts).toEqual([]);
+});

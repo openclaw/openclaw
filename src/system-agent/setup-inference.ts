@@ -28,7 +28,10 @@ export type {
   SetupInferenceUnavailableCandidate,
   VerifySetupInferenceResult,
 } from "./setup-inference-core.js";
-export { detectSetupInference, listManualSetupInferenceOptions } from "./setup-inference-detect.js";
+export {
+  detectSetupInference,
+  listManualSetupInferenceDetection,
+} from "./setup-inference-detect.js";
 export { activateSetupInference } from "./setup-inference-activate.js";
 export {
   resolvePersistentApplyInference,

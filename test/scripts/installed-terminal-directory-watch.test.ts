@@ -44,7 +44,10 @@ function fixture() {
     fs.mkdirSync(path.dirname(path.join(root, relative)), { recursive: true });
     fs.writeFileSync(path.join(root, relative), entry.source);
   }
-  const dependency = path.resolve(path.dirname(require.resolve("@openclaw/fs-safe/json")), "..");
+  const dependency = path.resolve(
+    path.dirname(require.resolve("@openclaw/fs-safe-captured-0.27.1/json")),
+    "..",
+  );
   fs.mkdirSync(path.join(root, "node_modules/@openclaw"), { recursive: true });
   fs.cpSync(dependency, path.join(root, "node_modules/@openclaw/fs-safe"), { recursive: true });
   writeJson(path.join(root, "package.json"), {

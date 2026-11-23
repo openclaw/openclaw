@@ -1,6 +1,4 @@
 import { GatewayProtocolRequestError } from "@openclaw/gateway-client/browser";
-import { timestampMsToIsoString } from "@openclaw/normalization-core/number-coercion";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { CronListParams } from "../../../../packages/gateway-protocol/src/schema/cron.types.ts";
 import {
   readCanonicalCronListPage,
@@ -9,9 +7,14 @@ import {
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { CronCompactJob, CronJob, CronJobsListResult } from "../../api/types.ts";
 import { formatUiError } from "../format-error.ts";
-import { usesCronInventoryEvents } from "./inventory-connection.ts";
+import {
+  readCronRuntimeEvent,
+  usesCronInventoryEvents,
+  type Runtime,
+} from "./inventory-connection.ts";
 import { cronInventoryHasJob, readCronInventory } from "./inventory.ts";
-import type { DEFAULT_CRON_JOBS_FILTERS } from "./state.ts";
+import { buildCronJobsListParams } from "./list-params.ts";
+import { applyCompactCronRuntime } from "./runtime-projection.ts";
 import type { CronJobsState } from "./types.ts";
 
 function clearCronJobsSnapshot(state: CronJobsState<unknown>) {
@@ -44,20 +47,6 @@ async function drainPendingCronJobsReload<Row extends CronInventoryJob>(
 }
 
 type CronInventoryJob = Pick<CronJob, "id" | "name" | "agentId" | "enabled" | "updatedAtMs">;
-type CronRuntimeState = Pick<
-  CronJob["state"],
-  | "nextRunAtMs"
-  | "lastRunAtMs"
-  | "lastRunStatus"
-  | "lastStatus"
-  | "runningAtMs"
-  | "autoDisabled"
-  | "admissionDeferred"
-  | "lastError"
-  | "lastDurationMs"
-  | "lastMeaningfulResult"
-  | "lastTriggerEvalAtMs"
->;
 
 export type CronJobsPageOptions = {
   append?: boolean;
@@ -75,7 +64,7 @@ export type CronJobsProjection<Row extends CronInventoryJob> = {
   applyRuntime: (
     state: CronJobsState<Row>,
     index: number,
-    update: { updatedAtMs: number; runtime: CronRuntimeState; finished: boolean },
+    event: Omit<Runtime, "revision">,
   ) => boolean;
 };
 
@@ -99,29 +88,14 @@ const compactCronJobsProjection: CronJobsProjection<CronCompactJob> = {
   compact: true,
   read: (client, params, options) =>
     readCronInventory(client, { ...params, compact: true }, options),
-  applyRuntime: (state, index, { updatedAtMs, runtime, finished }) => {
-    // Runtime facts preserve name order; other compact orderings need an authoritative page.
+  applyRuntime: (state, index, event) => {
     if (state.cronJobsSortBy !== "name") {
       return false;
     }
-    const { nextRunAtMs, lastRunAtMs, lastRunStatus, lastStatus, runningAtMs, autoDisabled } =
-      runtime;
-    state.cronJobs = state.cronJobs.with(index, {
-      ...state.cronJobs[index]!,
-      updatedAtMs,
-      nextRunAt: timestampMsToIsoString(nextRunAtMs) ?? null,
-      nextRunAtMs: nextRunAtMs ?? null,
-      lastRunAt: timestampMsToIsoString(lastRunAtMs) ?? null,
-      lastRunAtMs: lastRunAtMs ?? null,
-      lastRunStatus: lastRunStatus ?? lastStatus ?? null,
-      runningAtMs,
-      autoDisabled,
-      admissionDeferred: runtime.admissionDeferred,
-      lastDurationMs: runtime.lastDurationMs,
-      lastMeaningfulResult: runtime.lastMeaningfulResult,
-      lastTriggerEvalAtMs: runtime.lastTriggerEvalAtMs,
-      ...(finished ? { lastRunError: runtime.lastError ?? null } : {}),
-    });
+    state.cronJobs = state.cronJobs.with(
+      index,
+      applyCompactCronRuntime(state.cronJobs[index]!, event),
+    );
     return true;
   },
 };
@@ -131,7 +105,9 @@ function applyLegacyCronJobsEvent<Row extends CronInventoryJob>(
   projection: CronJobsProjection<Row>,
   payload: unknown,
 ): boolean {
+  const event = readCronRuntimeEvent(payload);
   if (
+    !event ||
     state.cronLoading ||
     state.cronJobsLoadingMore ||
     state.cronJobsReloadPending ||
@@ -140,57 +116,25 @@ function applyLegacyCronJobsEvent<Row extends CronInventoryJob>(
     state.cronJobsHasMore ||
     state.cronJobs.length !== state.cronJobsTotal ||
     !(cronInventoryScopes.get(state)?.scope === (state.cronSessionFilter ?? state.cronAgentId)) ||
-    state.cronJobsLastStatusFilter !== "all" ||
-    !isRecord(payload) ||
-    !["started", "finished", "scheduled"].includes(String(payload.action)) ||
-    !isRecord(payload.job) ||
-    !isRecord(payload.job.state) ||
-    payload.jobId !== payload.job.id
+    state.cronJobsLastStatusFilter !== "all"
   ) {
     return false;
   }
   // Definitions, unknown membership, filtered status and incomplete windows need a list read.
-  const index = state.cronJobs.findIndex((job) => job.id === payload.jobId);
+  const index = state.cronJobs.findIndex((job) => job.id === event.jobId);
   const previous = state.cronJobs[index];
   if (
     !previous ||
-    previous.name !== payload.job.name ||
-    previous.agentId !== payload.job.agentId ||
-    previous.enabled !== payload.job.enabled ||
-    typeof payload.job.updatedAtMs !== "number"
+    previous.name !== event.job.name ||
+    previous.agentId !== event.job.agentId ||
+    previous.enabled !== event.job.enabled
   ) {
     return false;
   }
-  if (payload.job.updatedAtMs < previous.updatedAtMs) {
+  if (event.job.updatedAtMs < previous.updatedAtMs) {
     return true;
   }
-  // SAFETY: The authenticated cron publisher owns this compact runtime projection.
-  const runtime = payload.job.state as CronRuntimeState;
-  const { nextRunAtMs, lastRunAtMs, lastRunStatus, lastStatus, runningAtMs, autoDisabled } =
-    runtime;
-  const finished = payload.action === "finished";
-  return projection.applyRuntime(state, index, {
-    updatedAtMs: payload.job.updatedAtMs,
-    runtime: {
-      nextRunAtMs,
-      lastRunAtMs,
-      lastRunStatus,
-      lastStatus,
-      runningAtMs,
-      autoDisabled,
-      admissionDeferred: runtime.admissionDeferred,
-      lastDurationMs: runtime.lastDurationMs,
-      lastMeaningfulResult: runtime.lastMeaningfulResult,
-      lastTriggerEvalAtMs: runtime.lastTriggerEvalAtMs,
-      ...(finished
-        ? {
-            lastError: typeof payload.error === "string" ? payload.error : undefined,
-            lastDurationMs: typeof payload.durationMs === "number" ? payload.durationMs : undefined,
-          }
-        : {}),
-    },
-    finished,
-  });
+  return projection.applyRuntime(state, index, event);
 }
 
 export function loadCompactCronJobsPage(
@@ -198,33 +142,6 @@ export function loadCompactCronJobsPage(
   opts?: CronJobsPageOptions,
 ) {
   return loadCronJobsProjectionPage(state, compactCronJobsProjection, opts);
-}
-
-export function buildCronJobsListParams(
-  state: Pick<
-    CronJobsState,
-    keyof typeof DEFAULT_CRON_JOBS_FILTERS | "cronAgentId" | "cronSessionFilter"
-  >,
-  options: { offset?: number; tableFilters?: boolean } = {},
-): Omit<CronListParams, "compact"> {
-  return {
-    ...(state.cronSessionFilter ?? (state.cronAgentId ? { agentId: state.cronAgentId } : {})),
-    includeDisabled: state.cronJobsEnabledFilter === "all",
-    includeDeliveryPreviews: false,
-    limit: state.cronJobsLimit,
-    offset: options.offset ?? 0,
-    query: state.cronJobsQuery.trim() || undefined,
-    enabled: state.cronJobsEnabledFilter,
-    ...(options.tableFilters
-      ? {
-          scheduleKind: state.cronJobsScheduleKindFilter,
-          lastRunStatus: state.cronJobsLastStatusFilter,
-          trigger: state.cronJobsTriggerFilter,
-        }
-      : {}),
-    sortBy: state.cronJobsSortBy,
-    sortDir: state.cronJobsSortDir,
-  };
 }
 
 export async function loadCronJobsProjectionPage<Row extends CronInventoryJob>(

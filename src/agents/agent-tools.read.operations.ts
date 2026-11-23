@@ -1,5 +1,4 @@
 import { detectMime } from "@openclaw/media-core/mime";
-import { decodeWindowsTextFileBuffer } from "../infra/windows-encoding.js";
 import {
   classifyMediaReferenceSource,
   normalizeMediaReferenceSource,
@@ -12,6 +11,7 @@ import {
 import { resolveContainerPathCandidate } from "./path-policy.js";
 import { resolveSandboxFileMutationQueueKey } from "./sandbox/file-mutation-identity.js";
 import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
+import { decodeReadTextBuffer } from "./sessions/tools/read-text-capture.js";
 
 type SandboxFileOperationsParams = {
   abortSignal?: AbortSignal;
@@ -33,8 +33,8 @@ export function createSandboxReadOperations(params: SandboxFileOperationsParams)
     },
     decodeText: ({ buffer, absolutePath }: { buffer: Buffer; absolutePath: string }) =>
       params.bridge.resolvePath({ filePath: absolutePath, cwd: params.root }).hostPath
-        ? decodeWindowsTextFileBuffer({ buffer })
-        : decodeWindowsTextFileBuffer({ buffer, platform: "linux" }),
+        ? decodeReadTextBuffer({ buffer })
+        : decodeReadTextBuffer({ buffer, platform: "linux" }),
     readFile: (absolutePath: string, signal?: AbortSignal) =>
       params.bridge.readFile({
         filePath: absolutePath,

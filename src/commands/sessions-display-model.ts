@@ -1,3 +1,4 @@
+import { DEFAULT_PROVIDER } from "../agents/defaults.js";
 import type { ModelRef } from "../agents/model-ref-shared.js";
 import { resolveDefaultModelForAgent } from "../agents/model-selection-config.js";
 import {
@@ -19,7 +20,7 @@ export function resolveSessionDisplayModelRef(
   },
   classifyCliProvider: CliProviderClassifier = (provider) => isCliProvider(provider, cfg),
   ownerAgentId?: string,
-): ModelRef {
+): ModelRef | undefined {
   const agentId =
     ownerAgentId ?? (row.key.startsWith("agent:") ? row.key.split(":")[1] : undefined);
   const defaultRef = resolveDefaultModelForAgent({
@@ -33,7 +34,7 @@ export function resolveSessionDisplayModelRef(
     modelOverride: row.modelOverride,
   });
   const persistedRef = resolvePersistedSelectedModelRef({
-    defaultProvider: defaultRef.provider,
+    defaultProvider: defaultRef?.provider ?? DEFAULT_PROVIDER,
     runtimeProvider: row.modelProvider,
     runtimeModel: row.model,
     overrideProvider: normalizedOverride.providerOverride,
@@ -50,7 +51,7 @@ export function resolveSessionDisplayModelRef(
   if (!classifyCliProvider(persistedRef.provider)) {
     return persistedRef;
   }
-  const parsed = parseModelRef(persistedRef.model, defaultRef.provider, {
+  const parsed = parseModelRef(persistedRef.model, defaultRef?.provider ?? DEFAULT_PROVIDER, {
     allowManifestNormalization: false,
     allowPluginNormalization: false,
   });
@@ -75,7 +76,7 @@ export function resolveSessionDisplayModelRef(
     return parsed;
   }
   return {
-    provider: defaultRef.provider || persistedRef.provider,
+    provider: defaultRef?.provider || persistedRef.provider,
     model: parsed?.model || persistedRef.model,
   };
 }

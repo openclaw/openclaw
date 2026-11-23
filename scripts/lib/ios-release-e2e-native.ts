@@ -25,6 +25,7 @@ import {
 import { markIosResourcePhase } from "../ios-resource-timeline.mjs";
 import {
   collectGatewayProcessDiagnostics,
+  parseIOSSimulatorTiming,
   summarizeGatewayLanes,
   summarizeGatewayLogs,
   summarizeIOSBuildTiming,
@@ -74,6 +75,7 @@ export async function createNativeDependencies(options: {
     status: "running" | "passed" | "failed";
     ms: number;
     checkpoint?: string;
+    preparationTimings?: NonNullable<ReturnType<typeof parseIOSSimulatorTiming>>[];
   }[] = [];
   options.proof.phases = phases;
   let currentTrial: number | undefined;
@@ -121,6 +123,12 @@ export async function createNativeDependencies(options: {
     phase(operation, async () => {
       let stdout = "";
       let stderr = "";
+      let timingTail = "";
+      const preparationPhase = operation === "simulator-slim" ? phases.at(-1) : undefined;
+      if (preparationPhase) {
+        preparationPhase.preparationTimings = [];
+      }
+      const preparationTimings = preparationPhase?.preparationTimings;
       const started = performance.now();
       let failureContext: Promise<string[]> | undefined;
       const observeChatFailure = () => {
@@ -170,6 +178,16 @@ export async function createNativeDependencies(options: {
             });
             child.stderr?.on("data", (chunk: Buffer) => {
               stderr = (stderr + chunk.toString()).slice(-4096);
+              if (preparationTimings) {
+                const lines = (timingTail + chunk.toString()).split("\n");
+                timingTail = lines.pop()!.slice(-256);
+                for (const line of lines) {
+                  const timing = parseIOSSimulatorTiming(line);
+                  if (timing && preparationTimings.length < 4) {
+                    preparationTimings.push(timing);
+                  }
+                }
+              }
               observeChatFailure();
             });
           },

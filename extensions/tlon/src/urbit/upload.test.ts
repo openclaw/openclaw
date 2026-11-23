@@ -35,6 +35,7 @@ it.each([1024, MAX_IMAGE_BYTES * 2])("caps downloads at %s bytes", async (cap) =
   expect(mockReadRemoteMediaBuffer.mock.lastCall?.[0]).toMatchObject({
     url,
     maxBytes: Math.min(cap ?? MAX_IMAGE_BYTES, MAX_IMAGE_BYTES),
+    timeoutMs: 180_000,
     responseHeaderTimeoutMs: 120_000,
     readIdleTimeoutMs: 30_000,
   });

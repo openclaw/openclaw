@@ -2,6 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { lstatSync } from "node:fs";
 import fs, { type FileHandle } from "node:fs/promises";
 import path from "node:path";
+import { setTimeout as pause } from "node:timers/promises";
 import { isMissingPathError } from "../../infra/errors.js";
 import { withContentGitSlot } from "../../infra/git-content-budget.js";
 import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
@@ -32,6 +33,61 @@ import type { ManagedWorktreeRecord } from "./types.js";
 type GitOptions = Parameters<typeof runGit>[2];
 const log = createSubsystemLogger("agents/worktrees");
 let checkoutDeletion = Promise.resolve();
+const deletingCheckouts = new Set<string>();
+
+export function isRetiredCheckoutDeletionPending(directory: string): boolean {
+  return deletingCheckouts.has(path.resolve(directory));
+}
+
+/** One serialized deletion owner for retired checkouts and orphan recovery. */
+export async function deleteRetiredCheckout(directory: string): Promise<void> {
+  const retired = path.resolve(directory);
+  deletingCheckouts.add(retired);
+  try {
+    const argv = [
+      process.execPath,
+      ...resolveRuntimeWorkerArgv(
+        resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.retiredWorktreeCleanup),
+      ),
+      retired,
+    ];
+    let complete = false;
+    let firstPass = true;
+    while (!complete) {
+      const pass = checkoutDeletion.then(async () => {
+        const args = firstPass ? argv : [...argv, "resume"];
+        if (firstPass) {
+          await fs.unlink(path.join(retired, ".git")).catch(missingPathOrThrow);
+          firstPass = false;
+        }
+        const deleted = await runOutsideCommandProcessScope(() =>
+          withChildProcessOperation("worktree.cleanup", () =>
+            runCommandWithTimeout(
+              process.platform === "win32" ? args : ["nice", "-n", "10", ...args],
+              { timeoutMs: 30 * 60_000, killProcessTree: true },
+            ),
+          ),
+        );
+        if (deleted.termination !== "exit" || (deleted.code !== 0 && deleted.code !== 75)) {
+          throw new Error(deleted.stderr || "Retired checkout deletion did not complete");
+        }
+        if (deleted.code === 75) {
+          // Keep the whole deletion queue quiet for a commit interval, then let
+          // queued siblings run before continuing this tree's remaining files.
+          await pause(30_000);
+        }
+        return deleted.code === 0;
+      });
+      checkoutDeletion = pass.then(
+        () => {},
+        () => {},
+      );
+      complete = await pass;
+    }
+  } finally {
+    deletingCheckouts.delete(retired);
+  }
+}
 
 function missingPathOrThrow(error: unknown): undefined {
   if (!isMissingPathError(error)) {
@@ -161,29 +217,9 @@ export async function removeManagedCheckout(
         }
         // Serialize deletion to avoid a sweep starting many simultaneous filesystem walks.
         // The original .git marker protects rollback from concurrent orphan cleanup.
-        checkoutDeletion = checkoutDeletion
-          .then(async () => {
-            await fs.unlink(path.join(retired, ".git")).catch(missingPathOrThrow);
-            const argv = [
-              process.execPath,
-              ...resolveRuntimeWorkerArgv(
-                resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.retiredWorktreeCleanup),
-              ),
-              retired,
-            ];
-            const deleted = await withChildProcessOperation("worktree.cleanup", () =>
-              runCommandWithTimeout(
-                process.platform === "win32" ? argv : ["nice", "-n", "10", ...argv],
-                { timeoutMs: WORKTREE_CHECKOUT_TIMEOUT_MS, killProcessTree: true },
-              ),
-            );
-            if (deleted.termination !== "exit" || deleted.code !== 0) {
-              throw new Error(deleted.stderr || "Retired checkout deletion did not complete");
-            }
-          })
-          .catch((error: unknown) =>
-            log.warn(`Retired checkout cleanup failed at ${retired}: ${String(error)}`),
-          );
+        void deleteRetiredCheckout(retired).catch((error: unknown) =>
+          log.warn(`Retired checkout cleanup failed at ${retired}: ${String(error)}`),
+        );
       }),
     queueSignal,
   );

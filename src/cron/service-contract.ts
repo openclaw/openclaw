@@ -34,8 +34,6 @@ export type CronServiceRunOptions = {
   delivery?: Partial<
     Pick<CronDelivery, "mode" | "target" | "channel" | "to" | "threadId" | "accountId">
   >;
-  /** Internal event-source runs keep their persisted trigger on force execution. */
-  evaluateTrigger?: boolean;
   /** Current stream batch exposed to trigger scripts as trigger.streamBatch. */
   streamBatch?: string;
   /** Source schedule identity checked under the cron store lock before admission. */

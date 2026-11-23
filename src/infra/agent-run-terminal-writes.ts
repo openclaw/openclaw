@@ -1,9 +1,5 @@
 import type { AgentRunDelegatedAuthority } from "./agent-run-authority.types.js";
-import {
-  getAgentRunContext,
-  getAgentRunLifecycleGeneration,
-  validateAgentRunDelegatedAuthority,
-} from "./agent-run-registry.js";
+import { getAgentRunContext, getAgentRunLifecycleGeneration } from "./agent-run-registry.js";
 import type { AgentRunContext } from "./agent-run-registry.types.js";
 
 type OperationalRunInstance = AgentRunDelegatedAuthority["operationalRunInstance"];
@@ -11,7 +7,6 @@ type TerminalWriteContext = { run: <T>(write: () => T) => T };
 type TerminalWrites = {
   owner: AgentRunContext;
   instance: OperationalRunInstance;
-  context?: TerminalWriteContext;
   pending: Set<Promise<void>>;
 };
 
@@ -67,45 +62,6 @@ export function captureAgentRunTerminalPersistence(
   };
 }
 
-/** Bind a prepared runtime's write context to its exact live operational owner. */
-export function bindAgentRunTerminalWriteContext(
-  authority: AgentRunDelegatedAuthority,
-  context: TerminalWriteContext,
-): void {
-  const owner = getAgentRunContext(authority.operationalRunInstance.runId);
-  if (owner?.delegatedAuthority !== authority || !validateAgentRunDelegatedAuthority(authority)) {
-    throw new Error("Terminal write owner is no longer active");
-  }
-  const current = prepareTerminalWrites(owner, authority.operationalRunInstance);
-  current.context = context;
-}
-
-/**
- * Run a transcript write that a live run produced outside its own async context (its message
- * tool's delivery mirror) inside the run's bound write context, so the run's CLI history writer
- * covers the row like the run's other rows. Without a current binding the write runs as before.
- */
-export function runInAgentRunWriteContext<T>(runId: string | undefined, write: () => T): T {
-  const owner = runId ? getAgentRunContext(runId) : undefined;
-  const current = owner ? terminalWrites.get(owner) : undefined;
-  const context =
-    owner?.delegatedAuthority?.operationalRunInstance === current?.instance
-      ? current?.context
-      : undefined;
-  return context ? context.run(write) : write();
-}
-
-/** A new fallback candidate cannot borrow the preceding runtime's account context. */
-export function clearAgentRunTerminalWriteContext(instance: OperationalRunInstance): void {
-  const owner = getAgentRunContext(instance.runId);
-  const current = owner ? terminalWrites.get(owner) : undefined;
-  if (owner && current?.instance === instance) {
-    const replacement = { ...current, context: undefined };
-    terminalWrites.set(owner, replacement);
-    operationalTerminalWrites.set(instance, replacement);
-  }
-}
-
 export type CapturedAgentRunTerminalWriteContext = TerminalWriteContext & {
   assertCurrent: () => void;
   track: (persistence: Promise<void>) => void;
@@ -133,14 +89,12 @@ function captureAgentRunTerminalWriteContext(
   // lifecycle/candidate binding; the session writer checks its durable target.
   const lifecycleGeneration = owner.lifecycleGeneration;
   const captured = current;
-  const context = captured.context;
   const assertCurrent = () => {
     const currentOwner = getAgentRunContext(runId);
     if (
       getAgentRunLifecycleGeneration() !== lifecycleGeneration ||
       (currentOwner && currentOwner !== owner) ||
       terminalWrites.get(owner) !== captured ||
-      captured.context !== context ||
       (owner.delegatedAuthority &&
         owner.delegatedAuthority.operationalRunInstance !== captured.instance)
     ) {
@@ -151,7 +105,7 @@ function captureAgentRunTerminalWriteContext(
     assertCurrent,
     run: (write) => {
       assertCurrent();
-      return context ? context.run(write) : write();
+      return write();
     },
     track: (persistence) => trackTerminalWrite(captured, persistence),
   };

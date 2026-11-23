@@ -6,7 +6,6 @@ import { classifyAttachmentBytes } from "@openclaw/media-core/attachment-classif
 import { racePromiseWithAbortSignal } from "../../../infra/abort-signal.js";
 import { hasErrnoCode, toErrorObject } from "../../../infra/errors.js";
 import { shortenPathWithHome } from "../../../infra/home-display.js";
-import { decodeWindowsTextFileBuffer } from "../../../infra/windows-encoding.js";
 import type { ImageContent, TextContent } from "../../../llm/types.js";
 import {
   classifyMediaReferenceSource,
@@ -45,7 +44,11 @@ import {
 } from "./path-utils.js";
 import { captureLocalReadFile, readLocalFile } from "./read-file.js";
 import { createBoundedReadTextPage } from "./read-page.js";
-import { createReadTextCapture, type ReadTextCapture } from "./read-text-capture.js";
+import {
+  createReadTextCapture,
+  decodeReadTextBuffer,
+  type ReadTextCapture,
+} from "./read-text-capture.js";
 import type { ReadToolDetails } from "./tool-contracts.js";
 import { wrapToolDefinition } from "./tool-definition-wrapper.js";
 import { readToolInputSchema, readToolOutputSchema } from "./tool-schemas.js";
@@ -158,8 +161,8 @@ interface ReadOperations {
   resolveQueueKey?: (absolutePath: string, signal?: AbortSignal) => string | Promise<string>;
   /** Resolve a user-supplied path for this read backend. */
   resolvePath?: (filePath: string, cwd: string) => string | Promise<string>;
-  /** Decode text bytes for this backend. Custom backends default to UTF-8. */
-  decodeText?: (params: { buffer: Buffer; absolutePath: string }) => string;
+  /** Decode backend text, or retain complete UTF-8 bytes for range selection. */
+  decodeText?: (params: { buffer: Buffer; absolutePath: string }) => string | Buffer;
   readFile: (absolutePath: string, signal?: AbortSignal) => Promise<Buffer>;
   /** Check if file is readable (throw if not) */
   access: (absolutePath: string, signal?: AbortSignal) => Promise<void>;
@@ -172,7 +175,7 @@ interface ReadOperations {
 
 const defaultReadOperations: ReadOperations = {
   resolvePath: resolveLocalReadPath,
-  decodeText: ({ buffer }) => decodeWindowsTextFileBuffer({ buffer }),
+  decodeText: decodeReadTextBuffer,
   readFile: readLocalFile,
   access: assertLocalReadableFile,
 };
@@ -567,8 +570,7 @@ export function createReadToolDefinition(
               const requestedLines =
                 limit === undefined ? undefined : normalizePositiveLimit(limit, DEFAULT_MAX_LINES);
               if (!capturedText) {
-                const decodedText =
-                  ops.decodeText?.({ buffer, absolutePath }) ?? buffer.toString("utf8");
+                const decodedText = ops.decodeText?.({ buffer, absolutePath }) ?? buffer;
                 const selected = createReadTextCapture({
                   offset: startLineDisplay,
                   cursor,
@@ -576,7 +578,9 @@ export function createReadToolDefinition(
                   maxChars: Math.min(DEFAULT_MAX_BYTES, maxBytes) + 2,
                 });
                 selected.write(
-                  decodedText.startsWith("\uFEFF") ? decodedText.slice(1) : decodedText,
+                  typeof decodedText === "string" && decodedText.startsWith("\uFEFF")
+                    ? decodedText.slice(1)
+                    : decodedText,
                 );
                 capturedText = selected.finish();
               }

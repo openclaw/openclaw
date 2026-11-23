@@ -240,7 +240,8 @@ suite.define(() => {
       await page.locator("#settings-appearance-background").scrollIntoViewIfNeeded();
       expect(await page.locator("[data-background-upload]").isDisabled()).toBe(true);
       await page
-        .getByText("You need permission to edit your profile to upload images.", { exact: true })
+        .locator("#settings-appearance-background .settings-background-note")
+        .filter({ hasText: "You need permission to edit your profile to upload images." })
         .waitFor();
       await captureUiProof(suite, page, "scoped-reader-background.png");
       if (captureUiProofEnabled) {
@@ -272,7 +273,9 @@ suite.define(() => {
                 .poll(() => evaluateControlUiContext(page, (app) => app.gateway.snapshot.phase))
                 .toBe("reconnecting");
             } else {
-              await pollDisabled(page.locator(".sidebar-rail .sidebar-new-session")).toBe(true);
+              await pollDisabled(
+                page.locator(".sidebar-session-toolbar .sidebar-new-session"),
+              ).toBe(true);
             }
             const submit = page.getByRole("button", { name: "Start session" });
             await pollDisabled(submit).toBe(true);
@@ -307,7 +310,7 @@ suite.define(() => {
       const submit = page.getByRole("button", { name: "Start session" });
       const incognito = page.getByRole("switch", { name: "Incognito" });
       const effort = page.locator('[data-chat-thinking-select="true"]');
-      await pollEnabled(page.locator(".sidebar-rail .sidebar-new-session")).toBe(true);
+      await pollEnabled(page.locator(".sidebar-session-toolbar .sidebar-new-session")).toBe(true);
       await pollEnabled(submit).toBe(true);
       await pollDisabled(incognito).toBe(true);
       await page.locator("#new-session-where-trigger").click();

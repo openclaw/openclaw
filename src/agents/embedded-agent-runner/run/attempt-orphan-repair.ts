@@ -1,5 +1,5 @@
 import { normalizeInputProvenance } from "../../../sessions/input-provenance.js";
-import type { PersistedUserTurnMessage } from "../../../sessions/user-turn-transcript.types.js";
+import type { PersistedUserTurnMessage } from "../../../sessions/user-turn-input.types.js";
 import type {
   SessionEntry as SessionManagerEntry,
   SessionMessageEntry,

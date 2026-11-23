@@ -23,7 +23,7 @@ type RestartCase = {
 
 describe("CronService restart catch-up with dynamic cadence", () => {
   it.each([
-    "Session target preparation outlived its attempt: admitted run authority is no longer active",
+    "Session target preparation outlived its attempt: This agent run is no longer active. Start a new turn to retry.",
     "temporary timeout",
   ])("retries a failed paced check across restart: %s", async (error) => {
     const { storePath } = await makeStorePath();

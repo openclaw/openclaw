@@ -1,5 +1,5 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import {
   awaitGateBeforeSettlement,
   createDeferred,
@@ -21,6 +21,8 @@ import {
   clearGatewayContextResolver,
   withPluginRuntimeGatewayRequestScope,
 } from "../../plugins/runtime/gateway-request-scope.js";
+import { linkOpenClawIdUserProfile } from "../../state/user-profile-openclaw-id.worker.js";
+import { setUserProfileRole } from "../../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import {
   mintAgentRuntimeIdentityToken,
@@ -38,10 +40,11 @@ import {
 import { closeMcpLoopbackServer, ensureMcpLoopbackServer } from "../mcp-http.js";
 import { MEMBER_ROLE_PRESETS } from "../openclaw-id/member-role-presets.test-support.js";
 import {
+  setOpenClawIdMemberAccountLookup,
   setOpenClawIdTunnelPrincipalLookup,
   type OpenClawIdTunnelPrincipal,
 } from "../openclaw-id/tunnel-principal.js";
-import { captureGatewayOperatorRunAuthority } from "../operator-run-authority.js";
+import { prepareGatewayOperatorRunAuthority } from "../operator-run-authority.js";
 import { hasGatewayAdminScope } from "../operator-scopes.js";
 import { dispatchGatewayRequestInProcess } from "../server-in-process-dispatch.js";
 import { createOperatorClient } from "../server-plugin-in-process-dispatch.test-support.js";
@@ -143,6 +146,10 @@ function heldCron(testConfig: OpenClawConfig) {
 }
 
 installRequesterCronAuthorityTestHooks();
+afterEach(() => {
+  setOpenClawIdTunnelPrincipalLookup(undefined);
+  setOpenClawIdMemberAccountLookup(undefined);
+});
 beforeEach(async () => {
   config = {
     ...baseCfg,
@@ -199,12 +206,19 @@ it.each([
       kind: "member",
       peerKey: `iroh:${"ec".repeat(32)}`,
       accountId: "script-creator",
-      role: "operator",
+      role: "display-only",
       authority: { clawId: "creator-claw", rootPub: "creator-root", listedSeq: 1 },
     };
     if (ocid) {
+      setUserProfileRole(profile.id, "operator");
+      linkOpenClawIdUserProfile(
+        { profileId: profile.id, accountId: principal.accountId, email: null },
+        {},
+      );
+      setOpenClawIdMemberAccountLookup((accountId) => accountId === principal.accountId);
       config.gateway = {
         ...config.gateway,
+        openclawId: { enabled: true },
         roles: {
           ...config.gateway?.roles,
           definitions: {
@@ -225,7 +239,7 @@ it.each([
       authMethod: ocid ? "trusted-proxy" : "token",
     });
     const original = expectDefined(
-      await captureGatewayOperatorRunAuthority({
+      await prepareGatewayOperatorRunAuthority({
         client,
         context: fixture.context,
         sourceAuthority: null,
@@ -557,6 +571,107 @@ it.each([
       } finally {
         caller.release();
       }
+    }
+  },
+);
+
+it.each(["admin", "caller", "non-admin"] as const)(
+  "enforces native-app final-write authority: %s",
+  async (scenario) => {
+    const scope = scenario === "caller" ? "caller" : undefined;
+    const caller = captureGatewayDeviceRevocation(
+      fixture.context,
+      { deviceId: "native-admin-device", role: "operator" },
+      () => true,
+    );
+    config.tools = {
+      ...config.tools,
+      gatewayPolicy: {
+        allow: [AUTOMATIONS_TOOL_NAME],
+        actions: { [AUTOMATIONS_TOOL_NAME]: ["list", "get", "update"] },
+        automations: { scope },
+      },
+    };
+    setRuntimeConfigSnapshot(config);
+    const client = createOperatorClient({
+      profileId: CREATOR.id,
+      scopes: [scenario === "non-admin" ? "operator.write" : "operator.admin"],
+    });
+    client.connect.client = {
+      id: "openclaw-macos",
+      mode: "ui",
+      version: "test",
+      platform: "macOS",
+    };
+    client.internal = { authenticatedOperator: true };
+    const runId = "native-admin-management";
+    const creatorAdmission = resolveGatewayChatCronCreatorAuthorityAdmission({
+      runId,
+      resolvedSessionKey: SESSION,
+      client,
+      isCurrent: caller.isCurrent,
+      hasExplicitOrigin: false,
+      hasRestoredCronContinuation: false,
+      isIncognito: false,
+      isReconnectResume: false,
+      isSystemGenerated: false,
+      turnKind: "main",
+      isDirectExternalUser: true,
+    });
+    const foreign = await cronService.add({
+      name: "Foreign automation",
+      enabled: false,
+      schedule: { kind: "every", everyMs: 60_000 },
+      sessionTarget: "isolated",
+      wakeMode: "next-heartbeat",
+      payload: { kind: "agentTurn", message: "Original prompt", toolsAllow: [] },
+      owner: { agentId: "main", sessionKey: "agent:main:foreign", accountId: "other" },
+      delivery: { mode: "none" },
+    });
+    try {
+      await inRun(
+        runId,
+        creatorAdmission,
+        boundTo(fixture, async (_identity, admitted, creator) => {
+          const tools = await createCreatorTransportTools({
+            transport: "embedded",
+            config,
+            admitted,
+            creator,
+            senderIsOwner: false,
+          });
+          const inventory = await tools.invoke(AUTOMATIONS_TOOL_NAME, {
+            action: "list",
+            includeDisabled: true,
+          });
+          expect(inventory).toHaveProperty(
+            "details.scope",
+            scenario === "non-admin" ? "caller" : (scope ?? "gateway"),
+          );
+          const update = () =>
+            tools.invoke(AUTOMATIONS_TOOL_NAME, {
+              action: "update",
+              jobId: foreign.id,
+              job: { payload: { kind: "agentTurn", message: "Repaired prompt" } },
+            });
+          if (scope === "caller" || scenario === "non-admin") {
+            const before = await fixture.read();
+            await expect(update()).rejects.toThrow("not found");
+            expect(await fixture.read()).toEqual(before);
+            await expect(
+              tools.invoke(AUTOMATIONS_TOOL_NAME, { action: "get", jobId: foreign.id }),
+            ).rejects.toThrow("not found");
+            return;
+          }
+          await update();
+          expect(await fixture.read()).toMatchObject([
+            { id: foreign.id, payload: { message: "Repaired prompt" } },
+          ]);
+        }),
+      );
+    } finally {
+      fixture.release.resolve();
+      caller.release();
     }
   },
 );

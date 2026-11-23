@@ -6,6 +6,7 @@ import {
 } from "openclaw/plugin-sdk/agent-workspace-runtime";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { usesBoundedReplies } from "./shared/bounded-replies.js";
 
 function readWorkspaces(config: unknown) {
   const workspaces = asOptionalRecord(asOptionalRecord(config)?.workspaces) ?? {};
@@ -45,6 +46,7 @@ export function registerNodeWorkspaces(api: OpenClawPluginApi): void {
     reload: {
       configPrefixes: [
         "plugins.entries.file-transfer.config.workspaces",
+        "plugins.entries.file-transfer.config.nodes.*.boundedReplies",
         "agents.defaults.workspace",
         "agents.entries.*.workspace",
         "agents.ownership",
@@ -53,16 +55,16 @@ export function registerNodeWorkspaces(api: OpenClawPluginApi): void {
     async start(ctx) {
       const controller = new AbortController();
       lifetime = controller;
-      const configured = readWorkspaces(ctx.config.plugins?.entries?.["file-transfer"]?.config).map(
-        (entry) => ({
-          agentId: entry.agentId,
-          nodeId: entry.nodeId,
-          remoteRoot: entry.remoteRoot,
-          workspaceDir: path.resolve(
-            api.runtime.agent.resolveAgentWorkspaceDir(ctx.config, entry.agentId),
-          ),
-        }),
-      );
+      const config = ctx.config.plugins?.entries?.["file-transfer"]?.config;
+      const configured = readWorkspaces(config).map((entry) => ({
+        agentId: entry.agentId,
+        nodeId: entry.nodeId,
+        remoteRoot: entry.remoteRoot,
+        boundedReplies: usesBoundedReplies(config, entry.nodeId),
+        workspaceDir: path.resolve(
+          api.runtime.agent.resolveAgentWorkspaceDir(ctx.config, entry.agentId),
+        ),
+      }));
       for (const entry of configured) {
         declareAgentWorkspaceAccess(entry.workspaceDir);
       }

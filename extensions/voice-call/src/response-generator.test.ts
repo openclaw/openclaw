@@ -544,7 +544,10 @@ describe("generateVoiceResponse", () => {
   it("uses the configured core main key for restored call aliases", async () => {
     const { args, sessionStore } = await generated({
       voiceConfig: voiceConfig({ agentId: "voice" }),
-      coreConfig: { session: { mainKey: "work" } },
+      coreConfig: {
+        agents: { defaults: { model: { primary: "openai/gpt-5.6-sol" } } },
+        session: { mainKey: "work" },
+      },
       agentId: "voice",
       sessionKey: "agent:voice:main",
       transcript: [],

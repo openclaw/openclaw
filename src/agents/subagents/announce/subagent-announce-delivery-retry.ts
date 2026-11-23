@@ -12,6 +12,8 @@ import {
   findReplaySafeRunAbort,
   isReplaySafeTranscriptConflict,
 } from "../../embedded-agent-runner/transcript-conflict.js";
+import { isAgentRunRestartAbortReason } from "../../run-termination.js";
+import { isSandboxProvisioningError } from "../../sandbox/provisioning-error.js";
 import { isSessionTranscriptTurnMismatchErrorMessage } from "../../sessions/transcript-turn-error.js";
 import type { SubagentAnnounceDeliveryResult } from "./subagent-announce-dispatch.js";
 
@@ -57,6 +59,8 @@ const PERMANENT_ANNOUNCE_DELIVERY_ERROR_PATTERNS: readonly RegExp[] = [
   /recipient is not a valid/i,
   /outbound not configured for channel/i,
   /Session "[^"]+" is archived\. Restore it before starting new work\./i,
+  /^managed worktree was removed: .+$/,
+  /^This session's worktree was removed by cleanup or deletion\./,
 ];
 
 // The Gateway refused the request itself; resending the same handoff gets the same answer.
@@ -123,9 +127,12 @@ export function classifyAnnounceDeliveryError(
     replaySafe?: boolean;
     beforeAdmission?: boolean;
     requesterSettle?: boolean;
+    restartInterrupted?: boolean;
   } = {},
 ): SubagentAnnounceDeliveryResult {
   const safeAbort = findReplaySafeRunAbort(error);
+  const restartInterrupted =
+    facts.restartInterrupted || hasAnnounceErrorMatch(error, isAgentRunRestartAbortReason);
   const transcriptConflict = isReplaySafeTranscriptConflict(error);
   const stateConflict = hasAnnounceErrorMatch(
     error,
@@ -133,7 +140,7 @@ export function classifyAnnounceDeliveryError(
   );
   const reason =
     facts.interruption ??
-    (safeAbort
+    (safeAbort || restartInterrupted
       ? "requester_aborted"
       : hasAnnounceErrorMatch(error, isSessionWorkStartInvalidatedError)
         ? "requester_preparation_changed"
@@ -164,9 +171,15 @@ export function classifyAnnounceDeliveryError(
             hasAnnounceErrorMatch(
               error,
               (candidate) =>
-                candidate instanceof GatewayProtocolRequestError && candidate.retryable,
+                candidate instanceof GatewayProtocolRequestError &&
+                (candidate.retryable ||
+                  (facts.requesterSettle === true &&
+                    facts.replaySafe === true &&
+                    candidate.gatewayCode === ErrorCodes.UNAVAILABLE)),
             ) ||
+            (facts.requesterSettle === true && isSandboxProvisioningError(error)) ||
             safeAbort ||
+            restartInterrupted ||
             transcriptConflict ||
             (!facts.interruption && stateConflict))
         ? "retryable"

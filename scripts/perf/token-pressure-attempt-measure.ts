@@ -255,7 +255,6 @@ const { session } = await createAgentSession({
   tools: customTools.map(({ name }) => name),
   customTools,
   contextOverflowRecoveryOwner: "caller",
-  cleanupProviderSessionResourcesOnDispose: false,
 });
 const attempt = {
   config: {
@@ -367,6 +366,7 @@ contextGuards.checkMidTurnPrecheck = async (request) => {
 };
 const streamGuards = installEmbeddedAttemptStreamGuards(input, {
   onRejectedProviderReplayRepaired: () => assert.fail("unexpected replay repair"),
+  isToolBoundarySafe: () => false,
   onIdleTimeout: (error) => {
     throw error;
   },

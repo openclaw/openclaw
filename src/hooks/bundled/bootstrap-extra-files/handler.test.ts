@@ -2,10 +2,8 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { makeTempWorkspace, writeWorkspaceFile } from "../../../test-helpers/workspace.js";
-import {
-  type AgentBootstrapHookContext,
-  createInternalHookEvent as createHookEvent,
-} from "../../internal-hooks.js";
+import type { AgentBootstrapHookContext } from "../../internal-hook-types.js";
+import { createInternalHookEvent as createHookEvent } from "../../internal-hooks.js";
 import handler from "./handler.js";
 
 const log = vi.hoisted(() => ({ warn: vi.fn(), debug: vi.fn() }));

@@ -22,7 +22,12 @@ export async function openChatDashboardMenu(scope: Page | Locator): Promise<Loca
   if ((await trigger.getAttribute("aria-expanded")) !== "true") {
     await trigger.click();
   }
-  await menu.getByRole("menu", { name: "Dashboard options", exact: true }).waitFor();
+  // The opening popover can pass DOM hit testing before pointer input stops reaching
+  // the Dashboard widget iframe underneath it.
+  await menu
+    .getByRole("menu", { name: "Dashboard options", exact: true })
+    .and(menu.locator('[data-phase="open"]'))
+    .waitFor();
   return menu;
 }
 
@@ -113,11 +118,21 @@ async function selectMenuItem(menu: Locator, name: string | RegExp): Promise<voi
     abandoned = true;
     return null;
   });
+  const item = menu
+    .getByRole("menuitem", { name, exact: true })
+    .or(menu.getByRole("menuitemcheckbox", { name, exact: true }));
+  let beforeClickRead = false;
   try {
-    await menu
-      .getByRole("menuitem", { name, exact: true })
-      .or(menu.getByRole("menuitemcheckbox", { name, exact: true }))
-      .click();
+    if (observation) {
+      beforeClickRead = await withTimeout(
+        item.evaluate((target, recorder) => {
+          recorder?.captureBeforeClick(target);
+          return recorder !== null;
+        }, observation),
+        500,
+      ).catch(() => false);
+    }
+    await item.click();
     await menu.locator(".oc-menu:visible").last().waitFor({ state: "hidden" });
   } catch (error) {
     await rethrowWithControlUiE2eFailureFacts(
@@ -125,6 +140,8 @@ async function selectMenuItem(menu: Locator, name: string | RegExp): Promise<voi
       error,
       "layoutMenuFactsRead",
       async () => ({
+        // A late diagnostic evaluation must not be mistaken for a pre-click sample.
+        layoutMenuBeforeClickRead: beforeClickRead,
         layoutMenu: observation
           ? await observation.evaluate((recorder) => recorder?.read() ?? null)
           : null,
@@ -232,9 +249,7 @@ async function selectNativeLayoutAction(pane: Locator, name: string | RegExp): P
       await action.click();
       return;
     }
-    const dashboard = pane.locator(".chat-dashboard-menu").filter({ visible: true });
-    await button(dashboard, "Dashboard options").click();
-    await selectMenuItem(dashboard, name);
+    await selectMenuItem(await openChatDashboardMenu(pane), name);
     return;
   }
   if (matches("Focus")) {

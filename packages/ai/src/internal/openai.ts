@@ -32,6 +32,7 @@ export type {
 } from "../transports/openai-responses-contracts.js";
 
 export { responsesRequestLifecycle } from "../transports/openai-responses-request-lifecycle.js";
+export { isResponsesCompactRequest } from "../transports/openai-responses-compact-request.js";
 export { bindResponsesInputMessage } from "../transports/openai-responses-replay-messages-internal.js";
 export {
   encodedModelRequestBodyStream,
