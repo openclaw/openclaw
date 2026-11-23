@@ -6,16 +6,25 @@ import { promisify } from "node:util";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as runtimePaths from "../daemon/runtime-paths.js";
 import { createDoctorRuntimeProjection } from "../flows/doctor-health-contributions.test-support.js";
+import { readGatewayLockProcessNamespace } from "../infra/gateway-lock-payload.js";
+import { acquireGatewayStateOwner } from "../infra/gateway-state-owner.js";
 import * as processCensus from "../infra/openclaw-process-census.js";
 import * as openclawRoot from "../infra/openclaw-root.js";
+import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import {
   getUpdateRunAsync,
   getUpdateRunStatusAsync,
   listUpdateRunsAsync,
 } from "../infra/update-run-reader.js";
 import { createUpdateRunAsync } from "../infra/update-run-write.async.js";
+import { pluginProcessRuntimeEntrypoints } from "../plugins/process-runtime.test-support.js";
 import { defaultRuntime } from "../runtime.js";
-import type { OpenClawSchemaVersions } from "../state/openclaw-schema-versions.js";
+import { stateNativeProcessEntrypoints } from "../state/native-process-runtime.test-support.js";
+import {
+  OPENCLAW_AGENT_SCHEMA_VERSION,
+  OPENCLAW_STATE_SCHEMA_VERSION,
+  type OpenClawSchemaVersions,
+} from "../state/openclaw-schema-versions.js";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
@@ -80,6 +89,7 @@ async function repository(
   engine = ">=1",
   releaseAware = false,
   schemaVersions?: OpenClawSchemaVersions,
+  pluginCommand = "console.log(JSON.stringify({status:'ok',changed:false,warnings:[],sync:{warnings:[],errors:[]},npm:{outcomes:[]}}));",
 ) {
   const source = path.join(root, "source");
   const bare = path.join(root, "remote.git");
@@ -106,9 +116,10 @@ async function repository(
   }
   await fs.writeFile(
     path.join(source, "openclaw.mjs"),
-    `if (process.argv[3] === 'check-release') {
+    `import { spawnSync } from 'node:child_process';
+    if (process.argv[3] === 'check-release') {
       ${releaseAware ? "console.log(JSON.stringify({ok:true,surfaces:[]}));" : "throw new Error('unsupported command');"}
-    } else console.log(JSON.stringify({status:'ok',changed:false,warnings:[],sync:{warnings:[],errors:[]},npm:{outcomes:[]}}));`,
+    } else { ${pluginCommand} }`,
   );
   await fs.writeFile(
     path.join(source, "build.cjs"),
@@ -250,6 +261,83 @@ fs.copyFileSync(${JSON.stringify(pnpm)}, path.join(args[args.indexOf('--install-
       process.exitCode = undefined;
       await closeOpenClawStateDatabaseAsync();
       closeOpenClawStateDatabaseForTest();
+    }
+  });
+
+  it("defers candidate plugin maintenance while the old Gateway owns an older state schema", async () => {
+    vi.stubEnv("OPENCLAW_STATE_DIR", path.join(root, "state"));
+    vi.stubEnv("GIT_COMMIT", "");
+    const lifecycleUrl = resolveRuntimeWorkerUrl(pluginProcessRuntimeEntrypoints.lifecycleLease);
+    const database = openOpenClawStateDatabase({ env: process.env });
+    // Exercise the candidate's real plugin lease and schema admission, not plugin-result JSON.
+    const admission = `
+      import { withPluginLifecycleLease } from ${JSON.stringify(lifecycleUrl.href)};
+      import { closeOpenClawStateDatabaseAsync } from ${JSON.stringify(
+        resolveRuntimeWorkerUrl(stateNativeProcessEntrypoints.stateDatabase).href,
+      )};
+      try {
+        await withPluginLifecycleLease({waitMs:0}, async (lease) => lease.assertOwned());
+      } finally {
+        await closeOpenClawStateDatabaseAsync();
+      }
+    `;
+    const { checkout } = await repository(
+      false,
+      ">=1",
+      true,
+      { state: OPENCLAW_STATE_SCHEMA_VERSION, agent: OPENCLAW_AGENT_SCHEMA_VERSION },
+      `const child = spawnSync(process.execPath, ${JSON.stringify([
+        ...resolveRuntimeWorkerArgv(lifecycleUrl).slice(0, -1),
+        "--input-type=module",
+        "--eval",
+        admission,
+      ])}, {stdio:'inherit'});
+       process.exit(child.status ?? 1);`,
+    );
+    const owner = acquireGatewayStateOwner({
+      databasePath: database.path,
+      payload: {
+        pid: process.pid,
+        createdAt: new Date().toISOString(),
+        configPath: path.join(root, "openclaw.json"),
+        processNamespace: readGatewayLockProcessNamespace(),
+        role: "gateway",
+      },
+    });
+    try {
+      await owner.run(async () => {
+        const run = await createUpdateRunAsync({
+          trigger: "cli",
+          before: { version: "2026.11.6" },
+        });
+        // Keep the serving handles and ledger alive, but expose an older on-disk schema
+        // to the separate candidate process, whose compiled schema contract is current.
+        database.db.exec(`
+          PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION - 1};
+          UPDATE schema_meta SET schema_version = ${OPENCLAW_STATE_SCHEMA_VERSION - 1} WHERE meta_key = 'primary';
+        `);
+        const outcome = await prepareUpdate({
+          runId: run.runId,
+          runningRoot: checkout,
+          runningVersion: "2026.11.6",
+          channel: "dev",
+          node,
+          acceptCapabilities: true,
+        });
+        expect(outcome).toMatchObject({ status: "pending" });
+        const record = await getUpdateRunAsync(run.runId);
+        expect(record?.steps.filter(({ step }) => step === "plugins")).toEqual([]);
+        expect(await readTrial()).toMatchObject({ phase: "pending", acceptCapabilities: true });
+        owner.assertCurrent();
+      });
+    } finally {
+      database.db.exec(`
+        PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION};
+        UPDATE schema_meta SET schema_version = ${OPENCLAW_STATE_SCHEMA_VERSION} WHERE meta_key = 'primary';
+      `);
+      await closeOpenClawStateDatabaseAsync();
+      closeOpenClawStateDatabaseForTest();
+      owner.release();
     }
   });
 
@@ -614,7 +702,7 @@ if (process.argv[2] !== 'install') {
         }
         expect(outcome).toMatchObject({ status: "pending", target: { version: "2026.11.21" } });
         expect(await fs.readFile(path.join(root, "release-commands"), "utf8")).toBe(
-          `check-release:${runtime}\nplugins:${runtime}\n`,
+          `check-release:${runtime}\n`,
         );
         expect(await readTrial(prefix)).toMatchObject({
           phase: "pending",
