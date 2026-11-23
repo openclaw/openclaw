@@ -292,6 +292,56 @@ it.each(["wrapStreamFn", "wrapSimpleCompletionStreamFn"] as const)(
     );
   },
 );
+
+it.each([
+  ["provider", false],
+  ["provider", true],
+  ["model", false],
+  ["model", true],
+] as const)(
+  "rejects normalized Messages identity collisions: %s, reverse=%s",
+  async (kind, reverse) => {
+    const body = catalog();
+    const row = body.providers[0];
+    if (kind === "provider") {
+      const duplicate = structuredClone(row);
+      duplicate.id = ` ${providerId} `;
+      duplicate.routes[0].path = "/other/v1/messages";
+      duplicate.offers[0].route = `/v1/native/${providerId}/other/v1/messages`;
+      body.providers.push(duplicate);
+      if (reverse) {
+        body.providers.reverse();
+      }
+    } else {
+      const duplicate = structuredClone(row.models[0]);
+      duplicate.id = ` ${selected} `;
+      duplicate.nativeCapabilities.endpoints.messages.contextWindow = 999;
+      row.models.push(duplicate);
+      if (reverse) {
+        row.models.reverse();
+      }
+    }
+    await fixture(async ({ prepare, discover, seen }) => {
+      expect(await discover()).toMatchObject({ provider: { models: [] } });
+      await expect(prepare()).rejects.toThrow(
+        "ClawRouter catalog does not offer the selected model",
+      );
+      expect(seen.map(({ path }) => path)).toEqual(["/v1/catalog"]);
+    }, body);
+  },
+);
+
+it("retains a single normalized provider's exact native Messages offer", async () => {
+  const body = catalog();
+  body.providers[0].id = ` ${providerId} `;
+  await fixture(async ({ prepare, origin }) => {
+    expect(await prepare()).toMatchObject({
+      id: selected,
+      api: "anthropic-messages",
+      baseUrl: origin + "/v1/native/cloudflare-ai-gateway/anthropic",
+    });
+  }, body);
+});
 afterEach(() => vi.unstubAllEnvs());
 
 it.each(["wrapStreamFn", "wrapSimpleCompletionStreamFn"] as const)(

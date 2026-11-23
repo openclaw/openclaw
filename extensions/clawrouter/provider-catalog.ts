@@ -108,14 +108,17 @@ function readCatalogRows(body: unknown, baseUrl: string): readonly unknown[] {
     catalog?.version === "clawrouter.client-catalog.v1"
       ? readClawRouterCapabilityOffers(body, baseUrl)
       : [];
-  return providers.map((provider) => ({
-    provider,
-    offersDeclared: Object.hasOwn(asOptionalRecord(provider) ?? {}, "offers"),
-    uniqueProvider:
-      providers.filter((value) => asOptionalRecord(value)?.id === asOptionalRecord(provider)?.id)
-        .length === 1,
-    httpOffers: offers.filter((offer) => offer.providerId === asOptionalRecord(provider)?.id),
-  }));
+  return providers.map((provider) => {
+    const id = normalizeOptionalString(asOptionalRecord(provider)?.id);
+    return {
+      provider,
+      offersDeclared: Object.hasOwn(asOptionalRecord(provider) ?? {}, "offers"),
+      uniqueProvider:
+        providers.filter((value) => normalizeOptionalString(asOptionalRecord(value)?.id) === id)
+          .length === 1,
+      httpOffers: offers.filter((offer) => offer.providerId === id),
+    };
+  });
 }
 
 function parseCatalogRoute(value: unknown): CatalogRoute | undefined {
@@ -393,7 +396,9 @@ function buildRoutedModel(
       if (
         candidates.length !== 1 ||
         !messages ||
-        provider.models.filter((model) => asOptionalRecord(model)?.id === id).length !== 1 ||
+        provider.models.filter(
+          (model) => normalizeOptionalString(asOptionalRecord(model)?.id) === id,
+        ).length !== 1 ||
         !Array.isArray(provider.declaration.routes) ||
         provider.declaration.routes.filter(
           (route) => asOptionalRecord(route)?.endpoint === messages.endpoint,
