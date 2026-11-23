@@ -259,7 +259,6 @@ jobs:
           ref: ${{ github.workflow_sha }}
           path: workflow-source
           fetch-depth: 1
-          sparse-checkout: scripts
           persist-credentials: false
       - name: Revalidate immutable source after approval
         run: |
@@ -324,6 +323,21 @@ jobs:
         with:
           node-version: "24.22.1"
           package-manager-cache: false
+
+      - name: Setup trusted Docker tooling package manager
+        uses: ./workflow-source/.github/actions/setup-pnpm-store-cache
+        with:
+          cache-mode: off
+          package-manager-file: workflow-source/package.json
+          lockfile-path: workflow-source/pnpm-lock.yaml
+          node-version: "24.22.1"
+
+      - name: Install trusted Docker tooling dependencies
+        working-directory: workflow-source
+        env:
+          CI: "true"
+        # Install verifier dependencies, not the frozen image source or payloads.
+        run: pnpm install --frozen-lockfile --prefer-offline --ignore-scripts
 
       - name: Verify focused release evidence after Docker approval
         if: ${{ inputs.focused_release_evidence_run_id != '' }}
