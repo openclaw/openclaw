@@ -2295,7 +2295,7 @@ it.each([false, true])(
         currentChatType: "channel",
       },
     });
-    expect(call?.toolContext).toMatchObject({ ...routing, skipCrossContextDecoration: true });
+    expect(call?.toolContext).toMatchObject({ ...source, skipCrossContextDecoration: true });
   },
 );
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
