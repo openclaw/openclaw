@@ -50,6 +50,67 @@ const routeMedia = (page: Page) =>
   );
 
 suite.define(() => {
+  it("cancels a phone address edit before closing the Browser panel", async () => {
+    await suite.withPage(
+      {
+        viewport: { width: 390, height: 844 },
+        hasTouch: true,
+        isMobile: true,
+        reducedMotion: "reduce",
+      },
+      async ({ page }) => {
+        const tab = makeTab("existing", "Field guide", "https://design.invalid/review");
+        await routeMedia(page);
+        const gateway = await installMockGateway(page, {
+          featureMethods: [...defaultControlUiFeatureMethods, "browser.request"],
+          historyMessages: [{ role: "assistant", content: "Browser panel ready." }],
+          methodResponses: browserResponses(
+            ...browserCases(tab, {
+              targetId: tab.targetId,
+              path: "/fixture/field-guide.png",
+              url: tab.url,
+            }),
+            browserCase("/screencast", {
+              __mockError: { code: "UNAVAILABLE", message: "Still only" },
+            }),
+          ),
+        });
+        await page.goto(`${suite.server.baseUrl}chat/main`);
+        await page.getByText("Browser panel ready.").first().waitFor();
+        await openChatSidePanelType(page, "Browser");
+        const panel = page.locator("openclaw-browser-panel:visible");
+        await panel.locator(".bp-shot").waitFor();
+        const address = panel.getByRole("textbox", { name: "Page address" });
+        await expect.poll(() => address.inputValue()).toBe(tab.url);
+        for (const draft of ["studio/docs", "", "mailto:operator@example.invalid"]) {
+          await address.fill(draft);
+          if (draft.startsWith("mailto:")) {
+            await address.press("Enter");
+            await panel.getByRole("alert").waitFor();
+          }
+          await address.press("Escape");
+          expect(await panel.isVisible()).toBe(true);
+          await expect.poll(() => address.inputValue()).toBe(tab.url);
+          expect(await address.evaluate((field) => field.matches(":focus"))).toBe(true);
+          expect(await panel.getByRole("alert").count()).toBe(0);
+          await expect
+            .poll(() =>
+              address.evaluate((field: HTMLInputElement) => [
+                field.selectionStart,
+                field.selectionEnd,
+              ]),
+            )
+            .toEqual([0, tab.url.length]);
+        }
+        expect((await gateway.getRequests("browser.request")).map(requestPath)).not.toContain(
+          "/navigate",
+        );
+        await address.press("Escape");
+        await panel.waitFor({ state: "hidden" });
+      },
+    );
+  });
+
   it("embeds only the requested existing browser tab and retains its identity across resize", async () => {
     await suite.withPage(
       { locale: "en-US", serviceWorkers: "block", viewport: { height: 180, width: 400 } },

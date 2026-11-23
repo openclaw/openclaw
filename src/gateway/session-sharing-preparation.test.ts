@@ -445,7 +445,7 @@ it("restores exact committed facts after rollback without reviving a refused adm
     expect(after.membership.has("requester")).toBe(true);
     expect(harness.authorize(after)).toBeNull();
     expect(() => admission.assertSourceCurrent()).toThrow(
-      "source execution authority is no longer active",
+      "This agent run is no longer active. Start a new turn to retry.",
     );
   } finally {
     admission.close();

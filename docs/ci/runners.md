@@ -412,10 +412,15 @@ reuse, dispatch, and execution-plan jobs, always use `ubuntu-24.04`. Reusable
 live/E2E source admission and candidate evidence binding use the same label.
 Full Release Validation honors `OPENCLAW_RELEASE_RUNNER_GROUP`; the reusable
 workflow honors its `runner_group` input. Release Decision, Diagnostic Drain,
-and the nightly watcher keep their 720-minute budgets. When
-`OPENCLAW_CI_RUNNER_BACKEND=boat`, short hosted jobs provision separate Boat VMs
-and register ephemeral organization runners for those three jobs. Native Boat
-CI has a six-hour limit, so these watchers use regular VMs instead.
+and the nightly watcher keep their 720-minute budgets. The current reusable
+release watcher uses `blacksmith-2vcpu-ubuntu-2404` independently of backend and
+runner-group settings; it retains the `runner_label` input for caller compatibility.
+Activate this routing by pinning callers to the merged watcher revision before
+removing their Boat provisioning dependency. Existing immutable watcher pins
+retain their original routing. The nightly watcher is unchanged: when
+`OPENCLAW_CI_RUNNER_BACKEND=boat`, a short hosted job provisions its Boat VM
+and registers an ephemeral organization runner. Native Boat CI has a six-hour
+limit, so the nightly watcher uses a regular VM instead.
 
 This route requires the repository secrets `BOAT_API_KEY` and
 `BOAT_RUNNER_APP_PRIVATE_KEY`, plus the variables `BOAT_ORG`,

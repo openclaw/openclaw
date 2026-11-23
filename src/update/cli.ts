@@ -12,6 +12,7 @@ import {
   isImplicitLocalGatewayTarget,
 } from "../gateway/call.js";
 import { GatewayClientRequestError } from "../gateway/client.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { compareSemverStrings } from "../infra/npm-registry-spec.js";
 import { resolveEffectiveUpdateChannel, type UpdateChannel } from "../infra/update-channels.js";
 import { resolveStartupInstallStatus } from "../infra/update-install-status.js";
@@ -28,6 +29,10 @@ import { PREPARE_DEADLINE_MS, prepareUpdate } from "./run.js";
 import { resolveTarget } from "./target.js";
 
 const POLL_MS = 2_000;
+/** Earlier updaters' runtime cleanup is advisory: no new deletion starts after this. */
+const RETAINED_RUNTIME_BUDGET_MS = 2 * 60_000;
+/** Below this `--timeout`, cleanup could take more than a tenth of the update's budget. */
+const RETAINED_RUNTIME_MIN_TIMEOUT_MS = 10 * RETAINED_RUNTIME_BUDGET_MS;
 /** Prepare, plus a trial that includes the boot migration. */
 const RUN_DEADLINE_MS = PREPARE_DEADLINE_MS + 30 * 60_000;
 
@@ -117,6 +122,25 @@ export async function runReleaseUpdateCli(opts: ReleaseUpdateOptions): Promise<v
     opts.sha && upstreamRef
       ? { kind: "git" as const, upstreamRef, upstreamSha: opts.sha }
       : undefined;
+  // Like the releases prepareUpdate collects, an earlier updater's leftover is removed before
+  // this update starts; afterwards the release launcher would count as a possible holder.
+  // A census cannot be interrupted (Windows allows it 15 s), so a short --timeout skips cleanup.
+  if (timeoutMs === undefined || timeoutMs >= RETAINED_RUNTIME_MIN_TIMEOUT_MS) {
+    for (const line of await reclaimRetainedUpdateRuntimes(opts.runningRoot)) {
+      // The cleanup owner already logs each runtime it keeps.
+      if (line.startsWith("Runtime retained at ")) {
+        continue;
+      }
+      if (opts.json) {
+        defaultRuntime.error(line);
+      } else {
+        defaultRuntime.log(line);
+      }
+    }
+  }
+  if (opts.timeoutMs !== undefined) {
+    timeoutMs = Math.max(1, opts.timeoutMs - (Date.now() - startedAt));
+  }
   // Explicit package targets stay local: update.run cannot carry them without a protocol change.
   // --no-restart prepares in this process; the release starts at the Gateway's next start.
   const request =
@@ -165,6 +189,36 @@ export async function runReleaseUpdateCli(opts: ReleaseUpdateOptions): Promise<v
     record?.status === "succeeded" || record?.status === "skipped" || isPendingActivation(record)
       ? 0
       : 1;
+}
+
+/**
+ * Removes the runtime an earlier in-place updater retained (shipped updaters promise that the
+ * next update does). Doctor's owner decides custody from the runtime's owner record and the
+ * process census. It runs in this command, not the Gateway: the census is synchronous, and
+ * without an owner record it cannot tell the requesting `openclaw update` from an old updater.
+ */
+async function reclaimRetainedUpdateRuntimes(runningRoot: string): Promise<string[]> {
+  const deadline = Date.now() + RETAINED_RUNTIME_BUDGET_MS;
+  try {
+    const { prepareRetainedUpdateRuntimeMaintenance } =
+      await import("../commands/doctor-retained-runtime.js");
+    // This command's temp directories and the system one; Doctor also reads the service's.
+    const maintain = await prepareRetainedUpdateRuntimeMaintenance(process.env, {
+      inspectService: false,
+      packageRoots: [runningRoot],
+    });
+    // Doctor also fences its own process's workers; this command never loads code from
+    // another updater's runtime.
+    return await maintain(true, {
+      assertCurrent: () => {
+        if (Date.now() >= deadline) {
+          throw new Error("cleanup ran out of time; the next update retries");
+        }
+      },
+    });
+  } catch (error) {
+    return [`Could not inspect retained updater runtimes: ${formatErrorMessage(error)}`];
+  }
 }
 
 async function requestLocalGatewayRestart(timeoutMs = 30_000): Promise<boolean> {

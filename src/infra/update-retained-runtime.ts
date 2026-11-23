@@ -311,7 +311,7 @@ async function runWithRetainedUpdateRuntime<T>(
         if (prepared) {
           reportRetainedUpdateRuntime(
             directory,
-            "worker generation settled; cleanup deferred to the next eligible update or openclaw doctor --fix",
+            "worker generation settled; the next eligible openclaw update or openclaw doctor --fix retries its cleanup",
           );
         } else {
           await removeTemporaryArtifacts(directory, "Updater runtime");
