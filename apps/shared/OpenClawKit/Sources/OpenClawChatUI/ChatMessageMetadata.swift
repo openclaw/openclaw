@@ -159,8 +159,26 @@ struct ChatMessageTimestampPresentation: Equatable {
     }
 }
 
-/// Reply footer (web chat-message-timestamp-view.tsx:105-148,262-330): the relative time stays visible;
-/// run duration, exact time, tokens, cost, context and model open from a tap on the time.
+#if os(iOS)
+struct ChatMessageRelativeTimestamp: View {
+    let timestamp: Double?
+    @Environment(\.locale) private var locale
+    @Environment(\.timeZone) private var timeZone
+
+    var body: some View {
+        if let time = ChatMessageTimestampPresentation.make(
+            timestamp: self.timestamp, locale: self.locale, timeZone: self.timeZone)
+        {
+            Text(time.label)
+                .font(OpenClawChatTypography.caption2)
+                .monospacedDigit()
+                .foregroundStyle(.secondary)
+        }
+    }
+}
+#endif
+
+/// Opens exact time, duration and usage from the visible reply footer.
 struct ChatMessageFooter: View {
     let metadata: ChatMessageMetadata?
     let usage: ChatMessageUsagePresentation?

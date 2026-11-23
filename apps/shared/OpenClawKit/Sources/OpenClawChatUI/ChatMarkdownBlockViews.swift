@@ -9,6 +9,7 @@ import UIKit
 @MainActor
 struct ChatCodeBlockView: View {
     let block: ChatCodeBlock
+    @Environment(\.openClawChatWrapCodeLines) private var wrapsCodeLines
 
     var body: some View {
         #if os(iOS) || os(macOS)
@@ -36,12 +37,14 @@ struct ChatCodeBlockView: View {
                     .frame(height: 20)
             }
             .foregroundStyle(.secondary)
-            ScrollView(.horizontal, showsIndicators: false) {
-                Text(self.attributedCode)
-                    .font(OpenClawChatTypography.mono(size: 13, relativeTo: .footnote))
-                    .foregroundStyle(OpenClawChatTheme.assistantText)
-                    .lineSpacing(2)
-                    .textSelection(.enabled)
+            if self.wrapsCodeLines {
+                self.codeText
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            } else {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    self.codeText
+                }
             }
         }
         .padding(10)
@@ -52,6 +55,14 @@ struct ChatCodeBlockView: View {
                 .overlay(
                     RoundedRectangle(cornerRadius: 12, style: .continuous)
                         .strokeBorder(Color.white.opacity(0.08), lineWidth: 1)))
+    }
+
+    private var codeText: some View {
+        Text(self.attributedCode)
+            .font(OpenClawChatTypography.mono(size: 13, relativeTo: .footnote))
+            .foregroundStyle(OpenClawChatTheme.assistantText)
+            .lineSpacing(2)
+            .textSelection(.enabled)
     }
 
     private var attributedCode: AttributedString {

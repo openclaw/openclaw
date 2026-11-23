@@ -59,23 +59,6 @@ struct OpenClawChatAttachmentCaptureOwner {
     }
 }
 
-private struct SlashPanelHeightKey: PreferenceKey {
-    static let defaultValue: CGFloat = 0
-    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
-        value = max(value, nextValue())
-    }
-}
-
-/// The card takes its natural height, at least the resting height. The draft row stretches, so any
-/// room the minimum leaves sits under a short draft, and rows above the draft use it first.
-private struct CleanComposerRestingHeight: ViewModifier {
-    func body(content: Content) -> some View {
-        content
-            .frame(minHeight: CleanChatComposerMetrics.restingMinHeight, alignment: .bottom)
-            .fixedSize(horizontal: false, vertical: true)
-    }
-}
-
 /// Evaluates part of the composer in its own body. Debug builds keep every nested `some View` temporary on
 /// the stack, and the whole composer evaluated in one body nearly fills the 1 MB main-thread stack of a device.
 struct ChatComposerSection<Content: View>: View {
@@ -121,6 +104,7 @@ struct OpenClawChatComposer: View {
     let isComposerEnabled: Bool
     let isAttachmentInputEnabled: Bool
     let messagePlaceholder: String?
+    var compactMessagePlaceholder: String?
     let talkControl: OpenClawChatTalkControl?
     let dictationControl: OpenClawChatDictationControl?
     let voiceNoteControl: OpenClawChatVoiceNoteControl?
@@ -196,6 +180,9 @@ struct OpenClawChatComposer: View {
                 .accessibilityIdentifier("chat-composer-model-sign-in-notice")
             }
             self.viewModel.composerNotice.map(ChatComposerRestoredNotice.init)
+            #if os(iOS)
+            ChatNewSessionSlashOption(query: self.isFocused ? self.slashQuery ?? "" : "") { self.isFocused = false }
+            #endif
             self.lifecycleComposer
             if self.viewModel.modelCatalogMessage != nil || self.showsModelSignInRow {
                 HStack {
@@ -212,16 +199,19 @@ struct OpenClawChatComposer: View {
         }
         .sheet(isPresented: Binding(
             get: { self.signInContext != nil },
-            set: { if !$0 { self.signInContext = nil } }))
-        {
-            if let context = self.signInContext {
-                OpenClawChatModelSignInSheet(context: context) { await self.viewModel.refreshModelSignIn() }
-            }
+            set: {
+                if !$0 {
+                    self.signInContext = nil
+                }
+            })) {
+                if let context = self.signInContext {
+                    OpenClawChatModelSignInSheet(context: context) { await self.viewModel.refreshModelSignIn() }
+                }
         }
         .onChange(of: self.presentationOwner) { _, _ in
-                self.invalidateModelSignIn()
-            }
-            .onDisappear { self.invalidateModelSignIn() }
+            self.invalidateModelSignIn()
+        }
+        .onDisappear { self.invalidateModelSignIn() }
     }
 
     var usesDesktopModelMenu: Bool {
@@ -430,7 +420,7 @@ struct OpenClawChatComposer: View {
 
     @ViewBuilder
     private var composerContextRows: some View {
-        if let replyTarget = self.viewModel.replyTarget {
+        if let replyTarget = viewModel.replyTarget {
             ChatReplyPreview(target: replyTarget) {
                 self.inputModel?.clearReplyTarget()
             }
@@ -440,7 +430,7 @@ struct OpenClawChatComposer: View {
             ChatTalkActivityStrip(control: talkControl)
         }
 
-        if let dictationControl, self.dictationTask != nil || dictationControl.isActive {
+        if let dictationControl, dictationTask != nil || dictationControl.isActive {
             ChatDictationActivityRow(
                 control: dictationControl,
                 onCancel: {
@@ -459,7 +449,7 @@ struct OpenClawChatComposer: View {
         #endif
 
         if self.composerChrome == .clean {
-            self.composerCapabilityNoticeRow
+            composerCapabilityNoticeRow
         }
     }
 
@@ -636,7 +626,7 @@ struct OpenClawChatComposer: View {
     private var editor: some View {
         ChatComposerSection { self.editorContent }
             .overlay(alignment: .top) {
-                if self.isSlashPopoverPresented {
+                if self.isSlashPopoverPresented, !Self.showsNewSessionCommandShortcut(query: self.slashQuery) {
                     self.slashCommandPanel
                         .background(
                             GeometryReader { geo in
@@ -732,12 +722,12 @@ struct OpenClawChatComposer: View {
             }
         }
         #if os(iOS)
-        .modifier(CleanComposerRestingHeight())
+        .fixedSize(horizontal: false, vertical: true)
         #else
             .padding(.horizontal, self.isDesktopLayout ? 0 : 6)
             .padding(.vertical, self.isDesktopLayout ? 0 : 2)
         #endif
-        .modifier(CleanChatComposerSurface(cornerRadius: self.cleanCornerRadius))
+        .modifier(CleanChatComposerSurface(cornerRadius: cleanCornerRadius))
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("chat-composer-surface")
     }
@@ -745,16 +735,7 @@ struct OpenClawChatComposer: View {
     @ViewBuilder
     private var cleanEditor: some View {
         #if os(iOS)
-        VStack(alignment: .leading, spacing: CleanChatComposerMetrics.rowGap) {
-            self.cleanDraftRow
-            HStack(alignment: .center, spacing: 0) {
-                self.cleanLeadingControls
-                Spacer(minLength: 0)
-                self.cleanTrailingControls
-            }
-            .padding(.horizontal, CleanChatComposerMetrics.footerInlineInset)
-            .padding(.bottom, CleanChatComposerMetrics.footerBlockInset)
-        }
+        self.cleanPhoneEditor(expanded: self.isFocused)
         #elseif os(macOS)
         if self.isDesktopLayout {
             self.desktopEditor
@@ -787,22 +768,6 @@ struct OpenClawChatComposer: View {
     }
     #endif
 
-    private var compactEditor: some View {
-        HStack(alignment: .center, spacing: 4) {
-            self.cleanAttachmentMenu
-
-            if self.viewModel.sessionBranches.count > 1 {
-                self.branchMenu
-            }
-
-            self.editorOverlay
-                .frame(maxWidth: .infinity, minHeight: self.cleanControlHeight, alignment: .leading)
-                .layoutPriority(1)
-
-            self.cleanCaptureAndPrimaryControls
-        }
-    }
-
     /// iMessage-style trailing control: the talk (mic) affordance while the
     /// draft is empty, swapping to the send button once the user types.
     @ViewBuilder
@@ -818,8 +783,8 @@ struct OpenClawChatComposer: View {
                 sessionKey: self.viewModel.sessionKey,
                 helpText: self.talkHelpText(talkControl),
                 style: .compact(
-                    controlHeight: self.cleanControlHeight,
-                    iconControlSize: self.cleanIconControlSize))
+                    controlHeight: cleanControlHeight,
+                    iconControlSize: cleanIconControlSize))
         } else {
             sendButton
                 .frame(width: cleanControlHeight, height: cleanControlHeight)
@@ -856,9 +821,7 @@ struct OpenClawChatComposer: View {
         ZStack(alignment: editorOverlayAlignment) {
             #if !os(macOS)
             if self.viewModel.input.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                Text(self.placeholderText)
-                    .font(OpenClawChatTypography.body)
-                    .foregroundStyle(.tertiary)
+                ChatComposerPlaceholder(text: self.placeholderText, compactText: self.compactMessagePlaceholder)
                     .padding(.horizontal, self.cleanFieldTextInset)
                     .padding(.vertical, self.composerChrome == .clean ? 0 : 4)
             }
@@ -970,7 +933,7 @@ struct OpenClawChatComposer: View {
 
 extension OpenClawChatComposer {
     private var slashQuery: String? {
-        let text = self.inputModel?.input.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let text = inputModel?.input.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         guard text.hasPrefix("/"), !text.hasPrefix("//") else { return nil }
         let body = String(text.dropFirst())
         guard !body.isEmpty else { return "" }
@@ -988,9 +951,7 @@ extension OpenClawChatComposer {
         // Query and catalog reads belong to the panel body, not the surrounding composer.
         ChatComposerSection {
             let query = self.slashQuery ?? ""
-            let matches = self.viewModel.slashCommandMatches(
-                query: query,
-                filter: .all)
+            let matches = self.viewModel.slashCommandMatches(query: query, filter: .all)
             VStack(alignment: .leading, spacing: 0) {
                 if self.viewModel.isLoadingSlashCommands, self.viewModel.slashCommands.isEmpty {
                     HStack(spacing: 10) {
@@ -1150,7 +1111,7 @@ extension OpenClawChatComposer {
     private var slashPanelCanPresent: Bool {
         // Transports without a command catalog (e.g. onboarding) get no panel
         // instead of an empty "No matching commands" box.
-        guard self.inputModel?.transport.supportsSlashCommandCatalog == true else { return false }
+        guard inputModel?.transport.supportsSlashCommandCatalog == true else { return false }
         // macOS input is an NSTextView outside SwiftUI focus tracking; it is
         // the composer's only editable field, so enablement is the gate.
         #if os(macOS)
@@ -1177,7 +1138,7 @@ extension OpenClawChatComposer {
         }
         let shouldShow = self.slashPanelCanPresent && self.slashQuery != nil
         if shouldShow {
-            self.inputModel?.loadSlashCommandsIfNeeded()
+            inputModel?.loadSlashCommandsIfNeeded()
             self.slashHighlightIndex = 0
         }
         if shouldShow != self.isSlashPopoverPresented {
@@ -1224,7 +1185,9 @@ extension OpenClawChatComposer {
         case .moveDown:
             return inputModel.recallNextInput()
         case .escape:
-            if inputModel.cancelInputRecall() { return true }
+            if inputModel.cancelInputRecall() {
+                return true
+            }
             guard inputModel.replyTarget != nil else { return false }
             inputModel.clearReplyTarget()
             return true
@@ -1244,7 +1207,9 @@ extension OpenClawChatComposer {
 
     private var inputModel: OpenClawChatViewModel? {
         // Resolve synchronous input at delivery time, including callbacks from the previous render.
-        if let resolveInputModel { return resolveInputModel() }
+        if let resolveInputModel {
+            return resolveInputModel()
+        }
         return self.viewModel
     }
 
@@ -1262,11 +1227,14 @@ extension OpenClawChatComposer {
                 }
             }
             .buttonStyle(.plain)
-            .foregroundStyle(.white)
+            .foregroundStyle(self.stopButtonForeground)
+            #if os(iOS)
+            .tint(self.stopButtonForeground)
+            #endif
             .frame(width: self.sendButtonSize, height: self.sendButtonSize)
             .background(
                 RoundedRectangle(cornerRadius: self.sendButtonCornerRadius, style: .continuous)
-                    .fill(OpenClawChatTheme.danger)
+                    .fill(self.stopButtonFill)
                     .frame(width: self.sendButtonVisualSize, height: self.sendButtonVisualSize))
             .contentShape(Rectangle())
             .accessibilityLabel("Stop response")
@@ -1351,14 +1319,11 @@ extension OpenClawChatComposer {
     }
     #endif
 
-    /// A third of a text line above the draft, so the first line does not sit on the border.
-    var draftTopInset: CGFloat {
-        CleanChatComposerMetrics.editorBlockInset + self.scaledBodyLineHeight * OpenClawChatTypography.scale / 3
-    }
-
     var textMinHeight: CGFloat {
         #if os(macOS)
-        if self.usesDesktopModelMenu { return self.scaledBodyLineHeight }
+        if self.usesDesktopModelMenu {
+            return self.scaledBodyLineHeight
+        }
         #endif
         let base: CGFloat = if self.style == .onboarding {
             24
@@ -1370,7 +1335,9 @@ extension OpenClawChatComposer {
 
     private var textMaxHeight: CGFloat {
         #if os(macOS)
-        if self.isDesktopLayout { return 160 }
+        if self.isDesktopLayout {
+            return 160
+        }
         #endif
         let base: CGFloat = if self.style == .onboarding {
             52
@@ -1399,6 +1366,9 @@ extension OpenClawChatComposer {
     private var cleanCornerRadius: CGFloat {
         #if os(macOS)
         self.isDesktopLayout ? CleanChatComposerMetrics.surfaceCornerRadius : 24
+        #elseif os(iOS)
+        self.isFocused ? CleanChatComposerMetrics.expandedCornerRadius :
+            self.cleanControlHeight / 2 + CleanChatComposerMetrics.collapsedControlInset
         #else
         CleanChatComposerMetrics.surfaceCornerRadius
         #endif
@@ -1414,6 +1384,23 @@ extension OpenClawChatComposer {
 
     private var editorOverlayAlignment: Alignment {
         self.composerChrome == .clean ? .leading : .topLeading
+    }
+
+    private var stopButtonForeground: Color {
+        #if os(iOS)
+        let (red, green, blue) = self.colorScheme == .dark ? (248.0, 113.0, 113.0) : (185.0, 28.0, 28.0)
+        return Color(.sRGB, red: red / 255, green: green / 255, blue: blue / 255)
+        #else
+        .white
+        #endif
+    }
+
+    private var stopButtonFill: Color {
+        #if os(iOS)
+        self.stopButtonForeground.opacity(0.14)
+        #else
+        OpenClawChatTheme.danger
+        #endif
     }
 
     private var sendButtonFill: Color {
@@ -1485,7 +1472,7 @@ extension OpenClawChatComposer {
         panel.allowsMultipleSelection = true
         panel.canChooseDirectories = false
         panel.allowedContentTypes = OpenClawChatPickerAttachmentMetadata.allowedFileContentTypes
-        let owner = OpenClawChatAttachmentCaptureOwner(viewModel: self.viewModel)
+        let owner = OpenClawChatAttachmentCaptureOwner(viewModel: viewModel)
         panel.begin { resp in
             guard resp == .OK else { return }
             owner.addAttachments(urls: panel.urls)
@@ -1496,7 +1483,7 @@ extension OpenClawChatComposer {
         guard self.isAttachmentInputEnabled else { return false }
         let fileProviders = providers.filter { $0.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier) }
         guard !fileProviders.isEmpty else { return false }
-        let owner = OpenClawChatAttachmentCaptureOwner(viewModel: self.viewModel)
+        let owner = OpenClawChatAttachmentCaptureOwner(viewModel: viewModel)
         for item in fileProviders {
             item.loadItem(forTypeIdentifier: UTType.fileURL.identifier, options: nil) { item, _ in
                 guard let data = item as? Data,
@@ -1516,7 +1503,7 @@ extension OpenClawChatComposer {
     {
         guard self.isAttachmentInputEnabled else { return }
         guard let owner,
-              self.viewModel === owner.viewModel,
+              viewModel === owner.viewModel,
               owner.viewModel.isCurrentSession(owner.session)
         else { return }
         switch result {
@@ -1588,7 +1575,7 @@ extension OpenClawChatComposer {
     {
         guard self.isAttachmentInputEnabled,
               let owner,
-              self.viewModel === owner.viewModel,
+              viewModel === owner.viewModel,
               owner.viewModel.isCurrentSession(owner.session)
         else {
             self.pickerItems = []

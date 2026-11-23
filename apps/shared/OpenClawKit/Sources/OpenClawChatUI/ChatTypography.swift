@@ -7,6 +7,15 @@ import UIKit
 #endif
 
 enum OpenClawChatTypography {
+    static let composerGlyph = Font.system(size: 15, weight: .medium)
+    static let composerChevronGlyph = Font.system(size: 8, weight: .medium)
+    static let composerAttachmentGlyph = Font.system(size: 17, weight: .medium)
+    static let composerPrimaryGlyph = Font.system(size: 17, weight: .semibold)
+    /// Composer menu labels read close to the draft's size in a medium weight, as in the Control UI.
+    static var composerControlLabel: Font {
+        body(size: 16, weight: .medium, relativeTo: .callout)
+    }
+
     // The 17 pt system body is too large for a dense transcript on a phone, and leaves the smallest
     // Dynamic Type setting at 14 pt, the Control UI's default chat size. Chat sizes shrink by one ratio;
     // sizes that would fall under 11 pt stop there. Dynamic Type still scales the result.

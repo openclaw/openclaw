@@ -2,6 +2,10 @@ import SwiftUI
 
 extension OpenClawChatComposer {
     var thinkingPicker: some View {
+        self.thinkingSelectionPicker.pickerStyle(.menu)
+    }
+
+    var thinkingSelectionPicker: some View {
         Picker(selection: Binding(
             get: { self.viewModel.thinkingSelectionID },
             set: { next in self.viewModel.selectThinkingLevel(next) }))
@@ -20,7 +24,6 @@ extension OpenClawChatComposer {
             Text("Thinking")
                 .font(OpenClawChatTypography.captionSemiBold)
         }
-        .pickerStyle(.menu)
         .controlSize(.small)
         .frame(maxWidth: 140, alignment: .leading)
         .disabled(self.viewModel.isUpdatingSessionSettings)

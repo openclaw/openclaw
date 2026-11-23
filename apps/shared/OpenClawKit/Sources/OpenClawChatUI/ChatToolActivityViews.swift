@@ -972,7 +972,8 @@ struct ChatToolActivityList: View {
                 .tint(.secondary)
                 #if os(iOS)
                 disclosure.disclosureGroupStyle(ChatInlineDisclosureStyle(
-                    chevron: self.isNestedToolActivity ? .tint : .secondary))
+                    chevron: self.isNestedToolActivity ? .tint : .secondary,
+                    chevronFollowsLabel: true))
                 #else
                 disclosure
                 #endif

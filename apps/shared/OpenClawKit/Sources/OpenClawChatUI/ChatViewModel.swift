@@ -27,6 +27,12 @@ public final class OpenClawChatViewModel {
         }
     }
 
+    var newChatDraft: NewChatDraft?
+
+    /// Host preference for follow-ups. Explicit per-message choices take precedence.
+    /// Nil preserves the Gateway default.
+    public var defaultFollowUpMode: OpenClawChatQueueMode?
+
     public internal(set) var replyTarget: OpenClawChatReplyTarget?
     public let webConversation: OpenClawWebConversation?
     var isApplyingWebSession = false
@@ -792,13 +798,6 @@ public final class OpenClawChatViewModel {
         }
     }
 
-    var resolvedMainSessionKey: String {
-        if let agentID = self.explicitSessionAgentID ?? OpenClawChatSessionKey.agentID(from: self.sessionKey) {
-            return self.mainSessionKey(forAgent: agentID)
-        }
-        return ChatPayloadDecoding.trimmedNonEmptyString(self.sessionDefaults?.mainSessionKey) ?? "main"
-    }
-
     private var usesMutableAgentRouting: Bool {
         self.explicitSessionAgentID == nil && OpenClawChatSessionKey.agentID(from: self.sessionKey) == nil
     }
@@ -1479,8 +1478,10 @@ extension OpenClawChatViewModel {
         let previousRouteLeaseTask = previousPatchTail?.routeLeaseTask
         // Task scheduling is not FIFO. Chain lease capture separately so a
         // reconnect cannot give an older mutation a newer route than its successor.
-        let routeLeaseTask = Task { [weak self] in
+        let draftLease = self.newChatDraftSettingsLease(for: target)
+        let routeLeaseTask = Task<OpenClawChatSessionSettingsRouteLease?, Never> { [weak self] in
             _ = await previousRouteLeaseTask?.value
+            if let draftLease { return draftLease }
             return await self?.transport.acquireSessionSettingsRouteLease()
         }
         let task = Task { [weak self] in

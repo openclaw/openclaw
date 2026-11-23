@@ -196,7 +196,12 @@ struct CommandCenterTabSessionFilterTests {
             CommandCenterTab.sessionTitle(
                 entry(key: "agent:main:ios-abc123", displayName: "Compare session naming"))
                 == "Compare session naming")
-        #expect(CommandCenterTab.sessionTitle(entry(key: "agent:main:ios-abc123")) == "iOS chat")
+        let untitled = entry(key: "agent:main:ios-abc123")
+        #expect(CommandCenterTab.sessionTitle(untitled) == "iOS chat")
+        #expect(CommandCenterTab.sessionTitle(untitled, includesRoutingFallback: false) == nil)
+        #expect(CommandCenterTab.sessionTitle(
+            entry(key: untitled.key, displayName: "Compare session naming"),
+            includesRoutingFallback: false) == "Compare session naming")
         #expect(
             CommandCenterTab.sessionTitle(
                 entry(

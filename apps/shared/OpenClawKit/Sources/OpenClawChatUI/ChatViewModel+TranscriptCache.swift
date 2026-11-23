@@ -8,6 +8,13 @@ extension OpenClawChatViewModel {
     /// The presenter must prove the same Gateway/account before calling. The old transport must
     /// already be detached. Only display rows cross the handoff; fresh history owns all live state.
     public func inheritTranscriptPresentation(from previous: OpenClawChatViewModel) {
+        if previous.isTransportDetached, !self.isTransportDetached,
+           let draft = previous.newChatDraft, draft.key == self.sessionKey
+        {
+            // The presenter has already verified the same account and Gateway.
+            // Replacing its agent transport must not turn an unsent draft into a chat.
+            self.newChatDraft = draft
+        }
         guard previous.isTransportDetached, !self.isTransportDetached,
               self.messages.isEmpty, !self.hasAppliedLiveHistory,
               previous.canRetainTranscriptPresentation(

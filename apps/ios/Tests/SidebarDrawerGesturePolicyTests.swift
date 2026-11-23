@@ -10,13 +10,13 @@ struct SidebarDrawerGesturePolicyTests {
     private static func policy(
         layoutMode: RootTabs.SidebarLayoutMode = .drawer,
         isPresented: Bool = false,
-        canOpenFromEdge: Bool = true,
+        openingRegion: Policy.OpeningRegion = .edge,
         reduceMotion: Bool = false) -> Policy
     {
         Policy(
             layoutMode: layoutMode,
             isPresented: isPresented,
-            canOpenFromEdge: canOpenFromEdge,
+            openingRegion: openingRegion,
             reduceMotion: reduceMotion)
     }
 
@@ -26,7 +26,7 @@ struct SidebarDrawerGesturePolicyTests {
         #expect(Self.policy(isPresented: true).isEnabled(for: .close))
         #expect(!Self.policy(isPresented: true).isEnabled(for: .open))
         // Pushed content owns the edge (interactive pop), so the open pan is off entirely.
-        #expect(!Self.policy(canOpenFromEdge: false).isEnabled(for: .open))
+        #expect(!Self.policy(openingRegion: .disabled).isEnabled(for: .open))
         for intent in [Policy.Intent.open, .close] {
             for isPresented in [false, true] {
                 // Split mode keeps its padding layout and has no drawer gesture.
@@ -36,22 +36,14 @@ struct SidebarDrawerGesturePolicyTests {
         }
     }
 
-    @Test func `opening starts only at the leading edge below the navigation bar`() {
-        let cases: [(CGPoint, Bool)] = [
-            (CGPoint(x: 0, y: 400), true),
-            // The harness's injected edge drag lands 4 pt in.
-            (CGPoint(x: 4, y: 300), true),
-            (CGPoint(x: 44, y: 45), true),
-            // A left-to-right swipe in the middle of the transcript is the content's.
-            (CGPoint(x: 45, y: 400), false),
-            (CGPoint(x: 200, y: 400), false),
-            (CGPoint(x: 20, y: 44), false),
-        ]
-        for (start, accepted) in cases {
-            #expect(Self.policy().acceptsStart(start, for: .open) == accepted)
-            #expect(Self.policy().intent(start: start, translation: CGSize(width: 12, height: 3)) ==
-                (accepted ? .open : nil))
-        }
+    @Test(arguments: [Policy.OpeningRegion.edge, .content])
+    func `root chat also opens from the conversation below the header`(region: Policy.OpeningRegion) {
+        let policy = Self.policy(openingRegion: region)
+        let rightward = CGSize(width: 12, height: 3)
+        #expect(policy.intent(start: CGPoint(x: 4, y: 300), translation: rightward) == .open)
+        #expect(policy.intent(start: CGPoint(x: 200, y: 400), translation: rightward) ==
+            (region == .content ? .open : nil))
+        #expect(policy.intent(start: CGPoint(x: 20, y: 30), translation: rightward) == nil)
     }
 
     @Test func `drawer space measures from the leading screen edge and the safe area top`() {
@@ -79,7 +71,7 @@ struct SidebarDrawerGesturePolicyTests {
             #expect(presented.intent(start: start, translation: CGSize(width: 12, height: 0)) == nil)
             #expect(presented.intent(start: start, translation: CGSize(width: -8, height: 9)) == nil)
         }
-        #expect(Self.policy(isPresented: true, canOpenFromEdge: false)
+        #expect(Self.policy(isPresented: true, openingRegion: .disabled)
             .intent(start: CGPoint(x: 300, y: 400), translation: CGSize(width: -12, height: 0)) == .close)
     }
 
@@ -139,14 +131,13 @@ struct SidebarDrawerGesturePolicyTests {
         }
         let show = RootTabs.sidebarShowButtonAccessibilityIdentifier
         let hide = RootTabs.sidebarHideButtonAccessibilityIdentifier
-        let showTab = ChatProTab(headerSidebarAction: header(show), openSettings: {}, startFirstGatewaySetup: nil)
-        #expect(showTab == ChatProTab(headerSidebarAction: header(show), openSettings: {}, startFirstGatewaySetup: nil))
-        #expect(showTab != ChatProTab(headerSidebarAction: header(hide), openSettings: {}, startFirstGatewaySetup: nil))
-        let firstRunTab = ChatProTab(headerSidebarAction: header(show), openSettings: {}, startFirstGatewaySetup: {})
+        let showTab = ChatProTab(headerSidebarAction: header(show), startFirstGatewaySetup: nil)
+        #expect(showTab == ChatProTab(headerSidebarAction: header(show), startFirstGatewaySetup: nil))
+        #expect(showTab != ChatProTab(headerSidebarAction: header(hide), startFirstGatewaySetup: nil))
+        let firstRunTab = ChatProTab(headerSidebarAction: header(show), startFirstGatewaySetup: {})
         #expect(showTab != firstRunTab)
         #expect(firstRunTab == ChatProTab(
             headerSidebarAction: header(show),
-            openSettings: {},
             startFirstGatewaySetup: {}))
     }
 }

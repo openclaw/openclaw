@@ -39,7 +39,7 @@ enum OpenClawTextValue: ExpressibleByStringLiteral {
 
 struct OpenClawProBackground: View {
     var body: some View {
-        Color(uiColor: .systemGroupedBackground)
+        OpenClawBrand.canvas
             .ignoresSafeArea()
     }
 }
@@ -153,7 +153,7 @@ private struct ProPanelSurfaceModifier: ViewModifier {
             .background {
                 let shape = RoundedRectangle(cornerRadius: self.radius, style: .continuous)
                 shape
-                    .fill(Color(uiColor: self.isProminent ? .systemBackground : .secondarySystemGroupedBackground))
+                    .fill(OpenClawBrand.surfaceRaised)
                     .overlay {
                         shape.strokeBorder(self.borderStyle, lineWidth: 1)
                     }
@@ -170,7 +170,7 @@ private struct ProPanelSurfaceModifier: ViewModifier {
         if let tint {
             return tint.opacity(self.isProminent ? 0.18 : 0.10)
         }
-        return Color(uiColor: .separator).opacity(self.colorScheme == .dark ? 0.22 : 0.12)
+        return OpenClawBrand.border
     }
 }
 
@@ -197,6 +197,7 @@ struct OpenClawSidebarHeaderAction {
     /// The drawer's reveal control stays in its toolbar slot while the drawer covers it.
     /// Only the button observes this presentation.
     var drawerPresentation: RootSidebarPresentation?
+    var hasApprovalAttention = false
     let action: () -> Void
 
     /// Read only in the button to avoid rebuilding the destination or its toolbar.
@@ -230,34 +231,45 @@ struct OpenClawSidebarRevealToolbarVisibility: ViewModifier {
 struct OpenClawSidebarControlButton: View {
     let action: OpenClawSidebarHeaderAction
 
+    private static let chatMenuGlyph = UIGraphicsImageRenderer(size: CGSize(width: 16, height: 8)).image { _ in
+        UIColor.black.setFill()
+        UIBezierPath(roundedRect: CGRect(x: 0, y: 0, width: 16, height: 2), cornerRadius: 1).fill()
+        UIBezierPath(roundedRect: CGRect(x: 0, y: 6, width: 10, height: 2), cornerRadius: 1).fill()
+    }
+
     var body: some View {
         self.identified(self.button.buttonStyle(.plain))
-            .opacity(self.action.isShown ? 1 : 0)
+            .glassEffect(.regular.interactive(), in: Circle())
     }
 
     private var button: some View {
         Button(action: self.action.action) {
-            Label {
-                self.action.accessibilityLabel.text
-                    .font(OpenClawType.body)
-            } icon: {
-                self.icon
-            }
-            .labelStyle(.iconOnly)
+            self.icon
+                .openClawToolbarHitTarget()
+                .contentShape(Rectangle())
         }
-        .openClawToolbarHitTarget()
-        .contentShape(Rectangle())
         .accessibilityLabel(self.action.accessibilityLabel.text)
+        .accessibilityValue(self.action.hasApprovalAttention
+            ? String(localized: "Needs approval")
+            : "")
     }
 
     private var icon: some View {
-        Image(systemName: self.action.systemName)
-            .font(.system(size: 15, weight: .semibold))
-            .foregroundStyle(OpenClawBrand.accent)
+        Image(uiImage: Self.chatMenuGlyph)
+            .renderingMode(.template)
+            .foregroundStyle(Color(uiColor: .label))
             .openClawToolbarGlyphScale()
-            .frame(
-                width: OpenClawProMetric.compactControlSize,
-                height: OpenClawProMetric.compactControlSize)
+            .frame(width: OpenClawProMetric.compactControlSize, height: OpenClawProMetric.compactControlSize)
+            .overlay(alignment: .topTrailing) {
+                if self.action.hasApprovalAttention {
+                    Circle()
+                        .fill(OpenClawBrand.warn)
+                        .frame(width: 7, height: 7)
+                        .padding(7)
+                        .allowsHitTesting(false)
+                        .accessibilityHidden(true)
+                }
+            }
     }
 
     @ViewBuilder
@@ -287,8 +299,6 @@ struct OpenClawSidebarToolbarItem: ToolbarContent {
         ToolbarItem(placement: self.placement) {
             OpenClawSidebarControlButton(action: self.action)
         }
-        // Sidebar reveal is intentionally background-free in every host;
-        // suppress the toolbar's automatic glass so it cannot reappear.
         .sharedBackgroundVisibility(.hidden)
     }
 }
@@ -470,7 +480,7 @@ struct OpenClawToggleIndicator: View {
 
     var body: some View {
         Capsule()
-            .fill(self.isOn ? OpenClawBrand.accentFill : Color.secondary.opacity(0.35))
+            .fill(self.isOn ? OpenClawBrand.ok : Color.secondary.opacity(0.35))
             .frame(width: 52, height: 32)
             .overlay(alignment: self.isOn ? .trailing : .leading) {
                 Circle()

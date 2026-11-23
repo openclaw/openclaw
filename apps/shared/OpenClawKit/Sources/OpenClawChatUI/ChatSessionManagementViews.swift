@@ -598,13 +598,8 @@ public struct ChatNewSessionOptionsPopover: View {
 
     public var body: some View {
         VStack(alignment: .leading, spacing: 20) {
-            VStack(alignment: .leading, spacing: 5) {
-                Text("New Thread")
-                    .font(OpenClawChatTypography.headline)
-                Text("Choose an agent and a place to work.")
-                    .font(OpenClawChatTypography.footnote)
-                    .foregroundStyle(.secondary)
-            }
+            Text("New Thread")
+                .font(OpenClawChatTypography.headline)
 
             VStack(alignment: .leading, spacing: 8) {
                 Text("Agent")
@@ -689,8 +684,13 @@ public struct ChatNewSessionOptionsPopover: View {
                 Button(action: self.createThread) {
                     Text("Create Thread").font(OpenClawChatTypography.formControl.weight(.medium))
                 }
-                .buttonStyle(.borderedProminent)
-                .tint(OpenClawChatTheme.accent)
+                #if os(iOS)
+                .buttonStyle(.bordered)
+                    .tint(.primary)
+                #else
+                    .buttonStyle(.borderedProminent)
+                    .tint(OpenClawChatTheme.accent)
+                #endif
                 .keyboardShortcut(.defaultAction)
                 .disabled(
                     self.agentOptions.isLoading || self.isCreating || self.agentOptions.selectedAgentID.isEmpty || self
@@ -699,6 +699,9 @@ public struct ChatNewSessionOptionsPopover: View {
         }
         .padding(20)
         .frame(width: 360)
+        #if os(iOS)
+        .tint(.primary)
+        #endif
         .task { await self.loadOptions() }
         .onChange(of: self.agentOptions.selectedAgentID) {
             if self.agentOptions.selectedAgent?.workspaceGit == false {

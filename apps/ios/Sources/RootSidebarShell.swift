@@ -1,11 +1,6 @@
 import OpenClawChatUI
 import SwiftUI
 
-private enum RootSidebarShellMetric {
-    static let topLeadingRadius: CGFloat = 8
-    static let cornerRadius: CGFloat = 28
-}
-
 /// Sidebar visibility. Only small leaf views and modifiers read it, so a toggle does not
 /// re-evaluate the shell or RootTabs, which would re-run the sidebar and destination views.
 @Observable
@@ -28,7 +23,7 @@ struct RootSidebarShell<Sidebar: View, Detail: View>: View {
     let sidebarWidth: CGFloat
     let isDrawerLayout: Bool
     let presentation: RootSidebarPresentation
-    let canOpenFromEdge: Bool
+    let openingRegion: SidebarDrawerGesturePolicy.OpeningRegion
     let reduceMotion: Bool
     let animation: Animation?
     let onShow: () -> Void
@@ -47,9 +42,12 @@ struct RootSidebarShell<Sidebar: View, Detail: View>: View {
             self.sidebarLayer
                 .modifier(RootSidebarLayerPresentation(
                     presentation: self.presentation,
+                    dragOffset: self.dragOffset,
+                    sidebarWidth: self.sidebarWidth,
                     isDrawerLayout: self.isDrawerLayout,
                     reduceMotion: self.reduceMotion,
                     animation: self.animation))
+                .ignoresSafeArea(.container, edges: self.isDrawerLayout ? .vertical : [])
 
             self.detail
                 .modifier(RootSidebarContentCard(
@@ -76,11 +74,17 @@ struct RootSidebarShell<Sidebar: View, Detail: View>: View {
             presentation: self.presentation,
             sidebarWidth: self.sidebarWidth,
             isDrawerLayout: self.isDrawerLayout,
-            canOpenFromEdge: self.canOpenFromEdge,
+            openingRegion: self.openingRegion,
             reduceMotion: self.reduceMotion,
             onChanged: { self.dragOffset = $0 },
             onEnded: self.settleDrag))
-        .background(OpenClawProBackground())
+        .background {
+            if self.isDrawerLayout {
+                OpenClawSidebarPalette.background.ignoresSafeArea()
+            } else {
+                OpenClawProBackground()
+            }
+        }
     }
 
     private var sidebarLayer: some View {
@@ -94,7 +98,6 @@ struct RootSidebarShell<Sidebar: View, Detail: View>: View {
                     .frame(width: 1 / self.displayScale)
                     .opacity(self.isDrawerLayout ? 0 : 1)
             }
-            .ignoresSafeArea(.container, edges: self.isDrawerLayout ? .vertical : [])
     }
 
     /// Releases the card from the finger and settles it in one animated transaction.
@@ -117,7 +120,7 @@ private struct RootSidebarDrawerGestures: ViewModifier {
     let presentation: RootSidebarPresentation
     let sidebarWidth: CGFloat
     let isDrawerLayout: Bool
-    let canOpenFromEdge: Bool
+    let openingRegion: SidebarDrawerGesturePolicy.OpeningRegion
     let reduceMotion: Bool
     let onChanged: (CGFloat) -> Void
     let onEnded: (SidebarDrawerGesturePolicy.Action) -> Void
@@ -126,7 +129,7 @@ private struct RootSidebarDrawerGestures: ViewModifier {
         let policy = SidebarDrawerGesturePolicy(
             layoutMode: self.isDrawerLayout ? .drawer : .split,
             isPresented: self.presentation.isPresented,
-            canOpenFromEdge: self.canOpenFromEdge,
+            openingRegion: self.openingRegion,
             reduceMotion: self.reduceMotion)
         content
             .gesture(self.pan(.open, policy: policy))
@@ -147,14 +150,31 @@ private struct RootSidebarDrawerGestures: ViewModifier {
 }
 
 private struct RootSidebarLayerPresentation: ViewModifier {
+    @Environment(\.colorScheme) private var colorScheme
+
     let presentation: RootSidebarPresentation
+    let dragOffset: CGFloat
+    let sidebarWidth: CGFloat
     let isDrawerLayout: Bool
     let reduceMotion: Bool
     let animation: Animation?
 
     func body(content: Content) -> some View {
         let isPresented = self.presentation.isPresented
-        content
+        let reveal = self.sidebarWidth > 0 ? RootTabs.sidebarContentOffset(
+            sidebarWidth: self.sidebarWidth,
+            isVisible: isPresented,
+            dragOffset: self.dragOffset,
+            reduceMotion: self.reduceMotion) / self.sidebarWidth : 1
+        let shade = self.colorScheme == .dark ? 0.24 : 0.14
+        return content
+            .overlay {
+                if self.isDrawerLayout, !self.reduceMotion {
+                    Color.black.opacity(shade * (1 - min(1, max(0, Double(reveal)))))
+                        .allowsHitTesting(false)
+                        .accessibilityHidden(true)
+                }
+            }
             .opacity(!isPresented && (!self.isDrawerLayout || self.reduceMotion) ? 0 : 1)
             .accessibilityHidden(!isPresented)
             .allowsHitTesting(isPresented)
@@ -163,6 +183,9 @@ private struct RootSidebarLayerPresentation: ViewModifier {
 }
 
 private struct RootSidebarContentCard: ViewModifier {
+    @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.displayScale) private var displayScale
+
     let presentation: RootSidebarPresentation
     let dragOffset: CGFloat
     let sidebarWidth: CGFloat
@@ -181,7 +204,8 @@ private struct RootSidebarContentCard: ViewModifier {
                 reduceMotion: self.reduceMotion)
             : 0
         let progress = self.sidebarWidth > 0 ? offset / self.sidebarWidth : 0
-        let shape = RootSidebarContentClipShape.cardShape(progress: progress)
+        let shade = min(1, max(0, Double(progress)))
+        let shape = RootSidebarContentClipShape(progress: progress, safeAreaInsets: self.contentSafeAreaInsets)
         return content
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             // RootTabs always supplies its shared NavigationStack here. Expanding
@@ -190,16 +214,22 @@ private struct RootSidebarContentCard: ViewModifier {
             .background(OpenClawProBackground())
             .ignoresSafeArea(.container, edges: self.isDrawerLayout ? .vertical : [])
             .allowsHitTesting(!self.isDrawerLayout || !isPresented)
-            // Native bars can paint outside the content bounds into the system
-            // safe area. Keep them inside the card's mask without moving content.
-            .clipShape(RootSidebarContentClipShape(
-                progress: progress,
-                safeAreaInsets: self.contentSafeAreaInsets))
             .overlay {
-                shape.strokeBorder(
-                    OpenClawSidebarPalette.hairline.opacity(Double(progress)),
-                    lineWidth: 1)
+                OpenClawProBackground()
+                    .opacity(shade * 0.24)
+                    .allowsHitTesting(false)
+                    .accessibilityHidden(true)
             }
+            // Keep the chat card round at the screen edge, including behind system bars.
+            .clipShape(shape)
+            .overlay {
+                if self.isDrawerLayout, self.colorScheme == .dark {
+                    shape.stroke(.white.opacity(shade * 0.12), lineWidth: 1 / self.displayScale)
+                        .allowsHitTesting(false)
+                        .accessibilityHidden(true)
+                }
+            }
+            .shadow(color: .black.opacity(shade * 0.14), radius: 14, x: -4)
             .offset(x: offset)
             // Change only geometry, never the detail's structural identity, when
             // crossing the breakpoint or toggling a persistent sidebar.
@@ -223,10 +253,15 @@ private struct RootSidebarDismissalLayer: View {
                 Color.clear
                     .frame(width: self.sidebarWidth)
                     .allowsHitTesting(false)
-                Color.clear
-                    .contentShape(Rectangle())
-                    .accessibilityHidden(true)
-                    .onTapGesture(perform: self.onHide)
+                Button(action: self.onHide) {
+                    Color.clear
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(RootTabs.sidebarHideLabel.text)
+                .accessibilityIdentifier(RootTabs.sidebarHideButtonAccessibilityIdentifier)
+                .accessibilitySortPriority(-1)
             }
         }
     }
@@ -242,23 +277,14 @@ struct RootSidebarContentClipShape: Shape {
     }
 
     func path(in rect: CGRect) -> Path {
-        let progress = min(1, max(0, self.progress))
-        let expansion = 1 - progress
-        let barBounds = CGRect(
-            x: rect.minX - self.safeAreaInsets.leading * expansion,
-            y: rect.minY - self.safeAreaInsets.top * expansion,
-            width: rect.width + (self.safeAreaInsets.leading + self.safeAreaInsets.trailing) * expansion,
-            height: rect.height + (self.safeAreaInsets.top + self.safeAreaInsets.bottom) * expansion)
-        return Self.cardShape(progress: progress).path(in: barBounds)
-    }
-
-    static func cardShape(progress: CGFloat) -> UnevenRoundedRectangle {
-        UnevenRoundedRectangle(
-            topLeadingRadius: RootSidebarShellMetric.topLeadingRadius * progress,
-            bottomLeadingRadius: RootSidebarShellMetric.cornerRadius * progress,
-            bottomTrailingRadius: RootSidebarShellMetric.cornerRadius * progress,
-            topTrailingRadius: RootSidebarShellMetric.cornerRadius * progress,
-            style: .continuous)
+        let bounds = CGRect(
+            x: rect.minX - self.safeAreaInsets.leading,
+            y: rect.minY - self.safeAreaInsets.top,
+            width: rect.width + self.safeAreaInsets.leading + self.safeAreaInsets.trailing,
+            height: rect.height + self.safeAreaInsets.top + self.safeAreaInsets.bottom)
+        // Grow the corners quickly as the card leaves the edge, then translate it at that shape.
+        let radius = 52 * min(1, max(0, self.progress * 3))
+        return RoundedRectangle(cornerRadius: radius, style: .continuous).path(in: bounds)
     }
 }
 

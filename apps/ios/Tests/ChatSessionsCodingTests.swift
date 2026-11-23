@@ -139,6 +139,54 @@ struct ChatSessionsCodingTests {
         }
     }
 
+    @Test @MainActor func `clearing local chat copies preserves drafts and queued sends`() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("clear-chat-cache-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let databases = try OpenClawClientDatabases(directoryURL: directory)
+        defer { try? databases.close() }
+        let store = databases.store(gatewayID: "local-cache-a")
+        let otherStore = databases.store(gatewayID: "local-cache-b")
+        let reply = OpenClawChatMessage(
+            role: "assistant",
+            content: [.init(type: "text", text: "An earlier reply", mimeType: nil, fileName: nil, content: nil)],
+            timestamp: 1000)
+        await store.storeCanonicalTranscript(
+            sessionKey: "main", agentID: nil, messages: [reply], canonicalMessageIdempotencyKeys: [])
+        await otherStore.storeCanonicalTranscript(
+            sessionKey: "main", agentID: nil, messages: [reply], canonicalMessageIdempotencyKeys: [])
+
+        let draftSaved = await store.saveComposerDraftText(key: "main", text: "Unsent draft", revision: 1)
+        try #require(draftSaved)
+        let queued = OpenClawChatOutboxCommand(
+            id: UUID().uuidString,
+            sessionKey: "main",
+            deliverySessionKey: "agent:main:main",
+            routingContract: "per-sender|main|main",
+            agentID: "main",
+            text: "Send when online",
+            thinking: "off",
+            createdAt: Date().timeIntervalSince1970,
+            status: .queued,
+            retryCount: 0,
+            lastError: nil)
+        let enqueued = await store.enqueueCommand(queued)
+        try #require(enqueued)
+
+        let before = try await databases.gatewayCacheUsage()
+        #expect(before.conversations == 2 && before.hasCachedData && before.bytes > 0)
+
+        let after = try await databases.clearGatewayCache()
+        #expect(after.conversations == 0 && !after.hasCachedData)
+        #expect(await store.loadTranscript(sessionKey: "main").isEmpty)
+        #expect(await otherStore.loadTranscript(sessionKey: "main").isEmpty)
+        #expect(await store.loadComposerDraft(key: "main")?.text == "Unsent draft")
+        let commands = await store.loadCommands()
+        #expect(commands.map(\.id) == [queued.id])
+        #expect(commands.map(\.status) == [.queued])
+        #expect(commands.map(\.text) == ["Send when online"])
+    }
+
     @Test @MainActor func `ios sqlite cache preserves legacy text alongside nested output on reopen`() async throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("nested-chat-cache-\(UUID().uuidString)", isDirectory: true)

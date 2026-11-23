@@ -5,6 +5,13 @@ import UserNotifications
 
 /// A local projection of the same device owner used by the Dashboard, never a Gateway editor.
 struct LocalDeviceSettingsScreen: View {
+    enum Layout {
+        case device
+        case voiceAndTalk
+        case permissions
+    }
+
+    var layout: Layout = .device
     @Environment(NodeAppModel.self) private var appModel
     @Environment(AppAppearanceModel.self) private var appearanceModel
     @Environment(GatewayConnectionController.self) private var gatewayController
@@ -29,10 +36,35 @@ struct LocalDeviceSettingsScreen: View {
     var body: some View {
         let snapshot = self.snapshot
         List {
-            self.appearanceSection(snapshot)
-            self.deviceSection(snapshot)
-            self.voiceSection(snapshot)
-            self.permissionsSection(snapshot)
+            switch self.layout {
+            case .device:
+                self.appearanceSection(snapshot)
+                self.deviceSection(snapshot)
+                self.voiceSection(snapshot)
+                self.permissionsSection(snapshot)
+            case .voiceAndTalk:
+                self.voiceSection(snapshot)
+                Section {
+                    Text("Start live voice with OpenClaw")
+                        .font(OpenClawType.body)
+                } header: {
+                    Text("Siri").font(OpenClawType.captionSemiBold)
+                }
+            case .permissions:
+                Section {
+                    self.toggle(
+                        "Allow camera requests",
+                        key: .cameraEnabled,
+                        value: snapshot.capabilities?.cameraEnabled)
+                    if snapshot.capabilities?.healthSummaryAvailable == true {
+                        self.toggle(
+                            "Health summaries",
+                            key: .healthSummaryEnabled,
+                            value: snapshot.capabilities?.healthSummaryEnabled)
+                    }
+                }
+                self.permissionsSection(snapshot)
+            }
             if let errorText {
                 Text(errorText)
                     .font(OpenClawType.footnote)
@@ -40,6 +72,7 @@ struct LocalDeviceSettingsScreen: View {
                     .accessibilityIdentifier("LocalDeviceSettings.Error")
             }
         }
+        .listStyle(.insetGrouped)
         .accessibilityIdentifier("LocalDeviceSettings")
         .background(LocalDeviceSettingsConsentAnchor(view: self.consentAnchor))
         .disabled(self.actionTask != nil)
@@ -71,12 +104,8 @@ struct LocalDeviceSettingsScreen: View {
                 Text("Appearance").font(OpenClawType.body)
             }
             .pickerStyle(.menu)
+            .tint(.primary)
             .accessibilityIdentifier("LocalDeviceSettings.Appearance")
-        } header: {
-            Text("Appearance").font(OpenClawType.captionSemiBold)
-        } footer: {
-            Text("These settings apply only to this device and do not require Gateway admin access.")
-                .font(OpenClawType.footnote)
         }
     }
 
@@ -135,7 +164,9 @@ struct LocalDeviceSettingsScreen: View {
                 "Precise Location",
                 value: .verbatim(snapshot.permissions.location
                     .precise ? String(localized: "On") : String(localized: "Off")))
-            ForEach(snapshot.permissions.entries, id: \.id) { entry in
+            ForEach(snapshot.permissions.entries.filter {
+                self.layout == .device || $0.id != .notifications
+            }, id: \.id) { entry in
                 HStack {
                     VStack(alignment: .leading) {
                         Text(Self.permissionTitle(entry.id)).font(OpenClawType.body)
@@ -175,6 +206,7 @@ struct LocalDeviceSettingsScreen: View {
         {
             Text(title).font(OpenClawType.body)
         }
+        .tint(OpenClawBrand.ok)
         .accessibilityIdentifier("LocalDeviceSettings." + key.rawValue)
     }
 

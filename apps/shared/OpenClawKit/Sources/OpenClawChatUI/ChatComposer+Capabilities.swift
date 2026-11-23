@@ -7,8 +7,10 @@ extension OpenClawChatComposer {
            self.viewModel.composerCapabilityControlsAvailable
         {
             Divider()
+            #if !os(iOS)
             Text("Tool changes apply to the next run.")
                 .font(OpenClawChatTypography.caption)
+            #endif
             self.composerWebSearchButton
             self.composerSkillsMenu
             self.composerConnectorsMenu
@@ -23,6 +25,7 @@ extension OpenClawChatComposer {
                 .accessibilityHint(
                     self.viewModel.composerToolOverrideMutationDisabledReason ?? "")
             }
+            #if !os(iOS)
             if !self.viewModel.composerCapabilitiesLoading,
                let reason = self.viewModel.composerPermissionMutationDisabledReason,
                !self.viewModel.composerCapabilityCatalog.permissionMutationAvailable
@@ -53,6 +56,7 @@ extension OpenClawChatComposer {
                     chatActionLabel(Text("Retry capability loading"), systemImage: "arrow.clockwise")
                 }
             }
+            #endif
         }
     }
 
@@ -71,13 +75,25 @@ extension OpenClawChatComposer {
                 }
             } label: {
                 self.cleanInlinePermissionGlyph
-                    .frame(
-                        width: CleanChatComposerMetrics.controlTouchSize,
-                        height: CleanChatComposerMetrics.controlTouchSize)
+                    #if os(iOS)
+                    // Sit 20 pt from the `+` glyph instead of a full control width away.
+                        .padding(.trailing, 12)
+                        .frame(
+                            width: CleanChatComposerMetrics.glyphControlWidth,
+                            height: CleanChatComposerMetrics.controlTouchSize)
+                    #else
+                        .frame(
+                            width: CleanChatComposerMetrics.controlTouchSize,
+                            height: CleanChatComposerMetrics.controlTouchSize)
+                    #endif
                     .contentShape(Rectangle())
             }
             .menuIndicator(.hidden)
+            #if os(iOS)
+            .tint(CleanChatComposerMetrics.footerInk)
+            #else
             .tint(OpenClawChatTheme.muted)
+            #endif
             .disabled(
                 !self.viewModel.composerCapabilityCatalog.permissionMutationAvailable ||
                     self.viewModel.composerCapabilityMutationDisabled)
@@ -92,12 +108,24 @@ extension OpenClawChatComposer {
     private var cleanInlinePermissionGlyph: some View {
         ZStack {
             Image(systemName: "shield")
-                .font(.system(size: OpenClawChatTypography.scaled(18), weight: .semibold))
+                #if os(iOS)
+                    .font(OpenClawChatTypography.composerGlyph)
+                #else
+                    .font(.system(size: OpenClawChatTypography.scaled(18), weight: .semibold))
+                #endif
             Image(systemName: self.cleanInlinePermissionOverlaySymbol)
                 .font(.system(size: OpenClawChatTypography.scaled(7), weight: .bold))
                 .offset(y: -1)
         }
-        .foregroundStyle(.secondary)
+        #if os(iOS)
+        // Full access carries the accent, as in the Control UI.
+        .foregroundStyle(
+                self.viewModel.composerPermissionMode == .full
+                    ? OpenClawChatTheme.accent
+                    : CleanChatComposerMetrics.footerInk)
+        #else
+            .foregroundStyle(.secondary)
+        #endif
     }
 
     private var cleanInlinePermissionOverlaySymbol: String {
@@ -259,7 +287,14 @@ extension OpenClawChatComposer {
 
     @ViewBuilder
     var composerCapabilityNoticeRow: some View {
-        if let notice = self.viewModel.composerCapabilityNotice {
+        let notice = self.viewModel.composerCapabilityNotice
+        #if os(iOS)
+        let showsNotice = notice != OpenClawChatViewModel.toolChangesNextRunNotice &&
+            notice != OpenClawChatViewModel.toolOverridesClearedNextRunNotice
+        #else
+        let showsNotice = true
+        #endif
+        if showsNotice, let notice {
             HStack(alignment: .center, spacing: 8) {
                 Image(systemName: "info.circle.fill")
                     .foregroundStyle(OpenClawChatTheme.accent)

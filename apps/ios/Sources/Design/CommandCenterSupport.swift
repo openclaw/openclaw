@@ -88,6 +88,7 @@ struct CommandSessionActionsModifier: ViewModifier {
     let archivesSession: () -> Bool
     let performMutation: (String?, @escaping Mutation) -> Void
     let fork: () -> Void
+    let preview: (() -> AnyView)?
 
     @State private var editor: Editor?
     @State private var draftText = ""
@@ -102,56 +103,7 @@ struct CommandSessionActionsModifier: ViewModifier {
     }
 
     private func managedContent(_ content: Content) -> some View {
-        content
-            .contextMenu {
-                OpenClawSessionColorMenu(color: self.session.color) {
-                    self.patch(color: .some($0))
-                }
-                if !self.isArchived {
-                    self.actionButton(
-                        self.session.pinned == true
-                            ? OpenClawTextValue.localized("Unpin")
-                            : OpenClawTextValue.localized("Pin"),
-                        systemImage: self.session.pinned == true ? "pin.slash" : "pin")
-                    {
-                        self.patch(pinned: self.session.pinned != true)
-                    }
-                    if self.canSnooze {
-                        self.snoozeMenu
-                    }
-                    self.actionButton(
-                        self.session.unread == true
-                            ? OpenClawTextValue.localized("Mark as Read")
-                            : OpenClawTextValue.localized("Mark as Unread"),
-                        systemImage: self.session.unread == true ? "envelope.open" : "envelope.badge")
-                    {
-                        self.patch(unread: self.session.unread != true)
-                    }
-                    self.actionButton("Rename…", systemImage: "pencil") {
-                        self.beginRename()
-                    }
-                    self.actionButton(
-                        self.session.hasActiveRun == true
-                            ? OpenClawTextValue.localized("Fork from last completed message")
-                            : OpenClawTextValue.localized("Fork"),
-                        systemImage: "arrow.triangle.branch")
-                    {
-                        self.fork()
-                    }
-                    self.groupMenu
-                }
-                if self.canArchive {
-                    self.actionButton(
-                        self.isArchived ? .localized("Unarchive") : .localized("Archive"),
-                        systemImage: "archivebox")
-                    {
-                        self.patch(archived: self.archivesSession())
-                    }
-                }
-                if self.canDelete {
-                    self.deleteButton
-                }
-            }
+        self.contextMenuContent(content)
             .alert(self.editorTitle, isPresented: self.editorBinding) {
                 TextField(self.editorPlaceholder, text: self.$draftText)
                     .font(OpenClawType.body)
@@ -163,6 +115,7 @@ struct CommandSessionActionsModifier: ViewModifier {
                         : LocalizedStringKey("Create"))
                         .font(OpenClawType.subheadSemiBold)
                 }
+                .disabled(self.editor == .newGroup && self.draftText.trimmedNonEmpty == nil)
                 Button(role: .cancel) {
                     self.editor = nil
                 } label: {
@@ -170,6 +123,7 @@ struct CommandSessionActionsModifier: ViewModifier {
                         .font(OpenClawType.subheadSemiBold)
                 }
             }
+            .tint(.primary)
             .confirmationDialog(
                 "Delete Session?",
                 isPresented: self.$confirmsDelete,
@@ -275,6 +229,71 @@ struct CommandSessionActionsModifier: ViewModifier {
         }
     }
 
+    @ViewBuilder
+    private func contextMenuContent(_ content: Content) -> some View {
+        if let preview = self.preview {
+            content.contextMenu {
+                self.menuItems
+            } preview: {
+                preview()
+            }
+            .tint(.primary)
+        } else {
+            content.contextMenu { self.menuItems }
+        }
+    }
+
+    @ViewBuilder
+    private var menuItems: some View {
+        OpenClawSessionColorMenu(color: self.session.color) {
+            self.patch(color: .some($0))
+        }
+        if !self.isArchived {
+            self.actionButton(
+                self.session.pinned == true
+                    ? OpenClawTextValue.localized("Unpin")
+                    : OpenClawTextValue.localized("Pin"),
+                systemImage: self.session.pinned == true ? "pin.slash" : "pin")
+            {
+                self.patch(pinned: self.session.pinned != true)
+            }
+            if self.canSnooze {
+                self.snoozeMenu
+            }
+            self.actionButton(
+                self.session.unread == true
+                    ? OpenClawTextValue.localized("Mark as Read")
+                    : OpenClawTextValue.localized("Mark as Unread"),
+                systemImage: self.session.unread == true ? "envelope.open" : "envelope.badge")
+            {
+                self.patch(unread: self.session.unread != true)
+            }
+            self.actionButton("Rename…", systemImage: "pencil") {
+                self.beginRename()
+            }
+            self.actionButton(
+                self.session.hasActiveRun == true
+                    ? OpenClawTextValue.localized("Fork from last completed message")
+                    : OpenClawTextValue.localized("Fork"),
+                systemImage: "arrow.triangle.branch")
+            {
+                self.fork()
+            }
+            self.groupMenu
+        }
+        if self.canArchive {
+            self.actionButton(
+                self.isArchived ? .localized("Unarchive") : .localized("Archive"),
+                systemImage: "archivebox")
+            {
+                self.patch(archived: self.archivesSession())
+            }
+        }
+        if self.canDelete {
+            self.deleteButton
+        }
+    }
+
     private var groupMenu: some View {
         Menu {
             ForEach(self.categories, id: \.self) { category in
@@ -301,8 +320,15 @@ struct CommandSessionActionsModifier: ViewModifier {
         Button(role: .destructive) {
             self.confirmsDelete = true
         } label: {
-            Label("Delete…", systemImage: "trash")
-                .font(OpenClawType.subhead)
+            Label {
+                Text("Delete…").font(OpenClawType.subhead)
+            } icon: {
+                if self.preview != nil, let trash = UIImage(systemName: "trash") {
+                    Image(uiImage: trash.withTintColor(.systemRed, renderingMode: .alwaysOriginal))
+                } else {
+                    Image(systemName: "trash")
+                }
+            }
         }
     }
 
@@ -376,7 +402,8 @@ extension View {
         canDelete: Bool = true,
         archivesSession: @escaping () -> Bool = { true },
         performMutation: @escaping (String?, @escaping CommandSessionActionsModifier.Mutation) -> Void,
-        fork: @escaping () -> Void) -> some View
+        fork: @escaping () -> Void,
+        preview: (() -> AnyView)? = nil) -> some View
     {
         self.modifier(CommandSessionActionsModifier(
             session: session,
@@ -388,7 +415,8 @@ extension View {
             canDelete: canDelete,
             archivesSession: archivesSession,
             performMutation: performMutation,
-            fork: fork))
+            fork: fork,
+            preview: preview))
     }
 }
 

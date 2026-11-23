@@ -46,16 +46,16 @@ struct GatewayCustomHeadersSettingsView: View {
             }
 
             Section {
-                TextField(
-                    text: self.$newName,
-                    prompt: Text("e.g. CF-Access-Client-Id").font(OpenClawType.subhead))
-                {
-                    Text("Header name")
-                        .font(OpenClawType.subhead)
+                SettingsInputRow("Header name") {
+                    TextField(
+                        text: self.$newName,
+                        prompt: Text("e.g. CF-Access-Client-Id").font(OpenClawType.body))
+                    {
+                        Text("Header name").font(OpenClawType.body)
+                    }
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
                 }
-                .font(OpenClawType.subhead)
-                .textInputAutocapitalization(.never)
-                .autocorrectionDisabled()
                 self.headerValueField("Header value", text: self.$newValue)
                 Button {
                     self.addEntry()
@@ -143,20 +143,14 @@ struct GatewayCustomHeadersSettingsView: View {
         // swiftlint:enable line_length
     }
 
-    private func headerValueField(_ placeholder: String, text: Binding<String>) -> some View {
-        ZStack(alignment: .leading) {
-            SecureField("", text: text)
-                .font(OpenClawType.subhead)
-                .textInputAutocapitalization(.never)
-                .autocorrectionDisabled()
-                .accessibilityLabel(placeholder)
-            if text.wrappedValue.isEmpty {
-                Text(placeholder)
-                    .font(OpenClawType.subhead)
-                    .foregroundStyle(.tertiary)
-                    .allowsHitTesting(false)
-                    .accessibilityHidden(true)
+    private func headerValueField(_ title: LocalizedStringKey, text: Binding<String>) -> some View {
+        SettingsInputRow(title) {
+            SecureField(text: text, prompt: Text(verbatim: "—").font(OpenClawType.body)) {
+                Text(title).font(OpenClawType.body)
             }
+            .textInputAutocapitalization(.never)
+            .autocorrectionDisabled()
+            .accessibilityLabel(Text(title))
         }
     }
 

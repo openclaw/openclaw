@@ -1021,6 +1021,10 @@ struct ChatViewModelBusySendTests {
             vm.sessions[0].effectiveQueueMode = mode
             #expect(vm.sendModeChoices == [.steer, .followup])
         }
+        vm.defaultFollowUpMode = .followup
+        #expect(vm.sendModeChoices == [.steer])
+        vm.defaultFollowUpMode = .steer
+        #expect(vm.sendModeChoices == [.followup])
         vm.input = "/steer use the shorter approach"
         #expect(vm.sendModeChoices.isEmpty)
         vm.input = "use the shorter approach"
@@ -1100,10 +1104,13 @@ struct ChatViewModelBusySendTests {
         #expect(vm.pendingToolCalls.map(\.toolCallId) == ["tool-1"])
     }
 
-    @Test(arguments: [OpenClawChatQueueMode.steer, .followup])
+    @Test(
+        arguments: [OpenClawChatQueueMode.steer, .followup],
+        ["explicit", "preference", "override"])
     @MainActor
-    func `per message send mode survives reopening and reaches the route lease`(
-        mode: OpenClawChatQueueMode) async throws
+    func `send mode survives reopening and explicit choices override the host preference`(
+        mode: OpenClawChatQueueMode,
+        source: String) async throws
     {
         let (store, _, databaseDirectory) = try makeOutboxStore()
         defer { try? FileManager.default.removeItem(at: databaseDirectory) }
@@ -1113,8 +1120,13 @@ struct ChatViewModelBusySendTests {
         await vm.bootstrapTask?.value
         await waitForObservedState { vm.hasRestoredOutboxMessages }
         vm.input = "use the shorter approach"
-        let send = try #require(vm.send(queueMode: mode))
-        #expect(vm.send(queueMode: mode) == nil)
+        if source != "explicit" {
+            vm.hasActiveSessionRunWithoutChatSnapshot = true
+            vm.defaultFollowUpMode = source == "preference" ? mode : (mode == .steer ? .followup : .steer)
+        }
+        let explicitMode: OpenClawChatQueueMode? = source == "preference" ? nil : mode
+        let send = try #require(vm.send(queueMode: explicitMode))
+        #expect(vm.send(queueMode: explicitMode) == nil)
         await send.value
         #expect(vm.input.isEmpty)
         #expect(await offline.state.sentMessages.isEmpty)

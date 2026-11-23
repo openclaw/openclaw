@@ -15,7 +15,7 @@ extension SettingsProTab {
     {
         Section {
             HStack(spacing: 12) {
-                SettingsIcon(systemName: icon, color: color)
+                NativeSettingsRowIcon(systemName: icon)
                 VStack(alignment: .leading, spacing: 2) {
                     title.text
                         .font(OpenClawType.headline)
@@ -102,7 +102,7 @@ extension SettingsProTab {
         color: Color) -> some View
     {
         HStack(spacing: 12) {
-            SettingsIcon(systemName: icon, color: color)
+            NativeSettingsRowIcon(systemName: icon)
             VStack(alignment: .leading, spacing: 2) {
                 title.text
                     .font(OpenClawType.subheadSemiBold)
@@ -232,7 +232,6 @@ extension SettingsProTab {
         } else {
             self.manualGatewayContextPath = nil
         }
-        self.selectedAgentPickerId = self.appModel.selectedAgentId ?? ""
         let trimmedInstanceId = self.instanceId.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedInstanceId.isEmpty else { return }
         guard !self.appModel.isLocalGatewayFixtureEnabled,
@@ -385,13 +384,14 @@ extension SettingsProTab {
 
     func openGatewayQRScanner() {
         self.invalidateGatewaySetupAttempt()
-        let lease = self.gatewayController.cancelPendingConnectionAttempts(suspendCurrentGateway: true)
-        self.stagedGatewaySetupLink = nil
-        self.pendingTargetSuppression.replace(owner: .qrScanner, lease: lease)
-        self.scannerScanID = self.scannerResultHandoff.beginScan()
-        self.connectingGateway = nil
-        self.setupStatusText = String(localized: "Opening QR scanner...")
-        self.showQRScanner = true
+        let lease = gatewayController.cancelPendingConnectionAttempts(suspendCurrentGateway: true)
+        stagedGatewaySetupLink = nil
+        pendingTargetSuppression.replace(owner: .qrScanner, lease: lease)
+        scannerScanID = scannerResultHandoff.beginScan()
+        connectingGateway = nil
+        setupStatusText = String(localized: "Opening QR scanner...")
+        pairUsingCode = false
+        showQRScanner = true
     }
 
     func queueScannedResult(_ result: QRScannerResult, scanID: UInt64) {
@@ -690,7 +690,17 @@ extension SettingsProTab {
     func title(for route: SettingsRoute) -> String {
         switch route {
         case .deviceSettings: String(localized: "Device Settings")
+        case .voiceAndTalk: String(localized: "Voice & Talk")
+        case .permissions: String(localized: "Permissions")
+        case .accessories: String(localized: "Accessories")
+        case .chatPreferences: String(localized: "Chat")
+        case .storage: String(localized: "Storage")
+        case .sidebarPages: String(localized: "Pages")
+        case .skills: String(localized: "Skills")
+        case .plugins: String(localized: "Plugins")
+        case .advanced: String(localized: "Advanced")
         case .gateway: String(localized: "Gateway")
+        case .gatewayDetails: String(localized: "Connection details")
         case .appleWatch: String(localized: "Apple Watch")
         case .espSetup: String(localized: "ESP device setup")
         case .approvals: String(localized: "Approvals")

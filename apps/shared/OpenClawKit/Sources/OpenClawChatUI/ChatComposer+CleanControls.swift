@@ -5,7 +5,7 @@ import UIKit
 
 extension OpenClawChatComposer {
     @ViewBuilder
-    var cleanAttachmentMenu: some View {
+    private var cleanAttachmentMenu: some View {
         #if os(macOS)
         Button {
             self.pickFilesMac()
@@ -44,12 +44,19 @@ extension OpenClawChatComposer {
             }
             .disabled(!self.isAttachmentInputEnabled)
 
+            #if !os(iOS)
             Divider()
+            #endif
             if self.viewModel.sessionBranches.count > 1 {
+                #if os(iOS)
+                Divider()
+                #endif
                 self.branchMenu
             }
+            #if !os(iOS)
             self.verbosityPicker
                 .disabled(!self.viewModel.composerVerboseMutationAvailable)
+            #endif
             self.cleanComposerCapabilityItems
         } label: {
             CompactChatAttachmentLabel()
@@ -65,16 +72,45 @@ extension OpenClawChatComposer {
     }
 
     #if os(iOS)
-    var cleanDraftRow: some View {
-        self.editorOverlay
-            .frame(maxWidth: .infinity, minHeight: self.textMinHeight, maxHeight: .infinity, alignment: .topLeading)
-            .padding(.horizontal, CleanChatComposerMetrics.editorInlineInset)
-            .padding(.top, self.draftTopInset)
-            // The room under a short draft belongs to the draft: a tap there starts typing.
-            .contentShape(Rectangle())
-            .onTapGesture { self.focusDraft() }
+    func cleanPhoneEditor(expanded: Bool) -> some View {
+        CleanComposerPhoneLayout(expanded: expanded) {
+            self.editorOverlay
+                .frame(maxWidth: .infinity, minHeight: self.textMinHeight, alignment: .leading)
+                .contentShape(Rectangle())
+                .onTapGesture { self.focusDraft() }
+            HStack(spacing: 0) {
+                if expanded {
+                    self.cleanLeadingControls
+                } else {
+                    self.cleanAttachmentMenu
+                }
+            }
+            HStack(spacing: 0) {
+                if expanded {
+                    self.cleanTrailingControls
+                } else {
+                    self.cleanCaptureAndPrimaryControls
+                }
+            }
+        }
     }
     #endif
+
+    var compactEditor: some View {
+        HStack(alignment: .center, spacing: 4) {
+            self.cleanAttachmentMenu
+
+            if self.viewModel.sessionBranches.count > 1 {
+                self.branchMenu
+            }
+
+            self.editorOverlay
+                .frame(maxWidth: .infinity, minHeight: self.cleanControlHeight, alignment: .leading)
+                .layoutPriority(1)
+
+            self.cleanCaptureAndPrimaryControls
+        }
+    }
 
     @ViewBuilder
     var cleanLeadingControls: some View {
@@ -100,16 +136,17 @@ extension OpenClawChatComposer {
         .help("Composer options")
         .accessibilityLabel("Composer options")
         .accessibilityIdentifier("chat-attachment-picker")
-        #else
+        #elseif os(iOS)
         self.cleanAttachmentMenu
-        #if os(iOS)
         if self.viewModel.supportsComposerCapabilities {
             self.cleanInlinePermissionMenu
         }
-        #endif
+        #else
+        self.cleanAttachmentMenu
         #endif
     }
 
+    #if !os(iOS)
     @ViewBuilder
     var cleanContextUsageMenu: some View {
         if let usage = self.viewModel.contextUsage {
@@ -121,6 +158,8 @@ extension OpenClawChatComposer {
         }
     }
 
+    #endif
+
     var cleanTrailingControls: some View {
         ViewThatFits(in: .horizontal) {
             self.cleanInlineControls(compactModel: false)
@@ -129,8 +168,12 @@ extension OpenClawChatComposer {
     }
 
     private func cleanInlineControls(compactModel: Bool) -> some View {
-        HStack(spacing: CleanChatComposerMetrics.footerControlGap) {
+        // Labels carry their own side padding: 14 pt between the model and effort pair,
+        // 18 pt between effort, microphone, and the primary disc.
+        HStack(spacing: 0) {
+            #if !os(iOS)
             self.cleanContextUsageMenu
+            #endif
             // Camera switching only displaces settings in the compact iOS footer.
             #if os(macOS)
             self.cleanInlineModelPicker(compact: compactModel)
@@ -204,7 +247,11 @@ extension OpenClawChatComposer {
             self.cleanInlineModelLabel(compact: compact)
         }
         .menuIndicator(.hidden)
+        #if os(iOS)
+        .tint(CleanChatComposerMetrics.footerInk)
+        #else
         .tint(OpenClawChatTheme.muted)
+        #endif
         #if os(macOS)
         // Mac session settings remain editable during a response; pinning is
         // local and stays available while a Gateway settings save is pending.
@@ -241,6 +288,30 @@ extension OpenClawChatComposer {
         .padding(.horizontal, 6)
         .frame(width: compact ? 104 : 160, height: self.cleanControlHeight)
         .contentShape(Rectangle())
+        #elseif os(iOS)
+        let iconOnly = compact || self.dynamicTypeSize.isAccessibilitySize
+        HStack(spacing: 3) {
+            if iconOnly {
+                Image(systemName: "cpu")
+                    .font(OpenClawChatTypography.composerGlyph)
+            } else {
+                Text(self.viewModel.composerInlineModelLabel)
+                    .font(OpenClawChatTypography.composerControlLabel)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+            }
+            self.cleanPhoneMenuChevron
+        }
+        .foregroundStyle(CleanChatComposerMetrics.footerInk)
+        .padding(.leading, 8)
+        .padding(.trailing, 7)
+        .frame(
+            minWidth: CleanChatComposerMetrics.controlTouchSize,
+            maxWidth: iconOnly ? CleanChatComposerMetrics.compactModelWidth :
+                CleanChatComposerMetrics.regularModelMaxWidth,
+            minHeight: CleanChatComposerMetrics.controlTouchSize)
+        .fixedSize(horizontal: true, vertical: false)
+        .contentShape(Rectangle())
         #else
         if compact || self.dynamicTypeSize.isAccessibilitySize {
             Image(systemName: "cpu")
@@ -266,6 +337,14 @@ extension OpenClawChatComposer {
         }
         #endif
     }
+
+    #if os(iOS)
+    private var cleanPhoneMenuChevron: some View {
+        Image(systemName: "chevron.down")
+            .font(OpenClawChatTypography.composerChevronGlyph)
+            .accessibilityHidden(true)
+    }
+    #endif
 
     private var cleanInlineEffortMenu: some View {
         #if os(macOS)
@@ -294,39 +373,52 @@ extension OpenClawChatComposer {
         #else
         Menu {
             if self.viewModel.showsThinkingPicker {
+                #if os(iOS)
+                self.thinkingSelectionPicker.pickerStyle(.inline)
+                #else
                 self.thinkingPicker
+                #endif
             }
             if self.viewModel.showsFastModeControls {
                 self.fastModeToggle
             }
         } label: {
-            ZStack(alignment: .topTrailing) {
-                ZStack {
-                    Circle()
-                        .trim(from: 0.12, to: 0.88)
-                        .stroke(.secondary, style: StrokeStyle(lineWidth: 1.5, lineCap: .round))
-                        .rotationEffect(.degrees(90))
-                    Capsule()
-                        .fill(.secondary)
-                        .frame(width: 1.5, height: 7)
-                        .offset(y: -3.5)
-                        .rotationEffect(.degrees(self.viewModel.composerInlineEffortAngle))
-                }
-                .frame(width: 18, height: 18)
-                if self.viewModel.fastModeIsEnabled {
-                    Image(systemName: "bolt.fill")
-                        .font(OpenClawChatTypography.caption)
-                        .foregroundStyle(OpenClawChatTheme.accent)
-                        .offset(x: 7, y: -6)
-                }
+            #if os(iOS)
+            HStack(spacing: 3) {
+                CleanChatEffortGauge(
+                    angle: self.viewModel.composerInlineEffortAngle,
+                    fastModeEnabled: self.viewModel.fastModeIsEnabled,
+                    accentProgress: self.viewModel.thinkingLevel == "ultra",
+                    width: CleanChatComposerMetrics.effortGaugeWidth,
+                    ink: CleanChatComposerMetrics.footerInk,
+                    needleInk: CleanChatComposerMetrics.footerStrongInk)
+                self.cleanPhoneMenuChevron
             }
-            .frame(
-                width: self.cleanControlHeight,
-                height: self.cleanControlHeight)
+            .foregroundStyle(CleanChatComposerMetrics.footerInk)
+            .padding(.leading, 7)
+            .padding(.trailing, 6)
+            .frame(height: self.cleanControlHeight)
             .contentShape(Rectangle())
+            #else
+            CleanChatEffortGauge(
+                angle: self.viewModel.composerInlineEffortAngle,
+                fastModeEnabled: self.viewModel.fastModeIsEnabled,
+                accentProgress: self.viewModel.thinkingLevel == "ultra",
+                width: 20,
+                ink: .secondary,
+                needleInk: .secondary)
+                .frame(
+                    width: self.cleanControlHeight,
+                    height: self.cleanControlHeight)
+                .contentShape(Rectangle())
+            #endif
         }
         .menuIndicator(.hidden)
+        #if os(iOS)
+        .tint(CleanChatComposerMetrics.footerInk)
+        #else
         .tint(OpenClawChatTheme.muted)
+        #endif
         .disabled(
             !self.viewModel.composerEffortMutationAvailable ||
                 self.viewModel.isUpdatingSessionSettings)
@@ -397,6 +489,11 @@ extension OpenClawChatComposer {
 
     @ViewBuilder
     private var cleanCaptureAndPrimaryContent: some View {
+        #if os(iOS)
+        let micWidth: CGFloat? = CleanChatComposerMetrics.glyphControlWidth
+        #else
+        let micWidth: CGFloat? = nil
+        #endif
         let showsTalkMicrophone = self.talkControl?.isEnabled == true &&
             self.talkControl?.toggleMicrophone != nil
         // Live Talk owns its microphone control in the activity strip, not the dictation slot.
@@ -409,6 +506,7 @@ extension OpenClawChatComposer {
                 isComposerEnabled: self.isComposerEnabled,
                 isAttachmentInputEnabled: self.isAttachmentInputEnabled,
                 controlSize: self.cleanControlHeight,
+                controlWidth: micWidth,
                 onCancelDictation: {
                     ChatDictationActions.cancel(task: self.$dictationTask, control: self.dictationControl)
                 },
@@ -435,5 +533,111 @@ extension OpenClawChatComposer {
     private var cleanShowsCameraFlip: Bool {
         guard let talkControl = self.talkControl else { return false }
         return ChatCameraFlipButton.isAvailable(for: talkControl)
+    }
+}
+
+#if os(iOS)
+/// Lay out the same text view across focus changes so its responder, selection, and draft survive.
+private struct CleanComposerPhoneLayout: Layout {
+    let expanded: Bool
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache _: inout ()) -> CGSize {
+        let width = proposal.width ?? 320
+        let frames = self.frames(width: width, subviews: subviews)
+        return CGSize(width: width, height: (frames.map(\.maxY).max() ?? 0) + self.trailingInset)
+    }
+
+    private var leadingInset: CGFloat {
+        self.expanded ? CleanChatComposerMetrics.expandedLeadingControlInset :
+            CleanChatComposerMetrics.collapsedControlInset
+    }
+
+    /// Also the bottom inset, so the primary disc stays concentric with the corner.
+    private var trailingInset: CGFloat {
+        self.expanded ? CleanChatComposerMetrics.expandedControlInset :
+            CleanChatComposerMetrics.collapsedControlInset
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal _: ProposedViewSize, subviews: Subviews, cache _: inout ()) {
+        for (view, frame) in zip(subviews, self.frames(width: bounds.width, subviews: subviews)) {
+            view.place(
+                at: CGPoint(x: bounds.minX + frame.minX, y: bounds.minY + frame.minY),
+                anchor: .topLeading,
+                proposal: ProposedViewSize(frame.size))
+        }
+    }
+
+    private func frames(width: CGFloat, subviews: Subviews) -> [CGRect] {
+        let leadingEdge = self.leadingInset
+        let trailingEdge = self.trailingInset
+        let gap = CleanChatComposerMetrics.rowGap
+        let top = self.expanded ? CleanChatComposerMetrics.expandedEditorTopInset : trailingEdge
+        let leading = subviews[1].sizeThatFits(.unspecified)
+        let trailingWidth = max(0, width - leadingEdge - trailingEdge - leading.width)
+        let trailing = subviews[2].sizeThatFits(ProposedViewSize(
+            width: self.expanded ? trailingWidth : nil, height: nil))
+        let fieldX = self.expanded ? CleanChatComposerMetrics.editorInlineInset : leadingEdge + leading.width
+        let fieldEnd = self.expanded ? width - fieldX : width - trailingEdge - trailing.width - gap
+        let fieldWidth = max(0, fieldEnd - fieldX)
+        let field = subviews[0].sizeThatFits(ProposedViewSize(width: fieldWidth, height: nil))
+        let controlsHeight = max(leading.height, trailing.height)
+        let height = self.expanded ? controlsHeight : max(controlsHeight, field.height)
+        let controlsY = self.expanded ? top + field.height + gap : top
+        let fieldY = self.expanded ? top : top + (height - field.height) / 2
+        return [
+            CGRect(x: fieldX, y: fieldY, width: fieldWidth, height: field.height),
+            CGRect(
+                x: leadingEdge,
+                y: controlsY + (height - leading.height) / 2,
+                width: leading.width,
+                height: leading.height),
+            CGRect(
+                x: width - trailingEdge - trailing.width,
+                y: controlsY + (height - trailing.height) / 2,
+                width: trailing.width,
+                height: trailing.height),
+        ]
+    }
+}
+#endif
+
+extension OpenClawChatComposer {
+    static func showsNewSessionCommandShortcut(query: String?) -> Bool {
+        #if os(iOS)
+        query?.lowercased() == "new"
+        #else
+        false
+        #endif
+    }
+}
+
+struct SlashPanelHeightKey: PreferenceKey {
+    static let defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = max(value, nextValue())
+    }
+}
+
+struct ChatNewSessionSlashOption: View {
+    @Environment(\.openClawChatNewSessionOptionsPresented) private var optionsPresented
+    let query: String
+    let dismissInput: () -> Void
+
+    var body: some View {
+        if self.query.lowercased() == "new", let optionsPresented {
+            Divider()
+            Button {
+                optionsPresented.wrappedValue = true
+                self.dismissInput()
+            } label: {
+                Label("New session options…", systemImage: "slider.horizontal.3")
+                    .font(OpenClawChatTypography.footnoteSemiBold)
+                    .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+                    .padding(.horizontal, 14)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityIdentifier("chat-new-session-options")
+        }
     }
 }

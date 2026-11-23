@@ -5,7 +5,17 @@ import UserNotifications
 
 enum SettingsRoute: Hashable {
     case gateway
+    case gatewayDetails
     case deviceSettings
+    case voiceAndTalk
+    case permissions
+    case accessories
+    case chatPreferences
+    case storage
+    case sidebarPages
+    case skills
+    case plugins
+    case advanced
     case appleWatch
     case espSetup
     case approvals
@@ -21,16 +31,16 @@ struct ManualGatewaySecurityRows: View {
     var body: some View {
         Picker(selection: self.$useTLS) {
             Text("Unencrypted")
-                .font(OpenClawType.captionSemiBold)
+                .font(OpenClawType.body)
                 .tag(false)
             Text("Secure (TLS)")
-                .font(OpenClawType.captionSemiBold)
+                .font(OpenClawType.body)
                 .tag(true)
         } label: {
             Text("Connection security")
-                .font(OpenClawType.captionSemiBold)
+                .font(OpenClawType.body)
         }
-        .pickerStyle(.segmented)
+        .pickerStyle(.menu)
         .disabled(self.presentation.requiresTLS)
 
         if let helperText = self.presentation.helperText {
@@ -41,9 +51,43 @@ struct ManualGatewaySecurityRows: View {
     }
 }
 
-/// Canonical label/value list row for Settings and Talk surfaces. Keep every
-/// detail row on this view so row typography cannot drift between sections;
-/// plain `LabeledContent(String, value:)` renders unbranded system fonts.
+struct NativeSettingsRowIcon: View {
+    let systemName: String
+    @ScaledMetric(relativeTo: .body) private var scale = 1.0
+
+    var body: some View {
+        Image(systemName: self.systemName)
+            .font(.system(size: 15 * self.scale, weight: .regular))
+            .symbolRenderingMode(.monochrome)
+            .symbolVariant(.none)
+            .foregroundStyle(.secondary)
+            .opacity(0.88)
+            .frame(width: 24 * self.scale)
+    }
+}
+
+struct SettingsInputRow<Content: View>: View {
+    let title: LocalizedStringKey
+    let content: Content
+
+    init(_ title: LocalizedStringKey, @ViewBuilder content: () -> Content) {
+        self.title = title
+        self.content = content()
+    }
+
+    var body: some View {
+        LabeledContent {
+            self.content
+                .font(OpenClawType.body)
+                .foregroundStyle(.primary)
+                .multilineTextAlignment(.trailing)
+        } label: {
+            Text(self.title).font(OpenClawType.body)
+        }
+    }
+}
+
+/// Shared label and value layout for Settings and Talk.
 struct SettingsDetailRow: View {
     let label: LocalizedStringKey
     let value: OpenClawTextValue

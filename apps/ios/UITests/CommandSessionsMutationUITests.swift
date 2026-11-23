@@ -93,7 +93,7 @@ final class CommandSessionsMutationUITests: XCTestCase {
 
     private func openSessions(in app: XCUIApplication) {
         app.buttons["RootTabs.Sidebar.Show"].tap()
-        let sessions = app.buttons["All Sessions…"]
+        let sessions = app.buttons["RootTabs.Sidebar.ViewAllSessions"]
         XCTAssertTrue(sessions.waitForExistence(timeout: 10))
         for _ in 0..<5 where !sessions.isHittable {
             app.swipeUp()

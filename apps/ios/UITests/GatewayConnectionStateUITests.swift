@@ -33,10 +33,7 @@ final class GatewayConnectionStateUITests: XCTestCase {
         let nodeFailed = try await self.control(fixtureURL, path: "await?node=2")
         XCTAssertTrue(nodeFailed.connectedRoles.contains("operator"))
         let timeout = app.staticTexts["Connection timed out"]
-        let offlinePlaceholder = app.staticTexts.matching(NSPredicate(
-            format: "label ENDSWITH %@", "; sends when connected")).firstMatch
         XCTAssertFalse(timeout.exists, "connection-state:healthy-operator:no-global-node-timeout")
-        XCTAssertFalse(offlinePlaceholder.exists, "connection-state:healthy-operator:composer-online")
         XCTAssertTrue(input.isEnabled, "connection-state:healthy-operator:composer-enabled")
         self.capture(app, named: "connection-node-timeout-operator-healthy")
         if input.isEnabled {
@@ -61,9 +58,7 @@ final class GatewayConnectionStateUITests: XCTestCase {
         let bothFailed = try await self.control(
             fixtureURL, path: "await?node=\(nodeFailed.timeouts.node + 1)&operator=1")
         XCTAssertTrue(timeout.waitForExistence(timeout: 5), "connection-state:operator-unavailable:timeout-visible")
-        XCTAssertTrue(
-            offlinePlaceholder.waitForExistence(timeout: 5),
-            "connection-state:operator-unavailable:composer-queued")
+        XCTAssertTrue(input.isEnabled, "connection-state:operator-unavailable:composer-accepts-text")
         self.capture(app, named: "connection-both-timeout-visible")
         if timeout.exists {
             let start = timeout.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
@@ -78,8 +73,9 @@ final class GatewayConnectionStateUITests: XCTestCase {
         self.capture(app, named: "connection-identical-timeout-stays-dismissed")
 
         _ = try await self.control(fixtureURL, path: "recover", method: "POST")
-        _ = try await self.control(fixtureURL, path: "await?ready=1")
-        XCTAssertTrue(offlinePlaceholder.waitForNonExistence(timeout: 10), "connection-state:recovered:composer-online")
+        let recovered = try await self.control(fixtureURL, path: "await?ready=1")
+        XCTAssertTrue(recovered.connectedRoles.contains("operator"))
+        XCTAssertTrue(input.isEnabled, "connection-state:recovered:composer-enabled")
         XCTAssertTrue(timeout.waitForNonExistence(timeout: 5))
         self.capture(app, named: "connection-recovered")
 
@@ -90,7 +86,7 @@ final class GatewayConnectionStateUITests: XCTestCase {
     }
 
     /// An automatic reconnect keeps its handoff pending for as long as the saved Gateway
-    /// never answers. Chat must still offer the toolbar route to Gateway settings.
+    /// never answers. Chat must still offer the sidebar route to Gateway settings.
     func testToolbarStaysUsableWhileReconnectingToUnreachableGateway() {
         let app = XCUIApplication()
         defer { app.terminate() }
@@ -102,16 +98,20 @@ final class GatewayConnectionStateUITests: XCTestCase {
             "-gateway.manual.enabled", "YES", "-gateway.manual.host", "192.0.2.10", "-gateway.manual.port", "18789",
         ]
         app.launch()
-        let status = app.buttons["chat-agent-identity"]
+        let status = app.descendants(matching: .any)["chat-agent-identity"]
         XCTAssertTrue(status.waitForExistence(timeout: 15))
-        XCTAssertTrue(status.label.contains("Gateway: Connecting"), status.label)
+        XCTAssertFalse(status.label.contains("Gateway:"), status.label)
         XCTAssertFalse(app.textViews["chat-message-input"].isEnabled, "The chat surface waits out the handoff")
 
-        for control in [app.buttons["RootTabs.Sidebar.Show"], status, app.buttons["Chat actions"]] {
+        for control in [app.buttons["RootTabs.Sidebar.Show"], app.buttons["Chat actions"]] {
             XCTAssertTrue(control.isEnabled, "\(control.identifier) \(control.label) must stay enabled")
         }
-        app.buttons["Chat actions"].tap()
-        XCTAssertTrue(app.buttons["chat-gateway-settings"].waitForExistence(timeout: 5))
+        app.buttons["RootTabs.Sidebar.Show"].tap()
+        let settings = app.buttons["RootTabs.Sidebar.GatewaySettings"]
+        XCTAssertTrue(settings.waitForExistence(timeout: 5))
+        XCTAssertTrue(settings.isEnabled)
+        settings.tap()
+        XCTAssertTrue(app.navigationBars["Gateway"].waitForExistence(timeout: 5))
     }
 
     private func launchConnectionApp(_ app: XCUIApplication, setupCode: String) {

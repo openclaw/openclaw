@@ -2,288 +2,237 @@ import OpenClawKit
 import OpenClawProtocol
 import SwiftUI
 
-private struct ExecApprovalPromptDialogModifier: ViewModifier {
-    @Environment(NodeAppModel.self) private var appModel: NodeAppModel
-    @AccessibilityFocusState private var approvalCardFocused: Bool
-    let suppressedApproval: NodeAppModel.ExecApprovalInboxKey?
+struct ChatSessionApproval: View {
+    @Environment(NodeAppModel.self) private var appModel
+    @State private var reviewedItem: NodeAppModel.ExecApprovalInboxItem?
+    @State private var submitting = false
+    let sessionKey: String
+    let agentID: String?
+    let agentName: String
 
-    func body(content: Content) -> some View {
-        let prompt = self.presentedPrompt
-        ZStack {
-            content
-                .allowsHitTesting(prompt == nil)
-                .accessibilityHidden(prompt != nil)
-
-            if let prompt {
-                ZStack {
-                    Color.black.opacity(0.38)
-                        .ignoresSafeArea()
-                        .accessibilityHidden(true)
-
-                    ExecApprovalPromptCard(
-                        prompt: prompt,
-                        isResolving: self.appModel.pendingExecApprovalPromptResolving,
-                        canDismiss: self.appModel.pendingExecApprovalPromptCanDismiss,
-                        errorText: self.appModel.pendingExecApprovalPromptErrorText,
-                        resolvedText: self.appModel.pendingExecApprovalPromptResolvedText,
-                        resolvedTone: self.appModel.pendingExecApprovalPromptOutcome?.tone,
-                        onDecision: { decision in
-                            Task {
-                                await self.appModel.resolvePendingExecApprovalPrompt(decision: decision.rawValue)
-                            }
-                        },
-                        onCancel: {
-                            self.appModel.dismissPendingExecApprovalPrompt()
-                        })
-                        .frame(maxHeight: 680)
-                        .padding(.horizontal, 20)
-                        .padding(.vertical, 16)
-                        .frame(maxWidth: 460)
-                        .accessibilityElement(children: .contain)
-                        .accessibilityAddTraits(.isModal)
-                        .accessibilityFocused(self.$approvalCardFocused)
-                        .onAppear { self.approvalCardFocused = true }
-                        .transition(.scale(scale: 0.98).combined(with: .opacity))
-                }
-                .zIndex(1)
-            }
+    var body: some View {
+        if let item = self.item {
+            let isSelected = NodeAppModel.execApprovalInboxKey(self.appModel.pendingExecApprovalPrompt) == item.id
+            let outcome = isSelected ? self.appModel.pendingExecApprovalPromptResolvedText : nil
+            SessionApprovalCard(
+                prompt: item.prompt,
+                agentName: self.agentName,
+                isResolving: self.submitting || (isSelected && self.appModel.pendingExecApprovalPromptResolving),
+                error: isSelected ? self.appModel.pendingExecApprovalPromptErrorText : nil,
+                outcome: outcome,
+                decide: { decision in
+                    guard !self.submitting else { return }
+                    self.submitting = true
+                    self.reviewedItem = item
+                    Task {
+                        defer { self.submitting = false }
+                        await self.appModel.resolveSessionApproval(item, decision: decision)
+                    }
+                },
+                dismiss: {
+                    if NodeAppModel.execApprovalInboxKey(self.appModel.pendingExecApprovalPrompt) == item.id,
+                       self.appModel.pendingExecApprovalPromptResolvedText != nil
+                    {
+                        self.appModel.dismissPendingExecApprovalPrompt()
+                    }
+                    self.reviewedItem = nil
+                })
+                .id(item.id)
         }
-        .onChange(of: self.presentedPromptKey) { _, key in
-            self.approvalCardFocused = key != nil
-        }
-        .animation(.easeInOut(duration: 0.18), value: self.presentedPromptKey)
     }
 
-    private var presentedPrompt: NodeAppModel.ExecApprovalPrompt? {
-        guard let prompt = appModel.pendingExecApprovalPrompt,
-              NodeAppModel.execApprovalInboxKey(prompt) != self.suppressedApproval
-        else { return nil }
-        return prompt
-    }
-
-    private var presentedPromptKey: NodeAppModel.ExecApprovalInboxKey? {
-        NodeAppModel.execApprovalInboxKey(self.presentedPrompt)
+    private var item: NodeAppModel.ExecApprovalInboxItem? {
+        if let reviewedItem,
+           self.appModel.currentApprovalSource(for: reviewedItem.prompt) != nil,
+           NodeAppModel.execApprovalInboxKey(self.appModel.pendingExecApprovalPrompt) == reviewedItem.id,
+           self.appModel.pendingExecApprovalPromptResolvedText != nil
+        {
+            return reviewedItem
+        }
+        return self.appModel.pendingApproval(forSession: self.sessionKey, agentID: self.agentID)
     }
 }
 
-private struct ExecApprovalPromptCard: View {
+private struct SessionApprovalCard: View {
     let prompt: NodeAppModel.ExecApprovalPrompt
+    let agentName: String
     let isResolving: Bool
-    let canDismiss: Bool
-    let errorText: String?
-    let resolvedText: String?
-    let resolvedTone: NodeAppModel.ExecApprovalOutcomeTone?
-    let onDecision: (ApprovalDecision) -> Void
-    let onCancel: () -> Void
+    let error: String?
+    let outcome: String?
+    let decide: (ApprovalDecision) -> Void
+    let dismiss: () -> Void
+
+    private var isExec: Bool {
+        self.prompt.kind == ApprovalKind.exec.rawValue
+    }
 
     var body: some View {
-        VStack(spacing: 0) {
-            ScrollView {
-                self.reviewContent
-                    .padding(18)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            }
-            .accessibilityIdentifier("exec-approval-review-scroll")
-
-            Divider()
-
-            self.actionFooter
-                .padding(18)
-                .accessibilityIdentifier("exec-approval-actions")
-        }
-        .proPanelSurface(tint: OpenClawBrand.accentHot, radius: 20, isProminent: true)
-    }
-
-    private var reviewContent: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            VStack(alignment: .leading, spacing: 6) {
-                if self.prompt.kind != "exec" {
-                    Text(verbatim: self.prompt.commandText)
-                        .font(OpenClawType.headline)
-                    if let description = self.prompt.descriptionText?.trimmedNonEmpty {
-                        Text(verbatim: description)
-                            .font(OpenClawType.subhead)
+        VStack(alignment: .leading, spacing: 9) {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Text(self.isExec
+                    ? String(format: String(localized: "%@ wants to run a command"), self.agentName)
+                    : String(localized: "Approval needed"))
+                    .font(OpenClawType.subheadSemiBold)
+                    .accessibilityAddTraits(.isHeader)
+                Spacer(minLength: 0)
+                if self.outcome == nil, let expiry = self.prompt.expiresAtMs {
+                    let end = Date(timeIntervalSince1970: Double(expiry) / 1000)
+                    let now = Date.now
+                    if end > now {
+                        Text(timerInterval: now...end, countsDown: true, showsHours: false)
+                            .font(OpenClawType.caption)
+                            .monospacedDigit()
                             .foregroundStyle(.secondary)
+                            .fixedSize()
+                            .accessibilityLabel(String(localized: "Expires"))
+                            .accessibilityValue(Text(end, style: .relative))
                     }
-                } else {
-                    Text("Exec approval required")
-                        .font(OpenClawType.headline)
-                    Text("Review this exec request before continuing. Your decision will be sent back to the gateway.")
-                        .font(OpenClawType.subhead)
-                        .foregroundStyle(.secondary)
                 }
             }
-
-            if self.prompt.kind == "exec" {
-                Text(self.prompt.commandText)
-                    .font(OpenClawType.mono)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(10)
-                    .background(
-                        .black.opacity(0.14),
-                        in: RoundedRectangle(cornerRadius: OpenClawRadius.md, style: .continuous))
-            }
-
-            if let warningText = self.prompt.warningText?.trimmedNonEmpty {
-                Label {
-                    Text(warningText)
-                        .font(OpenClawType.footnote)
-                } icon: {
-                    Image(systemName: "exclamationmark.triangle.fill")
+            DisclosureGroup {
+                ViewThatFits(in: .vertical) {
+                    self.details
+                    ScrollView { self.details }
+                        .defaultScrollAnchor(.top)
+                        .frame(height: 144)
                 }
-                .foregroundStyle(OpenClawBrand.warn)
-                .fixedSize(horizontal: false, vertical: true)
-            }
-
-            VStack(alignment: .leading, spacing: 8) {
-                if self.isPluginApproval {
-                    if let pluginId = self.prompt.pluginId?.trimmedNonEmpty {
-                        ExecApprovalPromptMetadataRow(label: "Plugin", value: pluginId)
+                .frame(maxHeight: 144)
+                .padding(.top, 7)
+            } label: {
+                HStack(spacing: 7) {
+                    if self.isExec {
+                        Image(systemName: "terminal")
+                            .imageScale(.small)
+                            .foregroundStyle(.secondary)
+                            .accessibilityHidden(true)
                     }
-                    if let toolName = self.prompt.toolName?.trimmedNonEmpty {
-                        ExecApprovalPromptMetadataRow(label: "Tool", value: toolName)
-                    }
-                    if let severity = self.prompt.pluginSeverity?.trimmedNonEmpty {
-                        ExecApprovalPromptMetadataRow(label: "Severity", value: severity)
-                    }
-                } else {
-                    if let host = self.prompt.host?.trimmedNonEmpty {
-                        ExecApprovalPromptMetadataRow(label: "Host", value: host)
-                    }
-                    if let nodeId = self.prompt.nodeId?.trimmedNonEmpty {
-                        ExecApprovalPromptMetadataRow(label: "Node", value: nodeId)
-                    }
-                }
-                if let agentId = self.prompt.agentId?.trimmedNonEmpty {
-                    ExecApprovalPromptMetadataRow(label: "Agent", value: agentId)
-                }
-                if let expiresText = self.expiresText(self.prompt.expiresAtMs) {
-                    ExecApprovalPromptMetadataRow(label: "Expires", value: expiresText)
+                    Text(verbatim: self.prompt.commandText)
+                        .font(self.isExec ? OpenClawType.mono : OpenClawType.subheadMedium)
+                        .lineLimit(2)
+                        .foregroundStyle(.primary)
                 }
             }
-
-            if let errorText = self.errorText?.trimmedNonEmpty {
-                Text(errorText)
-                    .font(OpenClawType.footnote)
+            .padding(9)
+            .background(OpenClawBrand.surfaceMuted, in: RoundedRectangle(cornerRadius: OpenClawRadius.md))
+            .tint(.secondary)
+            .accessibilityIdentifier("chat-approval-details")
+            if let warning = self.prompt.warningText, !warning.isEmpty {
+                Text(verbatim: warning)
+                    .font(OpenClawType.caption)
+                    .foregroundStyle(.primary)
+            }
+            if let error = self.error {
+                Text(verbatim: error)
+                    .font(OpenClawType.caption)
                     .foregroundStyle(OpenClawBrand.danger)
             }
-
-            if let resolvedText = self.resolvedText?.trimmedNonEmpty {
-                Text(resolvedText)
-                    .font(OpenClawType.footnote)
-                    .foregroundStyle(self.resolvedColor)
-            }
-
-            if self.isResolving {
-                HStack(spacing: 8) {
-                    ProgressView()
-                        .progressViewStyle(.circular)
-                    Text("Resolving…")
-                        .font(OpenClawType.footnote)
-                        .foregroundStyle(.secondary)
-                }
-            }
-        }
-    }
-
-    private var isPluginApproval: Bool {
-        self.prompt.kind == "plugin"
-    }
-
-    private var actionFooter: some View {
-        VStack(spacing: 10) {
-            if self.resolvedText == nil {
-                if self.prompt.kind == "system-agent" {
-                    ApprovalDashboardReviewButton(prompt: self.prompt)
-                }
-                if self.prompt.allowsAllowOnce {
-                    approvalDialogButton(Text("Allow Once")) {
-                        self.onDecision(.allowOnce)
-                    }
-                    .openClawProminentButton()
-                    .disabled(self.isResolving)
-                }
-
-                if self.prompt.allowsAllowAlways {
-                    approvalDialogButton(Text("Allow Always")) {
-                        self.onDecision(.allowAlways)
-                    }
+            if let outcome = self.outcome {
+                Text(verbatim: outcome)
+                    .font(OpenClawType.caption)
+                    .foregroundStyle(.secondary)
+                self.action("Dismiss", action: self.dismiss)
                     .buttonStyle(.bordered)
-                    .disabled(self.isResolving)
-                }
-
-                ViewThatFits(in: .horizontal) {
-                    HStack(spacing: 10) {
-                        if self.prompt.allowsDeny {
-                            self.denyButton
-                        }
-                        self.cancelButton
-                    }
-
-                    VStack(spacing: 10) {
-                        if self.prompt.allowsDeny {
-                            self.denyButton
-                        }
-                        self.cancelButton
-                    }
-                }
+                    .tint(.primary)
+                    .frame(maxWidth: .infinity, alignment: .trailing)
             } else {
-                approvalDialogButton(Text("Dismiss"), role: .cancel, action: self.onCancel)
-                    .buttonStyle(.bordered)
+                if self.isResolving, self.error == nil {
+                    HStack(spacing: 6) {
+                        ProgressView().controlSize(.small)
+                        Text("Resolving…").font(OpenClawType.caption)
+                    }
+                    .foregroundStyle(.secondary)
+                    .accessibilityElement(children: .combine)
+                }
+                ViewThatFits(in: .horizontal) {
+                    self.actions(HStackLayout(spacing: 6))
+                    self.actions(VStackLayout(alignment: .trailing, spacing: 4))
+                }
+                .frame(maxWidth: .infinity, alignment: .trailing)
+                .controlSize(.regular)
+                .disabled(self.isResolving)
             }
         }
-        .controlSize(.large)
-        .frame(maxWidth: .infinity)
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(OpenClawBrand.surfaceRaised, in: RoundedRectangle(cornerRadius: 14))
+        .overlay {
+            RoundedRectangle(cornerRadius: 14)
+                .strokeBorder(.primary.opacity(0.10), lineWidth: 1)
+                .allowsHitTesting(false)
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("chat-session-approval")
     }
 
-    private var denyButton: some View {
-        approvalDialogButton(Text("Deny"), role: .destructive) {
-            self.onDecision(.deny)
+    private var details: some View {
+        VStack(alignment: .leading, spacing: 7) {
+            Text(verbatim: self.prompt.commandText)
+                .font(self.isExec ? OpenClawType.mono : OpenClawType.subhead)
+                .textSelection(.enabled)
+                .fixedSize(horizontal: false, vertical: true)
+            if let description = self.prompt.descriptionText {
+                Text(verbatim: description).font(OpenClawType.caption)
+            }
+            self.metadata(String(localized: "Host"), self.prompt.host)
+            self.metadata(String(localized: "Node"), self.prompt.nodeId)
+            self.metadata(String(localized: "Agent"), self.prompt.agentId)
+            self.metadata(String(localized: "Plugin"), self.prompt.pluginId)
+            self.metadata(String(localized: "Tool"), self.prompt.toolName)
+            self.metadata(String(localized: "Severity"), self.prompt.pluginSeverity)
+            if let expiry = self.prompt.expiresAtMs {
+                self.metadata(
+                    String(localized: "Expires"),
+                    Date(timeIntervalSince1970: Double(expiry) / 1000).formatted())
+            }
         }
-        .buttonStyle(.bordered)
-        .disabled(self.isResolving)
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    private var cancelButton: some View {
-        approvalDialogButton(Text("Cancel"), role: .cancel, action: self.onCancel)
-            .buttonStyle(.bordered)
-            .disabled(!self.canDismiss)
-    }
-
-    private var resolvedColor: Color {
-        switch self.resolvedTone {
-        case .success:
-            OpenClawBrand.ok
-        case .danger:
-            OpenClawBrand.danger
-        case .warning:
-            OpenClawBrand.warn
-        case .neutral, nil:
-            .secondary
+    @ViewBuilder
+    private func metadata(_ title: String, _ value: String?) -> some View {
+        if let value, !value.isEmpty {
+            LabeledContent {
+                Text(verbatim: value)
+                    .font(OpenClawType.caption)
+                    .multilineTextAlignment(.trailing)
+            } label: {
+                Text(verbatim: title)
+                    .font(OpenClawType.caption)
+                    .foregroundStyle(.secondary)
+            }
         }
     }
 
-    private func expiresText(_ expiresAtMs: Int64?) -> String? {
-        guard let expiresAtMs else { return nil }
-        let remainingSeconds = Int((Double(expiresAtMs) / 1000.0) - Date().timeIntervalSince1970)
-        if remainingSeconds <= 0 {
-            return String(localized: "expired")
+    private func actions(_ layout: some Layout) -> some View {
+        layout {
+            if self.prompt.kind == ApprovalKind.systemAgent.rawValue {
+                ApprovalDashboardReviewButton(prompt: self.prompt)
+            }
+            if self.prompt.allowsDeny {
+                self.action("Deny") { self.decide(.deny) }
+                    .buttonStyle(.plain)
+                    .padding(7)
+            }
+            if self.prompt.allowsAllowAlways {
+                self.action("Always allow") { self.decide(.allowAlways) }
+                    .buttonStyle(.bordered)
+                    .tint(.primary)
+            }
+            if self.prompt.allowsAllowOnce {
+                self.action("Allow once") { self.decide(.allowOnce) }
+                    .buttonStyle(.borderedProminent)
+                    .tint(OpenClawBrand.accent)
+            }
         }
-        if remainingSeconds < 60 {
-            return String(localized: "under a minute")
+        .fixedSize(horizontal: true, vertical: false)
+    }
+
+    private func action(_ title: LocalizedStringKey, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(title)
+                .font(OpenClawType.captionMedium)
+                .frame(minHeight: 30)
         }
-        if remainingSeconds < 3600 {
-            let minutes = Int(ceil(Double(remainingSeconds) / 60.0))
-            return String(
-                AttributedString(
-                    localized: "about ^[\(minutes) minute](inflect: true)")
-                    .characters)
-        }
-        let hours = Int(ceil(Double(remainingSeconds) / 3600.0))
-        return String(
-            AttributedString(
-                localized: "about ^[\(hours) hour](inflect: true)")
-                .characters)
     }
 }
 
@@ -330,42 +279,5 @@ struct ApprovalDashboardReviewButton: View {
         self.appModel.hasOperatorAdminScope &&
             self.prompt.attentionSource?.authorityGeneration == self.appModel.operatorAuthorityGeneration &&
             self.appModel.pendingExecApprovalInboxItems.contains { $0.prompt == self.prompt }
-    }
-}
-
-@MainActor
-func approvalDialogButton(
-    _ title: Text,
-    role: ButtonRole? = nil,
-    action: @escaping () -> Void) -> some View
-{
-    Button(role: role, action: action) {
-        title
-            .font(OpenClawType.subheadSemiBold)
-            .frame(maxWidth: .infinity)
-    }
-}
-
-private struct ExecApprovalPromptMetadataRow: View {
-    let label: LocalizedStringKey
-    let value: String
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 2) {
-            Text(self.label)
-                .font(OpenClawType.caption)
-                .foregroundStyle(.secondary)
-            Text(verbatim: self.value)
-                .font(OpenClawType.footnote)
-                .textSelection(.enabled)
-        }
-    }
-}
-
-extension View {
-    func execApprovalPromptDialog(
-        suppressedApproval: NodeAppModel.ExecApprovalInboxKey? = nil) -> some View
-    {
-        modifier(ExecApprovalPromptDialogModifier(suppressedApproval: suppressedApproval))
     }
 }

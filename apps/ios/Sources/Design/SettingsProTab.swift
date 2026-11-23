@@ -37,7 +37,6 @@ struct SettingsProTab: View {
     @State var connectingGateway: GatewayConnectionAttempt?
     @State var gatewayRegistry = GatewaySettingsStore.GatewayRegistry.empty
     @State var pendingForgetGateway: GatewaySettingsStore.GatewayRegistryEntry?
-    @State var selectedAgentPickerId = ""
     @State var gatewayAuthFields = GatewayConnectionController.ManualAuthOverride.Fields()
     @State var manualGatewayPortText = ""
     @State var manualGatewayContextPath: String?
@@ -50,6 +49,7 @@ struct SettingsProTab: View {
     @State var scannerScanID: UInt64 = 0
     @State var pendingTargetSuppression = GatewayPendingTargetSuppression()
     @State var showQRScanner = false
+    @State var pairUsingCode = false
     @State var scannerError: String?
     @State var showResetOnboardingAlert = false
     @State var suppressCredentialPersist = false
@@ -160,15 +160,6 @@ struct SettingsProTab: View {
                 // Leaving a fixture must reload the saved registry and credentials before they are editable.
                 self.syncSettingsState()
             }
-            .onChange(of: self.selectedAgentPickerId) { _, newValue in
-                let trimmed = newValue.trimmingCharacters(in: .whitespacesAndNewlines)
-                self.appModel.setSelectedAgentId(trimmed.isEmpty ? nil : trimmed)
-            }
-            .onChange(of: self.appModel.selectedAgentId ?? "") { _, newValue in
-                if newValue != self.selectedAgentPickerId {
-                    self.selectedAgentPickerId = newValue
-                }
-            }
             .onChange(of: self.setupCode) { _, newValue in
                 if !newValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                     self.clearStagedGatewaySetupLink()
@@ -185,6 +176,78 @@ struct SettingsProTab: View {
             }
     }
 
+    private func gatewayPairingSheet(scanID: UInt64) -> some View {
+        NavigationStack {
+            Group {
+                if self.pairUsingCode {
+                    Form {
+                        SecureField(text: self.$setupCode) {
+                            Text("Setup code").font(OpenClawType.body)
+                        }
+                        .font(OpenClawType.body)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                        .accessibilityLabel("Setup code")
+                        .accessibilityIdentifier("SettingsHub.SetupCode")
+                        .disabled(self.connectingGateway != nil)
+                        Button {
+                            Task { await self.applySetupCodeAndConnect() }
+                        } label: {
+                            Text("Connect").font(OpenClawType.subheadSemiBold)
+                        }
+                        .disabled(!self.canApplyGatewaySetup || self.connectingGateway != nil)
+                        if let status = self.setupStatusLine, self.setupStatusText != nil {
+                            Text(status)
+                                .font(OpenClawType.footnote)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                } else {
+                    QRScannerView(
+                        onResult: { self.queueScannedResult($0, scanID: scanID) },
+                        onError: { _ in
+                            guard self.scannerResultHandoff.isActive(scanID: scanID) else { return }
+                            self.showPairingCode()
+                        },
+                        onDismiss: {
+                            guard self.scannerResultHandoff.isActive(scanID: scanID) else { return }
+                            self.showQRScanner = false
+                        })
+                        .ignoresSafeArea()
+                        .safeAreaInset(edge: .bottom) {
+                            Button {
+                                self.showPairingCode()
+                            } label: {
+                                Text("Paste setup code")
+                                    .font(OpenClawType.subheadSemiBold)
+                            }
+                            .buttonStyle(.bordered)
+                            .padding()
+                        }
+                }
+            }
+            .navigationTitle("Pair Gateway")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button(role: .close) {
+                        self.scannerResultHandoff.cancel()
+                        self.showQRScanner = false
+                        self.setupCode = ""
+                    }
+                }
+            }
+        }
+        .tint(.primary)
+    }
+
+    private func showPairingCode() {
+        self.scannerResultHandoff.cancel()
+        self.setupStatusText = nil
+        self.pendingTargetSuppression.resumeAutoConnect(.qrScanner, controller: self.gatewayController)
+        self.pairUsingCode = true
+    }
+
     private func settingsModalPresentation(_ content: some View) -> some View {
         let scanID = self.scannerScanID
         return content
@@ -192,40 +255,13 @@ struct SettingsProTab: View {
                 isPresented: self.$showQRScanner,
                 onDismiss: {
                     self.processQueuedScannerResult()
+                    if self.pairUsingCode {
+                        self.setupCode = ""
+                        self.pairUsingCode = false
+                    }
                 },
                 content: {
-                    NavigationStack {
-                        QRScannerView(
-                            onResult: { result in
-                                self.queueScannedResult(result, scanID: scanID)
-                            },
-                            onError: { error in
-                                guard self.scannerResultHandoff.isActive(scanID: scanID) else { return }
-                                self.showQRScanner = false
-                                self.setupStatusText = "Scanner error: \(error)"
-                                self.scannerError = error
-                            },
-                            onDismiss: {
-                                guard self.scannerResultHandoff.isActive(scanID: scanID) else { return }
-                                self.showQRScanner = false
-                            })
-                            .ignoresSafeArea()
-                            .navigationTitle("Scan QR Code")
-                            .navigationBarTitleDisplayMode(.inline)
-                            .font(OpenClawType.body)
-                            .toolbar {
-                                ToolbarItem(placement: .topBarLeading) {
-                                    Button {
-                                        self.scannerResultHandoff.cancel()
-                                        self.showQRScanner = false
-                                    } label: {
-                                        Text("Cancel")
-                                            .font(OpenClawType.subheadSemiBold)
-                                    }
-                                    .font(OpenClawType.subheadSemiBold)
-                                }
-                            }
-                    }
+                    self.gatewayPairingSheet(scanID: scanID)
                 })
             .alert("Reset Onboarding?", isPresented: self.$showResetOnboardingAlert) {
                 Button(role: .destructive) {

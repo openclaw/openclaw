@@ -58,9 +58,13 @@ struct ChatInlineDisclosureStyle: DisclosureGroupStyle {
     }
 
     var chevron: Chevron = .tint
+    var chevronFollowsLabel = false
 
     func makeBody(configuration: Configuration) -> some View {
-        ChatInlineDisclosure(configuration: configuration, chevron: self.chevron)
+        ChatInlineDisclosure(
+            configuration: configuration,
+            chevron: self.chevron,
+            chevronFollowsLabel: self.chevronFollowsLabel)
     }
 }
 
@@ -69,6 +73,7 @@ private struct ChatInlineDisclosure: View {
     @Environment(\.openClawReadingPosition) private var readingPosition
     let configuration: DisclosureGroupStyleConfiguration
     let chevron: ChatInlineDisclosureStyle.Chevron
+    let chevronFollowsLabel: Bool
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -86,14 +91,14 @@ private struct ChatInlineDisclosure: View {
             } label: {
                 HStack(alignment: .center, spacing: 8) {
                     self.configuration.label
-                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .frame(maxWidth: self.chevronFollowsLabel ? nil : .infinity, alignment: .leading)
                     Image(systemName: "chevron.right")
                         .font(.caption)
                         .foregroundStyle(self.chevronStyle)
                         .rotationEffect(.degrees(self.configuration.isExpanded ? 90 : 0))
                         .accessibilityHidden(true)
                 }
-                .frame(minHeight: 44)
+                .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
@@ -189,8 +194,12 @@ private struct ChatSystemLine: View {
 }
 
 private enum ChatUIConstants {
+    #if os(iOS)
+    static let bubbleCorner: CGFloat = 16
+    #else
     /// Web `--radius-md` (ui/src/styles/base.css:366) on the user bubble.
     static let bubbleCorner: CGFloat = 10
+    #endif
     static let onboardingBubbleCorner: CGFloat = 18
 }
 
@@ -511,19 +520,15 @@ extension ChatMessageBubble {
         VStack(alignment: .leading, spacing: 6) {
             if shouldRenderBubble {
                 if self.isUser {
-                    self.messageContent(text: text, textColor: textColor)
-                        .padding(self.bubblePadding)
-                        .background { ChatUserBubbleSurface() }
-                        .clipShape(self.bubbleShape)
-                        .overlay {
-                            if self.style == .onboarding {
-                                // A mitred join keeps the tail's point sharp inside the bubble's bounds.
-                                self.bubbleShape.strokeBorder(
-                                    Color.white.opacity(0.12),
-                                    style: StrokeStyle(lineWidth: 0.5, lineJoin: .miter))
-                            }
-                        }
-                        .padding(.trailing, self.style == .onboarding ? 8 : 0)
+                    #if os(iOS)
+                    VStack(alignment: .trailing, spacing: 4) {
+                        self.userBubble(text: text, textColor: textColor)
+                        self.footer
+                            .padding(.trailing, self.style == .onboarding ? 8 : 0)
+                    }
+                    #else
+                    self.userBubble(text: text, textColor: textColor)
+                    #endif
                 } else {
                     // Assistant replies are plain text on the column, like the web chat.
                     self.messageContent(text: text, textColor: textColor)
@@ -539,6 +544,22 @@ extension ChatMessageBubble {
                 self.footer
             }
         }
+    }
+
+    private func userBubble(text: String, textColor: Color) -> some View {
+        self.messageContent(text: text, textColor: textColor)
+            .padding(self.bubblePadding)
+            .background { ChatUserBubbleSurface() }
+            .clipShape(self.bubbleShape)
+            .overlay {
+                if self.style == .onboarding {
+                    // A mitred join keeps the tail's point sharp inside the bubble's bounds.
+                    self.bubbleShape.strokeBorder(
+                        Color.white.opacity(0.12),
+                        style: StrokeStyle(lineWidth: 0.5, lineJoin: .miter))
+                }
+            }
+            .padding(.trailing, self.style == .onboarding ? 8 : 0)
     }
 
     private var textColor: Color {
@@ -593,7 +614,9 @@ extension ChatMessageBubble {
                         .id(self.inlineWidgetScope)
             }
 
+            #if !os(iOS)
             self.footer
+            #endif
         }
         .textSelection(.enabled)
         .foregroundStyle(textColor)
@@ -644,10 +667,16 @@ extension ChatMessageBubble {
 
     @ViewBuilder
     private var footer: some View {
+        #if os(iOS)
+        if self.isUser {
+            ChatMessageRelativeTimestamp(timestamp: self.metadata?.timestamp)
+        }
+        #else
         let usage = self.usagePresentation
         if self.metadata != nil || usage != nil {
             ChatMessageFooter(metadata: self.metadata, usage: usage)
         }
+        #endif
     }
 
     private var shouldRenderBubble: Bool {

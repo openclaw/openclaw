@@ -582,6 +582,13 @@ public enum OpenClawChatGatewayRequests {
             timeoutMs: self.compactionTimeoutMs)
     }
 
+    public static func sessionPreview(sessionKey: String) -> OpenClawChatGatewayRequest {
+        OpenClawChatGatewayRequest(
+            method: "sessions.preview",
+            params: ["keys": AnyCodable([sessionKey]), "limit": AnyCodable(6), "maxChars": AnyCodable(1200)],
+            timeoutMs: 4000)
+    }
+
     public static func history(
         sessionKey: String,
         agentID: String?,

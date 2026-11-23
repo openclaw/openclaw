@@ -39,7 +39,7 @@ final class SessionSnoozeUITests: XCTestCase {
         app.buttons["Go to Chat"].tap()
         XCTAssertTrue(app.staticTexts["Your research workspace is ready."].waitForExistence(timeout: 30))
         app.buttons["RootTabs.Sidebar.Show"].tap()
-        let sessions = app.buttons["All Sessions…"]
+        let sessions = app.buttons["RootTabs.Sidebar.ViewAllSessions"]
         XCTAssertTrue(sessions.waitForExistence(timeout: 10))
         for _ in 0..<5 where !sessions.isHittable {
             app.swipeUp()
@@ -68,8 +68,8 @@ final class SessionSnoozeUITests: XCTestCase {
         app.buttons["RootTabs.Sidebar.Show"].tap()
         let home = app.buttons["RootTabs.Sidebar.Destination.chat"]
         XCTAssertTrue(home.waitForExistence(timeout: 10))
-        XCTAssertEqual(home.label, "Home")
-        XCTAssertEqual(app.buttons.matching(NSPredicate(format: "label == %@", "Home")).count, 1)
+        XCTAssertEqual(home.label, "Main chat")
+        XCTAssertEqual(app.buttons.matching(NSPredicate(format: "label == %@", "Main chat")).count, 1)
         for _ in 0..<5 where !sessions.isHittable {
             app.swipeUp()
         }

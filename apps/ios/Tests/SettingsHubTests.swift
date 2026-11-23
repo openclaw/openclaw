@@ -683,7 +683,7 @@ final class SettingsHubVisualProofTests: XCTestCase {
             let desktopURL = try XCTUnwrap(ControlUIHubPage.desktop(source: nil, session: nil).url(config: config))
             let terminalURL = try XCTUnwrap(ControlUIHubPage.terminal.url(config: config))
             let entryPoints: [(String, URL, AnyView)] = [
-                ("settings-hub", expectedURL, AnyView(SettingsHubScreen(navigationPath: .constant([]))
+                ("settings-advanced", expectedURL, AnyView(SettingsHubScreen(navigationPath: .constant([.advanced]))
                         .environment(model)
                         .environment(appearanceModel)
                         .environment(gatewayController)

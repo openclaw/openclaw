@@ -162,21 +162,16 @@ const LOCALIZED_WRAPPER_CONTRACTS: Record<string, readonly string[]> = {
     'format: String(localized: "Agent: %@")',
   ],
   "apps/ios/Sources/Design/SettingsProTabSections.swift": [
-    "func settingsListRow(\n        icon: String,\n        iconColor: Color,\n        title: LocalizedStringKey",
+    "func settingsListRow(\n        icon: String,\n        title: LocalizedStringKey",
     "func aboutLinkRow(\n        title: LocalizedStringKey",
-    "func gatewaySecureField(\n        _ placeholder: LocalizedStringKey",
+    "func gatewaySecureField(\n        _ title: LocalizedStringKey",
     "func settingsToggle(\n        _ title: LocalizedStringKey",
-    ".accessibilityLabel(Text(placeholder))",
+    "SettingsInputRow(title)",
     ".accessibilityLabel(Text(title))",
   ],
   "apps/ios/Sources/Gateway/GatewayConnectionController+Capabilities.swift": [
     'String(localized: "Secure connection is required for this host.")',
     'String(localized: "Use only on a trusted private network.")',
-  ],
-  "apps/ios/Sources/Gateway/ExecApprovalPromptDialog.swift": [
-    "private struct ExecApprovalPromptMetadataRow: View {\n    let label: LocalizedStringKey",
-    'localized: "about ^[\\(minutes) minute](inflect: true)"',
-    'localized: "about ^[\\(hours) hour](inflect: true)"',
   ],
   "apps/ios/Sources/Voice/TalkModeManager.swift": [
     'format: String(localized: "Speech error: %@")',
@@ -230,21 +225,16 @@ const LOCALIZED_WRAPPER_CONTRACTS: Record<string, readonly string[]> = {
 };
 const RAW_LOCALIZATION_BYPASSES: Record<string, readonly string[]> = {
   "apps/ios/Sources/Design/SettingsProTabSections.swift": [
-    "func settingsListRow(\n        icon: String,\n        iconColor: Color,\n        title: String",
+    "func settingsListRow(\n        icon: String,\n        title: String",
     "func aboutLinkRow(title: String",
     "func gatewayActionButton(\n        title: String",
-    "func gatewaySecureField(_ placeholder: String",
+    "func gatewaySecureField(\n        _ title: String",
     "func settingsToggle(\n        _ title: String",
     ".accessibilityLabel(title)",
   ],
   "apps/ios/Sources/Gateway/GatewayConnectionController+Capabilities.swift": [
     'helperText: "Secure connection is required for this host."',
     'helperText: "Use only on a trusted private network."',
-  ],
-  "apps/ios/Sources/Gateway/ExecApprovalPromptDialog.swift": [
-    "private struct ExecApprovalPromptMetadataRow: View {\n    let label: String",
-    'return "under a minute"',
-    'return "about 1 minute"',
   ],
   "apps/ios/Sources/Voice/TalkModeManager.swift": [
     'self.statusText = "',

@@ -35,7 +35,7 @@ extension OpenClawChatViewModel {
 
     var sendModeChoices: [OpenClawChatQueueMode] {
         guard self.canChooseSendMode else { return [] }
-        switch self.currentSessionEntry()?.effectiveQueueMode {
+        switch defaultFollowUpMode?.rawValue ?? currentSessionEntry()?.effectiveQueueMode {
         case "steer": return [.followup]
         case "followup": return [.steer]
         // Other Gateway modes and older Gateways do not have a single opposite.
@@ -322,6 +322,7 @@ extension OpenClawChatViewModel {
             self.applyDeferredExternalStateIfReady()
         }
 
+        guard await self.prepareNewChatDraftSettings(for: draft.session) else { return }
         guard await self.prepareLiveRoute(for: draft) else { return }
         guard await self.validateAttachmentBudgetForSend(draft.attachments, session: draft.session) else { return }
         guard self.composerModelAvailabilityMessage == nil else {
@@ -362,8 +363,10 @@ extension OpenClawChatViewModel {
             trimmed: trimmed,
             session: currentSessionSnapshot(),
             replyTarget: Self.isSlashCommandDraft(trimmed) ? nil : replyTarget,
-            queueMode: queueMode,
-            composerSessionKey: self.visibleComposerKey,
+            queueMode: queueMode ?? (
+                self.hasBlockingRunActivity && self.canSendDuringRun && !Self.isSlashCommandDraft(trimmed)
+                    ? defaultFollowUpMode : nil),
+            composerSessionKey: visibleComposerKey,
             composerRevision: composerRevision(for: sessionKey))
     }
 
@@ -740,6 +743,7 @@ extension OpenClawChatViewModel {
     }
 
     private func finishAcceptedComposerSend(_ draft: SendDraft) {
+        if self.newChatDraft?.key == draft.session.key { self.newChatDraft = nil }
         self.recordSuccessfulInput(
             draft.trimmed,
             transcriptEcho: draft.outgoingMessageText,

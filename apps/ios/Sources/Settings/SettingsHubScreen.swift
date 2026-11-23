@@ -1,131 +1,273 @@
 import Foundation
+import OpenClawChatUI
 import OpenClawKit
 import SwiftUI
+import UIKit
 
 struct SettingsHubScreen: View {
     @Environment(NodeAppModel.self) private var appModel
     @Environment(AppAppearanceModel.self) private var appearanceModel
     @Environment(GatewayConnectionController.self) private var gatewayController
+    @AppStorage("screen.preventSleep") private var preventSleep = true
+    @State private var showApprovalNotificationSettings = false
     @State private var embedCompatibility = DashboardEmbedCompatibility()
     @Binding var navigationPath: [SettingsRoute]
     var headerSidebarAction: OpenClawSidebarHeaderAction?
     var onRouteChange: ((SettingsRoute?) -> Void)?
-    var onApprovalNotificationsRoute: ((String?) -> Void)?
+    var onClose: (() -> Void)?
+    var onSelectPage: ((RootTabs.SidebarDestination) -> Void)?
+    var onTrySkill: ((String) -> Void)?
+    var gatewaySetupRequest: GatewaySetupRequest?
+    var onGatewaySetupRequestHandled: ((Int) -> Void)?
 
     var body: some View {
         NavigationStack(path: self.$navigationPath) {
             self.root
                 .background(SidebarNavigationMarginAnchor())
                 .navigationDestination(for: SettingsRoute.self) { route in
-                    self.nativeScreen(route: route)
+                    self.destination(route)
                 }
+        }
+        .preferredColorScheme(self.appearanceModel.preference.colorScheme)
+        .tint(.primary)
+        .sheet(isPresented: self.$showApprovalNotificationSettings) {
+            DashboardPageScreen(
+                path: RootTabs.notificationSettingsPath(
+                    servingEnabled: NotificationServingPreference.isEnabled(),
+                    disclosureAccepted: !PushBuildConfig.current.usesOpenClawHostedRelay
+                        || PushEnrollmentConsent.disclosureAccepted),
+                title: String(localized: "Notifications"),
+                onClose: { self.showApprovalNotificationSettings = false })
+        }
+        .onChange(of: self.navigationPath, initial: true) { _, path in
+            self.onRouteChange?(path.last)
         }
     }
 
-    @ViewBuilder private var root: some View {
-        let config = self.appModel.activeGatewayConnectConfig
-        if Self.usesDashboard(
-            isOperatorConnected: self.appModel.isOperatorGatewayConnected,
-            hasOperatorAdminScope: self.appModel.hasOperatorAdminScope,
-            isDemoMode: self.appModel.isAppleReviewDemoModeEnabled,
-            isScreenshotMode: ProcessInfo.processInfo.arguments.contains("--openclaw-screenshot-mode")),
-            let url = AuthenticatedControlUI.pageURL(
-                config: config,
-                path: DashboardRouteMap.settingsPath,
-                queryItems: [])
+    private var root: some View {
+        List {
+            Section {
+                self.gatewayRow
+                if self.appModel.pendingExecApprovalCount > 0 {
+                    NavigationLink(value: SettingsRoute.approvals) {
+                        HStack {
+                            self.label("Approvals", icon: "checkmark.circle")
+                            Spacer()
+                            Text(self.appModel.pendingExecApprovalCount.formatted())
+                                .font(OpenClawType.body)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    .accessibilityIdentifier("SettingsHub.Approvals")
+                }
+            } header: {
+                self.sectionHeader("Gateway")
+            }
+
+            Section {
+                self.appearance
+                NativeNotificationSettingsRow()
+                self.link("Voice & Talk", icon: "mic", route: .voiceAndTalk)
+                self.link("Permissions", icon: "checkmark.shield", route: .permissions)
+                self.link("Accessories", icon: "applewatch", route: .accessories)
+                Toggle(isOn: self.$preventSleep) {
+                    self.label("Keep screen awake", icon: "display")
+                }
+                .tint(OpenClawBrand.ok)
+                .accessibilityIdentifier("SettingsHub.KeepAwake")
+                self.link("Storage", icon: "internaldrive", route: .storage)
+                    .accessibilityIdentifier("SettingsHub.Storage")
+            } header: {
+                self.sectionHeader(UIDevice.current.userInterfaceIdiom == .pad ? "This iPad" : "This iPhone")
+            }
+
+            Section {
+                NativePersonalSettingsRow(agentID: self.agentID, agentName: self.appModel.chatAgentName)
+                self.link("Chat", icon: "bubble.left", route: .chatPreferences)
+                self.link("Sidebar", icon: "sidebar.left", route: .sidebarPages)
+            }
+            Section {
+                self.link("Skills", icon: "book", route: .skills)
+                self.link("Plugins", icon: "shippingbox", route: .plugins)
+            } header: {
+                self.sectionHeader("Tools")
+            }
+            Section {
+                self.link("Advanced", icon: "slider.horizontal.3", route: .advanced)
+                self.link("About", icon: "info.circle", route: .about)
+            }
+        }
+        .listStyle(.insetGrouped)
+        .accessibilityIdentifier("SettingsHub.Native")
+        .navigationTitle("Settings")
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            if let headerSidebarAction {
+                OpenClawSidebarToolbarItem(action: headerSidebarAction, placement: .topBarLeading)
+            }
+            if let onClose {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button(role: .close) { onClose() }
+                        .accessibilityIdentifier("SettingsHub.Close")
+                }
+            }
+        }
+    }
+
+    private var agentID: String {
+        self.appModel.chatAgentId.trimmedNonEmpty ?? "main"
+    }
+
+    private var gatewayRow: some View {
+        NavigationLink(value: SettingsRoute.gateway) {
+            Label {
+                VStack(alignment: .leading, spacing: 4) {
+                    if let name = self.appModel.gatewayServerName?.trimmedNonEmpty {
+                        Text(name).font(OpenClawType.body)
+                    } else {
+                        Text("Connection").font(OpenClawType.body)
+                    }
+                    HStack(spacing: 6) {
+                        Circle()
+                            .fill(self.appModel.isOperatorGatewayConnected ? OpenClawBrand.ok : Color.secondary)
+                            .frame(width: 6, height: 6)
+                            .accessibilityHidden(true)
+                        Text(self.gatewayStatus)
+                            .font(OpenClawType.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            } icon: {
+                NativeSettingsRowIcon(systemName: "dot.radiowaves.left.and.right")
+            }
+        }
+        .accessibilityIdentifier("SettingsHub.Gateway")
+    }
+
+    private var gatewayStatus: LocalizedStringKey {
+        if !self.appModel.isOperatorGatewayConnected {
+            return "Offline"
+        }
+        return self.appModel.hasOperatorAdminScope ? "Connected" : "Limited access"
+    }
+
+    private var appearance: some View {
+        Picker(selection: Binding(
+            get: { self.appearanceModel.preference },
+            set: { self.appearanceModel.select($0) }))
         {
-            EmbeddedDashboardContent(
-                appModel: self.appModel,
-                appearanceModel: self.appearanceModel,
-                gatewayController: self.gatewayController,
-                url: url,
-                config: config,
-                openPanel: self.openPanel,
-                embedCompatibility: self.embedCompatibility,
-                openGateway: { self.push(.gateway) })
-                .navigationTitle("Settings")
-                .navigationBarTitleDisplayMode(.inline)
-                .toolbar {
-                    if let headerSidebarAction {
-                        OpenClawSidebarToolbarItem(action: headerSidebarAction, placement: .topBarLeading)
-                    }
-                    ToolbarItem(placement: .topBarTrailing) {
-                        Button {
-                            self.push(.deviceSettings)
-                        } label: {
-                            Text("Device")
-                                .font(OpenClawType.subheadSemiBold)
-                        }
-                        .accessibilityIdentifier("SettingsHub.Device")
-                    }
-                    ToolbarItem(placement: .topBarTrailing) {
-                        Button {
-                            self.push(.espSetup)
-                        } label: {
-                            Label { Text("ESP device setup").font(OpenClawType.subheadSemiBold) } icon: {
-                                Image(systemName: "cpu")
-                            }
-                            .labelStyle(.iconOnly)
-                        }
-                        .accessibilityIdentifier("SettingsHub.ESPSetup")
-                    }
-                    ToolbarItem(placement: .topBarTrailing) {
-                        Button {
-                            self.push(.gateway)
-                        } label: {
-                            Text("Gateway")
-                                .font(OpenClawType.subheadSemiBold)
-                        }
-                        .accessibilityIdentifier("SettingsHub.Gateway")
-                    }
-                    ToolbarItem(placement: .topBarTrailing) {
-                        Button {
-                            self.push(.approvals)
-                        } label: {
-                            HStack(spacing: 4) {
-                                Label {
-                                    Text("Approvals")
-                                        .font(OpenClawType.subheadSemiBold)
-                                } icon: {
-                                    Image(systemName: "checkmark.shield")
-                                }
-                                .labelStyle(.iconOnly)
-                                if self.appModel.pendingExecApprovalCount > 0 {
-                                    Text(self.appModel.pendingExecApprovalCount.formatted())
-                                        .font(OpenClawType.captionSemiBold)
-                                        .padding(.horizontal, 5)
-                                        .background(OpenClawBrand.warn.opacity(0.2), in: Capsule())
-                                }
-                            }
-                        }
-                        .accessibilityLabel("Approvals")
-                        .accessibilityValue(self.appModel.pendingExecApprovalCount.formatted())
-                        .accessibilityIdentifier("SettingsHub.Approvals")
-                    }
-                }
-        } else {
-            SettingsProTab(
-                registersNavigationDestinations: false,
-                headerSidebarAction: self.headerSidebarAction,
-                onApprovalNotificationsRoute: self.onApprovalNotificationsRoute)
+            Text("System").font(OpenClawType.body).tag(AppAppearancePreference.system)
+            Text("Light").font(OpenClawType.body).tag(AppAppearancePreference.light)
+            Text("Dark").font(OpenClawType.body).tag(AppAppearancePreference.dark)
+        } label: {
+            self.label("Appearance", icon: "sun.max")
+        }
+        .pickerStyle(.menu)
+        .tint(.primary)
+        .accessibilityIdentifier("SettingsHub.Appearance")
+    }
+
+    private func sectionHeader(_ title: LocalizedStringKey) -> some View {
+        Text(title).font(OpenClawType.captionSemiBold)
+    }
+
+    private func label(_ title: LocalizedStringKey, icon: String) -> some View {
+        Label {
+            Text(title).font(OpenClawType.body)
+        } icon: {
+            NativeSettingsRowIcon(systemName: icon)
         }
     }
 
-    private func nativeScreen(route: SettingsRoute) -> some View {
-        SettingsProTab(
-            directRoute: route,
-            registersNavigationDestinations: false,
-            onRouteChange: self.onRouteChange,
-            onApprovalNotificationsRoute: self.onApprovalNotificationsRoute)
+    private func link(_ title: LocalizedStringKey, icon: String, route: SettingsRoute) -> some View {
+        NavigationLink(value: route) { self.label(title, icon: icon) }
     }
 
-    private func push(_ route: SettingsRoute) {
-        self.navigationPath.append(route)
+    @ViewBuilder
+    private func destination(_ route: SettingsRoute) -> some View {
+        switch route {
+        case .voiceAndTalk:
+            LocalDeviceSettingsScreen(layout: .voiceAndTalk)
+                .navigationTitle("Voice & Talk")
+                .navigationBarTitleDisplayMode(.inline)
+        case .permissions:
+            LocalDeviceSettingsScreen(layout: .permissions)
+                .navigationTitle("Permissions")
+                .navigationBarTitleDisplayMode(.inline)
+        case .accessories:
+            List {
+                self.link("Apple Watch", icon: "applewatch", route: .appleWatch)
+                    .accessibilityIdentifier("settings-watch-row")
+                self.link("ESP device setup", icon: "cpu", route: .espSetup)
+            }
+            .navigationTitle("Accessories")
+            .navigationBarTitleDisplayMode(.inline)
+        case .chatPreferences:
+            NativeChatSettingsScreen()
+        case .storage:
+            NativeStorageSettingsScreen()
+        case .sidebarPages:
+            RootSidebarPagesEditor(onSelect: { self.onSelectPage?($0) }, presentedAsSheet: false)
+        case .skills, .plugins:
+            NativeToolSettingsScreen(
+                kind: route == .skills ? .skills : .plugins,
+                agentID: self.agentID,
+                agentName: self.appModel.chatAgentName,
+                gatewayName: self.appModel.gatewayServerName,
+                onTrySkill: self.onTrySkill)
+        case .advanced:
+            self.advanced
+        default:
+            SettingsProTab(
+                directRoute: route,
+                registersNavigationDestinations: false,
+                acceptsGatewaySetupRequests: route == .gateway,
+                onApprovalNotificationsRoute: { _ in self.showApprovalNotificationSettings = true },
+                gatewaySetupRequest: self.gatewaySetupRequest,
+                onGatewaySetupRequestHandled: self.onGatewaySetupRequestHandled)
+        }
     }
 
-    private func openPanel(_ panel: DeviceSettingsPanel) {
-        guard let route = Self.route(for: panel) else { return }
-        self.push(route)
+    private var advanced: some View {
+        Group {
+            let config = self.appModel.activeGatewayConnectConfig
+            if Self.usesDashboard(
+                isOperatorConnected: self.appModel.isOperatorGatewayConnected,
+                hasOperatorAdminScope: self.appModel.hasOperatorAdminScope,
+                isDemoMode: self.appModel.isAppleReviewDemoModeEnabled,
+                isScreenshotMode: ProcessInfo.processInfo.arguments.contains("--openclaw-screenshot-mode")),
+                let url = AuthenticatedControlUI.pageURL(
+                    config: config,
+                    path: DashboardRouteMap.settingsPath,
+                    queryItems: [])
+            {
+                EmbeddedDashboardContent(
+                    appModel: self.appModel,
+                    appearanceModel: self.appearanceModel,
+                    gatewayController: self.gatewayController,
+                    url: url,
+                    config: config,
+                    openPanel: { panel in
+                        if let route = Self.route(for: panel) {
+                            self.navigationPath.append(route)
+                        }
+                    },
+                    embedCompatibility: self.embedCompatibility,
+                    openGateway: { self.navigationPath.append(.gateway) })
+            } else {
+                List {
+                    Section {
+                        self.gatewayRow
+                    } footer: {
+                        if self.appModel.isOperatorGatewayConnected, !self.appModel.hasOperatorAdminScope {
+                            Text("Advanced settings require full access.").font(OpenClawType.footnote)
+                        }
+                    }
+                }
+            }
+        }
+        .navigationTitle("Advanced")
+        .navigationBarTitleDisplayMode(.inline)
     }
 
     static func usesDashboard(
@@ -371,6 +513,78 @@ struct EmbeddedDashboardContent: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding()
             .background(OpenClawBrand.warn.opacity(0.12))
+        }
+    }
+}
+
+private struct NativeStorageSettingsScreen: View {
+    @Environment(NodeAppModel.self) private var appModel
+    @State private var usage: OpenClawClientDatabases.GatewayCacheUsage?
+    @State private var updating = false
+    @State private var confirmsClear = false
+    @State private var failure: LocalizedStringKey?
+
+    var body: some View {
+        List {
+            if let usage {
+                Section {
+                    SettingsDetailRow(
+                        "Cache size",
+                        value: .verbatim(ByteCountFormatter.string(fromByteCount: usage.bytes, countStyle: .file)))
+                    SettingsDetailRow("Cached conversations", value: .verbatim(usage.conversations.formatted()))
+                }
+                Section {
+                    Button(role: .destructive) {
+                        self.confirmsClear = true
+                    } label: {
+                        Text("Clear Cache").font(OpenClawType.body)
+                    }
+                    .disabled(self.updating || !usage.hasCachedData)
+                    .accessibilityIdentifier("Storage.ClearCache")
+                }
+            }
+            if let failure {
+                Section {
+                    Text(failure).font(OpenClawType.body).foregroundStyle(.secondary)
+                    if self.usage == nil {
+                        Button { Task { await self.update() } } label: {
+                            Text("Retry").font(OpenClawType.body)
+                        }
+                    }
+                }
+            }
+            if self.updating || (self.usage == nil && self.failure == nil) {
+                ProgressView()
+            }
+        }
+        .listStyle(.insetGrouped)
+        .navigationTitle("Storage")
+        .navigationBarTitleDisplayMode(.inline)
+        .accessibilityIdentifier("Storage.Native")
+        .task { await self.update() }
+        .alert("Clear cache?", isPresented: self.$confirmsClear) {
+            Button(role: .cancel) {} label: { Text("Cancel").font(OpenClawType.body) }
+            Button(role: .destructive) { Task { await self.update(clearing: true) } } label: {
+                Text("Clear Cache").font(OpenClawType.body)
+            }
+        } message: {
+            Text("Removes saved copies of chats from this iPhone.").font(OpenClawType.body)
+        }
+    }
+
+    private func update(clearing: Bool = false) async {
+        guard !self.updating else { return }
+        self.updating = true
+        self.failure = nil
+        defer { self.updating = false }
+        do {
+            self.usage = if clearing {
+                try await self.appModel.clearLocalChatCache()
+            } else {
+                try await self.appModel.localChatCacheUsage()
+            }
+        } catch {
+            self.failure = clearing ? "Could not clear the cache." : "Could not read storage."
         }
     }
 }

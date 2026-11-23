@@ -49,7 +49,6 @@ extension OpenClawSnapshotUITests {
         let controls = [
             app.buttons["chat-attachment-picker"],
             app.buttons["chat-composer-inline-permissions"],
-            app.buttons["chat-context-usage"],
             model,
             app.buttons["chat-composer-inline-effort"],
             app.buttons["chat-dictation-control"],
@@ -1089,62 +1088,32 @@ extension OpenClawSnapshotUITests {
         XCTAssertTrue(app.buttons["RootTabs.Sidebar.Show"].exists)
     }
 
-    func testChatAndOverviewNavigateThroughSidebar() throws {
+    func testChatAndSessionsNavigateThroughSidebar() throws {
         try XCTSkipIf(UIDevice.current.userInterfaceIdiom != .phone, "Phone sidebar proof only")
         self.launchApp(for: ScreenshotTarget(
             initialTab: "control",
-            initialDestination: "overview",
-            name: "control-chat-return"))
-
-        let agentSession = try XCTUnwrap(self.app?.staticTexts["Agent session"])
-        XCTAssertTrue(agentSession.waitForExistence(timeout: 8))
-        self.attachScreenshot(named: "control-overview-before-chat")
+            initialDestination: "sessions",
+            name: "sessions-chat-return"))
+        let app = try XCTUnwrap(self.app)
+        let sessions = app.descendants(matching: .any)["Sessions.StatusScope"]
+        XCTAssertTrue(sessions.waitForExistence(timeout: 8))
+        self.attachScreenshot(named: "sessions-before-chat")
 
         try self.startNewChatFromSidebar()
-        XCTAssertTrue(self.app?.otherElements["chat-composer-surface"].waitForExistence(timeout: 8) == true)
-        self.attachScreenshot(named: "chat-return-to-overview")
+        XCTAssertTrue(app.otherElements["chat-composer-surface"].waitForExistence(timeout: 8))
+        self.attachScreenshot(named: "chat-return-to-sessions")
 
-        try self.selectSidebarDestination("Overview")
-        XCTAssertTrue(agentSession.waitForExistence(timeout: 8))
-        self.attachScreenshot(named: "control-overview-after-chat")
+        try self.selectSidebarDestination("View all")
+        XCTAssertTrue(sessions.waitForExistence(timeout: 8))
+        let session = app.buttons.matching(NSPredicate(
+            format: "identifier BEGINSWITH %@", "SessionDashboard.Session.")).firstMatch
+        XCTAssertTrue(session.waitForExistence(timeout: 8))
+        session.tap()
+        XCTAssertTrue(app.otherElements["chat-composer-surface"].waitForExistence(timeout: 8))
 
-        let agentSessionRow = try XCTUnwrap(self.app?.buttons.matching(NSPredicate(
-            format: "label BEGINSWITH[c] %@",
-            "Molty, chat")).firstMatch)
-        XCTAssertTrue(agentSessionRow.waitForExistence(timeout: 8))
-        agentSessionRow.tap()
-
-        XCTAssertTrue(self.app?.otherElements["chat-composer-surface"].waitForExistence(timeout: 8) == true)
-        self.attachScreenshot(named: "chat-session-return-to-overview")
-        try self.selectSidebarDestination("Overview")
-        XCTAssertTrue(self.app?.staticTexts["Agent session"].waitForExistence(timeout: 8) == true)
-    }
-
-    func testAgentUsesToolbarFilter() throws {
-        try XCTSkipIf(UIDevice.current.userInterfaceIdiom != .phone, "Phone Agent proof only")
-        self.launchApp(for: ScreenshotTarget(
-            initialTab: "agent",
-            initialDestination: "agents",
-            name: "agent-toolbar-filter"))
-
-        let menu = try XCTUnwrap(app?.buttons["agent-status-filter-menu"])
-        XCTAssertTrue(menu.waitForExistence(timeout: 8))
-        XCTAssertFalse(self.app?.segmentedControls["Agent status"].exists == true)
-        menu.tap()
-        XCTAssertTrue(self.app?.buttons["All"].waitForExistence(timeout: 3) == true)
-        XCTAssertTrue(self.app?.buttons["Online"].exists == true)
-        XCTAssertTrue(self.app?.buttons["Ready"].exists == true)
-        self.attachScreenshot(named: "agent-toolbar-filter")
-
-        // Native context menus must finish their dismissal before teardown. Killing
-        // the app with this menu open can leave the next app scene inactive.
-        self.app?.buttons["Ready"].tap()
-        self.waitForValue("Ready", of: menu)
-        menu.tap()
-        let all = try XCTUnwrap(self.app?.buttons["All"])
-        XCTAssertTrue(all.waitForExistence(timeout: 3))
-        all.tap()
-        self.waitForValue("All", of: menu)
+        try self.selectSidebarDestination("View all")
+        XCTAssertTrue(sessions.waitForExistence(timeout: 8))
+        self.attachScreenshot(named: "sessions-after-chat")
     }
 
     /// Real app onboarding, history decoder, artifact RPC, HTTP loader, and system share sheet.
@@ -1289,12 +1258,13 @@ extension OpenClawSnapshotUITests {
             stage: "relaunch",
             in: relaunchedApp)
         print("IOS_RELEASE_CHECKPOINT relaunch")
-        try self.selectSidebarDestination("Overview")
-        XCTAssertTrue(relaunchedApp.staticTexts["Agent session"].waitForExistence(timeout: 8))
+        try self.selectSidebarDestination("View all")
+        XCTAssertTrue(relaunchedApp.descendants(matching: .any)["Sessions.StatusScope"]
+            .waitForExistence(timeout: 8))
         XCTAssertTrue(relaunchedApp.buttons["RootTabs.Sidebar.Show"].exists)
-        XCTAssertTrue(relaunchedApp.buttons["Gateway settings"].waitForExistence(timeout: 5))
         self.attachScreenshot(named: "live-gateway-overview")
         XCTAssertEqual(relaunchedApp.state, .runningForeground)
+        // Keep the release runner's historical checkpoint and artifact identity.
         print("IOS_RELEASE_CHECKPOINT overview")
     }
 

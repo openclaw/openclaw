@@ -44,6 +44,12 @@ extension NodeAppModel {
         return self.agentAvatarImages[agentID]
     }
 
+    func hasResolvedAgentAvatar(for agentID: String) -> Bool {
+        let request = self.agentAvatarRequest
+        return request.isConnected && self.loadedAgentAvatarRequest == request && self.resolvedAgentAvatarIDs
+            .contains(agentID)
+    }
+
     /// The resolved identity name, kept across refreshes so chat never flickers back to the
     /// roster name; another Gateway owner never sees it.
     func agentIdentityName(for agentID: String) -> String? {
@@ -60,6 +66,7 @@ extension NodeAppModel {
     func refreshAgentAvatars(_ request: IOSAgentAvatarRequest) async {
         guard request == self.agentAvatarRequest, !Task.isCancelled else { return }
         self.agentAvatarImages = [:]
+        self.resolvedAgentAvatarIDs = []
         self.loadedAgentAvatarRequest = request
         // Names stay until replacements arrive; only agents that left the roster lose theirs.
         if self.agentIdentitiesOwnerID != request.ownerID {
@@ -77,7 +84,8 @@ extension NodeAppModel {
                 customHeaders: GatewaySettingsStore.loadGatewayCustomHeaders(
                     gatewayStableID: config.effectiveStableID))
         }
-        let route = if let gatewayID = self.chatTranscriptCacheGatewayID {
+        let gatewayID = self.chatTranscriptCacheGatewayID
+        let route = if let gatewayID {
             await self.operatorSession.currentRoute(ifGatewayID: gatewayID)
         } else {
             nil as GatewayNodeSessionRoute?
@@ -123,9 +131,19 @@ extension NodeAppModel {
                 if let data, let image = AgentIdentityPresentation.image(data: data) {
                     self.agentAvatarImages[agentID] = image
                 }
+                self.resolvedAgentAvatarIDs.insert(agentID)
             }
         }
         guard !Task.isCancelled, request == self.agentAvatarRequest else { return }
+        if request.isConnected, let gatewayID, route != nil, !request.entries.isEmpty {
+            var names: [String: String] = [:]
+            for entry in request.entries {
+                names[entry.agentID] = self.agentIdentities[entry.agentID]?.name ?? entry.rosterName?.trimmedNonEmpty
+            }
+            // A cold start can draw the main chat before its routing identity has restored.
+            if let defaultAgentID = self.gatewayDefaultAgentId { names[""] = names[defaultAgentID] }
+            GatewaySettingsStore.cacheChatAgentNames(stableID: gatewayID, names: names)
+        }
         self.chatPresentation.sync(appModel: self)
     }
 }

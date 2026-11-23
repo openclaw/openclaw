@@ -93,6 +93,25 @@ public struct OpenClawChatAttentionSummary: Identifiable, Equatable, Sendable {
 
 extension ChatSessionSidebarModel {
     @MainActor
+    public static func attentionSourceMatchesSession(
+        source: String,
+        sourceAgentID: String?,
+        sessionKey: String,
+        mainSessionKey: String,
+        agentID: String?,
+        sessionRoutingContract: String?) -> Bool
+    {
+        self.isSessionInActiveAgentScope(key: source, agentID: sourceAgentID, activeAgentID: agentID) &&
+            OpenClawChatViewModel.matchesCurrentSessionKey(
+                incoming: source,
+                agentId: sourceAgentID,
+                current: sessionKey,
+                mainSessionKey: mainSessionKey,
+                activeAgentId: agentID,
+                sessionRoutingContract: sessionRoutingContract)
+    }
+
+    @MainActor
     public static func attentionSummary(
         requests: [OpenClawChatAttentionRequest],
         sessions: [OpenClawChatSessionEntry],
@@ -105,16 +124,13 @@ extension ChatSessionSidebarModel {
         let pending = requests.filter { request in
             guard request.expiresAtMs > nowMs, let source = request.sessionKey else { return false }
             return sessions.contains { session in
-                let agentID = session.agentId ?? activeAgentID
-                return self.isSessionInActiveAgentScope(
-                    key: source, agentID: request.agentID, activeAgentID: agentID) &&
-                    OpenClawChatViewModel.matchesCurrentSessionKey(
-                        incoming: source,
-                        agentId: request.agentID,
-                        current: session.key,
-                        mainSessionKey: mainSessionKey,
-                        activeAgentId: agentID,
-                        sessionRoutingContract: sessionRoutingContract)
+                self.attentionSourceMatchesSession(
+                    source: source,
+                    sourceAgentID: request.agentID,
+                    sessionKey: session.key,
+                    mainSessionKey: mainSessionKey,
+                    agentID: session.agentId ?? activeAgentID,
+                    sessionRoutingContract: sessionRoutingContract)
             }
         }.sorted {
             if $0.createdAtMs != $1.createdAtMs { return $0.createdAtMs < $1.createdAtMs }

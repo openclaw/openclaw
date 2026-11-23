@@ -1862,6 +1862,39 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
         #expect(appModel.pendingApprovalAttentionRequests.first { $0.id == "exec-inactive" }?.createdAtMs == 51)
     }
 
+    @Test @MainActor func `the session card resolves its own request rather than the selected inbox review`() async throws {
+        NodeAppModel._test_resetPersistedWatchExecApprovalBridgeState()
+        defer { NodeAppModel._test_resetPersistedWatchExecApprovalBridgeState() }
+        let (_, model) = makeWatchModel(notificationCenter: MockBootstrapNotificationCenter())
+        configureMockApprovalRoute(model)
+        try model._test_setUnifiedExecApprovalGetResponses([
+            ("request-a", makePendingExecApprovalJSON("request-a")),
+            ("request-b", makePendingApprovalJSON(
+                id: "request-b", presentation: pluginApprovalPresentation(
+                    title: "Review a request",
+                    description: "Test request."))),
+        ], listResponses: [
+            "exec.approval.list": makePendingApprovalListJSON(
+                id: "request-a", kind: .exec, sessionKey: "agent:worker:room-a"),
+            "plugin.approval.list": makePendingApprovalListJSON(
+                id: "request-b", kind: .plugin, sessionKey: "agent:worker:room-b"),
+        ])
+        await model.refreshPendingApprovalInbox()
+        let card = try #require(model.pendingApproval(forSession: "agent:worker:room-a", agentID: "worker"))
+        let other = try #require(model.pendingApproval(forSession: "agent:worker:room-b", agentID: "worker"))
+        model.presentPendingExecApprovalFromInbox(other.id)
+
+        let writes = WatchApprovalReadbackProbe()
+        model._test_setExecApprovalResolutionSuccessHandler { id, _, decision, _ in
+            await writes.record(id + ":" + decision)
+        }
+        await model.resolveSessionApproval(card, decision: .deny)
+
+        #expect(await writes.snapshot() == ["request-a:deny"])
+        #expect(model.pendingApproval(forSession: "agent:worker:room-a", agentID: "worker") == nil)
+        #expect(model.pendingApproval(forSession: "agent:worker:room-b", agentID: "worker")?.id == other.id)
+    }
+
     @Test(arguments: ["terminal", "gateway", "operator"])
     @MainActor func `approval list cannot revive terminal or previous route attention`(
         _ transition: String) async throws

@@ -517,6 +517,7 @@ final class NodeAppModel {
     var gatewaySetupRequestID: Int = 0
     private(set) var pendingAgentDeepLinkPrompt: AgentDeepLinkPrompt?
     private var pendingGatewaySetupLink: GatewayConnectDeepLink?
+    private(set) var approvalInboxNavigationRequestID = 0
     private(set) var pendingExecApprovalPrompt: ExecApprovalPrompt?
     private(set) var pendingExecApprovalPromptResolving: Bool = false
     private(set) var pendingExecApprovalPromptErrorText: String?
@@ -554,9 +555,7 @@ final class NodeAppModel {
     var pendingApprovalAttentionRequests: [OpenClawChatAttentionRequest] {
         self.pendingExecApprovalInboxItems.compactMap { item in
             let prompt = item.prompt
-            guard self.isExecApprovalPromptCurrent(prompt),
-                  let source = prompt.attentionSource,
-                  source.authorityGeneration == self.operatorAuthorityGeneration,
+            guard let source = self.currentApprovalSource(for: prompt),
                   let expiresAtMs = prompt.expiresAtMs
             else { return nil }
             return OpenClawChatAttentionRequest(
@@ -573,8 +572,43 @@ final class NodeAppModel {
         }
     }
 
-    /// An uncertain resolution keeps approval actions frozen, but must not trap the
-    /// reviewer in a modal or Settings detail while canonical readback is unavailable.
+    func approvalTargetsSession(
+        sourceSessionKey: String?,
+        sourceAgentID: String?,
+        sessionKey: String,
+        agentID: String?) -> Bool
+    {
+        guard let sourceSessionKey else { return false }
+        return ChatSessionSidebarModel.attentionSourceMatchesSession(
+            source: sourceSessionKey,
+            sourceAgentID: sourceAgentID,
+            sessionKey: sessionKey,
+            mainSessionKey: self.mainSessionKey,
+            agentID: agentID,
+            sessionRoutingContract: self.chatSessionRoutingContract)
+    }
+
+    func pendingApproval(forSession sessionKey: String, agentID: String?) -> ExecApprovalInboxItem? {
+        self.pendingExecApprovalInboxItems.first { item in
+            guard let source = self.currentApprovalSource(for: item.prompt) else { return false }
+            return self.approvalTargetsSession(
+                sourceSessionKey: source.sessionKey,
+                sourceAgentID: source.agentID ?? item.prompt.agentId,
+                sessionKey: sessionKey,
+                agentID: agentID)
+        }
+    }
+
+    func currentApprovalSource(for prompt: ExecApprovalPrompt) -> ApprovalAttentionSource? {
+        guard self.isExecApprovalPromptCurrent(prompt),
+              let source = prompt.attentionSource,
+              source.authorityGeneration == self.operatorAuthorityGeneration
+        else { return nil }
+        return source
+    }
+
+    /// An uncertain resolution keeps approval actions frozen, but the reviewer can
+    /// still leave the request while canonical readback is unavailable.
     var pendingExecApprovalPromptCanDismiss: Bool {
         !self.pendingExecApprovalPromptResolving || self.pendingExecApprovalPromptErrorText != nil
     }
@@ -816,6 +850,7 @@ final class NodeAppModel {
     let chatPresentation = IOSChatViewModelOwner()
     var agentAvatarImages: [String: UIImage] = [:]
     var loadedAgentAvatarRequest: IOSAgentAvatarRequest?
+    var resolvedAgentAvatarIDs: Set<String> = []
     /// `agent.identity.get` results by agent id for `agentIdentitiesOwnerID`'s Gateway.
     var agentIdentities: [String: IOSResolvedAgentIdentity] = [:]
     var agentIdentitiesOwnerID: String?
@@ -927,6 +962,22 @@ final class NodeAppModel {
               GatewayStableIdentifier.matches(cache.gatewayID, gatewayID)
         else { return }
         await cache.storeSessions(sessions, agentID: agentID)
+    }
+
+    func localChatCacheUsage() async throws -> OpenClawClientDatabases.GatewayCacheUsage {
+        try await self.requireChatCacheDatabases().gatewayCacheUsage()
+    }
+
+    func clearLocalChatCache() async throws -> OpenClawClientDatabases.GatewayCacheUsage {
+        try await self.requireChatCacheDatabases().clearGatewayCache()
+    }
+
+    private func requireChatCacheDatabases() throws -> OpenClawClientDatabases {
+        if self.clientDatabases == nil {
+            self.clientDatabases = Self.makeClientDatabases()
+        }
+        guard let clientDatabases else { throw CocoaError(.fileReadUnknown) }
+        return clientDatabases
     }
 
     /// Delete one forgotten gateway's cache and durable state, or both
@@ -1990,9 +2041,11 @@ final class NodeAppModel {
                 approvalId: approvalId,
                 gatewayStableID: gatewayStableID)
         }
-        await self.presentNotificationPermissionGuidanceForExecApprovalIfNeeded(
-            approvalId: approvalId,
-            shouldApply: shouldContinue)
+        if attentionSource?.sessionKey == nil {
+            await self.presentNotificationPermissionGuidanceForExecApprovalIfNeeded(
+                approvalId: approvalId,
+                shouldApply: shouldContinue)
+        }
         guard shouldContinue() else { return }
         await self.presentExecApprovalPrompt(
             approvalId: approvalId,
@@ -3433,7 +3486,16 @@ extension NodeAppModel {
     }
 
     func chatAgentDisplayName(for agentID: String) -> String {
-        self.agentIdentityName(for: agentID) ?? self.agentDisplayName(for: agentID)
+        if let identityName = self.agentIdentityName(for: agentID) { return identityName }
+        if let rosterName = self.gatewayAgents.first(where: { $0.id == agentID })?.name?.trimmedNonEmpty {
+            return rosterName
+        }
+        if let gatewayID = self.chatTranscriptCacheGatewayID,
+           let cachedName = GatewaySettingsStore.cachedChatAgentName(stableID: gatewayID, agentID: agentID)
+        {
+            return cachedName
+        }
+        return self.agentDisplayName(for: agentID)
     }
 
     var chatAgentAvatarURL: String? {
@@ -7648,6 +7710,30 @@ extension NodeAppModel {
             "Location wake post-check wakeId=\(wakeId, privacy: .public) connected=\(connected, privacy: .public)")
     }
 
+    var hasAPNsDeviceToken: Bool {
+        self.apnsDeviceTokenHex?.isEmpty == false
+    }
+
+    /// Submission is not proof of delivery or Gateway acceptance.
+    var hasSubmittedNotificationRegistration: Bool {
+        guard self.gatewayConnected,
+              let token = apnsDeviceTokenHex,
+              !token.isEmpty
+        else { return false }
+        let stableID = self.activeGatewayConnectConfig?.effectiveStableID ?? self.connectedGatewayID ?? ""
+        return !Self.shouldPublishDirectAPNsRegistration(
+            token: token,
+            gatewayStableID: stableID,
+            lastToken: self.apnsLastRegisteredTokenHex,
+            lastGatewayStableID: self.apnsLastRegisteredGatewayStableID)
+    }
+
+    func retryNotificationRegistration(
+        shouldContinue: @escaping @MainActor @Sendable () -> Bool) async
+    {
+        await self.registerAPNsTokenIfNeeded(shouldContinue: shouldContinue)
+    }
+
     func updateAPNsDeviceToken(_ tokenData: Data) {
         let tokenHex = tokenData.map { String(format: "%02x", $0) }.joined()
         guard !tokenHex.isEmpty else { return }
@@ -7827,6 +7913,7 @@ extension NodeAppModel {
     {
         guard shouldContinue(), let approvalId = ExecApprovalIdentifier.exact(prompt.approvalId) else { return }
         let operatorRoute: GatewayNodeSessionRoute
+        let gatewayID: String
         switch await self.validateExecApprovalPushRoute(
             prompt,
             sourceReason: "notification_action",
@@ -7834,6 +7921,7 @@ extension NodeAppModel {
         {
         case let .validated(context):
             operatorRoute = context.route
+            gatewayID = context.gatewayStableID
         case .unavailable:
             guard shouldContinue() else { return }
             self.appendPendingWatchExecApprovalRecoveryPush(prompt)
@@ -7848,6 +7936,20 @@ extension NodeAppModel {
             notificationPush: prompt,
             expectedOperatorRoute: operatorRoute,
             shouldContinue: shouldContinue)
+        guard shouldContinue(),
+              self.pendingExecApprovalPrompt?.matches(approvalID: approvalId, gatewayStableID: gatewayID) == true,
+              let key = Self.execApprovalInboxKey(self.pendingExecApprovalPrompt)
+        else { return }
+        if let item = self.execApprovalInboxPromptsByKey[key],
+           let source = self.currentApprovalSource(for: item),
+           let sessionKey = source.sessionKey,
+           ChatSessionSidebarModel.isSessionInActiveAgentScope(
+               key: sessionKey, agentID: source.agentID ?? item.agentId, activeAgentID: self.chatAgentId)
+        {
+            self.openChat(sessionKey: sessionKey)
+        } else {
+            self.approvalInboxNavigationRequestID &+= 1
+        }
     }
 
     func presentExecApprovalGatewayEventPrompt(
@@ -8534,6 +8636,18 @@ extension NodeAppModel {
 
     func dismissPendingExecApprovalPrompt(approvalId: String) {
         self.clearPendingExecApprovalPromptIfMatches(approvalId)
+    }
+
+    func resolveSessionApproval(_ item: ExecApprovalInboxItem, decision: ApprovalDecision) async {
+        // The global review selection may change before the tap's task starts.
+        guard self.currentApprovalSource(for: item.prompt) != nil,
+              self.pendingExecApprovalInboxItems.contains(item)
+        else { return }
+        if Self.execApprovalInboxKey(self.pendingExecApprovalPrompt) != item.id {
+            self.presentPendingExecApprovalFromInbox(item.id)
+        }
+        guard Self.execApprovalInboxKey(self.pendingExecApprovalPrompt) == item.id else { return }
+        await self.resolvePendingExecApprovalPrompt(decision: decision.rawValue)
     }
 
     func resolvePendingExecApprovalPrompt(decision: String) async {

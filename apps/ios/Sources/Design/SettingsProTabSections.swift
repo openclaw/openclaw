@@ -1,55 +1,35 @@
 import OpenClawKit
 import SwiftUI
 
-/// iOS Settings-style icon: white glyph on a solid rounded-square, sized for a List row.
-struct SettingsIcon: View {
-    let systemName: String
-    let color: Color
-
-    var body: some View {
-        Image(systemName: self.systemName)
-            .font(.system(size: 14, weight: .semibold))
-            .foregroundStyle(.white)
-            .frame(width: 28, height: 28)
-            .background(RoundedRectangle(cornerRadius: 7, style: .continuous).fill(self.color))
-    }
-}
-
 extension SettingsProTab {
     var offlineDeviceSection: some View {
         Section {
             self.settingsListRow(
                 icon: "iphone",
-                iconColor: .gray,
                 title: "Device Settings",
                 route: .deviceSettings)
                 .accessibilityIdentifier("settings-device-row")
             self.settingsListRow(
                 icon: "cpu",
-                iconColor: .orange,
                 title: "ESP device setup",
                 route: .espSetup)
                 .accessibilityIdentifier("settings-esp-setup-row")
             self.settingsListRow(
                 icon: "applewatch",
-                iconColor: .green,
                 title: "Apple Watch",
                 route: .appleWatch)
                 .accessibilityIdentifier("settings-watch-row")
             self.settingsListRow(
                 icon: "stethoscope",
-                iconColor: .teal,
                 title: "Diagnostics",
                 route: .diagnostics)
             self.settingsListRow(
                 icon: "doc.text",
-                iconColor: .gray,
                 title: "Licenses",
                 route: .licenses)
                 .accessibilityIdentifier("settings-licenses-row")
             self.settingsListRow(
                 icon: "info.circle.fill",
-                iconColor: .gray,
                 title: "About",
                 route: .about)
         } header: {
@@ -61,16 +41,14 @@ extension SettingsProTab {
 
     func settingsListRow(
         icon: String,
-        iconColor: Color,
         title: LocalizedStringKey,
         route: SettingsRoute) -> some View
     {
         NavigationLink(value: route) {
             Label {
-                Text(title)
-                    .font(OpenClawType.subheadSemiBold)
+                Text(title).font(OpenClawType.body)
             } icon: {
-                SettingsIcon(systemName: icon, color: iconColor)
+                NativeSettingsRowIcon(systemName: icon)
             }
         }
     }
@@ -84,10 +62,13 @@ extension SettingsProTab {
             } else {
                 List {
                     switch route {
-                    case .deviceSettings:
+                    case .deviceSettings, .voiceAndTalk, .permissions, .accessories,
+                         .chatPreferences, .storage, .sidebarPages, .skills, .plugins, .advanced:
                         EmptyView()
                     case .gateway:
                         self.gatewayDestination
+                    case .gatewayDetails:
+                        self.gatewayDetailsDestination
                     case .appleWatch:
                         self.appleWatchDestination
                     case .espSetup:
@@ -98,10 +79,15 @@ extension SettingsProTab {
                         self.diagnosticsDestination
                     case .about:
                         self.aboutDestination
+                        Section {
+                            self.gatewayNavigationRow("Diagnostics", icon: "stethoscope", route: .diagnostics)
+                            self.gatewayNavigationRow("Licenses", icon: "doc.text", route: .licenses)
+                        }
                     case .licenses:
                         self.licensesDestination
                     }
                 }
+                .listStyle(.insetGrouped)
             }
         }
         .font(OpenClawType.body)
@@ -117,18 +103,6 @@ extension SettingsProTab {
                     .font(OpenClawType.headline)
                     .foregroundStyle(.primary)
             }
-            if route == .gateway {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button {
-                        self.openGatewayQRScanner()
-                    } label: {
-                        Image(systemName: "qrcode.viewfinder")
-                            .font(OpenClawType.subheadSemiBold)
-                    }
-                    .disabled(self.connectingGateway != nil)
-                    .accessibilityLabel("Scan QR")
-                }
-            }
             if let headerSidebarAction {
                 OpenClawSidebarToolbarItem(
                     action: headerSidebarAction,
@@ -137,112 +111,61 @@ extension SettingsProTab {
         }
     }
 
-    /// Ordered by intent: connection state, then pairing (the first-run action),
-    /// then facts/preferences; manual entry and credentials are plumbing at the end.
     var gatewayDestination: some View {
         Group {
-            self.gatewayStatusCard
-
-            Section {
-                Button {
-                    Task { await self.reconnectGateway() }
-                } label: {
-                    Label("Reconnect", systemImage: "arrow.triangle.2.circlepath")
-                        .font(OpenClawType.body)
+            if !self.appModel.isLocalGatewayFixtureEnabled, !self.gatewayRegistry.entries.isEmpty {
+                self.pairedGatewaysCard
+            }
+            if !self.appModel.isOperatorGatewayConnected, !self.gatewayRegistry.entries.isEmpty {
+                Section {
+                    Button {
+                        Task { await self.reconnectGateway() }
+                    } label: {
+                        Label {
+                            Text("Reconnect").font(OpenClawType.body)
+                        } icon: {
+                            NativeSettingsRowIcon(systemName: "arrow.clockwise")
+                        }
+                    }
+                    .disabled(self.isReconnectingGateway || self.appModel.isAppleReviewDemoModeEnabled)
                 }
-                .disabled(self.isReconnectingGateway || self.appModel.isAppleReviewDemoModeEnabled)
-                Button {
-                    Task { await self.runDiagnostics() }
-                } label: {
-                    Label("Diagnose", systemImage: "cross.case")
-                        .font(OpenClawType.body)
-                }
-                .disabled(self.isRefreshingGateway)
-            } footer: {
-                self.gatewayActionStatusView
             }
 
             self.gatewaySetupCard
-            // Fixtures hide saved gateways, so an empty list would read as unpaired.
-            if !self.appModel.isLocalGatewayFixtureEnabled {
-                self.pairedGatewaysCard
-            }
 
+            Section {
+                self.gatewayNavigationRow("Diagnostics", icon: "stethoscope", route: .diagnostics)
+                self.gatewayNavigationRow("Connection details", icon: "info.circle", route: .gatewayDetails)
+            } footer: {
+                self.gatewayActionStatusView
+            }
+        }
+    }
+
+    private var gatewayDetailsDestination: some View {
+        Group {
             Section {
                 SettingsDetailRow("Address", value: .verbatim(self.gatewayAddress))
                 SettingsDetailRow("Server", value: .verbatim(self.gatewayServer))
-                SettingsDetailRow(
-                    "Discovered",
-                    value: .verbatim(self.gatewayController.gateways.count.formatted()))
-                SettingsDetailRow(
-                    "Default Agent",
-                    value: .verbatim(self.appModel.activeAgentName))
-                SettingsDetailRow(
-                    "Agents",
-                    value: .verbatim(self.appModel.gatewayAgents.count.formatted()))
-                SettingsDetailRow(
-                    "Access",
-                    value: .verbatim(
-                        self.appModel.isOperatorGatewayConnected
-                            ? (self.appModel.hasOperatorAdminScope ? "Full" : "Limited")
-                            : "Not available"))
             }
-
-            if self.appModel.isOperatorGatewayConnected,
-               !self.appModel.hasOperatorAdminScope
-            {
-                // Localization: expand this phone's permissions from limited to full/admin access.
-                Section("Upgrade access") {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text("This phone has limited Gateway access.")
-                            .font(OpenClawType.subheadSemiBold)
-                        // Localization: this phone scans a code generated by either Control UI or openclaw qr.
-                        Text(
-                            "Use a secure wss:// or Tailscale Serve Gateway, then scan a full-access setup code from the web app or openclaw qr and reconnect to enable settings and upgrades.") // swiftlint:disable:this line_length
-                            .font(OpenClawType.caption) // Keep the native localization key contiguous.
-                            .foregroundStyle(.secondary)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-                    Button {
-                        self.openGatewayQRScanner()
-                    } label: {
-                        Label("Scan Full-Access Code", systemImage: "qrcode.viewfinder")
-                            .font(OpenClawType.body)
-                    }
-                }
-            }
-
-            self.agentSelectionCard
             self.deviceIdentityCard
-            // Fixtures never load the saved manual Gateway's route, so Connect Manual would target the wrong identity.
             if !self.appModel.isLocalGatewayFixtureEnabled {
                 self.manualGatewayCard
             }
             self.gatewayAdvancedCard
         }
-        .font(OpenClawType.body)
     }
 
-    private var gatewayStatusCard: some View {
-        // Hero pairing action honors the same connect lock as the other scanner
-        // entry points; an in-flight attempt must not race a second scan.
-        let showScanHero = self.gatewayNeedsPairing && self.connectingGateway == nil
-        // Unapplied `self.openGatewayQRScanner` in a ternary crashes the Swift 6
-        // type checker ("failed to produce diagnostic"); build the optional closure imperatively.
-        var scanAction: (() -> Void)?
-        if showScanHero {
-            scanAction = { self.openGatewayQRScanner() }
+    private func gatewayNavigationRow(
+        _ title: LocalizedStringKey, icon: String, route: SettingsRoute) -> some View
+    {
+        NavigationLink(value: route) {
+            Label {
+                Text(title).font(OpenClawType.body)
+            } icon: {
+                NativeSettingsRowIcon(systemName: icon)
+            }
         }
-        let gateway = self.gatewayStatusPresentation
-        return self.detailStatusCard(
-            icon: "antenna.radiowaves.left.and.right",
-            title: "Gateway",
-            detail: .verbatim(gateway.detail),
-            value: .verbatim(gateway.value),
-            color: gateway.color,
-            actionTitle: showScanHero ? "Scan QR to Pair" : nil,
-            actionSystemImage: "qrcode.viewfinder",
-            action: scanAction)
     }
 
     var approvalsDestination: some View {
@@ -554,7 +477,7 @@ extension SettingsProTab {
                             Text(document.title)
                                 .font(OpenClawType.subhead)
                         } icon: {
-                            SettingsIcon(systemName: "doc.text", color: .gray)
+                            NativeSettingsRowIcon(systemName: "doc.text")
                         }
                     }
                 }
@@ -570,15 +493,17 @@ extension SettingsProTab {
     func gatewayActionButton(
         title: LocalizedStringKey,
         icon: String,
-        color: Color,
         isBusy: Bool,
         isDisabled: Bool = false,
         action: @escaping () -> Void) -> some View
     {
         Button(action: action) {
             HStack {
-                Label(title, systemImage: icon)
-                    .font(OpenClawType.body)
+                Label {
+                    Text(title).font(OpenClawType.body)
+                } icon: {
+                    NativeSettingsRowIcon(systemName: icon)
+                }
                 Spacer()
                 if isBusy {
                     ProgressView().controlSize(.small)
@@ -587,7 +512,6 @@ extension SettingsProTab {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .foregroundStyle(color)
         .disabled(isBusy || isDisabled)
         .accessibilityLabel(Text(title))
     }
@@ -627,27 +551,22 @@ extension SettingsProTab {
                 self.aboutLinkRow(
                     title: "Support",
                     icon: "questionmark.circle",
-                    color: .blue,
                     url: URL(string: "https://community.openclaw.ai/")!)
                 self.aboutLinkRow(
                     title: "Website",
                     icon: "globe",
-                    color: .blue,
                     url: URL(string: "https://openclaw.ai")!)
                 self.aboutLinkRow(
                     title: "Docs",
                     icon: "book.fill",
-                    color: .orange,
                     url: URL(string: "https://docs.openclaw.ai")!)
                 self.aboutLinkRow(
                     title: "GitHub",
                     icon: "chevron.left.slash.chevron.right",
-                    color: .gray,
                     url: URL(string: "https://github.com/openclaw/openclaw")!)
                 self.aboutLinkRow(
                     title: "Discord",
                     icon: "bubble.left.and.bubble.right.fill",
-                    color: .indigo,
                     url: URL(string: "https://openclaw.ai/discord?from=openclaw-app-ios-settings")!)
             } footer: {
                 Text("© 2026 OpenClaw Foundation — MIT License.")
@@ -661,7 +580,6 @@ extension SettingsProTab {
     func aboutLinkRow(
         title: LocalizedStringKey,
         icon: String,
-        color: Color,
         url: URL) -> some View
     {
         Link(destination: url) {
@@ -671,7 +589,7 @@ extension SettingsProTab {
                         .font(OpenClawType.subheadSemiBold)
                         .foregroundStyle(.primary)
                 } icon: {
-                    SettingsIcon(systemName: icon, color: color)
+                    NativeSettingsRowIcon(systemName: icon)
                 }
                 Spacer()
                 Image(systemName: "arrow.up.right")
@@ -683,69 +601,37 @@ extension SettingsProTab {
         .accessibilityLabel(Text(title))
     }
 
-    var agentSelectionCard: some View {
-        Section {
-            Picker("Default Agent", selection: self.$selectedAgentPickerId) {
-                Text("Default").font(OpenClawType.body).tag("")
-                let defaultId = (self.appModel.gatewayDefaultAgentId ?? "")
-                    .trimmingCharacters(in: .whitespacesAndNewlines)
-                ForEach(
-                    self.appModel.gatewayAgents.filter(\.isSelectableAgent).filter { $0.id != defaultId },
-                    id: \.id)
-                { agent in
-                    let name = (agent.name ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-                    Text(name.isEmpty ? agent.id : name).font(OpenClawType.body).tag(agent.id)
-                }
-            }
-            .font(OpenClawType.body)
-        } footer: {
-            Text("Used for new Chat and Talk sessions.")
-                .font(OpenClawType.footnote)
-        }
-    }
-
-    /// One section owns the whole pairing story: scan, paste, and discovered
-    /// gateways; splitting these across the page hid Scan QR below plumbing.
     var gatewaySetupCard: some View {
-        Section {
-            self.gatewayActionButton(
-                title: "Scan QR",
-                icon: "qrcode.viewfinder",
-                color: OpenClawBrand.accent,
-                isBusy: false,
-                isDisabled: self.connectingGateway != nil)
-            {
-                self.openGatewayQRScanner()
-            }
-            TextField("Paste setup code", text: self.$setupCode)
-                .font(OpenClawType.body)
-                .textInputAutocapitalization(.never)
-                .autocorrectionDisabled()
-                .disabled(self.connectingGateway != nil)
-            self.gatewayActionButton(
-                title: "Connect",
-                icon: "bolt.horizontal.circle",
-                color: OpenClawBrand.accent,
-                isBusy: self.setupAttemptID != nil,
-                isDisabled: !self.canApplyGatewaySetup || self.connectingGateway != nil)
-            {
-                Task { await self.applySetupCodeAndConnect() }
-            }
-            if self.gatewayController.gateways.isEmpty {
-                Text("No gateways found yet. Use manual setup if Bonjour is blocked.")
-                    .font(OpenClawType.subhead)
-                    .foregroundStyle(.secondary)
-            } else {
-                ForEach(self.gatewayController.gateways) { gateway in
-                    self.discoveredGatewayRow(gateway)
+        let limited = appModel.isOperatorGatewayConnected && !appModel.hasOperatorAdminScope
+        return Section {
+            if self.stagedGatewaySetupLink != nil {
+                self.gatewayActionButton(
+                    title: "Connect",
+                    icon: "bolt.horizontal.circle",
+                    isBusy: self.setupAttemptID != nil,
+                    isDisabled: self.connectingGateway != nil)
+                {
+                    Task { await self.applySetupCodeAndConnect() }
                 }
+            } else {
+                Button {
+                    self.openGatewayQRScanner()
+                } label: {
+                    Label {
+                        Text(limited ? "Upgrade access" : "Add Gateway")
+                            .font(OpenClawType.body)
+                    } icon: {
+                        NativeSettingsRowIcon(systemName: "qrcode.viewfinder")
+                    }
+                }
+                .disabled(self.connectingGateway != nil)
+                .accessibilityIdentifier("SettingsHub.PairGateway")
             }
-        } header: {
-            Text("Add Gateway")
-                .font(OpenClawType.subheadSemiBold)
         } footer: {
-            if let status = self.setupStatusLine {
-                Text(status)
+            if let status = self.setupStatusLine, self.setupStatusText != nil {
+                Text(status).font(OpenClawType.footnote)
+            } else if limited {
+                Text("Pair again with a full-access setup code.")
                     .font(OpenClawType.footnote)
             }
         }
@@ -763,11 +649,8 @@ extension SettingsProTab {
                 }
             }
         } header: {
-            Text("Paired Gateways")
-                .font(OpenClawType.subheadSemiBold)
-        } footer: {
-            Text("Keep multiple gateways connected and switch which one is in focus.")
-                .font(OpenClawType.footnote)
+            Text("Saved gateways")
+                .font(OpenClawType.captionSemiBold)
         }
     }
 
@@ -778,18 +661,22 @@ extension SettingsProTab {
         let keepsConnected = self.gatewayRegistry.connectedStableIDs.contains {
             GatewayStableIdentifier.matches($0, entry.stableID)
         }
+        let endpoint = self.gatewayEndpointSummary(entry)
         return HStack(spacing: 12) {
             Button {
                 guard !isActive else { return }
                 Task { await self.switchGateway(to: entry) }
             } label: {
                 VStack(alignment: .leading, spacing: 3) {
-                    Text(entry.name)
-                        .font(OpenClawType.subheadSemiBold)
-                        .foregroundStyle(.primary)
-                    Text(self.gatewayEndpointSummary(entry))
-                        .font(OpenClawType.caption)
-                        .foregroundStyle(.secondary)
+                    Text(verbatim: entry.name)
+                        .font(OpenClawType.body)
+                    if entry.name.trimmingCharacters(in: .whitespacesAndNewlines)
+                        .caseInsensitiveCompare(endpoint) != .orderedSame
+                    {
+                        Text(verbatim: endpoint)
+                            .font(OpenClawType.footnote)
+                            .foregroundStyle(.secondary)
+                    }
                 }
                 Spacer(minLength: 8)
             }
@@ -800,9 +687,9 @@ extension SettingsProTab {
                 ProgressView()
                     .controlSize(.small)
             } else if isActive {
-                Image(systemName: "checkmark.circle.fill")
+                Image(systemName: "checkmark")
                     .font(OpenClawType.subheadSemiBold)
-                    .foregroundStyle(OpenClawBrand.accent)
+                    .foregroundStyle(.primary)
                     .accessibilityLabel("Focused Gateway")
             } else {
                 Button {
@@ -815,7 +702,7 @@ extension SettingsProTab {
                 } label: {
                     Image(systemName: keepsConnected ? "bolt.horizontal.circle.fill" : "bolt.horizontal.circle")
                         .font(OpenClawType.subheadSemiBold)
-                        .foregroundStyle(keepsConnected ? OpenClawBrand.accent : .secondary)
+                        .foregroundStyle(keepsConnected ? .primary : .secondary)
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel(keepsConnected ? "Disconnect Gateway" : "Keep Gateway Connected")
@@ -892,27 +779,32 @@ extension SettingsProTab {
     }
 
     var manualGatewayCard: some View {
-        Section("Manual Gateway") {
+        Section {
             self.settingsToggle("Use Manual Gateway", isOn: self.manualGatewayEnabledBinding)
-            TextField("Host", text: self.manualHostBinding)
-                .font(OpenClawType.body)
+            SettingsInputRow("Host") {
+                TextField(text: self.manualHostBinding, prompt: Text(verbatim: "—").font(OpenClawType.body)) {
+                    Text("Host").font(OpenClawType.body)
+                }
                 .textInputAutocapitalization(.never)
                 .autocorrectionDisabled()
+            }
             if let hostIssue = self.manualGatewayHostIssue {
                 Text(hostIssue)
                     .font(OpenClawType.footnote)
                     .foregroundStyle(OpenClawBrand.warn)
             }
-            TextField("Port", text: self.manualPortBinding)
-                .font(OpenClawType.body)
+            SettingsInputRow("Port") {
+                TextField(text: self.manualPortBinding, prompt: Text(verbatim: "—").font(OpenClawType.body)) {
+                    Text("Port").font(OpenClawType.body)
+                }
                 .keyboardType(.numberPad)
+            }
             ManualGatewaySecurityRows(
                 presentation: self.manualGatewayTransport,
                 useTLS: self.manualGatewayTLSBinding)
             self.gatewayActionButton(
                 title: "Connect Manual",
                 icon: "network",
-                color: OpenClawBrand.accent,
                 isBusy: self.connectingGateway == .manual,
                 isDisabled: self.manualGatewayHost.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                     || self.manualGatewayHostIssue != nil
@@ -920,6 +812,8 @@ extension SettingsProTab {
             {
                 Task { await self.connectManual() }
             }
+        } header: {
+            Text("Manual Gateway").font(OpenClawType.captionSemiBold)
         }
         .disabled(self.setupAttemptID != nil)
     }
@@ -944,6 +838,7 @@ extension SettingsProTab {
             })
     }
 
+    @ViewBuilder
     var gatewayAdvancedCard: some View {
         Section {
             self.settingsToggle("Auto-connect on launch", isOn: self.$gatewayAutoConnect)
@@ -1010,35 +905,30 @@ extension SettingsProTab {
                     .font(OpenClawType.footnote)
                     .foregroundStyle(.secondary)
             }
+        }
+        Section {
             Button(role: .destructive) {
                 self.showResetOnboardingAlert = true
             } label: {
-                Label("Reset Onboarding", systemImage: "arrow.counterclockwise")
+                Text("Reset Onboarding")
                     .font(OpenClawType.body)
+                    .foregroundStyle(OpenClawBrand.danger)
             }
         }
     }
 
     func gatewaySecureField(
-        _ placeholder: LocalizedStringKey,
+        _ title: LocalizedStringKey,
         text: Binding<String>) -> some View
     {
-        ZStack(alignment: .leading) {
-            SecureField("", text: text)
-                .font(OpenClawType.subhead)
-                .textInputAutocapitalization(.never)
-                .autocorrectionDisabled()
-                .accessibilityLabel(Text(placeholder))
-            if text.wrappedValue.isEmpty {
-                Text(placeholder)
-                    .font(OpenClawType.subheadSemiBold)
-                    .foregroundStyle(.tertiary)
-                    .padding(.horizontal, 8)
-                    .allowsHitTesting(false)
-                    .accessibilityHidden(true)
+        SettingsInputRow(title) {
+            SecureField(text: text, prompt: Text(verbatim: "—").font(OpenClawType.body)) {
+                Text(title).font(OpenClawType.body)
             }
+            .textInputAutocapitalization(.never)
+            .autocorrectionDisabled()
+            .accessibilityLabel(Text(title))
         }
-        .font(OpenClawType.subhead)
     }
 
     var diagnosticsAdvancedCard: some View {
@@ -1057,10 +947,15 @@ extension SettingsProTab {
     }
 
     var deviceIdentityCard: some View {
-        Section("Device") {
-            TextField("Device Name", text: self.$displayName)
-                .font(OpenClawType.body)
+        Section {
+            SettingsInputRow("Device Name") {
+                TextField(text: self.$displayName, prompt: Text(verbatim: "—").font(OpenClawType.body)) {
+                    Text("Device Name").font(OpenClawType.body)
+                }
+            }
             SettingsDetailRow("Instance ID", value: .verbatim(self.instanceId))
+        } header: {
+            Text("Device").font(OpenClawType.captionSemiBold)
         }
     }
 
