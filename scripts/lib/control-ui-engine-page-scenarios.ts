@@ -1517,28 +1517,27 @@ function createPageFixture(
               },
             }
           : {}),
-        "skills.search":
-          id === "skills"
-            ? {
-                cases: [
-                  { match: { query: "Data skill 0999", limit: 20 }, response: { results: [] } },
-                  {
-                    match: { limit: 20 },
-                    response: {
-                      results: Array.from({ length: 20 }, (_, index) => ({
-                        slug: `registry-skill-${index}`,
-                        installRef: `@census/registry-skill-${index}`,
-                        displayName: `Registry skill ${index}`,
-                        summary: "Synthetic registry skill for discovery.",
-                        registry: "https://clawhub.example.invalid",
-                        ownerHandle: "census",
-                        score: 1,
-                      })),
-                    },
-                  },
-                ],
-              }
-            : { results: [] },
+        // Route transitions use this shared fixture for every destination, so
+        // Skills readiness needs the registry page even when another page is the origin.
+        "skills.search": {
+          cases: [
+            { match: { query: "Data skill 0999", limit: 20 }, response: { results: [] } },
+            {
+              match: { limit: 20 },
+              response: {
+                results: Array.from({ length: 20 }, (_, index) => ({
+                  slug: `registry-skill-${index}`,
+                  installRef: `@census/registry-skill-${index}`,
+                  displayName: `Registry skill ${index}`,
+                  summary: "Synthetic registry skill for discovery.",
+                  registry: "https://clawhub.example.invalid",
+                  ownerHandle: "census",
+                  score: 1,
+                })),
+              },
+            },
+          ],
+        },
         "models.authStatus": {
           ts: time,
           providers: [
