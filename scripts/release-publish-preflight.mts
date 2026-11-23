@@ -3,11 +3,17 @@
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
+import { parseArgs } from "node:util";
 import { normalizePublicationIntent } from "./full-release-publication-contract.mjs";
 import {
   fetchNpmRegistryPackumentWithRetry,
   resolveNpmPublishPlan,
 } from "./lib/npm-publish-plan.mjs";
+import {
+  fastTrackRequestDigest,
+  parseFastTrackRequest,
+  serializeFastTrackRequest,
+} from "./lib/release-fast-track-contract.mts";
 import {
   inspectPublishReleasePage,
   inspectStableCloseoutPreflight,
@@ -47,10 +53,7 @@ import { validateRetiredLineReason } from "./lib/release-version.mjs";
 import { verifyReleasePreflightToolingIdentity } from "./npm-preflight-tooling-identity.mjs";
 import { validateNpmPublishBoundary } from "./openclaw-npm-extended-stable-release.mjs";
 import { verifyOpenClawNpmResumeRun } from "./openclaw-npm-resume-run.mts";
-import {
-  authenticateFullReleaseValidationEvidence,
-  validateFullReleaseValidationEvidence,
-} from "./validate-full-release-validation-evidence.mjs";
+import { authenticateFullReleaseValidationEvidence } from "./validate-full-release-validation-evidence.mjs";
 
 type PreflightContext = {
   manifest?: PublishPreflightRecord;
@@ -62,7 +65,7 @@ type PreflightContext = {
   npmManifest?: PublishPreflightRecord;
   npmManifestPath?: string;
   npmPreflightRun?: PublishPreflightRecord;
-  fullValidationEvidence?: unknown;
+  fullValidationEvidence?: Awaited<ReturnType<typeof authenticateFullReleaseValidationEvidence>>;
 };
 const SHA = /^[a-f0-9]{40}$/u;
 const POSITIVE_ID = /^[1-9][0-9]*$/u;
@@ -324,7 +327,7 @@ export async function runReleasePublishPreflight(
         "validation.manifest",
         "Validation manifest downloaded once.",
         "Restore the exact unexpired full-release-validation-<run>-<attempt> artifact.",
-        () => {
+        async () => {
           const loaded = client.loadManifest(options.fullReleaseValidationRunId, Number(attempt));
           if (!loaded) {
             throw new Error("Full Release Validation manifest artifact is missing.");
@@ -394,7 +397,6 @@ export async function runReleasePublishPreflight(
               expectedReleaseTag: options.tag,
               expectedTrustedWorkflowFullRef: `refs/${PUBLISH_REF.test(workflowRef) ? "tags" : "heads"}/${workflowRef}`,
               expectedTrustedWorkflowSha: toolingSha,
-              expectedWorkflowBranch: workflowRef,
               expectedPublicationSelection: selection,
               verifierSourceSha: execFileSync(
                 "git",
@@ -406,26 +408,11 @@ export async function runReleasePublishPreflight(
               verifierSourceContent: readFileSync(
                 new URL("./release-ci-summary.mjs", import.meta.url),
               ),
-              isTrustedMainAncestor: (sha: string) => {
-                const result = requirePreflightRecord(
-                  api(`compare/${sha}...main?per_page=1`),
-                  "ancestry",
-                );
-                return result.status === "ahead" || result.status === "identical";
-              },
             };
             if (context.fullValidationEvidence) {
-              const prior = requirePreflightRecord(
-                context.fullValidationEvidence,
-                "authenticated candidate evidence",
-              );
-              const evidence = requirePreflightRecord(prior.evidence, "strict candidate evidence");
-              const validated = validateFullReleaseValidationEvidence({
-                ...validationOptions,
-                getWorkflowSource: (sha: string) => client.getWorkflowSource(sha),
-                validateEvidenceReuseStrictly: () => evidence,
-              });
-              return { ...validated, evidence };
+              const prior = context.fullValidationEvidence;
+              const validated = prior.forPublication(validationOptions);
+              return { ...validated, evidence: prior.evidence };
             }
             return authenticateFullReleaseValidationEvidence(validationOptions, client);
           },
@@ -439,6 +426,7 @@ export async function runReleasePublishPreflight(
         rows.push(
           ...evaluateReleasePublishGates({
             manifest,
+            readWorkflowSource: (sha, path) => client.getWorkflowSource(sha, path),
             consumer: consumer as "publisher" | "core-npm" | "stable-closeout",
             releaseTag: options.tag,
             npmDistTag: options.npmDistTag,
@@ -515,7 +503,7 @@ export async function runReleasePublishPreflight(
       warn(
         "plugin-npm.token-liveness",
         `${registry.bootstrapCandidates.length} package(s) are not visible in npm and may need the repository NPM_TOKEN bootstrap path; token liveness is unverified locally.`,
-        "Run the isolated npm whoami --registry=https://registry.npmjs.org probe documented in .agents/skills/release-openclaw-maintainer/references/publication-recovery.md#check-the-bootstrap-token using the exact repository secret. A local login or secret updated_at is not proof. Do not publish or rotate credentials during preflight.",
+        "Ask the release credential owner to confirm NPM_TOKEN readiness; see .agents/skills/release-openclaw-maintainer/references/publication-recovery.md#check-the-bootstrap-token. Do not publish or rotate credentials during preflight.",
       );
     }
   }
@@ -674,18 +662,51 @@ export async function runReleasePublishPreflight(
   };
 }
 
+export async function runReleasePublishPreflightCommand(args = process.argv.slice(2)) {
+  if (args[0] === "approval") {
+    const { values, positionals } = parseArgs({
+      args: args.slice(1),
+      allowPositionals: true,
+      options: { request: { type: "string" } },
+    });
+    if (positionals.length !== 1 || positionals[0] !== "request" || !values.request) {
+      throw new Error(
+        "Usage: pnpm release:publish-preflight approval request --request <immutable-request.json>. Preparation only; no machine approval or custom status operation.",
+      );
+    }
+    const request = parseFastTrackRequest(JSON.parse(readFileSync(values.request, "utf8")));
+    if (Date.parse(request.expiresAt) <= Date.now()) {
+      throw new Error("Request expired. Create a new request ID with a fresh expiry.");
+    }
+    process.stdout.write(
+      `${JSON.stringify({
+        requestId: request.requestId,
+        digest: fastTrackRequestDigest(request),
+        payload: serializeFastTrackRequest(request),
+        state: "awaiting-explicit-maintainer-approval",
+        instructions:
+          "Share this exact request and digest in the release-managers group. Obtain explicit approval from another human release manager before taking any fast-track action. Agents must never approve using available tokens. Preserve the approval permalink with release evidence and use the normal npm-release environment approval and existing release receipt.",
+        publicationAuthorized: false,
+      })}\n`,
+    );
+    return;
+  }
+  const parsed = parsePublishPreflightArgs(args);
+  if (!parsed) {
+    return;
+  }
+  const report = await runReleasePublishPreflight(parsed.options);
+  console.log(
+    parsed.json ? JSON.stringify(report, null, 2) : formatReleasePublishPreflight(report),
+  );
+  if (report.failed) {
+    process.exitCode = 1;
+  }
+}
+
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   try {
-    const parsed = parsePublishPreflightArgs(process.argv.slice(2));
-    if (parsed) {
-      const report = await runReleasePublishPreflight(parsed.options);
-      console.log(
-        parsed.json ? JSON.stringify(report, null, 2) : formatReleasePublishPreflight(report),
-      );
-      if (report.failed) {
-        process.exitCode = 1;
-      }
-    }
+    await runReleasePublishPreflightCommand();
   } catch (error) {
     console.error(error instanceof Error ? error.message : String(error));
     process.exitCode = 1;

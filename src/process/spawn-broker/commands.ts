@@ -2,6 +2,7 @@ import type { SpawnOptions } from "node:child_process";
 import { Socket } from "node:net";
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { reclaimAgentExecCgroup } from "../linux-exec-cgroup.js";
 import type { SpawnInitiation } from "../spawn-initiation.js";
 import { BrokerChild } from "./child.js";
 import type { BrokerExecaOptions, BrokerExecaResult } from "./execa-protocol.js";
@@ -42,8 +43,12 @@ export function createBrokerCommandRequest(
     message.type === "spawn-execa" ? createDeferredCore<BrokerExecaResult>() : undefined;
   void output?.promise.catch(() => {});
   void result?.promise.catch(() => {});
+  const child = new BrokerChild(message.id, message.argv, transmit, Boolean(output));
+  if (message.execCgroup) {
+    void child.waitForClose().then(() => reclaimAgentExecCgroup(message.execCgroup));
+  }
   return {
-    child: new BrokerChild(message.id, message.argv, transmit, Boolean(output)),
+    child,
     initiateSpawn,
     result,
     output,

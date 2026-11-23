@@ -204,11 +204,13 @@ describe("SystemAgentChatEngine wizard", () => {
       return "applied";
     });
     expect(prompt.text).toContain("Port");
-    const invalid = await engine.handle("banana");
-    expect(invalid.text).toContain("Enter port 18789");
-    expect(invalid.text).toContain("Port");
-    expect(countCancelHints(invalid.text)).toBe(1);
-    expect(invalid.text.endsWith(CANCEL_HINT)).toBe(true);
+    for (const value of ["banana", "config set gateway.port 19001"]) {
+      const invalid = await engine.handle(value);
+      expect(invalid.text).toContain("Enter port 18789");
+      expect(invalid.text).toContain("Port");
+      expect(countCancelHints(invalid.text)).toBe(1);
+      expect(invalid.text.endsWith(CANCEL_HINT)).toBe(true);
+    }
     const done = await engine.handle("18789");
     expect(done.text).toContain("telegram is configured");
   });

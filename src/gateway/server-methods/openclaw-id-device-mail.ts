@@ -77,11 +77,21 @@ export async function handleOpenClawIdDeviceMail(
       return;
     }
     opts.respond(true, result);
-  } catch {
+  } catch (error) {
+    // Name and cause code only: the request carries the caller's ID token and signature.
+    const cause = error instanceof Error ? error.cause : undefined;
+    const code = cause instanceof Error && "code" in cause ? cause.code : undefined;
+    opts.context.logGateway.warn(
+      `openclaw-id: device mail ${String(request.operation)} failed: ${
+        error instanceof Error ? `${error.name}: ${error.message}` : "unknown error"
+      }${typeof code === "string" ? ` (${code})` : ""}`,
+    );
     opts.respond(
       false,
       undefined,
-      errorShape(ErrorCodes.UNAVAILABLE, "Owner-device mail could not be delivered"),
+      errorShape(ErrorCodes.UNAVAILABLE, "Owner-device mail could not be delivered", {
+        retryable: true,
+      }),
     );
   }
 }

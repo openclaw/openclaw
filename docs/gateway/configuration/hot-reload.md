@@ -39,6 +39,13 @@ UI preferences remain in `ui.prefs`. Changing them preserves prepared model
 catalogs, provider authentication, and plugin registrations. Display changes
 still publish the updated config to consumers that read those settings.
 
+Presentation and browser settings preserve prepared model catalogs and session
+snapshots. Connected Control UI conversations keep their model, membership,
+process, and session details when `ui`, `browser`, logging, diagnostics, telemetry,
+or update settings change. Config editors still receive the saved revision.
+Model, provider, authentication, and agent-model settings retain their invalidation.
+Settings with unknown reader dependencies conservatively refresh derived views.
+
 The `agents.create`, `agents.update`, and `agents.delete` Gateway methods wait
 for runtime application before reporting success. A successful response lets
 clients immediately create sessions or read the updated agent roster. If the
@@ -193,35 +200,27 @@ Overlapping model or credential changes use the newer write's runtime applicatio
 superseding an earlier publication does not itself require a Gateway restart.
 
 Auth-profile edits refresh credential facts without replacing unchanged plugin
-instances. A scheduled session event that has selected its model keeps running
-when another provider's auth profile changes. Changes to its own provider's auth
-policy still invalidate the captured policy. Before execution has started, the
-session-event owner can re-admit the same occurrence under current policy, with
-at most two retries. Once a hook, model, or delivery may have performed work, it
-does not replay the occurrence; a failed scheduled run remains visible in cron
-history and the next schedule is a separate run.
+instances.
 
-Logging changes never revoke scheduled work. Plugin changes, including turning a
-Labs plugin such as Advisor on or off, leave scheduled turns to the plugin reload:
-the turn hands over at its next step boundary or keeps its admitted plugin
-generation until it finishes, as interactive turns do. Once a scheduled turn selects its
-model, edits to another provider's model configuration also leave it running.
-Adding models to the allowlist preserves the turn while its selected model remains
-allowed; removing that permission or changing its provider's configuration still
-rechecks the occurrence under current policy. These unrelated edits do not consume
-the occurrence's bounded readmission attempts.
+Configuration edits apply to the next turn. A session event that has started
+(a hook, model request, or delivery may have performed work), including a
+subagent turn or a scheduled run, finishes under the configuration it started
+with. Stop, cancellation, revoked source authority, and agent deletion still end
+it.
 
-Every session event, including a background command's completion follow-up,
-compares only the configuration its own agent uses: shared settings, agent
-defaults, and that agent's entry. Scheduled events compare the channels on their
-route and re-admit other message actions against current policy. Unscheduled
-events retain all channel configuration because their tools keep the captured
-configuration. Adding or editing another agent, including that agent's secret
-references, leaves a running
-event alone, and so do logging changes. A change to the event's own agent, the
-agent defaults, or shared settings still rechecks the occurrence under current
-policy. Only scheduled events narrow auth, model-provider, and MCP changes to
-their selected model; other session events treat any such change as relevant.
+Before execution starts, a session event compares the configuration it was
+admitted under with the current publication. Logging, diagnostics, UI
+preferences, telemetry, update settings, session maintenance (including
+cold-storage enablement), and plugin changes never refuse it. Session routing,
+storage location, sharing, communication, and tool or model policy changes do.
+The session-event owner then re-admits the same occurrence under current policy,
+with at most two retries.
+
+Each event compares only the configuration its own agent uses: shared settings,
+agent defaults, and that agent's entry. Adding or editing another agent leaves
+the event alone. Scheduled events compare only the channels on their route, and
+narrow auth, model-provider, and MCP changes to their selected model; other
+session events treat any such change as relevant.
 
 Session detail and process-list reads that encounter a retired model-catalog
 callback refresh their catalog binding once before preparing the response.

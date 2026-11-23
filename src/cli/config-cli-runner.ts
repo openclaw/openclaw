@@ -29,6 +29,7 @@ import { visitConfigValueTree } from "../config/value-tree.js";
 import { diffConfigPaths } from "../gateway/config-diff.js";
 import { buildGatewayReloadPlan } from "../gateway/config-reload-plan.js";
 import { resolveGatewayReloadSettings } from "../gateway/config-reload-settings.js";
+import { openClawIdAccessWarning } from "../gateway/openclaw-id/access-plugin.js";
 import { danger, info } from "../globals.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { redactToolDetail } from "../logging/redact.js";
@@ -553,7 +554,7 @@ export async function runConfigOperations(params: {
     const application = params.onRuntimeApplication
       ? createRuntimeConfigWriteApplication(captureGatewayRootWorkAdmissionContinuationScope()?.run)
       : undefined;
-    await replaceConfigFile({
+    const written = await replaceConfigFile({
       sourceConfig: authoredNextConfig,
       snapshot,
       ...(snapshot.hash !== undefined ? { baseHash: snapshot.hash } : {}),
@@ -600,6 +601,10 @@ export async function runConfigOperations(params: {
               : status === "applied-restart-required"
                 ? "Saved and applied, but a recovery restart is required."
                 : `Saved; runtime application is not confirmed (${status}). Inspect the Gateway's active configuration before retrying.`;
+    }
+    const warning = openClawIdAccessWarning(written.nextConfig);
+    if (warning) {
+      runtime.error(warning);
     }
   }
   if (removedGatewayAuthPaths.length > 0) {

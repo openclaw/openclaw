@@ -12,6 +12,7 @@ import type {
 } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { getAgentScopedMediaLocalRoots } from "openclaw/plugin-sdk/media-runtime";
+import { resolveOutboundMediaAccessForConfig } from "openclaw/plugin-sdk/outbound-media";
 import { questionGatewayRuntime } from "openclaw/plugin-sdk/question-gateway-runtime";
 import { chunkMarkdownTextWithMode, type ChunkMode } from "openclaw/plugin-sdk/reply-chunking";
 import {
@@ -23,12 +24,12 @@ import {
 import { createReplyReferencePlanner } from "openclaw/plugin-sdk/reply-reference";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { sanitizeAssistantVisibleText } from "openclaw/plugin-sdk/text-chunking";
+import { hasSlackNativeDataBlock } from "../blocks-fallback.js";
 import { SLACK_MAX_BLOCKS } from "../blocks-input.js";
 import { markdownToSlackMrkdwnChunks } from "../format.js";
 import { SLACK_MESSAGE_TEXT_HARD_LIMIT, SLACK_TEXT_LIMIT } from "../limits.js";
 import { emitSlackMessageSentHooks } from "../message-sent-hook.js";
 import {
-  hasSlackNativeDataBlock,
   isSlackInvalidBlocksResponse,
   isSlackNativeResponseUrlRejection,
 } from "../native-data-blocks.js";
@@ -161,6 +162,7 @@ export async function deliverReplies(params: {
   const mediaLocalRoots = deliverySession
     ? getAgentScopedMediaLocalRoots(params.cfg, deliverySession.agentId)
     : undefined;
+  const mediaAccess = resolveOutboundMediaAccessForConfig(params.cfg);
   let latestResult: SlackSendResult | undefined;
   for (const prepared of params.replies) {
     const { payload } = prepared;
@@ -199,6 +201,7 @@ export async function deliverReplies(params: {
         token: params.token,
         accountId: params.accountId,
         ...(mediaLocalRoots ? { mediaLocalRoots } : {}),
+        mediaAccess,
         onDeliveryResult: (result) => {
           acceptedResults.push(result);
           if (questionId) {

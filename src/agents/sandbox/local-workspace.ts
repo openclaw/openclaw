@@ -20,16 +20,18 @@ import {
   setWorktreePreparationTemplate,
   startWorktreePreparationPhase,
 } from "../worktrees/preparation-timing.js";
+import { isLocalSandboxWorkspaceBackend } from "./config.js";
 import { bindSandboxInputStager, getSandboxInputStager } from "./input-staging.js";
 import {
   bindSandboxPersistentExecCapability,
   getSandboxPersistentExecCapability,
 } from "./persistent-exec.types.js";
 import { acquireSandboxRuntimeUse } from "./registry-lifecycle.js";
+import type { SandboxStateOwnerPath } from "./state-owner-path.js";
 import type { SandboxConfig, SandboxContext } from "./types.js";
 
 export function assertLocalSandboxWorkspaceBackend(backend: SandboxConfig["backend"]) {
-  if (backend !== "docker" && backend !== "podman") {
+  if (!isLocalSandboxWorkspaceBackend(backend)) {
     throw new Error(
       "Managed guest projects require a local Docker or Podman sandbox; this backend cannot safely reconcile a local managed checkout",
     );
@@ -46,6 +48,7 @@ export async function prepareLocalSandboxWorkspace(params: {
   signal?: AbortSignal;
   assertCurrent?: () => void;
   assertHost?: () => void;
+  stateOwnerPath?: SandboxStateOwnerPath;
 }) {
   using phases = observeDiagnosticsTimelinePhases(
     "attempt.setup.sandbox.workspace_selection.owner",
@@ -80,7 +83,7 @@ export async function prepareLocalSandboxWorkspace(params: {
   const assertCurrent = () => {
     params.assertCurrent?.();
     if (disposed) {
-      throw new Error("Local sandbox workspace authority changed");
+      throw new Error("The local sandbox workspace was released. Start a new turn to retry.");
     }
     owner.assertCurrent();
   };
@@ -92,9 +95,9 @@ export async function prepareLocalSandboxWorkspace(params: {
   const checkpoint = (options?: { knownMutation?: true }) =>
     checkpointLocalWorkspace(owner, options);
   try {
-    lifetime.use(
-      await acquireSandboxRuntimeUse({ workspaceDir: localWorkspaceProjectionPath(owner) }),
-    );
+    const projectionPath = await localWorkspaceProjectionPath(owner);
+    assertCurrent();
+    lifetime.use(await acquireSandboxRuntimeUse({ workspaceDir: projectionPath }));
     assertCurrent();
     markManagedWorktreePreparation();
     assertLocalSandboxWorkspaceBackend(params.sandbox.backend);
@@ -124,7 +127,7 @@ export async function prepareLocalSandboxWorkspace(params: {
               beginCapture();
               phases.mark("attempt.setup.sandbox.workspace_selection.prepare.reconcile");
               try {
-                return await state.prepare();
+                return await state.prepare({ sandbox: params.sandbox });
               } finally {
                 phases.mark("attempt.setup.sandbox.workspace_selection.prepare.release");
               }

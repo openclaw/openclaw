@@ -280,7 +280,8 @@ suite.define(() => {
     });
     await clearedPage.goto(`${suite.server.baseUrl}settings/appearance`);
     await waitForControlUiSettingsTakeover(clearedPage);
-    expect(await clearedPage.locator("openclaw-sidebar-attention").count()).toBe(0);
+    const clearedInbox = clearedPage.locator(".sidebar-rail .sidebar-issues-button");
+    await expect.poll(() => clearedInbox.getAttribute("aria-label")).toBe("0 inbox items");
     await clearedPage.close();
 
     const recurrencePage = await context.newPage();
@@ -340,15 +341,13 @@ suite.define(() => {
       .getByRole("menuitem", { exact: true, name: "Settings" })
       .click();
     await waitForControlUiSettingsTakeover(page);
-    expect(await page.locator(".sidebar-issues-button").count()).toBe(0);
-    await captureProof(
-      page,
-      "settings-without-inbox-pending.png",
-      page.locator(".settings-workspace"),
-    );
+    const settingsItem = await openLimitedAccessItem(await openInbox(page));
+    await waitForPendingUpgradeItem(settingsItem);
+    await captureProof(page, "settings-inbox-pending.png", page.locator(".settings-workspace"));
     expect(await gateway.getRequests("device.scopes.requestUpgrade")).toHaveLength(1);
     expect(await gateway.getRequests("device.scopes.waitUpgrade")).toHaveLength(1);
 
+    await closeInbox(page);
     await page.keyboard.press("Escape");
     await expect.poll(() => new URL(page.url()).pathname).toBe("/new");
     const returnedItem = await openLimitedAccessItem(await openInbox(page));

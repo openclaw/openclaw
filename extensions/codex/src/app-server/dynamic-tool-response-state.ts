@@ -16,6 +16,8 @@ export type CodexDynamicToolRuntimeResponse = CodexDynamicToolCallResponse & {
   diagnosticTerminalType?: CodexDynamicToolDiagnosticTerminalType;
   executionStarted?: boolean;
   executedArguments?: Record<string, unknown>;
+  /** The call named no tool available to this turn. */
+  unknownTool?: true;
   replaySafe?: boolean;
   sideEffectEvidence?: boolean;
   terminate?: boolean;
@@ -32,6 +34,7 @@ export function createFailedDynamicToolResponse(
   options?: {
     executedArguments?: Record<string, unknown>;
     executionStarted?: boolean;
+    unknownTool?: true;
     sideEffectEvidence?: boolean;
     terminalReason?: CodexDynamicToolDiagnosticTerminalReason;
   },
@@ -41,8 +44,10 @@ export function createFailedDynamicToolResponse(
     success: false,
     diagnosticTerminalReason: options?.terminalReason ?? "failed",
     diagnosticTerminalType: "error",
-    executionStarted: options?.executionStarted,
+    // A call to a missing tool never starts.
+    executionStarted: options?.unknownTool ? false : options?.executionStarted,
     executedArguments: options?.executedArguments,
+    ...(options?.unknownTool ? { unknownTool: true as const } : {}),
     sideEffectEvidence: options?.sideEffectEvidence === true || undefined,
   };
 }

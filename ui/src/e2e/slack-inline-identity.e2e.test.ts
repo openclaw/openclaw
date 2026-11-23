@@ -45,7 +45,8 @@ suite.define(() => {
       label: "slack-inline-identity",
       env: {
         ...deviceGatewayEnv,
-        OPENCLAW_BUNDLED_PLUGINS_DIR: path.resolve("extensions"),
+        // This is a display proof, not source-plugin compilation inside the history RPC.
+        OPENCLAW_BUNDLED_PLUGINS_DIR: path.resolve("dist/extensions"),
         OPENCLAW_GATEWAY_PASSWORD: undefined,
         OPENCLAW_GATEWAY_TOKEN: undefined,
       },

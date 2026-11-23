@@ -4,6 +4,7 @@ import {
   tryResolveCronJobEffectiveAgentId,
 } from "../../cron/agent-id.js";
 import { resolveCronJobConfigRevision } from "../../cron/config-revision.js";
+import { resolveCronRunAdmissionSource } from "../../cron/run-authority.js";
 import type { CronRuntimeAuthority } from "../../cron/runtime-authority.js";
 import {
   createAccountCronScheduledToolPolicy,
@@ -18,6 +19,7 @@ import type {
   CronJob,
   CronJobCreate,
   CronJobPatch,
+  CronStoredJob,
   CronToolsAllowExecTarget,
   CronToolsAllowProvenance,
 } from "../../cron/types.js";
@@ -35,7 +37,6 @@ import {
 } from "../cron-creator-authority-grant.js";
 import type { CronCreatorAuthorityGrant } from "../cron-creator-authority-grant.types.js";
 import { bindGatewayDeviceRevocation } from "../device-revocation.js";
-import { assertActiveAgentRuntimeAuthority } from "./agent-runtime-authority.js";
 import { assertHumanCronJobAccess, assertHumanCronExecutionAccess } from "./cron-human-owner.js";
 import type {
   GatewayClient,
@@ -97,7 +98,6 @@ export function resolveCronCreatorAuthorityCapture(
 export function resolveCronStreamExecPolicy(
   client: GatewayClient | null,
   required: boolean,
-  context: GatewayRequestContext,
 ): CronStreamExecPolicy | undefined {
   const identity = client?.internal?.agentRuntimeIdentity;
   if (!identity || !required) {
@@ -109,7 +109,6 @@ export function resolveCronStreamExecPolicy(
       ? resolveCronCreatorStreamExecPolicy(identity.cronCreatorAuthorityGrant)
       : undefined;
   if (!execPolicy) {
-    assertActiveAgentRuntimeAuthority(client, context);
     throw new TypeError(CRON_STREAM_EXEC_AUTHORITY_ERROR);
   }
   return execPolicy;
@@ -129,8 +128,6 @@ export function resolveCronMutationCommitGuard(
     "sessionMutationCommitGuard" | "hasCurrentClientAuthority"
   > & { modelJobPolicy?: { config: OpenClawConfig; jobId: string; patch?: CronJobPatch } },
 ): (() => void) | undefined {
-  const validatesAuthority =
-    client?.internal?.agentRuntimeIdentity && context.validateAgentRuntimeApprovalAuthority;
   const identity = client?.internal?.agentRuntimeIdentity;
   const manageAll = identity ? getCronManagementAuthority(identity) : undefined;
   const creatorGrant = identity?.cronCreatorAuthorityGrant;
@@ -141,22 +138,12 @@ export function resolveCronMutationCommitGuard(
       ?.capturesRuntimeAuthority === false
       ? creatorGrant
       : undefined;
-  if (
-    !validatesAuthority &&
-    !jobScope &&
-    !manageAll &&
-    !requesterGrant &&
-    !callerAuthority?.sessionMutationCommitGuard &&
-    !callerAuthority?.hasCurrentClientAuthority
-  ) {
+  if (!jobScope && !manageAll && !requesterGrant && !callerAuthority?.sessionMutationCommitGuard) {
     return undefined;
   }
   let consumedRequester: ReturnType<typeof consumeCronCreatorAuthorityGrant> | undefined;
   return bindGatewayDeviceRevocation(() => {
     callerAuthority?.sessionMutationCommitGuard?.();
-    if (callerAuthority?.hasCurrentClientAuthority?.() === false) {
-      throw new TypeError("Gateway caller authority is no longer active.");
-    }
     manageAll?.();
     if (jobScope) {
       const job = context.cron.getJob(jobScope.jobId);
@@ -175,9 +162,6 @@ export function resolveCronMutationCommitGuard(
         throw new TypeError(`unknown cron job id: ${jobId}`);
       }
       assertCronModelJobAllowed(client, config, job, patch);
-    }
-    if (validatesAuthority) {
-      assertActiveAgentRuntimeAuthority(client, context);
     }
     // The capability can expire, or the same id can acquire another owner while
     // this request waits for the cron lock. Re-read both at the commit owner.
@@ -313,9 +297,15 @@ export function readCronCallerScope(
 
 /** Management access can reauthorize origin, but cannot lend another account native identity. */
 export function resolveCronRequesterProvenanceForJob(
-  job: Pick<CronJob, "owner">,
+  job: Pick<CronStoredJob, "owner" | "scheduledToolPolicy" | "payload" | "toolsAllowProvenance">,
   callerScope: CronCallerScope | undefined,
 ): CronToolsAllowProvenance | undefined {
+  // Management preserves an existing operator job; it does not adopt the
+  // admin chat as its requester. Use admission, not the trusted-policy label:
+  // legacy operator jobs may lack that label, and requester jobs may carry it.
+  if (callerScope?.manageAll && resolveCronRunAdmissionSource(job) === "operator-schedule") {
+    return undefined;
+  }
   const provenance = callerScope?.toolsAllowProvenance;
   if (!provenance?.channelRequester) {
     return provenance;
@@ -397,6 +387,18 @@ export function cronTrustedJobOwnedByCaller(
   );
 }
 
+/** Whether the caller holds a live scheduled-run claim (signed, short-lived) for this job. */
+export function cronCallerRunsJob(
+  job: CronJob,
+  callerScope: Pick<CronCallerScope, "agentId" | "currentJobId"> | undefined,
+  defaultAgentId?: string,
+): boolean {
+  return (
+    callerScope?.currentJobId === job.id &&
+    tryResolveCronJobEffectiveAgentId(job, defaultAgentId) === callerScope.agentId
+  );
+}
+
 export function cronJobMatchesCallerScope(params: {
   job: CronJob;
   callerScope: CronCallerScope | undefined;
@@ -420,11 +422,10 @@ export function cronJobMatchesCallerScope(params: {
   const policy = params.job.scheduledToolPolicy;
   // A signed scheduled-run claim restores only the cron tool's historical
   // current-job surface. Its delivery account need not be its creator account.
-  // Callers must opt in per read/self-remove operation.
+  // Callers must opt in per read/self-remove/self-scratch operation.
   if (
     params.allowCurrentJob === true &&
-    params.callerScope.currentJobId === params.job.id &&
-    effectiveAgentId === params.callerScope.agentId
+    cronCallerRunsJob(params.job, params.callerScope, params.defaultAgentId)
   ) {
     return true;
   }

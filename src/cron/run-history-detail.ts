@@ -7,8 +7,11 @@ import {
   MAX_DATE_TIMESTAMP_MS,
 } from "@openclaw/normalization-core/number-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { z } from "zod";
+import {
+  normalizeOptionalString,
+  readNonBlankString,
+  readStringValue,
+} from "@openclaw/normalization-core/string-coerce";
 import { FAILOVER_REASONS } from "../../packages/gateway-protocol/src/failover-reasons.js";
 import { parseAutomationResult } from "./automation-result.js";
 import { resolveCronCompletionStatus } from "./completion-status.js";
@@ -21,87 +24,6 @@ type CronDeliveryStatus = import("./types.js").CronDeliveryStatus;
 type CronRunStatus = import("./types.js").CronRunStatus;
 
 const CRON_RUN_DETAIL_KIND = "cron-run";
-const cronRunStatusSchema = z.enum(["ok", "error", "skipped"]);
-const cronCompletionStatusSchema = z.enum(["succeeded", "failed", "unknown"]);
-const cronDeliveryStatusSchema = z.enum(["delivered", "not-delivered", "unknown", "not-requested"]);
-const optionalCronStringSchema = z.string().optional().catch(undefined);
-const optionalNonBlankCronStringSchema = z
-  .string()
-  .refine((value) => value.trim().length > 0)
-  .optional()
-  .catch(undefined);
-const optionalCronTimestampSchema = z
-  .unknown()
-  .optional()
-  .transform((value) => normalizeTimestamp(value));
-const optionalCronNonnegativeIntegerSchema = z
-  .unknown()
-  .optional()
-  .transform((value) => asSafeIntegerInRange(value, { min: 0 }));
-const cronUsageSchema = z
-  .object({
-    input_tokens: optionalCronNonnegativeIntegerSchema,
-    output_tokens: optionalCronNonnegativeIntegerSchema,
-    total_tokens: optionalCronNonnegativeIntegerSchema,
-    cache_read_tokens: optionalCronNonnegativeIntegerSchema,
-    cache_write_tokens: optionalCronNonnegativeIntegerSchema,
-  })
-  .transform((usage) =>
-    Object.values(usage).some((tokenCount) => tokenCount !== undefined) ? usage : undefined,
-  )
-  .optional()
-  .catch(undefined);
-const cronFailureNotificationDeliverySchema = z
-  .looseObject({
-    status: cronDeliveryStatusSchema,
-    delivered: z.boolean().optional().catch(undefined),
-    error: optionalCronStringSchema,
-  })
-  .transform(({ status, delivered, error }) => ({
-    status,
-    ...(delivered !== undefined ? { delivered } : {}),
-    ...(error !== undefined ? { error } : {}),
-  }))
-  .optional()
-  .catch(undefined);
-const cronRunLogEntrySchema = z.looseObject({
-  action: z.literal("finished"),
-  jobId: z.string().refine((value) => value.trim().length > 0),
-  ts: z
-    .unknown()
-    .transform((value) => normalizeTimestamp(value))
-    .pipe(z.number()),
-  status: cronRunStatusSchema.optional().catch(undefined),
-  completionStatus: cronCompletionStatusSchema.optional().catch(undefined),
-  error: optionalCronStringSchema,
-  errorReason: z.enum(FAILOVER_REASONS).optional().catch(undefined),
-  summary: optionalCronStringSchema,
-  result: z.unknown().optional().transform(parseAutomationResult),
-  runId: optionalNonBlankCronStringSchema,
-  diagnostics: z.unknown().optional(),
-  runAtMs: optionalCronTimestampSchema,
-  durationMs: optionalCronNonnegativeIntegerSchema,
-  nextRunAtMs: optionalCronTimestampSchema,
-  triggerFired: z
-    .unknown()
-    .optional()
-    .transform((value) => (value === true ? true : undefined)),
-  model: optionalNonBlankCronStringSchema,
-  provider: optionalNonBlankCronStringSchema,
-  usage: cronUsageSchema,
-  delivered: z.boolean().optional().catch(undefined),
-  deliveryStatus: cronDeliveryStatusSchema.optional().catch(undefined),
-  deliveryError: optionalCronStringSchema,
-  deliverySuppressionReason: z
-    .enum(["empty", "silent", "heartbeat", "channel_transform"])
-    .optional()
-    .catch(undefined),
-  failureNotificationDelivery: cronFailureNotificationDeliverySchema,
-  delivery: z.custom<{ [key: string]: JsonValue }>(isJsonObject).optional().catch(undefined),
-  sessionId: optionalNonBlankCronStringSchema,
-  sessionKey: optionalNonBlankCronStringSchema,
-});
-
 /** Native JSON parsing keeps released scalar/null and numeric-overflow semantics. */
 export function parseCronRunDetailJson(serialized: string): JsonValue | undefined {
   // SAFETY: Native parsing only produces JSON values; undefined denotes a syntax error.
@@ -122,11 +44,16 @@ function normalizeTimestamp(value: unknown): number | undefined {
 }
 
 export function isCronRunStatus(value: unknown): value is CronRunStatus {
-  return cronRunStatusSchema.safeParse(value).success;
+  return value === "ok" || value === "error" || value === "skipped";
 }
 
 export function isCronDeliveryStatus(value: unknown): value is CronDeliveryStatus {
-  return cronDeliveryStatusSchema.safeParse(value).success;
+  return (
+    value === "delivered" ||
+    value === "not-delivered" ||
+    value === "unknown" ||
+    value === "not-requested"
+  );
 }
 
 /** Parses stored or migrated cron history while preserving the stable wire shape. */
@@ -135,49 +62,76 @@ export function parseCronRunLogEntryObject(
   opts?: { jobId?: string },
 ): CronRunLogEntry | null {
   const jobId = normalizeOptionalString(opts?.jobId);
-  const parsed = cronRunLogEntrySchema.safeParse(obj);
-  if (!parsed.success) {
+  if (!isRecord(obj) || obj.action !== "finished") {
     return null;
   }
-  const entryObj = parsed.data;
-  if (jobId && entryObj.jobId !== jobId) {
+  const entryJobId = readNonBlankString(obj.jobId);
+  const ts = normalizeTimestamp(obj.ts);
+  if (!entryJobId || ts === undefined || (jobId && entryJobId !== jobId)) {
     return null;
   }
+  const status = isCronRunStatus(obj.status) ? obj.status : undefined;
+  const delivered = typeof obj.delivered === "boolean" ? obj.delivered : undefined;
+  const deliveryStatus = isCronDeliveryStatus(obj.deliveryStatus) ? obj.deliveryStatus : undefined;
+  const completionStatus = obj.completionStatus;
+  const suppression = obj.deliverySuppressionReason;
+  const failure = obj.failureNotificationDelivery;
+  const usage = isRecord(obj.usage)
+    ? {
+        input_tokens: asSafeIntegerInRange(obj.usage.input_tokens, { min: 0 }),
+        output_tokens: asSafeIntegerInRange(obj.usage.output_tokens, { min: 0 }),
+        total_tokens: asSafeIntegerInRange(obj.usage.total_tokens, { min: 0 }),
+        cache_read_tokens: asSafeIntegerInRange(obj.usage.cache_read_tokens, { min: 0 }),
+        cache_write_tokens: asSafeIntegerInRange(obj.usage.cache_write_tokens, { min: 0 }),
+      }
+    : undefined;
 
-  // Diagnostics are redacted at authoring; this read/migration path only normalizes stored shape.
+  // Keep the released wire projection without schema clones or caught errors for writer-owned nulls.
   return {
-    ts: entryObj.ts,
-    jobId: entryObj.jobId,
+    ts,
+    jobId: entryJobId,
     action: "finished",
-    status: entryObj.status,
+    status,
     completionStatus:
-      entryObj.completionStatus ??
-      resolveCronCompletionStatus({
-        status: entryObj.status,
-        delivered: entryObj.delivered,
-        deliveryStatus: entryObj.deliveryStatus,
-      }),
-    error: entryObj.error,
-    errorReason: entryObj.errorReason,
-    summary: entryObj.summary,
-    result: entryObj.result,
-    runId: entryObj.runId,
-    diagnostics: normalizeCronRunDiagnosticsCore(entryObj.diagnostics),
-    runAtMs: entryObj.runAtMs,
-    durationMs: entryObj.durationMs,
-    nextRunAtMs: entryObj.nextRunAtMs,
-    triggerFired: entryObj.triggerFired,
-    model: entryObj.model,
-    provider: entryObj.provider,
-    usage: entryObj.usage,
-    delivered: entryObj.delivered,
-    deliveryStatus: entryObj.deliveryStatus,
-    deliveryError: entryObj.deliveryError,
-    deliverySuppressionReason: entryObj.deliverySuppressionReason,
-    failureNotificationDelivery: entryObj.failureNotificationDelivery,
-    delivery: entryObj.delivery,
-    sessionId: entryObj.sessionId,
-    sessionKey: entryObj.sessionKey,
+      completionStatus === "succeeded" ||
+      completionStatus === "failed" ||
+      completionStatus === "unknown"
+        ? completionStatus
+        : resolveCronCompletionStatus({ status, delivered, deliveryStatus }),
+    error: readStringValue(obj.error),
+    errorReason: FAILOVER_REASONS.find((reason) => reason === obj.errorReason),
+    summary: readStringValue(obj.summary),
+    result: parseAutomationResult(obj.result),
+    runId: readNonBlankString(obj.runId),
+    diagnostics: normalizeCronRunDiagnosticsCore(obj.diagnostics),
+    runAtMs: normalizeTimestamp(obj.runAtMs),
+    durationMs: asSafeIntegerInRange(obj.durationMs, { min: 0 }),
+    nextRunAtMs: normalizeTimestamp(obj.nextRunAtMs),
+    triggerFired: typeof obj.triggerFired === "boolean" ? obj.triggerFired : undefined,
+    model: readNonBlankString(obj.model),
+    provider: readNonBlankString(obj.provider),
+    usage: usage && Object.values(usage).some((count) => count !== undefined) ? usage : undefined,
+    delivered,
+    deliveryStatus,
+    deliveryError: readStringValue(obj.deliveryError),
+    deliverySuppressionReason:
+      suppression === "empty" ||
+      suppression === "silent" ||
+      suppression === "heartbeat" ||
+      suppression === "channel_transform"
+        ? suppression
+        : undefined,
+    failureNotificationDelivery:
+      isRecord(failure) && isCronDeliveryStatus(failure.status)
+        ? {
+            status: failure.status,
+            ...(typeof failure.delivered === "boolean" ? { delivered: failure.delivered } : {}),
+            ...(typeof failure.error === "string" ? { error: failure.error } : {}),
+          }
+        : undefined,
+    delivery: isJsonObject(obj.delivery) ? obj.delivery : undefined,
+    sessionId: readNonBlankString(obj.sessionId),
+    sessionKey: readNonBlankString(obj.sessionKey),
   };
 }
 

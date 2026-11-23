@@ -180,8 +180,8 @@ describe("unit-fast vitest lane", () => {
         import fs from "node:fs";
         import path from "node:path";
         process.chdir(${JSON.stringify(cwd)});
-        const [mockHelper, harness, pure, stateful, quoted, ignored] =
-          ["mock-helper", "harness", "pure", "stateful", "quoted-[é]", "ignored"].map(name => "src/hooks/" + name + ".test.ts");
+        const [e2eMockHelper, mockHelper, harness, pure, stateful, quoted, ignored] =
+          ["e2e-mock-helper", "mock-helper", "harness", "pure", "stateful", "quoted-[é]", "ignored"].map(name => "src/hooks/" + name + ".test.ts");
         const otherRoots = ["packages/memory-host-sdk/src/pure.test.ts", "test/pure.test.ts"];
         const write = (file, source) => {
           fs.mkdirSync(path.dirname(file), { recursive: true });
@@ -189,7 +189,7 @@ describe("unit-fast vitest lane", () => {
         };
         write(".gitignore", ignored + "\\n");
         for (const file of [pure, quoted, ignored, ...otherRoots]) write(file, ${JSON.stringify(pureTest)});
-        for (const [file, helper] of [[stateful, "stateful.test-support"], [mockHelper, "mock-helper.test-mocks"], [harness, "shared.test-harness"]]) {
+        for (const [file, helper] of [[stateful, "stateful.test-support"], [mockHelper, "mock-helper.test-mocks"], [e2eMockHelper, "shared.e2e-mocks"], [harness, "shared.test-harness"]]) {
           write(file, 'import { it } from "vitest"; import { check } from "./' + helper + '.js"; it("helper", check);');
           write("src/hooks/" + helper + ".ts", 'import { vi } from "vitest"; export const check = vi.fn();');
         }
@@ -201,7 +201,7 @@ describe("unit-fast vitest lane", () => {
         const { createUnitFastVitestConfig } = await import(${moduleUrl("test/vitest/vitest.unit-fast.config.ts")});
         const { createUnitFastIsolatedVitestConfig } = await import(${moduleUrl("test/vitest/vitest.unit-fast-isolated.config.ts")});
         const { createScopedVitestConfig } = await import(${moduleUrl("test/vitest/vitest.scoped-config.ts")});
-        const specs = createVitestRunSpecs([harness, mockHelper, pure, stateful], { baseEnv: {} });
+        const specs = createVitestRunSpecs([e2eMockHelper, harness, mockHelper, pure, stateful], { baseEnv: {} });
         const factories = {
           "test/vitest/vitest.unit-fast.config.ts": createUnitFastVitestConfig,
           "test/vitest/vitest.unit-fast-isolated.config.ts": createUnitFastIsolatedVitestConfig,
@@ -211,14 +211,14 @@ describe("unit-fast vitest lane", () => {
             writeVitestIncludeFile(spec.includeFilePath, spec.includePatterns);
             return { config: spec.config, include: factories[spec.config](spec.env).test.include };
           });
-          assert.deepEqual(paths.getUnitFastTestFiles(), [...otherRoots, harness, mockHelper, pure, quoted, stateful].toSorted());
-          assert.deepEqual(paths.getUnitFastIsolatedTestFiles(), [harness, mockHelper, stateful]);
+          assert.deepEqual(paths.getUnitFastTestFiles(), [...otherRoots, e2eMockHelper, harness, mockHelper, pure, quoted, stateful].toSorted());
+          assert.deepEqual(paths.getUnitFastIsolatedTestFiles(), [e2eMockHelper, harness, mockHelper, stateful]);
           assert.deepEqual(runs, [
             { config: "test/vitest/vitest.unit-fast.config.ts", include: [pure] },
-            { config: "test/vitest/vitest.unit-fast-isolated.config.ts", include: [harness, mockHelper, stateful] },
+            { config: "test/vitest/vitest.unit-fast-isolated.config.ts", include: [e2eMockHelper, harness, mockHelper, stateful] },
           ]);
           assert.deepEqual(createScopedVitestConfig(["src/hooks/**/*.test.ts"], { env: {} }).test.exclude
-            .filter((file) => file.startsWith("src/hooks/")), [harness, mockHelper, pure, quoted, stateful]);
+            .filter((file) => file.startsWith("src/hooks/")), [e2eMockHelper, harness, mockHelper, pure, quoted, stateful]);
           assert.equal(paths.resolveUnitFastTestIncludePattern(ignored), null);
           assert.equal(paths.isUnitFastTestFile(quoted), true);
         } finally {
@@ -356,6 +356,44 @@ describe("unit-fast vitest lane", () => {
       include: unitFastIsolatedTestFiles,
       setupFiles: envSetup,
     });
+  });
+
+  it("keeps registry-owning helper consumers exactly once in the isolated fast lane", () => {
+    const files = [
+      "src/agents/embedded-agent-runner/run/agent-hook-context.test.ts",
+      "src/agents/harness/hook-context.test.ts",
+      "src/plugins/memory-provider-runtime.audience.test.ts",
+    ];
+    expect(paths.getUnitFastTestFiles(files)).toEqual(files);
+    expect(paths.getUnitFastIsolatedTestFiles(files)).toEqual(files);
+    expect(paths.getUnitFastTimerTestFiles(files)).toEqual([]);
+    for (const file of files) {
+      expect(unitFastTestFiles.filter((candidate) => candidate === file)).toEqual([file]);
+      expect(unitFastIsolatedTestFiles.filter((candidate) => candidate === file)).toEqual([file]);
+      expect(paths.isUnitFastTestFile(file)).toBe(true);
+      expect(paths.resolveUnitFastTestIncludePattern(file)).toBeNull();
+      expect(paths.resolveUnitFastIsolatedTestIncludePattern(file)).toBe(file);
+    }
+
+    const includeFile = path.join(
+      tempDirs.make("openclaw-registry-owner-includes-"),
+      "include.json",
+    );
+    fs.writeFileSync(includeFile, JSON.stringify(files));
+    for (const [env, argv] of [
+      [{}, cli(...files)],
+      [{ OPENCLAW_VITEST_INCLUDE_FILE: includeFile }, cli()],
+      [{}, cli()],
+    ] as const) {
+      const shared = createUnitFastVitestConfig(env, { argv: [...argv] }).test!;
+      const isolated = createUnitFastIsolatedVitestConfig(env, { argv: [...argv] }).test!;
+      expect(shared.isolate).toBe(false);
+      expect(isolated.isolate).toBe(true);
+      for (const file of files) {
+        expect(shared.include?.filter((candidate) => candidate === file)).toEqual([]);
+        expect(isolated.include?.filter((candidate) => candidate === file)).toEqual([file]);
+      }
+    }
   });
 
   it("routes fake-timer unit-fast tests through the serial fake-timer lane", () => {

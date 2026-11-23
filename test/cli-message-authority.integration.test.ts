@@ -861,8 +861,8 @@ describe("CLI message authority integration", () => {
         release();
         expectDenied(
           await pending,
-          retire === "abort"
-            ? /abort|cancel|no longer active/i
+          retire === "source" || retire === "abort"
+            ? /message turn has ended/i
             : /no longer active|permission revoked/i,
         );
         expect(acceptedChannelEdits).toBe(0);
@@ -989,7 +989,7 @@ describe("CLI message authority integration", () => {
 
         const result = await pending;
         if (revoke === "source") {
-          expectDenied(result, /agent runtime authority is no longer active/);
+          expectDenied(result, /message turn has ended/i);
         } else {
           expectSuccess(result);
         }

@@ -1,5 +1,6 @@
 // Defines the per-model provider compatibility schema fragment and its
 // OpenRouter/Vercel AI Gateway routing sub-schemas.
+import type { ModelCatalogCompatConfig } from "@openclaw/model-catalog-core/model-catalog-types";
 import { z } from "zod";
 import type {
   OpenAICompletionsCompat,
@@ -73,6 +74,8 @@ export const ModelCompatSchema = z
      * prompt in `input` unless set true here after verifying against that endpoint.
      */
     supportsInstructions: z.boolean().optional(),
+    /** Whether the model caches top-level `instructions`; false sends the system prompt as input. */
+    cachesInstructions: z.boolean().optional(),
     /**
      * Whether the provider supports `stream_options: { include_usage: true }` for token usage in
      * streaming responses. Default: true.
@@ -174,7 +177,7 @@ export const ModelCompatSchema = z
      * or Anthropic-style `cache_control.ttl: "1h"`, depending on format). Default: true.
      */
     supportsLongCacheRetention: z.boolean().optional(),
-  })
+  } satisfies Record<keyof ModelCatalogCompatConfig, z.ZodType>)
   .optional();
 
 /** Provider/model compatibility switches consumed by request builders and tool schema adapters. */

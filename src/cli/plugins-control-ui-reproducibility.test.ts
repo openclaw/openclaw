@@ -25,22 +25,21 @@ async function fixture(root: string, pluginPath: string, graphPath: string) {
   );
   await fs.writeFile(path.join(dependency, "index.js"), 'export const value = "original";');
   await fs.symlink(dependency, path.join(rootDir, "node_modules/dependency"), "dir");
-  await fs.symlink(
-    path.dirname(require.resolve("esbuild/package.json")),
-    path.join(rootDir, "node_modules/esbuild"),
-    "dir",
-  );
+  const esbuild = path.dirname(require.resolve("esbuild/package.json"));
+  await fs.symlink(esbuild, path.join(rootDir, "node_modules/esbuild"), "dir");
   await fs.writeFile(
     path.join(rootDir, "index.ts"),
-    'import "./style.css"; import { events } from "./shared.js"; import { value } from "dependency"; export async function observe() { const a = await import("./a.js"); const b = await import("./b.js"); return { events, value, lazyValues: [a.value, b.value], distinct: a.identity !== b.identity }; }',
+    'import "./style.css"; import { events } from "./shared.js"; import { value } from "dependency"; export async function observe() { const a = await import("./a.js"); const b = await import("./b.js"); return { events, value, lazyValues: [a.value, b.value], distinct: a.identity !== b.identity }; } export function loadLongExpression() { return import("./long.js"); }',
   );
   await fs.writeFile(path.join(rootDir, "style.css"), ".fixture { color: red; }");
   await fs.writeFile(path.join(rootDir, "shared.js"), "export const events = [];");
   // Separate modules have intentionally identical bytes but distinct activation identity.
-  for (const name of ["a", "b"]) {
+  for (const name of ["a", "b", "long"]) {
     await fs.writeFile(
       path.join(rootDir, name + ".js"),
-      'import { events } from "./shared.js"; export { value } from "dependency"; events.push("activated"); export const identity = {};',
+      name === "long"
+        ? `export function read(value) { return value${".next".repeat(16000)}; }`
+        : 'import { events } from "./shared.js"; export { value } from "dependency"; events.push("activated"); export const identity = {};',
     );
   }
   return { rootDir, source: "index.ts", dependency };

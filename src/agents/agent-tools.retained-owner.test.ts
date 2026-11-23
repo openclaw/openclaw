@@ -6,10 +6,8 @@ import { bindSessionRowProjection } from "../gateway/session-row-projection-acce
 import { createSessionRowProjectionFixture } from "../gateway/session-row-projection.test-support.js";
 import { withPluginRuntimeGatewayContextResolver } from "../plugins/runtime/gateway-request-scope.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import {
-  createAdmittedRunOperatorAuthority,
-  createOperationalRunInstanceRef,
-} from "./admitted-run-context.js";
+import { createOperationalRunInstanceRef } from "./admitted-run-context.js";
+import { createTestOperatorAuthority } from "./admitted-run-context.test-support.js";
 import { createOpenClawCodingToolsInternalAsync } from "./agent-tools.js";
 import { createAgentTurnTaintState } from "./embedded-agent-runner/run/turn-taint-state.js";
 import {
@@ -66,8 +64,6 @@ it.each([
       const taint = createAgentTurnTaintState(state === "tainted");
       const networkObservation = {
         toolName: "web_fetch",
-        argsHash: "github-profile-request",
-        resultHash: "public-profile-result",
         resultContentSource: "network" as const,
       };
       if (state === "owner-admin-already-tainted") {
@@ -76,7 +72,7 @@ it.each([
       const authority =
         state === "unowned"
           ? undefined
-          : createAdmittedRunOperatorAuthority({
+          : createTestOperatorAuthority({
               profileId: "authenticated-person",
               signal: lifetime.signal,
               scopes:
@@ -221,7 +217,7 @@ it.each(["sessions", "portal"] as const)(
         sessionId: "scoped-retained-session",
       };
       replaceSessionEntrySync(identity, { sessionId: identity.sessionId, updatedAt: 1 });
-      const authority = createAdmittedRunOperatorAuthority({
+      const authority = createTestOperatorAuthority({
         profileId: "scoped-person",
         scopes: ["operator.sessions.write"],
         assertCurrent() {},

@@ -138,7 +138,7 @@ That split lets OpenClaw validate config, explain missing/disabled plugins, and 
 
 Failed registrations remain visible in plugin diagnostics after their contributions are rolled back. Those records do not enter execution scopes or block healthy plugins and core context-engine admission; the loader still owns their cleanup.
 
-Runtime preparation checks pending data migrations through the shared-state read worker before registering plugins. Once checked, the process reuses that ledger result across plugin generations until a committed deferred-migration write invalidates it. Unrelated state writes do not repeat the check. Explicit artifact-preserving inspection keeps its isolated snapshot, and plugins with pending data migrations remain blocked until Doctor completes them.
+Runtime preparation checks pending data migrations through the shared-state read worker before registering plugins. Once checked, the process reuses that ledger result across plugin generations until a committed deferred-migration write invalidates it. Unrelated state writes do not repeat the check. Explicit artifact-preserving inspection keeps its isolated snapshot, and plugins with pending data migrations remain blocked until Doctor completes them. A plugin may separately declare explicit recovery CLI subtrees in its Doctor contract. The CLI can register those subtrees while migration withholds normal entrypoints; this never admits normal runtime code or invokes automatic recovery.
 
 Gateway startup confirms completed plugin migrations through the admitted live database reader, so checking a small migration ledger does not copy the entire shared database. Offline Doctor inspection retains its artifact-preserving snapshots.
 
@@ -172,6 +172,8 @@ Channel setup catalogs retain the requested workspace and load-path scope, inclu
 After startup, runtime readers reuse that inventory without filesystem discovery, manifest rereads, or freshness checks. Narrow plugin selections are in-memory views of the same inventory. Changing an account or an agent's run workspace does not invalidate it. Explicit plugin lifecycle operations prepare a new inventory for installs, updates, removals, source or manifest edits, and discovery-root changes before publishing it to the running Gateway.
 
 Plugin enablement readers can pass `rootConfig` to `resolveEffectiveEnableState` without constructing a normalized `config` copy. The policy owner reuses the published runtime configuration's prepared policy and refreshes it on publication; an explicitly supplied normalized `config` still takes precedence. Public normalization helpers continue to return caller-owned mutable copies.
+
+Plugin lifecycle confirmations use the complete committed inventory; catalog visibility filters only presentation and never make a successful install or policy change appear missing. Hidden Labs features remain hidden until explicitly enabled.
 
 Plugin inventory responses share prepared enablement and package-ownership facts between install-health diagnostics and catalog presentation. Those facts belong to one synchronous response preparation, after hosted catalog loading and before optional category loading; maintenance operations still prepare their own current ownership checks.
 
@@ -243,7 +245,7 @@ Retained work and in-flight calls share a 60-second pre-stop budget. Retained ru
 
 Automatic config reloads defer before closing admission when the affected plugin has retained work or calls and cannot overlap generations. The previous configuration keeps serving; deferred edits do not mark readiness unhealthy or hold new runs behind the drain budget. The config watcher retries after the recorded work and cleanup settle. Repeated observations of the same saved revision reuse that pending outcome instead of starting another replacement attempt. A newer edit replaces the pending candidate.
 
-`config.set`, `config.patch`, and `config.apply` report a saved-but-deferred edit as an unsuccessful application, including the saved revision, reason, and when it can apply. The Control UI retains the saved values and displays **Saved; waiting to apply**. This is not a rollback of the saved file: the previous plugin configuration remains active until automatic retry succeeds or the Gateway restarts. Explicit plugin reload requests retain their bounded drain and handover behavior; cleanup failures and failures after publication remain errors.
+`config.set`, `config.patch`, and `config.apply` report a saved-but-deferred edit as an unsuccessful application, including the saved revision, reason, and when it can apply. Agent saves through `agents.create`, `agents.update`, and `agents.delete` report the same outcome, because a waiting plugin reload also holds saved changes that need no reload, such as an agent's name or avatar. The Control UI retains the saved values and displays **Saved; waiting to apply**. This is not a rollback of the saved file: the previous plugin configuration remains active until automatic retry succeeds or the Gateway restarts. Explicit plugin reload requests retain their bounded drain and handover behavior; cleanup failures and failures after publication remain errors.
 
 A provider or harness plugin load failure remains recorded in its runtime generation. It makes that plugin unavailable without superseding the generation or blocking models that use healthy plugins. Inspect the failing owner with `openclaw plugins inspect <id> --runtime --json`. Use `openclaw doctor --fix` for supported installation repairs, or fix the reported problem in plugin code, then request `plugins.reload` through the admin Gateway API to load the repaired plugin.
 
@@ -263,7 +265,7 @@ A later reload can retry after pending cleanup completes successfully, without c
 
 Missing captured source files produce a replacement warning instead of preventing a fresh plugin load. Recovery snapshots must contain every previously captured input, including companion files. If replacement then fails, recovery restores only plugins with available captured code; it does not substitute changed installed files for a missing snapshot. Existing call-drain and resource-cleanup requirements still apply.
 
-At the end of a reload, the Gateway awaits disposal of unused recovery snapshots without blocking the event loop on their preparation workers. Cleanup attempts every snapshot before reporting failures, so one failed disposal does not strand unrelated captured source.
+Before replacing a serving plugin, async recovery copies its captured source through the existing broker resource owner. That owner creates the recovery directory, relocates dependency links, validates native references, and cleans up failed copies; the host retains native leases and path mappings. Recovery custody survives retirement of the original preparation source. Synchronous recovery forks retain their inline contract. At the end of a reload, the Gateway awaits disposal of unused recovery snapshots without blocking the event loop on their preparation workers. Cleanup attempts every snapshot before reporting failures, so one failed disposal does not strand unrelated captured source.
 
 Gateway shutdown also joins actual harness, MCP, LSP, embedding, and media cleanup after their initial grace periods. When clearing the active registry, plugin host cleanup can advance to later hooks after a timeout, but registry resets and shared database closure wait for its actual completion. These waits preserve resources for cleanup; they do not restore a retired plugin's runtime authority.
 
@@ -306,6 +308,11 @@ rebuild first when the installation loads compiled output. Embedded executable c
 changes require a newly built executable. External on-disk plugins continue to
 capture updated source and dependencies on explicit reload.
 
+Bundled public surfaces that would load TypeScript below `node_modules` use the
+matching `dist/extensions/<plugin>/` or `dist-runtime/extensions/<plugin>/`
+JavaScript artifact when available. Resolution follows release symlinks, so Git
+releases built by older updaters do not need a manual relocation to start.
+
 For development, `OPENCLAW_DEV_RELOAD_BUNDLED_PLUGINS=1` lets an explicit reload
 capture a bundled plugin's own code: its package tree and the build chunks that
 `dist/runtime-dependency-ownership.json` lists for that plugin. Those chunks are used
@@ -322,6 +329,20 @@ Source preparation workers wake synchronous host readers after posting results,
 callback requests, and consumption acknowledgements. The shared sequence is a
 progress hint only: the host still services the transport and checks the actual
 task receipt and deadline. Readers retain bounded polling for worker failures.
+
+Asynchronous source preparation allocates its source and native capture roots through
+the existing broker resource owner; catalog startup uses that owner for its source
+root. The broker holds the physical staging tokens while execution workers borrow
+paths. Host cache and recovery leases can retain native captures after preparation
+or its execution source has fully closed, so an unexpected preparation-worker exit
+cannot prematurely release a token. Ordinarily, the last lease retires the physical
+root. Loaded native code retains its physical custody and the unrefed existing
+broker until host exit; closing a cache does not unload native code.
+Unbound execution sources reuse that process-owned broker across ordinary Gateway
+close/restart, including when an old cache lease closes after successor admission.
+Transport loss or supervisor-loss recovery leaves terminal broker authority; a
+fresh source then uses a new broker, while any loaded native code retains surviving
+old custody until host exit. This failure case does not reopen old authority.
 
 Doctor retains an unexecuted source snapshot across its maintenance phases.
 Selected setup sources are prepared by the existing plugin preparation worker
@@ -627,7 +648,8 @@ native namespace member advances a counter, forwarded through the existing worke
 task channel at most once per second unless the active plugin changes. The parent allows admission
 to continue while that counter advances. After 180 seconds without progress, it
 records a failure naming the plugin and native reference verification stage and
-closes the worker without automatically recapturing that inventory. Reload the
+closes the worker without automatically recapturing that inventory. Time the host
+spends asleep or stopped does not count toward those 180 seconds. Reload the
 plugin or restart the Gateway to retry. Parent probes and queued requests remain
 bounded; provider discovery starts its own 180-second deadline after admission.
 Inventory retirement and shutdown still close the worker.
@@ -688,9 +710,12 @@ or a later dynamic import.
 Dynamic TypeScript imports preserve asynchronous CommonJS execution, including
 top-level await and `module.exports`, while source loaded from native JavaScript
 follows Node's module format. The first evaluation fixes that mode for the
-instance; resolving a module alone does not evaluate it. Compiler outputs are
-allocated on first resolution, not for every captured TypeScript file. A
-resolve-only call returns a stable existing path without compiling the module.
+instance; resolving a module alone does not evaluate it. The capture producer
+prepares real execution paths for admitted TypeScript sources. A resolve-only call
+returns one of these stable existing paths without compiling the module.
+Capture retains verified source text for these files. The compiler consumes that
+text and supplies its output directly to Node's load hook on first execution,
+without reopening captured sources or creating temporary compiler output files.
 Jiti-backed modules use Jiti's transformed runtime bindings for loader helpers,
 without a separate TypeScript analysis pass. Source
 `import.meta.resolve` retains Jiti's optional parent URL and resolution options,

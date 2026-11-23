@@ -2,6 +2,8 @@ import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { isAgentRunRestartAbortReason } from "../../agents/run-termination.js";
+import { GatewayOperatorAccessUnavailableError } from "../../infra/operator-authority-error.js";
+import { GatewayDispatchUnavailableError } from "../../infra/restart-recovery-errors.js";
 import {
   beginGatewayRestartSignalAdmission,
   GatewayDrainingError,
@@ -65,14 +67,28 @@ const queuedState = () => getExistingFollowupQueue(key);
 const waitForRoots = (count = 0) =>
   vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(count));
 
-it.each([
-  { callback: "same", stillClosed: false },
-  { callback: "fresh", stillClosed: false },
-  { callback: "same", stillClosed: true },
-  { callback: "fresh", stillClosed: true },
-] as const)(
-  "honors a $callback callback's drain request while an attempt unwinds (still closed: $stillClosed)",
-  async ({ callback, stillClosed }) => {
+it.each(
+  [
+    { callback: "same", stillClosed: false },
+    { callback: "fresh", stillClosed: false },
+    { callback: "same", stillClosed: true },
+    { callback: "fresh", stillClosed: true },
+  ].flatMap((entry) =>
+    (["database", "policy", "ingress"] as const).map((failure) => ({
+      callback: entry.callback,
+      stillClosed: entry.stillClosed,
+      failure,
+    })),
+  ),
+)(
+  "honors a $callback callback's drain request after $failure refusal (still closed: $stillClosed)",
+  async ({ callback, stillClosed, failure }) => {
+    const unavailable =
+      failure === "policy"
+        ? new GatewayOperatorAccessUnavailableError()
+        : failure === "ingress"
+          ? new GatewayDispatchUnavailableError("chat.send", true)
+          : new AgentDatabaseExecutionAdmissionClosedError("database is still closing");
     vi.useFakeTimers();
     const refused = createDeferred();
     const release = createDeferred();
@@ -85,10 +101,7 @@ it.each([
         return;
       }
       if (stillClosed) {
-        rejectQueuePreparation(
-          run,
-          new AgentDatabaseExecutionAdmissionClosedError("database is still closing"),
-        );
+        rejectQueuePreparation(run, unavailable);
       }
       delivered(run);
     };
@@ -98,10 +111,7 @@ it.each([
       }
       refused.resolve();
       await release.promise;
-      rejectQueuePreparation(
-        run,
-        new AgentDatabaseExecutionAdmissionClosedError("retired database owner"),
-      );
+      rejectQueuePreparation(run, unavailable);
     };
     const queued = createRun({ prompt: "resume after the explicit wake" });
     try {

@@ -39,7 +39,11 @@ function response(
   command.mockImplementationOnce(async (invocation: RunManagedCommandOptions) => {
     const child = new ChildProcess();
     const streams = { stdout: new PassThrough(), stderr: new PassThrough() };
-    Object.assign(child, streams);
+    Object.defineProperties(child, {
+      stdin: { value: null },
+      stdout: { value: streams.stdout },
+      stderr: { value: streams.stderr },
+    });
     try {
       invocation.onReady?.(child);
       for (const stream of ["stdout", "stderr"] as const) {

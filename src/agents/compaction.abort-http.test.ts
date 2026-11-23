@@ -1,5 +1,4 @@
 import { createServer } from "node:http";
-import { performance } from "node:perf_hooks";
 import { describe, expect, it } from "vitest";
 import * as httpFixtures from "../../test/helpers/gateway-integration-fixtures.js";
 import { makeUserMessage } from "../../test/helpers/user-message.js";
@@ -8,12 +7,10 @@ import type { AgentMessage } from "./runtime/index.js";
 import type { ExtensionContext } from "./sessions/index.js";
 import { makeProviderModelFixture } from "./test-helpers/provider-model-fixture.js";
 
-describe("compaction retry backoff over real HTTP", () => {
-  it("aborts after one provider response without changing the source history", async () => {
+describe("compaction provider rejection over real HTTP", () => {
+  it("does not retry a deterministic 400 or change the source history", async () => {
     const controller = new AbortController();
     const requests: Array<{ method: string; path: string }> = [];
-    let abortedAt: number | undefined;
-    let abortTimer: ReturnType<typeof setTimeout> | undefined;
 
     const server = createServer((request, response) => {
       request.resume();
@@ -25,21 +22,11 @@ describe("compaction retry backoff over real HTTP", () => {
       response.end(
         JSON.stringify({
           error: {
-            message: "Transient loopback provider rejection",
+            message: "This model does not support chat",
             type: "invalid_request_error",
-            code: "loopback_compaction_retry",
+            code: "401006",
           },
         }),
-        () => {
-          // Start cancellation only after the real provider response can put
-          // production compaction into its minimum 500 ms retry backoff.
-          if (requests.length === 1) {
-            abortTimer = setTimeout(() => {
-              abortedAt = performance.now();
-              controller.abort();
-            }, 200);
-          }
-        },
       );
     });
 
@@ -69,17 +56,10 @@ describe("compaction retry backoff over real HTTP", () => {
         reserveTokens: 1_000,
       });
 
-      await expect(summary).rejects.toThrow(/abort/i);
-      if (abortedAt === undefined) {
-        throw new Error("Compaction did not abort after the real loopback response");
-      }
-      expect(performance.now() - abortedAt).toBeLessThan(400);
+      await expect(summary).rejects.toThrow("This model does not support chat");
       expect(requests).toEqual([{ method: "POST", path: "/v1/chat/completions" }]);
       expect(Buffer.from(JSON.stringify(messages)).equals(originalHistory)).toBe(true);
     } finally {
-      if (abortTimer !== undefined) {
-        clearTimeout(abortTimer);
-      }
       await new Promise<void>((resolve, reject) => {
         server.close((error) => (error ? reject(error) : resolve()));
       });

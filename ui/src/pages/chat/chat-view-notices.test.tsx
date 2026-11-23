@@ -68,6 +68,7 @@ it.each([false, true])("collapses a replacement diagnostic (mobile=%s)", async (
     { runError: { summary: "First diagnostic" } },
     mobile,
   );
+  await vi.dynamicImportSettled();
   const details = await waitForElement(container, "details", "first diagnostic");
   details.setAttribute("open", "");
   publish({ messages: [], runError: { summary: "Second diagnostic" } });

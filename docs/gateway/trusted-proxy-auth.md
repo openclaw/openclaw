@@ -150,6 +150,9 @@ Update and restart health checks can also reuse the local CLI's existing paired 
 <ParamField path="gateway.auth.trustedProxy.deviceAutoApprove.scopes" type="string[]" default='["operator.read", "operator.write", "operator.approvals", "operator.questions"]'>
   Maximum scopes granted to an auto-approved operator device. Explicitly listing `operator.admin` lets every proxy-authenticated user request an automatic full-admin device grant, makes scope-less requests receive full admin automatically, and triggers the CRITICAL `gateway.trusted_proxy_device_auto_approve_admin` security audit finding plus a Gateway startup warning.
 </ParamField>
+<ParamField path="gateway.auth.trustedProxy.narrowToDeviceGrant" type="boolean" default="false">
+  Lets approved CLI and TUI devices connect within their paired scopes instead of filing a scope-upgrade request, and issues the TUI a device token. See [Approved CLI and TUI grants](#approved-cli-and-tui-grants).
+</ParamField>
 
 <Warning>
 Any local process that can connect to the Gateway can impersonate a loopback reverse proxy by sending identity headers. Only enable `allowLoopback` when the reverse proxy is the sole local listener for incoming user traffic, direct Gateway access is locked down, and you trust local processes. The proxy must authenticate users and strip or overwrite client-supplied identity headers; required headers alone do not distinguish the proxy from another local process.
@@ -176,6 +179,120 @@ do not use identity-scope grants and are unaffected by those scope edits.
 A configuration writer receives its accepted result before its connection closes.
 Pending handshakes and HTTP requests recheck the policy applicable to their authority
 after asynchronous waits.
+
+## Enterprise browser delegation
+
+OpenClaw Enterprise (OCE) can authorize each browser request without copying its
+user roster into `allowUsers`. When native browser access is enabled for an
+OCE-managed Agent, OCE automatically configures `gateway.auth.trustedProxy`,
+prepares a private credential for each Agent revision, and mounts its file only
+in the Gateway. No manual OpenClaw configuration is required. The following
+example shows the generated settings:
+
+```json5
+{
+  userHeader: "x-occ-identity",
+  delegation: {
+    credentialFile: "/var/run/openclaw/browser-delegation/browser-key",
+  },
+}
+```
+
+The file contains 32 random bytes encoded as 64 lowercase hexadecimal characters,
+with an optional final newline. The proxy sends that value in
+`x-occ-browser-key`, the verified subject in `x-occ-identity`, and exactly
+`operator.admin` or `operator.sessions.write` in `x-openclaw-scopes`. Existing
+trusted-source, required-header, and browser-origin checks still apply. Ingress
+must strip client-supplied headers; only the private OCE browser route may assert
+a reserved OCE subject and revision credential.
+
+The `oce` authority and `oce:v1:` subject prefix are fixed protocol values, not
+configuration settings. The subject contains 64 lowercase hexadecimal characters
+derived by OCE from its Installation and Principal. It resolves to a durable Gateway-local
+profile through an external identity binding, separate from email aliases.
+Native linking and merges cannot change that binding. An OCE account with
+multiple linked sign-in methods keeps one profile. Display-name changes do not
+change identity. Retain Gateway storage to retain profiles and attribution.
+
+Delegated scopes are both the initial grant and the maximum authority. Native
+roles and session-sharing rules can narrow them. Static `identityScopes`, device
+grants, and `deviceAutoApprove` cannot widen them; delegated connections never
+enroll devices or issue device tokens or ambient plugin-auth cookies. Session-only operators can read their own
+profile and use authorized sessions, but cannot invoke administrative methods.
+Separate profiles do not isolate Agent tools, files, or credentials.
+
+Missing credentials, invalid reserved subjects, unsupported scope values, and
+profile-store failures refuse access. Reserved claims cannot fall back to
+password, token, device, or other ingress authentication. Static non-OCE users
+retain the normal trusted-proxy behavior. OCE checks its live session and Agent
+permissions; the Gateway checks its own live profile and authorization policy.
+Credential-file replacement or removal invalidates admitted grants when the
+one-second credential-file poll observes the change. Reconnect with a current grant;
+restoring a previous key does not revive old connections.
+
+## Organization co-author defaults
+
+Optionally import a commit-credit name/email pair from your existing identity-aware
+proxy. This works with authenticated profiles that have no verified GitHub account.
+It preserves the principal from `userHeader`; credit fields never grant access,
+create sign-in aliases, or establish GitHub account ownership.
+
+```json5
+{
+  gateway: {
+    auth: {
+      mode: "trusted-proxy",
+      trustedProxy: {
+        userHeader: "x-authenticated-subject",
+        gitCoauthor: {
+          nameHeader: "x-coauthor-name",
+          emailHeader: "x-coauthor-email",
+          emailVerifiedHeader: "x-coauthor-email-verified",
+        },
+      },
+    },
+  },
+}
+```
+
+Keep your existing proxy trust, allowlist, origin, and scope configuration alongside
+this example. Header names are case-insensitive HTTP field names. Both name and
+email must be present and valid. If configured, `emailVerifiedHeader` must contain
+exactly `true`; omit that setting only when your organization accepts the proxy's
+email assertion without a separate verification claim.
+
+For Keycloak with OAuth2 Proxy:
+
+1. Populate each user's first name, last name, and email. Configure client scopes
+   or protocol mappers to emit `name`, `email`, and, when required, `email_verified`.
+   Dedicated administrator-managed commit-name/email claims are also suitable.
+2. Configure OAuth2 Proxy to overwrite the three configured upstream headers from
+   those authenticated claims on HTTP requests and WebSocket upgrades. Strip any
+   client-supplied copies. Keep the existing issuer-qualified subject as the
+   authenticated principal; email is not an authorization input.
+3. Configure the matching `gitCoauthor` header names in OpenClaw and sign in again.
+   Profile shows the imported organization pair read-only.
+4. Each person explicitly enables **Git co-author credit** before their supplied
+   address is published in commit history. Importing claims does not enable it.
+
+Successful profile admission refreshes the organization pair. Missing, malformed,
+partial, or unverified configured claims clear that pair. Unchanged claims do not
+invalidate pending credit. Removing the mapping stops using stored organization
+defaults and leaves the existing GitHub fallback. Profile does not offer manual
+name/email entry or per-user identity overrides. Imported details are bound to the
+configured principal and credit header mapping. A replacement mapping withholds
+old details until the next successful sign-in and requires renewed disclosure
+consent. A stale Profile page cannot enable a pair it has not observed; it refreshes
+the details and asks for a new choice. Later email updates under the same mapping
+retain the profile-wide credit preference.
+
+Organization defaults use one protected metadata slot outside the 128-key user
+preference allowance. Importing them does not consume a user preference slot or
+block sign-in at that limit.
+
+These are organization-supplied credit details. An `email_verified` claim reflects
+the provider's email-verification policy, not proof of a GitHub account. See
+[Git co-author credit](/concepts/user-model#gateway-profile-and-github-credit).
 
 ## Per-identity scope grants
 
@@ -247,6 +364,58 @@ The default is `enabled: false`. When enabled, all of these rules apply:
 <Warning>
 Enabling this option delegates new browser and native UI operator device enrollment entirely to the reverse-proxy identity. A compromised proxy account can enroll a persistent device with every configured scope. Listing `operator.admin` makes that device a full administrator without manual approval. Keep the Gateway reachable only through the proxy, require strong proxy authentication, overwrite identity headers, and use a narrow `allowUsers` list.
 </Warning>
+
+## Approved CLI and TUI grants
+
+An administrator can approve a CLI or TUI device for fewer scopes than its
+client requests, for example a guest approved for only
+`operator.sessions.write`. By default, each connection that requests more files
+a scope-upgrade request. Set `narrowToDeviceGrant` to connect within the
+approved grant instead:
+
+```json5
+{
+  gateway: {
+    auth: {
+      mode: "trusted-proxy",
+      trustedProxy: {
+        userHeader: "x-forwarded-user",
+        narrowToDeviceGrant: true,
+      },
+    },
+  },
+}
+```
+
+With this setting, a connection from an approved device whose request exceeds
+its grant receives the intersection of the two, with no pairing request and no
+audit entry. The hello reply reports the resulting scopes, so a newly approved
+device learns its grant on its first connection. The TUI also receives a device
+token, as the CLI already does, and stores the grant for later starts. The
+option is off by default, and without it a trusted-proxy Gateway issues the TUI
+no device token. When [named operator roles](/gateway/operator-scopes#named-operator-roles)
+are enforced, a human operator identified by the proxy receives no device token
+either way; that device's CLI and TUI still connect within the grant without
+storing it.
+The setting applies only to operator devices
+whose paired key matches and that send no browser `Origin`; browser clients and
+new device enrollment keep their existing behavior. A connection never receives
+more than the grant. Because `operator.admin` implies every operator scope, a
+request that includes it always overlaps the grant and connects within it. Only a
+request that shares no scope with the grant, such as `operator.pairing` alone
+against a session-only grant, files the upgrade request as before.
+
+This setup needs no [named operator roles](/gateway/operator-scopes#named-operator-roles):
+the approved device grant alone sets what a guest's CLI or TUI can do. Set
+`gateway.roles.default` only when you want to limit people by who they are,
+across all their devices, rather than by each device's grant.
+
+The TUI's device token, like the CLI's, authenticates a direct Gateway
+connection without the proxy identity until the device or token is revoked.
+`openclaw security audit` reports the warn-level
+`gateway.trusted_proxy_narrow_to_device_grant` finding while the option is on.
+Keep the proxy as the only Gateway ingress, and remove a guest's device with
+`openclaw devices remove <deviceId>` when their access ends.
 
 ## Control UI pairing behavior
 
@@ -536,6 +705,7 @@ The audit checks for:
 - Empty `allowUsers` (allows any authenticated user).
 - Enabled `allowLoopback` for same-host proxy sources.
 - Enabled operator device auto-approval (delegates new browser and native UI device pairing to the proxy identity).
+- Enabled `narrowToDeviceGrant` (the TUI holds a durable device token, as the CLI does).
 
 Separate, non-trusted-proxy-specific findings also apply whenever Control UI is exposed: wildcard or missing `gateway.controlUi.allowedOrigins`, and Host-header origin fallback.
 
@@ -598,6 +768,9 @@ A Gateway token cannot replace proxy authentication. Do not send identity header
     - Your proxy configuration for those specific headers.
     - Whether headers are being stripped somewhere in the chain.
 
+  </Accordion>
+  <Accordion title="trusted_proxy_access_invalid / trusted_proxy_access_user_mismatch / trusted_proxy_access_keys_unavailable">
+    Only with [Cloudflare Access JWT verification](/gateway/cloudflare-access#verify-the-access-jwt) on. `invalid`: the `cf-access-jwt-assertion` is not signed by the configured team, is for another application (`audience`), or has expired; check `issuer` and `audience`. `user_mismatch`: the user header differs from the assertion's signed email, so something other than Access set it. `keys_unavailable`: the Gateway could not load usable keys from `<issuer>/cdn-cgi/access/certs` and has no cached set younger than 24 hours. Check outbound HTTPS and the issuer's certs response.
   </Accordion>
   <Accordion title="trusted_proxy_user_not_allowed">
     The user is authenticated but not in `allowUsers`. Sign in with a permitted account or ask the Gateway administrator to review the intended access policy. Do not remove the allowlist as a connectivity workaround.

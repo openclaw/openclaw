@@ -6,7 +6,7 @@ import {
 import { prepareDashboardSessionTitle } from "../dashboard-session-title.js";
 import { ModelAccountConnectAuthorityError } from "../model-account-connect-errors.js";
 import { authorizeGatewaySessionCreation } from "../operator-role-policy.js";
-import { captureGatewayOperatorRunAuthority } from "../operator-run-authority.js";
+import { prepareGatewayOperatorRunAuthority } from "../operator-run-authority.js";
 import { prepareSessionCreateModelSelection } from "../session-create-model-selection.js";
 import { SessionMutationAuthorizationChangedError } from "../session-mutation-authorization-error.js";
 import { resolveAgentIdOrRespondError } from "./agent-id-shared.js";
@@ -65,7 +65,7 @@ export const sessionTitleHandlers: GatewayRequestHandlers = {
         respond(true, { title: null });
         return;
       }
-      let capturedOperator: Awaited<ReturnType<typeof captureGatewayOperatorRunAuthority>>;
+      let capturedOperator: Awaited<ReturnType<typeof prepareGatewayOperatorRunAuthority>>;
       try {
         const personalSelection = await preparePersonalModelSelection(
           { client, context, signal },
@@ -83,7 +83,7 @@ export const sessionTitleHandlers: GatewayRequestHandlers = {
             throw new SessionMutationAuthorizationChangedError(currentCreationError);
           }
         };
-        capturedOperator = await captureGatewayOperatorRunAuthority({
+        capturedOperator = await prepareGatewayOperatorRunAuthority({
           client,
           context,
           hasCurrentClientAuthority,

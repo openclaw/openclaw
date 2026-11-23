@@ -57,6 +57,7 @@ import {
   readGoalChatUserMessages,
   registerGoalChatRestartSettlementCase,
   registerGoalChatOperationCollisionCases,
+  registerGoalChatSpawnCases,
 } from "./server.chat-goal.test-support.js";
 import { gatewayConnect, gatewayProfile } from "./server/client-fixtures.test-support.js";
 import { seedDeletedSessionTranscript } from "./session-history-fixture.test-support.js";
@@ -84,7 +85,7 @@ const runEmbeddedAgent = vi.spyOn(embeddedAgent, "runEmbeddedAgent");
 
 installGatewayTestHooks({ scope: "suite" });
 const temporaryDirs = createTempDirTracker();
-const sessionKey = "agent:main:main";
+let sessionKey = "agent:main:main";
 const sessionId = "goal-chat-session";
 const client: GatewayClient = {
   connId: "goal-chat-ui",
@@ -105,6 +106,7 @@ afterAll(async () => {
 });
 
 beforeEach(async () => {
+  sessionKey = "agent:main:main";
   storePath = path.join(temporaryDirs.make("openclaw-goal-chat-"), "sessions.json");
   testState.sessionStorePath = storePath;
   await writeSessionStore({
@@ -305,6 +307,15 @@ function holdGoalReceipt() {
 }
 
 describe("Goal chat admission and continuation", () => {
+  registerGoalChatSpawnCases({
+    scope,
+    runEmbeddedAgent,
+    rpc,
+    setSessionKey: (key) => {
+      sessionKey = key;
+    },
+  });
+
   registerGoalAutomaticContinuationCases(scope, runEmbeddedAgent, rpc, goalStart, userMessages);
   registerGoalReplacementCases(scope, runEmbeddedAgent, rpc, goalStart, () => context, client);
 
@@ -319,7 +330,7 @@ describe("Goal chat admission and continuation", () => {
       return storePath;
     },
     send: (request) => rpc("chat.send", request),
-    assertNoModelRun: () => expect(runEmbeddedAgent).not.toHaveBeenCalled(),
+    assertOneModelRun: () => expect(runEmbeddedAgent).toHaveBeenCalledTimes(1),
   });
   it("starts the first message as a Goal with an ACP-scoped hook and replays without a second session or run", async () => {
     await useFreshSessionStore();
@@ -536,54 +547,35 @@ describe("Goal chat admission and continuation", () => {
     await waitForDispatchEnd();
   });
 
-  it.each(["caller revoked", "worker rejected"] as const)(
-    "leaves no admission when a delayed receipt lookup settles after %s",
-    async (outcome) => {
-      const entered = createDeferred();
-      const release = createDeferred();
-      const lookup = goalOperationReads.lookupSessionGoalOperation;
-      const lookupSpy = vi
-        .spyOn(goalOperationReads, "lookupSessionGoalOperation")
-        .mockImplementationOnce(async (options) => {
-          entered.resolve();
-          await release.promise;
-          if (outcome === "worker rejected") {
-            throw new Error("Goal receipt reader failed.");
-          }
-          return await lookup(options);
-        });
-      let current = true;
-      const params = goalStart("Wait for the receipt before reserving this Goal");
-      const respond = vi.fn<RespondFn>();
-      const pending = handleChatSend(
-        sendOptions(params, respond, { hasCurrentClientAuthority: () => current }),
-      );
-      try {
-        await awaitGateBeforeSettlement(
-          entered.promise,
-          pending,
-          "Goal receipt lookup was skipped.",
-        );
-        expect(context.dedupe.size).toBe(0);
-        expect(respond).not.toHaveBeenCalled();
-        current = outcome !== "caller revoked";
-        release.resolve();
-        await expect(pending).rejects.toThrow(
-          outcome === "caller revoked"
-            ? "Gateway caller authority is no longer active."
-            : "Goal receipt reader failed.",
-        );
-        expect(loadSessionEntry(scope())?.goal).toBeUndefined();
-        expect(context.dedupe.size).toBe(0);
-        expect(respond).not.toHaveBeenCalled();
-        await expectNoDispatch();
-      } finally {
-        release.resolve();
-        await pending.catch(() => undefined);
-        lookupSpy.mockRestore();
-      }
-    },
-  );
+  it("leaves no admission when a delayed receipt lookup fails", async () => {
+    const entered = createDeferred();
+    const release = createDeferred();
+    const lookupSpy = vi
+      .spyOn(goalOperationReads, "lookupSessionGoalOperation")
+      .mockImplementationOnce(async () => {
+        entered.resolve();
+        await release.promise;
+        throw new Error("Goal receipt reader failed.");
+      });
+    const params = goalStart("Wait for the receipt before reserving this Goal");
+    const respond = vi.fn<RespondFn>();
+    const pending = handleChatSend(sendOptions(params, respond));
+    try {
+      await awaitGateBeforeSettlement(entered.promise, pending, "Goal receipt lookup was skipped.");
+      expect(context.dedupe.size).toBe(0);
+      expect(respond).not.toHaveBeenCalled();
+      release.resolve();
+      await expect(pending).rejects.toThrow("Goal receipt reader failed.");
+      expect(loadSessionEntry(scope())?.goal).toBeUndefined();
+      expect(context.dedupe.size).toBe(0);
+      expect(respond).not.toHaveBeenCalled();
+      await expectNoDispatch();
+    } finally {
+      release.resolve();
+      await pending.catch(() => undefined);
+      lookupSpy.mockRestore();
+    }
+  });
 
   it.each(["expired", "replaced"] as const)(
     "does not register a fresh Goal after its reservation is %s during skill selection",

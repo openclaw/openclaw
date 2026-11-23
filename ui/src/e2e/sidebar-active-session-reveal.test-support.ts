@@ -91,7 +91,9 @@ export async function runActiveSessionRevealScenario(page: Page, baseUrl: string
   const documentation = sectionToggle("category:Documentation");
   const website = sectionToggle("category:Website");
   await page.goto(controlUiSessionUrl(baseUrl, parent.key));
-  await page.locator(".chat-subagent-wait a").getByText(leaf.label!, { exact: true }).waitFor();
+  await page
+    .getByText("The examples are ready for the final release verification.", { exact: true })
+    .waitFor();
   for (const key of [unrelated.key, parent.key, middle.key, root.key]) {
     if ((await toggle(key).getAttribute("aria-expanded")) !== "true") {
       await toggle(key).focus();
@@ -124,7 +126,7 @@ export async function runActiveSessionRevealScenario(page: Page, baseUrl: string
     sessionInfo: leaf,
     inFlightRun: { runId: "verification-run", startedAt: leaf.startedAt },
   });
-  await page.locator(".chat-subagent-wait a").getByText(leaf.label!, { exact: true }).click();
+  await page.goto(controlUiSessionUrl(baseUrl, leaf.key));
   await expect.poll(() => page.url()).toContain("dashboard/verification");
   await page
     .getByText("Verifying the release candidate against the reviewed integration examples.", {

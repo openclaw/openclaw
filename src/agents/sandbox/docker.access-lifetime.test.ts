@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import { createAdmittedRunOperatorAuthority } from "../admitted-run-context.js";
+import { createTestOperatorAuthority } from "../admitted-run-context.test-support.js";
 import { createEnteredGate } from "../entered-gate.test-support.js";
 import { resolveSandboxConfigForAgent } from "./config.js";
 import { execContainerRaw, type ExecContainerRawOptions } from "./container-engine.js";
@@ -122,11 +122,16 @@ vi.mock("./container-engine.js", () => ({
           ? result("", 125, "engine connection refused")
           : result(fixture.inspect(container, fixture.terminalState === "paused"));
       }
-      if (
-        args[2] ===
-        '{{.Id}}\n{{.State.Running}}\n{{.HostConfig.ReadonlyRootfs}}\n{{ index .Config.Labels "openclaw.configHash" }}'
-      ) {
-        return result(`${container.id}\n${container.running}\ntrue\n${container.hash}`);
+      if (args[2]?.includes('"State":{{json .State}}')) {
+        return result(
+          JSON.stringify({
+            Id: container.id,
+            State: { Running: container.running, Paused: false },
+            ReadonlyRootfs: true,
+            Labels: { "openclaw.configHash": container.hash },
+            Mounts: [],
+          }),
+        );
       }
       return result(
         args[2] === "{{.Id}}"
@@ -178,7 +183,7 @@ function source(params: SourceOptions = {}) {
     references++;
     return release;
   };
-  const authority = createAdmittedRunOperatorAuthority({
+  const authority = createTestOperatorAuthority({
     profileId: params.profileId ?? "guest",
     scopes: ["operator.write"],
     gatewayAccessGrant: { pluginId: "fixture-access", grantId: params.grantId ?? "original" },
@@ -388,7 +393,7 @@ it.each([
       const other = source({ grantId: kind === "different-grant" ? "other" : "original" });
       reuse.operatorAuthority =
         kind === "staff"
-          ? createAdmittedRunOperatorAuthority({ ...other.authority, gatewayAccessGrant: null })
+          ? createTestOperatorAuthority({ ...other.authority, gatewayAccessGrant: null })
           : other.authority;
     }
     if (mixed) {
@@ -477,7 +482,11 @@ it("recovers a pending unallocated attempt when setup is removed", async () => {
   const params = provision(source());
   delete params.cfg.docker.setupCommand;
   const created = await ensureSandboxContainer(params);
-  await expect(ensureSandboxContainer(params)).resolves.toEqual(created);
+  await expect(ensureSandboxContainer(params)).resolves.toMatchObject({
+    containerId: created.containerId,
+    containerName: created.containerName,
+    currentConfig: true,
+  });
   expect(fixture.registry.get(created.containerName)?.runtimeState).toBe("ready");
   expectCounts({ create: 2, exec: 0 });
 });

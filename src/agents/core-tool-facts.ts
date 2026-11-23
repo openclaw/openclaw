@@ -21,6 +21,8 @@ type CoreToolFacts = {
   replay?: "both" | "blind" | "recorded";
   // Present only on runs whose owner granted it; absence is not a policy mistake.
   runGranted?: true;
+  // A plugin builds this tool; only these ids may be claimed in a manifest's contracts.tools.
+  pluginBuilt?: true;
 };
 
 export type CoreToolDefinition = CoreToolFacts & {
@@ -66,7 +68,10 @@ export const CORE_TOOL_DEFINITIONS = [
   ...coreTools("runtime", { profiles: ["coding"] }, [
     ["exec", { executionLocation: "placement", factoryFamily: "shell" }],
     ["process", { executionLocation: "placement", factoryFamily: "shell" }],
-    ["code_execution", { includeInOpenClawGroup: true, factoryFamily: undefined }],
+    [
+      "code_execution",
+      { includeInOpenClawGroup: true, factoryFamily: undefined, pluginBuilt: true },
+    ],
     [
       "secrets",
       {
@@ -82,14 +87,14 @@ export const CORE_TOOL_DEFINITIONS = [
       includeInOpenClawGroup: true,
       replay: "both",
     },
-    [["web_search"], ["web_fetch"], ["x_search", { factoryFamily: undefined }]],
+    [["web_search"], ["web_fetch"], ["x_search", { factoryFamily: undefined, pluginBuilt: true }]],
   ),
   ...coreTools(
     "memory",
     { profiles: ["coding"], includeInOpenClawGroup: true, factoryFamily: undefined },
     [
-      ["memory_search"],
-      ["memory_get", { replay: "both" }],
+      ["memory_search", { pluginBuilt: true }],
+      ["memory_get", { replay: "both", pluginBuilt: true }],
       ["personal_instructions", { profiles: ["coding", "messaging"], factoryFamily: "openclaw" }],
     ],
   ),
@@ -107,21 +112,29 @@ export const CORE_TOOL_DEFINITIONS = [
     ["sessions_spawn", { executionLocation: "gateway" }],
     ["github_identity_status", { profiles: ["coding"] }],
     ["github_publish", { profiles: ["coding"] }],
+    ["session_project"],
     ["agents_wait", { profiles: ["coding"] }],
     ["sessions_yield"],
     ["subagents"],
     ["session_status", { profiles: ["minimal", "coding", "messaging"] }],
-    ["suggest_task", { profiles: ["coding"] }],
-    ["dismiss_task", { profiles: ["coding"] }],
+    // Offered only when the requesting operator UI can act on suggestion cards.
+    ["suggest_task", { profiles: ["coding"], runGranted: true }],
+    ["dismiss_task", { profiles: ["coding"], runGranted: true }],
   ]),
   ...coreTools("ui", { profiles: ["coding"], includeInOpenClawGroup: true }, [
-    ["browser", { executionLocation: "placement", profiles: [], factoryFamily: undefined }],
+    [
+      "browser",
+      { executionLocation: "placement", profiles: [], factoryFamily: undefined, pluginBuilt: true },
+    ],
     ["screen"],
     ["theme", { profiles: ["coding", "messaging"] }],
     ["dashboard"],
     ["terminal"],
     ["portal", { executionLocation: "gateway" }],
-    ["canvas", { profiles: [], includeInOpenClawGroup: false, factoryFamily: undefined }],
+    [
+      "canvas",
+      { profiles: [], includeInOpenClawGroup: false, factoryFamily: undefined, pluginBuilt: true },
+    ],
     ["show_widget", { profiles: [] }],
   ]),
   ...coreTools("messaging", { profiles: ["messaging"], includeInOpenClawGroup: true }, [
@@ -146,7 +159,10 @@ export const CORE_TOOL_DEFINITIONS = [
     ["progress_card"],
     ["ask_user", { profiles: ["coding", "messaging"] }],
     // Owned by the skill-workshop plugin; listed for profile and group membership.
-    ["skill_workshop", { executionLocation: "gateway", factoryFamily: undefined }],
+    [
+      "skill_workshop",
+      { executionLocation: "gateway", factoryFamily: undefined, pluginBuilt: true },
+    ],
     ["skill_library", { executionLocation: "gateway", runGranted: true }],
     ["skills_search", { factoryFamily: undefined, replay: "blind" }],
     ["skills_read", { factoryFamily: undefined, replay: "blind" }],
@@ -300,4 +316,9 @@ export function isKnownCoreToolId(toolId: string): boolean {
 /** Core tools that only exist on runs whose owner granted them, such as `skill_library`. */
 export function isRunGrantedCoreToolId(toolId: string): boolean {
   return CORE_TOOL_BY_ID.get(toolId)?.runGranted === true;
+}
+
+/** Catalog ids a plugin builds, such as `browser`; a manifest may claim only these. */
+export function isPluginBuiltCoreToolId(toolId: string): boolean {
+  return CORE_TOOL_BY_ID.get(toolId)?.pluginBuilt === true;
 }

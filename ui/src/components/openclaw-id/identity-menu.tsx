@@ -1,4 +1,4 @@
-import { createMemo, onSettled, refresh } from "solid-js";
+import { createMemo, createSignal, onSettled, refresh } from "solid-js";
 import type { GatewayEventListener } from "../../api/gateway.ts";
 import type {
   OpenClawIdPeopleLink,
@@ -7,6 +7,7 @@ import type {
 } from "../../lib/openclaw-id/types.ts";
 import { projectGateway } from "../../lib/reactive/application.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
+import { createTimeout } from "../../lib/reactive/timers.ts";
 import {
   renderSidebarIdentityMenu as SidebarIdentityMenu,
   type SidebarIdentityMenuParams,
@@ -61,6 +62,8 @@ export function OpenClawIdIdentityMenu(props: SidebarIdentityMenuParams) {
     onSettled(() => context.gateway.subscribeEvents(onGatewayEvent));
     return read;
   });
+  const [copied, setCopied] = createSignal(false);
+  const resetCopied = createTimeout(() => setCopied(false), 2200);
   const extension = createMemo(() => {
     const current = status();
     if (!current || current.status.state === "off") {
@@ -68,13 +71,17 @@ export function OpenClawIdIdentityMenu(props: SidebarIdentityMenuParams) {
     }
     return {
       identity: openClawIdMenuIdentity(current),
-      entries: openClawIdMenuEntries(current, publication()?.()),
+      entries: openClawIdMenuEntries(current, publication()?.(), copied),
       signOut: openClawIdSignOutEntries(current),
       onSelect: (value: string) =>
         selectOpenClawIdMenuValue(value, {
           status: status(),
           client: context.gateway.snapshot.client,
           basePath: props.basePath,
+          onLinkCopied: () => {
+            setCopied(true);
+            resetCopied.schedule();
+          },
           onKeysChanged: () => context.sidebarAttention.refreshOpenClawId(),
         }),
     };

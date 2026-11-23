@@ -172,7 +172,7 @@ it.for(["email", "github"] as const)(
                 return undefined;
               }
               if (requiresGitHub && !getUserProfileListItem(profile.profileId).githubIdentity) {
-                throw new Error("Verified GitHub identity required");
+                return undefined;
               }
               return visitor.service.authorize(
                 profile.emails,
@@ -259,7 +259,7 @@ it.for(["email", "github"] as const)(
           operatorRolePolicy: { scopes: guestRole.scopes },
         });
         expect(profile.operatorAccessAuthority).toBeTruthy();
-        expect(profile.hasCurrentClientAuthority()).toBe(true);
+        expect(profile.hasCurrentClientAuthority?.()).toBe(true);
         expect(getUserProfileListItem(profileId)).toMatchObject({
           emails: [principal],
           githubIdentity: numeric ? { login: "canonical-ada" } : null,
@@ -301,7 +301,7 @@ it.for(["email", "github"] as const)(
         }
         clock.mockReturnValue(NOW + DAY_MS);
         await deny();
-        expect(profile.hasCurrentClientAuthority()).toBe(false);
+        expect(profile.hasCurrentClientAuthority?.()).toBe(false);
         if (numeric) {
           expect([...visitor.grants.keys()]).toEqual(["github:42"]);
           expect(visitor.emails()).toEqual([]);

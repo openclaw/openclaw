@@ -2,6 +2,8 @@ import { once } from "node:events";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { WebSocket, WebSocketServer } from "ws";
 import { makeTextToolResult } from "../../../../test/helpers/text-tool-result.js";
+import { PROVIDER_STATE_SCOPE } from "../provider-types.js";
+import { claimConversationProviderState } from "../session-resources.js";
 import type { Context } from "../types.js";
 import {
   closeOpenAICodexWebSocketSessions,
@@ -81,7 +83,12 @@ describe("ChatGPT Responses rejected continuation", () => {
       });
       await once(server, "listening");
       const loopbackModel = createLoopbackModel(server);
-      const options = { apiKey, sessionId: "tool-replay", transport: "auto" as const };
+      const options = {
+        apiKey,
+        sessionId: "tool-replay",
+        [PROVIDER_STATE_SCOPE]: claimConversationProviderState("tool-replay"),
+        transport: "auto" as const,
+      };
       try {
         const run = (context: Context) =>
           streamOpenAICodexResponses(loopbackModel, context, options).result();

@@ -510,6 +510,7 @@ export async function rollbackConfigFileWriteIfUnchanged(params: {
       replaceFileAtomicSync({
         filePath: params.configPath,
         content: previousRaw,
+        allowDrvfsRenameRecovery: true,
         dirMode: params.stateDirectory
           ? (stateRootDirectoryMode(path.dirname(params.configPath), params.stateDirectory.path) ??
             0o700)

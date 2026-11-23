@@ -433,7 +433,7 @@ describe("webchat admission to plugin node duplex authority", () => {
         expect(prompt).toHaveBeenCalledOnce();
       } else {
         expect(launchErrors).toHaveLength(1);
-        expect(launchErrors[0]).toMatch(/no longer (active|current)/);
+        expect(launchErrors[0]).toMatch(/no longer (active|current)|placement changed/);
         expect(prompt).not.toHaveBeenCalled();
         expect(invoke).not.toHaveBeenCalled();
       }

@@ -155,7 +155,9 @@ async function resolveActiveContributors(
   });
   // Learned skills live on the host under the agent dir, and memory providers deny
   // sandboxed callers, so a sandboxed session can learn into neither.
-  if (sandboxRuntime.sandboxed) {
+  // Learning runs a model turn; with no model there is nothing it can learn into.
+  const model = params.model;
+  if (sandboxRuntime.sandboxed || !model) {
     return [];
   }
 
@@ -166,7 +168,7 @@ async function resolveActiveContributors(
         agentId: params.agentId,
         sessionKey: params.sessionKey,
         provider: params.provider,
-        model: params.model,
+        model,
         sessionEntry: params.sessionStore?.[params.sessionKey] ?? params.sessionEntry,
       })
     ) {

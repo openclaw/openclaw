@@ -190,7 +190,11 @@ struct GatewayDiscoverySelectionFlowTests {
                 }
                 try #require(session.requests.value.allSatisfy { $0.url == savedURL })
                 try await Self.press("Next", in: hosting)
-                try await TestWait.observed("connection-page discovery start") {
+                try await Self.press("Next", in: hosting)
+                // Only the Nearby choice browses the network and asks for Local Network access.
+                try #require(discovery.statusText == GatewayDiscoveryStatusText.idle)
+                try await Self.press("Nearby", in: hosting)
+                try await TestWait.observed("Nearby discovery start") {
                     discovery.statusText != GatewayDiscoveryStatusText.idle
                 }
                 // Stop only this injected discovery producer before supplying its normal public
@@ -263,7 +267,7 @@ struct GatewayDiscoverySelectionFlowTests {
         let matches = try await AppKitTestSupport.accessibilityElements(in: root).filter {
             $0.accessibilityRole?() == .button && $0.isAccessibilityEnabled?() == true &&
                 [$0.accessibilityLabel?(), AppKitTestSupport.accessibilityTitle(of: $0)].compactMap(\.self).contains {
-                    $0 == title || (title == "Nearby selection fixture" && $0.contains(title))
+                    $0 == title || ((title == "Nearby" || title == "Nearby selection fixture") && $0.contains(title))
                 }
         }
         try #require(matches.count <= 1, "Ambiguous mounted button: \(title)")

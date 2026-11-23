@@ -169,21 +169,16 @@ struct SwiftUIRenderSmokeTests {
                 message: message,
                 style: .standard,
                 markdownVariant: .standard,
-                userAccent: nil,
                 displayOptions: [],
-                assistantName: "OpenClaw",
-                assistantAvatarText: "OC",
-                assistantAvatarTint: nil,
                 showsAssistantAvatar: true,
-                isClean: false,
                 contextWindowTokens: nil,
                 userMessageExpanded: false,
                 onToggleUserMessageExpanded: {},
-                inlineWidgetResolverReady: true,
-                inlineWidgetResourceResolver: { _, _ in nil },
-                mediaArtifactResolverReady: false,
-                mediaPlaybackAllowed: { true },
-                loadMediaArtifact: { _, _, _ in nil })
+                inlineWidgetScope: ChatInlineWidgetScope(
+                    modelID: ObjectIdentifier(Self.self),
+                    sessionTarget: OpenClawChatSessionTarget(sessionKey: "main", agentID: nil),
+                    sessionGeneration: 0),
+                mediaPlaybackAllowed: { true })
                 .environment(\.dynamicTypeSize, typeSize)
 
             _ = Self.host(root, size: CGSize(width: 320, height: 420))
@@ -229,31 +224,33 @@ struct SwiftUIRenderSmokeTests {
             message: message,
             style: .standard,
             markdownVariant: .standard,
-            userAccent: nil,
             displayOptions: [],
-            assistantName: "OpenClaw",
-            assistantAvatarText: "OC",
-            assistantAvatarTint: nil,
             showsAssistantAvatar: true,
-            isClean: false,
             contextWindowTokens: nil,
             userMessageExpanded: false,
             onToggleUserMessageExpanded: {},
-            inlineWidgetResolverReady: true,
-            inlineWidgetResourceResolver: { _, _ in nil },
-            mediaArtifactResolverReady: true,
-            mediaPlaybackAllowed: { true },
-            loadMediaArtifact: { requested, requestedKind, playback in
-                #expect(requested == artifactId)
-                #expect(requestedKind == kind)
-                requests.continuation.yield(playback)
-                guard kind == .image else { return nil }
-                return OpenClawChatLoadedMedia.data(OpenClawChatMediaData(
-                    data: Data(base64Encoded:
-                        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8A" +
-                            "AusB9Y9Zl1sAAAAASUVORK5CYII=")!,
-                    mimeType: "image/png"))
-            })
+            inlineWidgetScope: ChatInlineWidgetScope(
+                modelID: ObjectIdentifier(Self.self),
+                sessionTarget: OpenClawChatSessionTarget(sessionKey: "main", agentID: nil),
+                sessionGeneration: 0),
+            mediaPlaybackAllowed: { true })
+            .environment(\.openClawChatGateway, ChatGatewayResources(
+                owner: ObjectIdentifier(Self.self),
+                isResolverReady: { true },
+                faviconContext: { nil },
+                loadFavicon: { _ in nil },
+                resolveWidgetResource: { _, _ in nil },
+                loadMedia: { requested, requestedKind, playback in
+                    #expect(requested == artifactId)
+                    #expect(requestedKind == kind)
+                    requests.continuation.yield(playback)
+                    guard kind == .image else { return nil }
+                    return OpenClawChatLoadedMedia.data(OpenClawChatMediaData(
+                        data: Data(base64Encoded:
+                            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8A" +
+                                "AusB9Y9Zl1sAAAAASUVORK5CYII=")!,
+                        mimeType: "image/png"))
+                }))
         let window = Self.host(root, size: CGSize(width: 393, height: 420))
         defer { window.isHidden = true }
 
@@ -276,11 +273,8 @@ struct SwiftUIRenderSmokeTests {
         let root = ChatStreamingAssistantBubble(
             text: ChatStreamingAssistantText(sourceText: text, includesThinking: false),
             markdownVariant: .standard,
-            assistantName: "OpenClaw",
-            assistantAvatarText: "OC",
-            assistantAvatarTint: nil,
-            showsAssistantAvatar: true,
-            isClean: false)
+            showsAssistantAvatar: true)
+            .environment(\.openClawAssistantIdentity, ChatAssistantIdentity(name: "OpenClaw", avatarText: "OC"))
 
         _ = Self.host(root, size: CGSize(width: 393, height: 400))
     }
@@ -311,21 +305,16 @@ struct SwiftUIRenderSmokeTests {
                 message: message,
                 style: .standard,
                 markdownVariant: .standard,
-                userAccent: nil,
                 displayOptions: [],
-                assistantName: "OpenClaw",
-                assistantAvatarText: "OC",
-                assistantAvatarTint: nil,
                 showsAssistantAvatar: true,
-                isClean: false,
                 contextWindowTokens: 1_000_000,
                 userMessageExpanded: false,
                 onToggleUserMessageExpanded: {},
-                inlineWidgetResolverReady: true,
-                inlineWidgetResourceResolver: { _, _ in nil },
-                mediaArtifactResolverReady: false,
-                mediaPlaybackAllowed: { true },
-                loadMediaArtifact: { _, _, _ in nil })
+                inlineWidgetScope: ChatInlineWidgetScope(
+                    modelID: ObjectIdentifier(Self.self),
+                    sessionTarget: OpenClawChatSessionTarget(sessionKey: "main", agentID: nil),
+                    sessionGeneration: 0),
+                mediaPlaybackAllowed: { true })
                 .environment(\.dynamicTypeSize, typeSize)
 
             _ = Self.host(root, size: CGSize(width: 320, height: 280))
@@ -395,7 +384,7 @@ struct SwiftUIRenderSmokeTests {
 
     @Test @MainActor func `root prompt alert stack still presents deep link prompt`() async throws {
         let appModel = NodeAppModel()
-        appModel.gatewayConnected = true
+        appModel.apply(.connected(GatewaySessionInfo()), to: .node, route: nil)
         let gatewayController = Self.gatewayControllerWithCapturedTLSFingerprint(appModel: appModel)
         let root = Color.clear
             .gatewayTrustPromptAlert()
@@ -418,7 +407,7 @@ struct SwiftUIRenderSmokeTests {
         GatewayConnectionController(
             appModel: appModel,
             startDiscovery: false,
-            tcpReachabilityProbe: { _, _, _, _ in true },
+            tcpReachabilityProbe: { _, _, _, _ in .reachable },
             tlsFingerprintProbe: { _ in .fingerprint("abc123") })
     }
 

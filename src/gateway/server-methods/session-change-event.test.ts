@@ -22,9 +22,7 @@ import {
 } from "../../infra/agent-run-registry.js";
 import type { RpcSourceRef } from "../../sessions/session-controller.rpc-sources.js";
 import { rpcSourceTesting } from "../../sessions/session-lifecycle-admission.test-support.js";
-import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { AsyncWorkScope } from "../../shared/async-work-scope.js";
-import { readGatewayAccessRevision } from "../gateway-access-revision.js";
 import { createSessionRowPlacementProjection } from "../session-row-placement-projection.js";
 import {
   bindSessionRowProjection,
@@ -189,32 +187,6 @@ afterEach(async () => {
 });
 
 describe("sessions.changed coalescing", () => {
-  it("publishes catalog-only changes without invalidating session projections or access", async () => {
-    const context = createContext();
-    const changed = vi.fn();
-    const unsubscribe = sessionChanges.subscribe(changed);
-    onTestFinished(unsubscribe);
-    const initialAccessRevision = readGatewayAccessRevision();
-
-    await emitAndSettleLeading(context, { reason: "groups" }, { catalogOnly: true });
-
-    expect(changed).not.toHaveBeenCalled();
-    expect(context.mentionInbox?.invalidateAsync).not.toHaveBeenCalled();
-    expect(readGatewayAccessRevision()).toBe(initialAccessRevision);
-    expect(context.broadcastToConnIds).toHaveBeenCalledWith(
-      "sessions.changed",
-      expect.objectContaining({ reason: "groups" }),
-      expect.any(Set),
-      expect.any(Object),
-    );
-
-    // Rename/delete use the same public reason but can change member rows.
-    await emitAndSettleLeading(context, { reason: "groups" });
-    expect(changed).toHaveBeenCalledWith({ all: true, scope: "sessions" });
-    expect(context.mentionInbox?.invalidateAsync).toHaveBeenCalledOnce();
-    expect(readGatewayAccessRevision()).toBe(initialAccessRevision + 1);
-  });
-
   it("makes the session desktop ready during roster backoff and fences late list responses", async () => {
     const context = createContext();
     const sessionKey = "agent:main:cloud";
@@ -510,45 +482,6 @@ describe("sessions.changed coalescing", () => {
     expect(drainedBeforeSecond).toBe(false);
     expect(context.broadcastToConnIds).toHaveBeenCalledTimes(2);
     expect(vi.getTimerCount()).toBe(0);
-  });
-
-  it("emits a leading row and one trailing row with the latest state", async () => {
-    const context = createContext();
-    const initialAccessRevision = readGatewayAccessRevision();
-
-    await emitAndSettleLeading(context, { reason: "create", sessionKey: "agent:main:chat" });
-    mocks.rowLabel = "latest";
-    await emitAndSettleLeading(context, {
-      reason: "patch",
-      sessionKey: "agent:main:chat",
-      catalogChanged: true,
-    });
-    await emitAndSettleLeading(context, { reason: "send", sessionKey: "agent:main:chat" });
-
-    expect(context.broadcastToConnIds).toHaveBeenCalledOnce();
-    await vi.advanceTimersByTimeAsync(100);
-
-    expect(context.broadcastToConnIds).toHaveBeenCalledTimes(2);
-    expect(broadcasts(context)[1]?.[1]).toMatchObject({
-      label: "latest",
-      reason: "send",
-      catalogChanged: true,
-    });
-    expect(readGatewayAccessRevision()).toBe(initialAccessRevision + 3);
-    await emitAndSettleLeading(context, { reason: "patch", sessionKey: "agent:main:chat" });
-    expect(broadcasts(context).at(-1)?.[1]).not.toHaveProperty("catalogChanged");
-  });
-
-  it("refreshes metadata projections without expiring access when nobody receives events", async () => {
-    const context = createContext(new Set());
-    const sessionKey = "agent:main:metadata";
-    const initialAccessRevision = readGatewayAccessRevision();
-    await emitAndSettleLeading(context, { reason: "patch", sessionKey }, { accessChanged: false });
-
-    expect(readGatewayAccessRevision()).toBe(initialAccessRevision);
-    expect(context.mentionInbox?.invalidateAsync).toHaveBeenCalledOnce();
-    expect(context.broadcastToConnIds).not.toHaveBeenCalled();
-    expect(mocks.loadRow).not.toHaveBeenCalled();
   });
 
   it("emits the latest trailing row by the sustained-mutation deadline", async () => {

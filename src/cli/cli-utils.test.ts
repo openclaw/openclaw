@@ -4,6 +4,11 @@ import { ExitError } from "../runtime.js";
 import { runCommandWithRuntime } from "./cli-utils.js";
 import { registerDnsCli } from "./dns-cli.js";
 import {
+  formatCliFailureLines,
+  formatCliJsonFailure,
+  recordCliGatewayRunFailure,
+} from "./failure-output.js";
+import {
   applyResolvedCommandOutputMode,
   withConsoleLogsRoutedToStderrForJson,
 } from "./json-output-mode.js";
@@ -62,16 +67,25 @@ describe("runCommandWithRuntime", () => {
     expect(runtime.exit.mock.calls).toEqual([[1], [1]]);
   });
 
-  it("bubbles JSON-mode failures to the process-level owner", async () => {
+  it("reports JSON failures once while retaining the original envelope", async () => {
     const runtime = { error: vi.fn(), exit: vi.fn() };
+    const error = new Error("archive missing");
+    recordCliGatewayRunFailure(error, "run-1");
     await withConsoleLogsRoutedToStderrForJson(["--json"], async () => {
       applyResolvedCommandOutputMode(true);
-      await expect(
-        runCommandWithRuntime(runtime, rejectWith(new Error("archive missing"))),
-      ).rejects.toThrow("archive missing");
+      const caught = await runCommandWithRuntime(runtime, rejectWith(error)).catch(
+        (err: unknown) => err,
+      );
+      expect(formatCliJsonFailure(caught)).toEqual({
+        ok: false,
+        runId: "run-1",
+        origin: "gateway",
+        error: { type: "cli_error", message: "archive missing" },
+      });
+      expect(formatCliFailureLines({ title: "failed", error: caught })).toEqual([]);
     });
-
-    expect([runtime.error.mock.calls, runtime.exit.mock.calls]).toEqual([[], []]);
+    expect(runtime.error.mock.calls).toEqual([["archive missing"]]);
+    expect(runtime.exit).not.toHaveBeenCalled();
   });
 });
 

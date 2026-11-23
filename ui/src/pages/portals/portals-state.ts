@@ -63,6 +63,7 @@ export function createPortals(
     listReady: boolean;
     listRead: { result: Promise<void> };
     error: string | null;
+    closeFailure: { portalId: string; message: string } | null;
     closingPortalId: string | null;
     portalProbeState: PortalProbeState | null;
     pendingEnvironment: EnvironmentSummary | null;
@@ -82,6 +83,7 @@ export function createPortals(
     listReady: false,
     listRead: { result: Promise.resolve() },
     error: null,
+    closeFailure: null,
     closingPortalId: null,
     portalProbeState: null,
     pendingEnvironment: null,
@@ -306,6 +308,7 @@ export function createPortals(
     state.listReady = false;
     state.error = null;
     portalProbeCache.clear();
+    state.closeFailure = null;
     state.portalProbeState = null;
   }
 
@@ -337,6 +340,7 @@ export function createPortals(
     state.selectedPortalId = selectedPortalId;
     state.loaded = true;
     state.error = null;
+    state.closeFailure = null;
     const selectedPortal = portals.find((portal) => portal.id === selectedPortalId);
     if (selectedPortal) {
       ensurePortalProbe(selectedPortal, selectedPortalId !== previousPortalId);
@@ -525,6 +529,7 @@ export function createPortals(
       }
       state.closingPortalId = portal.id;
       state.error = null;
+      state.closeFailure = null;
       notify();
       const current = () => lifecycle.isCurrent(scope) && state.closingPortalId === portal.id;
       try {
@@ -534,7 +539,10 @@ export function createPortals(
         }
       } catch (error) {
         if (current()) {
-          state.error = t("portalsPage.closeFailed", { error: formatUiError(error) });
+          state.closeFailure = {
+            portalId: portal.id,
+            message: t("portalsPage.closeFailed", { error: formatUiError(error) }),
+          };
         }
       } finally {
         if (current()) {

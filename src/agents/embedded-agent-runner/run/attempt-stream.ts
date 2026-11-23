@@ -20,7 +20,6 @@ import type { StreamFn } from "../../runtime/index.js";
 import type { FixedRequestTokenPressure } from "../../sessions/context-token-pressure.js";
 import { withSessionManagerWrite } from "../../sessions/session-manager-write-admission.js";
 import { resolveAgentTimeoutMs } from "../../timeout.js";
-import { UNKNOWN_TOOL_THRESHOLD } from "../../tool-loop-detection.js";
 import type { NormalizedUsage } from "../../usage.js";
 import { log } from "../logger.js";
 import { createPromptCacheRequestObserver } from "../prompt-cache-request-observer.js";
@@ -110,6 +109,8 @@ export function installEmbeddedAttemptStreamGuards(
     onRejectedProviderReplayRepaired: () => void;
     onIdleTimeout: (error: Error) => void;
     diagnosticOwner: DiagnosticEmbeddedRunOwner;
+    /** Whether stopping at this request boundary leaves the tool batch continuable. */
+    isToolBoundarySafe: () => boolean;
   },
 ) {
   const { attempt } = input;
@@ -284,16 +285,9 @@ export function installEmbeddedAttemptStreamGuards(
     isOpenAIResponsesApi,
   };
   let normalizeToolCallIds: Parameters<typeof wrapStreamFnWithMessageTransform>[1] | undefined;
-  // Forks pair pending calls themselves with non-error placeholders, so they need IDs only.
-  let normalizeForkToolCallIds: typeof normalizeToolCallIds;
   if (shouldApplyReplayToolCallIdSanitizer(replayToolCallIdSanitizerDecision)) {
     const mode = replayToolCallIdSanitizerDecision.toolCallIdMode;
-    const normalize = (
-      ...[messages, model, repairToolUseResultPairing]: [
-        ...Parameters<NonNullable<typeof normalizeToolCallIds>>,
-        boolean | undefined,
-      ]
-    ) =>
+    normalizeToolCallIds = (messages, model) =>
       sanitizeReplayToolCallIdsForStream({
         messages,
         mode,
@@ -305,11 +299,8 @@ export function installEmbeddedAttemptStreamGuards(
           provider: attempt.provider,
           policy: transcriptPolicy,
         }),
-        repairToolUseResultPairing,
+        repairToolUseResultPairing: transcriptPolicy.repairToolUseResultPairing,
       });
-    normalizeToolCallIds = (messages, model) =>
-      normalize(messages, model, transcriptPolicy.repairToolUseResultPairing);
-    normalizeForkToolCallIds = (messages, model) => normalize(messages, model, false);
   }
 
   // Responses and eligible Anthropic routes replay provider checkpoints; a rejected one must be
@@ -341,7 +332,7 @@ export function installEmbeddedAttemptStreamGuards(
   installStreamWrapper(wrapStreamFnPromoteStandaloneTextToolCalls, liveAllowedToolNames);
   installStreamWrapper(wrapStreamFnTrimToolCallNames, liveAllowedToolNames, {
     // Unknown-tool recovery stays active even when configurable loop detection is disabled.
-    unknownToolThreshold: UNKNOWN_TOOL_THRESHOLD,
+    unknownToolThreshold: 10,
   });
 
   if (
@@ -475,7 +466,6 @@ export function installEmbeddedAttemptStreamGuards(
   });
   return {
     normalizeToolCallIds,
-    normalizeForkToolCallIds,
     /** Returns the measured predecessor that may anchor this exact request's pressure. */
     onModelRequest: async (
       ...args: [
@@ -499,6 +489,7 @@ export function installEmbeddedAttemptStreamGuards(
         previousRequest,
         measuredContextTokens:
           previous?.requestIndex === request.requestIndex - 1 ? previous.contextTokens : undefined,
+        boundarySafe: callbacks.isToolBoundarySafe,
       });
       if (args[0].api === "openai-completions") {
         measuredRequestPressure.set(

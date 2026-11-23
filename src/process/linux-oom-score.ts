@@ -10,12 +10,7 @@ import {
   type OomWrapOptions,
 } from "./linux-oom-score-spawn.js";
 
-export {
-  resolveOomScoreWrappedCommand,
-  spawnOomScoreAdjusted,
-  spawnWithInheritedOomScore,
-  type OomWrapOptions,
-} from "./linux-oom-score-spawn.js";
+export { spawnOomScoreAdjusted, type OomWrapOptions } from "./linux-oom-score-spawn.js";
 
 /**
  * Linux children inherit the Gateway's OOM score, leaving the larger Gateway

@@ -86,6 +86,8 @@ function recordDiagnosticEvent(
     case "diagnostic.phase.completed":
     case "secret.egress":
     case "tool.catalog":
+    case "queue.lane.enqueue":
+    case "queue.lane.dequeue":
     case "gateway.rpc":
     case "sessions.list.baseline.retired":
     case "gateway.http.cancelled":
@@ -381,25 +383,6 @@ function recordDiagnosticEvent(
     case "session.recovery.completed":
       recordSessionDiagnosticEvent(store, evt);
       return;
-    case "queue.lane.enqueue":
-    case "queue.lane.dequeue": {
-      const labels = { lane: normalizeDiagnosticLane(evt.lane) };
-      store.gauge(
-        "openclaw_queue_lane_size",
-        "Current diagnostic queue lane size.",
-        labels,
-        numericValue(evt.queueSize),
-      );
-      if (evt.type === "queue.lane.dequeue") {
-        store.histogram(
-          "openclaw_queue_lane_wait_seconds",
-          "Queue lane wait time in seconds.",
-          labels,
-          seconds(evt.waitMs),
-        );
-      }
-      return;
-    }
     case "session.state":
     case "session.stuck":
     case "session.turn.created":
@@ -674,6 +657,7 @@ export function createDiagnosticsPrometheusExporter() {
         ctx.internalDiagnostics?.onWorkerRequestMetrics?.(
           createWorkerRequestMetricsRecorder(store),
         ),
+        ctx.internalDiagnostics?.onPluginMetrics?.({ record: store.plugin, retire: store.retire }),
         subscribe(
           (event, metadata) => {
             try {

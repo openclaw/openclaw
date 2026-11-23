@@ -28,6 +28,7 @@ export function attachBrokerNativeResource(
   let closeSequence = 0;
   let ready = false;
   let initializedOwner = false;
+  let dispatched = false;
   let closed = false;
   let failure: Error | undefined;
   let transportLost = false;
@@ -118,6 +119,8 @@ export function attachBrokerNativeResource(
     let candidate: Socket;
     try {
       candidate = connect(attachment.endpoint);
+      // The native lease owns liveness, including startup and unsettled work.
+      candidate.unref();
     } catch (error) {
       // An invalid endpoint throws before any socket exists. Report it like an asynchronous
       // connection failure, after the caller has installed this attachment's owner.
@@ -150,6 +153,7 @@ export function attachBrokerNativeResource(
     });
     candidate.once("connect", () => {
       connected = true;
+      dispatched = true;
       void transmit({ type: "resource-attach", attachment }).catch((error: unknown) =>
         lose(toErrorObject(error, "Native resource attachment failed")),
       );
@@ -186,10 +190,15 @@ export function attachBrokerNativeResource(
           (error: unknown) => failDelivery(error, "Native resource input delivery failed"),
         );
       });
+      target.unref();
     },
     () => {},
   );
   return {
+    /** False is a no-dispatch receipt: the broker cannot have received this factory. */
+    get dispatched() {
+      return dispatched;
+    },
     ownerMessage(value: unknown, sequence: number) {
       void initialized.promise
         .then(() => transmit({ type: "resource-owner", id: attachment.id, sequence, value }, true))

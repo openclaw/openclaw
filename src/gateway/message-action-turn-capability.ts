@@ -389,6 +389,31 @@ export function resolveMessageActionTurnCapability(
   return copyMessageActionTurnContext(capability);
 }
 
+/** The caller's minted turn is still live; this checks no run authority. */
+export function isMessageActionTurnCurrent(identity: {
+  agentId: string;
+  sessionKey: string;
+  operationalRunInstance: { runId: string };
+  messageActionContext?: AgentRuntimeMessageActionContext;
+}): boolean {
+  const messageActionContext = identity.messageActionContext;
+  if (!messageActionContext) {
+    return true;
+  }
+  if (!messageActionContext.turnCapability) {
+    return false;
+  }
+  return Boolean(
+    resolveMessageActionTurnCapability({
+      token: messageActionContext.turnCapability,
+      agentId: identity.agentId,
+      runId: identity.operationalRunInstance.runId,
+      sessionKey: identity.sessionKey,
+      sessionId: messageActionContext.sessionId,
+    }),
+  );
+}
+
 function copyMessageActionTurnContext(
   capability: MessageActionTurnCapability,
 ): AgentRuntimeMessageActionContext {

@@ -54,6 +54,8 @@ The Home dock uses the same session read permissions as the full page. If you ca
 
 Your Home draft and attachments follow the conversation between the page and dock. Files still being prepared keep their progress and Remove action, and Send waits until preparation finishes.
 
+To see pull requests or saved task progress, open Home full page and select **Details**. Neither appears above the dock composer.
+
 Home can include a bounded, quoted work-context reference with your message. Before sending, that reference follows the page's agent, session, title, and visible file, not merely the Home conversation receiving it. You can remove it before sending.
 
 Sent messages show **Context attached** below your words instead of displaying the generated context as message text. Open it to inspect the captured session, page, agent, workspace, file, or selection; **Technical details** shows the snapshot as JSON. The snapshot is frozen when you send, including through queues and retries. Copying or editing your message does not include the generated reference. It remains reference data, not instructions or permission to access another conversation. Older messages without a recorded attachment are left unchanged.
@@ -116,7 +118,7 @@ A connected **Desktop** viewer stays connected for 30 seconds while its tab is h
 
 When you open a chat, the panel automatically reveals an available desktop assigned to that exact session. Discovery only reads existing resources: it never provisions a desktop or attaches an unrelated global or child-session resource. Session and inventory events refresh desktop discovery while the chat is visible. Resources without explicit session metadata remain available through the manual panel controls.
 
-Browser-tool results stay inline on desktop and mobile; they do not automatically open the Browser panel. Choose **Open** on a browser preview card, use the panel controls, or ask your agent to show it. A panel you explicitly opened still follows its saved per-session layout when you return or reload.
+Browser tool calls do not add automatic preview cards or open the Browser panel. To inspect the agent’s browser, choose **Browser** from the panel’s **+** menu or ask your agent to show it. The panel uses the session’s latest successful browser target. A panel you explicitly opened still follows its saved per-session layout when you return or reload.
 
 Automatic desktop reveals reuse the existing panel and keep an already-selected tool in front. Automatically discovered desktops stay out of the saved layout, including after resizing or docking, so reloading validates the resource again before opening it. If discovery confirms that the desktop is no longer available, its automatic tab closes without affecting an explicitly selected desktop or disabling future automatic reveals. Mobile chat shows these panels full-width, just like manually opened panels; other narrow panes retain their bottom-docked layout. Minimizing the panel or closing a Browser or Desktop tab disables further automatic desktop reveals for that session in the current browser profile, including after reload; the **+** menu can still open them manually.
 
@@ -241,6 +243,10 @@ same item from chat selects its existing tab. Links inside the reader and URLs
 entered in the address bar navigate the current tab, with independent Back and
 Forward history. The **+** button opens a new tab. Up to ten tabs stay in memory,
 including their loaded documents while you switch between them.
+
+Hold Ctrl or Cmd to suppress link hover previews while opening several links.
+Pressing either key also dismisses an open preview and cancels a pending one.
+Normal hover and keyboard-focus previews resume on the next interaction after release.
 
 Loaded reader documents and link previews stay visible while the same Gateway
 reconnects. The reader refreshes after reconnect without clearing its address

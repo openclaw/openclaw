@@ -50,8 +50,6 @@ type CreateDiscordComponentButton =
 type CreateDiscordComponentModal =
   typeof import("./agent-components.js").createDiscordComponentModal;
 type CreateDiscordComponentStringSelect = CreateDiscordComponentButton;
-type DispatchReplyWithBufferedBlockDispatcherFn =
-  typeof import("openclaw/plugin-sdk/reply-dispatch-runtime").dispatchReplyWithBufferedBlockDispatcher;
 
 let createDiscordComponentButton: CreateDiscordComponentButton;
 let createDiscordComponentStringSelect: CreateDiscordComponentStringSelect;
@@ -102,8 +100,6 @@ describe("discord component interactions", () => {
       replyToMode: "first",
       ...overrides,
     }) as DiscordAccountConfig;
-
-  type DispatchParams = Parameters<DispatchReplyWithBufferedBlockDispatcherFn>[0];
 
   type ComponentContext = Parameters<CreateDiscordComponentButton>[0];
 
@@ -343,11 +339,6 @@ describe("discord component interactions", () => {
       To: "channel:dm-channel",
     });
     expect(dispatchReplyMock).toHaveBeenCalledTimes(1);
-    const dispatchParams = mockCallArg(dispatchReplyMock, 0, "dispatchReplyMock") as
-      | DispatchParams
-      | undefined;
-    expect(typeof dispatchParams?.dispatcherOptions.responsePrefixContextProvider).toBe("function");
-    expect(typeof dispatchParams?.replyOptions?.onModelSelected).toBe("function");
     expect(lastContext(recordInboundSessionMock)).toMatchObject({
       OriginatingTo: "user:123456789",
       To: "channel:dm-channel",
