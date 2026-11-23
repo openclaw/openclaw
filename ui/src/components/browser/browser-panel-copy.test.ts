@@ -119,41 +119,33 @@ describe("Browser panel copy", () => {
     expect(remote.requests).toEqual([]);
   });
 
-  it("names a selection truncated at the size cap", async () => {
-    const { controller } = setup(() => selected("abc", true));
+  it.each([
+    {
+      name: "names a selection truncated at the size cap",
+      read: () => selected("abc", true),
+      written: "abc",
+      toast:
+        "Copied. The selection was too long, so only the first 1000000 characters were copied.",
+    },
+    {
+      name: "explains an empty selection and leaves the clipboard alone",
+      read: () => selected(""),
+      toast: "Nothing is selected in the page. Ask the agent to select text, then copy again.",
+    },
+    {
+      name: "reports an unreadable page without echoing the failure",
+      read: () => {
+        throw new Error("Request failed: hunter2");
+      },
+      toast: "Couldn’t read the page selection. Check the browser connection and try again.",
+    },
+  ])("$name", async ({ read, written, toast }) => {
+    const { controller } = setup(read);
     controller.input.copySelection();
 
-    await vi.waitFor(() => expect(writeText).toHaveBeenCalledExactlyOnceWith("abc"));
-    expect(toasts()).toEqual([
-      "Copied. The selection was too long, so only the first 1000000 characters were copied.",
-    ]);
-  });
-
-  it("explains an empty selection and leaves the clipboard alone", async () => {
-    const { controller } = setup(() => selected(""));
-    controller.input.copySelection();
-
-    await vi.waitFor(() =>
-      expect(toasts()).toEqual([
-        "Nothing is selected in the page. Ask the agent to select text, then copy again.",
-      ]),
-    );
-    expect(writeText).not.toHaveBeenCalled();
-  });
-
-  it("reports an unreadable page without echoing the failure", async () => {
-    const { controller } = setup(() => {
-      throw new Error("Request failed: hunter2");
-    });
-    controller.input.copySelection();
-
-    await vi.waitFor(() =>
-      expect(toasts()).toEqual([
-        "Couldn’t read the page selection. Check the browser connection and try again.",
-      ]),
-    );
+    await vi.waitFor(() => expect(toasts()).toEqual([toast]));
+    expect(writeText.mock.calls).toEqual(written ? [[written]] : []);
     expect(controller.errorText).toBeNull();
-    expect(writeText).not.toHaveBeenCalled();
   });
 
   it("explains disabled page scripting and stops asking", async () => {

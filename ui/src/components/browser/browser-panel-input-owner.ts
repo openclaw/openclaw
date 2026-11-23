@@ -45,6 +45,7 @@ const MAX_INPUT_BURST = 100;
 type QueuedInput = { input: BrowserOperatorInput; targetId: string };
 
 const COPY_FAILURE_TEXT = {
+  disconnected: "browser.copyDisconnected",
   empty: "browser.copyNothingSelected",
   unavailable: "browser.copyUnavailable",
   unreadable: "browser.copyReadFailed",
@@ -787,17 +788,17 @@ export class BrowserPanelInputOwner {
     const toast = (key: string) => showToast({ message: t(key), severity: "error" });
     const scope = this.selectionScope();
     if (!scope) {
-      toast("browser.copyDisconnected");
+      toast(COPY_FAILURE_TEXT.disconnected);
       return;
     }
     if (this.host.evaluateUnavailable) {
-      toast("browser.copyUnavailable");
+      toast(COPY_FAILURE_TEXT.unavailable);
       return;
     }
     const { client, targetId, current } = scope;
     let selection: BrowserSelection | null = null;
     // Why the clipboard stayed untouched. A stale result names no page, so it stays silent.
-    let failure: "stale" | "unreadable" | "unavailable" | "empty" | "write" = "stale";
+    let failure: keyof typeof COPY_FAILURE_TEXT | "stale" = "stale";
     const read = async () => {
       // Typed text and clicks queued before the copy reach the page first.
       await this.inputFlight;
