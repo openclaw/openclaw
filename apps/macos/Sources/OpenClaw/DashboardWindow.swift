@@ -18,6 +18,7 @@ enum DashboardWindowLayout {
 /// reuses the shipped pre-web-chrome event; `commandPalette` gets a dedicated
 /// toggle event because the legacy `native-open-search` contract is open-only.
 enum DashboardNativeCommand: String {
+    case newBrowserTab = "openclaw:native-new-browser-tab"
     case newSession = "openclaw:native-new-session"
     case commandPalette = "openclaw:native-toggle-search"
 
@@ -25,7 +26,7 @@ enum DashboardNativeCommand: String {
     /// open-only legacy event when the primary event goes unhandled.
     var legacyFallbackEventName: String? {
         switch self {
-        case .newSession: nil
+        case .newBrowserTab, .newSession: nil
         case .commandPalette: "openclaw:native-open-search"
         }
     }

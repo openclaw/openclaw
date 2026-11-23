@@ -7,6 +7,34 @@ import WebKit
 @Suite(.serialized, .testWaitLimit)
 @MainActor
 struct DashboardCloseShortcutTests {
+    @Test func `command T requests one new tab while the native browser has focus`() async throws {
+        let server = try await DashboardHTTPFixture.start()
+        defer { server.stop() }
+        let controller = self.makeController(server: server)
+        defer { controller.closeDashboard() }
+        try await controller.waitForDocumentLoad()
+        let window = try #require(controller.window)
+        try await controller.webView.evaluateJavaScript("""
+        window.tabRequests = 0;
+        window.addEventListener('openclaw:native-new-browser-tab', () => window.tabRequests++);
+        """)
+        try controller.nativeBrowser.open(tabId: "first", url: #require(URL(string: "about:blank")), sessionKey: "")
+        try controller.nativeBrowser.present(
+            scope: "panel", tabId: "first", rect: DashboardBrowserRect(x: 0, y: 0, width: 300, height: 200),
+            visible: true)
+        #expect(window.makeFirstResponder(try #require(controller.nativeBrowser.webView(for: "first"))))
+        for held in [false, true] {
+            let event = try #require(NSEvent.keyEvent(
+                with: .keyDown, location: .zero, modifierFlags: .command,
+                timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber,
+                context: nil, characters: "t", charactersIgnoringModifiers: "t", isARepeat: held, keyCode: 17))
+            #expect(window.performKeyEquivalent(with: event))
+        }
+        try await TestWait.state("new browser tab command") {
+            try await controller.webView.evaluateJavaScript("window.tabRequests") as? Int == 1
+        }
+    }
+
     @Test func `command W routes native browser focus to the visible presenting panel`() async throws {
         let previousMenu = self.installCloseMenu()
         defer { NSApp.mainMenu = previousMenu }
