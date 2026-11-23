@@ -40,12 +40,11 @@ export function captureSkillLibraryAccess(
     env,
   });
   const roles = structuredClone(authority.getConfig().gateway?.roles);
-  const readRoleSubject = () =>
-    authority.getConfig().gateway?.openclawId?.enabled && authority.profileId
-      ? operatorRoleSubject(readResidentUserProfileIdentity(authority.profileId))
-      : { profileId: authority.profileId, openclawIdMember: false };
   const input: SkillLibraryWorkerAuthority = {
-    roleSubject: readRoleSubject(),
+    roleSubject:
+      authority.getConfig().gateway?.openclawId?.enabled && authority.profileId
+        ? operatorRoleSubject(readResidentUserProfileIdentity(authority.profileId))
+        : { profileId: authority.profileId, openclawIdMember: false },
     profileId: authority.profileId,
     namespace: authority.namespace,
     scopes: [...authority.scopes],
@@ -55,18 +54,14 @@ export function captureSkillLibraryAccess(
   const pinned = { path: context.admission.databasePath, env: { ...env, ...context.environment } };
   const assertCurrent = () => {
     context.admission.assertCurrent();
-    authority.assertCurrent();
     if (
-      !isDeepStrictEqual(roles, authority.getConfig().gateway?.roles) ||
-      !isDeepStrictEqual(input.roleSubject, readRoleSubject()) ||
-      !isDeepStrictEqual(input.scopes, authority.scopes) ||
       input.profileId !== authority.profileId ||
       input.ownerDevice !== authority.ownerDevice ||
       input.namespace !== authority.namespace
     ) {
       throw new SkillLibraryError(
         "AUTHORITY_EXPIRED",
-        "Skill library authority changed. Refresh and retry.",
+        "Skill library target moved. Refresh and retry.",
       );
     }
   };
@@ -83,7 +78,11 @@ export function captureSkillLibraryAccess(
         assertCurrent();
         library.assertCurrent();
       };
-      const profiles = await captureUserProfileAuthorityRead(context.admission);
+      const profiles = await captureUserProfileAuthorityRead(
+        context.admission,
+        undefined,
+        "identity",
+      );
       assertSource();
       const commandInput = {
         kind,
@@ -117,7 +116,7 @@ export function captureSkillLibraryAccess(
       if (!profileCurrent) {
         throw new SkillLibraryError(
           "CONFLICT",
-          "Profile authority changed during library access. Retry.",
+          "Profile identity moved during library access. Retry.",
         );
       }
       const check = () => {
@@ -125,7 +124,7 @@ export function captureSkillLibraryAccess(
         if (!profileCurrent()) {
           throw new SkillLibraryError(
             "AUTHORITY_EXPIRED",
-            "Skill library profile authority changed. Refresh and retry.",
+            "Skill library profile identity moved. Refresh and retry.",
           );
         }
       };

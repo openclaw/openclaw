@@ -499,7 +499,6 @@ describe("worker turn launcher terminal results", () => {
         reclaim: async (request, authorize, beforeDrain, serialize, pendingOperations) =>
           barriers.runReclaimPreparation({
             ...request,
-            authorize,
             beforeDrain,
             pendingOperations,
             run: async () => serialize!(stopCleanup),

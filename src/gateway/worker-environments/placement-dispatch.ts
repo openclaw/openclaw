@@ -397,14 +397,14 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
 
   const reclaimCurrent = async (
     request: WorkerPlacementReclaimRequest,
-    authorize?: WorkerPlacementAuthorization,
+    assertSessionCurrent?: () => void,
     beforeDrain?: WorkerPlacementReclaimSourceCheck,
     initial?: WorkerDispatchPlacement,
     completedOperation?: WorkerPlacementCancellationTarget,
     onTransition?: (placement: WorkerDispatchPlacement) => void,
   ): Promise<WorkerReclaimPlacement> => {
     const { placement: current, move } = await placements.getWithMoveAsync(request.sessionId);
-    authorize?.();
+    assertSessionCurrent?.();
     beforeDrain?.();
     if (current?.state === "draining" && move?.abandonSource) {
       if (
@@ -421,9 +421,13 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
       // Stop owns live authority after the canceled Move settles; its committed disposition stays.
       return await options.runFailedReclaimBarrier({
         ...request,
-        authorize,
-        reclaim: async (reauthorize) => {
-          const local = await abandonment.abandonSource(request, move, reauthorize, current);
+        reclaim: async () => {
+          const local = await abandonment.abandonSource(
+            request,
+            move,
+            assertSessionCurrent,
+            current,
+          );
           reportPlacementTransition(onTransition, local);
           return local;
         },
@@ -443,10 +447,9 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
     if (owned?.state === "failed" || owned?.state === "provisioning") {
       return await options.runFailedReclaimBarrier({
         ...request,
-        authorize,
-        reclaim: async (reauthorize) => {
+        reclaim: async () => {
           let failedPlacement = await placements.getAsync(request.sessionId);
-          reauthorize?.();
+          assertSessionCurrent?.();
           if (request.recoverToGateway) {
             beforeDrain?.();
           }
@@ -454,7 +457,7 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
             failedPlacement = await failure.cancelProvisioning(
               failedPlacement,
               initial,
-              reauthorize,
+              assertSessionCurrent,
             );
             reportPlacementTransition(onTransition, failedPlacement);
           }
@@ -471,7 +474,10 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
           if (failedPlacement?.state !== "failed") {
             throw new Error("Failed cloud worker placement changed during reclaim");
           }
-          const cleanupError = await failure.retryFailedTeardown(failedPlacement, reauthorize);
+          const cleanupError = await failure.retryFailedTeardown(
+            failedPlacement,
+            assertSessionCurrent,
+          );
           const failed = await placements.getAsync(request.sessionId);
           if (failed?.state !== "failed") {
             throw new Error("Failed cloud worker placement changed during reclaim");
@@ -487,8 +493,8 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
             );
           }
           const assertCurrent = request.recoverToGateway
-            ? composePlacementAuthorization(reauthorize, () => beforeDrain?.())
-            : undefined;
+            ? composePlacementAuthorization(assertSessionCurrent, () => beforeDrain?.())
+            : assertSessionCurrent;
           if (assertCurrent) {
             assertCurrent();
             if (options.prepareGatewayMove) {
@@ -516,7 +522,7 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
         },
       });
     }
-    return await reclaimOnce(request, undefined, authorize, beforeDrain, onTransition);
+    return await reclaimOnce(request, undefined, undefined, beforeDrain, onTransition);
   };
 
   const reclaim = async (
@@ -529,12 +535,13 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
     pendingOperations?: WorkerPlacementPendingOperations,
     onTransition?: (placement: WorkerDispatchPlacement) => void,
   ): Promise<WorkerReclaimPlacement> => {
+    authorize?.();
+    if (request.recoverToGateway && getRuntimeConfig().cloudWorkers?.requiredProfile) {
+      throw new RequiredWorkerProfileError(
+        "Gateway recovery is disabled by the required worker profile policy; Stop retains the workspace for remote recovery.",
+      );
+    }
     const assertGatewayRecoverySource = (captured?: WorkerDispatchPlacement) => {
-      if (request.recoverToGateway && getRuntimeConfig().cloudWorkers?.requiredProfile) {
-        throw new RequiredWorkerProfileError(
-          "Gateway recovery is disabled by the required worker profile policy; Stop retains the workspace for remote recovery.",
-        );
-      }
       if (!request.recoverToGateway) {
         return;
       }
@@ -559,7 +566,6 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
       }
     };
     const initial = await placements.getAsync(request.sessionId);
-    authorize?.();
     beforeDrain?.();
     assertGatewayRecoverySource(initial);
     if (initial) {
@@ -574,14 +580,13 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
     );
     return await options.runReclaimPreparation({
       ...request,
-      authorize,
       beforeDrain: checkSource,
       pendingOperations,
-      run: (reauthorize) =>
+      run: (assertCurrent) =>
         serialize(() =>
           reclaimCurrent(
             request,
-            reauthorize,
+            assertCurrent,
             checkSource,
             initial,
             pendingOperations?.completedPlacement(),

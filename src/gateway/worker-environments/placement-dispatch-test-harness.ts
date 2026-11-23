@@ -534,27 +534,23 @@ export async function createHarness(
           run: async () => {
             authorize?.();
             beforeDrain?.();
-            const placement = await begin(authorize);
+            const placement = await begin();
             return placement.state === "reclaimed"
               ? placement
               : await reclaim(
                   { kind: "local", path: options.workspacePath ?? "/gateway/workspace" },
                   placement,
-                  authorize,
                 );
           },
         })),
     runFailedReclaimBarrier:
       options.runFailedReclaimBarrier ??
-      (async ({ sessionId, sessionKey, authorize, reclaim }) =>
+      (async ({ sessionId, sessionKey, reclaim }) =>
         await runSessionMutation({
           diagnosticLabel: "placement-failed-reclaim",
           scope: options.workspacePath ?? "/gateway/workspace",
           identities: [sessionId, sessionKey],
-          run: async () => {
-            authorize?.();
-            return await reclaim(authorize);
-          },
+          run: async () => await reclaim(),
         })),
     ...createWorkerWorkspaceRecoveryFixture({
       resolveWorkspace:

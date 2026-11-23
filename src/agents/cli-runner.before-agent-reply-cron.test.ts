@@ -341,7 +341,7 @@ describe("runCliAgent before_agent_reply seam", () => {
         } else {
           expect((await operation).payloads).toEqual([{ text: "hook result" }]);
           expect(effect).toHaveBeenCalledOnce();
-          expect(heldRequest).toThrow("no longer active");
+          expect(heldRequest).toThrow("The guarded request ended.");
           expect(heldClaim).toThrow("no longer active");
         }
         expect(prepareMock).not.toHaveBeenCalled();
