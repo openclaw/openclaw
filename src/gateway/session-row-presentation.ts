@@ -24,6 +24,7 @@ import {
   sessionRowFactEncodingBytes,
   type SessionListView,
 } from "./session-list-view-cache.js";
+import { presentSessionPin, usesLegacyNativePins } from "./session-pin-compatibility.js";
 import {
   resolveRequestedSessionAgentId,
   tryResolveSessionCompatibilityOwnerAgentId,
@@ -158,7 +159,7 @@ export function prepareSessionRowPublication(
     return {
       getAudienceKey() {
         // Fixed-domain prefixes keep the opaque sharing key intact without re-encoding it.
-        return `${recipient.presentFastMode("ultrafast") === true ? 0 : 1}:${recipient.publicationState?.factsRevision ?? ""}:${recipient.sharing.getCacheKey()}`;
+        return `${recipient.omitSharedPins ? 1 : 0}:${recipient.presentFastMode("ultrafast") === true ? 0 : 1}:${recipient.publicationState?.factsRevision ?? ""}:${recipient.sharing.getCacheKey()}`;
       },
       // Event fanout needs display structures only on an audience miss, after live authority.
       getPresentation() {
@@ -204,7 +205,15 @@ function prepareSessionRowRecipient(
         })
         ?.has(identityId) ?? false,
   });
-  return { cfg, policyConfig, rowContext, presentFastMode, publicationState, sharing };
+  return {
+    cfg,
+    policyConfig,
+    rowContext,
+    presentFastMode,
+    publicationState,
+    sharing,
+    omitSharedPins: client !== undefined && !usesLegacyNativePins(client),
+  };
 }
 
 /** Recreate after yields: the caller identity and clock belong to one synchronous presentation. */
@@ -524,9 +533,11 @@ export function prepareProjectedSessionPresentation(
       ? visibility.swarmKey
       : excludedSwarmKeys && JSON.stringify([...excludedSwarmKeys]);
     recipientFacts[7] = recipientView?.workspaceReadDisabledReason;
-    const personalPin =
-      options.personalPins &&
-      personalSessionPinRank(options.personalPins, record.key, record.entry, now) > 0;
+    const personalPin = options.personalPins
+      ? personalSessionPinRank(options.personalPins, record.key, record.entry, now) > 0
+      : recipient.omitSharedPins
+        ? null
+        : undefined;
     recipientFacts[8] = personalPin;
     recipientFacts.length = 9;
     const variants = signature === undefined ? undefined : views?.get(signature);
@@ -552,10 +563,7 @@ export function prepareProjectedSessionPresentation(
       preparedRunState: temporal,
       backgroundProcessCount,
     });
-    if (personalPin !== undefined) {
-      row.pinned = personalPin;
-      delete row.pinnedAt;
-    }
+    presentSessionPin(row, personalPin);
     row.childOwnerSessionKeys = [...childOwnerSessionKeys];
     row.fastMode = presentFastMode(row.fastMode);
     row.effectiveFastMode = presentFastMode(row.effectiveFastMode);

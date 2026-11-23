@@ -191,7 +191,8 @@ extension ChatSessionSidebar {
         var loaded = false
         for await event in self.viewModel.transport.events() {
             switch event {
-            case .health(true) where !loaded, .modelSelectionChanged, .reconnected, .routeChanged, .seqGap:
+            case .health(true) where !loaded, .personalPinsChanged, .modelSelectionChanged, .reconnected, .routeChanged,
+                 .seqGap:
                 let scope = self.batch.scope
                 do {
                     guard let connection = self.menuActions.connection else { return }
@@ -324,11 +325,19 @@ extension ChatSessionSidebar {
                 }
                 return [fields]
             } ?? []
-            for patch in patches {
-                let data = try await connection.request(OpenClawChatGatewayRequests.sessionMenu(
-                    "sessions.patch",
-                    session: row,
-                    fields: patch))
+            for (index, patch) in patches.enumerated() {
+                let data: Data
+                do {
+                    data = try await connection.request(OpenClawChatGatewayRequests.sessionMenu(
+                        "sessions.patch", session: row, fields: patch))
+                } catch where index > 0 {
+                    guard connection.isCurrent() else { throw CancellationError() }
+                    self.batch
+                        .notices =
+                        [String(localized: "Group change saved. Could not confirm the unpin.") + " " + error
+                            .localizedDescription]
+                    return // Reconcile both owners, including a response lost after commit.
+                }
                 var receipt = try JSONDecoder().decode(OpenClawChatSessionPatchReceipt.self, from: data)
                 receipt.agentID = OpenClawChatSessionKey.agentID(from: row.key) ?? row.agentId
                 // Pin state is already committed even if persisting its subsequent placement fails.

@@ -182,6 +182,9 @@ extension OpenClawChatViewModel {
 
     func handleWebConversationEvent(_ evt: OpenClawChatTransportEvent) {
         switch evt {
+        case .personalPinsChanged:
+            self.refreshSessions(limit: Self.sessionListFetchLimit)
+            self.refreshSidebarData(coalescing: true)
         case let .health(ok):
             self.applyTransportHealth(ok, refreshSessionsOnReconnect: false)
             if ok { self.loadWebConversationChrome()

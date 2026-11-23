@@ -44,12 +44,12 @@ import { readPreparedGatewayModelMetadata } from "../server-model-catalog-view.j
 import { registerDeflatedSegment } from "../server/ws-compression.js";
 import { buildGatewaySessionSnapshot } from "../session-event-payload.js";
 import { prepareSessionFastModePresentation } from "../session-fast-mode-presentation.js";
+import { usesLegacyNativePins } from "../session-pin-compatibility.js";
 import { tryResolveSessionCompatibilityOwnerAgentId } from "../session-request-agent.js";
 import { withReadySessionRows, type SessionRowReadView } from "../session-row-prepared-read.js";
 import { prepareProjectedSessionPresentation } from "../session-row-presentation.js";
 import { getSessionRowProjection } from "../session-row-projection-access.js";
 import { resolveGatewayModelThinkingProfile } from "../session-utils-model.js";
-import { buildGatewaySessionRow } from "../session-utils-row.js";
 import { getSessionDefaults, resolveSessionModelRef } from "../session-utils.js";
 import { withPreparedSessionResolve } from "../sessions-resolve.js";
 import { readChatHistoryDelta } from "./chat-history-delta.js";
@@ -60,7 +60,10 @@ import {
   respondChatHistoryReadError,
   type ChatHistoryMethod,
 } from "./chat-history-recovery.js";
-import { prepareChatHistorySessionRead } from "./chat-history-session-read.js";
+import {
+  prepareChatHistorySessionRead,
+  buildUnsavedHistoryRow,
+} from "./chat-history-session-read.js";
 import { handleChatMetadataRequest } from "./chat-metadata-handler.js";
 import { captureQueuedChatInputRunIds, readChatPendingInputs } from "./chat-pending-inputs.js";
 import { withChatStartupDiagnostics } from "./chat-server-timing.js";
@@ -375,8 +378,9 @@ export async function handleChatHistoryRequest({
           }).row ??
           (entry
             ? undefined
-            : buildGatewaySessionRow({
+            : buildUnsavedHistoryRow({
                 ...selectedSession,
+                client,
                 key: canonicalKey,
                 preparedAcpMeta: unsavedAcpMeta ?? null,
                 preparedRuntimeOwnership: null,
@@ -386,12 +390,6 @@ export async function handleChatHistoryRequest({
         { config: cfg, phase: method },
       );
 
-      // Unsaved sessions have no resident row, but their configured defaults use the same wire contract.
-      if (!entry && sessionInfo) {
-        const presentFastMode = prepareSessionFastModePresentation(client);
-        sessionInfo.fastMode = presentFastMode(sessionInfo.fastMode);
-        sessionInfo.effectiveFastMode = presentFastMode(sessionInfo.effectiveFastMode);
-      }
       if (entry && !sessionInfo) {
         respondChatHistoryUnavailable(
           method,
@@ -521,6 +519,7 @@ export async function handleChatHistoryRequest({
           }
           const sessionSnapshot = buildGatewaySessionSnapshot({
             sessionRow: sessionInfo,
+            includeLegacyPins: usesLegacyNativePins(client),
             agentId: sessionAgentId,
             activeRunState,
           });

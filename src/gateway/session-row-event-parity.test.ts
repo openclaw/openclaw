@@ -223,7 +223,10 @@ describe("session event privacy retained boundaries", () => {
               activeRunIds: null,
               label: null,
             });
-            expect(frame.payload.session).toEqual(expected[index]);
+            // The roster owns personal pins. All other authorized facts must still match exactly.
+            const { pinned, ...sharedRow } = expected[index]!;
+            expect(pinned).toBe(false);
+            expect(frame.payload.session).toEqual(sharedRow);
             expect(frame.payload.childSessions).toEqual(expected[index]?.childSessions);
             expect(frame.payload.message).toEqual(source.message);
           }

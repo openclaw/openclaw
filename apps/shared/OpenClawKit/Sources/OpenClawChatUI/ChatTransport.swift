@@ -6,6 +6,7 @@ public enum OpenClawChatTransportEvent: Sendable {
     case health(ok: Bool)
     case tick
     case chatMetadataChanged(modelCatalogChanged: Bool = true, agentID: String? = nil)
+    case personalPinsChanged
     case modelSelectionChanged
     case sessionsChanged(OpenClawChatSessionsChangedEvent)
     case sessionObserver(SessionObserverDigest)
@@ -153,8 +154,8 @@ public struct OpenClawChatSessionsChangedEvent: Codable, Sendable, Equatable {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         var session = try container.decodeIfPresent(OpenClawChatSessionEntry.self, forKey: .session)
         var sessionPayload = try container.decodeIfPresent(SessionPayload.self, forKey: .session)
-        // The Gateway emits sidebar clearing receipts on the outer envelope. Carry their
-        // presence into the row patch so projection and replay do not restore stale values.
+        /// The Gateway emits sidebar clearing receipts on the outer envelope. Carry their
+        /// presence into the row patch so projection and replay do not restore stale values.
         func overlay<T: Decodable>(
             _ key: CodingKeys,
             _ path: WritableKeyPath<OpenClawChatSessionEntry, T?>) throws

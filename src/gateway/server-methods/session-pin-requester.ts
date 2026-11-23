@@ -1,8 +1,3 @@
-import {
-  GATEWAY_CLIENT_CAPS,
-  hasGatewayClientCap,
-  isNativeAppUiClient,
-} from "../../../packages/gateway-protocol/src/client-info.js";
 import { assertAdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
 import {
   getGatewayToolCallerIdentity,
@@ -99,14 +94,4 @@ export async function readRequesterSessionPins(
   );
   owner.assertCurrent();
   return new Map(order.map((key, index) => [key, order.length - index]));
-}
-
-/** Older native binaries persist visible pin IDs in shared config. Never hand them personal pins. */
-export function usesLegacyNativePins(client: GatewayRequestHandlerOptions["client"]) {
-  return (
-    client !== null &&
-    !isSyntheticGatewayCaller(client) &&
-    isNativeAppUiClient(client.connect.client) &&
-    !hasGatewayClientCap(client.connect.caps, GATEWAY_CLIENT_CAPS.PERSONAL_SESSION_PINS)
-  );
 }

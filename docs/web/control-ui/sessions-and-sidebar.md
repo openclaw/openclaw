@@ -190,7 +190,10 @@ Concurrent saves use conflict checks and preserve unrelated pin edits. Older nat
 clients that do not advertise `personal-session-pins` keep their shared pin list;
 they never receive the profile's private pin list to write back to shared configuration.
 After upgrading, pin the chats you want on your own sidebar. Historical shared pins
-have no recorded pinner and are not copied into anyone's profile.
+have no recorded pinner and are not copied into anyone's profile. Calls without a
+verified person can still list visible sessions without a pin filter; sign in to
+filter by pins or change them. The native compatibility path can be retired once
+supported clients no longer write pin order to shared configuration.
 
 The browser keeps device-specific geometry and transient presentation, such as
 sidebar width and scroll position. Navigation changes on read-only connections

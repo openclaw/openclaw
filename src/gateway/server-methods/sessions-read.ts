@@ -32,6 +32,7 @@ import {
 import { errorShapeFromError } from "../error-shape.js";
 import { hasOperatorBoundary, operatorSessionCap } from "../operator-role-policy.js";
 import { SessionMutationAuthorizationChangedError } from "../session-mutation-authorization-error.js";
+import { usesLegacyNativePins } from "../session-pin-compatibility.js";
 import { resolveRequestedSessionAgentId as resolveRequestedGlobalAgentId } from "../session-request-agent.js";
 import { withReadySessionRows, type SessionRowReadView } from "../session-row-prepared-read.js";
 import {
@@ -59,7 +60,6 @@ import {
   PERSONAL_PIN_PROFILE_REQUIRED,
   readRequesterSessionPins,
   sessionPinRequester,
-  usesLegacyNativePins,
 } from "./session-pin-requester.js";
 import { startSessionListDiagnostics } from "./sessions-list-diagnostics.js";
 import { sessionMaintenanceHandlers } from "./sessions-maintenance.js";

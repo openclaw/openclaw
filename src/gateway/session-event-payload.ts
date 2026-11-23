@@ -9,6 +9,8 @@ export function buildGatewaySessionSnapshot(params: {
   sessionRow: GatewaySessionRow | null | undefined;
   agentId?: string;
   lifecycle?: boolean;
+  /** Only for single-recipient history replies to a legacy native client. */
+  includeLegacyPins?: boolean;
   event?: AgentEventRuntimePayload;
   lifecycleRunId?: string;
   label?: string;
@@ -38,8 +40,10 @@ export function buildGatewaySessionSnapshot(params: {
       : {};
   const sessionRow = { ...storedRow, ...patch };
   // Session events are shared; a metadata update must not overwrite a recipient’s personal pins.
-  delete sessionRow.pinned;
-  delete sessionRow.pinnedAt;
+  if (!params.includeLegacyPins) {
+    delete sessionRow.pinned;
+    delete sessionRow.pinnedAt;
+  }
   if (Object.hasOwn(patch, "lastActivityAt")) {
     sessionRow.unread = deriveSessionUnread(sessionRow);
   }
@@ -85,6 +89,9 @@ export function buildGatewaySessionSnapshot(params: {
     archivedAt: sessionRow.archivedAt ?? null,
     archivedBy: sessionRow.archivedBy ?? null,
     archiveReason: sessionRow.archiveReason ?? null,
+    ...(params.includeLegacyPins
+      ? { pinned: sessionRow.pinned ?? false, pinnedAt: sessionRow.pinnedAt ?? null }
+      : {}),
     sidebarRoot: sessionRow.sidebarRoot ?? false,
     snoozedUntil: sessionRow.snoozedUntil ?? null,
     snoozedAt: sessionRow.snoozedAt ?? null,

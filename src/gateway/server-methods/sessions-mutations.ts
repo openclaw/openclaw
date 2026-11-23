@@ -34,6 +34,7 @@ import {
 } from "../session-identity-projection.js";
 import { loadSessionLifecycleRuntime } from "../session-lifecycle-runtime-loader.js";
 import { sessionMutationForbiddenError } from "../session-mutation-authorization-error.js";
+import { usesLegacyNativePins } from "../session-pin-compatibility.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import { prepareSessionMutationFacts } from "../session-sharing-preparation.js";
 import {
@@ -49,7 +50,7 @@ import { isSyntheticGatewayCaller } from "./gateway-personal-caller.js";
 import { respondError } from "./response.js";
 import { emitSessionsChanged } from "./session-change-event.js";
 import { readGatewayRequestMutationAuthority } from "./session-mutation-guards.js";
-import { sessionPinRequester, usesLegacyNativePins } from "./session-pin-requester.js";
+import { sessionPinRequester } from "./session-pin-requester.js";
 import type { SessionPatchTargetIdentity } from "./session-unread-ack.js";
 import { startSessionPatchDiagnostics } from "./sessions-patch-diagnostics.js";
 import { executeSessionPatchMutations } from "./sessions-patch-engine.js";

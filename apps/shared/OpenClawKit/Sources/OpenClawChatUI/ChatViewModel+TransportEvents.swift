@@ -23,6 +23,9 @@ extension OpenClawChatViewModel {
             return nil
         }
         switch evt {
+        case .personalPinsChanged:
+            self.refreshSessions(limit: Self.sessionListFetchLimit)
+            self.refreshSidebarData(coalescing: true)
         case let .health(ok):
             let reconnected = ok && !self.healthOK
             applyTransportHealth(ok)
