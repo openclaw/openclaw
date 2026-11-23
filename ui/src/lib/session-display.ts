@@ -3,6 +3,7 @@ import {
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { createSignal } from "solid-js";
 import { isCronSessionDisplayKey } from "../../../src/shared/session-list-visibility.ts";
 import type { GatewaySessionRow } from "../api/types.ts";
 import { t } from "../i18n/index.ts";
@@ -46,6 +47,7 @@ const WORKTREE_BRANCH_PREFIX = "openclaw/";
 const CHANNEL_SESSION_KEY_RE =
   /^agent:[^:]+:([^:]+)(?:(?::[^:]+)?:(?:direct|dm)|:(?:group|channel)):/;
 const PEER_SESSION_KEY_RE = /:(?:direct|dm|group|channel|thread):/;
+const DIRECT_SESSION_KEY_RE = /:(?:direct|dm):/;
 
 /**
  * Classifies channel-originated sessions for the sidebar's built-in channel
@@ -62,6 +64,84 @@ export function resolveChannelSessionInfo(
   const keyChannel = key.match(CHANNEL_SESSION_KEY_RE)?.[1];
   const channel = normalizeOptionalString(keyChannel) ?? normalizeOptionalString(rowChannel);
   return { channel, channelSession: Boolean(channel) };
+}
+
+// Phone metadata costs ~30 KB gzip, so it loads only once a phone peer is shown.
+// Readers show the plain number until then and refresh through the signal.
+let formatPhoneNumber: ((raw: string) => string | undefined) | undefined;
+let phoneFormatterLoad: Promise<void> | undefined;
+const [phoneFormatterReady, setPhoneFormatterReady] = createSignal(false);
+
+/** Cached projections key on this so their numbers reformat once metadata lands. */
+export const channelPhoneFormatterReady = phoneFormatterReady;
+
+export function loadChannelPhoneFormatter(): Promise<void> {
+  phoneFormatterLoad ??= import("@openclaw/normalization-core/phone-presentation").then(
+    (module) => {
+      formatPhoneNumber = module.formatInternationalPhoneNumber;
+      setPhoneFormatterReady(true);
+    },
+    // A failed chunk leaves numbers unformatted, which still reads correctly.
+    () => undefined,
+  );
+  return phoneFormatterLoad;
+}
+
+// Channels whose direct-chat peers are addressed by phone number or email.
+const PHONE_ADDRESS_CHANNELS = new Set(["whatsapp", "signal", "imessage", "bluebubbles", "sms"]);
+
+/** A readable phone number or email for a direct-chat peer, when the channel addresses peers that way. */
+export function formatChannelPeerAddress(channel: string, peer: string): string | undefined {
+  if (!PHONE_ADDRESS_CHANNELS.has(channel)) {
+    return undefined;
+  }
+  const value = peer.trim().replace(/^(?:whatsapp|signal|imessage|bluebubbles|sms|auto):/i, "");
+  if (/^[^\s@:]+@[^\s@:]+\.[^\s@:]+$/.test(value)) {
+    return value;
+  }
+  // WhatsApp phone JIDs are digits; privacy LIDs and group JIDs are not phone numbers.
+  const digits = value.match(/^\+?(\d{7,15})(?:@s\.whatsapp\.net)?$/i)?.[1];
+  if (!digits) {
+    return undefined;
+  }
+  const number = `+${digits}`;
+  phoneFormatterReady();
+  if (!formatPhoneNumber) {
+    void loadChannelPhoneFormatter();
+    return number;
+  }
+  return formatPhoneNumber(number) ?? number;
+}
+
+/**
+ * Drops the id suffixes bundled ingress producers append to conversation labels.
+ * They disambiguate for agents; people read the name.
+ */
+export function channelConversationLabel(
+  channel: string,
+  rawLabel: string | undefined,
+): string | undefined {
+  let label = rawLabel;
+  if (!label) {
+    return undefined;
+  }
+  if (channel === "discord") {
+    label = label.replace(/ (?:user|channel) id:\d+$/, "");
+  } else if (channel === "telegram") {
+    label = label.replace(/(?:^| )id:-?\d+(?: topic:\d+)?$/, "");
+    if (/^(?:id:unknown|group:-?\d+(?: topic:\d+)?)$/.test(label)) {
+      return undefined;
+    }
+  } else if (channel === "signal") {
+    label = label.replace(/ id:\S+$/, "");
+  }
+  return normalizeOptionalString(label);
+}
+
+/** Telegram labels a person as "Name (@handle)"; the name leads and the handle is detail. */
+export function splitChannelContactLabel(label: string): { name: string; handle?: string } {
+  const match = label.match(/^(.+?) \((@[^\s()]+)\)$/);
+  return match ? { name: match[1]!, handle: match[2] } : { name: label };
 }
 
 type SessionWorktreeDisplayRow = {
@@ -158,6 +238,7 @@ type SessionDisplayRow = {
   label?: string;
   displayName?: string;
   derivedTitle?: string;
+  channel?: string;
   /** Canonical account projected from the delivery route by the Gateway. */
   accountId?: string;
 } & SessionWorktreeDisplayRow;
@@ -219,8 +300,12 @@ function parseSessionKey(key: string): {
     if (!channel || !identifier) {
       return { prefix: "", fallbackName: key, accountId };
     }
-    const channelLabel = formatSessionChannelLabel(channel);
     const peerId = identifier.trim();
+    const address = formatChannelPeerAddress(channel, peerId);
+    if (address) {
+      return { prefix: "", fallbackName: address, accountId };
+    }
+    const channelLabel = formatSessionChannelLabel(channel);
     const peerLabel = peerId.length <= 10 ? peerId : `…${sliceUtf16Safe(peerId, -6)}`;
     return {
       prefix: "",
@@ -299,7 +384,19 @@ export function resolveSessionDisplayName(key: string, row?: SessionDisplayRow):
   if (label && label !== key) {
     name = applyTypedPrefix(label);
   } else if (displayName && displayName !== key) {
-    name = applyTypedPrefix(displayName);
+    const channel = resolveChannelSessionInfo(key, row?.channel).channel;
+    if (channel) {
+      // Bare ingress ids ("id:unknown", "group:-100…") name nobody; the key fallback reads better.
+      const conversation = channelConversationLabel(channel, displayName);
+      const direct = DIRECT_SESSION_KEY_RE.test(key);
+      const contact =
+        conversation && direct ? splitChannelContactLabel(conversation).name : conversation;
+      name = contact
+        ? applyTypedPrefix((direct && formatChannelPeerAddress(channel, contact)) || contact)
+        : fallbackName;
+    } else {
+      name = applyTypedPrefix(displayName);
+    }
   } else {
     // Unnamed work sessions read as their checkout instead of an opaque key.
     const workSubtitle = row ? resolveSessionWorkSubtitle(row) : undefined;

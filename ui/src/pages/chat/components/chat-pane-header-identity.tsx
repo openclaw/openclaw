@@ -1,5 +1,6 @@
 import { Show, createMemo, onSettled } from "solid-js";
 import { SessionColorDot } from "../../../components/session-color.tsx";
+import { ChannelSessionAvatar } from "../../../components/solid/channel-session-avatar.tsx";
 import { GatewayStatus } from "../../../components/solid/gateway-status.tsx";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { AgentIdentityAvatar } from "../../../components/solid/identity-avatar.tsx";
@@ -14,6 +15,7 @@ import {
   recordCompositionEnd,
 } from "../../../lib/ime.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
+import { resolveSessionChannelPresentation } from "../../../lib/session-channel.ts";
 import { isSessionTitlePending } from "../../../lib/session-display.ts";
 import { nativeListener } from "../../../lib/solid-native-listener.ts";
 import type { ChatPaneHeaderProps } from "./chat-pane-header.types.ts";
@@ -120,11 +122,27 @@ export function AgentCrumb(
 }
 
 function SessionTitle(props: ChatPaneHeaderProps) {
+  // The open conversation wears the same face and channel badge as its sidebar row.
+  const channel = createMemo(() =>
+    !props.catalog && props.session ? resolveSessionChannelPresentation(props.session) : undefined,
+  );
   return (
     <>
       <SessionColorDot
         value={props.catalog ? props.catalogColor : (props.sessionColor ?? props.session?.color)}
       />
+      <Show when={channel()}>
+        {(presentation) => (
+          <span class="chat-pane__channel-face" aria-hidden="true">
+            <ChannelSessionAvatar
+              agentId={props.session?.agentId}
+              channel={presentation().channel}
+              channelLabel={presentation().channelLabel}
+              contactAvatarUrl={props.session?.channelAvatarUrl}
+            />
+          </span>
+        )}
+      </Show>
       <span class="chat-pane__session-title-text">
         <Show
           when={

@@ -381,7 +381,7 @@ function Header(props: SessionHovercardInput) {
   const channel = () => props.row?.channelPresentation;
   const details = createMemo(() => [
     ...new Set(
-      [channel()?.conversation, channel()?.address].filter(
+      [channel()?.conversation, channel()?.contactDetail ?? channel()?.address].filter(
         (value) => value && value !== props.row?.label,
       ),
     ),

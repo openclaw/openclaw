@@ -2,6 +2,7 @@ import { asNonNegativeFiniteNumber } from "@openclaw/normalization-core/number-c
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { ControlUiNavigationItem } from "../../../src/plugin-sdk/control-ui.js";
 import { isIncognitoSessionKey } from "../../../src/shared/incognito-session-key.js";
+import { sessionActivityTimestamp } from "../../../src/shared/session-activity-timestamp.js";
 import type { GatewayControlUiPluginTab } from "../api/gateway.ts";
 import type { GatewaySessionRow, SessionsListResult } from "../api/types.ts";
 import {
@@ -16,6 +17,7 @@ import { i18n } from "../i18n/index.ts";
 import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
 import { resolveSessionChannelPresentation } from "../lib/session-channel.ts";
 import {
+  channelPhoneFormatterReady,
   isSessionTitlePending,
   resolveChannelSessionInfo,
   resolveSessionDisplayName,
@@ -204,6 +206,7 @@ export function buildSidebarSessionNavigationState(input: {
         defaultAgentId,
         selfUserId,
         i18n.getLocale(),
+        channelPhoneFormatterReady(),
         active,
         visuallyActive,
         isRunVisuallyActive,
@@ -297,6 +300,7 @@ export function buildSidebarSessionNavigationState(input: {
           unread: row.archived !== true && row.unread === true,
           hiddenFromInvolvingMe: row.hiddenFromInvolvingMe,
           lastMessagePreview: normalizeOptionalString(row.lastMessagePreview),
+          activityAt: sessionActivityTimestamp(row) || undefined,
           lastReadAt: row.lastReadAt,
           attention:
             row.archived === true ? SIDEBAR_SESSION_NO_ATTENTION : input.resolveAttention(row),

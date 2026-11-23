@@ -2766,6 +2766,55 @@ openclaw-session-menu[popover] {
   animation: menu-in 140ms var(--ease-out);
 }
 
+/* Channel conversations read as message threads: face, name and time, then the latest line. */
+.sidebar-recent-session--channel {
+  --sidebar-channel-face: 28px;
+  --channel-badge-size: 14px;
+}
+
+.sidebar-recent-session--channel > .sidebar-recent-session__link {
+  padding-inline-start: 4px;
+}
+
+/* Doubled class outranks the shared 20px lead and glyph sizes. */
+.sidebar-recent-session.sidebar-recent-session--channel .sidebar-session-indicator,
+.sidebar-recent-session.sidebar-recent-session--channel .session-glyph,
+.sidebar-recent-session.sidebar-recent-session--channel .session-glyph .session-glyph__content {
+  width: var(--sidebar-channel-face);
+  height: var(--sidebar-channel-face);
+  flex-basis: var(--sidebar-channel-face);
+}
+
+.sidebar-recent-session.sidebar-recent-session--channel .identity-avatar--agent.is-fallback {
+  font-size: 15px;
+}
+
+.sidebar-recent-session--channel .sidebar-recent-session__name {
+  width: auto;
+  flex: 1 1 0;
+  /* Fill the title row so baseline alignment keeps the name where centering put it. */
+  align-self: baseline;
+  line-height: max(24px, var(--sidebar-title-line-height));
+}
+
+/* The smaller time shares the name's baseline instead of floating above it. */
+.sidebar-recent-session__time {
+  align-self: baseline;
+  flex: none;
+  margin-left: auto;
+  padding-left: 8px;
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* Hover actions take the time's place at the end of the title line. */
+.sidebar-recent-session--channel:is(:hover, :focus-within, .sidebar-recent-session--menu-open)
+  .sidebar-recent-session__time {
+  display: none;
+}
+
 .session-menu__sub,
 .sidebar-recent-session__channel {
   flex: 0 1 auto;

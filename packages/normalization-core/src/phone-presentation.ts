@@ -7,21 +7,34 @@ const sharedCountryCallingCodes = new Set(
     .map(([callingCode]) => callingCode),
 );
 
-export function formatInternationalPhoneNumberForDisplay(
-  raw: string,
-  locale?: string,
-): string | undefined {
+function parsePossibleInternationalNumber(raw: string) {
   const candidate = raw.trim();
   if (!candidate.startsWith("+")) {
     return undefined;
   }
-
   try {
     const phoneNumber = parsePhoneNumberFromString(candidate, { extract: false });
-    if (!phoneNumber?.isPossible()) {
-      return undefined;
-    }
+    return phoneNumber?.isPossible() ? phoneNumber : undefined;
+  } catch {
+    return undefined;
+  }
+}
 
+/** Compact international form for identity labels, where the calling code already names the region. */
+export function formatInternationalPhoneNumber(raw: string): string | undefined {
+  return parsePossibleInternationalNumber(raw)?.formatInternational();
+}
+
+export function formatInternationalPhoneNumberForDisplay(
+  raw: string,
+  locale?: string,
+): string | undefined {
+  const phoneNumber = parsePossibleInternationalNumber(raw);
+  if (!phoneNumber) {
+    return undefined;
+  }
+
+  try {
     const international = phoneNumber.formatInternational();
     if (!phoneNumber.country || sharedCountryCallingCodes.has(phoneNumber.countryCallingCode)) {
       return international;

@@ -37,7 +37,12 @@ it("preserves measured two-line row heights when layout invalidation does not re
     }
   };
   await waitForSolid(() => {
-    expect(sidebar.querySelectorAll(".sidebar-recent-session__channel").length).toBeGreaterThan(1);
+    // Channel conversations keep a second line beside their face and channel badge.
+    expect(
+      sidebar.querySelectorAll(".sidebar-recent-session--channel .sidebar-recent-session__subtitle")
+        .length,
+    ).toBeGreaterThan(1);
+    expect(sidebar.querySelectorAll(".channel-session-avatar__badge").length).toBeGreaterThan(1);
     separated();
   });
   await new Promise<void>((resolve) => {

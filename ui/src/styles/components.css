@@ -314,6 +314,73 @@ openclaw-session-owner-chip .viewer-avatar__initials {
   object-fit: cover;
 }
 
+/* A channel conversation's face with the channel's own icon as a corner badge. */
+.channel-session-avatar {
+  position: relative;
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.channel-session-avatar__face,
+.channel-session-avatar__face .identity-avatar--agent,
+.channel-session-avatar__face .channel-avatar {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border-radius: var(--radius-full);
+}
+
+.channel-session-avatar__badge {
+  position: absolute;
+  right: -3px;
+  bottom: -3px;
+  display: block;
+  /* Contexts size the badge with their face; compact faces default to 10px. */
+  width: var(--channel-badge-size, 10px);
+  height: var(--channel-badge-size, 10px);
+  overflow: hidden;
+  border-radius: var(--radius-full);
+  /* The row surface over the sidebar, as both the disc and a ring, reads as a cut in the face. */
+  background: linear-gradient(var(--session-row-bg, transparent) 0 0), var(--sidebar-bg, var(--bg));
+  box-shadow:
+    0 0 0 2px var(--session-row-bg, transparent),
+    0 0 0 2px var(--sidebar-bg, var(--bg));
+}
+
+.chat-pane__channel-face {
+  flex: none;
+  width: 22px;
+  height: 22px;
+  margin-inline-end: 8px;
+}
+
+.chat-pane__channel-face .channel-session-avatar__badge {
+  right: -2px;
+  bottom: -2px;
+  box-shadow: 0 0 0 1.5px var(--bg);
+  background: var(--bg);
+}
+
+.channel-session-avatar__badge .channel-avatar {
+  width: 100%;
+  height: 100%;
+  border-radius: 0;
+  object-fit: contain;
+}
+
+.channel-session-avatar__monogram {
+  display: grid;
+  place-items: center;
+  width: 100%;
+  height: 100%;
+  background: linear-gradient(135deg, var(--channels-art-a), var(--channels-art-b));
+  color: rgb(255 255 255 / 92%);
+  font-size: 8px;
+  font-weight: 700;
+  line-height: 1;
+}
+
 .session-glyph__emoji {
   font-size: 15px;
   line-height: 1;

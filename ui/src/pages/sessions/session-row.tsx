@@ -28,7 +28,11 @@ import { handleNavigationClick } from "../../lib/navigation-click.ts";
 import { formatSessionTokens } from "../../lib/presenter.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { liveValue as createLiveValue } from "../../lib/reactive/live-value.ts";
-import { resolveSessionDisplayKind, resolveSessionDisplayName } from "../../lib/session-display.ts";
+import {
+  resolveChannelSessionInfo,
+  resolveSessionDisplayKind,
+  resolveSessionDisplayName,
+} from "../../lib/session-display.ts";
 import { isSessionRunStateActive } from "../../lib/session-run-state.ts";
 import { SESSION_DRAG_MIME } from "../../lib/sessions/drag.ts";
 import {
@@ -243,8 +247,14 @@ export function SessionRows(props: SessionsProps & { row: GatewaySessionRow; row
   );
   const displayKind = createMemo(() => resolveSessionDisplayKind(row()));
   const listTitle = createMemo(() => resolveSessionDisplayName(row().key, row()));
+  // Channel conversations name their contact even when unnamed (a formatted number beats "Claw (imessage)").
+  const channelSession = createMemo(
+    () => resolveChannelSessionInfo(row().key, row().channel).channelSession,
+  );
   const primaryTitle = () =>
-    displayName() || trimmedLabel() ? listTitle() : (friendlyKeyLabel() ?? listTitle());
+    displayName() || trimmedLabel() || channelSession()
+      ? listTitle()
+      : (friendlyKeyLabel() ?? listTitle());
   const secondaryTitle = () => {
     const context = friendlyKeyLabel() ?? row().key;
     return context !== primaryTitle() ? context : null;

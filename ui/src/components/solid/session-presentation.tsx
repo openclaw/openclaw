@@ -28,6 +28,7 @@ import {
 import type { resolveSidebarSessionSubtitle } from "../session-row-subtitle.ts";
 import { createSessionRunVisibility as sessionRunVisibility } from "../session-run-visibility-controller.ts";
 import { ChannelAvatar } from "./channel-avatar.tsx";
+import { ChannelSessionAvatar } from "./channel-session-avatar.tsx";
 import "../tooltip.ts";
 import { Icon, sessionIcon, sessionIconMask } from "./icon.tsx";
 import { SessionOwnerAvatar, SessionOwnerChip } from "./session-owner-chip.tsx";
@@ -478,11 +479,14 @@ export function renderSessionLeadingState(props: {
     </Show>
   );
   const channelAvatarUrl = createMemo(() => session().channelAvatarUrl);
+  // Channel conversations read like a messaging app: a face with the channel as a corner badge.
+  const channel = createMemo(() => session().channelPresentation);
+  const hasFace = createMemo(() => Boolean(channel() || channelAvatarUrl()));
   const stackedParticipants = createMemo(
     () => session().participantCount ?? session().participants?.length ?? 0,
   );
   const renderedIdentities = createMemo(() => {
-    if (hasIcon() || channelAvatarUrl() || !hasOwner()) {
+    if (hasIcon() || hasFace() || !hasOwner()) {
       return undefined;
     }
     return [
@@ -491,13 +495,9 @@ export function renderSessionLeadingState(props: {
     ].filter((identity): identity is SessionParticipantIdentity => identity !== undefined);
   });
   const hasContent = createMemo(
-    () =>
-      (attentionIcon() || props.icon !== false) &&
-      (hasIcon() || Boolean(channelAvatarUrl()) || hasOwner()),
+    () => (attentionIcon() || props.icon !== false) && (hasIcon() || hasFace() || hasOwner()),
   );
-  const showGlyph = createMemo(
-    () => hasIcon() || Boolean(channelAvatarUrl()) || hasOwner() || showRun(),
-  );
+  const showGlyph = createMemo(() => hasIcon() || hasFace() || hasOwner() || showRun());
   const content = (
     <Switch fallback={<OwnerChip />}>
       <Match when={attentionIcon()}>
@@ -506,6 +506,17 @@ export function renderSessionLeadingState(props: {
       <Match when={props.icon != null}>{props.icon}</Match>
       <Match when={Boolean(icon())}>
         <SessionIcon icon={icon()!} />
+      </Match>
+      <Match when={channel()}>
+        {(presentation) => (
+          <ChannelSessionAvatar
+            agentId={session().agentId}
+            channel={presentation().channel}
+            channelLabel={presentation().channelLabel}
+            contactAvatarUrl={channelAvatarUrl()}
+            avatarAuth={props.avatarAuth}
+          />
+        )}
       </Match>
       <Match when={Boolean(channelAvatarUrl())}>
         <ChannelAvatar
@@ -536,11 +547,9 @@ export function renderSessionLeadingState(props: {
         runningLabel={runningLabel()}
         background={background()}
         runVisibility={props.runVisibility}
-        circular={!hasIcon() && Boolean(channelAvatarUrl() || hasOwner())}
+        circular={!hasIcon() && (hasFace() || hasOwner())}
         ring={
-          !hasIcon() && !channelAvatarUrl() && hasOwner() && stackedParticipants() > 0
-            ? "pair"
-            : "circle"
+          !hasIcon() && !hasFace() && hasOwner() && stackedParticipants() > 0 ? "pair" : "circle"
         }
         badge={<Show when={unreadBadge()}>{renderSessionUnreadBadge()}</Show>}
       />

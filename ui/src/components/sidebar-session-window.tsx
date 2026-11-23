@@ -31,9 +31,13 @@ export function createSidebarSessionWindow(
   const describe = (
     row: SidebarRecentSession,
   ): { height: number; signature: GeometrySignature } => {
+    // Channel conversations always carry their latest line beside a face.
     const preview =
-      host().sessionsShowPreview &&
-      Boolean(row.snapshotSubtitle?.subtitle || row.lastMessagePreview || row.channelPresentation);
+      (row.channelPresentation !== undefined && host().sidebarAgentsMode !== "roster") ||
+      (host().sessionsShowPreview &&
+        Boolean(
+          row.snapshotSubtitle?.subtitle || row.lastMessagePreview || row.channelPresentation,
+        ));
     const ownHeight = Math.max(preview ? 44 : 32, rowFloor());
     if (!host().isSessionChildrenExpanded(row)) {
       return { height: ownHeight, signature: [preview] };
