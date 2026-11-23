@@ -15,6 +15,7 @@ import {
   chatThreadDistanceFromBottom,
   waitForChatScrollIdle,
   chatMessage,
+  openAiAuthor,
 } from "./chat-flow.test-support.ts";
 import { board } from "./chat-layout-fixtures.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -619,6 +620,7 @@ suite.define(() => {
         },
         {
           role: "assistant",
+          ...openAiAuthor,
           content: [
             {
               type: "toolCall",
@@ -660,7 +662,7 @@ suite.define(() => {
         chatMessage(
           "assistant",
           "The transcript implementation is sound and all focused tests pass.",
-          { timestamp: 103 },
+          { ...openAiAuthor, timestamp: 103 },
         ),
         ...Array.from({ length: 3 }, (_, index) => [
           {
@@ -681,6 +683,7 @@ suite.define(() => {
         },
         {
           role: "assistant",
+          ...openAiAuthor,
           content: [
             {
               type: "toolCall",
@@ -702,6 +705,7 @@ suite.define(() => {
         },
         {
           role: "assistant",
+          ...openAiAuthor,
           content: [{ type: "text", text: "The sibling tool check passed." }],
           timestamp: 113,
         },

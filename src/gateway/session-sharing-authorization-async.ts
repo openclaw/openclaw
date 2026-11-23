@@ -1,10 +1,13 @@
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { ErrorCodes, errorShape } from "../../packages/gateway-protocol/src/index.js";
 import { GATEWAY_OWNER_PROFILE_ID } from "../../packages/gateway-protocol/src/schema/users.js";
 import {
+  assertAdmittedRunOperatorAuthority,
   createAdmittedRunOperatorAuthority,
   type AdmittedRunOperatorAuthority,
 } from "../agents/admitted-run-context.js";
 import { AgentSelectionRequiredError } from "../agents/agent-scope-config.js";
+import { isAbortRequestText } from "../auto-reply/reply/abort-primitives.js";
 import {
   retainPreparedSessionSharingFacts,
   projectSessionSharingEntry,
@@ -19,23 +22,19 @@ import { sameSessionTranscriptStorePath } from "../config/sessions/transcript-st
 import type { SessionEntry } from "../config/sessions/types.js";
 import { observeDiagnosticsTimelinePhases } from "../infra/diagnostics-timeline.js";
 import { readDatabasePathIdentitySync } from "../infra/sqlite-worker-identity.js";
-import {
-  intersectOperatorScopes,
-  resolveMissingOperatorScope,
-} from "../shared/operator-scope-compat.js";
+import { resolveMissingOperatorScope } from "../shared/operator-scope-compat.js";
+import { waitForAgentInputAdmission } from "../state/agent-database-preparation-context.js";
 import { resolveDatabasePath } from "../state/openclaw-state-db.paths.js";
 import {
   prepareUserProfileIdentity,
   readResidentGatewayOwnerProfile,
 } from "../state/user-profile-list.js";
+import { sanitizeChatSendMessageInput } from "./chat-input-sanitize.js";
 import { errorShapeFromError } from "./error-shape.js";
 import { resolveGatewayOperatorAccessAuthority } from "./operator-access-policy.js";
-import { isNamedOperatorRoleEnforcementEnabled } from "./operator-role-enforcement.js";
+import { isOperatorRoleEnforcedFor, operatorRoleSubject } from "./operator-role-enforcement.js";
 import { resolveOperatorRolePolicyForAssignment } from "./operator-role-policy.js";
-import {
-  captureGatewayOperatorRunAuthority,
-  intersectOperatorRunModelPolicy,
-} from "./operator-run-authority.js";
+import { prepareGatewayOperatorRunAuthority } from "./operator-run-authority.js";
 import type { GatewayClient, GatewayRequestContext } from "./server-methods/shared-types.js";
 import { sessionMethodDatabaseAdmission, isSessionTargetMethod } from "./session-method-policy.js";
 import { SessionMutationAuthorizationChangedError } from "./session-mutation-authorization-error.js";
@@ -85,28 +84,26 @@ export async function prepareSessionPrincipalRunAuthority(
   params: Parameters<typeof prepareSessionPrincipalRunAccess>[0],
 ): Promise<{ authority: AdmittedRunOperatorAuthority; release: () => void }> {
   const source = await prepareSessionPrincipalRunAccess(params);
-  let admitted: Awaited<ReturnType<typeof captureGatewayOperatorRunAuthority>>;
+  const original = source.recordedOperatorAuthority;
+  if (original) {
+    return {
+      authority: createAdmittedRunOperatorAuthority({
+        ...original,
+        assertCurrent: source.assertCurrent,
+        signal: source.signal,
+      }),
+      release: source.release,
+    };
+  }
+  let admitted: Awaited<ReturnType<typeof prepareGatewayOperatorRunAuthority>>;
   try {
-    admitted = await captureGatewayOperatorRunAuthority({
+    admitted = await prepareGatewayOperatorRunAuthority({
       client: source.client,
       context: params.context,
       sourceAuthority: source,
     });
     if (!admitted) {
       throw new Error("Session principal has no current run authority.");
-    }
-    const original = source.recordedOperatorAuthority;
-    if (original) {
-      const current = admitted.authority;
-      admitted.authority = createAdmittedRunOperatorAuthority({
-        ...current,
-        scopes: intersectOperatorScopes(current.scopes, original.scopes),
-        gatewayAccessGrant: original.gatewayAccessGrant,
-        recoverySnapshot: original.recoverySnapshot,
-        get modelPolicy() {
-          return intersectOperatorRunModelPolicy(original.modelPolicy, current.modelPolicy);
-        },
-      });
     }
     return admitted;
   } catch (error) {
@@ -117,12 +114,6 @@ export async function prepareSessionPrincipalRunAuthority(
     }
     throw error;
   }
-}
-
-// A revoked or changed source throws instead of yielding stale scopes.
-function currentRecordedScopes(authority: AdmittedRunOperatorAuthority): readonly string[] {
-  authority.assertCurrent();
-  return authority.scopes;
 }
 
 /** Resolve a recorded person against current grants and an existing exact session. */
@@ -137,14 +128,23 @@ async function prepareSessionPrincipalRunAccess(params: {
   sessionPrincipal?: true;
   /** Restart continuations retain a recorded original source when one exists. */
   preserveRecordedSource?: true;
+  /** Host-restored interrupted requester, not session ownership or caller-supplied attribution. */
+  recoveredOperatorAuthority?: AdmittedRunOperatorAuthority;
   assertCurrent?: () => void;
 }) {
   params.assertCurrent?.();
   const getConfig = params.context.getCommittedRuntimeConfig ?? params.context.getRuntimeConfig;
+  const preserveRecordedSource =
+    params.preserveRecordedSource || params.recoveredOperatorAuthority !== undefined;
   const identity = await prepareUserProfileIdentity(params.profileId);
   const ownerProfilePath = resolveDatabasePath();
   let sharing: ReturnType<typeof resolveSessionMutationAuthorization>["authorization"];
-  let recorded: Awaited<ReturnType<typeof restoreSessionOperatorSource>>;
+  let recorded:
+    | Pick<
+        NonNullable<Awaited<ReturnType<typeof restoreSessionOperatorSource>>>,
+        "authority" | "release"
+      >
+    | undefined;
   const release = () => {
     sharing?.release?.();
     recorded?.release();
@@ -152,27 +152,21 @@ async function prepareSessionPrincipalRunAccess(params: {
   };
   const readScopes = () => {
     const profile = identity.readCurrentProfile();
-    // The recorded principal must itself remain the Gateway owner; this is never a fallback.
-    if (params.profileId === GATEWAY_OWNER_PROFILE_ID) {
+    let scopes: readonly string[] | undefined = recorded?.authority.scopes;
+    if (!scopes && params.profileId === GATEWAY_OWNER_PROFILE_ID) {
       if (readResidentGatewayOwnerProfile(ownerProfilePath)?.id !== params.profileId) {
         throw new Error("Session principal is no longer the Gateway owner.");
       }
-      return ["operator.admin"];
+      scopes = ["operator.admin"];
+    } else if (!scopes) {
+      scopes = resolveOperatorRolePolicyForAssignment(
+        params.profileId,
+        profile.assignedRole,
+        getConfig(),
+        profile.githubLogin ?? null,
+        operatorRoleSubject(profile),
+      )?.scopes;
     }
-    const cfg = getConfig();
-    // Without roles a profile carries no authority of its own; only the person's recorded
-    // authenticated source for this session, revalidated on every use, supplies it.
-    const scopes =
-      recorded &&
-      (recorded.authority.openclawIdPrincipal?.kind === "member" ||
-        !isNamedOperatorRoleEnforcementEnabled(cfg))
-        ? currentRecordedScopes(recorded.authority)
-        : resolveOperatorRolePolicyForAssignment(
-            params.profileId,
-            profile.assignedRole,
-            cfg,
-            profile.githubLogin ?? null,
-          )?.scopes;
     if (!scopes || resolveMissingOperatorScope(["operator.sessions.write"], scopes) !== null) {
       throw new Error("Session principal has no current run authority.");
     }
@@ -182,7 +176,15 @@ async function prepareSessionPrincipalRunAccess(params: {
     // Fresh role-based principals keep their existing admission semantics. A
     // restart may additionally transfer the original authenticated custody;
     // source-less legacy sessions remain non-durable when roles authorize them.
-    if (params.profileId !== GATEWAY_OWNER_PROFILE_ID) {
+    if (params.recoveredOperatorAuthority) {
+      const authority = params.recoveredOperatorAuthority;
+      assertAdmittedRunOperatorAuthority(authority);
+      authority.assertCurrent();
+      if (authority.profileId !== params.profileId) {
+        throw new Error("Interrupted requester identity changed.");
+      }
+      recorded = { authority, release: authority.retain?.() ?? (() => {}) };
+    } else if (params.profileId !== GATEWAY_OWNER_PROFILE_ID) {
       recorded = await restoreSessionOperatorSource({
         context: params.context,
         profileId: params.profileId,
@@ -190,15 +192,25 @@ async function prepareSessionPrincipalRunAccess(params: {
         sessionKey: params.sessionKey,
         storePath: params.storePath,
         memberOnly:
-          !params.preserveRecordedSource && isNamedOperatorRoleEnforcementEnabled(getConfig()),
+          !preserveRecordedSource &&
+          isOperatorRoleEnforcedFor(
+            getConfig(),
+            operatorRoleSubject(identity.readCurrentProfile()),
+          ) &&
+          !operatorRoleSubject(identity.readCurrentProfile()).openclawIdMember,
         assertCurrent: () => params.assertCurrent?.(),
       });
     }
     const scopes = readScopes();
-    const access = resolveGatewayOperatorAccessAuthority(params.profileId, getConfig(), {
-      requireLivePolicySet: true,
-      openclawIdPrincipal: recorded?.authority.openclawIdPrincipal,
-    });
+    const original = recorded?.authority;
+    // A restored requester already passed current reference admission.
+    const access = original
+      ? undefined
+      : resolveGatewayOperatorAccessAuthority(params.profileId, getConfig(), {
+          requireLivePolicySet: true,
+          openclawIdPrincipal: recorded?.authority.openclawIdPrincipal,
+        });
+    access?.assertCurrent();
     // A policy adapter identifies the resolved person without manufacturing a transport grant.
     const client: GatewayClient = {
       connect: {
@@ -215,25 +227,18 @@ async function prepareSessionPrincipalRunAccess(params: {
       },
     };
     const assertPrincipalCurrent = composeSessionSourceAssertion(
-      [params.assertCurrent],
-      (assertParent) => {
-        assertParent();
-        access?.signal.throwIfAborted();
-        access?.assertCurrent();
-        if (params.preserveRecordedSource) {
-          recorded?.authority.assertCurrent();
-        }
-        // readScopes validates the retained identity before consuming its current role.
-        if (resolveMissingOperatorScope(client.connect.scopes ?? [], readScopes()) !== null) {
-          throw new Error("Session principal has no current run authority.");
-        }
-      },
-      params.preserveRecordedSource ? undefined : { synchronousCheck: true },
+      [params.assertCurrent, recorded?.authority.assertCurrent],
+      undefined,
+      { synchronousCheck: true },
     );
     const resolved = await resolveSessionMutationAuthorizationAsync({
       client,
       context: params.context,
       method: "chat.send",
+      sessionScope:
+        original && resolveMissingOperatorScope(["operator.write"], scopes) !== null
+          ? "operator.sessions.write"
+          : undefined,
       requestParams: { agentId: params.agentId, sessionKey: params.sessionKey },
       assertInvocationCurrent: assertPrincipalCurrent,
       assertPrincipalTargetCurrent: (target) => {
@@ -267,15 +272,16 @@ async function prepareSessionPrincipalRunAccess(params: {
       { synchronousCheck: true },
     );
     assertCurrent();
-    const signals = [access?.signal, recorded?.authority.signal].filter(
-      (signal): signal is AbortSignal => signal !== undefined,
-    );
     return {
       client,
       assertCurrent,
-      signal: signals.length > 1 ? AbortSignal.any(signals) : signals[0],
-      gatewayAccessGrant: access ? access.gatewayAccessGrant : null,
-      recordedOperatorAuthority: params.preserveRecordedSource ? recorded?.authority : undefined,
+      signal: recorded?.authority.signal,
+      gatewayAccessGrant: original
+        ? original.gatewayAccessGrant
+        : access
+          ? access.gatewayAccessGrant
+          : null,
+      recordedOperatorAuthority: original,
       release,
     };
   } catch (error) {
@@ -338,6 +344,22 @@ export async function resolveSessionMutationAuthorizationAsync(
     return resolveSessionMutationAuthorization(params);
   }
   const cfg = params.context.getRuntimeConfig();
+  // Goal Resume retains session access across transcript writer handoffs.
+  const sessionAccessOnly =
+    params.method === "chat.send" ||
+    (params.method === "sessions.goal.update" && requestPreparation.authorizesAgentRun);
+  const chatParams =
+    params.method === "chat.send" ? asOptionalRecord(params.requestParams) : undefined;
+  const chatMessage =
+    typeof chatParams?.message === "string"
+      ? sanitizeChatSendMessageInput(chatParams.message)
+      : undefined;
+  // Match the chat handler's command interpretation: cancellation must not join startup.
+  const stopCommand =
+    chatParams?.suppressCommandInterpretation !== true &&
+    chatParams?.intent === undefined &&
+    chatMessage?.ok === true &&
+    isAbortRequestText(chatMessage.message);
   using phases = observeDiagnosticsTimelinePhases("sessionAuthority.profiles");
   const preparedProfiles = await prepareSessionSharingProfiles(params.client);
   phases.mark("sessionAuthority.targets");
@@ -397,6 +419,15 @@ export async function resolveSessionMutationAuthorizationAsync(
         release();
         return { error: input.error };
       }
+      if (params.method === "chat.send" && !stopCommand) {
+        // Capture session facts after the same startup work that input preparation joins.
+        await waitForAgentInputAdmission(input.agentId, {
+          cfg,
+          sessionKey: target.sessionKey,
+          owner: params.context.agentDatabaseStartup,
+        });
+        request.assertInvocationCurrent?.();
+      }
       const retained = await prepareSessionMutationFacts({
         cfg,
         sessionKey: target.sessionKey,
@@ -404,7 +435,7 @@ export async function resolveSessionMutationAuthorizationAsync(
         allowMissing: true,
         followLifecycle: params.method === "chat.send",
         followTranscript: params.method === "chat.send",
-        sessionAccessOnly: params.method === "chat.send",
+        sessionAccessOnly,
       });
       reads.push(retained);
       const initialFacts = retained.readCurrent(cfg);
@@ -540,7 +571,7 @@ export async function resolveSessionMutationAuthorizationAsync(
             membership: new Set(),
           });
           creationReleases.push(retained.release);
-          const readScope = params.method === "chat.send" ? "session-access" : "sharing";
+          const readScope = sessionAccessOnly ? "session-access" : "sharing";
           const read = () => {
             const current = retained.readCurrent(readScope);
             if (!active || !current?.entry) {

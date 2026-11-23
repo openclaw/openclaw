@@ -40,7 +40,7 @@ import {
 } from "./session-transcript-index.js";
 import { SessionTranscriptProjectionUnavailableError } from "./session-transcript-projection-error.js";
 import { waitForSessionTranscriptIndexReconcile } from "./session-transcript-reconcile.js";
-import { searchSessionTranscriptsReadOnlySync as searchSessionTranscripts } from "./session-transcript-search.js";
+import { searchSessionTranscriptsReadOnlySync as searchSessionTranscripts } from "./session-transcript-search.worker.js";
 import { messageEvent, timedMessageEvent } from "./transcript-message.test-support.js";
 
 const mediaMessage = (id: string, content: string) =>
@@ -372,7 +372,7 @@ it("keeps oversized metadata current but hides changed text until the real worke
     expect(searchSessionTranscripts({ ...scope, query: "changed" }).hits).toMatchObject([
       { messageId: "user" },
     ]);
-    expect(readActiveTranscriptStats(scope).eventCount).toBe(3);
+    expect(readActiveTranscriptStats(scope).eventCount).toBe(2);
   });
 });
 

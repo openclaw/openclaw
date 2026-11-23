@@ -4,6 +4,7 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeAll, beforeEach, expect, vi } from "vitest";
 import { validateUpdateRunResult } from "../../../packages/gateway-protocol/src/index.js";
+import { installPrivateUpdateHandoffWorker } from "../../../test/helpers/private-update-handoff-store.js";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
@@ -87,7 +88,7 @@ export const startManagedServiceUpdateHandoffMock = vi.fn<
 }));
 export const claimManagedServiceUpdateHandoffMock = vi.fn<
   typeof import("../../infra/update-managed-service-handoff.js").claimManagedServiceUpdateHandoff
->(() => true);
+>(async () => true);
 export const transferManagedServiceUpdateHandoffMock = vi.fn<
   typeof import("../../infra/update-managed-service-handoff.js").transferManagedServiceUpdateHandoff
 >(async () => true);
@@ -130,6 +131,7 @@ export async function withTransferredUpdateHandoff(
   );
   const tempRoot = await import("../../infra/tmp-openclaw-dir.js");
   const tmp = vi.spyOn(tempRoot, "resolvePreferredOpenClawTmpDir").mockReturnValue(root);
+  const leaseWorker = installPrivateUpdateHandoffWorker(root);
   const handoff = await vi.importActual<
     typeof import("../../infra/update-managed-service-handoff.js")
   >("../../infra/update-managed-service-handoff.js");
@@ -231,6 +233,7 @@ require(process.argv[1]);`,
       await fs.rm(path.dirname(helper.logPath), { recursive: true, force: true });
     }
     tmp.mockRestore();
+    leaseWorker.mockRestore();
   }
 }
 
@@ -488,7 +491,8 @@ beforeEach(() => {
   resolveStartupInstallStatusMock.mockReset();
   resolveStartupInstallStatusMock.mockResolvedValue({
     root: "/tmp/openclaw",
-    status: { root: "/tmp/openclaw", installKind: "git", packageManager: "pnpm" },
+    // Package installs keep the handler these suites cover; Git installs use src/update/.
+    status: { root: "/tmp/openclaw", installKind: "package", packageManager: "pnpm" },
     installReceipt: null,
   });
   getLatestUpdateRestartSentinelMock.mockClear();
@@ -497,7 +501,7 @@ beforeEach(() => {
   recordLatestUpdateRestartSentinelMock.mockClear();
   startManagedServiceUpdateHandoffMock.mockReset();
   transferManagedServiceUpdateHandoffMock.mockReset().mockResolvedValue(true);
-  claimManagedServiceUpdateHandoffMock.mockReset().mockReturnValue(true);
+  claimManagedServiceUpdateHandoffMock.mockReset().mockResolvedValue(true);
   cancelManagedServiceUpdateHandoffMock.mockReset().mockResolvedValue("restored-in-process");
   startManagedServiceUpdateHandoffMock.mockImplementation(async (params) => ({
     status: "started",
@@ -534,9 +538,8 @@ export async function invokeUpdateRun(
     commands: { ownerAllowFrom: ["slack:C0123ABC", "slack:C0456DEF"] },
   },
   contextOverrides: Record<string, unknown> = {},
-  authority: Pick<
-    GatewayRequestHandlerOptions,
-    "sessionMutationCommitGuard" | "hasCurrentClientAuthority"
+  authority: Partial<
+    Pick<GatewayRequestHandlerOptions, "sessionMutationCommitGuard" | "signal" | "client">
   > = {},
 ) {
   setRuntimeConfigSnapshot(runtimeConfig);
@@ -584,8 +587,9 @@ export async function captureUpdateRunPayload(
   return payload;
 }
 
+// update.run reads the install status to route, then the package handler reads it again.
 export function mockGlobalInstallSurface(root = "/tmp/openclaw-global") {
-  resolveStartupInstallStatusMock.mockResolvedValueOnce({
+  resolveStartupInstallStatusMock.mockResolvedValue({
     root,
     status: { root, installKind: "package", packageManager: "npm" },
     installReceipt: null,
@@ -599,7 +603,7 @@ export function mockGlobalInstallSurface(root = "/tmp/openclaw-global") {
 }
 
 export function mockGitInstallSurface(root: string) {
-  resolveStartupInstallStatusMock.mockResolvedValueOnce({
+  resolveStartupInstallStatusMock.mockResolvedValue({
     root,
     status: { root, installKind: "git", packageManager: "pnpm" },
     installReceipt: null,

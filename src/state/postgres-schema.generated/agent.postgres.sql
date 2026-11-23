@@ -437,6 +437,8 @@ CREATE TABLE "session_pending_inputs" (
   "state" text COLLATE "C" NOT NULL,
   "accepted_at" bigint NOT NULL,
   "consumed_event_id" text COLLATE "C",
+  "end_cause" text COLLATE "C",
+  "origin_source_json" text COLLATE "C",
   PRIMARY KEY ("seq"),
   CHECK (("state" IN ('queued', 'interrupted', 'cancelled'))),
   UNIQUE ("input_id"),

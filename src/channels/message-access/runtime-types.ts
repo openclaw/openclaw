@@ -181,12 +181,12 @@ export type ResolveChannelMessageIngressParams = {
   event: ChannelIngressEventInput;
   /** Exact finalized host context this result may enter; omit for decision-only checks. */
   contextBinding?: ChannelIngressContextBinding;
-  /** Opted-in public ingress: publish fresh isolated visible children of this invocation.
-   * The plugin must verify every supplied context post is public; unknown audiences deny.
-   * Recheck current account policy and delivery ownership synchronously at use time.
+  /** Run-admission source renewal for any ingress. `audience: "public"` additionally
+   * grants child-session publication after explicit opt-in and public-context proof.
+   * Without that audience, a started ordinary request may finish after revocation.
    */
   childSessionPublication?: {
-    audience: "public";
+    audience?: "public";
     assertCurrent: () => void;
     /** Renew source authorization at run admission; return its synchronous use-time guard.
      * Return null if the original route, access tier, or public audience is no longer valid.

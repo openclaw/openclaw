@@ -104,7 +104,7 @@ it.each([
         };
         await replaceSessionEntry(scope, entry);
         await addSessionMember(scope, { identityId, addedBy: "other-creator" });
-        using authority = browserAuthority(fixture.context, client);
+        using authority = browserAuthority(fixture.context);
         const voiceSessionId = `admitted-${revocation}`;
         let creating = false;
         let revoked = false;
@@ -225,7 +225,8 @@ it.each([
         );
         await createTalkClient(admission.handler);
         expect(revoked).toBe(revocation !== "unchanged");
-        const committed = revocation === "unchanged" || (timing === "after" && writer === "worker");
+        // Without a transport callback, the wrapper write takes the worker commit like the worker case.
+        const committed = revocation === "unchanged" || (timing === "after" && writer !== "native");
         expect({
           persistedId,
           recorded: clientVoiceSessionTesting.readRecord("main", voiceSessionId) !== undefined,

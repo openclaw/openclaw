@@ -14,13 +14,14 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
 import { setUserProfileRole } from "../../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
+import { encodeChatHistoryResponsePage } from "../chat-history-response-page.js";
 import { prepareGatewayRecipientProfile } from "../expected-profile.js";
 import {
   prepareOperatorModelPresentation,
   projectOperatorModelRead,
 } from "../operator-model-presentation.js";
 import { invalidateOperatorRolePolicy } from "../operator-role-policy.js";
-import { SerializedJsonArray } from "../serialized-json.js";
+import { SerializedJsonArray, serializeGatewayFrame } from "../serialized-json.js";
 import { getSessionRowProjection } from "../session-row-projection-access.js";
 import * as transcriptReaders from "../session-transcript-readers.js";
 import * as historyDelta from "./chat-history-delta.js";
@@ -111,12 +112,110 @@ function record(value: unknown) {
 }
 
 function onlyRecord(value: unknown) {
-  const rows = expectDefined(Array.isArray(value) ? value : undefined, "record list");
+  const materialized = value instanceof SerializedJsonArray ? value.materialize() : value;
+  const rows = expectDefined(Array.isArray(materialized) ? materialized : undefined, "record list");
   expect(rows).toHaveLength(1);
   return record(rows[0]);
 }
 
 describe("historical model disclosure", () => {
+  it("preserves indexed history bytes and current disclosure across viewer and wire shapes", async () => {
+    await withHistoryState(async () => {
+      const f = fixture();
+      f.setPolicy(f.cfg, ["example/allowed"]);
+      const context = { getRuntimeConfig: () => f.cfg, getCommittedRuntimeConfig: () => f.cfg };
+      for (const percent of [0, 5, 100]) {
+        const rows = Array.from({ length: 200 }, (_, index) => ({
+          role: "assistant",
+          ...(index < percent * 2 ? { provider: "example", model: "historical" } : {}),
+          content: 'Unicode 雪🦞 and "model":"historical"',
+          __openclaw: { id: `row-${index}`, nested: historicalModel },
+        }));
+        const page = encodeChatHistoryResponsePage(
+          { messages: rows },
+          {
+            encodeResponse: true,
+            entry: undefined,
+            provider: undefined,
+            sessionId: "indexed",
+            storePath: undefined,
+            sessionAgentId: "main",
+            canonicalKey: "agent:main:indexed",
+            max: 200,
+            maxHistoryBytes: 512 * 1024,
+            effectiveMaxChars: 20_000,
+            offset: undefined,
+            messageId: undefined,
+          },
+        );
+        const encoded = expectDefined(page.encodedResponse, "encoded history");
+        const messages = new SerializedJsonArray(encoded.messages, page.messageModelIndex);
+        using materialize = vi.spyOn(messages, "materialize");
+        for (const client of [f.client, null, f.client]) {
+          const input = {
+            messages,
+            sessionInfo: {
+              key: "agent:main:indexed",
+              kind: "direct" as const,
+              updatedAt: 1,
+              ...historicalModel,
+            },
+          };
+          const scope = { context, client, agentId: "main" };
+          const projected = projectOperatorModelRead(scope, input);
+          for (const subscribe of [false, true]) {
+            const frame = (payload: unknown) => ({
+              type: "res",
+              id: "indexed",
+              ok: true,
+              payload: subscribe ? { initialHistory: { ok: true, payload } } : payload,
+            });
+            const expected = projectOperatorModelRead(scope, { ...input, messages: rows });
+            expect(serializeGatewayFrame(frame(projected)).toString()).toBe(
+              JSON.stringify(frame(expected)),
+            );
+          }
+          if (percent === 0 || client === null) {
+            expect(projected.messages).toBe(messages);
+          }
+          if (percent === 5 && client !== null) {
+            expect(projected.messages).toBeInstanceOf(SerializedJsonArray);
+            if (!(projected.messages instanceof SerializedJsonArray)) {
+              throw new Error("expected bytes");
+            }
+            expect(
+              projected.messages.segments.some((part) => part.buffer === encoded.messages.buffer),
+            ).toBe(true);
+          }
+          const envelopes = rows.map((message) => ({
+            ...historicalModel,
+            session: historicalModel,
+            message,
+          }));
+          const delta = projectOperatorModelRead(scope, { kind: "delta", messages: envelopes });
+          const presentation = prepareOperatorModelPresentation({
+            cfg: f.cfg,
+            policyConfig: f.cfg,
+            client,
+          });
+          const oldDelta = envelopes.map((envelope) =>
+            presentation
+              ? Object.assign({}, presentation.session(envelope), {
+                  session: presentation.session(envelope.session),
+                  message: presentation.message(envelope.message),
+                })
+              : envelope,
+          );
+          expect(serializeGatewayFrame({ type: "res", payload: delta }).toString()).toBe(
+            JSON.stringify({ type: "res", payload: { kind: "delta", messages: oldDelta } }),
+          );
+        }
+        expect(materialize).toHaveBeenCalledTimes(percent === 100 ? 2 : 0);
+        expect(JSON.parse(Buffer.from(encoded.messages).toString())).toEqual(rows);
+      }
+    });
+  });
+
   it("keeps unrestricted startup history encoded between restricted viewers", async () => {
     await withHistoryState(async () => {
       const f = fixture();
@@ -261,6 +360,19 @@ describe("historical model disclosure", () => {
         expect(project.message(allowed)).toBe(allowed);
       }
       expect(project.message({ ...message, model: "allowed-denied" })).not.toHaveProperty("model");
+      const unchangedDelta = {
+        message: { ...message, model: "allowed" },
+        session: allowedModel,
+        ...allowedModel,
+      };
+      expect(project.deltaMessage(unchangedDelta)).toBe(unchangedDelta);
+      for (const envelope of [
+        { ...unchangedDelta, ...historicalModel },
+        { ...unchangedDelta, session: historicalModel },
+        { ...unchangedDelta, message },
+      ]) {
+        expect(project.deltaMessage(envelope)).not.toBe(envelope);
+      }
       expect(project.message({ ...message, provider: null })).toMatchObject({ provider: null });
       for (const model of ["gateway-injected", "delivery-mirror"]) {
         const bookkeeping = { ...message, provider: "openclaw", model };
@@ -349,6 +461,7 @@ describe("historical model disclosure", () => {
         getCommittedRuntimeConfig: () => committed,
       });
       const historyOptions = {
+        acceptsSerializedJson: true,
         params: { sessionKey: scope.sessionKey, limit: 1 },
         client: f.client,
         context,
@@ -403,7 +516,13 @@ describe("historical model disclosure", () => {
         const read = historyPages.readChatHistoryPage;
         vi.spyOn(historyPages, "readChatHistoryPage").mockImplementationOnce(async (...args) => {
           const result = await read(...args);
-          expect(onlyRecord(result.messages)).toMatchObject({
+          expect(
+            onlyRecord(
+              result.encodedResponse
+                ? new SerializedJsonArray(result.encodedResponse.messages)
+                : result.messages,
+            ),
+          ).toMatchObject({
             provider: "example",
             model: "historical",
           });
@@ -532,3 +651,101 @@ describe("historical model disclosure", () => {
     });
   });
 });
+
+it.each(["history", "delta", "subscribe"] as const)(
+  "preserves shipped model disclosure via %s",
+  async (flow) => {
+    await withHistoryState(async (state) => {
+      const f = fixture();
+      f.setPolicy(f.cfg, ["example/allowed"]);
+      await state.writeConfig(f.cfg);
+      setRuntimeConfigSnapshot(f.cfg);
+      const scope = await seedHistorySession(`lane2674-${flow}`, {
+        createdActor: { type: "human", source: "profile", id: f.person.id },
+        ...historicalModel,
+        providerOverride: "example",
+        modelOverride: "historical",
+        modelOverrideSource: "user",
+      });
+      await appendTranscriptMessage(scope, {
+        eventId: `lane2674-${flow}-input`,
+        message: { role: "user", content: "Synthetic question" },
+      });
+      const context = await createHistoryReadContext({
+        getRuntimeConfig: () => f.cfg,
+        getCommittedRuntimeConfig: () => f.cfg,
+      });
+      const rpc = historyRpc(context, scope.sessionKey);
+      const before = response(await rpc("chat.history", {}, { client: f.client }));
+      const hidden = { provider: "example", model: "historical" };
+      await appendTranscriptMessage(scope, {
+        eventId: `lane2674-${flow}-assistant`,
+        message: {
+          role: "assistant",
+          ...hidden,
+          content: "Synthetic assistant response",
+          __openclaw: { nested: hidden },
+        },
+      });
+      await appendTranscriptMessage(scope, {
+        eventId: `lane2674-${flow}-tool`,
+        message: {
+          role: "toolResult",
+          ...hidden,
+          toolCallId: "probe",
+          toolName: "inspect",
+          content: [{ type: "text", text: "Synthetic tool result" }],
+          __openclaw: { nested: hidden },
+        },
+      });
+      let payload: Record<string, unknown>;
+      if (flow === "subscribe") {
+        const { handleGatewayRequest } = await import("../server-methods.js");
+        const { sessionSubscriptionHandlers } = await import("./sessions-subscriptions.js");
+        const respond = vi.fn<RespondFn>();
+        await handleGatewayRequest({
+          req: {
+            type: "req",
+            id: "lane2674",
+            method: "sessions.messages.subscribe",
+            params: { key: scope.sessionKey, initialHistory: { limit: 200 } },
+          },
+          client: f.client,
+          context,
+          respond,
+          isWebchatConnect: () => false,
+          extraHandlers: sessionSubscriptionHandlers,
+          acceptsSerializedJson: true,
+        });
+        payload = response(respond);
+        expect(record(payload.initialHistory).ok).toBe(true);
+      } else {
+        payload = response(
+          await rpc("chat.history", flow === "delta" ? { cursor: before.deltaCursor } : {}, {
+            client: f.client,
+            acceptsSerializedJson: true,
+          }),
+        );
+        if (flow === "delta") {
+          expect(payload.kind).toBe("delta");
+        }
+      }
+      const wire = JSON.parse(
+        serializeGatewayFrame({ type: "res", id: "lane2674", ok: true, payload }).toString(),
+      );
+      const history = flow === "subscribe" ? wire.payload.initialHistory.payload : wire.payload;
+      expectModelHidden(history.sessionInfo);
+      const rows = history.messages.map((value: unknown) =>
+        flow === "delta" ? record(value).message : value,
+      );
+      const assistantRow = rows.find((value: unknown) => record(value).role === "assistant");
+      const toolRow = rows.find((value: unknown) => record(value).role === "toolResult");
+      expect(assistantRow).toBeDefined();
+      expect(toolRow).toBeDefined();
+      expectModelHidden(assistantRow, "provider");
+      expect(record(record(assistantRow)["__openclaw"]).nested).toEqual(hidden);
+      expect(toolRow).toMatchObject(hidden);
+      expect(record(record(toolRow)["__openclaw"]).nested).toEqual(hidden);
+    });
+  },
+);

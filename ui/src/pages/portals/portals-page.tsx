@@ -166,6 +166,9 @@ function PortalPreview(props: {
     return () => observer.disconnect();
   });
   const portalUrl = () => props.portal.url ?? "";
+  const previewError = () =>
+    state().error ??
+    (state().closeFailure?.portalId === props.portal.id ? state().closeFailure?.message : null);
   const origin = () => new URL(props.portal.publicUrl).origin;
   const canLaunch = () => Boolean(props.portal.tokenQuery && portalUrl());
   const displayUrl = () => {
@@ -336,9 +339,9 @@ function PortalPreview(props: {
             />
           </header>
         </Show>
-        <Show when={state().error}>
+        <Show when={previewError()}>
           <InlineAlert tone="danger" class="portals-preview__error" role="alert">
-            {state().error}
+            {previewError()}
           </InlineAlert>
         </Show>
         <Show when={probeRead()} fallback={<PortalProbeLoading />}>
@@ -546,11 +549,7 @@ export function PortalContent(props: { model: PortalsModel; mobile?: boolean }) 
           when={props.model.presentation().embedded}
           fallback={
             <ShellLayoutBoundary traits={{ portalsPage: true }}>
-              <HubPageHeader
-                active="portals"
-                wide
-                docsUrl="https://docs.openclaw.ai/gateway/portals"
-              />
+              <HubPageHeader active="portals" docsUrl="https://docs.openclaw.ai/gateway/portals" />
               <PortalReadiness model={props.model} readReady={readReady}>
                 <Show when={selectedPortal()} fallback={<EmptyState model={props.model} />}>
                   <section class="portals-layout">

@@ -11,6 +11,14 @@ export function transformCliResultText(
   return {
     ...output,
     rawText: output.text,
+    ...(output.interimNativeReplies
+      ? {
+          interimNativeReplies: output.interimNativeReplies.map((reply) => ({
+            ...reply,
+            text: applyPluginTextReplacements(reply.text, replacements),
+          })),
+        }
+      : {}),
     text: applyPluginTextReplacements(output.text, replacements),
     ...(output.textParts
       ? {

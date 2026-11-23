@@ -5,11 +5,15 @@
  *
  * node --expose-gc --import ./scripts/tsx.mjs scripts/perf/scratch-cleanup-measure.ts \
  *   --root /absolute/new/evidence-directory --samples 5 --mode timing
+ * --agent-temp compares inherited system temp with workspace TMPDIR using a real child;
+ * both variants run the same TTL owner. Routing/fork time is recorded outside owner time.
+ * Baseline leaves validation scratch unowned; this is reclamation cost, not a speedup.
  * Repeat with a new root and --mode allocation; --mode profile writes one CPU profile.
  * Acceptance: reclaim every expired entry, preserve fresh/live/outside files, bounded paced
  * deletion. Report added CPU/allocation cost and A/A spread; do not claim a Gateway speedup.
  */
 import assert from "node:assert/strict";
+import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import { Session } from "node:inspector/promises";
@@ -18,7 +22,8 @@ import path from "node:path";
 import { monitorEventLoopDelay } from "node:perf_hooks";
 import { setTimeout as delay } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
-import { parseArgs } from "node:util";
+import { parseArgs, promisify } from "node:util";
+import { prepareAgentExecScratch } from "../../src/agents/exec-scratch.js";
 import {
   cleanScratch,
   closeScratchCleanupCursor,
@@ -35,6 +40,7 @@ const { values } = parseArgs({
     "file-bytes": { type: "string", default: "19050" },
     mode: { type: "string", default: "timing" },
     baseline: { type: "string" },
+    "agent-temp": { type: "boolean", default: false },
     "nested-clone": { type: "boolean", default: false },
   },
 });
@@ -61,7 +67,7 @@ const liveFiles = Math.floor(fileCount * 0.2);
 const freshFiles = Math.floor(fileCount * 0.2);
 const coverageFiles = Math.floor(fileCount / 31);
 const expiredFiles = fileCount - liveFiles - freshFiles - coverageFiles;
-const expired = path.join(checkout, ".openclaw/tmp/expired-proof");
+let expired = path.join(checkout, ".openclaw/tmp/expired-proof");
 const coverage = path.join(runtime, "node-coverage-synthetic");
 const freshProof = path.join(checkout, ".openclaw/tmp/fresh-proof");
 const liveProof = path.join(liveCheckout, ".openclaw/tmp/live-proof");
@@ -109,6 +115,7 @@ const metadata = {
     logicalBytes: fileCount * fileBytes,
     fileBytes,
     nestedClone: values["nested-clone"],
+    agentTemp: values["agent-temp"],
     payload: "deterministic SHA-256 blocks; byte removal counts are logical, not allocated extents",
   },
   host: {
@@ -134,6 +141,25 @@ try {
   for (let sample = 0; sample < samples; sample++) {
     for (const label of values.mode === "profile" ? ["candidate"] : ["A1", "A2"]) {
       for (const variant of ["baseline", "candidate"]) {
+        let routingMs: number | undefined;
+        if (values["agent-temp"]) {
+          await fs.mkdir(runtime, { recursive: true });
+          const started = performance.now();
+          const environment =
+            variant === "candidate"
+              ? await prepareAgentExecScratch(checkout)
+              : { TMPDIR: runtime, TMP: runtime, TEMP: runtime };
+          const reply = await promisify(execFile)(
+            process.execPath,
+            [
+              "-e",
+              'process.stdout.write(require("node:path").join(require("node:os").tmpdir(),"validation-proof"))',
+            ],
+            { env: { ...process.env, ...environment } },
+          );
+          expired = reply.stdout;
+          routingMs = performance.now() - started;
+        }
         await fs.rm(expired, { recursive: true, force: true });
         await populate(expired, expiredFiles, old);
         await populate(coverage, coverageFiles, old);
@@ -174,7 +200,9 @@ try {
         const started = performance.now();
         let result: ScratchCleanupResult | undefined;
         const owner =
-          variant === "candidate" ? { cleanScratch, closeScratchCleanupCursor } : baseline;
+          variant === "candidate" || values["agent-temp"]
+            ? { cleanScratch, closeScratchCleanupCursor }
+            : baseline;
         if (owner) {
           const cursor = {};
           try {
@@ -218,6 +246,7 @@ try {
           label,
           variant,
           elapsedMs,
+          routingMs,
           allocatedBytes,
           cpuMs: (usedCpu.user + usedCpu.system) / 1000,
           mainThreadCpuMs: (usedThreadCpu.user + usedThreadCpu.system) / 1000,
@@ -239,6 +268,10 @@ try {
           assert.deepEqual(result?.errors, []);
           await assert.rejects(fs.stat(expired), { code: "ENOENT" });
           await assert.rejects(fs.stat(coverage), { code: "ENOENT" });
+        }
+        if (values["agent-temp"] && variant === "baseline") {
+          assert.equal(result?.bytesRemoved, coverageFiles * fileBytes);
+          assert.equal((await fs.readdir(expired)).length, expiredFiles);
         }
         assert.equal((await fs.readdir(freshProof)).length, freshFiles);
         assert.equal((await fs.readdir(liveProof)).length, liveFiles);

@@ -56,7 +56,7 @@ export function createBrowserToolDefinition(
     ...(actions.has("profiles")
       ? [
           "Browser choice: omit profile to use the configured default (normally the isolated OpenClaw-managed `openclaw` browser).",
-          "When existing logins/cookies matter, use action=profiles to inspect available profiles, then select the appropriate profile by name. Do not assume a profile name.",
+          "When existing logins/cookies matter, use action=profiles to inspect selected-route profiles and read-only nodeRoutes candidates. Attach/permission failures are route-local: follow the browser-automation skill to verify authorized alternatives before login/permission handoff. Never silently reroute actions or assume accounts match. Do not assume a profile name.",
         ]
       : []),
     actions.has("importprofile")

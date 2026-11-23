@@ -46,6 +46,7 @@ import {
 import { captureRuntimeConfig } from "../config/runtime-source-projection.js";
 import type { OpenClawConfig as Config } from "../config/types.openclaw.js";
 import type { SecretRef as Ref } from "../config/types.secrets.js";
+import { isDeeplyFrozenPlainData } from "../shared/immutable-data.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { captureEnv } from "../test-utils/env.js";
 import {
@@ -248,6 +249,23 @@ describe("secrets runtime state", () => {
     runtimeSnapshotsTesting.resetPersistedMutationLineage();
     envSnapshot.restore();
     vi.restoreAllMocks();
+  });
+
+  it("publishes immutable resolved config while snapshot editors retain mutable copies", () => {
+    const config = providerConfig(19_001, "fixture-key");
+    activateSnapshot(preparedSnapshot({ config }));
+    const published = getRuntimeConfigSnapshot()!;
+    expect(getActiveSecretsRuntimeConfigSnapshot()!.config).toBe(published);
+    expect(isDeeplyFrozenPlainData(published)).toBe(true);
+    const editable = getSnapshot()!;
+    editable.config.gateway!.port = 19_002;
+    config.models!.providers!.openai!.models.length = 1;
+    expect(published.gateway!.port).toBe(19_001);
+    expect(published.models!.providers!.openai!.models).toEqual([]);
+    activateSnapshot(editable);
+    expect(getRuntimeConfigSnapshot()!.gateway!.port).toBe(19_002);
+    expect(isDeeplyFrozenPlainData(getRuntimeConfigSnapshot())).toBe(true);
+    expect(published.gateway!.port).toBe(19_001);
   });
 
   it.each(["activation", "explicit-source", "source-write", "restore"])(

@@ -12,7 +12,6 @@ const history = (messages: unknown[] = []) => ({ items: [], nextCursor: null, me
 class FixtureState {
   onUpdate?: (update: InternalSessionTranscriptUpdate) => void;
   authRevoked = false;
-  authorityCurrent = true;
   gatewayConfig: { trustedProxies?: string[]; allowRealIpFallback?: boolean } = {
     trustedProxies: ["10.0.0.1"],
     allowRealIpFallback: false,
@@ -58,10 +57,7 @@ vi.mock("./http-utils.js", () => ({
   resolveSharedSecretHttpOperatorScopes: () => ["operator.read"],
   authorizeScopedGatewayHttpRequestOrReply: async () => ({
     cfg: { gateway: {} },
-    requestAuth: {
-      hasCurrentClientAuthority: () => fixture.authorityCurrent,
-      ...(fixture.profile ? { authenticatedUserProfile: fixture.profile } : {}),
-    },
+    requestAuth: fixture.profile ? { authenticatedUserProfile: fixture.profile } : {},
     operatorScopes: ["operator.read"],
   }),
   checkGatewayHttpRequestAuth: async (params: {
@@ -350,7 +346,6 @@ const changes = {
   sharing: { visible: false },
   replacement: { sessionId: "replacement" },
   reset: { lifecycleRevision: "after-reset" },
-  "ingress policy": { authorityCurrent: false },
   authentication: { authRevoked: true },
   close: {},
   failure: {},
@@ -376,7 +371,6 @@ it.each([
   ["text/event-stream", "replacement"],
   ["application/json", "reset"],
   ["text/event-stream", "authentication"],
-  ["application/json", "ingress policy"],
 ] as const)("withholds initial %s history after %s during its read", async (accept, change) => {
   fixture.profile = guestProfile;
   using barrier = readBarrier();

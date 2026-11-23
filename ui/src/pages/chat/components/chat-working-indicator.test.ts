@@ -43,7 +43,8 @@ it("pops in for new work but continues a claw that another one just handed off",
   const now = vi.spyOn(performance, "now").mockReturnValue(10_000);
   const isContinued = (view: ReturnType<typeof indicator>) =>
     view.find(".chat-working-indicator")?.classList.contains("chat-working-indicator--continued");
-  const preview = indicator("handoff");
+  const preview = indicator("handoff", { workingIndicator: "claw" });
+  expect(preview.find(".chat-reading-indicator svg .claw-icon__jaw")).not.toBeNull();
   expect(isContinued(preview)).toBe(false);
   preview.unmount();
   now.mockReturnValue(10_200);

@@ -49,16 +49,14 @@ export function setMinimalCliPrepareDeps(
 }
 
 export async function connectPreparedCliTurn(context: PreparedCliRunContext, signal: AbortSignal) {
-  const { createCliRunCurrentAssertion } = await import("../agents/cli-runner/execution-target.js");
   const runtime = getActiveMcpLoopbackRuntime();
   const token = context.preparedBackend.env?.OPENCLAW_MCP_TOKEN;
   if (!runtime || !token) {
     throw new Error("Expected prepared CLI grant and MCP loopback runtime");
   }
   const captureKey = `capture-${context.params.runId}`;
-  context.preparedBackend.mcpClientGrantCapture?.activate(
-    captureKey,
-    createCliRunCurrentAssertion(context.params),
+  context.preparedBackend.mcpClientGrantCapture?.activate(captureKey, () =>
+    context.params.abortSignal?.throwIfAborted(),
   );
   return {
     token,

@@ -1,6 +1,6 @@
 import type { SessionsCompanionStateResult } from "../../packages/gateway-protocol/src/schema/sessions.js";
 import { resolveSessionAgentId } from "../agents/agent-scope.js";
-import { resolveSimpleCompletionSelectionForAgent } from "../agents/simple-completion-runtime.js";
+import { resolveSimpleCompletionSelectionForAgent } from "../agents/simple-completion-selection.js";
 import { resolveUtilityModelRefForAgent } from "../agents/utility-model.js";
 import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
 import { onSessionIdentityMutation } from "../sessions/session-lifecycle-events.js";
@@ -21,7 +21,7 @@ type SessionCompanionTarget = { sessionKey: string; agentId: string; ownerId: st
 export type SessionCompanionService = {
   ask: ReturnType<typeof createSessionCompanionAskRuntime>["ask"];
   state: (target: SessionCompanionTarget) => SessionsCompanionStateResult;
-  reset: (target: SessionCompanionTarget) => void;
+  reset: (target: SessionCompanionTarget & { cancelAskId?: string }) => boolean;
   dispose: () => void;
 };
 
@@ -131,11 +131,13 @@ export function createSessionCompanion(deps: SessionCompanionDeps): SessionCompa
       const sessionKey = target.sessionKey.trim();
       const agentId = target.agentId.trim();
       if (sessionKey && agentId) {
-        resetThread(
-          sessionCompanionThreadKey(sessionKey, agentId, target.ownerId),
-          "explicit-reset",
-        );
+        const key = sessionCompanionThreadKey(sessionKey, agentId, target.ownerId);
+        if (target.cancelAskId) {
+          return askRuntime.cancel(key, "stopped", target.cancelAskId);
+        }
+        resetThread(key, "explicit-reset");
       }
+      return true;
     },
     dispose() {
       disposed = true;

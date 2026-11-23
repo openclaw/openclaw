@@ -1,6 +1,5 @@
 // Plans grouped targeted Docker lane matrix entries without installed dependencies.
 import { fileURLToPath } from "node:url";
-import { expandInstalledRecoveryLanes } from "./e2e/lib/upgrade-survivor/installed-recovery-cases.mjs";
 import { parsePositiveInt } from "./lib/numeric-options.mjs";
 import { compareReleaseVersions, parseReleaseVersion } from "./lib/release-version.mjs";
 import { expandUpdateFirstHopCompatLanes } from "./lib/update-first-hop-lanes.mjs";
@@ -18,10 +17,12 @@ import {
 const BASELINE_SHARDED_LANES = new Set(["published-upgrade-survivor", "update-migration"]);
 // The 62-minute update-restart-auth lane needs room for runner setup and artifact upload.
 const LONG_LANE_JOB_TIMEOUT_MINUTES = new Map([["update-restart-auth", 75]]);
-// Candidate checks 43754432638 (attempt 1) found first-hop upgrades and
-// legacy-state scenarios among the longest jobs. Admit these groups early;
+// Candidate checks 43773667009 left package recovery waiting behind the 32-job cap.
+// Admit those first, followed by the long first-hop/legacy groups from 43754432638;
 // leave every other group in its original order.
 const LONG_LANE_ORDER = [
+  "package-verification-recovery",
+  "package-publication-recovery",
   "update-first-hop-compat",
   "update-restart-auth",
   "plugin-update",
@@ -74,9 +75,7 @@ export function planTargetedDockerLaneGroups({
   upgradeSurvivorScenarios = "",
 } = {}) {
   // Each recorded first-hop source becomes its own job.
-  const selectedLanes = expandInstalledRecoveryLanes(
-    expandUpdateFirstHopCompatLanes(splitTokens(lanes)),
-  );
+  const selectedLanes = expandUpdateFirstHopCompatLanes(splitTokens(lanes));
   if (selectedLanes.length === 0) {
     throw new Error("docker_lanes is required when planning targeted Docker lane groups.");
   }
@@ -300,7 +299,7 @@ if (isMain) {
     }
     const { checkUpgradeSurvivorBaselines } =
       await import("./lib/upgrade-survivor-baseline-check.mjs");
-    groups = checkUpgradeSurvivorBaselines(groups, {
+    groups = await checkUpgradeSurvivorBaselines(groups, {
       evidenceDir: process.argv[3],
       baseline: options.upgradeSurvivorBaseline,
       baselines: options.upgradeSurvivorBaselines,

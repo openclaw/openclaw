@@ -2,9 +2,11 @@ import { hasNativeBrowserBridge } from "../app/native-browser-host.ts";
 import { listen } from "./reactive/listener.ts";
 
 type SurfaceElements = () => Iterable<Element>;
+export type NativeOverlayOcclusion = "live" | "hidden" | "backdrop" | "hidden-backdrop";
 const surfaces = new Set<SurfaceElements>();
 const listeners = new Set<() => void>();
 let activeOverlays = 0;
+let activeBackdrops = 0;
 let frame: number | null = null;
 
 function notify() {
@@ -53,14 +55,13 @@ function overlapsSurface(bounds: DOMRectReadOnly): boolean {
 }
 
 /** Native web views sit above the page, including its browser top layer. */
-export function acquireNativeOverlayOcclusion(): () => void {
+export function acquireNativeOverlayOcclusion(preserveBackdrop = false): () => void {
   if (!hasNativeBrowserBridge()) {
     return () => {};
   }
   activeOverlays += 1;
-  if (activeOverlays === 1) {
-    notify();
-  }
+  activeBackdrops += Number(preserveBackdrop);
+  notify();
   let released = false;
   return () => {
     if (released) {
@@ -68,29 +69,34 @@ export function acquireNativeOverlayOcclusion(): () => void {
     }
     released = true;
     activeOverlays -= 1;
-    if (activeOverlays === 0) {
-      notify();
-    }
+    activeBackdrops -= Number(preserveBackdrop);
+    notify();
   };
 }
 
 export function subscribeNativeOverlayOcclusion(
-  listener: (occluded: boolean) => void,
+  listener: (occlusion: NativeOverlayOcclusion) => void,
   getBounds: () => DOMRectReadOnly | null,
 ): () => void {
   if (!hasNativeBrowserBridge()) {
-    listener(false);
+    listener("live");
     return () => {};
   }
-  let previous: boolean | undefined;
+  let previous: NativeOverlayOcclusion | undefined;
   const update = () => {
-    const bounds = getBounds();
-    const occluded =
-      activeOverlays > 0 ||
-      Boolean(bounds && bounds.width > 0 && bounds.height > 0 && overlapsSurface(bounds));
-    if (occluded !== previous) {
-      previous = occluded;
-      listener(occluded);
+    const bounds = activeOverlays === 0 ? getBounds() : null;
+    const occlusion =
+      activeBackdrops > 0
+        ? activeOverlays > activeBackdrops
+          ? "hidden-backdrop"
+          : "backdrop"
+        : activeOverlays > 0 ||
+            (bounds && bounds.width > 0 && bounds.height > 0 && overlapsSurface(bounds))
+          ? "hidden"
+          : "live";
+    if (occlusion !== previous) {
+      previous = occlusion;
+      listener(occlusion);
     }
   };
   listeners.add(update);

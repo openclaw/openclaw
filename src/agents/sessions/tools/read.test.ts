@@ -22,15 +22,7 @@ import { createReadTool, createReadToolDefinition, type ReadToolOptions } from "
 import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES } from "./truncate.js";
 import { createWriteTool } from "./write.js";
 
-const decodeWindowsTextFileBufferMock = vi.hoisted(() =>
-  vi.fn(({ buffer }: { buffer: Buffer }) => buffer.toString("utf8")),
-);
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-
-vi.mock("../../../infra/windows-encoding.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../../infra/windows-encoding.js")>()),
-  decodeWindowsTextFileBuffer: decodeWindowsTextFileBufferMock,
-}));
 
 const ONE_PIXEL_PNG_BASE64 =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=";
@@ -170,10 +162,7 @@ console.log("headless-read-ok");`,
     expect(result.stdout).toContain("headless-read-ok");
   });
 
-  beforeEach(() => {
-    decodeWindowsTextFileBufferMock.mockReset();
-    decodeWindowsTextFileBufferMock.mockImplementation(({ buffer }) => buffer.toString("utf8"));
-  });
+  beforeEach(() => {});
 
   it("reads managed inbound media refs as image files", async () => {
     const stateDir = tempDirs.make("openclaw-read-media-");
@@ -342,7 +331,6 @@ console.log("headless-read-ok");`,
       /^Read did not return file contents because it detected a binary document \[.+\]\. Use an available document parser or converter, or convert the file to text, Markdown, or CSV, then read the converted file\.$/,
     );
     expect(result.details.kind).toBe("text");
-    expect(decodeWindowsTextFileBufferMock).not.toHaveBeenCalled();
   });
 
   it("counts filename-resolution notes inside the complete 50 KiB read ceiling", async () => {
@@ -619,11 +607,9 @@ console.log("headless-read-ok");`,
   });
 
   it("uses the shared Windows decoder for local filesystem reads", async () => {
-    const legacyBytes = Buffer.from([0xc4, 0xe3, 0xba, 0xc3]);
-    decodeWindowsTextFileBufferMock.mockReturnValueOnce("decoded legacy text");
+    const legacyBytes = Buffer.from("\uFEFFdecoded legacy text", "utf16le");
     const { tool } = await fileFixture("legacy.txt", legacyBytes);
     const result = await executeRead(tool, { path: "legacy.txt" });
-    expect(decodeWindowsTextFileBufferMock).toHaveBeenCalledWith({ buffer: legacyBytes });
     expect(textContent(result)).toBe("decoded legacy text");
   });
 

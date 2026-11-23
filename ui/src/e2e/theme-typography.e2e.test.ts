@@ -65,6 +65,12 @@ suite.define(() => {
           code: font("code"),
         };
       });
+    const pickerWidths = () =>
+      page
+        .locator("#settings-appearance-typography .picker-select__trigger")
+        .evaluateAll((pickers) => pickers.map((picker) => picker.getBoundingClientRect().width));
+    const widths = await pickerWidths();
+    expect(widths).toEqual([widths[0], widths[0], widths[0]]);
     const initial = await families();
     expect(initial).toEqual({
       ui: expect.stringContaining("DM Sans"),
@@ -80,6 +86,7 @@ suite.define(() => {
     await expect.poll(async () => (await families()).chat).toContain("Geist");
     await selectPickerValue(chat, "lora");
     await expect.poll(async () => (await families()).chat).toContain("Lora");
+    expect(await pickerWidths()).toEqual(widths);
     await expect
       .poll(() =>
         page.evaluate(() =>
@@ -339,7 +346,9 @@ suite.define(() => {
     await expectChrome(pageColor);
     await navigationDrawerToggle(page).click();
     await expectChrome(dimmed);
-    await page.locator("openclaw-app-sidebar .sidebar-rail .sidebar-new-session").click();
+    await page
+      .locator("openclaw-app-sidebar .sidebar-session-toolbar .sidebar-new-session")
+      .click();
     await page.locator(".new-session-page__message").waitFor();
     await expectChrome(canvasColor);
 

@@ -274,7 +274,7 @@ describe("automatic worker planning protections", () => {
     const sibling = `agent:main:subagent:maintenance-unprotected-${protection}`;
     seed(protectedKey, protectedId, 1);
     if (protection === "resume-marker") {
-      seed(protectedKey, protectedId, 1, { resumeAfterRestart: { queuedInputIds: [] } });
+      seed(protectedKey, protectedId, 1, { resumeAfterRestart: {} });
     }
     if (protection.endsWith("-id")) {
       seed(aliasKey, protectedId, 1);

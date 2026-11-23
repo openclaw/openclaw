@@ -998,13 +998,11 @@ const ownerWatches: readonly UiE2eOwnerWatch[] = [
   pageWatch("ui/src/e2e/cron-run-feedback.e2e.test.ts", ["cron"], ["ui/src/lib/cron/types.ts"]),
   pageWatch("ui/src/e2e/cron-run-filter-typography.e2e.test.ts", ["cron"]),
   pageWatch("ui/src/e2e/cron-run-suppression.e2e.test.ts", ["cron"], ["ui/src/lib/cron/types.ts"]),
-  pageWatch("ui/src/e2e/cron-search.e2e.test.ts", ["cron"], ["ui/src/lib/cron/types.ts"]),
   pageWatch(
     "ui/src/e2e/cron-trigger-authoring.e2e.test.ts",
     ["cron"],
     ["ui/src/lib/cron/types.ts"],
   ),
-  pageWatch("ui/src/e2e/cron-trigger-filter.e2e.test.ts", ["cron"], ["ui/src/lib/cron/types.ts"]),
   {
     testFile: "ui/src/e2e/csp-jitless.e2e.test.ts",
     ownerRoots: ["src/gateway/control-ui-csp.ts", "ui/src/main.ts", "ui/src/pages/chat/route.ts"],
@@ -1632,11 +1630,6 @@ const ownerWatches: readonly UiE2eOwnerWatch[] = [
     "ui/src/e2e/session-management.group-return.e2e.test.ts",
     ["chat"],
     sessionMenuOwnerRoots,
-  ),
-  pageWatch(
-    "ui/src/e2e/session-management.groups.e2e.test.ts",
-    ["chat", "sessions"],
-    [...sessionMenuOwnerRoots, "ui/src/lib/cron/types.ts"],
   ),
   pageWatch(
     "ui/src/e2e/session-management.mutation-scope.e2e.test.ts",

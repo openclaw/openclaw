@@ -3,12 +3,25 @@ import { isMainThread, Worker } from "node:worker_threads";
 // The benchmark retains numeric task facts only; native cloning still owns each payload.
 if (isMainThread && process.send) {
   const dispatches = [];
+  const countReads = process.env.OPENCLAW_USAGE_BENCH_COUNT_READS === "1";
   // Install before application imports so even a worker's first task is observed.
   // oxlint-disable-next-line typescript/unbound-method -- Every call below restores the sending Worker as its receiver.
   const postMessage = Worker.prototype.postMessage;
   Worker.prototype.postMessage = function (message, ...args) {
     const task = typeof message?.taskId === "number" ? message.input : undefined;
     const input = task?.kind === undefined ? task : task.input;
+    if (countReads && task?.kind === "usage-cost") {
+      const operation = task.operation;
+      const families = operation?.families;
+      dispatches.push({
+        kind: "usage-cost:" + operation?.kind,
+        rows:
+          families?.length ?? operation?.sessions?.length ?? operation?.sessionFiles?.length ?? 0,
+        instances: families?.reduce((sum, items) => sum + items.length, 0),
+        contextRows: 0,
+        packedBytes: 0,
+      });
+    }
     if (Array.isArray(input?.rows) && (Array.isArray(input.packed) || task.kind === "cohorts")) {
       const packedBytes =
         input.packed?.reduce(

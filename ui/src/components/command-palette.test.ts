@@ -531,6 +531,48 @@ describe("CommandPalette search", () => {
     expect(query('[role="option"][aria-selected="true"]')?.textContent).toContain("Needle Bravo");
   });
 
+  it.each(["success", "failure"] as const)(
+    "keeps live results and the keyboard choice when archived search ends with %s",
+    async (outcome) => {
+      const archived = createDeferred<ReturnType<typeof createSessionResult>>();
+      const message = createSessionResult("agent:main:message", "Older conversation");
+      const { gateway } = createGateway(true, {
+        methods: ["sessions.search"],
+        request: async (method) =>
+          method === "sessions.search"
+            ? transcriptResult(message, "Needle in a message")
+            : { models: [] },
+      });
+      const context = createContext(gateway);
+      context.sessions.list = vi.fn(async (options) =>
+        options?.archivedFilter === "archived"
+          ? archived.promise
+          : createSessionResult("agent:main:needle", "Needle conversation"),
+      );
+      const { palette } = await mountPalette(context);
+      try {
+        await searchPalette(palette, "needle");
+        expect(findPaletteOption(palette, "Needle conversation")).toBeDefined();
+        pressKey(paletteInput(palette), "ArrowDown");
+        await palette.updateComplete;
+        expectActive(palette, findPaletteOption(palette, "Older conversation")!);
+      } finally {
+        if (outcome === "success") {
+          archived.resolve(createSessionResult("agent:main:archive", "Archived needle"));
+        } else {
+          archived.reject(new Error("Archive lookup unavailable"));
+        }
+        await settlePalette(palette);
+      }
+      expect(findPaletteOption(palette, "Needle conversation")).toBeDefined();
+      expectActive(palette, findPaletteOption(palette, "Older conversation")!);
+      expect(palette.textContent).not.toContain("Couldn’t search sessions");
+      expect(Boolean(findPaletteOption(palette, "Archived needle"))).toBe(outcome === "success");
+      pressKey(paletteInput(palette), "Enter");
+      expect(palette.onSelectSession).toHaveBeenCalledWith("agent:main:message");
+    },
+  );
+
   it("shows a chat search failure and retries after returning from Compose", async () => {
     const query = "plugins";
     const list = vi

@@ -8,10 +8,7 @@ import { managedWorktrees } from "../agents/worktrees/service.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import { withTimeout } from "../infra/fs-safe.js";
 import type { registerProjectRegistry } from "../projects/project-registry.js";
-import {
-  captureSessionControllerSettlement,
-  SESSION_CONTROLLER_DRAIN_TIMEOUT_MS,
-} from "../sessions/session-controller.lifecycle.js";
+import { captureSessionControllerSettlement } from "../sessions/session-controller.lifecycle.js";
 import { requestRpcSourceCancellation } from "../sessions/session-controller.rpc-sources.js";
 import { rpcSourceTesting } from "../sessions/session-lifecycle-admission.test-support.js";
 import type { SessionRepositoryWorkspaceStore } from "../state/session-repository-workspaces.js";
@@ -22,6 +19,7 @@ import type { directSessionReq } from "./test/server-sessions.test-helpers.js";
 
 const execFileAsync = promisify(execFile);
 const git = (repo: string, ...args: string[]) => execFileAsync("git", ["-C", repo, ...args]);
+const WORKSPACE_TEST_DRAIN_TIMEOUT_MS = 30_000;
 
 async function addWorkspaceOrigin(workspace: string): Promise<void> {
   const remote = `${workspace}.git`;
@@ -153,14 +151,15 @@ export async function waitForCreatedSessionRun(
       requestRpcSourceCancellation(entry);
     }
   }
-  const removed = await waitForChatAbortControllerRemoval({
-    targets,
-    timeoutMs: SESSION_CONTROLLER_DRAIN_TIMEOUT_MS,
-  });
+  // Removal may precede accepted persistence. Check terminal ownership after
+  // captured source custody settles, rather than retaining an early false result.
   if (released) {
-    await withTimeout(released, SESSION_CONTROLLER_DRAIN_TIMEOUT_MS, "worktree title run cleanup");
+    await withTimeout(released, WORKSPACE_TEST_DRAIN_TIMEOUT_MS, "worktree title run cleanup");
   }
-  return removed;
+  return await waitForChatAbortControllerRemoval({
+    targets,
+    timeoutMs: WORKSPACE_TEST_DRAIN_TIMEOUT_MS,
+  });
 }
 
 export async function publishRepositoryFixtureCheckpoint(

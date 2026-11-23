@@ -52,6 +52,7 @@ it.each([
   ["excludeCron", "cron:scheduled", { excludeCron: true }],
   ["excludeSystem", "system:maintenance", { excludeSystem: true }],
   ["dock-inclusive", "board-agent", { excludeDock: false }],
+  ["title-only", "metadata-only", { search: "needle", searchTitlesOnly: true }],
 ] as const)("keeps list and subscription membership scoped for %s", async (name, key, filter) => {
   const ordinary = row("ordinary", { agentId: "main" });
   const dock = name === "dock-inclusive";

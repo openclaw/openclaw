@@ -19,6 +19,8 @@ on:
       - "scripts/lib/ci-test-timings-schema.mts"
       - "scripts/lib/ci-test-timings-refit.mts"
       - "scripts/lib/ci-node-test-groups-codec.mts"
+      - "scripts/lib/ci-node-test-evidence.mjs"
+      - "scripts/lib/ci-test-output.mts"
       - "scripts/lib/ci-static-check-evidence.mjs"
       - "scripts/run-vitest*"
       - "scripts/vitest-process-group.mts"

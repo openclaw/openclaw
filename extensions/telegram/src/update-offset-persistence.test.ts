@@ -53,12 +53,12 @@ describe("createTelegramUpdateOffsetPersistence", () => {
 
     await flushMicrotasks();
     expect(onError).toHaveBeenCalledWith(expect.objectContaining({ updateId: 101 }));
-    expect(checkpoint()).toEqual(abort ? [[101], 100] : [[101, 103], 103]);
+    expect(checkpoint()).toEqual(abort ? [[101], 100] : [[101, 103, 102], 102]);
     await persistence.stop();
   });
 
   it.each([
-    { timing: "during write", first: 103, next: 102, expected: [103] },
+    { timing: "during write", first: 103, next: 102, expected: [103, 102] },
     { timing: "during teardown", first: 101, next: 102, expected: [101, 102] },
   ])("checkpoints a new offset arriving $timing", async ({ timing, first, next, expected }) => {
     const write = createDeferred<void>();

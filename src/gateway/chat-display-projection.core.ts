@@ -26,6 +26,7 @@ import {
   formatProviderRefusalText,
 } from "../shared/assistant-error-format.js";
 import { readRunFailureCause, readRunFailureNotice } from "../shared/run-failure-notice.js";
+import { preserveCollectedSubagentCompletions } from "../shared/subagent-completion.js";
 import {
   isOpenClawMessageToolMirrorAssistantMessage,
   isTranscriptOnlyOpenClawAssistantMessage,
@@ -560,7 +561,9 @@ export function prepareChatHistoryRecoveryMessages(
   options?: ChatHistoryRecoveryOptions,
 ) {
   const projectedMessages = messages.map((original) => {
-    const message = projectTranscriptImageArtifacts(prepareAssistantHistoryMessage(original));
+    const message = preserveCollectedSubagentCompletions(
+      projectTranscriptImageArtifacts(prepareAssistantHistoryMessage(original)),
+    );
     const entry = asOptionalRecord(message);
     const failureRunId = readSessionTranscriptFailureRunId(entry);
     if (failureRunId) {

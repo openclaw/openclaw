@@ -1,3 +1,4 @@
+import type { SerializedJsonArrayIndex } from "../../gateway/serialized-json.js";
 import type {
   SessionArtifactReadQuery,
   SessionArtifactReadResult,
@@ -46,7 +47,7 @@ export type ChatHistoryResponsePage = {
   activity?: AgentHistoryActivity[];
   messagesBytes: number;
   responseHistoryBytes: number;
-  omission?: { omittedCount: number; normalizedBytes: number; byteLimited?: true };
+  omission?: { omittedCount: number; byteLimited?: true };
   nextOffset?: number;
   olderCursor?: string;
   newerCursor?: string;
@@ -71,6 +72,7 @@ export type ChatHistoryPageAnchor = Pick<ChatHistoryPageCursor, "sessionId" | "s
 };
 
 export type ChatHistoryPage = {
+  messageModelIndex?: SerializedJsonArrayIndex;
   encodedResponse?: Omit<ChatHistoryResponsePage, "messages" | "activity"> & {
     messages: Uint8Array<ArrayBuffer>;
     activity?: Uint8Array<ArrayBuffer>;
@@ -119,7 +121,7 @@ export type ChatHistoryPageParams = {
 };
 
 /** A hidden wake that resumes work this session started: a background command, a restart, or a child. */
-export type ProjectedContinuationSource = "exec" | "restart" | "subagent";
+type ProjectedContinuationSource = "exec" | "restart" | "subagent";
 
 /** Hidden input's meaning for the next visible row: `true` starts a turn, a source continues one. */
 export type PendingTurnBoundary = boolean | ProjectedContinuationSource;

@@ -25,7 +25,7 @@ import {
   guestScopes,
 } from "./github-publication-requester.test-support.js";
 import { invalidateOperatorRolePolicy } from "./operator-role-policy.js";
-import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
+import { prepareGatewayOperatorRunAuthority } from "./operator-run-authority.js";
 import type { OperatorScope } from "./operator-scopes.js";
 import { handleGatewayRequest } from "./server-methods.js";
 import { createContext } from "./server-plugin-in-process-dispatch.test-support.js";
@@ -195,7 +195,7 @@ it.each([
     };
     let result: unknown;
     if (route !== "rpc") {
-      const original = await captureGatewayOperatorRunAuthority({ client, context });
+      const original = await prepareGatewayOperatorRunAuthority({ client, context });
       if (!system) {
         assert(original, "Expected original operator authority");
       }
@@ -437,12 +437,11 @@ it("checks the accepted tree while leaving later workflow edits unpublished", as
 });
 
 it.each(["before local CAS", "before push"] as const)(
-  "settles the accepted index when workflow permission closes %s",
+  "finishes the accepted workflow publication when permission changes %s",
   async (boundary) => {
     const f = await createRequesters();
     const workspace = f.local;
     const file = await writeWorkflow(workspace);
-    const head = await workspace.git("rev-parse", "HEAD");
     const transport = mocks.runCommand.getMockImplementation()!;
     mocks.runCommand.mockImplementation(async (args, options) => {
       const result = await transport(args, options);
@@ -457,26 +456,19 @@ it.each(["before local CAS", "before push"] as const)(
       return result;
     });
     await expect(f.publish(boundary, f.maintainer)).resolves.toMatchObject({
-      status: "failed",
-      code: "identity_changed",
+      status: "published",
     });
-    expect(workspace.effects).toEqual([]);
-    if (boundary === "before push") {
-      expect(await workspace.git("show", "HEAD:.github/workflows/example.yml")).toBe(
-        workflow.trim(),
-      );
-      expect(await workspace.git("diff", "--cached", "HEAD")).toBe("");
-    } else {
-      expect(await workspace.git("rev-parse", "HEAD")).toBe(head);
-      await expect(fs.stat(workspace.file(".git/index.lock"))).rejects.toMatchObject({
-        code: "ENOENT",
-      });
-      expect(
-        (await fs.readdir(workspace.file(".git"))).some((entry) =>
-          entry.startsWith("index.openclaw-"),
-        ),
-      ).toBe(false);
-    }
+    expect(workspace.effects).toEqual(["push", "pull_request"]);
+    expect(await workspace.git("show", "HEAD:.github/workflows/example.yml")).toBe(workflow.trim());
+    expect(await workspace.git("diff", "--cached", "HEAD")).toBe("");
+    await expect(fs.stat(workspace.file(".git/index.lock"))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+    expect(
+      (await fs.readdir(workspace.file(".git"))).some((entry) =>
+        entry.startsWith("index.openclaw-"),
+      ),
+    ).toBe(false);
     expect(await fs.readFile(file, "utf8")).toBe(workflow);
   },
 );

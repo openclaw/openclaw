@@ -6,11 +6,11 @@ import { UPDATE_NATIVE_GATE_SOURCE } from "../cli/update-cli/update-command-nati
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import { resolveCommandProcessSignal } from "../process/exec-spawn.js";
-import { resolveIdentityPathViaExistingAncestorSync } from "./boundary-path.js";
 import { hasErrnoCode, ignoreMissingPath as ignoreMissingUpdateCandidateFile } from "./errno.js";
 import { formatErrorMessage } from "./errors.js";
 import { withUserPathBaseDirectory } from "./home-dir.js";
 import { resolveOpenClawPackageRoot } from "./openclaw-root.js";
+import { resolveIdentityPathViaExistingAncestorSync } from "./path-existence.js";
 import { isPathInside } from "./path-guards.js";
 import { runtimeProcessEntrypoints } from "./runtime-process-entrypoints.js";
 import { resolveRuntimeScriptEntrypointUrl } from "./runtime-process-url.js";
@@ -19,6 +19,7 @@ import { resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
 import { tryProcessCwd } from "./safe-cwd.js";
 import {
   maintainRetainedUpdateRuntimes,
+  recordRetainedUpdateRuntimeOwner,
   registerRetainedUpdateRuntime,
   removeTemporaryArtifacts,
   reportRetainedUpdateRuntime,
@@ -194,6 +195,8 @@ async function runWithRetainedUpdateRuntime<T>(
           if (!outsideMutation(privateRoot)) {
             throw new Error("Retained updater directory overlaps an installation being replaced");
           }
+          await recordRetainedUpdateRuntimeOwner(privateRoot);
+          assertCurrent();
           const nativeGateSource = resolveRuntimeWorkerUrl(
             runtimeProcessEntrypoints.updateNativeGate,
           );

@@ -169,6 +169,7 @@ checks also default to five minutes.
   </Step>
   <Step title="Post-install tasks">
     - Resolves the just-installed `openclaw` binary for follow-up commands
+    - If its bin directory was missing from the caller's original `PATH`, the final summary keeps the shell setup step visible, prints a shell-specific PATH repair, and uses the quoted executable path for immediate commands. A piped installer cannot change its parent shell's environment.
     - npm-prefix and daemon-status checks use a default five-second timeout; completed checks return without waiting for that deadline.
     - For an unconfigured install, starts onboarding before doctor or gateway checks. With `--no-onboard` or no TTY, it prints the command to finish setup later.
     - For a configured install, refreshes and restarts a loaded gateway service best-effort and runs repair Doctor. Upgrade repair failures are fatal; plugin update failures remain warnings.
@@ -409,6 +410,13 @@ Quote `--prefix` and `--git-dir` values containing spaces or shell characters wh
     If a gateway service is already loaded from that same prefix, the script runs
     `openclaw gateway install --force`, which activates the replacement service,
     and then checks gateway health best-effort.
+  </Step>
+  <Step title="Show PATH setup">
+    If `<prefix>/bin` was not on `PATH` when the installer started, prints a
+    shell-specific command that adds it for the current shell and, unless the
+    installer starts onboarding itself, the full-path `openclaw onboard` command.
+    The installer does not add it to shell startup files, and `--json` output is
+    unchanged.
   </Step>
 </Steps>
 

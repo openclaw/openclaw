@@ -294,7 +294,6 @@ describe("CI changed Node test plan", () => {
     {
       source: "src/channels/message-access/operator-authority.test-support.ts",
       targets: [
-        "src/channels/message-access/operator-authority.test.ts",
         "src/agents/command/delivery.restart-final.integration.test.ts",
         "src/agents/command/delivery.settle-reset.integration.test.ts",
         "src/auto-reply/reply/commands-acp.owner.test.ts",
@@ -302,8 +301,10 @@ describe("CI changed Node test plan", () => {
         "src/auto-reply/reply/commands-plugin.channel-native.test.ts",
         "src/auto-reply/reply/commands-plugin.native-subagents.test.ts",
         "src/gateway/operator-run-recovery.channel.test.ts",
+        "src/gateway/operator-run-recovery.start-grant.test.ts",
         "src/gateway/operator-run-recovery.test.ts",
         "src/gateway/server.mcp-session-owner.test.ts",
+        "src/gateway/session-restart-resume.admission.test.ts",
       ],
       areas: ["src/channels"],
     },
@@ -648,6 +649,7 @@ describe("CI changed Node test plan", () => {
       "test/scripts/eager-import-closure.test.ts",
       "test/scripts/type-suppression-inventory.test.ts",
       "test/scripts/plugin-sdk-surface-report.test.ts",
+      "test/scripts/runtime-process-build-graph.test.ts",
       lintSuppressionInventory,
     ];
     expect(resolvePolicyTestTargets([source], { cwd })).toEqual([
