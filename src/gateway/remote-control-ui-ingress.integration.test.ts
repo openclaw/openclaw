@@ -755,7 +755,7 @@ describe("remote Control UI ingress production composition", () => {
     await expect(factory.bindPrincipal(personOptions(policyPerson.id))).rejects.toMatchObject({
       code: "forbidden",
     });
-    for (const change of ["merge", "grant"] as const) {
+    for (const change of ["role", "merge", "grant"] as const) {
       const subject = await ensureCanonicalUserProfileForEmail(`${change}@ingress.example.test`);
       await setIngressRole(subject.id, "admin");
       const grant = new AbortController();
@@ -765,7 +765,9 @@ describe("remote Control UI ingress production composition", () => {
       });
       try {
         expect(await binding.request("users.self", {})).toHaveProperty("profile.id", subject.id);
-        if (change === "merge") {
+        if (change === "role") {
+          await setIngressRole(subject.id, "reader");
+        } else if (change === "merge") {
           await mergeCanonicalUserProfiles(subject.id, reader.id);
         } else {
           grant.abort();
