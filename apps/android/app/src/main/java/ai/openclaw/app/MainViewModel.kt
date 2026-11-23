@@ -548,9 +548,7 @@ class MainViewModel internal constructor(
 
   internal fun refreshSessionGroups() = ensureRuntime().chat.refreshSessionGroups()
 
-  internal val personalPinRevision: StateFlow<Long> = runtimeState(initial = 0L) { it.chat.personalPinRevision }
-
-  internal fun refreshPersonalSessionPins(): Unit = ensureRuntime().chat.refreshPersonalSessionPins()
+  internal val sessionBrowserRevision: StateFlow<Long> = runtimeState(initial = 0L) { it.chat.sessionBrowserRevision }
 
   internal fun refreshCurrentChatSessionWindow(): Unit = ensureRuntime().chat.refreshSessionsForCurrentWindow()
 

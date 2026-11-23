@@ -848,8 +848,8 @@ class ChatController internal constructor(
   private var sessionsListLimit: Int? = null
   private var sessionRosterNextOffset: Int? = null
   private var sessionRosterLoadedLimit: Int? = null
-  private val personalPinRevisionMutable = MutableStateFlow(0L)
-  internal val personalPinRevision = personalPinRevisionMutable.asStateFlow()
+  private val sessionBrowserRevisionMutable = MutableStateFlow(0L)
+  internal val sessionBrowserRevision = sessionBrowserRevisionMutable.asStateFlow()
   private val sessionRosterHasMoreMutable = MutableStateFlow(false)
   internal val sessionRosterHasMore: StateFlow<Boolean> = sessionRosterHasMoreMutable.asStateFlow()
   private val sessionRosterLoadingMoreMutable = MutableStateFlow(false)
@@ -3841,7 +3841,7 @@ class ChatController internal constructor(
                 .asArrayOrNull()
             }.getOrNull()
           }
-        if (keys?.any { it.asStringOrNull() == "ui.railShortcuts" } == true) refreshPersonalSessionPins()
+        if (keys?.any { it.asStringOrNull() == "ui.railShortcuts" } == true) refreshSessionsForCurrentWindow()
       }
 
       "sessions.changed" -> {
@@ -5226,6 +5226,8 @@ class ChatController internal constructor(
     archived: Boolean? = null,
   ): Boolean =
     sessionRosterLoadMutex.withLock {
+      // Searches and the Archived view have their own rows, even when the active page stays equal.
+      sessionBrowserRevisionMutable.update { it + 1 }
       val requestArchived = archived ?: sessionsListArchived
       val pageSize = limit?.takeIf { it > 0 } ?: sessionsListLimit ?: SIDEBAR_SESSION_ROSTER_LIMIT.takeUnless { requestArchived }
       val loadedLimit =
@@ -5238,12 +5240,6 @@ class ChatController internal constructor(
         preserveWindow = loadedLimit != null,
       )
     }
-
-  internal fun refreshPersonalSessionPins() {
-    // Off-window searches have their own rows; an equal roster cannot notify them.
-    personalPinRevisionMutable.update { it + 1 }
-    refreshSessionsForCurrentWindow()
-  }
 
   internal fun refreshSessionsForCurrentWindow() {
     scope.launch { fetchSessionsForCurrentWindow() }
@@ -6433,6 +6429,8 @@ class ChatController internal constructor(
       return
     }
     if (reason == "delete") {
+      // An archived or off-window match can disappear without changing the active page.
+      sessionBrowserRevisionMutable.update { it + 1 }
       val sessionKey = payload["sessionKey"].asStringOrNull() ?: payload["key"].asStringOrNull()
       val ownerAgentId = payload["agentId"].asStringOrNull()
       if (

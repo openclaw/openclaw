@@ -160,7 +160,7 @@ internal fun SessionsScreen(
     )
   // Stored group names stay offered as move targets even while they have no members.
   val categories =
-    (sessions.mapNotNull { it.category?.trim()?.takeIf(String::isNotEmpty) } + storedGroups)
+    ((sessions + searchState.entries).mapNotNull { it.category?.trim()?.takeIf(String::isNotEmpty) } + storedGroups)
       .distinctBy { it.lowercase() }
       .sortedWith(String.CASE_INSENSITIVE_ORDER)
 
@@ -172,9 +172,10 @@ internal fun SessionsScreen(
     deleteGroupTarget = deleteGroupTarget?.takeIf { it.gatewayStableId == activeGatewayStableId }
   }
 
-  LaunchedEffect(isConnected, filter) {
+  LaunchedEffect(isConnected, activeGatewayStableId) {
     if (isConnected) {
-      viewModel.refreshChatSessions(limit = 200, archived = filter == SessionFilter.Archived)
+      // Keep the paged roster active for the Drawer. Archived is a separate scoped list below.
+      viewModel.refreshChatSessions(limit = 200)
     }
   }
 
@@ -182,7 +183,7 @@ internal fun SessionsScreen(
     nextAttentionExpiry?.let { expiry ->
       sessionStatusNowMs = awaitSessionStatusExpiry(expiry)
       if (personalPins && nextWakeMs != null && nextWakeMs <= sessionStatusNowMs) {
-        viewModel.refreshPersonalSessionPins()
+        viewModel.refreshCurrentChatSessionWindow()
       }
     }
   }
@@ -1052,22 +1053,22 @@ internal fun rememberSessionBrowserSearchState(
   archived: Boolean,
 ): SessionBrowserSearchState {
   val normalizedQuery = query.trim()
-  if (normalizedQuery.isEmpty()) return SessionBrowserSearchState(normalizedQuery, sessions, false)
+  if (normalizedQuery.isEmpty() && !archived) return SessionBrowserSearchState(normalizedQuery, sessions, false)
   val gatewayId by viewModel.activeGatewayStableId.collectAsState()
   val ownerAgentId by viewModel.chatSessionOwnerAgentId.collectAsState()
-  val pinRevision by viewModel.personalPinRevision.collectAsState()
-  var searchResults by remember(gatewayId, ownerAgentId, normalizedQuery, archived) { mutableStateOf<List<ChatSessionEntry>>(emptyList()) }
+  val connected by viewModel.isConnected.collectAsState()
+  val revision by viewModel.sessionBrowserRevision.collectAsState()
+  var searchResults by remember(gatewayId, ownerAgentId, connected, normalizedQuery, archived) { mutableStateOf<List<ChatSessionEntry>?>(null) }
   var searchLoading by remember { mutableStateOf(false) }
 
-  // Search is a separate Gateway query: an off-window match can wake or change rank
-  // without changing the rows in the active or archived roster window.
-  LaunchedEffect(gatewayId, ownerAgentId, normalizedQuery, archived, sessions, pinRevision) {
-    searchResults = emptyList()
+  // Retain the last answer for this exact scope while it refreshes; a different query,
+  // connection or owner starts empty. An off-window change need not alter the active page.
+  LaunchedEffect(gatewayId, ownerAgentId, connected, normalizedQuery, archived, sessions, revision) {
     searchLoading = true
     try {
       // Key changes cancel superseded debounce/fetch work. The controller owns
       // gateway search plus the offline local-filter fallback.
-      delay(250)
+      if (normalizedQuery.isNotEmpty() && searchResults == null) delay(250)
       searchResults =
         viewModel.fetchChatSessionList(
           search = normalizedQuery,
@@ -1080,7 +1081,7 @@ internal fun rememberSessionBrowserSearchState(
 
   return SessionBrowserSearchState(
     query = normalizedQuery,
-    entries = searchResults,
+    entries = searchResults.orEmpty(),
     loading = searchLoading,
   )
 }

@@ -831,7 +831,7 @@ internal fun OpenClawSidebar(
   LaunchedEffect(nextWakeMs, personalPins, gatewayStableId) {
     nextWakeMs?.let {
       sessionNowMs = awaitSessionStatusExpiry(it)
-      if (personalPins) viewModel.refreshPersonalSessionPins()
+      if (personalPins) viewModel.refreshCurrentChatSessionWindow()
     }
   }
   val searchResults =
@@ -943,7 +943,7 @@ internal fun OpenClawSidebar(
       ) {
         if (searchState.query.isNotEmpty()) {
           SidebarSectionTitle(nativeString("Threads"), palette)
-          if (searchState.loading || searchResults.isEmpty()) {
+          if (searchResults.isEmpty()) {
             Text(
               text = if (searchState.loading) nativeString("Searching threads") else nativeString("No matching threads"),
               style = ClawTheme.type.caption,

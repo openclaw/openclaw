@@ -183,10 +183,10 @@ class ChatControllerSessionActionsTest {
       assertEquals(listOf("archived"), archived.map { it.key })
       assertFalse(controller.fetchSessionList("Cedar", archived = false).single().pinned == true)
       for (afterWake in listOf(true, false)) {
-        val before = controller.personalPinRevision.value
+        val before = controller.sessionBrowserRevision.value
         val matchingRows =
           async {
-            controller.personalPinRevision.first { it != before }
+            controller.sessionBrowserRevision.first { it != before }
             controller.fetchSessionList("Cedar", archived = false)
           }
         runCurrent()
@@ -195,7 +195,7 @@ class ChatControllerSessionActionsTest {
         assertFalse(matchingRows.isCompleted)
         searchPin = afterWake
         if (afterWake) {
-          controller.refreshPersonalSessionPins()
+          controller.refreshSessionsForCurrentWindow()
         } else {
           controller.handleGatewayEvent("users.prefs.changed", """{"keys":["ui.railShortcuts"]}""")
         }
@@ -206,6 +206,37 @@ class ChatControllerSessionActionsTest {
       val windows = gateway.calls.map { json.parseToJsonElement(requireNotNull(it.paramsJson)).jsonObject }.filter { it["search"] == null }
       assertEquals(3, windows.size)
       assertTrue(windows.all { it["archived"] == JsonPrimitive(true) && it["limit"] == JsonPrimitive(7) })
+    }
+
+  @Test
+  fun deletingAnArchivedRowInvalidatesItsSeparateListWithoutEvictingActiveDrawerRows() =
+    runTest {
+      val gateway = ScriptedGateway(json)
+      var archived = true
+      gateway.respond("sessions.list") { raw ->
+        val params = json.parseToJsonElement(requireNotNull(raw)).jsonObject
+        if (params["archived"] == JsonPrimitive(true)) {
+          if (archived) """{"sessions":[{"key":"retired","archived":true}]}""" else """{"sessions":[]}"""
+        } else {
+          """{"sessions":[{"key":"saved","pinned":true},{"key":"recent"}]}"""
+        }
+      }
+      val controller = controller(this, gateway)
+      controller.refreshSessions(limit = 7)
+      runCurrent()
+      assertEquals(listOf("retired"), controller.fetchSessionList(null, archived = true).map { it.key })
+      val before = controller.sessionBrowserRevision.value
+      val refreshed =
+        async {
+          controller.sessionBrowserRevision.first { it != before }
+          controller.fetchSessionList(null, archived = true)
+        }
+      archived = false
+      controller.handleGatewayEvent("sessions.changed", """{"reason":"delete","sessionKey":"retired","agentId":"main"}""")
+      assertTrue(refreshed.await().isEmpty())
+      val active = controller.sessions.value
+      assertEquals(listOf("saved", "recent"), active.map { it.key })
+      assertEquals(true, active.first().pinned)
     }
 
   @Test
