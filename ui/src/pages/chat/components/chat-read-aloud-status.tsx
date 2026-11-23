@@ -59,11 +59,7 @@ export default function ReadAloudStatus(props: {
   return (
     <Show when={keyProvider()} fallback={<span role="status">{formatUiError(props.error)}</span>}>
       {(provider) => (
-        <span
-          class="chat-send-status"
-          role="status"
-          style={{ "flex-basis": "100%", color: "var(--muted)" }}
-        >
+        <span class="chat-send-status" role="status" style={{ order: 0, "font-weight": 500 }}>
           <span>
             {voiceApiKeyTitle("speech", provider())}. {voiceApiKeyDetail()}
           </span>
