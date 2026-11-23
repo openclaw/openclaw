@@ -140,6 +140,12 @@ On Windows, the task supervisor starts without the Gateway's config or state
 bootstrap. Only its child opens the state databases; the waiting supervisor must
 not retain a connection or admission descriptor across a release switch.
 
+The Gateway's launcher IPC listener does not keep the child process alive. Once
+Gateway cleanup settles, the child exits naturally so the resident launcher can
+start the pending release, including after a rollback. Stop and readiness messages
+still use the same channel while the Gateway is running. The serving release must
+contain this fix; a newer candidate cannot release an older Gateway's IPC reference.
+
 Rules for update changes:
 
 - Change update behavior in `src/update/`. Do no update work while the Gateway is
@@ -222,10 +228,13 @@ contain this fix.
 
 The serving Gateway records a completed release rollback as a failed update, with
 the launcher's reason and the previous version's running facts. Settings → Updates
-and `openclaw update status` offer Retry, then Report update failure if it fails
-again. Startup output remains in the saved diagnostic details, not a failed update
-step. Unperformed verification checks are not reported as warnings. Machine-only
-Doctor check receipts stay in saved JSON, not installation steps or report text.
+and `openclaw update status` show that cause, then offer Retry and Report update
+failure if it fails again. Saved verification remains labeled as recorded facts;
+an unavailable current-health probe adds no separate notice. The failed phase and
+its internal check stay in the saved row, not the rollback summary. Startup output
+remains in the saved diagnostic details, not a failed update step. Unperformed
+verification checks are not reported as warnings. Machine-only Doctor check
+receipts stay in saved JSON, not installation steps or report text.
 Failed supplemental steps count toward the success headline's warnings without
 changing the recorded successful outcome.
 The installed updater must contain preparation-step reporting changes; the
