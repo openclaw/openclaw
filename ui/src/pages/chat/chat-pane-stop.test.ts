@@ -138,29 +138,6 @@ describe("chat pane Stop intent", () => {
     expect(fixture.callbacks().onAbort).toBeUndefined();
   });
 
-  it.each([false, true])(
-    "replays a participant's exact Stop after reconnect (rendered offline=%s)",
-    async (renderedOffline) => {
-      const fixture = createStopFixture(["operator.sessions.read"]);
-      Object.assign(fixture.session, { sharingRole: "member", invitedAccess: "send" });
-      const renderedStop = renderedOffline ? undefined : fixture.callbacks().onAbort;
-      fixture.disconnect();
-      const stop = renderedOffline ? fixture.callbacks().onAbort : renderedStop;
-      expect(stop).toBeTypeOf("function");
-      stop?.();
-      expect(fixture.state.pendingAbort?.runId).toBe("original-run");
-      fixture.state.chatRunId = "replacement-run";
-      fixture.reconnect();
-      expect(await replayPendingChatAbort(fixture.state)).toBe(true);
-      expect(await replayPendingChatAbort(fixture.state)).toBe(false);
-      expect(fixture.request).toHaveBeenCalledExactlyOnceWith("chat.abort", {
-        sessionKey: fixture.session.key,
-        runId: "original-run",
-        userInitiated: true,
-      });
-    },
-  );
-
   it.each(["read", "suggest", undefined] as const)(
     "does not revive a participant Stop after invitation changes to %s",
     async (invitedAccess) => {
@@ -205,10 +182,15 @@ describe("chat pane Stop intent", () => {
     { scope: "operator.write", method: "chat.abort", renderBeforeDisconnect: true },
     { scope: "operator.sessions.write", method: "chat.abort", renderBeforeDisconnect: false },
     { scope: "operator.sessions.write", method: "sessions.abort", renderBeforeDisconnect: false },
+    { scope: "operator.sessions.read", method: "chat.abort", renderBeforeDisconnect: true },
+    { scope: "operator.sessions.read", method: "chat.abort", renderBeforeDisconnect: false },
   ])(
-    "replays only the captured run once via $method with $scope",
+    "replays only the captured run once via $method with $scope (rendered online=$renderBeforeDisconnect)",
     async ({ scope, method, renderBeforeDisconnect }) => {
       const fixture = createStopFixture([scope]);
+      if (scope === "operator.sessions.read") {
+        Object.assign(fixture.session, { sharingRole: "member", invitedAccess: "send" });
+      }
       fixture.state.chatRunSessionAbortable = method === "sessions.abort";
       const renderedStop = renderBeforeDisconnect ? fixture.callbacks().onAbort : undefined;
       fixture.disconnect();

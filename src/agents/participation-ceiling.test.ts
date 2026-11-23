@@ -305,115 +305,75 @@ it("retains both patterned restrictions through JSON recovery and later widening
   ).toEqual(["knowledge_record"]);
 });
 
-it("filters discovery and exact-id deferred dispatch without invoking forbidden tools", async () => {
-  const read = createStubTool("read");
-  const spawn = createStubTool("sessions_spawn");
-  const yieldTool = createStubTool("sessions_yield");
-  const denied = [
-    "message",
-    "github_publish",
-    "knowledge_remember",
-    "computer",
-    "browser",
-    "openclaw",
-    "cron",
-    "automations",
-    "execute",
-  ].map(createStubTool);
-  const plugin = createStubTool("web_fetch");
-  setPluginToolMeta(plugin, { pluginId: "untrusted-plugin", optional: false });
-  for (const tool of [read, spawn, yieldTool, plugin, ...denied]) {
-    tool.execute = vi.fn(async () => ({ content: [], details: {} }));
-  }
-  const catalogRef = createToolSearchCatalogRef();
-  registerHeadlessToolSearchCatalog({
-    catalogRef,
-    tools: [read, spawn, yieldTool, plugin, ...denied],
-  });
-  const deniedIds = catalogRef
-    .current!.entries.filter(
-      (entry) => !["read", "sessions_spawn", "sessions_yield"].includes(entry.name),
-    )
-    .map((entry) => entry.id);
-  const runtime = new ToolSearchRuntime(
-    {
-      catalogRef,
-      ...prepareParticipationTestRun({
-        ...ceiling,
-        tools: ["read", "sessions_spawn", "sessions_yield"],
-      }),
-    },
-    resolveToolSearchConfig(),
-  );
-  expect(runtime.all().map((entry) => entry.name)).toEqual([
-    "read",
-    "sessions_spawn",
-    "sessions_yield",
-  ]);
-  expect(await runtime.search("message")).toEqual([]);
-  for (const id of deniedIds) {
-    await expect(runtime.describe(id)).rejects.toThrow();
-    await expect(runtime.callExactId(id, {})).rejects.toThrow();
-  }
-  await runtime.call("read", {});
-  expect(read.execute).toHaveBeenCalledOnce();
-  await runtime.call("sessions_spawn", {});
-  expect(spawn.execute).toHaveBeenCalledOnce();
-  await runtime.call("sessions_yield", {});
-  expect(yieldTool.execute).toHaveBeenCalledOnce();
-  for (const tool of [plugin, ...denied]) {
-    expect(tool.execute).not.toHaveBeenCalled();
-  }
-});
-
-it("dispatches configured plugin and MCP tools but never openclaw, including exact IDs", async () => {
-  const plugin = createStubTool("knowledge_record");
-  const mcp = createStubTool("fixture__read");
-  const forbidden = createStubTool("openclaw");
-  setPluginToolMeta(plugin, { pluginId: "knowledge", optional: false });
-  setPluginToolMeta(mcp, {
-    pluginId: "bundle-mcp",
-    optional: false,
-    mcp: {
-      serverName: "fixture",
-      safeServerName: "fixture",
-      toolName: "read",
-      operation: "tool",
-    },
-  });
-  for (const tool of [plugin, mcp, forbidden]) {
-    tool.execute = vi.fn(async () => ({ content: [], details: {} }));
-  }
-  const catalogRef = createToolSearchCatalogRef();
-  registerHeadlessToolSearchCatalog({ catalogRef, tools: [plugin, mcp, forbidden] });
-  const entries = [...catalogRef.current!.entries];
-  const runtime = new ToolSearchRuntime(
-    {
-      catalogRef,
-      ...prepareParticipationTestRun({
-        ...ceiling,
-        tools: ["knowledge", "fixture__*", "openclaw"],
-      }),
-    },
-    resolveToolSearchConfig(),
-  );
-  expect(
-    runtime
-      .all()
-      .map((entry) => entry.name)
-      .toSorted(),
-  ).toEqual(["fixture__read", "knowledge_record"]);
-  for (const entry of entries) {
-    if (entry.name === "openclaw") {
-      await expect(runtime.callExactId(entry.id, {})).rejects.toThrow();
-    } else {
-      await runtime.callExactId(entry.id, {});
+it.each([
+  {
+    name: "default tools",
+    tools: ["read", "sessions_spawn", "sessions_yield"],
+    allowed: ["read", "sessions_spawn", "sessions_yield"],
+  },
+  {
+    name: "configured plugin and MCP tools",
+    tools: ["knowledge", "fixture__*", "openclaw"],
+    allowed: ["fixture__read", "knowledge_record"],
+  },
+])(
+  "filters discovery and exact-ID dispatch for $name without forbidden effects",
+  async (scenario) => {
+    const tools = [
+      "read",
+      "sessions_spawn",
+      "sessions_yield",
+      "message",
+      "github_publish",
+      "knowledge_remember",
+      "computer",
+      "browser",
+      "openclaw",
+      "cron",
+      "automations",
+      "execute",
+    ].map(createStubTool);
+    const untrusted = createStubTool("web_fetch");
+    const plugin = createStubTool("knowledge_record");
+    const mcp = createStubTool("fixture__read");
+    setPluginToolMeta(untrusted, { pluginId: "untrusted-plugin", optional: false });
+    setPluginToolMeta(plugin, { pluginId: "knowledge", optional: false });
+    setPluginToolMeta(mcp, {
+      pluginId: "bundle-mcp",
+      optional: false,
+      mcp: {
+        serverName: "fixture",
+        safeServerName: "fixture",
+        toolName: "read",
+        operation: "tool",
+      },
+    });
+    tools.push(untrusted, plugin, mcp);
+    for (const tool of tools) {
+      tool.execute = vi.fn(async () => ({ content: [], details: {} }));
     }
-  }
-  expect(plugin.execute).toHaveBeenCalledOnce();
-  expect(mcp.execute).toHaveBeenCalledOnce();
-  expect(forbidden.execute).not.toHaveBeenCalled();
-});
+    const catalogRef = createToolSearchCatalogRef();
+    registerHeadlessToolSearchCatalog({ catalogRef, tools });
+    const runtime = new ToolSearchRuntime(
+      { catalogRef, ...prepareParticipationTestRun({ ...ceiling, tools: scenario.tools }) },
+      resolveToolSearchConfig(),
+    );
+    expect(runtime.all().map((entry) => entry.name)).toEqual(scenario.allowed);
+    expect(await runtime.search("message")).toEqual([]);
+    for (const entry of catalogRef.current!.entries) {
+      if (scenario.allowed.includes(entry.name)) {
+        await runtime.call(entry.name, {});
+        await runtime.callExactId(entry.id, {});
+      } else {
+        await expect(runtime.describe(entry.id)).rejects.toThrow();
+        await expect(runtime.callExactId(entry.id, {})).rejects.toThrow();
+      }
+    }
+    for (const tool of tools) {
+      expect(tool.execute).toHaveBeenCalledTimes(scenario.allowed.includes(tool.name) ? 2 : 0);
+    }
+  },
+);
 
 it.each([
   ["read-only", "full", "deny", true],

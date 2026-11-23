@@ -272,7 +272,14 @@ function useDesktopSharing(props: ChatSessionSharingProps, controls: MenuControl
               };
             },
             get trigger() {
-              return row().controlLabel;
+              return (
+                <>
+                  {row().controlLabel}
+                  <span class="picker-select__chevron" aria-hidden="true">
+                    <Icon name="chevronDown" />
+                  </span>
+                </>
+              );
             },
             onBeforeShow(event) {
               if (busy()) {

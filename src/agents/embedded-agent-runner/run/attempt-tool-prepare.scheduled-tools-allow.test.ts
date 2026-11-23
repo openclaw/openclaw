@@ -584,47 +584,15 @@ it("narrows an isolated cron session to its allowlist and keeps a shared session
   expect(shared.callable).toEqual(isolated.callable);
 });
 
-it("removes participation-excluded tools from construction and deferred dispatch", async () => {
-  const participationCeiling = { kind: "send" as const, profileId: "guest", sessionKey };
-  const config = { ...baseConfig, tools: { ...baseConfig.tools, alsoAllow: ["*"] } };
-  const run = await prepareTools(
-    {
-      runId: "participant",
-      trigger: "user",
-      senderIsOwner: true,
-      admittedRunContext:
-        await prepareParticipationTestRun(participationCeiling).preparedRunAdmission.admit(
-          "embedded",
-        ),
-      approvalReviewerDeviceId: "guest-device",
-    },
-    config,
-    "world__calendar_list",
-  );
-  expect(run.callable.length).toBeGreaterThan(0);
-  expect(run.callable.every((name) => DEFAULT_PARTICIPATION_TOOLS.includes(name))).toBe(true);
-  expect(run.listed).toEqual(run.callable);
-  expect(run.catalogNames.every((name) => DEFAULT_PARTICIPATION_TOOLS.includes(name))).toBe(true);
-  expect(run.dispatched).toBeUndefined();
-  const ordinary = await prepareTools(
-    { runId: "ordinary", trigger: "user", senderIsOwner: true },
-    config,
-  );
-  expect(ordinary.listed).toEqual(
-    expect.arrayContaining(["message", "sessions_spawn", "world__calendar_list"]),
-  );
-});
-
-it.each(
-  [[], ["read", "sessions_list", "web_fetch"]].map((tools) => ({
-    tools,
-  })),
-)(
-  "enforces configured participation tools $tools through real tool assembly",
+it.each([{ tools: undefined }, { tools: [] }, { tools: ["read", "sessions_list", "web_fetch"] }])(
+  "enforces default or configured participation tools $tools through assembly and deferred dispatch",
   async ({ tools }) => {
+    const config = tools
+      ? { ...baseConfig, agents: { entries: { main: { tools: { deny: ["web_fetch"] } } } } }
+      : { ...baseConfig, tools: { ...baseConfig.tools, alsoAllow: ["*"] } };
     const run = await prepareTools(
       {
-        runId: "configured-participant",
+        runId: "participant",
         trigger: "user",
         senderIsOwner: true,
         admittedRunContext: await prepareParticipationTestRun({
@@ -633,11 +601,29 @@ it.each(
           sessionKey,
           tools,
         }).preparedRunAdmission.admit("embedded"),
+        approvalReviewerDeviceId: "guest-device",
       },
-      { ...baseConfig, agents: { entries: { main: { tools: { deny: ["web_fetch"] } } } } },
+      config,
+      "world__calendar_list",
     );
-    expect(run.callable).toEqual(tools.filter((name) => name !== "web_fetch").toSorted());
     expect(run.listed).toEqual(run.callable);
-    expect(run.catalogNames).toEqual(run.callable);
+    expect(run.dispatched).toBeUndefined();
+    if (tools) {
+      expect(run.callable).toEqual(tools.filter((name) => name !== "web_fetch").toSorted());
+      expect(run.catalogNames).toEqual(run.callable);
+    } else {
+      expect(run.callable.length).toBeGreaterThan(0);
+      expect(run.callable.every((name) => DEFAULT_PARTICIPATION_TOOLS.includes(name))).toBe(true);
+      expect(run.catalogNames.every((name) => DEFAULT_PARTICIPATION_TOOLS.includes(name))).toBe(
+        true,
+      );
+      const ordinary = await prepareTools(
+        { runId: "ordinary", trigger: "user", senderIsOwner: true },
+        config,
+      );
+      expect(ordinary.listed).toEqual(
+        expect.arrayContaining(["message", "sessions_spawn", "world__calendar_list"]),
+      );
+    }
   },
 );

@@ -281,6 +281,7 @@ describe("chat session sharing menu", () => {
     expect(part(inherited, "sharing-permission")?.textContent).toBe("Can send");
     const editable = item(root, "permission:channel:chn_design")!;
     expect(editable.textContent).toBe("Can read");
+    expect(editable.querySelector(".picker-select__chevron svg")).not.toBeNull();
     expect(
       root.querySelector('[data-value="member:channel:chn_design"] openclaw-session-owner-chip'),
     ).not.toBeNull();
