@@ -2111,14 +2111,6 @@ span.new-session-page__select {
   white-space: nowrap;
 }
 
-/* Explanations longer than a row label wrap instead of clipping at the popover edge. */
-.new-session-page__picker-popover .new-session-page__empty--wrap {
-  height: auto;
-  padding-block: 8px;
-  line-height: 1.4;
-  white-space: normal;
-}
-
 @keyframes new-session-placeholder-pulse {
   0%,
   100% {

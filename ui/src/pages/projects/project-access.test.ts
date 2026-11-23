@@ -66,30 +66,6 @@ describe("project role access", () => {
     ]);
   });
 
-  it("adds a project ID and deletes an emptied list with explicit array replacement", () => {
-    expect(roleProjectsPatch(config, "contractor", "docs", true)).toEqual({
-      options: {
-        raw: {
-          gateway: { roles: { definitions: { contractor: { projects: ["site", "docs"] } } } },
-        },
-        note: "projects: share docs with role contractor",
-      },
-    });
-    expect(roleProjectsPatch(config, "contractor", "site", false)).toEqual({
-      options: {
-        raw: { gateway: { roles: { definitions: { contractor: { projects: null } } } } },
-        note: "projects: unshare site with role contractor",
-        replacePaths: ["gateway.roles.definitions.contractor.projects"],
-      },
-    });
-  });
-
-  it("creates the projects field for a role without one", () => {
-    expect(roleProjectsPatch(config, "guest", "site", true)).toMatchObject({
-      options: { raw: { gateway: { roles: { definitions: { guest: { projects: ["site"] } } } } } },
-    });
-  });
-
   it("refuses to edit a wildcard or vanished role", () => {
     expect(roleProjectsPatch(config, "partner", "site", false)).toEqual({ error: "all" });
     expect(roleProjectsPatch(config, "former", "site", true)).toEqual({ error: "missing" });

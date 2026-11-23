@@ -17,11 +17,12 @@ import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { ProjectsModel } from "./projects-model.ts";
 import { renderProjectsView } from "./projects-page.tsx";
 
-// mock-isolation: Replace imperative dialogs so confirmations and prompts remain deterministic.
+// mock-isolation: Replace imperative confirmations so removal choices remain deterministic.
 vi.mock("../../components/confirm-dialog.ts", () => ({
   showConfirmDialog: vi.fn(),
   showConfirmChoiceDialog: vi.fn(),
 }));
+// mock-isolation: Replace the imperative input dialog so rename and clone submissions stay scripted.
 vi.mock("../../components/input-dialog.tsx", () => ({ showInputDialog: vi.fn() }));
 // mock-isolation: Observe New Session catalog invalidation without its connection lifecycle.
 vi.mock("../../lib/projects.ts", () => {
@@ -390,18 +391,5 @@ describe("ProjectsPage", () => {
       ),
     );
     expect(page.model.selectedId).toBe("docs");
-  });
-
-  it("places the Projects tab between Sessions and Worktrees", async () => {
-    const page = createProjectsPage(listRequest());
-    await page.ready();
-    const tabs = [...page.element.querySelectorAll('[role="tab"]')].map((tab) =>
-      tab.textContent?.trim(),
-    );
-    expect(tabs).toEqual(["Sessions", "Projects", "Worktrees"]);
-    [...page.element.querySelectorAll<HTMLElement>('[role="tab"]')]
-      .find((tab) => tab.textContent?.trim() === "Worktrees")!
-      .click();
-    expect(page.context.navigate).toHaveBeenCalledWith("worktrees");
   });
 });

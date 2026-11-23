@@ -546,7 +546,7 @@ export function ProjectPickerContent(props: ProjectChipProps) {
                       {/* Restricted roles see only shared projects, so say why none appear. */}
                       {!props.params.place.canWrite() &&
                       props.params.place.browser.projects.length === 0 ? (
-                        <div class="new-session-page__menu-note new-session-page__empty new-session-page__empty--wrap">
+                        <div class="new-session-page__menu-note">
                           {t("newSession.noSharedProjects")}
                         </div>
                       ) : (

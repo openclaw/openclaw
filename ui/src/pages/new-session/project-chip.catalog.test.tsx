@@ -304,10 +304,9 @@ it.each([
   await openProjectSearch(view.container);
   const shared = "No projects are shared with your role. Ask an admin to share one.";
   await waitForSolid(() =>
-    expect(view.container.querySelector(".new-session-page__empty")?.textContent).toBe(
-      admin ? "No local projects registered" : shared,
-    ),
+    expect(view.container.textContent).toContain(admin ? "No local projects registered" : shared),
   );
+  expect(view.container.textContent?.includes(shared)).toBe(!admin);
   const manage = view.container.querySelector<HTMLAnchorElement>(
     ".new-session-page__manage-projects",
   );

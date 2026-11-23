@@ -11,6 +11,7 @@ import {
   SettingsPage,
   SettingsRow,
   SettingsSection,
+  SettingsValue,
 } from "../../components/solid/settings-ui.tsx";
 import { SettingsWorkspace } from "../../components/solid/settings-workspace.tsx";
 import { Switch } from "../../components/solid/switch.tsx";
@@ -25,7 +26,6 @@ import { sessionHubTabs, type SessionHubTab } from "../sessions/session-hub-tabs
 import "../../styles/settings.css";
 import "../../styles/hub-tabs.css";
 import "../../styles/new-session.css";
-import "../../styles/projects.css";
 import {
   readConfiguredRoles,
   roleProjectAccess,
@@ -135,7 +135,7 @@ export function renderProjectsView(model: ProjectsModel, view: () => ProjectsMod
           fallback={<span class="muted">{t("projectsPage.accessEveryone")}</span>}
         >
           {(entries) => (
-            <span class="projects-access-chips">
+            <span class="chip-row">
               <For each={entries().filter((entry) => entry.enabled)} keyed={(entry) => entry.role}>
                 {(entry) => <span class="chip">{entry().role}</span>}
               </For>
@@ -201,16 +201,19 @@ export function renderProjectsView(model: ProjectsModel, view: () => ProjectsMod
               {view().error}
             </InlineAlert>
           </Show>
-          <SettingsSection>
-            <div class="data-table-search projects-search">
-              <input
-                type="search"
-                aria-label={t("projectsPage.search")}
-                placeholder={t("projectsPage.search")}
-                value={view().query}
-                onInput={(event) => model.update({ query: event.currentTarget.value })}
-              />
-            </div>
+          <SettingsSection
+            notice={
+              <div class="data-table-search">
+                <input
+                  type="search"
+                  aria-label={t("projectsPage.search")}
+                  placeholder={t("projectsPage.search")}
+                  value={view().query}
+                  onInput={(event) => model.update({ query: event.currentTarget.value })}
+                />
+              </div>
+            }
+          >
             <Errored
               fallback={(_error, reset) => (
                 <button
@@ -242,7 +245,7 @@ export function renderProjectsView(model: ProjectsModel, view: () => ProjectsMod
                   }
                 >
                   <div class="data-table-container">
-                    <table class="data-table projects-table">
+                    <table class="data-table">
                       <thead>
                         <tr>
                           <th>{t("projectsPage.columnProject")}</th>
@@ -254,14 +257,11 @@ export function renderProjectsView(model: ProjectsModel, view: () => ProjectsMod
                       <tbody>
                         <For each={filtered()} keyed={(project) => project.id}>
                           {(project) => (
-                            <tr
-                              class="projects-table__row"
-                              onClick={() => model.select(project().id)}
-                            >
+                            <tr onClick={() => model.select(project().id)}>
                               <td>
                                 <button
                                   type="button"
-                                  class="projects-table__name"
+                                  class="btn btn--sm btn--ghost"
                                   onClick={(event) => {
                                     event.stopPropagation();
                                     model.select(project().id);
@@ -270,9 +270,7 @@ export function renderProjectsView(model: ProjectsModel, view: () => ProjectsMod
                                   {project().displayName}
                                 </button>
                                 <Show when={project().repositoryIdentity}>
-                                  {(identity) => (
-                                    <span class="projects-table__sub muted">{identity()}</span>
-                                  )}
+                                  {(identity) => <div class="muted">{identity()}</div>}
                                 </Show>
                               </td>
                               <td>{projectType(project())}</td>
@@ -281,11 +279,7 @@ export function renderProjectsView(model: ProjectsModel, view: () => ProjectsMod
                                   when={project().repoRoot}
                                   fallback={<span class="muted">—</span>}
                                 >
-                                  {(root) => (
-                                    <span class="projects-table__path" title={root()}>
-                                      {root()}
-                                    </span>
-                                  )}
+                                  {(root) => <span class="mono">{root()}</span>}
                                 </Show>
                               </td>
                               <td>
@@ -377,51 +371,50 @@ function ProjectDetails(props: {
     >
       <div class="oc-dialog projects-detail">
         <DialogHeader title={props.project.displayName} onClose={() => props.model.select(null)} />
-        <div class="oc-dialog__body projects-detail__body">
+        <div class="oc-dialog__body">
           <Show when={props.view().error}>
             <InlineAlert tone="danger" role="alert">
               {props.view().error}
             </InlineAlert>
           </Show>
-          <section class="projects-detail__section">
-            <h3>{t("projectsPage.sourceHeading")}</h3>
-            <dl class="projects-detail__facts">
-              <For each={facts()} keyed={false}>
-                {(fact) => (
-                  <>
-                    <dt>{fact()[0]}</dt>
-                    <dd>{fact()[1]}</dd>
-                  </>
-                )}
-              </For>
-            </dl>
-          </section>
-          <section class="projects-detail__section">
-            <h3>{t("projectsPage.accessHeading")}</h3>
-            <Show when={readOnly()}>
-              {(notice) => (
-                <InlineAlert tone="info" role="note">
-                  <strong>{t("nav.gateway.configReadOnly")}</strong>{" "}
-                  {notice().message || t("nav.gateway.configReadOnlyHint")}
-                </InlineAlert>
+          <SettingsSection title={t("projectsPage.sourceHeading")}>
+            <For each={facts()} keyed={false}>
+              {(fact) => (
+                <SettingsRow title={fact()[0]} control={<SettingsValue value={fact()[1]} />} />
               )}
-            </Show>
-            <Show when={!canAdmin()}>
-              <p class="muted">{t("projectsPage.accessAdminRequired")}</p>
-            </Show>
-            <Show when={workspace()}>
-              <p class="muted">{t("projectsPage.accessAgentsNote")}</p>
-            </Show>
+            </For>
+          </SettingsSection>
+          <SettingsSection
+            title={t("projectsPage.accessHeading")}
+            notice={
+              <>
+                <Show when={readOnly()}>
+                  {(notice) => (
+                    <InlineAlert tone="info" role="note">
+                      <strong>{t("nav.gateway.configReadOnly")}</strong>{" "}
+                      {notice().message || t("nav.gateway.configReadOnlyHint")}
+                    </InlineAlert>
+                  )}
+                </Show>
+                <Show when={!canAdmin()}>
+                  <span class="muted">{t("projectsPage.accessAdminRequired")}</span>
+                </Show>
+                <Show when={workspace()}>
+                  <span class="muted">{t("projectsPage.accessAgentsNote")}</span>
+                </Show>
+              </>
+            }
+          >
             <Show
               when={props.access !== undefined}
-              fallback={<p class="muted">{t("projectsPage.accessUnavailable")}</p>}
+              fallback={<SettingsEmpty message={t("projectsPage.accessUnavailable")} />}
             >
               <Show
                 when={props.access}
-                fallback={<p class="muted">{t("projectsPage.accessNoRoles")}</p>}
+                fallback={<SettingsEmpty message={t("projectsPage.accessNoRoles")} />}
               >
                 {(entries) => (
-                  <div class="settings-group projects-detail__access">
+                  <>
                     <For each={entries()} keyed={(entry) => entry.role}>
                       {(entry) => (
                         <SettingsRow
@@ -441,13 +434,13 @@ function ProjectDetails(props: {
                         />
                       )}
                     </For>
-                  </div>
+                  </>
                 )}
               </Show>
             </Show>
-            <p class="muted projects-detail__note">{t("projectsPage.accessPublicNote")}</p>
-            <p class="muted projects-detail__note">{t("projectsPage.accessWorktreeNote")}</p>
-          </section>
+          </SettingsSection>
+          <span class="muted">{t("projectsPage.accessPublicNote")}</span>
+          <span class="muted">{t("projectsPage.accessWorktreeNote")}</span>
         </div>
         <Show when={canAdmin() && !workspace()}>
           <openclaw-modal-actions class="oc-dialog__footer">
