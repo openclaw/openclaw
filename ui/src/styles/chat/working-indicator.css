@@ -754,6 +754,12 @@ button.chat-working-indicator__subagents:is(:hover, :focus-visible) {
   font-size: var(--control-ui-text-sm);
 }
 
+/* The chat group shrink-wraps this block to its content, and the list's fixed
+   width is that content's minimum, so cap the block at the group's width. */
+.chat-handoff-resume {
+  max-width: 100%;
+}
+
 /* One width for both lists, so the status chips line up. */
 .chat-handoff-sessions {
   width: 560px;

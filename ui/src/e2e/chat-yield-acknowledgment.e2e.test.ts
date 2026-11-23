@@ -319,6 +319,22 @@ suite.define(() => {
       expect(await thread.getByText("Wait for subagents", { exact: true }).count()).toBe(0);
       expect(await thread.locator(".chat-notice").count()).toBe(0);
       expect(await thread.textContent()).not.toContain(PRIVATE);
+      // On a phone-width view the list and every status badge stay on screen.
+      await page.setViewportSize({ width: 390, height: 844 });
+      await expect.poll(() => page.evaluate(() => window.innerWidth)).toBe(390);
+      const insideViewport = () =>
+        rule.evaluate((node) => {
+          const edge = (selector: string) =>
+            [...node.querySelectorAll(selector)].map((el) => el.getBoundingClientRect().right);
+          return {
+            list: Math.max(...edge("ul")) <= window.innerWidth,
+            badges:
+              edge(".chat-handoff-sessions__status").length === 3 &&
+              Math.max(...edge(".chat-handoff-sessions__status")) <= window.innerWidth,
+          };
+        });
+      await expect.poll(insideViewport).toEqual({ list: true, badges: true });
+      await page.setViewportSize({ width: 1280, height: 900 });
       // A listed child opens its own session in place.
       await rule.locator("li a", { hasText: SECOND }).click();
       await expect
