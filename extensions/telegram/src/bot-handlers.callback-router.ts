@@ -1,9 +1,9 @@
 import { randomUUID } from "node:crypto";
 import type { Context } from "grammy";
+import { agentControlText } from "openclaw/plugin-sdk/agent-control-runtime";
 import { resolveAgentDir, resolveDefaultModelForAgent } from "openclaw/plugin-sdk/agent-runtime";
 import { parseExecApprovalCommandText } from "openclaw/plugin-sdk/approval-reply-runtime";
 import { buildCommandsMessagePaginated } from "openclaw/plugin-sdk/command-status";
-import { agentControlText } from "openclaw/plugin-sdk/interactive-runtime";
 import { applySessionModelSelection } from "openclaw/plugin-sdk/model-session-runtime";
 import {
   formatModelsAvailableHeaderAsync,

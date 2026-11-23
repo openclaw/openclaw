@@ -148,8 +148,8 @@ Button semantics:
   A plugin interactive handler that registers the value's namespace still gets
   the tap first, with the mark removed. A tap that no handler claims reaches the
   agent as `callback_data: <value>`, on every channel and without expiry.
-  Channels decode a tapped value with `agentControlText(data)` from
-  `openclaw/plugin-sdk/interactive-runtime`: it returns that agent input for a
+  Bundled channels decode a tapped value with `agentControlText(data)` from
+  the private `openclaw/plugin-sdk/agent-control-runtime` entrypoint: it returns that agent input for a
   marked value and `undefined` for any other value. The mark takes 2 bytes of the
   channel's value limit.
 - `action.type: "approval"` identifies one durable operator approval, its
@@ -663,7 +663,6 @@ code:
 ```ts
 import {
   adaptMessagePresentationForChannel,
-  agentControlText,
   applyPresentationActionLimits,
   hasMessagePresentationBlocks,
   interactiveReplyToPresentation,

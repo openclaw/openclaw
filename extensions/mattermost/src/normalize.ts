@@ -1,5 +1,5 @@
+import { agentControlText } from "openclaw/plugin-sdk/agent-control-runtime";
 import {
-  agentControlText,
   normalizeMessagePresentation,
   renderMessagePresentationFallbackText,
   resolveMessagePresentationControlValue,

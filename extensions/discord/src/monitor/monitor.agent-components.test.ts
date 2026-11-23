@@ -2,8 +2,8 @@ import { installDiscordIngressTestRuntime } from "../test-support/ingress-runtim
 
 installDiscordIngressTestRuntime();
 import { ComponentType } from "discord-api-types/v10";
+import { stampAgentControls } from "openclaw/plugin-sdk/agent-control-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { stampAgentControls } from "openclaw/plugin-sdk/interactive-runtime";
 import { beforeAll, beforeEach, expect, it, vi } from "vitest";
 import { clearDiscordComponentEntriesForTest } from "../components-registry.test-support.js";
 import { parseCustomId } from "../internal/components.base.js";

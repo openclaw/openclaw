@@ -4,7 +4,7 @@ import {
   type APIComponentInMessageActionRow,
   type APIMessageTopLevelComponent,
 } from "discord-api-types/v10";
-import { agentControlText } from "openclaw/plugin-sdk/interactive-runtime";
+import { agentControlText } from "openclaw/plugin-sdk/agent-control-runtime";
 import { logError } from "openclaw/plugin-sdk/logging-core";
 import {
   isDiscordAgentControlCustomId,

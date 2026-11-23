@@ -89,6 +89,13 @@ waiting, and `resolveAgentRunLifecycleTerminalFacts({ phase, data })` classifies
 success, failure, cancellation, and timeout. Match the event's session and run
 identity before updating plugin state. These helpers grant no execution authority.
 
+## Agent-authored controls
+
+Bundled channel plugins use the private `agent-control-runtime` entrypoint for
+`agentControlText`, `stampAgentControlValue`, and `stampAgentControls`. These
+helpers preserve agent callback ownership across channel adapters without
+adding to the typed public `interactive-runtime` contract.
+
 ## Reply session initialization conflicts
 
 Use `isReplySessionInitConflictError(error)` from

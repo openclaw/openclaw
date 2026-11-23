@@ -63,6 +63,7 @@
   "inbound-envelope",
   "inbound-event-delivery",
   "interactive-runtime",
+  "agent-control-runtime",
   "outbound-media",
   "pair-loop-guard-runtime",
   "poll-runtime",

@@ -38,6 +38,18 @@ it("keeps bundled harness and command menu helpers out of the public SDK", () =>
   );
 });
 
+it("keeps bundled agent controls private without removing the shipped reply classifier", () => {
+  const publicEntries = surfaceReport.publicStats.byEntrypoint;
+  const privateEntries = surfaceReport.localOnlyStats.byEntrypoint;
+  for (const helper of ["agentControlText", "stampAgentControlValue", "stampAgentControls"]) {
+    expect(publicEntries.get("interactive-runtime")?.exportNames).not.toContain(helper);
+    expect(privateEntries.get("agent-control-runtime")?.exportNames).toContain(helper);
+  }
+  expect(publicEntries.get("reply-runtime")?.exportNames).toContain(
+    "isReplySessionInitConflictError",
+  );
+});
+
 it("accepts frozen named facades while rejecting missing deprecated reexports", () => {
   expect(surfaceReport.deprecatedBarrelWithoutReexports).toEqual([]);
   surfaceReport.deprecatedBarrelWithoutReexports = ["fixture-facade"];

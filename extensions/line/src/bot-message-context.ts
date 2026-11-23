@@ -1,4 +1,5 @@
 import type { webhook } from "@line/bot-sdk";
+import { agentControlText } from "openclaw/plugin-sdk/agent-control-runtime";
 import { recordChannelActivity } from "openclaw/plugin-sdk/channel-activity-runtime";
 import {
   buildChannelInboundEventContext,
@@ -27,7 +28,6 @@ import {
   resolvePinnedMainDmOwnerFromAllowlist,
   resolveConfiguredBindingRoute,
 } from "openclaw/plugin-sdk/conversation-runtime";
-import { agentControlText } from "openclaw/plugin-sdk/interactive-runtime";
 import type { HistoryEntry } from "openclaw/plugin-sdk/reply-history";
 import {
   parseAgentSessionKey,
