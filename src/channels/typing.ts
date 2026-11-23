@@ -96,11 +96,11 @@ export function createTypingCallbacks(params: CreateTypingCallbacksParams): Typi
     if (!stop) {
       return;
     }
-    const stopIfCurrent = () => {
+    const stopIfCurrent = async () => {
       if (epoch !== target) {
         return;
       }
-      return stop();
+      await stop();
     };
     // An admitted start may publish activity after cleanup. Its terminal stop
     // must follow that work so late acknowledgments cannot leave typing visible.

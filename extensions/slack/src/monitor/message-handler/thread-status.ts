@@ -61,12 +61,17 @@ export function createSlackSessionStatusCycle(params: {
   let statusWasSet = false;
   let generation = 0;
   let publishedGeneration = -1;
-  let lastTitle: string | undefined;
+  let publishChain: Promise<void> = Promise.resolve();
 
-  const publishProcessing = async (title?: string) => {
-    didSetStatus = true;
-    publishedGeneration = generation;
-    statusWasSet = await params.publish("processing", title);
+  const enqueuePublish = (status: "processing" | "active", title?: string): Promise<boolean> => {
+    const result = publishChain.then(() =>
+      title === undefined ? params.publish(status) : params.publish(status, title),
+    );
+    publishChain = result.then(
+      () => undefined,
+      () => undefined,
+    );
+    return result;
   };
 
   return {
@@ -75,31 +80,33 @@ export function createSlackSessionStatusCycle(params: {
       params.gate.beginGeneration();
     },
     async start(title?: string) {
-      lastTitle = title;
       if (publishedGeneration !== generation) {
         didSetStatus = false;
       }
       if (didSetStatus || params.gate.hasVisibleOutput()) {
         return;
       }
-      await publishProcessing(title);
+      const target = generation;
+      didSetStatus = true;
+      publishedGeneration = target;
+      const accepted = await enqueuePublish("processing", title);
+      if (didSetStatus && publishedGeneration === target) {
+        statusWasSet = accepted;
+      }
     },
     async stop() {
       if (!didSetStatus) {
         return;
       }
       const stoppingGeneration = generation;
-      didSetStatus = false;
       const reportFailure = statusWasSet;
+      didSetStatus = false;
       statusWasSet = false;
       publishedGeneration = -1;
-      const restored = await params.publish("active");
+      const restored = await enqueuePublish("active");
       if (generation !== stoppingGeneration) {
-        // The successor may already have published processing while this stop
-        // was in flight. Only repair the indicator when it has not.
-        if (publishedGeneration !== generation && !params.gate.hasVisibleOutput()) {
-          await publishProcessing(lastTitle);
-        }
+        // Active was queued before any successor processing. A live successor
+        // publishes processing itself; a finished one must not be restarted.
         return;
       }
       if (reportFailure && !restored) {

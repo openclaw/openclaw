@@ -15,37 +15,51 @@ const state = vi.hoisted(() => ({
   clearRunContext: vi.fn(),
 }));
 
-vi.mock("../../infra/agent-run-registry.js", () => ({
+vi.mock("../../infra/agent-run-registry.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../infra/agent-run-registry.js")>()),
   clearAgentRunContext: (...args: unknown[]) => state.clearRunContext(...args),
 }));
 
-vi.mock("../../agents/embedded-agent-runner/delivery-evidence.js", () => ({
+vi.mock("../../agents/embedded-agent-runner/delivery-evidence.js", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("../../agents/embedded-agent-runner/delivery-evidence.js")
+  >()),
   hasCompletedSourceReplyDeliveryEvidence: () => false,
 }));
 
-vi.mock("./agent-runner-result-accounting.js", () => ({
+vi.mock("./agent-runner-result-accounting.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./agent-runner-result-accounting.js")>()),
   accountFollowupTurn: (...args: unknown[]) => state.account(...args),
 }));
 
-vi.mock("./followup-turn-admission.js", () => ({
+vi.mock("./followup-turn-admission.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./followup-turn-admission.js")>()),
   admitFollowupTurn: (...args: unknown[]) => state.admit(...args),
 }));
 
-vi.mock("./followup-turn-execution.js", () => ({
+vi.mock("./followup-turn-execution.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./followup-turn-execution.js")>()),
   executeFollowupTurn: (...args: unknown[]) => state.execute(...args),
 }));
 
-vi.mock("./followup-delivery.js", () => ({
+vi.mock("./followup-delivery.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./followup-delivery.js")>()),
   deliverFollowupDecision: (...args: unknown[]) => state.deliver(...args),
   resolveFollowupDeliveryDecision: (...args: unknown[]) => state.resolveDecision(...args),
 }));
 
-vi.mock("./queue.js", () => ({
+vi.mock("./queue.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./queue.js")>()),
   completeFollowupRunLifecycle: (...args: unknown[]) => state.completeLifecycle(...args),
-  FollowupRunDeferredError: class FollowupRunDeferredError extends Error {},
 }));
 
-vi.mock("../../runtime.js", () => ({ defaultRuntime: { error: vi.fn() } }));
+vi.mock("../../runtime.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../runtime.js")>();
+  return {
+    ...actual,
+    defaultRuntime: { ...actual.defaultRuntime, error: vi.fn() },
+  };
+});
 
 const { createFollowupRunner } = await import("./followup-runner.js");
 
@@ -120,14 +134,15 @@ beforeEach(() => {
 });
 
 describe("queued follow-up typing lifecycle", () => {
-  it("starts typing for an admitted turn after the predecessor sealed and closed its callbacks", async () => {
+  it("publishes processing on the successor generation after the predecessor is sealed", async () => {
     const events: string[] = [];
+    let generation = 0;
     const callbacks = createTypingCallbacks({
       start: async () => {
-        events.push("start");
+        events.push(`processing#${generation}`);
       },
       stop: async () => {
-        events.push("stop");
+        events.push(`active#${generation}`);
       },
       onStartError: () => {},
       keepaliveIntervalMs: 0,
@@ -136,7 +151,10 @@ describe("queued follow-up typing lifecycle", () => {
     const typing = createTypingController({
       onReplyStart: callbacks.onReplyStart,
       onCleanup: callbacks.onCleanup,
-      onOpenSuccessor: callbacks.beginNextLifecycle,
+      onOpenSuccessor: () => {
+        generation += 1;
+        return callbacks.beginNextLifecycle?.();
+      },
       typingIntervalSeconds: 0,
     });
     await typing.startTypingLoop();
@@ -160,8 +178,20 @@ describe("queued follow-up typing lifecycle", () => {
     })(turn.queued);
     await Promise.resolve();
 
-    expect(events).toEqual(["start", "stop", "start", "followup-started", "stop"]);
+    expect(events).toEqual([
+      "processing#0",
+      "active#0",
+      "processing#1",
+      "followup-started",
+      "active#1",
+    ]);
+    const finished = [...events];
+    callbacks.onIdle?.();
+    callbacks.onCleanup?.();
+    typing.markRunComplete();
+    typing.markDispatchIdle();
     await typing.startTypingLoop();
-    expect(events).toEqual(["start", "stop", "start", "followup-started", "stop"]);
+    await Promise.resolve();
+    expect(events).toEqual(finished);
   });
 });
