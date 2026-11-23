@@ -726,11 +726,20 @@ it.each<[string | null, string[], string]>([
   expectChatBudget(report.markdown);
 });
 
-it.each<[UpdateRunRecord["status"], string | null, string]>([
+it.each<[UpdateRunRecord["status"], string | null, string, Step[]?]>([
   [
     "succeeded",
     null,
     "✅ OpenClaw updated to 2026.9.2 (from 2026.9.1); 1 warning needs attention.",
+  ],
+  [
+    "succeeded",
+    null,
+    "✅ OpenClaw updated to 2026.9.2 (from 2026.9.1); 1 warning needs attention.",
+    [
+      failedStep("plugins"),
+      { step: "warning:plugins", status: "completed", detail: "Plugin maintenance needs a retry." },
+    ],
   ],
   ["running", null, "⬆️ OpenClaw update in progress: verifying."],
   ["skipped", null, "ℹ️ OpenClaw update skipped: unknown reason."],
@@ -745,12 +754,15 @@ it.each<[UpdateRunRecord["status"], string | null, string]>([
     "still-starting",
     "ℹ️ OpenClaw 2026.9.2 installed; Gateway still starting; readiness unverified; recovery backups retained.",
   ],
-])("keeps the %s outcome when plugin maintenance fails (%s)", (status, reason, headline) => {
-  const report = render({
-    status,
-    reason,
-    phase: "verifying",
-    steps: [failedStep("plugins")],
-  });
-  expect(report.headline).toBe(headline);
-});
+])(
+  "keeps the %s outcome when plugin maintenance fails (%s, case %#)",
+  (status, reason, headline, steps = [failedStep("plugins")]) => {
+    const report = render({
+      status,
+      reason,
+      phase: "verifying",
+      steps,
+    });
+    expect(report.headline).toBe(headline);
+  },
+);

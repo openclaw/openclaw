@@ -331,7 +331,17 @@ export function renderUpdateRunReport(
       // Supplemental failures need attention without changing a successful core outcome.
       let attentionCount = warnings.length;
       for (const step of run.steps) {
-        if (step.status === "failed" && !PHASES.has(step.step)) {
+        if (step.status !== "failed" || PHASES.has(step.step)) {
+          continue;
+        }
+        const warningStep = `warning:${step.step}`;
+        const warned = run.steps.some(
+          (warning) =>
+            warning.step === warningStep &&
+            warning.status === "completed" &&
+            Boolean(warning.detail),
+        );
+        if (!warned) {
           attentionCount++;
         }
       }
