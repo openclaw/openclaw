@@ -254,7 +254,7 @@ describe("OpenAI-compatible operator run authority", () => {
       await runOpenAiCompatibleAgentCommand(fixture.params);
 
       const options = vi.mocked(agentCommandFromGatewayIngress).mock.calls[0]?.[0];
-      expect(options?.runContext?.senderId).toBe(fixture.person.id);
+      expect(options?.runContext?.mcpRequesterProfileId).toBe(fixture.person.id);
       expect(options?.messageChannel).toBe("webchat");
       expect(options?.runContext?.accountId).toBeUndefined();
     });
@@ -286,7 +286,7 @@ describe("OpenAI-compatible operator run authority", () => {
       expect(
         vi
           .mocked(agentCommandFromGatewayIngress)
-          .mock.calls.map(([opts]) => opts.runContext?.senderId),
+          .mock.calls.map(([opts]) => opts.runContext?.mcpRequesterProfileId),
       ).toEqual(profiles.map((profile) => profile.id));
     });
   });
@@ -310,7 +310,7 @@ describe("OpenAI-compatible operator run authority", () => {
         await runOpenAiCompatibleAgentCommand(fixture.params);
 
         const options = vi.mocked(agentCommandFromGatewayIngress).mock.calls[0]?.[0];
-        expect(options?.runContext?.senderId).toBeUndefined();
+        expect(options?.runContext?.mcpRequesterProfileId).toBeUndefined();
       });
     },
   );

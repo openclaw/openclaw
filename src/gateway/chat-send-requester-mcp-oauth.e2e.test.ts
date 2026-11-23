@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import https from "node:https";
 import path from "node:path";
+import { text as readProviderBody } from "node:stream/consumers";
 import type { TLSSocket } from "node:tls";
 import { afterEach, expect, it, onTestFailed } from "vitest";
 import { writeOpenAiResponsesText } from "../../test/helpers/openai-responses-sse.js";
@@ -30,7 +31,6 @@ import type { GatewayClient } from "./client.js";
 import {
   closeProvider,
   listenProvider,
-  readProviderBody,
   writeToolCall,
 } from "./gateway-provider-fixture.test-support.js";
 import { createGatewayConfigPath, setupGatewayTempHome } from "./gateway.test-support.js";
@@ -389,10 +389,10 @@ async function startProof() {
   return { accounts, model, tempHome, workspaceDir, shared };
 }
 
-it(
-  "signs each verified person in separately through one backend client",
+it.each(["backend", "browser"] as const)(
+  "signs each verified person in separately through %s chat",
   { timeout: 120_000 },
-  async () => {
+  async (surface) => {
     const { accounts, model, tempHome, workspaceDir, shared } = await startProof();
     let phase = "starting Gateway";
     onTestFailed(() => {
@@ -480,9 +480,17 @@ it(
     const asPerson = async (email: string) => {
       const client = await connectGatewayClient({
         url: `wss://127.0.0.1:${port}`,
-        clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
-        mode: GATEWAY_CLIENT_MODES.BACKEND,
-        deviceIdentity: device,
+        ...(surface === "browser"
+          ? {
+              clientName: GATEWAY_CLIENT_NAMES.CONTROL_UI,
+              mode: GATEWAY_CLIENT_MODES.WEBCHAT,
+              origin: "https://control.example.test",
+            }
+          : {
+              clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
+              mode: GATEWAY_CLIENT_MODES.BACKEND,
+              deviceIdentity: device,
+            }),
         scopes: ["operator.read", "operator.write"],
         tlsFingerprint: TLS_FINGERPRINT,
         edgeAuthHeaders: proxied(email),

@@ -17,6 +17,7 @@ it.each(["shared", "personal"] as const)(
           safeServerName: "calendar",
           toolName: "events",
           description: "List events",
+          fallbackDescription: "List events",
           inputSchema: { type: "object" },
         },
       ],

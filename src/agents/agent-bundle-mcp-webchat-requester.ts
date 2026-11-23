@@ -3,9 +3,10 @@ import type { InputProvenance } from "../sessions/input-provenance.js";
 import type { ReplyOperation } from "../sessions/session-controller.contracts.js";
 import {
   assertSessionControllerOperation,
-  hasOperationBackendRunId,
+  getOperationBackendRunIds,
   readSessionControllerOperationState,
 } from "../sessions/session-controller.state.js";
+import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel-constants.js";
 import {
   readAdmittedRunOperatorAuthority,
   resolveAdmittedRunActiveAssertion,
@@ -20,6 +21,7 @@ export type WebchatMcpRequesterContext = {
   sessionKey?: string;
   runId: string;
   senderId?: string | null;
+  mcpRequesterProfileId?: string;
   messageChannel?: string | null;
   messageProvider?: string | null;
   admittedRunContext?: AdmittedRunContext;
@@ -51,6 +53,60 @@ export function readWebchatMcpRequester(run: {
     : undefined;
 }
 
+/** Capture only server-verified user turns. A browser must also own the exact live input. */
+export function captureRunMcpRequester(
+  run: WebchatMcpRequesterContext,
+): WebchatMcpRequester | undefined {
+  if (run.gatewayUiCommandTarget) {
+    return run.mcpRequesterProfileId === run.gatewayUiCommandTarget.profileId
+      ? captureWebchatMcpRequester(run)
+      : undefined;
+  }
+  const { mcpRequesterProfileId: profileId, admittedRunContext, sessionKey } = run;
+  if (
+    !profileId ||
+    !sessionKey ||
+    run.spawnedBy ||
+    run.scheduledToolPolicy ||
+    run.controlOperation ||
+    run.trigger === "memory" ||
+    (run.inputProvenance && run.inputProvenance.kind !== "external_user")
+  ) {
+    return undefined;
+  }
+  const assertActive = admittedRunContext
+    ? resolveAdmittedRunActiveAssertion(admittedRunContext, run.abortSignal)
+    : undefined;
+  const participants = run.replyOperation?.personalToolParticipants;
+  return Object.freeze({
+    sessionId: run.sessionId,
+    sessionKey,
+    runId: run.runId,
+    requesterSenderId: profileId,
+    assertCurrent: () => {
+      const authority = readAdmittedRunOperatorAuthority(admittedRunContext);
+      if (
+        !assertActive ||
+        authority?.profileId !== profileId ||
+        (participants && participants.resolve()?.profileId !== profileId)
+      ) {
+        throw new Error("Personal MCP requires the current authenticated requester.");
+      }
+      assertActive();
+      authority.assertCurrent();
+    },
+  });
+}
+
+/** Profiles use the same durable principal as MCP Apps, not the transport account. */
+export function profileMcpRequesterScope(requester: WebchatMcpRequester) {
+  return {
+    requesterSenderId: requester.requesterSenderId,
+    agentAccountId: undefined,
+    messageChannel: INTERNAL_MESSAGE_CHANNEL,
+  };
+}
+
 /** Use the existing live personal-tool owner when Webchat has no transport SenderId. */
 export function captureWebchatMcpRequester(
   run: WebchatMcpRequesterContext,
@@ -67,7 +123,7 @@ export function captureWebchatMcpRequester(
     admitted.operationalRunInstance.runId !== run.runId ||
     !operation ||
     (turnKind !== "direct" && turnKind !== "visible") ||
-    !hasOperationBackendRunId(operation, run.runId) ||
+    !getOperationBackendRunIds(operation)?.has(run.runId) ||
     operation.sessionId !== run.sessionId ||
     operation.key !== run.sessionKey ||
     !run.toolAuthorityFingerprint ||
@@ -97,7 +153,7 @@ export function captureWebchatMcpRequester(
     assertSessionControllerOperation(operation);
     authority.assertCurrent();
     if (
-      !hasOperationBackendRunId(operation, run.runId) ||
+      !getOperationBackendRunIds(operation)?.has(run.runId) ||
       operation.toolAuthorityFingerprint !== run.toolAuthorityFingerprint ||
       operation.personalToolParticipants !== participants
     ) {

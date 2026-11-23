@@ -4,6 +4,7 @@ import {
   hasAgentRunContextExecutionOwner,
   listAgentRunsForSession,
 } from "../infra/agent-run-registry.js";
+import { withGuardedFetchRequestAuthority } from "../infra/net/fetch-request-authority.js";
 import type { BundleMcpServerConfig } from "../plugins/bundle-mcp.types.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
@@ -15,6 +16,8 @@ import {
   type SessionMcpRuntimeManagerOpts,
   type SessionMcpConfigPublication,
 } from "./agent-bundle-mcp-manager-lifecycle.js";
+import { runWithSessionMcpToolCallAuthority } from "./agent-bundle-mcp-request-context.js";
+import { createMcpRunView } from "./agent-bundle-mcp-run-view.js";
 import { loadSessionMcpConfig } from "./agent-bundle-mcp-runtime-config.js";
 import { sessionMcpRuntimeOwners } from "./agent-bundle-mcp-runtime-owner.js";
 import {
@@ -222,9 +225,20 @@ export function createSessionMcpRuntimeManager(opts: SessionMcpRuntimeManagerOpt
       ...partition,
       safeServerNamesByServer,
       requester,
-      acquireRequester: () =>
-        requester
-          ? materializeRequesterScopedRuntime({
+      acquireRequester: async () => {
+        if (!requester) {
+          return undefined;
+        }
+        const assertCurrent = params.assertRequesterCurrent;
+        try {
+          assertCurrent?.();
+        } catch {
+          // An ambiguous or ended turn grants no personal partition. Shared MCP is independent.
+          return undefined;
+        }
+        const lease = await withGuardedFetchRequestAuthority(assertCurrent, () =>
+          runWithSessionMcpToolCallAuthority(assertCurrent, () =>
+            materializeRequesterScopedRuntime({
               ...params,
               configReloadAtAdmission,
               mcpServers: fullConfig.loaded.mcpServers,
@@ -234,8 +248,17 @@ export function createSessionMcpRuntimeManager(opts: SessionMcpRuntimeManagerOpt
               safeServerNamesByServer,
               requesterSenderId: requester.senderId,
               runtimeKey: requester.runtimeKey,
-            })
-          : undefined,
+            }),
+          ),
+        );
+        try {
+          assertCurrent?.();
+          return lease;
+        } catch (error) {
+          lease?.releaseLease();
+          throw error;
+        }
+      },
     };
   };
   const materializeRequesterScopedRuntime = async (
@@ -340,7 +363,7 @@ export function createSessionMcpRuntimeManager(opts: SessionMcpRuntimeManagerOpt
         const requesterLease = requester ? await acquireRequester() : undefined;
         if (requesterLease) {
           leases.push(requesterLease);
-          parts.push(requesterLease.runtime);
+          parts.push(createMcpRunView(requesterLease.runtime, params.assertRequesterCurrent));
         }
         return {
           runtime:

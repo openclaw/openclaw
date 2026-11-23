@@ -172,8 +172,8 @@ export async function runOpenAiCompatibleAgentCommand(params: {
         ? AbortSignal.any([params.abortSignal, sourceSignal])
         : (params.abortSignal ?? sourceSignal);
     abortSignal?.throwIfAborted();
-    // A shared-secret owner's attribution is not an authenticated message sender.
-    const requesterSenderId =
+    // A shared-secret owner is not an authenticated personal MCP requester.
+    const mcpRequesterProfileId =
       normalizeOptionalString(params.requestAuth.user) &&
       !usesSharedSecretGatewayMethod(params.requestAuth.authMethod)
         ? normalizeOptionalString(params.requestAuth.authenticatedUserProfile?.profileId)
@@ -190,7 +190,7 @@ export async function runOpenAiCompatibleAgentCommand(params: {
         runId: params.runId,
         deliver: false,
         messageChannel: params.messageChannel,
-        runContext: requesterSenderId ? { senderId: requesterSenderId } : undefined,
+        runContext: mcpRequesterProfileId ? { mcpRequesterProfileId } : undefined,
         senderIsOwner: params.senderIsOwner,
         bestEffortDeliver: false,
         allowModelOverride: params.modelOverride !== undefined,

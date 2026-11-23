@@ -21,9 +21,12 @@ import {
   buildConfiguredRequesterConnectCatalog,
   mergeMcpConnectCatalog,
 } from "./agent-bundle-mcp-requester-connect.js";
-import { loadSessionMcpConfig } from "./agent-bundle-mcp-runtime-config.js";
 import { createMcpRunView } from "./agent-bundle-mcp-run-view.js";
-import { readWebchatMcpRequester } from "./agent-bundle-mcp-webchat-requester.js";
+import { loadSessionMcpConfig } from "./agent-bundle-mcp-runtime-config.js";
+import {
+  profileMcpRequesterScope,
+  readWebchatMcpRequester,
+} from "./agent-bundle-mcp-webchat-requester.js";
 import type { CodexMcpServersConfig } from "./codex-mcp-config.types.js";
 import {
   prepareConversationCapabilityProfile,
@@ -377,9 +380,7 @@ export async function materializeStaticMcpToolsForHarnessRunCore(
 export async function materializeRequesterScopedMcpToolsForHarnessRunCore(
   params: MaterializeRequesterScopedMcpToolsForHarnessRunParams,
 ): Promise<RequesterScopedHarnessMcpTools | undefined> {
-  const webchatRequester = !params.requesterSenderId?.trim()
-    ? readWebchatMcpRequester(params)
-    : undefined;
+  const webchatRequester = readWebchatMcpRequester(params);
   let closed = false;
   const assertRequesterCurrent =
     webchatRequester &&
@@ -402,10 +403,11 @@ export async function materializeRequesterScopedMcpToolsForHarnessRunCore(
     cfg: params.cfg,
     manifestRegistry: params.manifestRegistry,
     toolOverrides: params.toolOverrides,
-    requesterSenderId: params.requesterSenderId?.trim() || webchatRequester?.requesterSenderId,
-    assertRequesterCurrent,
+    requesterSenderId: params.requesterSenderId,
     agentAccountId: params.agentAccountId,
     messageChannel: params.messageChannel,
+    ...(webchatRequester && profileMcpRequesterScope(webchatRequester)),
+    assertRequesterCurrent,
     toolDenylist: policyParams.conversationCapabilityProfile?.policy.explicitToolDenylist,
   });
   const scopedRuntime = scopedRuntimeHandle?.runtime;
@@ -429,7 +431,9 @@ export async function materializeRequesterScopedMcpToolsForHarnessRunCore(
       }
     }
 
-    const hasRequester = normalizeOptionalString(params.requesterSenderId) !== undefined;
+    const hasRequester =
+      webchatRequester !== undefined ||
+      normalizeOptionalString(params.requesterSenderId) !== undefined;
     const baseAdvertisedCatalog = getAdvertisedScopedMcpCatalog(params.sessionId) ?? liveCatalog;
     const advertisedCatalog = baseAdvertisedCatalog
       ? mergeMcpConnectCatalog(baseAdvertisedCatalog, scopedRuntime?.requesterConnect)

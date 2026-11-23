@@ -130,8 +130,6 @@ export type SessionMcpRuntime = {
 export type SessionMcpRuntimeLease = {
   runtime: SessionMcpRuntime;
   releaseLease: () => void;
-  /** Per-run requester fence; never retained on the shared session runtime. */
-  assertRequesterCurrent?: () => void;
   /** Retires unleased discovery servers outside the final prepared bundle. */
   retireUnusedServers?: (retainedServerNames: ReadonlySet<string>) => Promise<void>;
 };
@@ -153,6 +151,8 @@ export type SessionMcpRuntimeManager = {
     manifestRegistry?: Pick<PluginManifestRegistry, "plugins">;
     /** Trusted sender id; required to materialize requester-scoped MCP servers. */
     requesterSenderId?: string | null;
+    /** Turn-owned authority for the personal partition, never cached with a runtime. */
+    assertRequesterCurrent?: () => void;
     agentAccountId?: string | null;
     messageChannel?: string | null;
     toolOverrides?: Pick<SessionToolOverrides, "mcpServers" | "mcpToolsDeny">;

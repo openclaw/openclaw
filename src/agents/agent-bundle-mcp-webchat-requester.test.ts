@@ -71,6 +71,7 @@ async function withTurn<T>(
   let revoked = false;
   const authority = createAdmittedRunOperatorAuthority({
     profileId,
+    canonicalIdentity: { profileId },
     scopes: ["operator.read", "operator.write"],
     gatewayAccessGrant: null,
     modelPolicy: prepareOperatorModelPolicy({ cfg: {}, policy: {} }),
@@ -392,6 +393,7 @@ it.each([
               turn.replyOperation!.personalToolParticipants!.accept({
                 operatorAuthority: createAdmittedRunOperatorAuthority({
                   profileId: "grace-profile",
+                  canonicalIdentity: { profileId: "grace-profile" },
                   scopes: ["operator.read", "operator.write"],
                   gatewayAccessGrant: null,
                   modelPolicy: prepareOperatorModelPolicy({ cfg: {}, policy: {} }),

@@ -25,6 +25,7 @@ export function buildCommandAttemptToolContext(
     currentInboundAudio: params.runContext.currentInboundAudio,
     replyToMode: params.runContext.replyToMode,
     senderId: params.runContext.senderId,
+    mcpRequesterProfileId: params.runContext.mcpRequesterProfileId,
     senderIsOwner: params.opts.senderIsOwner,
     // Owners are a config fact, so completion turns render the user turn's prompt section.
     ownerNumbers: resolveOwnerPromptNumbers({

@@ -53,7 +53,17 @@ export function createMcpRunView(
       }
       const value = Reflect.get(target, key, target);
       if (REQUEST_OPERATIONS.has(key) && typeof value === "function") {
-        return (...args: unknown[]) => run(async () => Reflect.apply(value, target, args));
+        return (...args: unknown[]) => {
+          const serverName = args[0];
+          const scoped =
+            key === "getCatalog"
+              ? target.requesterScope !== undefined
+              : typeof serverName === "string" &&
+                (target.isRequesterScopedServer?.(serverName) ??
+                  target.requesterScope !== undefined);
+          const invoke = async () => Reflect.apply(value, target, args);
+          return scoped ? run(invoke) : invoke();
+        };
       }
       return typeof value === "function" ? value.bind(target) : value;
     },

@@ -7,7 +7,10 @@ import {
   acquireSessionMcpRuntime,
   materializeBundleMcpToolsForRun,
 } from "../../agent-bundle-mcp-tools.js";
-import { readWebchatMcpRequester } from "../../agent-bundle-mcp-webchat-requester.js";
+import {
+  profileMcpRequesterScope,
+  readWebchatMcpRequester,
+} from "../../agent-bundle-mcp-webchat-requester.js";
 import { isAgentToolExecutionAvailable } from "../../agent-tool-availability.js";
 import { wrapToolWithAbortSignal } from "../../agent-tools.abort.js";
 import { wrapToolWithBeforeToolCallHook } from "../../agent-tools.before-tool-call.wrapper.js";
@@ -133,10 +136,7 @@ export async function prepareEmbeddedAttemptBundleTools(params: {
     },
   });
   phases.mark("attempt.bundle-tools.mcp-acquire");
-  const webchatRequester =
-    bundleMcpEnabled && !params.attempt.senderId?.trim()
-      ? readWebchatMcpRequester(params.attempt)
-      : undefined;
+  const webchatRequester = bundleMcpEnabled ? readWebchatMcpRequester(params.attempt) : undefined;
   const bundleMcpAcquisition = bundleMcpEnabled
     ? await acquireSessionMcpRuntime({
         ...mcpConfig,
@@ -144,12 +144,11 @@ export async function prepareEmbeddedAttemptBundleTools(params: {
         sessionKey: params.attempt.sessionKey,
         agentId: params.setup.sessionAgentId,
         agentDir: params.agentDir,
-        // Webchat has no transport SenderId. Its exact live direct-turn owner
-        // supplies the authenticated profile without rewriting channel attribution.
-        requesterSenderId: params.attempt.senderId?.trim() || webchatRequester?.requesterSenderId,
-        assertRequesterCurrent: webchatRequester?.assertCurrent,
+        requesterSenderId: params.attempt.senderId,
         agentAccountId: params.attempt.agentAccountId,
         messageChannel: params.attempt.messageChannel ?? params.attempt.messageProvider,
+        ...(webchatRequester && profileMcpRequesterScope(webchatRequester)),
+        assertRequesterCurrent: webchatRequester?.assertCurrent,
       })
     : undefined;
   phases.mark("attempt.bundle-tools.mcp-materialize");

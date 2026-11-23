@@ -47,6 +47,8 @@ export type AgentRunContext = {
   currentThreadTs?: string;
   currentInboundAudio?: boolean;
   senderId?: string | null;
+  /** Server-verified identity used only by personal MCP. */
+  mcpRequesterProfileId?: string;
   replyToMode?: "off" | "first" | "all" | "batched";
   hasRepliedRef?: { value: boolean };
 };
