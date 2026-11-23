@@ -157,9 +157,8 @@ describe.skipIf(routes.length === 0)("registered Decision live flow", () => {
               };
               const reply = await tool.execute("live-decision", batch);
               const outcome = reply.details as DecisionOutcome;
-              expect(outcome.status).toBe("ok");
               if (outcome.status !== "ok") {
-                throw new Error("Decision unavailable: " + outcome.reason);
+                throw new Error(`${plugin} text Decision unavailable: ${outcome.reason}`);
               }
               const { answers, usage, model } = outcome.result;
               expect(model).toBe(modelId);
@@ -206,9 +205,10 @@ describe.skipIf(routes.length === 0)("registered Decision live flow", () => {
                 ...batch,
               });
               const outcome = reply.details as DecisionOutcomeV2;
-              expect(outcome.status).toBe("ok");
               if (outcome.status !== "ok") {
-                throw new Error("Image Decision unavailable: " + outcome.reason);
+                throw new Error(
+                  `${plugin} ${image.mimeType} Decision unavailable: ${outcome.reason}`,
+                );
               }
               const { answers, usage, model } = outcome.result;
               expect(outcome.provenance.providerId).toBe(plugin);

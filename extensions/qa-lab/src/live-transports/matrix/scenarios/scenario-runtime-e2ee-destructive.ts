@@ -717,36 +717,65 @@ export async function runMatrixQaE2eeServerDeviceDeletedReloginRecoversScenario(
 export async function runMatrixQaE2eeSyncStateLossCryptoIntactScenario(
   context: MatrixQaScenarioContext,
 ): Promise<MatrixQaScenarioExecution> {
-  if (!context.gatewayStateDir) {
+  const gatewayStateDir = context.gatewayStateDir;
+  if (!gatewayStateDir) {
     throw new Error("Matrix E2EE sync-state loss scenario requires gateway state restart support");
+  }
+  // Emit before awaiting: the outer flow deadline can expire before a catch or finally runs.
+  // Only fixed stage names and timings belong here, never account, event, or error payloads.
+  async function stage<T>(name: string, operation: () => Promise<T>): Promise<T> {
+    const startedAt = performance.now();
+    const record = (status: "started" | "completed" | "failed") =>
+      console.info(
+        JSON.stringify({
+          scenario: "matrix-e2ee-sync-state-loss-crypto-intact",
+          stage: name,
+          status,
+          elapsedMs: Math.round(performance.now() - startedAt),
+        }),
+      );
+    record("started");
+    try {
+      const result = await operation();
+      record("completed");
+      return result;
+    } catch (error) {
+      record("failed");
+      throw error;
+    }
   }
   const restoreAccountId = context.sutAccountId ?? "sut";
   const configPath = requireMatrixQaGatewayConfigPath(context);
-  const originalAccountConfig = await readMatrixQaGatewayMatrixAccount({
-    accountId: restoreAccountId,
-    configPath,
-  });
+  const originalAccountConfig = await stage("read-original-account", async () =>
+    readMatrixQaGatewayMatrixAccount({
+      accountId: restoreAccountId,
+      configPath,
+    }),
+  );
   const accountId = "sync-state-loss-gateway";
-  const account = await registerMatrixQaDestructiveOwner(
-    context,
-    "matrix-e2ee-sync-state-loss-crypto-intact",
+  const account = await stage("register-owner", async () =>
+    registerMatrixQaDestructiveOwner(context, "matrix-e2ee-sync-state-loss-crypto-intact"),
   );
   const rawDriver = createMatrixQaDriverScenarioClient(context);
-  const roomId = await rawDriver.createPrivateRoom({
-    encrypted: true,
-    inviteUserIds: [context.observerUserId, account.userId],
-    name: "Matrix QA E2EE Sync State Loss Recovery Room",
-  });
-  await Promise.all([
-    createMatrixQaClient({
-      accessToken: context.observerAccessToken,
-      baseUrl: context.baseUrl,
-    }).joinRoom(roomId),
-    createMatrixQaClient({
-      accessToken: account.accessToken,
-      baseUrl: context.baseUrl,
-    }).joinRoom(roomId),
-  ]);
+  const roomId = await stage("create-room", async () =>
+    rawDriver.createPrivateRoom({
+      encrypted: true,
+      inviteUserIds: [context.observerUserId, account.userId],
+      name: "Matrix QA E2EE Sync State Loss Recovery Room",
+    }),
+  );
+  await stage("join-room", async () =>
+    Promise.all([
+      createMatrixQaClient({
+        accessToken: context.observerAccessToken,
+        baseUrl: context.baseUrl,
+      }).joinRoom(roomId),
+      createMatrixQaClient({
+        accessToken: account.accessToken,
+        baseUrl: context.baseUrl,
+      }).joinRoom(roomId),
+    ]),
+  );
   const accountConfig: Record<string, unknown> = {
     ...originalAccountConfig,
     accessToken: account.accessToken,
@@ -767,77 +796,92 @@ export async function runMatrixQaE2eeSyncStateLossCryptoIntactScenario(
   let driver: MatrixQaE2eeScenarioClient | undefined;
   let gatewayAccountReplaced = false;
   try {
-    await context.restartGatewayAfterStateMutation(
-      async () => {
-        await replaceMatrixQaGatewayMatrixAccount({
-          accountConfig,
-          accountId,
-          configPath,
-        });
-        gatewayAccountReplaced = true;
-      },
-      {
+    await stage("start-replacement-account", async () =>
+      context.restartGatewayAfterStateMutation(
+        async () => {
+          await stage("replace-account-config", async () =>
+            replaceMatrixQaGatewayMatrixAccount({
+              accountConfig,
+              accountId,
+              configPath,
+            }),
+          );
+          gatewayAccountReplaced = true;
+        },
+        {
+          timeoutMs: context.timeoutMs,
+          waitAccountId: accountId,
+        },
+      ),
+    );
+    const syncStore = await stage("wait-persisted-sync-cursor", async () =>
+      waitForMatrixSyncStoreWithCursor({
+        accountId,
+        context,
+        stateDir: gatewayStateDir,
         timeoutMs: context.timeoutMs,
-        waitAccountId: accountId,
-      },
+        userId: account.userId,
+      }),
     );
-    const syncStore = await waitForMatrixSyncStoreWithCursor({
-      accountId,
-      context,
-      stateDir: context.gatewayStateDir,
-      timeoutMs: context.timeoutMs,
-      userId: account.userId,
-    });
-    await context.restartGatewayAfterStateMutation(
-      async () => {
-        await deleteMatrixSyncStoreCursor(syncStore);
-      },
-      {
-        timeoutMs: context.timeoutMs,
-        waitAccountId: accountId,
-      },
+    await stage("restart-without-sync-cursor", async () =>
+      context.restartGatewayAfterStateMutation(
+        async () => {
+          await stage("delete-sync-cursor", async () => deleteMatrixSyncStoreCursor(syncStore));
+        },
+        {
+          timeoutMs: context.timeoutMs,
+          waitAccountId: accountId,
+        },
+      ),
     );
-    driver = await createMatrixQaE2eeActorClient(
-      context,
-      "matrix-e2ee-sync-state-loss-crypto-intact",
-      "driver",
+    driver = await stage("create-e2ee-driver", async () =>
+      createMatrixQaE2eeActorClient(context, "matrix-e2ee-sync-state-loss-crypto-intact", "driver"),
     );
+    const activeDriver = driver;
     // Cached client readiness does not imply that this newly created room has synced.
-    await driver.waitForJoinedMember({
-      roomId,
-      timeoutMs: context.timeoutMs,
-      userId: account.userId,
-    });
+    await stage("wait-room-membership", async () =>
+      activeDriver.waitForJoinedMember({
+        roomId,
+        timeoutMs: context.timeoutMs,
+        userId: account.userId,
+      }),
+    );
     const token = buildMatrixQaToken("MATRIX_QA_E2EE_SYNC_LOSS");
-    const driverStartSince = await driver.prime();
-    const rawStartSince = await rawDriver.primeRoom();
-    const driverEventId = await driver.sendTextMessage({
-      body: buildMentionPrompt(account.userId, token),
-      mentionUserIds: [account.userId],
-      roomId,
-    });
-    const decrypted = await driver.waitForRoomEvent({
-      predicate: (event) =>
-        isMatrixQaExactMarkerReply(event, {
-          roomId,
-          sutUserId: account.userId,
-          token,
-        }),
-      roomId,
-      timeoutMs: context.timeoutMs,
-    });
+    const driverStartSince = await stage("prime-e2ee-driver", async () => activeDriver.prime());
+    const rawStartSince = await stage("prime-raw-driver", async () => rawDriver.primeRoom());
+    const driverEventId = await stage("send-encrypted-marker", async () =>
+      activeDriver.sendTextMessage({
+        body: buildMentionPrompt(account.userId, token),
+        mentionUserIds: [account.userId],
+        roomId,
+      }),
+    );
+    const decrypted = await stage("wait-decrypted-reply", async () =>
+      activeDriver.waitForRoomEvent({
+        predicate: (event) =>
+          isMatrixQaExactMarkerReply(event, {
+            roomId,
+            sutUserId: account.userId,
+            token,
+          }),
+        roomId,
+        timeoutMs: context.timeoutMs,
+      }),
+    );
     const reply = buildMatrixReplyArtifact(decrypted.event, token);
     assertTopLevelReplyArtifact("sync-state loss E2EE reply", reply);
-    const encrypted = await rawDriver.waitForRoomEvent({
-      observedEvents: context.observedEvents,
-      predicate: (event) =>
-        event.roomId === roomId &&
-        event.sender === account.userId &&
-        event.type === "m.room.encrypted",
-      roomId,
-      since: rawStartSince,
-      timeoutMs: context.timeoutMs,
-    });
+    const encrypted = await stage("wait-encrypted-reply", async () =>
+      rawDriver.waitForRoomEvent({
+        observedEvents: context.observedEvents,
+        predicate: (event) =>
+          event.roomId === roomId &&
+          event.sender === account.userId &&
+          event.type === "m.room.encrypted",
+        roomId,
+        since: rawStartSince,
+        timeoutMs: context.timeoutMs,
+      }),
+    );
     return {
       details: [
         "gateway sync cursor was deleted while Matrix crypto state stayed intact",
@@ -849,20 +893,24 @@ export async function runMatrixQaE2eeSyncStateLossCryptoIntactScenario(
       ].join("\n"),
     };
   } finally {
-    await driver?.stop().catch(() => undefined);
+    await stage("stop-e2ee-driver", async () => driver?.stop()).catch(() => undefined);
     if (gatewayAccountReplaced) {
-      await context.restartGatewayAfterStateMutation(
-        async () => {
-          await replaceMatrixQaGatewayMatrixAccount({
-            accountConfig: originalAccountConfig,
-            accountId: restoreAccountId,
-            configPath,
-          });
-        },
-        {
-          timeoutMs: context.timeoutMs,
-          waitAccountId: restoreAccountId,
-        },
+      await stage("restore-gateway-account", async () =>
+        context.restartGatewayAfterStateMutation(
+          async () => {
+            await stage("restore-account-config", async () =>
+              replaceMatrixQaGatewayMatrixAccount({
+                accountConfig: originalAccountConfig,
+                accountId: restoreAccountId,
+                configPath,
+              }),
+            );
+          },
+          {
+            timeoutMs: context.timeoutMs,
+            waitAccountId: restoreAccountId,
+          },
+        ),
       );
     }
   }

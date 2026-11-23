@@ -1,0 +1,3 @@
+# Release 2026.11.8: stale fixture contracts, joined deadline cleanup, and safe Matrix diagnostics.
+# Exact net regression-test growth: 39 fixture lines and 16 pricing/diagnostic lines.
+55

@@ -168,6 +168,7 @@ const createWrongAccountContext = () =>
 beforeEach(() => vi.clearAllMocks());
 
 it("awaits target room sync before sending", async () => {
+  const progress = vi.spyOn(console, "info").mockImplementation(() => {});
   const order: string[] = [];
   const replacement = account("replacement", "REPLACEMENT");
   const roomId = "!recovery:matrix-qa.test";
@@ -218,6 +219,20 @@ it("awaits target room sync before sending", async () => {
   });
   expect(order).toEqual(["ready", "ready", "wait", "synced", "send", "ready"]);
   expect(driver.stop).toHaveBeenCalledOnce();
+  const stages = progress.mock.calls.map(([line]) => JSON.parse(String(line)));
+  progress.mockRestore();
+  expect(stages).toContainEqual(
+    expect.objectContaining({ stage: "wait-room-membership", status: "completed" }),
+  );
+  expect(stages).toContainEqual(
+    expect.objectContaining({ stage: "send-encrypted-marker", status: "failed" }),
+  );
+  expect(stages.at(-1)).toEqual(
+    expect.objectContaining({ stage: "restore-gateway-account", status: "completed" }),
+  );
+  expect(JSON.stringify(stages)).not.toMatch(
+    /replacement-token|replacement-password|saved-cursor|send reached/,
+  );
   expect(mocks.replaceMatrixQaGatewayMatrixAccount).toHaveBeenLastCalledWith(
     expect.objectContaining({ accountId: "sut", accountConfig: { enabled: true } }),
   );
