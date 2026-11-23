@@ -25,11 +25,14 @@ export async function openNavigationDrawer(page: Page) {
 }
 
 export async function navigation(page: Page, view: "pages" | "sessions") {
-  const button = page.locator(`[data-navigation-view="${view}"]`).first();
+  const pages = view === "pages";
+  const button = page
+    .locator(pages ? "[data-rail-more]" : `[data-navigation-view="${view}"]`)
+    .first();
   if (!(await inViewport(button))) {
     await openNavigationDrawer(page);
   }
-  if ((await button.getAttribute("aria-pressed")) !== "true") {
+  if ((await button.getAttribute(pages ? "aria-expanded" : "aria-pressed")) !== "true") {
     await button.click();
   }
   await page

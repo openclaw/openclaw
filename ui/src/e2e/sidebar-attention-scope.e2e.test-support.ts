@@ -82,6 +82,8 @@ export async function runSidebarAttentionScopeFlow(params: SidebarAttentionScope
       },
       "cron.list": scopedCronResponses(writerJob),
       "models.authStatus": { providers: [], ts: 1 },
+      // The gateway records the dismissed run; failures carry no run time, so they fail at 0.
+      "cron.acknowledgeFailure": { acknowledgedAtMs: 0 },
     },
   });
   const cronScopeRequestCount = async (agentId: string | null) =>

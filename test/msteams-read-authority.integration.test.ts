@@ -319,7 +319,11 @@ async function createFixture(
     {
       ...capabilityParams,
       operationalRunInstance,
-      receiptAuthority: () => validateAgentRunDelegatedAuthority(delegatedAuthority),
+      receiptAuthority: () => {
+        if (!validateAgentRunDelegatedAuthority(delegatedAuthority)) {
+          throw new Error("agent tool caller authority is no longer active");
+        }
+      },
     },
   );
 

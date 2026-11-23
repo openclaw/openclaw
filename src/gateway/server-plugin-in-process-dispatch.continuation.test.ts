@@ -447,7 +447,11 @@ describe("typed in-process agent continuation authorization", () => {
           agentId: "main",
           sessionKey: "agent:main:requester",
           operationalRunInstance: createOperationalRunInstanceRef("reply-requester"),
-          receiptAuthority: () => receiptCurrent,
+          receiptAuthority: () => {
+            if (!receiptCurrent) {
+              throw new Error("agent tool caller authority is no longer active");
+            }
+          },
           operatorAuthority: operator.authority,
           personalToolParticipants: participants,
         };
@@ -597,7 +601,9 @@ describe("typed in-process agent continuation authorization", () => {
               agentId: "main",
               sessionKey: "agent:main:requester",
               operationalRunInstance: createOperationalRunInstanceRef("finished-spawner"),
-              receiptAuthority: () => false,
+              receiptAuthority: () => {
+                throw new Error("agent tool caller authority is no longer active");
+              },
               operatorAuthority: source.authority,
             },
             () => {

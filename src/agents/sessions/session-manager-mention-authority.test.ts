@@ -185,7 +185,7 @@ it.each([
               if (revoke) {
                 await expect(append).rejects.toMatchObject({
                   name: "MessageInjectionAuthorityError",
-                  message: "Message injection authority is no longer current",
+                  message: "The message input is no longer available. Start a new turn to retry.",
                   // Actor failure serialization preserves name/message, not the nested cause.
                   ...(!retainActor
                     ? {

@@ -199,9 +199,6 @@ export function ApplicationShell(props: {
             "shell--nav-resizing": navResizing(),
           },
         ]}
-        data-background-managed={
-          !view().backgroundReady || view().uiSettings.background !== undefined ? "" : undefined
-        }
         style={{
           "--shell-nav-expanded-width": `${view().expandedNavWidth}px`,
           "--shell-nav-rail-width": `${view().railWidth}px`,

@@ -41,7 +41,6 @@ import {
 } from "../../../packages/gateway-protocol/src/schema/git-coauthor-identity.js";
 import { resolveConfiguredGitHubHost } from "../../agents/github-host.js";
 import { resolveSystemGitHubIdentityStatus } from "../../agents/github-tool-identity.js";
-import { resolveGatewayPersonalToolParticipant } from "../../agents/tools/gateway-caller-context.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { getActiveSecretsRuntimeConfigSnapshot } from "../../secrets/runtime-state.js";
 import { UserChannelIdentityConflictError } from "../../state/user-channel-identities.js";
@@ -96,6 +95,7 @@ import { prepareUserModelAccountAction } from "./users-model-account-access.js";
 import { usersPersonalFileHandlers } from "./users-personal-file.js";
 import {
   prepareAuthenticatedProfile,
+  preparePersonalPreferences,
   prepareProfileMutationAccess,
   prepareUserProfileAdministration,
 } from "./users-profile-access.js";
@@ -129,26 +129,6 @@ function profileError(error: unknown) {
     return errorShape(ErrorCodes.INVALID_REQUEST, error.message);
   }
   return errorShape(ErrorCodes.UNAVAILABLE, formatErrorMessage(error));
-}
-
-function preparePersonalPreferences(client: GatewayRequestHandlerOptions["client"]) {
-  const unavailable =
-    "Personal settings are unavailable in this turn. Ask again yourself with a new message in the OpenClaw app.";
-  try {
-    const participant = resolveGatewayPersonalToolParticipant(
-      client?.internal?.agentRuntimeIdentity,
-      { requireSingleParticipant: true },
-    );
-    return () => {
-      try {
-        participant?.assertCurrent();
-      } catch {
-        throw new Error(unavailable);
-      }
-    };
-  } catch {
-    throw new Error(unavailable);
-  }
 }
 
 function connectHandler<P extends { profileId?: string }>(

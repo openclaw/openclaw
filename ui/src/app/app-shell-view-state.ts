@@ -47,7 +47,6 @@ import {
   isDesktopPanelAvailable,
   isHomePanelAvailable,
 } from "./panel-availability.ts";
-import { resolveProfileAppearancePrefs } from "./server-prefs-profile.ts";
 import { NAV_WIDTH_MAX, normalizeCatalogOpenTarget } from "./settings.ts";
 import type { ShellLayoutOwner } from "./shell-layout-owner.ts";
 import { currentThemeBranding } from "./theme-branding.ts";
@@ -265,13 +264,6 @@ export function readShellView(host: ShellViewHost) {
   const newSessionDisabledReason = newSessionAccess.allowed ? undefined : newSessionAccess.reason;
   const workspacePluginsEnabled = activeRoute !== "plugins" && activeRoute !== "plugin-settings";
   const uiSettings = context.theme.settings;
-  // Unknown profile preferences are not absence. Keep the first shell paint
-  // image-free so a saved None choice cannot download artwork before hydration.
-  const profileId = gatewaySnapshot.selfUser?.id;
-  const backgroundReady =
-    gatewayConnected &&
-    (!profileId ||
-      resolveProfileAppearancePrefs(context.gateway.connection.gatewayUrl, profileId) !== null);
   // The new-session draft shares the chat layout: full-height pane that owns
   // its scrolling and pins the composer dock to the bottom.
   const chatLikeRoute = sessionRoute || activeRoute === "new-session" || activeRoute === "systems";
@@ -475,7 +467,6 @@ export function readShellView(host: ShellViewHost) {
     newSessionDisabledReason,
     workspacePluginsEnabled,
     uiSettings,
-    backgroundReady,
     chatLikeRoute,
     sidebarProperties,
     embedNavigation,

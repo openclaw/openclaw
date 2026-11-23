@@ -26,7 +26,7 @@ it("renders text-only headings without changing UTF-8 citation attribution", () 
     { heading: 2, segments: [{ text: "Findings" }] },
   ]);
   expect(blocks.flatMap((block) => block.segments).filter((segment) => segment.sourceId)).toEqual([
-    { text: "[S1]", sourceId: "S1" },
+    { text: "[S1]", sourceId: "S1", startByte },
   ]);
   expect(blocks.at(-1)?.segments).toEqual([{ text: "<script>unsafe()</script>" }]);
   const invalid = reportBlocks({

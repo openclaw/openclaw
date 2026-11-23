@@ -208,7 +208,11 @@ it.each(["allowed", "revoked", "replaced"] as const)(
                     operatorAuthority: source.authority,
                     operationalRunInstance:
                       createOperationalRunInstanceRef("acp-custody-invocation"),
-                    receiptAuthority: () => invocationOpen,
+                    receiptAuthority: () => {
+                      if (!invocationOpen) {
+                        throw new Error("agent tool caller authority is no longer active");
+                      }
+                    },
                   },
                   () =>
                     createSessionsSendTool({

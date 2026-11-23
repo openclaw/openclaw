@@ -6,14 +6,6 @@ import {
   getInternalToolExecutionPreparer,
 } from "../../../packages/agent-core/src/internal-hooks.js";
 import { createExecutionIdentityAdmissionToken } from "../../audit/execution-identity-admission.js";
-import {
-  bindCommandOwnerAuthority,
-  captureCommandOwnerAssertion,
-} from "../../auto-reply/command-owner-authority.js";
-import {
-  composeSessionSourceAssertion,
-  prepareSessionSourceEffect,
-} from "../../config/sessions/session-source-authority.js";
 import type { GatewayRequestContext } from "../../gateway/server-methods/types.js";
 import {
   claimAgentRunApprovalAuthority,
@@ -34,8 +26,8 @@ import {
 } from "../tool-terminal-presentation.js";
 import type { AnyAgentTool } from "./common.js";
 import {
-  captureGatewayToolCallerAssertion,
   getGatewayToolCallerIdentity as getCaller,
+  prepareGatewayToolCallerAssertion,
   withGatewayToolApprovalOwner,
   withGatewayToolCallerIdentity,
   wrapToolWithGatewayCallerIdentity,
@@ -84,44 +76,19 @@ function makeTool(): AnyAgentTool {
 }
 
 describe("gateway caller context wrapper", () => {
-  it("carries prepared command authority through nested caller receipts without losing revocation", async () => {
-    let active = true;
-    const synchronousSource = vi.fn();
-    const released = vi.fn();
-    const source = composeSessionSourceAssertion([
-      Object.assign(synchronousSource, {
-        prepareSessionSourceEffect: async () => ({ assertCurrent() {}, release: released }),
-      }),
-    ]);
-    const context = {};
-    bindCommandOwnerAuthority(context, {
-      sourceAssertion: source,
-      isCurrent() {
-        expect(this.sourceAssertion).toBe(source);
-        source();
-        return active;
-      },
-    });
-    const owner = expectDefined(captureCommandOwnerAssertion(context), "command owner");
-    const receipt = Object.assign(() => {
-      owner();
-      return true;
-    }, owner);
-    await withCallers(
-      [{ operationalRunInstance: runInstance("prepared-owner"), receiptAuthority: receipt }, {}],
+  it("lets Stop on the caller refuse a prepared watch admission", async () => {
+    const stop = new AbortController();
+    await withCaller(
+      { operationalRunInstance: runInstance("watch-stop"), approvalSignals: [stop.signal] },
       async () => {
-        const assertion = expectDefined(captureGatewayToolCallerAssertion(), "caller assertion");
-        const prepared = await prepareSessionSourceEffect(assertion);
+        const prepared = await prepareGatewayToolCallerAssertion();
         try {
-          prepared.assertCurrent();
-          expect(synchronousSource).not.toHaveBeenCalled();
-          active = false;
-          expect(() => prepared.assertCurrent()).toThrow("Channel operator authority changed");
-          expect(synchronousSource).not.toHaveBeenCalled();
+          prepared.assertCurrent?.();
+          stop.abort(new Error("synthetic Stop"));
+          expect(() => prepared.assertCurrent?.()).toThrow("synthetic Stop");
         } finally {
-          await prepared.release?.();
+          prepared.release();
         }
-        expect(released).toHaveBeenCalledOnce();
       },
     );
   });
@@ -394,8 +361,16 @@ describe("gateway caller context wrapper", () => {
     const run = runInstance("outer");
     let outerActive = sameRun;
     let innerActive = true;
-    const outer = () => outerActive;
-    const inner = () => innerActive;
+    const outer = () => {
+      if (!outerActive) {
+        throw new Error("outer revoked");
+      }
+    };
+    const inner = () => {
+      if (!innerActive) {
+        throw new Error("inner revoked");
+      }
+    };
     const outerSignal = sameRun ? new AbortController().signal : AbortSignal.abort();
     const innerSignal = new AbortController().signal;
     const identity = await withCallers(
@@ -406,13 +381,13 @@ describe("gateway caller context wrapper", () => {
       })),
       getCaller,
     );
-    expect(identity?.receiptAuthority?.()).toBe(true);
+    expect(() => identity?.receiptAuthority?.()).not.toThrow();
     if (sameRun) {
       outerActive = false;
-      expect(identity?.receiptAuthority?.()).toBe(false);
+      expect(() => identity?.receiptAuthority?.()).toThrow("outer revoked");
       outerActive = true;
       innerActive = false;
-      expect(identity?.receiptAuthority?.()).toBe(false);
+      expect(() => identity?.receiptAuthority?.()).toThrow("inner revoked");
       expect(identity?.approvalSignals).toEqual([outerSignal, innerSignal]);
     } else {
       expect(identity?.approvalSignals).toEqual([innerSignal]);

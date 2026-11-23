@@ -225,10 +225,8 @@ export function createHostChannelInboundEventContextBuilder<
             channelPrincipal: ownerPrincipal,
             recoveryReference: authority.recoveryReference,
             operatorAuthority,
-            isCurrent: () =>
-              owner.isLive() &&
-              owner.resolveGatewayContext?.() === gateway &&
-              authority.isCurrent(gateway.getRuntimeConfig()),
+            // The owner decision above is fixed at admission; only the ingress lifetime ends it.
+            isCurrent: () => owner.isLive() && owner.resolveGatewayContext?.() === gateway,
           });
         };
         bindParticipants();

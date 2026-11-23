@@ -68,6 +68,11 @@ export async function restoreGatewayQueuedOperatorRecovery(params: QueuedRecover
   return admitStart(params, "operator.sessions.write", "sending messages");
 }
 
+/** A queued Talk consult starts on the grant that created it: operator.talk, or write. */
+export async function restoreTalkConsultOperator(params: QueuedRecoveryParams) {
+  return admitStart(params, "operator.talk", "using Talk");
+}
+
 /** Scheduled automations start on the grant that creates them: operator.cron, or write. */
 export async function restoreScheduledAutomationOperator(params: QueuedRecoveryParams) {
   return admitStart(params, "operator.cron", "running this automation");
@@ -76,7 +81,7 @@ export async function restoreScheduledAutomationOperator(params: QueuedRecoveryP
 /** Admission only narrows scopes; a start also needs its grant. Channel senders need none. */
 async function admitStart(
   params: QueuedRecoveryParams,
-  grant: "operator.sessions.write" | "operator.cron",
+  grant: "operator.sessions.write" | "operator.talk" | "operator.cron",
   action: string,
 ): Promise<RestoredGatewayOperatorAuthority> {
   const admitted = await admitQueuedSource(params);

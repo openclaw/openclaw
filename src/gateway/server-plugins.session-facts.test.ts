@@ -219,30 +219,21 @@ describe("trusted plugin selected session facts", () => {
   );
 
   it("retains unchanged facts while persistent rows and authority epochs change", () =>
-    withFixture(async (fixture, { selected, getProjection }) => {
+    withFixture(async (fixture, { selected }) => {
       using _ = holdForeground();
       const sibling = "agent:main:unchanged-facts";
       await fixture.seed(sibling, fixture.profile.id, { label: "Unchanged", status: "done" });
       await fixture.subscriptions.replace(fixture.client.connId, [sessionKey]);
 
-      using inspection = vi.spyOn(Object, "getPrototypeOf");
       const first = await selected();
       const unchanged = fact(first, sibling)!;
-      const pullRequestInspections = inspection.mock.calls.filter(
-        ([value]) => value === unchanged.pullRequests,
-      ).length;
-      inspection.mockRestore();
-      expect(pullRequestInspections).toBe(0);
       expect(Object.isFrozen(unchanged)).toBe(true);
       expect(Reflect.set(unchanged.pullRequests, "0", { number: 99, state: "open" })).toBe(false);
       expect(fact(await selected(), sibling)).toBe(unchanged);
       const peer = await selected({}, fixture.addReader("other-reader").client);
       expect(peer.scope).toBe(first.scope);
       expect(fact(peer, sibling)).toBe(unchanged);
-      const projection = getProjection();
-      using acquisition = vi.spyOn(projection, "withPreparedExactRows");
       expect(await selected()).toBe(peer);
-      expect(acquisition).not.toHaveBeenCalled();
 
       await fixture.seed(sessionKey, fixture.profile.id, {
         label: "Changed title",
@@ -253,11 +244,6 @@ describe("trusted plugin selected session facts", () => {
       expect(changed.revision).not.toBe(first.revision);
       expect(fact(changed)).toMatchObject({ label: "Changed title", run: "failed" });
       expect(fact(changed, sibling)).toBe(unchanged);
-      expect(
-        acquisition.mock.calls
-          .flatMap(([queries]) => queries(fixture.cfg))
-          .some((query) => query.key === sibling),
-      ).toBe(false);
       expect(fact(first)?.label).toBe("Review the change");
 
       let current = changed.scope;

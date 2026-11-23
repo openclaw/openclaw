@@ -130,7 +130,11 @@ async function inAdminRun<T>(
           ...callerIdentity,
           operationalRunInstance,
           approvalAuthority: authority,
-          receiptAuthority: () => agentRuns.validateAgentRunDelegatedAuthority(authority),
+          receiptAuthority: () => {
+            if (!agentRuns.validateAgentRunDelegatedAuthority(authority)) {
+              throw new Error("agent tool caller authority is no longer active");
+            }
+          },
         },
         () => run(capability),
       ),

@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { resolveTimestampMsToIsoString } from "@openclaw/normalization-core/number-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import type { AssistantMessage } from "../../llm/types.js";
+import type { AssistantHistoryMessage } from "../../llm/types.js";
 import { canonicalizePersistedUserMessageMedia } from "../../media/media-facts.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import type {
@@ -142,7 +142,7 @@ function createTranscriptMessageEvent<TMessage>(params: {
 export function prepareInitialAssistantTranscript(params: {
   sessionId: string;
   cwd?: string;
-  message: AssistantMessage;
+  message: AssistantHistoryMessage;
   idempotencyKey?: string;
 }) {
   const prepared = prepareTranscriptMessageAppendForWorker({

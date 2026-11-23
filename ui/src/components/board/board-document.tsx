@@ -445,7 +445,9 @@ function BoardDocumentContent(
         </Show>
         <Show when={state().kind === "error"}>
           <div class="board-document__state board-document__state--error" role="alert">
-            {t("dashboardDocument.loadFailed", { error: state().error })}
+            {props.passive
+              ? state().error
+              : t("dashboardDocument.loadFailed", { error: state().error })}
           </div>
         </Show>
         <Show when={["missing-session", "not-found", "unavailable"].includes(state().kind)}>

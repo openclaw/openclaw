@@ -2811,12 +2811,17 @@ require("node:fs").writeFileSync("scheduler-restart", process.env.OPENCLAW_UPGRA
     }
   });
 
+  it("keeps release decision and drain on Blacksmith independently of global CI routing", () => {
+    const watcher = readWorkflow(".github/workflows/full-release-state-watcher.yml");
+    expect(watcher.jobs.watch["runs-on"]).toBe("blacksmith-2vcpu-ubuntu-2404");
+    expect(watcher.jobs.watch["timeout-minutes"]).toBe(720);
+    expect(watcher.on.workflow_call.inputs.runner_label).toEqual({
+      type: "string",
+      required: true,
+    });
+  });
+
   it.each([
-    {
-      file: "full-release-state-watcher.yml",
-      runner: "blacksmith-2vcpu-ubuntu-2404",
-      job: "watch",
-    },
     {
       file: "openclaw-npm-preflight.yml",
       runner: "blacksmith-8vcpu-ubuntu-2404",
