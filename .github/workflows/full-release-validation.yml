@@ -2702,9 +2702,10 @@ jobs:
         release_execution_plan,
       ]
     if: always()
-    uses: openclaw/openclaw/.github/workflows/full-release-state-watcher.yml@359602511237fb5e448cdea288c0e9ca3d961a78
+    uses: openclaw/openclaw/.github/workflows/full-release-state-watcher.yml@b5e0ed2fdd00553915067a258603606515236c58
     with:
       mode: decision
+      runner_label: blacksmith-2vcpu-ubuntu-2404
       fail_fast: ${{ inputs.fail_fast }}
       release_profile: ${{ inputs.release_profile }}
       rerun_group: ${{ inputs.rerun_group }}
@@ -2727,9 +2728,10 @@ jobs:
         release_execution_plan,
       ]
     if: always()
-    uses: openclaw/openclaw/.github/workflows/full-release-state-watcher.yml@359602511237fb5e448cdea288c0e9ca3d961a78
+    uses: openclaw/openclaw/.github/workflows/full-release-state-watcher.yml@b5e0ed2fdd00553915067a258603606515236c58
     with:
       mode: drain
+      runner_label: blacksmith-2vcpu-ubuntu-2404
       fail_fast: ${{ inputs.fail_fast }}
       release_profile: ${{ inputs.release_profile }}
       rerun_group: ${{ inputs.rerun_group }}

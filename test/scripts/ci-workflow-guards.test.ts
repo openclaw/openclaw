@@ -2720,6 +2720,10 @@ require("node:fs").writeFileSync("scheduler-restart", process.env.OPENCLAW_UPGRA
     const watcher = readWorkflow(".github/workflows/full-release-state-watcher.yml");
     expect(watcher.jobs.watch["runs-on"]).toBe("blacksmith-2vcpu-ubuntu-2404");
     expect(watcher.jobs.watch["timeout-minutes"]).toBe(720);
+    expect(watcher.on.workflow_call.inputs.runner_label).toEqual({
+      type: "string",
+      required: true,
+    });
   });
 
   it.each([

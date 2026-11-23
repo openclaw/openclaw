@@ -406,7 +406,10 @@ independently of `OPENCLAW_CI_RUNNER_BACKEND` and runner-group variables.
 This release-only route does not change normal CI or nightly runner selection.
 Full Release Validation pins the reusable watcher to an immutable revision; when
 changing that definition, update both caller pins. The watcher checks out the
-caller's pinned tooling and admitted verifier. Both watchers retain their
+caller's pinned tooling and admitted verifier with full source and installs the
+selected verifier's frozen dependencies. The runner_label input is retained
+for the merged reusable-workflow interface; both release callers supply the
+Blacksmith label without provisioning Boat. Both watchers retain their
 720-minute budgets and full evidence collection.
 
 The nightly watcher also keeps its 720-minute budget. When

@@ -43,30 +43,38 @@ function step(job: string, name: string) {
   return match;
 }
 
-it("keeps release collectors independent of Boat provisioning without changing nightly", () => {
-  expect(workflow.jobs.boat_release_runners).toBeUndefined();
-  expect(workflow.jobs.cleanup_boat_release_runners).toBeUndefined();
+it("runs both release callers independently of Boat with the pinned Blacksmith watcher", () => {
+  const revision = "b5e0ed2fdd00553915067a258603606515236c58";
+  expect(workflow.jobs).not.toHaveProperty("boat_release_runners");
+  expect(workflow.jobs).not.toHaveProperty("cleanup_boat_release_runners");
   for (const name of ["release_decision", "diagnostic_drain"]) {
-    expect(workflowJob(name).needs).not.toContain("boat_release_runners");
-    expect(workflowJob(name).if).toBe("always()");
-    expect(workflowJob(name).with).not.toHaveProperty("runner_label");
-  }
-});
-
-it("pins both hosted callers to the Q-ledger-aware watcher definition", () => {
-  const revision = "359602511237fb5e448cdea288c0e9ca3d961a78";
-  for (const name of ["release_decision", "diagnostic_drain"]) {
+    const caller = workflowJob(name);
+    expect(caller.needs).toEqual([
+      "resolve_target",
+      "prepare_npm_package",
+      "qualify_npm_package",
+      "prepare_plugin_npm",
+      "prepare_docker_release",
+      "release_execution_plan",
+    ]);
+    expect(caller.if).toBe("always()");
+    expect(caller.with?.runner_label).toBe("blacksmith-2vcpu-ubuntu-2404");
     expect((workflowJob(name) as { uses?: string }).uses).toBe(
       "openclaw/openclaw/.github/workflows/full-release-state-watcher.yml@" + revision,
     );
   }
-  // Independently verified against the immutable selected revision; no Git-history
-  // dependency in shallow CI checkouts. A changed watcher needs a new verified pin.
-  const selectedSource = readFileSync(".github/workflows/full-release-state-watcher.yml", "utf8");
+  // Retain the exact pinned definition independently of current watcher edits.
+  // This fixture is the git blob at revision above, so shallow CI needs no history.
+  const selectedSource = readFileSync(
+    "test/scripts/fixtures/full-release-state-watcher-b5e0ed.yml",
+    "utf8",
+  );
   expect(createHash("sha256").update(selectedSource).digest("hex")).toBe(
-    "ac9d013a2ad46a6f3a404eb7998e303b27052b112b70ff638962485148478763",
+    "532e32b7cdcc38587774a7f24853b113596fb51998f6cfb6f87819ce69c953ef",
   );
   const selected = parse(selectedSource);
+  expect(selected.jobs.watch["runs-on"]).toBe("blacksmith-2vcpu-ubuntu-2404");
+  expect(selected.jobs.watch["timeout-minutes"]).toBe(720);
   expect(selected.jobs.watch.env.OPENCLAW_RELEASE_WAIVERS_PATH).toBe(
     "${{ github.workspace }}/scripts/lib/release-validation-waivers.json",
   );
@@ -75,6 +83,30 @@ it("pins both hosted callers to the Q-ledger-aware watcher definition", () => {
       (entry: { name: string }) => entry.name === "Checkout release state tooling",
     ).if,
   ).toBeUndefined();
+});
+
+it("materializes full watcher checkouts and frozen Q/no-Q dependencies", () => {
+  for (const name of [
+    "Checkout release state tooling",
+    "Checkout admitted qualification verifier",
+  ]) {
+    expect(step("watch", name).with).not.toHaveProperty("sparse-checkout");
+  }
+  const installs = workflowJob("watch").steps.filter(
+    (entry) => entry.name === "Install qualification verifier dependencies",
+  );
+  expect(installs).toEqual([
+    expect.objectContaining({
+      if: "inputs.qualification_workflow_sha == ''",
+      "working-directory": ".",
+      run: "pnpm install --frozen-lockfile --prefer-offline --ignore-scripts",
+    }),
+    expect.objectContaining({
+      if: "inputs.qualification_workflow_sha != ''",
+      "working-directory": "qualification-verifier",
+      run: "pnpm install --frozen-lockfile --prefer-offline --ignore-scripts",
+    }),
+  ]);
 });
 
 it("runs release tooling only from the trusted revision without persisted credentials", () => {
