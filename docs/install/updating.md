@@ -121,6 +121,10 @@ The Gateway's `update.run` and `openclaw update` both use one path:
    it restores the previous release and the SQLite migration originals.
 6. The Gateway that serves after the switch records the outcome. Only a Gateway
    that runs the target build records success.
+7. After success is recorded, the serving release runs advisory Doctor inspections
+   in the background. The same update details receive their results without a page
+   reload. Only warning and error findings add advice; inspections do not delay
+   completion, fail the update, or trigger rollback.
 
 Rules for update changes:
 
@@ -179,8 +183,7 @@ Candidate Doctor's retirement-only pass retains deferred advisory inspection
 selectors in its result. Shipped v2026.11.7 and v2026.11.10-beta.1 updaters read
 the last Doctor result and run those inspections after Gateway readiness; a
 narrow repair pass must not replace them with an empty list. The candidate must
-contain this fix. Release updates in `src/update/` do not yet run these advisory
-inspections after commit.
+contain this fix.
 
 At Gateway start, a preparation lock whose owner is dead or has the new Gateway's
 PID is released after its run is recorded as failed with reason `interrupted`.
