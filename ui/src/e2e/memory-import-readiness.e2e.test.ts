@@ -78,7 +78,7 @@ suite.define(() => {
         });
         await page.goto(suite.server.baseUrl + "memory-import");
         const section = page.locator('[data-provider-id="claude"]');
-        // A title attribute can contain the whole path while the actual touch UI cuts it off.
+        // The recovery location is a detail, not a compact list label.
         const lastCharacterFits = (el: Element) => {
           const text = el.firstChild!;
           const range = document.createRange();
@@ -92,7 +92,19 @@ suite.define(() => {
         };
         const file = section.locator(".memory-import__files code");
         await file.waitFor();
-        expect.soft(await file.evaluate(lastCharacterFits)).toBe(true);
+        expect(await file.textContent()).toBe(relativePath);
+        expect(await file.getAttribute("title")).toBe(item.source);
+        const compact = await file.locator(".memory-import__filename").evaluate((el) => {
+          const text = el.querySelector("bdi")!.firstChild!;
+          const range = document.createRange();
+          range.selectNodeContents(text);
+          const lines = new Set(Array.from(range.getClientRects(), (r) => r.top));
+          range.setStart(text, text.textContent!.lastIndexOf("_") + 1);
+          const ending = range.getBoundingClientRect();
+          const box = el.getBoundingClientRect();
+          return lines.size === 1 && ending.left >= box.left - 1 && ending.right <= box.right + 1;
+        });
+        expect(compact).toBe(true);
         await section.getByRole("button", { name: "Import selected" }).tap();
         await page.locator('[data-test-id="memory-import-confirm"]').press("Enter");
         const report = section.locator(".memory-import__result-path code");

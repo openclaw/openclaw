@@ -5,9 +5,9 @@ import type {
   MigrationsMemoryApplyResult,
 } from "../../../../packages/gateway-protocol/src/schema/migrations.js";
 import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
+import { Checkbox } from "../../components/solid/checkbox.tsx";
 import "../../components/agent-select-registration.ts";
 import "../../components/modal-dialog.tsx";
-import { Checkbox } from "../../components/solid/checkbox.tsx";
 import { DialogHeader } from "../../components/solid/dialog-header.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import { InlineAlert } from "../../components/solid/inline-alert.tsx";
@@ -26,6 +26,7 @@ import { normalizeAgentLabel } from "../../lib/agents/display.ts";
 import { formatUiError, formatUiExternalText } from "../../lib/format-error.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { ModelProviderIcon } from "../../lib/reactive/provider-presentation.tsx";
+import { ImportFileLabel } from "./import-file-label.tsx";
 import "../../styles/memory-import.css";
 import type { MemoryImportViewProps } from "./view-types.ts";
 
@@ -134,7 +135,7 @@ function Collection(props: {
                 <span class="memory-import__file-icon" aria-hidden="true">
                   <Icon name="fileText" />
                 </span>
-                <code title={item().source ?? artifactLabel(item())}>{artifactLabel(item())}</code>
+                <ImportFileLabel path={artifactLabel(item())} source={item().source} />
                 <span
                   class={[
                     "memory-import__file-status",

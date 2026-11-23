@@ -119,10 +119,29 @@
   height: 14px;
 }
 
-.memory-import__files code {
+.memory-import__file-label {
+  display: grid;
+  min-width: 0;
   color: var(--text);
   font-size: 10px;
-  overflow-wrap: anywhere;
+}
+
+.memory-import__file-label > span {
+  min-width: 0;
+  overflow: hidden;
+  direction: rtl;
+  text-align: match-parent;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.memory-import__filename {
+  grid-row: 1;
+}
+
+.memory-import__folder {
+  grid-row: 2;
+  color: var(--muted);
 }
 
 .memory-import__file-status {
