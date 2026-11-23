@@ -478,7 +478,9 @@ it("refuses an early Git release updater's schema change from --check before any
 
   expect(stdout.join("")).toBe("");
   expect(process.exitCode).toBe(1);
-  expect(stderr.join("")).toContain("Nothing was changed, and the Gateway keeps serving");
+  expect(stderr.join("")).toContain(
+    "The update stopped before switching releases; the Gateway was not touched.",
+  );
 });
 
 it.each([false, true])(

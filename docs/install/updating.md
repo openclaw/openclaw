@@ -2107,18 +2107,18 @@ TypeScript sources ([#201874](https://github.com/openclaw/openclaw/issues/201874
 web search provider is configured, their Gateway fails at startup.
 
 The updater in a checkout built from `main` between 2026-11-17 and 2026-11-19 (it builds
-releases under `git-install/releases/<release>/build`) cannot finish an update that changes a
-database schema: it refuses before restarting the Gateway, and after a migration neither it nor
-the checkout's `openclaw` command can open the migrated data. The new release's check stops that
-update before anything changes, keeps the Gateway serving, and prints the one-time rebuild to run
-from the checkout:
+releases under `git-install/releases/<release>/build`) never rebuilds the checkout, so after a
+database migration neither it nor the checkout's `openclaw` command can open the migrated data.
+When the new release would migrate state, its check stops that update before the release is
+switched, leaves the Gateway untouched, and prints a one-time rebuild to run from the checkout:
 
 ```sh
-openclaw gateway stop --force && git pull --ff-only && pnpm install --frozen-lockfile && pnpm build && openclaw doctor --fix && openclaw gateway install --force && openclaw gateway start
+git pull --ff-only && openclaw gateway stop --force && pnpm install --frozen-lockfile && pnpm build && openclaw doctor --fix && openclaw gateway install --force; openclaw gateway start
 ```
 
-Later `openclaw update` runs then use the rebuilt checkout's updater. Updates that change no
-schema still go through that older updater.
+The rebuild also moves the service back to the checkout, which ends the startup failure above.
+Later `openclaw update` runs use the rebuilt checkout's updater. Updates that change no schema
+still go through the older updater.
 
 The inspection reports data at risk only on evidence: a schema that moved, or a store it
 cannot read after a new-version Doctor or boot check may have written it. When no

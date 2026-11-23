@@ -5,7 +5,10 @@ import { afterEach, expect, it } from "vitest";
 import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db-contract.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
-import { refuseEarlyGitReleaseSchemaChange } from "./update-candidate-check-early-release.js";
+import {
+  EARLY_GIT_RELEASE_REBUILD,
+  refuseEarlyGitReleaseSchemaChange,
+} from "./update-candidate-check-early-release.js";
 
 const roots: string[] = [];
 afterEach(() => cleanupTempDirs(roots));
@@ -24,8 +27,9 @@ function sqlite(file: string, version: number, setup = "") {
 function install(params: {
   state?: number;
   agents?: number[];
-  layout?: "build" | "current";
+  layout?: "build" | "current" | "package";
   legacyLink?: boolean;
+  registered?: boolean;
 }) {
   const stateDir = makeTempDir(roots, "openclaw-early-release-");
   const prefix = path.join(stateDir, "git-install");
@@ -38,16 +42,17 @@ function install(params: {
     path.join(stateDir, "state", "openclaw.sqlite"),
     params.state ?? OPENCLAW_STATE_SCHEMA_VERSION - 1,
     `CREATE TABLE agent_databases (path TEXT, agent_id TEXT);
-     ${agents.map((file, index) => `INSERT INTO agent_databases VALUES ('${file}', 'a${index}');`).join("\n")}`,
+     ${(params.registered === false ? [] : agents).map((file, index) => `INSERT INTO agent_databases VALUES ('${file}', 'a${index}');`).join("\n")}`,
   );
   const root = path.join(
     prefix,
     "releases",
     "git-b",
-    params.layout === "current" ? "openclaw" : "build",
+    ...{ build: ["build"], current: ["openclaw"], package: ["lib", "node_modules", "openclaw"] }[
+      params.layout ?? "build"
+    ],
   );
   fs.mkdirSync(root, { recursive: true });
-  fs.writeFileSync(path.join(root, ".git"), "gitdir: /home/me/openclaw/.git/worktrees/build\n");
   if (params.legacyLink !== false) {
     fs.mkdirSync(path.join(prefix, "releases", "git-a", "lib", "node_modules", "openclaw"), {
       recursive: true,
@@ -58,7 +63,7 @@ function install(params: {
       path.join(prefix, "lib", "node_modules", "openclaw"),
     );
   }
-  return { root, env: { OPENCLAW_STATE_DIR: stateDir } as NodeJS.ProcessEnv };
+  return { root, stateDir, env: { OPENCLAW_STATE_DIR: stateDir } as NodeJS.ProcessEnv };
 }
 
 it("refuses a schema change for the early release updater and names the rebuild", () => {
@@ -68,32 +73,61 @@ it("refuses a schema change for the early release updater and names the rebuild"
   expect(refusal).toContain(
     `state schema ${OPENCLAW_STATE_SCHEMA_VERSION - 1} to ${OPENCLAW_STATE_SCHEMA_VERSION}, agent schema ${OPENCLAW_AGENT_SCHEMA_VERSION - 1} to ${OPENCLAW_AGENT_SCHEMA_VERSION}`,
   );
-  expect(refusal).toContain("Nothing was changed");
-  expect(refusal?.split("\n").at(-1)).toBe(
-    "cd /home/me/openclaw && openclaw gateway stop --force && git pull --ff-only && pnpm install --frozen-lockfile && pnpm build && openclaw doctor --fix && openclaw gateway install --force && openclaw gateway start",
-  );
+  expect(refusal).toContain("the Gateway was not touched");
+  // The early updater redacts state and home paths out of this output; the step names none.
+  expect(refusal?.split("\n").at(-1)).toBe(EARLY_GIT_RELEASE_REBUILD);
+  expect(EARLY_GIT_RELEASE_REBUILD).not.toMatch(/[\s~]\//u);
 });
 
-it("refuses when only one agent store is older", () => {
-  const { root, env } = install({
-    state: OPENCLAW_STATE_SCHEMA_VERSION,
-    agents: [OPENCLAW_AGENT_SCHEMA_VERSION, OPENCLAW_AGENT_SCHEMA_VERSION - 1],
-  });
-  expect(refuseEarlyGitReleaseSchemaChange(root, env)).toContain(
-    `agent schema ${OPENCLAW_AGENT_SCHEMA_VERSION - 1} to ${OPENCLAW_AGENT_SCHEMA_VERSION}`,
-  );
+it("refuses when one agent store is older, registered or not", () => {
+  for (const registered of [true, false]) {
+    const { root, env } = install({
+      state: OPENCLAW_STATE_SCHEMA_VERSION,
+      agents: [OPENCLAW_AGENT_SCHEMA_VERSION, OPENCLAW_AGENT_SCHEMA_VERSION - 1],
+      registered,
+    });
+    expect(refuseEarlyGitReleaseSchemaChange(root, env)).toContain(
+      `agent schema ${OPENCLAW_AGENT_SCHEMA_VERSION - 1} to ${OPENCLAW_AGENT_SCHEMA_VERSION}`,
+    );
+  }
 });
 
-it("lets the early release updater through when nothing migrates", () => {
+it("finds the early release layout through a linked state directory", () => {
+  const { root, stateDir } = install({});
+  const alias = path.join(makeTempDir(roots, "openclaw-early-release-alias-"), "state");
+  fs.symlinkSync(stateDir, alias);
+  expect(refuseEarlyGitReleaseSchemaChange(root, { OPENCLAW_STATE_DIR: alias })).not.toBeNull();
+});
+
+it("lets the early release updater through when nothing migrates or state is unreadable", () => {
   for (const agents of [[OPENCLAW_AGENT_SCHEMA_VERSION], []]) {
     const { root, env } = install({ state: OPENCLAW_STATE_SCHEMA_VERSION, agents });
     expect(refuseEarlyGitReleaseSchemaChange(root, env)).toBeNull();
   }
+  const newer = install({ state: OPENCLAW_STATE_SCHEMA_VERSION + 1, agents: [] });
+  expect(refuseEarlyGitReleaseSchemaChange(newer.root, newer.env)).toBeNull();
+  const unreadable = install({});
+  fs.writeFileSync(path.join(unreadable.stateDir, "state", "openclaw.sqlite"), "not a database");
+  expect(refuseEarlyGitReleaseSchemaChange(unreadable.root, unreadable.env)).toBeNull();
 });
 
 it("never refuses another updater, which can finish a schema change", () => {
-  for (const shape of [{ layout: "current" as const }, { legacyLink: false }]) {
+  for (const shape of [
+    { layout: "current" as const },
+    { layout: "package" as const },
+    { legacyLink: false },
+  ]) {
     const { root, env } = install(shape);
     expect(refuseEarlyGitReleaseSchemaChange(root, env)).toBeNull();
   }
+  // A `build` directory outside this state directory's releases is not the early layout.
+  const { env } = install({});
+  const elsewhere = path.join(
+    makeTempDir(roots, "openclaw-early-release-other-"),
+    "releases",
+    "x",
+    "build",
+  );
+  fs.mkdirSync(elsewhere, { recursive: true });
+  expect(refuseEarlyGitReleaseSchemaChange(elsewhere, env)).toBeNull();
 });
