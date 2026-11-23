@@ -597,7 +597,8 @@ export async function runExecProcess({
     });
 
   // Sandboxed reads cannot reach host temp files, and durable commands keep their own log.
-  if (!opts.sandbox && !opts.durable) {
+  // GitHub App execution must not persist potentially credential-bearing raw output.
+  if (!opts.sandbox && !opts.durable && !opts.githubApp) {
     session.outputFile = openPrivateTempFileStream("openclaw-exec", EXEC_OUTPUT_FILE_MAX_BYTES);
   }
   try {
