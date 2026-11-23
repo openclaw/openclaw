@@ -314,7 +314,9 @@ describe("runReplyAgent runtime config", () => {
       }
       await withTestDir({ prefix: "openclaw-preflight-heartbeat-" }, async (tempDir) => {
         const runtime = await createStoredRuntime(tempDir, {
-          totalTokens: 95_000,
+          // Fitting maintenance waits for the attempt's request boundary; a prompt over the
+          // window still compacts in reply preflight.
+          totalTokens: flushing ? 95_000 : 105_000,
           totalTokensFresh: true,
           totalTokensVersion: SESSION_TOTAL_TOKENS_VERSION,
         });

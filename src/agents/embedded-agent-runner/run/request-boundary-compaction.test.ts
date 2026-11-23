@@ -179,7 +179,12 @@ async function fixture(options: { boundary?: boolean; history?: SessionManager }
           assertActive: () => {},
           withTranscriptWrite,
           onPrecheck,
-          hookContext: { sessionId: session.sessionId, sessionKey: "agent:main:main" },
+          hookContext: {
+            sessionId: session.sessionId,
+            sessionKey: "agent:main:main",
+            sessionAgentId: "main",
+            workspaceDir: "/tmp/warm-workspace",
+          },
           postCompaction: { sessionKey: "agent:main:main", sessionFile: "warm.sqlite" },
         });
   const submit = (prompt = "current request") =>
