@@ -6869,42 +6869,50 @@ render_github_release_notes() { cp "$2" "$1"; printf '%s\\n' '{"verificationIncl
     expect(events).toContain("verify:workflow=refs/tags/release-publish/aaaaaaaaaaaa-42");
   });
 
-  it.each(["success", "binding", "assets"] as const)(
-    "keeps verifier success separate from postpublish %s completion",
-    (outcome) => {
-      const version = "2026.9.1";
-      const fixture = createReleasePublishFixture(
-        {
-          RELEASE_TAG: `v${version}`,
-          PUBLISH_OPENCLAW_NPM: "false",
-        },
-        {
-          functions: `
+  it.each([
+    "success",
+    "binding",
+    "assets",
+    "recovery",
+    "recovery-attempt",
+    "recovery-producer",
+    "recovery-target",
+  ] as const)("keeps verifier success separate from postpublish %s completion", (outcome) => {
+    const version = "2026.9.1";
+    const recovery = outcome.startsWith("recovery");
+    const bindingFailure = outcome === "binding" || (recovery && outcome !== "recovery");
+    const fixture = createReleasePublishFixture(
+      {
+        RELEASE_TAG: `v${version}`,
+        PUBLISH_OPENCLAW_NPM: "false",
+      },
+      {
+        functions: `
 ${shellFunctionSource(readFileSync("scripts/lib/release-publish-children.sh", "utf8"), "verify_published_release")}
 ${outcome === "assets" ? "upload_release_evidence_assets() { echo asset-upload-denied >&2; return 17; }" : ""}
 `,
-        },
-      );
-      writeJson(join(fixture.root, "package.json"), { type: "module", version });
-      mkdirSync(join(fixture.root, "extensions"));
-      mkdirSync(join(fixture.root, "scripts"));
-      writeFileSync(join(fixture.root, "scripts/openclaw-npm-postpublish-verify.ts"), "");
-      copyFileSync(
-        resolve("scripts/release-verify-beta.ts"),
-        join(fixture.root, ".release-harness/scripts/release-verify-beta.ts"),
-      );
-      const bin = join(fixture.root, "bin");
-      mkdirSync(bin);
-      writeExecutable(
-        join(bin, "git"),
-        `#!/bin/sh
+      },
+    );
+    writeJson(join(fixture.root, "package.json"), { type: "module", version });
+    mkdirSync(join(fixture.root, "extensions"));
+    mkdirSync(join(fixture.root, "scripts"));
+    writeFileSync(join(fixture.root, "scripts/openclaw-npm-postpublish-verify.ts"), "");
+    copyFileSync(
+      resolve("scripts/release-verify-beta.ts"),
+      join(fixture.root, ".release-harness/scripts/release-verify-beta.ts"),
+    );
+    const bin = join(fixture.root, "bin");
+    mkdirSync(bin);
+    writeExecutable(
+      join(bin, "git"),
+      `#!/bin/sh
 if [ "$PWD" = "$GITHUB_WORKSPACE" ] && [ "$*" = "rev-parse HEAD" ]; then printf '%s\\n' "$TARGET_SHA"; else exec /usr/bin/git "$@"; fi
 `,
-      );
-      for (const command of ["npm", "gh"]) {
-        writeExecutable(
-          join(bin, command),
-          `#!${process.execPath}
+    );
+    for (const command of ["npm", "gh"]) {
+      writeExecutable(
+        join(bin, command),
+        `#!${process.execPath}
 const args = process.argv.slice(2);
 if (args[0] === "view") {
   console.log(JSON.stringify({ version: "${version}", "dist-tags.beta": "${version}", "dist.integrity": "sha512-fixture", "dist.tarball": "https://example.invalid/openclaw.tgz" }));
@@ -6912,70 +6920,90 @@ if (args[0] === "view") {
   console.log(JSON.stringify({ workflowName: args[2] === "101" ? "Plugin NPM Release" : "OpenClaw NPM Release", headBranch: "main", event: "workflow_dispatch", status: "completed", conclusion: "success", jobs: [] }));
 } else { throw new Error("Unexpected verifier mutation: " + args.join(" ")); }
 `,
-        );
-      }
-      const manifest = join(fixture.root, "manifest");
-      mkdirSync(manifest);
-      writeJson(join(manifest, "full-release-validation-manifest.json"), {
-        runId: "66",
-        runAttempt: outcome === "binding" ? "4" : "3",
-        workflowRef: "release-ci/tooling",
-        targetSha: "a".repeat(40),
-      });
-      const job = workflowJob(RELEASE_PUBLISH_WORKFLOW, "publish");
-      const env = {
-        PATH: `${bin}:${process.env.PATH}`,
-        FULL_RELEASE_VALIDATION_MANIFEST_DIR: manifest,
-        CHILD_OPENCLAW_NPM_RUN_ID: "404",
-      };
-      const initialized = fixture.run(workflowStep(job, "Initialize postpublish diagnostics"), env);
-      expect(initialized.status, initialized.stderr).toBe(0);
-      const completed = fixture.run(workflowStep(job, "Complete publish workflows"), env);
-      expect(completed.status, completed.stderr).toBe(
-        outcome === "success" ? 0 : outcome === "assets" ? 17 : 1,
       );
-      const terminal = fixture.run(workflowStep(job, "Record postpublish outcome"), {
-        ...env,
-        COMPLETION_OUTCOME: outcome === "success" ? "success" : "failure",
-        PUBLISH_JOB_STATUS: outcome === "success" ? "success" : "failure",
-      });
-      expect(terminal.status, terminal.stderr).toBe(0);
-      const diagnostic = readJson(
-        join(fixture.root, "evidence/release-postpublish-diagnostics.json"),
-      );
-      expect(diagnostic).toMatchObject({
-        verification: "success",
-        stages: {
-          coreNpm: { state: "success" },
-          clawHub: { state: "skipped" },
-          binding: { state: outcome === "binding" ? "failure" : "success" },
-          assets: {
-            state:
-              outcome === "binding" ? "unattempted" : outcome === "assets" ? "failure" : "success",
-          },
+    }
+    const manifest = join(fixture.root, "manifest");
+    mkdirSync(manifest);
+    symlinkSync(
+      resolve("scripts/lib/release-evidence-identity.mjs"),
+      join(fixture.root, ".release-harness/scripts/lib/release-evidence-identity.mjs"),
+      "file",
+    );
+    const validationPath = join(manifest, "full-release-validation-manifest.json");
+    writeJson(validationPath, {
+      runId: recovery ? "55" : "66",
+      runAttempt: outcome === "binding" ? "4" : "3",
+      workflowRef: "release-ci/tooling",
+      targetSha: (outcome === "recovery-target" ? "b" : "a").repeat(40),
+      ...(recovery
+        ? {
+            recovery: {
+              sourceRunId: "55",
+              sourceRunAttempt: 3,
+              producer: {
+                runId: outcome === "recovery-producer" ? 77 : 66,
+                runAttempt: outcome === "recovery-attempt" ? 4 : 3,
+                workflowHeadBranch: "release-publish/recovered-42",
+              },
+            },
+          }
+        : {}),
+    });
+    const originalValidation = readFileSync(validationPath, "utf8");
+    const job = workflowJob(RELEASE_PUBLISH_WORKFLOW, "publish");
+    const env = {
+      PATH: `${bin}:${process.env.PATH}`,
+      FULL_RELEASE_VALIDATION_MANIFEST_DIR: manifest,
+      CHILD_OPENCLAW_NPM_RUN_ID: "404",
+    };
+    const initialized = fixture.run(workflowStep(job, "Initialize postpublish diagnostics"), env);
+    expect(initialized.status, initialized.stderr).toBe(0);
+    const completed = fixture.run(workflowStep(job, "Complete publish workflows"), env);
+    expect(completed.status, completed.stderr).toBe(
+      bindingFailure ? 1 : outcome === "assets" ? 17 : 0,
+    );
+    const terminal = fixture.run(workflowStep(job, "Record postpublish outcome"), {
+      ...env,
+      COMPLETION_OUTCOME: completed.status === 0 ? "success" : "failure",
+      PUBLISH_JOB_STATUS: completed.status === 0 ? "success" : "failure",
+    });
+    expect(terminal.status, terminal.stderr).toBe(0);
+    const diagnostic = readJson(
+      join(fixture.root, "evidence/release-postpublish-diagnostics.json"),
+    );
+    expect(diagnostic).toMatchObject({
+      verification: "success",
+      stages: {
+        coreNpm: { state: "success" },
+        clawHub: { state: "skipped" },
+        binding: { state: bindingFailure ? "failure" : "success" },
+        assets: {
+          state: bindingFailure ? "unattempted" : outcome === "assets" ? "failure" : "success",
         },
-        jobOutcomeBeforeArtifactUploads: outcome === "success" ? "success" : "failure",
+      },
+      jobOutcomeBeforeArtifactUploads: completed.status === 0 ? "success" : "failure",
+    });
+    const canonical = join(fixture.root, "evidence/release-postpublish-evidence.json");
+    expect(readFileSync(validationPath, "utf8")).toBe(originalValidation);
+    expect(existsSync(canonical)).toBe(!bindingFailure);
+    if (!bindingFailure) {
+      const receipt = readJson(canonical);
+      expect(receipt).toMatchObject({
+        version: 1,
+        releasePublishRunId: "44",
+        workflowRuns: expect.arrayContaining([
+          expect.objectContaining({
+            id: "66",
+            runAttempt: "3",
+            targetSha: "a".repeat(40),
+            workflowRef: recovery ? "release-publish/recovered-42" : "release-ci/tooling",
+          }),
+        ]),
       });
-      const canonical = join(fixture.root, "evidence/release-postpublish-evidence.json");
-      expect(existsSync(canonical)).toBe(outcome !== "binding");
-      if (outcome !== "binding") {
-        const receipt = readJson(canonical);
-        expect(receipt).toMatchObject({
-          version: 1,
-          releasePublishRunId: "44",
-          workflowRuns: expect.arrayContaining([
-            expect.objectContaining({
-              id: "66",
-              runAttempt: "3",
-              targetSha: "a".repeat(40),
-            }),
-          ]),
-        });
-        expect(receipt.kind).toBeUndefined();
-        expect(fixture.outputs().postpublish_evidence_ready).toBe("true");
-      }
-    },
-  );
+      expect(receipt.kind).toBeUndefined();
+      expect(fixture.outputs().postpublish_evidence_ready).toBe("true");
+    }
+  });
 
   it("retains cancelled or skipped verification without authorizing recovery", () => {
     const fixture = createReleasePublishFixture();

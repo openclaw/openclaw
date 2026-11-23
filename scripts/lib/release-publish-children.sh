@@ -1309,7 +1309,7 @@ sync_npm_beta_floor() {
 verify_published_release() {
   local release_version evidence_path canonical_evidence_path
   local expected_attempt expected_id run_attempt run_id run_label run_url target_sha
-  local validation_file workflow_ref verifier
+  local validation_file validation_producer workflow_ref verifier
   local -a verify_args
 
   release_version="${RELEASE_TAG#v}"
@@ -1373,9 +1373,18 @@ verify_published_release() {
     run_label="Authorized Beta Focused Validation"
   else
     validation_file="${FULL_RELEASE_VALIDATION_MANIFEST_DIR}/full-release-validation-manifest.json"
-    run_id="$(jq -er '.runId | select(type == "string" and length > 0)' "${validation_file}")"
-    run_attempt="$(jq -er '.runAttempt | select(type == "string" and test("^[1-9][0-9]*$"))' "${validation_file}")"
-    workflow_ref="$(jq -er '.workflowRef | select(type == "string" and length > 0)' "${validation_file}")"
+    # Prepublish authentication binds the recovery seal and unchanged original
+    # qualification. Project the same producer here; never relabel the manifest.
+    validation_producer="$(node --input-type=module - "${validation_file}" <<'NODE'
+import { readFileSync } from 'node:fs';
+import { releaseEvidenceProducerTuple } from './.release-harness/scripts/lib/release-evidence-identity.mjs';
+const producer = releaseEvidenceProducerTuple(JSON.parse(readFileSync(process.argv[2], 'utf8')));
+console.log(JSON.stringify(producer));
+NODE
+)"
+    run_id="$(jq -er '.runId | tostring | select(test("^[1-9][0-9]*$"))' <<< "${validation_producer}")"
+    run_attempt="$(jq -er '.runAttempt | tostring | select(test("^[1-9][0-9]*$"))' <<< "${validation_producer}")"
+    workflow_ref="$(jq -er '(.workflowHeadBranch // .workflowRef) | select(type == "string" and length > 0)' <<< "${validation_producer}")"
     target_sha="$(jq -er '.targetSha | select(type == "string" and test("^[a-f0-9]{40}$"))' "${validation_file}")"
     expected_id="${FULL_RELEASE_VALIDATION_RUN_ID}"
     expected_attempt="${FULL_RELEASE_VALIDATION_RUN_ATTEMPT}"
