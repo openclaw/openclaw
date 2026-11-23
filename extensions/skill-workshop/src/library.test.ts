@@ -56,6 +56,21 @@ const view = (filePath?: string, versionId?: string) =>
 const versions = () => lib.listWorkshopArchive({}, "main");
 const liveNames = async () => (await lib.listWorkshopSkills({}, "main")).map(({ name }) => name);
 const skillPath = (...parts: string[]) => path.join(resolveWorkshopSkillsDir({}, "main"), ...parts);
+
+it("keeps reads available but refuses model-facing Workshop publication under deployment policy", async () => {
+  await create("Original approved procedure");
+  vi.stubEnv("OPENCLAW_DISABLE_SKILL_INSTALLS", "1");
+  try {
+    await expect(patch("Original", "Changed")).rejects.toThrow("Skill mutations are disabled");
+    await expect(create("Unapproved procedure", "new-skill")).rejects.toThrow(
+      "Skill mutations are disabled",
+    );
+    expect(await readLive()).toContain("Original approved procedure");
+    expect(await liveNames()).toEqual(["deploy"]);
+  } finally {
+    vi.unstubAllEnvs();
+  }
+});
 const restore = (context = ctx) => lib.restoreWorkshopSkill(context, { name: liveSkillName });
 const archive = (absorbedInto?: string) =>
   lib.archiveWorkshopSkill(ctx, { name: liveSkillName, absorbedInto });

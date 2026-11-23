@@ -67,7 +67,8 @@ describe("config env vars", () => {
             ...Object.fromEntries(
               `OPENCLAW_CONFIG_READONLY OPENCLAW_CONFIG_READONLY_NOTICE BASH_ENV SHELL HOME ZDOTDIR
                OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS
-               openclaw_allow_older_binary_destructive_actions OPENCLAW_INCLUDE_ROOTS`
+               openclaw_allow_older_binary_destructive_actions OPENCLAW_INCLUDE_ROOTS
+               OPENCLAW_DISABLE_SKILL_INSTALLS OPENCLAW_PINNED_SKILL_FILES`
                 .split(/\s+/)
                 .map((name) => [name, "/tmp/blocked"]),
             ),

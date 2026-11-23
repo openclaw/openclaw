@@ -9,6 +9,7 @@ import { removePathWithinRoot } from "../../infra/fs-safe-remove.js";
 import { pathExists, root } from "../../infra/fs-safe.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { PluginHookSkillChangedEvent } from "../../plugins/hook-skill.types.js";
+import { assertSkillMutationsEnabled } from "../deployment-policy.js";
 import { parseSkillFrontmatter } from "../loading/frontmatter.js";
 import { resolveAgentSkillsRoot } from "../loading/skill-paths.js";
 import type { SkillScanFinding } from "../security/scanner.js";
@@ -247,6 +248,7 @@ export async function writeSkillRootFile(params: {
   /** Host-held authority; runs after awaited work and immediately before the write. */
   assertCurrent?: () => void;
 }): Promise<{ description?: string }> {
+  assertSkillMutationsEnabled();
   const assertCurrent = params.assertCurrent ?? noop;
   const filePath = normalizeSkillFilePath(params.filePath);
   const validated = validateSkillFileContent({ ...params, filePath });
@@ -273,6 +275,7 @@ export async function removeSkillRootFile(params: {
   /** Host-held authority; runs immediately before the removal. */
   assertCurrent?: () => void;
 }): Promise<void> {
+  assertSkillMutationsEnabled();
   const filePath = normalizeSkillFilePath(params.filePath);
   if (filePath === SKILL_FILE) {
     throw new SkillAuthoringError(
@@ -310,6 +313,7 @@ export async function commitSkillRootChange<T>(params: {
   beforeDispatch?: (result: T) => Promise<void>;
   assertCurrent?: () => void;
 }): Promise<T> {
+  assertSkillMutationsEnabled();
   const assertCurrent = params.assertCurrent ?? noop;
   assertCurrent();
   const skillDir = resolveSkillDir(params.skillsRoot, params.skillName);

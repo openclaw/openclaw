@@ -2,8 +2,10 @@ import { getAgentWorkspaceAccess } from "../../agents/workspace-access.js";
 import { resolveStateDir } from "../../config/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { pruneMapToMaxSize } from "../../infra/map-size.js";
+import { isPathInside } from "../../infra/path-guards.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
+import { deploymentSkillPins } from "../deployment-policy.js";
 import {
   captureSkillLibraryPreparation,
   loadSkillLibrarySelection,
@@ -13,7 +15,7 @@ import { getSkillsSourceVersion } from "../runtime/refresh-state.js";
 import { prepareLocalSkillSources, prepareSkillSourcePlan } from "../runtime/refresh.js";
 import { mergeRemoteNodeSkillEntries } from "../runtime/remote-skills.js";
 import { fingerprintSkillSnapshotConfig } from "../runtime/snapshot-config-fingerprint.js";
-import { recordSkillFileHost } from "../skill-file-host.js";
+import { recordSkillFileHost, resolveSkillFileHost } from "../skill-file-host.js";
 import type { SkillEligibilityContext, SkillEntry, SkillSnapshot } from "../types.js";
 import { prepareSkillBinaryProbe, resolveSkillRequiredBins } from "./config.js";
 import type { Skill } from "./skill-contract.js";
@@ -40,6 +42,7 @@ import {
 
 const MAX_SKILL_ENTRY_CACHE_SIZE = 64;
 type LocalSkillTiers = {
+  workspaceDir: string;
   sourceKey: string;
   agent: SkillEntry[];
   execution: SkillEntry[];
@@ -141,6 +144,7 @@ function loadLocalSkillTiers(
     pruneMapToMaxSize(agentSkillEntryCache, MAX_SKILL_ENTRY_CACHE_SIZE);
   }
   const entries = {
+    workspaceDir,
     sourceKey,
     agent: agentTier,
     execution:
@@ -160,17 +164,48 @@ function mergeSkillTiers(
     ? loadSkillLibrarySelection(opts.librarySelections)
     : [],
 ): SkillEntry[] {
+  const pins = opts?.workspaceOnly ? new Map<string, string>() : deploymentSkillPins();
+  const pinnedEntries = new Map<string, SkillEntry>();
+  for (const entry of tiers.agent) {
+    const file = pins.get(entry.skill.name);
+    if (file !== entry.skill.filePath) {
+      continue;
+    }
+    const host = resolveSkillFileHost(entry.skill);
+    const gatewayOwned =
+      host === "gateway" ||
+      (host === undefined &&
+        !isPathInside(tiers.workspaceDir, file) &&
+        entry.skill.source !== "openclaw-workspace" &&
+        entry.skill.source !== "agents-skills-project");
+    if (gatewayOwned) {
+      pinnedEntries.set(entry.skill.name, {
+        ...entry,
+        skill: recordSkillFileHost({ ...entry.skill }, "gateway"),
+      });
+    }
+  }
+  for (const name of pins.keys()) {
+    if (!pinnedEntries.has(name)) {
+      throw new Error(
+        `Deployment-pinned skill ${JSON.stringify(name)} is unavailable from its Gateway source.`,
+      );
+    }
+  }
+  const matchesSnapshot = (entry: SkillEntry) =>
+    !opts?.matchesSnapshotSkill || opts.matchesSnapshotSkill(entry.skill);
   const select = (entries: SkillEntry[]) =>
-    entries.filter(
-      (entry) => !opts?.matchesSnapshotSkill || opts.matchesSnapshotSkill(entry.skill),
-    );
+    entries.filter((entry) => !pins.has(entry.skill.name) && matchesSnapshot(entry));
   const collisions: SkillCollision[] = [];
   const entries = mergeSkillRecords(
-    mergeRemoteNodeSkillEntries(
-      select(tiers.agent),
-      opts?.eligibility?.nodeSkills,
-      opts?.matchesSnapshotSkill,
-    ),
+    [
+      ...mergeRemoteNodeSkillEntries(
+        select(tiers.agent),
+        opts?.eligibility?.nodeSkills,
+        opts?.matchesSnapshotSkill,
+      ).filter((entry) => !pins.has(entry.skill.name)),
+      ...[...pinnedEntries.values()].filter(matchesSnapshot),
+    ],
     tiers.sourceKey,
     collisions,
   );
@@ -264,6 +299,7 @@ async function prepareCapturedWorkspaceSkillEntries(
         ? sources.entries
         : mergeSkillTiers(
             {
+              workspaceDir,
               sourceKey: JSON.stringify([
                 sourcePlan,
                 opts?.executionWorkspaceDir,
@@ -356,6 +392,7 @@ async function prepareCapturedWorkspaceSkillEntries(
       : (opts?.entries ??
         mergeSkillTiers(
           {
+            workspaceDir: agentWorkspaceDir,
             sourceKey: JSON.stringify(["remote", agentWorkspaceDir, executionWorkspaceDir]),
             agent: agentEntries,
             execution: gatewayExecutionWorkspaceDir
