@@ -4,6 +4,8 @@
  * or {ok:false,error}. Requests use type: open {tabId,url,sessionKey,activate?}, navigate
  * {tabId,url}, back/forward/reload/stop/close/snapshot/download {tabId}, inspect {tabId,x,y},
  * present {scope,tabId,rect:{x,y,width,height}|null,visible}, release-scope {scope}.
+ * Hosts advertising __OPENCLAW_NATIVE_BROWSER_CUTOUTS__ also accept
+ * overlay-cutouts {cutouts:[{x,y,width,height,radius}]}, in viewport CSS pixels.
  * IDs and scopes are opaque; web-created IDs are `mac-` plus a generated UUID.
  * Open replies include tabId. The host reuses a session's tab at the requested URL or its
  * retained initial-request alias, so the returned ID may differ from the request.
@@ -44,6 +46,7 @@ export type NativeBrowserTab = {
 };
 export type NativeBrowserState = { revision: number; tabs: NativeBrowserTab[] };
 type NativeBrowserRect = { x: number; y: number; width: number; height: number };
+export type NativeBrowserCutout = NativeBrowserRect & { radius: number };
 export type NativeBrowserMessage =
   | { type: "open"; tabId: string; url: string; sessionKey: string; activate?: boolean }
   | { type: "navigate"; tabId: string; url: string }
@@ -59,7 +62,8 @@ export type NativeBrowserMessage =
       rect: NativeBrowserRect | null;
       visible: boolean;
     }
-  | { type: "release-scope"; scope: string };
+  | { type: "release-scope"; scope: string }
+  | { type: "overlay-cutouts"; cutouts: NativeBrowserCutout[] };
 export type NativeBrowserReply =
   | {
       ok: true;

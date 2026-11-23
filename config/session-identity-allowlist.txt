@@ -507,7 +507,6 @@ src/agents/tools/ask-user-tool.ts	1
 src/agents/tools/computer-tool-node.ts	4
 src/agents/tools/computer-tool-request.ts	1
 src/agents/tools/cron-tool-write.ts	1
-src/agents/tools/cron-tool.ts	1
 src/agents/tools/embedded-gateway-stub.ts	2
 src/agents/tools/gateway-caller-context.ts	2
 src/agents/tools/image-generate-review-actions.ts	7
