@@ -242,6 +242,34 @@ describe("full release same-parent recovery workflow", () => {
     expect(source).not.toContain("continuation_plan_json");
   });
 
+  it.each([false, true])(
+    "seals the plan with the admitted evaluator when admitted=%s",
+    (admitted) => {
+      const seal = step("release_execution_plan", "Seal immutable release execution plan");
+      const env = seal.env as Record<string, unknown>;
+      assert(typeof env.RELEASE_STATE_SCRIPT === "string");
+      const selected = runInNewContext(env.RELEASE_STATE_SCRIPT.replace(/^\$\{\{|\}\}$/gu, ""), {
+        needs: {
+          resolve_target: {
+            result: "success",
+            outputs: {
+              source_admission_json: JSON.stringify(admitted ? { qualificationAdmission: {} } : {}),
+            },
+          },
+        },
+        github: { workspace: "/workspace" },
+        fromJSON: JSON.parse,
+        format: (pattern: string, value: string) => pattern.replace("{0}", value),
+      });
+      expect(selected).toBe(
+        admitted
+          ? "/workspace/qualification-verifier/scripts/full-release-validation-state.mjs"
+          : "/workspace/scripts/full-release-validation-state.mjs",
+      );
+      expect(seal.run).toContain('node "$RELEASE_STATE_SCRIPT" plan');
+    },
+  );
+
   it("routes compact reuse revalidation through the admitted verifier and exact target", () => {
     expect(step("evidence_reuse", "Find reusable validation evidence").env).toMatchObject({
       OPENCLAW_RELEASE_CI_SUMMARY_VALIDATOR:
