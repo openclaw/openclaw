@@ -624,7 +624,6 @@ export const databaseWorkerCoreTestFiles = [
   "src/agents/code-mode.tool-result-middleware.test.ts",
   "src/agents/code-mode.source-reply.loop.test.ts",
   "src/agents/command/attempt-execution.shared.test.ts",
-  "src/agents/command/session-store.snooze.test.ts",
   "src/agents/command/session-store.test.ts",
   "src/agents/core-coding-tools.exec-workdir.test.ts",
   "src/agents/subagents/registry/subagent-registry-sweeper-recovery.test.ts",

@@ -13,18 +13,16 @@ import type { SessionEntry } from "./types.js";
 export function projectVisibleSessionActivity(
   entry: Pick<
     SessionEntry,
-    "createdAt" | "lastReadAt" | "markedUnreadAt" | "lastActivityAt" | "snoozedUntil"
+    "createdAt" | "lastReadAt" | "markedUnreadAt" | "lastActivityAt" | "snoozedUntil" | "snoozedAt"
   >,
   message: unknown,
   timestamp: unknown,
 ): Pick<SessionEntry, "lastActivityAt" | "snoozedUntil" | "snoozedAt"> | undefined {
   const at = parseDateFirstTimestampMs(timestamp) ?? Date.now();
   const baseline = entry.lastReadAt ?? entry.createdAt;
-  if (
-    baseline === undefined ||
-    at <= baseline ||
-    (deriveSessionUnread(entry) && entry.snoozedUntil === undefined)
-  ) {
+  const turnsUnread = baseline !== undefined && at > baseline && !deriveSessionUnread(entry);
+  const wakes = entry.snoozedUntil !== undefined && at > (entry.snoozedAt ?? 0);
+  if (!turnsUnread && !wakes) {
     return undefined;
   }
   const role = asOptionalRecord(message)?.role;

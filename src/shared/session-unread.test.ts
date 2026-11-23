@@ -17,7 +17,7 @@ import { deriveSessionUnread } from "./session-unread.js";
 const sessionDirs = useAutoCleanupTempDirTracker(afterEach);
 
 /** A chat the person read just now; each case appends one run's rows after that read. */
-async function createReadSession() {
+async function createReadSession({ legacy = false } = {}) {
   setRuntimeConfigSnapshot({});
   const dir = sessionDirs.make("openclaw-unread-");
   const target = {
@@ -29,10 +29,9 @@ async function createReadSession() {
   const readAt = Date.now() - 1_000;
   await upsertSessionEntryCore(target, {
     sessionId: target.sessionId,
-    createdAt: readAt - 1_000,
+    ...(legacy ? {} : { createdAt: readAt - 1_000, lastReadAt: readAt }),
     updatedAt: readAt,
     lastActivityAt: readAt - 1_000,
-    lastReadAt: readAt,
     snoozedUntil: readAt + 3_600_000,
     snoozedAt: readAt,
   });
@@ -120,6 +119,13 @@ describe("deriveSessionUnread from transcript content", () => {
     const entry = session.entry();
     expect(deriveSessionUnread(entry)).toBe(true);
     expect(entry?.snoozedUntil).toBeUndefined();
+  });
+
+  it("wakes a snoozed legacy session that has no read baseline", async () => {
+    const session = await createReadSession({ legacy: true });
+    session.append(assistant("Disk is 95% full."));
+
+    expect(session.entry()?.snoozedUntil).toBeUndefined();
   });
 
   it("keeps activity from a batched turn when the turn also writes session metadata", async () => {
