@@ -1,4 +1,5 @@
 import type { WorkerToolSurface } from "../../../packages/gateway-protocol/src/schema/worker-gateway-tool.js";
+import { resolveAgentProfile } from "../../agents/agent-profiles.js";
 import { createPreparedEmbeddedAgentSettingsManager } from "../../agents/agent-project-settings.js";
 import { resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
 import { resolveUserTimezone } from "../../agents/date-time.js";
@@ -43,7 +44,6 @@ import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { resolveProviderRuntimePluginHandle } from "../../plugins/provider-hook-runtime.js";
 import type { WorkerConnectionIdentity } from "./connection-identity.js";
 import type { WorkerGatewayToolRuntime } from "./worker-gateway-tool-contract.js";
-import { resolveWorkerTurnAgentProfile } from "./worker-turn-agent-profile.js";
 import { resolveWorkerTurnTranscriptTarget } from "./worker-turn-transcript-target.js";
 
 export const WORKER_CONTEXT_ENGINE_HOST = {
@@ -122,7 +122,11 @@ export async function prepareWorkerTurnPrompt(params: {
         pluginMetadataSnapshot: preparedModelRuntime.metadataSnapshot,
       }),
   };
-  const agentProfile = resolveWorkerTurnAgentProfile({ turn });
+  const agentProfile = resolveAgentProfile({
+    config: turn.config,
+    agentId: turn.agentId,
+    sessionKey: turn.sessionKey,
+  });
   const bootstrap = await prepareEmbeddedAttemptBootstrap({
     attempt,
     setup,
