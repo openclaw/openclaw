@@ -1,6 +1,6 @@
 import type {
   Api,
-  AssistantMessage,
+  AssistantHistoryMessage,
   ModelInputContent,
   ProviderMessage,
   ProviderModel,
@@ -17,7 +17,7 @@ export function transformProviderMessages<TApi extends Api>(
   normalizeToolCallId?: (
     id: string,
     model: CanonicalModel<TApi>,
-    source: AssistantMessage,
+    source: AssistantHistoryMessage,
   ) => string,
 ): Message[] {
   const target: CanonicalModel<TApi> = {

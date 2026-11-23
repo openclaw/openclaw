@@ -232,7 +232,7 @@ export function buildSessionEventContext(params: {
   text: string;
   options: Pick<
     SessionEventOptions,
-    "source" | "sourceTurnId" | "sourceRunId" | "scheduledAutomation"
+    "source" | "sourceTurnId" | "sourceRunId" | "completedToolCall" | "scheduledAutomation"
   >;
   readmissionAttempt?: number;
   occurrenceId: string;
@@ -261,6 +261,9 @@ export function buildSessionEventContext(params: {
     InputProvenance: {
       kind: "internal_system",
       sourceTool: automation ? CRON_EXECUTION_SOURCE_TOOL : options.source,
+      ...(!automation && options.source === "tool_handoff" && options.completedToolCall
+        ? { completedToolCall: options.completedToolCall }
+        : {}),
       ...(automation && automation.job.state.runningAtMs !== undefined
         ? {
             jobId: automation.job.id,
@@ -326,7 +329,6 @@ export function buildSessionEventContext(params: {
     // text's existing command authorization. Non-owner and system turns never gain it.
     bindCommandOwnerAuthority(ctx, {
       operatorAuthority,
-      sourceAssertion: params.assertCurrent,
       isCurrent: () => {
         params.assertCurrent();
         return true;
@@ -334,7 +336,6 @@ export function buildSessionEventContext(params: {
       // Work that outlives this occurrence keeps only the live operator source.
       successor: {
         operatorAuthority,
-        sourceAssertion: operatorAuthority.assertCurrent,
         isCurrent: () => {
           operatorAuthority.assertCurrent();
           return true;
@@ -345,7 +346,6 @@ export function buildSessionEventContext(params: {
     bindCommandOwnerAuthority(ctx, {
       channelPrincipal: requesterPrincipal,
       recoveryReference: requesterOwner.recoveryReference,
-      sourceAssertion: params.assertCurrent,
       isCurrent: () => {
         params.assertCurrent();
         return true;
@@ -353,7 +353,6 @@ export function buildSessionEventContext(params: {
       successor: {
         channelPrincipal: requesterPrincipal,
         recoveryReference: requesterOwner.recoveryReference,
-        sourceAssertion: params.assertCurrent,
         isCurrent: () => {
           params.assertCurrent();
           return true;
@@ -373,7 +372,6 @@ export function buildSessionEventContext(params: {
       bindCommandOwnerAuthority(ctx, {
         channelPrincipal,
         recoveryReference: authority.recoveryReference,
-        sourceAssertion: params.assertCurrent,
         isCurrent: () => {
           params.assertCurrent();
           return true;
@@ -381,7 +379,6 @@ export function buildSessionEventContext(params: {
         successor: {
           channelPrincipal,
           recoveryReference: authority.recoveryReference,
-          sourceAssertion: params.assertCurrent,
           isCurrent: () => {
             params.assertCurrent();
             return true;

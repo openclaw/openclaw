@@ -4,6 +4,10 @@ import path from "node:path";
 import { serialize } from "node:v8";
 import { toStringifiedError } from "@openclaw/normalization-core/error-coercion";
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import {
+  raiseChildOomScoreInBackground,
+  shouldAdjustChildOomScore,
+} from "../process/linux-oom-score-spawn.js";
 import { BrokerChild } from "../process/spawn-broker/child.js";
 import { recordChildProcessSpawn } from "../process/spawn-diagnostics.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -89,6 +93,11 @@ export function createSqliteReadOnlyWorkerSession(
     transport.kind === "broker"
       ? transport.owner.spawn(executable, argv, spawnOptions)
       : childProcess.spawn(executable, argv, spawnOptions);
+  // Brokered children already get the broker's raised score. A reader the kernel ends
+  // under memory pressure fails the reads it serves; the Gateway keeps serving.
+  if (transport.kind === "native" && shouldAdjustChildOomScore({ env })) {
+    raiseChildOomScoreInBackground(child.pid);
+  }
   recordChildProcessSpawn(
     executable,
     child,

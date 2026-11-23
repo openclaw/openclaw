@@ -1,13 +1,15 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { assertAdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
 import {
-  captureGatewayToolCallerAssertion,
   getGatewayToolCallerIdentity,
   resolveGatewayToolOperatorSelection,
   withGatewayToolCallerIdentity,
   withoutGatewayToolCallerIdentity,
 } from "../agents/tools/gateway-caller-context.js";
-import { composeSessionSourceAssertion } from "../config/sessions/session-source-authority.js";
+import {
+  composePreparedOnlySessionSource,
+  composeSessionSourceAssertion,
+} from "../config/sessions/session-source-authority.js";
 import { isHostPluginApprovalMethod } from "../infra/approval-gateway-runtime-methods.js";
 import { getActivePluginRegistry } from "../plugins/runtime.js";
 import {
@@ -60,7 +62,6 @@ import {
   runWithOperatorToolGatewayCleanupContext,
 } from "./server-plugin-runtime-client.js";
 import { createSessionContinuationLifetime } from "./session-continuation-lifetime.js";
-import { resolveSessionRuntimeAuthority } from "./session-runtime-authority.js";
 import {
   cancelSubagentCompletionToolHandoff,
   registerSubagentCompletionToolHandoff,
@@ -360,13 +361,7 @@ export function resolveInProcessGatewayDispatch(
       ? composeSessionSourceAssertion([assertSettleWakeCurrent, operatorRunAuthority.assertCurrent])
       : undefined;
   assertTransferredSettleWakeCurrent?.();
-  const runtimeAuthority = assertTransferredSettleWakeCurrent
-    ? { assertCurrent: assertTransferredSettleWakeCurrent }
-    : resolveSessionRuntimeAuthority({
-        method,
-        runtimeIdentity: agentRuntimeIdentity ?? scope?.client?.internal?.agentRuntimeIdentity,
-      });
-  const assertCallerCurrent = captureGatewayToolCallerAssertion(method);
+  const assertCallerCurrent = composePreparedOnlySessionSource(caller);
   const transfersCreatedInput =
     method === "sessions.create" &&
     (options?.sessionCreation?.via === "spawn" ||
@@ -376,7 +371,6 @@ export function resolveInProcessGatewayDispatch(
         options.sessionCreation.actor.source === "profile" &&
         options.sessionCreation.actor.id === operatorRunAuthority?.profileId)) &&
     caller?.operationalRunInstance !== undefined &&
-    assertCallerCurrent !== undefined &&
     options.agentToolCaller?.agentId === caller.agentId &&
     options.agentToolCaller.sessionKey === caller.sessionKey;
   const assertInvocationCurrent = composeSessionSourceAssertion([
@@ -384,7 +378,6 @@ export function resolveInProcessGatewayDispatch(
     // none may outlive or broaden a recovered service operation's tool ceiling.
     service?.assertCurrent,
     selection?.assertCurrent,
-    runtimeAuthority?.assertCurrent,
     assertSettleWakeCurrent,
     !isHostOwnedAgentRun || !operatorRunAuthority
       ? composeSessionSourceAssertion(
@@ -399,7 +392,7 @@ export function resolveInProcessGatewayDispatch(
   ]);
   assertInvocationCurrent();
   if (!isHostOwnedAgentRun) {
-    assertCallerCurrent?.(method);
+    assertCallerCurrent?.();
   }
   const scopedOperatorProfile = scope?.client?.authenticatedUserProfile;
   const scopedRoleActor = scope?.client?.internal?.operatorRoleActor;
@@ -700,7 +693,6 @@ export function resolveInProcessGatewayDispatch(
     assertContextCurrent: composeSessionSourceAssertion([
       service?.assertCurrent,
       selection?.assertCurrent,
-      runtimeAuthority?.assertCurrent,
       assertSourceCurrent,
       method !== "agent" ? assertCallerCurrent : undefined,
       transfersCreatedInput ? options.agentToolCaller?.assertCurrent : undefined,

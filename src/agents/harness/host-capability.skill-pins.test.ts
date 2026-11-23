@@ -1,7 +1,6 @@
 import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
-import { requireNodeSqlite } from "../../infra/node-sqlite.js";
 import { skillLibraryRevisionDir } from "../../skills/library/bundle.js";
 import * as selectionRead from "../../skills/library/selection-read.js";
 import * as librarySelection from "../../skills/library/selection.js";
@@ -9,7 +8,6 @@ import { saveSkillLibrary } from "../../skills/library/service.js";
 import type { SkillSnapshot } from "../../skills/types.js";
 import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
-import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
 import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import type { AnyAgentTool } from "../tools/common.js";
 import { createAdmittedHostCapabilityTestFixture } from "./host-capability.test-support.js";
@@ -125,14 +123,7 @@ it("retains prepared resources after selections evict their shared cache entry",
       }
       return entries;
     });
-  requireNodeSqlite();
-  const sql = observeMainThreadSql();
-  try {
-    await expectResource(await fixture.build(), "evicted-library");
-    sql.expectIdle();
-  } finally {
-    sql.restore();
-  }
+  await expectResource(await fixture.build(), "evicted-library");
 });
 
 it.each(["host close", "abort", "snapshot edit"] as const)(

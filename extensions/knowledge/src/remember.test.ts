@@ -3,7 +3,9 @@ import { Check } from "typebox/value";
 import { expect, it } from "vitest";
 import { contract } from "./contract.js";
 import type { RememberInput } from "./remember-contract.js";
+import { claimPayload } from "./remember.js";
 import { createKnowledgeService } from "./service.js";
+import { canonical } from "./storage-types.js";
 import { KnowledgeStorage } from "./storage.js";
 import {
   accessFor,
@@ -12,6 +14,7 @@ import {
   toolContext,
   useTestTempDirs,
 } from "./test-support.js";
+import { digest } from "./vault.js";
 
 const tempDirs = useTestTempDirs();
 
@@ -246,4 +249,119 @@ it("named and omitted subjects never guess competing names or create pages", asy
   expect(read!.entities).toStrictEqual([pilot.id]);
   expect((await f.record(out.items[6]!.id)).record!.metadata!.entities).toBe(undefined);
   expect(out.message).toMatch(/4 linked by inference/);
+});
+
+it("replays a legacy collapsed date batch without publishing the suppressed assertion", async () => {
+  const f = await fixture();
+  const input: RememberInput & { requestId: string } = {
+    requestId: randomUUID(),
+    attribution: "Synthetic legacy user",
+    excerpt: "Ships Friday, first on November 1 then on November 2.",
+    items: [
+      { text: "Ships Friday.", kind: "commitment", occurred_at: "2026-11-01" },
+      { text: "Ships Friday.", kind: "commitment", occurred_at: "2026-11-02" },
+    ],
+  };
+  // The original writer collapsed equal text/kind/subjects before attach + batch.
+  const receipt = await retainedRememberBatch(f, input);
+  const restarted = createKnowledgeService(f.api);
+  const replay = await restarted.remember(input, f.owner);
+  expect(replay.receipt).toStrictEqual(receipt);
+  expect(replay.items.map(({ status, id }) => [status, id])).toStrictEqual([
+    ["inserted", receipt.items![0]!.id],
+    ["duplicate", receipt.items![0]!.id],
+  ]);
+  expect((await restarted.records_detail({ kind: "claim" }, f.owner)).total).toBe(1);
+  expect((await f.record(receipt.items![0]!.id)).record!.metadata!.occurred_at).toBe("2026-11-01");
+  await expect(
+    restarted.remember(
+      {
+        ...input,
+        items: [...input.items, { text: "Unrelated new claim.", kind: "fact" }],
+      },
+      f.owner,
+    ),
+  ).rejects.toThrow(/different payload/);
+  const fresh = await restarted.remember({ ...input, requestId: randomUUID() }, f.owner);
+  expect(fresh.items.map((item) => item.status)).toStrictEqual(["duplicate", "inserted"]);
+  expect((await restarted.records_detail({ kind: "claim" }, f.owner)).total).toBe(2);
+  expect((await restarted.remember(input, f.owner)).items).toStrictEqual(replay.items);
+});
+
+async function retainedRememberBatch(
+  f: Awaited<ReturnType<typeof fixture>>,
+  input: RememberInput & { requestId: string },
+  intent?: string,
+) {
+  const storage = new KnowledgeStorage(f.config);
+  const access = accessFor(f.owner, true);
+  const upload = await storage.attach(
+    {
+      requestId: input.requestId,
+      expectedVaultId: f.config.vaultId,
+      filename: "excerpt.txt",
+      mediaType: "text/plain",
+      attribution: input.attribution,
+      offset: 0,
+      data: Buffer.from(input.excerpt).toString("base64"),
+      final: true,
+    },
+    access,
+  );
+  const vaultStatus = await f.service.status({}, f.owner);
+  return storage.batch(
+    {
+      requestId: input.requestId,
+      expectedVaultId: f.config.vaultId,
+      expectedOntologyFingerprint: vaultStatus.ontologyFingerprint,
+      items: [
+        {
+          key: "i0",
+          kind: "claim",
+          input: claimPayload(
+            input.items[0]!,
+            { subject: "none" },
+            {
+              ...upload.evidence!,
+              start_line: 1,
+              end_line: 1,
+            },
+            input.attribution,
+          ),
+        },
+      ],
+    },
+    access,
+    "agent",
+    intent,
+  );
+}
+
+it("replays shipped prefixed remember receipts without relaxing changed retries", async () => {
+  const f = await fixture();
+  const input: RememberInput & { requestId: string } = {
+    requestId: randomUUID(),
+    attribution: "Synthetic released user",
+    excerpt: "Ships Friday.",
+    items: [{ text: "Ships Friday.", kind: "commitment", occurred_at: "2026-11-01" }],
+  };
+  const receipt = await retainedRememberBatch(
+    f,
+    input,
+    "remember:" + digest(canonical({ operation: "remember", input })),
+  );
+  const restarted = createKnowledgeService(f.api);
+  const replay = await restarted.remember(input, f.owner);
+  expect(replay.receipt).toStrictEqual(receipt);
+  expect(replay.items[0]!.id).toBe(receipt.items![0]!.id);
+  for (const change of [
+    { excerpt: "A different excerpt." },
+    { attribution: "A different speaker" },
+    { items: [{ ...input.items[0]!, occurred_at: "2026-11-02" }] },
+  ]) {
+    await expect(restarted.remember({ ...input, ...change }, f.owner)).rejects.toThrow(
+      /different payload/,
+    );
+  }
+  expect((await restarted.records_detail({ kind: "claim" }, f.owner)).total).toBe(1);
 });

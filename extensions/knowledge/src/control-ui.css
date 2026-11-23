@@ -2465,6 +2465,54 @@ details[open] > summary > .knowledge-disclosure-label > .knowledge-icon {
   flex: 0 1000 auto;
   color: var(--muted);
 }
+@media (max-width: 640px) {
+  /* Keep the store and its sharing scope together. Tabs can grow without
+     narrowing that row; Settings belongs beside the view navigation. */
+  .knowledge-header {
+    grid-template-columns: minmax(34px, 1fr) minmax(0, auto) minmax(34px, 1fr);
+    column-gap: 8px;
+  }
+  .knowledge-header > :first-child {
+    grid-column: 1 / -1;
+    min-width: 0;
+  }
+  .knowledge-tabs {
+    grid-column: 2;
+    max-width: 100%;
+    flex-wrap: wrap;
+    justify-content: center;
+  }
+  .knowledge-actions {
+    display: contents;
+  }
+  .knowledge-actions .knowledge-icon-button {
+    grid-column: 3;
+    grid-row: 2;
+    justify-self: end;
+  }
+  .knowledge-status {
+    grid-column: 1 / -1;
+    grid-row: 3;
+  }
+  .knowledge-store-bar {
+    flex-wrap: wrap;
+    gap: 4px 12px;
+    min-height: 35px;
+  }
+  .knowledge-page .knowledge-store-context {
+    max-width: 100%;
+    justify-content: flex-start;
+    text-align: start;
+  }
+  .knowledge-store-context :is(strong, span) {
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+  .knowledge-store-context span {
+    flex: 0 1 auto;
+  }
+}
+
 .knowledge-settings {
   display: grid;
   grid-template-columns: 190px minmax(0, 1fr);

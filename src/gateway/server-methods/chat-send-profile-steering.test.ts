@@ -169,7 +169,7 @@ it.for([
         const errorMessage = expect.stringContaining(
           boundary === "mailbox" || change === "profile merge"
             ? "Authenticated profile verification is unavailable"
-            : "authority is no longer current",
+            : "The message input is no longer available",
         );
         const failure = fixture.context.dedupe.get(`chat:${fixture.params.idempotencyKey}`);
         expect.soft(failure).toMatchObject({
@@ -312,7 +312,9 @@ it.each(["backend", "question dispatcher"] as const)(
     });
     expectUntouched(fixture, operation, cancel);
     await fixture.finishDispatch();
-    expect(authority.assertCurrent).toThrow("operator execution authority is no longer active");
+    expect(authority.assertCurrent).toThrow(
+      "Operator execution ended. Reconnect to the Gateway, then resend your message.",
+    );
   },
 );
 

@@ -461,6 +461,10 @@ export function createTerminalPanelSessions(host: TerminalPanelSessionHost) {
         void resumeTransport();
         return;
       }
+      if (action.kind === "restore") {
+        void api.restoreSessions();
+        return;
+      }
       void ownedIntentQueue.queue(action);
     },
     connectHost(): void {
@@ -603,7 +607,7 @@ export function createTerminalPanelSessions(host: TerminalPanelSessionHost) {
     discard: (tab) => discardCancelledTab(tab),
     exited: (tab) => handleExit(tab.id, { reason: "disconnected", exitCode: null }),
     setBooting: (booting) => updateState({ booting }),
-    setError: (text) => api.setError(text),
+    setError: (text, retryAction) => api.setError(text, retryAction),
   });
 
   let refreshError: TerminalPanelError | null = null;

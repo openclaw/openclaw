@@ -583,6 +583,12 @@ export const CronStatusParamsSchema = closedObject({});
 /** Looks up a job by stable id or legacy jobId alias. */
 export const CronGetParamsSchema = cronIdOrJobIdParams({});
 
+/** Acknowledge only the observed failure, including a paused job during local migration. */
+export const CronAcknowledgeFailureParamsSchema = Type.Union([
+  closedObject({ id: NonEmptyString, failedAtMs: Type.Integer({ minimum: 0 }) }),
+  closedObject({ id: NonEmptyString, adopt: Type.Literal(true) }),
+]);
+
 export const CronScratchSchema = closedObject({
   content: Type.String({ maxLength: 262144 }),
   revision: Type.Integer({ minimum: 1 }),

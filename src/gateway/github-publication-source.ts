@@ -36,8 +36,6 @@ import {
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
 import { runOpenClawStateWorkerOperation } from "../state/openclaw-state-worker-store.js";
-import { observeUserGitHubConnectionAuthority } from "../state/user-github-connection-events.js";
-import { onUserProfilesChanged } from "../state/user-profile-events.js";
 
 type SourceBinding = {
   context: OpenClawStateWorkerContext;
@@ -173,7 +171,7 @@ async function prepareMemoryPublicationSource(
         released ||
         !isDeepStrictEqual(readMemorySourceFacts(captured, params.selector.sessionKey), memory)
       ) {
-        throw new Error("GitHub publication source authority changed.");
+        throw new Error("GitHub publication source ended. Retry the publication.");
       }
     },
     retain(operation) {
@@ -214,7 +212,8 @@ export async function prepareGitHubPublicationSource(params: {
   const releases: Array<() => void> = [];
   let releasing: Promise<void> | undefined;
   let binding: SourceBinding | undefined;
-  const revoke = () => closed.abort(new Error("GitHub publication source authority changed."));
+  const revoke = () =>
+    closed.abort(new Error("GitHub publication source ended. Retry the publication."));
   const drain = async () => {
     revoke();
     await Promise.allSettled(pending);
@@ -250,16 +249,6 @@ export async function prepareGitHubPublicationSource(params: {
     registerOpenClawStateDatabaseAsyncResource({ close: drain }),
     registerOpenClawStateDatabaseLifecycleListener((event) => {
       if (event.kind !== "opened" && event.path === context.admission.databasePath) {
-        revoke();
-      }
-    }),
-    onUserProfilesChanged(revoke),
-    observeUserGitHubConnectionAuthority(({ databasePath, changedOwners }) => {
-      if (
-        databasePath === context.admission.databasePath &&
-        params.selector.personalOwnerProfileId !== undefined &&
-        changedOwners.includes(params.selector.personalOwnerProfileId)
-      ) {
         revoke();
       }
     }),

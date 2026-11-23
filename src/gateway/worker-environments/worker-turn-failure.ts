@@ -29,6 +29,7 @@ export type WorkerTurnEnvironmentService = Pick<
     Pick<
       WorkerEnvironmentService,
       | "resolveSshIdentity"
+      | "resolveExecMemoryBoundary"
       | "supportsNodePortal"
       | "prepareComputer"
       | "readRuntimeRefresh"

@@ -384,7 +384,20 @@ failures while reporting the outcome. Complete projections record
 cleanup, so recursive deletion does not delay command exit. Each runtime records
 the update process that created it in `owner.json`; cleanup removes the runtime
 once that process has exited and no running process points into the directory
-([Doctor checks](/cli/doctor/checks)). Run
+([Doctor checks](/cli/doctor/checks)). On a prepared-release install,
+`openclaw update` runs this cleanup in its own process before the update starts, and its
+outcome never changes the update's. With a `--timeout` under 20 minutes it skips the
+cleanup, because the process census cannot be interrupted. The Gateway's `update.run` and automatic updates do
+not run it: the process census would block the serving Gateway, and for a runtime without
+`owner.json` it cannot tell the requesting `openclaw update` from an older updater still
+using it. Inside a container, cleanup keeps runtimes and says so, because host processes
+are not visible. A runtime without `owner.json` that the first release update did not remove
+(for example, because that update ran from the Gateway) is reported afterwards as
+`no recognized runtime marker`. Remove it by hand only after checking that its `tree/`
+holds the replaced installation, that the update that created it and its workers have
+exited (an older updater can still load files from it later, so an empty `lsof +D
+<directory>` alone is not enough), and that no `openclaw update` is running. If you cannot
+verify that, keep it and [get support](/help/support). Run
 `openclaw doctor --fix` before uninstalling; manual removal on Windows needs the
 extended-length path prefix ([Uninstall](/install/uninstall#remove-the-cli)). Incomplete preparation
 keeps immediate best-effort cleanup. Unsettled workers retain their runtime with

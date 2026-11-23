@@ -237,7 +237,9 @@ export async function createSessionSuggestionMutation(params: {
           throw new SessionMutationAuthorizationChangedError(
             errorShape(
               ErrorCodes.UNAVAILABLE,
-              error instanceof Error ? error.message : "suggestion requester authority changed",
+              error instanceof Error
+                ? error.message
+                : "suggestion request ended; retry the request",
             ),
           );
         }

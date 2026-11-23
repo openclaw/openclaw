@@ -42,6 +42,7 @@ const log = createSubsystemLogger("outbound/deliver");
 
 function openSpoolStore(stateDir: string | undefined, maxBytes?: number) {
   return fileStore({
+    allowDrvfsRenameRecovery: true,
     rootDir: resolveDeliveryQueueMediaDir(stateDir),
     dirMode: 0o700,
     mode: 0o600,

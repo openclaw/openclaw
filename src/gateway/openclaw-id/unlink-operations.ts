@@ -39,7 +39,7 @@ export type UnlinkPreview = {
 };
 
 /** An unlink waiting for Discovery's confirmation (pending-unlink.ts sends it). */
-export type PendingUnlink = NonNullable<StoredClaw["pending_unlinks"]>[number];
+type PendingUnlink = NonNullable<StoredClaw["pending_unlinks"]>[number];
 
 const refusal = (code: string, detail: string): AuthorityRefusal => ({ ok: false, code, detail });
 

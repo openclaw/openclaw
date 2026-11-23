@@ -138,7 +138,6 @@ export const commandsHandlers: GatewayRequestHandlers = {
           context,
           respond,
           signal,
-          hasCurrentClientAuthority,
           sessionKey: params.sessionKey,
           agentId: resolved.agentId,
           changedError: errorShape(

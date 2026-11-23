@@ -66,7 +66,7 @@ function createRequestAuthority(source: {
   const assertAuthority = () => {
     source.inherited?.assertCurrent();
     if (!active) {
-      throw new Error("Guarded request authority is no longer active.");
+      throw new Error("The guarded request ended. Start a new request to retry.");
     }
     invokeSynchronousGuard(source.assertCurrent);
   };
