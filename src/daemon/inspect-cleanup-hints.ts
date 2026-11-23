@@ -6,23 +6,27 @@ import type { ExtraGatewayService } from "./inspect-files.js";
 import { isWindowsGatewayRecoveryExecutable } from "./inspect-markers.js";
 
 export type WindowsRecoveryTaskInspection =
-  | { status: "missing"; path: string }
+  | { status: "missing"; path: string; soleAction: boolean }
   | { status: "present" }
   | { status: "unreadable" }
   | { status: "none" };
 
-/** A present recovery executable still belongs to the Windows package. */
+/**
+ * A present recovery executable still belongs to the Windows package.
+ * Deletion advice is limited to a task whose only action is that missing executable.
+ */
 export async function classifyWindowsRecoveryTask(
   actions: readonly { path: string }[] | undefined,
 ): Promise<WindowsRecoveryTaskInspection> {
-  const paths = (actions ?? [])
-    .map((action) => action.path.trim().replace(/^"+|"+$/g, ""))
-    .filter((executable) => isWindowsGatewayRecoveryExecutable(executable));
-  if (paths.length === 0) {
+  const normalized = (actions ?? []).map((action) => action.path.trim().replace(/^"+|"+$/g, ""));
+  const recoveryPaths = normalized.filter((executable) =>
+    isWindowsGatewayRecoveryExecutable(executable),
+  );
+  if (recoveryPaths.length === 0) {
     return { status: "none" };
   }
   let missingPath: string | undefined;
-  for (const recoveryPath of paths) {
+  for (const recoveryPath of recoveryPaths) {
     try {
       await fs.access(recoveryPath);
       return { status: "present" };
@@ -34,7 +38,14 @@ export async function classifyWindowsRecoveryTask(
       return { status: "unreadable" };
     }
   }
-  return missingPath ? { status: "missing", path: missingPath } : { status: "present" };
+  if (!missingPath) {
+    return { status: "present" };
+  }
+  return {
+    status: "missing",
+    path: missingPath,
+    soleAction: normalized.length === 1 && recoveryPaths.length === 1,
+  };
 }
 
 export function renderGatewayServiceCleanupHints(
@@ -84,8 +95,8 @@ export function renderGatewayServiceCleanupHints(
         // that either shell can expand rather than guessing a common escape.
         if (/^[A-Za-z0-9_. ()\\/-]+$/.test(service.label)) {
           hints.push(terminalText`schtasks /Query /TN "${service.label}" /V /FO LIST`);
-          // A missing recovery executable is not package ownership. The operator
-          // runs this delete; install does not remove sibling Scheduled Tasks.
+          // Only a task whose single action is the missing recovery executable
+          // gets a delete command. Mixed actions stay inspection-only.
           if (service.windowsMissingRecoveryLauncher) {
             hints.push(terminalText`schtasks /Delete /F /TN "${service.label}"`);
           }

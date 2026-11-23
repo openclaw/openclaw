@@ -827,6 +827,29 @@ describe("inventory projections", () => {
     expect(managed.services.map((service) => service.label)).toEqual(["\\OpenClaw Gateway"]);
   });
 
+  it("keeps a mixed recovery task inspection-only", async () => {
+    const missing =
+      "C:\\WindowsApps\\OpenClawFoundation.OpenClawGateway_example\\openclaw-gateway-recovery.exe";
+    const label = "\\OpenClaw Gateway OpenClawFoundation.OpenClawGateway_example";
+    vi.mocked(taskProbe.listScheduledTasks).mockReturnValue([
+      task(label, [action(missing, ""), action("C:\\Tools\\backup.exe", "")]),
+    ]);
+
+    const result = await findExtraGatewayServices(nativeEnv, { deep: true });
+
+    expect(result.errors).toEqual([]);
+    expect(result.services).toEqual([
+      expect.objectContaining({
+        label,
+        detail: `missing recovery launcher: ${missing}`,
+      }),
+    ]);
+    expect(result.services[0]).not.toHaveProperty("windowsMissingRecoveryLauncher");
+    expect(renderGatewayServiceCleanupHints(result.services)).toEqual([
+      `schtasks /Query /TN "${label}" /V /FO LIST`,
+    ]);
+  });
+
   it("does not offer removal when the recovery launcher cannot be read", async () => {
     const launcher =
       "C:\\WindowsApps\\OpenClawFoundation.OpenClawGateway_example\\openclaw-gateway-recovery.exe";
