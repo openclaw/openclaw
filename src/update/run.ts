@@ -309,7 +309,9 @@ export async function prepareUpdate(params: {
     if (!prepared.ok) {
       return await fail(
         prepared.reason,
-        "The new version could not be built. The current version is still running.",
+        prepared.reason === "interrupted"
+          ? "The update was interrupted by a Gateway restart and can be retried."
+          : "The new version could not be built. The current version is still running.",
         prepared.stderrTail,
       );
     }
