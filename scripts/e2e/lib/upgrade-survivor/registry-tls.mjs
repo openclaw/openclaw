@@ -48,9 +48,12 @@ export function mapRegistryHosts(root) {
       : "/etc/hosts";
   const before = fs.readFileSync(hosts, "utf8");
   assert(
-    !before
-      .split(/\r?\n/u)
-      .some((line) => line.split("#")[0].split(/\s+/u).includes("registry.npmjs.org")),
+    !before.split(/\r?\n/u).some((line) =>
+      line
+        .split("#")[0]
+        .split(/\s+/u)
+        .some((alias) => alias === "registry.npmjs.org"),
+    ),
     "registry hosts override already exists",
   );
   fs.writeFileSync(path.join(root, "hosts.before"), before);
