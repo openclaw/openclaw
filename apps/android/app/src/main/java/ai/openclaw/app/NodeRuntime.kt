@@ -16,6 +16,7 @@ import ai.openclaw.app.chat.MessageSpeechClient
 import ai.openclaw.app.chat.MessageSpeechController
 import ai.openclaw.app.chat.MessageSpeechState
 import ai.openclaw.app.chat.OutgoingAttachment
+import ai.openclaw.app.chat.PERSONAL_SESSION_PINS_CAPABILITY
 import ai.openclaw.app.chat.SESSION_UNREAD_ACK_CAPABILITY
 import ai.openclaw.app.chat.SessionDiffSnapshot
 import ai.openclaw.app.chat.SessionForkResult
@@ -1245,6 +1246,8 @@ class NodeRuntime internal constructor(
   val skillsState: StateFlow<GatewaySummaryState<GatewaySkillsSummary>> = skillsSummary.state
   private val _sessionCatalogAvailable = MutableStateFlow(false)
   val sessionCatalogAvailable: StateFlow<Boolean> = _sessionCatalogAvailable.asStateFlow()
+  private val _personalSessionPinsAvailable = MutableStateFlow(false)
+  internal val personalSessionPinsAvailable = _personalSessionPinsAvailable.asStateFlow()
   private val _sessionDiffAvailable = MutableStateFlow(false)
   val sessionDiffAvailable: StateFlow<Boolean> = _sessionDiffAvailable.asStateFlow()
   private val chatPermissionSettingsAvailableState = MutableStateFlow(false)
@@ -8145,6 +8148,7 @@ class NodeRuntime internal constructor(
   private fun replaceGatewayCapabilities(capabilities: Set<String>?) {
     synchronized(gatewayMethodsLock) {
       gatewayAdvertisedCapabilities = capabilities
+      _personalSessionPinsAvailable.value = PERSONAL_SESSION_PINS_CAPABILITY in capabilities.orEmpty()
       chatPermissionSettingsAvailableState.value = chat.canSetSessionPermissionMode()
     }
   }

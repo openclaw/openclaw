@@ -284,15 +284,16 @@ internal fun sidebarRecentSessions(
   sessions: List<ChatSessionEntry>,
   currentSessionKey: String = "",
   nowMs: Long = System.currentTimeMillis(),
+  personalPins: Boolean = false,
 ): List<ChatSessionEntry> =
   sessions
-    .asSequence()
     .filter { isSessionVisibleInNavigation(it, currentSessionKey, nowMs) }
-    .sortedWith(
+    .sortedForSessionSections(
+      personalPins,
       compareByDescending<ChatSessionEntry> { it.pinned == true }
         .thenByDescending { it.lastActivityAt ?: it.updatedAtMs ?: 0L }
         .thenBy { it.key },
-    ).toList()
+    )
 
 /**
  * Category folders follow the gateway catalog order, then unknown categories.
@@ -329,8 +330,9 @@ internal fun sidebarSessionPresentation(
   excludedSessionKeys: Set<String> = emptySet(),
   currentSessionKey: String = "",
   nowMs: Long = System.currentTimeMillis(),
+  personalPins: Boolean = false,
 ): SidebarSessionPresentation {
-  val activeSessions = sidebarRecentSessions(sessions, currentSessionKey, nowMs)
+  val activeSessions = sidebarRecentSessions(sessions, currentSessionKey, nowMs, personalPins)
   // Catalog sections own their rows, so those rows neither nest here nor hold children here.
   val listed = activeSessions.filter { it.pinned == true || it.key !in excludedSessionKeys }
   val parentByKey = navigationParentLinks(listed)
@@ -347,7 +349,8 @@ internal fun sidebarSessionPresentation(
   val roots =
     listed
       .filter { it.key !in parentByKey }
-      .sortedWith(
+      .sortedForSessionSections(
+        personalPins,
         compareByDescending<ChatSessionEntry> { it.pinned == true }
           .thenByDescending(::threadActivity)
           .thenBy { it.key },
@@ -641,6 +644,7 @@ internal fun OpenClawSidebar(
     )
   val catalogErrorText = catalogState.errorText
   val catalogSessionKeys = sidebarVisibleCatalogSessionKeys(catalogState.catalogs)
+  val personalPins by viewModel.personalSessionPinsAvailable.collectAsState()
   val recentPresentation =
     sidebarSessionPresentation(
       sessions = sessions,
@@ -648,6 +652,7 @@ internal fun OpenClawSidebar(
       excludedSessionKeys = catalogSessionKeys,
       currentSessionKey = activeSessionKey,
       nowMs = sessionNowMs,
+      personalPins = personalPins,
     )
   val pinnedSessions = recentPresentation.pinned
   val pinnedExpanded = pinnedExpandedChoice ?: recentPresentation.holdsNestedSession(pinnedSessions, activeSessionKey)

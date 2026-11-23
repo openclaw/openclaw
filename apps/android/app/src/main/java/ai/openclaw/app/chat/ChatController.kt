@@ -84,6 +84,7 @@ import java.util.concurrent.atomic.AtomicLong
 
 // Bounds one-shot search list fetches like the primary session list.
 internal const val SESSION_LIST_FETCH_LIMIT = 200
+internal const val PERSONAL_SESSION_PINS_CAPABILITY = "personal-session-pins"
 internal const val SESSION_UNREAD_ACK_CAPABILITY = "session-unread-ack-contract"
 private const val SESSION_SCOPED_CHAT_METADATA_CAPABILITY = "session-scoped-chat-metadata"
 private const val SESSION_SCOPED_MODEL_CATALOG_CAPABILITY = "session-scoped-model-catalog"
@@ -1411,7 +1412,7 @@ class ChatController internal constructor(
           }
         } else if (pinned != null) {
           val lease = captureRequestLease(requestCacheScope) ?: throw GatewayRequestNotEnqueued("not connected")
-          if (!lease.supportsCapability("personal-session-pins")) {
+          if (!lease.supportsCapability(PERSONAL_SESSION_PINS_CAPABILITY)) {
             updateErrorText("Update the Gateway to change personal session pins.")
             return@with false
           }

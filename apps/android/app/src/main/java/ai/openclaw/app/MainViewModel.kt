@@ -555,6 +555,7 @@ class MainViewModel internal constructor(
   val sidebarVisiblePages: StateFlow<List<String>> = prefs.sidebarVisiblePages
   val sessionCatalogAvailable: StateFlow<Boolean> =
     runtimeState(initial = false) { it.sessionCatalogAvailable }
+  internal val personalSessionPinsAvailable: StateFlow<Boolean> = runtimeState(initial = false) { it.personalSessionPinsAvailable }
   internal val sessionDiffAvailable: StateFlow<Boolean> =
     runtimeState(initial = false) { it.sessionDiffAvailable }
   val sessionCatalogState: StateFlow<SessionCatalogState> =

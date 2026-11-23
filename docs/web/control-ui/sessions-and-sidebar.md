@@ -196,8 +196,10 @@ filter by pins or change them. Admitted session tools always use their requester
 opt in on their connection and verify Gateway support before writing a personal pin.
 The legacy path can be retired in a future protocol transition after supported clients migrate. Updated macOS
 and Android clients require the Gateway to advertise `personal-session-pins` before
-sending a personal edit; update the Gateway first. A Mac undoing an archive on an
-older Gateway can restore the legacy pin that the same archive just cleared.
+sending a personal edit; update the Gateway first. On a supported Gateway, Android
+shows the saved pin order in both the sidebar and the Sessions screen, independently
+of how you sort recent sessions. A Mac undoing an archive on an older Gateway can
+restore the legacy pin that the same archive just cleared.
 
 The browser keeps device-specific geometry and transient presentation, such as
 sidebar width and scroll position. Navigation changes on read-only connections

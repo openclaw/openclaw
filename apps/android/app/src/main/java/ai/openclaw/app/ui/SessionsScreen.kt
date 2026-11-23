@@ -137,6 +137,7 @@ internal fun SessionsScreen(
       query = searchText,
       archived = filter == SessionFilter.Archived,
     )
+  val personalPins by viewModel.personalSessionPinsAvailable.collectAsState()
   val visibleSessions =
     resolveSessionBrowserEntries(
       entries = searchState.entries,
@@ -144,6 +145,7 @@ internal fun SessionsScreen(
       filter = filter,
       recentFirst = recentFirst,
       nowMs = sessionStatusNowMs,
+      personalPins = personalPins,
     )
   val nextAttentionExpiry = nextSessionStatusExpiry(searchState.entries, sessionStatusNowMs)
   val storedGroups by viewModel.sessionCustomGroups.collectAsState()
@@ -1069,12 +1071,23 @@ internal fun rememberSessionBrowserSearchState(
   )
 }
 
+/** A capable Gateway has already ranked the visible pins in the requester's saved order. */
+internal fun List<ChatSessionEntry>.sortedForSessionSections(
+  personalPins: Boolean,
+  comparator: Comparator<ChatSessionEntry>,
+): List<ChatSessionEntry> {
+  if (!personalPins) return sortedWith(comparator)
+  val (pins, others) = partition { it.pinned == true }
+  return pins + others.sortedWith(comparator)
+}
+
 internal fun resolveSessionBrowserEntries(
   entries: List<ChatSessionEntry>,
   currentSessionKey: String,
   filter: SessionFilter,
   recentFirst: Boolean,
   nowMs: Long = System.currentTimeMillis(),
+  personalPins: Boolean = false,
 ): List<ChatSessionEntry> {
   val filtered =
     when (filter) {
@@ -1090,11 +1103,8 @@ internal fun resolveSessionBrowserEntries(
       // never render with archived-only actions while a refetch is in flight.
       SessionFilter.Archived -> entries.filter { it.archived == true }
     }
-  return if (recentFirst) {
-    filtered.sortedByDescending { it.lastActivityAt ?: it.updatedAtMs ?: 0L }
-  } else {
-    filtered.sortedBy { it.lastActivityAt ?: it.updatedAtMs ?: 0L }
-  }
+  val byActivity = compareBy<ChatSessionEntry> { it.lastActivityAt ?: it.updatedAtMs ?: 0L }
+  return filtered.sortedForSessionSections(personalPins, if (recentFirst) byActivity.reversed() else byActivity)
 }
 
 private val cronSessionDisplayKey = Regex("^(?:cron:|agent::*[^:]+:+cron:+[^:])")
