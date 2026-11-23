@@ -40,6 +40,7 @@ import {
 } from "../../test-utils/openclaw-test-state.js";
 import { drainSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
 import type { createBundleLspToolRuntime } from "../agent-bundle-lsp-runtime.js";
+import { getPreparedModelRuntimePolicyConfigReader } from "../prepared-model-runtime-auth.js";
 import {
   acquireAgentRunPreparedModelRuntime,
   refreshPreparedModelRuntimeSnapshots,
@@ -162,7 +163,8 @@ vi.mock("../prepared-model-runtime.js", async (importOriginal) => {
       try {
         expect(current.registrations.length).toBe(1);
         if (current.mode === "raw") {
-          expect(lease.snapshot === standalone).toBe(true);
+          expect(lease.snapshot.catalogOwner).toBe(expectDefined(standalone, "raw").catalogOwner);
+          expect(getPreparedModelRuntimePolicyConfigReader(lease.snapshot)?.()).toBe(input.config);
         }
         if (current.mode === "before_compaction" || current.mode === "after_compaction") {
           expect(

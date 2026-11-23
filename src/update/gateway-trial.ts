@@ -4,7 +4,14 @@ import {
 } from "../infra/update-run-write.async.js";
 import { redactSensitiveText } from "../logging/redact.js";
 import { resolveRuntimeServiceBuildId, VERSION } from "../version.js";
-import { readTrial, resolvePrefix, writeTrial, type Trial } from "./store.js";
+import {
+  readTrial,
+  readUpdateLock,
+  releaseUpdateLock,
+  resolvePrefix,
+  writeTrial,
+  type Trial,
+} from "./store.js";
 
 // IPC also reaches Windows, where POSIX signals cannot request a graceful child stop.
 if (process.env.OPENCLAW_LAUNCHER_IPC === "1") {
@@ -78,6 +85,12 @@ async function finishSucceeded(trial: Trial & { runId: string }) {
 
 /** Called after the listener is serving, including the old release after a rollback. */
 export async function announceReady(buildId: string | null): Promise<void> {
+  const lock = await readUpdateLock();
+  // A restarted container can reuse the old Gateway's PID (including PID 1).
+  if (lock && (lock.dead || lock.pid === process.pid)) {
+    await finishUpdateRunAsync(lock.runId, { status: "failed", reason: "interrupted" });
+    await releaseUpdateLock();
+  }
   await settleRunFromTrial(await readTrial());
   if (process.env.OPENCLAW_LAUNCHER_IPC !== "1" || !process.send || !process.connected) {
     return;

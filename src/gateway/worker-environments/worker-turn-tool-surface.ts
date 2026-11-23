@@ -83,6 +83,7 @@ type WorkerLaunchToolSetup = Pick<
   surface: WorkerToolSurface;
   localMcpNodeId?: string;
   exec: WorkerToolAuthority["exec"];
+  memoryBoundary?: "sandbox";
   connectionIdentity: WorkerConnectionIdentity;
   placements: WorkerSessionPlacementStore;
   questionsEnabled: boolean;
@@ -191,7 +192,10 @@ function issueWorkerLaunchToolAuthority(params: WorkerLaunchToolSetup): WorkerTo
     mcpTools.push({ ...handle, allowElicitation: true });
   }
   return {
-    exec: params.exec,
+    exec:
+      params.exec && params.memoryBoundary
+        ? { ...params.exec, memoryBoundary: params.memoryBoundary }
+        : params.exec,
     ...(mcpTools.length && { mcpTools }),
     allowedToolNames: surface.tools
       .filter((tool) => tool.execution === "placement")

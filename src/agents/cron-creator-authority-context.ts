@@ -436,7 +436,7 @@ export function bindActiveCronCreatorAuthorityResolver(
     authority.signal.throwIfAborted();
     operationSignal?.throwIfAborted();
     if (authority.isCurrent?.() === false) {
-      throw new Error("Automation caller authority is no longer active.");
+      throw new Error("This agent run is no longer active. Start a new turn to retry.");
     }
     const signal = operationSignal
       ? AbortSignal.any([authority.signal, operationSignal])
@@ -488,12 +488,10 @@ export function bindActiveOperatorTurnAuthority(runId: string | undefined):
       if (
         !authority.active ||
         authority.runId !== normalizedRunId ||
-        authority.isCurrent?.() === false ||
-        (authority.managementEntitlement?.source === "channel-owner" &&
-          !authority.managementEntitlement.isCurrent())
+        authority.isCurrent?.() === false
       ) {
         authority.signal.throwIfAborted();
-        throw new Error("operator turn authority is no longer active");
+        throw new Error("The message turn has ended. Start a new turn to retry.");
       }
     },
   };

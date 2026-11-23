@@ -15,6 +15,10 @@ import {
 import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
 import { GatewayConnectionWork } from "./server-connection-work.js";
 import {
+  LEAN_POST_READY_FIRST_CHECK_MS,
+  schedulePostReadyWorkRelease,
+} from "./server-post-ready-release.js";
+import {
   createLog,
   createTestCronState,
   createMaintenanceHandles,
@@ -37,6 +41,45 @@ beforeEach(() => {
 afterEach(resetGatewayWorkAdmission);
 
 describe("post-ready maintenance scheduling", () => {
+  it("waits for post-ready work before admitting maintenance, so lean releases when idle", async () => {
+    const clock = createGatewaySchedulerClock();
+    const scheduler = createTestGatewayScheduler(clock.clock);
+    const gate = createDeferredCore();
+    const start = vi.fn(async () => {});
+    const startMaintenance = vi.fn(async () => null);
+    try {
+      scheduleGatewayPostReadyMaintenance(
+        createPostReadyMaintenanceScheduleParams({
+          scheduler,
+          waitForPostReadyWork: () => gate.promise,
+          startMaintenance,
+          cronState: createTestCronState({ start }),
+        }),
+      );
+      // Maintenance waits for the barrier inside this wake without holding root work.
+      const maintenanceWake = clock.advanceBy(1);
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+      expect(getActiveGatewayRootWorkCount()).toBe(0);
+      const release = vi.fn(gate.resolve);
+      schedulePostReadyWorkRelease({
+        scheduler,
+        profile: "lean",
+        release,
+        isClosing: () => false,
+      });
+      await clock.advanceBy(LEAN_POST_READY_FIRST_CHECK_MS);
+      expect(release).toHaveBeenCalledOnce();
+      await maintenanceWake;
+      await vi.waitFor(() => expect(start).toHaveBeenCalledOnce());
+      expect(startMaintenance).toHaveBeenCalledOnce();
+    } finally {
+      gate.resolve();
+      await scheduler.stop();
+    }
+  });
+
   it("sweeps exec cgroups after admission, repeats at idle cadence, and stops watches on close", async () => {
     const platform = mockProcessPlatform("linux");
     const sweep = vi.spyOn(execCgroup, "sweepAgentExecCgroups").mockResolvedValue();
