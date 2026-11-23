@@ -10,6 +10,7 @@ import type { SessionEntry } from "../config/sessions/types.js";
 import { sessionChanges, type SessionRowChange } from "../sessions/session-row-changes.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
+  buildSessionObserverPrompt,
   defaultPersistDigest,
   normalizeSessionObserverModelOutput,
   synthesizeSessionObserverTerminalDigest,
@@ -100,6 +101,29 @@ it.each([
 });
 it("rejects leading prose", () => {
   expect(normalizeSessionObserverModelOutput(`Here is the digest: ${json}`)).toBeNull();
+});
+
+it("sends only the model-facing previous digest fields to the utility model", () => {
+  const prompt = buildSessionObserverPrompt(
+    {
+      previousDigest: { ...digest(7), assessment: "Tests are passing." },
+      planProgress: { completed: 1, total: 2 },
+    },
+    ["note one"],
+  );
+  const payload = JSON.parse(prompt) as {
+    previousDigest: Record<string, unknown>;
+    newNotes: string[];
+    planProgress: unknown;
+  };
+
+  expect(payload.previousDigest).toEqual({
+    headline: "Checking files",
+    assessment: "Tests are passing.",
+    health: "on-track",
+  });
+  expect(payload.newNotes).toEqual(["note one"]);
+  expect(payload.planProgress).toEqual({ completed: 1, total: 2 });
 });
 
 it("returns null without publication when the session row is gone", () =>

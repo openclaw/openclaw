@@ -427,13 +427,21 @@ export function buildSessionObserverPrompt(
   state: Pick<SessionObserverState, "previousDigest" | "planProgress">,
   notes: readonly string[],
 ): string {
-  const {
-    sessionId: _sessionId,
-    lifecycleRevision: _lifecycleRevision,
-    ...previousDigest
-  } = state.previousDigest ?? {};
+  const previous = state.previousDigest;
+  // Only the model-facing digest fields belong in the prompt. Identity and
+  // bookkeeping fields (sessionKey, sessionId, lifecycleRevision, runId,
+  // revision, updatedAt) made small models echo them back inside their answer,
+  // where the strict response schema rejected the whole digest.
+  const previousDigest = previous
+    ? {
+        headline: previous.headline,
+        ...(previous.assessment ? { assessment: previous.assessment } : {}),
+        health: previous.health,
+        ...(previous.planProgress ? { planProgress: previous.planProgress } : {}),
+      }
+    : null;
   return JSON.stringify({
-    previousDigest: state.previousDigest ? previousDigest : null,
+    previousDigest,
     newNotes: notes,
     planProgress: state.planProgress ?? null,
   });
