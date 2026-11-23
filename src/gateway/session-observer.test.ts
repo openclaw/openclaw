@@ -168,6 +168,10 @@ it("accepts a second assessment when the model echoes the previous digest", asyn
   await advance(12_000);
   expectBroadcast(harness, { ...firstAssessment, revision: 2 });
   expect(completeModel).toHaveBeenCalledTimes(2);
+  const secondRequest = JSON.parse(completeModel.mock.calls[1]?.[0].prompt ?? "{}") as {
+    previousDigest?: unknown;
+  };
+  expect(secondRequest.previousDigest).toEqual(firstAssessment);
 });
 
 it("coalesces live completions and cancels in-flight work for the terminal digest", async ({
