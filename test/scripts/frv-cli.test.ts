@@ -46,7 +46,16 @@ describe("frv CLI", () => {
           ["selected", "untouched"].map((name, index) =>
             Object.assign(job(name, "failure"), { id: 10 + index, run_id: 101, run_attempt: 1 }),
           ),
-          [{ ...job("selected", conclusion), id: 20, run_id: 101, run_attempt: 2 }],
+          [
+            {
+              ...job("selected", conclusion),
+              id: 20,
+              run_id: 101,
+              run_attempt: 2,
+              started_at: "2026-08-22T00:02:00Z",
+              completed_at: "2026-08-22T00:03:00Z",
+            },
+          ],
         ],
         workflow: {
           type: "file",

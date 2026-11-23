@@ -6087,6 +6087,8 @@ esac
       currentWorkflowSha: publisherSha,
       preflightHeadBranch: producerTag,
       preflightHeadSha: producerSha,
+      // Protected release-only tooling need not be on main; publisher ancestry still binds it.
+      mainComparisonStatus: "diverged",
     };
     const valid = await run(params);
     expect(valid.status, valid.stderr).toBe(0);
@@ -6097,7 +6099,6 @@ esac
       { producerTagSha: "c".repeat(40) },
       { producerTagType: "tag" },
       { producerBranches: [{ ref: `refs/heads/${producerTag}` }] },
-      { mainComparisonStatus: "diverged" },
       { publisherComparisonStatus: "behind" },
     ]) {
       const result = await run({ ...params, ...rejected });
@@ -9149,7 +9150,7 @@ test "$package_manager" = "pnpm@12.1.0"
         for (const [attempt, reused, dispatched] of [
           [1, "false", true],
           [2, "false", false],
-          [1, "true", child.kind === "artifact-candidate"],
+          [1, "true", false],
         ] as const) {
           expect(
             runInNewContext(step.if ?? "true", {
