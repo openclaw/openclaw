@@ -1,8 +1,9 @@
-import { writeFile } from "node:fs/promises";
+import { realpath, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import {
   createAssistant,
   createAssistantResultStream,
@@ -19,6 +20,7 @@ import {
   applyExtraParamsToAgentMock,
   hookRunner,
   limitHistoryTurnsMock,
+  resolveBootstrapContextForRunMock,
   resolveEffectiveCompactionModeMock,
   sessionAutomaticCompactionMock,
   sessionManualCompactionMock,
@@ -43,6 +45,23 @@ export function registerCompactionSafeguardTests({
       compaction: { enabled: false, reserveTokens: 1_024, keepRecentTokens: 1 },
       retry: { enabled: false },
     });
+  const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+  it("bounds the compaction workspace context with the selected profile budget", async () => {
+    const actual =
+      await vi.importActual<typeof import("../bootstrap-files.js")>("../bootstrap-files.js");
+    resolveBootstrapContextForRunMock.mockImplementation(actual.resolveBootstrapContextForRun);
+    const workspaceDir = await realpath(tempDirs.make("openclaw-compaction-profile-budget-"));
+    await writeFile(join(workspaceDir, "AGENTS.md"), "a".repeat(12_000));
+    await compact({
+      workspaceDir,
+      config: { agents: { defaults: { agentProfileId: "openclaw/small" } } },
+    });
+    const resolved = await resolveBootstrapContextForRunMock.mock.results[0]?.value;
+    const agents = resolved?.contextFiles.find((file: { path: string }) =>
+      file.path.endsWith("AGENTS.md"),
+    );
+    expect(agents?.content.length).toBeLessThan(12_000);
+  });
   it.each([
     [undefined, "background"],
     ["normal", "normal"],
