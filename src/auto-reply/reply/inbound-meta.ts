@@ -412,14 +412,26 @@ export function buildCompactInboundUserContextPrefix(
     blocks.push(`Context: ${formatContextJson(compactFacts)}`);
   }
 
-  const replyBody = sanitizeTranscriptText(ctx.ReplyToBody, "body");
-  const replySender = normalizePromptMetadataString(ctx.ReplyToSender);
+  // A channel that quotes only through ReplyChain (Nextcloud Talk) has no ReplyToBody. Its
+  // nearest entry stands in as the reply target, like the reply chain of the default context.
+  const replyChainEntry = ctx.ReplyChain?.find((entry) =>
+    Boolean(sanitizeTranscriptText(entry.body, "body")),
+  );
+  const replyBody =
+    sanitizeTranscriptText(ctx.ReplyToBody, "body") ??
+    sanitizeTranscriptText(replyChainEntry?.body, "body");
+  const replySender =
+    normalizePromptMetadataString(ctx.ReplyToSender) ??
+    (ctx.ReplyToBody ? undefined : normalizePromptMetadataString(replyChainEntry?.sender));
   if (replyBody || replySender) {
     blocks.push(
       `Reply target: ${formatContextJson({
         sender: replySender,
         body: replyBody,
-        is_quote: ctx.ReplyToIsQuote === true ? true : undefined,
+        is_quote:
+          ctx.ReplyToIsQuote === true || (!ctx.ReplyToBody && replyChainEntry?.isQuote === true)
+            ? true
+            : undefined,
       })}`,
     );
   }
