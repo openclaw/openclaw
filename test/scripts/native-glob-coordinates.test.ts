@@ -12,6 +12,7 @@ import {
   openFixtureReceiptChannel,
 } from "../helpers/fixture-receipts.js";
 import { awaitGateBeforeSettlement, withinTest } from "../helpers/promise.js";
+import { runNodeScript } from "../helpers/run-node-script.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { testRunnerFixtureEnv } from "./prepared-script-wrapper.test-support.js";
 
@@ -125,6 +126,65 @@ it.skipIf(process.platform === "win32").each(["cjs", "esm"])(
     }
   },
 );
+
+it("preserves Windows drive and filename case in native test admission", async ({ signal }) => {
+  const directory = tempDirs.make("native-glob-admission-");
+  const runtime = resolveTestRuntime(process.env);
+  fs.symlinkSync(
+    fs.realpathSync(path.join(root, "node_modules")),
+    path.join(directory, "node_modules"),
+    process.platform === "win32" ? "junction" : "dir",
+  );
+  const probe = write(
+    directory,
+    "admission.mjs",
+    `
+    import assert from 'node:assert/strict';
+    import {createVitest} from 'vitest/node';
+    assert.equal(Boolean(process.versions.bun),${runtime === "bun"});
+    for(const drive of ['c:','C:']){
+      const prefix=drive+'/fixture';
+      const ctx=await createVitest({
+        root:${JSON.stringify(directory)},config:false,watch:false,run:true,reporters:[],
+        include:[],includeSource:[],
+      });
+      try{
+        const project=ctx.getRootProject();
+        assert.deepEqual((await project.globTestFiles()).testFiles,[]);
+        project.config.include=[prefix+'/**/*.test.ts','**/*.relative.ts'];
+        project.config.exclude=[prefix+'/**/blocked.*'];
+        project.config.includeSource=[prefix+'/**/*.source.ts'];
+        let reads=0;
+        const source=()=>{reads++;return 'if (import.meta.vitest) {}';};
+        assert.equal(project.matchesTestGlob(prefix+'/new.test.ts',source),true,drive+' uncached absolute include');
+        assert.equal(project.matchesTestGlob((prefix+'/backslash.test.ts').replaceAll('/','\\\\'),source),true);
+        assert.equal(project.matchesTestGlob(prefix+'/blocked.relative.ts',source),false);
+        assert.equal(project.matchesTestGlob(project.config.root+'/ordinary.relative.ts',source),true);
+        assert.equal(project.matchesTestGlob(prefix+'/wrong.TEST.ts',source),false);
+        assert.equal(project.matchesTestGlob(prefix+'/blocked.source.ts',source),false);
+        assert.equal(project.matchesTestGlob(prefix+'/unrelated.ts',source),false);
+        assert.equal(reads,0);
+        assert.equal(project.matchesTestGlob(prefix+'/live.source.ts',source),true);
+        assert.equal(reads,1);
+        assert.equal(project.matchesTestGlob(prefix+'/plain.source.ts',()=>{reads++;return 'export {};';}),false);
+        assert.equal(reads,2);
+        project.config.exclude.push(prefix+'/**');
+        assert.equal(project.matchesTestGlob(prefix+'/new.test.ts',source),true);
+        assert.equal(reads,2);
+      }finally{await ctx.close();}
+    }
+    `,
+  );
+  const result = await runNodeScript(probe, testRunnerFixtureEnv(), 20_000, {
+    cwd: directory,
+    executable: process.execPath,
+    signal,
+    requireProcessTreeExit: process.platform !== "win32",
+    maxBuffer: 128 * 1024,
+  });
+  expect(result.error).toBeUndefined();
+  expect(result.status, result.stderr + result.stdout).toBe(0);
+});
 
 type WatchRecord = {
   kind: "module" | "ready" | "add" | "removed" | "run";
