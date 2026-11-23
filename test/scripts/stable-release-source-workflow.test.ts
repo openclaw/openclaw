@@ -19,6 +19,7 @@ describe("stable client compatibility release wiring", () => {
           default: "",
         });
       }
+      expect(native.jobs.qualify["cache-mode"]).toBe("none");
       const steps = native.jobs.qualify.steps;
       const admission = steps[0].run.slice(steps[0].run.indexOf('if [[ -n "$CLIENT_SHA"'));
       expect(child.jobs[platform].needs).toBe("select");

@@ -50,6 +50,8 @@ permissions:
 
 jobs:
   qualify:
+    # Composite cache-off inputs do not revoke the runner cache token.
+    cache-mode: none
     runs-on: xcode-27-xlarge
     timeout-minutes: 240
     env:

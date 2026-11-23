@@ -38,6 +38,8 @@ env:
 
 jobs:
   qualify:
+    # Composite cache-off inputs do not revoke the runner cache token.
+    cache-mode: none
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     env:
