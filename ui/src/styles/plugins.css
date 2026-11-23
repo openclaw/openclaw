@@ -2030,6 +2030,12 @@
     gap: 6px;
     min-width: 0;
     max-width: 100%;
+
+    /* Names such as “Workspace Synchronization Amber” differ at the end. */
+    h3 {
+      direction: rtl;
+      text-align: match-parent;
+    }
   }
 
   .plugin-card-title-row .plugin-card-author {
