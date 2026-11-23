@@ -68,6 +68,7 @@ import {
 } from "./accounts.js";
 import { zaloApprovalAuth } from "./approval-auth.js";
 import { ZaloConfigSchema } from "./config-schema.js";
+import { hasZaloGroupAllowlistedById, resolveZaloGroupToolPolicy } from "./group-access.js";
 import type { ZaloProbeResult } from "./probe.js";
 import { collectRuntimeConfigAssignments, secretTargetRegistryEntries } from "./secret-contract.js";
 import { createZaloSetupWizardProxy, zaloSetupContract } from "./setup-core.js";
@@ -237,7 +238,9 @@ export const zaloPlugin: ChannelPlugin<ResolvedZaloAccount, ZaloProbeResult> =
       },
       groups: {
         resolveRequireMention: () => true,
+        resolveToolPolicy: resolveZaloGroupToolPolicy,
       },
+      doctor: { shouldSkipDefaultEmptyGroupAllowlistWarning: hasZaloGroupAllowlistedById },
       actions: {
         describeMessageTool: ({ cfg, accountId }) => {
           const accounts = accountId

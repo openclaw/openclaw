@@ -20,10 +20,7 @@ import {
 } from "openclaw/plugin-sdk/reply-payload";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import { sleepWithAbort, waitForAbortSignal } from "openclaw/plugin-sdk/runtime-env";
-import {
-  resolveDefaultGroupPolicy,
-  warnMissingProviderGroupPolicyFallbackOnce,
-} from "openclaw/plugin-sdk/runtime-group-policy";
+import { resolveDefaultGroupPolicy } from "openclaw/plugin-sdk/runtime-group-policy";
 import {
   normalizeOptionalString,
   normalizeStringEntries,
@@ -43,7 +40,12 @@ import {
   type ZaloMessage,
   type ZaloUpdate,
 } from "./api.js";
-import { normalizeZaloAllowEntry, resolveZaloRuntimeGroupPolicy } from "./group-access.js";
+import {
+  admitZaloGroupSender,
+  normalizeZaloAllowEntry,
+  resolveZaloGroupAdmission,
+  resolveZaloRuntimeGroupPolicy,
+} from "./group-access.js";
 import type { ZaloRuntimeEnv, ZaloStatusSink } from "./monitor.types.js";
 import {
   prepareHostedZaloMediaUrl,
@@ -264,6 +266,17 @@ async function authorizeZaloMessage(
     groupPolicy: account.config.groupPolicy,
     defaultGroupPolicy,
   });
+  const groupAdmission = resolveZaloGroupAdmission({
+    cfg: config,
+    account,
+    isGroup,
+    chatId,
+    groupPolicy,
+  });
+  if ("drop" in groupAdmission) {
+    logVerbose(core, runtime, `zalo: drop group ${chatId} (${groupAdmission.drop})`);
+    return undefined;
+  }
   const shouldComputeAuth = core.channel.commands.shouldComputeCommandAuthorized(rawBody, config);
   const resolveChannelIngress = async (contextBinding?: ChannelIngressContextBinding) =>
     await core.channel.inbound.ingress.resolveStable({
@@ -285,7 +298,7 @@ async function authorizeZaloMessage(
       contextBinding,
       providerMissingFallbackApplied,
       dmPolicy,
-      groupPolicy,
+      groupPolicy: groupAdmission.senderGroupPolicy,
       policy: { groupAllowFromFallbackToAllowFrom: true },
       allowFrom: normalizeStringEntries(account.config.allowFrom),
       groupAllowFrom: normalizeStringEntries(account.config.groupAllowFrom),
@@ -293,27 +306,9 @@ async function authorizeZaloMessage(
     });
   const access = await resolveChannelIngress();
   const senderAccess = access.senderAccess;
-  if (isGroup) {
-    warnMissingProviderGroupPolicyFallbackOnce({
-      providerMissingFallbackApplied: senderAccess.providerMissingFallbackApplied,
-      providerKey: "zalo",
-      accountId: account.accountId,
-      log: (messageValue) => logVerbose(core, runtime, messageValue),
-    });
-    if (!senderAccess.allowed) {
-      if (senderAccess.reasonCode === "group_policy_disabled") {
-        logVerbose(core, runtime, `zalo: drop group ${chatId} (groupPolicy=disabled)`);
-      } else if (senderAccess.reasonCode === "group_policy_empty_allowlist") {
-        logVerbose(
-          core,
-          runtime,
-          `zalo: drop group ${chatId} (groupPolicy=allowlist, no groupAllowFrom)`,
-        );
-      } else if (senderAccess.reasonCode === "group_policy_not_allowlisted") {
-        logVerbose(core, runtime, `zalo: drop group sender ${senderId} (groupPolicy=allowlist)`);
-      }
-      return undefined;
-    }
+  const log = (messageValue: string) => logVerbose(core, runtime, messageValue);
+  if (isGroup && !admitZaloGroupSender({ senderAccess, account, chatId, senderId, log })) {
+    return undefined;
   }
 
   if (
