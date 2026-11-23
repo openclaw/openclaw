@@ -421,7 +421,7 @@ export function createChannelIngressDrainOwner<
       // Abandonment is retryable, but it must still pass through the shared
       // retry policy. Releasing directly here bypasses the attempt/age
       // dead-letter gate and can replay the same accepted input forever.
-      onAbandoned: () => applyFailureDisposition(state, new Error("turn-abandoned")),
+      onAbandoned: () => onFailed(new Error("turn-abandoned")),
       onDropped: (reason) => onFailed(new IngressQueueCapDropError(reason)),
     };
   };
