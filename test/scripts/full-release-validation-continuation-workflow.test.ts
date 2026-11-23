@@ -50,9 +50,12 @@ it("pins both hosted callers to the Q-ledger-aware watcher definition", () => {
       "openclaw/openclaw/.github/workflows/full-release-state-watcher.yml@" + revision,
     );
   }
-  // Independently verified against the immutable selected revision; no Git-history
-  // dependency in shallow CI checkouts. A changed watcher needs a new verified pin.
-  const selectedSource = readFileSync(".github/workflows/full-release-state-watcher.yml", "utf8");
+  // Retain the exact pinned definition independently of current watcher edits.
+  // This fixture is the git blob at revision above, so shallow CI needs no history.
+  const selectedSource = readFileSync(
+    "test/scripts/fixtures/full-release-state-watcher-b720fc.yml",
+    "utf8",
+  );
   expect(createHash("sha256").update(selectedSource).digest("hex")).toBe(
     "4ee76e74a50fa5d0939b67010e0b334bf0a7bda604c0e81de079f05291ce561f",
   );

@@ -9,6 +9,9 @@ const nightly = workflow.readWorkflow(nightlyPath);
 const frv = workflow.readWorkflow(".github/workflows/full-release-validation.yml");
 const watcher = workflow.readWorkflow(".github/workflows/full-release-state-watcher.yml").jobs
   .watch;
+const pinnedWatcher = workflow.readWorkflow(
+  "test/scripts/fixtures/full-release-state-watcher-b720fc.yml",
+).jobs.watch;
 const job = nightly.jobs.validate;
 const steps: workflow.WorkflowStep[] = job.steps;
 const helperStep = steps.find((step) => step.run?.includes("pnpm ci:full-release"));
@@ -270,7 +273,7 @@ it("routes long watchers to their own Boat runner and always cleans up after the
     for (const name of waiters) {
       const waiter = selected.jobs[name];
       expect(waiter.needs).toContain(provision);
-      const runnerJob = selected === frv ? watcher : waiter;
+      const runnerJob = selected === frv ? pinnedWatcher : waiter;
       expect(runnerJob["timeout-minutes"]).toBe(720);
       if (selected === frv) {
         expect(waiter.uses).toBe(
