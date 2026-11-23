@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import { createAdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
+import { createTestOperatorAuthority } from "../../agents/admitted-run-context.test-support.js";
 import {
   GitHubIdentityError,
   installManagedGitHubProfile,
@@ -26,11 +26,12 @@ vi.mock("../../plugins/repository-integration-runtime.js", async (importOriginal
 }));
 import { syncSessionRepositoryWorkspace } from "./repository-workspace-startup.js";
 import type { WorkerTunnelHandle } from "./tunnel-contract.js";
-import { bindWorkerGitHubTurn, prepareGitHubPublicationFact } from "./worker-github-binding.js";
+import { prepareGitHubPublicationFact } from "./worker-github-binding.js";
 import {
   workerGitHubFixture,
   createWorkerGitHubBindingFixture,
 } from "./worker-github-binding.test-support.js";
+import { bindWorkerGitHubTurn } from "./worker-turn-github-binding.js";
 
 async function prepareWorkerGitHubBinding(
   params: Parameters<typeof prepareGitHubPublicationFact>[0],
@@ -333,7 +334,7 @@ describe("worker GitHub launch binding", () => {
     let current = true;
     const release = vi.fn();
     const retain = vi.fn(() => release);
-    const operatorAuthority = createAdmittedRunOperatorAuthority({
+    const operatorAuthority = createTestOperatorAuthority({
       profileId: "original-operator",
       scopes: ["operator.write"],
       assertCurrent: () => {
@@ -816,7 +817,7 @@ describe("same-bound integrated worker credential renewal", () => {
       },
     };
     const controller = new AbortController();
-    const operator = createAdmittedRunOperatorAuthority({
+    const operator = createTestOperatorAuthority({
       profileId: "operator-profile",
       repositoryCredentialSource: credentialSource,
       scopes: ["operator.write"],

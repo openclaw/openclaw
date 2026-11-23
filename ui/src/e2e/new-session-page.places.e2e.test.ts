@@ -14,6 +14,7 @@ import {
   WORKSPACE,
   LOCAL_GIT_WORKSPACE_RESPONSES,
   captureProjectUiProof,
+  captureUiProofEnabled,
   controlUiSessionPath,
   createNewSessionPageE2eSuite,
   createdSessionListResult,
@@ -102,6 +103,20 @@ suite.define(() => {
     const checkoutSelect = page.locator(".oc-popover.new-session-page__checkout-popover");
     const checkoutTrigger = page.locator("#new-session-checkout-trigger");
     await expectLabel(projectTrigger, "openclaw");
+    await expectLabel(checkoutTrigger, "main");
+    if (captureUiProofEnabled) {
+      await checkoutTrigger.hover();
+      await captureProjectUiProof(suite, page, "checkout-main.png");
+    }
+    const unusedLabelWidth = await checkoutTrigger
+      .getByText("main", { exact: true })
+      .evaluate(async (label) => {
+        await document.fonts.ready;
+        const text = new Range();
+        text.selectNodeContents(label);
+        return label.getBoundingClientRect().width - text.getBoundingClientRect().width;
+      });
+    expect(unusedLabelWidth).toBeLessThanOrEqual(1);
     await projectTrigger.click();
     await projectSelect.locator(".header-search__input").waitFor();
     await button(projectSelect, "Browse folders").click();
@@ -143,6 +158,11 @@ suite.define(() => {
     const slashMenu = page.locator("#chat-new-session-slash-menu-listbox");
     await pollLocatorText(slashMenu).toContain("/status");
     expect(await slashMenu.textContent()).not.toContain("/clear");
+    // Presence in the list doesn't mean the first command survived pane clipping.
+    const menuBox = await bounds(slashMenu);
+    const scrollBox = await bounds(page.locator(".new-session-page__scroll"));
+    expect(menuBox.y).toBeGreaterThanOrEqual(scrollBox.y);
+    expect(menuBox.y + menuBox.height).toBeLessThanOrEqual(scrollBox.y + scrollBox.height);
     await message.fill("fix the flaky test");
     expect(new URL(page.url()).pathname).toBe("/new");
     expect(

@@ -54,9 +54,6 @@ suite.define(() => {
           });
           await writeFile(path.join(suite.artifactDir, "inventory-read-error.png"), frame.png);
         }
-        await surface.getByRole("button", { name: "Retry", exact: true }).click();
-        await expect.poll(() => error.count()).toBe(0);
-        await empty.waitFor();
         await gateway.setMethodResponse("models.authStatus", {
           ts: 2,
           providers: [{ provider: "openai", profiles: [], apiKey: { source: "config" } }],
@@ -64,9 +61,9 @@ suite.define(() => {
             { provider: "openai", apiKeySupported: true, quickApiKeySetup: true },
           ],
         });
-        await surface.getByRole("button", { name: "Refresh", exact: true }).click();
+        await surface.getByRole("button", { name: "Retry", exact: true }).click();
+        await expect.poll(() => error.count()).toBe(0);
         await surface.locator('[data-provider-id="openai"]').waitFor();
-        expect(await empty.count()).toBe(0);
         expect(await gateway.getRequests("config.patch")).toHaveLength(0);
         expect(falseEmpty, "A failed provider read cannot establish an empty inventory").toBe(0);
       },

@@ -965,7 +965,7 @@ it("prepares cold ACP shared facts without filesystem work in optional receipt l
       if (pending) {
         const reply = await pending.reply;
         pending.assertCurrent();
-        pending.accept(reply);
+        await pending.accept(reply);
         pending.assertCurrent();
       }
       expect(observed).toHaveBeenCalledTimes(1);

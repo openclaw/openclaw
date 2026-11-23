@@ -66,6 +66,7 @@ export function CommandPaletteDock(props: {
 export const COMMAND_PALETTE_INPUT_ID = "cmd-palette-input";
 
 export function CommandPaletteInput(props: {
+  mode: CommandPaletteMode;
   value: string;
   placeholder: string;
   onInputRef: (element: Element | undefined, previous?: HTMLTextAreaElement) => void;
@@ -75,8 +76,6 @@ export function CommandPaletteInput(props: {
   onSelectionChange?: (event: Event) => void;
   onCompositionStart?: () => void;
   onCompositionEnd?: () => void;
-  /** Search stays compact; Compose grows like the composer before it scrolls. */
-  maxLines?: number;
   onPaste?: (event: ClipboardEvent) => void;
   busy?: boolean;
   readOnly?: boolean;
@@ -93,7 +92,8 @@ export function CommandPaletteInput(props: {
   // Browser composition and selection belong to the live field until its value changes.
   const committedValue = createMemo(() => props.value);
   const committedPlaceholder = createMemo(() => props.placeholder);
-  const maxLines = createMemo(() => props.maxLines ?? 3);
+  // Search stays compact; Compose grows like the composer before it scrolls.
+  const maxLines = createMemo(() => (props.mode === "compose" ? 8 : 3));
   // The compiler batches native attributes; result/ARIA updates must not rewrite the field.
   const bindValue = createLiveValue(committedValue);
 
@@ -172,6 +172,10 @@ export function CommandPaletteInput(props: {
           autofocus
           rows={1}
           enterkeyhint="enter"
+          autocorrect="off"
+          autocapitalize="off"
+          writingsuggestions="false"
+          spellcheck={props.mode === "compose" ? "true" : "false"}
           id={COMMAND_PALETTE_INPUT_ID}
           class="cmd-palette__input"
           aria-label={props.placeholder}

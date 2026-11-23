@@ -58,6 +58,20 @@ describe("Templates Gateway contract", () => {
     updateApply.rejects({ agentId: "demo", source, planIntegrity: "sha256:reviewed" });
   });
 
+  it("admits optional category entries as catalog entries, not arbitrary registry records", () => {
+    search.accepts({ overview: true, includeCategoryEntries: true });
+    search.rejects({ overview: true, includeCategoryEntries: "true" });
+    const result = (additionalEntries: unknown[]) => ({
+      entries: [],
+      overview: {
+        featured: [],
+        sections: [{ category: "research", entries: [], additionalEntries }],
+      },
+    });
+    searchResult.accepts(result([]), result([catalogEntry]));
+    searchResult.rejects(result([{ name: coordinate.packageName }]));
+  });
+
   it("allows the public catalog and exact publisher Add coordinates", () => {
     search.accepts({}, { query: "workflow", limit: 30 }, { overview: true, limit: 8 });
     search.rejects({ sourceRoot: "/private/template" });

@@ -7,7 +7,6 @@ import {
   prepareGitHubPublicationRepositoryIdentity,
   type readGitHubPublicationWorktreeOwner,
 } from "./github-publication-availability.js";
-import { parseGitHubPublicationBaseBranch } from "./github-publication-base.js";
 import {
   GitHubPublicationRequesterUnavailableError,
   GitHubPublicationBranchChangedError,
@@ -29,6 +28,10 @@ import {
   assertExpectedSharedGitHubPublisher,
   projectGitHubPublicationResult,
 } from "./github-publication-receipt.js";
+import {
+  gitHubBranchPresence,
+  resolveRecordedPublicationBaseBranch,
+} from "./github-publication-recorded-base.js";
 import type { GitHubPublicationRequesterPolicyV2 } from "./github-publication-requester.js";
 import type { PublicationSessionIdentity } from "./github-publication-session.types.js";
 import { readSharedGitHubPublication } from "./github-publication-shared-read.js";
@@ -216,7 +219,17 @@ export async function prepareGitHubPublicationTarget(params: {
   const repository = `${target.pullRequest.owner}/${target.pullRequest.repo}`;
   const baseBranch = target.fork
     ? target.pullRequest.defaultBranch
-    : parseGitHubPublicationBaseBranch(worktree.baseRef, target.pullRequest.defaultBranch);
+    : await resolveRecordedPublicationBaseBranch({
+        cwd: worktree.path,
+        baseRef: worktree.baseRef,
+        defaultBranch: target.pullRequest.defaultBranch,
+        remoteBranchExists: gitHubBranchPresence({
+          repository,
+          host: githubHost,
+          env: params.identity.env,
+        }),
+      });
+  assertCurrent();
   if (!target.fork && branch === baseBranch) {
     throw new GitHubPublicationWorkspaceChangedError(
       "GitHub publication branch changed to its pull request base.",

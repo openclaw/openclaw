@@ -11,6 +11,76 @@ import {
 
 const suite = createControlUiE2eSuite({ name: "Control UI Portals layout" });
 suite.define(() => {
+  it("keeps close failures with their selected portal", async () => {
+    await suite.withPage(
+      { ...createControlUiE2eContextOptions(), viewport: { width: 1280, height: 900 } },
+      async ({ page }) => {
+        const origin = new URL(suite.server.baseUrl).origin;
+        const portalFixture = (id: string, title: string, port: number): PortalSummary => {
+          const publicUrl = `${origin}/portals-close-fixture-${id}.html`;
+          return {
+            id,
+            title,
+            port,
+            listenPort: port,
+            tokenQuery: "openclaw_portal=synthetic",
+            url: `${publicUrl}?openclaw_portal=synthetic`,
+            publicUrl,
+            createdAtMs: 1000,
+          };
+        };
+        const first = portalFixture("app-0", "First app", 3000);
+        const second = portalFixture("app-1", "Second app", 3001);
+        const portals = [first, second];
+        for (const portal of portals) {
+          await page.route(`${portal.publicUrl}*`, (route) =>
+            route.fulfill({
+              contentType: "text/html",
+              body: `<!doctype html><title>${portal.title}</title><h1>${portal.title}</h1>`,
+            }),
+          );
+        }
+        const gateway = await installMockGateway(page, {
+          featureMethods: [...defaultControlUiFeatureMethods, "portal.close", "portal.list"],
+          methodResponses: { "portal.list": { portals }, "portal.close": { closed: true } },
+        });
+        await page.goto(`${suite.server.baseUrl}portals`);
+        await page.locator(".portals-preview__frame").waitFor();
+        await gateway.deferNext("portal.close");
+        await page.getByRole("button", { name: "Close First app", exact: true }).click();
+        await gateway.waitForRequest("portal.close", { match: { id: first.id } });
+        await gateway.rejectDeferred("portal.close", {
+          message: "Synthetic first-app close failure",
+        });
+        await page
+          .getByText("Couldn’t close the portal. Try again. Synthetic first-app close failure", {
+            exact: true,
+          })
+          .waitFor();
+        await page.getByRole("button", { name: "Second app" }).click();
+        await page
+          .frameLocator(".portals-preview__frame")
+          .getByRole("heading", { name: "Second app" })
+          .waitFor();
+        expect(await page.locator(".portals-preview__error").count()).toBe(0);
+        await page.getByRole("button", { name: "First app" }).click();
+        await page
+          .getByText("Couldn’t close the portal. Try again. Synthetic first-app close failure", {
+            exact: true,
+          })
+          .waitFor();
+        await gateway.setMethodResponse("portal.list", { portals: [second] });
+        await page.getByRole("button", { name: "Close First app", exact: true }).click();
+        await gateway.waitForRequest("portal.close", { after: 1, match: { id: first.id } });
+        expect((await gateway.getRequests("portal.close")).map(({ params }) => params)).toEqual([
+          { id: first.id },
+          { id: first.id },
+        ]);
+        await expect.poll(() => page.locator(".portals-preview__error").count()).toBe(0);
+        await expect.poll(() => page.getByRole("button", { name: "First app" }).count()).toBe(0);
+      },
+    );
+  });
   it.each([
     ["tall", 1440, 1000],
     ["short", 1280, 520],
@@ -55,13 +125,14 @@ suite.define(() => {
             throw new DOMException("Incomplete Portal layout", "DataError");
           }
           const box = (element: Element) => {
-            const { top, bottom, right, height: boxHeight } = element.getBoundingClientRect();
-            return { top, bottom, right, height: boxHeight };
+            const { top, bottom, left, right, height: boxHeight } = element.getBoundingClientRect();
+            return { top, bottom, left, right, height: boxHeight };
           };
           const bounds = content.getBoundingClientRect(),
             style = getComputedStyle(content);
           return {
             contentInnerBottom: bounds.bottom - Number.parseFloat(style.paddingBottom),
+            contentInnerLeft: bounds.left + Number.parseFloat(style.paddingLeft),
             contentInnerRight: bounds.right - Number.parseFloat(style.paddingRight),
             contentScrollHeight: content.scrollHeight,
             contentClientHeight: content.clientHeight,
@@ -90,7 +161,10 @@ suite.define(() => {
           expect(geometry.gridTemplateColumns.split(" ")).toHaveLength(1);
           expect(rail.bottom).toBeLessThanOrEqual(preview.top);
           expect(preview.height).toBeGreaterThanOrEqual(560);
-          expect(preview.right).toBeLessThanOrEqual(geometry.contentInnerRight + 1);
+          for (const panel of [rail, preview]) {
+            expect(Math.abs(panel.left - geometry.contentInnerLeft)).toBeLessThanOrEqual(1);
+            expect(Math.abs(panel.right - geometry.contentInnerRight)).toBeLessThanOrEqual(1);
+          }
         }
       },
     );

@@ -18,6 +18,7 @@ import { createSessionCompoundWorkerFixture } from "./session-compound-worker.te
 import { captureSessionEntryReadSource } from "./session-entry-read-source.js";
 import { acquireSessionInputActor, bindUserTurnInputActor } from "./session-input-actor.js";
 import { recordSessionParticipantInWorker } from "./session-sharing-store.async.js";
+import { buildSessionTranscriptTurnExpectedState } from "./session-transcript-turn-state.js";
 
 it("acquires a captured input actor outside unrelated writer work and checks authority before writing", async ({
   signal,
@@ -377,9 +378,13 @@ it.each([
         ),
         "admitted session actor",
       );
+      const entry = expectDefined(f.read(), "initial session entry");
       const recorder = createUserTurnTranscriptRecorder({
         input: { text: "Keep the original admission", idempotencyKey: "fenced-input" },
-        target: { ...f.scope, expectedSessionId: f.scope.sessionId, sessionEntry: f.read() },
+        ...(change === "lifecycle"
+          ? { expectedSessionState: buildSessionTranscriptTurnExpectedState(entry) }
+          : {}),
+        target: { ...f.scope, expectedSessionId: f.scope.sessionId, sessionEntry: entry },
         updateMode: "none",
       });
       await input.actor.read({ assertCurrent, authorize: assertCurrent });

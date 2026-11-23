@@ -36,9 +36,9 @@ import {
 import { ADMIN_SCOPE, APPROVALS_SCOPE } from "../../method-scopes.js";
 import { serializeEventPayload } from "../../node-registry.js";
 import { resolveOpenClawIdOwnerProfile } from "../../openclaw-id/owner-account.js";
-import { openclawIdTunnelRolePolicy } from "../../openclaw-id/tunnel-principal.js";
+import { openclawIdSubjectRolePolicy } from "../../openclaw-id/tunnel-principal.js";
 import { isOperatorApprovalRuntimeToken } from "../../operator-approval-runtime-token.js";
-import { isNamedOperatorRoleEnforcementEnabled } from "../../operator-role-enforcement.js";
+import { operatorRoleSubject } from "../../operator-role-enforcement.js";
 import { resolveOperatorRolePolicyForAssignment } from "../../operator-role-policy.js";
 import {
   buildPluginNodeCapabilityScopedHostUrl,
@@ -58,6 +58,7 @@ import {
   resolveEffectiveConnectionScopes,
   resolveGatewayConnectPolicyFailure,
 } from "./connect-admission.js";
+import { completeGatewayConnectDeviceTokens } from "./connect-device-tokens.js";
 import { sendGatewayHello } from "./connect-hello.js";
 import { prepareGatewayNodeConnect } from "./connect-node-session.js";
 import {
@@ -66,7 +67,7 @@ import {
   prepareGatewayConnectOperatorDeviceSource,
   rejectGatewayConnectOperatorAccess,
 } from "./connect-operator-access.js";
-import { attachPublicationReader } from "./connect-publication-reader.js";
+import { attachPublicationTransport } from "./connect-publication-transport.js";
 import {
   createGatewayConnectProfileLifecycle,
   resolveGatewayConnectProfileAdmission,
@@ -87,8 +88,8 @@ export async function attachAuthenticatedGatewayConnect(
   context: GatewayConnectPhaseContext,
   state: DeviceAuthorizedGatewayConnect,
 ): Promise<void> {
-  if (state.publicationReader) {
-    await attachPublicationReader(context, state);
+  if (state.publicationTransport) {
+    await attachPublicationTransport(context, state);
     return;
   }
   const {
@@ -183,42 +184,32 @@ export async function attachAuthenticatedGatewayConnect(
   // (CLI, backend RPC probes, tests) churn for the full TTL and stay excluded.
   const shouldTrackPresence = !isEphemeralGatewayClient(connectParams.client);
   const clientId = connectParams.client.id;
-  const instanceId = connectParams.client.instanceId;
   // Nodes retain device-owned presence. User clients need one row per connection
   // so two tabs watching different sessions cannot overwrite each other.
   const presenceKey = shouldTrackPresence
     ? role === "node"
-      ? (device?.id ?? instanceId ?? connId)
+      ? (device?.id ?? connectParams.client.instanceId ?? connId)
       : connId
     : undefined;
   const authenticatedUserId = normalizeOptionalString(authResult.user);
-  const authenticatedFactoryGitHubAccountId = resolveTrustedEnterpriseGitHubAccountId({
-    authResult,
-    authConfig: context.configSnapshot.gateway?.auth,
-    config: context.configSnapshot,
-  });
-  const tailscaleLogin = authResult.tailscaleIdentity
-    ? classifyTailscaleLogin(authResult.tailscaleIdentity.login)
-    : undefined;
-  const authenticatedUserIsTailscaleProvider = tailscaleLogin?.kind === "provider";
+  const authenticatedUserIsTailscaleProvider = authResult.tailscaleIdentity
+    ? classifyTailscaleLogin(authResult.tailscaleIdentity.login)?.kind === "provider"
+    : false;
   const profileLifecycle = createGatewayConnectProfileLifecycle(context, state);
-  const repositoryIdentity = resolveRepositoryConnectionIdentity({
+  const githubAuth = {
     authResult,
     authConfig: context.configSnapshot.gateway?.auth,
     config: context.configSnapshot,
     requestHeaders: context.handler.upgradeReq.headers,
     assertCurrent: profileLifecycle.assertCurrent,
-  });
+  };
+  const authenticatedFactoryGitHubAccountId = resolveTrustedEnterpriseGitHubAccountId(githubAuth);
+  const repositoryIdentity = resolveRepositoryConnectionIdentity(githubAuth);
   const resolveAuthenticatedGitHubIdentity = createAuthenticatedGitHubIdentitySync({
+    ...githubAuth,
     repositoryIdentity,
-    authResult,
-    authConfig: context.configSnapshot.gateway?.auth,
-    config: context.configSnapshot,
-    requestHeaders: context.handler.upgradeReq.headers,
-    assertCurrent: profileLifecycle.assertCurrent,
     recordTiming: context.recordAttachTiming,
   });
-  const rolesConfigured = isNamedOperatorRoleEnforcementEnabled(context.configSnapshot);
   // Only an owner-bound ingress grant receives the shared owner role bypass;
   // an OpenClaw ID owner device is the Gateway owner.
   const openclawIdPrincipal =
@@ -248,9 +239,21 @@ export async function attachAuthenticatedGatewayConnect(
       role,
       authenticatedUserId,
       authMethod,
-      rolesConfigured,
+      rolesConfigured: Boolean(context.configSnapshot.gateway?.roles?.default),
       openclawIdOwner: openclawIdPrincipal?.kind === "owner" && !linkedOwnerProfile,
     });
+  const resolveConnectionScopes = (verifiedIdentityWrite?: boolean) =>
+    resolveEffectiveConnectionScopes({
+      role,
+      deviceScopes,
+      verifiedIdentity: state.authPolicy.verifiedIdentity,
+      identityScopes: githubAuth.authConfig?.identityScopes,
+      upgradeReq: context.handler.upgradeReq,
+      verifiedIdentityWrite,
+    });
+  const initialScopes = remoteIngressPrincipal
+    ? deviceScopes
+    : (authResult.delegation?.scopes.slice() ?? resolveConnectionScopes());
   const identityStartedAt = performance.now();
   const profileAdmission = remoteIngressPrincipal
     ? { ok: true as const, prepared: undefined }
@@ -258,6 +261,7 @@ export async function attachAuthenticatedGatewayConnect(
         context,
         state,
         ownerProfileExpected,
+        connectionScopes: initialScopes,
         linkedOwnerProfile,
         authenticatedUserId,
         requestHeaders: context.handler.upgradeReq.headers,
@@ -270,40 +274,32 @@ export async function attachAuthenticatedGatewayConnect(
   }
   context.setConnectPhase?.("registration");
   const preparedProfile = profileAdmission.prepared;
+  await completeGatewayConnectDeviceTokens(state, preparedProfile?.authority);
   const authenticatedUserProfile =
     remoteIngressPrincipal?.authenticatedUserProfile ?? preparedProfile?.profile;
   // Identity-derived scopes must be capped only after their durable profile is known.
   // Configured roles fail closed if profile storage or provider verification is unavailable.
   const scopesStartedAt = performance.now();
-  // OpenClaw ID members are capped by their membership role, whatever the device requested.
-  const openclawIdRolePolicy =
-    role === "operator" ? openclawIdTunnelRolePolicy(openclawIdPrincipal) : undefined;
   const rolePolicy = remoteIngressPrincipal
     ? remoteIngressPrincipal.operatorRolePolicy
-    : openclawIdRolePolicy
-      ? openclawIdRolePolicy
-      : role === "operator" && !operatorOwner
-        ? resolveOperatorRolePolicyForAssignment(
+    : role === "operator" && !operatorOwner
+      ? openclawIdSubjectRolePolicy(openclawIdPrincipal, () =>
+          resolveOperatorRolePolicyForAssignment(
             authenticatedUserProfile?.profileId,
             preparedProfile?.authority.role ?? null,
             context.configSnapshot,
             preparedProfile?.authority.githubLogin ?? null,
-          )
-        : undefined;
-  const effectiveScopes = remoteIngressPrincipal
-    ? deviceScopes
-    : authResult.delegation
-      ? [...authResult.delegation.scopes]
-      : resolveEffectiveConnectionScopes({
-          role,
-          deviceScopes,
-          verifiedIdentity: state.authPolicy.verifiedIdentity,
-          identityScopes: context.configSnapshot.gateway?.auth?.identityScopes,
-          verifiedIdentityWrite:
-            Boolean(preparedProfile && rolePolicy?.verifiedIdentityWrite) &&
-            (authResult.method === "trusted-proxy" || authResult.method === "tailscale"),
-          upgradeReq: context.handler.upgradeReq,
-        });
+            operatorRoleSubject(preparedProfile?.authority),
+          ),
+        )
+      : undefined;
+  const effectiveScopes =
+    !authResult.delegation &&
+    preparedProfile &&
+    rolePolicy?.verifiedIdentityWrite &&
+    (authResult.method === "trusted-proxy" || authResult.method === "tailscale")
+      ? resolveConnectionScopes(true)
+      : initialScopes;
   const scopes = rolePolicy
     ? intersectOperatorScopes(effectiveScopes, rolePolicy.scopes)
     : effectiveScopes;
@@ -405,10 +401,11 @@ export async function attachAuthenticatedGatewayConnect(
   const controlUiAdmin = authenticatedControlUi && scopes.includes(ADMIN_SCOPE);
   const internal: NonNullable<GatewayWsClient["internal"]> = {
     ...(isLocalClient ? { isLocalClient: true as const } : {}),
+    ...(isLocalBackendClient ? { localBackendClient: true as const } : {}),
     ...(context.handler.ingressAttribution.kind === "openclaw-id-tunnel"
       ? { openclawIdPeerKey: context.handler.ingressAttribution.peerKey }
       : {}),
-    ...(openclawIdPrincipal ? { openclawIdPrincipal, openclawIdRolePolicy } : {}),
+    ...(openclawIdPrincipal ? { openclawIdPrincipal } : {}),
     ...(authenticatedOperator ? { authenticatedOperator: true as const } : {}),
     ...(authenticatedControlUi ? { authenticatedControlUi: true as const } : {}),
     ...(controlUiAdmin ? { controlUiAdmin: true as const } : {}),
@@ -431,6 +428,7 @@ export async function attachAuthenticatedGatewayConnect(
       return;
     }
     internal.operatorDeviceTokenIdentity = source;
+    internal.operatorDeviceScopeCeiling = device ? Object.freeze([...deviceScopes]) : undefined;
     registrationStartedAt += performance.now() - sourceStartedAt;
   }
   const prepareLocalUserIngress = (profile = authenticatedUserProfile) =>

@@ -65,7 +65,11 @@ function attachedDesktopHarness(desktopRegistry?: ReturnType<typeof createDeskto
         operationalRunInstance: h.run,
         approvalAuthority: h.authority,
         gatewayContextResolver: () => context,
-        receiptAuthority: () => validateAgentRunDelegatedAuthority(h.authority),
+        receiptAuthority: () => {
+          if (!validateAgentRunDelegatedAuthority(h.authority)) {
+            throw new Error("agent tool caller authority is no longer active");
+          }
+        },
       };
     },
   };

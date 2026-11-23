@@ -1,6 +1,7 @@
 import { expect, it } from "vitest";
 import type { MigrationsMemoryPlanResult } from "../../../packages/gateway-protocol/src/schema/migrations.js";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { agentRoster } from "./agent-roster.test-support.ts";
 import {
   createControlUiE2eContextOptions,
   createControlUiE2eSuite,
@@ -35,6 +36,44 @@ const plan: MigrationsMemoryPlanResult = {
 };
 
 suite.define(() => {
+  it("fits a short destination agent and paths beside their labels on a phone", async () => {
+    await suite.withPage({ viewport: { width: 390, height: 844 } }, async ({ page }) => {
+      await installMockGateway(page, {
+        methodResponses: {
+          "agents.list": agentRoster({ main: "Molty", writer: "Writer" }, "main", "agent"),
+          "migrations.memory.plan": {
+            ...plan,
+            providers: [
+              {
+                providerId: "codex",
+                label: "Codex",
+                found: true,
+                source: "/studio/notes",
+                target: "/studio",
+                summary,
+                items: [],
+              },
+            ],
+          },
+        },
+      });
+      await page.goto(new URL("/memory-import", suite.server.baseUrl).toString());
+      const host = page.locator(".memory-import");
+      await host.getByText("/studio/memory/imports/", { exact: true }).waitFor();
+      const rows = host
+        .locator(".settings-row")
+        .filter({ has: page.locator(".agent-select__trigger, .settings-row__value") });
+      expect(await rows.count()).toBe(3);
+      for (const row of await rows.all()) {
+        const label = await row.locator(".settings-row__title").boundingBox();
+        const value = await row
+          .locator(".agent-select__trigger, .settings-row__value")
+          .boundingBox();
+        expect(label!.y + label!.height / 2).toBeCloseTo(value!.y + value!.height / 2, 0);
+      }
+    });
+  });
+
   it("does not claim a provider was not found when its memory scan failed", async () => {
     await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
       const gateway = await installMockGateway(page, {

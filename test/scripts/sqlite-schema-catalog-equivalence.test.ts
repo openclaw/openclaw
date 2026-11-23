@@ -91,6 +91,20 @@ describe("generated SQLite schema catalogs", () => {
   it("keeps predecessor schemas free of objects introduced after their version", () => {
     // A state schema edit without a matching predecessor transform retires every
     // derived hash, stranding real databases on the previous layout.
+    const predecessor41 = getOpenClawStatePredecessorSchema(41);
+    expect(predecessor41).toContain("requested_by_profile_id");
+    expect(predecessor41).not.toContain("confirmed_loss_recovery_json");
+    // The canonical SQLite source at main 2e8c1ad0aa97 contained approval v41, not worker loss.
+    expect(createHash("sha256").update(predecessor41).digest("hex")).toBe(
+      "f410ba904b7af3414751f66fa320d9263f708b0eedeecb4cf1f49fa73ef67022",
+    );
+    expect(readGeneratedSqliteCatalog(predecessor41)).toBeDefined();
+    const predecessor40 = getOpenClawStatePredecessorSchema(40);
+    expect(predecessor40).not.toContain("requested_by_profile_id");
+    expect(createHash("sha256").update(predecessor40).digest("hex")).toBe(
+      "fcbb00212b86de19fc5fa0f04654883e4714871ea6417f63645a97c1c9e9457f",
+    );
+    expect(readGeneratedSqliteCatalog(predecessor40)).toBeDefined();
     const predecessor39 = getOpenClawStatePredecessorSchema(39);
     expect(predecessor39).not.toContain(
       "CREATE TABLE IF NOT EXISTS device_pairing_browser_requests",

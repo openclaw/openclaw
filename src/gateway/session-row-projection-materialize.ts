@@ -30,6 +30,7 @@ import {
 import { SessionRowCatalogPending, SessionRowFactsPending } from "./session-row-prepared-read.js";
 import { isColdArchivedSessionRow } from "./session-row-projection-archive.js";
 import { createSessionRowCapabilityReader } from "./session-row-projection-identities.js";
+import { readIncognitoSessionRow } from "./session-row-projection-memory.js";
 import * as records from "./session-row-projection-record.js";
 import { readSessionRowLookup, type prepareSessionRowScopes } from "./session-row-scope.js";
 import {
@@ -351,6 +352,7 @@ export function readResidentSessionRow(
       runtimeResolution,
       preparedModelMetadata: readPreparedGatewayModelMetadata(cfg),
       preparedRepositoryWorkspace: databaseFacts.repositoryWorkspace,
+      preparedWorktree: databaseFacts.worktree,
       configuredAgentIds: params.configuredAgentIds,
       store: prepared?.entries ?? {},
       storePath: row.storeTarget.storePath,
@@ -375,6 +377,7 @@ export function readResidentSessionRow(
         lastAssistantMessage: row.lastAssistantMessage,
       },
       skipTranscriptUsageFallback: true,
+      hasMessages: databaseFacts.transcriptHasMessages ?? row.hasMessages,
       includeSwarmChildren: true,
       childLinks: prepared ? undefined : params.links,
     });
@@ -452,39 +455,6 @@ export function readSessionRowEntry(row: records.Row) {
   // Durable reads reenter the existing worker preparation owner after invalidation.
   const { key, agentId, storeTarget } = row;
   throw new SessionRowFactsPending([{ key, agentId, storePath: storeTarget.storePath }]);
-}
-
-/** Exact incognito acquisition never admits an ephemeral store to the resident roster. */
-function readIncognitoSessionRow(params: {
-  assertCurrent: () => void;
-  cfg: records.Inputs["cfg"];
-  key: string;
-  agentId: string;
-  storePath?: string;
-}) {
-  const { key, agentId, storePath } = params;
-  const memory = captureSessionActorStorageOwner(
-    { agentId, sessionKey: key, storePath },
-    { assertCurrent: params.assertCurrent, authorize: params.assertCurrent },
-  );
-  const current = memory?.owner?.readSession(key, memory.authority);
-  if (!current?.entry || !memory) {
-    return undefined;
-  }
-  const assertSessionCurrent = memory.owner?.captureSessionReadGuard(key);
-  return records.createIncognitoSessionRow({
-    ...params,
-    storePath: memory.path,
-    entry: current.entry,
-    membership: new Set(current.members.map((member) => member.identityId)),
-    source: {
-      identity: current.version.epoch,
-      assertCurrent() {
-        assertSessionCurrent?.();
-        memory.authority.assertCurrent();
-      },
-    },
-  });
 }
 
 /** Bind discovery and resident identity reads to the projection's current owner. */

@@ -9,7 +9,6 @@ import {
 } from "openclaw/plugin-sdk/provider-auth";
 import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
 import { resolveConfiguredSecretInputString } from "openclaw/plugin-sdk/secret-input-runtime";
-import { formatCliCommand } from "openclaw/plugin-sdk/setup-tools";
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   LMSTUDIO_DEFAULT_API_KEY_ENV_VAR,
@@ -207,7 +206,7 @@ export async function resolveLmstudioRuntimeApiKey(params: {
       [
         "LM Studio API key is required.",
         `Set models.providers.lmstudio.apiKey (for example "${envMarker}")`,
-        `or run "${formatCliCommand("openclaw models auth login --provider lmstudio")}".`,
+        "or add an LM Studio API key in Models.",
       ].join(" "),
     );
   };

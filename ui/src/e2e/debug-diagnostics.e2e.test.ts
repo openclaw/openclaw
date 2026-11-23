@@ -391,6 +391,15 @@ async function exerciseDiagnostics({ page }: { page: Page }) {
   await contains(snapshots, "diagnostics-e2e");
   await page.setViewportSize({ height: 844, width: 390 });
   await noOverflow();
+  for (const panel of await snapshots.getByRole("group").all()) {
+    expect(
+      await panel.evaluate((node) => {
+        const parent = node.parentElement!.getBoundingClientRect();
+        const box = node.getBoundingClientRect();
+        return Math.max(Math.abs(box.left - parent.left), Math.abs(box.right - parent.right));
+      }),
+    ).toBeLessThan(1);
+  }
   await page.setViewportSize({ height: 1000, width: 1280 });
   await page.getByRole("searchbox", { name: "Search settings" }).focus();
   await page.keyboard.press("Escape");

@@ -1291,12 +1291,14 @@ openclaw-chat-sidebar-region,
   --icon-button-color: var(--icon-interactive, var(--control-secondary-text, var(--muted)));
 }
 
-.sidebar-region__panels-toggle .chat-pane__panels-toggle[aria-expanded="true"] {
+.sidebar-region__panels-toggle
+  .chat-pane__panels-toggle[aria-expanded="true"]:not(.macos-titlebar-sidebar-toggle) {
   background: var(--session-header-control-surface);
   color: var(--session-header-control-active-color, var(--text));
 }
 
-.sidebar-region__panels-toggle .chat-pane__panels-toggle[aria-expanded="true"]:hover {
+.sidebar-region__panels-toggle
+  .chat-pane__panels-toggle[aria-expanded="true"]:not(.macos-titlebar-sidebar-toggle):hover {
   background: var(--session-header-control-active-hover-bg);
 }
 

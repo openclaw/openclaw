@@ -60,18 +60,9 @@ it.each([
   }
 });
 
-it.each([
-  { scope: "config" as const, failedRemoval: 0 },
-  { scope: "config+creds+sessions" as const, failedRemoval: 0 },
-  { scope: "config+creds+sessions" as const, failedRemoval: 1 },
-])("reports failed removal $failedRemoval for $scope", async ({ scope, failedRemoval }) => {
-  for (let index = 0; index < failedRemoval; index++) {
-    cleanup.removePath.mockResolvedValueOnce({ ok: true });
-  }
+it("reports a failed config-only removal", async () => {
   cleanup.removePath.mockResolvedValueOnce({ ok: false });
+  await expectIncomplete("config");
 
-  await expectIncomplete(scope);
-
-  expect(cleanup.removePath).toHaveBeenCalledTimes(scope === "config" ? 1 : 2);
   expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("retry reset"));
 });

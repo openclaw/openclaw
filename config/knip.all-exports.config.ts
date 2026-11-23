@@ -57,7 +57,8 @@ const ROOT_TEST_ENTRY_GLOBS = [
   "test/scripts/pr-review-artifacts.node.mjs!",
   // The PR cache suite launches this standalone Node regression by path.
   "test/scripts/pr-cache-deferral.node.mjs!",
-  // The compiler scheduling test launches this dependency-hook fixture by exact path.
+  // Compiler tests launch these dependency-hook fixtures by exact path.
+  "test/scripts/fixtures/vitest-worker-build-identity.cjs!",
   "test/scripts/fixtures/vitest-worker-scheduling.cjs!",
   // The cache test launches this isolated GC worker through runRetentionNodeScript.
   "test/scripts/vitest-worker-cache-retention.test-support.ts!",
@@ -135,6 +136,8 @@ const ROOT_TEST_ENTRY_GLOBS = [
   "src/infra/database-engine/multi-namespace.worker.test-support.ts!",
   // The state-read admission test launches this Worker from computed source and dist paths.
   "src/infra/database-engine/state-read-admission.worker.test-support.ts!",
+  // The state admission tests spawn this peer update-ledger writer by path.
+  "src/infra/database-engine/state-fragments.process.test-support.ts!",
   // The proxy owner test spawns this capture child through resolveRuntimeWorkerUrl.
   "src/proxy-capture/child-transport.process.test-support.ts!",
   // The PostgreSQL state owner test resolves this worker through resolveRuntimeWorkerUrl.

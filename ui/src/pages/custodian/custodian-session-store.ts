@@ -718,9 +718,12 @@ export class CustodianSessionStore {
         }
       }
       this.retryParams = null;
-      this.wizardValue = result.step ? initialWizardValue(result.step) : undefined;
-      const message = createCustodianReplyMessage(this.nextMessageId, result);
-      this.nextMessageId += 1;
+      const step = result.step;
+      this.wizardValue = step ? initialWizardValue(step) : undefined;
+      if (step?.type === "text" && !step.sensitive && params.wizardAnswer?.stepId === step.id) {
+        this.wizardValue = params.wizardAnswer.value;
+      }
+      const message = createCustodianReplyMessage(this.nextMessageId++, result);
       this.messages = [...this.messages, message];
       if (result.handoff?.kind === "model-accounts") {
         this.exitSetup("profile");

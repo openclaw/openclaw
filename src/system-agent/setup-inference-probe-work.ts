@@ -14,6 +14,8 @@ export type SetupTurnSuccess = {
   latencyMs: number;
   text: string;
   auth: AgentExecutionAuthBinding;
+  /** Effective context window the runtime resolved for the probe, when it reports one. */
+  contextTokens?: number;
 };
 
 /** The probe is setup evidence, not a chat turn: its events must never reach Gateway projection. */

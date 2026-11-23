@@ -141,6 +141,7 @@ it.each(["runtime", "doctor"] as const)(
       const { db } = await assertSqliteMigrationScopePreserved(
         scope,
         [
+          "operator_approvals",
           "schema_meta",
           "config_machine_state",
           "github_publication_requests",
@@ -149,6 +150,7 @@ it.each(["runtime", "doctor"] as const)(
           "session_state_heads",
           "session_repository_workspaces",
           "worker_workspace_pending_results",
+          "worker_session_placements",
           "worker_environments",
           "acp_replay_events",
           "skill_usage",

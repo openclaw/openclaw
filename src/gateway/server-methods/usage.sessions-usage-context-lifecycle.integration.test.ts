@@ -481,6 +481,13 @@ it.for([
       expect(dispatches()).toEqual(["prepare", "report"]);
       expect(contextOnly.totals.totalTokens).toBe(17);
       expect(contextOnly.sessions.map((row) => row.sessionId)).toEqual([sessions[0]!.sessionId]);
+      const minimumTokens = await read("minTokens:1");
+      expect(minimumTokens.totals.totalTokens).toBe(40);
+      expect(minimumTokens.sessions[0]).toMatchObject({
+        sessionId: sessions[0]!.sessionId,
+        hasContextWeight: true,
+      });
+      expect(dispatches()).toEqual(["report"]);
       const withContext = await read("model:synthetic", true);
       expect(dispatches()).toEqual(["prepare", "cohorts"]);
       expect(withContext.totals.totalTokens).toBe(40);

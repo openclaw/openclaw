@@ -458,6 +458,7 @@ async function readConfigSnapshot(
 export async function prepareConfigRecoveryFromContext(
   context: ConfigIoContext,
   current: ConfigFileSnapshot,
+  intent?: "doctor-repair",
 ): Promise<PreparedConfigRecovery | null> {
   return await withArtifactPreservingStateReads(async () => {
     if (
@@ -483,6 +484,7 @@ export async function prepareConfigRecoveryFromContext(
       context.transformRecoveryCandidate,
     );
     const plan = await prepareSuspiciousConfigRead({
+      intent,
       deps: previewContext.deps,
       measure: previewContext.deps.measure,
       configPath: context.configPath,

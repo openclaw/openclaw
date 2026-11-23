@@ -129,7 +129,11 @@ export function registerGracefulGatewayShutdownTests(f: UpdateRespawnFixtures): 
           ).toHaveBeenCalledOnce();
           expectUncalled(f.restartGatewayProcessWithFreshPid, f.respawnGatewayProcessForUpdate);
           // Settled cleanup still bounds a leaked handle that would outlive the loop.
-          expect(f.requestSettledExitWatchdog).toHaveBeenCalledExactlyOnceWith(1_000, undefined);
+          expect(f.requestSettledExitWatchdog).toHaveBeenCalledExactlyOnceWith(
+            1_000,
+            undefined,
+            expect.any(Function),
+          );
         }, true);
       } finally {
         closing.release();
@@ -356,7 +360,11 @@ export function registerShutdownCompletionTests(f: UpdateRespawnFixtures): void 
       expectCallCount(1, close, f.armShutdownHardExitWatchdog);
       await expect(loopPromise).resolves.toBe(1);
       expect(f.cancelShutdownHardExitWatchdog).toHaveBeenCalledOnce();
-      expect(f.requestSettledExitWatchdog).toHaveBeenCalledExactlyOnceWith(1_000, "SIGUSR2");
+      expect(f.requestSettledExitWatchdog).toHaveBeenCalledExactlyOnceWith(
+        1_000,
+        "SIGUSR2",
+        expect.any(Function),
+      );
     }, true);
   });
 }

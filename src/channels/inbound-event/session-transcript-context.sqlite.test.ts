@@ -3,6 +3,7 @@ import { afterAll, expect, it } from "vitest";
 import { buildInboundUserContextPrefix } from "../../auto-reply/reply/inbound-meta.js";
 import type { FinalizedMsgContext } from "../../auto-reply/templating.js";
 import {
+  applySessionEntryLifecycleMutation,
   loadTranscriptEvents,
   persistSessionTranscriptTurn as persistTurn,
   replaceSessionEntry,
@@ -279,3 +280,91 @@ it("suppresses already-replayed DM turns while preserving delivery-only context 
   expect(prompt).not.toContain("ordinary user turn");
   expect(prompt).not.toContain("ordinary assistant reply");
 });
+
+it.each([
+  ["group", { historyLimit: 50 }],
+  ["direct", { historyLimit: 50, historyKind: "pending" as const }],
+] as const)(
+  "sends each replayed %s turn once and nothing from before /new",
+  async (chatType, SessionTranscriptContext) => {
+    const scope = {
+      agentId: "main",
+      sessionId: `pending-${chatType}`,
+      sessionKey: "agent:main:main",
+      storePath: path.join(sessionDirs.make(), "sessions.json"),
+    };
+    const sessionEntry = { sessionId: scope.sessionId, chatType, updatedAt: 1 };
+    await replaceSessionEntry(scope, sessionEntry);
+    const exchange = async (question: string, answer: string, messageId: string) => {
+      await persistUserTurnTranscript({
+        ...scope,
+        sessionEntry,
+        input: {
+          text: question,
+          timestamp: Date.now(),
+          transport: { channel: "whatsapp", messageId },
+        },
+      });
+      await persistTurn(scope, {
+        updateMode: "none",
+        messages: [{ message: { role: "assistant", content: answer, stopReason: "stop" } }],
+      });
+    };
+    await exchange("question before reset", "answer before reset", "m-before");
+    // /new keeps the session id and writes a clear-context reset boundary.
+    await applySessionEntryLifecycleMutation({
+      skipMaintenance: true,
+      storePath: scope.storePath,
+      upserts: [
+        {
+          entry: { ...sessionEntry, updatedAt: 2 },
+          resetBoundary: { context: "clear", reason: "new", cwd: "/tmp/workspace" },
+          sessionKey: scope.sessionKey,
+        },
+      ],
+    });
+    await exchange("question after reset", "answer after reset", "m-after");
+    const ctx: FinalizedMsgContext = {
+      Body: "next message",
+      RawBody: "next message",
+      CommandBody: "next message",
+      SessionKey: scope.sessionKey,
+      AgentId: scope.agentId,
+      Provider: "whatsapp",
+      ChatType: chatType,
+      Timestamp: Date.now() + 1_000,
+      CommandAuthorized: false,
+      SessionTranscriptContext,
+      InboundHistory: [
+        { messageId: "side", sender: "Bob", body: "side note", timestamp: Date.now() },
+      ],
+    };
+    let prompt = "";
+    await runPreparedChannelTurn({
+      channel: "whatsapp",
+      routeSessionKey: scope.sessionKey,
+      storePath: scope.storePath,
+      ctxPayload: ctx,
+      recordInboundSession: async () => undefined,
+      runDispatch: async () => {
+        prompt = buildInboundUserContextPrefix(ctx);
+        return { queuedFinal: false };
+      },
+    });
+
+    // The run replays the post-reset exchange from the session itself.
+    expect((await readRecent(scope)).map((turn) => turn.text)).toEqual([
+      "question after reset",
+      "answer after reset",
+    ]);
+    expect(prompt).toContain("side note");
+    for (const text of [
+      "question before reset",
+      "answer before reset",
+      "question after reset",
+      "answer after reset",
+    ]) {
+      expect(prompt).not.toContain(text);
+    }
+  },
+);

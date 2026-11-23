@@ -19,7 +19,9 @@ import { Tooltip } from "../../../components/solid/tooltip.tsx";
 import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
 import { isCronInventoryInvalidation } from "../../../lib/cron/inventory-connection.ts";
 import { loadCompactCronJobsPage, retireCronJobsRequest } from "../../../lib/cron/jobs.ts";
-import { createInitialCronState } from "../../../lib/cron/state.ts";
+import { createSessionAutomationSchedule } from "../../../lib/cron/session-automation-schedule-loader.ts";
+import { sessionAutomationNextRun } from "../../../lib/cron/session-automation-schedule-non-cron.ts";
+import { createCronReadState } from "../../../lib/cron/state.ts";
 import { createGatewayConnectionLifecycle } from "../../../lib/gateway-connection-lifecycle.ts";
 import { canCallGatewayMethod, canPresentGatewayMethod } from "../../../lib/gateway-methods.ts";
 import { createGatewayRetryOwner } from "../../../lib/gateway-retry.ts";
@@ -28,15 +30,13 @@ import { useOptionalApplication } from "../../../lib/reactive/context.ts";
 import { elementRef } from "../../../lib/reactive/element-ref.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { listen } from "../../../lib/reactive/listener.ts";
+import "../../../styles/chat/summary-automations.css";
 import { resolveUiConversationIdentity } from "../../../lib/sessions/session-key.ts";
 import { HoverMarquee } from "../../../lib/solid/hover-marquee.tsx";
-import "../../../styles/chat/summary-automations.css";
 import type { DetailsAutomation, DetailsSnapshotPatch } from "../chat-details-snapshot.ts";
 import type { ChatDetailsSnapshot } from "../session-details-snapshot-schema.ts";
 import { ChatDetailsDesktopSection } from "./chat-details-desktop-section.tsx";
 import { ChatLazyBoundary } from "./chat-lazy-boundary.tsx";
-import { createSessionAutomationSchedule } from "./session-automation-schedule-loader.ts";
-import { sessionAutomationNextRun } from "./session-automation-schedule-non-cron.ts";
 
 registerEnglishCatalog(registerChatSessionEnglish);
 
@@ -69,7 +69,7 @@ export function createSessionAutomationInventory(
   const [revision, setRevision] = createSignal(0);
   const publish = () => setRevision((value) => value + 1);
   // The loader owns synchronous request state; Solid only observes its revision.
-  let cron = createInitialCronState<CronCompactJob>();
+  let cron = createCronReadState<CronCompactJob>();
   const [receipt, setReceipt] = createSignal<{
     state: typeof cron;
     result: Promise<void>;
@@ -121,7 +121,7 @@ export function createSessionAutomationInventory(
     readAccess = canPresentGatewayMethod(source?.snapshot, "cron.list", "operator.read", {
       requireAdvertisement: false,
     });
-    const next = createInitialCronState<CronCompactJob>({
+    const next = createCronReadState<CronCompactJob>({
       client: source?.snapshot.client ?? null,
       connected: source?.snapshot.phase === "connected",
     });

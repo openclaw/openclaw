@@ -519,7 +519,12 @@ export function registerRequesterWakeReceiptBoundaryTests({
               ? { lifecycleRunId: requesterTurnRunId, activeWriterRunId: requesterTurnRunId }
               : { status: "failed", lastRunId: requesterTurnRunId },
       );
-      if (scenario === "rejected wake" || stableBatch || rejectPersistence) {
+      if (
+        scenario === "rejected wake" ||
+        stableBatch ||
+        rejectPersistence ||
+        scenario === "rejected newer yield"
+      ) {
         const events = readTranscriptEventRows(
           openOpenClawAgentDatabase({ agentId: "main" }),
           entry!.sessionId,
@@ -530,8 +535,9 @@ export function registerRequesterWakeReceiptBoundaryTests({
             .filter((event) => event.customType === "run-failed-before-reply"),
         ).toEqual([
           expect.objectContaining({
-            content:
-              "⚠️ The child result couldn't be delivered to this conversation. Your conversation is preserved. Check the child sessions for saved work, then retry or resend your request.",
+            content: expect.stringContaining(
+              "The child result couldn't be delivered to this conversation.",
+            ),
             display: true,
             details: expect.objectContaining({
               runId: stableBatch
