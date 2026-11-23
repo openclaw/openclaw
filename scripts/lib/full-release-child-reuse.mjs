@@ -513,7 +513,7 @@ const BETA2_BOOKKEEPING_BLOBS = new Map([
     "test/scripts/full-release-artifact-contract.test.ts",
     "bae2928a25ac7a955941bf9e885dd5e834b4c5f9",
   ],
-  ["test/scripts/full-release-artifacts.test.ts", "59d6a53857fcf9c9b9826200cc6637688afb3f35"],
+  ["test/scripts/full-release-artifacts.test.ts", "b0c0b39142e044c9ac738760cb403d26b8286e56"],
   [
     "test/scripts/full-release-validation-at-sha.candidate.test.ts",
     "8642e22cab6c0aff3f968e6ae47afe249026c7b4",

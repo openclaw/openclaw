@@ -1,9 +1,11 @@
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { delimiter, dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
+import { runInNewContext } from "node:vm";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { parse } from "yaml";
 import { selectPublicationArtifactSource } from "../../scripts/full-release-artifacts.mjs";
 import { buildFullReleaseCandidateBinding } from "../../scripts/full-release-candidate-contract.mjs";
 import {
@@ -1605,6 +1607,70 @@ function selectionFixture(
 }
 
 describe("explicit publication artifact selection", () => {
+  it.each([true, false])(
+    "runs workflow selection in its provisioned checkout (admitted Q: %s)",
+    (admitted) => {
+      const test = fixture();
+      const steps = parse(readFileSync(".github/workflows/full-release-validation.yml", "utf8"))
+        .jobs.evidence_reuse.steps;
+      const install = steps.find(
+        (step: { name?: string }) => step.name === "Install qualification verifier dependencies",
+      );
+      const selection = steps.find((step: { id?: string }) => step.id === "artifacts");
+      const source = {
+        ...(admitted ? { qualificationAdmission: { workflowSha: "c".repeat(40) } } : {}),
+        coverage: {
+          publication_artifact_source_json: JSON.stringify({ runId: "51", runAttempt: 1 }),
+        },
+      };
+      const context = {
+        needs: {
+          resolve_target: {
+            result: "success",
+            outputs: { source_admission_json: JSON.stringify(source) },
+          },
+        },
+        github: { workspace: test.root },
+        fromJSON: JSON.parse,
+        format: (pattern: string, workspace: string) => pattern.replace("{0}", workspace),
+      };
+      const evaluate = (expression: string) =>
+        runInNewContext(expression.replace(/^\s*\$\{\{|\}\}\s*$/gu, "").trim(), context);
+      for (const checkout of ["workflow", "qualification-verifier"]) {
+        // Copy real scripts, not a symlink that could resolve dependencies in the source checkout.
+        cpSync("scripts", join(test.root, checkout, "scripts"), { recursive: true });
+      }
+      const provisioned = evaluate(install["working-directory"]);
+      expect(provisioned).toBe(admitted ? "qualification-verifier" : "workflow");
+      symlinkSync(resolve("node_modules"), join(test.root, provisioned, "node_modules"), "dir");
+      expect(
+        existsSync(
+          join(test.root, admitted ? "workflow" : "qualification-verifier", "node_modules"),
+        ),
+      ).toBe(false);
+      const script = join(test.root, "select-artifacts.sh");
+      writeFileSync(script, selection.run);
+      const result = test.run(
+        "reuse",
+        {
+          SOURCE_ADMISSION_JSON: JSON.stringify(source),
+          OPENCLAW_RELEASE_CI_SUMMARY_VALIDATOR: evaluate(
+            selection.env.OPENCLAW_RELEASE_CI_SUMMARY_VALIDATOR,
+          ),
+        },
+        script,
+        { preloadFetch: false, executable: "bash" },
+      );
+      expect(result.status, result.stderr).toBe(1);
+      expectRejected(
+        result,
+        "Selected publication artifact parent attempt changed or is not terminal",
+      );
+      expect(result.apiCalls[`repos/${REPOSITORY}/actions/runs/51`]).toBe(1);
+      expect(result.outputs).toEqual({});
+      expect(selection.env.PARENT_WORKFLOW_SHA).toBe("${{ github.sha }}");
+    },
+  );
   it("runs explicit selection through the direct CLI and reports asynchronous evidence rejection", () => {
     const test = fixture();
     // Match the workflow node command, without preloads or the test runner's Bun executable.
