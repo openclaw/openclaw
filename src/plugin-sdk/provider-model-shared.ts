@@ -369,6 +369,8 @@ type BuildProviderReplayFamilyHooksOptions =
   | {
       /** Google Gemini transcript policy with Gemini replay sanitation hooks. */
       family: "google-gemini";
+      /** Select append-only context for transports that do not use the managed transient suffix. */
+      usesAppendOnlyRuntimeContext?: (ctx: ProviderReplayPolicyContext) => boolean;
     }
   | {
       /** OpenAI-compatible transport carrying Gemini-style thought signatures. */
@@ -422,7 +424,12 @@ export function buildProviderReplayFamilyHooks(
     }
     case "google-gemini":
       return {
-        buildReplayPolicy: buildGoogleGeminiReplayPolicy,
+        buildReplayPolicy: (ctx) => {
+          const policy = buildGoogleGeminiReplayPolicy();
+          return options.usesAppendOnlyRuntimeContext?.(ctx)
+            ? { ...policy, appendOnlyRuntimeContext: true }
+            : policy;
+        },
         // Retained adapter for third-party callers of the legacy family hook.
         sanitizeReplayHistory: sanitizeGoogleGeminiReplayHistory,
         sanitizeReplayHistoryAsync: sanitizeGoogleGeminiReplayHistoryAsync,
