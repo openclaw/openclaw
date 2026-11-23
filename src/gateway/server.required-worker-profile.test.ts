@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, expect, test, vi } from "vitest";
+import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import {
   type SessionPlacementAdmissionProvider,
   installSessionPlacementAdmissionProvider,
@@ -298,8 +299,14 @@ test.each(["channel", "incognito", "shared"] as const)(
       Parameters<typeof createRequiredWorkerSessionPreparation>[0]["dispatch"]["dispatch"]
     >(async (request, onTransition, assertCurrent, signal, awaitRequestedHandoff) => {
       dispatchAssertion = assertCurrent;
-      assertCurrent?.();
-      assertCurrent?.();
+      const sql = observeHostDataSql();
+      try {
+        assertCurrent?.();
+        assertCurrent?.();
+        expect(sql.queries).toEqual([]);
+      } finally {
+        sql.restore();
+      }
       const requested = await placements.startDispatch(request);
       onTransition?.(requested);
       await awaitRequestedHandoff?.(signal);
@@ -337,8 +344,14 @@ test.each(["channel", "incognito", "shared"] as const)(
       await prepare(
         identity,
         async (assertCurrent) => {
-          assertCurrent();
-          assertCurrent();
+          const sql = observeHostDataSql();
+          try {
+            assertCurrent();
+            assertCurrent();
+            expect(sql.queries).toEqual([]);
+          } finally {
+            sql.restore();
+          }
           retainedAssertion = assertCurrent;
         },
         undefined,

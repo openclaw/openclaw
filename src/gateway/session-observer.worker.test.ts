@@ -17,6 +17,7 @@ import {
   runOpenClawAgentWorkerWrite,
   runOpenClawAgentWriteAdmission,
 } from "../state/openclaw-agent-write-admission.js";
+import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import {
   withOpenClawTestState,
   type OpenClawTestState,
@@ -46,6 +47,11 @@ const observerConfig = (store: string | undefined, utilityModel = ""): OpenClawC
   gateway: { controlUi: { sessionObserver: true } },
   agents: { defaults: { utilityModel } },
 });
+
+function traceSql() {
+  const trace = observeMainThreadSql();
+  return { ...trace, [Symbol.dispose]: () => trace.restore() };
+}
 
 function send(
   observer: ReturnType<typeof createSessionObserver>,
@@ -173,7 +179,10 @@ it("moves observer admission, publication, terminal and companion reads off the 
       vi.spyOn(entryFacts, "readRetainedSessionEntryFacts").mockReturnValue(undefined);
       const start = event({ stream: "lifecycle", data: { phase: "start" } });
       {
+        using sql = traceSql();
         observer.handleEvent(start);
+        sql.expectIdle();
+        sql.clear();
         await observer.handleEventAsync({ ...start, runId: "worker-run" });
         await sendPreamble(observer, "Worker observation", "worker-run");
         for (const delta of ["Checking ", "the implementation."]) {
@@ -185,15 +194,25 @@ it("moves observer admission, publication, terminal and companion reads off the 
           sequence: 1,
           text: "Assistant: Checking the implementation.",
         });
+        sql.expectIdle();
+        sql.restore();
         peer.prepare(lifecycleUpdate).run(key);
         advanceClock();
-        await sendPreamble(observer, "Retired observation", "worker-run");
-        expect(broadcast).toHaveBeenCalledTimes(1);
+        {
+          using fresh = traceSql();
+          await sendPreamble(observer, "Retired observation", "worker-run");
+          expect(broadcast).toHaveBeenCalledTimes(1);
+          fresh.expectIdle();
+        }
         await resetLifecycle();
-        expect((await observer.getCompanionSnapshotAsync(key, "main")).digest).toBeUndefined();
-        await send(observer, "lifecycle", { phase: "end" }, "worker-run");
-        await observer.disposeAsync();
-        expect(broadcast).toHaveBeenCalledTimes(1);
+        {
+          using after = traceSql();
+          expect((await observer.getCompanionSnapshotAsync(key, "main")).digest).toBeUndefined();
+          await send(observer, "lifecycle", { phase: "end" }, "worker-run");
+          await observer.disposeAsync();
+          expect(broadcast).toHaveBeenCalledTimes(1);
+          after.expectIdle();
+        }
       }
     },
     false,
