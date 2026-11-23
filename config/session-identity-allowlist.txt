@@ -805,7 +805,7 @@ src/gateway/github-repository-publication-workspace.ts	1
 src/gateway/github-repository-publication.kernel.ts	2
 src/gateway/github-repository-publication.ts	7
 src/gateway/hooks-mapping.ts	1
-src/gateway/human-mention-policy.ts	4
+src/gateway/human-mention-policy.ts	3
 src/gateway/in-process-session-run.ts	5
 src/gateway/internal-source-reply-persistence.ts	21
 src/gateway/managed-image-attachments.ts	2
@@ -1080,7 +1080,6 @@ src/gateway/subagent-completion-tool-handoff.ts	4
 src/gateway/talk/client-agent-consult.ts	8
 src/gateway/talk/client-agent-runtime.ts	3
 src/gateway/talk/client-gateway-control.ts	2
-src/gateway/talk/client-run-authority.ts	2
 src/gateway/talk/handlers/client-legacy-voice-bindings.ts	2
 src/gateway/talk/handlers/client.ts	2
 src/gateway/talk/handlers/voice.ts	4

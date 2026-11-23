@@ -259,7 +259,7 @@ export function createGatewayControlUiIngressFactory(params: {
             ? error
             : new GatewayControlUiIngressError(
                 "forbidden",
-                "Remote ingress principal authority changed; reopen the binding under current authority.",
+                "Remote ingress principal binding changed. Reopen the binding and try again.",
               );
         invalidated.abort(denial);
         prepared.release();
@@ -271,20 +271,28 @@ export function createGatewayControlUiIngressFactory(params: {
         const initialIdentity = prepared.readCurrentFacts();
         const initial = initialIdentity.profile;
         const emailBindingIds = prepared.emailBindingIds;
-        const readRole = (current: typeof initial) =>
-          openclawIdSubjectRolePolicy(admission?.principal, () =>
-            resolveOperatorRolePolicyForAssignment(
-              profileId,
-              current.assignedRole,
-              host.getRuntimeConfig(),
-              current.githubLogin ?? null,
-              operatorRoleSubject(current),
-            ),
-          );
-        const role = principal.kind !== "owner" ? structuredClone(readRole(initial)) : undefined;
+        const [cfg, subject] = [host.getRuntimeConfig(), operatorRoleSubject(initial)];
+        const role =
+          principal.kind !== "owner"
+            ? openclawIdSubjectRolePolicy(admission?.principal, () =>
+                resolveOperatorRolePolicyForAssignment(
+                  profileId,
+                  initial.assignedRole,
+                  cfg,
+                  initial.githubLogin ?? null,
+                  subject,
+                ),
+              )
+            : undefined;
+        if (
+          principal.kind === "person" &&
+          gatewayPersonPrincipalAuthError(host.getResolvedAuth(), cfg, initial.emails, subject)
+        ) {
+          throw new Error("Principal is not allowed by the Gateway auth policy");
+        }
         const access =
           principal.kind !== "owner"
-            ? resolveGatewayOperatorAccessAuthority(profileId, host.getRuntimeConfig(), {
+            ? resolveGatewayOperatorAccessAuthority(profileId, cfg, {
                 requireLivePolicySet: true,
                 openclawIdPrincipal: admission?.principal,
               })
@@ -304,17 +312,9 @@ export function createGatewayControlUiIngressFactory(params: {
             if (
               !isDeepStrictEqual(currentIdentity.aliases, initialIdentity.aliases) ||
               initial.emails.some((email) => !current.emails.includes(email)) ||
-              initial.githubAccountIds?.some((id) => !current.githubAccountIds?.includes(id)) ||
-              (principal.kind === "person" &&
-                gatewayPersonPrincipalAuthError(
-                  host.getResolvedAuth(),
-                  host.getRuntimeConfig(),
-                  current.emails,
-                  operatorRoleSubject(current),
-                ) !== undefined) ||
-              !isDeepStrictEqual(role, principal.kind !== "owner" ? readRole(current) : undefined)
+              initial.githubAccountIds?.some((id) => !current.githubAccountIds?.includes(id))
             ) {
-              throw new Error("Principal identity or role changed");
+              throw new Error("Principal identity changed");
             }
             access?.assertCurrent();
             return { ...currentIdentity, row };
