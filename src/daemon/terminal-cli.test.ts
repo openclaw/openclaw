@@ -6,6 +6,8 @@ import { replaceFileAtomic } from "@openclaw/fs-safe/atomic";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { applyCliProfileEnv, parseCliProfileArgs } from "../cli/profile.js";
 import { resolveExecutablePath } from "../infra/executable-path.js";
+import { gitReleaseSlot, resolveGitReleasePrefix } from "../infra/git-release-paths.js";
+import { writeLauncher } from "../update/launcher.js";
 import { installDesktopTerminalPath, installGatewayTerminalCli } from "./terminal-cli.js";
 
 vi.mock("@openclaw/fs-safe/atomic", async (importOriginal) => {
@@ -445,6 +447,65 @@ describe.skipIf(process.platform === "win32")("Gateway terminal installation", (
     );
     await f.install("first", next);
     expect(f.run()).toEqual({ profile: "first", args: ["upgraded"] });
+  });
+
+  it("refreshes an owned profile shim to follow the resident Git release launcher", async () => {
+    const f = await fixture("work");
+    await f.install();
+    await f.install("other");
+    const otherShim = path.join(f.home, ".openclaw-other/bin/openclaw");
+    const previousOther = await fs.readFile(otherShim, "utf8");
+    const prefix = resolveGitReleasePrefix(f.env);
+    const slot = gitReleaseSlot(prefix);
+    const launcher = await writeLauncher(prefix);
+    for (const release of ["first-release", "next-release"]) {
+      const root = path.join(prefix, "releases", release, "openclaw");
+      await writeFixtureFile(
+        path.join(root, "package.json"),
+        '{"name":"openclaw","type":"module"}',
+      );
+      await writeFixtureFile(path.join(root, "dist/index.js"), 'throw new Error("Gateway entry");');
+      await writeFixtureFile(
+        path.join(root, "dist/entry.js"),
+        `console.log(JSON.stringify({
+          release: ${JSON.stringify(release)},
+          profile: process.env.OPENCLAW_PROFILE,
+          runtimeFlags: process.execArgv,
+          args: process.argv.slice(2),
+        }));`,
+      );
+    }
+    await fs.symlink("releases/first-release/openclaw", slot);
+    const runtimeFlag = "--max-old-space-size=2048";
+    const refresh = () =>
+      installGatewayTerminalCli({
+        env: f.env,
+        command: {
+          programArguments: [process.execPath, runtimeFlag, launcher, "gateway", "--port", "19999"],
+        },
+        warn: (message) => f.warnings.push(message),
+      });
+    await fs.writeFile(launcher, 'throw new Error("Unexpected launcher");');
+    await refresh();
+    expect(f.run(["--version"])).toEqual({ profile: "work", args: ["--version"] });
+    await writeLauncher(prefix);
+    await refresh();
+
+    expect(f.run(["--version"])).toEqual({
+      release: "first-release",
+      profile: "work",
+      runtimeFlags: [runtimeFlag],
+      args: ["--version"],
+    });
+    await fs.unlink(slot);
+    await fs.symlink("releases/next-release/openclaw", slot);
+    expect(f.run(["--version"])).toEqual({
+      release: "next-release",
+      profile: "work",
+      runtimeFlags: [runtimeFlag],
+      args: ["--version"],
+    });
+    expect(await fs.readFile(otherShim, "utf8")).toBe(previousOther);
   });
 
   it.each([

@@ -12,6 +12,7 @@ import { resolveConfigPath, resolveStateDir } from "../config/paths.js";
 import { resolvePathViaExistingAncestorSync } from "../infra/boundary-path.js";
 import { ignoreMissingPath, isMissingPathError } from "../infra/errno.js";
 import { isExecutableFileAsync, resolveExecutablePathAsync } from "../infra/executable-path.js";
+import { GIT_RELEASE_LAUNCHER, resolveGitReleasePrefix } from "../infra/git-release-paths.js";
 import { resolveRequiredHomeDir } from "../infra/home-dir.js";
 import { lstatIfExists } from "../infra/path-existence.js";
 import { isPathInside } from "../infra/path-guards.js";
@@ -25,6 +26,8 @@ import { resolveServiceEntrypointIndex, summarizeGatewayServiceLayout } from "./
 import type { GatewayServiceInstallArgs } from "./service-types.js";
 
 const signature = "#!/bin/sh\n# OpenClaw managed terminal CLI\n";
+const gitReleaseLauncherSignature =
+  /^#!\/usr\/bin\/env node\n\/\/ OpenClaw (?:release launcher, written by openclaw update\. Services and the CLI on PATH run this file\.|launcher format: \d+)\n/;
 type Snapshot = Awaited<ReturnType<typeof readRegularFile>> | undefined;
 
 async function snapshot(file: string): Promise<Snapshot> {
@@ -106,14 +109,24 @@ export async function installGatewayTerminalCli(params: {
     const entrypoint = layout?.entrypoint;
     const packageRoot = layout?.packageRoot;
     const runtime = command.programArguments[0] ?? "";
+    const releaseLauncher = path.join(resolveGitReleasePrefix(env), GIT_RELEASE_LAUNCHER);
+    const usesReleaseLauncher =
+      index !== undefined &&
+      command.programArguments[index] === releaseLauncher &&
+      (await lstatIfExists(releaseLauncher))?.isFile() &&
+      gitReleaseLauncherSignature.test(
+        (await snapshot(releaseLauncher))?.buffer.toString("utf8") ?? "",
+      );
+    // Validate the selected package, but let the resident launcher follow later release switches.
+    const packageEntrypoint = usesReleaseLauncher ? layout?.entrypointReal : entrypoint;
     const packaged =
       index !== undefined &&
       index > 0 &&
       (isNodeRuntime(runtime) || isBunRuntime(runtime)) &&
       packageRoot &&
-      entrypoint &&
+      packageEntrypoint &&
       ["openclaw.mjs", "dist/index.js", "dist/index.mjs", "dist/entry.js"].some(
-        (name) => path.join(packageRoot, name) === entrypoint,
+        (name) => path.join(packageRoot, name) === packageEntrypoint,
       );
     if (
       index === undefined ||
@@ -128,7 +141,10 @@ export async function installGatewayTerminalCli(params: {
     const home = resolveRequiredHomeDir(env);
     const profile = normalizeProfileName(env.OPENCLAW_PROFILE) ?? "default";
     const state = resolveProfileStateDir(profile, env, () => home);
-    const prefix = [...command.programArguments.slice(0, index), entrypoint];
+    const prefix = [
+      ...command.programArguments.slice(0, index),
+      usesReleaseLauncher ? releaseLauncher : entrypoint,
+    ];
     const contextual = prefix.map(quoteCliArg).join(" ") + " --profile " + profile;
     if (
       path.resolve(resolveStateDir(env)) !== state ||
