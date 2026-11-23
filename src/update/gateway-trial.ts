@@ -37,6 +37,25 @@ export async function settleRunFromTrial(
   }
   const outcome = trial.outcome;
   const buildId = resolveRuntimeServiceBuildId();
+  // Only the release that actually booted may claim successful activation.
+  if (outcome.status === "succeeded" && trial.buildId && buildId !== trial.buildId) {
+    return;
+  }
+  await recordUpdateRunVerificationAsync(trial.runId, {
+    runningVersion: VERSION,
+    ...(buildId ? { runningBuildId: buildId } : {}),
+    booted: true,
+    serviceRunning: true,
+    coreReady: true,
+    ...(outcome.status === "succeeded"
+      ? { versionMatch: true }
+      : {
+          rollbackOutcome: {
+            status: "succeeded",
+            reason: outcome.reason ?? "new build failed to start",
+          },
+        }),
+  });
   if (outcome.status === "rolled-back" && outcome.stderrTail) {
     const stderrTail = redactSensitiveText(outcome.stderrTail, { mode: "tools" });
     await recordUpdateRunStepAsync(trial.runId, {
@@ -46,29 +65,15 @@ export async function settleRunFromTrial(
       stderrTail,
     });
   }
-  const finished =
+  const finished = await finishUpdateRunAsync(
+    trial.runId,
     outcome.status === "succeeded"
-      ? await finishSucceeded(trial)
-      : await finishUpdateRunAsync(trial.runId, {
+      ? { status: "succeeded", after: { version: VERSION, buildId } }
+      : {
           status: "failed",
           reason: `${outcome.reason ?? "The new version did not start"}; v${VERSION} is still running`,
-          diagnostics: {
-            rollbackOutcome: {
-              status: "succeeded",
-              reason: outcome.reason ?? "new build failed to start",
-            },
-            verification: {
-              runningVersion: VERSION,
-              ...(buildId ? { runningBuildId: buildId } : {}),
-              booted: true,
-              serviceRunning: true,
-              coreReady: true,
-            },
-          },
-        });
-  if (finished === null) {
-    return;
-  }
+        },
+  );
   trial.reported = true;
   await writeTrial(trial, prefix);
   // A requester that received the start notice also hears the outcome (same rule as the run watcher).
@@ -78,26 +83,6 @@ export async function settleRunFromTrial(
       await createUpdateRunNotifier(finished)
     )(finished, "finished");
   }
-}
-
-/** Only the release that actually booted may claim a successful activation. */
-async function finishSucceeded(trial: Trial & { runId: string }) {
-  const buildId = resolveRuntimeServiceBuildId();
-  if (trial.buildId && buildId !== trial.buildId) {
-    return null;
-  }
-  await recordUpdateRunVerificationAsync(trial.runId, {
-    runningVersion: VERSION,
-    ...(buildId ? { runningBuildId: buildId } : {}),
-    booted: true,
-    serviceRunning: true,
-    coreReady: true,
-    versionMatch: true,
-  });
-  return await finishUpdateRunAsync(trial.runId, {
-    status: "succeeded",
-    after: { version: VERSION, buildId },
-  });
 }
 
 /** Called after the listener is serving, including the old release after a rollback. */
