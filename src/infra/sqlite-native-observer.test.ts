@@ -11,7 +11,13 @@ function outcome(operation: () => unknown) {
   try {
     return operation();
   } catch (error) {
-    return error instanceof Error ? error.message : error;
+    return error instanceof Error
+      ? {
+          name: error.name,
+          code: (error as Error & { code?: string }).code,
+          message: error.message,
+        }
+      : error;
   }
 }
 
@@ -23,6 +29,32 @@ function expectNativeBehavior(
   expect(exercise(db, true)).toEqual(exercise(native, false));
   expect(hasPendingSqliteNativeExecution(db)).toBe(false);
 }
+
+it.each(["get", "all", "run", "iterate"] as const)(
+  "preserves native %s preparation, finalization, and binding errors",
+  (method) => {
+    const execute = (
+      statement: ReturnType<ReturnType<typeof open>["prepare"]>,
+      args: unknown[],
+    ) => {
+      const result = Reflect.apply(statement[method].bind(statement), undefined, args);
+      return method === "iterate" ? [...result] : result;
+    };
+    for (const sql of ["", "; -- empty\n /* comment */", "SELECT FROM"]) {
+      expectNativeBehavior((db) => outcome(() => execute(db.prepare(sql), [])));
+    }
+    for (const argument of [undefined, {}, Symbol("invalid")]) {
+      expectNativeBehavior((db) =>
+        outcome(() => execute(db.prepare("SELECT ? AS value"), [argument])),
+      );
+    }
+    expectNativeBehavior((db) => {
+      const statement = db.prepare("SELECT 1 AS value");
+      db.close();
+      return outcome(() => execute(statement, []));
+    });
+  },
+);
 
 it.each(["exec", "all"] as const)("retains custody across failing %s callbacks", (method) => {
   using db = open();
