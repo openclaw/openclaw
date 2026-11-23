@@ -284,7 +284,7 @@ describe("OpenAI-compatible operator run authority", () => {
           assert(childAuthority, "Detached work lost its original operator authority");
           expect(() => childAuthority.assertCurrent()).not.toThrow();
           child.close();
-          expect(() => authority.assertCurrent()).toThrow(/no longer active/);
+          expect(() => authority.assertCurrent()).toThrow(/Operator execution ended/);
         } finally {
           await close();
           child?.close();
