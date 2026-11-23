@@ -77,6 +77,36 @@ it("appends a failed child's status once to an idle parent and keeps it after co
     expect(statusTexts(compacted)).toHaveLength(1);
   }));
 
+it("bounds a large completed cohort to one shared history budget", () =>
+  withOpenClawTestState({ label: "child-status-budget" }, async (state) => {
+    const scope = await seedRequester(state);
+    await SessionManager.openAsync(scope);
+    const cohort = Array.from({ length: 16 }, (_, index) =>
+      createSubagentRunRecord({
+        runId: `cohort-${index}`,
+        label: `Fix the parser ${index}`,
+        childSessionKey: `agent:main:subagent:cohort-${index}`,
+        requesterSessionKey: scope.sessionKey,
+        requesterAgentId: scope.agentId,
+        requesterStorePath: scope.storePath,
+        expectsCompletionMessage: true,
+        completion: { required: true, resultText: "x".repeat(20_000) },
+        startedAt: 1,
+        endedAt: 2,
+        outcome: { status: "ok" },
+      }),
+    );
+    await appendChildStatusToRequester(cohort);
+
+    const statuses = statusTexts(
+      convertToLlm(
+        (await SessionManager.openModelContextAsync(scope)).buildSessionContext().messages,
+      ),
+    );
+    expect(statuses).toHaveLength(1);
+    expect(JSON.stringify(statuses[0]?.content).length).toBeLessThan(40_000);
+  }));
+
 it("keeps tool call and result adjacent at the provider boundary when a child ends mid-turn", () =>
   withOpenClawTestState({ label: "child-status-mid-turn" }, async (state) => {
     const scope = await seedRequester(state);

@@ -59,11 +59,13 @@ type AdmissionReceipt =
 type MutationReceipt = SubagentCompletionMutationResult & { writeId: string };
 
 const CHILD_STATUS_CUSTOM_TYPE = "subagent-completion";
-const MAX_CHILD_RESULT_CHARS = 8_000;
+const MAX_CHILD_STATUS_CHARS = 8_000;
+const MAX_STATUS_CHARS = 32_000;
 const NEXT_ACTION =
   "If you still need this work, resume it with sessions_send or start a new child with sessions_spawn.";
 
-async function formatChildStatus(child: SubagentRunRecord): Promise<string> {
+/** `budget` is this child's share of the whole entry, so a large cohort stays bounded. */
+async function formatChildStatus(child: SubagentRunRecord, budget: number): Promise<string> {
   const outcome = child.execution.outcome;
   const killed = child.endedReason === SUBAGENT_ENDED_REASON_KILLED;
   const status = killed
@@ -78,7 +80,11 @@ async function formatChildStatus(child: SubagentRunRecord): Promise<string> {
             : `failed: ${outcome.error || "unknown error"}`
           : "ended with unknown status";
   const label = child.label?.trim() || child.task?.trim() || "child task";
-  const header = `Child "${truncateUtf16Safe(label, 200)}" (session ${child.childSessionKey}, run ${child.runId}): ${status}`;
+  const header = truncateUtf16Safe(
+    `Child "${truncateUtf16Safe(label, 200)}" (session ${child.childSessionKey}, run ${child.runId}): ${status}`,
+    Math.min(1_000, budget),
+  );
+  const resultBudget = Math.max(0, budget - header.length - NEXT_ACTION.length);
   // A retired or replaced row keeps its frozen captured result.
   const result = killed
     ? ""
@@ -88,8 +94,8 @@ async function formatChildStatus(child: SubagentRunRecord): Promise<string> {
       )) ?? "");
   const shownText = result.trim();
   const shownResult =
-    shownText.length > MAX_CHILD_RESULT_CHARS
-      ? `${truncateUtf16Safe(shownText, MAX_CHILD_RESULT_CHARS)}\n[Result truncated. Read the rest with sessions_history on ${child.childSessionKey}.]`
+    shownText.length > resultBudget
+      ? `${truncateUtf16Safe(shownText, resultBudget)}\n[Result truncated. Read the rest with sessions_history on ${child.childSessionKey}.]`
       : shownText;
   return [header, shownResult, killed || outcome?.status === "ok" ? "" : NEXT_ACTION]
     .filter(Boolean)
@@ -108,7 +114,8 @@ export async function appendChildStatusToRequester(
       child.expectsCompletionMessage === true &&
       child.execution.status === "terminal" &&
       child.pauseReason !== "sessions_yield" &&
-      !hasConsumedRequesterInput(child),
+      !hasConsumedRequesterInput(child) &&
+      child.delivery?.status !== "delivered",
   );
   const first = shown[0];
   if (!first) {
@@ -127,8 +134,14 @@ export async function appendChildStatusToRequester(
   const runIds = shown
     .map((child) => `${child.runId}:${child.delivery?.generation ?? 1}`)
     .toSorted();
+  // The report owner dedupes against the latest status entry only. If the registry write after
+  // this append fails and another child appends first, the retry repeats this entry. Accepted:
+  // a rare repeated history line, never a lost result.
   const runId = buildAnnounceIdempotencyKey(`subagent-status:${runIds.join(",")}`);
-  const content = (await Promise.all(shown.map(formatChildStatus))).join("\n\n");
+  const budget = Math.min(MAX_CHILD_STATUS_CHARS, Math.floor(MAX_STATUS_CHARS / shown.length));
+  const content = (await Promise.all(shown.map((child) => formatChildStatus(child, budget)))).join(
+    "\n\n",
+  );
   const result = await runWithoutOwnedSessionTranscriptWrites(() =>
     appendSessionTranscriptReport(
       {
