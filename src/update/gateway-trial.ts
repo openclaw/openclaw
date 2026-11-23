@@ -80,6 +80,52 @@ export async function settleRunFromTrial(
           reason: `${outcome.reason ?? "The new version did not start"}; v${VERSION} is still running`,
         },
   );
+  if (outcome.status === "succeeded") {
+    const step = "post-activation doctor inspections";
+    // Advisory work never holds the committed trial handshake open.
+    void wakeUpdateRunWatcher(trial.runId, async () => {
+      try {
+        const [{ runPostActivationInspections }, { resolvePostActivationInspectionCheckIds }] =
+          await Promise.all([
+            import("../cli/update-cli/update-command-post-activation-inspections.js"),
+            import("../flows/doctor-health-contributions.js"),
+          ]);
+        const root = await resolveOpenClawPackageRoot({ moduleUrl: import.meta.url });
+        if (!root) {
+          throw new Error("Running release root not found");
+        }
+        const result = await runPostActivationInspections({
+          root,
+          gatewayReady: true,
+          checkIds: await resolvePostActivationInspectionCheckIds(),
+          timeoutMs: 120_000,
+          result: { status: "ok", mode: "unknown", steps: [], durationMs: 0 },
+        });
+        for (const projected of result.steps.flatMap(updateRunStepsFromResultStep)) {
+          await recordUpdateRunStepAsync(trial.runId, projected);
+        }
+        if (result.steps.length === 0) {
+          await recordUpdateRunStepAsync(trial.runId, { step, status: "completed" });
+        }
+      } catch (error) {
+        // The update stays successful; the skipped inspections are reported with a next step.
+        const detail = redactSensitiveText(
+          `Doctor inspections did not run after the update (${String(error)}). Run \`openclaw doctor --lint --all\` to check this install.`,
+          { mode: "tools" },
+        ).slice(0, 2000);
+        await recordUpdateRunStepAsync(trial.runId, { step, status: "completed", detail });
+        await recordUpdateRunStepAsync(trial.runId, {
+          step: `warning:${step}`,
+          status: "completed",
+          detail,
+        });
+      }
+    }).catch((error: unknown) => {
+      log.warn(
+        `update run ${trial.runId} inspection result could not be recorded: ${String(error)}`,
+      );
+    });
+  }
   trial.reported = true;
   await writeTrial(trial, prefix);
   // A requester that received the start notice also hears the outcome (same rule as the run watcher).
