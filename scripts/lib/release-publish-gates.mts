@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { validateReleaseManifestAdvisoryJobs } from "../full-release-validation-policy.mjs";
 import { isRecord } from "./record-shared.mjs";
+import { readReleaseManifestWaivers } from "./release-manifest-waivers.mts";
 import { resolveReleasePublishInputs } from "./release-publish-inputs.mjs";
 import { parseReleaseVersion } from "./release-version.mjs";
 
@@ -35,6 +36,7 @@ export function evaluateReleasePublishGates(input: {
   consumer: ReleasePublishConsumer;
   expectedSha?: string;
   expectedReleaseProfile?: string;
+  readWorkflowSource?: (sha: string, path: string) => string;
 }): ReleasePublishGate[] {
   const { manifest, consumer } = input;
   const gates: ReleasePublishGate[] = [];
@@ -140,7 +142,9 @@ export function evaluateReleasePublishGates(input: {
       ? "Runtime waiver and known-flaky inputs are no longer accepted."
       : "";
   try {
-    validateReleaseManifestAdvisoryJobs(manifest);
+    validateReleaseManifestAdvisoryJobs(manifest, {
+      waiverPolicy: readReleaseManifestWaivers(manifest, input.readWorkflowSource),
+    });
   } catch (error) {
     selectedLanesError ||= error instanceof Error ? error.message : String(error);
   }

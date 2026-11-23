@@ -1,5 +1,4 @@
 import fs from "node:fs/promises";
-import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { resolveStateDir } from "../../config/paths.js";
 import { resolveDatabaseFamilyEngines } from "../../infra/database-engine/registry.js";
@@ -17,6 +16,7 @@ import {
   type UpdateDatabaseBackup,
 } from "../../infra/update-database-backup.js";
 import { restoreUpdateDatabaseBackup } from "../../infra/update-database-restore.js";
+import { formatUpdateDatabaseSnapshotReceipt } from "../../infra/update-database-snapshot-receipt.js";
 import { UpdatePreMutationError } from "../../infra/update-pre-mutation-error.js";
 import { loadPluginCohortRecovery } from "../../infra/update-run-recovery-store.js";
 import { reportUpdateStepCompletion } from "../../infra/update-runner-command.js";
@@ -218,15 +218,7 @@ export async function captureUpdateDatabases(params: {
         params.assertCurrent();
         maintenance.assertCurrent();
       }
-      let backupRoot = transaction.databaseBackupRoot ?? transaction.backupRoot;
-      if (execution.updateInstallKind === "git" && !execution.switchToGit) {
-        // Database recovery outlives runtime retirement and stays outside the Git source fence.
-        const artifactRoot = path.join(execution.root, ".artifacts");
-        await fs.mkdir(artifactRoot, { recursive: true });
-        const physicalArtifactRoot = await fs.realpath(artifactRoot);
-        params.assertCurrent();
-        backupRoot = path.join(physicalArtifactRoot, path.basename(backupRoot));
-      }
+      const backupRoot = transaction.databaseBackupRoot ?? transaction.backupRoot;
       backupDirectory = `${backupRoot}.databases`;
       const captured = await createUpdateDatabaseBackup({
         backupRoot,
@@ -249,10 +241,6 @@ export async function captureUpdateDatabases(params: {
         postgresOffline: maintenance !== null && unavailable === undefined,
         postgresSchemaCaptures: source.config.database?.postgres?.recoveryCaptures === "server",
       });
-      if (execution.updateInstallKind === "git") {
-        // Git runtime transactions have no package journal; retire these snapshots with them.
-        transaction.databaseBackupRoot = backupRoot;
-      }
       params.assertCurrent();
       maintenance?.assertCurrent();
       return captured;
@@ -321,7 +309,7 @@ export async function captureUpdateDatabases(params: {
     durationMs: Date.now() - startedAt,
     exitCode: 0,
     diagnostics: [
-      `Databases snapshotted at ${backup.directory}. ${restorable ? "Verified successful activation removes these snapshots only if automatic restoration remains available; otherwise retain them with the update's recovery artifacts." : "These snapshots require manual recovery and remain available after successful activation."}`,
+      `${formatUpdateDatabaseSnapshotReceipt(backup.directory)} ${restorable ? "Verified successful activation removes these snapshots only if automatic restoration remains available; otherwise retain them with the update's recovery artifacts." : "These snapshots require manual recovery and remain available after successful activation."}`,
       ...backup.databases.map(
         (entry) =>
           `${entry.path} -> ${entry.snapshotPath}; schema ${entry.userVersion}; ${entry.sizeBytes} bytes; SHA-256 ${entry.sha256}`,
@@ -433,6 +421,7 @@ export async function restoreFailedUpdateDatabases(params: {
     const pair = params.backup.pluginCohortRecovery
       ? undefined
       : loadPluginCohortRecovery(params.runId, { env: params.env });
+    const journalReconciliationFailures: string[] = [];
     const migratedPaths = await restoreUpdateDatabaseBackup({
       ...params,
       pluginCohortRecovery:
@@ -441,6 +430,9 @@ export async function restoreFailedUpdateDatabases(params: {
       expectedGenerations: params.backup.migration?.to ?? params.backup.sourceGenerations,
       onLiveMutation: () => {
         liveMutationStarted = true;
+      },
+      onJournalReconciliationFailures: (failures) => {
+        journalReconciliationFailures.push(...failures);
       },
     });
     if (migratedPaths === null) {
@@ -459,6 +451,10 @@ export async function restoreFailedUpdateDatabases(params: {
         `Restored pre-migration databases from ${params.backup.directory}.`,
         ...migratedPaths.map(
           (file) => `Migrated database file retained for manual recovery: ${file}`,
+        ),
+        ...journalReconciliationFailures.map(
+          (failure) =>
+            `Journal policy re-establishment failed (recoverable; while no process holds the files run PRAGMA journal_mode=WAL): ${failure}`,
         ),
       ],
     };

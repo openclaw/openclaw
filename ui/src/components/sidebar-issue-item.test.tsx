@@ -236,7 +236,8 @@ describe("renderSidebarUpdateSurface", () => {
       try {
         await vi.waitFor(() => expect(harness.overlays.snapshot.updateRun?.runId).toBe(run.runId));
         const card = renderUpdate(harness.context);
-        card.querySelector<HTMLButtonElement>(".sidebar-update-card__action")!.click();
+        card.querySelector("summary")!.click();
+        card.querySelector<HTMLButtonElement>(".sidebar-issues-panel__action")!.click();
         const { modal } = await getRenderedModalDialog(document.body);
         render(null);
         expect(card.isConnected).toBe(false);

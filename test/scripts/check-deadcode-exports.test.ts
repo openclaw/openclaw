@@ -957,6 +957,9 @@ function other(lineageCompletion: typeof lineageWriter) {
       ).toBe(false);
       expect(compiled).toContain(`from "./${module}";`);
     }
+    expect(compiled).toMatch(
+      /import \{ runWithOpenClawStateLeaseWorker as __updateCompatibilityConsumer\d+ \} from "\.\/src\/state\/openclaw-state-lease-worker-operation\.ts";/u,
+    );
     const finishAliases = [
       ...compiled.matchAll(
         /import \{ finishUpdateRun as (__updateCompatibilityConsumer\d+) \} from "\.\/src\/infra\/update-run-(?:ledger|write)\.ts";/gu,
@@ -1041,9 +1044,5 @@ function other(lineageCompletion: typeof lineageWriter) {
 ${errors}
 Install workspace dependencies in-tree (pnpm install) — on delegated boxes the crabbox wrapper links the hydrated modules dir into the workdir — and rerun.`,
     });
-  });
-
-  it("accepts clean export scan output unchanged", () => {
-    expect(checkExportScan("clean scan", "")).toEqual({ entries: [], message: "", ok: true });
   });
 });

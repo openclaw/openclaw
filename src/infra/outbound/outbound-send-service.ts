@@ -4,14 +4,16 @@ import {
   type EmbeddedMessageDeliveryFact,
 } from "../../agents/embedded-agent-message-delivery.js";
 import type { AgentToolResult } from "../../agents/runtime/index.js";
-import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
+import { copyReplyPayloadMetadata, type ReplyPayload } from "../../auto-reply/reply-payload.js";
 import type { ChatType } from "../../channels/chat-type.js";
 import type { OutboundReplyFacts } from "../../channels/message/types.js";
 import { normalizeConversationReadInvocationOrigin } from "../../channels/plugins/conversation-read-origin.js";
 import { dispatchChannelMessageAction } from "../../channels/plugins/message-action-dispatch.js";
 import type { ChannelOutboundAdapter } from "../../channels/plugins/types.public.js";
 import { isChannelPartialDeliveryError } from "../../channels/turn/partial-delivery-error.js";
+import { stampAgentControls } from "../../interactive/agent-control.js";
 import {
+  normalizeLegacyInteractiveReply,
   normalizeMessagePresentation,
   renderMessagePresentationFallbackText,
 } from "../../interactive/payload.js";
@@ -85,6 +87,18 @@ type SendActionParams = {
   reply?: OutboundReplyFacts;
   threadId?: string | number;
 };
+
+function markAgentControls(payload: ReplyPayload): ReplyPayload {
+  if (!payload.presentation && !payload.interactive) {
+    return payload;
+  }
+  const marked = stampAgentControls(payload);
+  return copyReplyPayloadMetadata(payload, {
+    ...payload,
+    presentation: normalizeMessagePresentation(marked.presentation),
+    interactive: normalizeLegacyInteractiveReply(marked.interactive),
+  });
+}
 
 async function tryHandleWithPluginAction(params: {
   ctx: OutboundSendContext;
@@ -180,12 +194,14 @@ export async function executeSendAction(params: SendActionParams): Promise<{
     : undefined;
   const presentation = normalizeMessagePresentation(defaultPayload.presentation);
   // A hook that declines owns the plugin action path, including presentations.
-  const corePayload = requiresCoreDelivery
+  const unmarkedCorePayload = requiresCoreDelivery
     ? defaultPayload
     : preparedPayload ||
       (!prepareSendPayload && presentation && hasCorePresentationDelivery(channelPlugin.outbound)
         ? defaultPayload
         : null);
+  // Message-action controls leave core for the outbound queue here, before persistence.
+  const corePayload = unmarkedCorePayload && markAgentControls(unmarkedCorePayload);
   if (!corePayload) {
     const pluginMessage = presentation
       ? materializeMessagePresentationFallback({ payload: defaultPayload, text: params.message })

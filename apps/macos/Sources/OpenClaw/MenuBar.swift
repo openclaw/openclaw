@@ -585,7 +585,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             joinedClaw: MacOpenClawIDJoinCompletion.primaryIsJoinedClaw(
                 mode: AppStateStore.shared.connectionMode,
                 remoteUrl: AppStateStore.shared.remoteUrl),
-            removedClaw: MacOpenClawIDDeviceStore.shared.lastRemoval() != nil,
+            removedClaw: MacOpenClawIDFeature.isEnabled && MacOpenClawIDDeviceStore.shared.lastRemoval() != nil,
             markComplete: { OnboardingController.markComplete() },
             show: {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {

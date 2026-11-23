@@ -4,6 +4,7 @@ import {
   checkRunMessage,
   defaultOptions,
   repairPrompt,
+  rescheduledRunMessage,
   REVIEW_NIGHTLY_SCHEDULE,
   REVIEW_WEEKLY_SCHEDULE,
   scribeById,
@@ -107,6 +108,31 @@ describe("scribes catalog", () => {
     ).toContain("- Runs on cron `5 1 * * 2`, time zone UTC.");
   });
 
+  it("moves a generated consolidation run message to the new schedule's run amounts", () => {
+    const generated = (schedule: typeof REVIEW_WEEKLY_SCHEDULE | typeof REVIEW_NIGHTLY_SCHEDULE) =>
+      setupPrompt(scribeSetup("claim-consolidation", "ongoing", { schedule }, "UTC")).match(
+        /Run message:\n\n```text\n([\s\S]+)\n```$/,
+      )![1]!;
+    const weekly = { kind: "cron", expr: REVIEW_WEEKLY_SCHEDULE };
+    const nightly = { kind: "cron", expr: REVIEW_NIGHTLY_SCHEDULE };
+    const custom = { kind: "cron", expr: "0 6 * * 1" };
+    const move = (message: string, from: typeof weekly, to: typeof weekly) =>
+      rescheduledRunMessage("claim-consolidation", message, from, to);
+    expect(move(generated(REVIEW_WEEKLY_SCHEDULE), weekly, nightly)).toBe(
+      generated(REVIEW_NIGHTLY_SCHEDULE),
+    );
+    // A custom schedule leaves the amounts to the skill, and an offered one brings them back.
+    const onCustom = move(generated(REVIEW_WEEKLY_SCHEDULE), weekly, custom);
+    expect(onCustom).not.toContain("- Each run:");
+    expect(move(onCustom, custom, weekly)).toBe(generated(REVIEW_WEEKLY_SCHEDULE));
+    // An edited message, or another scribe's, is kept as it is.
+    const edited = `${generated(REVIEW_WEEKLY_SCHEDULE)}\nAlso tidy page titles.`;
+    expect(move(edited, weekly, nightly)).toBe(edited);
+    expect(rescheduledRunMessage("granola", "Granola message", weekly, nightly)).toBe(
+      "Granola message",
+    );
+  });
+
   it("writes a Granola prompt that names the meetings and the meeting-ingest work", () => {
     const prompt = setupPrompt(
       scribeSetup("granola", "ongoing", defaultOptions("granola"), "America/Los_Angeles"),
@@ -127,6 +153,39 @@ describe("scribes catalog", () => {
     );
     expect(once).toContain("Runs once, now, in this turn.");
     expect(once).toContain("including notes others shared, from the last 30 days.");
+  });
+
+  it("writes a Slack prompt that names the channels, the opt-ins and the source-ingest work", () => {
+    const prompt = setupPrompt(
+      scribeSetup("slack", "ongoing", defaultOptions("slack"), "America/Los_Angeles"),
+    );
+    expect(prompt).toContain(
+      [
+        "- Runs weekdays at 9:30 AM, 1:30 PM and 5:30 PM America/Los_Angeles (cron `30 9,13,17 * * 1-5`).",
+        "- Slack channels: every channel the Slack bot is a member of, from the last 7 days.",
+        "- Slack user token: not used; read only channels the Slack bot is a member of.",
+        "- Direct messages and group DMs: skipped.",
+        "- Each run: ingest 6 channels with new messages.",
+      ].join("\n"),
+    );
+    expect(prompt).toContain("declaration key `knowledge:scribe:slack`");
+    const runMessage = prompt.match(/Run message:\n\n```text\n([\s\S]+)\n```$/)?.[1] ?? "";
+    expect(runMessage).toContain(
+      'Follow "Learn from Slack" in the "Scribe runs" section of the knowledge-source-ingest skill',
+    );
+    expect(checkRunMessage("slack", runMessage)).toEqual({ state: "current" });
+    const opted = { since: "30d", userToken: true, dms: true } as const;
+    const once = setupPrompt(scribeSetup("slack", "once", opted, "UTC"));
+    expect(once).toContain("Runs once, now, in this turn.");
+    expect(once).toContain("- Slack user token: also read every channel the owner's Slack user");
+    expect(once).toContain("- Direct messages and group DMs: included.");
+    expect(once).not.toContain("Each run:");
+    // Every choice the dialog offers is recognized, and an edited one keeps its settings.
+    const optedRun = setupPrompt(scribeSetup("slack", "ongoing", opted, "UTC")).match(
+      /Run message:\n\n```text\n([\s\S]+)\n```$/,
+    )![1]!;
+    expect(checkRunMessage("slack", optedRun)).toEqual({ state: "current" });
+    expect(checkRunMessage("slack", `${optedRun}\nSkip #random.`)).toEqual({ state: "custom" });
   });
 
   it("recognizes run messages earlier versions generated and keeps edited ones", () => {
@@ -440,6 +499,7 @@ describe("scribes state", () => {
       ["conversations", "available", undefined, undefined],
       ["granola", "available", undefined, undefined],
       ["memory", "done", "s-memory", undefined],
+      ["slack", "available", undefined, undefined],
     ]);
     expect(snapshots[3]!.result).toEqual({ state: "done", summary: "Saved 4" });
     expect(request).toHaveBeenCalledWith("sessions.list", {
@@ -548,6 +608,9 @@ describe("scribes state", () => {
       if (method === "plugins.inspect") {
         return { plugin: { installed: true, enabled: true }, mcpAuth: [{ state: "authorized" }] };
       }
+      if (method === "channels.status") {
+        throw new Error("missing scope");
+      }
       return { files: [{ name: "MEMORY.md", missing: false, size: 4096 }] };
     });
     expect(await detectSources({ request } as never, "main")).toEqual({
@@ -563,10 +626,13 @@ describe("scribes state", () => {
 });
 
 describe("plugin readiness", () => {
+  // Slack is installed with no readable account state, so only Granola's readiness is known.
   const read = async (answer: () => unknown) => {
-    const request = vi.fn(async (method: string) => {
+    const request = vi.fn(async (method: string, params?: Record<string, unknown>) => {
       if (method === "plugins.inspect") {
-        return answer();
+        return params?.pluginId === "slack"
+          ? { plugin: { installed: true, enabled: true } }
+          : answer();
       }
       if (method === "sessions.list") {
         return { sessions: [], count: 0 };
@@ -614,6 +680,54 @@ describe("plugin readiness", () => {
         throw Object.assign(new Error("missing scope"), { gatewayCode: "UNAUTHORIZED" });
       }),
     ).toBeUndefined();
+  });
+});
+
+describe("Slack readiness", () => {
+  const status = (account?: Record<string, unknown>) => ({
+    channelAccounts: { slack: account ? [{ accountId: "default", ...account }] : [] },
+    channelDefaultAccountId: { slack: "default" },
+  });
+  const read = async (channels: () => unknown) => {
+    const request = vi.fn(async (method: string, params?: Record<string, unknown>) => {
+      if (method === "plugins.inspect") {
+        return { plugin: { installed: true, enabled: true } };
+      }
+      if (method === "channels.status") {
+        expect(params).toEqual({ channel: "slack" });
+        return channels();
+      }
+      return { sessions: [], files: [] };
+    });
+    const detection = await detectSources({ request } as never, "main");
+    return { slack: detection.plugins?.slack, tokens: detection.tokens };
+  };
+  const running = { enabled: true, configured: true, running: true };
+
+  const has = (bot: boolean, userToken: boolean) => ({
+    botTokenStatus: bot ? "available" : "missing",
+    userTokenStatus: userToken ? "available" : "missing",
+  });
+  // A user-only account (no bot token) is ready and says it has no bot token.
+  it.each([
+    [{ running: false }, "needs-sign-in", undefined],
+    [{ configured: false }, "needs-sign-in", undefined],
+    [has(true, false), "ready", { bot: true, user: false }],
+    [has(true, true), "ready", { bot: true, user: true }],
+    [has(false, true), "ready", { bot: false, user: true }],
+  ] as const)("reads Slack account %j as %s with tokens %j", async (account, slack, tokens) => {
+    expect(await read(() => status({ ...running, ...account }))).toEqual({
+      slack,
+      tokens: tokens && { slack: tokens },
+    });
+  });
+
+  it("needs a Slack account, and leaves Slack unknown when channels.status can't be read", async () => {
+    expect(await read(() => status())).toEqual({ slack: "needs-sign-in", tokens: undefined });
+    const unreadable = () => {
+      throw new Error("missing scope");
+    };
+    expect(await read(unreadable)).toEqual({ slack: undefined, tokens: undefined });
   });
 });
 

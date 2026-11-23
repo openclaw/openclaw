@@ -16,9 +16,6 @@ type ToolArgumentValidator = {
 
 const validatorCache = new WeakMap<object, WeakMap<object, ToolArgumentValidator>>();
 
-/** Maximum string length accepted for schema-gated JSON coercion. */
-const MAX_JSON_COERCE_LENGTH = 64 * 1024;
-
 interface JsonSchemaObject {
   $ref?: string;
   $defs?: Record<string, JsonSchemaObject>;
@@ -160,11 +157,7 @@ function coercePrimitiveByType(value: unknown, type: string): unknown {
     }
     case "array":
     case "object": {
-      if (
-        typeof value === "string" &&
-        value.trim() !== "" &&
-        value.length <= MAX_JSON_COERCE_LENGTH
-      ) {
+      if (typeof value === "string" && value.trim() !== "") {
         try {
           const parsed: unknown = JSON.parse(value);
           if (matchesJsonType(parsed, type)) {
@@ -363,6 +356,28 @@ export function validateToolCall(tools: Tool[], toolCall: ToolCall): unknown {
   return validateToolArguments(tool, toolCall);
 }
 
+/** Explains a string sent where the schema wants an object or array, including its JSON parse error. */
+function describeStringForContainer(args: unknown, error: TLocalizedValidationError): string {
+  if (error.keyword !== "type") {
+    return "";
+  }
+  const expected = error.params.type;
+  const expectedTypes = Array.isArray(expected) ? expected : [expected];
+  if (!expectedTypes.some((type) => type === "object" || type === "array")) {
+    return "";
+  }
+  const value: unknown = Pointer.Get(args, error.instancePath);
+  if (typeof value !== "string") {
+    return "";
+  }
+  try {
+    JSON.parse(value);
+    return " (received a JSON string; pass the value itself, not a string)";
+  } catch (parseError) {
+    return ` (received a string that is not valid JSON: ${String(parseError)}; pass the value itself, not a string)`;
+  }
+}
+
 function introducesNullValue(previous: unknown, converted: unknown): boolean {
   if (converted === null) {
     return previous !== null;
@@ -410,7 +425,10 @@ export function validateToolArguments(tool: Tool, toolCall: ToolCall): unknown {
   const errors =
     validator
       .Errors(args)
-      .map((error) => `  - ${formatValidationPath(error)}: ${error.message}`)
+      .map(
+        (error) =>
+          `  - ${formatValidationPath(error)}: ${error.message}${describeStringForContainer(args, error)}`,
+      )
       .join("\n") || "Unknown validation error";
 
   throw new Error(

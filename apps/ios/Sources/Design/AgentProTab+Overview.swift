@@ -75,7 +75,7 @@ extension AgentProTab {
                 self.agentAvatar(agent, state: state)
 
                 VStack(alignment: .leading, spacing: 3) {
-                    Text(self.agentName(for: agent))
+                    Text(AgentIdentityPresentation.displayName(for: agent))
                         .font(OpenClawType.subheadSemiBold)
                         .foregroundStyle(.primary)
                         .lineLimit(1)
@@ -138,8 +138,8 @@ extension AgentProTab {
         appModel.gatewayAgents.filter(\.isSelectableAgent).sorted { lhs, rhs in
             if lhs.id == self.activeAgentID { return true }
             if rhs.id == self.activeAgentID { return false }
-            return self.agentName(for: lhs)
-                .localizedCaseInsensitiveCompare(self.agentName(for: rhs)) == .orderedAscending
+            return AgentIdentityPresentation.displayName(for: lhs)
+                .localizedCaseInsensitiveCompare(AgentIdentityPresentation.displayName(for: rhs)) == .orderedAscending
         }
     }
 
@@ -158,10 +158,10 @@ extension AgentProTab {
             guard matchesFilter else { return false }
             guard !query.isEmpty else { return true }
             let haystack = [
-                self.agentName(for: agent),
+                AgentIdentityPresentation.displayName(for: agent),
                 agent.id,
                 agent.workspace?.trimmedNonEmpty,
-                RootSidebar.agentModelLabel(agent),
+                AgentIdentityPresentation.modelLabel(for: agent),
             ]
                 .compactMap(\.self)
                 .joined(separator: " ")

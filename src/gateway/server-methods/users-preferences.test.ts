@@ -69,10 +69,6 @@ async function withPreferenceState(
 }
 
 type PreferenceMethod = "users.prefs.get" | "users.prefs.set";
-const forbidden = expect.objectContaining({
-  code: "FORBIDDEN",
-  message: "Gateway requester authority changed",
-});
 const preferenceReply = (entries: Record<string, unknown>) => [
   true,
   { status: "ok", entries },
@@ -330,12 +326,11 @@ test("users.prefs refuses a pending write when the participant is revoked before
   });
 });
 
-test.each(["current", "scope", "source", "identity", "staff"] as const)(
+test.each(["current", "staff"] as const)(
   "users.self keeps its original %s authority through the handler's identity sync",
   async (change) => {
     await withPreferenceState(async (prepareProfiles) => {
       const owner = ensureProfileForEmail("self-reader@example.test");
-      const replacement = ensureProfileForEmail("other-reader@example.test");
       await prepareProfiles();
       const client = createOperatorWsClient({
         connId: "self-reader",
@@ -358,77 +353,23 @@ test.each(["current", "scope", "source", "identity", "staff"] as const)(
         return { profileId: owner.id, updatedAt: owner.updatedAt };
       });
       client.authenticatedGitHubIdentitySync = sync;
-      let current = true;
-      const { respond, request } = dispatch(client, "users.self", {}, undefined, () => current);
+      const { respond, request } = dispatch(client, "users.self", {});
       const outcome = Promise.allSettled([request]);
       await gate.during(
         request,
         () => {
           expect(sync).toHaveBeenCalledTimes(change === "staff" ? 1 : 2);
           expect(respond).not.toHaveBeenCalled();
-          if (change === "scope") {
-            client.connect.scopes = [];
-          } else if (change === "source") {
-            current = false;
-          } else if (change === "identity") {
-            attach(replacement);
-          }
         },
         outcome,
       );
-      if (change === "source") {
-        expect(await outcome).toMatchObject([
-          { status: "rejected", reason: { message: "Gateway requester authority changed" } },
-        ]);
-        expect(respond).not.toHaveBeenCalled();
-      } else {
-        expect(await outcome).toEqual([{ status: "fulfilled", value: undefined }]);
-        if (change === "current" || change === "staff") {
-          expect(respond).toHaveBeenCalledExactlyOnceWith(true, {
-            profile: expect.objectContaining({ id: owner.id }),
-          });
-        } else {
-          expect(respond).toHaveBeenCalledExactlyOnceWith(false, undefined, forbidden);
-        }
-      }
+      expect(await outcome).toEqual([{ status: "fulfilled", value: undefined }]);
+      expect(respond).toHaveBeenCalledExactlyOnceWith(true, {
+        profile: expect.objectContaining({ id: owner.id }),
+      });
     }, true);
   },
 );
-
-test("users.prefs.get retains its original scope across the preference read", async () => {
-  await withPreferenceState(async (prepareProfiles) => {
-    const owner = ensureProfileForEmail("retained-preferences@example.test");
-    await prepareProfiles();
-    await setPrefs(owner.id, { entries: { "ui.theme": "dark" } });
-    const client = createOperatorWsClient({
-      connId: "preference-reader",
-      scopes: ["operator.sessions.read"],
-    });
-    attachProfile(client, { id: owner.id, updatedAt: 1 });
-    using gate = createRequestGate();
-    const original = preferences.getCanonicalUserPreferences;
-    using read = vi
-      .spyOn(preferences, "getCanonicalUserPreferences")
-      .mockImplementation(async (...args) => {
-        const result = await original(...args);
-        await gate.pause();
-        return result;
-      });
-    const { respond, request } = dispatch(client, "users.prefs.get");
-    const outcome = Promise.allSettled([request]);
-    await gate.during(
-      request,
-      () => {
-        expect(read).toHaveBeenCalledOnce();
-        client.connect.scopes = [];
-      },
-      outcome,
-    );
-    expect(await outcome).toEqual([{ status: "fulfilled", value: undefined }]);
-    expect(respond).toHaveBeenCalledExactlyOnceWith(false, undefined, forbidden);
-    expect(await original(owner.id)).toMatchObject({ entries: { "ui.theme": "dark" } });
-  }, true);
-});
 
 test.each(["removed", "changed", "auth-mode"] as const)(
   "users.prefs.get hides organization credit when proxy configuration is %s during its read",
@@ -595,26 +536,6 @@ test("users.prefs dispatch saves guest choices only to the authenticated durable
       { message: "missing scope: operator.write" },
     ]);
     expect(await request("users.prefs.get", {}, graceClient)).toEqual(preferenceReply({}));
-    const createAdmission = workerAdmission.createSqliteWorkerOperationAdmission;
-    let reachedCommit = false;
-    using admission = vi.spyOn(workerAdmission, "createSqliteWorkerOperationAdmission");
-    admission.mockImplementation((admit, attachment) =>
-      createAdmission((workerRequest, grant) => {
-        if (workerRequest.stage === "commit") {
-          reachedCommit = true;
-          adaClient.connect.scopes = [];
-        }
-        admit(workerRequest, grant);
-      }, attachment),
-    );
-    expect(
-      await request("users.prefs.set", { entries: { [key]: { folder: "/revoked" } } }),
-    ).toMatchObject([false, undefined, { code: "FORBIDDEN" }]);
-    expect(reachedCommit).toBe(true);
-    expect(await preferences.getCanonicalUserPreferences(ada.id)).toMatchObject({
-      entries: { [key]: updated },
-    });
-    admission.mockRestore();
     linkEmail("ada@example.test", grace.id);
     expect(await request("users.prefs.get", {}, graceClient)).toEqual(
       preferenceReply({ [key]: updated }),
@@ -822,4 +743,47 @@ test("allows fallback consent after hiding inactive metadata without reviving it
       (await preferences.getCanonicalUserPreferences(owner.id))?.entries["git.coauthor.enabled"],
     ).toBe(false);
   }, true);
+});
+
+test("merges concurrent failure receipts for the operator and never advances one on legacy adoption", async () => {
+  const receiptKey = "ui.inbox.cronFailed";
+  await withPreferenceState(async () => {
+    const operator = ensureProfileForEmail("operator@example.test").id;
+    const other = ensureProfileForEmail("other@example.test").id;
+    const acknowledge = (jobId: string, failedAtMs: number, adopt = false) =>
+      preferences.setCanonicalUserPreferences(
+        operator,
+        {},
+        { cronFailure: { jobId, failedAtMs, adopt } },
+      );
+    await Promise.all([acknowledge("a", 10), acknowledge("b", 12)]);
+    expect(await acknowledge("a", 20, true)).toMatchObject({
+      ok: true,
+      value: { acknowledgedAtMs: 10 },
+    });
+    await acknowledge("a", 20);
+    await acknowledge("a", 10);
+    expect(
+      (await preferences.getCanonicalUserPreferences(operator, [receiptKey]))?.entries,
+    ).toEqual({ [receiptKey]: { a: 20, b: 12 } });
+    expect((await preferences.getCanonicalUserPreferences(other, [receiptKey]))?.entries).toEqual(
+      {},
+    );
+    expect(
+      await preferences.setCanonicalUserPreferences(operator, {
+        [receiptKey]: null,
+      }),
+    ).toMatchObject({ ok: false, error: { code: "invalid-key" } });
+    await preferences.setCanonicalUserPreferences(
+      other,
+      {},
+      {
+        cronFailure: { jobId: "b", failedAtMs: 30, adopt: false },
+      },
+    );
+    mergeProfiles(operator, other);
+    expect((await preferences.getCanonicalUserPreferences(other, [receiptKey]))?.entries).toEqual({
+      [receiptKey]: { a: 20, b: 30 },
+    });
+  });
 });

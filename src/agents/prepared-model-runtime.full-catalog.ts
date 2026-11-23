@@ -145,7 +145,7 @@ export async function prepareFullCatalogFacts(
             ...(preparedStaticProviderCatalog ? { preparedStaticProviderCatalog } : {}),
             ...(input.workspaceDir ? { workspaceDir: input.workspaceDir } : {}),
           })));
-    // Signed-in providers keep their known manifest rows when the account listing fails.
+    // Signed-in providers whose manifest is their list keep it when an account listing fails.
     const credentialProviders = Object.keys(agentFacts.credentials).map(normalizeProviderId);
     const scopedProviders =
       options.providerIds && new Set(options.providerIds.map(normalizeProviderId));

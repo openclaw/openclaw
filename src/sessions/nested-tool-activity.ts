@@ -1,6 +1,11 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { z } from "zod";
 import { unwrapToolCallForDisplay } from "../agents/tool-display-call.js";
+import { isAutomationsToolName } from "../agents/tools/automations-tool-name.js";
+import {
+  automationCreationCall,
+  automationCreationFromToolDetails,
+} from "../chat/automation-job-result.js";
 import { boundedJsonUtf8Bytes } from "../infra/json-utf8-bytes.js";
 import {
   readCollectedSubagentCompletions,
@@ -86,12 +91,21 @@ export function createNestedToolActivity(
   const errors = collection ? readCollectionErrorCount(details.result) : 0;
   const input = boundedJsonUtf8Bytes(details.input, 8_192).complete
     ? structuredClone(details.input)
-    : "[Nested tool input omitted: exceeds display limit]";
-  const result = boundedJsonUtf8Bytes(details.result, 32_768).complete
-    ? details.result
-    : {
-        content: [{ type: "text", text: omittedResultText }],
-      };
+    : (isAutomationsToolName(details.toolName) && automationCreationCall(details.input)) ||
+      "[Nested tool input omitted: exceeds display limit]";
+  let result = details.result;
+  if (!boundedJsonUtf8Bytes(result, 32_768).complete) {
+    const automationCreation =
+      !details.isError && isAutomationsToolName(details.toolName)
+        ? automationCreationFromToolDetails(asOptionalRecord(result)?.details)
+        : undefined;
+    result = {
+      content: [{ type: "text", text: omittedResultText }],
+      ...(automationCreation && boundedJsonUtf8Bytes(automationCreation, 8_192).complete
+        ? { details: { automationCreation } }
+        : {}),
+    };
+  }
   return getActivitySchema().parse({
     role: "custom",
     customType: NESTED_TOOL_ACTIVITY_CUSTOM_TYPE,

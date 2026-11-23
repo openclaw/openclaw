@@ -16,7 +16,7 @@ import type { AuthorizedGatewayHttpRequest } from "./http-auth-utils.js";
 import type { GatewayHttpRequestAuthOptions } from "./http-request-authority.js";
 import { resolveOpenAiCompatError, type OpenAiCompatError } from "./openai-compat-errors.js";
 import { resolveGatewayOperatorRoleActor } from "./operator-role-policy.js";
-import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
+import { prepareGatewayOperatorRunAuthority } from "./operator-run-authority.js";
 import type { GatewayContextResolver } from "./server-methods/types.js";
 import { createSyntheticPluginRuntimeClient } from "./server-plugin-runtime-client.js";
 import { areGatewayUploadsEnabled, GATEWAY_UPLOADS_DISABLED_MESSAGE } from "./upload-policy.js";
@@ -129,7 +129,9 @@ export async function runOpenAiCompatibleAgentCommand(params: {
       throw new ToolAuthorizationError(GATEWAY_UPLOADS_DISABLED_MESSAGE);
     }
     if (!admitted && params.hasCurrentClientAuthority?.() === false) {
-      throw new ToolAuthorizationError("Gateway requester authority changed");
+      throw new ToolAuthorizationError(
+        "Gateway requester changed during admission. Retry the request.",
+      );
     }
   };
   assertSourceCurrent();
@@ -148,7 +150,7 @@ export async function runOpenAiCompatibleAgentCommand(params: {
     throw new Error("OpenAI-compatible operator execution requires a current Gateway context.");
   }
   const captured = gatewayContext
-    ? await captureGatewayOperatorRunAuthority({
+    ? await prepareGatewayOperatorRunAuthority({
         client,
         context: {
           getRuntimeConfig: gatewayContext.getRuntimeConfig,

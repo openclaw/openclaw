@@ -634,7 +634,7 @@ async function beginPreparedReplyMessageInjectionTarget(
         if (result?.transcriptCommit === "unconfirmed") {
           return { status: "indeterminate", errorMessage: result.errorMessage };
         }
-        if (targetRunId && queueOptions?.waitForTranscriptCommit === true) {
+        if (targetRunId) {
           await userTurnTranscriptRecorder?.confirmSteerTargetRunIdForPersistence?.(targetRunId);
         }
         return { status: "accepted" };

@@ -71,7 +71,6 @@ suite.define(() => {
         },
       });
       await page.goto(suite.server.baseUrl + "cron?new");
-      await page.locator("#cron-name").fill("Synthetic release digest");
       await page.locator("#cron-payload-text").fill("Summarize the fictional release notes.");
       const controls = page.locator(".cron-prompt__run-controls");
       const model = controls.locator('[data-chat-model-select="true"]');

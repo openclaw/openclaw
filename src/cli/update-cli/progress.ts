@@ -27,6 +27,7 @@ import type { UpdateStepResult } from "../../infra/update-step-result.js";
 import { formatJsonConsoleLine, getConsoleSettings } from "../../logging/console.js";
 import { isLogLevelEnabled } from "../../logging/levels.js";
 import { defaultRuntime } from "../../runtime.js";
+import { formatUpdateReportReadHint } from "./report-path.js";
 import type { UpdateCommandOptions } from "./shared.js";
 
 // One command owns each observer. The final report flushes it before printing so
@@ -398,6 +399,7 @@ export async function prepareResult(
     defaultRuntime.log(theme.heading(outputReport.headline));
     if (reportPath) {
       defaultRuntime.log(`Report: ${reportPath}`);
+      defaultRuntime.log(formatUpdateReportReadHint(reportPath));
     }
     for (const line of outputReport.lines) {
       defaultRuntime.log(line);

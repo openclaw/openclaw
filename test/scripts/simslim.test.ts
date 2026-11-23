@@ -2,6 +2,7 @@ import { spawnSync } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { parseIOSSimulatorTiming } from "../../scripts/lib/ios-release-e2e-diagnostics.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -35,6 +36,7 @@ const [tool, ...args] = process.argv.slice(2);
 const root = process.env.SIMSLIM_FIXTURE_ROOT;
 const failure = process.env.SIMSLIM_FIXTURE_FAILURE;
 appendFileSync(path.join(root, "commands.jsonl"), JSON.stringify({ tool, args }) + "\n");
+if (tool === "xcrun" || (tool === "simslim" && args[0] !== "--version")) process.stderr.write("fixture progress\r");
 if (tool === "uname") {
   console.log(args[0] === "-s" ? process.env.SIMSLIM_FIXTURE_OS : process.env.SIMSLIM_FIXTURE_ARCH);
 } else if (tool === "curl") {
@@ -158,6 +160,13 @@ describe.skipIf(process.platform === "win32")("iOS simulator preparation", () =>
       ready,
       { tool: "simslim", args: ["verify", simulatorId, "--except", keptCategories] },
     ]);
+    const timings = result.stderr
+      .split("\n")
+      .flatMap((line) => parseIOSSimulatorTiming(line) ?? []);
+    expect(timings.map(({ phase, exitCode }) => ({ phase, exitCode }))).toEqual(
+      ["cold-boot", "configure", "ready", "verify"].map((phase) => ({ phase, exitCode: 0 })),
+    );
+    expect(timings.every(({ seconds }) => seconds >= 0)).toBe(true);
   });
 
   it.each([
@@ -182,5 +191,10 @@ describe.skipIf(process.platform === "win32")("iOS simulator preparation", () =>
     const { result, commands } = runFixture("ios-simulator-prepare.sh", { failure });
     expect(result.status).toBe(23);
     expect(commands).toHaveLength(count);
+    const timings = result.stderr
+      .split("\n")
+      .flatMap((line) => parseIOSSimulatorTiming(line) ?? []);
+    expect(timings).toHaveLength(count);
+    expect(timings.at(-1)?.exitCode).toBe(23);
   });
 });

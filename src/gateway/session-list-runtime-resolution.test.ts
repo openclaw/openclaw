@@ -113,8 +113,10 @@ it("resolves cold search runtimes per agent and selection, observing later runti
         Object.fromEntries(
           ["alpha", "beta"].map((agentId) => [
             agentId,
-            effective.mock.calls.filter(([params]) => params.agentScope?.agentId === agentId)
-              .length,
+            effective.mock.calls.filter(
+              ([params]) =>
+                params.agentScope?.kind === "prepared" && params.agentScope.agentId === agentId,
+            ).length,
           ]),
         ),
       ).toEqual({ alpha: 4, beta: 4 });

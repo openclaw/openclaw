@@ -9,6 +9,7 @@ import { extractToolCardsCached } from "../../../lib/chat/tool-cards.ts";
 import { parseAgentSessionKey } from "../../../lib/sessions/session-key.ts";
 import { chatItemGroups } from "../chat-agent-run-grouping.ts";
 import { assistantGroupCanOwnActiveRunStatus } from "../chat-assistant-reply.ts";
+import type { AutomationProjection } from "../chat-automation-projection-loader.ts";
 import { createPendingSteerLookup } from "../chat-pending-input-display.ts";
 import { indexQuestionPrompts } from "../chat-question-placement.ts";
 import { projectChatReasoning } from "../chat-reasoning.ts";
@@ -26,7 +27,6 @@ import {
 } from "../chat-thread.ts";
 import { readAsyncQuestions } from "./chat-async-question-content.ts";
 import { buildChatArchiveNotice } from "./chat-divider.ts";
-import { projectInlineSwarms } from "./chat-inline-swarm-projection.ts";
 import type { NativeMessageGroupOptions } from "./chat-message-group-options.ts";
 import { assistantMediaPolicyKey } from "./chat-message-media.ts";
 import type { StreamGroupOptions } from "./chat-message-stream-view.tsx";
@@ -75,6 +75,7 @@ export function projectChatTranscript(
   props: ChatThreadProps,
   transcript: ChatTranscriptSession,
   search = getTranscriptState(props.paneId).search.snapshot,
+  projectAutomations?: AutomationProjection,
 ) {
   const state = getTranscriptState(props.paneId);
   const { actions, dependencies: actionDependencies } = createTranscriptActions(
@@ -116,6 +117,7 @@ export function projectChatTranscript(
     locale,
     messages: props.messages,
     toolMessages: props.toolMessages,
+    projectAutomations,
     guardianNotices: props.guardianNotices,
     streamSegments: props.streamSegments,
     get stream() {
@@ -395,13 +397,6 @@ export function projectChatTranscript(
       searchResult: searchFiltering,
     } satisfies NativeMessageGroupOptions;
   };
-  const swarmsByFrame = projectInlineSwarms(
-    props,
-    rows,
-    liveItem,
-    searchFiltering,
-    actions.onOpenSubagent,
-  );
   // Only working indicators depend on live usage and subagent wait status.
   const workingUsageKey = JSON.stringify([
     runOutputTokens,
@@ -415,7 +410,6 @@ export function projectChatTranscript(
     latestAssistantItemKey,
     continuations,
     searchFiltering,
-    (key) => swarmsByFrame.get(key)?.signature,
   );
   // Deferred palettes apply leaf branding after the preference snapshot.
   const appliedBranding = currentThemeBranding();
@@ -580,7 +574,6 @@ export function projectChatTranscript(
         options: {
           basePath: props.basePath,
           sessionPublicOrigin: props.sessionPublicOrigin,
-          swarms: swarmsByFrame.get(item.key)?.views,
           streamOptions: streamGroupOptions,
           renderGroupOptions,
           partDependencies: renderDependencies,

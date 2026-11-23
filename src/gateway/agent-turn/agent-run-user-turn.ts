@@ -33,6 +33,7 @@ import {
   type InputProvenance,
 } from "../../sessions/input-provenance.js";
 import { recordSessionParticipantBestEffort } from "../../sessions/session-participant-recording.js";
+import type { UserTurnInput } from "../../sessions/user-turn-input.types.js";
 import { readUserTurnRequesterOrigin } from "../../sessions/user-turn-transcript-admission.js";
 import { retainsUserTurnTranscriptMedia } from "../../sessions/user-turn-transcript-media.js";
 import {
@@ -42,7 +43,6 @@ import {
 import {
   buildRunUserTurnIdempotencyKey,
   createUserTurnTranscriptRecorder,
-  type UserTurnInput,
   type UserTurnTranscriptRecorder,
 } from "../../sessions/user-turn-transcript.js";
 import type { SubagentCompletion } from "../../shared/subagent-completion.js";

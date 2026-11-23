@@ -667,7 +667,7 @@ extension OpenClawChatViewModel {
         if let index = canonicalFinalMessageIndex(message, scope: scope) {
             if let runId {
                 // Correlate only after the canonical match, preserving its durable row identity.
-                // The final row must share the live run's reader anchor regardless of arrival order.
+                // The final row must share the live run's reading-position key regardless of arrival order.
                 if self.messages[index].workRunID == nil {
                     var updated = self.messages
                     updated[index].transcriptRunID = runId
@@ -678,7 +678,7 @@ extension OpenClawChatViewModel {
             return
         }
 
-        // Only the provisional row joins its live run (reader anchor and grouping). Stamping before
+        // Only the provisional row joins its live run (reading position and grouping). Stamping before
         // the canonical checks made a run-less canonical session message look foreign: duplicate reply.
         if message.workRunID == nil { message.transcriptRunID = runId }
         let reconciled = Self.reconcileMessageIDs(previous: self.messages, incoming: self.messages + [message])

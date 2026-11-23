@@ -36,6 +36,7 @@ import { resolveCliStartupPolicy as resolveCliStartupPolicyForArgv } from "./com
 import { maybeRunCliInContainer, parseCliContainerArgs } from "./container-target.js";
 import { tryRunGatewayServiceUpdateCapabilityProbe } from "./daemon-cli/update-capability.js";
 import { shouldStartLocalOnboarding } from "./fresh-install-config.js";
+import { tryRunWindowsGatewayTaskSupervisor } from "./gateway-cli/task-supervisor.js";
 import {
   isGatewayRunInvocationArgv,
   resolveGatewayCommandPath,
@@ -87,7 +88,11 @@ import type {
   ReachableGateway,
 } from "./run-main.gateway-types.js";
 import type { CliHarnessCleanup } from "./runtime-cleanup-scope.js";
-import { closeCliResources, runCliDisposer } from "./runtime-cleanup.js";
+import {
+  closeCliResources,
+  pauseNonTtyStdinForCliExit,
+  runCliDisposer,
+} from "./runtime-cleanup.js";
 import { exitAfterSignalExitBarriers, registerSignalExitBarrier } from "./signal-exit-barrier.js";
 import {
   configureCliStartupDiagnostics,
@@ -411,18 +416,6 @@ async function resolveLocalGatewayProbeTargets(
           },
         ];
   return { targets, auth: connection.auth };
-}
-
-function pauseNonTtyStdinForCliExit(): void {
-  const stdin = process.stdin;
-  if (stdin.isTTY) {
-    return;
-  }
-  try {
-    stdin.pause();
-  } catch {
-    // Best-effort cleanup for command paths that only inspected stdin.
-  }
 }
 
 function isCommanderParseExit(error: unknown): error is { exitCode: number } {
@@ -808,6 +801,10 @@ async function runCliWithPreparedOutputMode(
   );
 
   if (await tryRunGatewayServiceUpdateCapabilityProbe(normalizedArgv)) {
+    return;
+  }
+
+  if (await tryRunWindowsGatewayTaskSupervisor(normalizedArgv)) {
     return;
   }
 

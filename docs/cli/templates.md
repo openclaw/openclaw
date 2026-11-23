@@ -22,9 +22,12 @@ export commands. To use a newer release, Add it as another agent. Agents enrolle
 by the earlier installed-Template lifecycle can be
 [released to ordinary agents](#agents-from-the-earlier-lifecycle).
 
-Enable **Templates** in **Settings → Labs** before adding one. On a headless installation, set
-`gateway.controlUi.experimental.templates` to `true` in OpenClaw config.
-Authoring and inspecting local Template packages do not require the Labs toggle.
+Templates are available by default, with no Labs or replacement settings switch.
+Open **Customize → Templates** to browse and review them. The historical
+`gateway.controlUi.experimental.templates` setting remains an advanced opt-out:
+an explicit `false` stays off on upgrade; unset or `true` permits discovery and Add.
+Set it to `true` or remove an existing `false` to enable Templates again.
+Authoring and inspecting local Template packages are independent of this setting.
 
 `templates add` accepts a ClawHub Template reference (`@publisher/slug`), a canonical
 local package directory, or `CLAW.md` with YAML frontmatter. The reference uses the
@@ -38,8 +41,8 @@ path whose filename is `CLAW.md`, such as `CLAW.md` or `nested/CLAW.md`. Local
 If inspection reports an encoding error, re-encode the source file as UTF-8 and retry;
 Add refuses it before creating an agent or workspace.
 Publishing and searching Templates through ClawHub use the separate registry
-surface. The Control UI can browse official and community Templates from **Pages → Templates** at `/templates`
-when **Templates** is enabled in **Settings → Labs**.
+surface. The Control UI can browse official and community Templates from **Customize → Templates** at `/templates`
+without a Labs opt-in.
 
 ## Add an unpublished local project to a running Gateway
 
@@ -70,7 +73,7 @@ apply. Paths refer to directories on the Gateway host, not the caller's machine.
 
 ## Import a Template archive in the Control UI
 
-With Templates enabled, open **Pages → Templates**, click **+ Import** (the Import
+With Templates enabled, open **Customize → Templates**, click **+ Import** (the Import
 icon in the header on mobile), and select a `.tgz` built with
 `openclaw templates build`. The file is read from your
 browser's computer, not from a path on the Gateway. Uploads are limited to 1 MiB
@@ -104,16 +107,36 @@ Ask the agent, “create a new template from this agent.” The bundled
 review in that same conversation. No sidebar setup or special command is
 required. The agent proposes portable behavior with an input, job, output, and
 authority boundary; it does not publish, return a review link, or create or
-fork a session. Review requires Templates enabled in Labs, an active administrator
+fork a session. Review requires Templates availability, an active administrator
 Control UI connection, and a workspace on the Gateway host. If review is unavailable,
 the proposal stays private.
+
+The agent tells you when it starts, then checks its instructions, avatar, skills,
+plugins, and active scheduled automations together. Paused routines stay on the source agent. You'll see short messages as it
+chooses which skills and plugins to include and which routines belong in the
+Template. It writes the instructions a new owner needs, then opens the private
+review card. Nothing is published unless you choose **Publish**.
+
+You can also describe a Template that is not this agent, for example “create a
+new template that uses a video plugin and, each morning at 3am, makes a short
+video about the pull requests merged in a repository I choose.” The same skill
+drafts it in the same conversation and opens the same review card. It writes the
+instructions and automations from your description, so an automation does not
+have to exist on this agent, and it leaves out this agent's avatar, routines,
+and any skill or plugin you did not name. A plugin or skill you name is declared
+only with an exact published ClawHub release; if the agent cannot find one, it
+says so and leaves the dependency out. Details the Template needs from whoever
+adds it, such as a repository or their time zone, are asked by its first-run
+[`BOOTSTRAP.md`](/cli/templates#author-locally), which updates the declared automation and
+enables it after they agree.
 
 The optional **Create Template** action in the agent's left-sidebar row menu
 still invokes the same skill in that agent's existing main chat. Pinned agents
 keep this action in a focused row menu.
 
-The inline review card shows the exact archive files and declared skill, plugin,
-MCP, and automation requirements. Open an item to inspect its contents, or use
+The draft appears as a compact card in chat. Select **Preview** to inspect the
+exact archive files and declared skill, plugin, MCP, and automation requirements
+in the same review dialog used for imports. Open an item to inspect it, or use
 **View all** to inspect the archive files. Review is read-only. To change a name,
 description, file, or requirement, ask the agent to revise its private proposal
 in the same conversation, then inspect the fresh review. The agent's display
@@ -123,11 +146,31 @@ source workspace, memories, or raw conversations. Known private paths and
 credential-like text are rejected. Review the remaining text for personal facts
 and private context.
 
-Sign in with `clawhub login` on the Gateway host. **Publish** uploads the exact
-reviewed artifact using that account. An agent turn cannot authorize publication.
+The agent's avatar is the one exception to authored text. A proposal may name a
+single image in the agent's workspace, and review then shows that image on the
+card in place of the generic artwork. The image file itself is not copied.
+OpenClaw decodes it and writes a new PNG, at most 512 pixels on its longer side
+and 512 KiB, so metadata stored in the original file is not published. That PNG
+is the package's `assets/icon.png`, which ClawHub uses as the Template's listing
+icon, and the manifest maps it to `avatars/avatar.png` as the avatar of each
+agent created from the Template. It appears among the archive files without a
+text preview.
+
+The image must be a PNG, JPEG, GIF, WebP, or self-contained SVG file of at most
+2 MiB whose contents match its extension. Links and paths outside the workspace
+are refused. If the image is missing or unusable, review fails with the reason
+instead of falling back to the generic artwork. To publish without an avatar,
+ask the agent to remove it from the proposal. Changing the image after review
+requires a fresh review before **Publish**.
+
+Sign in with `clawhub login` on the Gateway host. Select **Publish** on the card
+or in the preview dialog to upload the exact reviewed artifact using that
+account. Opening the preview is optional. An agent turn cannot authorize publication.
 The card stays in the conversation and shows **Pending** while ClawHub checks
-the submission; **View submission** opens its ClawHub page. Once the registry
-confirms publication, the card shows **Published** and offers **Copy link**.
+the submission. Select **View submission** to follow its progress on ClawHub.
+While pending, the open card checks again 30 seconds after each response. Checks stop after
+ClawHub confirms publication or failure. On success, the card shows
+**Published** and offers **Copy link** for the public listing.
 Others can then discover the Template and Add it as an ordinary agent.
 
 ## Add through the setup helper
@@ -143,7 +186,7 @@ its result into later helper turns; users do not need to paste the review JSON.
 The host uses the requesting session's existing setup-change approval policy;
 an agent-supplied `approved: true` does not authorize installation. Trust warnings require exact human approval even under Full Access. Review and
 installation retain the original administrator connection, cancellation, and
-revocation checks and use the same installer as **Pages → Templates**. Templates
+revocation checks and use the same installer as **Customize → Templates**. Templates
 must already be enabled in **Settings → Labs**. The helper does not enable Labs,
 install local paths, publish Templates, or gain shell access.
 
@@ -159,8 +202,8 @@ continue its existing setup rather than adding another copy.
 proposal in that workspace and returns its unique `draftId` and path. It does
 not copy source files, start a model turn, contact ClawHub, or publish. Each
 invocation creates a distinct proposal; retain the returned ID instead of
-searching for a latest draft. The bundled skill uses this command when a chat
-request did not arrive with a UI-created draft.
+searching for a latest draft. The bundled skill runs this command during inventory when a chat request did not
+arrive with a UI-created draft; otherwise it reuses the supplied draft.
 
 Create a minimal project, validate its inputs, preview it without mutation,
 and build an immutable package artifact:

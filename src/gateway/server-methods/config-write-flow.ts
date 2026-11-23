@@ -303,7 +303,7 @@ async function collectConfigWriteBillingRouteWarnings(params: {
     }
     const { collectModelBillingRouteMigrationWarnings } =
       await import("../../commands/doctor/shared/model-billing-route-migration.js");
-    const warnings = collectModelBillingRouteMigrationWarnings({
+    const warnings = await collectModelBillingRouteMigrationWarnings({
       before,
       after,
       // The published snapshot can predate this write's plugin changes; a write that also

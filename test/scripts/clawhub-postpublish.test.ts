@@ -2,7 +2,7 @@ import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { delimiter, join } from "node:path";
+import { join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { crc32 } from "node:zlib";
 import * as tar from "tar/raw";
@@ -29,9 +29,9 @@ import {
 } from "../../scripts/full-release-publication-contract.mjs";
 import { releaseExecutionPlanSha256 } from "../../scripts/full-release-validation-policy.mjs";
 import { waitForClawHubPublicVersion } from "../../scripts/lib/clawhub-publication-state.mjs";
+import { createReleaseEvidenceClient } from "../../scripts/release-ci-summary.mjs";
 import { verifyPublishedClawHubPackage } from "../../scripts/verify-clawhub-published-artifact.mjs";
 import { candidatePublicationFixture } from "./candidate-publication.test-support.js";
-import { createFrv18PublicationClient } from "./frv18-publication.test-support.js";
 
 function requestUrl(input: Parameters<typeof fetch>[0]) {
   return typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
@@ -555,10 +555,8 @@ function addSealedSibling(f: ReturnType<typeof fixture>) {
   return { manifest, artifact: f.recoveryArtifact, sibling };
 }
 
-function authenticatedParentRecoveryFixture(
-  mode: "full" | "selected" | "omitted sibling",
-  qualification = candidatePublicationFixture(),
-) {
+function authenticatedParentRecoveryFixture(mode: "full" | "selected" | "omitted sibling") {
+  const qualification = candidatePublicationFixture();
   const version = qualification.source.projection!.version;
   const f = parentRecoveryFixture(
     fixture(false, qualification.p, "example", 1, {
@@ -686,11 +684,7 @@ function authenticatedParentRecoveryFixture(
       if (url.pathname.endsWith("/recover")) {
         expect(init?.method).toBe("POST");
         expect(authorization).toBe("Bearer publisher-token");
-        if (qualification.c !== "995f9059b6e6fe3ba0865a3354924fd2bcbfceea") {
-          expect(qualification.admission.calls).toContain(
-            `repos/${repository}/actions/artifacts/70`,
-          );
-        }
+        expect(qualification.admission.calls).toContain(`repos/${repository}/actions/artifacts/70`);
         recoveryWrites.push(entry.name);
         return Response.json({
           name: entry.name,
@@ -733,7 +727,10 @@ function authenticatedParentRecoveryFixture(
   return { ...f, qualification, recoveryWrites, evidenceClient };
 }
 
-function originalPackedFixture(mode: "full" | "selected" | "omitted sibling" = "selected") {
+function originalPackedFixture(
+  mode: "full" | "selected" | "omitted sibling" = "selected",
+  partial = false,
+) {
   const f = authenticatedParentRecoveryFixture(mode);
   const seal = {
     schemaVersion: 1,
@@ -741,7 +738,8 @@ function originalPackedFixture(mode: "full" | "selected" | "omitted sibling" = "
     identity: f.transactions.identity,
     packages: f.transactions.packages.map((entry) => ({
       ...entry,
-      publicationStatus: "unavailable",
+      publicationStatus: partial && entry.name !== f.entry.name ? "pending" : "unavailable",
+      ...(partial && entry.name !== f.entry.name ? { attemptId: "attempt-2" } : {}),
     })),
   };
   replaceJsonArtifact(f.original, f.recoveryArtifact, "recovery-manifest.json", seal);
@@ -749,7 +747,7 @@ function originalPackedFixture(mode: "full" | "selected" | "omitted sibling" = "
   const publisher = {
     ...job("publish_plugins_clawhub"),
     head_sha: f.child.head_sha,
-    conclusion: "skipped",
+    conclusion: partial ? "failure" : "skipped",
   };
   f.setJobs(20, 1, [...inventory.jobs, publisher]);
   // Original parent authorization never existed. No prepared-success artifact is invented.
@@ -1284,20 +1282,6 @@ describe("original sealed ClawHub source", () => {
       workflow_run: { id: Number(runId) },
     };
     f.metadata.set(artifactsPath(Number(runId)), { artifacts: [artifact, artifact] });
-    f.metadata.set(`actions/runs/${runId}`, f.qualification.parent);
-    const metadataFile = join(f.directory, "cli-metadata.json");
-    writeFileSync(metadataFile, JSON.stringify([...f.metadata]));
-    writeFileSync(
-      join(f.directory, "gh"),
-      `#!${process.execPath}
-const fs = require("node:fs");
-const metadata = new Map(JSON.parse(fs.readFileSync(${JSON.stringify(metadataFile)}, "utf8")));
-const path = process.argv[3].replace("repos/openclaw/openclaw/", "");
-if (process.argv[2] !== "api" || !metadata.has(path)) throw new Error("Unexpected CLI fixture request: " + path);
-process.stdout.write(JSON.stringify(metadata.get(path)));
-`,
-      { mode: 0o755 },
-    );
     const request = join(f.directory, "original-request.json");
     const output = join(f.directory, "original-descriptor.json");
     const preload = join(f.directory, "cli-io.mjs");
@@ -1345,11 +1329,7 @@ globalThis.fetch = async (input, init) => {
       {
         encoding: "utf8",
         timeout: 10_000,
-        env: {
-          ...f.options.env,
-          PATH: `${f.directory}${delimiter}${process.env.PATH}`,
-          SystemRoot: process.env.SystemRoot,
-        },
+        env: { PATH: process.env.PATH, SystemRoot: process.env.SystemRoot, ...f.options.env },
       },
     );
     expect(result.error).toBeUndefined();
@@ -1423,10 +1403,10 @@ globalThis.fetch = async (input, init) => {
     },
   );
 
-  it.each(["bare", "qualified"])(
+  it.each(["bare", "qualified", "partial"])(
     "hands selected original bytes to a fresh transaction with a %s parent path",
     async (path) => {
-      const f = originalPackedFixture();
+      const f = originalPackedFixture("selected", path === "partial");
       f.current.path =
         path === "bare" ? parentWorkflow : `${parentWorkflow}@${f.options.env.GITHUB_REF}`;
       const descriptor = await createOriginalPackedClawHubDescriptor(f.options);
@@ -1496,6 +1476,8 @@ globalThis.fetch = async (input, init) => {
     "executed publisher",
     "missing publisher",
     "incomplete pack",
+    "wrong sibling producer",
+    "changed sibling artifact",
     "outside admission",
     "tampered seal",
     "changed request",
@@ -1505,7 +1487,12 @@ globalThis.fetch = async (input, init) => {
     "other executing attempt",
   ] as const)("refuses original source for %s", async (change) => {
     const f = originalPackedFixture(
-      change === "outside admission" ? "omitted sibling" : "selected",
+      change === "outside admission"
+        ? "omitted sibling"
+        : change === "executed publisher"
+          ? "full"
+          : "selected",
+      true,
     );
     f.current.path = parentWorkflow;
     const inventory = f.metadata.get(jobsPath(20, 1)) as { jobs: ReturnType<typeof job>[] };
@@ -1525,6 +1512,13 @@ globalThis.fetch = async (input, init) => {
           1,
           inventory.jobs.filter((entry) => !entry.name.includes("Pack ClawHub package")),
         );
+      } else if (change === "wrong sibling producer") {
+        inventory.jobs.find(
+          (candidate) => candidate.name === "Pack ClawHub package (@openclaw/sibling)",
+        )!.run_attempt = 2;
+      } else if (change === "changed sibling artifact") {
+        f.seal.packages[1]!.artifactSha256 = "f".repeat(64);
+        replaceJsonArtifact(f.original, f.recoveryArtifact, "recovery-manifest.json", f.seal);
       } else if (change === "tampered seal") {
         const tampered = Buffer.from(f.archives.get(f.recoveryArtifact.id)!);
         tampered.writeUInt8(tampered.readUInt8(tampered.length - 1) ^ 1, tampered.length - 1);
@@ -1545,47 +1539,113 @@ globalThis.fetch = async (input, init) => {
           ? /unproven/u
           : change === "incomplete pack"
             ? /pack job inventory/u
-            : change === "outside admission"
-              ? /outside the original admitted/u
-              : change === "changed request"
-                ? /authenticated parent request/u
-                : change === "mismatched parent full ref" || change === "completed parent"
-                  ? /active parent/u
-                  : change === "non-null parent conclusion"
-                    ? /parent state/u
-                    : change === "other executing attempt"
-                      ? /executing current parent attempt/u
-                      : /size|digest/u,
+            : change === "wrong sibling producer"
+              ? /producer job/u
+              : change === "changed sibling artifact"
+                ? /transaction roster/u
+                : change === "outside admission"
+                  ? /outside the original admitted/u
+                  : change === "changed request"
+                    ? /authenticated parent request/u
+                    : change === "mismatched parent full ref" || change === "completed parent"
+                      ? /active parent/u
+                      : change === "non-null parent conclusion"
+                        ? /parent state/u
+                        : change === "other executing attempt"
+                          ? /executing current parent attempt/u
+                          : /size|digest/u,
       );
     }
     expect(f.recoveryWrites).toEqual([]);
   });
 
-  it.each(["legacy missing state", "unknown", "published", "HTTP 404"])(
-    "does not treat %s as authoritative absence",
+  it.each(["pending", "published", "failed", "unknown", "changed attempt"])(
+    "never treats a selected sealed %s entry as missing receipt",
     async (state) => {
-      const f = originalPackedFixture();
-      const fetchImpl: typeof fetch = async (input, init) => {
-        if (
-          requestUrl(input).startsWith("https://clawhub.ai/") &&
-          requestUrl(input).endsWith("/publication")
-        ) {
-          return state === "HTTP 404"
-            ? new Response(null, { status: 404 })
-            : Response.json({
-                name: f.entry.name,
-                version: f.entry.version,
-                ...(state === "legacy missing state" ? {} : { state }),
-              });
-        }
-        return f.options.fetchImpl(input, init);
-      };
-      await expect(
-        createOriginalPackedClawHubDescriptor({ ...f.options, fetchImpl }),
-      ).rejects.toThrow(/publication|HTTP 404/u);
+      const f = originalPackedFixture("selected", true);
+      Object.assign(f.seal.packages[0]!, {
+        publicationStatus: state === "changed attempt" ? "unavailable" : state,
+        ...(state === "pending" || state === "failed" || state === "changed attempt"
+          ? { attemptId: "different-attempt" }
+          : {}),
+      });
+      replaceJsonArtifact(f.original, f.recoveryArtifact, "recovery-manifest.json", f.seal);
+      if (state === "unknown" || state === "changed attempt") {
+        await expect(createOriginalPackedClawHubDescriptor(f.options)).rejects.toThrow(
+          /manifest package state/u,
+        );
+      } else {
+        expect(await createOriginalPackedClawHubDescriptor(f.options)).toBeNull();
+      }
       expect(f.recoveryWrites).toEqual([]);
     },
   );
+
+  it.each(["authority", "pending"])(
+    "does not expose restored bytes when %s changes during download",
+    async (change) => {
+      const f = originalPackedFixture("selected", true);
+      const descriptor = await createOriginalPackedClawHubDescriptor(f.options);
+      const matrix = await resolvePreparedClawHubMatrix({ ...f.options, descriptor });
+      const outputDir = join(f.directory, "revoked-package");
+      const fetchImpl: typeof fetch = async (input, init) => {
+        const response = await f.options.fetchImpl(input, init);
+        if (requestUrl(input).endsWith("actions/artifacts/" + f.packageArtifact.id + "/zip")) {
+          if (change === "authority") {
+            Object.assign(f.current, completed);
+          } else {
+            f.setPending();
+          }
+        }
+        return response;
+      };
+      await expect(
+        restorePreparedClawHubPackage({
+          ...f.options,
+          descriptor,
+          fetchImpl,
+          entry: matrix[0]!.prepared,
+          token: "fixture-token",
+          outputDir,
+        }),
+      ).rejects.toThrow(change === "authority" ? /parent/u : /not absent/u);
+      expect(existsSync(outputDir)).toBe(false);
+      expect(f.recoveryWrites).toEqual([]);
+    },
+  );
+
+  it.each([
+    "legacy missing state",
+    "unknown",
+    "published",
+    "pending",
+    "failed",
+    "changed attempt",
+    "HTTP 404",
+  ])("does not treat %s as authoritative absence", async (state) => {
+    const f = originalPackedFixture("selected", true);
+    const fetchImpl: typeof fetch = async (input, init) => {
+      if (
+        requestUrl(input).startsWith("https://clawhub.ai/") &&
+        requestUrl(input).endsWith("/publication")
+      ) {
+        return state === "HTTP 404"
+          ? new Response(null, { status: 404 })
+          : Response.json({
+              name: f.entry.name,
+              version: f.entry.version,
+              ...(state === "legacy missing state" ? {} : { state }),
+              ...(state === "pending" ? { stage: "checks", attemptId: "pending-attempt" } : {}),
+              ...(state === "failed" ? { recoverable: true, attemptId: "failed-attempt" } : {}),
+            });
+      }
+      return f.options.fetchImpl(input, init);
+    };
+    await expect(
+      createOriginalPackedClawHubDescriptor({ ...f.options, fetchImpl }),
+    ).rejects.toThrow(/publication|HTTP 404/u);
+    expect(f.recoveryWrites).toEqual([]);
+  });
 
   it("rejects changed tarball bytes even when their enclosing archive digest is current", async () => {
     const f = originalPackedFixture();
@@ -1734,36 +1794,6 @@ describe("ClawHub parent-requested recovery", () => {
     expect(f.registryReads).toEqual([]);
   });
 
-  it("recovers the original beta bytes without an aggregate manifest", async () => {
-    const qualification = candidatePublicationFixture({
-      candidateSha: "995f9059b6e6fe3ba0865a3354924fd2bcbfceea",
-      candidateVersion: "2026.11.10-beta.1",
-      runId: "44507108002",
-    });
-    const f = authenticatedParentRecoveryFixture("selected", qualification);
-    const parent = { ...qualification.parent, conclusion: "failure" };
-    const client = createFrv18PublicationClient(qualification, parent, { missingManifest: true });
-    vi.stubGlobal("fetch", async (url: string) =>
-      url.endsWith("/2026.11.10-beta.1")
-        ? new Response("{}", { status: 404 })
-        : Response.json({
-            versions: { "2026.11.5": {} },
-            "dist-tags": { latest: "2026.11.5", beta: "2026.11.5" },
-          }),
-    );
-    try {
-      const evidence = await recoverClawHubFromParent({ ...f.options, evidenceClient: client });
-      expect(f.recoveryWrites).toEqual([f.entry.name]);
-      expect(
-        evidence.packages.map(
-          (entry: { package: { packageName: string } }) => entry.package.packageName,
-        ),
-      ).toEqual([f.entry.name]);
-    } finally {
-      vi.unstubAllGlobals();
-    }
-  });
-
   it("does not let an approved request or public bytes replace original FRV authority", async () => {
     const f = parentRecoveryFixture();
     const loadManifest = vi.fn(() => {
@@ -1772,10 +1802,10 @@ describe("ClawHub parent-requested recovery", () => {
     await expect(
       recoverClawHubFromParent({
         ...f.options,
-        evidenceClient: { ...candidatePublicationFixture({ runId: "40" }).client, loadManifest },
+        evidenceClient: { ...createReleaseEvidenceClient(repository), loadManifest },
       }),
     ).rejects.toThrow("Original FRV provenance unavailable");
-    expect(loadManifest).toHaveBeenCalledWith("40", 1, undefined);
+    expect(loadManifest).toHaveBeenCalledWith("40", 1);
     expect(f.githubReads).toContain("actions/runs/10/attempts/1");
     expect(f.githubReads).toContain("actions/runs/20/attempts/1");
   });
@@ -1976,6 +2006,7 @@ describe("ClawHub detached postpublish verification", () => {
           DEFER_CLAWHUB: String(deferred),
           RELEASE_NPM_DIST_TAG: tag,
           NORMAL_CLAWHUB_RUN_ID: "",
+          PLUGIN_NPM_RUN_ID: "73",
         },
       });
       expect(written.status, written.stderr).toBe(0);

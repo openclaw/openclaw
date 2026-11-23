@@ -29,12 +29,14 @@ import {
 import { isTruthyEnvValue, isVitestRuntimeEnv } from "../infra/env.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createGatewayActiveWorkSnapshot } from "../infra/gateway-active-work.js";
+import { initializeGatewayResourceProfile } from "../infra/gateway-resource-profile.js";
 import { prepareGatewayAgentCliShim } from "../infra/openclaw-cli-shim.js";
 import { readGatewayRestartHandoff } from "../infra/restart-handoff.js";
 import { setGatewayRestartPolicy, setPreRestartDeferralCheck } from "../infra/restart.js";
 import { withSqliteReadOnlyWorkerScope } from "../infra/sqlite-readonly-worker.js";
 import { withSystemEventOwner } from "../infra/system-event-ownership.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
+import { initializeWorkerMemoryBudget } from "../infra/worker-memory-budget.js";
 import { applyLoggingConfig } from "../logging/logger.js";
 import type { createSubsystemLogger } from "../logging/subsystem.js";
 import { setGatewayPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
@@ -334,6 +336,10 @@ async function prepareGatewayServerBootstrapSelected(input: {
     { omitErrorMessage: true },
   );
   const cfgAtStart = authBootstrap.cfg;
+  initializeWorkerMemoryBudget(
+    initializeGatewayResourceProfile(cfgAtStart.gateway?.resources),
+    cfgAtStart.gateway?.resources,
+  );
   startupTrace.setConfig(cfgAtStart);
   if (!opts.updateCanary) {
     try {

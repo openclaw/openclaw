@@ -440,15 +440,27 @@ export function resolveMutableAgentEntry(
   return undefined;
 }
 
+/** Borrow the roster owner's prepared entry; mutable public callers keep clone-on-read. */
+export function readAgentConfigEntry(
+  cfg: OpenClawConfig,
+  agentId: string,
+): Readonly<AgentEntry> | undefined {
+  const id = normalizeAgentId(agentId);
+  const facts = readAgentRosterFacts(cfg);
+  const entry = facts
+    ? (facts.entryByNormalizedId ??= buildAgentEntryIndex(cfg)).get(id)?.entry
+    : resolveAgentEntry(cfg, id);
+  return (
+    entry ?? (!hasAgentRosterProperty(cfg) && id === LEGACY_IMPLICIT_AGENT_ID ? { id } : undefined)
+  );
+}
+
 /** Resolves merged config for one agent id. */
 export function resolveAgentConfig(
   cfg: OpenClawConfig,
   agentId: string,
 ): ResolvedAgentConfig | undefined {
-  const id = normalizeAgentId(agentId);
-  const entry: AgentEntry | undefined =
-    resolveAgentEntry(cfg, id) ??
-    (!hasAgentRosterProperty(cfg) && id === LEGACY_IMPLICIT_AGENT_ID ? { id } : undefined);
+  const entry = readAgentConfigEntry(cfg, agentId);
   if (!entry) {
     return undefined;
   }
@@ -520,7 +532,7 @@ export function resolveAgentWorkspaceDir(
   env: NodeJS.ProcessEnv = process.env,
 ) {
   const id = normalizeAgentId(agentId);
-  const configured = resolveAgentConfig(cfg, id)?.workspace?.trim();
+  const configured = readAgentConfigEntry(cfg, id)?.workspace?.trim();
   if (configured) {
     return stripNullBytes(resolveUserPath(configured, env));
   }

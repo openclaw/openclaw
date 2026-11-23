@@ -62,7 +62,9 @@ export function prepareExecApprovalConsumption<TPayload>(params: {
         currentGraceAnchorMs === null ||
         currentNowMs - currentGraceAnchorMs >= EXEC_APPROVAL_RESOLVED_ENTRY_GRACE_MS
       ) {
-        throw new ApprovalMutationRefusedError("approval consumption is no longer available");
+        throw new ApprovalMutationRefusedError(
+          "This approval is no longer available. Start a new turn to request approval again.",
+        );
       }
     },
     markCommitted: (record) => {

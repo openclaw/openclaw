@@ -122,7 +122,6 @@ it.each([
   const selected = () => sidebar.querySelector(`[data-session-key="${key}"]`);
   const text = () => selected()?.textContent?.replace(/\s+/g, " ").trim();
   const keys = () => sidebar.sessionData.sessionsResult?.sessions.map((row) => row.key);
-  const done = () => sidebar.querySelector(`[data-session-key="${key}"] [aria-label="Done"]`);
   try {
     await activateSessionMenuValue(sidebar, "owner:ada");
     await waitForFast(() => {
@@ -306,7 +305,7 @@ it.each([
       lastMessagePreview: listed?.lastMessagePreview,
       status: listed?.status,
     }).toStrictEqual({ ...presentation("Latest filtered child"), status: "done" });
-    expect(done()).not.toBeNull();
+    expect(selected()?.querySelector(".session-glyph--running")).toBeNull();
 
     await waitForFast(() => expect(selected()?.textContent).toContain("Latest filtered child"));
     expect(keys()).toEqual(initialRows.map((row) => row.key));

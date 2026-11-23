@@ -108,6 +108,7 @@ const completionRuntime = createSubagentRegistryCompletionRuntime({
 });
 const pendingLifecycle = completionRuntime.pendingLifecycle;
 const clearPendingLifecycleError = pendingLifecycle.clearError;
+export const completeSubagentRunWithRecovery = completionRuntime.completeSubagentRunWithRecovery;
 const clearPendingLifecycleTimeout = pendingLifecycle.clearTimeout;
 
 const contextCleanup = createSubagentRegistryContextCleanup({
@@ -452,7 +453,6 @@ const subagentSweeper = createSubagentRegistrySweeper({
     subagentLifecycleController.sessionEffectsHostCurrent(entry),
   shouldSuppressSessionEffects: (entry, effects) =>
     subagentLifecycleController.shouldSuppressSessionEffects(entry, effects),
-  discardTerminalDelivery: SubagentLifecycleController.discardTerminalDelivery,
   callGateway: callSubagentRegistryGateway,
   retireSupersededRun: retireSupersededSubagentRun,
   retireObligations: retireKilledSubagentObligations,
@@ -575,7 +575,7 @@ export function initSubagentRegistry() {
 }
 
 export {
-  listLiveSubagentRootSessions,
+  listLiveSubagentSessions,
   resolveRootSubagentRequester,
 } from "./subagent-registry-read.js";
 

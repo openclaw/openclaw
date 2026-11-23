@@ -264,7 +264,7 @@ describe("Activity recap lifecycle with the canonical session store", () => {
     vi.restoreAllMocks();
   });
 
-  it("stops an operator recap revoked during preparation and retains its cached result", async () => {
+  it("finishes an admitted operator recap after model policy changes and refuses the next recap", async () => {
     const { profile, provider } = await operatorRecaps(["test/utility"]);
     const alias = await ensureCanonicalUserProfileForEmail("recap-alias@example.test");
     await assignSessionOwnerInWorker(scope, {
@@ -298,12 +298,19 @@ describe("Activity recap lifecycle with the canonical session store", () => {
     setRuntimeConfigSnapshot(cfg);
     preparation.resolve(prepared);
     await revoked.drain();
-    expect(provider).toHaveBeenCalledTimes(1);
-    expect(read()?.activitySummary).toEqual(cached);
-    expect(view()).toMatchObject({ state: "unavailable", text: completedText });
+    expect(provider).toHaveBeenCalledTimes(2);
+    expect(read()?.activitySummary).toMatchObject(summary(4));
+    expect(read()?.activitySummary).not.toEqual(cached);
+    expect(view()).toMatchObject({ state: "current", text: completedText });
     const retainedAssertion = complete.mock.calls[0]?.[0].operatorAuthority?.assertCurrent;
     expect(retainedAssertion).toBeDefined();
-    expect(() => retainedAssertion?.()).toThrow();
+    expect(() => retainedAssertion?.()).not.toThrow();
+    await messages(1, 4);
+    const next = new AsyncWorkScope();
+    await next.track(() => ensureRecap(target));
+    await next.drain();
+    expect(provider).toHaveBeenCalledTimes(2);
+    expect(read()?.activitySummary).toMatchObject(summary(4));
   });
 
   it("denies profile-created recaps after a nonhuman assignment while service recaps complete", async () => {

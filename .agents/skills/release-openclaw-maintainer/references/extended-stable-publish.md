@@ -25,7 +25,7 @@ Use this path only for a `.33+` Gateway distribution from the trailing
 completed month: the `openclaw` npm package, official npm plugins,
 and matching Docker Gateway images. Use
 `scripts/openclaw-npm-extended-stable-release.mjs` and the release workflows
-at Q=C by default for qualification; an explicit reviewed main-ancestor Q may
+at Q=C by default for qualification; an explicit reviewed exact Q may
 be admitted against unchanged C. Independently trusted P owns admission,
 verification, and publication. Missing Q contracts need a deliberate Q repair
 or candidate backport, never a moving-main fallback.

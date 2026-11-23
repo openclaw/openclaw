@@ -2059,6 +2059,7 @@
                       "tools/llm-task",
                       "tools/lobster",
                       "tools/mcp",
+                      "tools/session-project",
                       "tools/tool-search"
                     ]
                   },
@@ -3272,6 +3273,8 @@
                 "group": "Release notes",
                 "pages": [
                   "releases/index",
+                  "releases/2026.11.7",
+                  "releases/2026.11.6",
                   "releases/2026.11.5",
                   "releases/2026.11.4",
                   "releases/2026.11.3",

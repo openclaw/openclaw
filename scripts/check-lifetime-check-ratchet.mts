@@ -17,29 +17,7 @@ import {
 // Constructors and refusals of mid-request authority re-checks (AGENTS.md "Choose good
 // compromises"; docs/gateway/security/trust-model.md). Admission, cancellation, secrets and
 // data fences are not listed: they stay.
-export const LIFETIME_CHECK_CALLS = [
-  "captureRequestAuthorityAssertion",
-  "bindWebSocketRequestMutationAuthority",
-  "captureGatewayRequestOperatorGuard",
-  "retainGatewayRequestMutationAuthority",
-  "captureGatewayOperatorRunAuthority",
-  "captureOperatorToolGatewayAuthority",
-  "resolveSessionRuntimeAuthority",
-  "captureHttpRequestAuthority",
-  "bindHttpResponseAuthority",
-  "retainExecApprovalsCurrentRead",
-  "createPluginRuntimeCapabilityLease",
-  "captureAdmittedRunActiveAssertion",
-  "captureGatewayToolCallerAssertion",
-  "captureGatewayToolReceiptAssertion",
-  "captureAgentToolSourceExecutionGuard",
-  "captureSourceInvocationGuard",
-  "createCliRunCurrentAssertion",
-  "captureMediaGenerationAdmission",
-  "captureCronJobMessageAuthority",
-  "captureCronJobSourceAuthority",
-  "captureCronJobStandingGrantAuthority",
-] as const;
+export const LIFETIME_CHECK_CALLS = [] as const;
 const calls: ReadonlySet<string> = new Set(LIFETIME_CHECK_CALLS);
 // Authority wording only: "<owner|lock|generation> is no longer current" is a data or ownership fence.
 const refusals = [

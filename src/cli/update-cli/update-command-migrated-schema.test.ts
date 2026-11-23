@@ -374,8 +374,8 @@ it.each([
     const warning = result.steps.at(-1);
     expect(warning).toMatchObject({ name: "state-schema-verification", exitCode: 0 });
     expect(warning?.advisory?.message).toMatch(
-      gitRelease
-        ? /^State schema check was inconclusive \(.*\)\. No data was changed because no new-version process had opened the state\. The update continues; the new release migrates state when it starts\.$/
+      status === "ok"
+        ? /^State schema check was inconclusive \(.*\)\. No data was changed because no new-version process had opened the state\. The update continues\.$/
         : /^State schema check was inconclusive \(.*\)\. No data was changed because no new-version process had opened the state\.$/,
     );
     expect(nextAction ?? "").not.toMatch(/data at risk|Keep the Gateway stopped/);
@@ -386,7 +386,7 @@ it.each([
   { changed: false, blocked: undefined },
   { changed: true, blocked: "state-migrated-no-rollback" },
 ])(
-  "a Git release leaves migration to the Gateway start and blocks only a moved schema (changed=$changed)",
+  "a Git release allows an older schema at activation and blocks rollback once it moves (changed=$changed)",
   async ({ changed, blocked }) => {
     const { env, agentPath, schemaVersions } = await servingAgentStore("update-release-schema-");
     if (changed) {

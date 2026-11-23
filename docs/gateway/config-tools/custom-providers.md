@@ -172,6 +172,7 @@ migration is needed.
     | `supportsTemperature` | Accepts `temperature` for this model and adapter. |
     | `supportsUsageInStreaming` | Emits usage metadata in streaming responses. |
     | `supportsInstructions` | Responses API only: accepts the system prompt via top-level `instructions` instead of embedded in `input`. Defaults to `true` only for native OpenAI and xAI's main route — the two routes with confirmed contract evidence. Every other route, bundled or custom, defaults to `false`; set explicitly once verified against that endpoint. |
+    | `cachesInstructions` | Responses API only: caches top-level `instructions`. Set `false` to send the system prompt as input so it can be cached. |
     | `supportsTools` | Supports structured tool/function calling. Set `false` to disable tools. |
     | `supportsStrictMode` | Accepts the `strict` tool field. On compatible Completions and Responses routes, `true` permits explicit `strict: false` so optional tool arguments remain optional. |
     | `requiresStringContent` | Requires plain-string Chat Completions message content. |

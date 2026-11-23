@@ -619,7 +619,7 @@ describe("ExecApprovalManager", () => {
   });
 
   it("keeps delegated authority independent from optional audit evidence", async () => {
-    const { manager, runtime, bind } = delegatedManager();
+    const { manager, bind } = delegatedManager();
     const { record, snapshot } = await bind("approval", {
       executionIdentityToken: {
         tokenVersion: 1,
@@ -630,11 +630,13 @@ describe("ExecApprovalManager", () => {
       },
     });
     delete record.executionIdentityToken;
-    expect(await manager.forceDenyIfRuntimeAuthorityClosed(record.id)).toBeNull();
     expect((await snapshot())?.resolvedAtMs).toBeUndefined();
-    runtime.active = false;
-    expect(await manager.forceDenyIfRuntimeAuthorityClosed(record.id)).toMatchObject({
-      outcome: "denied",
-    });
+    expect(
+      await cancelAgentRuntimeBoundApprovals({
+        authority: delegatedAuthority,
+        manager,
+        publish: vi.fn(),
+      }),
+    ).toBe(1);
   });
 });

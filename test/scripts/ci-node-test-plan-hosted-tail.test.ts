@@ -155,7 +155,8 @@ it.each(["push", "main", "full"] as const)("bounds hosted groups (%s)", (mode) =
   );
   expect(updateGroups).toHaveLength(1);
   if (full) {
-    expect(updateGroups[0]!.pretestBuildMode).toBe("runtime");
+    // Ordinary updater tests do not inherit packaged-runtime consumers' build.
+    expect(updateGroups[0]!.pretestBuildMode).toBeUndefined();
     expect(updateGroups[0]!.includePatterns!.length).toBeGreaterThan(1);
   } else {
     expect(updateGroups[0]!.includePatterns).toEqual(["src/cli/update-cli.test.ts"]);

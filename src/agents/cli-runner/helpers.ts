@@ -82,6 +82,7 @@ export function resolveCliRunQueueKey(params: {
 export function buildCliAgentSystemPrompt(params: {
   preparedTtsPreferences?: import("../../tts/tts-preferences.js").PreparedTtsPreferences;
   requesterProfileId?: string;
+  prepareSessionProjectGuidance?: () => Promise<string | undefined>;
   workspaceDir: string;
   cwd?: string;
   config?: OpenClawConfig;
@@ -118,7 +119,8 @@ export function buildCliAgentSystemPrompt(params: {
     cfg: params.config ?? {},
     agentId: params.agentId,
   });
-  const defaultModelLabel = `${defaultModelRef.provider}/${defaultModelRef.model}`;
+  const defaultModelLabel =
+    defaultModelRef && `${defaultModelRef.provider}/${defaultModelRef.model}`;
   const { runtimeInfo } = buildSystemPromptParams({
     config: params.config,
     agentId: params.agentId,
@@ -147,6 +149,7 @@ export function buildCliAgentSystemPrompt(params: {
   });
   return buildConfiguredAgentSystemPrompt({
     config: params.config,
+    prepareSessionProjectGuidance: params.prepareSessionProjectGuidance,
     preparedModelRuntime: params.preparedModelRuntime,
     preparedTtsPreferences: params.preparedTtsPreferences,
     agentId: params.agentId,

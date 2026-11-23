@@ -1,5 +1,5 @@
 import type { AgentRunTerminalOutcome } from "../../agents/agent-run-terminal-outcome.types.js";
-import type { PersistedUserTurnMessage } from "../../sessions/user-turn-transcript.types.js";
+import type { PersistedUserTurnMessage } from "../../sessions/user-turn-input.types.js";
 import type { SessionPendingInputEndCause } from "./session-pending-input-end-cause.types.js";
 
 export type SessionPendingInputState = "queued" | "interrupted" | "cancelled";

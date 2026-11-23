@@ -240,18 +240,6 @@ describe("command gating", () => {
     expect(result.text).toContain(expected);
   });
 
-  it("blocks a stale owner snapshot before reading or writing config", async () => {
-    const params = buildParams("/config show", { commands: { config: true, text: true } });
-    params.command.senderIsOwner = true;
-    params.command.assertOwnerCurrent = () => {
-      throw new Error("requester revoked during dispatch");
-    };
-    const result = await handleConfigCommand(params, true);
-    expect(result?.reply?.text).toContain("owner authority changed");
-    expect(readConfigFileSnapshotMock).not.toHaveBeenCalled();
-    expect(replaceConfigFileMock).not.toHaveBeenCalled();
-  });
-
   it.each([
     ["config", handleConfigCommand],
     ["debug", handleDebugCommand],

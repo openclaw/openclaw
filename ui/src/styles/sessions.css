@@ -1191,6 +1191,7 @@ select.session-group-select {
 
   openclaw-sessions-page .data-table-bulk-bar {
     flex-wrap: wrap;
+    column-gap: var(--space-2);
   }
 
   openclaw-sessions-page .data-table-pagination__size {

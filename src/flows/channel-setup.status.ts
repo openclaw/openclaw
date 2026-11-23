@@ -375,6 +375,8 @@ export async function noteChannelPrimer(
   );
   await prompter.note(
     [
+      t("wizard.channelsPrimer.credentialStorage"),
+      "",
       t("wizard.channelsPrimer.inboundSafety"),
       t("wizard.channelsPrimer.approveWith", {
         command: formatCliCommand("openclaw pairing approve <channel> <code>"),

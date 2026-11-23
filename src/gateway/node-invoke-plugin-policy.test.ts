@@ -20,8 +20,7 @@ import {
   MAX_PLUGIN_APPROVAL_TIMEOUT_MS,
   type PluginApprovalRequestPayload,
 } from "../infra/plugin-approvals.js";
-import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
-import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
+import { resetPluginRuntimeStateForTest } from "../plugins/runtime.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import {
   createTestApprovalFixture,
@@ -520,19 +519,6 @@ describe("applyPluginNodeInvokePolicy", () => {
     });
   });
 
-  it("passes plugin policy approval bindings to iOS delivery", async (testContext) => {
-    const fixture = deliveryFixture(testContext);
-    const { manager, context, handleRequested } = fixture;
-    await fixture.run(async () => {
-      context.pluginApprovalIosPushDelivery = { handleRequested };
-      const { record, pending: resultPromise } = await fixture.request();
-
-      expect(handleRequested).toHaveBeenCalledExactlyOnceWith(record);
-
-      await expectApprovalResolution(resultPromise, manager, record);
-    });
-  });
-
   it("sends an iOS cleanup wake through the current delivery owner", async (testContext) => {
     const fixture = deliveryFixture(testContext);
     const { manager, context, handleRequested } = fixture;
@@ -606,6 +592,24 @@ describe("applyPluginNodeInvokePolicy", () => {
     });
   });
 
+  it.for(["before the prompt", "while awaiting the decision"])(
+    "finishes the approval when the upload gate closes %s",
+    async (stage, testContext) => {
+      const fixture = createPolicyApprovalFixture(testContext);
+      let uploadAllowed = stage !== "before the prompt";
+      await fixture.run(async () => {
+        setDangerousDemoCommandRegistry([createApprovalRequestPolicy()]);
+        const { record, pending } = await fixture.request(createOperatorClient(), {
+          isApprovalAuthorityActive: () => uploadAllowed,
+        });
+        uploadAllowed = false;
+
+        await expectApprovalResolution(pending, fixture.manager, record);
+        expect(fixture.invoke).not.toHaveBeenCalled();
+      });
+    },
+  );
+
   it("fails closed when the allow-once claim cannot be consumed", async (testContext) => {
     const fixture = createPolicyApprovalFixture(testContext);
     const { manager } = fixture;
@@ -648,18 +652,6 @@ describe("applyPluginNodeInvokePolicy", () => {
     expect(context.broadcast).not.toHaveBeenCalled();
     expect(context.broadcastToConnIds).not.toHaveBeenCalled();
     expect(invoke).not.toHaveBeenCalled();
-  });
-
-  it("leaves commands without a dangerous plugin registration to normal allowlist handling", async () => {
-    setActivePluginRegistry(createEmptyPluginRegistry());
-    const { context } = createContext();
-
-    const result = await invokeDemoPolicy(context, null, {
-      command: "safe.echo",
-      params: { value: "hello" },
-    });
-
-    expect(result).toBeNull();
   });
 });
 

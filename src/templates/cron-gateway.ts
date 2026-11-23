@@ -23,7 +23,7 @@ type TemplateCronCreatorCapture = CronAddOptions & {
 export function createTemplateCronGateway(
   cron: Pick<
     CronServiceContract,
-    "add" | "list" | "readJob" | "updateWithPrecondition" | "remove" | "getDefaultAgentId"
+    "add" | "readJob" | "updateWithPrecondition" | "remove" | "getDefaultAgentId"
   > & {
     writeScratch(
       id: string,
@@ -64,24 +64,26 @@ export function createTemplateCronGateway(
         options?.captureOwnerProfileId?.(
           actor?.type === "human" && actor.source === "profile" ? actor.id : undefined,
         );
-        return await cron.add(normalized, {
-          ...creator,
-          commitGuard: guard,
-          matchesExisting: (job) => {
-            if (job.declarationKey === normalized.declarationKey) {
-              throw new Error("Template schedule declaration appeared after the list check.");
-            }
-            return false;
+        return await cron.add(
+          { ...normalized, ...(options?.schedulerJobId ? { id: options.schedulerJobId } : {}) },
+          {
+            ...creator,
+            commitGuard: guard,
+            matchesExisting: (job) => {
+              if (job.declarationKey === normalized.declarationKey) {
+                throw new Error(
+                  "Template schedule declaration already exists; it was not created by this attempt.",
+                );
+              }
+              return false;
+            },
           },
-        });
+        );
       } finally {
         creator?.disposeOperatorSource?.();
         creator?.disposeInferenceAuthorization?.();
       }
     },
-    list: async (agentId) => ({
-      jobs: (await cron.list({ includeDisabled: true })).filter((job) => job.agentId === agentId),
-    }),
     get: async (id) => {
       assertCurrent();
       const job = await cron.readJob(id);
@@ -101,7 +103,7 @@ export function createTemplateCronGateway(
       }
     },
     enable: async (id, expectedConfigRevision, commitGuard) => {
-      await cron.updateWithPrecondition(
+      return await cron.updateWithPrecondition(
         id,
         { enabled: true },
         (job) => {

@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import { operatorMcpOAuthIdentity } from "../agents/mcp-oauth-identity.js";
 import { readMcpOAuthStoreStatuses } from "../agents/mcp-oauth-store.js";
@@ -6,9 +7,14 @@ import { cronJobDefinitionFromReadView } from "../cron/job-read-view.js";
 import { normalizeCronJobCreate } from "../cron/normalize.js";
 import { toPublicCronJob } from "../cron/public-job.js";
 import { createTrustedCronScheduledToolPolicy } from "../cron/scheduled-tool-policy.js";
+import type { CronServiceContract } from "../cron/service-contract.js";
 import { applyDefaultCronToolsAllow } from "../cron/tools-allow.js";
 import type { CronJob, CronStoredJob } from "../cron/types.js";
 import { root as fsSafeRoot } from "../infra/fs-safe.js";
+import {
+  readAutomationSavedDefinition,
+  type AutomationSavedDefinition,
+} from "../shared/automation-saved-definition.js";
 import type { TemplateInstallOutcome } from "../shared/template-install-notice.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { TEMPLATE_CRON_REF_SCHEMA_VERSION, type PersistedTemplateCronRef } from "./cron-records.js";
@@ -24,12 +30,12 @@ export type TemplateCronGateway = {
     input: Record<string, unknown>,
     options?: {
       commitGuard?: () => void;
-      existingRef?: PersistedTemplateCronRef;
+      /** Native operation identity; never sourced from the Template. */
+      schedulerJobId?: string;
       captureOwnerProfileId?: (ownerProfileId: string | undefined) => void;
     },
-  ) => Promise<unknown>;
-  get?: (schedulerJobId: string) => Promise<unknown>;
-  list?: (agentId: string) => Promise<unknown>;
+  ) => ReturnType<CronServiceContract["add"]>;
+  get?: (schedulerJobId: string) => Promise<(CronJob & { configRevision: string }) | undefined>;
   remove: (
     schedulerJobId: string,
     options: { commitGuard?: () => void; expectedConfigRevision: string },
@@ -39,7 +45,7 @@ export type TemplateCronGateway = {
     jobId: string,
     expectedConfigRevision: string,
     commitGuard: () => void,
-  ) => Promise<void>;
+  ) => Promise<CronJob | void>;
 };
 
 export class TemplateCronInstallError extends Error {
@@ -51,42 +57,6 @@ export class TemplateCronInstallError extends Error {
     super(message);
     this.name = "TemplateCronInstallError";
   }
-}
-
-function templateCronSchedulerJobFromResult(value: unknown): { id: string } | undefined {
-  if (!value || typeof value !== "object") {
-    return undefined;
-  }
-  const record = value as Record<string, unknown>;
-  if (typeof record.id === "string" && record.id) {
-    return { id: record.id };
-  }
-  const job = record.job;
-  if (job && typeof job === "object" && typeof (job as Record<string, unknown>).id === "string") {
-    return { id: (job as Record<string, unknown>).id as string };
-  }
-  return undefined;
-}
-
-function schedulerJobRecordByDeclarationKey(
-  value: unknown,
-  declarationKey: string,
-): (Record<string, unknown> & { id: string }) | undefined {
-  if (!value || typeof value !== "object") {
-    return undefined;
-  }
-  const jobs = (value as Record<string, unknown>).jobs;
-  if (!Array.isArray(jobs)) {
-    return undefined;
-  }
-  const matches = jobs.filter(
-    (job): job is Record<string, unknown> & { id: string } =>
-      Boolean(job) &&
-      typeof job === "object" &&
-      (job as Record<string, unknown>).declarationKey === declarationKey &&
-      typeof (job as Record<string, unknown>).id === "string",
-  );
-  return matches.length === 1 ? matches[0] : undefined;
 }
 
 function templateCronGatewayInput(agentId: string, ref: PersistedTemplateCronRef) {
@@ -227,7 +197,7 @@ export async function installTemplateCronJobsStateless(
   plan: TemplateAddPlan,
   options: TemplateMutationStateOptions & {
     assertForwardCurrent?: () => void;
-    gateway?: Pick<TemplateCronGateway, "add" | "list" | "get" | "writeScratch" | "enable">;
+    gateway?: Pick<TemplateCronGateway, "add" | "get" | "writeScratch" | "enable">;
     nowMs?: number;
     onSetupOutcome?: (outcome: TemplateInstallOutcome) => Promise<void>;
   } = {},
@@ -236,30 +206,35 @@ export async function installTemplateCronJobsStateless(
   if (actions.length === 0) {
     return [];
   }
-  if (!options.gateway) {
-    throw new TemplateCronInstallError(
-      "cron_gateway_required",
-      "Template automations require the gateway-owned cron.add API.",
-      [],
-    );
-  }
+  const slots = actions.map((action) => ({
+    slotId: action.id,
+    name:
+      action.automation?.name ??
+      (typeof action.details?.name === "string" ? action.details.name : action.id),
+  }));
   const refs: PersistedTemplateCronRef[] = [];
   const assertCurrent = () => {
     options.assertCurrent?.();
     options.assertForwardCurrent?.();
   };
   assertCurrent();
-  // The manifest has no per-routine dependency graph, so unresolved Template-wide
-  // setup pauses every declaration. Preserve its exact schedule, prompt and scratch;
-  // ordinary automation controls can enable it after the requirement is connected.
-  const needsSetup = await templateSchedulesNeedSetup(plan, options);
-  assertCurrent();
   let scratchWriteAttempted = false;
-  let currentAction = actions[0]!;
-  let publishingOutcome = false;
+  let settled = 0;
+  let created: Extract<TemplateInstallOutcome, { kind: "automation-created" }> | undefined;
   try {
+    await options.onSetupOutcome?.({ kind: "automation-plan", slots });
+    assertCurrent();
+    if (!options.gateway) {
+      throw new TemplateCronInstallError(
+        "cron_gateway_required",
+        "Template automations require the gateway-owned cron.add API.",
+        refs,
+      );
+    }
+    // Unresolved Template-wide setup pauses every declaration, preserving its schedule and scratch.
+    const needsSetup = await templateSchedulesNeedSetup(plan, options);
+    assertCurrent();
     for (const action of actions) {
-      currentAction = action;
       // SAFETY: cronJob plan actions originate from validated TemplateCronJob manifest entries.
       const details = action.details as TemplateCronJob | undefined;
       if (!action.automation && !details?.id) {
@@ -325,49 +300,66 @@ export async function installTemplateCronJobsStateless(
         }
         ref = { ...ref, job: { automation: { ...automation, enabled: false } } };
       }
-      let result: { id: string } | undefined;
+      const schedulerJobId = randomUUID();
+      let confirmed: boolean;
+      let definition: AutomationSavedDefinition | undefined;
       try {
         await options.prepareEffect?.();
         assertCurrent();
-        result = templateCronSchedulerJobFromResult(
-          await options.gateway.add(templateCronGatewayInput(plan.agent.finalId, ref), {
-            commitGuard: assertCurrent,
-            captureOwnerProfileId: (ownerProfileId) => {
-              ref = { ...ref, nativeOwnership: { ownerProfileId } };
-            },
-          }),
-        );
-        assertCurrent();
-        if (!result) {
-          throw new Error("cron.add returned no scheduler job id");
+        const added = await options.gateway.add(templateCronGatewayInput(plan.agent.finalId, ref), {
+          commitGuard: assertCurrent,
+          schedulerJobId,
+          captureOwnerProfileId: (ownerProfileId) => {
+            ref = { ...ref, nativeOwnership: { ownerProfileId } };
+          },
+        });
+        confirmed = added?.id === schedulerJobId && !("created" in added && !added.created);
+        if (confirmed) {
+          const saved = "job" in added ? added.job : added;
+          definition = readAutomationSavedDefinition(
+            { ...saved, configRevision: resolveCronJobConfigRevision(saved) },
+            schedulerJobId,
+          );
         }
       } catch (error) {
-        if (options.gateway.list) {
-          try {
-            const listed = schedulerJobRecordByDeclarationKey(
-              await options.gateway.list(plan.agent.finalId),
-              ref.declarationKey,
-            );
-            if (
-              ref.nativeOwnership &&
-              listed &&
-              templateCronGatewayJobMatchesRef(plan.agent.finalId, ref, listed)
-            ) {
-              result = listed;
-            }
-          } catch {
-            // The primary error is more useful when reconciliation is unavailable.
-          }
-        }
-        if (!result) {
+        // A lost acknowledgement may follow a commit. A declaration key, even
+        // with identical settings and owner, cannot identify this attempt.
+        const live =
+          ref.nativeOwnership &&
+          (await options.gateway.get?.(schedulerJobId).catch(() => undefined));
+        if (
+          live?.id !== schedulerJobId ||
+          !templateCronGatewayJobMatchesRef(plan.agent.finalId, ref, live)
+        ) {
           throw new TemplateCronInstallError(
             "cron_install_failed",
             coerceErrorMessage(error),
             refs,
           );
         }
+        confirmed = true;
+        definition = readAutomationSavedDefinition(live, schedulerJobId);
       }
-      refs.push({ ...ref, status: "complete", schedulerJobId: result.id });
+      if (!confirmed) {
+        throw new TemplateCronInstallError(
+          "cron_install_failed",
+          "cron.add did not confirm creation of the requested scheduler job",
+          refs,
+        );
+      }
+      refs.push({ ...ref, status: "complete", schedulerJobId });
+      // The scheduler has created this job even if importing scratch or enabling
+      // it subsequently fails. The rollback owner decides whether its ID survives.
+      const job = ref.job;
+      created = {
+        kind: "automation-created",
+        ...(definition ? { definition } : {}),
+        declarationId: action.id,
+        schedulerJobId,
+        name: "automation" in job ? job.automation.name : (job.name ?? job.id),
+        enabled: "automation" in job ? job.automation.enabled : (job.enabled ?? true),
+      };
+      assertCurrent();
       if (action.scratch !== undefined) {
         if (!options.gateway.writeScratch) {
           throw new TemplateCronInstallError(
@@ -379,13 +371,13 @@ export async function installTemplateCronJobsStateless(
         await options.prepareEffect?.();
         assertCurrent();
         scratchWriteAttempted = true;
-        await options.gateway.writeScratch(result.id, action.scratch, assertCurrent);
+        await options.gateway.writeScratch(schedulerJobId, action.scratch, assertCurrent);
         assertCurrent();
         if (activateAfterScratch && action.automation) {
           if (!options.gateway.get || !options.gateway.enable) {
             throw new Error("Template scratch import requires the gateway-owned cron.update API.");
           }
-          const live = await options.gateway.get(result.id);
+          const live = await options.gateway.get(schedulerJobId);
           assertCurrent();
           const revision = templateCronGatewayJobConfigRevision(live);
           if (!revision || !templateCronGatewayJobMatchesRef(plan.agent.finalId, ref, live)) {
@@ -393,37 +385,38 @@ export async function installTemplateCronJobsStateless(
           }
           await options.prepareEffect?.();
           assertCurrent();
-          await options.gateway.enable(result.id, revision, assertCurrent);
+          delete created.definition;
+          const enabledJob = await options.gateway.enable(schedulerJobId, revision, assertCurrent);
+          if (enabledJob) {
+            created.definition = readAutomationSavedDefinition(
+              { ...enabledJob, configRevision: resolveCronJobConfigRevision(enabledJob) },
+              schedulerJobId,
+            );
+          }
+          created.enabled = true;
           ref = { ...ref, job: { automation: action.automation } };
-          refs[refs.length - 1] = { ...ref, status: "complete", schedulerJobId: result.id };
+          refs[refs.length - 1] = { ...ref, status: "complete", schedulerJobId };
         }
       }
-      const completed = refs[refs.length - 1]!;
-      const job = completed.job;
       assertCurrent();
-      publishingOutcome = true;
-      await options.onSetupOutcome?.({
-        kind: "automation-created",
-        declarationId: action.id,
-        schedulerJobId: result.id,
-        name: "automation" in job ? job.automation.name : (job.name ?? job.id),
-        enabled: "automation" in job ? job.automation.enabled : (job.enabled ?? true),
-      });
-      publishingOutcome = false;
+      await options.onSetupOutcome?.(created);
+      settled++;
+      created = undefined;
       assertCurrent();
     }
   } catch (error) {
-    if (!publishingOutcome) {
+    // No slot stays pending after a terminal install error. On publication failure,
+    // replay the completed slot's exact idempotent receipt, never a false failure.
+    for (const slot of slots.slice(settled)) {
       try {
         assertCurrent();
-        await options.onSetupOutcome?.({
-          kind: "automation-failed",
-          declarationId: currentAction.id,
-          name: currentAction.automation?.name ?? currentAction.id,
-        });
+        await options.onSetupOutcome?.(
+          created ?? { kind: "automation-failed", declarationId: slot.slotId, name: slot.name },
+        );
       } catch {
         // Notice delivery must not replace the installer failure or discard retained jobs.
       }
+      created = undefined;
     }
     // Once scratch is exposed, a later Add failure cannot prove that it is still ours.
     throw new TemplateCronInstallError(

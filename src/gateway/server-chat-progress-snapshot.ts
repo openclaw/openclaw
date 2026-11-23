@@ -5,6 +5,11 @@ import {
   ChatRunStartupPhaseSchema,
 } from "../../packages/gateway-protocol/src/schema/logs-chat.js";
 import { isCompleteAgentPreamble } from "../agents/agent-activity-presentation.js";
+import { isAutomationsToolName } from "../agents/tools/automations-tool-name.js";
+import {
+  automationCreationCall,
+  automationCreationFromToolDetails,
+} from "../chat/automation-job-result.js";
 import type { AgentEventPayload } from "../infra/agent-events.js";
 import { boundedJsonUtf8Bytes, jsonStringByteLengthUpToLimit } from "../infra/json-utf8-bytes.js";
 import { freezeTrustedJsonSnapshot, isDeeplyFrozenPlainData } from "../shared/immutable-data.js";
@@ -230,6 +235,7 @@ export function updateChatRunProgressSnapshot(
           ({ facts: candidate }) =>
             candidate.stream === "run_status" && candidate.data.phase === "waiting_for_model",
         )));
+  const isToolPreparation = event.stream === "run_status" && phase === "preparing_tool";
   const isRetryStatus = event.stream === "run_status" && phase === "retrying";
   const isFallbackStatus = event.stream === "lifecycle" && phase === "fallback_step";
   const isFinishing = event.stream === "lifecycle" && phase === "finishing";
@@ -287,6 +293,7 @@ export function updateChatRunProgressSnapshot(
     );
   const isSummaryProgress =
     isModelWait ||
+    isToolPreparation ||
     isTool ||
     isItem ||
     isUsage ||
@@ -362,6 +369,7 @@ export function updateChatRunProgressSnapshot(
     removeWhere((candidate) => candidate.stream === "usage");
   } else if (
     isStartupStatus ||
+    isToolPreparation ||
     isRetryStatus ||
     isFallbackStatus ||
     isFinishing ||
@@ -461,12 +469,37 @@ export function updateChatRunProgressSnapshot(
         ? "output"
         : undefined
       : "scalars";
+  // Summary reconnects and oversized native payloads must not turn a saved slot pending again.
+  const retainCreationFacts = () => {
+    if (!isTool || typeof data.name !== "string" || !isAutomationsToolName(data.name)) {
+      return;
+    }
+    if (phase === "start") {
+      const args = automationCreationCall(data.args);
+      if (args) {
+        storedData.args = args;
+      }
+    } else if (phase === "result" && typeof data.isError === "boolean") {
+      storedData.isError = data.isError;
+      const automationCreation =
+        !data.isError && automationCreationFromToolDetails(asNullableRecord(data.result)?.details);
+      if (automationCreation) {
+        storedData.result = { details: { automationCreation } };
+      }
+    }
+  };
+  if (mode === "summary") {
+    retainCreationFacts();
+  }
   let captured = captureProgressEvent(storedEvent, captureMode);
   if (!captured && isTool) {
     delete storedData.args;
     delete storedData.partialResult;
     delete storedData.diff;
     delete storedData.result;
+    if (mode === "full") {
+      retainCreationFacts();
+    }
     captured = captureProgressEvent(storedEvent, captureMode);
   }
   if (!captured) {

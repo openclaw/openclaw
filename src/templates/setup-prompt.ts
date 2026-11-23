@@ -26,11 +26,14 @@ export function buildTemplateOpeningMessage(
   dependenciesPending = false,
 ): string {
   const declarationKey = `template:${agent.agentId}:<entry id>`;
+  const slot = { slotId: "<entry id>", name: "<entry name, or its id>" };
   const addAutomation = JSON.stringify({
     action: "add",
+    planId: "<returned planId>",
+    slotId: slot.slotId,
     job: {
       declarationKey,
-      name: "<entry name, or its id>",
+      name: slot.name,
       enabled: false,
       schedule: { kind: "cron", expr: "<schedule.cron>", tz: "<schedule.timezone>" },
       sessionTarget: `session:${agent.sessionKey}`,
@@ -42,9 +45,11 @@ export function buildTemplateOpeningMessage(
     'Greeting. Greet the user briefly in your own voice, using the instructions already in your context. Send this greeting immediately, before any reads or other setup tools, with `message` ({"action":"send","final":false,"message":"..."}) and no channel or target. Do not ask them to choose a role or change your personality.',
     [
       'Automations. Read `CLAW.md`, then call `automations` with {"action":"list","includeDisabled":true}. For each entry under `automations` (`cronJobs` in older manifests), skip it when a listed automation already has `declarationKey` ' +
-        `${JSON.stringify(declarationKey)}; do not add or update that one, including user-enabled jobs. Otherwise call \`automations\` with:`,
+        `${JSON.stringify(declarationKey)}; do not add or update that one, including user-enabled jobs. Follow list pagination. If no entries remain, skip this step. Otherwise, before adding anything, call \`automations\` with all remaining slots in manifest order:`,
+      JSON.stringify({ action: "plan", slots: [slot] }),
+      "Use the returned planId and the corresponding entry id in each add:",
       addAutomation,
-      "Copy the schedule and message exactly, and ignore the entry's `enabled`, `session` and `delivery`. Tell the user which automations you created paused and that they can ask you to turn any of them on. On retry, preserve matching jobs exactly, do not re-pause them or claim existing enabled jobs are paused. Follow list pagination until all jobs have been checked.",
+      "Copy the schedule and message exactly, and ignore the entry's `enabled`, `session` and `delivery`. The card shows each result; do not repeat its rows. For newly created jobs, mention that they are paused and they can ask you to turn any of them on. On retry, preserve matching jobs exactly, do not re-pause them or claim existing enabled jobs are paused.",
     ].join("\n"),
     ...(report.mcpServers.length > 0
       ? [

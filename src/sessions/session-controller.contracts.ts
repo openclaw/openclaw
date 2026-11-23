@@ -512,6 +512,7 @@ export type SessionControllerSourceCustody = {
   cancellationRetired?: boolean;
   stopHeartbeat?: () => void;
   releaseAuthority?: () => void;
+  releaseCallbacks?: () => void;
   failure?: unknown;
   disposeSource?: () => void;
   /** One in-process Gateway registration may adopt a pre-reserved source. */

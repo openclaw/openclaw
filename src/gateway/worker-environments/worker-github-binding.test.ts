@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { WORKER_GITHUB_REFRESH_PROTOCOL_FEATURE } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import { createAdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
+import { createTestOperatorAuthority } from "../../agents/admitted-run-context.test-support.js";
 import type { AdmittedRunOperatorAuthority } from "../../agents/admitted-run-operator-authority.types.js";
 import {
   GitHubIdentityError,
@@ -377,18 +377,15 @@ describe("worker GitHub launch binding", () => {
     }
   });
 
-  it("retains and rechecks the admitted original operator independently of the turn owner", async () => {
+  it("retains the admitted original operator until the grant is revoked", async () => {
     await installProfile();
-    let current = true;
     const release = vi.fn();
     const retain = vi.fn(() => release);
-    const operatorAuthority = createAdmittedRunOperatorAuthority({
+    const operatorAuthority = createTestOperatorAuthority({
       profileId: "original-operator",
       scopes: ["operator.write"],
       assertCurrent: () => {
-        if (!current) {
-          throw new Error("Original operator revoked");
-        }
+        throw new Error("Original operator revoked");
       },
       retain,
     });
@@ -396,9 +393,9 @@ describe("worker GitHub launch binding", () => {
     const grant = await bindPreparedGrant(fact, () => undefined, operatorAuthority);
     try {
       expect(retain).toHaveBeenCalledOnce();
-      current = false;
-      expect(() => grant.assertCurrent()).toThrow("Original operator revoked");
-      await expect(grant.refresh()).rejects.toThrow();
+      // Admission already decided; a later revocation does not stop this turn's credential.
+      grant.assertCurrent();
+      expect(grant.signal.aborted).toBe(false);
     } finally {
       await grant.revoke();
     }

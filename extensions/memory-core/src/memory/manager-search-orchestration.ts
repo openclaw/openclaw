@@ -311,9 +311,15 @@ export abstract class MemorySearchOrchestration extends MemorySearchRetrieval {
         }
       }
       const indexIdentity = refreshSearchIdentity();
+      const shouldRepairConfiguredScope =
+        searchSyncEnabled &&
+        indexIdentity.status === "mismatched" &&
+        indexIdentity.owner === "configuration" &&
+        indexIdentity.code === "scope";
       const shouldRepairIdentity =
         hasIndexedContent &&
         (indexIdentity.status === "missing" ||
+          shouldRepairConfiguredScope ||
           (searchSyncEnabled &&
             indexIdentity.status === "mismatched" &&
             indexIdentity.owner === "openclaw" &&

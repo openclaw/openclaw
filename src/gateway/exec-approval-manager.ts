@@ -4,7 +4,6 @@ import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import {
   ApprovalMutationRefusedError,
   createExecApprovalMutationGuard,
-  isExecApprovalRuntimeActive,
   isExecApprovalMutationRefused,
 } from "./exec-approval-authority.js";
 import { prepareExecApprovalConsumption } from "./exec-approval-consumption.js";
@@ -191,11 +190,7 @@ export class ExecApprovalManager<
       const localEntry = capturedEntry;
       let persistence: ExecApprovalMutationPersistence = this.options.persistence;
       if (localEntry?.record.terminalReason === "storage-corrupt") {
-        const repaired = await this.persistStorageCorruptDeny(
-          recordId,
-          options.assertCurrent,
-          options.guard,
-        );
+        const repaired = await this.persistStorageCorruptDeny(recordId, options.guard);
         return projectRepairedApprovalResolution(repaired, decision);
       }
       if (decision !== "deny" && !localEntry) {
@@ -225,7 +220,9 @@ export class ExecApprovalManager<
                 localEntry.record.expiresAtMs > nowMs &&
                 localEntry.record.expiresAtMs <= Date.now())
             ) {
-              throw new ApprovalMutationRefusedError("approval record is no longer current");
+              throw new ApprovalMutationRefusedError(
+                "This approval is no longer available. Start a new turn to request approval again.",
+              );
             }
             assertExecApprovalStandingGrantCurrent(
               this.options,
@@ -344,7 +341,7 @@ export class ExecApprovalManager<
       let persistence: ExecApprovalMutationPersistence = this.options.persistence;
       const localRecord = capturedRecord;
       if (localRecord?.terminalReason === "storage-corrupt") {
-        return this.persistStorageCorruptDeny(recordId, assertResolverCurrent, callerGuard);
+        return this.persistStorageCorruptDeny(recordId, callerGuard);
       }
 
       let result: ForceDenyOperatorApprovalResult;
@@ -361,7 +358,7 @@ export class ExecApprovalManager<
               throw new Error("approval binding changed before cancellation");
             }
           },
-          { guard: callerGuard, assertCurrent: assertResolverCurrent },
+          { guard: callerGuard },
         );
         if (retainedPersistence) {
           guard.assertCurrent();
@@ -451,7 +448,7 @@ export class ExecApprovalManager<
     const recordId = lookup.outcome === "found" ? lookup.record.id : lookup.id;
     authority?.assertCurrent();
     const waited = await this.waitForMutations(recordId);
-    authority?.assertCurrent();
+    authority?.guard.assertCurrent();
     if (waited) {
       const refreshed = await getOperatorApprovalDetailed({
         id: recordId,
@@ -459,7 +456,7 @@ export class ExecApprovalManager<
         databaseOptions: this.options.persistence.databaseOptions,
         guard: authority?.guard,
       });
-      authority?.assertCurrent();
+      authority?.guard.assertCurrent();
       lookup =
         refreshed.outcome === "found"
           ? refreshed
@@ -487,8 +484,8 @@ export class ExecApprovalManager<
     }
     if (lookup.record.status === "pending" && entry.record.terminalReason === "storage-corrupt") {
       const repaired = await this.trackMutation(() => {
-        authority?.assertCurrent();
-        return this.persistStorageCorruptDeny(recordId, undefined, authority?.guard);
+        authority?.guard.assertCurrent();
+        return this.persistStorageCorruptDeny(recordId, authority?.guard);
       }, recordId);
       return "record" in repaired ? repaired.record : null;
     }
@@ -500,11 +497,9 @@ export class ExecApprovalManager<
 
   private async persistStorageCorruptDeny(
     recordId: string,
-    assertCurrent?: () => void,
     callerGuard?: OperatorApprovalStoreGuard,
   ): Promise<ExecApprovalForceDenyResult<TPayload>> {
     callerGuard?.assertCurrent();
-    assertCurrent?.();
     const localEntry = this.pending.get(recordId);
     if (!localEntry) {
       return { outcome: "not-found" };
@@ -524,7 +519,7 @@ export class ExecApprovalManager<
             throw new Error("approval binding changed before repair");
           }
         },
-        { guard: callerGuard, assertCurrent },
+        { guard: callerGuard },
       ),
     });
     if (result.outcome === "denied" || result.outcome === "expired") {
@@ -673,21 +668,5 @@ export class ExecApprovalManager<
       return null;
     }
     return decision;
-  }
-
-  /** Atomically closes a live approval whose exact runtime owner is gone. */
-  async forceDenyIfRuntimeAuthorityClosed(
-    recordId: string,
-  ): Promise<ExecApprovalForceDenyResult<TPayload> | null> {
-    const record = this.pending.get(recordId)?.record;
-    if (!record || isExecApprovalRuntimeActive(this.options, record)) {
-      return null;
-    }
-    return this.forceDenyDetailed(
-      recordId,
-      "run-aborted",
-      { kind: "system", id: null },
-      "cancelled",
-    );
   }
 }

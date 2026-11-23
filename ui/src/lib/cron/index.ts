@@ -7,6 +7,13 @@ import { t } from "../../i18n/index.ts";
 import { formatUiError } from "../format-error.ts";
 import { toNumber } from "../format.ts";
 import { parseFailureAlertCooldownMs } from "./decimal.ts";
+import { DEFAULT_CRON_FORM } from "./editor-state.ts";
+import {
+  loadCronStatus,
+  retireCronSelectedJobRead,
+  retireCronStatusFeedback,
+  retireCronStatusRequest,
+} from "./editor-status.ts";
 import { hasUnchangedCronSchedule, buildCronSchedule } from "./form-schedule.ts";
 import {
   hasCronFormErrors,
@@ -15,21 +22,15 @@ import {
   normalizeCronFormState,
   validateCronForm,
 } from "./form.ts";
+import { patchCronJobDefinition } from "./job-definition.ts";
 import { loadCronJobsPage } from "./jobs-full.ts";
 import { retireCronJobsRequest } from "./jobs.ts";
 import { buildCronPayload } from "./payload.ts";
 import { cronRunNotStartedMessage, isCronRunNotStartedNotice } from "./run-feedback.ts";
 import { clearCronRunsPage, loadCronRuns, retireCronRunsRequest } from "./runs.ts";
-import {
-  DEFAULT_CRON_FORM,
-  loadCronStatus,
-  retireCronSelectedJobRead,
-  retireCronStatusFeedback,
-  retireCronStatusRequest,
-} from "./state.ts";
 import type { CronFormState, CronState } from "./types.ts";
-
-export { createInitialCronState, loadCronStatus } from "./state.ts";
+export { createInitialCronState } from "./editor-state.ts";
+export { loadCronStatus } from "./editor-status.ts";
 export { loadCronScopeStats } from "./scope.ts";
 export { loadCronJobsPage } from "./jobs-full.ts";
 
@@ -80,13 +81,6 @@ async function withCronBusy(
     }
   }
   return undefined;
-}
-
-function requireCronConfigRevision(revision: string | null | undefined): string {
-  if (revision) {
-    return revision;
-  }
-  throw new Error(t("cron.missingConfigRevision"));
 }
 
 function clearCronEditState(state: CronState) {
@@ -351,11 +345,7 @@ async function updateCronJobDefinition(
   const selectedJob = state.cronEditingJob;
   const ownsEditor = () => state.cronEditingJob === job && state.cronForm === form;
   try {
-    const updatedJob = await client.request<CronJob>("cron.update", {
-      id: job.id,
-      expectedConfigRevision: requireCronConfigRevision(job.configRevision),
-      patch,
-    });
+    const updatedJob = await patchCronJobDefinition(client, job, patch);
     if (!isCurrent()) {
       return false;
     }

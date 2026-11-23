@@ -413,6 +413,15 @@ export function createSessionRowChildProjection(params: {
     mark(change: SessionRowChange) {
       if (!("all" in change)) {
         invalidate(change.sessionKey);
+        if (change.scope === "runtime") {
+          if (change.runtimeSession) {
+            for (const row of params.matching({ key: change.runtimeSession.sessionId }, "id")) {
+              invalidate(row.key);
+            }
+          }
+          // Both runtime keys and session-ID aliases have invalidated their ancestors.
+          activity.invalidateRuntime([]);
+        }
         return;
       }
       if (change.factsInvalidated) {

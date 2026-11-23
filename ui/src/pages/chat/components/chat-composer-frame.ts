@@ -302,9 +302,9 @@ export function createChatComposerContext(
     draft: string,
     submissionAction?: Event,
     followUpModeOverride?: ChatFollowUpMode,
-  ) => {
+  ): boolean => {
     if (state.composerDraftScope !== draftScope || !canSubmitDraft(draft)) {
-      return;
+      return false;
     }
     state.composerComposing = false;
     state.tasks()?.clearAccepted();
@@ -312,11 +312,11 @@ export function createChatComposerContext(
     commitComposerDraft(props, draft);
     props.onTypingChange?.(false);
     if (goalComposer.activateDraft(draft, true)) {
-      return;
+      return true;
     }
     if (goalComposer.active) {
       void goalComposer.submit(submissionAction);
-      return;
+      return true;
     }
     const completion = props.onSend(followUpModeOverride, submissionAction);
     syncComposerDraftAfterSend(state.composerTextarea);
@@ -325,6 +325,7 @@ export function createChatComposerContext(
     } else {
       settleSubmittedCommandMenus();
     }
+    return true;
   };
 
   const queuedSubmit = createQueuedSubmit(props, state, visibleDraft, canSubmitDraft, submitDraft);

@@ -81,6 +81,7 @@ import { createAvailablePortalTools } from "./tools/portal-tool.js";
 import { createProgressCardTool } from "./tools/progress-card-tool.js";
 import { createScreenTool } from "./tools/screen-tool.js";
 import { createSecretsTool } from "./tools/secrets-tool.js";
+import { createSessionProjectTool } from "./tools/session-project-tool.js";
 import { createSessionStatusTool } from "./tools/session-status-tool.js";
 import { createSessionsCreateTool } from "./tools/sessions-create-tool.js";
 import { createSessionsHistoryTool } from "./tools/sessions-history-tool.js";
@@ -364,9 +365,6 @@ function* createOpenClawToolsSteps(
         agentDir: searchContext.agentDir,
         authStore: options?.authProfileStore,
         runtimeWebSearch: runtimeWebTools?.search,
-        ...(options?.authProfileStoreSource !== undefined
-          ? { resolveAuthProfileStoreSource: () => options.authProfileStoreSource === true }
-          : {}),
       });
     options?.onWebSearchConfiguration?.(configured);
     if (!configured) {
@@ -509,6 +507,7 @@ function* createOpenClawToolsSteps(
               }),
           createCronTool({
             ...options,
+            requireCreationPlan: options?.requireCronCreationPlan,
             // Use the durable runSessionKey; cleanup-retired policy keys leave cron jobs dangling.
             agentSessionKey: options?.runSessionKey ?? options?.agentSessionKey,
             agentId: sessionAgentId,
@@ -588,6 +587,9 @@ function* createOpenClawToolsSteps(
             }) === "unconfigured",
           preview: options.githubPublicationPreview,
         })
+      : null,
+    !embedded && sessionKey && options?.sessionProjectMoveEligible
+      ? createSessionProjectTool(options)
       : null,
     transcriptsTool,
     imageGenerateTool,

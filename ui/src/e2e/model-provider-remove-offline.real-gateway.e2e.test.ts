@@ -113,7 +113,7 @@ suite.define(() => {
         await waitForControlUiGatewayReady(page);
         const fixture = await expandProvider(page, "fixture");
         await capture("after-reload.png", fixture);
-        expect(await card.count()).toBe(0);
+        await expect.poll(() => card.count()).toBe(0);
         const after = await persistedConfig();
         expect(after.models?.providers).toEqual(siblings);
         expect(after.agents?.defaults?.model).toBe("fixture/current");

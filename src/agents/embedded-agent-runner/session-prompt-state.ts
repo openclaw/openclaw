@@ -25,6 +25,9 @@ import {
 } from "./cache-ttl-checkpoint.js";
 import { extractAttemptPermissionNotice } from "./run/attempt-system-prompt.js";
 import { buildSystemUpdateMessage } from "./run/runtime-context-prompt.js";
+import { promptDelta } from "./session-prompt-delta.js";
+import { resolvePromptHistoryId } from "./session-prompt-history-id.js";
+import { SYSTEM_PROMPT_UPDATE_HEADER } from "./session-prompt-update.js";
 import {
   readToolSurfaceCheckpoint,
   type ToolDefinition,
@@ -62,6 +65,8 @@ type SystemPromptSeries = {
   renderedPrefix: string;
   routeKey: string;
   historyId: string | null;
+  /** The transcript's boundary count when this series was written; see resolvePromptHistoryId. */
+  boundaryCount?: number;
   permissionNotice?: string;
   usageRanking?: ToolUsageRankingSnapshot;
   restart: boolean;
@@ -132,26 +137,6 @@ type ToolSurfaceInput = {
   historyBoundaryCount?: number;
   tools: AnyAgentTool[];
 };
-
-function resolvePromptHistoryId(params: {
-  state: EmbeddedSessionPromptState;
-  entries: SessionEntry[];
-  historyBoundaryCount?: number;
-}): string | null {
-  // Bounded reloads can omit a compaction's payload without changing history.
-  // The manager's boundary count, not its visible window, invalidates this run's fact.
-  const previous = params.state.historyBoundary;
-  if (previous && previous.count === params.historyBoundaryCount) {
-    return previous.id;
-  }
-  const id =
-    params.entries.findLast((entry) => entry.type === "compaction" || entry.type === "reset")?.id ??
-    null;
-  if (params.historyBoundaryCount !== undefined) {
-    params.state.historyBoundary = { count: params.historyBoundaryCount, id };
-  }
-  return id;
-}
 
 /** The prompt owner alone decides when persisted usage may enter provider-visible text. */
 export async function prepareSessionToolUsageRanking(params: {
@@ -292,11 +277,14 @@ export function prepareSessionPublicationToolListing(
           catalogMode: current.catalogMode,
         };
   if (listing !== previous) {
+    const { name, description, parameters } = listing;
     params.state.pendingToolSurface = {
       routeKey: params.routeKey,
       historyId,
       toolPolicy: params.toolPolicy,
-      tools: known?.tools ?? [],
+      tools: known?.tools?.map((tool) =>
+        tool.name === name ? { name, description, parameters } : tool,
+      ),
       publicationListing: listing,
     };
   }
@@ -322,46 +310,43 @@ export function prepareSessionPublicationToolListing(
   );
 }
 
-/**
- * The session pins every tool definition it has sent, so a turn that builds fewer
- * tools keeps the provider prefix: retained definitions refuse their calls. New or
- * changed definitions extend the pin once and are written with the next checkpoint.
- */
-export function prepareSessionToolSurface(params: ToolSurfaceInput): AnyAgentTool[] {
+/** The series' first request pins tools and definitions; unbuilt pinned tools refuse calls. */
+export function prepareSessionToolSurface(
+  params: ToolSurfaceInput & { admitNewTools?: boolean },
+): AnyAgentTool[] {
   const { known, historyId } = resolveSessionToolSurface(params);
-  const pinned = new Map(known?.tools.map((tool) => [tool.name, tool]));
-  // Sibling guidance in a description follows the tools a turn built; the pin keeps
-  // the session's wording while the parameters match.
-  let changed = !known;
-  const tools = params.tools.map((tool) => {
-    const pin = pinned.get(tool.name);
-    // Computer discovery supplies live execution facts, not a new session definition.
-    if (pin && tool.name === "computer") {
-      return copyAgentToolMetadata(tool, { ...tool, ...pin });
-    }
-    if (changed && pin?.description === tool.description) {
-      return tool;
-    }
-    const sameParameters = pin && sameToolParameters(pin.parameters, tool.parameters);
-    changed ||= !sameParameters;
-    return sameParameters && pin.description !== tool.description
-      ? copyAgentToolMetadata(tool, { ...tool, description: pin.description })
-      : tool;
-  });
-  const built = new Set(tools.map((tool) => tool.name));
-  const retained = [...pinned.values()].filter((tool) => !built.has(tool.name));
-  if (changed) {
-    const current = tools.map(describeSessionToolDefinition);
+  const previous = new Map(known?.tools?.map((pin) => [pin.name, pin]));
+  // Surfaces that still filter per turn admit new tools and changed schemas, as before.
+  const admitted =
+    !known?.tools || params.admitNewTools
+      ? params.tools.filter(
+          (tool) =>
+            !previous.has(tool.name) ||
+            // Computer discovery supplies live facts, never a new session definition.
+            (tool.name !== "computer" &&
+              !sameToolParameters(previous.get(tool.name)?.parameters, tool.parameters)),
+        )
+      : [];
+  let pinned = known?.tools;
+  if (!pinned || admitted.length > 0) {
+    const definitions = new Map([
+      ...previous,
+      ...admitted.map((tool) => [tool.name, describeSessionToolDefinition(tool)] as const),
+    ]);
+    pinned = [...definitions.values()].toSorted((a, b) => a.name.localeCompare(b.name));
     params.state.pendingToolSurface = {
       routeKey: params.routeKey,
       historyId,
       toolPolicy: params.toolPolicy,
       publicationListing: known?.publicationListing,
-      // oxlint-disable-next-line unicorn/no-array-sort -- The combined definitions array is private.
-      tools: [...current, ...retained].sort((a, b) => a.name.localeCompare(b.name)),
+      tools: pinned,
     };
   }
-  return [...tools, ...retained.map(refusePinnedTool)];
+  const built = new Map(params.tools.map((tool) => [tool.name, tool]));
+  return pinned.map((pin) => {
+    const tool = built.get(pin.name);
+    return tool ? copyAgentToolMetadata(tool, { ...tool, ...pin }) : refusePinnedTool(pin);
+  });
 }
 
 function refusePinnedTool(tool: ToolDefinition): AnyAgentTool {
@@ -371,12 +356,7 @@ function refusePinnedTool(tool: ToolDefinition): AnyAgentTool {
   );
 }
 
-/**
- * The tool definitions this session last sent to the provider, or undefined before its
- * first pin. Compaction estimates its replacement request with these: deferred catalog
- * tools stay registered but never reach the provider. Accepted edge case: a history or
- * tool policy change since the pin is counted from the next turn's pin.
- */
+/** Tools last sent to the provider (undefined before a pin), for compaction estimates. */
 export function readSessionSentTools(entries: SessionEntry[]): AnyAgentTool[] | undefined {
   return readToolSurfaceCheckpoint(entries)?.tools.map(refusePinnedTool);
 }
@@ -385,33 +365,6 @@ export function readSessionSentTools(entries: SessionEntry[]): AnyAgentTool[] | 
 export function beginSessionSystemPrompt(state: EmbeddedSessionPromptState): void {
   state.pendingSystemPrompt = undefined;
   state.historyBoundary = undefined;
-}
-
-function promptSections(text: string): Map<string, string> {
-  const sections = new Map<string, string>();
-  for (const section of text.split(/(?=^## )/m)) {
-    const lineEnd = section.indexOf("\n");
-    const heading = section.startsWith("## ")
-      ? section.slice(0, lineEnd < 0 ? section.length : lineEnd)
-      : "";
-    sections.set(heading, (sections.get(heading) ?? "") + section);
-  }
-  return sections;
-}
-
-function promptDelta(previous: string, current: string): string[] {
-  const before = promptSections(previous);
-  const sections: string[] = [];
-  for (const [heading, section] of promptSections(current)) {
-    if (before.get(heading) !== section) {
-      sections.push(section);
-    }
-    before.delete(heading);
-  }
-  for (const heading of before.keys()) {
-    sections.push(`${heading}\n(removed)`);
-  }
-  return sections;
 }
 
 /**
@@ -471,6 +424,8 @@ export function prepareSessionSystemPrompt(params: {
         renderedPrefix: shareSystemPromptPrefix(data.renderedPrefix),
         routeKey: params.routeKey,
         historyId,
+        // The persisted count: a checkpoint written before the count existed is rewritten with it.
+        boundaryCount: typeof data.boundaryCount === "number" ? data.boundaryCount : undefined,
         permissionNotice:
           typeof data.permissionNotice === "string" ? data.permissionNotice : undefined,
         usageRanking: params.state.persistedUsageRanking,
@@ -510,12 +465,14 @@ export function prepareSessionSystemPrompt(params: {
         renderedPrefix,
         routeKey: params.routeKey,
         historyId,
+        boundaryCount: params.historyBoundaryCount,
         permissionNotice,
         usageRanking: params.state.usageRanking?.snapshot,
         restart: true,
       }
     : {
         ...series!,
+        boundaryCount: params.historyBoundaryCount,
         renderedPrefix,
         permissionNotice,
         usageRanking: params.state.usageRanking?.snapshot,
@@ -530,7 +487,7 @@ export function prepareSessionSystemPrompt(params: {
       ? buildSystemUpdateMessage(
           restart
             ? sections.join("\n\n")
-            : `System prompt update. The sections below replace their earlier versions; everything else in the system prompt is unchanged.\n\n${sections.join("\n\n")}`,
+            : `${SYSTEM_PROMPT_UPDATE_HEADER}\n\n${sections.join("\n\n")}`,
           "prompt-update",
           false,
         )
@@ -584,6 +541,7 @@ export async function persistSessionSystemPrompt(
     snapshot.renderedPrefix !== previous.renderedPrefix ||
     snapshot.routeKey !== previous.routeKey ||
     snapshot.historyId !== previous.historyId ||
+    snapshot.boundaryCount !== previous.boundaryCount ||
     snapshot.permissionNotice !== previous.permissionNotice ||
     snapshot.usageRanking !== previous.usageRanking
   ) {

@@ -57,7 +57,6 @@ suite.define(() => {
     await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
       const gateway = await installGateway(page);
       await page.goto(`${suite.server.baseUrl}cron?new`);
-      await page.locator("#cron-name").fill("Synthetic garden inventory");
       await page.locator("#cron-payload-text").fill("Summarize the fictional garden inventory.");
       await chooseAgent(page, "Writer");
       await expect

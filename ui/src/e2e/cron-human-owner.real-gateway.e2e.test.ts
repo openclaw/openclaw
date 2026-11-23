@@ -5,6 +5,7 @@ import { buffer } from "node:stream/consumers";
 import type { Page } from "playwright";
 import type { ViteDevServer } from "vite";
 import { expect, it } from "vitest";
+import { summarizeMockInferenceRequest } from "../../../scripts/e2e/lib/mock-inference-facts.ts";
 import { loadCronStore, saveCronStore } from "../../../src/cron/store.ts";
 import type { CronStoredJob } from "../../../src/cron/types.ts";
 import { writeToolCall } from "../../../src/gateway/gateway-provider-fixture.test-support.ts";
@@ -71,6 +72,14 @@ const suite = createControlUiE2eSuite({
             const body: { model?: unknown; input?: unknown } = JSON.parse(
               (await buffer(request)).toString("utf8"),
             );
+            if (summarizeMockInferenceRequest(body).purpose === "activity-recap") {
+              writeOpenAiResponsesText(response, {
+                text: "Legacy automation execution completed.",
+                messageId: "activity-recap-message",
+                responseId: "activity-recap-response",
+              });
+              return;
+            }
             if (JSON.stringify(body.input)?.includes(namingPrompt)) {
               namingModels.push(body.model);
               writeOpenAiResponsesText(response, {

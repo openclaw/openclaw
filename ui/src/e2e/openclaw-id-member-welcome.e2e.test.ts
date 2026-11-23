@@ -1,5 +1,6 @@
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
+import type { Locator } from "playwright";
 import { expect, it } from "vitest";
 import { CONTROL_UI_BOOTSTRAP_CONFIG_PATH } from "../../../src/gateway/control-ui-bootstrap-contract.ts";
 import type { OpenClawIdStatusResult } from "../lib/openclaw-id/types.ts";
@@ -19,11 +20,11 @@ const suite = createControlUiE2eSuite({ name: "OpenClaw ID member welcome" });
 suite.define(() => {
   it("asks a member named from their email who they are before offering a composer", async () => {
     for (const viewport of [
-      { width: 1280, height: 800 },
-      { width: 390, height: 760 },
+      { width: 1440, height: 900 },
+      { width: 390, height: 844 },
     ]) {
       await suite.withPage(
-        { ...createControlUiE2eContextOptions(), viewport },
+        { ...createControlUiE2eContextOptions(), viewport, hasTouch: viewport.width === 390 },
         async ({ page }) => {
           const status: OpenClawIdStatusResult = {
             status: { state: "on", tunnel: { state: "running", relayOnline: true } },
@@ -105,6 +106,24 @@ suite.define(() => {
               frame.png,
             );
           };
+          const expectFocusRingInsidePage = async (button: Locator) => {
+            expect(await button.evaluate((node) => node.matches(":focus-visible"))).toBe(true);
+            const ringBottom = await button.evaluate((node) => {
+              const style = getComputedStyle(node);
+              return (
+                node.getBoundingClientRect().bottom +
+                Number.parseFloat(style.outlineWidth) +
+                Number.parseFloat(style.outlineOffset)
+              );
+            });
+            const pageBottom = await page
+              .locator(".new-session-page__scroll")
+              .evaluate((node) => node.getBoundingClientRect().bottom);
+            expect(ringBottom).toBeLessThanOrEqual(pageBottom);
+          };
+          const skip = step.getByRole("button", { name: "Skip for now", exact: true });
+          await name.press("Tab");
+          await expectFocusRingInsidePage(skip);
           await capture("1-ask-name");
           // Listening early turns on chooser interception well before the keypress that needs it.
           page.on("filechooser", () => {});
@@ -115,7 +134,7 @@ suite.define(() => {
           });
           await step.getByText("Nice to meet you, Sam Rivera. Want to add a photo?").waitFor();
           expect(await composer.count()).toBe(0);
-          await capture("2-ask-photo");
+
           // The photo control is a real button: reachable and operable from the keyboard.
           const upload = step.getByRole("button", { name: "Upload photo", exact: true });
           // The button stays disabled until the name save settles.
@@ -124,7 +143,15 @@ suite.define(() => {
           const chooser = page.waitForEvent("filechooser");
           await page.keyboard.press("Enter");
           await chooser;
-          await step.getByRole("button", { name: "Not now", exact: true }).click();
+          await upload.press("Tab");
+          const notNow = step.getByRole("button", { name: "Not now", exact: true });
+          await expectFocusRingInsidePage(notNow);
+          await capture("2-ask-photo");
+          if (viewport.width === 390) {
+            await notNow.tap();
+          } else {
+            await notNow.press("Enter");
+          }
           await composer.first().waitFor();
           expect(await step.count()).toBe(0);
           await page.getByText("People here see you as Sam Rivera.", { exact: false }).waitFor();

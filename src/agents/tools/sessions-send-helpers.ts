@@ -21,7 +21,7 @@ export type SessionDeliveryTarget = {
 };
 
 export function sendFailure(
-  status: "error" | "forbidden" | "timeout",
+  status: "error" | "forbidden",
   error: string,
   sessionKey?: string,
   runId: string = crypto.randomUUID(),

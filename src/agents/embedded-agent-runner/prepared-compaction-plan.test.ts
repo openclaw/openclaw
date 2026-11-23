@@ -582,3 +582,30 @@ it.each(["active", "empty-tools", "no-tools", "model-change"])(
     }
   },
 );
+
+it("leaves prompt updates out of the summary; the restart after compaction re-renders them", () => {
+  const ids = ["u1", "p1", "u2", "p2", "u3", "u4", "u5", "u6"];
+  const parentId = (id: string) => ids[ids.indexOf(id) - 1] ?? null;
+  const entry = (id: string, fields: object) =>
+    ({
+      id,
+      parentId: parentId(id),
+      timestamp: "2026-01-01T00:00:00.000Z",
+      ...fields,
+    }) as SessionEntry;
+  const update = (id: string) =>
+    entry(id, {
+      type: "custom_message",
+      customType: "openclaw.system-update",
+      content: "System prompt update.\n\n## AGENTS.md\n" + "rule ".repeat(500),
+      display: false,
+      details: { kind: "prompt-update", turnScoped: false },
+    });
+  const user = (id: string) =>
+    entry(id, { type: "message", message: { role: "user", content: id } });
+  const entries = ids.map((id) => (id.startsWith("p") ? update(id) : user(id)));
+  const result = prepareCompactionPlan(entries, new Map(entries.map((e, i) => [e.id, i])), options);
+  expect(
+    result.status === "prepared" && result.plan.selections.history.map((r) => r.source),
+  ).toEqual([0, 2, 4, 5, 6]);
+});

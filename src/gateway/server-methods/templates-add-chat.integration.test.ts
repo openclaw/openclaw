@@ -41,6 +41,13 @@ const { resolveSource, greeting, dependencyReport, skills, registry, probe, work
 // workspace writer, installers, config writes and session finalization stay real.
 vi.mock("../../templates/clawhub-source.js", async (original) => ({
   ...(await original<typeof import("../../templates/clawhub-source.js")>()),
+  // Add starts these registry reads early; the delivery fake below stands in for them.
+  prefetchClawHubSource: () => ({
+    claim: async () => {
+      throw new Error("The delivery fake resolves the Template source");
+    },
+    discard: async () => {},
+  }),
   withResolvedClawHubSource: resolveSource,
 }));
 // mock-isolation: The registry's skill endpoints are external I/O; the fake writes the
@@ -410,7 +417,15 @@ it("creates the Template's agent without a plan and reports dependencies after i
     deliver(source);
     const atGreeting: { skill?: boolean; mcp?: boolean; pending?: boolean } = {};
     greeting.mockImplementation(
-      async (_options, agentId: string, _session, _opening, _prompt, onStarted) => {
+      async (
+        _options,
+        agentId: string,
+        _session,
+        _opening,
+        _prompt,
+        onStarted,
+        onModelRequested,
+      ) => {
         onStarted?.();
         atGreeting.skill = await exists(
           path.join(gateway.workspace(agentId), "skills", "itinerary", "SKILL.md"),
@@ -420,6 +435,7 @@ it("creates the Template's agent without a plan and reports dependencies after i
         atGreeting.pending = (
           await readSessionEntryReadOnlyInWorker({ agentId, sessionKey })
         )?.initializationPending;
+        onModelRequested?.();
       },
     );
 
@@ -491,8 +507,12 @@ it("creates the Template's agent without a plan and reports dependencies after i
         true,
       ),
       expect.any(Function),
+      expect.any(Function),
     ]);
     expect(atGreeting.pending).toBeUndefined();
+    // Dependencies wait for the opening turn's first model request, so the greeting
+    // is not prepared while installers hold the Gateway's main thread.
+    expect(atGreeting).toMatchObject({ skill: false, mcp: false });
     expect(dependencyReport).toHaveBeenCalledExactlyOnceWith(
       expect.anything(),
       { agentId: "travel-copilot", sessionKey },

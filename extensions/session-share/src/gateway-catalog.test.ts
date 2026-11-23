@@ -5,6 +5,7 @@ import {
   createTestPluginServiceScheduler,
 } from "openclaw/plugin-sdk/plugin-test-api";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
+import { sessionCatalogPaging } from "openclaw/plugin-sdk/session-catalog";
 import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import { createSessionShareGatewayCatalog } from "./gateway-catalog.js";
 
@@ -265,7 +266,9 @@ it.each([
   expect(f.assertConnection).toThrow("configuration changed");
   const calls = f.client.request.mock.calls.length;
   expect((await f.catalog.list({}))[0]?.sessions).toHaveLength(0);
-  await expect(f.catalog.read({ hostId: "gateway:team", threadId: "one" })).rejects.toThrow();
+  await expect(f.catalog.read({ hostId: "gateway:team", threadId: "one" })).rejects.toThrow(
+    "configuration changed",
+  );
   expect(f.client.request).toHaveBeenCalledTimes(calls);
   f.replace(original);
   f.hello();
@@ -377,3 +380,108 @@ it.each([undefined, "primary", "missing"])(
     }
   },
 );
+
+it("discovers peer filter support and never turns transport errors into identity fallback", async () => {
+  const { catalog, client } = await createSource();
+  const profileRelation = {
+    relationship: "involving",
+    target: { type: "github-account", id: "101" },
+  } as const;
+  (client.options.onHelloOk as (hello: unknown) => void)({
+    features: { methods: ["session-share.list", "session-share.read"] },
+  });
+  const row = {
+    threadId: "shared",
+    status: "idle",
+    archived: false,
+    canContinue: false,
+    canArchive: false,
+  };
+  client.request.mockResolvedValue({ sessions: [row] });
+  expect((await catalog.list({ profileRelation }))[0]).toMatchObject({
+    sessions: [row],
+    error: { code: "FILTER_PARTIAL" },
+  });
+  expect(client.request).toHaveBeenLastCalledWith("session-share.list", { limit: 20 });
+  client.request.mockClear();
+  await expect(
+    catalog.read({ hostId: "gateway:team", threadId: "shared", profileRelation }),
+  ).rejects.toThrow("does not support relationship filters");
+  expect(client.request).not.toHaveBeenCalled();
+  (client.options.onHelloOk as (hello: unknown) => void)({
+    features: { methods: ["session-share.catalog.list", "session-share.catalog.read"] },
+  });
+  client.request.mockResolvedValue({ sessions: [] });
+  expect((await catalog.list({ profileRelation }))[0]?.error).toBeUndefined();
+  expect(client.request).toHaveBeenLastCalledWith("session-share.catalog.list", {
+    limit: 20,
+    profileRelation,
+  });
+  client.request.mockRejectedValueOnce(new Error("unknown profileRelation"));
+  expect((await catalog.list({ profileRelation }))[0]?.error?.message).toContain(
+    "Shared Gateway unavailable",
+  );
+  expect(
+    client.request.mock.calls.every(([method]) => method === "session-share.catalog.list"),
+  ).toBe(true);
+});
+
+it("uses the advertised Gateway catalog pair without a filter and rejects original paths", async () => {
+  const { catalog, client } = await createSource();
+  (client.options.onHelloOk as (hello: unknown) => void)({
+    features: { methods: ["session-share.catalog.list", "session-share.catalog.read"] },
+  });
+  const row = {
+    threadId: "one",
+    status: "idle",
+    archived: false,
+    canContinue: false,
+    canArchive: false,
+  };
+  client.request.mockResolvedValue({ sessions: [row] });
+  expect((await catalog.list({}))[0]?.sessions).toEqual([row]);
+  expect(client.request).toHaveBeenLastCalledWith("session-share.catalog.list", { limit: 20 });
+  client.request.mockResolvedValue({ threadId: "one", items: [] });
+  await catalog.read({ hostId: "gateway:team", threadId: "one" });
+  expect(client.request).toHaveBeenLastCalledWith("session-share.catalog.read", {
+    threadId: "one",
+    limit: 20,
+  });
+  client.request.mockResolvedValue({ sessions: [{ ...row, originalPath: "/chat/main/one" }] });
+  expect((await catalog.list({}))[0]).toMatchObject({
+    sessions: [],
+    error: { code: "SOURCE_UNAVAILABLE" },
+  });
+});
+
+it("retains authorized rows and the fallback mode across Gateway cursor pages", async () => {
+  const { catalog, client } = await createSource();
+  (client.options.onHelloOk as (hello: unknown) => void)({
+    features: { methods: ["session-share.catalog.list", "session-share.catalog.read"] },
+  });
+  const profileRelation = {
+    relationship: "owned",
+    target: { type: "github-account", id: "101" },
+  } as const;
+  const row = {
+    threadId: "shared",
+    status: "idle",
+    archived: false,
+    canContinue: false,
+    canArchive: false,
+  };
+  const sourceCursor = sessionCatalogPaging.encodeCursor(20);
+  client.request
+    .mockResolvedValueOnce({ sessions: [], relationUnresolved: true })
+    .mockResolvedValueOnce({ sessions: [row], nextCursor: sourceCursor });
+  const host = (await catalog.list({ profileRelation }))[0]!;
+  expect(host).toMatchObject({ sessions: [row], error: { code: "FILTER_PARTIAL" } });
+  expect(host.profileRelation).toBeUndefined();
+  client.request.mockResolvedValue({ sessions: [row] });
+  await catalog.list({ profileRelation, cursors: { "gateway:team": host.nextCursor! } });
+  expect(client.request).toHaveBeenLastCalledWith("session-share.catalog.list", {
+    limit: 20,
+    cursor: sourceCursor,
+  });
+  expect(client.request).toHaveBeenCalledTimes(3);
+});

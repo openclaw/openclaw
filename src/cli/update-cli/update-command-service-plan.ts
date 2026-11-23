@@ -183,7 +183,7 @@ export async function serviceInspectionWarningMessage(
     state?.installed || state?.command?.sourcePath
       ? "A service definition is present and was left unchanged."
       : "",
-    `Stop the Gateway through its owner (\`${formatCliCommand("openclaw gateway stop")}\` for the managed service), then run \`${formatCliCommand("openclaw update repair")}\`.`,
+    `Stop the Gateway through its owner (\`${formatCliCommand("openclaw gateway stop --force")}\` for the managed service), then run \`${formatCliCommand("openclaw update repair")}\`.`,
   ]
     .filter(Boolean)
     .join(" ");

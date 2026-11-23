@@ -11,7 +11,7 @@ import {
 } from "./chat-thread-run-identity.ts";
 import { assistantGroupIsIndependentBoundary } from "./chat-turn-boundary.ts";
 import { extractMessageMediaText } from "./components/chat-message-media-projection.ts";
-import { readLiveTerminalDisposition } from "./terminal-message-identity.ts";
+import { isLiveTerminalForRun, readLiveTerminalDisposition } from "./terminal-message-identity.ts";
 
 /** Host-stamped provider speech is a call transcript, not a backing-agent answer. */
 export function isProviderVoiceTranscript(message: unknown): boolean {
@@ -88,6 +88,27 @@ export function assistantMessageCanOwnTurnActions(message: unknown, explicitOnly
     return false;
   }
   return !explicitOnly || phase === "final_answer" || stopReason === "stop";
+}
+
+export function hasTerminalRunOutcome(message: unknown, runId: string): boolean {
+  const record = asRecord(message);
+  const metadata = asRecord(record?.["__openclaw"]);
+  if (
+    isLiveTerminalForRun(message, runId) ||
+    metadata?.runTerminal === true ||
+    assistantMessageIsInterrupted(message) ||
+    record?.stopReason === "error"
+  ) {
+    return true;
+  }
+  // Provider speech, commentary and reasoning mirrors can stop a message without ending its run.
+  const phase = resolveAssistantReplyPhase(message);
+  return (
+    !isProviderVoiceTranscript(message) &&
+    phase !== "commentary" &&
+    metadata?.mirrorOrigin !== "codex-app-server" &&
+    (phase === "final_answer" || record?.stopReason === "stop")
+  );
 }
 
 export function assistantMessageKind(

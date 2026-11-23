@@ -22,6 +22,7 @@ import {
 import type { UserTurnTranscriptRecorder } from "../../../sessions/user-turn-transcript.types.js";
 import { memoizeFrozenPlainDataProjection } from "../../../shared/immutable-data.js";
 import { isTextContentBlock } from "../../content-blocks.js";
+import { PROJECTED_PROMPT_UPDATE } from "../../embedded-agent-helpers/turns.js";
 import {
   escapeInternalRuntimeContextDelimiters,
   isOpenClawSystemUpdateMessage,
@@ -31,7 +32,7 @@ import {
   retainRuntimeContextMessageForPrompt,
   stripHistoricalRuntimeContextCustomMessages,
 } from "../../internal-runtime-context.js";
-import { annotateInterSessionUserMessages } from "../../replay-provenance.js";
+import { annotateCrossSessionMessages } from "../../replay-provenance.js";
 import type { Agent, AgentMessage } from "../../runtime/index.js";
 import { stripToolResultDetails } from "../../session-transcript-repair.js";
 import { bindModelPromptProjectionAppend } from "../../sessions/model-prompt-projection-append.js";
@@ -90,13 +91,16 @@ const runtimeContextProjections = [false, true].map((escape) =>
               details: { source: "openclaw-runtime-context", runtimeContextCarrier: true },
             };
           }
-          const projected: UserMessage = {
+          const projected: UserMessage & { [PROJECTED_PROMPT_UPDATE]?: true } = {
             role: "user",
             content: message.content,
             timestamp: message.timestamp,
           };
           if (inHistorySystemUpdates) {
             projected.operatorMessage = { turnScoped: details.data.turnScoped };
+          } else {
+            // A symbol key never reaches provider JSON or the transcript.
+            projected[PROJECTED_PROMPT_UPDATE] = true;
           }
           return projected;
         }
@@ -170,7 +174,7 @@ export function normalizeMessagesForLlmBoundary(
     options?.currentUserTimestampOverride,
   );
   const normalizedUserMessages = normalizeUserMessagesForLlmBoundary(
-    annotateInterSessionUserMessages(
+    annotateCrossSessionMessages(
       normalized.map((message, index) =>
         projectRecordedModelPrompt(message, userTranscriptMessages?.[index]),
       ),
@@ -421,6 +425,7 @@ export function installModelPromptProjection(params: {
 }): () => void {
   if (
     !params.recorder?.captureModelPromptProjection &&
+    !params.getUserTranscriptContexts &&
     (!params.modelPrompt?.trim() || params.modelPrompt === params.transcriptPrompt) &&
     !params.prependContext?.trim() &&
     !params.appendContext?.trim()
@@ -433,16 +438,21 @@ export function installModelPromptProjection(params: {
   let promptOwner:
     | NonNullable<ReturnType<typeof resolveRuntimeContextPromptOwner>>["owner"]
     | undefined;
-  const resolveProjection = async (messages: AgentMessage[], assertCurrent: () => void) => {
+  const resolveProjection = async (
+    messages: AgentMessage[],
+    assertCurrent: () => void,
+    context?: UserTranscriptContext,
+  ) => {
     if (!params.shouldCapturePrompt()) {
       return undefined;
     }
-    await params.recorder?.waitForRuntimePersistence();
+    const recorder = context ? context.recorder : params.recorder;
+    await recorder?.waitForRuntimePersistence();
     assertCurrent();
-    const recorded = params.recorder?.getPersistedMessage?.();
-    if (!targetPrompt) {
+    const recorded = recorder?.getPersistedMessage?.() ?? context?.transcriptMessage;
+    if (!context && !targetPrompt) {
       const retained = resolveRuntimeContextPromptOwner(messages);
-      const key = recorded?.idempotencyKey;
+      const key = asOptionalObjectRecord(recorded)?.idempotencyKey;
       const paired = params
         .getUserTranscriptContexts?.()
         ?.find(
@@ -464,7 +474,7 @@ export function installModelPromptProjection(params: {
     const key = asOptionalObjectRecord(canonicalPrompt)?.idempotencyKey;
     const target = messages.find(
       (message) =>
-        message === targetPrompt ||
+        message === (context?.runtimeMessage ?? targetPrompt) ||
         message === canonicalPrompt ||
         (key && message.role === "user" && Reflect.get(message, "idempotencyKey") === key),
     );
@@ -481,7 +491,9 @@ export function installModelPromptProjection(params: {
       frozen ??
       (firstText === undefined
         ? undefined
-        : resolveModelPromptText({ ...params, text: firstText }));
+        : context
+          ? firstText
+          : resolveModelPromptText({ ...params, text: firstText }));
     // Inter-session input keeps its stored source-provenance envelope in current and replayed text.
     if (
       frozen === undefined &&
@@ -496,13 +508,13 @@ export function installModelPromptProjection(params: {
       !(
         frozen !== undefined ||
         text !== firstText ||
-        (params.recorder?.captureModelPromptProjection &&
+        (recorder?.captureModelPromptProjection &&
           !firstText?.startsWith(INTER_SESSION_PROMPT_PREFIX_BASE))
       )
     ) {
       return undefined;
     }
-    return { target, targetProjection, frozen, text };
+    return { target, targetProjection, frozen, text, recorder };
   };
   const releaseCarrier =
     params.carrier && params.recorder?.prepareModelPromptProjection
@@ -532,11 +544,24 @@ export function installModelPromptProjection(params: {
           signal?.throwIfAborted();
           params.assertCurrent?.();
         };
-        const projection = await resolveProjection(messages, assertCurrent);
-        if (projection) {
-          const { target, targetProjection, frozen } = projection;
+        const contexts = params.getUserTranscriptContexts?.();
+        // Queued users have their own recorder, not the recorder that started this attempt.
+        for (let index = -1; index < (contexts?.length ?? 0); index++) {
+          const context = index >= 0 ? contexts?.[index] : undefined;
+          if (
+            context &&
+            (!context.recorder?.captureModelPromptProjection ||
+              context.recorder === params.recorder)
+          ) {
+            continue;
+          }
+          const projection = await resolveProjection(promptMessages, assertCurrent, context);
+          if (!projection) {
+            continue;
+          }
+          const { target, targetProjection, frozen, recorder } = projection;
           let { text } = projection;
-          const captureProjection = params.recorder?.captureModelPromptProjection;
+          const captureProjection = recorder?.captureModelPromptProjection;
           if (frozen === undefined && captureProjection) {
             const capture = () => captureProjection(text, assertCurrent);
             const captured = await (params.withTranscriptWrite
@@ -558,7 +583,7 @@ export function installModelPromptProjection(params: {
                 modelPromptProjection: { version: 1, text },
               },
             };
-            promptMessages = messages.map((message) =>
+            promptMessages = promptMessages.map((message) =>
               message === target ? projectedTarget : message,
             );
             if (agent.state) {
