@@ -405,6 +405,28 @@ describe("sessions view", () => {
     expectTexts(selector, ["a", "z", "archived", "rail"]);
   });
 
+  it("returns two snoozed pins to their saved positions on successive deadlines without new inputs", async () => {
+    vi.useFakeTimers();
+    onTestFinished(() => vi.useRealTimers());
+    vi.setSystemTime(1_000);
+    const selector = "tbody .session-data-row .session-key-cell__primary";
+    await renderSettled(
+      [
+        createRow("ordinary", { updatedAt: 100 }),
+        createRow("second", { updatedAt: 50, snoozedUntil: 2_000 }),
+        createRow("first", { updatedAt: 1, snoozedUntil: 3_000 }),
+      ],
+      { personalSidebarEntries: ["session:first", "session:second"] },
+    );
+    expectTexts(selector, ["ordinary", "second", "first"]);
+    vi.advanceTimersByTime(1_001);
+    flush();
+    expectTexts(selector, ["second", "ordinary", "first"]);
+    vi.advanceTimersByTime(1_000);
+    flush();
+    expectTexts(selector, ["first", "second", "ordinary"]);
+  });
+
   it("keeps session filters in the header popover without a count badge", async () => {
     const onSearchChange = vi.fn();
     document.body.append(container);

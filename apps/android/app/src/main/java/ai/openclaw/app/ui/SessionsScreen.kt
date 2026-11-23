@@ -397,6 +397,7 @@ internal fun SessionsScreen(
               filter = filter,
               nowMs = sessionStatusNowMs,
               compact = compactLayout,
+              personalPins = personalPins,
               categories = categories,
               expanded = session.key !in collapsedSessionKeys,
               onToggleExpanded = {
@@ -592,6 +593,7 @@ private fun SessionRow(
   filter: SessionFilter,
   nowMs: Long,
   compact: Boolean,
+  personalPins: Boolean,
   categories: List<String>,
   expanded: Boolean,
   onToggleExpanded: () -> Unit,
@@ -848,7 +850,13 @@ private fun SessionRow(
             }
           }
         } else {
-          SessionMenuItem(if (session.pinned == true) nativeString("Unpin") else nativeString("Pin")) {
+          val pinLabel =
+            when {
+              !personalPins -> nativeString("Update the Gateway to change personal session pins.")
+              session.pinned == true -> nativeString("Unpin")
+              else -> nativeString("Pin")
+            }
+          SessionMenuItem(pinLabel, enabled = personalPins) {
             menuExpanded = false
             coroutineScope.launch {
               viewModel.patchChatSession(ChatSessionPatch(key = session.key, ownerAgentId = session.ownerAgentId, pinned = session.pinned != true))
@@ -963,10 +971,12 @@ private fun SessionGroupHeader(
 @Composable
 private fun SessionMenuItem(
   text: String,
+  enabled: Boolean = true,
   onClick: () -> Unit,
 ) {
   DropdownMenuItem(
     text = { Text(text, style = ClawTheme.type.body) },
+    enabled = enabled,
     onClick = onClick,
   )
 }

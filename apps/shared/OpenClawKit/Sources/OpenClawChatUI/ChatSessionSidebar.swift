@@ -59,10 +59,14 @@ struct ChatSessionSidebar: View {
         }
     }
 
+    var sidebarClock: OpenClawChatSessionSnooze.RosterClock {
+        self.menuActions.connection?.supportsPersonalPins == true ? self.viewModel.rosterClock : .init()
+    }
+
     private func sidebar(now localNow: Date) -> some View {
-        let clock = self.menuActions.connection?.supportsPersonalPins == true ? self.viewModel.rosterClock : .init()
+        let clock = self.sidebarClock
         let now = clock.gatewayDate(at: localNow)
-        let sections = self.interactionSections(now: now)
+        let sections = self.interactionSections(now: localNow)
         let nextWake = clock.localWake(in: self.rosterData?.queryRows ?? self.viewModel.sessions, at: localNow)
         let projectedRows = sections.flatMap(\.nodes).flatMap(\.previewSessions)
         let visibleRows = self.visibleInteractionRows(sections)

@@ -18,9 +18,9 @@ import { projectGateway, projectOverlays } from "../lib/reactive/application.ts"
 import { projectAgents } from "../lib/reactive/domain-capabilities.ts";
 import { createParkedProjection } from "../lib/reactive/parked-projection.ts";
 import { projectOwner } from "../lib/reactive/projection.ts";
+import { createSessionSnoozeWake } from "../lib/reactive/session-snooze-wake.ts";
 import { activeSessionAgentStatus, sessionRowAttention } from "../lib/session-attention.ts";
 import { uiConversationMatches } from "../lib/sessions/session-key.ts";
-import { nextSessionSnoozeWakeAt } from "../lib/sessions/session-snooze.ts";
 import {
   summarizeSidebarSessionAttention,
   type SidebarSessionAttention,
@@ -51,14 +51,13 @@ export function createSessionAttention(
   let resolverMemo = new SidebarProjectionMemo<SessionAttentionResolver>();
   let agentStatusExpiryTimer: ReturnType<typeof globalThis.setTimeout> | undefined;
   let agentStatusExpiryAt = Infinity;
-  let snoozeWakeTimer: ReturnType<typeof globalThis.setTimeout> | undefined;
-  let snoozeWakeAt: number | null = null;
   const invalidateDeadline = () => {
     if (host.isConnected) {
       resolverMemo = new SidebarProjectionMemo<SessionAttentionResolver>();
       setClock((revision) => revision + 1);
     }
   };
+  const wake = createSessionSnoozeWake(invalidateDeadline);
   onSettled(() => {
     let client: ApplicationContext["gateway"]["snapshot"]["client"] | undefined;
     const synchronize = () => {
@@ -101,7 +100,7 @@ export function createSessionAttention(
       stopEvents();
       disposeQuestionPromptState(questions);
       globalThis.clearTimeout(agentStatusExpiryTimer);
-      globalThis.clearTimeout(snoozeWakeTimer);
+      wake([]);
     };
   });
 
@@ -127,21 +126,7 @@ export function createSessionAttention(
   function scheduleSessionSnoozeWake(
     rows: Iterable<Pick<GatewaySessionRow, "snoozedUntil">>,
   ): void {
-    const wakeAt = host.isConnected ? nextSessionSnoozeWakeAt(rows, Date.now()) : null;
-    if (wakeAt === snoozeWakeAt) {
-      return;
-    }
-    globalThis.clearTimeout(snoozeWakeTimer);
-    snoozeWakeAt = wakeAt;
-    if (wakeAt !== null) {
-      snoozeWakeTimer = globalThis.setTimeout(
-        () => {
-          snoozeWakeAt = null;
-          invalidateDeadline();
-        },
-        Math.min(2_147_483_647, Math.max(0, wakeAt - Date.now() + 1)),
-      );
-    }
+    wake(host.isConnected ? rows : []);
   }
 
   function readResolver(): SessionAttentionResolver {

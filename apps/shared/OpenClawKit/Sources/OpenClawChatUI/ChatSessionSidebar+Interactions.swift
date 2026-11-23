@@ -17,7 +17,8 @@ struct ChatSidebarDrag: Codable, Transferable {
 }
 
 extension ChatSessionSidebar {
-    func interactionSections(now: Date = .now) -> [ChatSessionSidebarModel.Section] {
+    func interactionSections(now localNow: Date = .now) -> [ChatSessionSidebarModel.Section] {
+        let now = self.sidebarClock.gatewayDate(at: localNow)
         var sections = self.rosterSections(now: now, observedOrder: self.observedOrder)
         let positions = self.batch.pinPositions
         sections = sections.map { section in

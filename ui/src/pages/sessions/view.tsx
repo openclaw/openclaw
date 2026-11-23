@@ -1,6 +1,15 @@
 import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-import { createDeferred, createMemo, Errored, isPending, Loading, Repeat, Show } from "solid-js";
+import {
+  createDeferred,
+  createMemo,
+  createSignal,
+  Errored,
+  isPending,
+  Loading,
+  Repeat,
+  Show,
+} from "solid-js";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { personalSessionPinKeys } from "../../app-navigation.ts";
 import { Checkbox } from "../../components/solid/checkbox.tsx";
@@ -18,6 +27,7 @@ import { formatUiError } from "../../lib/format-error.ts";
 import { useOptionalApplication } from "../../lib/reactive/context.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { createMediaQuery } from "../../lib/reactive/platform.ts";
+import { createSessionSnoozeWake } from "../../lib/reactive/session-snooze-wake.ts";
 import { groupSessionRows } from "../../lib/sessions/grouping.ts";
 import { isPinnableUiSessionRow } from "../../lib/sessions/session-key.ts";
 import { isSessionSnoozed } from "../../lib/sessions/session-snooze.ts";
@@ -250,12 +260,20 @@ function SessionsTable(props: SessionsProps & { readRoster: () => RosterOutcome 
     () =>
       new Map([...personalSessionPinKeys(props.personalSidebarEntries)].map((key, i) => [key, i])),
   );
+  const [wakeRevision, setWakeRevision] = createSignal(0);
+  const wake = createSessionSnoozeWake(() => setWakeRevision((revision) => revision + 1));
   const sorted = createMemo(() => {
+    wakeRevision();
     const column = sortColumn();
     const sortDirection = direction();
     const ranks = pinRanks();
     const now = Date.now();
-    const rows = rawRows().map((row) => withTablePin(row, ranks, now));
+    const roster = rawRows();
+    wake(
+      roster.filter((row) => ranks.has(row.key) && !row.archived),
+      now,
+    );
+    const rows = roster.map((row) => withTablePin(row, ranks, now));
     return rows.toSorted((a, b) => {
       const pinnedDiff =
         (a.pinned ? ranks.get(a.key)! : ranks.size) - (b.pinned ? ranks.get(b.key)! : ranks.size);
