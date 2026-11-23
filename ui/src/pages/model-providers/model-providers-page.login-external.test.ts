@@ -23,7 +23,7 @@ describe("Models provider login", () => {
       throw new Error("Expected an authenticated Gateway fixture");
     }
     auth.recoveryScope = "provider-sign-in-recovery";
-    const admission = createDeferred<void>();
+    const admission = createDeferred();
     const runMutation = context.runtimeConfig.runExternalMutation;
     let admissions = 0;
     const page = appendPage(context);
