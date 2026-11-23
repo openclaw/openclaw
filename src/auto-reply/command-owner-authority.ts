@@ -71,7 +71,7 @@ export function transferCommandOwnerAuthorityToSuccessor(
   return "transferred";
 }
 
-/** Preserve the ingress source check, which can also own the request's lifetime. */
+/** Fence a turn that admitted owner tools against later identity or role revocation. */
 export function captureCommandOwnerAssertion(context: object): CommandOwnerAssertion | undefined {
   const authority = getCommandOwnerAuthority(context);
   if (!authority) {
@@ -79,9 +79,7 @@ export function captureCommandOwnerAssertion(context: object): CommandOwnerAsser
   }
   const assertCurrent = () => {
     if (!authority.isCurrent()) {
-      throw new CommandOwnerRevokedError(
-        "The request source is no longer available; send a new request.",
-      );
+      throw new CommandOwnerRevokedError("Channel operator authority changed; send a new request.");
     }
   };
   const source = composeSessionSourceAssertion([authority.sourceAssertion], (assertSource) => {

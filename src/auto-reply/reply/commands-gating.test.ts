@@ -247,7 +247,7 @@ describe("command gating", () => {
       throw new Error("requester revoked during dispatch");
     };
     const result = await handleConfigCommand(params, true);
-    expect(result?.reply?.text).toContain("This request has ended");
+    expect(result?.reply?.text).toContain("owner authority changed");
     expect(readConfigFileSnapshotMock).not.toHaveBeenCalled();
     expect(replaceConfigFileMock).not.toHaveBeenCalled();
   });

@@ -117,9 +117,7 @@ describe("gateway caller context wrapper", () => {
           prepared.assertCurrent();
           expect(synchronousSource).not.toHaveBeenCalled();
           active = false;
-          expect(() => prepared.assertCurrent()).toThrow(
-            "The request source is no longer available",
-          );
+          expect(() => prepared.assertCurrent()).toThrow("Channel operator authority changed");
           expect(synchronousSource).not.toHaveBeenCalled();
         } finally {
           await prepared.release?.();

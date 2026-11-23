@@ -324,7 +324,7 @@ it.each(
         !ownerRevoked;
       if (ownerRevoked) {
         setUserProfileRole(admin.profile.id, "member");
-        expect(assertOwnerCurrent).toThrow("The request source is no longer available");
+        expect(assertOwnerCurrent).toThrow("Channel operator authority changed");
       }
       if (boundary === "restart-owner-retired") {
         retire();
@@ -387,7 +387,7 @@ it.each(
       }
       if (lateRevocation) {
         setUserProfileRole(admin.profile.id, "member");
-        expect(assertOwnerCurrent).toThrow("The request source is no longer available");
+        expect(assertOwnerCurrent).toThrow("Channel operator authority changed");
       }
       if (boundary.endsWith("reference")) {
         const db = requireNativeSqliteDatabase(openOpenClawStateDatabase().db);

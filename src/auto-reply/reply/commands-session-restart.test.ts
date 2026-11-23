@@ -197,7 +197,7 @@ describe("handleRestartCommand", () => {
         await entered.promise;
         authority.current = false;
         release.resolve();
-        expect((await command)?.reply?.text).toContain("This request has ended");
+        expect((await command)?.reply?.text).toContain("owner authority changed");
         expectNoRestart();
         expect(mocks.clear).toHaveBeenCalledTimes(stage === "sentinel" ? 1 : 0);
       } finally {
@@ -262,7 +262,7 @@ describe("handleRestartCommand", () => {
       });
       mocks.clear.mockImplementationOnce(sentinel.clearRestartSentinelIfRevision);
       const result = await handleRestartCommand(params, true);
-      expect(result?.reply?.text).toContain("This request has ended");
+      expect(result?.reply?.text).toContain("owner authority changed");
       expect(mocks.trigger).not.toHaveBeenCalled();
       expect(replacement).toBeDefined();
       expect(await sentinel.readRestartSentinel()).toEqual(replacement);
