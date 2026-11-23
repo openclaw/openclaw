@@ -143,6 +143,17 @@ export async function confirmAndStartUpdateRuntime(
     };
     updateDialogOpen = true;
 
+    function hasNativeRoute() {
+      return Boolean(
+        (params.viaNativeApp || params.prepareGatewayFallback) && hasNativeUpdateBridge(),
+      );
+    }
+
+    function canRetry() {
+      const hostManaged = latestProgress?.hostManaged ?? Boolean(updateSchedule?.install?.host);
+      return !hostManaged || (hasNativeRoute() && params.canStartNativeUpdate?.() === true);
+    }
+
     function readView() {
       const current = phase;
       const route = viaNativeApp
@@ -185,6 +196,7 @@ export async function confirmAndStartUpdateRuntime(
         working,
         finished,
         failed,
+        canRetry: failed && canRetry(),
         statusRead,
         readError,
         showRecovery,
@@ -358,7 +370,7 @@ export async function confirmAndStartUpdateRuntime(
                       )}
                     </button>
                   </Show>
-                  <Show when={view.failed}>
+                  <Show when={view.canRetry}>
                     <button
                       type="button"
                       class="btn primary"
@@ -396,6 +408,9 @@ export async function confirmAndStartUpdateRuntime(
           return false;
         }
         if (!target) {
+          if (phase.kind !== "confirm" && !canRetry()) {
+            return false;
+          }
           throw new Error(t("updates.dialog.statusNotRefreshed"));
         }
         ({ updateAvailable, updateSchedule } = target);
@@ -424,11 +439,7 @@ export async function confirmAndStartUpdateRuntime(
     }
 
     function restoreNativeOwner(): "unchanged" | "restored" | "denied" {
-      if (
-        (!params.viaNativeApp && !params.prepareGatewayFallback) ||
-        viaNativeApp ||
-        !hasNativeUpdateBridge()
-      ) {
+      if (viaNativeApp || !hasNativeRoute()) {
         return "unchanged";
       }
       if (!checkNativePermission()) {
@@ -440,13 +451,13 @@ export async function confirmAndStartUpdateRuntime(
     }
 
     async function retry() {
-      if (checkingStatus || latestProgress?.connected === false || !retainTarget()) {
+      if (checkingStatus || latestProgress?.connected === false || !retainTarget() || !canRetry()) {
         return;
       }
       if (restoreNativeOwner() === "denied") {
         return;
       }
-      if (prepareRetry && !(await refreshTarget(prepareRetry))) {
+      if (prepareRetry && (!(await refreshTarget(prepareRetry)) || !canRetry())) {
         return;
       }
       phase = { kind: "confirm" };
@@ -542,6 +553,15 @@ export async function confirmAndStartUpdateRuntime(
         retainedEmit = false;
         if (phase.kind === "confirm") {
           return;
+        }
+        if (phase.kind === "working") {
+          if (!retainTarget()) {
+            return;
+          }
+          if (progress.hostManaged && !progress.busy) {
+            close();
+            return;
+          }
         }
         if (progress.run && (!staleFailure || progress.run.status === "running")) {
           sawBusy = true;

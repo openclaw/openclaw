@@ -62,9 +62,11 @@ app updater to update the bundled Gateway and runtime together. The official
 container image declares `owner: "container-image"`: pull the new image and
 recreate the container. `openclaw update`, `openclaw update repair`, and Gateway
 update requests return the marker's update hint without changing the package or
-stopping the Gateway; background checks skip package-registry updates. Missing
-or invalid markers retain normal install behavior, with a warning for an invalid
-marker. An npm, pnpm, Bun or Git install that you set up yourself inside a
+stopping the Gateway; background checks skip package-registry updates. Gateway
+`update.status` reports the owner in `schedule.install.host`. In Settings → Updates,
+the Control UI shows the owner's guidance instead of a Gateway update action.
+Missing or invalid markers retain normal install behavior, with a warning for an
+invalid marker. An npm, pnpm, Bun or Git install that you set up yourself inside a
 container, devcontainer or LXC host has no marker and updates normally.
 
 After a Mac app update, recovery checks the service selected by the connection

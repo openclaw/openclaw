@@ -14,6 +14,7 @@ import {
   resolveStartupInstallStatus,
   withUpdateInstallStatus,
 } from "./update-install-status.js";
+import type { StartupInstallStatus } from "./update-install-status.types.js";
 import { canRunDevGitCampaign, resolveDevGitUpdate } from "./update-startup-refresh.js";
 import {
   getUpdateSchedule,
@@ -22,6 +23,14 @@ import {
   retireUpdateTarget,
   withoutUpdateCampaign,
 } from "./update-status-state.js";
+
+function isConfiguredAutoUpdateEnabled(cfg: OpenClawConfig): boolean {
+  return (
+    Boolean(cfg.update?.auto?.enabled) &&
+    cfg.update?.checkOnStart !== false &&
+    !isTruthyEnvValue(process.env.OPENCLAW_NO_AUTO_UPDATE)
+  );
+}
 
 /** Projects scheduler facts independently of optional checkout discovery. */
 export function getGatewayUpdateSchedule(
@@ -40,14 +49,14 @@ export function getGatewayUpdateSchedule(
       : { channel };
   const result = {
     ...facts,
-    autoEnabled:
-      Boolean(cfg.update?.auto?.enabled) &&
-      cfg.update?.checkOnStart !== false &&
-      !isTruthyEnvValue(process.env.OPENCLAW_NO_AUTO_UPDATE),
+    autoEnabled: isConfiguredAutoUpdateEnabled(cfg),
     ...(campaign ? { campaign } : {}),
   };
   const install = currentUpdateCheckLifecycle().installStatus;
-  return install && (install.status.error?.timeoutMs || install.status.installKind === "immutable")
+  return install &&
+    (install.status.error?.timeoutMs ||
+      install.status.installKind === "immutable" ||
+      install.status.installKind === "host")
     ? withUpdateInstallStatus(result, install.status, true, install.installReceipt, install.root)
     : result;
 }
@@ -63,6 +72,7 @@ export function refreshGatewayUpdateStatus(getConfig: () => OpenClawConfig): Pro
   const refresh = lifecycle
     .run(async (signal) => {
       const scheduleAtStart = getUpdateSchedule();
+      const cachedInstall = lifecycle.installStatus;
       const configured = normalizeUpdateChannel(cfg.update?.channel);
       const channel =
         configured ??
@@ -70,8 +80,22 @@ export function refreshGatewayUpdateStatus(getConfig: () => OpenClawConfig): Pro
           currentVersion: VERSION,
           ...(await lifecycle.initialize()).status,
         }).channel;
-      if (channel !== "dev" && (await lifecycle.initialize()).status.installKind !== "immutable") {
-        return;
+      let localInstall: StartupInstallStatus | undefined;
+      if (channel !== "dev") {
+        const initialized = await lifecycle.initialize();
+        if (initialized.status.installKind !== "immutable") {
+          localInstall =
+            initialized === cachedInstall
+              ? await resolveStartupInstallStatus(false, signal)
+              : initialized;
+          if (
+            initialized.status.installKind !== "host" &&
+            localInstall.status.installKind !== "host" &&
+            localInstall.status.installKind !== "immutable"
+          ) {
+            return;
+          }
+        }
       }
       const assertCurrent = () => {
         const schedule = getUpdateSchedule();
@@ -87,12 +111,14 @@ export function refreshGatewayUpdateStatus(getConfig: () => OpenClawConfig): Pro
         }
       };
       assertCurrent();
-      const { root, status, installReceipt } = await resolveStartupInstallStatus(true, signal);
+      const { root, status, installReceipt } =
+        localInstall ?? (await resolveStartupInstallStatus(true, signal));
       assertCurrent();
       const unavailable =
         status.error ||
         (channel === "dev" && status.installKind === "unknown") ||
-        resolveGitScheduleStatus(status, installReceipt, root)?.status === "unavailable";
+        (!localInstall &&
+          resolveGitScheduleStatus(status, installReceipt, root)?.status === "unavailable");
       // A failed remote fetch does not invalidate freshly read local Git identity.
       const identityUnavailable =
         status.error ||
@@ -111,19 +137,21 @@ export function refreshGatewayUpdateStatus(getConfig: () => OpenClawConfig): Pro
         (lifecycle.installStatus?.status.error && !status.error) ||
         (!status.error &&
           status.installKind !== "unknown" &&
-          (lifecycle.installStatus?.status.installKind !== status.installKind ||
+          (status.installKind === "host" ||
+            lifecycle.installStatus?.status.installKind !== status.installKind ||
             refreshedChannel !== channel)) ||
+        (!status.error && lifecycle.installStatus?.status.installKind === "host") ||
         lifecycle.installStatus?.status.installKind === "immutable" ||
         status.installKind === "immutable"
       ) {
         lifecycle.installStatus = { root, status, installReceipt };
       }
       const schedule = getUpdateSchedule();
-      const current =
-        schedule?.channel === refreshedChannel
-          ? schedule
-          : { channel: refreshedChannel, autoEnabled: Boolean(getConfig().update?.auto?.enabled) };
-      const next = withUpdateInstallStatus(current, status, true, installReceipt, root);
+      const current = {
+        ...(schedule?.channel === refreshedChannel ? schedule : { channel: refreshedChannel }),
+        autoEnabled: isConfiguredAutoUpdateEnabled(getConfig()),
+      };
+      const next = withUpdateInstallStatus(current, status, !localInstall, installReceipt, root);
       const publishSchedule = (published: UpdateScheduleState) =>
         setUpdateScheduleCache({
           next: published,
@@ -138,7 +166,7 @@ export function refreshGatewayUpdateStatus(getConfig: () => OpenClawConfig): Pro
         }
         throw new Error("The latest Dev update could not be checked. Try again.");
       }
-      if (refreshedChannel !== "dev" || status.installKind !== "git") {
+      if (localInstall || refreshedChannel !== "dev" || status.installKind !== "git") {
         // A package check preserves supported package availability, never a
         // target or campaign owned by a Git checkout that no longer exists.
         if (status.installKind === "package" && schedule?.target?.kind !== "git") {

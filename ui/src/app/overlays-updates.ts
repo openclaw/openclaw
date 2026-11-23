@@ -51,6 +51,14 @@ export type ApplicationUpdateOverlayHooks = {
 type UpdateHistory = { kind: "unknown" } | { kind: "known"; runId: string | null };
 type UpdateAdmissionAttempt = { history: UpdateHistory; requestSent: boolean };
 
+const emptyUpdateOutcome = {
+  updateRun: null,
+  updateRunAcknowledged: false,
+  updateStatusBanner: null,
+  updateStatusCheckBanner: null,
+  recordedUpdateAttempt: null,
+};
+
 export function createApplicationUpdateOverlays(
   gateway: ApplicationGateway,
   onChange: () => void,
@@ -85,7 +93,7 @@ export function createApplicationUpdateOverlays(
   let updateGatewayScope = gatewayCredentialScope(gateway.connection.gatewayUrl);
   let profileId = gateway.snapshot.selfUser?.id ?? null;
   const receipts = createUpdateRunReceipts();
-  let updateRequestRunning = false;
+  let updateRequestPhase: "draining" | "requesting" | null = null;
   let updateRunGeneration = 0;
   let statusProjectionGeneration = 0;
   let updateHoldInFlight = false;
@@ -184,7 +192,8 @@ export function createApplicationUpdateOverlays(
       campaign?.state === "applying" && snapshot.updateRun?.origin.campaignId !== campaign.id;
     snapshot = {
       ...snapshot,
-      updateRunning: updateRequestRunning || snapshot.updateRun?.status === "running" || applying,
+      updateRunning:
+        updateRequestPhase !== null || snapshot.updateRun?.status === "running" || applying,
       updateReconciliationPending:
         runId !== null && (!snapshot.updateRun || snapshot.updateRun.status === "running"),
     };
@@ -408,7 +417,12 @@ export function createApplicationUpdateOverlays(
     const targetChanged =
       nextScope !== updateGatewayScope || (connected && nextProfile !== profileId);
     const scopeChanged = targetChanged || (Boolean(next.hello?.auth) && !nextAccess.canAdmin);
-    if (targetChanged) {
+    const nextConnectedSource = connected ? next.client : null;
+    const connectedSourceChanged = connectedSource !== nextConnectedSource;
+    if (
+      targetChanged ||
+      (updateRequestPhase === "draining" && (connectedSourceChanged || scopeChanged))
+    ) {
       confirmationTargetGeneration++;
     }
     if (scopeChanged) {
@@ -418,7 +432,7 @@ export function createApplicationUpdateOverlays(
       runId = null;
       updateHistory = { kind: "unknown" };
       updateAttempt = null;
-      updateRequestRunning = false;
+      updateRequestPhase = null;
       setCurrentFailure(null);
       snapshot = {
         ...snapshot,
@@ -435,8 +449,6 @@ export function createApplicationUpdateOverlays(
     if (connected) {
       profileId = nextProfile;
     }
-    const nextConnectedSource = connected ? next.client : null;
-    const connectedSourceChanged = connectedSource !== nextConnectedSource;
     const helloChanged = activeHello !== next.hello;
     operatorAccess = nextAccess;
     activeClient = next.client;
@@ -455,7 +467,7 @@ export function createApplicationUpdateOverlays(
       }
       connectedEpoch++;
       updateRunGeneration++;
-      updateRequestRunning = false;
+      updateRequestPhase = null;
     }
     if (!connected || !next.client) {
       snapshot = {
@@ -499,7 +511,9 @@ export function createApplicationUpdateOverlays(
 
   return {
     get snapshot() {
-      return snapshot;
+      return updateRequestPhase === "draining" && snapshot.updateRun?.status !== "running"
+        ? { ...snapshot, ...emptyUpdateOutcome }
+        : snapshot;
     },
     synchronizeGateway,
     handleUpdateRunChanged(payload: unknown) {
@@ -551,7 +565,7 @@ export function createApplicationUpdateOverlays(
     captureUpdateTarget(this: void) {
       const generation = confirmationTargetGeneration;
       const revision = gateway.connectionRevision;
-      // Keep target identity across reconnects; each action checks its live authority separately.
+      // Reconnect retains the target unless it interrupted admission before dispatch.
       return () =>
         !disposed &&
         generation === confirmationTargetGeneration &&
@@ -570,6 +584,7 @@ export function createApplicationUpdateOverlays(
       if (
         !client ||
         !isCurrentClient(client) ||
+        snapshot.updateSchedule?.install?.host ||
         snapshot.updateRunning ||
         snapshot.updateReconciliationPending
       ) {
@@ -577,32 +592,33 @@ export function createApplicationUpdateOverlays(
       }
       const generation = ++updateRunGeneration;
       const sessionKey = hooks.getActiveSessionKey?.();
-      const attempt: UpdateAdmissionAttempt = {
-        history: snapshot.updateRun
+      const attempt: UpdateAdmissionAttempt = { history: updateHistory, requestSent: false };
+      const retirePreviousOutcome = () => {
+        attempt.history = snapshot.updateRun
           ? { kind: "known", runId: snapshot.updateRun.runId }
-          : updateHistory,
-        requestSent: false,
+          : updateHistory;
+        updateAttempt = attempt;
+        runId = null;
+        updateRequestPhase = "requesting";
+        setCurrentFailure(null);
+        snapshot = { ...snapshot, ...emptyUpdateOutcome };
       };
-      updateAttempt = attempt;
-      runId = null;
-      updateRequestRunning = true;
-      setCurrentFailure(null);
-      snapshot = {
-        ...snapshot,
-        updateRun: null,
-        updateRunAcknowledged: false,
-        updateStatusBanner: null,
-        updateStatusCheckBanner: null,
-        recordedUpdateAttempt: null,
-      };
+      updateRequestPhase = "draining";
       publish();
       const isCurrent = () => generation === updateRunGeneration && isCurrentClient(client);
+      const canAdmit = () =>
+        isCurrent() &&
+        !snapshot.updateSchedule?.install?.host &&
+        snapshot.updateSchedule?.campaign?.state !== "applying" &&
+        snapshot.updateRun?.status !== "running" &&
+        (runId === null || runId === snapshot.updateRun?.runId);
       try {
         // The published interlock suspends new config writes; drain existing writes before admission.
         await hooks.drainConfigWrites?.();
-        if (!isCurrent() || snapshot.updateSchedule?.campaign?.state === "applying") {
+        if (!canAdmit()) {
           return;
         }
+        retirePreviousOutcome();
         const response = await client.request<UpdateRunResponse>(
           "update.run",
           sessionKey ? { sessionKey } : {},
@@ -634,6 +650,12 @@ export function createApplicationUpdateOverlays(
         }
       } catch (error) {
         if (isCurrent()) {
+          if (updateRequestPhase === "draining") {
+            if (!canAdmit()) {
+              return;
+            }
+            retirePreviousOutcome();
+          }
           publishError(error);
           // A correlated rejection is the outcome of this request. Only transport
           // loss after send needs discovery; retained history cannot replace a refusal.
@@ -643,7 +665,7 @@ export function createApplicationUpdateOverlays(
         }
       } finally {
         if (isCurrent()) {
-          updateRequestRunning = false;
+          updateRequestPhase = null;
           publish(true);
         }
       }

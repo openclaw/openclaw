@@ -343,6 +343,95 @@ it("keeps a repeated request from stacking a second confirmation or update", asy
   expect(first.startGatewayUpdate).toHaveBeenCalledOnce();
 });
 
+it.each(["host before confirmation", "host during drain", "disconnect during drain"] as const)(
+  "retains the previous failed run when a retry is cancelled: %s",
+  async (trigger) => {
+    const drain = createDeferred();
+    const previous = createUpdateRunFixture({
+      status: "failed",
+      phase: "finished",
+      finishedAtMs: 3_000,
+      reason: "build-failed",
+    });
+    let schedule: UpdateScheduleState = { channel: "stable", autoEnabled: false };
+    const request = vi.fn<RequestFn>(async (method) =>
+      method === "update.status" ? { lastRun: previous, schedule } : {},
+    );
+    const harness = updateRunHarness(request);
+    const overlays = createApplicationOverlays(harness.gateway, {
+      drainConfigWrites: () => drain.promise,
+    });
+    const expectPreviousFailure = (connected = true) =>
+      expect(overlays.snapshot).toMatchObject({
+        updateRun: previous,
+        recordedUpdateAttempt: { reason: "build-failed" },
+        diagnosableUpdateFailureId: connected ? previous.runId : null,
+        reportableUpdateFailureId: previous.runId,
+      });
+    let operation: Promise<void> | undefined;
+    const settled = confirmAndStartUpdateRuntime({
+      isCurrentTarget: overlays.captureUpdateTarget(),
+      startGatewayUpdate: () => {
+        operation = overlays.runUpdate();
+      },
+      watchUpdateProgress: createUpdateProgressWatcher({ gateway: harness.gateway, overlays }),
+      updateAvailable: UPDATE_AVAILABLE,
+      updateSchedule: null,
+      viaNativeApp: false,
+    });
+    try {
+      const { modal } = await getRenderedModalDialog(document.body);
+      await waitForSolid(() => expectPreviousFailure());
+      const statusReads = () => request.mock.calls.filter(([method]) => method === "update.status");
+      const initialReads = statusReads().length;
+      if (trigger !== "host before confirmation") {
+        findButton("Update and restart").click();
+        expect(overlays.snapshot.updateRunning).toBe(true);
+      }
+      schedule = {
+        channel: "stable",
+        autoEnabled: false,
+        install: {
+          kind: "host",
+          host: {
+            owner: "macos-app",
+            displayName: "OpenClaw.app",
+            updateHint: "Update the app.",
+          },
+        },
+      };
+      if (trigger === "disconnect during drain") {
+        harness.update({ phase: "reconnecting" });
+      } else {
+        harness.emitEvent("update.available", { schedule });
+      }
+      if (trigger === "host before confirmation") {
+        findButton("Update and restart").click();
+      } else if (trigger === "host during drain") {
+        flush();
+        expect(modal.textContent).toContain("Starting update…");
+        expect(modal.querySelector(".update-run-view")).toBeNull();
+      }
+      drain.resolve();
+      await operation;
+      expect(request.mock.calls.map(([method]) => method)).not.toContain("update.run");
+      expect(document.querySelector("openclaw-modal-dialog")).toBeNull();
+      expectPreviousFailure(trigger !== "disconnect during drain");
+      expect(statusReads()).toHaveLength(initialReads);
+      if (trigger === "disconnect during drain") {
+        harness.update({ phase: "connected" });
+      }
+      await overlays.refreshUpdateStatus();
+      expectPreviousFailure();
+    } finally {
+      drain.resolve();
+      document.querySelector("openclaw-modal-dialog")?.dispatchEvent(new Event("modal-cancel"));
+      await settled;
+      overlays.dispose();
+    }
+  },
+);
+
 it("shows a simple starting state until the progress report arrives", async () => {
   const drain = createDeferred();
   const accepted = createDeferred<{ runId: string }>();
@@ -648,6 +737,77 @@ it.each([
     expect(stream.stopped).toBe(watch);
   },
 );
+
+it.each([false, true])("offers a host-owned retry only with a native route: %s", async (native) => {
+  const run = createUpdateRunFixture({
+    status: "failed",
+    phase: "finished",
+    finishedAtMs: 4_000,
+    reason: "build-failed",
+  });
+  const stream = createProgressStream({ run, hostManaged: true });
+  const postMessage = installNativeBridge();
+  const prepareRetry = vi.fn(async () => null);
+  const { settled, startGatewayUpdate } = startUpdate({
+    existingRun: run,
+    prepareRetry,
+    ...(native ? { prepareGatewayFallback: prepareRetry } : {}),
+    watchUpdateProgress: stream.watchUpdateProgress,
+    onCheckStatus: vi.fn(async () => true),
+    onReviewUpdate: vi.fn(),
+  });
+  const { modal } = await getRenderedModalDialog(document.body);
+  const retry = [...modal.querySelectorAll("button")].find(
+    (button) => button.textContent?.trim() === "Retry update",
+  );
+  expect(Boolean(retry)).toBe(native);
+  expect(findButton("Check status").disabled).toBe(false);
+  expect(findButton("Review update").disabled).toBe(false);
+  if (native) {
+    findButton("Retry update").click();
+    flush();
+    findButton("Update Mac app and restart").click();
+    expect(postMessage).toHaveBeenCalledOnce();
+  } else {
+    findButton("Close").click();
+  }
+  await settled;
+  expect(prepareRetry).not.toHaveBeenCalled();
+  expect(startGatewayUpdate).not.toHaveBeenCalled();
+});
+
+it("keeps diagnostics without a connection error when retry discovers host ownership", async () => {
+  const run = createUpdateRunFixture({
+    status: "failed",
+    phase: "finished",
+    finishedAtMs: 4_000,
+    reason: "build-failed",
+  });
+  const stream = createProgressStream({ run });
+  const prepareRetry = vi.fn(async () => {
+    await stream.push({ run, hostManaged: true });
+    return null;
+  });
+  const { settled, startGatewayUpdate } = startUpdate({
+    existingRun: run,
+    prepareRetry,
+    watchUpdateProgress: stream.watchUpdateProgress,
+    onCheckStatus: vi.fn(async () => true),
+    onReviewUpdate: vi.fn(),
+  });
+  const { modal } = await getRenderedModalDialog(document.body);
+  findButton("Retry update").click();
+  await flushMicrotasks();
+  flush();
+  expect(prepareRetry).toHaveBeenCalledOnce();
+  expect(modal.textContent).not.toContain("Retry update");
+  expect(modal.textContent).not.toContain("Couldn’t refresh update status");
+  expect(findButton("Check status").disabled).toBe(false);
+  expect(findButton("Review update").disabled).toBe(false);
+  expect(startGatewayUpdate).not.toHaveBeenCalled();
+  findButton("Close").click();
+  await settled;
+});
 
 it.each([
   { status: "running", entry: "existing" },

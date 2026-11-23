@@ -166,6 +166,43 @@ describe("renderUpdates", () => {
     expect(retry.title).toBe(title);
   });
 
+  it.each([false, true])(
+    "shows the owning app's guidance instead of a Gateway update action (previous failure: %s)",
+    (previousFailure) => {
+      renderUpdates({
+        update: {
+          updateRun: previousFailure ? failedRun() : null,
+          updateSchedule: {
+            channel: "stable",
+            autoEnabled: false,
+            install: {
+              kind: "host",
+              host: {
+                owner: "macos-app",
+                displayName: "OpenClaw.app",
+                updateHint: "Update OpenClaw.app to update this Gateway.",
+              },
+            },
+          },
+          updateAvailable: null,
+        },
+      });
+
+      expect(text("Status")).toContain("Managed by OpenClaw.app");
+      expect(text("Status")).not.toContain("Update status unavailable");
+      const guidance = row("Update Gateway");
+      expect(guidance.textContent).toContain(
+        "Managed by OpenClaw.app. Update OpenClaw.app to update this Gateway.",
+      );
+      expect(guidance.querySelector("button")).toBeNull();
+      expect(container.textContent).not.toContain("Update Gateway…");
+      expect(container.textContent).not.toContain("Retry update");
+      if (previousFailure) {
+        expect(container.textContent).toContain("Check status");
+      }
+    },
+  );
+
   it.each(["Update Gateway…", "Retry update"])(
     "dispatches %s to the latest handler without replacing the button",
     (label) => {

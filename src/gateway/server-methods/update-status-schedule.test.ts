@@ -340,7 +340,7 @@ it("keeps the optional schedule unknown when local identity cannot resolve its c
   expect(install).toHaveBeenCalledExactlyOnceWith(false, expect.any(AbortSignal));
 });
 
-it("omits app-owned install and stale package targets from the protocol schedule", async () => {
+it("reports the app owner and omits stale package targets from the protocol schedule", async () => {
   stalePackageSchedule("dev", false);
   install.mockResolvedValue(
     installAt("host", "/opt/OpenClaw.app/openclaw", {
@@ -350,8 +350,88 @@ it("omits app-owned install and stale package targets from the protocol schedule
 
   const result = await status(makeConfig(), { refreshCheckout: true });
 
-  expect(result.schedule).toEqual({ channel: "dev", autoEnabled: false });
+  expect(result.schedule).toEqual({
+    channel: "dev",
+    autoEnabled: false,
+    install: {
+      kind: "host",
+      host: {
+        owner: "macos-app",
+        displayName: "OpenClaw.app",
+        updateHint: "Update OpenClaw.app to update this Gateway.",
+      },
+    },
+  });
   expect(result.updateAvailable).toBeNull();
+});
+
+it("keeps refreshed host guidance for subsequent status reads on dev", async () => {
+  const config = makeConfig("dev");
+  const root = "/opt/OpenClaw.app/openclaw";
+  const owner = createMacosAppInstallOwner();
+  const updateHint = "Choose Check for Updates in OpenClaw.app.";
+  install.mockResolvedValueOnce(installAt("host", root, { installOwner: owner }));
+  await lifecycle.initialize();
+  install.mockResolvedValueOnce(
+    installAt("host", root, { installOwner: { ...owner, updateHint } }),
+  );
+
+  const refreshed = await status(config, { refreshCheckout: true });
+  const cached = await status(config);
+
+  expect([refreshed, cached].map((reply) => reply.schedule.install.host.updateHint)).toEqual([
+    updateHint,
+    updateHint,
+  ]);
+  expect(install).toHaveBeenCalledTimes(2);
+});
+
+it("observes a stable package's host marker being added, edited, and removed without remote discovery", async () => {
+  vi.stubEnv("OPENCLAW_NO_AUTO_UPDATE", undefined);
+  const config = makeConfig("stable", true);
+  const root = "/opt/OpenClaw.app/openclaw";
+  const pkg = installAt("package", root);
+  const owner = createMacosAppInstallOwner();
+  install.mockResolvedValueOnce(pkg);
+  await lifecycle.initialize();
+  stalePackageSchedule("stable");
+  install.mockClear();
+  const { scheduleChanged } = trackNotifications();
+
+  for (const updateHint of [owner.updateHint, "Choose Check for Updates in OpenClaw.app."]) {
+    install.mockResolvedValueOnce(
+      installAt("host", root, { installOwner: { ...owner, updateHint } }),
+    );
+    const refreshed = await status(config, { refreshCheckout: true });
+    expect(refreshed.schedule).toEqual({
+      channel: "stable",
+      autoEnabled: false,
+      install: {
+        kind: "host",
+        host: { owner: owner.owner, displayName: owner.displayName, updateHint },
+      },
+    });
+    expect(getUpdateSchedule()).toEqual(refreshed.schedule);
+    expect(scheduleChanged).toHaveBeenLastCalledWith(refreshed.schedule);
+    expect((await status(config)).schedule).toEqual(refreshed.schedule);
+  }
+
+  install.mockResolvedValueOnce(pkg);
+  const removed = await status(config, { refreshCheckout: true });
+  expect(removed.schedule).toEqual({
+    channel: "stable",
+    autoEnabled: true,
+    install: { kind: "package" },
+  });
+  expect(getUpdateSchedule()).toEqual(removed.schedule);
+  expect(scheduleChanged).toHaveBeenNthCalledWith(3, removed.schedule);
+  expect((await status(config)).schedule).toEqual(removed.schedule);
+  expect(scheduleChanged).toHaveBeenCalledTimes(3);
+  expect(install.mock.calls.map(([fetchRemoteGit]) => fetchRemoteGit)).toEqual([
+    false,
+    false,
+    false,
+  ]);
 });
 
 it.for([false, true])(

@@ -122,7 +122,7 @@ export function RecordedAttempt(
                     {t("updates.page.diagnoseFailure")}
                   </button>
                 </Show>
-                <Show when={failed()}>
+                <Show when={failed() && !props.update.updateSchedule?.install?.host}>
                   <button
                     class="btn btn--sm primary"
                     type="button"

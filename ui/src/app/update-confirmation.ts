@@ -12,6 +12,7 @@ export type UpdateProgress = {
   /** An update request, run, or outcome reconciliation is still pending. */
   busy: boolean;
   connected: boolean;
+  hostManaged?: boolean;
   /** Set once the update produced a definitive failure. */
   failure: string | null;
   /** Reading fresh progress failed; the retained run remains authoritative. */
@@ -27,6 +28,7 @@ export function createUpdateProgressWatcher(context: {
   overlays: {
     snapshot: {
       updateRun: UpdateRunRecord | null;
+      updateSchedule: UpdateScheduleState | null;
       updateRunning: boolean;
       updateReconciliationPending: boolean;
       updateStatusBanner: { tone: string; text: string; source?: "read" } | null;
@@ -43,6 +45,7 @@ export function createUpdateProgressWatcher(context: {
         run: update.updateRun,
         busy: update.updateRunning || update.updateReconciliationPending,
         connected: context.gateway.snapshot.phase === "connected",
+        hostManaged: Boolean(update.updateSchedule?.install?.host),
         failure: banner && banner.tone !== "info" && banner.source !== "read" ? banner.text : null,
         readError:
           update.updateStatusCheckBanner?.text ?? (banner?.source === "read" ? banner.text : null),

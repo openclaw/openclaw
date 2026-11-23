@@ -623,32 +623,48 @@ function GatewayUpdates(props: UpdatesViewProps) {
         <Show when={!run()}>
           <CommitList {...props} />
         </Show>
-        <SettingsRow
-          title={t("updates.page.updateNow")}
-          description={t(
-            formatUpdateTargetLabel(props.update.updateSchedule, props.update.updateAvailable)
-              ? "updates.page.updateNowDescription"
-              : "updates.page.noKnownUpdateDescription",
-          )}
-          control={
-            <button
-              type="button"
-              class="btn"
-              title={updateButtonTitle()}
-              disabled={
-                confirming() ||
-                props.updateBusy ||
-                props.update.updateStatusRefreshing ||
-                !props.canUpdate ||
-                checkRequired()
+        {/* The owning app updates this Gateway; a Gateway update here would only be refused. */}
+        <Show
+          when={props.update.updateSchedule?.install?.host}
+          fallback={
+            <SettingsRow
+              title={t("updates.page.updateNow")}
+              description={t(
+                formatUpdateTargetLabel(props.update.updateSchedule, props.update.updateAvailable)
+                  ? "updates.page.updateNowDescription"
+                  : "updates.page.noKnownUpdateDescription",
+              )}
+              control={
+                <button
+                  type="button"
+                  class="btn"
+                  title={updateButtonTitle()}
+                  disabled={
+                    confirming() ||
+                    props.updateBusy ||
+                    props.update.updateStatusRefreshing ||
+                    !props.canUpdate ||
+                    checkRequired()
+                  }
+                  onClick={() => void updateNow()}
+                >
+                  <Icon name="download" />
+                  {props.updateBusy ? t("updates.page.updating") : t("updates.page.updateNow")}
+                </button>
               }
-              onClick={() => void updateNow()}
-            >
-              <Icon name="download" />
-              {props.updateBusy ? t("updates.page.updating") : t("updates.page.updateNow")}
-            </button>
+            />
           }
-        />
+        >
+          {(host) => (
+            <SettingsRow
+              title={t("updates.page.hostManagedTitle")}
+              description={t("updates.page.hostManagedDescription", {
+                name: host().displayName,
+                hint: host().updateHint,
+              })}
+            />
+          )}
+        </Show>
       </SettingsSection>
       <p class="settings-page__hint">
         <a href="https://docs.openclaw.ai/install/update-troubleshooting" target="_blank">
@@ -659,13 +675,15 @@ function GatewayUpdates(props: UpdatesViewProps) {
         fallback={(error, reset) => (
           <InlineAlert tone="danger" role="alert">
             {formatUiError(error())}
-            <RetryAction
-              type="button"
-              onRetry={() => {
-                reset();
-                void updateNow();
-              }}
-            />
+            <Show when={!props.update.updateSchedule?.install?.host}>
+              <RetryAction
+                type="button"
+                onRetry={() => {
+                  reset();
+                  void updateNow();
+                }}
+              />
+            </Show>
           </InlineAlert>
         )}
       >

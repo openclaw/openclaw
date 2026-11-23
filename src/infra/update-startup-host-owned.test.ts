@@ -91,7 +91,18 @@ it.each(["stable", "beta", "dev", "extended-stable"] as const)(
     expect(runCommandWithTimeout).not.toHaveBeenCalled();
     expect(runAutoUpdate).not.toHaveBeenCalled();
     expect(getUpdateAvailable()).toBeNull();
-    expect(getUpdateSchedule()).toEqual({ channel, autoEnabled: false });
+    expect(getUpdateSchedule()).toEqual({
+      channel,
+      autoEnabled: false,
+      install: {
+        kind: "host",
+        host: {
+          owner: "macos-app",
+          displayName: "OpenClaw.app",
+          updateHint: "Update OpenClaw.app to update this Gateway.",
+        },
+      },
+    });
     expect(lifecycle.campaign?.getState()).toBeUndefined();
   },
 );
