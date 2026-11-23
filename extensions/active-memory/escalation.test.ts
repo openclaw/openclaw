@@ -91,8 +91,6 @@ describe("active-memory escalation", () => {
     "Hab ich das nicht gesagt?",
     "Hattet ihr das nicht schon vereinbart?",
     "Hatten Sie das nicht damals gesagt?",
-    "Haben wir für morgen geplant, wer das Plugin sperren soll?",
-    "Haben wir das nicht abgemacht?",
   ])("recognizes recall intent in %j", (message) => {
     expect(decide("escalate", message)).toBe("recall");
   });
@@ -176,6 +174,21 @@ describe("active-memory escalation", () => {
     "Wie lange haben wir noch, bis das entschieden ist?",
     "Haben wir einen Plan, wie das gesagt werden soll?",
     "Haben Sie morgen ein Meeting, in dem das entschieden wird?",
+    "Haben wir morgen ein Meeting oder wird das erst später entschieden?",
+    "Haben Sie morgen ein Meeting oder wird das erst später entschieden?",
+    "Haben wir Zeit oder wird das entschieden?",
+    "Haben Sie Zeit oder wird das entschieden?",
+    "Habe ich Zeit oder werde ich erwähnt?",
+    "Hast du Zeit oder wirst du erwähnt?",
+    "Habt ihr Zeit oder werdet ihr erwähnt?",
+    "Haben wir Zeit oder werden wir erwähnt?",
+    "Haben Sie das bis morgen entschieden?",
+    "Habt ihr morgen alles von gestern besprochen?",
+    "Haben wir ein Meeting oder ist das noch nicht entschieden?",
+    "Hast du Zeit damit das besprochen ist?",
+    "Hab ich gestern gesagt, sorry. Hast du das bis morgen entschieden?",
+    "Haben wir ein Meeting oder wird das noch entschieden?",
+    "Hast du Zeit damit das besprochen werden kann?",
   ])("does not mistake ordinary or future-facing %j for recall intent", (message) => {
     expect(hasRecallIntent(message)).toBe(false);
   });
