@@ -28,12 +28,18 @@ export type TypingController = {
   markRunComplete: () => void;
   markDispatchIdle: () => void;
   cleanup: () => void;
+  /** Fresh unsealed lifecycle. Does not reopen a sealed predecessor. */
+  createSuccessor?: () => TypingController;
 };
 
 /** Creates a typing controller that seals itself after run and dispatch completion. */
 export function createTypingController(params: {
   onReplyStart?: () => Promise<void> | void;
   onCleanup?: () => void;
+  /** Called once, on the successor's first start. May return that generation's stop. */
+  onOpenSuccessor?: () => void | (() => void);
+  /** Internal: successor controllers revive the channel lifecycle on first start. */
+  reviveOnStart?: boolean;
   typingIntervalSeconds?: number;
   keepalive?: boolean;
   log?: (message: string) => void;
@@ -56,6 +62,8 @@ export function createTypingController(params: {
   let dispatchIdle = false;
   // Late streaming callbacks must not restart a completed controller.
   let sealed = false;
+  let shouldRevive = params.reviveOnStart === true;
+  let successorStop: (() => void) | undefined;
   let typingTtlTimer: NodeJS.Timeout | undefined;
   const typingIntervalMs = resolveTypingIntervalMs(params.typingIntervalSeconds);
   // Leave one full cadence for a keepalive call to settle before safety cleanup.
@@ -76,7 +84,11 @@ export function createTypingController(params: {
     // This fires only once (sealed prevents re-entry).
     if (active) {
       try {
-        onCleanup?.();
+        if (successorStop) {
+          successorStop();
+        } else {
+          onCleanup?.();
+        }
       } catch (err) {
         console.warn(`[typing] cleanup failed: ${String(err)}`);
       }
@@ -105,6 +117,13 @@ export function createTypingController(params: {
       return;
     }
     try {
+      if (shouldRevive) {
+        shouldRevive = false;
+        const opened = params.onOpenSuccessor?.();
+        if (typeof opened === "function") {
+          successorStop = opened;
+        }
+      }
       await onReplyStart?.();
       refreshTypingTtl();
     } catch (err) {
@@ -190,5 +209,6 @@ export function createTypingController(params: {
     markRunComplete,
     markDispatchIdle,
     cleanup,
+    createSuccessor: () => createTypingController({ ...params, reviveOnStart: true }),
   };
 }
