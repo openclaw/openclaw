@@ -6593,7 +6593,8 @@ jobs:
         id: android-toolchain
         uses: ./.ci-harness/.github/actions/setup-android-toolchain
         with:
-          cache-mode: ${{ needs.preflight.outputs.cache_write_allowed == 'true' && 'read-write' || needs.preflight.outputs.cache_mode }}
+          cache-mode: &android_cache_write ${{ needs.preflight.outputs.cache_write_allowed == 'true' && 'read-write' || needs.preflight.outputs.cache_mode }}
+          gradle-cache-key: ${{ matrix.task }}
           install-native-deps: ${{ needs.preflight.outputs.use_compatible_android_ci != 'true' && 'true' || 'false' }}
 
       - name: Restore Robolectric Maven cache
@@ -6858,6 +6859,8 @@ jobs:
         uses: ./.ci-harness/.github/actions/setup-android-toolchain
         with:
           cache-mode: *cache_mode
+          gradle-cache-mode: *android_cache_write
+          gradle-cache-key: access-native
           install-native-deps: "true"
 
       - name: Run packaged Access crypto and production TLS on Android
