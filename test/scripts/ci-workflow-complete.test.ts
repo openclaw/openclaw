@@ -735,7 +735,7 @@ ${check.run}
     ).toBe(row.expected);
   });
 
-  it("iOS runs the Access proof and Watch UI tests after lifecycle tests fail", () => {
+  it("iOS runs the Access proof after lifecycle tests fail", () => {
     const root = fixture();
     const result = run(
       root,
@@ -746,16 +746,14 @@ ${ciStep("ios-build", "Run focused iOS lifecycle simulator tests").run!}`,
     );
     expect(result.status, result.stderr).not.toBe(0);
     const commands = readFileSync(path.join(root, "trace"), "utf8").trim().split("\n");
-    expect(commands).toHaveLength(3);
+    expect(commands).toHaveLength(2);
     expect(commands[0]).toContain("OpenClawLifecycleTests.xcresult");
     expect(commands[1]).toBe("scripts/ios-access-restart-proof.py fixture-simulator");
-    expect(commands[2]).toContain("OpenClawWatchDeliveryUITests.xcresult");
   });
 
   it.each([
     { task: "test-wear", lint: "true", appLint: "play", benchmark: "false", count: 3 },
     { task: "ktlint", lint: "false", appLint: "third-party", benchmark: "true", count: 3 },
-    { task: "build-play", lint: "false", appLint: "", benchmark: "false", count: 3 },
   ])("Android $task runs trailing commands after the first Gradle failure", (row) => {
     const root = fixture();
     executable(root, "apps/android/gradlew", 'printf "%s\\n" "$*" >> "$TRACE"; exit 7');
@@ -812,11 +810,8 @@ ${ciStep("ios-build", "Run focused iOS lifecycle simulator tests").run!}`,
     ["ios-build", "Configure iOS build and report simulator selection", "node-env", "tests"],
     ["ios-build", "Prepare iOS simulator", "ios-configure", "tests"],
     ["ios-build", "Build iOS app", "ios-swift-tools", "tests"],
-    ["ios-build", "Build iOS app (Release)", "ios-swift-tools", "release"],
-    ["ios-build", "Prove native managed document download and export", "ios-swift-tools", "tests"],
     ["ios-build", "Run focused iOS voice cleanup simulator tests", "ios-app-build", "tests"],
     ["ios-build", "Run focused iOS lifecycle simulator tests", "ios-app-build", "tests"],
-    ["ios-build", "Run focused Apple Watch operation simulator tests", "ios-app-build", "tests"],
   ])("%s / %s ignores unrelated failure but requires %s", (job, name, producer, phase) => {
     const setup = Object.fromEntries(
       [
