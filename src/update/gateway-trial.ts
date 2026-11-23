@@ -40,7 +40,7 @@ export async function settleRunFromTrial(
       ? await finishSucceeded(trial)
       : await finishUpdateRunAsync(trial.runId, {
           status: "failed",
-          reason: outcome.reason,
+          reason: `${outcome.reason ?? "The new version did not start"}; v${VERSION} is still running`,
           ...(outcome.stderrTail
             ? {
                 diagnostics: {

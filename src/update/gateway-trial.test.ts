@@ -84,7 +84,7 @@ it.each(["succeeded", "rolled-back"] as const)(
         verification: { runningVersion: VERSION, booted: true },
       });
     } else {
-      expect(finished?.reason).toBe("new build failed to start");
+      expect(finished?.reason).toBe(`new build failed to start; v${VERSION} is still running`);
       expect(finished?.steps.find((step) => step.step === "outcome")?.detail).not.toContain(
         "sk-abcdefghijklmnopqrstuvwxyz123456",
       );
