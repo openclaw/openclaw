@@ -4,12 +4,15 @@ import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers
 import { PreparedModelRuntimePublicationSupersededError } from "../../agents/prepared-model-runtime.errors.js";
 import { setRuntimeConfigSnapshot } from "../../config/config.js";
 import {
+  assignSessionOwner,
+  listSessionEntriesCore,
   loadSessionEntry,
   patchSessionEntryCore,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import { writeSessionEntry } from "../../config/sessions/session-accessor.sqlite-entry-store.js";
 import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.sqlite-entry.js";
+import { recordSessionParticipant } from "../../config/sessions/session-accessor.sqlite-participants.native.js";
 import { hasOpenClawAgentDatabaseAsyncResources } from "../../state/openclaw-agent-db-resources.js";
 import {
   closeOpenClawAgentDatabasesAsync,
@@ -59,6 +62,12 @@ function expectSuperseded(error: unknown, access = false) {
 }
 
 const cases = [
+  { write: "raw sibling update", allowed: true },
+  { write: "sibling cache replacement", allowed: true },
+  { write: "canonical sibling owner", allowed: true },
+  { write: "canonical sibling participant", allowed: true },
+  { write: "compound sibling owner", allowed: true },
+  { write: "compound sibling participant", allowed: true },
   { write: "overlapping selected account", allowed: false },
   { write: "selected lifecycle change", allowed: false },
   { write: "rolled-back selected account", allowed: true },
@@ -77,6 +86,7 @@ it.each(cases)("metadata read across $write", ({ write, allowed }) =>
     await state.writeConfig(config);
     setRuntimeConfigSnapshot(config);
     const selected = { agentId: "main", sessionKey: "agent:main:metadata-selected" };
+    const sibling = { agentId: "main", sessionKey: "agent:main:metadata-sibling" };
     replaceSessionEntrySync(selected, {
       sessionId: "selected",
       lifecycleRevision: "selected-original",
@@ -84,9 +94,43 @@ it.each(cases)("metadata read across $write", ({ write, allowed }) =>
       label: "selected",
       updatedAt: 1,
     });
+    if (write.includes("sibling")) {
+      replaceSessionEntrySync(sibling, { sessionId: "sibling", label: "sibling", updatedAt: 1 });
+      // Prepare side tables before capturing the selected metadata read.
+      assignSessionOwner(sibling, {
+        owner: { type: "agent", id: "main" },
+        assignedBy: { type: "agent", id: "main" },
+        assignedAt: 1,
+      });
+      recordSessionParticipant(sibling, {
+        identity: { type: "agent", id: "seed-participant" },
+        promptedAt: 1,
+      });
+    }
     await closeOpenClawAgentDatabasesAsync(state.root);
     expect(hasOpenClawAgentDatabaseAsyncResources()).toBe(false);
     const before = expectDefined(loadSessionEntry(selected), "selected session entry");
+    if (write === "sibling cache replacement") {
+      listSessionEntriesCore({ ...selected, projection: "list" });
+    }
+    const changeSibling = () => {
+      if (write.endsWith("participant")) {
+        expect(
+          recordSessionParticipant(sibling, {
+            identity: { type: "agent", id: "second-participant" },
+            promptedAt: 2,
+          }),
+        ).toBe("inserted");
+      } else {
+        expect(
+          assignSessionOwner(sibling, {
+            owner: { type: "agent", id: "other" },
+            assignedBy: { type: "agent", id: "main" },
+            assignedAt: 2,
+          }),
+        ).not.toBeNull();
+      }
+    };
     const writeSelected = (
       current: Parameters<typeof writeSessionEntry>[0],
       patch: Partial<typeof before>,
@@ -99,7 +143,25 @@ it.each(cases)("metadata read across $write", ({ write, allowed }) =>
           ? expectDefined(scope.withCurrent, "metadata refresh")(() => metadata)
           : undefined;
       void refresh?.catch(() => {});
-      if (write === "overlapping selected account") {
+      if (write === "raw sibling update" || write === "sibling cache replacement") {
+        openOpenClawAgentDatabase(sibling)
+          .db.prepare("UPDATE session_nodes SET updated_at = updated_at + 1 WHERE session_key = ?")
+          .run(sibling.sessionKey);
+        if (write === "sibling cache replacement") {
+          listSessionEntriesCore({ ...sibling, projection: "list" });
+        }
+      } else if (write.startsWith("compound sibling")) {
+        runOpenClawAgentWriteTransaction((current) => {
+          writeSessionEntry(current, sibling.sessionKey, {
+            sessionId: "sibling",
+            label: "compound update",
+            updatedAt: 2,
+          });
+          changeSibling();
+        }, sibling);
+      } else if (write.startsWith("canonical sibling")) {
+        changeSibling();
+      } else if (write === "overlapping selected account") {
         runOpenClawAgentWriteTransaction((current) => {
           writeSelected(current, { authProfileOverride: "openai:changed-during-refresh" });
         }, selected);
@@ -170,6 +232,14 @@ it.each(cases)("metadata read across $write", ({ write, allowed }) =>
       expect(loadSessionEntry(selected)).toEqual(before);
       expect(error).toBeUndefined();
       expect(respond).toHaveBeenCalledWith(true, metadata);
+      if (write.includes("sibling") && (write.endsWith("owner") || write.endsWith("participant"))) {
+        const changed = expectDefined(loadSessionEntry(sibling), "changed sibling");
+        if (write.endsWith("owner")) {
+          expect(changed.owner?.actor.id).toBe("other");
+        } else {
+          expect(changed.participantCount).toBe(2);
+        }
+      }
     } else {
       expectSuperseded(
         error,
