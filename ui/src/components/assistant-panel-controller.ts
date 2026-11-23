@@ -5,6 +5,7 @@ import type { AssistantDockOwner } from "../app/assistant-dock.ts";
 import { chatInputOwnerForContext } from "../app/chat-input-owner.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import { listSelectableAgents } from "../lib/agents/display.ts";
+import { selectComposerInput } from "../lib/composer-input.ts";
 import { listen } from "../lib/reactive/listener.ts";
 import {
   prepareSessionNavigationHandoff,
@@ -24,7 +25,7 @@ import {
   CHAT_ROUTE_READY_EVENT,
   CHAT_TRANSCRIPT_LOADING_CHANGED_EVENT,
 } from "../pages/chat/chat-history-events.ts";
-import type { ChatPaneElement } from "../pages/chat/chat-pane-elements.ts";
+import { chatPanesWithin, type ChatPaneElement } from "../pages/chat/chat-pane-elements.ts";
 import type { CustodianSessionStore } from "../pages/custodian/custodian-session-store.ts";
 import { subscribePluginHelp } from "../pages/custodian/plugin-help-state.ts";
 import { createDockLayout } from "./dock-layout.ts";
@@ -79,6 +80,8 @@ export function createAssistantPanel(
   let handledMinimizeRequestId = 0;
   // Explicit opens and closes release the first-use hold; the saved choice returns on the next page.
   let firstUseHold: "none" | "held" | "released" = "none";
+  // An explicit Home open waits for its lazily mounted composer.
+  let homeComposerFocus: { previous: Element | null } | null = null;
   let targetScope = "";
   let refreshing = false;
   let homeDefaults: {
@@ -162,10 +165,36 @@ export function createAssistantPanel(
         subscribeSources();
       }
       publishSessionKey();
+      focusHomeComposer();
     } finally {
       refreshing = false;
     }
     notify();
+  }
+
+  function focusHomeComposer(): void {
+    const request = homeComposerFocus;
+    if (!request) {
+      return;
+    }
+    const activeElement = element.ownerDocument.activeElement;
+    if (
+      !dockLayout.open ||
+      destination !== "home" ||
+      // Typing into another field while Home loads keeps that field. Sidebar
+      // collapse can move focus between chrome buttons, so only fields count.
+      (activeElement !== request.previous &&
+        activeElement?.closest("input, textarea, [contenteditable]:not([contenteditable='false'])"))
+    ) {
+      homeComposerFocus = null;
+      return;
+    }
+    const pane = chatPanesWithin(element).find((candidate) => candidate.focusComposerInput?.());
+    const composer = pane?.composerElement;
+    if (composer) {
+      homeComposerFocus = null;
+      selectComposerInput(composer, composer.value.length, composer.value.length);
+    }
   }
 
   function subscribeSources(): void {
@@ -505,6 +534,8 @@ export function createAssistantPanel(
     if (!availableFor(requestedDestination)) {
       return;
     }
+    const homeWasOpen = dockLayout.open && destination === "home";
+    const previousFocus = element.ownerDocument.activeElement;
     const detail = asNullableRecord(event instanceof CustomEvent ? event.detail : null);
     const dock = detail?.dock;
     if (dock === "right" || dock === "bottom") {
@@ -519,6 +550,11 @@ export function createAssistantPanel(
       openDestination(requestedDestination);
     } else {
       toggle();
+    }
+    // Repeating the shortcut on an open dock keeps its established close action.
+    if (requestedDestination === "home" && !homeWasOpen && dockLayout.open) {
+      homeComposerFocus = { previous: previousFocus };
+      focusHomeComposer();
     }
   }
 
