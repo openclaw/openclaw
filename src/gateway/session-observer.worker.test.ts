@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import fs from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import { expect, it, vi } from "vitest";
 import { createDeferred, withinTest } from "../../test/helpers/promise.js";
@@ -171,6 +172,18 @@ async function withObserver(
     }
   });
 }
+
+it("does not discover physical stores for unwatched assistant deltas", async () => {
+  await withObserver(async ({ observer, watch }) => {
+    watch(false);
+    await send(observer, "lifecycle", { phase: "start" });
+    const realpath = vi.spyOn(fs.realpathSync, "native");
+    for (const delta of ["Checking ", "the implementation."]) {
+      await send(observer, "assistant", { delta });
+    }
+    expect(realpath).not.toHaveBeenCalled();
+  });
+});
 
 it("moves observer admission, publication, terminal and companion reads off the caller and observes foreign resets", async () => {
   await withObserver(

@@ -1,3 +1,4 @@
+import { DatabaseSync } from "node:sqlite";
 import { expect, it, vi } from "vitest";
 import type { ModelsListResult } from "../../../packages/gateway-protocol/src/schema/model-catalog.js";
 import type { AuthProfileStore } from "../../agents/auth-profiles/types.js";
@@ -11,17 +12,22 @@ import {
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.sqlite-entry.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
+import * as pluginScope from "../../plugins/runtime/gateway-request-scope.js";
 import { connectUserModelAccount } from "../../state/user-model-accounts.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { authorizationClient } from "../server-methods.authorization.test-support.js";
-import { readPreparedCatalog } from "../server-model-catalog-auth.js";
+import {
+  readPreparedCatalog,
+  registerGatewayModelCatalogPrivateAccess,
+} from "../server-model-catalog-auth.js";
 import { gatewayProfile } from "../server/client-fixtures.test-support.js";
 import { WITHOUT_OPENAI_ENV_AUTH } from "../test-helpers.env.js";
 import {
   createChatMetadataHarness,
   createChatMetadataOwner,
 } from "./chat-metadata-runtime.test-support.js";
+import * as modelsListResult from "./models-list-result.js";
 import {
   createModelsListTestContext,
   catalogEntry,
@@ -188,6 +194,12 @@ it("publishes catalog status and policy changes while retaining a retired owner 
       };
       harness.setOwner(owner);
       context.readPreparedModelsList = harness.runtime.readModelsList;
+      const snapshot = (await readPreparedCatalog(context, "main"))!;
+      const unpreparedRead = vi.fn(async () => snapshot);
+      registerGatewayModelCatalogPrivateAccess(context.loadGatewayModelCatalogSnapshot, {
+        readPrepared: unpreparedRead,
+        loadDeferred: unpreparedRead,
+      });
       const read = modelsReader(context, params, client);
       const publishConfig = async (next: OpenClawConfig) => {
         currentConfig = next;
@@ -197,14 +209,36 @@ it("publishes catalog status and policy changes while retaining a retired owner 
         await harness.runtime.refresh();
       };
       try {
+        using prepareProjection = vi.spyOn(modelsListResult, "prepareModelsListResult");
         await harness.runtime.refresh();
-        expect((await read())?.models.map(({ id }) => id)).toEqual(["first", "model-1"]);
+        const prepared = await read();
+        expect(prepared?.models.map(({ id }) => id)).toEqual(["first", "model-1"]);
+        {
+          using enterPluginScope = vi.spyOn(pluginScope, "withPluginRuntimeRegistryScope");
+          using prepareStatement = vi.spyOn(DatabaseSync.prototype, "prepare");
+          using executeStatement = vi.spyOn(DatabaseSync.prototype, "exec");
+          expect(await Promise.all([read(), read()])).toEqual([prepared, prepared]);
+          expect(enterPluginScope).not.toHaveBeenCalled();
+          expect(prepareStatement).not.toHaveBeenCalled();
+          expect(executeStatement).not.toHaveBeenCalled();
+          expect(unpreparedRead).not.toHaveBeenCalled();
+          expect(prepareProjection).toHaveBeenCalledOnce();
+        }
+        harness.setSkillsVersion(2);
+        await publishConfig({
+          ...currentConfig,
+          ui: { seamColor: "#123456", prefs: { chatShowToolCalls: false } },
+          meta: { lastTouchedVersion: "2026.10.11" },
+        });
+        expect(await read()).toEqual(prepared);
+        expect(prepareProjection).toHaveBeenCalledOnce();
         owner.modelCatalog.pendingProviders = ["test"];
         expect(await read()).toMatchObject({ pendingProviders: ["test"] });
         owner.modelCatalog.pendingProviders = undefined;
         owner.modelCatalog.refreshFailed = true;
         expect(await read()).toMatchObject({ refreshFailed: true });
         expect(await read()).not.toHaveProperty("pendingProviders");
+        expect(prepareProjection).toHaveBeenCalledOnce();
         await publishConfig({
           ...currentConfig,
           agents: {
@@ -221,6 +255,7 @@ it("publishes catalog status and policy changes while retaining a retired owner 
             expect.objectContaining({ id: "model-1", manualSelectionAllowed: false }),
           ]),
         });
+        expect(prepareProjection).toHaveBeenCalledTimes(2);
         current = false;
         // A retired owner keeps serving its last list until the replacement publishes.
         expect(await read()).toMatchObject({
@@ -235,6 +270,8 @@ it("publishes catalog status and policy changes while retaining a retired owner 
         expect(await read()).toMatchObject({
           models: expect.arrayContaining([expect.objectContaining({ id: "second" })]),
         });
+        expect(prepareProjection).toHaveBeenCalledTimes(3);
+        expect(unpreparedRead).not.toHaveBeenCalled();
       } finally {
         await harness.runtime.stop();
         clearRuntimeConfigSnapshot();
