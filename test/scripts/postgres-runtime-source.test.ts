@@ -16,7 +16,9 @@ describe("PostgreSQL runtime constants", () => {
       );
 
       for (const field of Object.keys(fixture)) {
-        expect(Object.getOwnPropertyDescriptor(runtime, field)?.get).toBeTypeOf("function");
+        expect(Object.getOwnPropertyDescriptor(runtime, field)).toMatchObject({
+          get: expect.any(Function),
+        });
       }
       expect(runtime.eagerSql).toBe(fixture.eagerSql);
       const catalog = runtime.expectedCatalog;

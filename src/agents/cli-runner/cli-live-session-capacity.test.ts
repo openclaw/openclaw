@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { handleAgentExecutionError } from "../../auto-reply/reply/agent-runner-error-handler.js";
 import type { AgentTurnParams } from "../../auto-reply/reply/agent-runner-execution.types.js";
 import type { CliBackendLiveSessionHandle } from "../../plugins/cli-backend.types.js";
+import { prepareSystemAgentRunAdmission } from "../admitted-run-context.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";
 import { buildPreparedCliRunContext } from "../cli-runner.test-helpers.js";
 import {
@@ -27,17 +28,37 @@ vi.mock("../../infra/host-memory.js", async (importOriginal) => ({
   readHostFreeMemoryBytes: hostMemory.freeBytes,
 }));
 
-const registered: Array<() => void> = [];
+const registered: CliBackendLiveSessionHandle[] = [];
+const admissions: Array<ReturnType<typeof prepareSystemAgentRunAdmission>> = [];
+let nextRunId = 0;
 afterEach(() => {
-  for (const remove of registered.splice(0)) {
-    remove();
+  for (const session of registered.splice(0)) {
+    session.close("restart");
+  }
+  for (const admission of admissions.splice(0)) {
+    admission.close();
   }
   vi.clearAllMocks();
 });
 
 /** Registers one more busy warm process for a new conversation; returns the refusal, if any. */
-function registerBusyLiveSession(sessionId: string): unknown {
-  const context = buildPreparedCliRunContext({ provider: "claude-cli", sessionId });
+async function registerBusyLiveSession(sessionId: string): Promise<unknown> {
+  const index = ++nextRunId;
+  const context = buildPreparedCliRunContext({
+    provider: "claude-cli",
+    agentId: "main",
+    runId: `capacity-run-${index}`,
+    sessionId,
+    sessionKey: `agent:main:capacity-${index}`,
+  });
+  const admission = prepareSystemAgentRunAdmission(
+    {},
+    context.params.runId,
+    "main",
+    "capacity-test",
+  );
+  admissions.push(admission);
+  context.params.admittedRunContext = await admission.admit("plugin-harness");
   const capability = createCliLiveSessionCapability({
     context,
     argv: ["claude", "-p"],
@@ -57,7 +78,7 @@ function registerBusyLiveSession(sessionId: string): unknown {
   } catch (error) {
     return error;
   }
-  registered.push(() => capability.remove(handle));
+  registered.push(handle);
   return undefined;
 }
 
@@ -136,9 +157,9 @@ describe("a local CLI live-session refusal versus a provider rate limit", () => 
 
   it("explains the host's session limit instead of blaming the provider", async () => {
     for (let index = 0; index < 16; index += 1) {
-      expect(registerBusyLiveSession(`busy-${index}`)).toBeUndefined();
+      expect(await registerBusyLiveSession(`busy-${index}`)).toBeUndefined();
     }
-    const refusal = registerBusyLiveSession("over-limit");
+    const refusal = await registerBusyLiveSession("over-limit");
 
     expect(refusal).toMatchObject({ reason: "overloaded", status: undefined });
     expect(await settleWithSavedLogin(refusal)).toEqual([]);

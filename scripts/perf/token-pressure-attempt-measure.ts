@@ -371,6 +371,8 @@ const streamGuards = installEmbeddedAttemptStreamGuards(input, {
     throw error;
   },
   diagnosticOwner: createDiagnosticEmbeddedRunOwner(attempt),
+  // This measurement fixture does not certify safe tool boundaries.
+  isToolBoundarySafe: () => false,
 });
 const modelState = createEmbeddedModelState(
   { session, runId: attempt.runId, onModelUsage: streamGuards.onModelUsage },
