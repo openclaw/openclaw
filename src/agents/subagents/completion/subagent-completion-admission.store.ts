@@ -120,7 +120,7 @@ export async function appendChildStatusToRequester(
 ): Promise<void> {
   const shown = batch.filter(
     (child) =>
-      child.expectsCompletionMessage === true &&
+      child.expectsCompletionMessage !== false &&
       child.execution.status === "terminal" &&
       child.pauseReason !== "sessions_yield" &&
       !hasConsumedRequesterInput(child) &&
@@ -130,14 +130,15 @@ export async function appendChildStatusToRequester(
   if (!first) {
     return;
   }
-  // Address the current chat, including a compaction successor; deletion and Stop get nothing.
+  // Address the current chat, including a compaction successor; a deleted chat gets nothing.
+  // A Stopped parent still gets the entry: Stop ends that turn, not the finished children's results.
   const requester = {
     agentId: first.requesterAgentId,
     sessionKey: first.requesterSessionKey,
     storePath: first.requesterStorePath,
   };
   const current = await readSessionEntryReadOnlyInWorker(requester);
-  if (!current?.sessionId || current.status === "killed") {
+  if (!current?.sessionId) {
     return;
   }
   const runIds = shown

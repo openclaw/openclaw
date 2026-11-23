@@ -222,10 +222,7 @@ export function recordRequesterDelivery(
   if (delivery.requesterDelivery?.state !== "consumed") {
     delivery.requesterDelivery = fact;
   }
-  if (
-    delivery.disposition !== "ambiguous" &&
-    (delivery.status === "pending" || delivery.status === "in_progress")
-  ) {
+  if (delivery.status === "pending" || delivery.status === "in_progress") {
     delivery.disposition = undefined;
     delivery.lastError = undefined;
   }
@@ -261,9 +258,7 @@ export function isDeliveryTerminalForRequesterSettle(
     entry.delivery?.status === "delivered" ||
     (entry.delivery?.status === "not_required" && entry.pauseReason !== "sessions_yield") ||
     entry.delivery?.status === "discarded" ||
-    entry.delivery?.disposition === "delivered" ||
-    entry.delivery?.disposition === "intentional_non_delivery" ||
-    entry.delivery?.disposition === "permanent_failure"
+    entry.delivery?.disposition === "delivered"
   );
 }
 

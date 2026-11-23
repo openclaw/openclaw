@@ -41,7 +41,7 @@ import { captureRequesterContinuationCaller } from "../requester-cron-authority.
 import { transferRequesterFinalAttachment } from "../requester-final-attachment.js";
 import { getSubagentDepthFromSessionStoreInWorker } from "../spawn/subagent-depth.js";
 import { reserveSubagentControllerSource } from "./subagent-announce-controller-source.js";
-import { classifyAnnounceDeliveryError } from "./subagent-announce-delivery-retry.js";
+import { summarizeDeliveryError } from "./subagent-announce-delivery-retry.js";
 import {
   deliverSubagentAnnouncement,
   loadRequesterSessionEntry,
@@ -193,7 +193,6 @@ async function maybeWakeRequesterAfterAllChildrenSettledBound(
     await completeBatch(settledBatch, currentState, {
       delivered: false,
       path: "none",
-      disposition: "permanent_failure",
       error:
         "Child result delivery lost its Gateway owner. Inspect the saved child results and retry.",
     });
@@ -652,12 +651,9 @@ async function maybeWakeRequesterAfterAllChildrenSettledBound(
       if (await settleRevokedBatch()) {
         return false;
       }
-      delivery = classifyAnnounceDeliveryError(error, {
-        path: "none",
-        beforeAdmission: !dispatchAccepted && !controllerInput?.custody.rpcAdopted,
-      });
+      delivery = { delivered: false, path: "none", error: summarizeDeliveryError(error) };
     }
-    if (delivery.disposition !== "session_queued") {
+    if (delivery.path !== "queued") {
       retireUnadoptedInput();
     }
     // Results committed to the requester transcript are never replayed: settle what the turn did.
@@ -668,7 +664,7 @@ async function maybeWakeRequesterAfterAllChildrenSettledBound(
       return settledDelivery.delivered;
     }
     // The controller mailbox owns a queued handoff and settles it itself.
-    if ((await settleRevokedBatch()) || delivery.disposition === "session_queued") {
+    if ((await settleRevokedBatch()) || delivery.path === "queued") {
       return false;
     }
     // A wake that missed its turn settles the batch into requester history; nothing retries it.

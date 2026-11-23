@@ -751,9 +751,6 @@ describe("settleRequesterTurnAfterSessionSpawns", () => {
         );
         expect(calls).toEqual(["persist", "schedule"]);
       }
-      if (kind === "in_progress") {
-        expect(runs.get(second.runId)!.delivery?.disposition).toBe("intentional_non_delivery");
-      }
     },
   );
 

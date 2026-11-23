@@ -21,29 +21,25 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-it.each(["failed", "retryable"] as const)(
-  "applies session-run retention after six minutes (%s)",
-  async (deliveryStatus) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      const settledAt = Date.now() - 6 * 60_000;
-      const entry = createArchivedSubagentSweeperRun({
-        spawnMode: "session",
-        cleanup: "keep",
-        archiveAtMs: undefined,
-        cleanupCompletedAt: settledAt,
-        delivery: {
-          status: "failed",
-          ...(deliveryStatus === "retryable" ? { disposition: "retryable" as const } : {}),
-          lastError: "completion agent failed",
-        },
-      });
-      const { sweeper, runs, callGateway } = createSubagentSweeperHarness(entry);
-      await sweeper.sweepOnce();
-      expect(runs.has(entry.runId)).toBe(deliveryStatus !== "failed");
-      expect(callGateway).not.toHaveBeenCalled();
+it("applies session-run retention after six minutes", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const settledAt = Date.now() - 6 * 60_000;
+    const entry = createArchivedSubagentSweeperRun({
+      spawnMode: "session",
+      cleanup: "keep",
+      archiveAtMs: undefined,
+      cleanupCompletedAt: settledAt,
+      delivery: {
+        status: "failed",
+        lastError: "completion agent failed",
+      },
     });
-  },
-);
+    const { sweeper, runs, callGateway } = createSubagentSweeperHarness(entry);
+    await sweeper.sweepOnce();
+    expect(runs.has(entry.runId)).toBe(false);
+    expect(callGateway).not.toHaveBeenCalled();
+  });
+});
 
 it("lets I/O run during a retained backlog and skips owners replaced between batches", async () => {
   vi.useRealTimers();
