@@ -400,8 +400,8 @@ describe("Gateway GitHub publication", () => {
     const token = `ghp_${"x".repeat(36)}`;
     const diagnostic = [
       "\u001b[31mfatal: Authentication failed\u001b[0m",
-      "https://example.test/repo?unknown=fixture-query#fixture-fragment",
-      "https://example.test/fi'xture/repo",
+      "https://user:fixture-password@example.test/repo?unknown=fixture-query#fixture-fragment",
+      "https://user:fi'xture@example.test/repo",
       `https://example.test/${"x".repeat(4_096)}?unknown=fixture-long-query#fixture-long-fragment`,
       "Authorization: Bearer fixture-bearer",
       `GH_TOKEN=${token}`,
@@ -551,7 +551,7 @@ describe("Gateway GitHub publication", () => {
           code: "workspace_changed",
           message: "GitHub publication failed.",
           nextAction:
-            "GitHub publication worktree changed. Inspect the reconciled workspace and any recorded GitHub effects, then request a new publication after reviewing the changes.",
+            "GitHub publication worktree authority changed. Inspect the reconciled workspace and any recorded GitHub effects, then request a new publication after reviewing the changes.",
         });
         expect(commandMatchesAny("commit-tree", "push", "POST")).toEqual([]);
       });
