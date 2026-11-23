@@ -99,18 +99,16 @@ it("lets a launcher child exit naturally while its IPC peer remains connected", 
   child.stderr!.setEncoding("utf8").on("data", (chunk: string) => {
     stderr += chunk;
   });
-  const exited = once(child, "exit");
+  const exited = once(child, "exit", { signal: AbortSignal.timeout(10_000) });
   try {
     const [message] = await once(child, "message");
     expect(message).toBe("loaded");
-    expect(await once(child, "exit", { signal: AbortSignal.timeout(5_000) }), stderr).toEqual([
-      0,
-      null,
-    ]);
+    expect(await exited, stderr).toEqual([0, null]);
   } finally {
     if (child.exitCode === null && child.signalCode === null) {
+      const stopped = once(child, "exit");
       child.kill("SIGKILL");
-      await exited;
+      await stopped;
     }
   }
 }, 15_000);
