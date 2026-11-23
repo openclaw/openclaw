@@ -551,7 +551,7 @@ describe("Gateway GitHub publication", () => {
           code: "workspace_changed",
           message: "GitHub publication failed.",
           nextAction:
-            "GitHub publication worktree authority changed. Inspect the reconciled workspace and any recorded GitHub effects, then request a new publication after reviewing the changes.",
+            "The GitHub publication worktree changed. Inspect the reconciled workspace and any recorded GitHub effects, then request a new publication after reviewing the changes.",
         });
         expect(commandMatchesAny("commit-tree", "push", "POST")).toEqual([]);
       });
