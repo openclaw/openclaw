@@ -2,6 +2,7 @@
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { projectAgentHarnessTranscriptMessageForDisplay } from "../agents/harness/transcript-visibility.js";
 import { CURRENT_SESSION_VERSION, SessionManager } from "../agents/sessions/session-manager.js";
 import { HEARTBEAT_PROMPT } from "../auto-reply/heartbeat.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
@@ -82,11 +83,20 @@ describe("deriveSessionUnread from transcript content", () => {
     },
     { name: "a quiet heartbeat", messages: [user(HEARTBEAT_PROMPT), assistant("HEARTBEAT_OK")] },
     {
-      name: "a hidden coordination turn",
-      messages: [
-        { ...user("progress"), display: false },
-        { ...assistant("noted"), display: false },
-      ],
+      // The run writer marks a child's sessions_send turn hidden; its plain reply stays private.
+      name: "a parent answering its child's sessions_send",
+      messages: [user("progress"), assistant("noted")].map((message) =>
+        projectAgentHarnessTranscriptMessageForDisplay({
+          hidden: false,
+          inputProvenance: {
+            kind: "inter_session",
+            sourceTool: "sessions_send",
+            sourceSessionKey: "agent:main:subagent:child",
+            sourceRole: "subagent",
+          },
+          message: message as never,
+        }),
+      ),
     },
   ])("stays read after $name", async ({ messages }) => {
     const session = await createReadSession();

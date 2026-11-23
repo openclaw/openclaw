@@ -298,10 +298,9 @@ export function runSessionTurnPostimageTests(harness: TurnTestHarness) {
             .all(sessionId);
         const rawSeq = scenario === "header" ? 2 : scenario === "nonmessage" ? 4 : 3;
         const updatedAt = scenario === "header" ? 20003 : 20002;
-        // Visible rows advance unread activity, so the turn's entry write observes its transcript.
         expect(
           rows("session_windows", "transcript_updated_at, transcript_observed_at", "session_id"),
-        ).toEqual([{ transcript_updated_at: updatedAt, transcript_observed_at: updatedAt }]);
+        ).toEqual([{ transcript_updated_at: updatedAt, transcript_observed_at: 20000 }]);
         expect(result.appendedMessages.map((message) => message.effectiveParentId)).toEqual([
           scenario === "header" ? null : scenario === "nonmessage" ? "note" : "seed",
           "question",

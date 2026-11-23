@@ -23,6 +23,7 @@ import {
   buildThreadAwareOutboundSessionRoute,
 } from "../../plugin-sdk/core.js";
 import * as backgroundResults from "../../sessions/background-session-result.js";
+import { deriveSessionUnread } from "../../shared/session-unread.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 import { resolveCronDeliveryPlan } from "../delivery-plan.js";
 import { loadCronStore, saveCronStore } from "../store.js";
@@ -98,6 +99,7 @@ it("keeps the destination session for a reply to a delivered cron question", () 
       updatedAt: lastHumanAt,
       sessionStartedAt: lastHumanAt,
       lastInteractionAt: lastHumanAt,
+      lastReadAt: lastHumanAt,
     });
     params.cfgWithAgentDefaults.session = {
       ...params.cfgWithAgentDefaults.session,
@@ -118,8 +120,8 @@ it("keeps the destination session for a reply to a delivered cron question", () 
     const entry = latest(destination);
     expect(entry).toMatchObject(generation);
     expect(entry?.lastInteractionAt).toBeGreaterThanOrEqual(deliveryStartedAt);
-    // The delivered result is visible content, so it marks the destination unread.
-    expect(entry?.lastActivityAt).toBeGreaterThanOrEqual(deliveryStartedAt);
+    // The delivered result is visible content, so it marks the read destination unread.
+    expect(deriveSessionUnread(entry)).toBe(true);
 
     expect(await dispatchCronDelivery(params)).toMatchObject({ delivered: true });
     expect(sendText).toHaveBeenCalledOnce();
