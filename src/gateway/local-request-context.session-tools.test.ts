@@ -432,10 +432,8 @@ describe("built-in session tool role authority", () => {
       expect(await turn.steer(bob)).toMatchObject({ status: "accepted" });
       await expectRead(REQUESTER, [true, { sessionKey: REQUESTER }]);
       await expectRead(undefined, [true, draftMessages]);
-      context.readChatStartupProjection = async () => {
-        await turn.complete();
-        return undefined;
-      };
+      // The ended turn is refused when the next request starts.
+      await turn.complete();
       await expectRead(REQUESTER, [
         false,
         undefined,

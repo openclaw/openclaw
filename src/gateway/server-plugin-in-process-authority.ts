@@ -60,7 +60,6 @@ import {
   runWithOperatorToolGatewayCleanupContext,
 } from "./server-plugin-runtime-client.js";
 import { createSessionContinuationLifetime } from "./session-continuation-lifetime.js";
-import { resolveSessionRuntimeAuthority } from "./session-runtime-authority.js";
 import {
   cancelSubagentCompletionToolHandoff,
   registerSubagentCompletionToolHandoff,
@@ -360,12 +359,6 @@ export function resolveInProcessGatewayDispatch(
       ? composeSessionSourceAssertion([assertSettleWakeCurrent, operatorRunAuthority.assertCurrent])
       : undefined;
   assertTransferredSettleWakeCurrent?.();
-  const runtimeAuthority = assertTransferredSettleWakeCurrent
-    ? { assertCurrent: assertTransferredSettleWakeCurrent }
-    : resolveSessionRuntimeAuthority({
-        method,
-        runtimeIdentity: agentRuntimeIdentity ?? scope?.client?.internal?.agentRuntimeIdentity,
-      });
   const assertCallerCurrent = captureGatewayToolCallerAssertion(method);
   const transfersCreatedInput =
     method === "sessions.create" &&
@@ -384,7 +377,6 @@ export function resolveInProcessGatewayDispatch(
     // none may outlive or broaden a recovered service operation's tool ceiling.
     service?.assertCurrent,
     selection?.assertCurrent,
-    runtimeAuthority?.assertCurrent,
     assertSettleWakeCurrent,
     !isHostOwnedAgentRun || !operatorRunAuthority
       ? composeSessionSourceAssertion(
@@ -700,7 +692,6 @@ export function resolveInProcessGatewayDispatch(
     assertContextCurrent: composeSessionSourceAssertion([
       service?.assertCurrent,
       selection?.assertCurrent,
-      runtimeAuthority?.assertCurrent,
       assertSourceCurrent,
       method !== "agent" ? assertCallerCurrent : undefined,
       transfersCreatedInput ? options.agentToolCaller?.assertCurrent : undefined,
