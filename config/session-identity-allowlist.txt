@@ -436,7 +436,7 @@ src/agents/subagents/completion/session-followup-completion.ts	21
 src/agents/subagents/completion/subagent-completion-admission.store.ts	17
 src/agents/subagents/completion/subagent-completion-admission.worker.ts	13
 src/agents/subagents/completion/subagent-completion-delivery.ts	6
-src/agents/subagents/completion/subagent-completion-mutation.kernel.ts	16
+src/agents/subagents/completion/subagent-completion-mutation.kernel.ts	15
 src/agents/subagents/registry/subagent-active-context.ts	2
 src/agents/subagents/registry/subagent-child-owner-match.ts	4
 src/agents/subagents/registry/subagent-control-kill-capture.ts	6
@@ -456,7 +456,7 @@ src/agents/subagents/registry/subagent-registry-execution-cleanup.ts	10
 src/agents/subagents/registry/subagent-registry-helpers.ts	13
 src/agents/subagents/registry/subagent-registry-lifecycle-announce-cleanup.ts	5
 src/agents/subagents/registry/subagent-registry-lifecycle-bookkeeping.ts	1
-src/agents/subagents/registry/subagent-registry-lifecycle-cleanup.ts	6
+src/agents/subagents/registry/subagent-registry-lifecycle-cleanup.ts	5
 src/agents/subagents/registry/subagent-registry-lifecycle-delivery.ts	3
 src/agents/subagents/registry/subagent-registry-lifecycle-finalize-cleanup.ts	2
 src/agents/subagents/registry/subagent-registry-lifecycle-persistence.ts	3

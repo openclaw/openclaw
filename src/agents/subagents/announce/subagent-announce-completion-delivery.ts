@@ -33,7 +33,7 @@ import {
 import { hasVisibleAgentPayload } from "../../embedded-agent-runner/message-visibility.js";
 import { hasVisibleCompletionResult } from "../../internal-event-contract.js";
 import { collectAgentInternalEventMedia, type AgentInternalEvent } from "../../internal-events.js";
-import { MISSING_REPLY_NOTICE_TEXT, type ReplyExpectation } from "../../reply-completion.js";
+import type { ReplyExpectation } from "../../reply-completion.js";
 import { createAgentRunDirectAbortError } from "../../run-termination.js";
 import {
   hasAnnounceSendEvidence,
@@ -282,11 +282,7 @@ type DirectCompletionContent = { content: string; mediaUrls: string[]; audioAsVo
 function collectDirectCompletionContent(params: {
   agentResult?: { payloads?: unknown };
   events: readonly AgentInternalEvent[] | undefined;
-  contentKind: "completed_result" | "failed_notice";
 }): DirectCompletionContent | undefined {
-  if (params.contentKind === "failed_notice") {
-    return { content: MISSING_REPLY_NOTICE_TEXT, mediaUrls: [] };
-  }
   const collect = (payloads: readonly unknown[]): DirectCompletionContent | undefined => {
     const textParts: string[] = [];
     const mediaUrls = new Set<string>();
@@ -382,7 +378,6 @@ export async function deliverCompletionDirect(params: {
     threadId?: string;
   };
   internalEvents?: readonly AgentInternalEvent[];
-  contentKind: "completed_result" | "failed_notice";
   signal?: AbortSignal;
   agentResult?: { payloads?: unknown };
   onDeliveryResult?: (delivery: SubagentAnnounceDeliveryResult) => void | Promise<void>;
@@ -392,9 +387,7 @@ export async function deliverCompletionDirect(params: {
   const completionContent = collectDirectCompletionContent({
     agentResult: params.agentResult,
     events: params.internalEvents,
-    contentKind: params.contentKind,
   });
-  // A failed completion must not deliver partial child media as its result.
   const content = completionContent?.content;
   const mediaUrls = completionContent?.mediaUrls ?? [];
   const audioAsVoice = completionContent?.audioAsVoice === true;
