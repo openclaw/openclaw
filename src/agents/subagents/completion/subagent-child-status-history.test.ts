@@ -111,7 +111,7 @@ it("bounds a large failed cohort to one shared history budget", () =>
     }
     await settleRequesterCompletionBatch({
       entries: cohort,
-      outcome: { delivered: false, path: "direct", reason: "requester_aborted" },
+      outcome: { delivered: false, path: "direct" },
     });
 
     const statuses = statusTexts(
