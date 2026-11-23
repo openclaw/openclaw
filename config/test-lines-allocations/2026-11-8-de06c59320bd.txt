@@ -1,0 +1,4 @@
+6
+# LOCAL 2026.11.8 row 132; source de06c59320bdc80c51a2e98cc0d83bf4580163a2.
+# Exercise shutdown while pricing is pending alongside existing discovery and scan-admission cancellation cases.
+# Exact net LF growth; no scalar baseline or coverage reduction.

@@ -1,0 +1,4 @@
+4
+# LOCAL 2026.11.8 row 52; source 15e7f5add65061a095f2f59e95aa5e61e1bb26c3.
+# Distinguish OAuth-shaped API-key profiles from ordinary API keys at private descriptor preparation; preserve secret cleanup.
+# Exact net LF growth; no scalar baseline or coverage reduction.

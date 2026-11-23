@@ -1,0 +1,4 @@
+13
+# LOCAL 2026.11.8 row 180; source 05bfba3e45395ec8f2ae85ef90b1517152c53b8a.
+# Protect the Grok context size through foundation, regional and global resolution at the existing discovery owner.
+# Exact net LF growth; no scalar baseline or coverage reduction.

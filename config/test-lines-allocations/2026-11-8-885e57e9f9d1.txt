@@ -1,0 +1,4 @@
+6
+# LOCAL 2026.11.8 row 104; source 885e57e9f9d1d768590a6079c8bb7c160088d0a8.
+# Prove real managed-worktree and repository-receipt reads do not copy SQLite while retaining custody/currentness controls.
+# Exact net LF growth; no scalar baseline or coverage reduction.
