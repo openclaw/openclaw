@@ -48,7 +48,6 @@ export function prepareSessionEventInput(text: string, options: SessionEventOpti
   const operatorAuthority = options.expectedTarget
     ? readSessionEventTargetOperatorAuthority(options.expectedTarget)
     : undefined;
-  operatorAuthority?.assertCurrent();
   const cfg = getSessionEventRuntimeConfig();
   const agentId = normalizeAgentId(options.agentId);
   resolveConfiguredAgentId(cfg, agentId);
@@ -333,13 +332,10 @@ export function buildSessionEventContext(params: {
         params.assertCurrent();
         return true;
       },
-      // Work that outlives this occurrence keeps only the live operator source.
+      // Work that outlives this occurrence keeps the operator source admitted at its start.
       successor: {
         operatorAuthority,
-        isCurrent: () => {
-          operatorAuthority.assertCurrent();
-          return true;
-        },
+        isCurrent: () => true,
       },
     });
   } else if (requesterOwner?.owner) {
