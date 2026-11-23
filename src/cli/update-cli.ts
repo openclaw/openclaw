@@ -4,7 +4,6 @@ import { theme } from "../../packages/terminal-core/src/theme.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { POST_CORE_UPDATE_ENV } from "../infra/update-post-core-context.js";
 import { defaultRuntime, ExitError } from "../runtime.js";
-import { checkRelease } from "../update/check-release.js";
 import { inheritOptionFromParent } from "./command-options.js";
 import { formatHelpExamples } from "./help-format.js";
 import { isJsonOutputModeActive } from "./json-output-mode.js";
@@ -244,6 +243,7 @@ ${theme.muted("Docs:")} ${formatDocsLink("/cli/update", "docs.openclaw.ai/cli/up
         defaultRuntime.exit(1);
       }, 3 * 60_000);
       try {
+        const { checkRelease } = await import("../update/check-release.js");
         const result = await checkRelease();
         defaultRuntime.writeJson(result, 0);
         if (!result.ok) {

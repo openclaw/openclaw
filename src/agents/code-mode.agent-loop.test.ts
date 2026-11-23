@@ -476,66 +476,87 @@ describe("Code Mode agent-loop error recovery", () => {
     expect(await readFile(join(state.workspaceDir, "executions.txt"), "utf8")).toBe("run\n");
   });
 
-  it("delivers a steer before a required nested shell finishes and resumes its exact result", async ({
-    onTestFinished,
-  }) => {
-    const { state, shell } = await nativeExecFixture("steer-held-shell", onTestFinished);
-    const started = join(state.workspaceDir, "started");
-    const release = join(state.workspaceDir, "release");
-    const command = nodeCommand(`const fs = require("node:fs");
+  it.for(["exec", "process poll"])(
+    "delivers a steer during %s and resumes the exact result",
+    async (waitKind, { onTestFinished }) => {
+      const { state, shell, scopeKey } = await nativeExecFixture(
+        "steer-held-shell",
+        onTestFinished,
+      );
+      const processTool = createProcessTool({ scopeKey });
+      const pollCalls = vi.spyOn(processTool, "execute");
+      const started = join(state.workspaceDir, "started");
+      const release = join(state.workspaceDir, "release");
+      const command = nodeCommand(`const fs = require("node:fs");
       const watcher = fs.watch(${JSON.stringify(state.workspaceDir)}, () => {
         if (fs.existsSync(${JSON.stringify(release)})) { watcher.close(); clearTimeout(timer); console.log("original result"); }
       });
       const timer = setTimeout(() => watcher.close(), 10000);
       fs.appendFileSync(${JSON.stringify(started)}, "started");`);
-    const correction = "Check this before the command finishes.";
-    let session!: AgentSession;
-    const observed: Context[] = [];
-    const run = runCodeModeAgent({
-      hiddenTools: [shell],
-      embeddedSession: true,
-      execInput: {
-        code: `return (await exec({command:${JSON.stringify(command)}})).aggregated;`,
-        awaitResults: true,
-      },
-      programs: [
-        "exec",
-        async (context) => {
-          observed.push(context);
-          await writeFile(release, "finish");
-          const result = readToolResultDetails(
-            context.messages.findLast((m) => m.role === "toolResult"),
-          );
-          expect(result).toMatchObject({
-            status: "waiting",
-            reason: "steering",
-            runId: expect.any(String),
-          });
-          return { wait: true, runId: String(result?.runId) };
+      const correction = "Check this before the command finishes.";
+      let session!: AgentSession;
+      const observed: Context[] = [];
+      const run = runCodeModeAgent({
+        hiddenTools: [shell, processTool],
+        embeddedSession: true,
+        execInput: {
+          code:
+            waitKind === "exec"
+              ? `return (await exec({command:${JSON.stringify(command)}})).aggregated;`
+              : `let result = await exec({command:${JSON.stringify(command)}, background:true});
+             const sessionId = result.sessionId;
+             while (result.status === "running") {
+               result = await process({action:"poll", sessionId, timeout:1000});
+             }
+             return result.aggregated;`,
+          awaitResults: true,
         },
-      ],
-      configureAgent(_agent, harness) {
-        session = harness.session!;
-      },
-    });
-    await vi.waitFor(async () => expect(await readFile(started, "utf8")).toBe("started"), {
-      timeout: 15000,
-    });
-    const receipt = steerActiveSessionWithOptionalDeliveryWait(session, correction, {
-      waitForTranscriptCommit: true,
-    });
-    const { agent } = await run;
-    await receipt;
-    expect(observed[0]?.messages.slice(-2)).toMatchObject([
-      { role: "toolResult", details: { status: "waiting" } },
-      { role: "user", content: [{ type: "text", text: correction }] },
-    ]);
-    expect(
-      readToolResultDetails(agent.state.messages.findLast((m) => m.role === "toolResult")),
-    ).toMatchObject({ status: "completed", value: "original result\n" });
-    expect(agent.state.messages.filter((message) => message.role === "user")).toHaveLength(2);
-    expect(await readFile(started, "utf8")).toBe("started");
-  });
+        programs: [
+          "exec",
+          async (context) => {
+            observed.push(context);
+            await writeFile(release, "finish");
+            const result = readToolResultDetails(
+              context.messages.findLast((m) => m.role === "toolResult"),
+            );
+            expect(result).toMatchObject({
+              status: "waiting",
+              reason: "steering",
+              runId: expect.any(String),
+            });
+            return { wait: true, runId: String(result?.runId) };
+          },
+        ],
+        configureAgent(_agent, harness) {
+          session = harness.session!;
+        },
+      });
+      await vi.waitFor(async () => expect(await readFile(started, "utf8")).toBe("started"), {
+        timeout: 15000,
+      });
+      if (waitKind === "process poll") {
+        // Deliver only once the background command is being observed, not during exec startup.
+        await vi.waitFor(() => expect(pollCalls).toHaveBeenCalled(), { timeout: 15000 });
+      }
+      const receipt = steerActiveSessionWithOptionalDeliveryWait(session, correction, {
+        waitForTranscriptCommit: true,
+      });
+      const { agent } = await run;
+      await receipt;
+      expect(observed[0]?.messages.slice(-2)).toMatchObject([
+        { role: "toolResult", details: { status: "waiting" } },
+        { role: "user", content: [{ type: "text", text: correction }] },
+      ]);
+      expect(
+        readToolResultDetails(agent.state.messages.findLast((m) => m.role === "toolResult")),
+      ).toMatchObject({
+        status: "completed",
+        value: "original result\n",
+      });
+      expect(agent.state.messages.filter((message) => message.role === "user")).toHaveLength(2);
+      expect(await readFile(started, "utf8")).toBe("started");
+    },
+  );
 
   it("keeps native failure output within its budget", async ({ onTestFinished }) => {
     const { shell } = await nativeExecFixture("exec-failure-budget", onTestFinished);

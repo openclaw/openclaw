@@ -61,11 +61,12 @@ export async function prepareCronStreamSourceAuthority(params: {
         throw new Error("Native stream source identity is no longer current.");
       }
     };
-    const { restoreGatewayOperatorSource } = await import("./operator-run-recovery.js");
-    restored = await restoreGatewayOperatorSource({
+    const { restoreScheduledAutomationOperator } = await import("./operator-run-recovery.js");
+    restored = await restoreScheduledAutomationOperator({
       agentId: tryResolveCronJobEffectiveAgentId(job, context.cron.getDefaultAgentId()),
-      snapshot,
-      source: job.operatorSource && decodeGatewayOperatorRecoverySource(job.operatorSource.source),
+      source: { kind: "gateway", snapshot },
+      operatorSource:
+        job.operatorSource && decodeGatewayOperatorRecoverySource(job.operatorSource.source),
       context,
       assertCurrent,
     });

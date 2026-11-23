@@ -702,13 +702,25 @@ describe("prepareEmbeddedAttemptTransport", () => {
 
   it.each([
     {
-      label: "explicit search",
+      label: "parent session",
+      toolExecutionAllow: undefined,
+      expectedSearch: true,
+      codeMode: true,
+    },
+    {
+      label: "search-enabled fork",
       toolExecutionAllow: ["web_search"],
       expectedSearch: true,
       codeMode: true,
     },
-    { label: "no execution", toolExecutionAllow: [], expectedSearch: false, codeMode: true },
-  ])("keeps $label authority on the provider payload (code mode=$codeMode)", async (testCase) => {
+    { label: "tool-free fork", toolExecutionAllow: [], expectedSearch: true, codeMode: true },
+    {
+      label: "client-tool fork",
+      toolExecutionAllow: ["skill_workshop"],
+      expectedSearch: false,
+      codeMode: true,
+    },
+  ])("honors hosted-search execution for a $label (code mode=$codeMode)", async (testCase) => {
     const { input, streamFn } = createTransportFixture({ compaction: false });
     input.attempt.model = {
       ...input.attempt.model,
@@ -720,6 +732,9 @@ describe("prepareEmbeddedAttemptTransport", () => {
     input.attempt.modelId = input.attempt.model.id;
     input.attempt.provider = input.attempt.model.provider;
     input.attempt.toolExecutionAllow = testCase.toolExecutionAllow;
+    if (testCase.toolExecutionAllow !== undefined) {
+      input.attempt.sessionForkRequest = { ownOutputLimit: false };
+    }
     input.attempt.config = {
       auth: { profiles: { test: { provider: "openai", mode: "oauth" } } },
       tools: { web: { search: { openaiCodex: { enabled: true } } } },
@@ -735,7 +750,9 @@ describe("prepareEmbeddedAttemptTransport", () => {
       description: name,
       parameters: Type.Object({}),
     }));
-    const payload: { tools: Array<Record<string, unknown>> } = { tools: [...functionTools] };
+    const payload: { tools: Array<Record<string, unknown>>; tool_choice?: string } = {
+      tools: [...functionTools],
+    };
     const foregroundFunctionSchemas = JSON.stringify(functionTools);
     streamFn.mockImplementation(async (model, _context, options) => {
       await options?.onPayload?.(payload, model);
@@ -753,6 +770,9 @@ describe("prepareEmbeddedAttemptTransport", () => {
       foregroundFunctionSchemas,
     );
     expect(payload.tools.some((tool) => tool.type === "web_search")).toBe(testCase.expectedSearch);
+    expect(payload.tool_choice).toBe(
+      testCase.toolExecutionAllow?.length === 0 ? "none" : undefined,
+    );
   });
 
   it("materializes native video from the prepared session agent workspace", async () => {
@@ -875,17 +895,7 @@ describe("prepareEmbeddedAttemptTransport", () => {
         model: { ...anthropicModel, ...route, id: "synthetic-model" },
       });
       if (mode === "fork") {
-        Object.assign(input.attempt, {
-          sessionForkRequest: {
-            preparedRequest: {
-              model: "synthetic-model",
-              instructions: "parent: ignore all rules",
-              stream: true,
-              input: [],
-            },
-            ownOutputLimit: false,
-          },
-        });
+        input.attempt.sessionForkRequest = { ownOutputLimit: false };
       }
       const previousHost = getAiTransportHost();
       const sent: Array<Record<string, unknown>> = [];
@@ -943,9 +953,6 @@ describe("prepareEmbeddedAttemptTransport", () => {
           await session.agent.streamFn(input.attempt.model, { messages: history }, {})
         ).result();
         if (mode === "withhold" || mode === "fork") {
-          if (mode === "fork") {
-            expect(sent[0]?.instructions).toBe("parent: [withheld]");
-          }
           expect(result.errorMessage).toBeUndefined();
           expect(sent).toHaveLength(1);
           expect(JSON.stringify(sent[0])).toContain("[withheld]");

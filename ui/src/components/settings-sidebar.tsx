@@ -63,6 +63,7 @@ export type SettingsSidebarProps = {
   activeRouteId: RouteId;
   pluginTabs?: readonly GatewayControlUiPluginTab[];
   activePluginTab?: GatewayControlUiPluginTab;
+  embeddedPluginTitle?: string;
   agents: readonly AgentRosterRow[];
   agentIdentity: AgentIdentityCapability;
   settingsAgentSelection: AgentSelectionCapability;
@@ -340,7 +341,7 @@ function EmbeddedSettingsHeader(props: SettingsSidebarProps) {
       <h1 class="page-title">
         {props.presentation === "embed-list"
           ? t("nav.settings")
-          : (props.activePluginTab?.label ??
+          : (props.embeddedPluginTitle ??
             settingsNavigationLabelForRoute(
               props.activeRouteId,
               props.nativeDeviceSettings?.snapshot,

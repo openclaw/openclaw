@@ -382,7 +382,6 @@ describe("sessions tool ownership", () => {
         method: "sessions.assignOwner",
         params: { key: sessionKey, owner: { type: actor.type, id: actor.id } },
         agentToolCaller: { agentId: "main", sessionKey },
-        assertDispatchCurrent: expect.any(Function),
       });
       if (!controls) {
         expect(assigned).toMatchObject({

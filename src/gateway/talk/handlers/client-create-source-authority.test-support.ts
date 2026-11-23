@@ -116,10 +116,8 @@ export function registerClientCreateSourceAuthorityTests(harness: SourceAuthorit
   });
 
   it.each([
-    ...["commit", "transport"].flatMap((guard) =>
-      [false, true].map((revoked) => ({ replacement: false, guard, revoked })),
-    ),
-    ...["commit", "receipt", "transport"].flatMap((guard) =>
+    ...[false, true].map((revoked) => ({ replacement: false, guard: "commit", revoked })),
+    ...["commit", "receipt"].flatMap((guard) =>
       [false, true].map((revoked) => ({ replacement: true, guard, revoked })),
     ),
   ])(
@@ -185,21 +183,16 @@ export function registerClientCreateSourceAuthorityTests(harness: SourceAuthorit
         }
         return true;
       };
-      const authority =
-        guard === "transport"
-          ? {
-              hasCurrentClientAuthority: replacement ? assertSdkCurrent : readSdkCurrent,
-            }
-          : {
-              sessionMutationCommitGuard:
-                guard === "receipt"
-                  ? captureGatewayToolReceiptAssertion(
-                      composeSessionSourceAssertion([
-                        captureExternalSessionCommitGuard(assertSdkCurrent),
-                      ]),
-                    )
-                  : assertSdkCurrent,
-            };
+      const authority = {
+        sessionMutationCommitGuard:
+          guard === "receipt"
+            ? captureGatewayToolReceiptAssertion(
+                composeSessionSourceAssertion([
+                  captureExternalSessionCommitGuard(assertSdkCurrent),
+                ]),
+              )
+            : assertSdkCurrent,
+      };
       let change: Promise<unknown> | undefined;
       try {
         if (replacement) {
@@ -220,9 +213,7 @@ export function registerClientCreateSourceAuthorityTests(harness: SourceAuthorit
         }
         expect(fixture.reply?.[0], fixture.reply?.[2]?.message).toBe(!revoked);
         if (revoked) {
-          expect(fixture.reply?.[2]?.message).toContain(
-            !replacement && guard === "transport" ? "Gateway requester authority changed" : error,
-          );
+          expect(fixture.reply?.[2]?.message).toContain(error);
           expect(clientVoiceSessionTesting.readRecord("main", voiceSessionId)).toBeUndefined();
           expect(fixture.cancelBrowserSession).toHaveBeenCalledOnce();
         } else {

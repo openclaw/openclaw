@@ -9,6 +9,7 @@ import { resolveAgentPromptSurfaceForSessionKey } from "../../agents/prompt-surf
 import { resolveAgentRuntimePrompt } from "../../agents/runtime-prompt.js";
 import { ensureSandboxWorkspaceForSession } from "../../agents/sandbox/context.js";
 import { resolveSandboxRuntimeStatusAsync } from "../../agents/sandbox/runtime-status.js";
+import { sessionProjectGuidanceSource } from "../../agents/session-project-guidance.js";
 import { buildConfiguredAgentSystemPrompt } from "../../agents/system-prompt-config.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
@@ -190,6 +191,14 @@ export async function resolveCommandsSystemPromptBundle(params: HandleCommandsPa
     config: params.cfg,
     preparedModelRuntime,
     agentId: sessionAgentId,
+    prepareSessionProjectGuidance: sessionProjectGuidanceSource({
+      config: params.cfg,
+      agentId: sessionAgentId,
+      sessionKey: params.sessionKey,
+      entry: targetSessionEntry,
+      senderIsOwner: params.command.senderIsOwner,
+      operatorAuthority: params.opts?.operatorAuthority,
+    }),
     workspaceDir,
     reasoningLevel: params.resolvedReasoningLevel,
     extraSystemPrompt: undefined,
