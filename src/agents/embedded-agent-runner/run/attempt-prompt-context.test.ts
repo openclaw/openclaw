@@ -684,6 +684,43 @@ describe("prepareEmbeddedAttemptPromptContext", () => {
         ),
       ).toEqual([]);
     });
+
+    it("keeps a producer's instruction fragments when the context has no compact projection", async () => {
+      const replyInstruction = "Reply with a short summary of the finished subagent run.";
+      const fixture = createInput({
+        attempt: createAttempt({
+          currentInboundContext: {
+            text: `${verboseInbound}\n\n${replyInstruction}`,
+            fragments: [
+              { kind: "conversation-data", text: verboseInbound },
+              { kind: "runtime-instruction", text: replyInstruction },
+            ],
+          },
+        }),
+      });
+
+      const result = await prepareContext({
+        ...fixture.input,
+        contextSerialization: compactSerialization,
+        sessionVersion: 4,
+      });
+
+      const details = result.runtimeContextMessageForCurrentTurn?.details as
+        | { fragments?: Array<{ kind: string; text: string }> }
+        | undefined;
+      expect(details?.fragments).toEqual(
+        expect.arrayContaining([
+          { kind: "conversation-data", text: verboseInbound },
+          { kind: "runtime-instruction", text: replyInstruction },
+        ]),
+      );
+      expect(
+        details?.fragments?.filter(
+          (fragment) =>
+            fragment.kind === "conversation-data" && fragment.text.includes(replyInstruction),
+        ),
+      ).toEqual([]);
+    });
   });
 
   it("keeps the live orphan-repair heartbeat task active without parsing its marker", async () => {

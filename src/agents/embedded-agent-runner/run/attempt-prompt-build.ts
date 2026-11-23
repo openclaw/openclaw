@@ -509,11 +509,18 @@ export async function prepareEmbeddedAttemptPromptContext(input: {
       : []);
   // Compact mode swaps in the compact projection. Instructions such as the delivery directive
   // stay instructions, and the compact facts stay quoted data, exactly as in default mode.
+  // A context with no compact projection keeps the producer's own fragments, so a producer's
+  // reply instruction (a subagent completion, for example) stays an instruction.
+  const hasCompactProjection =
+    attempt.currentInboundContext?.compactText !== undefined ||
+    attempt.currentInboundContext?.compactResumableText !== undefined;
   const compactInboundFragments: RuntimeContextFragment[] =
     (escapedProjection ? attempt.currentInboundContext?.compactFragments : undefined) ??
-    (inboundProjection.text
-      ? [{ kind: "conversation-data" as const, text: inboundProjection.text }]
-      : []);
+    (hasCompactProjection
+      ? inboundProjection.text
+        ? [{ kind: "conversation-data" as const, text: inboundProjection.text }]
+        : []
+      : defaultInboundFragments);
   const inboundFragments =
     contextSerialization.mode === "default" ? defaultInboundFragments : compactInboundFragments;
   const fragments: RuntimeContextFragment[] = [...inboundFragments, ...eventFragments];
