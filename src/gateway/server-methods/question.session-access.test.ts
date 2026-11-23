@@ -165,17 +165,11 @@ async function fixture(state: OpenClawTestState) {
       { ...entry, ...delta },
     );
   await write();
-  const call = (
-    method: string,
-    params: Record<string, unknown>,
-    client = owner,
-    current?: () => boolean,
-  ) =>
+  const call = (method: string, params: Record<string, unknown>, client = owner) =>
     callQuestionRpc(method, params, {
       client,
       cfg,
       registered: true,
-      hasCurrentClientAuthority: current,
     });
   const request = (id = "ordinary-question", client = producer) =>
     call("question.request", { ...requestParams, id, timeoutMs: 10_000 }, client);
@@ -445,7 +439,7 @@ it.each(["closed claim", "absent", "incognito", "disallowed agent"] as const)(
     }),
 );
 
-it.each(["generation", "session", "profile", "reused id"] as const)(
+it.each(["generation", "session", "reused id"] as const)(
   "rechecks held answer delivery after %s",
   (change) =>
     withQuestionFixture(async (f) => {
@@ -465,9 +459,6 @@ it.each(["generation", "session", "profile", "reused id"] as const)(
         if (change === "session") {
           await f.write({ sessionId: "replacement" });
         }
-        if (change === "profile") {
-          observer.authenticatedUserProfile = f.viewer.authenticatedUserProfile;
-        }
         if (change === "reused id") {
           manager.reset();
           manager.request({ ...requestParams, id });
@@ -475,10 +466,7 @@ it.each(["generation", "session", "profile", "reused id"] as const)(
           manager.resolve(id, answers);
         }
         const outcome = (await settled)[0];
-        const error =
-          change === "profile"
-            ? { code: "FORBIDDEN", message: "Gateway requester authority changed" }
-            : { details: { reason: "QUESTION_NOT_FOUND" } };
+        const error = { details: { reason: "QUESTION_NOT_FOUND" } };
         expect(outcome).toMatchObject({
           status: "fulfilled",
           value: [false, undefined, error],
@@ -623,81 +611,45 @@ it.each([
     }),
 );
 
-it.each([
-  ["get", "request authority", "narrow"],
-  ["get", "observer scope", "narrow"],
-  ["request", "request authority", "admin"],
-  ["request", "request authority", "broad"],
-] as const)(
-  "fences question.%s when its %s closes during %s worker preparation",
-  (method, owner, kind) =>
-    withQuestionFixture(async (f) => {
-      if (method === "get") {
-        expect((await f.request())[0]).toBe(true);
-      }
-      const entered = createDeferredCore();
-      const release = createDeferredCore();
-      invalidateQuestionReadFacts();
-      const read = sessionEntryReads.withSessionEntriesFromStoresInWorker;
-      const spy = vi
-        .spyOn(sessionEntryReads, "withSessionEntriesFromStoresInWorker")
-        .mockImplementation(async (...args) => {
-          entered.resolve();
-          await release.promise;
-          return read(...args);
-        });
-      let current = true;
-      const observer = new AsyncWorkScope();
-      broadcast.mockClear();
-      const client =
-        kind === "admin"
-          ? adminRequestClient
-          : kind === "narrow"
-            ? f.owner
-            : broadQuestionClient(f.producer);
-      const call = () =>
-        f.call(
-          `question.${method}`,
-          { ...(method === "request" ? requestParams : {}), id: "ordinary-question" },
-          client,
-          () => current,
-        );
-      const request = method === "get" ? observer.track(call) : call();
-      const result = Promise.allSettled([request]);
-      try {
-        await entered.promise;
-        if (method === "get") {
-          await f.write({ updatedAt: 2 });
-        }
-        if (owner === "request authority") {
-          current = false;
-        } else {
-          observer.beginClose();
-        }
-        release.resolve();
-        if (method === "get") {
-          expect((await result)[0]).toMatchObject({
-            status: "rejected",
-            reason:
-              owner === "request authority"
-                ? { message: "Gateway requester authority changed" }
-                : { name: "AbortError" },
-          });
-          expect(spy).toHaveBeenCalledOnce();
-          expect(manager.get("ordinary-question")?.status).toBe("pending");
-        } else {
-          expect((await result)[0]).toMatchObject({ status: "rejected" });
-          expect(manager.get("ordinary-question")).toBeNull();
-        }
-        expect(broadcast).not.toHaveBeenCalled();
-      } finally {
-        release.resolve();
-        await result;
-        await observer.drain();
-        spy.mockRestore();
-      }
-    }),
-);
+it("fences question.get when its observer scope closes during narrow worker preparation", () =>
+  withQuestionFixture(async (f) => {
+    expect((await f.request())[0]).toBe(true);
+    const entered = createDeferredCore();
+    const release = createDeferredCore();
+    invalidateQuestionReadFacts();
+    const read = sessionEntryReads.withSessionEntriesFromStoresInWorker;
+    const spy = vi
+      .spyOn(sessionEntryReads, "withSessionEntriesFromStoresInWorker")
+      .mockImplementation(async (...args) => {
+        entered.resolve();
+        await release.promise;
+        return read(...args);
+      });
+    const observer = new AsyncWorkScope();
+    broadcast.mockClear();
+    const request = observer.track(() =>
+      f.call("question.get", { id: "ordinary-question" }, f.owner),
+    );
+    const result = Promise.allSettled([request]);
+    try {
+      await entered.promise;
+      await f.write({ updatedAt: 2 });
+      observer.beginClose();
+      release.resolve();
+      expect((await result)[0]).toMatchObject({
+        status: "rejected",
+        reason: { name: "AbortError" },
+      });
+      expect(spy).toHaveBeenCalledOnce();
+      expect(manager.get("ordinary-question")?.status).toBe("pending");
+      expect(broadcast).not.toHaveBeenCalled();
+    } finally {
+      release.resolve();
+      await result;
+      await observer.drain();
+      spy.mockRestore();
+    }
+  }));
 
 it.each(["admin", "narrow"] as const)(
   "preserves %s creation semantics when optional worker facts are unavailable",

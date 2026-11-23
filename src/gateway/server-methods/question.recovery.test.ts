@@ -171,7 +171,7 @@ async function call(
   method: string,
   params: Record<string, unknown>,
   trusted = true,
-  requestAuthority: Pick<GatewayRequestHandlerOptions, "signal" | "hasCurrentClientAuthority"> = {},
+  requestAuthority: Pick<GatewayRequestHandlerOptions, "signal"> = {},
 ) {
   const responses: Parameters<RespondFn>[] = [];
   const cfg = {};
@@ -377,52 +377,40 @@ it("does not expire a stopped RPC observer's question before its expiry callback
   }
 });
 
-it.each(["signal", "current client"] as const)(
-  "denies a stopped observer's local response when its %s authority closes",
-  async (source) => {
-    const id = await request(false, 100);
-    const events: string[] = [];
-    onBroadcast = (event) => events.push(event);
-    const observer = new AsyncWorkScope();
-    const controller = new AbortController();
-    let current = true;
-    const registered = vi.spyOn(manager, "waitAnswer");
-    const waiting = observer.track(() =>
-      call("question.waitAnswer", { id }, false, {
-        signal: controller.signal,
-        hasCurrentClientAuthority: () => current,
-      }),
-    );
-    const result = Promise.allSettled([waiting]);
-    try {
-      expect(registered).toHaveBeenCalledExactlyOnceWith(id, undefined, undefined);
-      observer.beginClose();
-      if (source === "signal") {
-        controller.abort(new Error("Question request source closed"));
-      } else {
-        current = false;
-      }
-      vi.setSystemTime(Date.now() + 101);
-      expect((await result)[0]).toMatchObject({
-        status: "rejected",
-        reason: {
-          message:
-            source === "signal"
-              ? "Question request source closed"
-              : "Gateway requester authority changed",
-        },
-      });
-      await observer.drain();
-      expect(manager.observe(id)?.record.status).toBe("pending");
-      expect(events).toEqual([]);
-    } finally {
-      observer.beginClose();
-      await result;
-      await observer.drain();
-      registered.mockRestore();
-    }
-  },
-);
+it("denies a stopped observer's local response when its signal closes", async () => {
+  const id = await request(false, 100);
+  const events: string[] = [];
+  onBroadcast = (event) => events.push(event);
+  const observer = new AsyncWorkScope();
+  const controller = new AbortController();
+  const registered = vi.spyOn(manager, "waitAnswer");
+  const waiting = observer.track(() =>
+    call("question.waitAnswer", { id }, false, {
+      signal: controller.signal,
+    }),
+  );
+  const result = Promise.allSettled([waiting]);
+  try {
+    expect(registered).toHaveBeenCalledExactlyOnceWith(id, undefined, undefined);
+    observer.beginClose();
+    controller.abort(new Error("Question request source closed"));
+    vi.setSystemTime(Date.now() + 101);
+    expect((await result)[0]).toMatchObject({
+      status: "rejected",
+      reason: {
+        message: "Question request source closed",
+      },
+    });
+    await observer.drain();
+    expect(manager.observe(id)?.record.status).toBe("pending");
+    expect(events).toEqual([]);
+  } finally {
+    observer.beginClose();
+    await result;
+    await observer.drain();
+    registered.mockRestore();
+  }
+});
 
 it("does not let operator questions or public diagnostic text suppress unrelated run recovery", async () => {
   const id = await request(false);

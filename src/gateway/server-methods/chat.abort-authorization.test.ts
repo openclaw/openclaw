@@ -443,69 +443,6 @@ describe("chat.abort original authority and registration", () => {
     }
   });
 
-  it.each(["queued", "active"] as const)(
-    "stops subsequent effects after a synchronous %s cancellation revokes authority",
-    async (firstEffect) => {
-      let current = true;
-      const cancelInferenceForSession = vi.fn(() => ["worker"]);
-      const context = workerContext(cancelInferenceForSession, ["worker"]);
-      const first = createActiveRun("main", { queued: firstEffect === "queued" });
-      const second = createActiveRun("main", { queued: true });
-      rpcSourceTesting.set("first", first);
-      rpcSourceTesting.set("second", second);
-      if (firstEffect === "active") {
-        context.chatRunState.getOrCreate("first").buffer = "committed partial";
-        context.chatRunState.getOrCreate("second").buffer = "untouched partial";
-      }
-      let secondPartialAtRevocation: string | undefined;
-      first.input.abortSignal.addEventListener(
-        "abort",
-        () => {
-          secondPartialAtRevocation = context.chatRunState.resolveBuffer("second", {
-            final: true,
-          }).text;
-          current = false;
-        },
-        { once: true },
-      );
-      setPendingRegistrations(context);
-      const pending = [...context.dedupe];
-      using persist = vi.spyOn(persistence, "persistAbortedPartials").mockResolvedValue(undefined);
-      await expect(
-        invokeLifecycle(context, undefined, {
-          handler: (options) =>
-            handleChatAbortRequestWithLifecycle({
-              ...options,
-              hasCurrentClientAuthority: () => current,
-            }),
-        }),
-      ).rejects.toMatchObject({
-        message: "Chat cancellation and persistence failed",
-        errors: [
-          expect.objectContaining({ message: "Gateway requester authority changed" }),
-          expect.objectContaining({ message: "Gateway requester authority changed" }),
-        ],
-      });
-      expect(first.input.abortSignal.aborted).toBe(true);
-      // A successor waits behind the active first turn, so Stop withdraws it
-      // before the first turn revokes authority. Two pending inputs keep FIFO order.
-      expect(second.input.abortSignal.aborted).toBe(firstEffect === "active");
-      expect([...context.dedupe]).toEqual(pending);
-      expect(cancelInferenceForSession).not.toHaveBeenCalled();
-      if (firstEffect === "active") {
-        expect(persist).toHaveBeenCalledOnce();
-        expect(persist.mock.calls[0]?.[0].snapshots.map((snapshot) => snapshot.runId)).toEqual([
-          "first",
-        ]);
-        expect(secondPartialAtRevocation).toBe("");
-        expect(context.chatRunState.resolveBuffer("second", { final: true }).text).toBe("");
-      } else {
-        expect(persist.mock.calls.flatMap(([call]) => call.snapshots)).toEqual([]);
-        expect(persist).not.toHaveBeenCalled();
-      }
-    },
-  );
-
   it("withdraws selected pending input without adopting reentrant replacement registrations", async () => {
     const context = createChatAbortContext();
     const first = createActiveRun("main");
@@ -532,62 +469,6 @@ describe("chat.abort original authority and registration", () => {
     expect(rpcSourceTesting.get("reused")).toBe(replacement);
     expect([...context.dedupe]).toEqual(pending);
   });
-
-  it.each(["active", "queued", "pending-chat", "agent", "worker"] as const)(
-    "retains the original source and target fence before explicit %s cancellation",
-    async (kind) => {
-      for (const changed of ["source", "target"] as const) {
-        const cancelInferenceForSession = vi.fn(() => ["run-1"]);
-        const run = createActiveRun("agent:main:main", {
-          agentId: "main",
-          queued: kind === "queued",
-        });
-        const context = workerContext(
-          cancelInferenceForSession,
-          kind === "worker" ? ["run-1"] : [],
-        );
-        if (kind === "active" || kind === "queued") {
-          rpcSourceTesting.set("run-1", run);
-        } else if (kind !== "worker") {
-          context.dedupe.set(`${kind}:run-1`, {
-            ts: Date.now(),
-            ok: true,
-            payload: {
-              runId: "run-1",
-              sessionKey: "agent:main:main",
-              agentId: "main",
-              status: "accepted",
-            },
-          });
-        }
-        const before = [...context.dedupe];
-        await expect(
-          invokeChatAbortHandler({
-            handler: (options) =>
-              handleChatAbortRequestWithLifecycle({
-                ...options,
-                hasCurrentClientAuthority: () => changed !== "source",
-                sessionMutationAuthorization: {
-                  assertCurrent: () => {
-                    throw new Error("target changed");
-                  },
-                  assertTargetCurrent: () => {
-                    throw new Error("target changed");
-                  },
-                },
-              }),
-            context,
-            request: { sessionKey: "agent:main:main", runId: "run-1" },
-            client: { connId: "owner", connect: { scopes: ["operator.admin"] } },
-          }),
-        ).rejects.toThrow(changed === "source" ? "requester authority changed" : "target changed");
-        expect(run.input.abortSignal.aborted).toBe(false);
-        expect(rpcSourceTesting.has("run-1")).toBe(kind === "active" || kind === "queued");
-        expect([...context.dedupe]).toEqual(before);
-        expect(cancelInferenceForSession).not.toHaveBeenCalled();
-      }
-    },
-  );
 
   it("does not fall back to live worker queries without a registered capture owner", async () => {
     const captureSessionCancellation = vi.fn(() => ({

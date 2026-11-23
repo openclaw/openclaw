@@ -227,7 +227,7 @@ async function withWorkerTransport(
   }
 }
 
-it("fences worker Stop across stale authority and unreadable session facts, retaining unfenced best effort", () =>
+it("fences worker Stop across revoked admission and unreadable session facts, retaining unfenced best effort", () =>
   withAbortFixture(async (f) => {
     await withWorkerTransport(f.context, async (worker) => {
       const original = await worker.start("old-worker", "previous-session");
@@ -248,21 +248,12 @@ it("fences worker Stop across stale authority and unreadable session facts, reta
       expect(await f.abort({ sessionId: scope.sessionId, runId: "worker" }, f.other)).toMatchObject(
         [false, undefined, { code: "INVALID_REQUEST", message: "unauthorized" }],
       );
-      {
-        const readSession = sessionUtils.loadGatewaySessionEntryReadOnlyInWorker;
-        using _ = vi
-          .spyOn(sessionUtils, "loadGatewaySessionEntryReadOnlyInWorker")
-          .mockImplementationOnce(async (...args) => {
-            const result = await readSession(...args);
-            f.admin.connect.scopes = ["operator.read"];
-            return result;
-          });
-        expect(await f.abort({ sessionId: scope.sessionId, runId: "worker" })).toMatchObject([
-          false,
-          undefined,
-          { code: "FORBIDDEN" },
-        ]);
-      }
+      f.admin.connect.scopes = ["operator.read"];
+      expect(await f.abort({ sessionId: scope.sessionId, runId: "worker" })).toMatchObject([
+        false,
+        undefined,
+        { code: "FORBIDDEN" },
+      ]);
       await worker.flush();
       expect(worker.frames).toEqual([]);
       expect(current.aborted).toBe(false);

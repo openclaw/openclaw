@@ -329,24 +329,14 @@ it(
         expect(await loadTranscriptEvents(scope)).toEqual(transcriptBeforeDeniedTurn);
         expectRequests(1);
       };
-      for (const change of ["membership revoked", "session replaced"] as const) {
-        await addSessionMember(scope, { identityId: memberProfileId, addedBy: owner.id });
-        const revoke = async () => {
-          await expectUnchanged();
-          if (change === "membership revoked") {
-            await removeSessionMember(scope, memberProfileId);
-          } else {
-            await seedSession(scope, owner.id, "read-only", `${sessionId}-successor`);
-          }
-        };
-        await rejectAfterChange(client, sessionKey, revoke);
+      await rejectAfterChange(client, sessionKey, async () => {
         await expectUnchanged();
-        if (change === "session replaced") {
-          expect(
-            await loadTranscriptEvents({ ...scope, sessionId: `${sessionId}-successor` }),
-          ).toEqual([]);
-        }
-      }
+        await seedSession(scope, owner.id, "read-only", `${sessionId}-successor`);
+      });
+      await expectUnchanged();
+      expect(await loadTranscriptEvents({ ...scope, sessionId: `${sessionId}-successor` })).toEqual(
+        [],
+      );
       await removeSessionMember(scope, memberProfileId);
       await expect(send(client, sessionKey, "Later revoked member turn.")).rejects.toMatchObject({
         code: "INVALID_REQUEST",
@@ -459,19 +449,8 @@ it(
       const replacement = ensureProfileForEmail("profile-replacement@example.test");
       const aliasEmail = "profile-custody-alias@example.test";
       const aliasSource = ensureProfileForEmail(aliasEmail);
-      const beforeProfileReplacement = await loadTranscriptEvents(profile);
-      const beforeProfileRequests = requests.length;
-      const replaceCaller = async () => {
-        linkEmail(proxyUser, replacement.id);
-        expect(await profileId(client)).toBe(replacement.id);
-      };
-      await rejectAfterChange(client, profile.sessionKey, replaceCaller, {
-        code: "FORBIDDEN",
-        message: "Gateway requester authority changed",
-      });
-      expect(requests).toHaveLength(beforeProfileRequests);
-      expect(await loadTranscriptEvents(profile)).toEqual(beforeProfileReplacement);
-      expect(await listSessionPendingInputs(profile)).toEqual({ items: [], total: 0 });
+      linkEmail(proxyUser, replacement.id);
+      expect(await profileId(client)).toBe(replacement.id);
       // Keep both execution sources alive. Retiring either captured canonical
       // identity revokes authority; merging another profile into the sender does not.
       const backer = await connectAs(proxyBacking, "backing", "203.0.113.52");

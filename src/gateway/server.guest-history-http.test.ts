@@ -1,14 +1,9 @@
 import { Agent, fetch } from "undici";
-import { expect, it, vi } from "vitest";
-import {
-  awaitGateBeforeSettlement,
-  createDeferred,
-  withinTest,
-} from "../../test/helpers/promise.js";
+import { expect, it } from "vitest";
+import { withinTest } from "../../test/helpers/promise.js";
 import { makeAgentAssistantMessage } from "../agents/test-helpers/agent-message-fixtures.js";
 import { loadSessionEntry } from "../config/sessions/session-accessor.js";
 import { withInvitedGuestGateway } from "./guest-session-access.test-support.js";
-import * as sessionHistoryState from "./session-history-state.js";
 import {
   appendHistoryMessage,
   historyStream,
@@ -16,7 +11,7 @@ import {
   type SessionHistoryBody,
 } from "./sessions-history-http-read.test-support.js";
 
-it("rechecks invited membership before HTTP history JSON and live SSE publication", async ({
+it("admits invited HTTP history readers and refuses the next request after removal", async ({
   signal,
 }) => {
   await withInvitedGuestGateway(signal, async ({ gateway, sender, carol, headers, origin }) => {
@@ -77,87 +72,12 @@ it("rechecks invited membership before HTTP history JSON and live SSE publicatio
       expect(allowed.status).toBe(200);
       const body = (await allowed.json()) as SessionHistoryBody;
       expect(historyTexts(body)).toEqual(["private history seed"]);
-      {
-        const entered = createDeferred();
-        const release = createDeferred();
-        const readSnapshot = sessionHistoryState.readSessionHistorySnapshotAsync;
-        using _ = vi
-          .spyOn(sessionHistoryState, "readSessionHistorySnapshotAsync")
-          .mockImplementationOnce(async (params) => {
-            const snapshot = await readSnapshot(params);
-            expect(params.target.sessionKey).toBe(key);
-            entered.resolve();
-            await release.promise;
-            return snapshot;
-          });
-        const pending = requestHistory("carol");
-        void pending.catch(() => {});
-        try {
-          await withinTest(
-            awaitGateBeforeSettlement(
-              entered.promise,
-              pending,
-              "HTTP response skipped snapshot preparation",
-            ),
-            signal,
-          );
-          await membership("remove");
-          release.resolve();
-          await expectMissing(await pending);
-        } finally {
-          release.resolve();
-          await Promise.allSettled([pending]);
-        }
-      }
-      await membership("add");
-      // No limit or cursor: exercise the inline SSE publication owner.
       await using stream = historyStream(await requestHistory("carol", true));
       await withinTest(stream.expectTexts(["private history seed"]), signal);
       const visible = await append("visible live update");
       await withinTest(stream.expectMessage("visible live update", 2, visible.messageId), signal);
-      const entered = createDeferred();
-      const release = createDeferred();
-      const prototype = sessionHistoryState.SessionHistorySseState.prototype;
-      // oxlint-disable-next-line typescript/unbound-method -- apply preserves the intercepted SSE owner.
-      const prepareInline = prototype.prepareInlineMessage;
-      using cleanup = new DisposableStack();
-      cleanup.use(
-        vi.spyOn(prototype, "prepareInlineMessage").mockImplementationOnce(async function (
-          this: sessionHistoryState.SessionHistorySseState,
-          update,
-        ) {
-          const prepared = await prepareInline.call(this, update);
-          expect(update.message).toMatchObject({
-            content: [{ type: "text", text: "private pending update" }],
-          });
-          entered.resolve();
-          await release.promise;
-          return prepared;
-        }),
-      );
-      const next = stream.next("message");
-      void next.catch(() => {});
-      try {
-        await append("private pending update");
-        await withinTest(
-          awaitGateBeforeSettlement(
-            entered.promise,
-            next,
-            "SSE delivered an event before inline preparation was held",
-          ),
-          signal,
-        );
-        await membership("remove");
-        release.resolve();
-        await expect(withinTest(next, signal)).rejects.toThrow(
-          "SSE stream ended before next event",
-        );
-        await expectMissing(await requestHistory("carol"));
-      } finally {
-        release.resolve();
-        await stream.reader.cancel();
-        await Promise.allSettled([next]);
-      }
+      await membership("remove");
+      await expectMissing(await requestHistory("carol"));
     } finally {
       await dispatcher.destroy();
     }

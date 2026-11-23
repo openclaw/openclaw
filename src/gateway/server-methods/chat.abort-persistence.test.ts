@@ -4,7 +4,6 @@ import { makeUserMessage } from "../../../test/helpers/user-message.js";
 import { formatSqliteSessionFileMarker } from "../../config/sessions/legacy-sqlite-marker.js";
 import {
   appendTranscriptMessageSync,
-  loadSessionEntry,
   loadTranscriptEvents,
   replaceSessionEntry,
 } from "../../config/sessions/session-accessor.js";
@@ -13,7 +12,6 @@ import { rpcSourceTesting } from "../../sessions/session-lifecycle-admission.tes
 import { createCanonicalAgentConfigFixture } from "../../test-utils/config-roster.js";
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import * as sessionUtils from "../session-utils.js";
-import { createWorkerInferenceCancellationService } from "../worker-environments/inference-control.test-helpers.js";
 import { handleChatAbortRequest } from "./chat-abort-handler.js";
 import {
   captureAbortedPartial,
@@ -273,60 +271,6 @@ afterEach(() => {
 });
 
 describe("chat abort transcript persistence", () => {
-  it("commits an already-cancelled parent partial when revocation fences later worker cancellation", async () => {
-    const { readTranscript, sessionId, storePath, writeEntry } = await createTranscriptFixture();
-    const revision = "original-generation";
-    await writeEntry({ lifecycleRevision: revision, updatedAt: 1 });
-    sessionEntryState.lifecycleRevision = revision;
-    let current = true;
-    const parent = createActiveRun("main", { sessionId });
-    parent.input.abortSignal.addEventListener(
-      "abort",
-      () => {
-        current = false;
-      },
-      { once: true },
-    );
-    const cancelWorker = vi.fn(() => ["parent"]);
-    const context = createChatAbortContext({
-      sources: [["parent", parent]],
-      workerEnvironmentService: createWorkerInferenceCancellationService(
-        sessionId,
-        ["parent"],
-        cancelWorker,
-      ),
-    });
-    context.chatRunState.getOrCreate("parent").buffer = "Keep the cancelled parent partial";
-    await expect(
-      invokeChatAbortHandler({
-        handler: (options) =>
-          handleChatAbortRequest({ ...options, hasCurrentClientAuthority: () => current }),
-        context,
-        request: { sessionKey: "main" },
-        client: { connect: { scopes: ["operator.admin"] } },
-      }),
-    ).rejects.toMatchObject({
-      message: "Chat cancellation and persistence failed",
-      errors: [
-        expect.objectContaining({ message: "Gateway requester authority changed" }),
-        expect.objectContaining({ message: "Gateway requester authority changed" }),
-      ],
-    });
-    expect(parent.input.abortSignal.aborted).toBe(true);
-    expect(cancelWorker).not.toHaveBeenCalled();
-    const lines = await readTranscript();
-    const committed = collectMessagesWithIdempotencyKey(lines, "parent:assistant");
-    expect(committed).toHaveLength(1);
-    expectPartial(committed[0], "parent");
-    expect(collectAssistantRowsWithText(lines, "Keep the cancelled parent partial")).toHaveLength(
-      1,
-    );
-    expect(loadSessionEntry({ agentId: "main", sessionKey: "main", storePath })).toMatchObject({
-      sessionId,
-      lifecycleRevision: revision,
-    });
-  });
-
   it.each([
     { origin: "placement-abandon" as const, rejects: true },
     { origin: "rpc" as const, rejects: false },

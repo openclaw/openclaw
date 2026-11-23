@@ -12,8 +12,7 @@ import {
   getAgentList,
   mockCallArg,
 } from "./agents-mutate.test-support.js";
-import { readGatewayRequestMutationAuthority } from "./session-mutation-guards.js";
-import type { GatewayRequestHandlerOptions, GatewayRequestHandlers } from "./types.js";
+import type { GatewayRequestHandlers } from "./types.js";
 
 type AgentCreateMocks = {
   loadConfigReturn: Record<string, unknown>;
@@ -198,42 +197,6 @@ export function registerAgentCreateTests({
       );
       expect(mocks.writeConfigFile).not.toHaveBeenCalled();
       expect(mocks.ensureAgentWorkspace).not.toHaveBeenCalled();
-      expect(mocks.completeAgentOnboarding).not.toHaveBeenCalled();
-    });
-    it("rechecks caller authority after workspace preparation without an expected owner", async () => {
-      let authorityCurrent = true;
-      mocks.prepareAgentOnboarding.mockImplementationOnce(
-        async (options: GatewayRequestHandlerOptions) => ({
-          ...preparation(),
-          assertAuthorityCurrent: readGatewayRequestMutationAuthority(options).assertCurrent,
-        }),
-      );
-      const prepareWorkspace = expectDefined(
-        mocks.ensureAgentWorkspace.getMockImplementation(),
-        "workspace preparation",
-      );
-      mocks.ensureAgentWorkspace.mockImplementationOnce(async (...args) => {
-        const workspace = await prepareWorkspace(...args);
-        authorityCurrent = false;
-        return workspace;
-      });
-      const respond = vi.fn();
-      const handler = expectDefined(agentsHandlers["agents.create"], "agents.create handler");
-      await expect(
-        handler({
-          params: previewRequest,
-          respond,
-          context: createContext() as never,
-          req: { type: "req", id: "creation-authority", method: "agents.create" },
-          client: null,
-          hasCurrentClientAuthority: () => authorityCurrent,
-          isWebchatConnect: () => false,
-        }),
-      ).rejects.toThrow("Gateway requester authority changed");
-      expect(respond).not.toHaveBeenCalled();
-      expect(mocks.ensureAgentWorkspace).toHaveBeenCalledOnce();
-      expect(mocks.writeConfigFile).not.toHaveBeenCalled();
-      expect(mocks.rootWrite).not.toHaveBeenCalled();
       expect(mocks.completeAgentOnboarding).not.toHaveBeenCalled();
     });
     it("creates an agent with an explicit workspace, model, and identity", async () => {

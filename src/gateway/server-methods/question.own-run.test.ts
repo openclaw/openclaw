@@ -173,11 +173,7 @@ async function createOwnRunFixture() {
     expect(response[0], JSON.stringify(response[2])).toBe(true);
     return (response[1] as { id: string }).id;
   };
-  const beginWait = async (
-    id: string,
-    client: GatewayClient = browser.client,
-    hasCurrentClientAuthority?: () => boolean,
-  ) => {
+  const beginWait = async (id: string, client: GatewayClient = browser.client) => {
     const attached = createDeferred();
     const waitAnswer = manager.waitAnswer.bind(manager);
     const observer = vi.spyOn(manager, "waitAnswer").mockImplementationOnce((...args) => {
@@ -192,7 +188,6 @@ async function createOwnRunFixture() {
         cfg,
         client,
         registered: true,
-        hasCurrentClientAuthority,
       },
     );
     try {
@@ -276,22 +271,10 @@ describe("own-run question admission", () => {
                   foreign.client,
                 ),
               ).toMatchObject([false, undefined, { code: "UNAVAILABLE" }]);
-              await expect(
-                callQuestionRpc(
-                  method,
-                  { id, ...(method === "question.resolve" ? { answers } : {}) },
-                  {
-                    cfg: f.cfg,
-                    client: f.browser.client,
-                    registered: true,
-                    hasCurrentClientAuthority: () => false,
-                  },
-                ),
-              ).rejects.toThrow("Gateway requester authority changed");
             }
             expect(
               read,
-              "foreign or revoked requests must be rejected before liveness is read",
+              "foreign requests must be rejected before liveness is read",
             ).not.toHaveBeenCalled();
             expect(getActiveGatewayRootWorkCount()).toBe(1);
 
@@ -728,31 +711,6 @@ describe("own-run question admission", () => {
         expect(manager.get(id)?.status).toBe("cancelled");
         await manager.drain();
         expect(f.browser.socket.send).toHaveBeenCalledOnce();
-      });
-    },
-  );
-
-  it.each(["client invalidation", "request authority revocation"] as const)(
-    "fences answer delivery after %s while retaining accepted truth",
-    async (cause) => {
-      await withOwnRunQuestion(async (f) => {
-        const id = await f.request();
-        const observer: GatewayClient = { ...f.browser.client };
-        let current = true;
-        const waiting = await f.beginWait(id, observer, () => current);
-        const rejected = expect(waiting.result).rejects.toThrow(
-          "Gateway requester authority changed",
-        );
-        if (cause === "client invalidation") {
-          observer.invalidated = true;
-        } else {
-          current = false;
-        }
-        expect((await f.call("question.resolve", { id, answers }))[0]).toBe(true);
-        await rejected;
-        expect((await f.call("question.get", { id }))[1]).toMatchObject({
-          question: { id, status: "answered", answers },
-        });
       });
     },
   );

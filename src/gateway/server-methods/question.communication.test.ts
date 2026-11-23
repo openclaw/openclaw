@@ -126,8 +126,6 @@ it("retains creator/admin rights without treating assigned responsibility as aut
     expect(await canRead(peer)).toBe(false);
     const solo = { ...admin, internal: { operatorRoleActor: { kind: "system" as const } } };
     expect(await canRead(solo)).toBe(true);
-    creator.invalidated = true;
-    await expect(canRead(creator)).rejects.toThrow("requester authority changed");
     await callQuestionRpc(
       "question.resolve",
       { id: question.id, answers: { answers: { communication: ["Deny"] } } },

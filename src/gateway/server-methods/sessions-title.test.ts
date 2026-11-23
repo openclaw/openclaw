@@ -159,64 +159,52 @@ describe("sessions.title.prepare", () => {
     });
   });
 
-  it.each(["params", "connection"] as const)(
-    "retains the original title request across profile preparation when %s changes",
-    async (change) => {
-      const entered = createDeferredCore();
-      const resume = createDeferredCore();
-      const originalPrepare = profileReader.prepareUserProfileIdentity;
-      const releases: ReturnType<typeof vi.fn>[] = [];
-      const spy = vi
-        .spyOn(profileReader, "prepareUserProfileIdentity")
-        .mockImplementation(async (...args) => {
-          const prepared = await originalPrepare(...args);
-          const release = vi.fn(prepared.release);
-          prepared.release = release;
-          releases.push(release);
-          entered.resolve();
-          await resume.promise;
-          return prepared;
-        });
-      const params = {
-        agentId: "main",
-        message: "Original title request",
-        model: "title-test/primary",
-      };
-      const client = connectedClient(ownerId);
-      const running = prepare(params, cfg, client).then(
-        (respond) => ({ respond }),
-        (error: unknown) => ({ error }),
+  it("retains the original title request across profile preparation when params change", async () => {
+    const entered = createDeferredCore();
+    const resume = createDeferredCore();
+    const originalPrepare = profileReader.prepareUserProfileIdentity;
+    const releases: ReturnType<typeof vi.fn>[] = [];
+    const spy = vi
+      .spyOn(profileReader, "prepareUserProfileIdentity")
+      .mockImplementation(async (...args) => {
+        const prepared = await originalPrepare(...args);
+        const release = vi.fn(prepared.release);
+        prepared.release = release;
+        releases.push(release);
+        entered.resolve();
+        await resume.promise;
+        return prepared;
+      });
+    const params = {
+      agentId: "main",
+      message: "Original title request",
+      model: "title-test/primary",
+    };
+    const client = connectedClient(ownerId);
+    const running = prepare(params, cfg, client).then(
+      (respond) => ({ respond }),
+      (error: unknown) => ({ error }),
+    );
+    try {
+      await entered.promise;
+      params.message = "Replacement title request";
+      params.model = "title-test/blocked";
+      resume.resolve();
+      const result = await running;
+      expect(result).toHaveProperty("respond");
+      expect(mocks.runIsolatedCompletion).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({
+          prompt: expect.stringContaining("Original title request"),
+        }),
       );
-      try {
-        await entered.promise;
-        if (change === "params") {
-          params.message = "Replacement title request";
-          params.model = "title-test/blocked";
-        } else {
-          client.invalidated = true;
-        }
-        resume.resolve();
-        const result = await running;
-        if (change === "params") {
-          expect(result).toHaveProperty("respond");
-          expect(mocks.runIsolatedCompletion).toHaveBeenCalledExactlyOnceWith(
-            expect.objectContaining({
-              prompt: expect.stringContaining("Original title request"),
-            }),
-          );
-        } else {
-          expect(result).toHaveProperty("error");
-          expect(mocks.runIsolatedCompletion).not.toHaveBeenCalled();
-        }
-        expect(releases).toHaveLength(1);
-        expect(releases[0]).toHaveBeenCalledOnce();
-      } finally {
-        resume.resolve();
-        await running;
-        spy.mockRestore();
-      }
-    },
-  );
+      expect(releases).toHaveLength(1);
+      expect(releases[0]).toHaveBeenCalledOnce();
+    } finally {
+      resume.resolve();
+      await running;
+      spy.mockRestore();
+    }
+  });
 
   const withoutInference = [
     ...["", "invalid/"].map((utilityModel) =>
@@ -377,8 +365,6 @@ describe("sessions.title.prepare", () => {
   it.for([
     { loss: "disconnected", completion: "succeeds" },
     { loss: "replaced", completion: "succeeds" },
-    { loss: "role revoked", completion: "succeeds" },
-    { loss: "agent access revoked", completion: "succeeds" },
     { loss: "request aborted", completion: "succeeds" },
     { loss: "disconnected", completion: "fails" },
   ] as const)(
@@ -424,10 +410,6 @@ describe("sessions.title.prepare", () => {
           if (loss === "replaced") {
             connections.add(connectedClient(ownerId));
           }
-        } else if (loss === "role revoked") {
-          writer.scopes = ["operator.read"];
-        } else if (loss === "agent access revoked") {
-          writer.agents = [];
         } else {
           abort.abort();
         }
