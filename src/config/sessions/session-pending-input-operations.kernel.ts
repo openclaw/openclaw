@@ -45,6 +45,7 @@ import { readPendingInputSourceInDatabase } from "./session-pending-input-source
 import {
   isFinalInputCompletion,
   parseSessionPendingInputMessage,
+  restagePendingInputMessageJson,
 } from "./session-pending-input-value.js";
 
 function readPendingInputStage(
@@ -188,10 +189,11 @@ export function mutatePendingInput(
               getSessionKysely(current.db)
                 .updateTable("session_pending_inputs")
                 // Same-run restages keep run_id; a reclaimed channel source turn rebinds it.
-                // Restages carry the row's own bytes; an adopted owed row takes its turn's bytes.
+                // Restages carry the row's own bytes; an adopted owed row takes its turn's bytes
+                // and keeps its owed kind.
                 .set({
                   state: "queued",
-                  message_json: input.messageJson,
+                  message_json: restagePendingInputMessageJson(row.message_json, input.messageJson),
                   run_id: input.runId,
                   lifecycle_generation: input.lifecycleGeneration,
                   end_cause: null,

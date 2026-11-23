@@ -24,6 +24,12 @@ export function readOwedKind(messageJson: string): OwedKind | undefined {
   return asOptionalRecord(JSON.parse(messageJson))?.kind === "exec" ? "exec" : undefined;
 }
 
+/** A restage keeps the stored row's owed kind, so restart recovery still knows the row. */
+export function restagePendingInputMessageJson(stored: string, next: string): string {
+  const kind = readOwedKind(stored);
+  return kind && readOwedKind(next) !== kind ? JSON.stringify({ ...JSON.parse(next), kind }) : next;
+}
+
 /** Receipt for input a committed transcript already holds: it grants no execution. */
 export function consumedPendingInputReceipt(
   inputId: string,
