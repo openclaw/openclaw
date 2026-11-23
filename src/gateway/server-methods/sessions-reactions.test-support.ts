@@ -74,7 +74,6 @@ export async function call(
   params: Record<string, unknown>,
   requestClient: GatewayClient | null = client("alice", "Alice"),
   requestContext = context(),
-  hasCurrentClientAuthority?: () => boolean,
 ) {
   if (!projectionAccess.getSessionRowProjection(requestContext)) {
     reactionProjection ??= createSessionRowProjection({ cfg: {}, modelCatalog: [] });
@@ -87,7 +86,6 @@ export async function call(
     params,
     client: requestClient,
     context: requestContext,
-    hasCurrentClientAuthority,
     isWebchatConnect: () => true,
     respond,
   });
@@ -107,11 +105,7 @@ export function roleConfig(others: "none" | "view" | "suggest" | "write"): OpenC
 export function setReaction(
   messageId: string,
   params: Record<string, unknown> = {},
-  ...request: [
-    client?: GatewayClient | null,
-    context?: GatewayRequestContext,
-    authority?: () => boolean,
-  ]
+  ...request: [client?: GatewayClient | null, context?: GatewayRequestContext]
 ) {
   return call(
     "session.reactions.set",

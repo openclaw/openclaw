@@ -17,8 +17,6 @@ export type CommandOwnerAssertion = SessionSourceAssertion & {
   readonly recoveryReference?: CommandOwnerReference | null;
 };
 
-export class CommandOwnerRevokedError extends Error {}
-
 const capabilities = new WeakMap<object, CommandOwnerAuthority>();
 
 /** Host ingress binds a live check; ordinary context copies retain it, wire data cannot. */
