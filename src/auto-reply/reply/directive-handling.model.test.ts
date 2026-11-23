@@ -370,6 +370,7 @@ async function persistModelDirectiveForTest(params: {
   allowedModelKeys?: string[];
   allowedModelCatalog?: ModelCatalogEntry[];
   sessionEntry?: SessionEntry;
+  storePath?: string;
   provider?: string;
   model?: string;
   initialModelLabel?: string;
@@ -403,6 +404,7 @@ async function persistModelDirectiveForTest(params: {
     body: commandBody,
     cfg,
     sessionEntry,
+    storePath: params.storePath,
     provider,
     model,
     sessionKey,
@@ -643,19 +645,6 @@ describe("/model chat UX", () => {
     expect(resolved.profileOverride).toBeUndefined();
   }, 240_000);
 
-  it("clears runtime overrides when the model directive asks for default runtime", async () => {
-    const { sessionEntry } = await persistModelDirectiveForTest({
-      command: "/model openai/gpt-4o --runtime default hello",
-      allowedModelKeys: ["openai/gpt-4o"],
-      sessionEntry: createSessionEntry({ agentRuntimeOverride: "codex" }),
-      provider: "openai",
-      model: "gpt-4o",
-      initialModelLabel: "openai/gpt-4o",
-    });
-
-    expect(sessionEntry.agentRuntimeOverride).toBeUndefined();
-  });
-
   const pinnedSession = () =>
     createSessionEntry({
       providerOverride: "anthropic",
@@ -826,6 +815,8 @@ describe("handleDirectiveOnly model persist behavior (fixes #1435)", () => {
 
   registerModelRuntimeDirectiveTests({
     createSessionEntry,
+    persistedSession,
+    persistModelDirectiveForTest,
     runHandleCommand,
     refreshQueuedFollowupSession: queueMocks.refreshQueuedFollowupSession,
     persistStickyModelSelection: stickyModelMock.persistBestEffort,

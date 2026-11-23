@@ -82,3 +82,29 @@ test.each([
     expect(store).toEqual(before);
   },
 );
+
+test("clears speed on a provider switch without restoring it when switching back", async () => {
+  const cfg = { agents: { defaults: { model: "openai/gpt-5.4" } } };
+  const loadGatewayModelCatalog = async () => [
+    { provider: "openai", id: "gpt-5.4", name: "GPT 5.4" },
+    { provider: "openai", id: "gpt-5.5", name: "GPT 5.5" },
+    { provider: "anthropic", id: "claude-opus-4-6", name: "Claude Opus" },
+  ];
+  const store = mainStoreEntry({ fastMode: true });
+  for (const { model, fastMode, expectedFastMode } of [
+    { model: "openai/gpt-5.5", fastMode: undefined, expectedFastMode: true },
+    { model: "anthropic/claude-opus-4-6", fastMode: undefined, expectedFastMode: undefined },
+    { model: null, fastMode: undefined, expectedFastMode: undefined },
+    { model: "anthropic/claude-opus-4-6", fastMode: false, expectedFastMode: false },
+  ] as const) {
+    const entry = expectPatchOk(
+      await runPatch({
+        cfg,
+        loadGatewayModelCatalog,
+        store,
+        patch: { key: MAIN_SESSION_KEY, model, fastMode },
+      }),
+    );
+    expect(entry.fastMode, String(model)).toBe(expectedFastMode);
+  }
+});

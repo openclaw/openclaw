@@ -14,10 +14,13 @@ import { readVisibleTime } from "../../../lib/reactive/visible-clock.ts";
 import { ChatContextWindowControl } from "./chat-context-window-control.tsx";
 import { ChatModelCatalogState } from "./chat-model-catalog-state.tsx";
 import {
+  FAVORITES_GROUP,
   formatModelContextMeta,
   formatModelLabel,
   isModelPickerOptionSelected,
   modelPickerOptionKey,
+  modelRowKey,
+  type ChatModelPickerOption as ModelOption,
   type ChatModelPickerOptionProps,
   type ChatModelPickerTargetOptionProps,
   type ChatModelPickerTargetGroup,
@@ -159,7 +162,7 @@ function createOptionPresentation(props: ChatModelPickerOptionProps) {
   return createMemo(() => optionPresentation(props));
 }
 
-export function modelOptionSearchRow(
+function modelOptionSearchRow(
   options: ModelPresentationProps,
   defaultLabel: string,
 ): ChatModelSearchRow {
@@ -194,6 +197,54 @@ export function modelOptionSearchRow(
       optionBlocksSelection(options.entry) ||
       Boolean(options.entry.disabled && !resetsPin),
   };
+}
+
+export function modelOptionSearchRows(
+  groups: readonly [string, { lead: ModelOption[]; more: ModelOption[] }][],
+  options: Omit<ModelPresentationProps, "entry">,
+  defaultLabel: string,
+  query?: string,
+): ChatModelSearchRow[] {
+  return groups
+    .filter(([provider]) => provider !== FAVORITES_GROUP || !query?.trim())
+    .flatMap(([provider, group]) =>
+      group.lead
+        .map((entry) =>
+          Object.assign(modelOptionSearchRow({ ...options, entry }, defaultLabel), {
+            key: modelRowKey(entry, provider),
+            provider,
+            list: provider,
+          }),
+        )
+        .concat(
+          group.more.map((entry) =>
+            Object.assign(modelOptionSearchRow({ ...options, entry }, defaultLabel), {
+              provider,
+              more: true,
+              list: provider + ":more",
+            }),
+          ),
+        ),
+    );
+}
+
+export function modelTargetSearchRows(
+  groups: readonly ChatModelPickerTargetGroup[],
+  disabled: boolean,
+): ChatModelSearchRow[] {
+  return groups.flatMap((group) =>
+    group.options.map((entry) => ({
+      key: "target:" + group.id + ":" + entry.value,
+      list: "target:" + group.id,
+      provider: "target:" + group.id,
+      name: entry.label.toLocaleLowerCase(),
+      providerLabel: group.label.toLocaleLowerCase(),
+      reference: entry.value,
+      selected: false,
+      hasShortcut: true,
+      disabled,
+    })),
+  );
 }
 
 type OptionPresentation = ReturnType<ReturnType<typeof createOptionPresentation>>;
@@ -320,6 +371,7 @@ function ModelOptionButton(
       aria-label={[
         props.presentation.modelLabel,
         props.presentation.runtimeLabel,
+        props.speed?.label,
         props.presentation.accessibleStatus,
         props.presentation.chatOnlyHelp,
       ]
@@ -329,6 +381,7 @@ function ModelOptionButton(
       aria-disabled={blocked() ? "true" : undefined}
       data-chat-model-auth-blocked={props.presentation.needsAuth ? "" : undefined}
       data-chat-model-cooldown={props.presentation.coolingDown ? "" : undefined}
+      data-chat-model-has-speed={!blocked() && props.speed?.label ? "" : undefined}
       onKeyDown={(event) => {
         if (event.target !== event.currentTarget) {
           return;
@@ -350,7 +403,7 @@ function ModelOptionButton(
       }}
       onClick={(event) => {
         if (!blocked()) {
-          props.onSelect(props.entry, event);
+          props.onSelect(props.entry, event, props.speed?.useDefault ? null : undefined);
         }
       }}
     >
@@ -390,6 +443,35 @@ function ModelOptionButton(
           </Show>
         </span>
       </span>
+      <Show when={!blocked() && props.speed?.label}>
+        {(label) => (
+          <span class="chat-controls__model-speed-choices">
+            <span class="chat-controls__model-speed">{label()}</span>
+            <Show when={props.speed?.lastUsed}>
+              {(lastUsed) => (
+                <button
+                  type="button"
+                  class="chat-controls__model-last-speed"
+                  data-chat-model-last-speed
+                  aria-label={t("chat.modelControls.selectRememberedSpeed", {
+                    model: props.presentation.modelLabel,
+                    speed: lastUsed().label,
+                  })}
+                  disabled={lastUsed().disabled}
+                  onKeyDown={(event) => {
+                    if (event.key === " " || event.key === "Enter") {
+                      event.stopPropagation();
+                    }
+                  }}
+                  onClick={(event) => props.onSelect(props.entry, event, lastUsed().value)}
+                >
+                  {t("chat.modelControls.useRememberedSpeed", { speed: lastUsed().label })}
+                </button>
+              )}
+            </Show>
+          </span>
+        )}
+      </Show>
       <span class="chat-controls__model-favorite-slot">
         <Show when={!props.presentation.blocked && props.presentation.selected}>
           <span class="chat-controls__inline-select-check" aria-hidden="true">

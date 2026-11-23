@@ -25,12 +25,14 @@ import {
   modelRowKey,
   FAVORITES_GROUP,
   type ChatModelPickerOption as ModelPickerOption,
+  type PickerSpeedOverride,
 } from "./chat-model-picker-options.ts";
 import {
   ChatModelPickerOption,
   ChatModelPickerTargets,
   ModelList,
-  modelOptionSearchRow,
+  modelOptionSearchRows,
+  modelTargetSearchRows,
 } from "./chat-model-picker-options.tsx";
 import {
   createChatModelSearchView,
@@ -173,43 +175,8 @@ export function ChatModelPickerPanel(panel: ChatModelPickerPanelProps) {
         ...(account ? ["accounts"] : []),
       ],
       rows: [
-        ...providerGroups
-          .filter(([provider]) => provider !== FAVORITES_GROUP || !search?.query().trim())
-          .flatMap(([provider, group]) =>
-            group.lead
-              .map((entry) =>
-                Object.assign(modelOptionSearchRow({ ...modelSearchProps, entry }, defaultLabel), {
-                  key: modelRowKey(entry, provider),
-                  provider,
-                  list: provider,
-                }),
-              )
-              .concat(
-                group.more.map((entry) =>
-                  Object.assign(
-                    modelOptionSearchRow({ ...modelSearchProps, entry }, defaultLabel),
-                    {
-                      provider,
-                      more: true,
-                      list: `${provider}:more`,
-                    },
-                  ),
-                ),
-              ),
-          ),
-        ...targetGroups.flatMap((group) =>
-          group.options.map((entry) => ({
-            key: `target:${group.id}:${entry.value}`,
-            list: `target:${group.id}`,
-            provider: `target:${group.id}`,
-            name: entry.label.toLocaleLowerCase(),
-            providerLabel: group.label.toLocaleLowerCase(),
-            reference: entry.value,
-            selected: false,
-            hasShortcut: true,
-            disabled: disabled(),
-          })),
-        ),
+        ...modelOptionSearchRows(providerGroups, modelSearchProps, defaultLabel, search?.query()),
+        ...modelTargetSearchRows(targetGroups, disabled()),
         ...(account?.options.map((entry) => ({
           key: `account:${entry.value}`,
           list: "accounts",
@@ -310,7 +277,11 @@ export function ChatModelPickerPanel(panel: ChatModelPickerPanelProps) {
       .toSorted((left, right) => left - right)
       .map((index) => entries[index - first]!);
   };
-  const selectModel = (entry: ModelPickerOption, event: MouseEvent) => {
+  const selectModel = (
+    entry: ModelPickerOption,
+    event: MouseEvent,
+    speed?: PickerSpeedOverride,
+  ) => {
     event.stopPropagation();
     // Resetting a pin does not require the inherited model to be available.
     const resetsPin = entry.isDefault && sessionModelPinned();
@@ -318,12 +289,17 @@ export function ChatModelPickerPanel(panel: ChatModelPickerPanelProps) {
       event.preventDefault();
       return;
     }
-    void panel.params.onModelSelect(
+    const args = [
       entry.commitValue,
       panel.params.sessionKey,
       entry.runtimeOverride ??
         (entry.isDefault || entry.agentRuntime !== undefined ? null : undefined),
-    );
+    ] as const;
+    if (speed === undefined) {
+      void panel.params.onModelSelect(...args);
+    } else {
+      void panel.params.onModelSelect(...args, speed);
+    }
     searchView?.closeAfterSelection(event);
   };
   const selectTarget = (groupId: string, value: string, event: MouseEvent) => {
@@ -380,6 +356,7 @@ export function ChatModelPickerPanel(panel: ChatModelPickerPanelProps) {
           <ChatModelPickerOption
             disabled={disabled()}
             entry={props.entry}
+            speed={panel.params.speedForModel?.(props.entry)}
             rowKey={key()}
             favorite={
               favorites.available()

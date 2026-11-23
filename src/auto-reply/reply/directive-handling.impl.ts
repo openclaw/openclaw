@@ -22,6 +22,7 @@ import { applyModelOverrideWithAuthProfileCompatibility } from "../../sessions/a
 import {
   isModelSelectionLocked,
   MODEL_SELECTION_LOCKED_MESSAGE,
+  resetSessionFastModeForProviderSwitch,
 } from "../../sessions/model-overrides.js";
 import { emitSessionLifecycleEvent } from "../../sessions/session-lifecycle-events.js";
 import { readSessionInputProfileId } from "../../sessions/session-participant-input.js";
@@ -432,6 +433,14 @@ export async function handleDirectiveOnly(
       return rejectModelTransaction(authProfileError);
     }
     const initialSessionEntry = { ...sessionEntry };
+    // Apply explicit session directives after the reset. Inline Fast applies only to the message.
+    if (
+      modelSelection &&
+      resetSessionFastModeForProviderSwitch(sessionEntry, provider, modelSelection.provider) &&
+      !touchedSessionFields.includes("fastMode")
+    ) {
+      touchedSessionFields.push("fastMode");
+    }
     const directiveFieldsUpdated =
       !params.persistenceState &&
       applySessionDirectiveFields({

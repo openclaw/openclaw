@@ -61,7 +61,10 @@ import {
   parseAgentSessionKey,
 } from "../routing/session-key.js";
 import { applyModelOverrideWithAuthProfileCompatibility } from "../sessions/auth-profile-preservation.js";
-import { applyModelOverrideToSessionEntry } from "../sessions/model-overrides.js";
+import {
+  applyModelOverrideToSessionEntry,
+  resetSessionFastModeForProviderSwitch,
+} from "../sessions/model-overrides.js";
 import { normalizeSendPolicy } from "../sessions/send-policy.js";
 import {
   isSessionAgentAttentionIconId,
@@ -499,9 +502,10 @@ function* projectSessionPatchSteps(
   }
   if ("model" in patch) {
     const statusModelPatch = isSessionStatusModelPatchOrigin();
+    const agentModelPatch = isAgentSessionModelPatchOrigin();
     const previousModel = resolveSessionModelRef(cfg, next, sessionAgentId);
     // A session with no previous model has nothing to revert to.
-    const agentModelFallback = isAgentSessionModelPatchOrigin()
+    const agentModelFallback = agentModelPatch
       ? next.modelFallback?.source === "agent-patch"
         ? { ...next.modelFallback, ts: Math.max(now, next.modelFallback.ts + 1) }
         : previousModel &&
@@ -647,6 +651,10 @@ function* projectSessionPatchSteps(
         recordedProvider,
         markLiveSwitchPending: statusModelPatch || raw !== null,
       });
+      // Agent steering can roll back to the previous model; it is not a manual switch.
+      if (!agentModelPatch && !statusModelPatch && patch.fastMode === undefined) {
+        resetSessionFastModeForProviderSwitch(next, previousModel?.provider, selection.provider);
+      }
       if (raw === null && !statusModelPatch) {
         delete next.liveModelSwitchPending;
       }

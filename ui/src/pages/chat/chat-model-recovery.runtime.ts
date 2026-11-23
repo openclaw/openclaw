@@ -6,6 +6,7 @@ import { resolvePreferredServerChatModelValue } from "../../lib/chat/model-ref.t
 import { resolveChatModelOverrideValue } from "../../lib/chat/model-select-state.ts";
 import { formatUiError, formatUiErrorDetails } from "../../lib/format-error.ts";
 import { isAgentRuntimeRestrictionErrorDetails } from "../../lib/protocol-validators.generated/session-input.js";
+import type { SessionPatch } from "../../lib/sessions/index.ts";
 import { setChatError } from "./chat-history-state.ts";
 import {
   claimChatModelSelection,
@@ -25,6 +26,7 @@ async function confirmChatNativeRuntimeRecovery(
   selection: ChatModelSelection,
   selectionUnchanged: () => boolean = () => true,
   retriesMessage = false,
+  fastMode?: SessionPatch["fastMode"],
 ): Promise<boolean> {
   const { owner, ownsSelection, agentScope } = selection;
   const explanation = t(`chat.nativeRuntimeRecovery.reasons.${restriction.reason}`, {
@@ -57,6 +59,7 @@ async function confirmChatNativeRuntimeRecovery(
       {
         ...agentScope,
         ...(model !== undefined ? { model: model || null } : {}),
+        fastMode,
         expectedSessionId: selection.expectedSessionId,
         signal: owner.signal,
         retriesMessage,
@@ -168,6 +171,7 @@ export async function recoverChatModelSwitch(
   nextModel: string,
   runtimeSelection: string | null | undefined,
   selection: ChatModelSelection,
+  fastMode?: SessionPatch["fastMode"],
 ): Promise<boolean> {
   if (!selection.ownsSelection()) {
     return false;
@@ -187,5 +191,7 @@ export async function recoverChatModelSwitch(
     nextModel,
     selection,
     () => !runtimeSelection || runtimeSelection === restriction.runtimeId,
+    false,
+    fastMode,
   );
 }

@@ -19,7 +19,9 @@ import type { ChatModelAccountSection } from "./chat-model-account-control.ts";
 import {
   isModelPickerOptionSelected,
   type ChatModelPickerOption as ModelPickerOption,
+  type ChatModelPickerSpeed,
   type ChatModelPickerTargetGroup,
+  type PickerSpeedOverride,
 } from "./chat-model-picker-options.ts";
 import {
   ChatModelSearchContext,
@@ -48,6 +50,7 @@ export type ChatModelPickerParams = {
   modelSelectionLocked: boolean;
   selectionScopeDescription?: string;
   modelOptions: ModelPickerOption[];
+  speedForModel?: (entry: ModelPickerOption) => ChatModelPickerSpeed | undefined;
   open?: boolean;
   targetGroups?: readonly ChatModelPickerTargetGroup[];
   selectedModelValue: string;
@@ -66,6 +69,7 @@ export type ChatModelPickerParams = {
     value: string,
     sessionKey: string,
     agentRuntime?: string | null,
+    speed?: PickerSpeedOverride,
   ) => Promise<unknown>;
   onTargetRetry?: (groupId: string) => unknown;
   onTargetSelect?: (groupId: string, value: string) => unknown;

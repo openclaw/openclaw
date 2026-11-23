@@ -2788,6 +2788,44 @@ html[dir="rtl"] .chat-attachments-preview .chat-attachment-loading__line > span 
   color: var(--muted);
 }
 
+.chat-controls__model-speed-choices {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex: 0 0 auto;
+  order: 1;
+  margin-inline-start: auto;
+  padding-inline: 8px 10px;
+  white-space: nowrap;
+  font-size: 11px;
+  line-height: 1.25;
+}
+
+.chat-controls__model-speed {
+  color: var(--muted);
+}
+
+.chat-controls__model-last-speed {
+  color: var(--text);
+  background: transparent;
+  border: 0;
+  border-radius: var(--radius-menu-item);
+  min-height: 28px;
+  padding-inline: 7px;
+  font: inherit;
+  font-weight: 600;
+  cursor: var(--cursor-action);
+}
+
+.chat-controls__model-last-speed:hover:not(:disabled) {
+  background: var(--menu-hover);
+}
+
+.chat-controls__model-last-speed:disabled {
+  color: var(--muted);
+  cursor: default;
+}
+
 .chat-controls__model-option-meta {
   margin-inline-start: auto;
   display: inline-flex;
@@ -2798,6 +2836,10 @@ html[dir="rtl"] .chat-attachments-preview .chat-attachment-loading__line > span 
   font-size: 11px;
   font-weight: 400;
   padding-inline-start: 6px;
+}
+
+.chat-controls__model-option[data-chat-model-has-speed] .chat-controls__model-option-meta {
+  margin-inline-start: 0;
 }
 
 .chat-controls__model-chat-only-info {

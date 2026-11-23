@@ -129,11 +129,20 @@ export type ChatModelPickerOptionProps = {
   sessionKey?: string;
   disabled: boolean;
   entry: ChatModelPickerOption;
+  speed?: ChatModelPickerSpeed;
   index: number;
   selectedModelValue: string;
   selectedAgentRuntime?: string;
   sessionModelPinned: boolean;
-  onSelect: (entry: ChatModelPickerOption, event: MouseEvent) => void;
+  onSelect: (entry: ChatModelPickerOption, event: MouseEvent, speed?: PickerSpeedOverride) => void;
+};
+
+export type PickerSpeedOverride = true | "auto" | "ultrafast" | null;
+
+export type ChatModelPickerSpeed = {
+  label?: string;
+  useDefault?: boolean;
+  lastUsed?: { value: Exclude<PickerSpeedOverride, null>; label: string; disabled: boolean };
 };
 
 export type ChatModelPickerTargetOptionProps = {

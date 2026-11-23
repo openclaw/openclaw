@@ -147,6 +147,7 @@ check the per-agent setting if the model default still does not take effect.
 - Levels: `auto|on|off|ultrafast|default`. `ultra` is accepted as shorthand for `ultrafast` and stores the same `ultrafast` value.
 - Directive-only message toggles a session fast-mode override and replies `Fast mode set to auto.`, `Fast mode enabled.`, or `Fast mode disabled.`. Use `/fast default` to clear the session override and inherit the configured default; aliases include `inherit`, `clear`, `reset`, and `unpin`.
 - Send `/fast` (or `/fast status`) with no mode to see the current effective fast-mode state.
+- Switching providers with `/model` clears the session speed override; a `/model` switch within the same provider keeps it, subject to the destination model's capabilities. In Control UI, the model picker shows which speed a model choice will use and offers an explicit shortcut for a previous Fast choice when available. An explicit speed choice made alongside the switch still applies.
 - OpenClaw resolves fast mode in this order:
   1. Inline `/fast auto|on|off|ultrafast` override on the current message
   2. Stored session override from a directive-only message (`/fast default` clears this layer)
