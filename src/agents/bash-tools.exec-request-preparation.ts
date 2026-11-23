@@ -34,6 +34,7 @@ import { type ExecWorkdirResolution, resolveExecWorkdir } from "./bash-tools.exe
 import { buildSandboxEnv, coerceEnv } from "./bash-tools.shared.js";
 import type { BashSandboxConfig } from "./bash-tools.shared.js";
 import { EXEC_NODE_PATH_PREPEND_WARNING } from "./exec-node-path-prepend.js";
+import { prepareAgentExecScratch } from "./exec-scratch.js";
 import { prepareGitHubToolEnvironment } from "./github-tool-identity.js";
 import type { LocalGitHubAppExecution } from "./github-tool-identity.types.js";
 import { sanitizeEnvVars } from "./sandbox/sanitize-env-vars.js";
@@ -409,6 +410,10 @@ export function createExecRequestPreparation(params: {
     finalizeBeforeToolCallParams,
     prepareParamsWithResolvedExecEnv,
     isResolveExecEnvPrepared: (args: ExecToolArgs) => resolvedExecEnvPreparedStates.has(args),
+    prepareScratchEnv: (host: ExecHost) =>
+      host === "gateway" && params.defaults?.cwd
+        ? prepareAgentExecScratch(params.defaults.scratchRoot ?? params.defaults.cwd)
+        : undefined,
     getExecHookContext: (args: ExecToolArgs) => execHookContexts.get(args),
     getResolvedExecWorkdirPreparedState: (args: ExecToolArgs) =>
       resolvedExecWorkdirPreparedStates.get(args),
@@ -432,6 +437,7 @@ export function resolvePreparedExecEnvironment(params: {
   localGitConfigParameters?: string;
   managedLocalIdentity?: boolean;
   localProcessEnv?: Readonly<Record<string, string>>;
+  scratchEnv?: Record<string, string>;
   warnings: string[];
 }): {
   env: Record<string, string>;
@@ -449,8 +455,10 @@ export function resolvePreparedExecEnvironment(params: {
   };
   const routingEnv = buildExecRoutingEnv(executionContext);
   const explicitEnv: Record<string, string> | undefined =
-    params.execParams.env !== undefined || params.pluginEnv !== undefined
-      ? { ...params.execParams.env, ...params.pluginEnv }
+    params.scratchEnv !== undefined ||
+    params.execParams.env !== undefined ||
+    params.pluginEnv !== undefined
+      ? { ...params.scratchEnv, ...params.execParams.env, ...params.pluginEnv }
       : undefined;
   const storeEnvResult = params.storeEnv
     ? sanitizeHostExecEnvWithDiagnostics({

@@ -17,20 +17,7 @@ import {
 import { insertGitHubPublicationRequestAsync } from "./github-publication-request-async.js";
 import { bindGitHubPublicationSourceLifetime } from "./github-publication-source.js";
 import { readGitHubPublicationRequestAsync } from "./github-publication-store-async.js";
-import type {
-  WorkerSessionPlacementStore,
-  WorkerSessionTurnClaim,
-} from "./worker-environments/placement-store.js";
-
-function sameClaim(row: PublicationRow, claim: WorkerSessionTurnClaim): boolean {
-  return (
-    row.claim_id === claim.claimId &&
-    row.run_id === claim.runId &&
-    row.placement_generation === claim.placementGeneration &&
-    row.environment_id === (claim.owner.environmentId ?? null) &&
-    row.owner_epoch === (claim.owner.ownerEpoch ?? null)
-  );
-}
+import type { WorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
 
 /** Prepare and record a turn-owned request before the execution coordinator can publish it. */
 export function createGitHubPublicationClaimRequester(params: {
@@ -96,12 +83,15 @@ export function createGitHubPublicationClaimRequester(params: {
     );
     const worktreeOwner = admitted;
     const { worktree } = worktreeOwner;
-    if (!params.placements.validateTurnClaim(request.claim)) {
-      throw new Error("GitHub publication lost the live session turn claim after verification.");
-    }
-    if (!matchesCurrentGitHubPublicationIdentity({ agentId: request.agentId, identity })) {
-      throw new Error("GitHub publication identity changed.");
-    }
+    const assertEffectCurrent = () => {
+      if (!params.placements.validateTurnClaim(request.claim)) {
+        throw new Error("GitHub publication lost the live session turn claim after verification.");
+      }
+      if (!matchesCurrentGitHubPublicationIdentity({ agentId: request.agentId, identity })) {
+        throw new Error("GitHub publication identity changed.");
+      }
+    };
+    assertEffectCurrent();
     const requestDigest = digestRequest({
       sessionId: request.claim.sessionId,
       idempotencyKey: request.idempotencyKey,
@@ -154,20 +144,12 @@ export function createGitHubPublicationClaimRequester(params: {
         assertCurrent();
         assertRequester();
         worktreeOwner.assertCurrent();
-        if (
-          !params.placements.validateTurnClaim(request.claim) ||
-          !matchesCurrentGitHubPublicationIdentity({ agentId: request.agentId, identity })
-        ) {
-          throw new Error("GitHub publication authority changed before recording.");
-        }
+        assertEffectCurrent();
         bindGitHubPublicationSourceLifetime(source, signal);
         row = await insertGitHubPublicationRequestAsync(input, source);
       } finally {
         await source.release();
       }
-    }
-    if (!sameClaim(row, request.claim)) {
-      throw new Error("GitHub publication idempotency key was reused.");
     }
     return publicationResult(row);
   };

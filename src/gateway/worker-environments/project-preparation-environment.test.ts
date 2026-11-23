@@ -66,7 +66,8 @@ async function fixture(files: Record<string, string>) {
     return fs.writeFile(path.join(bin, command), `#!/bin/sh\n${body}\n`, { mode: 0o755 });
   }
   f.runScript.mockImplementation(async (script) =>
-    execFileSync(path.join(bin, "sh"), ["-c", script], {
+    execFileSync(path.join(bin, "sh"), ["-s"], {
+      input: script,
       env: {
         // Keep fixture Node/package-manager shims first while allowing the host
         // Git transport wrapper to resolve its backing executable and POSIX tools.
@@ -77,7 +78,6 @@ async function fixture(files: Record<string, string>) {
       },
       encoding: "utf8",
       timeout: 30_000,
-      stdio: ["ignore", "pipe", "pipe"],
     }),
   );
   return {

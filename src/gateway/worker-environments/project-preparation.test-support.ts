@@ -121,11 +121,11 @@ export async function createProjectPreparationFixture(
     namespace: "gateway",
   }))!;
   const runScript = vi.fn(async (script: string) =>
-    cp.execFileSync("sh", ["-c", script], {
+    cp.execFileSync("sh", ["-s"], {
+      input: script,
       env: { ...process.env, HOME: home, PREPARATION_UNRELATED_ENV: "must-not-forward" },
       encoding: "utf8",
       timeout: 30_000,
-      stdio: ["ignore", "pipe", "pipe"],
     }),
   );
   const upload = vi.fn(async (source: string, destination: string) => {

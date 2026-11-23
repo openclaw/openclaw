@@ -34,6 +34,7 @@ import type { withResolvedClawHubSource } from "../../templates/clawhub-source.j
 import { readTemplateManifestFile } from "../../templates/reader.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createTestApprovalManager } from "../exec-approval-manager.test-support.js";
+import { cancelAgentRuntimeBoundApprovals } from "./approval-run-cancellation.js";
 import { prepareDelegatedSystemAgentApproval } from "./system-agent-approval.js";
 import { withSystemAgentTemplateRequests } from "./system-agent-templates.js";
 import type { GatewayRequestHandlerOptions, GatewaySystemAgentSession } from "./types.js";
@@ -258,7 +259,7 @@ it.for([
                 const review = await engine.handle("Review this published Template");
                 expect(review.text).toContain(
                   scenario === "labs"
-                    ? "Settings > Labs"
+                    ? "Gateway configuration"
                     : scenario === "authority"
                       ? "operator.admin"
                       : "Template Add preview is unavailable",
@@ -310,7 +311,11 @@ it.for([
                   expect(validateAgentRunDelegatedAuthority(authority)).toBe(true);
                 }
                 if (scenario === "cancel") {
-                  await manager.forceDenyIfRuntimeAuthorityClosed(pending.id);
+                  await cancelAgentRuntimeBoundApprovals({
+                    authority,
+                    manager,
+                    publish: vi.fn(),
+                  });
                 } else {
                   await manager.resolve(
                     pending.id,

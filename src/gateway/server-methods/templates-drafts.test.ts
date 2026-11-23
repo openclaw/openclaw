@@ -149,10 +149,18 @@ async function reviewDraft(
   assert(typeof payload.reviewToken === "string" && typeof payload.name === "string");
   assert(Array.isArray(payload.files));
   const files = payload.files.map((file: unknown) => {
-    assert(isRecord(file) && typeof file.path === "string" && typeof file.content === "string");
+    assert(isRecord(file) && typeof file.path === "string");
+    // Only the packaged avatar is binary and therefore listed without text content.
+    assert(typeof file.content === "string" || file.path === "assets/icon.png");
     return { path: file.path, content: file.content, workspacePaths: file.workspacePaths };
   });
-  return { reviewToken: payload.reviewToken, name: payload.name, files, items: payload.items };
+  return {
+    reviewToken: payload.reviewToken,
+    name: payload.name,
+    files,
+    items: payload.items,
+    iconUrl: payload.iconUrl,
+  };
 }
 
 const proposal = createResearchBriefProposal();
@@ -453,6 +461,44 @@ Research public sources.
     for (const file of review.files) {
       expect(await readFile(join(extracted.packageRoot, file.path), "utf8")).toBe(file.content);
     }
+  });
+
+  it("publishes exactly the reviewed avatar and requires a fresh review when the image changes", async () => {
+    const fixture = await publicationFixture();
+    const { workspaceDir, draft, uploads } = fixture;
+    const svg = (fill: string) =>
+      `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 8 8"><rect width="8" height="8" fill="${fill}"/></svg>`;
+    await writeFile(join(workspaceDir, "harbor.svg"), svg("#f60"));
+    await writeFile(draft.path, JSON.stringify({ ...proposal, avatar: "harbor.svg" }));
+
+    const review = await fixture.review();
+    expect(review.files.find((file) => file.path === "assets/icon.png")).toEqual({
+      path: "assets/icon.png",
+      content: undefined,
+      workspacePaths: ["avatars/avatar.png"],
+    });
+    expect(review.iconUrl).toMatch(/^data:image\/png;base64,/u);
+
+    await writeFile(join(workspaceDir, "harbor.svg"), svg("#06f"));
+    const stale = await fixture.publish(review.reviewToken);
+    expect(stale[0]).toBe(false);
+    expect(stale[2]).toMatchObject({
+      details: { templatePublication: { effect: "none", code: "draft_review_required" } },
+    });
+    expect(fixture.posts).toBe(0);
+
+    const current = await fixture.review();
+    assert(typeof current.iconUrl === "string" && current.iconUrl !== review.iconUrl);
+    const result = await fixture.publish(current.reviewToken);
+    expect(result[0], JSON.stringify(result[2])).toBe(true);
+    const artifact = join(workspaceDir, "published.tgz");
+    await writeFile(artifact, uploads[0]!);
+    await using extracted = await extractBuiltTemplateArtifact(artifact);
+    const icon = await readFile(join(extracted.packageRoot, "assets/icon.png"));
+    expect(`data:image/png;base64,${icon.toString("base64")}`).toBe(current.iconUrl);
+    expect(await readFile(join(extracted.packageRoot, "CLAW.md"), "utf8")).toContain(
+      "avatar: avatars/avatar.png",
+    );
   });
 
   it("does not infer an attempt from matching public release reads without an attempt ID", async () => {

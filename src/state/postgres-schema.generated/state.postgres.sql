@@ -687,6 +687,7 @@ CREATE TABLE "operator_approvals" (
   "resolver_id" text COLLATE "C",
   "consumed_at_ms" bigint,
   "consumed_by" text COLLATE "C",
+  "requested_by_profile_id" text COLLATE "C",
   PRIMARY KEY ("approval_id"),
   CHECK ((char_length("approval_id") > 0) AND ("approval_id" NOT IN ('.', '..'))),
   CHECK ((char_length("resolution_ref") = 43) AND ("resolution_ref" COLLATE "C" !~ '\A.*[^A-Za-z0-9_-].*\Z')),

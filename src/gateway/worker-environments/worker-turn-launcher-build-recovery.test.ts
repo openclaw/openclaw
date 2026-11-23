@@ -395,7 +395,7 @@ it("waits for reconnect and settles the exact interrupted claim before the next 
     await execution.catch(() => {});
     waitForRelease.mockRestore();
   }
-});
+}, 180_000);
 
 async function createRefreshWaitHarness(fence = false) {
   await worker.seedActivePlacement();

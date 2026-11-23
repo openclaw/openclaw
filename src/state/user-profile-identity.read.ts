@@ -18,6 +18,7 @@ import {
   selectProfileAccessEntries,
   selectUserProfileGitHubIdentities,
 } from "./user-profile-github-identity.js";
+import { readOpenClawIdProfileLinksInDatabase } from "./user-profile-openclaw-id.read.js";
 import { openClawIdProfileProvider } from "./user-profile-openclaw-id.types.js";
 import {
   matchUserProfileReference,
@@ -188,9 +189,13 @@ export function selectUserProfileIdentityInDatabase(
   profileId: string,
 ): UserProfileIdentity | undefined {
   const profile = selectResolvedUserProfileMetadataById(db, profileId);
+  const openclawIdAccountIds = profile
+    ? readOpenClawIdProfileLinksInDatabase(db, [profile.id]).map((link) => link.accountId)
+    : [];
   return (
     profile && {
       profileId: profile.id,
+      ...(openclawIdAccountIds.length ? { openclawIdAccountIds } : {}),
       role: profile.role ?? null,
       aliases: new Set(
         executeSqliteQuerySync(

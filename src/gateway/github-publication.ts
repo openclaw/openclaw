@@ -10,6 +10,7 @@ import { getOrCreatePromise } from "../shared/lazy-promise.js";
 import type { GitHubPublicationRow as PublicationRow } from "../state/github-publication-read.types.js";
 import {
   decodeGitHubPublicationRequester,
+  encodeGitHubPublicationRequester,
   type GitHubPublicationOrigin,
   type GitHubPublicationRequesterSnapshot,
 } from "../state/github-publication-requester.js";
@@ -44,10 +45,10 @@ import {
   type GitHubPublicationRecoveryBackoff,
 } from "./github-publication-recovery.js";
 import {
-  prepareGitHubPublicationExecutionRequester,
+  isGitHubPublicationRequesterV2,
+  restoreGitHubPublicationRequester,
   type GitHubPublicationRequesterPolicyV2,
   type GitHubPublicationRequesterV2,
-  isGitHubPublicationRequesterV2,
 } from "./github-publication-requester.js";
 import {
   claimGitHubPublicationExecutionAsync,
@@ -126,7 +127,7 @@ export function createGitHubPublicationCoordinator(params: {
     assertInvocationCurrent?: () => void,
     invocationSignal?: AbortSignal,
     recoveryResult?: SessionGitHubPublicationResult,
-    invocationRequester?: GitHubPublicationRequesterV2,
+    admittedRequester?: GitHubPublicationRequesterV2,
   ): Promise<SessionGitHubPublicationResult> => {
     if (initial.status === "published" || initial.status === "failed") {
       return Promise.resolve(publicationResult(initial));
@@ -273,14 +274,21 @@ export function createGitHubPublicationCoordinator(params: {
                   lifecycle?.requester_authority_json,
                 );
                 lifecycleRevision = lifecycle?.lifecycle_revision;
-                const preparedRequester = await prepareGitHubPublicationExecutionRequester(
-                  lifecycle?.requester_authority_json,
-                  { sessionKey: claimed.session_key, agentId: claimed.agent_id },
-                  params.getCommittedRuntimeConfig,
-                  invocationRequester,
-                );
-                requester = preparedRequester.requester;
-                releaseRequester = preparedRequester.release;
+                if (
+                  admittedRequester &&
+                  encodeGitHubPublicationRequester(admittedRequester.snapshot) ===
+                    lifecycle?.requester_authority_json
+                ) {
+                  requester = admittedRequester;
+                } else {
+                  const restored = await restoreGitHubPublicationRequester(
+                    lifecycle?.requester_authority_json,
+                    { sessionKey: claimed.session_key, agentId: claimed.agent_id },
+                    params.getCommittedRuntimeConfig,
+                  );
+                  requester = restored;
+                  releaseRequester = restored.release;
+                }
                 signal.throwIfAborted();
                 invocationSignal?.throwIfAborted();
               },

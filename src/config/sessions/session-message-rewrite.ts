@@ -1,7 +1,7 @@
 import { isDeepStrictEqual } from "node:util";
 import { isMainThread } from "node:worker_threads";
+import type { PersistedUserTurnMessage } from "../../sessions/user-turn-input.types.js";
 import { prepareModelPromptProjection } from "../../sessions/user-turn-transcript.message.js";
-import type { PersistedUserTurnMessage } from "../../sessions/user-turn-transcript.types.js";
 import type { SessionTranscriptWriteScope } from "./session-accessor.sqlite-contract.js";
 import {
   captureLifecycleDatabaseScope,

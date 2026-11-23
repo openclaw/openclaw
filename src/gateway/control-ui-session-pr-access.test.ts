@@ -1,6 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { copyFileSync, renameSync } from "node:fs";
 import { DatabaseSync, StatementSync } from "node:sqlite";
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
@@ -941,8 +942,7 @@ it("drops cached subscription hydration after physical database replacement", as
     rateLimited = true;
 
     const peer = f.addReader("physical-replacement-reader");
-    await f.subscribe([sessionKey], peer.client);
-    // Join native work without forcing a refresh or discarding the existing subscription cache.
+    await f.subscriptions.replace(expectDefined(peer.client.connId, "replacement"), [sessionKey]);
     await f.subscriptions.pollNow();
     expect(frames(peer.socket)).toMatchObject([
       {

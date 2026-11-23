@@ -94,57 +94,7 @@ type ChatDispatchAdmission = {
   runId: string;
   assertCurrent: () => void;
 };
-type ActiveChatDispatchAdmission = ChatDispatchAdmission & { source: ChatDispatchAdmission };
-const chatDispatchAdmission = new AsyncLocalStorage<ActiveChatDispatchAdmission>();
-
-/** Core Goal queue retains the authenticated source, never a proof or closed dispatch. */
-export function captureRepositoryGoalDispatch(assertCurrent: () => void) {
-  const source = chatDispatchAdmission.getStore()?.source;
-  if (!source) {
-    return undefined;
-  }
-  source.assertCurrent();
-  const actorId = source.client?.authenticatedGitHubAccountId;
-  const profileId = source.client?.authenticatedUserProfile?.profileId;
-  const credentialSource = source.client?.authenticatedRepositoryCredentialSource;
-  const assertGoalSourceCurrent = () => {
-    // The queue retains operator authority independently of the completed input's
-    // work lease. The repository reader still verifies the live resident identity.
-    assertCurrent();
-    if (
-      source.client?.invalidated ||
-      source.client?.authenticatedGitHubAccountId !== actorId ||
-      source.client?.authenticatedUserProfile?.profileId !== profileId ||
-      source.client?.authenticatedRepositoryCredentialSource !== credentialSource
-    ) {
-      throw new Error("Goal source authority changed.");
-    }
-  };
-  return <T>(
-    identity: { agentId: string; sessionKey: string; sessionId: string; runId: string },
-    run: () => Promise<T>,
-  ) => {
-    const assertContinuationCurrent = () => {
-      assertGoalSourceCurrent();
-      if (
-        identity.agentId !== source.agentId ||
-        identity.sessionKey !== source.sessionKey ||
-        identity.sessionId !== source.getSessionId()
-      ) {
-        throw new Error("Goal continuation session changed.");
-      }
-    };
-    return withRepositoryChatDispatch(
-      {
-        ...source,
-        runId: identity.runId,
-        getSessionId: () => identity.sessionId,
-        assertCurrent: assertContinuationCurrent,
-      },
-      run,
-    );
-  };
-}
+const chatDispatchAdmission = new AsyncLocalStorage<ChatDispatchAdmission>();
 
 /** Carry the current authenticated input, never a broker proof, into worker preparation. */
 export async function withRepositoryChatDispatch<T>(
@@ -156,7 +106,6 @@ export async function withRepositoryChatDispatch<T>(
     return await chatDispatchAdmission.run(
       {
         ...admission,
-        source: admission,
         assertCurrent: () => {
           if (!active) {
             throw new Error("Repository chat dispatch admission was released.");

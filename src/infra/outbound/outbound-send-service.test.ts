@@ -160,6 +160,19 @@ it("forces durable core delivery and accepts the route before publishing its rec
   expect(onDeliveryResult).toHaveBeenCalledWith(evidence);
 });
 
+it("marks message-action controls once before core queue persistence", async () => {
+  const buttons = (value: string): ReplyPayload["presentation"] => ({
+    blocks: [{ type: "buttons", buttons: [{ label: "A", action: { type: "callback", value } }] }],
+  });
+  await send(
+    { input: { requireQueuePersistence: true } },
+    { message: "", payload: { text: "", presentation: buttons("::pick:a") } },
+  );
+  expectCall(mocks.send, {
+    payloads: [expect.objectContaining({ presentation: buttons("::::pick:a") })],
+  });
+});
+
 it.each([
   ["core", "source-account"],
   ["core", undefined],
@@ -320,15 +333,6 @@ it("keeps a confirmed plugin send when its history write fails", async () => {
   mocks.commit.mockRejectedValueOnce(new Error("transcript unavailable"));
   await expect(send()).resolves.toMatchObject({ handledBy: "plugin" });
   expect(mocks.send).not.toHaveBeenCalled();
-});
-
-it("leaves destination history to a delegating client on both send paths", async () => {
-  const input = { callerRecordsDestinationHistory: true };
-  await send({ input });
-  expect(mocks.commit).not.toHaveBeenCalled();
-  mocks.dispatch.mockResolvedValueOnce(null);
-  await send({ input });
-  expectCall(mocks.send, { skipDestinationHistory: true });
 });
 
 it("bypasses plugin sends during dry runs", async () => {

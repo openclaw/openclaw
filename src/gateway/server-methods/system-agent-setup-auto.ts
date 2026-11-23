@@ -56,31 +56,27 @@ function present(candidate: SetupInferenceCandidate) {
 /** Accepted setup belongs to the Gateway; disconnecting a joining caller does not cancel it. */
 export function runGatewayAutomaticSetup(
   context: GatewayRequestContext,
-  assertAuthority: () => void,
 ): Promise<SystemAgentSetupAutoResult> {
-  assertAuthority();
   const previous = runs.get(context.wizardSessions);
   if (previous) {
     return previous;
   }
-  const run = runExclusiveSystemAgentSetupActivation(() => autoSetup(assertAuthority));
+  const run = runExclusiveSystemAgentSetupActivation(autoSetup);
   runs.set(context.wizardSessions, run);
   void run.finally(() => runs.delete(context.wizardSessions)).catch(() => {});
   return run;
 }
 
-async function autoSetup(assertAuthority: () => void): Promise<SystemAgentSetupAutoResult> {
+async function autoSetup(): Promise<SystemAgentSetupAutoResult> {
   const runtime = createSystemAgentGatewayRuntime();
   const signal = getAsyncWorkSignal();
-  const assertCurrent = () => {
-    signal?.throwIfAborted();
-    assertAuthority();
-  };
+  const assertCurrent = () => signal?.throwIfAborted();
   const detection = await runSystemAgentGatewayTask(() => detectSetupInference());
   let ranked = rankSetupInferenceCandidates(detection.candidates);
   const attempts: SystemAgentSetupAutoResult["attempts"] = [];
   const failed = new Set<string>();
   const installedPlugins: string[] = [];
+  let hasNonAuthFailure = false;
   let codexNeedsSignIn = false;
   let codexFailed = false;
   let shared = false;
@@ -195,6 +191,7 @@ async function autoSetup(assertAuthority: () => void): Promise<SystemAgentSetupA
       return true;
     }
     failed.add(candidate.kind);
+    hasNonAuthFailure ||= activation.status !== "auth";
     if (candidate.kind === "codex-cli" && activation.status === "auth") {
       codexNeedsSignIn = true;
     }
@@ -311,7 +308,7 @@ async function autoSetup(assertAuthority: () => void): Promise<SystemAgentSetupA
       );
       if (signIn) {
         return {
-          ...result("needs-sign-in"),
+          ...result(hasNonAuthFailure ? "unavailable" : "needs-sign-in"),
           signIn: { authOptionId: signIn.id, label: signIn.label },
         };
       }

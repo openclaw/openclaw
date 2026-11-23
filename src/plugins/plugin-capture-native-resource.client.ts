@@ -129,7 +129,12 @@ export async function createPluginCaptureOwner(
   const closeWhenReleased = () => {
     if (closing && !roots.size) {
       loaded();
-      closePromise ??= independent.close();
+      closePromise ??= (async () => {
+        await independent.close();
+        // A transferred native root may outlive the preparation pool. Retire only
+        // after the actual independent claim has joined.
+        source.scheduleIdleBrokerRetirement();
+      })();
       return closePromise;
     }
     return Promise.resolve();

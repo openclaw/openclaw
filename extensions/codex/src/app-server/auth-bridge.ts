@@ -425,7 +425,7 @@ export async function applyCodexAppServerAuthProfile(params: {
           });
   if (params.authRequirement === "subscription" && loginParams?.type !== "chatgptAuthTokens") {
     throw createCodexAppServerAuthError(
-      "Codex subscription auth profile could not produce login credentials. Sign in with `openclaw models auth login --provider openai`, select that profile, then retry.",
+      "Codex subscription auth profile could not produce login credentials. Sign in to OpenAI with ChatGPT in OpenClaw, select that profile, then retry.",
     );
   }
   if (
@@ -495,7 +495,7 @@ export async function refreshCodexAppServerAuthTokens(
   });
   if (!loginParams || loginParams.type !== "chatgptAuthTokens") {
     throw new Error(
-      "Codex app-server ChatGPT token refresh requires an OAuth auth profile. Sign in with `openclaw models auth login --provider openai`, select that profile, then retry.",
+      "Codex app-server ChatGPT token refresh requires an OAuth auth profile. Sign in to OpenAI with ChatGPT in OpenClaw, select that profile, then retry.",
     );
   }
   if (

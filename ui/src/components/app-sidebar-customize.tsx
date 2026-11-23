@@ -1,5 +1,14 @@
 import type { JSX } from "@solidjs/web";
-import { createMemo, createSignal, Errored, For, Loading, onSettled, Show } from "solid-js";
+import {
+  createDeferred,
+  createMemo,
+  createSignal,
+  Errored,
+  For,
+  Loading,
+  onSettled,
+  Show,
+} from "solid-js";
 import type {
   PluginCatalogEntry,
   PluginsListResult,
@@ -11,8 +20,8 @@ import { projectGateway } from "../lib/reactive/application.ts";
 import { useApplication } from "../lib/reactive/context.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import { projectOwner } from "../lib/reactive/projection.ts";
-import { PluginArtTile } from "../pages/plugins/consent-dialog.tsx";
 import { PluginIconOwner, pluginIconFetchContext } from "../pages/plugins/plugin-icon-owner.ts";
+import { PluginArtTile } from "../pages/plugins/presentation.tsx";
 import { renderSidebarNavLink as SidebarNavLink } from "./app-sidebar-nav-menus.tsx";
 import type { AppSidebarRenderHost } from "./app-sidebar-render.tsx";
 import type { IconName } from "./icon-data.ts";
@@ -49,7 +58,7 @@ function sidebarPlugins(plugins: readonly PluginCatalogEntry[]): SidebarPlugin[]
 }
 
 function SidebarPages(props: { host: AppSidebarRenderHost; pluginSelected: boolean }) {
-  // Enabled routes leave out Templates unless its experimental flag is on.
+  // Enabled routes respect the advanced Templates opt-out.
   const pages = () =>
     CUSTOMIZE_PAGES.filter(([route]) => props.host.enabledRouteIds?.includes(route) ?? true);
   return (
@@ -135,9 +144,17 @@ function SidebarPlugins(props: {
                 href={href()}
                 active={props.pathname === href()}
                 icon={
-                  // Refresh artwork with the inventory snapshot while keeping the link mounted.
-                  <Show when={plugin()} keyed>
-                    {(entry) => <SidebarPluginArt plugin={entry} />}
+                  // A fresh list is not a new icon. Reload only for a changed installation or icon availability.
+                  <Show
+                    when={JSON.stringify([
+                      plugin().catalogId,
+                      plugin().version,
+                      plugin().installedAt,
+                      Boolean(plugin().hasIcon),
+                    ])}
+                    keyed
+                  >
+                    <SidebarPluginArt plugin={plugin()} />
                   </Show>
                 }
                 label={plugin().name}
@@ -167,7 +184,8 @@ export function SidebarCustomize(props: { host: AppSidebarRenderHost }): JSX.Ele
   const allowed = createMemo(() =>
     canCallGatewayMethod(gateway.read().snapshot, "plugins.list", "operator.read"),
   );
-  const inventory = createMemo(() => {
+  // Optional shortcuts must not hold route updates while inventory refreshes.
+  const inventory = createDeferred(() => {
     epoch();
     generation();
     return allowed()

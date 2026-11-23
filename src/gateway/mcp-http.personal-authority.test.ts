@@ -37,7 +37,7 @@ it.each([false, true])(
       const invoke = vi.fn(async () => {
         const caller = getGatewayToolCallerIdentity();
         expect(caller?.operationalRunInstance).toBe(turn.admittedRunContext.operationalRunInstance);
-        expect(caller?.receiptAuthority?.()).toBe(true);
+        expect(() => caller?.receiptAuthority?.()).not.toThrow();
         return {
           entries: [],
           profileId: "requester",

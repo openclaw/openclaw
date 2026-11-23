@@ -21,7 +21,12 @@ import {
   NoticeBanner,
 } from "./view-controls.tsx";
 import { Editor, EditorActions } from "./view-editor.tsx";
-import { describeJobNextRun, describeJobSchedule, TriggerIndicator } from "./view-job-status.tsx";
+import {
+  describeEditedOneShotStatus,
+  describeJobNextRun,
+  describeJobSchedule,
+  TriggerIndicator,
+} from "./view-job-status.tsx";
 import { RunHistory } from "./view-runs.tsx";
 import { CronSuggestionLists } from "./view-suggestions.tsx";
 import type { CronProps, CronPanelMode } from "./view-types.ts";
@@ -125,6 +130,8 @@ function DetailHeader(
       : t("cron.detail.newTitle");
   const reading = () => props.mode === "job" && !props.editing;
   const description = () => (reading() ? props.selectedJob?.description?.trim() : undefined);
+  const editStatus = () =>
+    props.editing ? describeEditedOneShotStatus(props.selectedJob, props.form) : undefined;
   // Header describes the SAVED job (schedule + next run); the form's live
   // summary describes unsaved edits, so the two never contradict each other.
   // The cadence reads as the Automations sidebar does ("Daily"); event triggers keep their source.
@@ -144,6 +151,11 @@ function DetailHeader(
           <div class="cron-detail-meta">
             <span class="cron-detail-sub">{subtitle()}</span>
             {props.selectedJob?.trigger ? <TriggerIndicator /> : undefined}
+          </div>
+        ) : undefined}
+        {editStatus() ? (
+          <div class="cron-detail-runtime" data-test-id="cron-schedule-runtime" role="status">
+            {editStatus()}
           </div>
         ) : undefined}
         {description() ? (

@@ -1,6 +1,7 @@
 import type { Worker, WorkerOptions } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { createDeferred } from "../../test/helpers/promise.js";
+import { withWorkerPreload } from "../../test/helpers/runtime-preload.js";
 
 /** Hold a real worker path lookup while the host retires its request owner. */
 export function createWorkerSourceLookupGate(pathname: string) {
@@ -30,19 +31,10 @@ export function createWorkerSourceLookupGate(pathname: string) {
       Atomics.notify(control, 1);
     },
     options(options?: WorkerOptions): WorkerOptions {
-      return {
-        ...options,
-        execArgv: [
-          ...(options?.execArgv ?? []),
-          "--import",
-          `data:text/javascript,${encodeURIComponent(preload)}`,
-        ],
-        workerData: {
-          ...options?.workerData,
-          sourceLookupGate: control.buffer,
-          sourceLookupPath: pathname,
-        },
-      };
+      return withWorkerPreload(options, preload, {
+        sourceLookupGate: control.buffer,
+        sourceLookupPath: pathname,
+      });
     },
     message(message: unknown) {
       if (!isRecord(message) || message.type !== "test-source-lookup") {

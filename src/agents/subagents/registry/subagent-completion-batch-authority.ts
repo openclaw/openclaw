@@ -1,4 +1,8 @@
 import { isDeepStrictEqual } from "node:util";
+import {
+  getCanonicalGatewayContextResolver,
+  getGatewayContextResolver,
+} from "../../../plugins/runtime/gateway-request-scope.js";
 import { SUBAGENT_ENDED_REASON_KILLED } from "./subagent-lifecycle-events.js";
 import type { SubagentCompletionCustody } from "./subagent-registry-memory.types.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
@@ -16,11 +20,18 @@ export function selectCompletionAuthorityBatch(
   observed: readonly SubagentRunRecord[],
   anchor: SubagentRunRecord,
   custodies: ReadonlyMap<object, SubagentCompletionCustody>,
+  retired: WeakSet<object>,
 ): SubagentRunRecord[] {
   const first = custodies.get(getSubagentRunRuntimeKey(anchor))?.authority;
+  const anchorResolver = getGatewayContextResolver(anchor);
+  const gateway = anchorResolver && getCanonicalGatewayContextResolver(anchorResolver);
+  const isRetired = retired.has(getSubagentRunRuntimeKey(anchor));
   return observed.filter((entry) => {
     const source = custodies.get(getSubagentRunRuntimeKey(entry))?.authority;
+    const resolver = getGatewayContextResolver(entry);
     return (
+      retired.has(getSubagentRunRuntimeKey(entry)) === isRetired &&
+      (resolver && getCanonicalGatewayContextResolver(resolver)) === gateway &&
       source?.operatorAuthority?.source === first?.operatorAuthority?.source &&
       source?.operatorAuthority?.invocation === first?.operatorAuthority?.invocation &&
       isDeepStrictEqual(source?.operatorAuthority?.scopes, first?.operatorAuthority?.scopes) &&

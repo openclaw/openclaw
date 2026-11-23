@@ -72,7 +72,11 @@ async function withCronGateway(
         agentId: "main",
         sessionKey: "agent:main:cron-mutation-fixture",
         operationalRunInstance: { instanceId: "cron-mutation-fixture", runId: "fixture-run" },
-        receiptAuthority: () => current,
+        receiptAuthority: () => {
+          if (!current) {
+            throw new Error("agent tool caller authority is no longer active");
+          }
+        },
         gatewayContextResolver: () => fixture.context,
       };
       await run({
@@ -220,44 +224,39 @@ describe("Cron mutation outcomes through the in-process router", () => {
     },
   );
 
-  it.each(["revoked", "aborted"] as const)(
-    "leaves durable state unchanged when its caller is %s during validation",
-    async (closure) => {
-      const validating = createDeferredCore();
-      const resumeValidation = createDeferredCore();
-      await withCronGateway(
-        async (fixture) => {
-          const before = await loadCronStore(fixture.storePath);
-          const pending = fixture.call({ method: "cron.add", params: jobInput });
-          try {
-            await Promise.race([
-              validating.promise,
-              pending.then(() => {
-                throw new Error("Cron mutation returned before its validation boundary");
-              }),
-            ]);
-            fixture.closeCaller(closure);
-            resumeValidation.resolve();
-            await expect(pending).rejects.toThrow(
-              closure === "aborted" ? "Cron request aborted" : /authority.*no longer active/i,
-            );
-            // A rejected request alone does not prove its handler stopped before writing.
-            await fixture.settle();
-            expect(await loadCronStore(fixture.storePath)).toEqual(before);
-            expect(fixture.runIsolatedAgentJob).not.toHaveBeenCalled();
-          } finally {
-            resumeValidation.resolve();
-            await Promise.allSettled([pending]);
-          }
-        },
-        async () => {
-          validating.resolve();
-          await resumeValidation.promise;
-          return [];
-        },
-      );
-    },
-  );
+  it("leaves durable state unchanged when its caller is aborted during validation", async () => {
+    const validating = createDeferredCore();
+    const resumeValidation = createDeferredCore();
+    await withCronGateway(
+      async (fixture) => {
+        const before = await loadCronStore(fixture.storePath);
+        const pending = fixture.call({ method: "cron.add", params: jobInput });
+        try {
+          await Promise.race([
+            validating.promise,
+            pending.then(() => {
+              throw new Error("Cron mutation returned before its validation boundary");
+            }),
+          ]);
+          fixture.closeCaller("aborted");
+          resumeValidation.resolve();
+          await expect(pending).rejects.toThrow("Cron request aborted");
+          // A rejected request alone does not prove its handler stopped before writing.
+          await fixture.settle();
+          expect(await loadCronStore(fixture.storePath)).toEqual(before);
+          expect(fixture.runIsolatedAgentJob).not.toHaveBeenCalled();
+        } finally {
+          resumeValidation.resolve();
+          await Promise.allSettled([pending]);
+        }
+      },
+      async () => {
+        validating.resolve();
+        await resumeValidation.promise;
+        return [];
+      },
+    );
+  });
 
   it.each([
     { closure: "revoked", reportingError: false },
@@ -301,7 +300,7 @@ describe("Cron mutation outcomes through the in-process router", () => {
   );
 
   it.each([true, false])(
-    "preserves a revoked caller's response only for actual queue acceptance: %s",
+    "preserves the completed queue decision after caller revocation (accepted: %s)",
     async (accepted) => {
       await withCronGateway(async (fixture) => {
         const now = Date.now();
@@ -334,7 +333,12 @@ describe("Cron mutation outcomes through the in-process router", () => {
               processInstanceId,
             });
           } else {
-            await expect(pending).rejects.toThrow(/authority.*no longer active/i);
+            await expect(pending).resolves.toMatchObject({
+              ok: true,
+              ran: false,
+              reason: "not-due",
+              processInstanceId,
+            });
           }
           expect(responseBoundaryObserved).toBe(true);
           const queuedAtMs = (await readJob(fixture, job.id))?.state.queuedAtMs;

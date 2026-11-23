@@ -26,7 +26,9 @@ export const acpAgentModelCheck: HealthCheck = {
         continue;
       }
       const nativeDefault = resolveDefaultModelForAgent({ cfg, agentId });
-      const nativeRef = sanitizeTerminalText(`${nativeDefault.provider}/${nativeDefault.model}`);
+      const nativeRef = nativeDefault
+        ? sanitizeTerminalText(`${nativeDefault.provider}/${nativeDefault.model}`)
+        : "not configured";
       const agentPath =
         source.kind === "entries"
           ? appendConfigPathSegment("agents.entries", source.key)

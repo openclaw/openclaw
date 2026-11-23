@@ -2,7 +2,6 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import path from "node:path";
 import { formatErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
-import type { SessionSourceAssertion } from "../config/sessions/session-source-authority.js";
 import type { prepareWorkerGitHubExecutionGrant } from "../gateway/worker-environments/worker-github-execution-identity.js";
 import {
   captureDiagnosticToolExecutionAwaiting,
@@ -37,10 +36,6 @@ import {
   type DeliveryContext,
 } from "../utils/delivery-context.shared.js";
 import { resolveSafeTimeoutDelayMs } from "../utils/timer-delay.js";
-import {
-  captureAgentToolSourceExecutionGuard,
-  runWithAgentToolSourceExecutionScope,
-} from "./agent-tool-source-execution-guard.js";
 import { createProcessSessionId } from "./bash-process-id.js";
 import type { ProcessSession } from "./bash-process-registry.js";
 import {
@@ -213,8 +208,7 @@ export async function runExecProcess({
     requestSignal && initialStartupSignal
       ? AbortSignal.any([requestSignal, initialStartupSignal])
       : (requestSignal ?? initialStartupSignal);
-  let assertSourceActive: SessionSourceAssertion | undefined =
-    captureAgentToolSourceExecutionGuard(startupSignal);
+  startupSignal?.throwIfAborted();
   let operatorAuthority =
     opts.githubApp?.operatorAuthority ?? getGatewayToolCallerIdentity()?.operatorAuthority;
   const operatorSignal = operatorAuthority?.signal;
@@ -354,13 +348,7 @@ export async function runExecProcess({
   let githubGrant: Awaited<ReturnType<typeof prepareWorkerGitHubExecutionGrant>>;
   const githubStartup = new AbortController();
   const cancelGitHubStartup = () => githubStartup.abort(startupSignal?.reason);
-  const onGitHubRevoked = () => {
-    if (managedRun) {
-      managedRun.cancel("manual-cancel");
-    } else {
-      supervisor.cancel(sessionId, "manual-cancel");
-    }
-  };
+  const onGitHubRevoked = () => supervisor.cancel(sessionId, "manual-cancel");
   const beginSandboxTermination = () => {
     const terminate = terminateSandboxProcess;
     if (!terminate || sandboxTermination || session.exited) {
@@ -402,7 +390,7 @@ export async function runExecProcess({
     session.finalizing = true;
     try {
       if (!opts.sandbox && managedRun?.waitForExtinction) {
-        finalOutcome = await settleHostExecDescendants(session, managedRun, outcome);
+        finalOutcome = await settleHostExecDescendants(session, managedRun, outcome, opts.warnings);
       }
       if (outcome.exitReason !== "exit") {
         beginSandboxTermination();
@@ -535,66 +523,64 @@ export async function runExecProcess({
       sessionKey: opts.sessionKey,
       target: diagnosticTarget,
     });
-  const spawn = (input: SpawnInput) =>
-    runWithAgentToolSourceExecutionScope(assertSourceActive, async () => {
-      const assertSourceCurrent = assertSourceActive;
-      const assertOperatorCurrent = operatorAuthority?.assertCurrent;
-      const assertRuntimeCurrent = assertSandboxCurrent;
-      const assertHostPolicyCurrent = assertPolicyCurrent;
-      const assertCurrent = () => {
-        assertSourceCurrent?.();
-        assertOperatorCurrent?.();
-        assertRuntimeCurrent?.();
-        githubGrant?.assertCurrent();
-      };
-      // Source authority covers construction; approval policy ends at native launch.
-      assertCurrent();
-      assertHostPolicyCurrent?.();
-      if (opts.durable && (opts.sandbox || opts.usePty || opts.secretEgressBindings?.length)) {
-        throw new Error(
-          "Durable exec requires noninteractive Gateway-host execution without secret-egress proxy grants. Use non-durable background exec or a directly provided credential.",
+  const spawn = async (input: SpawnInput) => {
+    const assertOperatorCurrent = operatorAuthority?.assertCurrent;
+    const assertRuntimeCurrent = assertSandboxCurrent;
+    const assertHostPolicyCurrent = assertPolicyCurrent;
+    const assertCurrent = () => {
+      startupSignal?.throwIfAborted();
+      assertOperatorCurrent?.();
+      assertRuntimeCurrent?.();
+      githubGrant?.assertCurrent();
+    };
+    // Source authority covers construction; approval policy ends at native launch.
+    assertCurrent();
+    assertHostPolicyCurrent?.();
+    if (opts.durable && (opts.sandbox || opts.usePty || opts.secretEgressBindings?.length)) {
+      throw new Error(
+        "Durable exec requires noninteractive Gateway-host execution without secret-egress proxy grants. Use non-durable background exec or a directly provided credential.",
+      );
+    }
+    const grant = opts.secretEgressBindings
+      ? await registerSecretEgressProxyProcess(opts.secretEgressBindings)
+      : undefined;
+    secretEgressGrant = grant;
+    try {
+      if (opts.durable) {
+        const { startDurableExecProcess } = await import("./bash-process-durable.js");
+        return await startDurableExecProcess(
+          session,
+          {
+            ...input,
+            env: resolveExecLaunchEnv(input.env, false),
+            assertCurrent,
+            beforeSpawn: assertHostPolicyCurrent,
+            initiateSpawn: launchLifecycle.wrap(assertCurrent, assertHostPolicyCurrent),
+          },
+          opts.durable,
         );
       }
-      const grant = opts.secretEgressBindings
-        ? await registerSecretEgressProxyProcess(opts.secretEgressBindings)
-        : undefined;
-      secretEgressGrant = grant;
-      try {
-        if (opts.durable) {
-          const { startDurableExecProcess } = await import("./bash-process-durable.js");
-          return await startDurableExecProcess(
-            session,
-            {
-              ...input,
-              env: resolveExecLaunchEnv(input.env, false),
-              assertCurrent,
-              beforeSpawn: assertHostPolicyCurrent,
-              initiateSpawn: launchLifecycle.wrap(assertCurrent, assertHostPolicyCurrent),
+      return await withChildProcessOperation("agent.exec", () =>
+        withoutGatewayToolCallerIdentity(() =>
+          supervisor.spawn({
+            ...input,
+            env: resolveExecLaunchEnv(input.env, Boolean(opts.sandbox), grant?.env),
+            onCancel: () => {
+              beginSandboxTermination();
+              grant?.revoke();
             },
-            opts.durable,
-          );
-        }
-        return await withChildProcessOperation("agent.exec", () =>
-          withoutGatewayToolCallerIdentity(() =>
-            supervisor.spawn({
-              ...input,
-              env: resolveExecLaunchEnv(input.env, Boolean(opts.sandbox), grant?.env),
-              onCancel: () => {
-                beginSandboxTermination();
-                grant?.revoke();
-              },
-              assertCurrent,
-              ...(input.mode === "child" ? { prepareTargetSpawn: prepareSandboxCurrent } : {}),
-              beforeSpawn: assertHostPolicyCurrent,
-              initiateSpawn: launchLifecycle.wrap(assertCurrent, assertHostPolicyCurrent),
-            }),
-          ),
-        );
-      } catch (error) {
-        grant?.revoke();
-        throw error;
-      }
-    });
+            assertCurrent,
+            ...(input.mode === "child" ? { prepareTargetSpawn: prepareSandboxCurrent } : {}),
+            beforeSpawn: assertHostPolicyCurrent,
+            initiateSpawn: launchLifecycle.wrap(assertCurrent, assertHostPolicyCurrent),
+          }),
+        ),
+      );
+    } catch (error) {
+      grant?.revoke();
+      throw error;
+    }
+  };
 
   // Sandboxed reads cannot reach host temp files, and durable commands keep their own log.
   // GitHub App execution must not persist potentially credential-bearing raw output.
@@ -602,7 +588,6 @@ export async function runExecProcess({
     session.outputFile = openPrivateTempFileStream("openclaw-exec", EXEC_OUTPUT_FILE_MAX_BYTES);
   }
   try {
-    assertSourceActive?.();
     operatorAuthority?.assertCurrent();
     releaseOperatorAuthority = operatorAuthority?.retain?.();
     if (opts.githubApp) {
@@ -614,11 +599,10 @@ export async function runExecProcess({
       if (process.platform === "win32" && !opts.usePty) {
         throw new Error("GitHub App execution on Windows requires a PTY; retry with pty enabled.");
       }
-      await launchLifecycle.prepare(assertSourceActive, beforeSpawn);
+      startupSignal?.throwIfAborted();
+      await launchLifecycle.prepare(beforeSpawn);
+      startupSignal?.throwIfAborted();
       startupSignal?.addEventListener("abort", cancelGitHubStartup, { once: true });
-      if (startupSignal?.aborted) {
-        cancelGitHubStartup();
-      }
       const { prepareWorkerGitHubExecutionGrant } =
         await import("../gateway/worker-environments/worker-github-execution-identity.js");
       githubGrant = await prepareWorkerGitHubExecutionGrant({
@@ -626,7 +610,6 @@ export async function runExecProcess({
         expectedProfileId: opts.githubApp.profileId,
         signal: githubStartup.signal,
         assertCurrent: () => {
-          assertSourceActive?.();
           operatorAuthority?.assertCurrent();
           assertPolicyCurrent?.();
           return true;
@@ -655,8 +638,9 @@ export async function runExecProcess({
       onStdout: handleOutput("stdout", sanitizeStdout),
       onStderr: handleOutput("stderr", sanitizeStderr),
     };
+    startupSignal?.throwIfAborted();
     if (!opts.githubApp) {
-      await launchLifecycle.prepare(assertSourceActive, beforeSpawn);
+      await launchLifecycle.prepare(beforeSpawn);
     }
     if (spawnSpec.mode === "pty") {
       try {
@@ -672,14 +656,14 @@ export async function runExecProcess({
           throw err;
         }
         launchLifecycle.release("retry");
-        assertSourceActive?.();
+        startupSignal?.throwIfAborted();
         const warning = `Warning: PTY spawn failed (${String(err)}); retrying without PTY for \`${opts.command}\`.`;
         logWarn(
           `exec: PTY spawn failed (${String(err)}); retrying without PTY for "${opts.command}".`,
         );
         opts.warnings.push(warning);
         usingPty = false;
-        await launchLifecycle.prepare(assertSourceActive, beforeSpawn);
+        await launchLifecycle.prepare(beforeSpawn);
       }
     }
     if (!managedRun) {
@@ -723,7 +707,6 @@ export async function runExecProcess({
     startupSignal?.removeEventListener("abort", cancelGitHubStartup);
     launchLifecycle.dispose();
     assertPolicyCurrent = undefined;
-    assertSourceActive = undefined;
     operatorAuthority = undefined;
     assertSandboxCurrent = undefined;
     prepareSandboxCurrent = undefined;
