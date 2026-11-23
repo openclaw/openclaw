@@ -339,3 +339,38 @@ it.each(["warning", "error"] as const)(
     );
   },
 );
+
+it("unrefs the launcher IPC channel so a settled child exits naturally", async () => {
+  const child = spawn(
+    process.execPath,
+    ["--import", "tsx", "-e", "import './src/update/gateway-trial.ts';"],
+    {
+      cwd: process.cwd(),
+      env: { ...process.env, OPENCLAW_LAUNCHER_IPC: "1" },
+      stdio: ["ignore", "ignore", "pipe", "ipc"],
+    },
+  );
+  let stderr = "";
+  child.stderr?.on("data", (chunk: Buffer) => {
+    stderr += chunk.toString();
+  });
+  const exited = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>(
+    (resolve, reject) => {
+      const timeout = setTimeout(
+        () => reject(new Error(`Child hung with OPENCLAW_LAUNCHER_IPC=1: ${stderr}`)),
+        10_000,
+      );
+      child.once("exit", (code, signal) => {
+        clearTimeout(timeout);
+        resolve({ code, signal });
+      });
+    },
+  );
+  try {
+    expect(await exited).toEqual({ code: 0, signal: null });
+  } finally {
+    if (child.exitCode === null && child.signalCode === null) {
+      child.kill("SIGKILL");
+    }
+  }
+});
