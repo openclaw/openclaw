@@ -26,6 +26,9 @@ const MANAGED_MCP_BRIDGES = [
   ["openClawToolsMcpBridge", "openclaw-tools", "openclawToolsServe"],
 ] as const;
 
+const pluginToolsMcpAllowEnv = "OPENCLAW_PLUGIN_TOOLS_MCP_ALLOW";
+const pluginToolsMcpDenyEnv = "OPENCLAW_PLUGIN_TOOLS_MCP_DENY";
+
 function isAcpxPluginRoot(dir: string): boolean {
   return (
     fs.existsSync(path.join(dir, "openclaw.plugin.json")) &&
@@ -162,9 +165,25 @@ function resolveManagedToolsMcpServerConfig(
   };
 }
 
+function resolvePluginToolsMcpBridgeEnv(params: {
+  pluginToolsMcpBridgeAllow?: string[];
+  pluginToolsMcpBridgeDeny?: string[];
+}): Record<string, string> | undefined {
+  const env: Record<string, string> = {};
+  if (params.pluginToolsMcpBridgeAllow && params.pluginToolsMcpBridgeAllow.length > 0) {
+    env[pluginToolsMcpAllowEnv] = JSON.stringify(params.pluginToolsMcpBridgeAllow);
+  }
+  if (params.pluginToolsMcpBridgeDeny && params.pluginToolsMcpBridgeDeny.length > 0) {
+    env[pluginToolsMcpDenyEnv] = JSON.stringify(params.pluginToolsMcpBridgeDeny);
+  }
+  return Object.keys(env).length > 0 ? env : undefined;
+}
+
 function resolveConfiguredMcpServers(params: {
   mcpServers?: Record<string, McpServerConfig>;
   pluginToolsMcpBridge: boolean;
+  pluginToolsMcpBridgeAllow?: string[];
+  pluginToolsMcpBridgeDeny?: string[];
   openClawToolsMcpBridge: boolean;
   moduleUrl?: string;
 }): Record<string, McpServerConfig> {
@@ -176,7 +195,13 @@ function resolveConfiguredMcpServers(params: {
   }
   for (const [flag, name, entryPoint] of MANAGED_MCP_BRIDGES) {
     if (params[flag]) {
-      resolved[name] = resolveManagedToolsMcpServerConfig(entryPoint, params.moduleUrl);
+      const env =
+        name === "openclaw-plugin-tools" ? resolvePluginToolsMcpBridgeEnv(params) : undefined;
+      const server = resolveManagedToolsMcpServerConfig(entryPoint, params.moduleUrl);
+      if (env) {
+        server.env = { ...server.env, ...env };
+      }
+      resolved[name] = server;
     }
   }
   return resolved;
@@ -216,6 +241,8 @@ export function resolveAcpxPluginConfig(params: {
   const mcpServers = resolveConfiguredMcpServers({
     mcpServers: normalized.mcpServers,
     pluginToolsMcpBridge,
+    pluginToolsMcpBridgeAllow: normalized.pluginToolsMcpBridgeAllow,
+    pluginToolsMcpBridgeDeny: normalized.pluginToolsMcpBridgeDeny,
     openClawToolsMcpBridge,
     moduleUrl: params.moduleUrl,
   });
@@ -237,6 +264,8 @@ export function resolveAcpxPluginConfig(params: {
     nonInteractivePermissions:
       normalized.nonInteractivePermissions ?? DEFAULT_NON_INTERACTIVE_POLICY,
     pluginToolsMcpBridge,
+    pluginToolsMcpBridgeAllow: normalized.pluginToolsMcpBridgeAllow,
+    pluginToolsMcpBridgeDeny: normalized.pluginToolsMcpBridgeDeny,
     openClawToolsMcpBridge,
     timeoutSeconds: normalized.timeoutSeconds,
     agentProcessEnvAllow: normalized.agentProcessEnvAllow,

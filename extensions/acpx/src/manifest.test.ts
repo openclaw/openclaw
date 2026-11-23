@@ -1,6 +1,8 @@
 // ACPX tests cover manifest plugin behavior.
 import fs from "node:fs";
+import Ajv from "ajv";
 import { describe, expect, it } from "vitest";
+import { AcpxPluginConfigSchema } from "./config-schema.js";
 
 type AcpxPackageManifest = {
   dependencies?: Record<string, string>;
@@ -18,6 +20,14 @@ type AcpxPluginManifest = {
     scope: string;
     relativePath: string;
   }>;
+  configGroups?: Array<{
+    id: string;
+    properties: string[];
+  }>;
+  configSchema?: {
+    properties?: Record<string, Record<string, unknown>>;
+  };
+  uiHints?: Record<string, Record<string, unknown>>;
 };
 
 const packageJson = JSON.parse(
@@ -70,5 +80,35 @@ describe("acpx package manifest", () => {
         relativePath: "acpx/codex-home/.tmp/plugins",
       },
     ]);
+  });
+
+  it("declares pluginToolsMcpBridgeAllow and pluginToolsMcpBridgeDeny in schema, groups, and uiHints with Zod parity", () => {
+    const toolsGroup = pluginJson.configGroups?.find(
+      (group) => group.id === "tools-and-mcp-servers",
+    );
+    expect(toolsGroup?.properties).toEqual(
+      expect.arrayContaining(["pluginToolsMcpBridgeAllow", "pluginToolsMcpBridgeDeny"]),
+    );
+    expect(pluginJson.uiHints?.pluginToolsMcpBridgeAllow).toBeDefined();
+    expect(pluginJson.uiHints?.pluginToolsMcpBridgeDeny).toBeDefined();
+
+    const ajv = new Ajv({ allErrors: true, strict: false });
+    const validateManifest = ajv.compile(pluginJson.configSchema ?? {});
+    const fixtures: Array<[Record<string, unknown>, boolean]> = [
+      [{ pluginToolsMcpBridgeAllow: ["memory-core", "github"] }, true],
+      [{ pluginToolsMcpBridgeDeny: [] }, true],
+      [{ pluginToolsMcpBridgeDeny: ["diffs"] }, true],
+      [{ pluginToolsMcpBridgeAllow: [] }, false],
+      [{ pluginToolsMcpBridgeAllow: [""] }, false],
+      [{ pluginToolsMcpBridgeAllow: ["   "] }, false],
+      [{ pluginToolsMcpBridgeAllow: "memory-core" }, false],
+      [{ pluginToolsMcpBridgeDeny: [""] }, false],
+      [{ pluginToolsMcpBridgeDeny: [" \t "] }, false],
+      [{ pluginToolsMcpBridgeDeny: [42] }, false],
+    ];
+    for (const [fixture, expectedValid] of fixtures) {
+      expect(validateManifest(fixture)).toBe(expectedValid);
+      expect(AcpxPluginConfigSchema.safeParse(fixture).success).toBe(expectedValid);
+    }
   });
 });

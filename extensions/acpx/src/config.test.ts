@@ -91,6 +91,36 @@ it("injects the built-in plugin-tools MCP server only when explicitly enabled", 
   });
 });
 
+it("propagates pluginToolsMcpBridgeAllow and pluginToolsMcpBridgeDeny into managed server env", () => {
+  const resolved = resolve({
+    pluginToolsMcpBridge: true,
+    pluginToolsMcpBridgeAllow: [" memory-core ", "github"],
+    pluginToolsMcpBridgeDeny: ["diffs", " codex "],
+  });
+  expect(resolved.pluginToolsMcpBridgeAllow).toEqual(["memory-core", "github"]);
+  expect(resolved.pluginToolsMcpBridgeDeny).toEqual(["diffs", "codex"]);
+  expect(resolved.mcpServers["openclaw-plugin-tools"]?.env).toEqual({
+    OPENCLAW_PLUGIN_TOOLS_MCP_ALLOW: JSON.stringify(["memory-core", "github"]),
+    OPENCLAW_PLUGIN_TOOLS_MCP_DENY: JSON.stringify(["diffs", "codex"]),
+  });
+  expect(
+    resolve({ pluginToolsMcpBridge: true, pluginToolsMcpBridgeDeny: [] }).mcpServers[
+      "openclaw-plugin-tools"
+    ]?.env,
+  ).toBeUndefined();
+});
+
+it.each([
+  ["pluginToolsMcpBridgeAllow", [[], "memory-core", ["   "], [42]], "a non-empty array"],
+  ["pluginToolsMcpBridgeDeny", ["diffs", [""], [42]], "an array"],
+] as const)("rejects invalid %s values", (key, values, requirement) => {
+  for (const value of values) {
+    expect(() => resolve({ [key]: value })).toThrow(
+      `${key} must be ${requirement} of plugin IDs or tool names`,
+    );
+  }
+});
+
 it("launches managed bridges from the host package when acpx is an external package", () => {
   const tmp = fs.realpathSync(tempDirs.make("openclaw-acpx-external-"));
   const hostRoot = path.join(tmp, "lib", "node_modules", "openclaw");
@@ -127,6 +157,15 @@ it("launches managed bridges from the host package when acpx is an external pack
         command: process.execPath,
         args: [...runtimeArgs, path.join(hostRoot, "dist", "mcp", "openclaw-tools-serve.js")],
       },
+    });
+
+    // External-package launch resolution does not depend on a host capability marker.
+    const filtered = resolve(
+      { pluginToolsMcpBridge: true, pluginToolsMcpBridgeDeny: ["diffs"] },
+      { moduleUrl: pathToFileURL(path.join(pluginRoot, "dist", "config.js")).href },
+    );
+    expect(filtered.mcpServers["openclaw-plugin-tools"]?.env).toEqual({
+      OPENCLAW_PLUGIN_TOOLS_MCP_DENY: JSON.stringify(["diffs"]),
     });
   } finally {
     process.argv = originalArgv;

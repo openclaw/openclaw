@@ -15,13 +15,20 @@ import {
   resetGlobalHookRunner,
 } from "../plugins/hook-runner-global.js";
 import { createMockPluginRegistry } from "../plugins/hooks.test-fixtures.js";
+import { setPluginToolMeta } from "../plugins/tool-metadata.js";
 import { PluginApprovalResolutions } from "../plugins/types.js";
 import {
   createCodexSupervisionToolsMcpServer,
   serveCodexSupervisionToolsMcp,
 } from "./codex-supervision-tools-serve.js";
 import { createPluginToolsMcpHandlers } from "./plugin-tools-handlers.js";
-import { acquirePluginToolsForMcp, servePluginToolsMcp } from "./plugin-tools-serve.js";
+import {
+  acquirePluginToolsForMcp,
+  pluginToolsMcpAllowEnv,
+  pluginToolsMcpDenyEnv,
+  resolvePluginToolsMcpBridgePolicy,
+  servePluginToolsMcp,
+} from "./plugin-tools-serve.js";
 import { createTool, textResult, withMcpConnection } from "./tools-mcp.test-support.js";
 
 const callGatewayTool = vi.hoisted(() => vi.fn());
@@ -179,6 +186,169 @@ describe("plugin tools MCP server", () => {
     } finally {
       await acquisition.release();
     }
+  });
+
+  it("applies bridgePolicy.deny to registry pre-filtering and exposed tools", async () => {
+    const githubTool = createTool("github_read", stored());
+    setPluginToolMeta(githubTool, { pluginId: "github", optional: false });
+    const diffsTool = createTool("diffs", stored());
+    setPluginToolMeta(diffsTool, { pluginId: "diffs", optional: false });
+    resolvePluginToolsMock.mockReturnValue([githubTool, diffsTool]);
+
+    const config = {
+      plugins: { enabled: true },
+      tools: { deny: ["tavily"] },
+    } as never;
+    vi.stubEnv("OPENCLAW_TOOLS_MCP_AGENT_SESSION_KEY", "agent:main:acp:session-deny");
+    const acquisition = await acquirePluginToolsForMcp({
+      config,
+      bridgePolicy: { deny: ["diffs", "codex"] },
+    });
+    try {
+      const acquireArgs = acquireStandalonePluginToolRegistryMock.mock.calls[0]?.[0];
+      expect(acquireArgs?.toolAllowlist).toBeUndefined();
+      expect(acquireArgs?.toolDenylist).toEqual(
+        expect.arrayContaining(["tavily", "diffs", "codex"]),
+      );
+      expect(acquisition.resolveTools().map((tool) => tool.name)).toEqual(["github_read"]);
+    } finally {
+      await acquisition.release();
+    }
+  });
+
+  it("applies bridgePolicy.allow to narrow loaded plugins without widening registry toolAllowlist", async () => {
+    const githubTool = createTool("github_read", stored());
+    setPluginToolMeta(githubTool, { pluginId: "github", optional: false });
+    const diffsTool = createTool("diffs", stored());
+    setPluginToolMeta(diffsTool, { pluginId: "diffs", optional: false });
+    resolvePluginToolsMock.mockReturnValue([githubTool, diffsTool]);
+
+    const config = { plugins: { enabled: true } } as never;
+    vi.stubEnv("OPENCLAW_TOOLS_MCP_AGENT_SESSION_KEY", "agent:main:acp:session-allow");
+    const acquisition = await acquirePluginToolsForMcp({
+      config,
+      bridgePolicy: { allow: ["github"] },
+    });
+    try {
+      const acquireArgs = acquireStandalonePluginToolRegistryMock.mock.calls[0]?.[0];
+      expect(acquireArgs?.toolAllowlist).toBeUndefined();
+      expect(acquireArgs?.toolDenylist).toBeUndefined();
+      expect(acquisition.resolveTools().map((tool) => tool.name)).toEqual(["github_read"]);
+    } finally {
+      await acquisition.release();
+    }
+  });
+
+  it("never allows bridgePolicy.allow to override agent/global deny or stricter allowlists", async () => {
+    const allowedTool = createTool("plugin_allowed", stored());
+    setPluginToolMeta(allowedTool, { pluginId: "allowed-plugin", optional: false });
+    const deniedTool = createTool("plugin_denied", stored());
+    setPluginToolMeta(deniedTool, { pluginId: "denied-plugin", optional: false });
+    const extraTool = createTool("plugin_extra", stored());
+    setPluginToolMeta(extraTool, { pluginId: "extra-plugin", optional: false });
+    resolvePluginToolsMock.mockReturnValue([allowedTool, deniedTool, extraTool]);
+
+    const config = {
+      plugins: { enabled: true },
+      tools: { allow: ["plugin_allowed", "plugin_denied"], deny: ["plugin_denied"] },
+      agents: {
+        entries: {
+          research: { tools: { allow: ["plugin_allowed"] } },
+        },
+      },
+    } as never;
+    vi.stubEnv("OPENCLAW_TOOLS_MCP_AGENT_SESSION_KEY", "agent:research:acp:session-invariant");
+    const acquisition = await acquirePluginToolsForMcp({
+      config,
+      bridgePolicy: { allow: ["plugin_allowed", "plugin_denied", "plugin_extra"] },
+    });
+    try {
+      const acquireArgs = acquireStandalonePluginToolRegistryMock.mock.calls[0]?.[0];
+      expect(acquireArgs?.toolAllowlist).toEqual(["plugin_allowed", "plugin_denied"]);
+      expect(acquireArgs?.toolDenylist).toEqual(expect.arrayContaining(["plugin_denied"]));
+      expect(acquisition.resolveTools().map((tool) => tool.name)).toEqual(["plugin_allowed"]);
+    } finally {
+      await acquisition.release();
+    }
+  });
+
+  it("enforces restrictive global profile even when agentless bridgePolicy.allow names a plugin", async () => {
+    const githubTool = createTool("github_read", stored());
+    setPluginToolMeta(githubTool, { pluginId: "github", optional: false });
+    resolvePluginToolsMock.mockReturnValue([githubTool]);
+
+    const acquisition = await acquirePluginToolsForMcp({
+      config: { plugins: { enabled: true }, tools: { profile: "minimal" } } as never,
+      bridgePolicy: { allow: ["github"] },
+    });
+    try {
+      expect(acquisition.resolveTools()).toEqual([]);
+    } finally {
+      await acquisition.release();
+    }
+  });
+
+  it("lets bridgePolicy.deny win over bridgePolicy.allow and fails closed on empty allow", async () => {
+    const alphaTool = createTool("alpha_tool", stored());
+    setPluginToolMeta(alphaTool, { pluginId: "alpha", optional: false });
+    const betaTool = createTool("beta_tool", stored());
+    setPluginToolMeta(betaTool, { pluginId: "beta", optional: false });
+    resolvePluginToolsMock.mockReturnValue([alphaTool, betaTool]);
+
+    const combined = await acquirePluginToolsForMcp({
+      config: { plugins: { enabled: true } } as never,
+      bridgePolicy: { allow: ["alpha", "beta"], deny: ["beta"] },
+    });
+    try {
+      expect(combined.resolveTools().map((tool) => tool.name)).toEqual(["alpha_tool"]);
+    } finally {
+      await combined.release();
+    }
+
+    acquireStandalonePluginToolRegistryMock.mockClear();
+    const emptyAllow = await acquirePluginToolsForMcp({
+      config: { plugins: { enabled: true } } as never,
+      bridgePolicy: { allow: [] },
+    });
+    try {
+      expect(acquireStandalonePluginToolRegistryMock).not.toHaveBeenCalled();
+      expect(emptyAllow.resolveTools()).toEqual([]);
+    } finally {
+      await emptyAllow.release();
+    }
+  });
+
+  it("parses bridge filter env vars and threads them through servePluginToolsMcp", async () => {
+    expect(resolvePluginToolsMcpBridgePolicy({})).toBeUndefined();
+    expect(
+      resolvePluginToolsMcpBridgePolicy({
+        [pluginToolsMcpAllowEnv]: '[" github ", "browser", "github", ""]',
+        [pluginToolsMcpDenyEnv]: "diffs, codex, diffs",
+      }),
+    ).toEqual({
+      allow: ["github", "browser"],
+      deny: ["diffs", "codex"],
+    });
+    expect(() =>
+      resolvePluginToolsMcpBridgePolicy({ [pluginToolsMcpAllowEnv]: "[bad json" }),
+    ).toThrow(pluginToolsMcpAllowEnv);
+    expect(() =>
+      resolvePluginToolsMcpBridgePolicy({
+        [pluginToolsMcpDenyEnv]: '{"deny":"diffs"}',
+      }),
+    ).toThrow(pluginToolsMcpDenyEnv);
+    expect(() => resolvePluginToolsMcpBridgePolicy({ [pluginToolsMcpDenyEnv]: "[123]" })).toThrow(
+      pluginToolsMcpDenyEnv,
+    );
+
+    vi.stubEnv(pluginToolsMcpAllowEnv, JSON.stringify(["browser", "github"]));
+    vi.stubEnv(pluginToolsMcpDenyEnv, JSON.stringify(["diffs"]));
+    await servePluginToolsMcp();
+    const acquireArgs = acquireStandalonePluginToolRegistryMock.mock.calls[0]?.[0];
+    expect(acquireArgs?.toolAllowlist).toBeUndefined();
+    expect(acquireArgs?.toolDenylist).toEqual(["diffs"]);
+    expect(acquireArgs?.toolDenylist).not.toContain("browser");
+    expect(acquireArgs?.toolDenylist).not.toContain("github");
   });
 
   it("uses unique ids and releases execution tracking through the scheduler alias", async () => {

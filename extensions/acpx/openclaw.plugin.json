@@ -65,7 +65,13 @@
       "id": "tools-and-mcp-servers",
       "title": "Tools and MCP servers",
       "order": 30,
-      "properties": ["pluginToolsMcpBridge", "openClawToolsMcpBridge", "mcpServers"]
+      "properties": [
+        "pluginToolsMcpBridge",
+        "pluginToolsMcpBridgeAllow",
+        "pluginToolsMcpBridgeDeny",
+        "openClawToolsMcpBridge",
+        "mcpServers"
+      ]
     },
     {
       "id": "pi-sessions",
@@ -100,6 +106,17 @@
       },
       "pluginToolsMcpBridge": {
         "type": "boolean"
+      },
+      "pluginToolsMcpBridgeAllow": {
+        "type": "array",
+        "minItems": 1,
+        "items": { "type": "string", "minLength": 1, "pattern": "\\S" },
+        "description": "Plugin IDs or plugin tool names allowed through the ACPX openclaw-plugin-tools MCP bridge; narrows (never widens or grants optional tools beyond) the owning agent's effective policy."
+      },
+      "pluginToolsMcpBridgeDeny": {
+        "type": "array",
+        "items": { "type": "string", "minLength": 1, "pattern": "\\S" },
+        "description": "Plugin IDs or plugin tool names excluded from the ACPX openclaw-plugin-tools MCP bridge before plugin loading."
       },
       "openClawToolsMcpBridge": {
         "type": "boolean"
@@ -204,6 +221,16 @@
     "pluginToolsMcpBridge": {
       "label": "Plugin Tools MCP Bridge",
       "help": "Default off. When enabled, inject the built-in OpenClaw plugin-tools MCP server into embedded ACP sessions so ACP agents can call plugin-registered tools.",
+      "advanced": true
+    },
+    "pluginToolsMcpBridgeAllow": {
+      "label": "Plugin Tools MCP Bridge Allowlist",
+      "help": "Optional plugin IDs or plugin tool names allowed through the ACPX openclaw-plugin-tools MCP bridge. Narrows (never widens) the owning agent's effective tool policy.",
+      "advanced": true
+    },
+    "pluginToolsMcpBridgeDeny": {
+      "label": "Plugin Tools MCP Bridge Denylist",
+      "help": "Optional plugin IDs or plugin tool names excluded from the ACPX openclaw-plugin-tools MCP bridge before plugin loading.",
       "advanced": true
     },
     "openClawToolsMcpBridge": {

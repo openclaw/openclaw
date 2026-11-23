@@ -5,11 +5,13 @@
  */
 import { pathToFileURL } from "node:url";
 import type { Server } from "@modelcontextprotocol/server";
+import { normalizeCsvOrLooseStringList } from "@openclaw/normalization-core/string-normalization";
 import { resolveEffectiveToolPolicy } from "../agents/agent-tools.policy.js";
 import { pickSandboxToolPolicy } from "../agents/sandbox-tool-policy.js";
 import {
   applyToolPolicyPipeline,
   buildDefaultToolPolicyPipelineSteps,
+  type ToolPolicyPipelineStep,
 } from "../agents/tool-policy-pipeline.js";
 import {
   collectExplicitAllowlist,
@@ -32,11 +34,99 @@ import {
 import { resolveToolsMcpAgentId, resolveToolsMcpSessionContext } from "./agent-session-env.js";
 import { createToolsMcpServer, serveRegisteredToolsMcpServer } from "./tools-stdio-server.js";
 
+export const pluginToolsMcpAllowEnv = "OPENCLAW_PLUGIN_TOOLS_MCP_ALLOW";
+export const pluginToolsMcpDenyEnv = "OPENCLAW_PLUGIN_TOOLS_MCP_DENY";
+
+export type PluginToolsMcpBridgePolicy = {
+  allow?: string[];
+  deny?: string[];
+};
+
+function dedupeTrimmedEntries(entries: readonly string[]): string[] {
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const entry of entries) {
+    const trimmed = entry.trim();
+    if (!trimmed || seen.has(trimmed)) {
+      continue;
+    }
+    seen.add(trimmed);
+    result.push(trimmed);
+  }
+  return result;
+}
+
+function parsePluginToolsMcpBridgeEnvList(
+  env: NodeJS.ProcessEnv,
+  envName: typeof pluginToolsMcpAllowEnv | typeof pluginToolsMcpDenyEnv,
+): string[] | undefined {
+  const raw = env[envName]?.trim();
+  if (!raw) {
+    return undefined;
+  }
+  if (raw.startsWith("[") || raw.startsWith("{")) {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(raw);
+    } catch (err) {
+      throw new Error(`${envName} must be a valid JSON string array: ${formatErrorMessage(err)}`, {
+        cause: err,
+      });
+    }
+    if (!Array.isArray(parsed) || !parsed.every((item) => typeof item === "string")) {
+      throw new Error(`${envName} must be a JSON array of strings`);
+    }
+    return dedupeTrimmedEntries(parsed);
+  }
+  return dedupeTrimmedEntries(normalizeCsvOrLooseStringList(raw));
+}
+
+export function resolvePluginToolsMcpBridgePolicy(
+  env: NodeJS.ProcessEnv = process.env,
+): PluginToolsMcpBridgePolicy | undefined {
+  const allow = parsePluginToolsMcpBridgeEnvList(env, pluginToolsMcpAllowEnv);
+  const deny = parsePluginToolsMcpBridgeEnvList(env, pluginToolsMcpDenyEnv);
+  if (allow === undefined && deny === undefined) {
+    return undefined;
+  }
+  return {
+    ...(allow !== undefined ? { allow } : {}),
+    ...(deny !== undefined ? { deny } : {}),
+  };
+}
+
+function normalizeBridgePolicy(
+  bridgePolicy?: PluginToolsMcpBridgePolicy,
+): PluginToolsMcpBridgePolicy | undefined {
+  if (!bridgePolicy) {
+    return undefined;
+  }
+  const allow =
+    bridgePolicy.allow !== undefined ? dedupeTrimmedEntries(bridgePolicy.allow) : undefined;
+  const deny =
+    bridgePolicy.deny !== undefined ? dedupeTrimmedEntries(bridgePolicy.deny) : undefined;
+  if (allow === undefined && (!deny || deny.length === 0)) {
+    return undefined;
+  }
+  return {
+    ...(allow !== undefined ? { allow } : {}),
+    ...(deny && deny.length > 0 ? { deny } : {}),
+  };
+}
+
 export async function acquirePluginToolsForMcp(params: {
   config: OpenClawConfig;
   agentId?: string;
+  bridgePolicy?: PluginToolsMcpBridgePolicy;
 }): Promise<PluginToolRegistryAcquisition> {
   const { config } = params;
+  const bridgePolicy = normalizeBridgePolicy(params.bridgePolicy);
+  if (bridgePolicy?.allow && bridgePolicy.allow.length === 0) {
+    return {
+      resolveTools: () => [],
+      release: async () => {},
+    };
+  }
   const context = { config, ...resolveToolsMcpSessionContext(params) };
   const effective = context.agentId
     ? resolveEffectiveToolPolicy({
@@ -50,7 +140,7 @@ export async function acquirePluginToolsForMcp(params: {
     effective?.profileAlsoAllow ?? config.tools?.alsoAllow,
   );
   const globalPolicy = effective?.globalPolicy ?? pickSandboxToolPolicy(config.tools);
-  const steps = effective
+  const baseSteps: ToolPolicyPipelineStep[] | undefined = effective
     ? buildDefaultToolPolicyPipelineSteps({
         profilePolicy,
         profile: effective.profile,
@@ -64,11 +154,61 @@ export async function acquirePluginToolsForMcp(params: {
         }),
       )
     : undefined;
-  const policies = steps?.map((step) => step.policy) ?? [profilePolicy, globalPolicy];
-  const toolAllowlist = collectExplicitAllowlist(policies);
-  const toolDenylist = collectExplicitDenylist(policies);
+  const bridgeStep: ToolPolicyPipelineStep | undefined = bridgePolicy
+    ? {
+        label: "acpx.pluginToolsMcpBridge",
+        policy: {
+          ...(bridgePolicy.allow ? { allow: bridgePolicy.allow } : {}),
+          ...(bridgePolicy.deny ? { deny: bridgePolicy.deny } : {}),
+        },
+        suppressUnavailableCoreToolWarning: true,
+      }
+    : undefined;
+  const steps: ToolPolicyPipelineStep[] | undefined = baseSteps
+    ? [...baseSteps, ...(bridgeStep ? [bridgeStep] : [])]
+    : bridgeStep
+      ? [
+          ...(profilePolicy
+            ? [
+                {
+                  label: "tools.profile",
+                  policy: profilePolicy,
+                  suppressUnavailableCoreToolWarning: true,
+                },
+              ]
+            : []),
+          ...(globalPolicy
+            ? [
+                {
+                  label: "tools.allow",
+                  policy: globalPolicy,
+                  suppressUnavailableCoreToolWarning: true,
+                },
+              ]
+            : []),
+          bridgeStep,
+        ]
+      : undefined;
+  const basePolicies = baseSteps?.map((step) => step.policy) ?? [profilePolicy, globalPolicy];
+  const baseAllowlist = collectExplicitAllowlist(basePolicies);
+  const baseDenylist = collectExplicitDenylist(basePolicies);
+  // Keep `toolAllowlist` strictly owned by the base policy so bridge allowlists
+  // can never opt in / grant optional plugin tools during standalone loading.
+  const toolAllowlist = baseAllowlist;
+  const toolDenylist = dedupeTrimmedEntries([...baseDenylist, ...(bridgePolicy?.deny ?? [])]);
   const acquisition = await acquireStandalonePluginToolRegistry({
     context,
+    ...(bridgePolicy && steps
+      ? {
+          filterToolNames: (pluginId: string, names: string[]) =>
+            applyToolPolicyPipeline({
+              tools: names.map((name) => ({ name })),
+              toolMeta: () => ({ pluginId }),
+              warn: () => {},
+              steps,
+            }).map((tool) => tool.name),
+        }
+      : {}),
     ...(toolAllowlist.length > 0 ? { toolAllowlist } : {}),
     ...(toolDenylist.length > 0 ? { toolDenylist } : {}),
     suppressNameConflicts: true,
@@ -101,6 +241,7 @@ export async function servePluginToolsMcp(): Promise<void> {
       acquirePluginToolsForMcp({
         config: await captureRuntimeConfigAsyncReader()(),
         agentId: resolveToolsMcpAgentId(),
+        bridgePolicy: resolvePluginToolsMcpBridgePolicy(),
       }),
     createServer: (tools, sdkResourceHost) => {
       if (tools.length === 0) {
