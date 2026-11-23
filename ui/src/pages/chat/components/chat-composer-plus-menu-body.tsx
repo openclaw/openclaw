@@ -82,25 +82,24 @@ function rootItems(menu: ChatComposerPlusMenuContentProps): MenuEntry[] {
     }),
   );
   const finish = (): MenuEntry[] => {
-    const rows: MenuEntry[] = [
+    if (plugins.length) {
+      if (entries.length) {
+        entries.push(menuDivider("plugin-actions-divider"));
+      }
+      entries.push(...plugins);
+    }
+    if (!entries.length) {
+      return attachments;
+    }
+    if (attachments.length) {
+      entries.push(menuDivider("attachment-divider"));
+    }
+    // Capabilities can arrive mid-click. Grow their scroll region above the
+    // attachment controls so those controls stay at the menu's anchored edge.
+    return [
+      { kind: "group", id: "root-list", class: "chat-plugin-menu-scroll", items: entries },
       ...attachments,
-      ...(entries.length && attachments.length ? [menuDivider("attachment-divider")] : []),
-      ...entries,
-      ...(plugins.length && (entries.length || attachments.length)
-        ? [menuDivider("plugin-actions-divider")]
-        : []),
-      ...plugins,
     ];
-    return plugins.length
-      ? [
-          {
-            kind: "group",
-            id: "root-list",
-            class: "chat-plugin-menu-scroll",
-            items: rows,
-          },
-        ]
-      : rows;
   };
   if (menu.showCapabilities || menu.rootToggles?.length) {
     entries.push(...(menu.rootToggles ?? []).map(renderCapabilityToggleRow));
