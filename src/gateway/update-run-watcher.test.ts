@@ -115,6 +115,35 @@ function nextPollSchedule() {
 }
 
 describe("Gateway update run watcher", () => {
+  it("publishes late diagnostic writes after a succeeded run has retired", async () => {
+    beginRun();
+    const published = createDeferredCore();
+    const broadcast = vi.fn(() => published.resolve());
+    watcher = startUpdateRunWatcher({ lifecycle, broadcast, log: { warn: vi.fn() } });
+    await published.promise;
+    const retired = nextLedgerRead("status");
+    ledger.run = { ...ledger.run!, status: "succeeded", phase: "finished", updatedAtMs: 2 };
+    await clock.advanceBy(2_000);
+    await retired;
+    const late = createDeferredCore();
+    broadcast.mockImplementation(() => late.resolve());
+    ledger.run = {
+      ...ledger.run,
+      updatedAtMs: 3,
+      steps: [
+        {
+          step: "warning:post-activation doctor inspections:0",
+          status: "completed",
+          detail: "Plaintext secret found.",
+        },
+      ],
+    };
+    wakeUpdateRunWatcher(ledger.run.runId);
+    await late.promise;
+    expect(broadcast).toHaveBeenLastCalledWith("update.run.changed", currentRunEvent());
+    expect(ledger.run.status).toBe("succeeded");
+  });
+
   it("joins in-flight schema publication on shutdown without arming its returned deadline", async () => {
     const publication = createDeferredCore<StateSchemaPublicationBlocker>();
     const entered = createDeferredCore();

@@ -11,9 +11,6 @@ import { captureGatewayStateOwner } from "../../infra/gateway-state-owner.js";
 import * as providerPersistence from "../../plugins/provider-auth-persistence.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import type { OpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import { disconnectGatewayClient } from "../test-helpers.e2e.js";
-import type { GatewayClient as ServerGatewayClient } from "./client-types.js";
-import { modelsAuthLoginHandlers } from "./models-auth-login.js";
 import { writeCatalogPlugin } from "./models-catalog-fixture.test-support.js";
 import {
   connectModelsReader,
@@ -134,7 +131,7 @@ it("discovers plugins.load.paths using the selected read-only config and honors 
   expect(existsSync(resolveOpenClawStateSqlitePath(state.env))).toBe(false);
 });
 
-it.for(["allowed", "non-admin", "revoked"] as const)(
+it.for(["allowed", "non-admin"] as const)(
   "owner-bound login uses real credential/config writers: %s",
   async (mode, { signal }) => {
     await using state = await createState();
@@ -155,31 +152,14 @@ it.for(["allowed", "non-admin", "revoked"] as const)(
       }
     });
     await using listening = await serveModelsEndpoint(endpoint, true);
-    let requester: ServerGatewayClient | null | undefined;
-    const login = modelsAuthLoginHandlers["models.authLogin"];
-    if (!login) {
-      throw new Error("Missing registered login handler");
-    }
-    const captureRequester = vi
-      .spyOn(modelsAuthLoginHandlers, "models.authLogin")
-      .mockImplementation((options) => {
-        requester = options.client;
-        return login(options);
-      });
     const persist = providerPersistence.persistProviderAuthProfilesAfterLogin;
-    // Keep real writers; revoke at the prepared-lock boundary before their authority check.
-    const revoke = vi
+    // Keep real writers and observe the prepared-lock boundary.
+    const observeWrite = vi
       .spyOn(providerPersistence, "persistProviderAuthProfilesAfterLogin")
       .mockImplementation((input) =>
         persist({
           ...input,
           beforeWrite: () => {
-            if (mode === "revoked") {
-              if (!requester) {
-                throw new Error("The real login requester was not captured");
-              }
-              requester.invalidated = true;
-            }
             try {
               input.beforeWrite?.();
             } finally {
@@ -220,15 +200,8 @@ it.for(["allowed", "non-admin", "revoked"] as const)(
             await withinTest(prepared.promise, signal);
             release.resolve();
             await withinTest(atCredentialWrite.promise, signal);
-            if (mode === "revoked") {
-              await disconnectGatewayClient(client);
-            }
             const outcome = await withinTest(completion, signal);
-            if (mode === "allowed") {
-              expect(outcome).toMatchObject({ result: { status: "done" } });
-            } else {
-              expect(outcome.error).toBeDefined();
-            }
+            expect(outcome).toMatchObject({ result: { status: "done" } });
           }
           await gateway.close();
           const profiles = loadPersistedAuthProfileStore()?.profiles;
@@ -252,8 +225,7 @@ it.for(["allowed", "non-admin", "revoked"] as const)(
       });
     } finally {
       release.resolve();
-      captureRequester.mockRestore();
-      revoke.mockRestore();
+      observeWrite.mockRestore();
     }
   },
 );

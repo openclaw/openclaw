@@ -174,7 +174,7 @@ export async function prepareDelegatedSystemAgentApproval(params: {
   const assertApprovalCurrent = (cancelled = false) => {
     if (cancelled || params.sessions.get(params.sessionId) !== params.session) {
       throw new Error(
-        `${SYSTEM_AGENT_APPROVAL_TERMINAL_MESSAGES.cancelled} The system-agent approval authority is no longer active.`,
+        `${SYSTEM_AGENT_APPROVAL_TERMINAL_MESSAGES.cancelled} The system-agent approval ended. Start a new turn to request approval again.`,
       );
     }
   };

@@ -85,9 +85,6 @@ export const sessionProviderReviewHandlers: GatewayRequestHandlers = {
         // Accepted input retains its original operator authority independently of UI selection.
         const assertCurrent = () => {
           options.signal?.throwIfAborted();
-          if (options.hasCurrentClientAuthority?.() === false) {
-            throw new Error("Provider review caller authority is no longer current");
-          }
           const assertAuthority =
             authorization.authorization?.assertAdmittedInputCurrent ??
             authorization.authorization?.assertCurrent;

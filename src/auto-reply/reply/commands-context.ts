@@ -23,7 +23,6 @@ export function buildPluginCommandContext(params: HandleCommandsParams) {
     channelId: command.channelId,
     isAuthorizedSender: command.isAuthorizedSender,
     senderIsOwner: command.senderIsOwner,
-    assertOwnerCurrent: command.assertOwnerCurrent,
     gatewayClientScopes: ctx.GatewayClientScopes,
     agentId: params.agentId,
     sessionKey: params.sessionKey,
@@ -70,7 +69,6 @@ export function buildCommandContext(
     accountId: normalizeOptionalString(ctx.AccountId),
     ownerList: auth.ownerList,
     senderIsOwner: auth.senderIsOwner,
-    ...(auth.assertOwnerCurrent ? { assertOwnerCurrent: auth.assertOwnerCurrent } : {}),
     isAuthorizedSender: auth.isAuthorizedSender,
     ...(auth.assertAuthorizedCurrent
       ? { assertAuthorizedCurrent: auth.assertAuthorizedCurrent }

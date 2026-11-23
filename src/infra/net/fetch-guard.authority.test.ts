@@ -92,8 +92,8 @@ it("releases closed callbacks without authorizing late requests", async () => {
         return new WeakRef(context);
       })();
       release.resolve();
-      await expect(retained).rejects.toThrow("no longer active");
-      expect(() => captured!()).toThrow("no longer active");
+      await expect(retained).rejects.toThrow("The guarded request ended.");
+      expect(() => captured!()).toThrow("The guarded request ended.");
       const control = new WeakRef({});
       await nextTurn();
       forceFullGc();

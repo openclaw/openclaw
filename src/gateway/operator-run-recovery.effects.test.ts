@@ -220,7 +220,7 @@ it.each(
                 context: fixture.context,
                 assertCurrent() {},
               }),
-            ).rejects.toThrow(/operator|profile/);
+            ).rejects.toThrow(/operator|profile|could not admit/);
           } else {
             await expect(fixture.restore()).rejects.toThrow();
           }

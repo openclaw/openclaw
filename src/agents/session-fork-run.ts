@@ -439,7 +439,9 @@ async function runSessionForkInner(params: SessionForkRunParams, abortSignal: Ab
   const assertScopeCurrent = () => {
     assertPhysicalCurrent();
     if (sourceLifetime.entry && !sourceLifetime.entry.isCurrent()) {
-      throw new SessionTranscriptReadFenceError("Session fork authority changed");
+      throw new SessionTranscriptReadFenceError(
+        "Session fork source changed. Retry in a new turn.",
+      );
     }
     params.assertCallerCurrent?.();
   };

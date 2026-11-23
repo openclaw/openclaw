@@ -157,7 +157,7 @@ describe("shared GitHub publication requester authority", () => {
         },
         session,
       ),
-    ).rejects.toThrow("no longer active");
+    ).rejects.toThrow("Operator execution ended.");
     expect(f.externalWrites).toEqual([]);
   });
 
