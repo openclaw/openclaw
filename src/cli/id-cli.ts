@@ -211,13 +211,23 @@ async function waitForPublication(opts: IdCliOpts, bindingSeq: number) {
   return false;
 }
 
+/** Sanitize each line of an untrusted, potentially multi-line error separately. */
+function sanitizeMultilineTerminalText(value: string): string {
+  return value
+    .split(/\r\n|\n|\r/u)
+    .map((line) => sanitizeTerminalText(line))
+    .join("\n");
+}
+
 function writeCommittedWarning(
   opts: IdCliOpts,
   bindingSeq: number,
   error: unknown,
   stage: "follow-up" | "publication",
 ) {
-  const reason = sanitizeTerminalText(error instanceof Error ? error.message : String(error));
+  const reason = sanitizeMultilineTerminalText(
+    error instanceof Error ? error.message : String(error),
+  );
   write(
     opts,
     {
