@@ -8,7 +8,7 @@ import {
 
 const suite = createControlUiE2eSuite({ name: "Logbook app domains" });
 suite.define(() => {
-  it("shows the entire app domain inside the day summary", async () => {
+  it("keeps long domains on one line with their distinct endings and full identities", async () => {
     await suite.withPage(
       { ...createControlUiE2eContextOptions(), viewport: { width: 1180, height: 820 } },
       async ({ page }) => {
@@ -17,7 +17,8 @@ suite.define(() => {
         const domain = "exhibitionaccessibilityreview.previewcollection.museum.example";
         const trackedMs = 61 * 60_000;
         const timeline = logbookTimeline(day, [{ appPrimary: domain }], trackedMs);
-        timeline.stats.apps = [{ domain, ms: trackedMs }];
+        const domains = [domain, domain.replace("museum", "gallery"), "studio.example"];
+        timeline.stats.apps = domains.map((name) => ({ domain: name, ms: trackedMs / 3 }));
         await installMockGateway(page, {
           communityInvite: false,
           controlUiTabs: [
@@ -27,17 +28,31 @@ suite.define(() => {
         });
         await page.goto(suite.server.baseUrl + "plugin?plugin=logbook&id=logbook");
         const apps = page.locator(".logbook-stats__apps");
-        const label = apps.getByText(domain, { exact: true });
-        await label.waitFor();
+        const labels = apps.locator(".logbook-stats__app");
+        await labels.last().waitFor();
         await page.evaluate(() => document.fonts.ready);
-        const textEnd = await label.evaluate((el) => {
-          const text = document.createRange();
-          text.selectNodeContents(el);
-          return text.getBoundingClientRect().right;
-        });
-        expect(textEnd).toBeLessThanOrEqual(
-          await apps.evaluate((el) => el.getBoundingClientRect().right),
+        const chips = await labels.evaluateAll((nodes) =>
+          nodes.map((node) => ({
+            full: node.getAttribute("title"),
+            text: node.textContent,
+            height: node.getBoundingClientRect().height,
+            right: node.getBoundingClientRect().right,
+            truncated: node.scrollWidth > node.clientWidth,
+            direction: getComputedStyle(node).direction,
+            overflow: getComputedStyle(node).textOverflow,
+          })),
         );
+        expect(chips.map((chip) => chip.full)).toEqual(domains);
+        expect(chips.map((chip) => chip.text)).toEqual(domains);
+        const right = await apps.evaluate((el) => el.getBoundingClientRect().right);
+        for (const chip of chips.slice(0, 2)) {
+          expect(chip.height).toBe(chips[2]!.height);
+          expect(chip.right).toBeLessThanOrEqual(right + 1);
+          expect(chip.truncated).toBe(true);
+          expect(chip.direction).toBe("rtl");
+          expect(chip.overflow).toBe("ellipsis");
+        }
+        expect(chips[2]!.truncated).toBe(false);
       },
     );
   });
