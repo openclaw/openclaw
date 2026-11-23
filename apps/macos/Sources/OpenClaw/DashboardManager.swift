@@ -133,6 +133,7 @@ final class DashboardManager {
                 MacGatewayProfileStore.didChangeNotification,
                 .openclawConfigDidChange,
                 .controlChannelStateDidChange,
+                NSApplication.didUnhideNotification,
             ]
             self.gatewayRefreshObservers = names.map { name in
                 NotificationCenter.default.addObserver(
@@ -189,6 +190,10 @@ final class DashboardManager {
                         guard let self else { return }
                         if name == .controlChannelStateDidChange {
                             await self.handleControlChannelStateChange(ControlChannel.shared.state)
+                        } else if name == NSApplication.didUnhideNotification {
+                            // Hidden app windows may have missed a native reconnect.
+                            guard !self.dashboardControllers().isEmpty else { return }
+                            await self.handleEndpointState(self.endpointStateProvider())
                         }
                         if name == MacGatewayProfileStore.didChangeNotification {
                             // Retain the invalidation until the latest catalog refresh finishes.
