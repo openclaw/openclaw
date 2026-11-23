@@ -26,8 +26,8 @@ export function buildSubagentCompletionFailureNotice(
             typeof endedAt === "number"
               ? ` on ${new Date(endedAt).toISOString().slice(0, 16).replace("T", " ")} UTC`
               : ""
-          }, but its result couldn't be added to this conversation automatically. Its saved result is below.`
-        : `${sorted.length} child agents finished, but their results couldn't be added to this conversation automatically. Their saved results are below.`;
+          }, but its result couldn't be added to this conversation automatically. Details are below.`
+        : `${sorted.length} child agents finished, but their results couldn't be added to this conversation automatically. Details are below.`;
   const overflow = (count: number) =>
     `[${count} additional child results omitted; list the requester's children with the available session tools and read their history.]`;
   // Reserve framing, recovery guidance and the overflow count before allocating result heads.
