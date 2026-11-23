@@ -523,8 +523,8 @@ export function ensureStatePostgresFragment(db: PostgresSqlConnection, table: st
     throw new Error("PostgreSQL state fragments require the owner's transaction");
   }
   invalidateLocalSqliteSchemaAdmissions(db);
-  const repositorySql =
-    facts.version < 38 ? withLegacyRepositoryDiskAuthority(fragment.sql) : fragment.sql;
+  const lossSql = facts.version < 41 ? withLegacyWorkerLossRecovery(fragment.sql) : fragment.sql;
+  const repositorySql = facts.version < 38 ? withLegacyRepositoryDiskAuthority(lossSql) : lossSql;
   const templateSql =
     facts.version < 36 ? withLegacyTemplateStateSchema(repositorySql) : repositorySql;
   const fragmentSql = facts.version < 35 ? withLegacyLocalWorkspaceCas(templateSql) : templateSql;
