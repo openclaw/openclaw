@@ -1,6 +1,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import * as githubReadIdentity from "../../agents/github-read-identity.js";
 import * as githubIdentity from "../../agents/github-tool-identity.js";
 import {
   clearRuntimeConfigSnapshot,
@@ -220,8 +221,6 @@ describe("controlUi.githubPreview", () => {
     { mode: "managed", method: "controlUi.githubDetail" },
     { mode: "service", method: "controlUi.githubDetail" },
     { mode: "anonymous", method: "controlUi.githubPreview" },
-    { mode: "native", method: "controlUi.githubPreview" },
-    { mode: "native", method: "controlUi.githubDetail" },
   ])("reads $method as $mode", async ({ mode, method }) => {
     vi.stubEnv("GH_TOKEN", mode === "service" ? "different-ambient-token" : "");
     vi.stubEnv("GITHUB_TOKEN", "");
@@ -242,20 +241,13 @@ describe("controlUi.githubPreview", () => {
       },
     };
     const prepare = vi.spyOn(githubIdentity, "prepareGitHubReadIdentity");
-    const nativeIdentity = {
-      ...identity,
-      token: "detected-cli-token",
-      selection: { source: "system-detected" as const, accountId: 102 },
-    };
     if (mode === "managed") {
       prepare.mockResolvedValue(identity);
-    } else if (mode === "native") {
-      prepare.mockResolvedValue(nativeIdentity);
     } else {
       prepare.mockRejectedValue(new githubIdentity.GitHubIdentityError("rate_limited"));
     }
     const cfg: OpenClawConfig =
-      mode === "anonymous" || mode === "native"
+      mode === "anonymous"
         ? { agents: { entries: { main: {} } } }
         : configuredGitHub(
             mode === "managed" ? "old-preview-service-token" : "configured-reader-token",
@@ -272,11 +264,7 @@ describe("controlUi.githubPreview", () => {
       setRuntimeConfigSnapshot(cfg);
     }
     const title =
-      mode === "managed"
-        ? "Use the selected GitHub identity"
-        : mode === "native"
-          ? "Use the detected GitHub CLI login"
-          : "Public metadata without a login";
+      mode === "managed" ? "Use the selected GitHub identity" : "Public metadata without a login";
     const anonymousResponse = json(issueFields(title));
     const fetchMock = vi.fn<typeof fetch>().mockImplementation(async (input) => {
       if (mode === "anonymous") {
@@ -287,7 +275,7 @@ describe("controlUi.githubPreview", () => {
       return json(
         issue
           ? issueFields(mode === "service" ? "Authenticated reader" : title, {
-              ...(mode === "managed" || mode === "native"
+              ...(mode === "managed"
                 ? { repository_url: "https://api.github.com/repos/openclaw/openclaw" }
                 : {}),
               body: mode === "managed" ? "Authenticated reader body" : "Reader body",
@@ -301,8 +289,7 @@ describe("controlUi.githubPreview", () => {
     await send(
       {
         kind: "issue",
-        number:
-          mode === "managed" ? 88120 : mode === "service" ? 1 : mode === "native" ? 88122 : 88121,
+        number: mode === "managed" ? 88120 : mode === "service" ? 1 : 88121,
         owner: mode === "service" ? "octocat" : "openclaw",
         repo: mode === "service" ? "reader-auth" : "openclaw",
         agentId: mode === "managed" ? "alternate" : "main",
@@ -315,20 +302,13 @@ describe("controlUi.githubPreview", () => {
     );
     if (mode === "anonymous") {
       expect(new Headers(fetchMock.mock.calls[0]?.[1]?.headers).has("Authorization")).toBe(false);
-      // No detected login: the native probe falls back to public anonymous access.
-      expect(prepare).toHaveBeenCalledWith(expect.objectContaining({ allowAnonymous: true }));
+      expect(prepare).not.toHaveBeenCalled();
     } else {
       expect(
         fetchMock.mock.calls.every(
           ([, options]) =>
             new Headers(options?.headers).get("Authorization") ===
-            `Bearer ${
-              mode === "managed"
-                ? identity.token
-                : mode === "native"
-                  ? nativeIdentity.token
-                  : "configured-reader-token"
-            }`,
+            `Bearer ${mode === "managed" ? identity.token : "configured-reader-token"}`,
         ),
       ).toBe(true);
       if (mode === "managed") {
@@ -336,13 +316,90 @@ describe("controlUi.githubPreview", () => {
           expect.objectContaining({ agentId: "alternate", config: cfg }),
         );
         expect(identity.revalidate).toHaveBeenCalled();
-      } else if (mode === "native") {
-        expect(prepare).toHaveBeenCalledWith(
-          expect.objectContaining({ agentId: "main", allowAnonymous: true }),
-        );
       } else {
         expect(prepare).not.toHaveBeenCalled();
       }
+    }
+  });
+
+  it.each([
+    { mode: "cli", method: "controlUi.githubPreview" },
+    { mode: "cli", method: "controlUi.githubDetail" },
+    { mode: "cli-rejected", method: "controlUi.githubDetail" },
+    { mode: "signed-out", method: "controlUi.githubPreview" },
+    { mode: "environment", method: "controlUi.githubPreview" },
+  ])("reads $method with the shared GitHub CLI account ($mode)", async ({ mode, method }) => {
+    vi.stubEnv("GH_TOKEN", mode === "environment" ? "ambient-reader-token" : "");
+    vi.stubEnv("GITHUB_TOKEN", "");
+    vi.spyOn(githubReadIdentity, "readNativeGitHubConfiguration").mockReturnValue(
+      mode === "signed-out" ? "unconfigured" : "configured",
+    );
+    const assertSelected = vi.fn();
+    const prepare = vi.spyOn(githubIdentity, "prepareGitHubReadIdentity").mockResolvedValue({
+      token: "detected-cli-token",
+      selection: { source: "system-detected", accountId: 102 },
+      cacheScope: `detected-cli-${mode}-${method}`,
+      assertSelected,
+      revalidate: vi.fn().mockResolvedValue(undefined),
+      start: async <T>(start: () => T): Promise<Awaited<T>> => {
+        assertSelected();
+        return await start();
+      },
+    });
+    const cfg: OpenClawConfig = { agents: { entries: { main: {} } } };
+    setRuntimeConfigSnapshot(cfg);
+    const title = "Public item";
+    const fetchMock = vi.fn<typeof fetch>().mockImplementation(async (input, init) => {
+      const authorization = new Headers(init?.headers).get("Authorization");
+      if (mode === "cli-rejected" && authorization) {
+        return new Response("{}", {
+          status: 403,
+          headers: { "x-ratelimit-remaining": "0", "x-ratelimit-reset": "9999999999" },
+        });
+      }
+      const url = input instanceof Request ? input.url : input.toString();
+      return json(
+        url.includes("/issues/")
+          ? issueFields(title, {
+              repository_url: "https://api.github.com/repos/openclaw/openclaw",
+              body: "Reader body",
+              comments: 0,
+            })
+          : { id: 125, private: false, visibility: "public" },
+      );
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const { respond, send } = fixture(method.replace("controlUi.", ""));
+    const number = { cli: 88130, "cli-rejected": 88131, "signed-out": 88132, environment: 88133 };
+    await send(
+      {
+        kind: "issue",
+        number: number[mode as keyof typeof number],
+        owner: "openclaw",
+        repo: "openclaw",
+        agentId: "main",
+      },
+      runtime(() => cfg),
+    );
+    expectReply(respond, expect.objectContaining({ title }));
+    const authorizations = fetchMock.mock.calls.map(([, init]) =>
+      new Headers(init?.headers).get("Authorization"),
+    );
+    if (mode === "cli") {
+      expect(prepare).toHaveBeenCalledWith(expect.objectContaining({ agentId: "main" }));
+      expect(authorizations.every((value) => value === "Bearer detected-cli-token")).toBe(true);
+    } else if (mode === "cli-rejected") {
+      // A rate-limited CLI login retries public reads anonymously, like environment tokens.
+      expect(authorizations).toContain("Bearer detected-cli-token");
+      expect(authorizations.at(-1)).toBeNull();
+    } else {
+      // Signed-out hosts never probe gh per read; environment tokens keep their own path.
+      expect(prepare).not.toHaveBeenCalled();
+      expect(
+        authorizations.every((value) =>
+          mode === "environment" ? value === "Bearer ambient-reader-token" : value === null,
+        ),
+      ).toBe(true);
     }
   });
 

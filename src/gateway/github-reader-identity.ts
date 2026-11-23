@@ -1,5 +1,5 @@
 import { resolveConfiguredGitHubHost } from "../agents/github-host.js";
-import type { PreparedGitHubSourceReadIdentity } from "../agents/github-read-identity.js";
+import { readNativeGitHubConfiguration } from "../agents/github-read-identity.js";
 import {
   GitHubIdentityError,
   prepareGitHubReadIdentity,
@@ -7,6 +7,7 @@ import {
 } from "../agents/github-tool-identity.js";
 import { getActiveSecretsRuntimeConfigSnapshot } from "../secrets/runtime-state.js";
 import { requestCurrentGitHubOAuthRefresh } from "./github-oauth-lifecycle.js";
+import type { ControlUiGitHubPreviewIdentity } from "./github-public-api.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 
 /** UI and agent readers share selection; each caller supplies its own live authority. */
@@ -27,38 +28,41 @@ export async function prepareGitHubReaderIdentity(
     );
   };
   const managed = configuredIdentity() !== undefined;
-  // The agent's account, own or shared, serves its reads. Without a managed
-  // selection that is the detected GitHub CLI login, unless an explicit web app
-  // service credential owns these reads.
+  // Without a managed selection, the agent's shared account is the detected
+  // GitHub CLI login. Service and environment credentials keep their existing
+  // optional-auth path, and the lifecycle's periodic native sample keeps
+  // signed-out hosts from probing gh on every read.
   const native =
     !managed &&
     resolveConfiguredGitHubHost(config) === "github.com" &&
-    config.gateway?.controlUi?.github?.token === undefined;
+    config.gateway?.controlUi?.github?.token === undefined &&
+    !process.env.GH_TOKEN?.trim() &&
+    !process.env.GITHUB_TOKEN?.trim() &&
+    readNativeGitHubConfiguration("github.com") === "configured";
   assertActive();
-  let prepared: PreparedGitHubSourceReadIdentity | undefined;
+  let identity: ControlUiGitHubPreviewIdentity | undefined;
   if (managed || native) {
     try {
-      prepared = await prepareGitHubReadIdentity({
+      const prepared = await prepareGitHubReadIdentity({
         config,
         sourceConfig: getActiveSecretsRuntimeConfigSnapshot()?.sourceConfig ?? config,
         agentId,
         allowStale: true,
-        allowAnonymous: true,
         getCurrentConfig: () => context.getRuntimeConfig(),
         assertActive,
         refresh: () => requestCurrentGitHubOAuthRefresh(agentId),
       });
+      // Like environment tokens, a rejected or rate-limited CLI login may retry
+      // public reads anonymously; managed selections stay strict.
+      identity = managed ? prepared : { ...prepared, optionalAuth: true };
     } catch (error) {
       // A managed selection fails visibly. A broken detected login keeps the
-      // previous environment/anonymous public access instead of blocking reads.
+      // previous anonymous public access instead of blocking reads.
       if (managed || !(error instanceof GitHubIdentityError)) {
         throw error;
       }
     }
   }
-  // Without a detected login, keep the cheap anonymous path; an anonymous native
-  // identity would re-run the gh absence probe on every GitHub dispatch.
-  const identity = prepared?.token === undefined ? undefined : prepared;
   return {
     identity,
     assertSelected:
