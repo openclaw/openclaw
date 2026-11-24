@@ -1312,5 +1312,9 @@ async function main() {
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  await main();
+  // The reuse command loads verifiers that import this module's artifact helpers.
+  void main().catch((error) => {
+    console.error(error);
+    process.exitCode = 1;
+  });
 }

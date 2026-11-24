@@ -1618,6 +1618,24 @@ function selectionFixture(
 }
 
 describe("explicit publication artifact selection", () => {
+  it("rejects an invalid historical selection through the CLI verifier", () => {
+    const result = spawnSync(process.execPath, [SCRIPT, "reuse"], {
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        SOURCE_ADMISSION_JSON: JSON.stringify({
+          coverage: {
+            publication_artifact_source_json: JSON.stringify({ runId: "81", runAttempt: 0 }),
+          },
+        }),
+      },
+    });
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain(
+      "Publication artifact source requires an exact parent run and attempt",
+    );
+  });
+
   it("adopts exact original bytes from a failed parent without changing producer Q", async () => {
     const { f, client, env } = selectionFixture();
     const selected = await selectPublicationArtifactSource(

@@ -2171,9 +2171,6 @@ export function createReleaseEvidenceClient(repository = DEFAULT_REPO) {
     verifyRetainedPublicationArtifacts(root, env, options) {
       return verifyRetainedPublicationArtifacts(root, env, options);
     },
-    verifyRetainedPublicationArtifacts(root, env, options) {
-      return verifyRetainedPublicationArtifacts(root, env, { ...options, immutableReads });
-    },
     downloadArtifactArchive(options) {
       return downloadExactActionsArtifactArchive(options);
     },

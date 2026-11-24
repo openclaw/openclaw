@@ -1236,7 +1236,7 @@ jobs:
           PLUGIN_NPM_REQUIRED: ${{ needs.resolve_target.outputs.plugin_npm_preflight_required }}
           OPENCLAW_RELEASE_CI_SUMMARY_VALIDATOR: ${{ needs.resolve_target.result == 'success' && fromJSON(needs.resolve_target.outputs.source_admission_json || '{}').qualificationAdmission != null && format('{0}/qualification-verifier/scripts/release-ci-summary.mjs', github.workspace) || format('{0}/workflow/scripts/release-ci-summary.mjs', github.workspace) }}
           OPENCLAW_RELEASE_WAIVERS_PATH: ${{ github.workspace }}/workflow/scripts/lib/release-validation-waivers.json
-        run: node workflow/scripts/full-release-artifacts.mjs reuse
+        run: node "${OPENCLAW_RELEASE_CI_SUMMARY_VALIDATOR%/*}/full-release-artifacts.mjs" reuse
 
       - name: Summarize evidence reuse
         env:
@@ -1407,6 +1407,12 @@ jobs:
                   echo "::warning::Child reuse lookup exited ${dispatch_status}; dispatching fresh work." >&2
                 fi
               fi
+            fi
+
+            # This qualification recovery permits only performance to run fresh.
+            if [[ "${{ needs.resolve_target.outputs.publication_artifact_source_json != '' }}" == true && "$CHILD_WORKFLOW_KIND" != performance ]]; then
+              echo "::error::No reusable evidence for $workflow; refusing fresh work in this pinned recovery." >&2
+              return 1
             fi
 
             encoded_workflow_ref="$(jq -rn --arg value "$CHILD_WORKFLOW_REF" '$value | @uri')"
