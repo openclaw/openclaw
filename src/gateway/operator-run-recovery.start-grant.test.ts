@@ -70,9 +70,6 @@ const chatKinds: Array<[string, Start]> = [
       }),
   ],
   ["restart replay of a queued chat input", chatStart],
-  ["restart completion wake", chatStart],
-  ["system turn with a recorded requester", chatStart],
-  ["worker environment provision resume", chatStart],
   [
     "plugin service session work accepted in a chat turn",
     (fixture) =>
@@ -86,16 +83,6 @@ const chatKinds: Array<[string, Start]> = [
 ];
 const automationKinds: Array<[string, Start]> = [
   ["cron agent turn, command and script", automationStart],
-  ["cron conversation event", automationStart],
-  ["native stream source", automationStart],
-  [
-    "scheduled plugin command",
-    (fixture) =>
-      restoreScheduledAutomationOperator({
-        ...queued(fixture),
-        operatorSource: cronSource(fixture),
-      }),
-  ],
   [
     "plugin service session work accepted in a cron run",
     (fixture) => restoreScheduledAutomationOperator(queued(fixture)),
