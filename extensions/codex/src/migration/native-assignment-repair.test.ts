@@ -166,23 +166,26 @@ describe("Codex native assignment Doctor repair", () => {
     },
   );
 
-  it.each(["assignment", "session"])("preserves missing %s lifecycle evidence", async (missing) => {
-    const legacy =
-      missing === "assignment"
-        ? { ...assignment, owner: { ...owner, lifecycleRevision: undefined } }
-        : assignment;
-    if (missing === "session") {
-      sessionStore.getSessionEntryByIdAsync.mockResolvedValue({
-        sessionKey: identity.sessionKey,
-        entry: { sessionId: identity.sessionId, updatedAt: 1 },
-      });
-    }
-    const state = fixture([legacy]);
-    const repaired = await migration.migrateLegacyState(state.params);
-    expect(state.read()).toEqual(state.original);
-    expect(repaired.warningDisposition).toBe("recoverable");
-    expect(repaired.warnings.join(" ")).toContain("unknown lifecycle evidence");
-  });
+  it.each(["assignment", "session"])(
+    "retires assignments when the %s lifecycle revision is absent on one side",
+    async (missing) => {
+      const legacy =
+        missing === "assignment"
+          ? { ...assignment, owner: { ...owner, lifecycleRevision: undefined } }
+          : assignment;
+      if (missing === "session") {
+        sessionStore.getSessionEntryByIdAsync.mockResolvedValue({
+          sessionKey: identity.sessionKey,
+          entry: { sessionId: identity.sessionId, updatedAt: 1 },
+        });
+      }
+      const state = fixture([legacy]);
+      const repaired = await migration.migrateLegacyState(state.params);
+      expect(state.read().nativeSubagentAssignments).toBeUndefined();
+      expect(repaired.changes).toHaveLength(1);
+      expect(repaired.warnings).toEqual([]);
+    },
+  );
 
   it.each([false, true])(
     "collapses compatible aliases, preserves separate turns, and converges (reverse=%s)",

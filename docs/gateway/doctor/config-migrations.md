@@ -867,7 +867,9 @@ The Codex plugin's `codex-native-assignment-repair` runs during
 `openclaw doctor --fix` and update-time Doctor, after session repair. It collapses
 proven duplicate assignments for the same child and native turn and removes
 assignments whose requester session, lifecycle, or connection is provably
-obsolete. Compatible aliases retain their receipt and recorded-result metadata;
+obsolete. Lifecycle revisions must match exactly, including legacy assignments
+where both are absent. Doctor removes assignments with a revision on only one side.
+Compatible aliases retain their receipt and recorded-result metadata;
 conflicting facts produce a recoverable warning without changing the row.
 Separate pending turns of one child are preserved. Repairs use the
 existing SQLite backup and exact-row compare-and-apply owner; no database schema
