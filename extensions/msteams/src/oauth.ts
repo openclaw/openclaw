@@ -1,8 +1,9 @@
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { generateHexPkceVerifierChallenge } from "openclaw/plugin-sdk/provider-auth";
 import {
   generateOAuthState,
-  parseOAuthCallbackInput,
-} from "openclaw/plugin-sdk/provider-auth-runtime";
+  parseOAuthAuthorizationInput,
+} from "openclaw/plugin-sdk/provider-oauth-runtime";
 import {
   MSTEAMS_DEFAULT_DELEGATED_SCOPES,
   MSTEAMS_OAUTH_REDIRECT_URI,
@@ -24,8 +25,7 @@ export async function loginMSTeamsDelegated(
 ): Promise<MSTeamsDelegatedTokens> {
   await ctx.note(
     [
-      "You are running in a remote/VPS environment.",
-      "A URL will be shown for you to open in your LOCAL browser.",
+      "A URL will be shown for you to open in your browser.",
       "After signing in, copy the redirect URL and paste it back here.",
     ].join("\n"),
     "MSTeams Delegated OAuth",
@@ -48,24 +48,25 @@ export async function loginMSTeamsDelegated(
   ctx.progress.update("OAuth URL ready");
   ctx.log(`\nOpen this URL in your LOCAL browser:\n\n${authUrl}\n`);
   ctx.progress.update("Waiting for you to paste the callback URL...");
-  const callbackInput = await ctx.prompt("Paste the redirect URL here: ");
-  const parsed = parseOAuthCallbackInput(callbackInput, {
-    missingState: "Missing 'state' parameter in URL. Paste the full redirect URL.",
-    invalidInput:
-      "Paste the full redirect URL (including code and state parameters), not just the authorization code.",
+  // A paste that does not answer this sign-in keeps the prompt open.
+  const callbackInput = await ctx.prompt({
+    message: "Paste the redirect URL here: ",
+    validate: (value) => {
+      try {
+        parseOAuthAuthorizationInput(value, { state, signInUrl: authUrl });
+        return undefined;
+      } catch (error) {
+        return formatErrorMessage(error);
+      }
+    },
   });
-  if ("error" in parsed) {
-    throw new Error(parsed.error);
-  }
-  if (parsed.state !== state) {
-    throw new Error("OAuth state mismatch - please try again");
-  }
+  const { code } = parseOAuthAuthorizationInput(callbackInput, { state });
   ctx.progress.update("Exchanging authorization code for tokens...");
   return exchangeMSTeamsCodeForTokens({
     tenantId: params.tenantId,
     clientId: params.clientId,
     clientSecret: params.clientSecret,
-    code: parsed.code,
+    code,
     verifier,
   });
 }

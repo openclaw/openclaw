@@ -18,7 +18,7 @@ import {
   resolveOperatorRolePolicy,
   resolveGatewayOperatorRoleActor,
 } from "./operator-role-policy.js";
-import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
+import { prepareGatewayOperatorRunAuthority } from "./operator-run-authority.js";
 import type { GatewayRequestHandlers } from "./server-methods/types.js";
 import { defineValidatedGatewayHandler } from "./server-methods/validation.js";
 import { SessionCompanionAskError } from "./session-companion-errors.js";
@@ -179,7 +179,7 @@ export const sessionCompanionHandlers: GatewayRequestHandlers = {
       );
       let releaseSharing: (() => void) | undefined;
       let capturedOperator:
-        | Awaited<ReturnType<typeof captureGatewayOperatorRunAuthority>>
+        | Awaited<ReturnType<typeof prepareGatewayOperatorRunAuthority>>
         | undefined;
       let retainedSource: PreparedSessionSourceAuthority | undefined;
       try {
@@ -283,7 +283,7 @@ export const sessionCompanionHandlers: GatewayRequestHandlers = {
           retainedSource = await assertSourceCurrent.prepareSessionSource?.();
           retainedSource?.assertCurrent();
         }
-        capturedOperator = await captureGatewayOperatorRunAuthority({
+        capturedOperator = await prepareGatewayOperatorRunAuthority({
           client,
           context,
           hasCurrentClientAuthority,

@@ -26,6 +26,7 @@ import { registerChatFailedMessageEditEnglish } from "../../ui/src/i18n/locales/
 import { registerChatGoalsEnglish } from "../../ui/src/i18n/locales/en-chat-goals.ts";
 import { registerChatMediaEnglish } from "../../ui/src/i18n/locales/en-chat-media.ts";
 import { registerChatMessageMetadataEnglish } from "../../ui/src/i18n/locales/en-chat-message-metadata.ts";
+import { registerChatMoveToProjectEnglish } from "../../ui/src/i18n/locales/en-chat-move-to-project.ts";
 import { registerChatOutputsEnglish } from "../../ui/src/i18n/locales/en-chat-outputs.ts";
 import { registerChatPermissionsEnglish } from "../../ui/src/i18n/locales/en-chat-permissions.ts";
 import { registerChatProviderReviewEnglish } from "../../ui/src/i18n/locales/en-chat-provider-review.ts";
@@ -160,6 +161,7 @@ const sourceFiles = [
   "en-chat-goals.ts",
   "en-chat-message-metadata.ts",
   "en-chat-failed-message-edit.ts",
+  "en-chat-move-to-project.ts",
   "en-chat-media.ts",
   "en-chat-provider-review.ts",
   "en-chat-public-qr.ts",
@@ -558,7 +560,6 @@ export function loadControlUiSourceCatalog(): TranslationMap {
       ...en,
       subtitles: registerRouteSubtitlesEnglish.catalog.subtitles,
       languages: registerSettingsEnglish.catalog.languages,
-      onboarding: registerMemoryImportEnglish.catalog.onboarding,
       execApproval: registerApprovalsEnglish.catalog.execApproval,
       browser: mergeControlUiTranslationMaps(en.browser, registerBrowserEnglish.catalog.browser),
       sessionProgressCard: registerSessionProgressEnglish.catalog.sessionProgressCard,
@@ -604,6 +605,7 @@ export function loadControlUiSourceCatalog(): TranslationMap {
         },
         sessionHeader: {
           ...registerChatSessionEnglish.catalog.chat.sessionHeader,
+          moveToProject: registerChatMoveToProjectEnglish.catalog.chat.sessionHeader.moveToProject,
           continueInTerminal,
         },
         sessionSuggestions: {

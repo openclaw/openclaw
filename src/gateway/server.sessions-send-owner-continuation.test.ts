@@ -136,7 +136,6 @@ it.for(["success", "child error", "owner revoked", "owner reassigned", "new user
         (entry.delivery?.status === "delivered" ||
           entry.delivery?.status === "suspended" ||
           entry.delivery?.status === "discarded" ||
-          entry.delivery?.disposition === "permanent_failure" ||
           entry.cleanupCompletedAt !== undefined)
       ) {
         completionSettled.resolve();
@@ -324,7 +323,11 @@ it.for(["success", "child error", "owner revoked", "owner reassigned", "new user
             sessionKey: parent,
             operationalRunInstance,
             approvalAuthority: authority,
-            receiptAuthority: () => validateAgentRunDelegatedAuthority(authority),
+            receiptAuthority: () => {
+              if (!validateAgentRunDelegatedAuthority(authority)) {
+                throw new Error("agent tool caller authority is no longer active");
+              }
+            },
             gatewayContextResolver: () => kernel.gatewayRequestContext,
           },
           () =>

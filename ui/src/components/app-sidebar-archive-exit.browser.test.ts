@@ -12,6 +12,7 @@ import { gatewayHelloForMethods } from "../test-helpers/gateway-methods.ts";
 import { emulateOverlayMedia } from "../test-helpers/overlay-browser-media.ts";
 import { waitForSolid } from "../test-helpers/solid-settle.ts";
 import "../test-helpers/load-styles.ts";
+import { startSidebarArchiveExit } from "./app-sidebar-archive-exit.ts";
 import { undoHeldArchive } from "./session-archive-hold.ts";
 
 setupSidebarTest();
@@ -54,23 +55,37 @@ it.each([
       expect(sidebar.querySelectorAll("[data-session-key]").length).toBeGreaterThan(1),
     );
     await document.fonts.ready;
+    const scroller = sidebar.querySelector<HTMLElement>(".sidebar-shell__body")!;
     if (scrolled) {
-      const scroller = sidebar.querySelector<HTMLElement>(".sidebar-shell__body")!;
       scroller.style.cssText = "height:400px;flex:none;overflow:auto";
+      await waitForSolid(() =>
+        expect(scroller.scrollHeight).toBeGreaterThan(scroller.clientHeight),
+      );
       scroller.scrollTop = 800;
-      scroller.dispatchEvent(new Event("scroll"));
-      await waitForSolid(() => {
-        const first = sidebar.querySelector<HTMLElement>("[data-session-window-key]")!;
-        expect(Number.parseFloat(first.style.marginBlockStart)).toBeGreaterThan(0);
-      });
     }
     await new Promise<void>((resolve) => {
       requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
     });
-    const rows = [...sidebar.querySelectorAll<HTMLElement>("[data-session-key]")];
-    const row = rows[0]!;
+    const { row, next } = await waitForSolid(() => {
+      const rows = [...sidebar.querySelectorAll<HTMLElement>("[data-session-key]")];
+      if (!scrolled) {
+        expect(rows.length).toBeGreaterThan(1);
+        return { row: rows[0]!, next: rows[1]! };
+      }
+      expect(scroller.scrollTop).toBeGreaterThan(0);
+      const viewport = scroller.getBoundingClientRect();
+      const clippedRow = rows.findLast(
+        (candidate) => candidate.getBoundingClientRect().bottom <= viewport.top,
+      );
+      const visibleAnchor = rows.find((candidate) => {
+        const bounds = candidate.getBoundingClientRect();
+        return bounds.bottom > viewport.top && bounds.top < viewport.bottom;
+      });
+      expect(clippedRow).toBeDefined();
+      expect(visibleAnchor).toBeDefined();
+      return { row: clippedRow!, next: visibleAnchor! };
+    });
     const archivedKey = row.dataset.sessionKey!;
-    const next = rows[1]!;
     expect(next.getBoundingClientRect().top).toBeGreaterThan(row.getBoundingClientRect().top);
     const beforeTop = next.getBoundingClientRect().top;
     const beforeRowTop = row.getBoundingClientRect().top;
@@ -91,6 +106,20 @@ it.each([
           }),
         )
       : undefined;
+    if (scrolled) {
+      const pausedExit = vi.spyOn(HTMLElement.prototype, "animate").mockImplementation(function (
+        this: HTMLElement,
+        keyframes,
+        options,
+      ) {
+        const animation = Element.prototype.animate.call(this, keyframes, options);
+        if (this.hasAttribute("data-sidebar-archive-exit")) {
+          animation.pause();
+        }
+        return animation;
+      });
+      onTestFinished(() => pausedExit.mockRestore());
+    }
     archive.click();
     await vi.dynamicImportSettled();
     await waitForSolid(() =>
@@ -100,10 +129,21 @@ it.each([
     await waitForSolid(() =>
       expect(sidebar.querySelector(`[data-session-key="${archivedKey}"]`)).toBeNull(),
     );
+    if (scrolled) {
+      await new Promise<void>((resolve) => {
+        requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+      });
+    }
     const exit = sidebar.querySelector<HTMLElement>("[data-sidebar-archive-exit]");
-    if (reducedMotion) {
+    if (reducedMotion || scrolled) {
       expect(exit).toBeNull();
-      await waitForSolid(() => expect(next.getBoundingClientRect().top).toBeLessThan(beforeTop));
+      await waitForSolid(() => {
+        if (scrolled) {
+          expect(next.getBoundingClientRect().top).toBeCloseTo(beforeTop, 0);
+        } else {
+          expect(next.getBoundingClientRect().top).toBeLessThan(beforeTop);
+        }
+      });
     } else {
       expect(exit).not.toBeNull();
       expect(exit!.inert).toBe(true);
@@ -158,3 +198,33 @@ it.each([
     await sidebar.updateComplete;
   },
 );
+
+it("keeps the exit when a parent is clipped but its child is visible", async () => {
+  await emulateOverlayMedia({ reducedMotion: "no-preference" });
+  const viewport = document.createElement("div");
+  viewport.className = "sidebar-shell__body";
+  viewport.style.cssText =
+    "position:fixed;top:0;left:0;display:block;width:320px;height:120px;overflow:auto";
+  viewport.innerHTML =
+    '<div style="height:80px"></div><div class="sidebar-session-tree"><div data-parent style="height:32px">Parent</div><div style="height:80px">Visible child</div></div><div style="height:300px"></div>';
+  document.body.append(viewport);
+  onTestFinished(() => viewport.remove());
+  viewport.scrollTop = 112;
+  const tree = viewport.querySelector<HTMLElement>(".sidebar-session-tree")!;
+  const parent = tree.querySelector<HTMLElement>("[data-parent]")!;
+  expect(parent.getBoundingClientRect().bottom).toBeLessThanOrEqual(
+    viewport.getBoundingClientRect().top,
+  );
+  expect(tree.getBoundingClientRect().bottom).toBeGreaterThan(viewport.getBoundingClientRect().top);
+  const exit = startSidebarArchiveExit(parent);
+  onTestFinished(() => exit?.cancel());
+  expect(exit).toBeDefined();
+  tree.remove();
+  await Promise.resolve();
+  const snapshot = viewport.querySelector<HTMLElement>("[data-sidebar-archive-exit]");
+  expect(snapshot).not.toBeNull();
+  expect(snapshot!.getBoundingClientRect().bottom).toBeGreaterThan(
+    viewport.getBoundingClientRect().top,
+  );
+  expect(snapshot!.textContent).toContain("Visible child");
+});

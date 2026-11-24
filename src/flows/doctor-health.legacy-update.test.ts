@@ -6,6 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { formatCliCommand } from "../cli/command-format.js";
+import * as serviceMaintenance from "../cli/update-cli/update-command-service-maintenance.js";
 import { ensureHeartbeatMonitorJobs } from "../commands/doctor-heartbeat-cadence-migration.js";
 import { retireHeartbeatWithDoctor } from "../commands/doctor-heartbeat-retirement.js";
 import * as doctorMaintenance from "../commands/doctor-maintenance.js";
@@ -26,6 +27,10 @@ import {
   readCronRunRecordsInDatabase,
   recordCronRunInDatabase,
 } from "../cron/store/run-history.kernel.js";
+import {
+  claimCronRunReceiptInDatabaseForTest,
+  prepareCronRunReceiptClaim,
+} from "../cron/store/run-receipt-store.test-support.js";
 import { replaceCronRuntimeAuthorityRows } from "../cron/store/save.kernel.js";
 import { getCronStoreKysely } from "../cron/store/schema.js";
 import * as runtimePaths from "../daemon/runtime-paths.js";
@@ -212,8 +217,8 @@ it.each([
       const runningAtMs = Date.now() - 1_000;
       const disabledDuringConversion =
         ownership === "notification-disabled" || ownership === "notification-resume-disabled";
-      const startupNotification = ownership === "notification" || disabledDuringConversion;
-      const offline = ownership === "stopped" || startupNotification;
+      const replayFinishedRun = ownership === "notification" || disabledDuringConversion;
+      const offline = ownership === "stopped" || replayFinishedRun;
       const storeKey = runOpenClawStateWriteTransaction(
         ({ db }) => {
           const key = resolveCronStoreKeyInDatabase(db, storePath, state.env);
@@ -232,10 +237,21 @@ it.each([
               sessionTarget: "main",
               wakeMode: "next-heartbeat",
               payload: { kind: "systemEvent", text: "legacy placeholder" },
-              state: { runningAtMs, ...(startupNotification ? { consecutiveErrors: 9 } : {}) },
+              state: { runningAtMs, ...(replayFinishedRun ? { consecutiveErrors: 9 } : {}) },
             },
             0,
           );
+          const receipt = replayFinishedRun
+            ? claimCronRunReceiptInDatabaseForTest({
+                database: db,
+                prepared: prepareCronRunReceiptClaim({
+                  storePath,
+                  job,
+                  agentId: "main",
+                  startedAtMs: runningAtMs,
+                }),
+              })
+            : undefined;
           replaceCronRuntimeAuthorityRows({ db, storeKey: key, jobs: [job] });
           const row = loadCronRows(db, key)[0]!;
           // Reproduce the discriminator written by the published heartbeat owner.
@@ -249,14 +265,18 @@ it.each([
                   ...JSON.parse(row.job_json),
                   payload: { kind: "heartbeat" },
                 }),
+                state_json: JSON.stringify({
+                  ...JSON.parse(row.state_json),
+                  ...(receipt ? { runningReceiptId: receipt.receiptId } : {}),
+                }),
               })
               .where("store_key", "=", key),
           );
-          if (startupNotification) {
+          if (replayFinishedRun) {
             recordCronRunInDatabase(db, {
               storeKey: key,
               jobId: job.id,
-              runId: `cron:${job.id}:${runningAtMs}`,
+              runId: `cron:${job.id}:${runningAtMs}:${receipt!.receiptId}`,
               agentId: "main",
               startedAt: runningAtMs,
               endedAt: runningAtMs + 500,
@@ -330,19 +350,31 @@ it.each([
         await expect(runDoctor(runtime)).resolves.toBeUndefined();
         expect(runtime.exit).not.toHaveBeenCalledWith(1);
         const after = read();
-        if (startupNotification) {
+        if (replayFinishedRun) {
           expectResult(resultPath, { status: "ok" });
-          expect(loadedCronStoreFromRows(after.rows).store.jobs[0]).toMatchObject({
+          const recovered = loadedCronStoreFromRows(after.rows).store.jobs[0]!;
+          expect(recovered).toMatchObject({
             payload: { kind: "agentTurn" },
             enabled: !disabledDuringConversion,
-            state: { runningAtMs, consecutiveErrors: 9 },
+            state: {
+              consecutiveErrors: 10,
+              lastRunAtMs: runningAtMs,
+              lastRunStatus: "error",
+              lastError: "synthetic provider failure",
+            },
           });
+          expect(recovered.state.runningAtMs).toBeUndefined();
+          expect(recovered.state.runningReceiptId).toBeUndefined();
           expect(after.history).toEqual(before.history);
-          const notified = Promise.withResolvers<void>();
-          const enqueueSessionEvent = vi.fn(async () => {
-            notified.resolve();
-            return { ok: true as const };
-          });
+          expect(recovered.state.lastDurationMs).toBe(500);
+          expect(after.history).toHaveLength(1);
+          expect(
+            withExistingOpenClawStateDatabaseReadOnly(
+              ({ db }) => readCronQuarantinedJobsInDatabase(db, storeKey),
+              { env: state.env },
+            ),
+          ).toEqual([]);
+          const enqueueSessionEvent = vi.fn(async () => ({ ok: true as const }));
           const cron = new CronService({
             scheduler: createTestGatewayScheduler(),
             storePath,
@@ -361,42 +393,19 @@ it.each([
           });
           try {
             await gateway!.run(() => cron.start());
-            if (!disabledDuringConversion) {
-              await notified.promise;
-              expect(enqueueSessionEvent).toHaveBeenCalledExactlyOnceWith(
-                expect.stringContaining("10 consecutive run failures"),
-                expect.objectContaining({ agentId: "main", jobId: "interrupted-monitor" }),
-              );
-            } else {
-              // An operator-disabled job needs result settlement, not a new
-              // auto-disable transition or its notification.
-              expect(enqueueSessionEvent).not.toHaveBeenCalled();
-            }
+            expect(enqueueSessionEvent).not.toHaveBeenCalled();
             const settled = read();
-            const recovered = loadedCronStoreFromRows(settled.rows).store.jobs[0]!;
-            expect(recovered).toMatchObject({
-              payload: { kind: "agentTurn" },
-              enabled: false,
+            const settledJob = loadedCronStoreFromRows(settled.rows).store.jobs[0]!;
+            expect(settledJob).toMatchObject({
               state: {
                 consecutiveErrors: 10,
                 lastRunAtMs: runningAtMs,
                 lastRunStatus: "error",
                 lastError: "synthetic provider failure",
-                lastDurationMs: 500,
               },
             });
-            if (!disabledDuringConversion) {
-              expect(recovered.state.autoDisabled?.reason).toBe("consecutive-failures");
-            }
-            expect(recovered.state.runningAtMs).toBeUndefined();
+            expect(settledJob.state.runningAtMs).toBeUndefined();
             expect(settled.history).toEqual(after.history);
-            expect(settled.history).toHaveLength(1);
-            expect(
-              withExistingOpenClawStateDatabaseReadOnly(
-                ({ db }) => readCronQuarantinedJobsInDatabase(db, storeKey),
-                { env: state.env },
-              ),
-            ).toEqual([]);
           } finally {
             cron.stop();
             await cron.waitForIdle();
@@ -501,34 +510,76 @@ it("imports retained legacy sessions after verified stop and before any candidat
   });
 });
 
-it.each(["manager-refused", "old-listener-remains"] as const)(
-  "reports stale stop failure before repair mutations: %s",
-  async (failure) => {
-    await resultState(async (state, resultPath, configBefore) => {
-      const service = managedService(state);
-      inspectStaleBuild();
-      if (failure === "manager-refused") {
-        service.stop.mockRejectedValueOnce(new Error("synthetic native stop refused"));
-      } else {
-        mocks.probePortUsage.mockResolvedValue("busy");
-      }
-      const facts = failureFacts({ check: "gateway-stop", code: "stale-gateway-stop-failed" });
-      const run = runDoctor();
+it.each([
+  "manager-refused",
+  "old-listener-remains",
+  "stop-unconfirmed",
+  "identity-uninspectable",
+] as const)("reports stale stop failure before repair mutations: %s", async (failure) => {
+  await resultState(async (state, resultPath, configBefore) => {
+    const service = managedService(state);
+    inspectStaleBuild();
+    const skipped =
+      "Gateway restoration identity could not be inspected; the managed service was not stopped.";
+    if (failure === "manager-refused") {
+      service.stop.mockRejectedValueOnce(new Error("synthetic native stop refused"));
+    } else if (failure === "old-listener-remains") {
+      mocks.probePortUsage.mockResolvedValue("busy");
+    } else if (failure === "stop-unconfirmed") {
+      // The port is free, but the manager reports an unknown state with the old PID.
+      const readRuntime = service.readRuntime;
+      service.readRuntime = async () =>
+        service.stop.mock.calls.length > service.restart.mock.calls.length
+          ? { status: "unknown", pid: 4200 }
+          : await readRuntime();
+      // An unknown state restores through a plain start.
+      Object.assign(service, { start: service.restart });
+    } else {
+      // No user D-Bus: the stop is skipped before the native manager is asked.
+      const inspect = serviceMaintenance.maybeStopManagedServiceBeforeMutableUpdate;
+      vi.spyOn(serviceMaintenance, "maybeStopManagedServiceBeforeMutableUpdate").mockImplementation(
+        async (params) =>
+          params.phase === "inspect"
+            ? await inspect(params)
+            : {
+                ...(await inspect({ ...params, phase: "inspect" })),
+                stopped: false,
+                serviceMutationAllowed: false,
+                serviceMutationSkipMessage: skipped,
+                serviceUpdateVerdict: { kind: "unavailable" as const, message: skipped },
+              },
+      );
+    }
+    const facts = failureFacts({ check: "gateway-stop", code: "stale-gateway-stop-failed" });
+    const run = runDoctor();
 
-      await expectRefusal(run, state.env, facts, "gateway restart", "gateway status --deep");
+    await expectRefusal(run, state.env, facts, "gateway restart", "gateway status --deep");
+    if (failure === "identity-uninspectable") {
+      // The message must not claim a stop was attempted for a PID that still runs.
+      await expect(run).rejects.toThrow(
+        `Stale Gateway PID 4200 was not stopped: ${skipped} Observed: service=running, PID=4200,`,
+      );
+      expect(service.stop).not.toHaveBeenCalled();
+    } else {
       expect(service.stop).toHaveBeenCalledOnce();
-      expectUncalled(mocks.config, mocks.runContributions);
-      expect(fs.readFileSync(state.configPath)).toEqual(configBefore);
-      expectResult(resultPath, {
-        status: "error",
-        configHash: "unchanged",
-        maintenanceRefusal: unverifiedState,
-        failureFacts: facts,
-      });
-      expect(mocks.outro).not.toHaveBeenCalledWith("Doctor complete.");
+    }
+    if (failure === "stop-unconfirmed") {
+      // A free port and an unknown state do not show the old Gateway still running.
+      await expect(run).rejects.toThrow(
+        "Stale Gateway PID 4200 could not be confirmed stopped: service=unknown, PID=4200, port 19754=free",
+      );
+    }
+    expectUncalled(mocks.config, mocks.runContributions);
+    expect(fs.readFileSync(state.configPath)).toEqual(configBefore);
+    expectResult(resultPath, {
+      status: "error",
+      configHash: "unchanged",
+      maintenanceRefusal: unverifiedState,
+      failureFacts: facts,
     });
-  },
-);
+    expect(mocks.outro).not.toHaveBeenCalledWith("Doctor complete.");
+  });
+});
 
 it("records advisory restoration when the service runs without verified readiness", async () => {
   // Exercise Gateway readiness after repair, not runtime capability admission.

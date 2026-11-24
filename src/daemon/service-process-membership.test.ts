@@ -1,5 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { inspectServiceProcessMembershipSync } from "./service-process-membership.js";
+import {
+  inspectLaunchdProcessMembershipSync,
+  inspectServiceProcessMembershipSync,
+} from "./service-process-membership.js";
 
 const native = vi.hoisted(() => ({ spawn: vi.fn(), read: vi.fn(), coalition: vi.fn() }));
 vi.mock("node:child_process", async (original) => ({
@@ -44,6 +47,41 @@ beforeEach(() => {
   });
 });
 afterEach(() => vi.unstubAllEnvs());
+
+describe("launchd listener membership", () => {
+  const listenerPid = gatewayPid + 1;
+  it.each([
+    ["same job", 1203n, "inside"],
+    ["unrelated job", 1204n, "outside"],
+    ["unreadable job", null, "unknown"],
+  ] as const)("classifies a detached listener in the %s", (_label, listenerCoalition, expected) => {
+    native.spawn.mockImplementation((command: string, args: string[]) =>
+      command === "ps"
+        ? { status: 0, stdout: `${listenerPid} 901 0\n${gatewayPid} 900 0\n` }
+        : { status: 0, stdout: uncontained(Number(args[1]!.slice(4))) },
+    );
+    native.coalition.mockImplementation((pid: number) => {
+      if (pid === gatewayPid) {
+        return { id: 1203n, name: "ai.openclaw.gateway" };
+      }
+      if (pid === listenerPid && listenerCoalition !== null) {
+        return {
+          id: listenerCoalition,
+          name: listenerCoalition === 1203n ? "ai.openclaw.gateway" : "unrelated",
+        };
+      }
+      throw new Error("unreadable");
+    });
+    expect(inspectLaunchdProcessMembershipSync(listenerPid, gatewayPid)).toBe(expected);
+    expect(native.coalition).not.toHaveBeenCalledWith(process.pid);
+  });
+
+  it.each([0, -1, Number.NaN, Number.MAX_SAFE_INTEGER + 1])("rejects invalid PID %s", (pid) => {
+    expect(inspectLaunchdProcessMembershipSync(pid, gatewayPid)).toBe("unknown");
+    expect(inspectLaunchdProcessMembershipSync(listenerPid, pid)).toBe("unknown");
+    expect(native.spawn).not.toHaveBeenCalled();
+  });
+});
 
 describe("launchd process membership", () => {
   const pidRecord = uncontained(process.pid);

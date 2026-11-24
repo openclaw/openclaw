@@ -6,14 +6,7 @@
 
 .chat-created-automations {
   width: min(100%, 360px);
-  min-width: 0;
   margin-block: 8px;
-  padding-inline: 11px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
-  background: var(--card);
-  color: var(--text);
-  font: 400 calc(13px * var(--control-ui-text-scale, 1)) / 1.4 var(--font-body);
 }
 
 .chat-created-automations__heading {
@@ -25,17 +18,6 @@
   border-bottom: 1px solid var(--border);
   font: inherit;
   font-weight: 600;
-}
-
-.chat-created-automations__clock {
-  display: grid;
-  place-items: center;
-  color: var(--muted);
-
-  svg {
-    width: 16px;
-    height: 16px;
-  }
 }
 
 .chat-created-automations__rows {
@@ -60,38 +42,14 @@
   .chat-created-automations__row {
     grid-template-columns: 32px minmax(0, 1fr) 44px;
   }
-
-  .chat-created-automations__clock {
-    width: 30px;
-    height: 30px;
-    border-radius: var(--radius-sm);
-    background: var(--surface-selected);
-  }
 }
 
 .chat-created-automations__copy {
-  display: grid;
-  align-content: center;
-  gap: 2px;
-  min-width: 0;
-  min-height: 44px;
-  padding: 4px 6px;
-  color: inherit;
-
   strong,
   small {
     overflow: hidden;
     white-space: nowrap;
     text-overflow: ellipsis;
-  }
-
-  strong {
-    font-weight: 550;
-  }
-
-  small {
-    color: var(--muted);
-    font-size: var(--control-ui-text-sm);
   }
 }
 

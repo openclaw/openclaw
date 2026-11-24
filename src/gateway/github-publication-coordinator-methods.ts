@@ -122,6 +122,7 @@ export function createGitHubPublicationCoordinatorMethods(params: {
     assertInvocationCurrent?: () => void,
     invocationSignal?: AbortSignal,
     recoveryResult?: SessionGitHubPublicationResult,
+    admittedRequester?: GitHubPublicationRequesterV2,
   ) => Promise<SessionGitHubPublicationResult>;
   recordRequestingRun: (requestId: string, runId: string) => void;
 }) {
@@ -155,6 +156,8 @@ export function createGitHubPublicationCoordinatorMethods(params: {
           validateExecution,
           input.requester.assertInvocationCurrent,
           input.requester.signal,
+          undefined,
+          input.requester,
         );
       } catch (error) {
         if (!(error instanceof GitHubPublicationRecoveryPendingError)) {
@@ -237,7 +240,7 @@ export function createGitHubPublicationCoordinatorMethods(params: {
           !current.turnClaim
         : current === undefined;
       if (!unchanged) {
-        throw new Error("GitHub publication session authority changed during snapshot.");
+        throw new Error("GitHub publication session moved during snapshot. Retry the publication.");
       }
     };
     const claim = placement ? exactClaimForPlacement(placement) : undefined;

@@ -1,3 +1,9 @@
+export const PROJECT_MOVE_HANDOFF_NAME = "Conversation move";
+
+export function buildSessionToolHandoffNotice(name: string): string {
+  return `${name} handed off; resume with its result in this same conversation.`;
+}
+
 export function buildSessionsYieldContextMessage(
   message: string,
   options?: { nativeInterruptMarker?: boolean },

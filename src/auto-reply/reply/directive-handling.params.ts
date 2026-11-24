@@ -22,7 +22,7 @@ export type HandleDirectiveOnlyParams = {
   elevatedAllowed: boolean;
   elevatedFailures?: Array<{ gate: string; key: string }>;
   defaultProvider: string;
-  defaultModel: string;
+  defaultModel: string | undefined;
   aliasIndex: ModelAliasIndex;
   allowedModelKeys: Set<string>;
   modelPolicy?: ModelVisibilityPolicy;
@@ -31,7 +31,8 @@ export type HandleDirectiveOnlyParams = {
   thinkingCatalog?: ModelCatalogEntry[];
   resetModelOverride: boolean;
   provider: string;
-  model: string;
+  /** Undefined when nothing configured or selected a model. */
+  model: string | undefined;
   initialModelLabel: string;
   formatModelSwitchEvent: (label: string, alias?: string) => string;
   canPersistStickyModelSelection?: boolean;
@@ -55,7 +56,8 @@ export type HandleDirectiveOnlyParams = {
       | {
           kind: "pending" | "applied";
           provider: string;
-          model: string;
+          /** Undefined while no model is configured; only a model directive can set one. */
+          model: string | undefined;
           modelCatalog?: ModelCatalogEntry[];
         }
       | { kind: "rejected"; errorText: string };

@@ -141,7 +141,8 @@ export function createChatSendMessageInjectionStarter(params: {
       assertSendNowCurrent?.();
     };
     const target = params.target;
-    if (!target || isInternalTextSlashCommandTurn) {
+    // Without a configured model, follow-up dispatch reports the missing model.
+    if (!target || isInternalTextSlashCommandTurn || !resolvedSessionModel) {
       return undefined;
     }
     using phase = params.diagnostics?.scope("detail.run_admission.steer_authority");

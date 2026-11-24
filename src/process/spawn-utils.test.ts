@@ -3,6 +3,7 @@ import childProcess from "node:child_process";
 import { EventEmitter, once } from "node:events";
 import { syncBuiltinESMExports } from "node:module";
 import path from "node:path";
+import { isMainThread } from "node:worker_threads";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { requireWorkspaceResultGit } from "../gateway/worker-environments/workspace-result-git.js";
@@ -19,6 +20,7 @@ import { withTempDir } from "../test-utils/temp-dir.js";
 import { spawnCommand } from "./exec-spawn.js";
 import { prepareOomScoreAdjustedSpawn } from "./linux-oom-score.js";
 import { runWithSpawnBroker } from "./spawn-broker/context.js";
+import type { CommandSpawnOptions } from "./spawn-broker/execa-types.js";
 import { createSpawnBrokerHost } from "./spawn-broker/host.js";
 import { supportsSpawnBrokerCommandTransport } from "./spawn-broker/pipe.js";
 import {
@@ -189,6 +191,60 @@ describe("child-process spawn diagnostics", () => {
       try {
         await host.ready();
         await runWithSpawnBroker(host, checkSuccessfulSpawns);
+      } finally {
+        await host.close();
+      }
+    },
+  );
+
+  it.skipIf(!supportsSpawnBrokerCommandTransport())(
+    "separates fallback classes for the same caller without recording command content",
+    async () => {
+      const host = createSpawnBrokerHost();
+      try {
+        await host.ready();
+        const options: CommandSpawnOptions[] = [
+          {},
+          { ipc: true },
+          { cleanup: false },
+          { stdin: 0 },
+          { stdio: ["ignore", 1, "ignore"] },
+          { stdio: "inherit" },
+        ];
+        await withChildProcessOperation("agent.exec", async () => {
+          for (const option of options) {
+            await runWithSpawnBroker(host, () =>
+              spawnCommand([process.execPath, "-e", "/* private argv */"], option),
+            );
+          }
+          await runWithSpawnBroker(undefined, () => spawnCommand([process.execPath, "-e", ""]));
+          const native = runWithSpawnBroker(host, () =>
+            spawnProcess(process.execPath, ["-e", ""], { stdio: ["ignore", "inherit", "ignore"] }),
+          );
+          expect((await once(native, "close"))[0]).toBe(0);
+        });
+        now = 60_000;
+        emitChildProcessSpawnSample();
+        expect(events).toEqual(
+          [
+            "broker",
+            "native.ipc",
+            "native.independent",
+            "native.descriptor",
+            "native.inherit",
+            "native.no-broker",
+            "native.stdio",
+          ].map((transport) =>
+            expect.objectContaining({
+              family: "node",
+              operation: "agent.exec",
+              transport,
+              thread: isMainThread ? "main" : "worker",
+              count: transport === "native.descriptor" ? 2 : 1,
+            }),
+          ),
+        );
+        expect(JSON.stringify(events)).not.toContain("private");
       } finally {
         await host.close();
       }

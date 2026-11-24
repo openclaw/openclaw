@@ -7,10 +7,15 @@ import { isRetryableDiscoveryError, type PublishOutcome } from "./publisher.js";
 
 type Failure = Extract<PublishOutcome, { state: "failed" }>;
 
-/** Restores only an account receipt tied to the exact locally committed root and signed binding. */
+/**
+ * Restores only an account receipt tied to the exact locally committed root and signed binding.
+ * With `registering` (the caller sends a registration when Discovery has none), a missing
+ * registration is first marked as sent, for this claw only (unlink-operations.ts).
+ */
 export async function reconcileRegistration(
   authority: OpenClawIdAuthority,
   client: DiscoveryClient,
+  registering = false,
 ): Promise<Failure | undefined> {
   const record = await authority.load();
   if (!record?.authority || !record.binding || record.discovery.owner_account_id) {
@@ -53,7 +58,15 @@ export async function reconcileRegistration(
       error.status === 404 &&
       error.code === "not_found"
     ) {
-      return undefined;
+      // From here Discovery may hold the claw. An unlink or new link meanwhile stops the send.
+      return !registering || (await authority.registrationSending(record.claw_id))
+        ? undefined
+        : {
+            state: "failed",
+            code: "claw_changed",
+            message: "this claw was unlinked, so its registration was not sent",
+            retryable: false,
+          };
     }
     return {
       state: "failed",

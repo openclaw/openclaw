@@ -177,6 +177,53 @@ it("matches release-wide grants and explicit candidate or execution restrictions
   expect(child.jobs.every((job) => job.conclusion === "failure")).toBe(true);
 });
 
+it("accepts an explicitly waived cancelled step without accepting other incomplete work", async () => {
+  const cancelled = {
+    ...leaf,
+    conclusion: "cancelled",
+    steps: [{ name: "Swift test", conclusion: "cancelled" }],
+  };
+  const approved = { ...grant, cancelledStep: "Swift test", aggregates: [] };
+  const current = { ...child, status: "completed", conclusion: "failure", jobs: [cancelled] };
+  const policy = evaluateReleaseChildPolicy({
+    child: current,
+    targetVersion,
+    waiverPolicy: [approved],
+  });
+  expect(policy.blockingJobs).toEqual([]);
+  expect(terminalPolicyPass(current, targetVersion, targetSha, [approved])).toBe(true);
+  await expect(
+    validateReleaseWaiverAggregates({ policy, jobs: [cancelled], getJobLog: () => "" }),
+  ).resolves.toBeUndefined();
+  expect(cancelled.conclusion).toBe("cancelled");
+  for (const job of [
+    { ...cancelled, steps: [{ name: "Setup", conclusion: "cancelled" }] },
+    { ...cancelled, steps: [...cancelled.steps, { name: "Upload", conclusion: "failure" }] },
+    { ...cancelled, steps: undefined },
+  ]) {
+    await expect(
+      validateReleaseWaiverAggregates({ policy, jobs: [job], getJobLog: () => "" }),
+    ).rejects.toThrow("non-policy cancellation");
+  }
+  for (const conclusion of ["failure", "timed_out", "action_required"]) {
+    const changed = { ...current, jobs: [{ ...cancelled, conclusion }] };
+    expect(
+      evaluateReleaseChildPolicy({ child: changed, targetVersion, waiverPolicy: [approved] })
+        .waivers,
+    ).toEqual([]);
+  }
+  for (const cancelledStep of ["", false]) {
+    expect(() =>
+      parseReleaseValidationWaivers(
+        JSON.stringify({
+          schema: "openclaw.release-validation-waivers/v1",
+          waivers: [{ ...approved, cancelledStep }],
+        }),
+      ),
+    ).toThrow();
+  }
+});
+
 it("requires complete aggregate evidence with only granted causes and the approved failing step", async () => {
   const policy = evaluateReleaseChildPolicy({ child, targetVersion, waiverPolicy: [grant] });
   const validate = (log = "##[error]test failed", jobs = child.jobs) =>
@@ -255,9 +302,15 @@ it("matches explicit test signatures only with a complete report and approved fa
   const validate = (text = log, job = testLeaf) =>
     validateReleaseWaiverAggregates({ policy, jobs: [job], getJobLog: () => text });
   await expect(validate()).resolves.toBeUndefined();
+  const timestampedLog = log
+    .split("\n")
+    .map((line) => `\uFEFF2026-11-22T04:00:00.0000000Z ${line}`)
+    .join("\n");
+  await expect(validate(timestampedLog)).resolves.toBeUndefined();
   for (const changed of [
     log.replace("synthetic failure", "different failure"),
     log.replace('"completed":1', '"completed":0'),
+    timestampedLog.replace('"completed":1', '"completed":0'),
   ]) {
     await expect(validate(changed)).rejects.toThrow();
   }

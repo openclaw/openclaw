@@ -18,6 +18,8 @@ export function assertExecApprovalStandingGrantCurrent<TPayload>(
       JSON.stringify(standingGrantSpec) ||
       (standingGrantSpec.kind === "mcp-tool" && record.mcpToolApprovalActive?.() !== true))
   ) {
-    throw new ApprovalMutationRefusedError("approval standing grant authority is no longer active");
+    throw new ApprovalMutationRefusedError(
+      "Approval run or tool scope ended. Request approval again.",
+    );
   }
 }
