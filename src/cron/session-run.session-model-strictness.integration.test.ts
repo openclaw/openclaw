@@ -389,7 +389,14 @@ describe("stored session model selections in scheduled session turns", () => {
             },
             ...(modelAllow ? { modelPolicy: { allow: modelAllow } } : {}),
             ...(params.preflightCompactionWatchdog
-              ? { compaction: { keepRecentTokens: 2_000, memoryFlush: { enabled: false } } }
+              ? {
+                  compaction: {
+                    // An explicit model keeps this scenario in preflight, not warm compaction.
+                    model: "primary/model-a",
+                    keepRecentTokens: 2_000,
+                    memoryFlush: { enabled: false },
+                  },
+                }
               : {}),
             models: Object.fromEntries(
               ["pinned/model-x", "primary/model-a", "fallback/model-b", "jobfallback/model-c"].map(

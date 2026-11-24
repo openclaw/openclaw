@@ -480,6 +480,7 @@ describe("generated titles over the real OpenAI-compatible transport", () => {
       "Titel: Nützlichkeit für unser Team prüfen",
       "Nützlichkeit für unser Team prüfen",
     ],
+    ["Portuguese title label", "Título: Busca: ordenar por data", "Busca: ordenar por data"],
     [
       "session title label",
       "Session title: Gateway Docker state volume",

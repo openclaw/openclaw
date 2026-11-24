@@ -80,18 +80,12 @@ export function installRequesterCronAuthorityTestHooks(
   });
 }
 
-export function admission(
-  runId: string,
-  client: GatewayClient,
-  childSessionKey?: string,
-  isCurrent?: () => boolean,
-) {
+export function admission(runId: string, client: GatewayClient, childSessionKey?: string) {
   return cronAdmission.resolveGatewayCronCreatorAuthorityAdmission({
     runId,
     resolvedSessionKey: SESSION,
     sessionId: SESSION_ID,
     client,
-    isCurrent,
     request: { message: "Update the maintenance automation", idempotencyKey: runId },
     inputProvenance: childSessionKey
       ? {
