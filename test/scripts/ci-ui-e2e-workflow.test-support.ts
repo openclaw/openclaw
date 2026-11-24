@@ -1,9 +1,8 @@
 import { expect, it } from "vitest";
 import type { NativeTypeScriptParser } from "../../scripts/lib/native-typescript.mts";
-import {
-  assertControlUiE2eOwnership,
-  assertRealGatewayWorkflowSelection,
-} from "./ci-ui-e2e-ownership.test-support.js";
+import { withEnvAsync } from "../../src/test-utils/env.js";
+import { assertControlUiE2eOwnership } from "./ci-ui-e2e-ownership.test-support.js";
+import { assertRealGatewayWorkflowSelection } from "./ci-ui-e2e-workflow-selection.test-support.js";
 import {
   readCiWorkflow,
   requiredWorkflowStep,
@@ -15,7 +14,9 @@ export function registerControlUiE2eWorkflowTests(
   parser: NativeTypeScriptParser,
 ): void {
   it("keeps private Control UI servers and resource-sensitive files under one serial owner", async () => {
-    await assertControlUiE2eOwnership(makeTempDirectory, parser);
+    await withEnvAsync({ VITEST_MAX_WORKERS: undefined }, () =>
+      assertControlUiE2eOwnership(makeTempDirectory, parser),
+    );
   });
 
   it("restores shared build content while retaining private real-Gateway preparation", () => {
@@ -42,6 +43,7 @@ export function registerControlUiE2eWorkflowTests(
     { frozen: true, prebuilt: true, childExit: 0 },
     { frozen: true, prebuilt: false, childExit: 0 },
     { frozen: false, prebuilt: false, childExit: 0 },
+    { frozen: false, prebuilt: true, childExit: 23, releaseTier: false },
   ])("selects the real-Gateway tier without retrying failures: %j", async (options) => {
     await assertRealGatewayWorkflowSelection(makeTempDirectory, options);
   });
