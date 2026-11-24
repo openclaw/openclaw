@@ -42,8 +42,13 @@ function isCollection(schema: JsonSchema): boolean {
   );
 }
 
+/** A choice between several object shapes; the form draws it as one setting. */
+const isUnion = (schema: JsonSchema) =>
+  Boolean(schema.anyOf ?? schema.oneOf) && !hasFixedFields(schema);
+
 function projectSchemaTier(params: TierParams): JsonSchema | null {
-  if (isObjectCollection(params.schema)) {
+  // Splitting one setting by tier would draw it in both tiers.
+  if (isObjectCollection(params.schema) || isUnion(params.schema)) {
     return hasCommonField(params) === !params.advanced ? params.schema : null;
   }
   return projectSchemaFields(params);
