@@ -121,6 +121,7 @@ export { resolveVerifierIdentity } from "./lib/release-evidence-identity.mjs";
 const sortReleaseJsonValueKeys = /** @type {<T>(value: T) => T} */ (sortJsonValueKeys); // Validated release JSON preserves its structural type.
 const DEFAULT_REPO = process.env.OPENCLAW_RELEASE_REPO || "openclaw/openclaw";
 const PHASED_RELEASE_EVIDENCE_SCHEMA = "openclaw.release-validation-evidence/v4";
+const BUILD_ONLY_PREPARATION = Symbol("build-only preparation evidence");
 const SHA_PINNED_BRANCH_PATTERN = /^release-ci\/[a-f0-9]{12}-[1-9][0-9]*$/u;
 const MANIFEST_ARTIFACT_ENTRY = "full-release-validation-manifest.json";
 const MAX_MANIFEST_ENTRY_LIST_BYTES = 8 * 1024;
@@ -772,7 +773,7 @@ export function requiredChildKeysForRerunGroup(
   const childKeys = childDispatchesForPhaseVersion(childPhaseVersion)
     .filter((child) => releaseChildSpec(child.manifestKey).rerunGroups.includes(rerunGroup))
     .map((child) => child.manifestKey);
-  if (childKeys.length === 0) {
+  if (childKeys.length === 0 && rerunGroup !== "build-only") {
     throw new Error(`release validation manifest rerun group is invalid: ${rerunGroup}`);
   }
   const selectedKeys = new Set(childKeys);
@@ -798,6 +799,9 @@ export function requiredChildKeysForRerunGroup(
 
 /** @returns {Set<string>} */
 function requiredChildKeysForManifest(manifest) {
+  if (manifest.rerunGroup === "build-only") {
+    return new Set();
+  }
   if (manifest.qualificationCoverage) {
     return new Set(
       validateQualificationCoverage(manifest.qualificationCoverage).children.map(
@@ -3336,7 +3340,7 @@ function qualificationReusePolicyIdentity(admission, promotion = false) {
  *   verifierSourceSha: string,
  * }} options
  */
-export async function validateReleaseRunEvidence(
+async function validateReleaseEvidenceGraph(
   {
     manifestPath,
     fastTrackApproval,
@@ -3359,8 +3363,18 @@ export async function validateReleaseRunEvidence(
     verifierSourceSha,
   },
   client,
-  recoveryDraft = null,
+  recoveryDraft,
+  preparationMode,
 ) {
+  const buildOnlyPreparation = preparationMode === BUILD_ONLY_PREPARATION;
+  if (
+    buildOnlyPreparation &&
+    (fastTrackApproval || qualificationReuse || reuseRequest || recoveryDraft)
+  ) {
+    throw new Error(
+      "Build-only preparation cannot approve, recover, or reuse release qualification.",
+    );
+  }
   const normalizedRepository = normalizeRepository(repository);
   const normalizedRunId = normalizeRequiredRunId(runId, "full release run ID");
   const remainingExpectedRunAttempts = normalizeExpectedRunAttempts(expectedRunAttempts);
@@ -3462,6 +3476,15 @@ export async function validateReleaseRunEvidence(
         runId: normalizedRunId,
       });
   if (
+    currentEvidence.manifest.rerunGroup === "build-only" &&
+    !fastTrackApproval &&
+    !buildOnlyPreparation
+  ) {
+    throw new Error(
+      "Build-only artifacts require explicit fast-track approval; they are not validated release evidence.",
+    );
+  }
+  if (
     recovery &&
     (qualificationReuse ||
       reuseRequest ||
@@ -3490,7 +3513,7 @@ export async function validateReleaseRunEvidence(
     expectedEvidenceSha,
     expectedRootRunId,
     expectedSelectedRunId,
-    expectedTargetSha: recovery ? undefined : expectedTargetSha,
+    expectedTargetSha: recovery || buildOnlyPreparation ? undefined : expectedTargetSha,
   };
   let requestedReuseDelta;
   if (reuseRequest !== undefined) {
@@ -3874,6 +3897,97 @@ export async function validateReleaseRunEvidence(
       (!retainedSource || !isDeepStrictEqual(currentArtifacts, rootArtifacts))
     ) {
       throw new Error("Reused publication artifacts differ from their authenticated root");
+    }
+  }
+  if (buildOnlyPreparation || currentEvidence.manifest.rerunGroup === "build-only") {
+    const plan = sourcePlans.get(currentEvidence.manifest.runId);
+    if (
+      recovery ||
+      reuse ||
+      !plan ||
+      plan.rerunGroup !== "build-only" ||
+      (expectedTargetSha !== undefined &&
+        currentEvidence.manifest.targetSha !== expectedTargetSha) ||
+      plan.children.some(
+        (child) => child.selected || child.required || child.runId || child.runAttempt,
+      ) ||
+      !isDeepStrictEqual(plan.candidate, currentEvidence.manifest.candidateBinding) ||
+      !plan.candidate ||
+      Object.values(currentEvidence.manifest.childRunIds).some(Boolean) ||
+      Object.keys(currentEvidence.manifest.childEvidence ?? {}).length > 0 ||
+      currentEvidence.manifest.publicationArtifacts?.npmPreflight?.schema !==
+        "openclaw.sealed-npm-preflight/v1" ||
+      !currentEvidence.manifest.publicationArtifacts?.docker
+    ) {
+      throw new Error(
+        "Build-only preparation requires its direct admitted artifact plan and sealed descriptors.",
+      );
+    }
+    validateReleaseCoveragePolicyBinding(plan, currentEvidence.manifest.validationInputs);
+    const mandatoryGates = [
+      "Resolve target ref",
+      "Acquire full release candidate",
+      "Prepare release npm artifacts",
+      "Qualify release npm artifacts",
+      "Prepare release Docker artifacts",
+      ...(currentEvidence.manifest.publicationArtifacts?.pluginNpm
+        ? ["Prepare exact plugin npm artifacts"]
+        : []),
+    ];
+    if (
+      mandatoryGates.some((name) => !plan.gates.some((gate) => gate.name === name && gate.required))
+    ) {
+      throw new Error("Build-only execution plan omitted a mandatory artifact gate.");
+    }
+    const attempts = [];
+    for (
+      let attempt = plan.parentRunAttempt;
+      attempt <= currentEvidence.manifest.runAttempt;
+      attempt++
+    ) {
+      attempts.push({
+        runAttempt: attempt,
+        jobs: await evidenceClient.getRunAttemptJobs(normalizedRunId, attempt, {
+          requireComplete: true,
+        }),
+      });
+    }
+    const composite = composeReleaseAttemptJobs(attempts, {
+      plannedRunAttempt: plan.parentRunAttempt,
+      effectiveRunAttempt: currentEvidence.manifest.runAttempt,
+      effectiveRunStatus: selectedRun.status,
+    });
+    validateQualificationJobs(
+      composite.jobs,
+      [
+        ...new Set([
+          ...mandatoryGates,
+          ...plan.gates.filter((gate) => gate.required).map((gate) => gate.name),
+        ]),
+      ],
+      "Build-only artifact preparation",
+    );
+    if (buildOnlyPreparation) {
+      if (remainingExpectedRunAttempts?.size) {
+        throw new Error("Build-only preparation contains unvalidated expected run attempts.");
+      }
+      return {
+        schema: "openclaw.release-build-only-evidence/v1",
+        prepared: true,
+        valid: false,
+        publicationAuthorized: false,
+        repository: normalizedRepository,
+        current: normalizedParentTuple(
+          currentEvidence,
+          producerIdentities.get(currentEvidence.manifest.runId),
+        ),
+        executionPlan: { parentRunAttempt: plan.parentRunAttempt, sha256: plan.sha256 },
+        validation: {
+          mode: "build-only",
+          skipped: currentQualification.coverage.children.map((child) => child.key),
+        },
+        verifier,
+      };
     }
   }
   if (fastTrackApproval) {
@@ -4324,6 +4438,30 @@ export async function validateReleaseRunEvidence(
   return { ...evidence, fastTrack: undefined, qualification: qualificationFacts(evidence) };
 }
 
+/** @param {Parameters<typeof validateReleaseEvidenceGraph>[0]} options */
+export async function validateReleaseRunEvidence(options, client, recoveryDraft = null) {
+  const evidence = await validateReleaseEvidenceGraph(options, client, recoveryDraft);
+  if ("prepared" in evidence) {
+    throw new Error("Preparation is not validated release evidence.");
+  }
+  return evidence;
+}
+
+// This read-only result proves preparation, never qualification or publication authority.
+// Publishers must authenticate an explicit fast-track approval and verify the sealed bytes.
+export async function validateReleaseBuildOnlyEvidence(options, client) {
+  const evidence = await validateReleaseEvidenceGraph(
+    options,
+    client,
+    null,
+    BUILD_ONLY_PREPARATION,
+  );
+  if (!("prepared" in evidence)) {
+    throw new Error("Expected build-only preparation evidence.");
+  }
+  return evidence;
+}
+
 // Normalize only after the owner has authenticated the complete evidence graph.
 // Recovery retains its original admission here, never in the aggregate source field.
 function qualificationFacts(evidence) {
@@ -4341,7 +4479,7 @@ function qualificationFacts(evidence) {
   };
 }
 
-function parseReleaseCiSummaryArgs(argv) {
+export function parseReleaseCiSummaryArgs(argv) {
   const stringFlags = {
     "--repo": "repository",
     "--manifest": "manifestPath",
@@ -4375,6 +4513,7 @@ function parseReleaseCiSummaryArgs(argv) {
     trustedWorkflowRef: "main",
     trustedWorkflowSha: undefined,
     validate: false,
+    buildOnlyPreparation: false,
     acquirePublicationManifest: false,
     verifierSourceFile: undefined,
     verifierSourceSha: undefined,
@@ -4386,6 +4525,10 @@ function parseReleaseCiSummaryArgs(argv) {
       options[stringFlags[argument]] = argv[++index];
     } else if (argument === "--acquire-publication-manifest") {
       options.acquirePublicationManifest = true;
+      options.runId = argv[++index];
+    } else if (argument === "--verify-build-only") {
+      options.validate = true;
+      options.buildOnlyPreparation = true;
       options.runId = argv[++index];
     } else if (argument === "--validate-run") {
       options.validate = true;
@@ -4477,6 +4620,7 @@ function printUsage() {
       "usage: release-ci-summary.mjs <full-release-run-id>",
       "       release-ci-summary.mjs <full-release-run-id> --watch [--interval seconds]",
       "       release-ci-summary.mjs --acquire-publication-manifest <id> [--repo owner/name] [--expected-run-attempts-json json]",
+      "       release-ci-summary.mjs --verify-build-only <id> [same identity/verifier options as --validate-run] --json",
       "       release-ci-summary.mjs --validate-run <id> [--repo owner/name] [--trusted-workflow-ref main --trusted-workflow-full-ref refs/heads/main] [--trusted-workflow-sha sha] [--manifest path] [--verifier-source-sha sha --verifier-source-file path] [--expected-target-sha sha --expected-evidence-sha sha --expected-evidence-policy policy --expected-root-run-id id --expected-selected-run-id id --expected-changed-paths-json json] [--expected-run-attempts-json json] [--reuse-request-json json] --json",
     ].join("\n"),
   );
@@ -4791,7 +4935,10 @@ async function main() {
 
   if (options.validate) {
     try {
-      const evidence = await validateReleaseRunEvidence({
+      const verify = options.buildOnlyPreparation
+        ? validateReleaseBuildOnlyEvidence
+        : validateReleaseRunEvidence;
+      const evidence = await verify({
         ...options,
         verifierSourceContent: options.verifierSourceFile
           ? readFileSync(options.verifierSourceFile)

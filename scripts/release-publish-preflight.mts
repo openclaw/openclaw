@@ -575,6 +575,8 @@ export async function runReleasePublishPreflight(
             sourceSha,
             toolingSha,
             retiredLineReason: options.retiredLinePublicationReason,
+            // Only successful full-evidence npm admission can report build-only.
+            dependencyEvidenceRequired: npmEvidence?.buildOnly !== true,
             runGh,
           }),
       );

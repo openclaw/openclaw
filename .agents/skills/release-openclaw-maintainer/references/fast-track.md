@@ -76,6 +76,45 @@ publication authorization. Publishers retain original FRV evidence and record
 **validation skipped by approved fast-track**, not fictional success. An artifact
 that was never built and sealed successfully cannot be authorized by approval.
 
+## Prepare artifacts without validation
+
+When the explicit maintainer instruction is to fast-track, do not run a full
+validation cycle merely to obtain artifacts. Use the existing isolated FRV
+dispatcher with `-f rerun_group=build-only` and the normal exact candidate,
+publication-selection and C/Q/P admission inputs. This mode builds and seals
+npm, plugin and Docker publication artifacts but does not dispatch CI,
+prerelease, release-check, live, soak or performance validation. npm source,
+SDK, dependency and contents validation also stays skipped. Build/package and
+artifact-integrity checks remain mandatory. Do not use the normal full-validation
+checklist to prepare a fast-track.
+
+```sh
+node scripts/full-release-validation-at-sha.mjs \
+  --sha <C> --target-ref <release-branch> --workflow-sha <Q> \
+  --admission-workflow-sha <P> --admission-workflow-ref main \
+  -f validation_purpose=publish -f rerun_group=build-only \
+  -f release_profile=stable -f publication_selection_json="$PUBLICATION_SELECTION"
+```
+
+Use the actual intended publication selection and release profile, as in the
+normal admission flow. This example does not grant dispatch or publication
+authority.
+
+Both the independently admitted qualification tooling Q and trusted publisher
+P must contain build-only support. For an older candidate C, select a reviewed
+Q containing this support rather than changing C or falling back to
+`rerun_group=all`. Unsupported tooling is a blocker, not permission to start
+hours of validation. No build-only dispatch or publication is authorized by
+this instruction alone; retain the explicit human fast-track direction.
+
+Wait for successful artifact preparation. The dispatcher and `pnpm frv verify`
+report preparation separately from validation. Retain the immutable manifest,
+which honestly records skipped validation, then prepare the exact approval
+packet against its run/attempt and sealed artifacts. Build-only evidence is
+never normal successful-validation evidence, reusable qualification or a fully
+validated baseline. Publish only through the existing fast-track approval path
+below. Failed builds or missing seals still block publication.
+
 ## Publish an approved request
 
 Keep `release_evidence_mode=full-release-validation`. Supply one additional

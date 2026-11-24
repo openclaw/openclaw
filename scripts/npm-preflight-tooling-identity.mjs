@@ -14,7 +14,11 @@ import {
   retainedPublicationArtifactSource,
   releaseEvidenceProducerTuple,
 } from "./lib/release-evidence-identity.mjs";
-import { verifyNpmBundleProducer } from "./npm-prepared-bundle.mjs";
+import {
+  isBuildOnlyNpmPreflight,
+  SEALED_NPM_PREFLIGHT_SCHEMA,
+  verifyNpmBundleProducer,
+} from "./npm-prepared-bundle.mjs";
 import {
   runReleaseToolingGh,
   validateReleaseToolingIdentity,
@@ -71,7 +75,7 @@ export function validateNpmPreflightProducer({
   fullReleaseRunId,
   fullReleaseRunAttempt,
 }) {
-  if (QUALIFIED_WORKFLOWS.has(workflowPath) && manifest?.version !== 3) {
+  if (QUALIFIED_WORKFLOWS.has(workflowPath) && ![3, 4].includes(manifest?.version)) {
     throw new Error("FRV npm preflight requires qualified version 3 producer evidence.");
   }
   // Published v1 preflights did not record the original ref qualifier. Keep
@@ -79,7 +83,17 @@ export function validateNpmPreflightProducer({
   if (manifest?.version === 1 && !Object.hasOwn(manifest, "producer")) {
     return { originalWorkflowRef: null, provenance: "legacy-unrecorded" };
   }
-  if (![2, 3].includes(manifest?.version) || !isRecord(manifest.producer)) {
+  if (
+    manifest?.version === 4 &&
+    (!QUALIFIED_WORKFLOWS.has(workflowPath) ||
+      !isBuildOnlyNpmPreflight(manifest) ||
+      fullReleaseManifest?.rerunGroup !== "build-only" ||
+      fullReleaseManifest?.publicationArtifacts?.npmPreflight?.schema !==
+        SEALED_NPM_PREFLIGHT_SCHEMA)
+  ) {
+    throw new Error("Build-only npm preflight requires its exact full release artifact binding.");
+  }
+  if (![2, 3, 4].includes(manifest?.version) || !isRecord(manifest.producer)) {
     throw new Error("npm preflight producer metadata is missing or unsupported.");
   }
   if (
@@ -101,7 +115,7 @@ export function validateNpmPreflightProducer({
     workflowSha,
     runId: String(runId),
     runAttempt: String(runAttempt),
-    ...(manifest.version === 3
+    ...([3, 4].includes(manifest.version)
       ? {
           producerWorkflowPath: ".github/workflows/openclaw-npm-preflight.yml",
           jobId: manifest.producer.jobId,
@@ -110,7 +124,7 @@ export function validateNpmPreflightProducer({
       : {}),
   };
   if (
-    manifest.version === 3 &&
+    [3, 4].includes(manifest.version) &&
     (!/^[1-9][0-9]*$/u.test(manifest.producer.jobId ?? "") ||
       typeof manifest.producer.jobName !== "string" ||
       !/(?:^| \/ )Qualify prepared npm package$/u.test(manifest.producer.jobName) ||
@@ -151,7 +165,7 @@ export function verifyNpmPreflightProducer({
   ...options
 }) {
   const identity = validateNpmPreflightProducer(options);
-  if (options.manifest.version !== 3) {
+  if (![3, 4].includes(options.manifest.version)) {
     return identity;
   }
   const producer = options.manifest.producer;
@@ -222,7 +236,10 @@ export function validateFullReleaseNpmPreflight({
         (manifest.receiptRecovery || manifest.publicationArtifactSource) &&
         retainedSource?.workflow.sha === toolingSha
       )) ||
-    qualified?.schema !== "openclaw.qualified-npm-preflight/v1" ||
+    qualified?.schema !==
+      (manifest.rerunGroup === "build-only"
+        ? SEALED_NPM_PREFLIGHT_SCHEMA
+        : "openclaw.qualified-npm-preflight/v1") ||
     qualified.source?.sha !== sourceSha ||
     !/^[a-f0-9]{64}$/u.test(qualified.manifestSha256 ?? "") ||
     !/^[1-9][0-9]*$/u.test(qualified.artifact?.id ?? "") ||
@@ -334,6 +351,16 @@ export async function downloadFullReleaseNpmPreflight({
     createHash("sha256").update(manifestBytes).digest("hex") !== descriptor.manifestSha256
   ) {
     throw new Error("Downloaded npm preflight manifest differs from its qualified descriptor.");
+  }
+  const npmManifest = JSON.parse(manifestBytes.toString("utf8"));
+  if (
+    (descriptor.schema === SEALED_NPM_PREFLIGHT_SCHEMA) !== isBuildOnlyNpmPreflight(npmManifest) ||
+    (descriptor.schema === SEALED_NPM_PREFLIGHT_SCHEMA &&
+      npmManifest.npmDistTag !== options.manifest.sourceAdmission?.publicationSelection?.npmDistTag)
+  ) {
+    throw new Error(
+      "Npm preflight validation mode or exact publication channel differs from its descriptor.",
+    );
   }
   mkdirSync(outputDir, { recursive: true });
   if (readdirSync(outputDir).length !== 0) {
