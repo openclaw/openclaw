@@ -19,6 +19,10 @@ import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-
 import { readTranscriptStatsAsync } from "../../config/sessions/session-transcript-stats.js";
 import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { getGatewayPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata-state.js";
+import { parseAgentSessionKey } from "../../routing/session-key.js";
+import { resolveParentSessionKeyCandidate } from "../../sessions/stored-model-overrides.js";
+import { resolveSessionSelectedModelRefAsync } from "../session-utils-model-selection.js";
 import { resolveSessionModelRef } from "../session-utils.js";
 
 type GatewaySessionCompactionParams = {
@@ -153,7 +157,34 @@ export async function runGatewaySessionCompaction(
     sessionKey: params.sessionStoreKey,
     storePath: params.storePath,
   };
-  const resolvedModel = resolveSessionModelRef(params.cfg, params.entry, params.agentId);
+  // Compact with the model ordinary turns select, including one inherited from a parent session.
+  const parentKey = resolveParentSessionKeyCandidate({
+    sessionKey: params.sessionKey,
+    parentSessionKey: params.entry.parentSessionKey,
+  });
+  const parentAgentId = parentKey ? parseAgentSessionKey(parentKey)?.agentId : undefined;
+  const parentEntry = parentKey
+    ? await readSessionEntryReadOnlyInWorker({
+        sessionKey: parentKey,
+        agentId: parentAgentId ?? params.agentId,
+        ...(!parentAgentId || parentAgentId === params.agentId
+          ? { storePath: params.storePath }
+          : {}),
+        clone: false,
+        hydrateSkillPromptRefs: false,
+      })
+    : undefined;
+  params.abortSignal?.throwIfAborted();
+  const resolvedModel = await resolveSessionSelectedModelRefAsync({
+    cfg: params.cfg,
+    agentId: params.agentId,
+    sessionKey: params.sessionKey,
+    source: {
+      entry: params.entry,
+      readSourceEntry: (key) => (key === parentKey ? parentEntry : undefined),
+    },
+    manifestPlugins: getGatewayPluginMetadataSnapshot() ?? [],
+  });
   if (!resolvedModel) {
     return { ok: false, compacted: false, reason: NO_MODEL_CONFIGURED_MESSAGE };
   }

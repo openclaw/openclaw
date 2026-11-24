@@ -74,7 +74,8 @@ export function resolveDirectStoredModelOverride(
   });
 }
 
-function resolveParentSessionKeyCandidate(params: {
+/** Resolves the session whose stored model selection this session inherits. */
+export function resolveParentSessionKeyCandidate(params: {
   sessionKey?: string;
   parentSessionKey?: string;
 }): string | null {
