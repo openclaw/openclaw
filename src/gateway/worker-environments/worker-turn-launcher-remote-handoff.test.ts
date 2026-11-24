@@ -220,7 +220,7 @@ describe("worker turn launcher remote handoff", () => {
     });
 
     onTestFinished(installSessionPlacementAdmissionProvider(provider));
-    const input = turn("run-worker-turn", true);
+    const input = turn("run-worker-turn", { executionIdentity: true, extraPlugins: ["browser"] });
     onTestFinished(() => input.preparedRunAdmission.close());
     const recorder = createUserTurnTranscriptRecorder({
       target: { ...sessionTarget, sessionEntry: undefined, config: input.config },
@@ -411,13 +411,14 @@ describe("worker turn launcher remote handoff", () => {
     });
     const provider = createLauncher({ environments });
 
+    const input = turn("run-persisted-user", { extraPlugins: ["browser"] });
     await provider.executeTurn(
       runIdentity("run-persisted-user"),
       {
-        ...turn("run-persisted-user"),
+        ...input,
         config: {
-          ...turn("run-persisted-user").config,
-          plugins: { entries: { browser: { enabled: false } } },
+          ...input.config,
+          plugins: { ...input.config.plugins, entries: { browser: { enabled: false } } },
         },
         toolsAllow: ["browser"],
         suppressNextUserMessagePersistence: true,

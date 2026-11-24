@@ -11,7 +11,7 @@ function requireValue(value, message) {
     throw new Error("Receipt recovery: " + message);
   }
 }
-function one(values, label) {
+export function one(values, label) {
   requireValue(values.length === 1, label + " is missing or ambiguous");
   return values[0];
 }

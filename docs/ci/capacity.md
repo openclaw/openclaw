@@ -456,7 +456,7 @@ manual/release runs retain full package generation. Pull requests and their
 exact-head fallback dispatches omit these jobs,
 real-Gateway UI, and named built-process verifiers. Unit/boundary and mocked
 Gateway coverage remain. The complete-file proof inventory belongs to
-`scripts/lib/ci-proof-test-inventory.mts` and applies to precise and compact PR
+`scripts/lib/ci-test-tier-policy.mts` and applies to precise and compact PR
 plans after owner resolution. Retained main proofs and the full manual inventory
 keep every assertion.
 

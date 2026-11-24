@@ -864,7 +864,7 @@ src/gateway/server-methods/chat-abort-handler.ts	11
 src/gateway/server-methods/chat-abort-runtime.ts	2
 src/gateway/server-methods/chat-abort-session-plan.ts	10
 src/gateway/server-methods/chat-aborted-partial.ts	7
-src/gateway/server-methods/chat-history-handler.ts	6
+src/gateway/server-methods/chat-history-handler.ts	2
 src/gateway/server-methods/chat-history-recovery.ts	2
 src/gateway/server-methods/chat-history-session-read.ts	6
 src/gateway/server-methods/chat-inject.ts	4

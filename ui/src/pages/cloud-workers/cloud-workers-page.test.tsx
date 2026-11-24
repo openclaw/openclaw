@@ -640,7 +640,9 @@ it("keeps a rejected profile draft and retires pending save presentation on acce
       ),
     );
     change(lifetime, "9h");
-    click(page, "Save");
+    const save = actionButton(page, "Save");
+    save.click();
+    save.click();
     await waitForSolid(() => {
       expect(patches).toBe(1);
       expect(actionButton(page, "Saving…").disabled).toBe(true);
@@ -653,6 +655,16 @@ it("keeps a rejected profile draft and retires pending save presentation on acce
     expect(lifetime.value).toBe("9h");
     await waitForSolid(() => expect(actionButton(page, "Save").disabled).toBe(false));
     expect(page.querySelector<HTMLInputElement>(".settings-toggle__input")?.disabled).toBe(false);
+    gatewayHarness.publish(false, client, null);
+    gatewayHarness.publish(
+      true,
+      client,
+      gatewayHelloForMethods(["config.patch", "environments.list"]),
+    );
+    await waitForSolid(() => expect(actionButton(page, "Save").disabled).toBe(false));
+    expect(page.textContent).toContain("Synthetic profile save unavailable");
+    expect(page.querySelector('input[aria-label="Max lifetime"]')).toBe(lifetime);
+    expect(lifetime.value).toBe("9h");
 
     pending = createDeferred<unknown>();
     click(page, "Save");

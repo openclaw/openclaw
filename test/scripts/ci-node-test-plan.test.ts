@@ -31,8 +31,8 @@ import {
 import {
   isCiProofTestFile,
   isReleaseOnlyRuntimeTestFile,
-} from "../../scripts/lib/ci-proof-test-inventory.mts";
-import * as proofTestInventory from "../../scripts/lib/ci-proof-test-inventory.mts";
+} from "../../scripts/lib/ci-test-tier-policy.mts";
+import * as testTierPolicy from "../../scripts/lib/ci-test-tier-policy.mts";
 import {
   createNativeSoloTimingKey,
   type CiTimingProfile,
@@ -1629,7 +1629,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       if (runnerBackend !== "github") {
         const fullFiles = groups.flatMap(optionalPatterns);
         const excluded = required(fullFiles[0]);
-        vi.spyOn(proofTestInventory, "isReleaseOnlyRuntimeTestFile").mockImplementation(
+        vi.spyOn(testTierPolicy, "isReleaseOnlyRuntimeTestFile").mockImplementation(
           (file) => file === excluded,
         );
         vi.spyOn(buildPrerequisites, "resolveVitestPretestBuildMode").mockReturnValue(undefined);
@@ -1833,19 +1833,26 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     }
   });
 
-  it("prices serial Gateway server measurements at two workers and preserves parallel samples (github)", () => {
+  it("prices serial Gateway server measurements at two workers and preserves parallel samples (github)", async () => {
     const runnerBackend = "github";
 
     const config = configPath("gateway-server");
     const owner = "agentic-control-plane-agent-chat";
-    useFixtureProjects((candidate) => candidate === config);
-
+    // Keep the file bound stable with both serial and release-only runtime work.
+    const files = [
+      ...Array.from(
+        { length: 89 },
+        (_, index) => `src/gateway/server.chat.timing-${index}.test.ts`,
+      ),
+      gatewayServerSerialTestFiles[0]!,
+      "src/gateway/server.sessions.archive-worktree-lifecycle.test.ts",
+    ];
     const timings: Record<string, number> = { [owner]: 540 };
-    spyTimings().mockReturnValue(timings);
-    vi.spyOn(testTimings, "readRuntimePlacementTimings").mockReturnValue([]);
+    mockProject("agentic", config, "src/gateway", files, timings);
+    const { createNodeTestShardBundles: createPlan } = await loadPlanModule();
     const options = { compactMode: "pull-request" as const, runnerBackend };
     const select = (includeReleaseOnlyRuntimeTests = true) =>
-      bundleTests({ ...options, includeReleaseOnlyRuntimeTests })
+      createPlan({ ...options, includeReleaseOnlyRuntimeTests })
         .flatMap(jobGroups)
         .filter((group) => group.shard_name.replace(/-hosted-\d+$/u, "") === owner);
     const inherited = select();
@@ -2275,8 +2282,8 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
   });
 
   it("keeps reduced Gateway coverage under distinct complete timing parts", () => {
-    const isReleaseOnlyRuntime = proofTestInventory.isReleaseOnlyRuntimeTestFile;
-    vi.spyOn(proofTestInventory, "isReleaseOnlyRuntimeTestFile").mockImplementation(
+    const isReleaseOnlyRuntime = testTierPolicy.isReleaseOnlyRuntimeTestFile;
+    vi.spyOn(testTierPolicy, "isReleaseOnlyRuntimeTestFile").mockImplementation(
       (file) => file === "src/gateway/server.chat-cli-auth.test.ts" || isReleaseOnlyRuntime(file),
     );
     const options = {

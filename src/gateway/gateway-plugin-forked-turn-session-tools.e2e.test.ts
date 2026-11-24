@@ -2,7 +2,11 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { type MethodResult, withForkGateway } from "./gateway-plugin-forked-turn.test-support.js";
+import {
+  type Fixture,
+  type MethodResult,
+  withForkGateway,
+} from "./gateway-plugin-forked-turn.test-support.js";
 
 describe("plugin forked turns with the session's read, ls and exec", () => {
   it(
@@ -45,16 +49,29 @@ describe("plugin forked turns with the session's read, ls and exec", () => {
           ).resolves.toMatchObject(settled);
           expect(fixture.forkToolOutputs()).toEqual([expect.stringContaining("notes.txt")]);
 
-          // A non-owner's turn keeps read but not exec.
+          // A full writer through a session-scoped method gets the same fork.
+          fixture.forkScript.calls = [{ name: "exec", args: { command: "echo OWN_EXEC_RAN" } }];
+          await expect(fixture.ownFork(owner.sessionKey, coreTools.tools)).resolves.toMatchObject(
+            settled,
+          );
+          expect(fixture.forkToolOutputs()).toEqual([expect.stringContaining("OWN_EXEC_RAN")]);
+
+          // A non-owner's turn keeps read, but a request with exec is refused before any model call.
           const stranger = await fixture.channelTurn(
             `agent:main:telegram:direct:fork-core-7-${randomUUID()}`,
             "7",
           );
-          fixture.forkScript.calls = [{ name: "exec", args: { command: "echo STRANGER_RAN" } }];
-          await expect(fixture.fork(stranger, coreTools)).resolves.toMatchObject(settled);
-          expect(fixture.forkToolOutputs()).toEqual([
-            expect.stringContaining("exec is not available in this background run"),
-          ]);
+          const strangerForkCalls = fixture.forkRequests.length;
+          await expect(fixture.fork(stranger, coreTools)).resolves.toEqual({
+            ok: true,
+            result: { status: "refused", reason: "tool_policy" },
+          });
+          expect(fixture.forkRequests).toHaveLength(strangerForkCalls);
+          fixture.forkScript.calls = [{ name: "read", args: { path: "notes.txt" } }];
+          await expect(fixture.fork(stranger, { tools: ["read", "ls"] })).resolves.toMatchObject(
+            settled,
+          );
+          expect(fixture.forkToolOutputs()).toEqual([expect.stringContaining("Release notes.")]);
 
           // An unmatched command under allowlist/on-miss is denied without an approval request.
           await fixture.patchConfig({ tools: { exec: { security: "allowlist", ask: "on-miss" } } });
@@ -103,4 +120,91 @@ describe("plugin forked turns with the session's read, ls and exec", () => {
       );
     },
   );
+
+  it(
+    "lets a session writer fork their own chat with read, but never exec or a sessionless launch",
+    { timeout: 150_000 },
+    async () => {
+      await withForkGateway(
+        (config) => config,
+        async (fixture) => {
+          const key = await webChatTurn(fixture);
+          await expect(
+            fixture.client.request("forkproof.run", { sessionKey: key, tools: ["read"] }),
+          ).rejects.toThrow(/operator.write/);
+          await expect(fixture.ownFork(key, ["read", "exec"])).resolves.toEqual({
+            ok: true,
+            result: { status: "refused", reason: "tool_policy" },
+          });
+          fixture.forkScript.calls = [{ name: "read", args: { path: "notes.txt" } }];
+          const fork = await fixture.ownFork(key, ["read"]);
+          expect(fork, fork.ok ? undefined : fork.message).toMatchObject({
+            ok: true,
+            result: { status: "settled" },
+          });
+          expect(fixture.forkToolOutputs()).toEqual([expect.stringContaining("Release notes.")]);
+          expect(fixture.proof.settled.at(-1)).toMatchObject({ ok: true, text: "FORK_DONE" });
+        },
+        { proxyScopes: ["operator.sessions.write"] },
+      );
+    },
+  );
+
+  it(
+    "runs exec through a session-scoped method only on the signed-in caller's own turn",
+    { timeout: 150_000 },
+    async () => {
+      await withForkGateway(
+        (config) => ({
+          ...config,
+          commands: { ownerAllowFrom: ["telegram:7"] },
+          tools: {
+            ...config.tools,
+            exec: { host: "gateway", security: "full", ask: "off", notifyOnExit: false },
+          },
+        }),
+        async (fixture) => {
+          const settled = { ok: true, result: { status: "settled" } };
+          const exec = (text: string) => [{ name: "exec", args: { command: `echo ${text}` } }];
+          const own = await webChatTurn(fixture);
+          fixture.forkScript.calls = exec("SAME_PERSON_RAN");
+          await expect(fixture.ownFork(own, ["exec"])).resolves.toMatchObject(settled);
+          expect(fixture.forkToolOutputs()).toEqual([expect.stringContaining("SAME_PERSON_RAN")]);
+
+          // Another owner's turn: the session-scoped caller may not run exec as that person.
+          const other = await fixture.channelTurn(
+            `agent:main:telegram:direct:fork-owner-7-${randomUUID()}`,
+            "7",
+          );
+          await expect(fixture.ownFork(other.sessionKey, ["read", "exec"])).resolves.toEqual({
+            ok: true,
+            result: { status: "refused", reason: "tool_policy" },
+          });
+          fixture.forkScript.calls = exec("OWNER_TURN_RAN");
+          await expect(fixture.fork(other, { tools: ["exec"] })).resolves.toMatchObject(settled);
+          expect(fixture.forkToolOutputs()).toEqual([expect.stringContaining("OWNER_TURN_RAN")]);
+        },
+        { proxyScopes: ["operator.admin", "operator.read", "operator.write"] },
+      );
+    },
+  );
 });
+
+/** A WebChat turn by the signed-in client in a chat it creates; returns the session key. */
+async function webChatTurn(fixture: Fixture) {
+  const { key } = await fixture.client.request<{ key: string }>("sessions.create", {
+    agentId: "main",
+    label: "Own chat",
+  });
+  await fixture.client.request("chat.send", {
+    sessionKey: key,
+    message: "Say hello.",
+    idempotencyKey: randomUUID(),
+  });
+  await expect
+    .poll(() => fixture.proof.agentEnds.some((end) => end.sessionKey === key), {
+      timeout: 45_000,
+    })
+    .toBe(true);
+  return key;
+}

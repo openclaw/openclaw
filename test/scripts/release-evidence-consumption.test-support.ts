@@ -41,7 +41,11 @@ const childPublisher = "Seal full release child evidence / Seal child receipt";
 // Only external transport is replaced; validation runs through production owners.
 export function recoveryConsumptionFixture(
   admitted: boolean | ReturnType<typeof candidatePublicationFixture> = false,
-  fixtureOptions: { waivedFailure?: boolean; waiverPolicySha?: string } = {},
+  fixtureOptions: {
+    waivedFailure?: boolean;
+    omittedPluginJob?: boolean;
+    waiverPolicySha?: string;
+  } = {},
 ) {
   const direct =
     typeof admitted === "boolean"
@@ -128,8 +132,6 @@ export function recoveryConsumptionFixture(
     childRole: string;
     jobName: string;
     reason: string;
-    aggregates: never[];
-    evidence: { runId: number; runAttempt: number };
   }[] = [];
   const sourceFile = (sha: string, path = ".github/workflows/full-release-validation.yml") =>
     path === "scripts/lib/release-validation-waivers.json"
@@ -233,8 +235,21 @@ export function recoveryConsumptionFixture(
         childRole: role,
         jobName: workload[0]!.name,
         reason: "Synthetic Q-only recovery grant",
-        aggregates: [],
-        evidence: { runId: Number(id), runAttempt: 1 },
+      });
+    }
+    if (fixtureOptions.omittedPluginJob && role === "pluginPrereleaseCandidate") {
+      const jobName = "plugin-prerelease-suite";
+      const offset = workload.findIndex((entry) => entry.name === jobName);
+      if (offset < 0) {
+        throw new Error("Expected the plugin suite in admitted coverage");
+      }
+      workload.splice(offset, 1);
+      waiverPolicy.push({
+        targetVersion: version,
+        targetSha: c,
+        childRole: role,
+        jobName,
+        reason: "Synthetic Q-only missing job grant",
       });
     }
     const publisher = job(10099 + index * 100, childPublisher, id);
@@ -745,7 +760,6 @@ export function recoveryConsumptionFixture(
       validateReusableReleaseChild(selection, request, {
         ...options,
         github: async (path: string) => github(path),
-        getJobLog: async (id: number) => required(logs.get(id), String(id)),
         downloadArchive: download,
       }),
     verifyRetainedPublicationArtifacts,

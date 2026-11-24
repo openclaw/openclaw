@@ -546,7 +546,7 @@ it.each(["healthy", "inconclusive", "corrupt"] as const)(
           expect(verifyIntegrity).toHaveBeenCalledOnce();
           await closeOpenClawAgentDatabasesAsync();
           // Native loss requires fresh proof; an inconclusive attempt still must not loop.
-          invalidateOpenClawAgentDatabaseValidation(pathname);
+          invalidateOpenClawAgentDatabaseValidation(pathname, "a maintenance write");
           revokeSqliteDatabaseAdmissionsForPath(pathname);
           await replaceSessionEntry(scope, { sessionId: "retained", updatedAt: 5 });
           await admission.pendingPreparation;
@@ -556,7 +556,7 @@ it.each(["healthy", "inconclusive", "corrupt"] as const)(
           closeOpenClawAgentDatabasesForTest();
           fs.renameSync(pathname, `${pathname}.previous`);
           fs.copyFileSync(`${pathname}.previous`, pathname);
-          invalidateOpenClawAgentDatabaseValidation(pathname);
+          invalidateOpenClawAgentDatabaseValidation(pathname, "a maintenance write");
           revokeSqliteDatabaseAdmissionsForPath(pathname);
           await replaceSessionEntry(scope, { sessionId: "retained", updatedAt: 6 });
           await admission.pendingPreparation;

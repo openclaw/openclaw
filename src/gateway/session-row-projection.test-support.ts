@@ -321,6 +321,7 @@ export function createSessionRowProjectionFixture(params: {
       throw new Error("Indexed lookup requires a real session row projection");
     },
     onSelectionChange: revisions.onSelectionChange,
+    onMembershipChange() {},
     onFactsChange: revisions.onFactsChange,
     readTaskPublicationRevision: revisions.taskPublication,
     hasLogicalChildEntries: (parent) => selectEntries({ parentSessionKey: parent }).length > 0,
