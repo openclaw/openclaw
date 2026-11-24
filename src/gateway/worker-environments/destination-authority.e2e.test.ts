@@ -276,7 +276,7 @@ process.stdin.pipe(child.stdin);
               let config: OpenClawConfig = {
                 agents: {
                   defaults: { workspace: source },
-                  entries: { main: { workspace: source, model: "synthetic/destination-proof" } },
+                  entries: { main: { workspace: source } },
                 },
                 cloudWorkers: {
                   requiredProfile: "development",
