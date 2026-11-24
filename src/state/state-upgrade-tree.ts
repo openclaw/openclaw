@@ -19,6 +19,7 @@ import {
 } from "../infra/sqlite-wal-filesystem.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { retirePostgresUpgrade } from "../snapshot/database-backup.js";
+import { GENERATION_NAME, RETIRED_BACKUP_NAME, skipEntry } from "./state-upgrade-paths.js";
 import { canReadUpgradeFile, readableCompanionBytes } from "./state-upgrade-readability.js";
 
 export type UpgradeOp = {
@@ -34,13 +35,6 @@ export type UpgradePlan = { appVersion: string; ops: UpgradeOp[] };
 
 const PLAN_FILE = "plan.json";
 const SQLITE_HEADER = Buffer.from("SQLite format 3\0", "latin1");
-// Copies an earlier upgrade or the retired in-place migration left behind.
-const RETIRED_BACKUP_NAME =
-  /\.pre-startup-migration-|\.scoped\.bak$|\.sqlite[^/]*\.bak$|^openclaw-media-persistence-recovery-/u;
-const GENERATION_NAME = /\.pre-[^/]+$/u;
-// SQLite companions the private copy folds in or the next open recreates.
-const COMPANION_NAME = /-(wal|shm|journal)$|\.seal$/u;
-
 export function fsyncPath(pathname: string, directory = false): void {
   let fd: number | undefined;
   try {
@@ -147,12 +141,8 @@ export function withRecoveredSource<T>(pathname: string, read: (readable: string
   }
 }
 
-export function skipEntry(name: string): boolean {
-  return GENERATION_NAME.test(name) || RETIRED_BACKUP_NAME.test(name) || COMPANION_NAME.test(name);
-}
-
 /** Changes on any write, replacement or mode change of the file. */
-function fileStamp(pathname: string): string | undefined {
+export function fileStamp(pathname: string): string | undefined {
   const stat = fs.lstatSync(pathname, { bigint: true, throwIfNoEntry: false });
   return stat && `${stat.ino}:${stat.size}:${stat.mtimeNs}:${stat.ctimeNs}`;
 }
