@@ -135,7 +135,7 @@ describe("AgentRuntimePlan", () => {
       });
       const build = (
         accessPrograms?: Record<string, unknown>,
-        cyberAccessPrograms?: Parameters<typeof buildPlan>[0]["cyberAccessPrograms"],
+        cyberAccessPrograms?: Parameters<typeof buildAgentRuntimePlan>[0]["cyberAccessPrograms"],
       ) =>
         buildPlan({
           config: config(accessPrograms),

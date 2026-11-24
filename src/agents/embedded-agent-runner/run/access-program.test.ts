@@ -245,6 +245,7 @@ it("reads a native runtime's own programs only when that runtime owns auth", asy
         provider: "openai",
         modelId: "synthetic-cyber",
         runtimeId: "codex",
+        authProfileStore: { version: 1, profiles: {} },
         auth: { providerForAuth: "openai", authProfileProviderForAuth: "openai", selectedAuthMode },
         preparedModelRuntime: {
           readFullModelCatalog: () => snapshot,
