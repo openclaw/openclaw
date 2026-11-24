@@ -4,7 +4,7 @@ import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import path from "node:path";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import { expect, it } from "vitest";
+import { assert, expect, it } from "vitest";
 import { isCompactionSummaryRequest } from "../../../test/helpers/compaction-summary-request.js";
 import { writeOpenAiResponsesItem } from "../../../test/helpers/openai-responses-item.test-support.js";
 import { writeOpenAiResponsesText } from "../../../test/helpers/openai-responses-sse.js";
@@ -30,6 +30,20 @@ import { createTestFollowupRun } from "./agent-runner.test-fixtures.js";
 import { createReplyParams } from "./test-helpers.js";
 import { createTypingController } from "./typing.js";
 
+type ProviderRequest = {
+  input: unknown[];
+  messages?: unknown[];
+  instructions?: string;
+  tools?: unknown[];
+  max_output_tokens?: number;
+  max_completion_tokens?: number;
+  max_tokens?: number;
+};
+
+function estimateInputTokens({ input, messages, instructions, tools }: ProviderRequest): number {
+  return Math.ceil(JSON.stringify({ input, messages, instructions, tools }).length / 4);
+}
+
 // Real reply/session/attempt owners reach a deterministic local provider. The
 // Responses tool loop must compact before the next oversized request; the
 // completions case keeps its timed-out-summary recovery across turns.
@@ -42,10 +56,11 @@ it.each([false, true])(
       let toolRounds = 0;
       let overWindow = 0;
       let summariesBeforeAnswer = 0;
-      let largestPrompt = 0;
       let publishedBeforeSummary = 0;
       let rateLimitedAfterSummary = false;
-      const requests: Array<{ body: string; input: unknown[] }> = [];
+      const requests: Array<
+        ProviderRequest & { body: string; inputTokens: number; outputTokens: number | undefined }
+      > = [];
       const contextWindow = midTurn ? 1_000_000 : 32_768;
       const reportPath = path.join(state.workspaceDir, "report.txt");
       await writeFile(reportPath, "Project evidence row.\n".repeat(1_800));
@@ -56,27 +71,18 @@ it.each([false, true])(
           body += chunk;
         });
         request.on("end", () => {
-          const wire = JSON.parse(body) as {
-            input: unknown[];
-            instructions?: string;
-            tools?: unknown[];
-            max_output_tokens?: number;
-          };
-          const tokens = Math.ceil(
-            JSON.stringify({
-              input: wire.input,
-              instructions: wire.instructions,
-              tools: wire.tools,
-            }).length / 4,
-          );
+          const wire = JSON.parse(body) as ProviderRequest;
+          const tokens = estimateInputTokens(wire);
+          const outputTokens =
+            wire.max_output_tokens ?? wire.max_completion_tokens ?? wire.max_tokens;
           if (summaryRequests === 0) {
             publishedBeforeSummary = Math.max(
               publishedBeforeSummary,
               loadSessionEntry(scope)?.totalTokens ?? 0,
             );
           }
-          largestPrompt = Math.max(largestPrompt, tokens);
-          if (midTurn && tokens + (wire.max_output_tokens ?? 4_096) > contextWindow) {
+          requests.push({ ...wire, body, inputTokens: tokens, outputTokens });
+          if (outputTokens !== undefined && tokens + outputTokens > contextWindow) {
             overWindow += 1;
             response.writeHead(400, { "content-type": "application/json" });
             response.end(
@@ -86,7 +92,6 @@ it.each([false, true])(
             );
             return;
           }
-          requests.push({ body, input: wire.input });
           if (isCompactionSummaryRequest(body)) {
             summaryRequests += 1;
             if (midTurn) {
@@ -267,7 +272,15 @@ it.each([false, true])(
           const summaryIndex = requests.findIndex((request) =>
             isCompactionSummaryRequest(request.body),
           );
+          expect(summaryIndex).toBeGreaterThan(0);
           const [previous, summary] = [requests[summaryIndex - 1]!, requests[summaryIndex]!];
+          const compactionThreshold = contextWindow * 0.85;
+          for (const request of requests.slice(0, summaryIndex)) {
+            expect(request.inputTokens).toBeLessThan(compactionThreshold);
+          }
+          expect(
+            estimateInputTokens({ ...summary, input: summary.input.slice(0, -1) }),
+          ).toBeGreaterThanOrEqual(compactionThreshold);
           const previousItems = JSON.stringify(previous.input).slice(0, -1);
           expect(JSON.stringify(summary.input).startsWith(previousItems)).toBe(true);
           const added = summary.input.slice(previous.input.length) as Array<
@@ -331,8 +344,10 @@ it.each([false, true])(
         }
         expect(summaryRequests).toBe(summariesAfterFirstTurn);
         expect(loadSessionEntry(scope)?.compactionCount).toBe(1);
-        if (midTurn) {
-          expect(largestPrompt).toBeLessThan(800_000);
+        for (const request of requests) {
+          assert(request.outputTokens !== undefined);
+          expect(request.outputTokens).toBeGreaterThan(0);
+          expect(request.inputTokens + request.outputTokens).toBeLessThanOrEqual(contextWindow);
         }
       } finally {
         await waitForSessionMaintenance(sessionKey);
