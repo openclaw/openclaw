@@ -19,6 +19,7 @@ import {
 } from "../../state/openclaw-agent-db.js";
 import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { recoveryCoordinator } from "./delivery-queue-recovery-coordinator.js";
 import { recoverPendingDeliveries } from "./delivery-queue-recovery.js";
 import {
   enqueueDeliveryOnce,
@@ -312,6 +313,44 @@ describe("delivery-queue confirmed transcript recovery", () => {
         .spyOn(confirmedVisibleMessage, "commitConfirmedVisibleMessage")
         .mockRejectedValueOnce(new Error("transcript storage unavailable"));
       const deliver = vi.fn();
+      const recoveryTiming = {
+        scanElapsedMs: 0,
+        laneKeyElapsedMs: 0,
+        laneKeyCalls: 0,
+        loadEntryCalls: 0,
+        onEntryCalls: 0,
+      };
+      const originalScan = recoveryCoordinator.scan;
+      const scan = vi.spyOn(recoveryCoordinator, "scan").mockImplementation(async (options) => {
+        const startedAt = performance.now();
+        const laneKey = options.laneKey;
+        try {
+          await originalScan({
+            ...options,
+            laneKey:
+              laneKey &&
+              ((entry) => {
+                const laneStartedAt = performance.now();
+                recoveryTiming.laneKeyCalls += 1;
+                try {
+                  return laneKey(entry);
+                } finally {
+                  recoveryTiming.laneKeyElapsedMs += performance.now() - laneStartedAt;
+                }
+              }),
+            loadEntry: (id) => {
+              recoveryTiming.loadEntryCalls += 1;
+              return options.loadEntry(id);
+            },
+            onEntry: (entry) => {
+              recoveryTiming.onEntryCalls += 1;
+              return options.onEntry(entry);
+            },
+          });
+        } finally {
+          recoveryTiming.scanElapsedMs += performance.now() - startedAt;
+        }
+      });
       try {
         const adapterCallsBeforeRecovery =
           resolveOutboundChannelMessageAdapterMock.mock.calls.length;
@@ -324,6 +363,7 @@ describe("delivery-queue confirmed transcript recovery", () => {
             info: log.info.mock.calls.map(([message]) => message),
             warn: log.warn.mock.calls.map(([message]) => message),
             error: log.error.mock.calls.map(([message]) => message),
+            recoveryTiming,
             adapterCalls:
               resolveOutboundChannelMessageAdapterMock.mock.calls.length -
               adapterCallsBeforeRecovery,
@@ -337,6 +377,7 @@ describe("delivery-queue confirmed transcript recovery", () => {
         expect((await runRecovery({ deliver })).result).toEqual(RECOVERY_SUMMARY.empty);
         expect(deliver).not.toHaveBeenCalled();
       } finally {
+        scan.mockRestore();
         commit.mockRestore();
       }
     },
