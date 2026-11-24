@@ -588,6 +588,8 @@ export async function executeMutableUpdate(
         installEnv: params.packageInstallEnv,
         installTarget: params.packageInstallTarget,
         validateCandidate,
+        getDatabaseBackupEnv: () =>
+          originalRun && (ownedManagedUpdateContext?.env ?? originalRun.env),
         beforeActivate,
         ...createPackageUpdateActivationOptions({
           run: opts.run,

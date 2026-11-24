@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { withTestDir } from "../test-helpers/temp-dir.js";
+import { withEnv } from "../test-utils/env.js";
 import { privatePackageActivationIdentity } from "./package-update-activation-paths.js";
 import { runGlobalPackageUpdateSteps } from "./package-update-steps.js";
 import {
@@ -10,6 +11,7 @@ import {
   stagedNpmPrefix,
   writePackageRoot,
 } from "./package-update-steps.test-support.js";
+import { resolvePrivateSqliteSnapshotStagingRoot } from "./sqlite-private-directory.js";
 import { prepareUpdateFailureReport } from "./update-failure-report-prepare.js";
 import {
   captureManagedUpdateLeaseDatabaseIdentity,
@@ -18,6 +20,53 @@ import {
 import { normalizeFallbackFailureReason } from "./update-runner-command.js";
 
 describe.skipIf(process.platform === "win32")("package-swap refusal reports", () => {
+  it("refuses an unsafe database backup workspace before stopping the Gateway", async () => {
+    await withTestDir({ prefix: "openclaw-refusal-report-" }, async (temporaryDir) => {
+      const home = await fs.realpath(temporaryDir);
+      const globalRoot = path.join(home, ".local", "lib", "node_modules");
+      const packageRoot = path.join(globalRoot, "openclaw");
+      const stateDir = path.join(home, ".openclaw");
+      const env = { HOME: home, OPENCLAW_STATE_DIR: stateDir };
+      const fallback = path.join(stateDir, "tmp");
+      await writePackageRoot(packageRoot, "1.0.0");
+      await fs.chmod(globalRoot, 0o775);
+      await fs.mkdir(fallback, { recursive: true });
+      await fs.chmod(fallback, 0o775);
+      let gatewayRunning = true;
+      const options = {
+        ...createNpmUpdateOptions(globalRoot),
+        getDatabaseBackupEnv: () => env,
+        validateCandidate: async () => [],
+        beforeActivate: async () => {
+          gatewayRunning = false;
+        },
+      };
+      const result = await runGlobalPackageUpdateSteps({
+        ...options,
+        runStep: async ({ name, argv, cwd }) => {
+          const prefix = stagedNpmPrefix(argv);
+          await writePackageRoot(path.join(prefix, "lib", "node_modules", "openclaw"), "2.0.0");
+          return packageUpdateStepResult({ name, argv, cwd });
+        },
+        onTransaction: async ({ databaseBackupRoot }) => {
+          const stagingRoot = `${databaseBackupRoot}.databases`;
+          await fs.mkdir(stagingRoot, { mode: 0o700 });
+          withEnv(env, () =>
+            resolvePrivateSqliteSnapshotStagingRoot({ ...env, XDG_CACHE_HOME: stagingRoot }),
+          );
+        },
+      });
+      expect.soft(gatewayRunning).toBe(true);
+      expect(result.failedStep?.stderrTail ?? "").toContain(
+        `Temp workspace ancestor "${globalRoot}"`,
+      );
+      expect(result.failedStep?.stderrTail ?? "").toContain("chmod go-w");
+      expect(await fs.readFile(path.join(packageRoot, "package.json"), "utf8")).toContain(
+        '"version":"1.0.0"',
+      );
+    });
+  });
+
   it.each([
     ["journal links", "package-recovery-permissions-unsafe"],
     ["lease file", "managed-handoff-lease-identity-changed"],

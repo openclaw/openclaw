@@ -1,5 +1,10 @@
 import { expect, it } from "vitest";
-import { createUpdateFailureFact, type UpdateFailureFact } from "./update-failure-facts.js";
+import { createUpdateStateInspectionDiagnostics } from "./update-candidate-state.diagnostics.js";
+import {
+  createUpdateErrorFact,
+  createUpdateFailureFact,
+  type UpdateFailureFact,
+} from "./update-failure-facts.js";
 import { preparePublicUpdateFailureIdentifiers } from "./update-failure-public-identifiers.js";
 import {
   prepareUpdateFailureReport,
@@ -269,6 +274,48 @@ it("keeps allowlisted stderr causes alongside a classified startup fact", async 
     /\/private\/customer|private-host|synthetic-secret/u,
   );
 });
+
+it.skipIf(process.platform === "win32")(
+  "retains backup worker chmod guidance and redacts the temp ancestor in the report",
+  async () => {
+    const home = "/home/Fixture Owner";
+    const ancestor = `${home}/.local/lib/node_modules`;
+    const stateDir = `${home}/.openclaw`;
+    const env = { HOME: home, OPENCLAW_STATE_DIR: stateDir };
+    const inspection = createUpdateStateInspectionDiagnostics({
+      operation: "State schema inspection",
+      phase: "pre-migration database backup",
+      paths: [`${stateDir}/state/openclaw.sqlite`],
+    });
+    const refusal = `Temp workspace ancestor "${ancestor}" is group/world writable without sticky protection; have its owner run chmod +t '${ancestor}' for a shared temp directory or chmod go-w '${ancestor}' for a private ancestor.`;
+    inspection.onOutputChunk(
+      Buffer.from(`No safe OpenClaw temp root is available. Default root: Error: ${refusal}\n`),
+      "stderr",
+    );
+    const error = inspection.failure(inspection.stderr(), "exit");
+    const failed = step("package-swap", {
+      stderrTail: error.message,
+      failureFacts: [createUpdateErrorFact("package-swap", error, env)],
+    });
+    expect
+      .soft(error.message)
+      .toMatch(/^State schema inspection failed \(exit\): Temp workspace ancestor /u);
+    for (const prepared of [
+      await report({ steps: [failed] }, {}, { env, stateDir }),
+      await report(
+        {},
+        { recordedRun: makeRecordedRun(updateRunStepsFromResultStep(failed)) },
+        { env, stateDir },
+      ),
+    ]) {
+      expectText(
+        prepared.body,
+        ['Temp workspace ancestor "~/.local/lib/node_modules"', "chmod +t", "chmod go-w"],
+        /\/home\/|Fixture Owner|\[redacted-diagnostic\]/u,
+      );
+    }
+  },
+);
 
 it.each([
   { error: undefined, expected: undefined },

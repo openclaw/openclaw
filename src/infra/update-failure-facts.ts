@@ -5,6 +5,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { containsAsciiControlCharacter } from "@openclaw/normalization-core/string-normalization";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { resolveStateDir } from "../config/paths.js";
+import { redactPublicTempWorkspaceRefusal } from "../logging/diagnostic-support-causes.js";
 import {
   parsePublicConfigDiagnosticLines,
   publicConfigIssueMessage,
@@ -261,6 +262,11 @@ export function createUpdateFailureFact(
           .map((issue) => `${configText(issue.path, 128)}: ${issue.message}`)
           .join("; ") || (issueKind !== "Invalid configuration field" ? issueKind : undefined)
       : undefined;
+  const workspaceDiagnostic =
+    fact.message &&
+    redactPublicTempWorkspaceRefusal(fact.message, (directory) =>
+      redactSupportString(directory, context),
+    );
   const diagnostic =
     configDiagnostic ?? (fact.message ? line(fact.message, Number.MAX_SAFE_INTEGER) : undefined);
   // Closed recovery facts contain generated basenames, not hostnames.
@@ -296,9 +302,11 @@ export function createUpdateFailureFact(
     code: line(fact.code, 80),
     // Closed issue kinds have no values to redact; scanning them as secret assignments
     // would erase schema fields such as apiKey on a second normalization pass.
-    ...(message
-      ? { message: configDiagnostic ? truncateUtf16Safe(message, 200) : line(message, 200) }
-      : {}),
+    ...(workspaceDiagnostic
+      ? { message: workspaceDiagnostic }
+      : message
+        ? { message: configDiagnostic ? truncateUtf16Safe(message, 200) : line(message, 200) }
+        : {}),
     ...(fact.errorName ? { errorName: line(fact.errorName, 80) } : {}),
     ...(fact.location !== undefined ? { location } : {}),
     ...(fact.affectedKey
