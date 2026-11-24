@@ -86,4 +86,22 @@ describe("OpenAI image generation auth availability", () => {
     authStore = createCodexOAuthAuthStore();
     await expectConfigured(expected, config);
   });
+
+  it.each([
+    ["free", false],
+    ["plus", true],
+    [undefined, true],
+  ] as const)(
+    "routes ChatGPT image auth only when the stored %s plan includes images",
+    async (chatgptPlanType, configured) => {
+      authConfigured = true;
+      authStore = createCodexOAuthAuthStore();
+      authStore.profiles["openai:default"] = {
+        ...authStore.profiles["openai:default"],
+        ...(chatgptPlanType ? { chatgptPlanType } : {}),
+      } as AuthProfileStore["profiles"][string];
+
+      await expectConfigured(configured, { baseUrl: "https://chatgpt.com/backend-api/codex" });
+    },
+  );
 });
