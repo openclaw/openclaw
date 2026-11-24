@@ -45,7 +45,8 @@ vi.mock("./update-command-terminal.js", async (original) => ({
   withUpdateCommandTerminalResult: async <T>(run: (register: () => void) => Promise<T>) =>
     run(() => {}),
 }));
-vi.mock("./update-command-schema.js", () => ({
+vi.mock("./update-command-schema.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./update-command-schema.js")>()),
   preflightUpdateCommandSchemas: async () => ({ preflightNotes: [], preflightFailures: [] }),
   captureUpdateActivationSchemas: async () => ({}),
 }));
