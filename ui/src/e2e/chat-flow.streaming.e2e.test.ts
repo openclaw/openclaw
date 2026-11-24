@@ -187,25 +187,12 @@ suite.define(() => {
       );
       const alert = page.locator(".chat-error");
       await alert.waitFor();
-      const toggle = alert.getByRole("button", { name: "Show details", exact: true });
-      expect(await toggle.count()).toBe(1);
-      expect(await toggle.getAttribute("aria-expanded")).toBe("false");
-      const copy = alert.getByRole("button", { name: "Copy error", exact: true });
-      expect(await copy.isVisible()).toBe(false);
-      await toggle.press("Enter");
-      await alert.locator(".lazy-view-error__detail").waitFor();
-      expect(await toggle.getAttribute("aria-expanded")).toBe("true");
-      await toggle.press("Space");
-      await alert.locator(".lazy-view-error__detail").waitFor({ state: "hidden" });
-      expect(await toggle.getAttribute("aria-expanded")).toBe("false");
-      if (label === "mobile") {
-        await toggle.tap();
-        await alert.locator(".lazy-view-error__detail").waitFor();
-        expect(await toggle.getAttribute("aria-expanded")).toBe("true");
-        await toggle.tap();
-        await alert.locator(".lazy-view-error__detail").waitFor({ state: "hidden" });
-        expect(await toggle.getAttribute("aria-expanded")).toBe("false");
-      }
+      expect(await alert.locator(".app-toast__message").textContent()).toBe(gatewayErrorText);
+      expect(
+        await alert
+          .locator("details, [aria-expanded], .lazy-view-error__detail, .report-issue-link")
+          .count(),
+      ).toBe(0);
       const [alertBox, composerBox] = await Promise.all([
         alert.boundingBox(),
         page.locator(".agent-chat__composer-shell").boundingBox(),

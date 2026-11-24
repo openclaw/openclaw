@@ -50,43 +50,45 @@ openclaw-pending-session-create {
   }
 }
 
-.chat-error--reply {
-  box-shadow: none;
+.chat-error--reply.chat-composer-neighbor-card {
+  column-gap: 8px;
+  min-height: 0;
+  padding-block: 7px;
 
-  .app-toast__content {
-    grid-template-rows: minmax(var(--app-toast-row), auto);
-    align-items: center;
+  .app-toast__message {
+    grid-column: 2;
+    min-width: 0;
+    overflow: hidden;
+    font-size: calc(13px * var(--control-ui-text-scale));
+    font-weight: 400;
+    line-height: calc(18px * var(--control-ui-text-scale));
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   .chat-error__actions {
     grid-row: 1;
-    gap: inherit;
+    grid-column: 3;
+    gap: 4px;
+    height: 30px;
     margin: 0;
   }
 
-  > .app-toast__dismiss {
-    height: var(--app-toast-row);
-    margin-block-start: 0;
-  }
-
-  .report-issue-link {
+  .chat-error__refresh {
     white-space: nowrap;
   }
-}
 
-.chat-error__toggle {
-  min-height: 28px;
-  color: var(--text);
-  outline: none;
-
-  &:is(:hover, :focus-visible) {
-    text-decoration: underline;
+  .chat-error__dismiss {
+    position: relative;
+    inset: auto;
+    opacity: 1;
+    scale: 1;
+    box-shadow: none;
   }
 }
 
-/* Keep paired reply actions and long discard labels below the message on phones. */
+/* Keep long discard labels below the message on phones. */
 @media (max-width: 560px) {
-  .chat-error--reply .chat-error__actions,
   .chat-error__actions:has(> .chat-error__discard) {
     grid-template-rows: none;
     grid-area: auto / 1 / auto / -1;
@@ -96,8 +98,7 @@ openclaw-pending-session-create {
     margin-block-start: 6px;
   }
 
-  .chat-error__discard,
-  .chat-error__refresh {
+  .chat-error__discard {
     white-space: normal;
     text-align: start;
   }
@@ -2162,7 +2163,6 @@ openclaw-chat-video-player {
   font: 12px/1.4 var(--mono);
 }
 
-.chat-error__toggle,
 button.chat-pr__diff {
   padding: 0;
   border: 0;

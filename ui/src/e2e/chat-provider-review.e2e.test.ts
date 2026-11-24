@@ -45,14 +45,14 @@ suite.define(() => {
     });
     const failure = page.locator(".chat-error").filter({ hasText: errorMessage });
     await failure.locator(".app-toast__message").waitFor();
-    expect(await failure.locator(".app-toast__message").textContent()).toContain(
-      "This request was blocked by our safety systems.",
-    );
-    expect(await failure.locator(".app-toast__description").count()).toBe(0);
-    await failure.getByRole("button", { name: "Show details", exact: true }).click();
-    expect(await failure.getByLabel("Error details", { exact: true }).textContent()).toContain(
-      errorMessage,
-    );
+    expect(await failure.locator(".app-toast__message").textContent()).toBe(errorMessage);
+    expect(
+      await failure
+        .locator(
+          ".app-toast__description, details, [aria-expanded], .lazy-view-error__detail, .report-issue-link",
+        )
+        .count(),
+    ).toBe(0);
 
     const providerReview = {
       id: "synthetic-review-one",

@@ -115,17 +115,9 @@ export function handleChatGatewayEvent(state: ChatState, incoming?: ChatEventPay
       ? "state_contention"
       : payload.state === "error" && payload.stopReason === "aborted-partial-persistence-failed"
         ? "stop"
-        : chatgptUsageLimitKind;
-  const cause =
-    payload.errorDetail || payload.errorKind || payload.stopReason
-      ? {
-          failoverReason: payload.errorDetail?.failoverReason,
-          providerRuntimeFailureKind: payload.errorDetail?.providerRuntimeFailureKind,
-          code: payload.errorDetail?.providerErrorCode,
-          errorKind: payload.errorKind,
-          stopReason: payload.stopReason,
-        }
-      : undefined;
+        : payload.errorDetail?.providerRuntimeFailureKind === "auth_refresh"
+          ? "auth_refresh"
+          : chatgptUsageLimitKind;
   const injectedMessageId =
     payload.state === "final" && payload.seq === 0 && payload.runId?.startsWith("inject-")
       ? payload.runId.slice("inject-".length)
@@ -330,18 +322,11 @@ export function handleChatGatewayEvent(state: ChatState, incoming?: ChatEventPay
         diagnosticOwnerRunId === payload.runId &&
         payload.errorMessage?.trim() &&
         (projectedRun.currentRun?.errorMessage !== previousTerminalRun.errorMessage ||
-          (chatgptUsageLimitKind && state.chatRunError?.kind !== errorKind) ||
-          cause !== undefined)
+          (errorKind && state.chatRunError?.kind !== errorKind))
       ) {
         // Late diagnostics belong to the active, pending, or latest locally terminal run;
         // publishing them over a newer response falsely marks the new run failed.
-        setChatRunError(
-          state,
-          resolveGatewayErrorText(payload, null),
-          payload.runId,
-          errorKind,
-          cause,
-        );
+        setChatRunError(state, resolveGatewayErrorText(payload, null), payload.runId, errorKind);
       }
       if (payload.state === "error") {
         reconcileOwnedTerminalRun();
@@ -508,13 +493,7 @@ export function handleChatGatewayEvent(state: ChatState, incoming?: ChatEventPay
       publishInterruptedStream();
     }
     if (payload.errorMessage?.trim()) {
-      setChatRunError(
-        state,
-        resolveGatewayErrorText(payload, null),
-        payload.runId,
-        errorKind,
-        cause,
-      );
+      setChatRunError(state, resolveGatewayErrorText(payload, null), payload.runId, errorKind);
     }
     reconcileOwnedTerminalRun();
   } else if (payload.state === "error") {
@@ -556,7 +535,6 @@ export function handleChatGatewayEvent(state: ChatState, incoming?: ChatEventPay
         resolveGatewayErrorText(payload, projectedErrorMessage ? visiblePayloadMessage : null),
         payload.runId,
         errorKind,
-        cause,
       );
     }
   }

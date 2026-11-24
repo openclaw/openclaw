@@ -5,13 +5,8 @@ import type { Page, Locator } from "playwright";
 import { assert, expect, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
-import {
-  controlUiBundledGatewayUrl,
-  controlUiBundledSettingsStorageKey,
-  controlUiSessionUrl,
-  installMockGateway,
-} from "../test-helpers/control-ui-e2e.ts";
-import { exactButton, polledClipboard, polledVisible } from "./chat-presentation.test-support.ts";
+import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { exactButton } from "./chat-presentation.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Control UI chat error details" });
@@ -19,7 +14,6 @@ const sessionKey = "agent:main:main";
 
 const diagnosticContext = {
   viewport: { height: 900, width: 1280 },
-  permissions: ["clipboard-read", "clipboard-write"],
 };
 
 async function sendPrompt(
@@ -53,117 +47,7 @@ async function expectMobileFit(page: Page, alert: Locator) {
 }
 
 suite.define(() => {
-  it.each([
-    {
-      name: "routine",
-      message: "Request timed out.",
-      cause: { failoverReason: "timeout" },
-      report: false,
-    },
-    {
-      name: "unclassified",
-      message: "Request timed out.",
-      cause: { provider: "openai", failoverReason: "unclassified" },
-      report: true,
-    },
-    {
-      name: "context-overflow",
-      message:
-        "Context overflow: prompt too large for the model. Try /reset (or /new) to start a fresh session, or use a larger-context model.",
-      visibleMessage: "Context overflow: prompt too large for the model.",
-      cause: { failoverReason: "context_overflow" },
-      report: false,
-      details: true,
-    },
-  ])(
-    "keeps $name composer diagnostics and reporting independent",
-    async ({ name, message, visibleMessage, cause, report, details }) => {
-      await suite.withPage(diagnosticContext, async ({ page, context }) => {
-        const gateway = await installMockGateway(page, { sessionKey, historyMessages: [] });
-        if (name === "unclassified") {
-          await page.setViewportSize({ width: 300, height: 900 });
-          await context.addInitScript(
-            ({ key, gatewayUrl }) =>
-              localStorage.setItem(key, JSON.stringify({ gatewayUrl, textScale: 140 })),
-            {
-              key: controlUiBundledSettingsStorageKey(suite.server.baseUrl),
-              gatewayUrl: controlUiBundledGatewayUrl(suite.server.baseUrl),
-            },
-          );
-        }
-        await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
-        const { runId } = await sendPrompt(page, gateway, "Check the example operation.");
-        await gateway.emitGatewayEvent("chat", {
-          sessionKey,
-          runId,
-          seq: 1,
-          state: "error",
-          errorMessage: message,
-          errorDetail: cause,
-        });
-        const notice = page.locator(".chat-error");
-        const title = notice.locator(".app-toast__message");
-        await title.waitFor();
-        await notice.getByRole("button", { name: "Refresh", exact: true }).waitFor();
-        if (name === "routine") {
-          const centers = await notice.evaluate((element) =>
-            [
-              element,
-              ...element.querySelectorAll(
-                ".app-toast__message, .chat-error__refresh, .app-toast__dismiss",
-              ),
-            ].map((node) => {
-              const bounds = node.getBoundingClientRect();
-              return bounds.y + bounds.height / 2;
-            }),
-          );
-          expect.soft(Math.max(...centers) - Math.min(...centers)).toBeLessThanOrEqual(0.5);
-        }
-        expect.soft(await title.textContent()).toContain(visibleMessage ?? message);
-        expect.soft(await notice.locator(".app-toast__description").count()).toBe(0);
-        expect
-          .soft(await notice.getByRole("link", { name: "Report a bug", exact: true }).count())
-          .toBe(report ? 1 : 0);
-        if (report) {
-          const link = notice.getByRole("link", { name: "Report a bug", exact: true });
-          await link.waitFor();
-          expect(
-            await link.evaluate((element) => {
-              const label = [...element.childNodes].find(
-                (node) =>
-                  node.nodeType === Node.TEXT_NODE && node.textContent?.includes("Report a bug"),
-              );
-              if (!label) {
-                throw new Error("Report label missing");
-              }
-              const range = new Range();
-              range.selectNodeContents(label);
-              return range.getClientRects().length;
-            }),
-          ).toBe(1);
-          expect(
-            await notice.evaluate((element) => element.scrollWidth <= element.clientWidth),
-          ).toBe(true);
-        }
-        if (details) {
-          const toggle = notice.getByRole("button", { name: "Show details", exact: true });
-          await toggle.click();
-          const diagnostic = notice.getByLabel("Error details", { exact: true });
-          await diagnostic.waitFor();
-          expect(await diagnostic.textContent()).toBe(message);
-          await notice.getByRole("button", { name: "Copy error", exact: true }).click();
-          await polledClipboard(page).toBe(message);
-          expect(await notice.getByRole("link", { name: "Report a bug" }).count()).toBe(0);
-        } else if (!report) {
-          expect(
-            await notice.getByRole("button", { name: "Show details", exact: true }).count(),
-          ).toBe(0);
-        }
-      });
-    },
-  );
-
-  it("preserves bounded OAuth facts in the disclosure and copied diagnostic", async () => {
+  it("preserves bounded OAuth facts in the full reply error without disclosure", async () => {
     await suite.withPage(diagnosticContext, async ({ page }) => {
       const gateway = await installMockGateway(page, { sessionKey, historyMessages: [] });
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
@@ -189,16 +73,17 @@ suite.define(() => {
         },
       });
       const notice = page.locator(".chat-error--reply");
-      await notice.getByRole("button", { name: "Show details", exact: true }).click();
-      const detail = notice.getByLabel("Error details", { exact: true });
+      const detail = notice.locator(".app-toast__message");
       await detail.waitFor();
-      expect(await notice.locator(".app-toast__message").textContent()).toBe(
-        "Your refresh token has already been used to generate a new access token.",
-      );
       expect(await detail.textContent()).toBe(diagnostic);
       expect(await notice.textContent()).not.toContain("synthetic-oauth-response");
-      await notice.getByRole("button", { name: "Copy error", exact: true }).click();
-      await polledClipboard(page).toBe(diagnostic);
+      expect(
+        await notice
+          .locator("details, [aria-expanded], .lazy-view-error__detail, .report-issue-link")
+          .count(),
+      ).toBe(0);
+      await notice.getByRole("button", { name: "Open Models", exact: true }).waitFor();
+      expect(await notice.getByRole("button", { name: "Refresh", exact: true }).count()).toBe(0);
       await expectMobileFit(page, notice);
       expect(await detail.textContent()).toBe(diagnostic);
     });
@@ -351,7 +236,7 @@ suite.define(() => {
     });
   });
 
-  it("keeps a rejected session-change message visible with recovery guidance and diagnostic details", async () => {
+  it("keeps a rejected session-change message and full redacted recovery text without disclosure", async () => {
     await suite.withPage(diagnosticContext, async ({ page }) => {
       const prompt = "Continue reviewing the example project";
       const skillPath = "/home/operator/.openclaw/projects/example/.agents/skills/review";
@@ -382,29 +267,15 @@ suite.define(() => {
       });
       const alert = page.locator(".chat-error");
       await alert.waitFor();
-      expect(await alert.locator(".app-toast__message").textContent()).toBe(
-        "Your message didn't run because the conversation changed.",
-      );
-      const toggle = alert.getByRole("button", { name: "Show details" });
-      expect(await toggle.getAttribute("aria-expanded")).toBe("false");
-      expect(await alert.getByRole("link", { name: "Report a bug" }).isVisible()).toBe(false);
-      expect(await alert.locator(".lazy-view-error__detail").isVisible()).toBe(false);
+      expect(await alert.locator(".app-toast__message").textContent()).toBe(safeError);
+      expect(
+        await alert
+          .locator("details, [aria-expanded], .lazy-view-error__detail, .report-issue-link")
+          .count(),
+      ).toBe(0);
+      expect(await alert.textContent()).not.toContain("synthetic-password");
       expect(await page.locator(".chat-thread").textContent()).toContain(prompt);
-      await toggle.press("Enter");
-      const details = alert.locator(".lazy-view-error__detail");
-      await polledVisible(details).toBe(true);
-      expect(await details.textContent()).toBe(safeError);
-      expect(await toggle.getAttribute("aria-expanded")).toBe("true");
-      const report = alert
-        .locator(".chat-error__details")
-        .getByRole("link", { name: "Report a bug" });
-      await polledVisible(report).toBe(true);
-      expect(await report.getAttribute("href")).toContain("template=bug_report.yml");
-      await exactButton(alert, "Copy error").click();
-      await polledClipboard(page).toBe(safeError);
       await expectMobileFit(page, alert);
-      await toggle.press("Space");
-      await polledVisible(report).toBe(false);
       const input = page.locator(".agent-chat__input textarea");
       await input.fill("A newer draft stays here");
       const historyCount = (await gateway.getRequests("chat.history")).length;

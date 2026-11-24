@@ -30,18 +30,14 @@ function recoverySession(id: string, label: string) {
 async function openFailure(page: Page, message: string) {
   const failure = page.locator(".chat-error").filter({ hasText: message });
   await failure.locator(".app-toast__message").waitFor();
-  expect(await failure.locator(".app-toast__message").textContent()).toBe(message.split("\n")[0]);
-  expect(await failure.locator(".app-toast__description").count()).toBe(0);
-  if (message.includes("\n")) {
-    await failure.getByRole("button", { name: "Show details", exact: true }).click();
-    const details = failure.getByLabel("Error details", { exact: true });
-    await details.waitFor();
-    expect(await details.textContent()).toBe(message);
-  } else {
-    expect(await failure.getByRole("button", { name: "Show details", exact: true }).count()).toBe(
-      0,
-    );
-  }
+  expect(await failure.locator(".app-toast__message").textContent()).toBe(message);
+  expect(
+    await failure
+      .locator(
+        ".app-toast__description, details, [aria-expanded], .lazy-view-error__detail, .report-issue-link",
+      )
+      .count(),
+  ).toBe(0);
   return failure;
 }
 function expectSameSession(page: Page, key: string) {

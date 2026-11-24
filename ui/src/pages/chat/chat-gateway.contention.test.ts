@@ -24,7 +24,6 @@ describe("chat gateway state contention", () => {
         runId: "run-1",
         summary: diagnostic,
         ...(errorKind === "state_contention" ? { kind: errorKind } : {}),
-        ...(errorKind ? { cause: { errorKind } } : {}),
       });
       expect(getChatSessionProjection(state).runs["run-1"]?.errorKind).toBe(errorKind);
       expect(state.chatMessage).toBe("Unsent draft");

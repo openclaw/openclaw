@@ -593,7 +593,7 @@ describe("reconcileChatRunFromCurrentSessionRow stale-active suppression (#87875
     const diagnostic = {
       runId: "r1",
       summary: "Full diagnostic",
-      cause: { providerRuntimeFailureKind: "auth_refresh" },
+      kind: "auth_refresh" as const,
     };
     const host = makeHost({
       chatRunId: "r1",

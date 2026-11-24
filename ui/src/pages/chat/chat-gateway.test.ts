@@ -924,11 +924,29 @@ describe("handleChatGatewayEvent", () => {
       expect(state.chatRunError).toEqual({
         runId: "run-1",
         summary: `${summary}\n\nProvider: openai\nHTTP status: 401\nReason: refresh_token_reused\nType: ${expectedType}`,
-        cause: {
-          failoverReason: "refresh_token_reused",
-          providerRuntimeFailureKind: "auth_refresh",
-        },
+        kind: "auth_refresh",
       });
+    },
+  );
+
+  it.each([
+    {
+      kind: "auth_refresh",
+      payload: { errorDetail: { providerRuntimeFailureKind: "auth_refresh" } },
+    },
+    { kind: "stop", payload: { stopReason: "aborted-partial-persistence-failed" } },
+    { kind: "state_contention", payload: { errorKind: "state_contention" } },
+  ] as const)(
+    "adopts $kind recovery after history publishes the same failure",
+    ({ kind, payload }) => {
+      const summary = "The operation failed.";
+      const state = createState({
+        chatRunId: "run-1",
+        chatRunError: { runId: "run-1", summary },
+      });
+      seedTerminal(state, "error", { errorMessage: summary });
+      receive(state, "error", { errorMessage: summary, ...payload });
+      expect(state.chatRunError).toEqual({ runId: "run-1", summary, kind });
     },
   );
 

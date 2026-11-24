@@ -322,9 +322,10 @@ suite.define(() => {
       state: "error",
       errorMessage: diagnostic,
     });
-    const failedAlert = page.getByRole("alert").filter({ hasText: renderedDiagnostic });
+    const failedAlert = page.locator(".chat-error--reply");
     await failedAlert.waitFor();
     expect(await failedAlert.locator(".app-toast__message").textContent()).toBe(renderedDiagnostic);
+    expect(await failedAlert.locator(".app-toast__message").getAttribute("role")).toBe("alert");
     expect(await failedAlert.locator(".app-toast__description").count()).toBe(0);
     expect(
       await failedAlert.getByRole("button", { name: "Show details", exact: true }).count(),

@@ -227,7 +227,7 @@ suite.define(() => {
   });
 
   it.each(["failed", "reclaimed", "request"])(
-    "exposes the full %s diagnostic with keyboard and clipboard access",
+    "preserves the full %s diagnostic on its owning error surface",
     async (failedState) => {
       await suite.withPage(
         { ...pageOptions, permissions: ["clipboard-read", "clipboard-write"] },
@@ -261,10 +261,30 @@ suite.define(() => {
           await alert.waitFor({ timeout: 10_000 });
           expect(await alert.textContent()).toContain("provider reported lease destroyed");
           expect(await alert.textContent()).not.toContain("stale terminal worker failure");
-          const toggle =
-            failedState === "request"
-              ? alert.locator("summary")
-              : alert.getByRole("button", { name: "Show details", exact: true });
+          if (failedState !== "request") {
+            const notice = page.locator(".chat-error--reply");
+            const message = notice.locator(".app-toast__message");
+            for (const width of [1440, 320]) {
+              await page.setViewportSize({ width, height: width === 320 ? 568 : 900 });
+              expect(await message.textContent()).toBe(workerFailureDiagnostic);
+              expect(
+                await notice
+                  .locator(
+                    "img, details, [aria-expanded], .lazy-view-error__detail, .report-issue-link",
+                  )
+                  .count(),
+              ).toBe(0);
+              expect(await message.evaluate((node) => getComputedStyle(node).textOverflow)).toBe(
+                "ellipsis",
+              );
+              expect(await notice.evaluate((node) => node.scrollWidth <= node.clientWidth)).toBe(
+                true,
+              );
+            }
+            expect(await gateway.getRequests("chat.send")).toHaveLength(0);
+            return;
+          }
+          const toggle = alert.locator("summary");
           const copy = alert.getByRole("button", { name: "Copy error", exact: true });
           const diagnostic = alert.locator(".lazy-view-error__detail");
           const expected = workerFailureDiagnostic;
@@ -301,15 +321,7 @@ suite.define(() => {
             expect(Math.min(...bounds.edges)).toBeGreaterThanOrEqual(0);
             expect(bounds.overflowX).toBeLessThanOrEqual(1);
             expect(bounds.overflowY).toBeGreaterThan(0);
-            const focusOrder =
-              failedState === "request"
-                ? [diagnostic, copy]
-                : [
-                    alert.getByRole("button", { name: "Refresh", exact: true }),
-                    copy,
-                    diagnostic,
-                    alert.getByRole("link", { name: "Report a bug", exact: true }),
-                  ];
+            const focusOrder = [diagnostic, copy];
             for (const target of focusOrder) {
               await page.keyboard.press("Tab");
               expect(await target.evaluate((node) => node === document.activeElement)).toBe(true);

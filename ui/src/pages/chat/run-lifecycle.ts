@@ -57,18 +57,12 @@ export type ChatHistoryRunObservation = {
 
 export type ChatRunError = {
   kind?:
+    | "auth_refresh"
     | "state_contention"
     | "stop"
     | "chatgpt_business_usage_limit"
     | "chatgpt_consumer_usage_limit";
   summary: string;
-  cause?: {
-    failoverReason?: string;
-    providerRuntimeFailureKind?: string;
-    errorKind?: string;
-    stopReason?: string;
-    code?: string;
-  };
   /** Display ownership only; the session reducer retains each run's diagnostic. */
   runId?: string;
 };
@@ -221,7 +215,6 @@ export function setChatRunError(
   summary: string,
   runId?: string,
   kind?: ChatRunError["kind"],
-  cause?: ChatRunError["cause"],
 ) {
   chatRunPresentation(state).batch(() => {
     setChatRunOwner(state, runId);
@@ -230,7 +223,6 @@ export function setChatRunError(
     }
     state.chatRunError = {
       ...(kind ? { kind } : {}),
-      ...(cause ? { cause } : {}),
       summary: redactToolDetail(summary.trim()),
       ...(runId ? { runId } : {}),
     };

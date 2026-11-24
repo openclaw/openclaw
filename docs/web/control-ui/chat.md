@@ -71,8 +71,6 @@ the run **Interrupted** only when the Gateway recorded that run as aborted; a ru
 that ended while its background command keeps working is not marked. This
 presentation does not resume the run or recover an answer that was never saved.
 
-The error card above the composer shows the error and its available recovery action without a generic explanation. Routine failures with a known classification do not offer **Report a bug** on that card; unknown failures, invalid request or replay state, and failures to save a reply keep reporting available. Full details, recovery guidance, and copying remain available independently of reporting. Transcript separator rows and the Help menu are unchanged.
-
 Archived sessions keep earlier messages and recorded failures readable in the
 transcript. Past run failures do not show a recovery banner above the archived
 composer; unarchive the session to continue the conversation.
@@ -1025,11 +1023,11 @@ Retries stay in the working claw row: **Retrying…**, **Retrying in …s** when
 
 Failed and timed-out turns also show the available failure reason in the sidebar's compact summary and run-error tooltip, including while a session refresh is still catching up. A run-error banner remains available when its durable thread notice has not loaded; once that notice is present, the duplicate banner is hidden.
 
-Chat error banners, including cloud runner failures, show short messages in full. Use **Copy error** beside **Details** in the header to copy the complete diagnostic received by the UI, even while collapsed. **Details** appears only when the complete diagnostic adds information beyond the preview, such as additional lines or text shortened for the preview; repeated lines and whitespace-only differences do not add details. Open it to read and select the complete diagnostic. The disclosure works with Enter or Space; the expanded text wraps long lines and can be scrolled with the keyboard. Copying does not open or close the details, and neither copying nor expanding an error retries the failed operation. Retry and other recovery actions remain separate from the disclosure.
+Other chat error banners, including cloud runner startup failures, show short messages in full. Use **Copy error** beside **Details** in the header to copy the complete diagnostic received by the UI, even while collapsed. **Details** appears only when the complete diagnostic adds information beyond the preview, such as additional lines or text shortened for the preview; repeated lines and whitespace-only differences do not add details. Open it to read and select the complete diagnostic. The disclosure works with Enter or Space; the expanded text wraps long lines and can be scrolled with the keyboard. Copying does not open or close the details, and neither copying nor expanding an error retries the failed operation. Retry and other recovery actions remain separate from the disclosure.
 
 When an active run compacts the conversation while your next message is being prepared, OpenClaw follows the verified continuation automatically, even if the earlier run finishes before preparation does. This keeps the original message and send identity without displaying a retry error.
 
-Run-error banners offer **Refresh** to reload the conversation without resending a message or replacing your draft. If the conversation changes before a message can run and dispatch cannot verify a safe continuation, the banner explains that the message did not run and asks you to refresh before sending it again. The original diagnostic remains under **Details**. OpenClaw does not automatically redirect that message into a replacement conversation.
+When a reply fails and its thread notice is unavailable, the card above the composer shows the redacted error on one line, cut off with an ellipsis when it does not fit. It has no details or expansion control. **Refresh** reloads the conversation without resending a message or replacing your draft; **X** dismisses the card. Sign-in failures offer **Open Models**, and busy-state failures offer **Check status**. Reporting a bug remains available from Help. If the conversation changes before a message can run, OpenClaw does not automatically redirect that message into a replacement conversation.
 
 <AccordionGroup>
   <Accordion title="Send and history semantics">

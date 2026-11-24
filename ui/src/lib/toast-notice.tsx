@@ -29,7 +29,6 @@ export function ToastNotice(props: {
   class?: string;
   action?: JSX.Element;
   detailAction?: JSX.Element;
-  detailContent?: JSX.Element;
   detailLabel?: string;
   dismissLabel?: string;
   lane?: ToastLane;
@@ -239,17 +238,15 @@ export function ToastNotice(props: {
             {copy().description ? (
               <span class="app-toast__description">{formatUiExternalText(copy().description)}</span>
             ) : undefined}
-            {props.detailContent ? undefined : (
-              <Show when={toast()} keyed>
-                {(options) => (
-                  <ErrorDetails
-                    error={options.detail}
-                    action={props.detailAction}
-                    label={props.detailLabel}
-                  />
-                )}
-              </Show>
-            )}
+            <Show when={toast()} keyed>
+              {(options) => (
+                <ErrorDetails
+                  error={options.detail}
+                  action={props.detailAction}
+                  label={props.detailLabel}
+                />
+              )}
+            </Show>
           </div>
           {props.action}
           {!props.action && hasAction() ? (
@@ -291,7 +288,6 @@ export function ToastNotice(props: {
               </button>
             )
           ) : undefined}
-          {props.detailContent}
         </div>
         <Show when={props.onDismiss}>
           <button

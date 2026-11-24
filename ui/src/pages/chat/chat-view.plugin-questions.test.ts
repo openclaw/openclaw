@@ -277,8 +277,8 @@ it.each(["native", "delegated"] as const)(
     render(initial);
     await waitForSolid(() => {
       expect(provider.querySelector(".chat-conversation-loading")).not.toBeNull();
-      expect(provider.querySelector(".chat-error.app-toast")?.textContent).toContain(
-        "Request interrupted.",
+      expect(provider.querySelector(".chat-error--reply .app-toast__message")?.textContent).toBe(
+        "Request interrupted.\nPlease check the conversation.",
       );
     });
     const textarea = provider.querySelector<HTMLTextAreaElement>("textarea")!;
@@ -286,12 +286,14 @@ it.each(["native", "delegated"] as const)(
     provider.querySelector<HTMLButtonElement>(".chat-error__refresh")!.click();
     expect(onRefresh).toHaveBeenCalledOnce();
 
-    const notice = provider.querySelector(".chat-error.app-toast");
+    const notice = provider.querySelector(".chat-error--reply");
     render({ ...initial, mobileComposer: false });
     await waitForSolid(() => {
       expect(provider.querySelector(".chat-conversation-loading")).toBeNull();
-      expect(provider.querySelector(".chat-error.app-toast")).toBe(notice);
-      expect(provider.querySelector(".chat-error")?.textContent).toContain("Request interrupted.");
+      expect(provider.querySelector(".chat-error--reply")).toBe(notice);
+      expect(notice?.querySelector(".app-toast__message")?.textContent).toBe(
+        "Request interrupted.\nPlease check the conversation.",
+      );
     });
     expect(provider.querySelector("textarea")).toBe(textarea);
     expect(textarea.value).toBe("Retain this draft");
