@@ -9,6 +9,7 @@ import {
   type readGitHubPublicationWorktreeOwner,
 } from "./github-publication-availability.js";
 import {
+  GitHubPublicationKnownFailure,
   GitHubPublicationRequesterUnavailableError,
   GitHubPublicationBranchChangedError,
   GitHubPublicationSessionBranchMismatchError,
@@ -19,13 +20,20 @@ import {
   requirePublicationCommand,
   runPublicationCommand,
 } from "./github-publication-git-transport.js";
-import { inspectOwnGitHubPullRequest } from "./github-publication-inspect.js";
+import {
+  inspectOwnGitHubPullRequest,
+  parseGitHubPullRequestUrl,
+} from "./github-publication-inspect.js";
 import { assertExistingPullRequestWriteAccess } from "./github-publication-pr-preflight.js";
 import {
   readPublishedGitHubPullRequest,
   type PublishedGitHubPullRequest,
 } from "./github-publication-pull-requests.js";
-import { projectGitHubPublicationResult } from "./github-publication-receipt.js";
+import {
+  gitHubPublicationUpdateTargetDigest,
+  gitHubPublicationUpdateTargetMatches,
+  projectGitHubPublicationResult,
+} from "./github-publication-receipt.js";
 import {
   gitHubBranchPresence,
   resolveRecordedPublicationBaseBranch,
@@ -46,12 +54,50 @@ type GitHubPublicationTarget = {
   publishedPullRequest?: PublishedGitHubPullRequest;
 };
 
+/** A name asserts this workspace's existing destination, never redirects publication. */
+export async function requireGitHubPublicationUpdateUrl(
+  session: PublicationSessionIdentity,
+  worktree:
+    | { id: string; branch: string; githubPullRequest?: SessionGitHubPullRequestBinding }
+    | undefined,
+  requestedUrl: string,
+): Promise<string> {
+  const binding = worktree?.githubPullRequest;
+  const receipt =
+    worktree && !binding
+      ? await readSharedGitHubPublication(session, { status: "published" })
+      : undefined;
+  const url =
+    binding?.url ??
+    (receipt &&
+    "worktree_id" in receipt &&
+    receipt.session_id === session.sessionId &&
+    receipt.worktree_id === worktree?.id &&
+    receipt.branch === worktree.branch
+      ? receipt.pull_request_url
+      : undefined);
+  const recorded = url && URL.parse(url);
+  if (recorded && url) {
+    const requested = parseGitHubPullRequestUrl(requestedUrl, recorded.host);
+    if (
+      recorded.pathname.toLowerCase() ===
+      ("/" + requested.repository + "/pull/" + requested.number).toLowerCase()
+    ) {
+      return url;
+    }
+  }
+  throw new Error(
+    "The requested PR is not prepared in this workspace and has no matching publication for this checkout. Continue in its publishing workspace or use prepare_pr where available. No replacement PR was created.",
+  );
+}
+
 /** A current workspace receipt selects its own PR without granting arbitrary import authority. */
 export async function preparePublishedPullRequestTarget(
   params: {
     session?: PublicationSessionIdentity;
     identity: PreparedGitHubPublicationIdentity;
     reconcile?: boolean;
+    updateTargetDigest?: string;
     assertCurrent: () => void;
   },
   target: GitHubPublicationTarget,
@@ -61,6 +107,17 @@ export async function preparePublishedPullRequestTarget(
   }
   const receipt = await readSharedGitHubPublication(params.session, { status: "published" });
   params.assertCurrent();
+  if (
+    params.updateTargetDigest &&
+    !gitHubPublicationUpdateTargetMatches(
+      params.updateTargetDigest,
+      receipt?.pull_request_url ?? undefined,
+    )
+  ) {
+    throw new GitHubPublicationWorkspaceChangedError(
+      "The requested PR no longer matches this checkout's publication. No replacement PR was created.",
+    );
+  }
   if (!receipt) {
     return target;
   }
@@ -98,6 +155,12 @@ export async function preparePublishedPullRequestTarget(
   // A new ordinary publication after a completed PR retains its existing selection rules.
   // Recovery still observes that exact PR, including an accepted update followed by closure.
   if (!params.reconcile && candidate.state === "closed") {
+    if (params.updateTargetDigest) {
+      throw new GitHubPublicationKnownFailure("The requested PR is closed.", {
+        code: "github_rejected",
+        nextAction: "Reopen the requested PR before updating it. No replacement PR was created.",
+      });
+    }
     return target;
   }
   assertExpectedSharedGitHubPublisher(publisher, {
@@ -140,6 +203,8 @@ export async function prepareGitHubPublicationTarget(params: {
   identity: PreparedGitHubPublicationIdentity;
   pullRequest?: SessionGitHubPullRequestBinding;
   session?: PublicationSessionIdentity;
+  reconcile?: boolean;
+  updateTargetDigest?: string;
   assertCurrent: () => void;
 }): Promise<GitHubPublicationTarget> {
   const { worktree, assertCurrent } = params;
@@ -148,6 +213,8 @@ export async function prepareGitHubPublicationTarget(params: {
   if (params.pullRequest) {
     const pr = params.pullRequest;
     if (
+      (params.updateTargetDigest &&
+        !gitHubPublicationUpdateTargetMatches(params.updateTargetDigest, pr.url)) ||
       pr.host !== githubHost ||
       !pr.preparedHeadCommit ||
       pr.preparedHeadCommit !== pr.head.commit
@@ -267,6 +334,8 @@ export async function prepareGitHubPublicationExecutionTarget(params: {
             sessionId: row.session_id,
             lifecycleRevision: params.lifecycleRevision,
           },
+    updateTargetDigest:
+      row.identity_source === "personal" ? undefined : gitHubPublicationUpdateTargetDigest(row),
     assertCurrent: params.assertCurrent,
   });
   const expected = params.expectedTarget;

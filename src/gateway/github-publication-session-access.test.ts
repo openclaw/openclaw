@@ -265,12 +265,14 @@ describe("local checkout publication", () => {
       handoff = true,
       idempotencyKey = "local-checkout",
       runId = "initial-publication-run",
+      pullRequestUrl?: string,
     ) => {
       const respond = vi.fn();
       const params = {
         sessionKey: SESSION_KEY,
         idempotencyKey,
         workspacePath,
+        ...(pullRequestUrl === undefined ? {} : { pullRequestUrl }),
       };
       await withGatewayToolCallerIdentity(
         {
@@ -731,10 +733,9 @@ describe("local checkout publication", () => {
       expect(await source.git("-C", task.entry.spawnedCwd!, "rev-parse", "HEAD")).toBe(
         acceptedHead,
       );
-      expect(await invoke(source.cwd, true, text)).toMatchObject([
-        true,
-        { status: "published", ...publicationTarget },
-      ]);
+      expect(
+        await invoke(source.cwd, true, text, undefined, publicationTarget.url + "/files"),
+      ).toMatchObject([true, { status: "published", ...publicationTarget }]);
       expect(await fs.readFile(path.join(task.entry.spawnedCwd!, "artifact.txt"), "utf8")).toBe(
         text,
       );
@@ -752,7 +753,7 @@ describe("local checkout publication", () => {
       const publishedHead = await source.git("-C", taskCheckout, "rev-parse", "HEAD");
       await fs.writeFile(path.join(taskCheckout, "artifact.txt"), text);
       await source.git("-C", taskCheckout, ...args);
-      const followUp = await invoke(taskCheckout, true, text);
+      const followUp = await invoke(taskCheckout, true, text, undefined, publicationTarget.url);
       expect(followUp, JSON.stringify(followUp)).toMatchObject([
         true,
         { status: "published", ...publicationTarget },

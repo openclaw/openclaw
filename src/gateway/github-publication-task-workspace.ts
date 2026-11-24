@@ -18,6 +18,7 @@ import {
 } from "./github-publication-requester.js";
 import type { PublicationSessionRead } from "./github-publication-session.types.js";
 import { readSharedGitHubPublication } from "./github-publication-shared-read.js";
+import { requireGitHubPublicationUpdateUrl } from "./github-publication-target.js";
 import { projectRequesterForProfile, resolveRequesterProject } from "./project-access.js";
 import type { GatewayRequestHandlerOptions } from "./server-methods/types.js";
 import { createGatewaySession } from "./session-create-service.js";
@@ -32,6 +33,7 @@ export async function prepareGitHubPublicationTaskWorkspace(params: {
   requester: GitHubPublicationRequesterV2;
   source: string;
   idempotencyKey: string;
+  pullRequestUrl?: string;
   policy?: {
     allow: string[];
     deny: string[];
@@ -134,6 +136,11 @@ export async function prepareGitHubPublicationTaskWorkspace(params: {
       assertTask(existing.entry);
     }
   }
+  if (params.pullRequestUrl !== undefined && !existing?.entry) {
+    throw new Error(
+      "This checkout has not published the requested PR. Continue in its publishing workspace or use prepare_pr where available. No replacement PR was created.",
+    );
+  }
   const gitOptions = { signal: options.signal, beforeRun: assertPreparationCurrent };
   if (parent.entry.projectId) {
     const { actor } = requester.snapshot;
@@ -189,6 +196,19 @@ export async function prepareGitHubPublicationTaskWorkspace(params: {
       assertCurrent();
       prepared.requester.assertCurrent();
     });
+    if (params.pullRequestUrl !== undefined) {
+      await requireGitHubPublicationUpdateUrl(
+        {
+          agentId: parent.agentId,
+          sessionKey: existing.canonicalKey,
+          sessionId: existing.entry.sessionId,
+          lifecycleRevision: existing.entry.lifecycleRevision ?? null,
+        },
+        existing.entry.worktree,
+        params.pullRequestUrl,
+      );
+      gitOptions.beforeRun();
+    }
     // Merge the source commit with its exact tree: the task branch fast-forwards and
     // its PR shows the source's changes even after a rebase or amend.
     const cwd = existing.entry.spawnedCwd!;
