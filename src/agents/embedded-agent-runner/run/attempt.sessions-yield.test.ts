@@ -317,7 +317,7 @@ describe("automation yield", () => {
   const sessionKey = "agent:main:cron:yield-job:run:turn";
   const { hoisted, runAttempt } = useContextEngineAttemptHarness(sessionKey);
 
-  it("ends the automation turn successfully without another model request", async () => {
+  it("keeps the automation turn going when nothing is pending", async () => {
     const outcomes: Extract<AgentEvent, { type: "tool_execution_end" }>[] = [];
     let requests = 0;
     hoisted.createOpenClawCodingToolsMock.mockImplementation((options) => [
@@ -342,11 +342,24 @@ describe("automation yield", () => {
             initialState: { model, tools },
             streamFn: () => {
               requests++;
+              if (requests === 2) {
+                expect(outcomes).toMatchObject([
+                  {
+                    toolName: "sessions_yield",
+                    result: {
+                      details: {
+                        status: "nothing_pending",
+                        message: expect.stringContaining("Reply to the user now"),
+                      },
+                    },
+                  },
+                ]);
+              }
               return streamAttemptAssistant(
                 model,
                 requests === 1
                   ? attemptToolCall("yield-call", "sessions_yield")
-                  : [{ type: "text", text: "Unexpected continuation" }],
+                  : [{ type: "text", text: "The work is complete; here is the answer." }],
               );
             },
           });
@@ -358,15 +371,13 @@ describe("automation yield", () => {
           return agent;
         }),
     });
-    expect(outcomes).toMatchObject([
-      {
-        toolName: "sessions_yield",
-        isError: false,
-        result: { details: { status: "yielded", note: expect.stringContaining("scheduler") } },
-      },
-    ]);
-    expect(requests).toBe(1);
-    expect(result.yieldDetected).toBe(true);
+    expect(requests).toBe(2);
+    expect(result.yieldDetected).toBeUndefined();
+    expect(result.messagesSnapshot.at(-1)).toMatchObject({
+      role: "assistant",
+      content: [{ type: "text", text: "The work is complete; here is the answer." }],
+      stopReason: "stop",
+    });
   });
 });
 

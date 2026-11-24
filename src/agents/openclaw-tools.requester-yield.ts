@@ -44,23 +44,46 @@ export function createRequesterYieldCallback(params: {
     return () => ({ error: SWARM_COLLECTOR_YIELD_UNSUPPORTED_ERROR });
   }
   // The scheduler owns child output and delivery for every automation placement.
-  // End the model turn without arming an interactive requester continuation.
+  // End the model turn without arming an interactive requester continuation —
+  // but only when something can actually resume it. A yield with no pending
+  // child, no wake-armed command, and no runtime completion claim is
+  // nothing_pending, not scheduler-owned.
   if (isSchedulerOwnedRequesterYield(params)) {
-    // The cron run executor resumes a yield on this run chat's wake-armed commands in place.
-    const resumesInPlace = isCronRunSessionKey(params.requesterSessionKey);
-    return () => {
-      const execs =
-        resumesInPlace && params.requesterSessionKey
-          ? listYieldAwaitableExecs({
-              agentId: params.requesterAgentId,
-              sessionKey: params.requesterSessionKey,
-            })
-          : [];
-      if (execs.length === 0) {
+    const requesterChat = params.requesterSessionKey
+      ? { agentId: params.requesterAgentId, sessionKey: params.requesterSessionKey }
+      : undefined;
+    return async () => {
+      // Check wake-armed commands for every placement, not just cron-run.
+      const execs = listYieldAwaitableExecs(requesterChat);
+      if (execs.length > 0) {
+        awaitExecsForYield(execs);
+        return isCronRunSessionKey(params.requesterSessionKey)
+          ? { resumesInPlace: true }
+          : { execWakeArmed: true };
+      }
+      // Check runtime completion claims (e.g. Codex native children).
+      const runtimeClaim = (await params.claimYieldCompletion?.()) ?? false;
+      if (runtimeClaim === true) {
         return { schedulerOwned: true };
       }
-      awaitExecsForYield(execs);
-      return { resumesInPlace: true };
+      // Account for runtime-reported pending children from earlier turns.
+      if (typeof runtimeClaim === "object" && runtimeClaim.pendingChildren.length > 0) {
+        return { schedulerOwned: true };
+      }
+      if (!params.requesterSessionKey) {
+        return { schedulerOwned: true };
+      }
+      // Check OpenClaw registry children.
+      const { listUnsettledRequesterChildren } =
+        await import("./subagents/registry/subagent-registry.js");
+      const pendingChildren = await listUnsettledRequesterChildren({
+        requesterSessionKey: params.requesterSessionKey,
+        requesterAgentId: params.requesterAgentId,
+      });
+      if (pendingChildren.length > 0) {
+        return { schedulerOwned: true };
+      }
+      return false;
     };
   }
   const requesterSessionKey = params.requesterSessionKey?.trim() || undefined;

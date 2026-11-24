@@ -517,6 +517,103 @@ describe("requester yield ownership", () => {
     },
   );
 
+  it.each(["interactive", "cron run session", "in-session automation"] as const)(
+    "keeps a %s turn going when it yields with nothing pending",
+    async (placement) => {
+      const runSessionKey =
+        placement === "cron run session"
+          ? CRON_RUN_KEY
+          : placement === "in-session automation"
+            ? "agent:main:main"
+            : "agent:main:main";
+      const admission = prepareSystemAgentRunAdmission({}, "run-requester", "main", "cron-yield");
+      onTestFinished(() => admission.close());
+      await admission.admit("embedded");
+      if (placement === "in-session automation") {
+        const context = {
+          placement: "in-session",
+          principal: { kind: "operator" },
+          authority: { basis: "operator-source", owner: true },
+          resources: { boardSessionKey: runSessionKey },
+          toolPolicy: {},
+        } as unknown as ScheduledExecutionContext;
+        onTestFinished(bindScheduledExecutionContext(admission.operationalRunInstance, context));
+      }
+      const onYield = vi.fn();
+      const tools = createTestOpenClawTools({
+        sessionKey:
+          placement === "interactive"
+            ? "agent:main:main"
+            : "agent:main:telegram:default:direct:1234",
+        runSessionKey: placement === "interactive" ? undefined : runSessionKey,
+        sessionId: "cron-requester-session",
+        runId: "run-requester",
+        ...(placement !== "interactive"
+          ? { operationalRunInstance: admission.operationalRunInstance }
+          : {}),
+        onYield,
+      });
+
+      await expectYield(requireTool(tools, "sessions_yield"), "nothing_pending");
+      expect(onYield).not.toHaveBeenCalled();
+    },
+  );
+
+  it("ends an in-session automation turn when a wake-armed command is pending", async () => {
+    const runSessionKey = "agent:main:main";
+    const admission = prepareSystemAgentRunAdmission({}, "run-requester", "main", "cron-yield");
+    onTestFinished(() => admission.close());
+    await admission.admit("embedded");
+    const context = {
+      placement: "in-session",
+      principal: { kind: "operator" },
+      authority: { basis: "operator-source", owner: true },
+      resources: { boardSessionKey: runSessionKey },
+      toolPolicy: {},
+    } as unknown as ScheduledExecutionContext;
+    onTestFinished(bindScheduledExecutionContext(admission.operationalRunInstance, context));
+    Object.assign(backgroundProcess(runSessionKey), {
+      agentId: "main",
+      notifyOnExit: true,
+      notifyOnExitEmptySuccess: true,
+      notifySessionTarget: {} as NonNullable<ProcessSession["notifySessionTarget"]>,
+      exitWakeAfterYield: true as const,
+      processActivity: {
+        deadlineAtMs: Date.now() + 60_000,
+        resultSettled: false,
+        lastOutputAtMs: Date.now(),
+      },
+    });
+    const onYield = vi.fn();
+    const tools = createTestOpenClawTools({
+      sessionKey: "agent:main:telegram:default:direct:1234",
+      runSessionKey,
+      sessionId: "cron-requester-session",
+      runId: "run-requester",
+      operationalRunInstance: admission.operationalRunInstance,
+      onYield,
+    });
+
+    await expectYield(requireTool(tools, "sessions_yield"), "yielded");
+    expect(onYield).toHaveBeenCalledExactlyOnceWith("Turn yielded.", undefined, undefined, {
+      execWakeArmed: true,
+    });
+  });
+
+  it("ends an in-session automation turn when a runtime completion claim is active", async () => {
+    const runSessionKey = "agent:main:main";
+    const onYield = vi.fn();
+    const tool = createYieldToolForTurn({
+      requesterSessionKey: runSessionKey,
+      scheduledToolTargets: { placement: "in-session" },
+      claimYieldCompletion: () => true,
+      onYield,
+    });
+
+    await expectYield(tool, "yielded");
+    expect(onYield).toHaveBeenCalledExactlyOnceWith("Turn yielded.", undefined, undefined);
+  });
+
   it.each([
     ["agent:main:subagent:watcher", undefined, undefined],
     ["agent:main:main", "agent:main:subagent:watcher", "worker-process-scope"],
