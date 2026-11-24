@@ -20,6 +20,10 @@ import {
   postgresCatalogQuery,
   readPostgresCatalog,
 } from "../infra/database-engine/postgres-catalog.js";
+import {
+  postgresCopyAclSql,
+  preflightPostgresCopyAcl,
+} from "../infra/database-engine/postgres-copy-acl.js";
 import { readPostgresPortCapabilities } from "../infra/database-engine/postgres-port-capabilities.js";
 import {
   assertDatabasePortNamespaceOwner,
@@ -400,6 +404,7 @@ export async function preflightPostgresUpgradeInWorker(params: {
         );
       }
       await assertDatabasePortNamespaceOwner(client, anchor.namespace);
+      await preflightPostgresCopyAcl(client, anchor.namespace);
       const descriptor = await admitDatabasePortDescriptor(
         { engine: "postgres", db: client, namespace: anchor.namespace },
         baseDescriptor,
@@ -428,8 +433,22 @@ export async function clonePostgresUpgradeInWorker(params: {
     preserveRowIds: true,
   });
   const anchor = requirePostgresUpgradeAnchor(params.anchorPath);
-  return withDatabasePortPostgres(params.config, anchor, async (client, descriptor) => {
-    const { namespace } = await clonePostgresSchema({ ...params, client, descriptor, anchor });
+  return withDatabasePortPostgres(params.config, anchor, async (client, baseDescriptor) => {
+    const descriptor = await admitDatabasePortDescriptor(
+      { engine: "postgres", db: client, namespace: anchor.namespace },
+      baseDescriptor,
+    );
+    const { namespace } = await clonePostgresSchema({
+      ...params,
+      client,
+      anchor,
+      descriptor: {
+        ...descriptor,
+        postgresPostData: (namespace) =>
+          `${descriptor.postgresPostData?.(namespace) ?? ""}\n;\n` +
+          postgresCopyAclSql(client, anchor.namespace, namespace),
+      },
+    });
     try {
       params.assertCurrent();
       using privateAnchor = openNodeSqliteDatabase(params.anchorPath);
@@ -509,9 +528,9 @@ export type PostgresUpgradeInspection = {
   retainedAgentIds: string[];
   registeredAgentDatabases: { agentId: string; path: string }[];
 };
-export type PostgresUpgradeClone = Parameters<typeof clonePostgresUpgradeInWorker>[0];
-export type PostgresUpgradeValidation = Parameters<typeof validatePostgresUpgradeInWorker>[0];
-export type PostgresUpgradeRetirement = Parameters<typeof retirePostgresUpgradeInWorker>[0];
+type PostgresUpgradeClone = Parameters<typeof clonePostgresUpgradeInWorker>[0];
+type PostgresUpgradeValidation = Parameters<typeof validatePostgresUpgradeInWorker>[0];
+type PostgresUpgradeRetirement = Parameters<typeof retirePostgresUpgradeInWorker>[0];
 
 export type Capture = Parameters<typeof capturePostgresBackupInWorker>[0];
 export type Restore = Parameters<typeof preparePostgresRestoreInWorker>[0];
