@@ -245,11 +245,16 @@ function assertDetachedSwitch(source, slot, expectedHead) {
   const edits = ["--", "operator-update-tracked.txt", "operator-update-notes.tmp"];
   // The switch must leave the operator's checkout alone and install only committed content.
   assert.equal(git(source, "rev-parse", "HEAD"), expectedHead, "source checkout HEAD changed");
-  assert.equal(
-    git(source, "status", "--porcelain", ...edits),
-    "M operator-update-tracked.txt\n?? operator-update-notes.tmp",
-    "source edits changed",
-  );
+  for (const [name, content] of [
+    ["operator-update-tracked.txt", "retain tracked edit\n"],
+    ["operator-update-notes.tmp", "retain user notes\n"],
+  ]) {
+    assert.equal(
+      fs.readFileSync(path.join(source, name), "utf8"),
+      content,
+      `source ${name} changed`,
+    );
+  }
   assert.equal(
     git(slot, "rev-parse", "HEAD"),
     expectedHead,

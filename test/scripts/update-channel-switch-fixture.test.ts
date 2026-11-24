@@ -177,6 +177,12 @@ it("checks that a detached release uses the selected commit, not local checkout 
       encoding: "utf8",
     });
   expect(check().status, check().stderr).toBe(0);
+  write("source/operator-update-notes.tmp", "");
+  expect(check().stderr).toContain("source operator-update-notes.tmp changed");
+  write("source/operator-update-notes.tmp", "retain user notes\n");
+  write("source/operator-update-tracked.txt", "corrupted\n");
+  expect(check().stderr).toContain("source operator-update-tracked.txt changed");
+  write("source/operator-update-tracked.txt", "retain tracked edit\n");
   write("release/operator-update-tracked.txt", "retain tracked edit\n");
   expect(check().stderr).toContain("local input leaked into the release");
 });
