@@ -46,13 +46,10 @@ export function snapshotRevision(
   row: Pick<BeamHandoff, "revision" | "publicationId">,
   digest: string,
 ): string {
-  // Existing rows have no revision until their next accepted write. The tag still
-  // names their exact representation and, where available, their original generation.
-  return `"${
-    row.revision ??
-    createHash("sha256")
-      .update(row.publicationId ?? "legacy")
-      .update(digest)
-      .digest("hex")
-  }"`;
+  // A condition on one enrolled publication must never update another, even if a
+  // restored receiver supplies identical packet bytes and the same stored write revision.
+  const tag = createHash("sha256")
+    .update(JSON.stringify([row.publicationId ?? null, row.revision ?? null, digest]))
+    .digest("hex");
+  return `"${tag}"`;
 }
