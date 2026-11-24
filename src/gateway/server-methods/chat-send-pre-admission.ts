@@ -416,6 +416,7 @@ export async function runChatSendPreAdmission(
         sessionKeyAliases: sessionKey === rawSessionKey ? undefined : [rawSessionKey],
         agentId: selectedAgent.agentId,
         sessionId: entry?.sessionId,
+        requiredSessionId: request.p.expectedSessionId,
         session: {
           ok: true,
           value: {
