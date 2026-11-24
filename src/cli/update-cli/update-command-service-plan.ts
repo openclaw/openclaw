@@ -37,7 +37,10 @@ import { sha256Hex } from "../../infra/crypto-digest.js";
 import { readActiveGatewayLockIdentity } from "../../infra/gateway-lock.js";
 import { assertGatewayServiceMutationAllowed } from "../../infra/gateway-supervision.js";
 // Read-only managed Gateway ownership and runtime selection for update planning.
-import { GIT_RELEASE_LAUNCHER } from "../../infra/git-release-paths.js";
+import {
+  GIT_RELEASE_LAUNCHER,
+  resolveGitReleaseEntrypointForForwardingTree,
+} from "../../infra/git-release-paths.js";
 import { formatInstallOwnerMessage, readInstallOwner } from "../../infra/install-owner.js";
 import { probePortUsage } from "../../infra/ports-probe.js";
 import { parseTcpPortFromArgs } from "../../infra/tcp-port.js";
@@ -321,10 +324,15 @@ export async function inspectManagedGatewayServiceBeforeUpdate(params: {
         kind: "owned",
         root,
         fingerprint,
-        // A unit that names the Git release launcher is written once; switches never change it.
+        // A unit that names the Git release launcher, or a converted checkout entry that
+        // forwards to it, is written once; switches never change it.
         refreshDefinition:
           (state.definitionMutationCapability?.kind ?? "writable") === "writable" &&
-          !command.programArguments.some((arg) => path.basename(arg) === GIT_RELEASE_LAUNCHER),
+          !command.programArguments.some(
+            (arg) =>
+              path.basename(arg) === GIT_RELEASE_LAUNCHER ||
+              (path.isAbsolute(arg) && resolveGitReleaseEntrypointForForwardingTree(arg) !== null),
+          ),
       }
     : { kind: "unresolved", root, fingerprint };
 }

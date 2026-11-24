@@ -115,6 +115,11 @@ definition without starting or restarting the Gateway. Linux reloads systemd's u
 metadata without restarting the unit; macOS reloads the staged plist on the next
 OpenClaw restart or login; Windows runs the updated task script on its next start.
 If staging fails, update history records the service-definition refresh as owed.
+A service definition that still names the checkout's `dist/index.js` or `openclaw.mjs`
+reaches the selected release through the forwarding marker the update leaves in the
+checkout (`.git/openclaw-launcher`). `openclaw gateway status`, `openclaw doctor --fix`
+and `openclaw update repair` treat that service as this installation's, serving the
+release the launcher selects, and leave its definition unchanged.
 
 Stopping another Gateway that shares this installation protects its running
 code; it does not migrate that Gateway's separate state. If its older state

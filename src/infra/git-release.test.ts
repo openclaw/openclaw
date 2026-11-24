@@ -704,6 +704,58 @@ describe.skipIf(process.platform === "win32" || Boolean(process.versions.bun))(
       expect(verdict).toMatchObject({ kind: "owned", refreshDefinition: false });
     });
 
+    // A Git conversion keeps the service `gateway install` wrote for the checkout; the
+    // checkout's entry forwards to the launcher, and Doctor runs from the release.
+    it.each([
+      ["forwards to this launcher", "owned"],
+      ["has no forwarding marker", "foreign"],
+      ["forwards to a missing launcher", "foreign"],
+      ["lacks the forwarder module", "foreign"],
+    ] as const)("classifies a checkout service whose tree %s as %s", async (layout, kind) => {
+      const { inspectManagedGatewayServiceBeforeUpdate } =
+        await import("../cli/update-cli/update-command-service-plan.js");
+      const { stateDir, prefix } = await setup();
+      await publishFixture(prefix, "2.0.0", "", false);
+      await writeGitReleaseLauncher(prefix);
+      const checkout = path.join(stateDir, "checkout");
+      await fs.mkdir(path.join(checkout, "dist"), { recursive: true });
+      await fs.mkdir(path.join(checkout, ".git"));
+      await fs.writeFile(
+        path.join(checkout, "package.json"),
+        JSON.stringify({ name: "openclaw", version: "1.0.0" }),
+      );
+      await fs.writeFile(path.join(checkout, "dist", "index.js"), "");
+      if (layout !== "lacks the forwarder module") {
+        await fs.writeFile(path.join(checkout, "release-launcher-forward.mjs"), "");
+      }
+      if (layout !== "has no forwarding marker") {
+        const launcher =
+          layout === "forwards to a missing launcher"
+            ? path.join(stateDir, "gone", "openclaw-launcher.mjs")
+            : path.join(prefix, "openclaw-launcher.mjs");
+        await fs.writeFile(path.join(checkout, ".git", "openclaw-launcher"), `${launcher}\n`);
+      }
+      const entry = path.join(checkout, "dist", "index.js");
+      const verdict = await inspectManagedGatewayServiceBeforeUpdate({
+        // Doctor's root: the package root of the release the CLI was forwarded to.
+        root: await fs.realpath(gitReleaseSlot(prefix)),
+        state: {
+          installed: true,
+          loadState: { status: "loaded" },
+          running: true,
+          env: {},
+          command: { programArguments: [process.execPath, entry, "gateway", "--port", "1"] },
+          runtime: { status: "running", systemd: { managerUid: 1001 } },
+        },
+      });
+
+      expect(verdict).toEqual(
+        kind === "owned"
+          ? expect.objectContaining({ kind, refreshDefinition: false })
+          : { kind: "foreign" },
+      );
+    });
+
     it("runs a Windows checkout from releases behind an absolute junction link", async () => {
       const { stateDir, prefix } = await setup();
       vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
