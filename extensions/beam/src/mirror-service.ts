@@ -6,7 +6,7 @@ import { MIRROR_CONFIG_PATH, MIRROR_TOKEN_PATH, parseBeamMirrorConfig } from "./
 import type { BeamMirrorEnrollment, MirrorPublicationStoreValue } from "./mirror-publication.js";
 import { createBeamMirrorRunner } from "./mirror.js";
 
-export function createBeamMirrorService(params: {
+function createBeamMirrorService(params: {
   runtime: PluginRuntime;
   resolveExecutable: () => Promise<string>;
   onRunner?: (runner: ReturnType<typeof createBeamMirrorRunner> | undefined) => void;
