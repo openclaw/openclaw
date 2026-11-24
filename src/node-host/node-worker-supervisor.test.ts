@@ -6,6 +6,7 @@ import { createDeferred } from "../../test/helpers/promise.js";
 import type { NodeWorkerSupervisorTransport } from "../gateway/node-registry-private.js";
 import { createNodeWorkerLaunchAdapter } from "../gateway/worker-environments/node-launch-adapter.js";
 import { createNodeWorkerBundleTestNode } from "../gateway/worker-environments/node-worker-bundle.test-support.js";
+import * as openclawRoot from "../infra/openclaw-root.js";
 import * as secretRegistry from "../logging/secret-redaction-registry.js";
 import { resetSecretRedactionRegistryForTest } from "../logging/secret-redaction-registry.test-support.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
@@ -589,6 +590,32 @@ describe("node worker supervisor", () => {
       releaseRetry.resolve();
       await cancellation;
     }
+  });
+
+  it("launches a worker through its persisted package-owned bundle alias", async () => {
+    await using f = fixture();
+    const input = launchInput(f.workspaceDir, "prepared-bundle");
+    const packageRoot = path.join(fs.realpathSync.native(f.root), "package");
+    const prepared = path.join(
+      packageRoot,
+      "worker-artifacts",
+      "expanded",
+      input.expectedBundleHash,
+    );
+    const alias = path.join(
+      f.bundleRoot,
+      input.gatewayNamespace,
+      "bundles",
+      input.expectedBundleHash,
+    );
+    fs.mkdirSync(path.dirname(prepared), { recursive: true });
+    fs.renameSync(alias, prepared);
+    fs.symlinkSync(prepared, alias, process.platform === "win32" ? "junction" : "dir");
+    vi.spyOn(openclawRoot, "resolveOpenClawPackageRootSync").mockReturnValue(packageRoot);
+
+    await f.launch(input);
+    expect(await f.terminal(input.launchId)).toMatchObject({ state: "completed" });
+    expect(fs.realpathSync.native(alias)).toBe(prepared);
   });
 
   it("fails closed when the bundle entry resolves outside its namespaced bundle", async () => {

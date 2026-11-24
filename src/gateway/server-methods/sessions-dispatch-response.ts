@@ -40,13 +40,13 @@ export function respondWorkerDispatchError(error: unknown, respond: RespondFn): 
     throw error;
   }
   const origin = getGitHubIdentityErrorOrigin(error);
-  respond(
-    false,
-    undefined,
-    errorShape(
-      isWorkerDispatchInputError(error) ? ErrorCodes.INVALID_REQUEST : ErrorCodes.UNAVAILABLE,
-      formatErrorMessage(error),
-    ),
-    origin ? { githubIdentityOrigin: origin } : undefined,
+  const response = errorShape(
+    isWorkerDispatchInputError(error) ? ErrorCodes.INVALID_REQUEST : ErrorCodes.UNAVAILABLE,
+    formatErrorMessage(error),
   );
+  if (origin) {
+    respond(false, undefined, response, { githubIdentityOrigin: origin });
+  } else {
+    respond(false, undefined, response);
+  }
 }

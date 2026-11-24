@@ -11,6 +11,7 @@ import { resetProcessRegistryForTests } from "./bash-process-registry.test-suppo
 import { resolvePreparedExecEnvironment } from "./bash-tools.exec-request-preparation.js";
 import { runExecProcess } from "./bash-tools.exec-runtime.js";
 import { prepareGitHubToolEnvironment } from "./github-tool-identity.js";
+import * as privateTempFile from "./sessions/tools/private-temp-file.js";
 
 const boundary = vi.hoisted(() => ({ spawn: vi.fn(), prepare: vi.fn() }));
 vi.mock("../process/supervisor/index.js", () => ({
@@ -93,6 +94,30 @@ afterEach(async () => {
 });
 
 describe.skipIf(process.platform === "win32")("local GitHub credential launch boundary", () => {
+  it("does not open a raw output file for GitHub App execution", async () => {
+    const openOutput = vi.spyOn(privateTempFile, "openPrivateTempFileStream");
+    await expect(
+      launch({
+        githubApp: {
+          profileId: "fixture",
+          agentId: "main",
+          sessionId: "fixture",
+          sessionKey: "agent:main:fixture",
+          operatorAuthority: {
+            profileId: "fixture",
+            canonicalIdentity: { profileId: "fixture" },
+            scopes: [],
+            assertCurrent: () => {
+              throw new Error("fixture stopped before credential admission");
+            },
+          },
+        },
+      }),
+    ).rejects.toThrow("fixture stopped before credential admission");
+    expect(openOutput).not.toHaveBeenCalled();
+    expect(boundary.spawn).not.toHaveBeenCalled();
+  });
+
   it.each(["github.com", "ghe.example.test", "tenant.ghe.com"])(
     "uses only the selected %s profile at the actual child boundary",
     async (host) => {

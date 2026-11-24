@@ -6,7 +6,7 @@ import {
   openFixtureReceiptChannel,
   type FixtureReceiptChannel,
 } from "../../test/helpers/fixture-receipts.js";
-import { withinTest } from "../../test/helpers/promise.js";
+import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { GatewayClient } from "../gateway/client.js";
 import {
@@ -139,6 +139,7 @@ async function invokePrivate(params: {
   gatewayCloudflareAccess?: { clientId: string; clientSecret: string };
   workspace?: NodeWorkerWorkspaceRuntime;
   signal?: AbortSignal;
+  workerPreparation?: Promise<void>;
 }) {
   const request = vi.fn<GatewayClient["request"]>().mockResolvedValue(null);
   await handleInvoke(
@@ -156,6 +157,7 @@ async function invokePrivate(params: {
       ...(params.supervisor ? { workerSupervisor: params.supervisor } : {}),
       ...(params.workspace ? { workerWorkspace: params.workspace } : {}),
       ...(params.signal ? { signal: params.signal } : {}),
+      workerPreparation: params.workerPreparation,
       gatewayUrl: params.gatewayUrl ?? "wss://gateway.example/tenant",
       ...(params.gatewayTlsFingerprint
         ? { gatewayTlsFingerprint: params.gatewayTlsFingerprint }
@@ -445,6 +447,59 @@ setInterval(() => {}, 1000);
     expect(result?.ok).toBe(true);
     expect(JSON.parse(result?.payloadJSON ?? "{}")).toEqual(build);
   });
+
+  it.each(["ready", "install failure", "preparation failure"] as const)(
+    "joins bundle and private preparation before responding: %s",
+    async (mode) => {
+      const build = {
+        bundleHash: "a".repeat(64),
+        openclawVersion: "2026.8.1",
+        protocolFeatures: [],
+      };
+      const installed = createDeferred<typeof build>();
+      const prepared = createDeferred();
+      const ensure = vi.fn(() => installed.promise);
+      const running = invokePrivate({
+        command: NODE_WORKER_BUNDLE_INSTALL_COMMAND,
+        paramsJSON: JSON.stringify({
+          gatewayNamespace: "gateway-test",
+          build,
+          archive: { token: "A".repeat(43), sha256: "b".repeat(64), bytes: 123 },
+        }),
+        bundleInstaller: { ensure },
+        workerPreparation: prepared.promise,
+      });
+      let finished = false;
+      void running.then(
+        () => {
+          finished = true;
+        },
+        () => {
+          finished = true;
+        },
+      );
+      try {
+        expect(ensure).toHaveBeenCalledOnce();
+        if (mode === "preparation failure") {
+          prepared.reject(new Error("private preparation failed"));
+        } else if (mode === "install failure") {
+          installed.reject(new Error("bundle installation failed"));
+        } else {
+          installed.resolve(build);
+        }
+        await new Promise<void>((resolve) => {
+          setImmediate(resolve);
+        });
+        expect(finished).toBe(false);
+      } finally {
+        installed.resolve(build);
+        prepared.resolve();
+        await running;
+      }
+      const { result } = await running;
+      expect(result).toMatchObject({ ok: mode === "ready" });
+    },
+  );
 
   it("dispatches workspace retention before a colliding plugin command", async () => {
     const input = launchInput();

@@ -64,6 +64,7 @@ export type WorkerProviderLifecycleInputOptions = {
     record: WorkerEnvironmentRecord,
     bundle: Extract<WorkerInstallationArtifact, { install: "bundle" }>,
     signal?: AbortSignal,
+    assertRecoveryCurrent?: () => void,
   ) => Promise<WorkerNodeRuntimePreparation>;
   closeNodeRuntime?: (preparation: WorkerNodeRuntimePreparation) => void;
   prepareNodeArtifacts?: (

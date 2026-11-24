@@ -218,6 +218,7 @@ export async function invokeNodeWorkerSupervisorCommand(params: {
   gatewayTlsFingerprint?: string;
   gatewayCloudflareAccess?: CloudflareAccessCredentials;
   signal?: AbortSignal;
+  preparation?: Promise<void>;
 }) {
   const { supervisor, bundleInstaller, workspace, paramsJSON, signal } = params;
   const receipt = (value: Awaited<ReturnType<NodeWorkerSupervisorControl["status"]>>) =>
@@ -228,24 +229,35 @@ export async function invokeNodeWorkerSupervisorCommand(params: {
   > = {
     [NODE_WORKER_WORKSPACE_PREPARE_COMMAND]: () =>
       workspace?.prepare(parseNodeWorkerPreparedWorkspaceInput(paramsJSON), signal),
-    [NODE_WORKER_BUNDLE_INSTALL_COMMAND]: () => {
+    [NODE_WORKER_BUNDLE_INSTALL_COMMAND]: async () => {
       if (!bundleInstaller) {
         return undefined;
       }
       if (!params.gatewayUrl) {
         throw new Error("node worker gateway connection unavailable");
       }
-      return bundleInstaller.ensure({
-        input: parseNodeWorkerBundleInstallInput(paramsJSON),
-        gatewayUrl: params.gatewayUrl,
-        ...(params.gatewayTlsFingerprint
-          ? { gatewayTlsFingerprint: params.gatewayTlsFingerprint }
-          : {}),
-        ...(params.gatewayCloudflareAccess
-          ? { gatewayCloudflareAccess: params.gatewayCloudflareAccess }
-          : {}),
-        signal,
-      });
+      const [installed, preparation] = await Promise.allSettled([
+        bundleInstaller.ensure({
+          input: parseNodeWorkerBundleInstallInput(paramsJSON),
+          gatewayUrl: params.gatewayUrl,
+          ...(params.gatewayTlsFingerprint
+            ? { gatewayTlsFingerprint: params.gatewayTlsFingerprint }
+            : {}),
+          ...(params.gatewayCloudflareAccess
+            ? { gatewayCloudflareAccess: params.gatewayCloudflareAccess }
+            : {}),
+          signal,
+        }),
+        params.preparation ?? Promise.resolve(),
+      ]);
+      if (installed.status === "rejected") {
+        throw installed.reason;
+      }
+      if (preparation.status === "rejected") {
+        throw preparation.reason;
+      }
+      signal?.throwIfAborted();
+      return installed.value;
     },
     [NODE_WORKER_WORKSPACE_EXEC_COMMAND]: () =>
       workspace?.exec(

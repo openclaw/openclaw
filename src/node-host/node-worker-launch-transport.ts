@@ -34,6 +34,10 @@ import {
   type WorkerProcessInput,
 } from "../worker/worker-process-protocol.js";
 import {
+  packagedNodeWorkerBundleDirectory,
+  resolveNodeWorkerBundleDirectory,
+} from "./node-worker-bundle-paths.js";
+import {
   createNodeWorkerContainer,
   type NodeWorkerContainerEngine,
 } from "./node-worker-container-engine.js";
@@ -92,10 +96,19 @@ function resolveNodeWorkerEntry(params: {
   gatewayNamespace: string;
 }): string {
   const root = fs.realpathSync.native(params.bundleRoot);
-  const bundle = fs.realpathSync.native(
-    path.join(root, params.gatewayNamespace, "bundles", params.expectedBundleHash),
+  const destination = path.join(
+    root,
+    params.gatewayNamespace,
+    "bundles",
+    params.expectedBundleHash,
   );
-  if (!isPathInside(root, bundle)) {
+  const bundle = fs.realpathSync.native(
+    resolveNodeWorkerBundleDirectory(destination, params.expectedBundleHash),
+  );
+  if (
+    !isPathInside(root, bundle) &&
+    bundle !== packagedNodeWorkerBundleDirectory(params.expectedBundleHash)
+  ) {
     throw new Error("node worker bundle resolves outside its configured root");
   }
   const entry = fs.realpathSync.native(

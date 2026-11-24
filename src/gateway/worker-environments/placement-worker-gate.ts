@@ -26,9 +26,12 @@ type WorkerPlacementBinding = Readonly<{
 export type WorkerSessionPlacementGate = {
   fenceWorkerTurnForRecovery: (claim: WorkerSessionTurnClaim) => void;
   /** Refresh runtime bytes without changing the retained workspace's owner epoch. */
-  prepareWorkerRuntimeRefresh(binding: WorkerPlacementBinding): Promise<{
+  prepareWorkerRuntimeRefresh(
+    binding: WorkerPlacementBinding & { idleOnly?: true; allowRetainedCleanup?: true },
+  ): Promise<{
     generation: number;
     reclaimResult?: WorkerWorkspacePendingResult;
+    retainedCleanupOnly?: true;
     assertCurrent: () => void;
     release: () => void;
   }>;
@@ -152,8 +155,16 @@ export function createWorkerSessionPlacementGate(
         if (owner.reclaimResult && owner.claim) {
           fenceWorkerTurnForRecovery(owner.claim);
         }
+        const retainedCleanupOnly =
+          binding.idleOnly && Boolean(owner.claim || owner.pendingResult || owner.reclaimResult);
+        if (retainedCleanupOnly && !binding.allowRetainedCleanup) {
+          throw new Error(
+            "Worker node upgrade is waiting for pending workspace recovery to settle",
+          );
+        }
         return {
           generation: owner.placement.generation,
+          ...(retainedCleanupOnly ? { retainedCleanupOnly: true as const } : {}),
           ...(owner.reclaimResult ? { reclaimResult: owner.reclaimResult } : {}),
           assertCurrent,
           release,

@@ -1,0 +1,4 @@
+# Runtime artifact integrity, readiness/retirement, bundle-alias launch, and verified same-node upgrade/recovery regressions.
+# Includes late provider cleanup and credential-isolated exec/publication coverage against the refreshed prerequisite.
+# Includes exact historical PostgreSQL worker placement fixtures for migration proof.
+914

@@ -1,6 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
 import type { WorkerAdmissionHandshake } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
-import { createDeferred } from "../../../test/helpers/promise.js";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  nextEventLoopTurn,
+  withinTest,
+} from "../../../test/helpers/promise.js";
 import { NODE_WORKER_ENVIRONMENT_STOP_COMMAND } from "../../infra/node-commands.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { installWorkerPlacementReconcileGuard } from "../server-worker-placement-reconcile-guard.js";
@@ -44,6 +49,8 @@ describe("worker environment runtime upgrades", () => {
     state: "idle" | "attached" = "attached",
     bootstrapReceipt: WorkerAdmissionHandshake = support.BOOTSTRAP_RECEIPT,
     targetReceipt: WorkerAdmissionHandshake = currentReceipt,
+    nodeRecovery = false,
+    providerCallTimeoutMs?: number,
   ) {
     const environmentId = "worker-runtime-upgrade";
     type Transition = Parameters<typeof testState.store.transition>[0];
@@ -57,7 +64,28 @@ describe("worker environment runtime upgrades", () => {
       environmentId,
       providerId: "fake",
       profileId: "development",
-      profileSnapshot: { settings: { region: "test", desktop: true } },
+      profileSnapshot: {
+        settings: { region: "test", desktop: true },
+        ...(nodeRecovery
+          ? {
+              runtimePreparation: {
+                source: "image",
+                key: "a".repeat(64),
+                cacheKey: "b".repeat(64),
+                contractVersion: 2,
+                target: { machineClass: "small", platform: "linux" },
+                artifacts: {
+                  nodeBootstrapSha256: "c".repeat(64),
+                  enabledPluginIds: [],
+                  workerBundleHash: bootstrapReceipt.bundleHash,
+                  workerArchiveSha256: "e".repeat(64),
+                  openclawVersion: "2026.7.2",
+                  protocolFeatures: [],
+                },
+              },
+            }
+          : {}),
+      },
       provisionOperationId: `provision:${environmentId}`,
     });
     await transition("requested", "provisioning");
@@ -69,6 +97,7 @@ describe("worker environment runtime upgrades", () => {
     }
     await transition(node ? "provisioning" : "bootstrapping", "ready", {
       ...support.readyPatch(environmentId, { ...bootstrapReceipt, installKind: "bundle" }),
+      sharedHost: false,
       desktop: support.DESKTOP,
       ...(node ? { leaseId: `lease:${environmentId}`, nodeDeviceId: `node:${environmentId}` } : {}),
     });
@@ -113,7 +142,43 @@ describe("worker environment runtime upgrades", () => {
       expect(sshEndpoint).toEqual(environment.sshEndpoint);
       return install();
     });
+    const currentNodeRuntime = {
+      nodeBootstrap: {
+        ...support.NODE_BOOTSTRAP,
+        sha256: "f".repeat(64),
+        openclawVersion: "2026.9.27",
+      },
+      workerBundle: {
+        url: "https://gateway.example.test/worker",
+        token: "runtime-worker-token",
+        bundleHash: targetReceipt.bundleHash,
+        protocolFeatures: [...targetReceipt.protocolFeatures],
+        sha256: support.BUNDLE_ARTIFACT.tarballSha256,
+        bytes: support.BUNDLE_ARTIFACT.tarballBytes,
+        packageRelativePath: `worker-artifacts/${support.BUNDLE_ARTIFACT.tarballSha256}.tgz`,
+      },
+    };
+    const prepareNodeRuntime = vi.fn<
+      NonNullable<support.WorkerEnvironmentServiceOptions["prepareNodeRuntime"]>
+    >(async (_record, _artifact, _signal, assertCurrent) => {
+      assertCurrent?.();
+      return currentNodeRuntime;
+    });
+    const closeNodeRuntime = vi.fn();
+    const resumeNode = vi.fn<
+      NonNullable<import("../../plugins/types.js").WorkerProvider["resumeNode"]>
+    >(async (request) => {
+      request.assertCurrent();
+    });
+    const inspect = vi.fn(async () => ({ status: "active" as const, sharedHost: false }));
     const provider = {
+      ...(nodeRecovery
+        ? {
+            requiresNodeEnrollment: true as const,
+            inspect,
+            resumeNode,
+          }
+        : {}),
       provision: vi.fn(support.createProvider().provision),
       destroy: vi.fn(async () => {}),
     };
@@ -149,22 +214,30 @@ describe("worker environment runtime upgrades", () => {
           nodeTunnelManager,
           placementStore: gate,
           ensureNodeWorkerBundle,
+          providerCallTimeoutMs,
+          ...(nodeRecovery ? { prepareNodeRuntime, closeNodeRuntime } : {}),
         },
       );
       return { gate, service };
     };
-    const { service } = await bindService(placements);
+    const { gate, service } = await bindService(placements);
     return {
       environment,
       owner,
       placement,
       placements,
       oldCredential,
+      currentNodeRuntime,
+      prepareNodeRuntime,
+      closeNodeRuntime,
+      inspect,
+      resumeNode,
       events,
       stop,
       install,
       ...provider,
       ensureNodeWorkerBundle,
+      gate,
       service,
       tunnelManager,
       nodeTunnelManager,
@@ -188,6 +261,141 @@ describe("worker environment runtime upgrades", () => {
       },
     };
   }
+
+  it.each(["idle", "active", "pending"] as const)(
+    "admits current node artifacts only for an idle exclusive placement (%s)",
+    async (scenario) => {
+      const busy = scenario !== "idle";
+      const h = await setupUpgrade(
+        "node",
+        "attached",
+        support.BOOTSTRAP_RECEIPT,
+        currentReceipt,
+        true,
+      );
+      if (busy) {
+        const claim = await h.placements.claimTurn({
+          ...REQUEST,
+          claimId: "live-before-upgrade",
+          runId: "live-before-upgrade",
+          owner: { kind: "worker", ...h.owner },
+        });
+        if (scenario === "pending") {
+          await h.placements.markWorkspaceResultPending(claim);
+          h.service.fenceWorkerTurnForRecovery(claim);
+        }
+      }
+      const updating = h.service.resumeNode(h.owner.environmentId, {
+        signal: new AbortController().signal,
+        assertCurrent() {},
+        upgradeRuntime: true,
+      });
+      if (busy) {
+        await expect(updating).rejects.toThrow(
+          scenario === "pending" ? "pending workspace recovery" : "current turn",
+        );
+        expect(h.prepareNodeRuntime).not.toHaveBeenCalled();
+        expect(h.resumeNode).not.toHaveBeenCalled();
+      } else {
+        await updating;
+        expect(h.resumeNode.mock.calls[0]?.[0]).toMatchObject({
+          leaseId: h.environment.leaseId,
+          deviceId: h.environment.nodeDeviceId,
+          nodeBootstrapSha256: "f".repeat(64),
+          openclawVersion: "2026.9.27",
+          runtime: h.currentNodeRuntime,
+        });
+        expect(h.closeNodeRuntime).toHaveBeenCalledExactlyOnceWith(h.currentNodeRuntime);
+        h.expectRetained({ nodeDeviceId: h.environment.nodeDeviceId });
+        expect(h.placements.get(REQUEST.sessionId)?.generation).toBe(h.placement!.generation);
+        expect(h.provision).not.toHaveBeenCalled();
+        expect(h.destroy).not.toHaveBeenCalled();
+      }
+    },
+  );
+
+  it.for(["placement preparation", "runtime preparation", "provider resume"] as const)(
+    "releases node upgrade resources on a provider timeout during %s without overlapping resumes",
+    async (phase, { signal }) => {
+      const timeoutMs = 20;
+      const h = await setupUpgrade(
+        "node",
+        "attached",
+        support.BOOTSTRAP_RECEIPT,
+        currentReceipt,
+        true,
+        timeoutMs,
+      );
+      const entered = createDeferred();
+      const unblock = createDeferred();
+      const pause = () => {
+        entered.resolve();
+        return unblock.promise;
+      };
+      const preparePlacement = h.gate.prepareWorkerRuntimeRefresh.bind(h.gate);
+      const releasePlacement = vi.fn();
+      vi.spyOn(h.gate, "prepareWorkerRuntimeRefresh").mockImplementationOnce(async (binding) => {
+        const authority = await preparePlacement(binding);
+        releasePlacement.mockImplementation(authority.release);
+        if (phase === "placement preparation") {
+          await pause();
+        }
+        return { ...authority, release: releasePlacement };
+      });
+      if (phase === "runtime preparation") {
+        h.prepareNodeRuntime.mockImplementationOnce(async () => {
+          await pause();
+          return h.currentNodeRuntime;
+        });
+      } else if (phase === "provider resume") {
+        h.resumeNode.mockImplementationOnce(async (request) => {
+          request.assertCurrent();
+          await pause();
+        });
+      }
+
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      const request = { signal, assertCurrent() {} };
+      const first = h.service.resumeNode(h.owner.environmentId, {
+        ...request,
+        upgradeRuntime: true,
+      });
+      // Capture rejection before advancing the shared deadline.
+      const outcome = first.catch((error: unknown) => error);
+      let retry: ReturnType<typeof h.service.resumeNode> | undefined;
+      try {
+        await withinTest(
+          awaitGateBeforeSettlement(entered.promise, first, "node upgrade did not reach the gate"),
+          signal,
+        );
+        await vi.advanceTimersByTimeAsync(timeoutMs);
+        expect(await withinTest(outcome, signal)).toMatchObject({
+          message: `Worker provider operation timed out after ${timeoutMs}ms`,
+        });
+        expect(releasePlacement).toHaveBeenCalledTimes(phase === "placement preparation" ? 0 : 1);
+        expect(h.closeNodeRuntime).toHaveBeenCalledTimes(phase === "provider resume" ? 1 : 0);
+
+        retry = h.service.resumeNode(h.owner.environmentId, request);
+        await nextEventLoopTurn();
+        expect(h.inspect).toHaveBeenCalledOnce();
+
+        unblock.resolve();
+        await expect(withinTest(retry, signal)).resolves.toBeUndefined();
+        expect(releasePlacement).toHaveBeenCalledOnce();
+        if (phase === "placement preparation") {
+          expect(h.prepareNodeRuntime).not.toHaveBeenCalled();
+          expect(h.closeNodeRuntime).not.toHaveBeenCalled();
+        } else {
+          expect(h.closeNodeRuntime).toHaveBeenCalledExactlyOnceWith(h.currentNodeRuntime);
+        }
+        expect(h.resumeNode).toHaveBeenCalledTimes(phase === "provider resume" ? 2 : 1);
+      } finally {
+        unblock.resolve();
+        vi.useRealTimers();
+        await Promise.allSettled([first, retry]);
+      }
+    },
+  );
 
   it("upgrades the node idle runtime while retaining its machine and workspace", async () => {
     const h = await setupUpgrade("node", "idle");
