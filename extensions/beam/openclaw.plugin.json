@@ -3,8 +3,17 @@
   "categories": ["developer-tools"],
   "activation": {
     "onStartup": false,
+    "onCommands": ["beam"],
     "onConfigPaths": ["plugins.entries.beam"]
   },
+  "cliCommands": [
+    {
+      "name": "beam",
+      "description": "Inspect the installed Beam connector",
+      "hasSubcommands": true
+    }
+  ],
+  "commandAliases": [{ "name": "beam", "kind": "cli" }],
   "configContracts": {
     "secretInputs": {
       "bundledDefaultEnabled": false,

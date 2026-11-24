@@ -579,6 +579,9 @@ const repositoryScriptEntries = [
   // docs/reference/fast-track-release-approval.md runs this manual-only Vitest config by path.
   "test/manual-release-approval.config.ts",
   "test/manual-release-approval.checks.ts",
+  "test/manual-fast-track-button.checks.ts",
+  "test/manual-fast-track-publication.checks.ts",
+  "test/manual-fast-track-receipt.checks.ts",
   "scripts/secrets/openclaw-bws-resolver.mjs!",
   // Security Review stages these entrypoints from isolated checkout attempts.
   "scripts/github/security-review-event.mjs!",
@@ -1588,6 +1591,10 @@ const config = {
       "test/fixtures/codex-app-server.mjs!",
     ]),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/azure-speech`]: bundledPluginWorkspace(),
+    [`${BUNDLED_PLUGIN_ROOT_DIR}/beam`]: bundledPluginWorkspace([
+      // Invoked by the plugin's release packaging hook.
+      "scripts/package-cleaners.mjs!",
+    ]),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/browser`]: bundledPluginWorkspace([
       // Core and plugin-SDK facades resolve these shipped Browser surfaces by basename.
       "browser-control-auth.ts!",

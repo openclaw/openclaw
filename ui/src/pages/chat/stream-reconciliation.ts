@@ -196,7 +196,7 @@ export function visibleCurrentAssistantStreamTail(
   );
 }
 
-export function hasAssistantStreamPartReplacement(
+function hasAssistantStreamPartReplacement(
   messages: unknown[],
   part: VisibleAssistantStreamPart,
   isHiddenAssistantMessage: AssistantMessageVisibility,
@@ -272,13 +272,6 @@ export function historyReplacedVisibleStream(
       );
     })
   );
-}
-
-export function hasVisibleStreamParts(
-  state: StreamReconciliationState,
-  opts: Pick<MaterializeVisibleStreamOptions, "includeCurrent" | "isHiddenStreamText">,
-): boolean {
-  return visibleAssistantStreamParts(state, opts).length > 0;
 }
 
 export function terminalMessageReplacesVisibleStream(

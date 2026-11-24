@@ -50,6 +50,8 @@ export type BeamUpload = {
 export type BeamStoredSession = BeamUpload & {
   /** Receiver incarnation; a release retry must never recreate an expired publication. */
   publicationId?: string;
+  /** Changes on accepted writes, including v1 updates with the same source timestamp. */
+  revision?: string;
   /** Receiver-owned handoff survives uploads, independently of provider runtime IDs. */
   continuation?: {
     id: string;
