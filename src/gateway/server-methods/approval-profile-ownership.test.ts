@@ -182,7 +182,6 @@ describe("approval profile ownership", () => {
       operatorRunAuthority: createTestOperatorAuthority({
         profileId: "actual-turn",
         scopes: ["operator.approvals"],
-        assertCurrent() {},
       }),
     };
     bindApprovalRequesterMetadata({ record, client: requester });
@@ -204,7 +203,6 @@ describe("approval profile ownership", () => {
       createTestOperatorAuthority({
         profileId: "admitted-profile",
         scopes: ["operator.approvals"],
-        assertCurrent() {},
       }),
     );
     try {

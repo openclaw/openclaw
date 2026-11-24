@@ -242,7 +242,7 @@ Theme cards preview each theme’s own background and accent colors in the curre
 
 Plugin themes can also bring their own SVG hats and composer visitors through [declared artwork](/plugins/manifest/surfaces#themes).
 
-Every built-in theme includes matching light and dark background artwork across the app canvas. The small, bundled lossless WebP images follow the selected mode, including System. Plugin themes can [declare their own light and dark backgrounds](/plugins/manifest/surfaces#themes), which are dimmed like a custom image; personal and imported palettes, and plugin themes without one for the current mode, use neutral artwork. Existing users keep this theme artwork until they change their background preference.
+Background artwork defaults to **None**: changing themes applies the palette without adding decoration. Choose **Theme** under **Appearance → Background → Artwork** to show the theme’s artwork on the enabled surfaces. Every built-in theme includes matching light and dark artwork, which follows the selected mode, including System. Plugin themes can [declare their own light and dark backgrounds](/plugins/manifest/surfaces#themes), which are dimmed like a custom image; personal and imported palettes, and plugin themes without artwork for the current mode, use neutral artwork. Saved artwork choices are preserved when you switch themes.
 
 In **Appearance → Background**, choose **None**, **Theme artwork**, or **Custom image**. **New session page** and **Sessions** are independent: hiding a background does not delete your image. Choosing a custom image for the first time starts with **Sessions** turned off. Later edits preserve your placement choices. Changing themes, fonts, accent, or color mode does not replace an explicit image or re-enable **None**. Without a personal profile, None, theme artwork, placement, presentation, and visibility are saved only in this browser for the selected Gateway. You can opt out without signing in; private uploads still require a profile.
 
@@ -449,6 +449,8 @@ version and restart the Gateway.
 New-update notifications in the Inbox and account menu appear only for the
 `stable` and `beta` channels. The `dev` channel can still check and start updates
 here manually, and active update progress and recovery messages remain visible.
+Expand a recorded update in **Inbox → System** and choose **View update details**
+to open its report without starting another update.
 
 For `dev` git updates, the confirmation, run report, and available-update status
 show the installed → target short commit SHAs on a separate line below the commit

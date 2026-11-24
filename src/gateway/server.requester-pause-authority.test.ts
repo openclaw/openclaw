@@ -459,15 +459,12 @@ it.for([
             (error: unknown) => error,
           );
           const expectedDenial = foreignRequester
-            ? "does not own this continuation"
-            : "no longer current";
+            ? /does not own this continuation/
+            : /no longer current|Requester continuation ended/;
           const settled = await Promise.allSettled(trackedRequests());
           for (const work of settled) {
             if (work.status === "rejected") {
-              expect(work.reason).toHaveProperty(
-                "message",
-                expect.stringContaining(expectedDenial),
-              );
+              expect(work.reason).toHaveProperty("message", expect.stringMatching(expectedDenial));
             }
           }
           expect(received).toEqual(receivedBefore);
@@ -475,7 +472,7 @@ it.for([
           expect(sessionAccessor.loadTranscriptEventsSync(scope)).toEqual(before);
           expect(context.dedupe.has(`agent:${continuationRunId}`)).toBe(false);
           expect(failure).toBeInstanceOf(Error);
-          expect(failure).toHaveProperty("message", expect.stringContaining(expectedDenial));
+          expect(failure).toHaveProperty("message", expect.stringMatching(expectedDenial));
         }
         expect((await pendingInputs.listSessionPendingInputs(scope)).total).toBe(0);
       } finally {

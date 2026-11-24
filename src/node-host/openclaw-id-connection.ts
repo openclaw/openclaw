@@ -77,7 +77,7 @@ export class NodeTunnelConnection {
     });
     this.checkStopped();
     if (this.connected && this.connected.remoteId() !== target.serverKey.slice(5)) {
-      this.connected.close(CONNECTION_CLOSE.claw_lost, "server authority changed");
+      this.connected.close(CONNECTION_CLOSE.claw_lost, "server identity changed; reconnect");
     }
     const pending = this.options.endpoint.connect(
       target.serverKey.slice(5),

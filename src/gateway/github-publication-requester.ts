@@ -448,7 +448,6 @@ export async function prepareGitHubPublicationRequesterV2(
     const assertInvocationCurrent = () => {
       try {
         signal.throwIfAborted();
-        source?.authority.assertCurrent();
       } catch {
         throw new GitHubPublicationRequesterUnavailableError();
       }

@@ -54,6 +54,8 @@ import { formatForLog } from "./ws-log.js";
 const profileLog = createSubsystemLogger("gateway/user-profiles");
 
 export type AuthenticatedHttpUserProfile = {
+  /** Identity established by the authenticator, independently of display attribution. */
+  personProfileId?: string;
   authenticatedUserProfile?: GatewayClient["authenticatedUserProfile"];
   /** Original authenticated device authority, retained across synthetic execution clients. */
   openclawIdPrincipal?: OpenClawIdTunnelPrincipal;
@@ -176,6 +178,9 @@ export async function resolveAuthenticatedHttpUserProfile(params: {
     assertRemoteControlUiIngressCurrent(ingress);
     const principal = ingress.resolvePrincipal();
     return {
+      ...(principal.principal.kind !== "owner"
+        ? { personProfileId: principal.principal.profileId }
+        : {}),
       authenticatedUserProfile: principal.authenticatedUserProfile,
       openclawIdPrincipal: principal.openclawIdPrincipal,
       preparedSessionProfile: principal.preparedSessionProfile,
@@ -283,13 +288,20 @@ export async function resolveAuthenticatedHttpUserProfile(params: {
       profileId,
       assertCurrent,
     });
-    const prepared = await prepareHttpProfile(
+    const profileResult = await prepareHttpProfile(
       profileId,
       profile.updatedAt,
       assertCurrent,
       usesSharedSecretGatewayMethod(params.authResult.method) ? undefined : params.cfg,
       openclawIdPrincipal,
     );
+    const prepared: AuthenticatedHttpUserProfile = {
+      ...profileResult,
+      ...(usesSharedSecretGatewayMethod(params.authResult.method)
+        ? {}
+        : // Authentication can name an alias. The prepared profile owns its canonical ID.
+          { personProfileId: profileResult.authenticatedUserProfile.profileId }),
+    };
     const delegation = params.authResult.delegation;
     if (delegation) {
       const profileCurrent = prepared.hasCurrentProfileAuthority;
@@ -333,7 +345,7 @@ async function prepareHttpProfile(
   const authority = await prepareUserProfileRoleAuthority(profileId);
   assertCurrent();
   if (!authority?.isCurrent()) {
-    throw new Error("HTTP profile authority changed during acquisition");
+    throw new Error("HTTP profile changed during acquisition. Retry the request.");
   }
   const display = authority.display;
   const member = operatorRoleSubject(authority).openclawIdMember;
@@ -355,7 +367,7 @@ async function prepareHttpProfile(
     : undefined;
   assertCurrent();
   if (!authority.isCurrent()) {
-    throw new Error("HTTP profile authority changed during acquisition");
+    throw new Error("HTTP profile changed during acquisition. Retry the request.");
   }
   return {
     ...projectHttpProfile(display, updatedAt, operatorRolePolicy, operatorAccessAuthority),

@@ -25,6 +25,14 @@ export const agentSessionRunProviderCompaction: unique symbol = Symbol(
   "openclaw.agent-session.run-provider-compaction",
 );
 
+/**
+ * Runs threshold compaction at a request boundary. Its first history summary comes
+ * from that request plus the given instructions, so it reads the warm prompt cache.
+ */
+export const agentSessionRunWarmCompaction: unique symbol = Symbol(
+  "openclaw.agent-session.run-warm-compaction",
+);
+
 type AgentSessionCompactionOutcome =
   | {
       status: "completed";

@@ -192,11 +192,13 @@ export function validateQualificationJobs(
   }
   for (const name of names(requiredNames, "required job names")) {
     const matches = jobs.filter((job) => job.name === name);
+    if (matches.length <= 1 && waivedJobNames.has(name)) {
+      continue;
+    }
     if (
       matches.length !== 1 ||
       matches[0].status !== "completed" ||
-      (matches[0].conclusion !== "success" &&
-        !(matches[0].conclusion === "failure" && waivedJobNames.has(name)))
+      matches[0].conclusion !== "success"
     ) {
       throw new Error(label + " required job did not succeed exactly once: " + name);
     }

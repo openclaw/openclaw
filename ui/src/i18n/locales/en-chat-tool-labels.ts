@@ -26,6 +26,10 @@ const enChatToolLabels = {
           running: "Launching",
           succeeded: "Launched",
           failed: "Couldn't launch subagent",
+          limitReached:
+            "Couldn't start a subagent. This session has {active} of {limit} active subagents. Wait for one to finish, then retry.",
+          namedLimitReached:
+            "{name} couldn't start. This session has {active} of {limit} active subagents. Wait for one to finish, then retry.",
           interrupted: "Subagent launch interrupted",
           unknown: "Subagent launch outcome unknown",
         },
@@ -203,6 +207,8 @@ const enChatToolLabels = {
         unknown: "{count} unknown",
       },
       openFile: "Open file",
+      signIn: "Sign in",
+      signInTo: "Sign in to {server}",
       copyToClipboard: "Copy to clipboard",
       downloadFile: "Download file",
       fileChanges: "File changes",

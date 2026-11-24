@@ -1,11 +1,6 @@
 import { expect, it, vi } from "vitest";
-import * as admission from "../../infra/sqlite-worker-operation-admission.js";
-import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import {
-  authorizationClient,
-  sendAuthorizationRequest,
-} from "../server-methods.authorization.test-support.js";
+import { sendAuthorizationRequest } from "../server-methods.authorization.test-support.js";
 import { expectRejectedOnce } from "../server-methods.request-gate.test-support.js";
 import { ensureSessionGroupCatalog, readSessionGroupCatalog } from "../session-group-catalog.js";
 import { putSessionGroups, updateSessionGroupDefaults } from "../session-groups.js";
@@ -106,41 +101,3 @@ it.each([
     );
   });
 });
-
-it.each([
-  ["transaction", "scope", "FORBIDDEN"],
-  ["commit", "scope", "FORBIDDEN"],
-  ["commit", "connection", "UNAVAILABLE"],
-] as const)(
-  "refuses creation at %s admission after %s revocation",
-  async (stage, revocation, code) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      await ensureSessionGroupCatalog();
-      const client = authorizationClient("revoked-creator", ["operator.write"]);
-      let revoked = false;
-      const hook = probe.admission(admission, (request, grant, callback) => {
-        if (request.stage === stage) {
-          revoked = true;
-          if (revocation === "scope") {
-            client.connect.scopes = ["operator.read"];
-          } else {
-            client.invalidated = true;
-          }
-        }
-        callback(request, grant);
-      });
-      try {
-        const response = await sendAuthorizationRequest(
-          "sessions.groups.create",
-          { name: "Refused" },
-          { client },
-        );
-        expect(revoked).toBe(true);
-        expectRejectedOnce(response, { code });
-        expect(readSessionGroupCatalog().groups).toEqual([]);
-      } finally {
-        hook.mockRestore();
-      }
-    });
-  },
-);

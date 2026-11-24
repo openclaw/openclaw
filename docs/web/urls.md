@@ -172,10 +172,13 @@ Standard links do not use `?session=` or `?face=`. Released links such as
 migration aid and immediately rewritten, without adding browser history, to the
 standard path. The released `?face=dashboard` companion selects the
 `/dashboard` namespace during that rewrite. Loaders and page code never read the
-query-form identity, and new links must not emit it. The Sessions list keeps its
-own `?session=` parameter because that parameter expands a row; it is not a
-session deep link. The one-shot composer value `?draft=` remains supported on
-chat and dashboard session paths.
+query-form identity, and new links must not emit it. In chat, an older link opens
+the session without reloading the Control UI if it points to this Gateway and
+contains a full `agent:` session key.
+
+The Sessions list keeps its own `?session=` parameter because that parameter
+expands a row; it is not a session deep link. The one-shot composer value
+`?draft=` remains supported on chat and dashboard session paths.
 
 ### Native catalog links
 

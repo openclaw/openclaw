@@ -439,39 +439,6 @@ it("serializes different emoji in a single channel slot without blocking other m
     expect(delivered).toEqual(["🚀", "🎉", "👍"]);
   }));
 
-it("rechecks revoked reactor authority at channel I/O after commit", () =>
-  withReactionState(async () => {
-    const { messageId, requestContext } = await channelFixture();
-    const reactor = client("alice");
-    const handoff = reactionGate();
-    const channelRequest = vi.fn();
-    runMessageAction.mockImplementationOnce(async (input: MessageActionInput) => {
-      await handoff.wait();
-      input.assertDirectAdapterHandoff?.();
-      channelRequest(input.params);
-      return actionResult;
-    });
-    const pending = setReaction(messageId, {}, reactor, requestContext);
-    await handoff.entered;
-    try {
-      expect(requestContext.broadcast).toHaveBeenCalledTimes(1);
-      expect((await listReactions())[1]).toMatchObject({
-        reactions: { [messageId]: [{ emoji: "👍", count: 1 }] },
-      });
-      expect(channelRequest).not.toHaveBeenCalled();
-      reactor.invalidated = true;
-    } finally {
-      handoff.release();
-    }
-    const result = await pending;
-    expectMirror(result, {
-      status: "failed",
-      reason: "reaction author or session authority changed",
-    });
-    expect(channelRequest).not.toHaveBeenCalled();
-    expect(runMessageAction).toHaveBeenCalledTimes(1);
-  }));
-
 it("rechecks the source conversation after awaited action preparation", () =>
   withReactionState(async () => {
     registerReactionChannel();

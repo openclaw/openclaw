@@ -1,5 +1,6 @@
 import { prepareGatewayPublicationReaderV1 } from "openclaw/plugin-sdk/gateway-runtime";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   sessionShareGatewayDeviceIds,
   sessionShareGatewaySourceEnabled,
@@ -7,8 +8,11 @@ import {
 } from "./config.js";
 import {
   createSessionShareNodeCommands,
+  isUnresolvedRelationError,
   SESSION_SHARE_LIST_COMMAND,
   SESSION_SHARE_READ_COMMAND,
+  SESSION_SHARE_CATALOG_LIST_COMMAND,
+  SESSION_SHARE_CATALOG_READ_COMMAND,
 } from "./node-commands.js";
 
 type Request = Parameters<Parameters<OpenClawPluginApi["registerGatewayMethod"]>[1]>[0];
@@ -17,6 +21,8 @@ export function registerSessionShareGatewayMethods(api: OpenClawPluginApi) {
   for (const [method, command] of [
     ["session-share.list", SESSION_SHARE_LIST_COMMAND],
     ["session-share.read", SESSION_SHARE_READ_COMMAND],
+    ["session-share.catalog.list", SESSION_SHARE_CATALOG_LIST_COMMAND],
+    ["session-share.catalog.read", SESSION_SHARE_CATALOG_READ_COMMAND],
   ]) {
     api.registerGatewayMethod(
       method!,
@@ -43,7 +49,14 @@ export function registerSessionShareGatewayMethods(api: OpenClawPluginApi) {
             }
           };
           assertCurrent();
-          // The reader remains a device. Only source-owned config selects the person.
+          if (
+            method === "session-share.catalog.list" &&
+            isRecord(request.params) &&
+            Object.hasOwn(request.params, "includeOriginalPath")
+          ) {
+            throw new Error("Gateway catalog lists do not support original paths");
+          }
+          // The reader remains a device. The supplied person narrows publication; it never changes reader authority.
           // Respond inside the source owner's final synchronous disclosure callback.
           const handler = createSessionShareNodeCommands(api, {
             assertCurrent,
@@ -53,7 +66,14 @@ export function registerSessionShareGatewayMethods(api: OpenClawPluginApi) {
             },
           }).find((candidate) => candidate.command === command)!;
           await handler.handle(JSON.stringify(request.params));
-        } catch {
+        } catch (error) {
+          if (isUnresolvedRelationError(error)) {
+            request.respond(false, undefined, {
+              code: "FILTER_UNAVAILABLE",
+              message: "Relationship target is unresolved or ambiguous on this source",
+            });
+            return;
+          }
           // Never propagate transcript paths, credentials, or raw source failures to the peer.
           request.respond(false, undefined, {
             code: "INVALID_REQUEST",

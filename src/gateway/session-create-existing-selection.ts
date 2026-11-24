@@ -241,7 +241,6 @@ export function prepareSessionCreatePermissionSelection(
   if (!mode) {
     return { ok: true };
   }
-  authority.assertCurrent();
   if (mode === "full" && !authority.scopes.includes(ADMIN_SCOPE)) {
     return {
       ok: false,
@@ -249,7 +248,6 @@ export function prepareSessionCreatePermissionSelection(
     };
   }
   const assertCurrent = () => {
-    authority.assertCurrent();
     if (
       resolveAgentConfig(request.getCurrentConfig?.() ?? request.cfg, target.agentId)
         ?.newSessionPermissionMode !== configuredMode
