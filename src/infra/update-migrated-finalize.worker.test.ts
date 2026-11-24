@@ -479,14 +479,14 @@ it.each([
     }));
     const start = vi.fn(async () => recovery);
     // mock-isolation: Starting the recovery needs Git, systemd and a service; its tests own that.
-    vi.doMock("./update-early-release-recovery.js", () => ({
+    vi.doMock("./update-early-release-recovery-start.js", () => ({
       startEarlyGitReleaseRecovery: start,
     }));
     try {
       await runWorker({}, "--check");
     } finally {
       vi.doUnmock("./openclaw-root.js");
-      vi.doUnmock("./update-early-release-recovery.js");
+      vi.doUnmock("./update-early-release-recovery-start.js");
       vi.unstubAllEnvs();
     }
 

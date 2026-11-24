@@ -3,8 +3,10 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
+import { startEarlyGitReleaseRecovery } from "./update-early-release-recovery-start.js";
+import type { StartDeps } from "./update-early-release-recovery-start.js";
 import * as recovery from "./update-early-release-recovery.js";
-import type { RunCommand, RunnerDeps, StartDeps } from "./update-early-release-recovery.js";
+import type { RunCommand, RunnerDeps } from "./update-early-release-recovery.js";
 
 type RecoveryOutcome = Parameters<RunnerDeps["record"]>[0];
 
@@ -71,7 +73,7 @@ function install() {
 
 posix("keeps the built release and starts the runner as a transient user service", async () => {
   const fx = install();
-  const result = await recovery.startEarlyGitReleaseRecovery(fx.change, fx.deps);
+  const result = await startEarlyGitReleaseRecovery(fx.change, fx.deps);
 
   expect(result).toEqual({ started: true, unit: "openclaw-update-recovery", target: fx.target });
   const release = path.join(fx.prefix, "recovery", "openclaw");
@@ -136,7 +138,7 @@ const refusals: Array<[string, (fx: Fx) => unknown]> = [
 posix.each(refusals)("changes nothing and says why: %s", async (reason, arrange) => {
   const fx = install();
   arrange(fx);
-  const result = await recovery.startEarlyGitReleaseRecovery(fx.change, fx.deps);
+  const result = await startEarlyGitReleaseRecovery(fx.change, fx.deps);
 
   expect(result).toMatchObject({ started: false, reason: expect.stringContaining(reason) });
   expect(sh(fx.root, "git rev-parse HEAD")).toBe(fx.target);
@@ -147,7 +149,7 @@ posix("starts nothing while another recovery runs", async () => {
   const fx = install();
   fx.deps.active = "active";
 
-  const result = await recovery.startEarlyGitReleaseRecovery(fx.change, fx.deps);
+  const result = await startEarlyGitReleaseRecovery(fx.change, fx.deps);
   expect(result).toEqual({ started: false, running: "openclaw-update-recovery" });
   expect(fs.existsSync(fx.root)).toBe(true);
   expect(fx.systemd.map(([command]) => command)).not.toContain("systemd-run");
@@ -169,7 +171,7 @@ function runner(fail: Record<string, number>, resumed = false, restarts = 0) {
   const run: RunCommand = async (argv) => {
     const cli = argv[1]?.endsWith("openclaw.mjs") ? path.dirname(argv[1]) : "";
     const role = cli === release ? "release" : cli ? "checkout" : "";
-    const name = [role, ...argv.filter((arg) => !/^[/-]/u.test(arg))].join(" ").trim();
+    const name = [role, ...argv.filter((arg) => !/^([/-]|\d+$)/u.test(arg))].join(" ").trim();
     calls.push(name);
     if (name.endsWith("gateway install") && !fail[name]) {
       fs.writeFileSync(serviceFile, `ExecStart=node ${cli}/dist/index.js --port 1\n`);
@@ -187,6 +189,7 @@ function runner(fail: Record<string, number>, resumed = false, restarts = 0) {
       return alive-- > 0;
     },
     restarts: async () => restarts,
+    hold: async () => (fail.hold ? null : "run-1"),
     migrated: () => true,
     ready: async (port: number | null) => {
       const role = fs.readFileSync(serviceFile, "utf8").includes(release) ? "release" : "checkout";
@@ -203,7 +206,14 @@ function runner(fail: Record<string, number>, resumed = false, restarts = 0) {
     sleep: async () => {},
   };
   const plan = { unit: "u", checkout: path.join(base, "co"), branch: "main", target, release };
-  const full = { ...plan, prefix, serviceFile, fromVersion: "1", driver: { pid: 1, start: "1" } };
+  const full = {
+    ...plan,
+    prefix,
+    serviceFile,
+    fromVersion: "1",
+    driver: { pid: 1, start: "1" },
+    plannedAt: 1,
+  };
   return { plan: full, calls, records, deps, serviceFile, release, original };
 }
 
@@ -238,6 +248,7 @@ it.each([
     [...TO_RELEASE, ...BUILD, ...TO_CHECKOUT, ...TO_RELEASE],
   ],
   ["stops restarting after repeated interruptions, keeping the release", {}, [], true, 3],
+  ["waits for another update before rebuilding", { hold: 1 }, TO_RELEASE],
 ] as Array<[string, Record<string, number>, string[], boolean?, number?]>)(
   "%s",
   async (_name, fail, expected, resumed = false, restarts = 0) => {
@@ -252,7 +263,8 @@ it.each([
     // Once the service starts the release a failure is recorded with its next step; before
     // that nothing changed and the next update retries.
     const failed =
-      restarts > 0 || ["release ready", "pnpm build", "checkout ready"].some((name) => fail[name]);
+      restarts > 0 ||
+      ["release ready", "hold", "pnpm build", "checkout ready"].some((name) => fail[name]);
     expect(fx.records.map((record) => record.nextAction?.includes("install --force"))).toEqual(
       failed ? [true] : [],
     );
@@ -260,6 +272,23 @@ it.each([
     expect(fs.existsSync(fx.release)).toBe(
       !done && !fail[MERGE] && !fail["release gateway install"],
     );
+  },
+);
+
+it.each([0, 1])(
+  "releases a build lock only its own interrupted run left (restarts %i)",
+  async (restarts) => {
+    const fx = runner({}, true, restarts);
+    const lock = path.join(fx.plan.checkout, ".artifacts", "dist-artifacts.lock");
+    fs.mkdirSync(lock, { recursive: true });
+    // A PID above the kernel's maximum is never alive.
+    fs.writeFileSync(
+      path.join(lock, "owner.json"),
+      '{"pid":99999999,"startedAt":"2026-11-24T00:00:00Z"}',
+    );
+    await recovery.runEarlyGitReleaseRecovery(fx.plan, fx.deps);
+
+    expect(fs.existsSync(lock)).toBe(restarts === 0);
   },
 );
 

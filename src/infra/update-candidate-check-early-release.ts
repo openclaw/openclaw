@@ -160,7 +160,7 @@ export function formatEarlyGitReleaseRefusal(
     return [
       ...lines,
       recovery.started
-        ? `So it stops here and reports this update as failed, and the new release finishes the update in the background. In about 5 to 10 minutes it moves the checkout to ${recovery.target.slice(0, 11)}, restarts the Gateway on the new release (which migrates your databases at startup), rebuilds the checkout, and restarts the Gateway on the rebuilt checkout. The first restart lasts as long as the migration; the second takes a few seconds. If it cannot finish, its log says why and the next \`openclaw update\` tries again.`
+        ? `So it stops here and reports this update as failed, and the new release finishes the update in the background. In about 5 to 10 minutes it moves the checkout to ${recovery.target.slice(0, 11)}, restarts the Gateway on the new release (which migrates your databases at startup), rebuilds the checkout, and restarts the Gateway on the rebuilt checkout. The first restart lasts as long as the migration; the second takes a few seconds. If it cannot finish, its log and \`openclaw update status\` say why and name the next step.`
         : "So it stops here. That recovery is still running and finishes the update; nothing else was changed.",
       "Until the rebuild finishes, the checkout's `openclaw` command refuses the migrated data; that is expected.",
       `Follow progress: systemctl --user status ${unit} (log: journalctl --user -u ${unit})`,

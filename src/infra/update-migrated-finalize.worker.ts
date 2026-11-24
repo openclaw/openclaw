@@ -100,8 +100,10 @@ async function finalizeMigratedUpdate(): Promise<void> {
       await recovery.finishEarlyGitReleaseRecovery(plan, finish);
     } else {
       // On success the finishing step removed the release this process runs from; the
-      // cleanup below loads nothing more, because this mode opened no database.
-      await recovery.runEarlyGitReleaseRecovery(plan);
+      // cleanup below loads nothing more from it.
+      const finished = await recovery.runEarlyGitReleaseRecovery(plan);
+      // A recovery that did not finish shows as failed in `systemctl --user status`.
+      process.exitCode = finished ? 0 : 1;
     }
     return;
   }
@@ -121,7 +123,8 @@ async function finalizeMigratedUpdate(): Promise<void> {
     const root = resolveOpenClawPackageRootSync({ moduleUrl: import.meta.url });
     const early = root ? inspectEarlyGitReleaseSchemaChange(root) : null;
     if (early) {
-      const { startEarlyGitReleaseRecovery } = await import("./update-early-release-recovery.js");
+      const { startEarlyGitReleaseRecovery } =
+        await import("./update-early-release-recovery-start.js");
       const recovery = await startEarlyGitReleaseRecovery(early);
       // The early release updater reports this stderr as the failed check before any change.
       process.stderr.write(`${formatEarlyGitReleaseRefusal(early, recovery)}\n`);
