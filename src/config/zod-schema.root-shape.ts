@@ -622,6 +622,11 @@ export const OpenClawSchemaShape = {
           maxSkillsInPrompt: z.number().int().min(0).optional(),
           /** Max characters for the model-facing skills prompt block (approx). */
           maxSkillsPromptChars: z.number().int().min(0).optional(),
+          /**
+           * Minimum description length each skill keeps in the model-facing skills prompt when the
+           * catalog has to shrink. `0` keeps every admitted skill name and drops descriptions instead.
+           */
+          minDescriptionChars: z.number().int().min(0).optional(),
           /** Max size (bytes) allowed for a SKILL.md file to be considered. */
           maxSkillFileBytes: z.number().int().min(0).optional(),
         })

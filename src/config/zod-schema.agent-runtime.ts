@@ -52,6 +52,7 @@ export const AgentContextLimitsSchema = z
 const AgentSkillsLimitsSchema = z
   .strictObject({
     maxSkillsPromptChars: z.number().int().min(0).optional(),
+    minDescriptionChars: z.number().int().min(0).optional(),
   })
   .optional();
 

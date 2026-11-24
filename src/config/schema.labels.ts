@@ -128,6 +128,8 @@ export const FIELD_LABELS: Record<string, string> = {
   "agents.entries": "Agent List",
   "agents.entries.*.skillsLimits": "Agent Skills Limits",
   "agents.entries.*.skillsLimits.maxSkillsPromptChars": "Agent Skills Prompt Max Chars",
+  "skills.limits.minDescriptionChars": "Skills Min Description Chars",
+  "agents.entries.*.skillsLimits.minDescriptionChars": "Agent Skills Min Description Chars",
   "agents.entries.*.contextLimits": "Agent Context Limits",
   "agents.entries.*.contextLimits.memoryGetMaxChars": "Agent memory_get Max Chars",
   "agents.entries.*.contextLimits.postCompactionMaxChars": "Agent Post-compaction Max Chars",

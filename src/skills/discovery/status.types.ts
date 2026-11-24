@@ -1,5 +1,6 @@
 import type { RequirementConfigCheck, Requirements } from "../../shared/requirements.js";
 import type { ClawHubSkillStatusLink, LocalSkillCardStatus } from "../lifecycle/workspace-types.js";
+import type { SkillsPromptBudget } from "../loading/skill-prompt-limits.js";
 import type { SkillInstallSpec } from "../types.js";
 
 export type SkillInstallOption = {
@@ -49,6 +50,13 @@ export type SkillStatusReport = {
   agentId?: string;
   agentSkillFilter?: string[];
   skills: SkillStatusEntry[];
+  /**
+   * How the model-facing catalog fit the prompt budget.
+   *
+   * Discovery visibility and prompt admission are separate gates, so a skill can
+   * be eligible and still be dropped from the rendered catalog.
+   */
+  promptBudget?: SkillsPromptBudget;
 };
 
 /** Filesystem facts, separate from Gateway policy and execution-host requirements. */

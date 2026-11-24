@@ -39,6 +39,33 @@ describe("skills descriptor formatting", () => {
     expect(row?.split(/[|│]/u)[3]?.trim()).toBe("left\\tright");
   });
 
+  it("reports the prompt budget outcome for the model-facing catalog", async () => {
+    const workspaceDir = tempDirs.make("prompt-budget-");
+    await writeWorkspaceSkills(
+      workspaceDir,
+      Array.from({ length: 12 }, (_, index) => ({
+        name: `budget-skill-${index}`,
+        description: "D".repeat(200),
+      })),
+    );
+    const report = buildWorkspaceSkillStatus(workspaceDir, {
+      managedSkillsDir: path.join(workspaceDir, "managed"),
+      config: {
+        plugins: { enabled: false },
+        skills: { limits: { maxSkillsPromptChars: 1_200 } },
+      },
+    });
+
+    const check = JSON.parse(formatSkillsCheck(report, { json: true }));
+    expect(check.promptBudget).toMatchObject({ total: 12, format: "compact" });
+    expect(check.promptBudget.admitted).toBeLessThan(12);
+    expect(check.promptBudget.omitted).toHaveLength(12 - check.promptBudget.admitted);
+
+    const human = stripAnsi(formatSkillsCheck(report, {}));
+    expect(human).toContain("Injected into prompt:");
+    expect(human).toContain("Omitted by prompt budget:");
+  });
+
   it.each([
     "{openclaw: {emoji: lobster, homepage: https://example.test/skill}}",
     "{openclaw:{emoji:'lobster',homepage:'https://example.test/skill'}}",

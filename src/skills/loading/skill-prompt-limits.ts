@@ -18,6 +18,28 @@ type SkillsPromptParams = {
   maxSkillsPromptChars?: number;
   remoteNote?: string;
   preserveOrder?: boolean;
+  /**
+   * Minimum description length each admitted skill keeps in the compact catalog.
+   * `0` keeps every admitted name even when no description fits; a positive value
+   * trades catalog size for trigger text that stays discoverable without a search.
+   */
+  minDescriptionChars?: number;
+};
+
+/** Outcome of the prompt-budget fit, for operator-facing reporting. */
+export type SkillsPromptBudget = {
+  /** Skills offered to the prompt budget. */
+  total: number;
+  /** Skills admitted into the rendered catalog. */
+  admitted: number;
+  /** Names dropped because they did not fit the prompt budget. */
+  omitted: string[];
+  /** Effective per-skill description cap; `0` when descriptions are omitted. */
+  descriptionMaxChars: number;
+  /** Rendered catalog format. */
+  format: "full" | "compact";
+  /** True when the catalog dropped every description. */
+  descriptionsOmitted: boolean;
 };
 
 /** Render a deterministic skills catalog within the shared model-context budget. */
@@ -25,10 +47,31 @@ export function formatSkillsForPromptBounded(params: SkillsPromptParams): string
   return prepareSkillsForPrompt(params).prompt;
 }
 
+/** Summarize how the prompt budget resolved the catalog, for operator-facing reporting. */
+function buildBudget(
+  orderedSkills: Skill[],
+  admitted: Skill[],
+  format: "full" | "compact",
+  descriptionMaxChars: number,
+): SkillsPromptBudget {
+  const admittedNames = new Set(admitted.map((skill) => skill.name));
+  return {
+    total: orderedSkills.length,
+    admitted: admitted.length,
+    omitted: orderedSkills
+      .filter((skill) => !admittedNames.has(skill.name))
+      .map((skill) => skill.name),
+    descriptionMaxChars,
+    format,
+    descriptionsOmitted: format === "compact" && descriptionMaxChars <= 0,
+  };
+}
+
 /** Keep resource selection tied to the exact catalog admitted by the prompt budget. */
 export function prepareSkillsForPrompt(params: SkillsPromptParams): {
   prompt: string;
   skills: Skill[];
+  budget: SkillsPromptBudget;
 } {
   const maxSkillsInPrompt = params.maxSkillsInPrompt ?? DEFAULT_MAX_SKILLS_IN_PROMPT;
   const maxSkillsPromptChars = params.maxSkillsPromptChars ?? DEFAULT_MAX_SKILLS_PROMPT_CHARS;
@@ -91,20 +134,37 @@ export function prepareSkillsForPrompt(params: SkillsPromptParams): {
     return {
       prompt: fullPrompt,
       skills: skillsForPrompt,
+      budget: buildBudget(orderedSkills, skillsForPrompt, "full", 0),
     };
   }
 
-  if (!fitsCompact(skillsForPrompt, 0)) {
-    const count = largestFittingValue(0, skillsForPrompt.length, (candidateCount) =>
+  // A name-only catalog is not discoverable without a search tool, so a configured
+  // description floor is spent on trigger text before extra names are admitted.
+  const descriptionFloorChars = Math.max(
+    0,
+    Math.min(params.minDescriptionChars ?? 0, COMPACT_DESCRIPTION_MAX_CHARS),
+  );
+  if (!fitsCompact(skillsForPrompt, descriptionFloorChars)) {
+    const countWithFloor = largestFittingValue(0, skillsForPrompt.length, (candidateCount) =>
+      fitsCompact(skillsForPrompt.slice(0, candidateCount), descriptionFloorChars),
+    );
+    const countWithoutFloor = largestFittingValue(0, skillsForPrompt.length, (candidateCount) =>
       fitsCompact(skillsForPrompt.slice(0, candidateCount), 0),
     );
-    skillsForPrompt = skillsForPrompt.slice(0, count);
+    skillsForPrompt = skillsForPrompt.slice(
+      0,
+      countWithFloor > 0 ? countWithFloor : countWithoutFloor,
+    );
   }
 
   if (skillsForPrompt.length === 0 && byCount.length > 0) {
     const fullWithoutNotice = renderWithinLimit(byCount, { kind: "full" }, false);
     if (fullWithoutNotice !== undefined) {
-      return { prompt: fullWithoutNotice, skills: byCount };
+      return {
+        prompt: fullWithoutNotice,
+        skills: byCount,
+        budget: buildBudget(orderedSkills, byCount, "full", 0),
+      };
     }
     const count = largestFittingValue(0, byCount.length, (candidateCount) =>
       fitsCompact(byCount.slice(0, candidateCount), 0, false),
@@ -132,5 +192,10 @@ export function prepareSkillsForPrompt(params: SkillsPromptParams): {
       { kind: "compact", descriptionMaxChars },
       includeLimitNote,
     ) ?? "";
-  return { prompt, skills: prompt ? skillsForPrompt : [] };
+  const admitted = prompt ? skillsForPrompt : [];
+  return {
+    prompt,
+    skills: admitted,
+    budget: buildBudget(orderedSkills, admitted, "compact", descriptionMaxChars),
+  };
 }

@@ -35,6 +35,7 @@ export function buildSkillSnapshotProjection(input: SkillSnapshotProjectionInput
     skills: compactPromptSkills(resolvedSkills),
     maxSkillsInPrompt: limits?.maxSkillsInPrompt,
     maxSkillsPromptChars: agentLimits?.maxSkillsPromptChars ?? limits?.maxSkillsPromptChars,
+    minDescriptionChars: agentLimits?.minDescriptionChars ?? limits?.minDescriptionChars,
     remoteNote,
     preserveOrder: input.preserveEntryOrder,
   });

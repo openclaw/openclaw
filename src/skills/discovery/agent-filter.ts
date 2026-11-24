@@ -4,6 +4,7 @@ import { normalizeSkillFilter } from "./filter.js";
 
 type AgentSkillsLimits = {
   maxSkillsPromptChars?: number;
+  minDescriptionChars?: number;
 };
 
 /**
