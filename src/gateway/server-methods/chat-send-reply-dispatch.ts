@@ -80,7 +80,9 @@ export function createChatSendReplyDispatch(params: {
   accountId: string | undefined;
   requesterContext?: WebchatReplyMediaRequesterContext;
   isAgentRunStarted: () => boolean;
+  /** Publishes pre-run block text: every block of a command turn, otherwise compaction notices. */
   onCommandBlock?: (text: string) => void;
+  commandTurn?: boolean;
   isRunCurrent?: () => boolean;
   abortSignal?: AbortSignal;
   assertWorkCurrent?: () => void;
@@ -584,7 +586,12 @@ export function createChatSendReplyDispatch(params: {
         ) {
           const parts = deliveredReplies.map(({ input: replyInput, kind }) => {
             const reply = readChatSendReplyPayload(replyInput);
-            if (kind !== "block" || reply.isReasoning === true || isBtwReplyPayload(reply)) {
+            if (
+              kind !== "block" ||
+              reply.isReasoning === true ||
+              isBtwReplyPayload(reply) ||
+              (!params.commandTurn && reply.isCompactionNotice !== true)
+            ) {
               return "";
             }
             const displayText =

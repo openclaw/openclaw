@@ -9,6 +9,7 @@ import { Type } from "typebox";
 import { onTestFinished, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import * as agentEvents from "../infra/agent-events.js";
+import type { AssistantHistoryMessage, HistoryUsage } from "../llm/types.js";
 import { runAgentLoop, type AgentEvent } from "../plugin-sdk/agent-core.js";
 import { createEmbeddedRunContextRecoveryState } from "./embedded-agent-runner/run/context-recovery-state.js";
 import { createEmbeddedRunFailoverRetryController } from "./embedded-agent-runner/run/failover-retry-controller.js";
@@ -72,7 +73,7 @@ async function runUsageCalls(
   { emit, subscription }: ReturnType<typeof createSubscribedSessionHarness>,
   calls: UsageCall[],
   onEvent?: (event: AgentEvent) => void,
-): Promise<AssistantMessage[]> {
+): Promise<AssistantHistoryMessage[]> {
   const model = makeProviderModelFixture({
     id: "usage-model",
     name: "Usage Model",
@@ -82,7 +83,7 @@ async function runUsageCalls(
     contextWindow: 100_000,
     maxTokens: 8_000,
   });
-  const completed: AssistantMessage[] = [];
+  const completed: AssistantHistoryMessage[] = [];
   let callIndex = 0;
   await runAgentLoop(
     [{ role: "user", content: "First request.", timestamp: 0 }],
@@ -287,7 +288,7 @@ it("accounts queued message_end delivery across a retry", async () => {
   const deliveryStarted = createDeferred();
   const releaseDelivery = createDeferred();
   const secondCompleted = createDeferred();
-  const admittedUsage: StreamUsage[] = [];
+  const admittedUsage: HistoryUsage[] = [];
   const onAgentEvent = vi.fn();
   const onModelUsage = vi.fn();
   const onBlockReplyFlush = vi.fn();
@@ -443,7 +444,7 @@ it.each([
       onContextAccountingEvent,
     });
     const { subscription } = harness;
-    let terminal: AssistantMessage | undefined;
+    let terminal: AssistantHistoryMessage | undefined;
     const [completed] = await runUsageCalls(harness, [call], (event) => {
       if (event.type === "message_end" && event.message.role === "assistant") {
         terminal = event.message;

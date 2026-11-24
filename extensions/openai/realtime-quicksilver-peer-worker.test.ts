@@ -21,16 +21,18 @@ function createPeer(
 
 // Observe encrypted RTP on another event loop: a same-thread receiver would
 // hide the gap by processing its queued callbacks after the deliberate stall.
-// werift never offers loopback host candidates and still queries its default
-// public STUN server when iceServers is empty, so without the explicit
-// 127.0.0.1 candidate ICE needs a reachable LAN address or NAT hairpin. In
-// network-restricted sandboxes or VPN-only hosts no pair connects and no RTP flows.
+// Use a loopback-only ICE-lite answerer. Adding a loopback candidate alongside
+// discovered addresses still lets full ICE nominate a LAN or STUN pair. The
+// media worker must negotiate real ICE/DTLS and RTP, but the test needs no LAN
+// path and the answerer does not gather public STUN candidates.
 const receiverSource = `const { parentPort, workerData } = require('node:worker_threads');
 (async () => {
   const { RTCPeerConnection, useOPUS } = await import(workerData.weriftUrl);
   const peer = new RTCPeerConnection({
     codecs: { audio: [useOPUS({ payloadType: 111 })], video: [] },
-    iceServers: [],
+    iceLite: true,
+    iceUseIpv4: false,
+    iceUseIpv6: false,
     iceAdditionalHostAddresses: ['127.0.0.1'],
   });
   const transceiver = peer.addTransceiver('audio', { direction: 'sendrecv' });

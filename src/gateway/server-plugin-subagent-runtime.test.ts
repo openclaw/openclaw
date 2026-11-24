@@ -320,7 +320,6 @@ describe("plugin background completions", () => {
             await expect(result).rejects.toThrow("operator role cannot use this model");
             expect(isolated).not.toHaveBeenCalled();
           }
-          expect(source.authority.assertCurrent).not.toThrow();
         } finally {
           source.release();
         }

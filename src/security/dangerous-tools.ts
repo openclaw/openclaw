@@ -99,7 +99,6 @@ export function hasGatewayOwnerToolAuthority(
     return false;
   }
   if (operatorAuthority) {
-    operatorAuthority.assertCurrent();
     return roleScopesAllow({
       role: "operator",
       requestedScopes: ["operator.admin"],

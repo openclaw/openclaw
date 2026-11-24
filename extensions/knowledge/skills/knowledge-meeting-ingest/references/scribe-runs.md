@@ -11,7 +11,10 @@ live run that stopped after digesting a meeting instead of finishing ingestion:
 [#197890](https://github.com/openclaw/openclaw/pull/197890) and
 [#197391](https://github.com/openclaw/openclaw/pull/197391). The per-run meeting
 target in step 5 addresses runs that ingested one meeting while others stayed
-pending ([#199744](https://github.com/openclaw/openclaw/pull/199744)).
+pending ([#199744](https://github.com/openclaw/openclaw/pull/199744)). The
+`gone` state in step 3 addresses runs that failed every time on a pending
+meeting deleted from Granola
+([#202388](https://github.com/openclaw/openclaw/pull/202388)).
 
 The prompt names which meetings (the owner's, or every meeting the account can
 read) and how far back to start (today, or the last 7 or 30 days, in the owner's
@@ -25,8 +28,8 @@ time zone).
    `Start: YYYY-MM-DD`, the start date the prompt set when the page was
    created. Then one line per Granola meeting: meeting date, UUID,
    `updated_at` and a state: `done` (with the meeting page title), `no
-   transcript`, or `pending` (with why). Lines record outcomes only: never
-   write resume notes, plans or instructions for a later run on the page.
+   transcript`, `gone`, or `pending` (with why). Lines record outcomes only:
+   never write resume notes, plans or instructions for a later run on the page.
    Create the page with `knowledge_save_page` (type `note`) on the first run,
    writing the prompt's start date.
 3. **List.** `list_meetings` from the later of `Start` and 7 days before the
@@ -34,9 +37,12 @@ time zone).
    the owner's meetings pass
    `involvement: {captured_by_me: true, listed_as_participant: true}`. Follow
    `next_cursor`. Add every `pending` meeting by UUID (read with
-   `get_meetings`), whatever its date, so it is retried until it is `done` or
-   `no transcript`. Skip `done` and `no transcript` meetings unless a later
-   `updated_at` shows the note changed.
+   `get_meetings`), whatever its date, so it is retried until it is `done`,
+   `no transcript` or `gone`. A `pending` meeting that `get_meetings` reports
+   as not found or inaccessible was deleted or unshared in Granola: record it
+   `gone` and go on to the other meetings; it is not a run failure. Skip
+   `done`, `no transcript` and `gone` meetings unless a later `updated_at`
+   shows the note changed.
 4. **Dedup.** Before acquiring, `knowledge_grep` the UUID, then the meeting
    title, and read candidate meeting pages with the same date (±1 day). A
    page is not proof of a complete ingestion: an earlier run may have stopped

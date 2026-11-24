@@ -62,6 +62,7 @@ export function fakeNativeBrowser(tabs: Bridge.NativeBrowserTab[] = [], legacy =
       case "present":
       case "overlay-cutouts":
       case "release-scope":
+      case "set-color-scheme":
       case "reload":
       case "stop":
         break;

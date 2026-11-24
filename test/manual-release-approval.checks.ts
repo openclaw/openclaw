@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import {
@@ -151,23 +151,23 @@ it("recomputes complete delta including generated files and detects caller count
   expect(() => eligibility(h.root, value, { published: false })).toThrow();
 });
 
-it("counts deletions, accepts 10000 total lines and rejects 10001", () => {
+it("counts deletions, accepts 15000 total lines and rejects 15001", () => {
   const h = history();
-  const anchor = h.commit("generated.txt", "old\n".repeat(5000));
-  const candidate = h.commit("generated.txt", "new\n".repeat(5000));
+  const anchor = h.commit("generated.txt", "old\n".repeat(7500));
+  const candidate = h.commit("generated.txt", "new\n".repeat(7500));
   expect(
     eligibility(h.root, {
       ...request(candidate, anchor),
-      delta: { commits: 1, added: 5000, deleted: 5000 },
+      delta: { commits: 1, added: 7500, deleted: 7500 },
     }),
-  ).toEqual({ commits: 1, added: 5000, deleted: 5000 });
-  const excessive = h.commit("generated.txt", "new\n".repeat(5001));
+  ).toEqual({ commits: 1, added: 7500, deleted: 7500 });
+  const excessive = h.commit("generated.txt", "new\n".repeat(7501));
   expect(() =>
     eligibility(h.root, {
       ...request(excessive, anchor),
-      delta: { commits: 2, added: 5001, deleted: 5000 },
+      delta: { commits: 2, added: 7501, deleted: 7500 },
     }),
-  ).toThrow("at most 10000");
+  ).toThrow("at most 15000");
 });
 
 it("excludes only package manifests and known lockfiles from LOC, including nested paths", () => {
@@ -182,16 +182,16 @@ it("excludes only package manifests and known lockfiles from LOC, including nest
     "bun.lock",
     "bun.lockb",
   ]) {
-    h.commit(`nested/${file}`, "dependency\n".repeat(10001));
+    h.commit(`nested/${file}`, "dependency\n".repeat(15001));
   }
-  const candidate = h.commit("package-helper.ts", "source\n".repeat(10000));
+  const candidate = h.commit("package-helper.ts", "source\n".repeat(15000));
   const value = {
     ...request(candidate, h.anchor),
-    delta: { commits: 8, added: 10000, deleted: 0 },
+    delta: { commits: 8, added: 15000, deleted: 0 },
   };
   expect(eligibility(h.root, value)).toEqual(value.delta);
   const excessive = h.commit("package.json.backup", "still counted\n");
-  expect(() => eligibility(h.root, { ...value, candidateSha: excessive })).toThrow("at most 10000");
+  expect(() => eligibility(h.root, { ...value, candidateSha: excessive })).toThrow("at most 15000");
   const binary = h.commit("nested/bun.lockb", Buffer.from([0, 1, 2]));
   expect(() => eligibility(h.root, { ...value, candidateSha: binary })).toThrow("binary change");
 });
@@ -199,19 +199,19 @@ it("excludes only package manifests and known lockfiles from LOC, including nest
 it("counts every commit since the validated anchor, not since the last fast-track", () => {
   const h = history();
   let candidate = h.anchor;
-  for (let i = 0; i < 10; i++) {
+  for (let i = 0; i < 20; i++) {
     candidate = h.commit(`file${i}.txt`, "line\n");
   }
-  const value = { ...request(candidate, h.anchor), delta: { commits: 10, added: 10, deleted: 0 } };
+  const value = { ...request(candidate, h.anchor), delta: { commits: 20, added: 20, deleted: 0 } };
   expect(eligibility(h.root, value)).toEqual(value.delta);
-  candidate = h.commit("eleventh.txt", "line\n");
+  candidate = h.commit("twenty-first.txt", "line\n");
   expect(() =>
     eligibility(h.root, {
       ...value,
       candidateSha: candidate,
-      delta: { commits: 11, added: 11, deleted: 0 },
+      delta: { commits: 21, added: 21, deleted: 0 },
     }),
-  ).toThrow("at most 10 commits");
+  ).toThrow("at most 20 commits");
 });
 
 it("rejects binary changes even when candidate attributes force text", () => {
@@ -360,4 +360,64 @@ it("binds a separate partial-FRV approval to retained results without relaxing s
   expect(() =>
     parseFastTrackRequest({ ...partial, policy: original.policy, action: original.action }),
   ).toThrow();
+});
+
+it("retains one string-attempt FRV record and its failed conclusion for stable closeout", () => {
+  const shell = readFileSync("scripts/lib/release-publish-children.sh", "utf8");
+  const start = shell.indexOf("      ([.workflowRuns[]?");
+  const end = shell.indexOf("\n    '", start);
+  expect(start).toBeGreaterThan(0);
+  const filter = shell.slice(start, end);
+  const record = {
+    id: "12",
+    label: "Full Release Validation",
+    runAttempt: 1,
+    conclusion: "failure",
+  };
+  const result = JSON.parse(
+    execFileSync(
+      "jq",
+      [
+        "--arg",
+        "release_publish_run_id",
+        "30",
+        "--arg",
+        "validation_label",
+        record.label,
+        "--arg",
+        "validation_run_id",
+        record.id,
+        "--arg",
+        "validation_run_attempt",
+        "1",
+        "--arg",
+        "validation_target_sha",
+        "a".repeat(40),
+        "--arg",
+        "validation_url",
+        "https://github.com/openclaw/openclaw/actions/runs/12",
+        "--arg",
+        "validation_workflow_ref",
+        "main",
+        filter,
+      ],
+      {
+        input: JSON.stringify({
+          workflowRuns: [{ label: "Plugin NPM Release", id: "40" }, record],
+        }),
+        encoding: "utf8",
+      },
+    ),
+  );
+  expect(result.workflowRuns).toHaveLength(2);
+  expect(
+    result.workflowRuns.filter((item: { label: string }) => item.label === record.label),
+  ).toEqual([
+    expect.objectContaining({
+      id: "12",
+      runAttempt: "1",
+      conclusion: "failure",
+      targetSha: "a".repeat(40),
+    }),
+  ]);
 });

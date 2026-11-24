@@ -24,7 +24,7 @@ import {
 import type { ChannelMessageActionContext, ChannelPlugin } from "./types.public.js";
 
 const receipt = { content: [{ type: "text" as const, text: "delivered" }], details: { ok: true } };
-const inactiveRead = "read authority is no longer active";
+const inactiveRead = "Plugin configured-reader was reloaded during the read. Retry the action.";
 const exactConversation = "exact current conversation";
 const noCurrentContext = { requesterAccountId: undefined, toolContext: undefined };
 type Context = Parameters<typeof dispatchChannelMessageAction>[0];
@@ -301,7 +301,7 @@ describe("official plugin read-only authority", () => {
     });
     expect(await fixture.dispatch(noCurrentContext)).toBe(receipt);
     expect(retained).toBeTypeOf("function");
-    expect(retained).toThrow(inactiveRead);
+    expect(retained).toThrow("Channel read ended. Retry the action.");
   });
 
   it.each(["artifact", "scope"] as const)("fences bundled %s fallbacks", async (fallback) => {
@@ -329,7 +329,6 @@ describe("official plugin read-only authority", () => {
     ["remove", ({ owner }) => owner.registry.plugins.splice(0)],
     ["revoke", ({ owner, record }) => revokePluginRecord(owner.registry, record)],
     ["reregister", ({ register }) => register()],
-    ["trust-downgrade", ({ record }) => Object.assign(record, { trustedOfficialInstall: false })],
   ])("fences subsequent I/O and results after %s", async (_change, invalidate) => {
     const fixture = registerOfficial();
     const { resume, entered, nextRequest } = pauseRead(fixture);
@@ -417,7 +416,7 @@ describe("scheduled message write declaration", () => {
       expect(fixture.context.senderIsOwner).toBe(false);
       expect(fixture.source.signal.aborted).toBe(false);
       expect(retained).toBeTypeOf("function");
-      expect(retained).toThrow("invocation is no longer active");
+      expect(retained).toThrow("invocation ended. Retry the action.");
     },
   );
 
@@ -495,7 +494,7 @@ describe("scheduled message write declaration", () => {
       return receipt;
     });
     const request = dispatchChannelMessageAction(fixture.context);
-    const rejected = expect(request).rejects.toThrow(/authority|retired/);
+    const rejected = expect(request).rejects.toThrow(/reloaded|retired/);
     try {
       await entered.promise;
       revokePluginRecord(fixture.owner.registry, fixture.record);

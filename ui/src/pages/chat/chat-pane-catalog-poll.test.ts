@@ -4,6 +4,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { SessionsCatalogReadResult } from "../../../../packages/gateway-protocol/src/index.js";
 import { createDeferred } from "../../../../test/helpers/promise.ts";
 import { buildCatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
+import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { catalogMessageId } from "./catalog-message-id.ts";
 import { catalogList } from "./chat-pane-catalog.test-support.ts";
 import { createMountedPanes } from "./chat-pane-mounted.test-support.ts";
@@ -341,4 +342,51 @@ it.each([
   expect(pane.history.catalogCursor).toBe("fresh-older");
   await expect(pane.loadCatalogSession(key, true)).resolves.toBe(true);
   expect(cursors).toEqual([undefined, undefined, "fresh-older"]);
+});
+
+it("retires a restricted transcript when its catalog route is withdrawn", async () => {
+  const key = { catalogId: "notebook", hostId: "gateway", threadId: "note" };
+  const fixture = createMountedPanes([]);
+  const client = fixture.state.client!;
+  const original = client.request.bind(client);
+  const methods = { list: "notebook.mine.list", read: "notebook.mine.read" };
+  let available = true;
+  const read = vi.fn(() => ({
+    ...key,
+    items: [{ type: "userMessage", text: "My notebook entry" }],
+  }));
+  const request = vi.spyOn(client, "request").mockImplementation(async (method, ...args) => {
+    if (method === "sessions.catalog.route") {
+      return available ? { catalogId: key.catalogId, routeSegment: "notes", methods } : null;
+    }
+    if (method === methods.list) {
+      return catalogList(key, [
+        {
+          threadId: key.threadId,
+          archived: false,
+          canContinue: false,
+          canArchive: false,
+          status: "stored",
+        },
+      ]);
+    }
+    if (method === methods.read) {
+      return read();
+    }
+    return original(method, ...args);
+  });
+  // Give the initial handshake to the mounted pane's connection lifecycle.
+  fixture.context.gateway.snapshot.hello = gatewayHelloForMethods(
+    ["sessions.catalog.route", ...Object.values(methods)],
+    ["operator.sessions.write"],
+  );
+  const pane = fixture.mount(buildCatalogSessionKey(key, "main"));
+  await vi.waitFor(() => expect(pane.history.catalogMessages).toHaveLength(1));
+  available = false;
+  fixture.emitGatewayEvent("sessions.catalog.routes.changed", { generation: 2 });
+  expect(pane.history.catalogMessages).toEqual([]);
+  await vi.waitFor(() => expect(pane.state.lastError).toBeTruthy());
+  expect(pane.history.catalogSession).toBeNull();
+  expect(read).toHaveBeenCalledOnce();
+  expect(request.mock.calls.some(([method]) => method === "sessions.catalog.list")).toBe(false);
 });

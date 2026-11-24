@@ -71,7 +71,7 @@ Hosting mutually untrusted users? Run a separate Gateway for each trust boundary
     - creates the legacy auth-profile secret key directory
     - starts the Gateway via Docker Compose
 
-    Pre-start onboarding and config writes run through `openclaw-gateway` directly (with `--no-deps --entrypoint node`), since `openclaw-cli` shares the Gateway's network namespace and only works once the Gateway container exists.
+    Pre-start onboarding and config writes run through `openclaw-gateway` directly (with `--no-deps --entrypoint node`), since `openclaw-cli` shares the Gateway's network and PID namespaces and only works once the Gateway container exists.
 
   </Step>
 
@@ -297,6 +297,23 @@ full copy, keep it, and still retire other Doctor copies older than 30 days;
 repair-specific backups still apply. If a capture fails, the next
 start tries again. A new image, a recreated container, or a container whose
 `/tmp` does not persist across restarts captures again.
+
+### Windows-drive bind mounts
+
+Docker Desktop with WSL2 can hide a renamed file on a Windows-drive bind mount
+until the last open file descriptor closes. This can make config and state writes
+fail with `ENOENT` even though the file appears in the directory listing.
+
+OpenClaw enables fs-safe's rename recovery for config, state, and atomic writes.
+fs-safe skips recovery preparation on known non-9p filesystems and verifies the
+directory descriptor belongs to a DrvFS mount before recovery. It checks the
+reopened file's identity, ownership, permissions, size, link count, and available
+content. Other mounts keep strict behavior.
+
+Recovery closes the final descriptor, so a recycled file identity with identical
+replacement content can still be indistinguishable from the original file.
+Prefer a Docker named volume or a bind mount from a WSL ext4 path when possible;
+these avoid that exception. Keep only one Gateway on the state volume.
 
 ### Read-only container root
 

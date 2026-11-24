@@ -32,8 +32,8 @@ export async function respondProviderMemoryStatus(params: ProviderStatusRequest)
   const assertRequestCurrent = () => {
     params.signal?.throwIfAborted();
     params.client?.connectionSignal?.throwIfAborted();
-    if (!open || params.client?.invalidated || params.hasCurrentClientAuthority?.() === false) {
-      throw new Error("Memory status authority is no longer active");
+    if (!open) {
+      throw new Error("Memory status request ended. Start a new request to retry.");
     }
   };
   let captured: Awaited<ReturnType<typeof prepareGatewayOperatorRunAuthority>> = undefined;
@@ -49,11 +49,6 @@ export async function respondProviderMemoryStatus(params: ProviderStatusRequest)
       throw new Error("Memory provider status requires authenticated operator authority");
     }
     const authority = captured.authority;
-    const assertCurrent = () => {
-      assertRequestCurrent();
-      authority.assertCurrent();
-    };
-    assertCurrent();
     const acquired = await getActiveMemoryProviderCore({
       cfg: params.cfg,
       agentId: params.agentId,
@@ -64,7 +59,7 @@ export async function respondProviderMemoryStatus(params: ProviderStatusRequest)
           scopes: authority.scopes,
           connId: params.client?.connId,
         },
-        assertCurrent,
+        assertCurrent: assertRequestCurrent,
         signal: params.signal,
       },
     });
@@ -73,7 +68,7 @@ export async function respondProviderMemoryStatus(params: ProviderStatusRequest)
       throw new Error(acquired.error ?? `memory plugin "${params.providerId}" unavailable`);
     }
     const health = await provider.health();
-    assertCurrent();
+    assertRequestCurrent();
     respondHealth(health, acquired.providerId ?? params.providerId);
   } catch (err) {
     respondHealth({ status: "unavailable", message: formatError(err) });

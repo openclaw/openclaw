@@ -10,13 +10,17 @@ extension DashboardWindowController {
               message.webView === self.webView,
               message.frameInfo.isMainFrame,
               ControlUIDocumentHost.isTrustedLinkSource(message.frameInfo.request.url, dashboardURL: self.currentURL),
-              self.canUseBrowserDocument(sourceID: self.notificationSourceID)
+              self.hasCurrentBrowserDocument
         else {
             replyHandler(["ok": false, "error": DashboardBrowserError.unavailable.localizedDescription], nil)
             return
         }
         do {
             let request = try DashboardBrowserMessageHandler.decode(message.body)
+            if self.isHiddenForExperience {
+                // The retained document still observes System appearance while hidden.
+                guard case .setColorScheme = request else { throw DashboardBrowserError.unavailable }
+            }
             switch request {
             case let .open(tabId, url, sessionKey, _):
                 // Activation is presentation owned by the requesting web panel.
@@ -44,6 +48,8 @@ extension DashboardWindowController {
                 self.nativeBrowser.setOverlayCutouts(cutouts)
             case let .releaseScope(scope):
                 self.nativeBrowser.releaseScope(scope)
+            case let .setColorScheme(colorScheme):
+                self.nativeBrowser.setColorScheme(colorScheme)
             case let .inspect(tabId, x, y):
                 self.performBrowserRequest(replyHandler: replyHandler) { browser, _ in
                     try await browser.inspect(tabId: tabId, x: x, y: y)
@@ -73,8 +79,11 @@ extension DashboardWindowController {
     }
 
     private func canUseBrowserDocument(sourceID: String) -> Bool {
-        self.window != nil && !self.isHiddenForExperience && self.canDeliverNativeCommands &&
-            self.notificationSourceID == sourceID && self.documentHost.hasCurrentBrowserSession &&
+        !self.isHiddenForExperience && self.notificationSourceID == sourceID && self.hasCurrentBrowserDocument
+    }
+
+    private var hasCurrentBrowserDocument: Bool {
+        self.window != nil && self.canDeliverNativeCommands && self.documentHost.hasCurrentBrowserSession &&
             ControlUIDocumentHost.isTrustedLinkSource(self.webView.url, dashboardURL: self.currentURL)
     }
 

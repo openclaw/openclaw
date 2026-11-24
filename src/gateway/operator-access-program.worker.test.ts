@@ -80,7 +80,6 @@ it.each<{
         scopes,
         gatewayAccessGrant: null,
         getRuntimeConfig: context.getRuntimeConfig,
-        assertCurrent: captured.authority.assertCurrent,
       });
       const programs = ["standard", "daybreak_blue", "daybreak_red"] as const;
       for (const authority of [captured.authority, channel]) {
@@ -124,7 +123,6 @@ it.each<{
           publishOperatorRoleConfigChange(context);
           expect(execution.signal.aborted).toBe(false);
           expect(execution.assertCurrent).not.toThrow();
-          expect(channel.assertCurrent).not.toThrow();
           const next = expectDefined(
             await prepareGatewayOperatorRunAuthority({ client, context }),
             "next request",
@@ -212,8 +210,7 @@ it.each<{ grants: Grants | undefined }>([{ grants: undefined }, { grants: ["dayb
       };
       assertAccessCeiling();
       fixture.setConfig(config([]));
-      expect(restored.authority.assertCurrent).not.toThrow();
-      expect(restored.authority.signal?.aborted).toBe(false);
+      expect(restored.authority.signal?.aborted).not.toBe(true);
       const next = expectDefined(await fixture.restore(), "next scheduled request");
       try {
         expect(() => assertOperatorAccessProgramAllowed(next.authority, "daybreak_blue")).toThrow(

@@ -65,6 +65,7 @@ import {
 } from "../session-utils.js";
 import { prepareSkillLibrarySessionCreation } from "../skill-library-session.js";
 import { readIncognitoActivePath } from "./chat-send-active-leaf.js";
+import { chatSendIncarnationChangedError } from "./chat-send-admission-errors.js";
 import type { NormalizedChatSendRequest } from "./chat-send-request.js";
 import { roundedChatSendTimingMs } from "./chat-server-timing.js";
 import { emitSessionsChanged } from "./session-change-event.js";
@@ -347,6 +348,9 @@ export async function prepareChatSendSession(params: {
   const { request, client } = params;
   const { p } = request;
   const { cfg, agentId, sessionKey, entry, legacyKey } = loadedValue;
+  if (request.targetPrecondition?.matches(entry) === false) {
+    return { ok: false as const, error: chatSendIncarnationChangedError() };
+  }
   if (isIncognitoSessionKey(sessionKey) && !entry) {
     return { ok: false as const, error: `Incognito session "${sessionKey}" was not found.` };
   }

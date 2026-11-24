@@ -959,9 +959,10 @@ target resolves unambiguously to an archived regular file. Missing or ambiguous
 targets are rejected instead of selecting different recovery data.
 
 Installer-managed and rebuildable runtime roots under the state directory are
-also skipped: `dev/`, `git/`, `npm/`, legacy `npm-runtime/`, `tmp/`, and
-`tools/`. These contain managed checkouts, package trees, compiler caches,
-temporary files, and downloaded runtimes rather than authoritative user state;
+also skipped: `dev/`, `git/`, `npm/`, legacy `npm-runtime/` and
+`plugin-runtime-deps/`, `tmp/`, and `tools/`. These contain managed checkouts,
+package trees, compiler caches, temporary files, and downloaded runtimes rather
+than authoritative user state;
 reinstall or update the corresponding runtime or plugin after restore.
 Effectively activated, loadable plugins can declare additional durable or
 regenerable state- or agent-relative roots through

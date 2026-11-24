@@ -5,12 +5,10 @@ import { parseConfigJson5 } from "../config/io.read-helpers.js";
 import { resolveConfigPath, resolveStateDir } from "../config/paths.js";
 import { acquireGatewayLock } from "../infra/gateway-lock.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { ExitError } from "../runtime.js";
 import { closeOpenClawStateDatabaseByPathAsync } from "./openclaw-state-db-cache.js";
-import {
-  explainMachineFailure,
-  isStateUpgradePending,
-  upgradeStateDirectory,
-} from "./state-upgrade.js";
+import { isStateUpgradePending } from "./state-upgrade-databases.js";
+import { explainMachineFailure, upgradeStateDirectory } from "./state-upgrade.js";
 
 const log = createSubsystemLogger("state/upgrade");
 
@@ -39,7 +37,7 @@ export async function upgradeStateOnGatewayStart(
   let lock: Awaited<ReturnType<typeof acquireGatewayLock>>;
   try {
     // A read-only open on a full disk fails too (it cannot create the shared-memory file).
-    if (!isStateUpgradePending(env)) {
+    if (!(await isStateUpgradePending(env))) {
       return;
     }
     // File-only ownership: the old databases are not opened for writing.
@@ -49,7 +47,7 @@ export async function upgradeStateOnGatewayStart(
   }
   try {
     const statePath = path.join(resolveStateDir(env), "state", "openclaw.sqlite");
-    await upgradeStateDirectory({
+    const result = await upgradeStateDirectory({
       env,
       log,
       // Selecting the environment read the config, which can leave a worker on a
@@ -92,6 +90,12 @@ export async function upgradeStateOnGatewayStart(
         }
       },
     });
+    if (result.status === "refused") {
+      // Configuration refusal tells the resident launcher to restore the previous
+      // release at once, rather than repeat a copy that cannot succeed.
+      console.error(result.reason);
+      throw new ExitError(78, result.reason);
+    }
   } finally {
     await lock?.release();
   }

@@ -199,23 +199,23 @@ it.each(["visible", "later page"])("opens linked history for a job on %s", async
   const inventory = harness.cronListResponse(
     placement === "visible"
       ? [job]
-      : Array.from({ length: 50 }, (_, index) => ({
-          ...job,
-          id: `other-${index}`,
-          name: `Other automation ${index}`,
-        })),
+      : [
+          ...Array.from({ length: 50 }, (_, index) => ({
+            ...job,
+            id: `earlier-${index}`,
+            name: `Earlier automation ${index}`,
+          })),
+          job,
+        ],
   );
-  if (placement === "later page") {
-    inventory.total = 51;
-    inventory.hasMore = true;
-    inventory.nextOffset = 50;
-  }
   jobs.resolve(inventory);
   await waitFor(() => {
     expect(page.cron.cronEditingJob?.id).toBe(job.id);
     expectHistoryTab(page);
     expect(dom.text(page, ".cron-run-entry--highlighted")).toContain("Linked run");
+    expect(page.cron.cronJobsSnapshotRevision).not.toBeNull();
   });
+  expect(page.cron.cronJobs.some((row) => row.id === job.id)).toBe(placement === "visible");
   expect(page.querySelectorAll(".cron-run-entry--highlighted")).toHaveLength(1);
   expect(dom.callsFor(request, "models.list")).toHaveLength(0);
   expect(request).toHaveBeenCalledWith(
