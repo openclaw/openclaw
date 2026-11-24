@@ -21,19 +21,11 @@ unconfirmed, check the project’s issues before trying again.
 
 ## Comment on an issue or PR from a project conversation
 
-The `github_publish` action `create_comment` posts one ordinary comment on an
-issue or PR in the conversation’s registered GitHub project. It takes the issue
-or PR number and a Markdown body of up to 8192 characters, not a repository or
-URL. Before posting, the Gateway asks the operator to approve the exact
-repository, number, posting account and text. A denied, cancelled or expired
-approval posts nothing. After approval, the Gateway rechecks the requester’s
-session and project access and the selected GitHub account, then posts with
-that account. The credential stays in the Gateway and never reaches agent
-execution. Success returns the comment URL. The Gateway log records the
-approval id, approver, account, target and outcome, never the body or the
-credential. If GitHub’s response is lost, the result is unconfirmed: read the
-thread before posting again. For source updates, keep using `publish` from the
-original conversation.
+From a registered project conversation, call `github_publish` with
+`action: "create_comment"`, `issueNumber`, and a Markdown `body` of up to 8192
+characters. The Gateway holds the posting credential and asks the operator to
+approve the target, account, and text. Denial sends nothing. Success returns the
+comment URL. If the result is unconfirmed, check the thread before retrying.
 
 ## Session GitHub App reader
 

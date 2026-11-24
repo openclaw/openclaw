@@ -42,38 +42,27 @@ type ProjectTarget = {
   repository: string;
   agentId: string;
   sessionKey: string;
-  identity: PreparedGitHubPublicationIdentity;
+  account: PreparedGitHubPublicationIdentity["account"];
 };
-type ProjectPost = {
-  noun: string;
-  nothing: string;
-  inactive: string;
-  writeRequired: string;
-  path: (repository: string) => string;
-  input: string;
-  jq: string;
-  approve?: (target: ProjectTarget, assertCurrent: () => void) => Promise<void>;
-  confirm: (result: unknown, target: ProjectTarget) => string | undefined;
-};
-type ProjectPostOutcome = { target: ProjectTarget } & (
-  | { outcome: "created"; url: string }
-  | { outcome: "unconfirmed" }
-  | { outcome: "rejected"; status: string }
-);
 
-/** Issue and comment posts use the registered project, never a checkout remote or a tool-supplied URL. */
-async function postToRegisteredGitHubProject(
-  options: HandlerOptions,
-  params: { sessionKey: string; agentId?: string },
-  post: ProjectPost,
-): Promise<ProjectPostOutcome> {
+/** Project posts use the registered repository, never a checkout remote or a tool-supplied URL. */
+export async function postSessionGitHubProjectItem(
+  options: HandlerOptions & {
+    params: Extract<SessionGitHubActionParams, { action: "create_issue" | "create_comment" }>;
+  },
+) {
+  const { params } = options;
+  const isComment = params.action === "create_comment";
+  const nothingPosted = isComment ? "Nothing was posted." : "Nothing was filed.";
   const caller = getGatewayToolCallerIdentity();
   if (
     caller &&
     (caller.sessionKey !== params.sessionKey ||
       (params.agentId && normalizeAgentId(params.agentId) !== normalizeAgentId(caller.agentId)))
   ) {
-    throw new Error(`${post.noun} must use the current conversation.`);
+    throw new Error(
+      `${isComment ? "Commenting" : "Issue creation"} must use the current conversation.`,
+    );
   }
   const getConfig = options.context.getCommittedRuntimeConfig ?? options.context.getRuntimeConfig;
   using selected = await prepareGitHubPublicationSession(params.sessionKey, {
@@ -84,7 +73,11 @@ async function postToRegisteredGitHubProject(
   });
   const { entry, agentId, canonicalKey } = selected.readCurrent();
   if (!entry?.projectId || entry.archivedAt !== undefined) {
-    throw new Error(post.inactive);
+    throw new Error(
+      isComment
+        ? "Comment from an active conversation in the intended registered GitHub project. No worktree is needed."
+        : "File the issue from an active conversation in the intended registered GitHub project. No worktree is needed.",
+    );
   }
   const admitted = await prepareGitHubPublicationRequesterV2(options, {
     agentId,
@@ -99,19 +92,21 @@ async function postToRegisteredGitHubProject(
       allowedScopes: authority.scopes,
     })
   ) {
-    throw new Error(post.writeRequired);
+    throw new Error(
+      `${isComment ? "Posting a GitHub comment" : "Filing a GitHub issue"} requires write access to this conversation.`,
+    );
   }
   const host = resolveConfiguredGitHubHost(getConfig());
   const unavailable = new Error(
-    `This conversation has no registered GitHub repository available to this requester. ${post.nothing}`,
+    `This conversation has no registered GitHub repository available to this requester. ${nothingPosted}`,
   );
   const registry = await selectStoredProjectRegistry(entry.projectId);
   const origin = registry?.project.originUrl;
-  const parsed = origin && !URL.parse(origin)?.port && parseProjectGitUrl(origin, host);
-  if (!registry || !parsed) {
+  const target = origin && !URL.parse(origin)?.port && parseProjectGitUrl(origin, host);
+  if (!registry || !target) {
     throw unavailable;
   }
-  const repository = new URL(parsed.url).pathname.slice(1, -4);
+  const repository = new URL(target.url).pathname.slice(1, -4);
   const assertSessionCurrent = () => {
     authority.assertCurrent();
     const latest = selected.readCurrent().entry;
@@ -120,7 +115,6 @@ async function postToRegisteredGitHubProject(
     }
   };
   const identity = await prepareCurrentGitHubPublicationIdentity(agentId, assertSessionCurrent);
-  const target = { host, repository, agentId, sessionKey: canonicalKey, identity };
   const assertPublisherCurrent = () => {
     assertSessionCurrent();
     if (
@@ -129,12 +123,27 @@ async function postToRegisteredGitHubProject(
       !matchesCurrentGitHubPublicationIdentity({ agentId, identity })
     ) {
       throw new Error(
-        `The selected GitHub account does not match the project's GitHub host. ${post.nothing}`,
+        `The selected GitHub account does not match the project's GitHub host. ${nothingPosted}`,
       );
     }
   };
-  await post.approve?.(target, assertPublisherCurrent);
+  const recordComment = isComment
+    ? await requestGitHubCommentApproval(
+        options,
+        { host, repository, agentId, sessionKey: canonicalKey, account: identity.account },
+        params,
+        assertPublisherCurrent,
+      )
+    : undefined;
   // No browser/native fallback and no retry: a lost POST response may hide a created item.
+  const unconfirmed = () => {
+    recordComment?.("unconfirmed");
+    return new Error(
+      isComment
+        ? `The GitHub comment is unconfirmed; it may already have been posted. Read https://${host}/${repository}/issues/${params.issueNumber} before posting again.`
+        : `GitHub issue creation is unconfirmed. Check https://${host}/${repository}/issues before submitting again.`,
+    );
+  };
   let dispatched = false;
   const result = await registry
     .withCurrent(async (current) => {
@@ -161,10 +170,24 @@ async function postToRegisteredGitHubProject(
         throw unavailable;
       }
       return await runPublicationCommand(
-        [...githubPublicationApiArgs(post.path(repository), "POST", host), "--jq", post.jq],
+        [
+          ...githubPublicationApiArgs(
+            isComment
+              ? `repos/${repository}/issues/${params.issueNumber}/comments`
+              : `repos/${repository}/issues`,
+            "POST",
+            host,
+          ),
+          "--jq",
+          isComment
+            ? "{id, url: .html_url, body, authorId: .user.id}"
+            : "{number, url: .html_url, authorId: .user.id}",
+        ],
         {
           env: identity.env,
-          input: post.input,
+          input: JSON.stringify(
+            isComment ? { body: params.body } : { title: params.title, body: params.body ?? "" },
+          ),
           beforeRun: () => {
             current.assertCurrent();
             assertPublisherCurrent();
@@ -175,66 +198,63 @@ async function postToRegisteredGitHubProject(
     })
     .catch((error: unknown) => {
       if (dispatched) {
-        return undefined;
+        throw unconfirmed();
       }
+      recordComment?.("not-posted");
       throw error;
     });
-  if (!result) {
-    return { target, outcome: "unconfirmed" };
-  }
   if (result.code !== 0 || result.error) {
     const status = /\(HTTP (4\d{2})\)/u.exec(result.stderr.toString("utf8"))?.[1];
-    return status && status !== "408" && status !== "499"
-      ? { target, outcome: "rejected", status }
-      : { target, outcome: "unconfirmed" };
+    if (status && status !== "408" && status !== "499") {
+      recordComment?.("rejected");
+      throw new Error(
+        isComment
+          ? `GitHub rejected the comment (HTTP ${status}). Check that #${params.issueNumber} exists in ${repository} and the selected account can comment there.`
+          : `GitHub rejected issue creation (HTTP ${status}). Check that issues are enabled and the selected account can file them.`,
+      );
+    }
+    throw unconfirmed();
   }
-  let value: unknown;
+  let posted: unknown;
   try {
-    value = JSON.parse(result.stdout.toString("utf8"));
+    posted = JSON.parse(result.stdout.toString("utf8"));
   } catch {
-    return { target, outcome: "unconfirmed" };
+    throw unconfirmed();
   }
-  const url = post.confirm(value, target);
-  return url ? { target, outcome: "created", url } : { target, outcome: "unconfirmed" };
-}
-
-export async function createSessionGitHubIssue(
-  options: HandlerOptions & {
-    params: Extract<SessionGitHubActionParams, { action: "create_issue" }>;
-  },
-) {
-  const { params } = options;
-  const posted = await postToRegisteredGitHubProject(options, params, {
-    noun: "Issue creation",
-    nothing: "Nothing was filed.",
-    inactive:
-      "File the issue from an active conversation in the intended registered GitHub project. No worktree is needed.",
-    writeRequired: "Filing a GitHub issue requires write access to this conversation.",
-    path: (repository) => `repos/${repository}/issues`,
-    input: JSON.stringify({ title: params.title, body: params.body ?? "" }),
-    jq: "{number, url: .html_url, authorId: .user.id}",
-    confirm: (issue, { host, repository, identity }) =>
-      isRecord(issue) &&
-      Number.isSafeInteger(issue.number) &&
-      typeof issue.number === "number" &&
-      issue.number >= 1 &&
-      issue.authorId === identity.account.accountId &&
-      typeof issue.url === "string" &&
-      issue.url.toLowerCase() === `https://${host}/${repository}/issues/${issue.number}`
-        ? issue.url
-        : undefined,
-  });
-  if (posted.outcome === "created") {
-    return { status: "created" as const, url: posted.url };
+  if (
+    !isRecord(posted) ||
+    posted.authorId !== identity.account.accountId ||
+    typeof posted.url !== "string"
+  ) {
+    throw unconfirmed();
   }
-  if (posted.outcome === "rejected") {
-    throw new Error(
-      `GitHub rejected issue creation (HTTP ${posted.status}). Check that issues are enabled and the selected account can file them.`,
-    );
+  if (isComment) {
+    if (
+      typeof posted.id !== "number" ||
+      !Number.isSafeInteger(posted.id) ||
+      posted.id < 1 ||
+      posted.body !== params.body
+    ) {
+      throw unconfirmed();
+    }
+    const root = `https://${host}/${repository}/`.toLowerCase();
+    const suffix = `/${params.issueNumber}#issuecomment-${posted.id}`;
+    const url = posted.url.toLowerCase();
+    if (url !== `${root}issues${suffix}` && url !== `${root}pull${suffix}`) {
+      throw unconfirmed();
+    }
+    recordComment?.("posted", posted.url);
+    return { status: "posted" as const, url: posted.url };
   }
-  throw new Error(
-    `GitHub issue creation is unconfirmed. Check https://${posted.target.host}/${posted.target.repository}/issues before submitting again.`,
-  );
+  if (
+    !Number.isSafeInteger(posted.number) ||
+    typeof posted.number !== "number" ||
+    posted.number < 1 ||
+    posted.url.toLowerCase() !== `https://${host}/${repository}/issues/${posted.number}`
+  ) {
+    throw unconfirmed();
+  }
+  return { status: "created" as const, url: posted.url };
 }
 
 const COMMENT_APPROVAL_TIMEOUT_MS = 5 * 60 * 1000;
@@ -245,7 +265,7 @@ async function requestGitHubCommentApproval(
   target: ProjectTarget,
   params: { issueNumber: number; body: string },
   assertCurrent: () => void,
-): Promise<{ id: string; approver: string | null }> {
+) {
   const manager = options.context.pluginApprovalManager;
   if (!manager) {
     throw new Error("GitHub comment approval is unavailable. Nothing was posted.");
@@ -255,7 +275,7 @@ async function requestGitHubCommentApproval(
   const detail = [
     `Repository: ${repositoryLabel}`,
     `Issue or PR: #${params.issueNumber}`,
-    `Account: @${target.identity.account.login}`,
+    `Account: @${target.account.login}`,
     "",
     "Comment body:",
     `| ${shown.text.replaceAll("\n", "\n| ")}`,
@@ -270,7 +290,7 @@ async function requestGitHubCommentApproval(
     pluginId: "github",
     title: "Post GitHub comment?",
     description: sanitizeExecApprovalDisplayText(
-      `Post this comment on ${repositoryLabel}#${params.issueNumber} as @${target.identity.account.login}?`,
+      `Post this comment on ${repositoryLabel}#${params.issueNumber} as @${target.account.login}?`,
     ).slice(0, 512),
     detail,
     severity: "warning",
@@ -310,9 +330,29 @@ async function requestGitHubCommentApproval(
     getIosPushDelivery: () => options.context.pluginApprovalIosPushDelivery,
   });
   const approved = manager.projectDecisionIfActive(record.id, await decision);
-  const approval = { id: record.id, approver: record.resolvedBy ?? null };
+  const recordOutcome = (
+    outcome: "denied" | "not-posted" | "posted" | "rejected" | "unconfirmed",
+    url?: string,
+  ) => {
+    try {
+      createSubsystemLogger("gateway/github-publication").info("GitHub comment", {
+        outcome,
+        approvalId: record.id,
+        approver: record.resolvedBy ?? null,
+        account: target.account.login,
+        accountId: target.account.accountId,
+        agentId: target.agentId,
+        sessionKey: target.sessionKey,
+        repository: target.repository,
+        issueNumber: params.issueNumber,
+        ...(url ? { url } : {}),
+      });
+    } catch {
+      // A diagnostic sink cannot change the comment outcome.
+    }
+  };
   if (approved !== "allow-once") {
-    recordGitHubComment(target, params.issueNumber, approval, "denied");
+    recordOutcome("denied");
     throw new Error(
       "The comment was not approved (denied, cancelled, or expired). Nothing was posted.",
     );
@@ -321,102 +361,5 @@ async function requestGitHubCommentApproval(
   if (!(await manager.consumeAllowOnce(record.id, "github.comment:" + toolCallId))) {
     throw new Error("The comment approval is no longer available. Nothing was posted.");
   }
-  return approval;
-}
-
-/** Metadata only: never the comment body, command output, or credential. */
-function recordGitHubComment(
-  target: ProjectTarget,
-  issueNumber: number,
-  approval: { id: string; approver: string | null },
-  outcome: "denied" | "not-posted" | "posted" | "rejected" | "unconfirmed",
-  url?: string,
-) {
-  try {
-    createSubsystemLogger("gateway/github-publication").info("GitHub comment", {
-      outcome,
-      approvalId: approval.id,
-      approver: approval.approver,
-      account: target.identity.account.login,
-      accountId: target.identity.account.accountId,
-      agentId: target.agentId,
-      sessionKey: target.sessionKey,
-      repository: target.repository,
-      issueNumber,
-      ...(url ? { url } : {}),
-    });
-  } catch {
-    // A diagnostic sink cannot change the comment outcome.
-  }
-}
-
-export async function createSessionGitHubComment(
-  options: HandlerOptions & {
-    params: Extract<SessionGitHubActionParams, { action: "create_comment" }>;
-  },
-) {
-  const { params } = options;
-  let approved:
-    | { target: ProjectTarget; approval: { id: string; approver: string | null } }
-    | undefined;
-  let posted: ProjectPostOutcome;
-  try {
-    posted = await postToRegisteredGitHubProject(options, params, {
-      noun: "Commenting",
-      nothing: "Nothing was posted.",
-      inactive:
-        "Comment from an active conversation in the intended registered GitHub project. No worktree is needed.",
-      writeRequired: "Posting a GitHub comment requires write access to this conversation.",
-      path: (repository) => `repos/${repository}/issues/${params.issueNumber}/comments`,
-      input: JSON.stringify({ body: params.body }),
-      jq: "{id, url: .html_url, body, authorId: .user.id}",
-      approve: async (target, assertCurrent) => {
-        approved = {
-          target,
-          approval: await requestGitHubCommentApproval(options, target, params, assertCurrent),
-        };
-      },
-      confirm: (comment, { host, repository, identity }) => {
-        if (
-          !isRecord(comment) ||
-          typeof comment.id !== "number" ||
-          !Number.isSafeInteger(comment.id) ||
-          comment.id < 1 ||
-          comment.body !== params.body ||
-          comment.authorId !== identity.account.accountId ||
-          typeof comment.url !== "string"
-        ) {
-          return undefined;
-        }
-        const thread = `https://${host}/${repository}/`.toLowerCase();
-        const suffix = `/${params.issueNumber}#issuecomment-${comment.id}`;
-        const url = comment.url.toLowerCase();
-        return url === `${thread}issues${suffix}` || url === `${thread}pull${suffix}`
-          ? comment.url
-          : undefined;
-      },
-    });
-  } catch (error) {
-    if (approved) {
-      recordGitHubComment(approved.target, params.issueNumber, approved.approval, "not-posted");
-    }
-    throw error;
-  }
-  if (!approved) {
-    throw new Error("The comment was not approved. Nothing was posted.");
-  }
-  const { target, approval } = approved;
-  if (posted.outcome === "created") {
-    recordGitHubComment(target, params.issueNumber, approval, "posted", posted.url);
-    return { status: "posted" as const, url: posted.url };
-  }
-  recordGitHubComment(target, params.issueNumber, approval, posted.outcome);
-  if (posted.outcome === "rejected") {
-    throw new Error(
-      `GitHub rejected the comment (HTTP ${posted.status}). Check that #${params.issueNumber} exists in ${target.repository} and the selected account can comment there.`,
-    );
-  }
-  throw new Error(
-    `The GitHub comment is unconfirmed; it may already have been posted. Read https://${target.host}/${target.repository}/issues/${params.issueNumber} before posting again.`,
-  );
+  return recordOutcome;
 }

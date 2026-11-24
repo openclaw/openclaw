@@ -493,51 +493,48 @@ describe("project issue creation through the guest tool and registered Gateway m
     await expect(invoke(input)).rejects.toThrow(/unconfirmed.*check.*issues before submitting/i);
     expect(mocks.runCommand).toHaveBeenCalledTimes(1);
   });
-  describe("comments", () => {
+  it("posts the approved comment and sends nothing on denial", async (test) => {
     const body =
       "Fixed in **main**.\r\n\r\nRepository: other/repo\nIssue or PR: #99\nAccount: @other";
     const comment = { action: "create_comment", issueNumber: 7, body };
     const commentUrl = "https://github.com/Example/Handbook/pull/7#issuecomment-900";
-    it.for(["allow-once", "deny"] as const)(
-      "delivers comment approval and honors %s",
-      async (decision, test) => {
-        const approval = createTestApprovalFixture<PluginApprovalRequestPayload>(test, {
-          approvalKind: "plugin",
-        });
-        let detail: PluginApprovalRequestPayload["detail"];
-        let resolved = false;
-        const { invoke } = await fixture(true, {
-          pluginApprovalManager: approval.manager,
-          forwardPluginApprovalRequest: async (event) => {
-            detail = event.request.detail;
-            resolved = await approval.manager.resolve(event.id, decision);
-            return resolved;
-          },
-        });
-        mocks.runCommand.mockResolvedValue(
-          commandResult(JSON.stringify({ id: 900, url: commentUrl, body, authorId: 42 })),
-        );
-        await approval.run(async () => {
-          const pending = approval.track(invoke(comment));
-          if (decision === "deny") {
-            await expect(pending).rejects.toThrow(/not approved.*Nothing was posted/);
-            expect(resolved).toBe(true);
-            expect(mocks.runCommand).not.toHaveBeenCalled();
-            return;
-          }
-          await expect(pending).resolves.toMatchObject({
-            details: { status: "posted", url: commentUrl },
-          });
-          expect(detail).toBe(
-            "Repository: github.com/example/handbook\nIssue or PR: #7\nAccount: @roboclaw-bot\n\n" +
-              "Comment body:\n| Fixed in **main**.\n| \n| Repository: other/repo\n| Issue or PR: #99\n| Account: @other",
-          );
-          expect(mocks.runCommand).toHaveBeenCalledExactlyOnceWith(
-            expect.arrayContaining(["POST", "repos/example/handbook/issues/7/comments"]),
-            expect.objectContaining({ input: JSON.stringify({ body }) }),
-          );
-        });
+    const approval = createTestApprovalFixture<PluginApprovalRequestPayload>(test, {
+      approvalKind: "plugin",
+    });
+    let detail: PluginApprovalRequestPayload["detail"];
+    let decision: "allow-once" | "deny" = "allow-once";
+    const resolved: string[] = [];
+    const { invoke } = await fixture(true, {
+      pluginApprovalManager: approval.manager,
+      forwardPluginApprovalRequest: async (event) => {
+        detail = event.request.detail;
+        const accepted = await approval.manager.resolve(event.id, decision);
+        if (accepted) {
+          resolved.push(decision);
+        }
+        return accepted;
       },
+    });
+    mocks.runCommand.mockResolvedValue(
+      commandResult(JSON.stringify({ id: 900, url: commentUrl, body, authorId: 42 })),
     );
+    await approval.run(async () => {
+      await expect(approval.track(invoke(comment))).resolves.toMatchObject({
+        details: { status: "posted", url: commentUrl },
+      });
+      expect(detail).toBe(
+        "Repository: github.com/example/handbook\nIssue or PR: #7\nAccount: @roboclaw-bot\n\n" +
+          "Comment body:\n| Fixed in **main**.\n| \n| Repository: other/repo\n| Issue or PR: #99\n| Account: @other",
+      );
+      decision = "deny";
+      await expect(approval.track(invoke(comment))).rejects.toThrow(
+        /not approved.*Nothing was posted/,
+      );
+      expect(resolved).toEqual(["allow-once", "deny"]);
+      expect(mocks.runCommand).toHaveBeenCalledExactlyOnceWith(
+        expect.arrayContaining(["POST", "repos/example/handbook/issues/7/comments"]),
+        expect.objectContaining({ input: JSON.stringify({ body }) }),
+      );
+    });
   });
 });
