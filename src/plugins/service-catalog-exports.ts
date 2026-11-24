@@ -86,7 +86,7 @@ function projectItem(
     ? createHmac("sha256", salt)
         .update(sourceKey)
         .update("\0")
-        .update(JSON.stringify(item.sender.identity, Object.keys(item.sender.identity).sort()))
+        .update(JSON.stringify(item.sender.identity, Object.keys(item.sender.identity).toSorted()))
         .digest("hex")
     : undefined;
   return {
@@ -166,8 +166,9 @@ export function createPluginServiceCatalogExports(params: {
               const selected = new Set<string>();
               latest = selected;
               const source = request.source;
-              if (source && (!source.hostId || !source.threadId || source.threadId.length > 500))
+              if (source && (!source.hostId || !source.threadId || source.threadId.length > 500)) {
                 throw new Error("Invalid catalog source locator");
+              }
               const hosts = new Set(
                 (await localHosts({ agentId, allowProcessHomeFallback })).filter(
                   (id) => !source || id === source.hostId,
@@ -175,10 +176,14 @@ export function createPluginServiceCatalogExports(params: {
               );
               const assertListing = () => {
                 assertCurrent(request.agentId);
-                if (selected !== latest) throw new Error("Catalog listing superseded");
+                if (selected !== latest) {
+                  throw new Error("Catalog listing superseded");
+                }
               };
               assertListing();
-              if (!hosts.size) return [];
+              if (!hosts.size) {
+                return [];
+              }
 
               // Free-text search has no native-ID contract. The producer owns
               // visibility, the home boundary and its cheapest authoritative lookup.

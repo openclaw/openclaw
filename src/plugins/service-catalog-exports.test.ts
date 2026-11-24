@@ -14,11 +14,12 @@ function fixture() {
     archived: false,
     canContinue: false,
     canArchive: false,
-    ...(threadId === "shown"
-      ? { exportPolicy: { origin: "native-local" as const, automatic: true } }
-      : threadId === "peer"
-        ? { exportPolicy: { origin: "federated" as const, automatic: false } }
-        : {}),
+    exportPolicy:
+      threadId === "shown"
+        ? { origin: "native-local" as const, automatic: true }
+        : threadId === "peer"
+          ? { origin: "federated" as const, automatic: false }
+          : undefined,
   }));
   const list = vi.fn<SessionCatalogProvider["list"]>(async () => [
     {
@@ -155,9 +156,15 @@ describe("service-owned catalog exports", () => {
       const pending = createDeferred<Awaited<ReturnType<SessionCatalogProvider["read"]>>>();
       f.read.mockImplementationOnce(() => pending.promise);
       const reading = catalog.read(f.request);
-      if (reason === "source replaced") f.registry.sessionCatalogs.splice(0, 1);
-      if (reason === "consent removed") f.selected.sources = [];
-      if (reason === "service stopped") f.signal.abort();
+      if (reason === "source replaced") {
+        f.registry.sessionCatalogs.splice(0, 1);
+      }
+      if (reason === "consent removed") {
+        f.selected.sources = [];
+      }
+      if (reason === "service stopped") {
+        f.signal.abort();
+      }
       pending.resolve({
         hostId: "native",
         threadId: "shown",
