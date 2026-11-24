@@ -697,7 +697,7 @@ export function createBeamMirrorRunner(params: {
             const hosts = await raceCatalog(
               catalog.list({
                 agentId: entry.candidate.agentId,
-                threadId: entry.candidate.threadId,
+                source: { hostId: entry.candidate.hostId, threadId: entry.candidate.threadId },
                 limitPerHost: MIRROR_LIST_LIMIT,
               }),
             );
@@ -759,7 +759,7 @@ export function createBeamMirrorRunner(params: {
       .find((entry) => entry.id === source.catalogId);
     if (!catalog) throw new Error("The source catalog is unavailable for local export");
     const hosts = await raceCatalog(
-      catalog.list({ agentId: source.agentId, limitPerHost: 100, threadId: source.threadId }),
+      catalog.list({ agentId: source.agentId, limitPerHost: MIRROR_LIST_LIMIT, source }),
     );
     const row = hosts
       .find((host) => host.hostId === source.hostId)
