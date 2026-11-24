@@ -2,6 +2,8 @@
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
+  appendFileSync,
+  mkdirSync,
   closeSync,
   mkdtempSync,
   openSync,
@@ -58,9 +60,15 @@ import {
 import {
   downloadExactActionsArtifactArchive,
   inspectActionsArtifactZip,
+  readBoundedRegularFile,
 } from "./lib/actions-artifact-archive.mjs";
 import { compareAscii, sortJsonValueKeys } from "./lib/canonical-json.mjs";
+import { releaseChildDispatchInputs } from "./lib/full-release-child-request.mjs";
 import { validateReusableReleaseChild } from "./lib/full-release-child-reuse.mjs";
+import {
+  buildReleaseValidationManifest,
+  manifestContextFromEnvironment,
+} from "./lib/full-release-manifest.mjs";
 import {
   accountGithubRequest,
   execGhRead,
@@ -74,6 +82,7 @@ import {
   normalizeSha,
   normalizeWorkflowPathRef,
   retainedPublicationArtifactSource,
+  releaseEvidenceProducerTuple,
   resolveTrustedWorkflowIdentity,
   resolveVerifierIdentity,
   verifyReceiptRecoveryAuthority,
@@ -89,6 +98,7 @@ import {
 import {
   resolveQualificationAdmissionDescriptor,
   revalidateQualificationAdmissionAuthority,
+  verifyReleaseRecoveryProducer,
   verifyQualificationAdmission,
   runQualificationAdmissionGh,
 } from "./release-qualification-admission.mjs";
@@ -1240,7 +1250,8 @@ export function validateParentManifest(value, expected) {
   if (
     candidateBinding !== null &&
     (candidateBinding.request.targetSha !== targetSha ||
-      candidateBinding.request.toolingSha !== workflowSha ||
+      candidateBinding.request.toolingSha !==
+        (retainedPublicationArtifactSource(value)?.workflow.sha ?? workflowSha) ||
       candidateBinding.request.releaseProfile !== releaseProfile ||
       (expected.repository !== undefined &&
         candidateBinding.request.repository !== expected.repository))
@@ -1452,6 +1463,9 @@ export function validateParentManifest(value, expected) {
       ? { publicationAdmissionContract: value.publicationAdmissionContract, publicationAdmission }
       : {}),
     ...(publicationArtifacts ? { publicationArtifacts } : {}),
+    ...(value.publicationArtifactSource === undefined
+      ? {}
+      : { publicationArtifactSource: value.publicationArtifactSource }),
     ...(sourceAdmission
       ? {
           sourceAdmissionContract: value.sourceAdmissionContract,
@@ -2170,6 +2184,7 @@ export function createReleaseEvidenceClient(repository = DEFAULT_REPO, { immutab
       : immutableReads.text(route, load);
   };
   return {
+    readWorkloadIdentity: readJson,
     validateChildReuse(selection, request, { deadlineMs, waiverPolicy } = {}) {
       return validateReusableReleaseChild(selection, request, {
         immutableReads,
@@ -2272,6 +2287,16 @@ export function createReleaseEvidenceClient(repository = DEFAULT_REPO, { immutab
         return JSON.stringify(readJson(route));
       });
     },
+    async selectPublicationArtifactSource(selection, env) {
+      const { selectPublicationArtifactSource } = await import("./full-release-artifacts.mjs");
+      return selectPublicationArtifactSource(selection, env, this);
+    },
+    verifyReleaseRecoveryProducer(options) {
+      return verifyReleaseRecoveryProducer({
+        ...options,
+        ...(immutableReads ? { runGh: runAdmissionGh } : {}),
+      });
+    },
     revalidateQualificationAdmissionAuthority(options) {
       return revalidateQualificationAdmissionAuthority({
         ...options,
@@ -2342,6 +2367,427 @@ export function createReleaseEvidenceClient(repository = DEFAULT_REPO, { immutab
   };
 }
 
+// This is an effective child projection, never a replacement immutable plan.
+// The only supported substitution is the normal CI from the explicitly retained
+// publication origin. C/Q, coverage, baselines and every other child stay fixed.
+async function recoveryChildProjection(plan, selection, client) {
+  if (selection === undefined) {
+    return { plan };
+  }
+  const source = plan.publicationArtifactSource;
+  if (
+    selection?.role !== "normalCi" ||
+    selection.sourceParentRunId !== source?.runId ||
+    selection.sourceParentAttempt !== Number(source?.runAttempt)
+  ) {
+    throw new Error("Recovery normal CI must come from the retained publication origin");
+  }
+  const original = client.loadExecutionPlanEvidence(source.runId);
+  const { plan: originPlan } = await restoreOriginalPublicationAdmission({
+    request: original.plan.sourceAdmission,
+    client,
+  });
+  const originalChild = originPlan.children.find((child) => child.key === "normalCi");
+  const currentChild = plan.children.find((child) => child.key === "normalCi");
+  if (
+    !currentChild?.selected ||
+    !currentChild.required ||
+    !originalChild?.selected ||
+    originalChild.source !== "fresh" ||
+    originalChild.runId !== selection.runId ||
+    originalChild.workflowSha !== selection.workflowSha ||
+    originalChild.workflowRef !== selection.workflowRef ||
+    originalChild.displayTitle !== selection.displayTitle ||
+    originPlan.targetSha !== plan.targetSha ||
+    !isDeepStrictEqual(originPlan.sourceAdmission, source)
+  ) {
+    throw new Error("Recovery normal CI differs from the immutable publication origin");
+  }
+  const scope =
+    plan.coveragePolicy === "npm-beta-v1"
+      ? "npm-beta"
+      : plan.coveragePolicy === "npm-stable-v1"
+        ? "npm-stable"
+        : "full";
+  const args = [
+    "-f",
+    "target_ref=" + plan.targetSha,
+    "-f",
+    "release_scope=" + scope,
+    "-f",
+    "include_android=" + String(scope === "full"),
+  ];
+  const context = plan.sourceAdmission.targetContextRef.replace(/^refs\/(?:heads|tags)\//u, "");
+  if (/^v[0-9]{4}\.[0-9]+\.[0-9]+((-(alpha|beta)\.[0-9]+)|(-[1-9][0-9]*))?$/u.test(context)) {
+    args.push("-f", "historical_target_tag=" + context);
+  } else if (
+    /^(release\/[0-9]{4}\.[0-9]+\.[0-9]+(-[1-9][0-9]*)?|extended-stable\/[0-9]{4}\.[0-9]+\.33)$/u.test(
+      context,
+    )
+  ) {
+    args.push("-f", "target_context_ref=" + context);
+  }
+  if (plan.sourceAdmission.coverage.qualification_baselines_json) {
+    args.push(
+      "-f",
+      "qualification_baselines_json=" + plan.sourceAdmission.coverage.qualification_baselines_json,
+    );
+  }
+  const inputs = releaseChildDispatchInputs(
+    client.getWorkflowSource(plan.workflowSha, ".github/workflows/ci.yml"),
+    args,
+  );
+  const verified = await client.validateChildReuse(selection, {
+    repository: plan.repository,
+    targetSha: plan.targetSha,
+    workflowSha: plan.workflowSha,
+    role: "normalCi",
+    inputs,
+    policyTargetVersion: plan.targetVersion,
+  });
+  if (!isDeepStrictEqual(verified.selection, selection)) {
+    throw new Error("Recovery normal CI must pin its authenticated receipt digest");
+  }
+  return {
+    originPlan,
+    plan: {
+      ...plan,
+      children: plan.children.map((child) =>
+        child.key === "normalCi"
+          ? {
+              ...originalChild,
+              source: "reused",
+              sourceParentAttempt: selection.sourceParentAttempt,
+            }
+          : child,
+      ),
+      childReuse: { ...plan.childReuse, normalCi: selection },
+    },
+  };
+}
+
+export async function prepareReleaseRecovery(
+  sourceRunId,
+  client = createReleaseEvidenceClient(),
+  { normalCiSelection } = {},
+) {
+  const runId = normalizeRequiredRunId(sourceRunId, "original qualification run");
+  const run = await client.getRun(runId);
+  const original = client.loadExecutionPlanEvidence(runId);
+  const { plan } = await restoreOriginalPublicationAdmission({
+    request: original.plan.sourceAdmission,
+    client,
+  });
+  if (
+    run.status !== "completed" ||
+    plan.evidenceReuse.requested ||
+    !plan.sourceAdmission.coverage.publication_artifact_source_json
+  ) {
+    throw new Error(
+      "Recovery requires a terminal direct original plan with explicitly retained publication bytes",
+    );
+  }
+  const effective = await recoveryChildProjection(plan, normalCiSelection, client);
+  const childAttempts = {};
+  for (const child of effective.plan.children.filter((entry) => entry.selected)) {
+    const observed = await client.getRun(child.runId);
+    validateReleaseChildRunProvenance(observed, {
+      ...child,
+      plannedRunAttempt: child.runAttempt,
+      repository: plan.sourceAdmission.repository,
+    });
+    childAttempts[child.runId] = observed.run_attempt;
+  }
+  const request = {
+    sourceRunId: runId,
+    sourceRunAttempt: run.run_attempt,
+    sourceArtifact: normalizedManifestArtifact(original.artifact, run.run_attempt),
+    executionPlanSha256: plan.sha256,
+    ...(normalCiSelection === undefined ? {} : { normalCiSelection }),
+    childAttempts,
+  };
+  await assertRecoveryAttempts(request, client);
+  return request;
+}
+
+export async function sealReleaseRecovery(
+  { request, producer },
+  client = createReleaseEvidenceClient(producer.repository),
+) {
+  client.verifyReleaseRecoveryProducer({ producer, completed: false });
+  const current = await prepareReleaseRecovery(request.sourceRunId, client, {
+    normalCiSelection: request.normalCiSelection,
+  });
+  if (!isDeepStrictEqual(current, request)) {
+    throw new Error("Recovery request changed: original plan, artifact or attempts");
+  }
+  const { plan } = client.loadExecutionPlanEvidence(request.sourceRunId);
+  const selected = await client.selectPublicationArtifactSource(
+    JSON.parse(plan.sourceAdmission.coverage.publication_artifact_source_json),
+    {
+      GH_TOKEN: process.env.GH_TOKEN,
+      GITHUB_REPOSITORY: producer.repository,
+      GITHUB_RUN_ID: request.sourceRunId,
+      GITHUB_RUN_ATTEMPT: String(request.sourceRunAttempt),
+      TARGET_SHA: plan.targetSha,
+      PARENT_WORKFLOW_SHA: plan.workflowSha,
+      SOURCE_ADMISSION_JSON: JSON.stringify(plan.sourceAdmission),
+      CANDIDATE_REQUEST_JSON: JSON.stringify(plan.candidateRequest),
+      PLUGIN_NPM_REQUIRED: String(
+        plan.sourceAdmission.publicationSelection?.pluginPublishScope !== "none",
+      ),
+    },
+  );
+  if (
+    !isDeepStrictEqual(selected.source, plan.publicationArtifactSource) ||
+    !isDeepStrictEqual(selected.candidate, plan.candidate)
+  ) {
+    throw new Error("Recovery publication source or candidate changed");
+  }
+  const effective = await recoveryChildProjection(plan, request.normalCiSelection, client);
+  const manifest = recoveryManifestFromPlan(
+    effective.plan,
+    request.sourceRunAttempt,
+    selected.publicationArtifacts,
+  );
+  const policy = await readReleaseValidationWaiversAsync((path) =>
+    client.getWorkflowSource(plan.workflowSha, path),
+  );
+  for (const child of effective.plan.children.filter((entry) => entry.selected)) {
+    const run = await client.getRun(child.runId);
+    const attempts = [];
+    for (
+      let attempt = child.runAttempt;
+      attempt <= request.childAttempts[child.runId];
+      attempt += 1
+    ) {
+      attempts.push({
+        runAttempt: attempt,
+        jobs: await client.getRunAttemptJobs(child.runId, attempt, { requireComplete: true }),
+      });
+    }
+    const evidence = composeReleaseChildAttemptEvidence({
+      attempts,
+      expected: { ...child, plannedRunAttempt: child.runAttempt, repository: producer.repository },
+      run,
+    });
+    manifest.childEvidence[child.key] = evidence;
+    const observation = {
+      key: child.key,
+      runId: child.runId,
+      runAttempt: run.run_attempt,
+      status: run.status,
+      conclusion: run.conclusion,
+      jobs: evidence.jobs,
+    };
+    const verdict = evaluateReleaseChildPolicy({
+      child: observation,
+      targetVersion: plan.targetVersion,
+      targetSha: plan.targetSha,
+      waiverPolicy: policy,
+    });
+    for (const waiver of verdict.waivers) {
+      manifest.waivers.push({ ...waiver, runId: child.runId, runAttempt: run.run_attempt });
+    }
+    manifest.advisoryJobs.push(...releaseChildAdvisories(observation));
+  }
+  manifest.recovery = { ...request, producer };
+  // Use the full publication verifier before writing a byte. This internal
+  // active-producer mode is not exposed by the verification CLI.
+  await validateReleaseRunEvidence(
+    {
+      repository: producer.repository,
+      runId: String(producer.runId),
+      trustedWorkflowRef: producer.workflowHeadBranch,
+      trustedWorkflowFullRef: producer.workflowFullRef,
+      trustedWorkflowSha: producer.workflowSha,
+      verifierSourceSha: producer.workflowSha,
+      verifierSourceContent: readFileSync(new URL("./release-ci-summary.mjs", import.meta.url)),
+    },
+    client,
+    { manifest },
+  );
+  return manifest;
+}
+
+async function assertRecoveryAttempts(recovery, client) {
+  for (const [id, attempt] of [
+    [recovery.sourceRunId, recovery.sourceRunAttempt],
+    ...Object.entries(recovery.childAttempts),
+  ]) {
+    const run = await client.getRun(id);
+    if (String(run.id) !== id || run.run_attempt !== attempt || run.status !== "completed") {
+      throw new Error("Recovery source/child attempt changed or remains active: " + id);
+    }
+  }
+}
+
+// Observations may advance; an authenticated normal-CI selection may substitute
+// that child only. Admission, input, artifact and immutable-plan fields stay fixed.
+function recoveryManifestFromPlan(plan, sourceRunAttempt, publicationArtifacts) {
+  return buildReleaseValidationManifest({
+    plan,
+    drain: {},
+    context: {
+      ...manifestContextFromEnvironment(plan.sourceAdmission, {
+        GITHUB_RUN_ID: plan.parentRunId,
+        GITHUB_RUN_ATTEMPT: String(sourceRunAttempt),
+        GITHUB_REF_NAME: plan.workflowRef,
+        GITHUB_SHA: plan.workflowSha,
+        GITHUB_REF: "refs/heads/" + plan.workflowRef,
+        GITHUB_REF_TYPE: "branch",
+        TARGET_REF: plan.targetSha,
+      }),
+      validationInputs: manifestContextFromEnvironment(plan.sourceAdmission, {}).validationInputs,
+      publicationArtifacts,
+    },
+  });
+}
+
+function recoveryFixedManifest(manifest) {
+  const {
+    recovery: _recovery,
+    childEvidence: _childEvidence,
+    waivers: _waivers,
+    advisoryJobs: _advisoryJobs,
+    ...fixed
+  } = manifest;
+  return JSON.stringify(sortReleaseJsonValueKeys(fixed));
+}
+
+async function loadRecoveryEvidence({
+  client,
+  selectedRun,
+  runId,
+  repository,
+  manifestPath,
+  recoveryDraft,
+  expectedRunAttempts,
+  verifier,
+  trustedIdentity,
+}) {
+  const retained =
+    recoveryDraft ?? client.loadManifest(runId, selectedRun.run_attempt, manifestPath);
+  if (!retained?.manifest?.recovery) {
+    throw new Error("Recovery aggregate is missing");
+  }
+  const recovery = retained.manifest.recovery;
+  const producer = recovery.producer;
+  if (
+    String(producer?.runId) !== runId ||
+    producer.repository !== repository ||
+    producer.runAttempt !== selectedRun.run_attempt ||
+    producer.workflowSha !== selectedRun.head_sha ||
+    producer.workflowHeadBranch !== selectedRun.head_branch ||
+    producer.workflowPath !== workflowPath(selectedRun)
+  ) {
+    throw new Error("Recovery producer identity changed");
+  }
+  if (producer.workflowSha !== verifier.sourceSha) {
+    const lineage = client.compareCommitLineage(producer.workflowSha, verifier.sourceSha);
+    if (
+      !["ahead", "identical"].includes(lineage.status) ||
+      lineage.merge_base_commit?.sha !== producer.workflowSha
+    ) {
+      throw new Error("Recovery producer differs from selected verifier lineage");
+    }
+  }
+  if (
+    trustedIdentity.type === "tag" &&
+    client.getRef(trustedIdentity.fullRef)?.object?.sha !== trustedIdentity.sha
+  ) {
+    throw new Error("Protected publication tooling tag changed");
+  }
+  client.verifyReleaseRecoveryProducer({ producer, completed: !recoveryDraft });
+  consumeExpectedRunAttempt(expectedRunAttempts, runId, producer.runAttempt, "recovery producer");
+  if (!recoveryDraft) {
+    validateManifestArtifactBinding(retained.artifact, retained.manifest, selectedRun, runId);
+  }
+  const sourceId = normalizeRequiredRunId(recovery.sourceRunId, "original qualification run");
+  if (sourceId === runId) {
+    throw new Error("Recovery must retain a distinct original qualification");
+  }
+  const parentRun = await client.getRun(sourceId);
+  const parentView = await client.getRunView(sourceId);
+  validateParentRunBinding(parentView, parentRun, sourceId);
+  if (
+    parentRun.repository?.full_name !== repository ||
+    parentRun.status !== "completed" ||
+    parentRun.run_attempt !== recovery.sourceRunAttempt
+  ) {
+    throw new Error("Original qualification attempt changed");
+  }
+  const original = client.loadExecutionPlanEvidence(sourceId);
+  const plan = validateReleaseExecutionPlanArtifact(original?.plan, {
+    parentRunId: sourceId,
+    repository,
+    workflowSha: parentRun.head_sha,
+    workflowRef: parentRun.head_branch,
+  });
+  if (
+    plan.evidenceReuse.requested ||
+    !plan.sourceAdmission.coverage.publication_artifact_source_json
+  ) {
+    throw new Error(
+      "Recovery requires the original direct qualification plan with explicitly retained publication bytes",
+    );
+  }
+  const authenticated = await restoreOriginalPublicationAdmission({
+    request: plan.sourceAdmission,
+    client,
+  });
+  if (
+    !isDeepStrictEqual(authenticated.plan, plan) ||
+    plan.sha256 !== recovery.executionPlanSha256 ||
+    !isDeepStrictEqual(
+      normalizedManifestArtifact(original.artifact, recovery.sourceRunAttempt),
+      recovery.sourceArtifact,
+    )
+  ) {
+    throw new Error("Recovery changed original plan bytes or artifact identity");
+  }
+  const effective = await recoveryChildProjection(plan, recovery.normalCiSelection, client);
+  const projected = recoveryManifestFromPlan(
+    effective.plan,
+    recovery.sourceRunAttempt,
+    retained.manifest.publicationArtifacts,
+  );
+  if (
+    !isDeepStrictEqual(recoveryFixedManifest(projected), recoveryFixedManifest(retained.manifest))
+  ) {
+    throw new Error("Recovery changed original plan inputs, artifacts or admission");
+  }
+  const manifest = validateParentManifest(retained.manifest, {
+    runAttempt: recovery.sourceRunAttempt,
+    runId: sourceId,
+    deferWaiverPolicy: true,
+    workflowRef: parentRun.head_branch,
+    workflowSha: parentRun.head_sha,
+  });
+  const selected = Object.values(manifest.childEvidence ?? {})
+    .map((child) => child.runId)
+    .toSorted((a, b) => a.localeCompare(b));
+  if (
+    !isDeepStrictEqual(selected, Object.keys(recovery.childAttempts ?? {}).toSorted()) ||
+    Object.values(recovery.childAttempts).some(
+      (attempt) => !Number.isSafeInteger(attempt) || attempt < 1,
+    )
+  ) {
+    throw new Error("Recovery attempt selection differs from original children");
+  }
+  await assertRecoveryAttempts(recovery, client);
+  return {
+    artifact: retained.artifact,
+    manifest,
+    manifestJson: sortReleaseJsonValueKeys(retained.manifest),
+    parentRun,
+    parentView,
+    recoveryProducer: selectedRun,
+    recoveryChildPlan: effective.plan,
+    recoveryNormalCiOrigin: effective.originPlan,
+  };
+}
+
 async function loadValidatedParentEvidence({
   client,
   preloadedRun,
@@ -2373,6 +2819,9 @@ async function loadValidatedParentEvidence({
       `successful parent run is missing its release validation manifest: ${runId}`,
     );
   }
+  if (manifestEvidence.manifest.recovery) {
+    throw new Error("Recovery requires its authenticated P producer");
+  }
   const manifest = recovery
     ? manifestEvidence.manifest
     : validateParentManifest(manifestEvidence.manifest, {
@@ -2395,6 +2844,29 @@ async function loadValidatedParentEvidence({
 
 function normalizedParentTuple(evidence, identity) {
   const { manifest, parentRun } = evidence;
+  if (evidence.recoveryProducer) {
+    const producer = releaseEvidenceProducerTuple(evidence.manifestJson);
+    const run = evidence.recoveryProducer;
+    return {
+      artifact: evidence.artifact
+        ? normalizedManifestArtifact(evidence.artifact, producer.runAttempt)
+        : null,
+      conclusion: run.conclusion,
+      status: run.status,
+      manifest: evidence.manifestJson,
+      manifestVersion: manifest.version,
+      runAttempt: producer.runAttempt,
+      runId: String(producer.runId),
+      targetSha: manifest.targetSha,
+      url: run.html_url,
+      workflowPath: producer.workflowPath,
+      workflowRef: producer.workflowHeadBranch,
+      workflowFullRef: producer.workflowFullRef,
+      workflowSha: producer.workflowSha,
+      workflowRefProof: "protected-p-recovery",
+      originalQualificationRunId: manifest.runId,
+    };
+  }
   return {
     artifact: evidence.artifact
       ? normalizedManifestArtifact(evidence.artifact, manifest.runAttempt)
@@ -2423,6 +2895,7 @@ async function validateStrictChildRun({
   parentEvidence,
   parentJobs,
   plannedChild,
+  recoveryNormalCiOrigin,
   repository,
   runId,
   expectedRunAttempts,
@@ -2461,19 +2934,36 @@ async function validateStrictChildRun({
   if (originAttempt === undefined) {
     throw new Error(`manifest child dispatch tuple mismatch: ${child.name}`);
   }
+  // P owns a substituted selection; its original parent's dispatch is the
+  // witness. Never pretend the retained Q parent dispatched the original CI.
+  const dispatchParent = recoveryNormalCiOrigin
+    ? {
+        runId: recoveryNormalCiOrigin.parentRunId,
+        runAttempt: recoveryNormalCiOrigin.parentRunAttempt,
+      }
+    : parentEvidence.manifest;
+  const dispatchJobs = recoveryNormalCiOrigin
+    ? await client.getParentJobs(dispatchParent.runId)
+    : parentJobs;
   const parentJob = selectManifestParentJob(
-    parentJobs,
+    dispatchJobs,
     child,
-    parentEvidence.manifest,
-    reused ? executionPlan.parentRunAttempt : originAttempt,
+    dispatchParent,
+    recoveryNormalCiOrigin
+      ? originAttempt
+      : reused
+        ? executionPlan.parentRunAttempt
+        : originAttempt,
     { requireSkippedCarryForward: plannedChild !== undefined },
   );
   const parentLog = await client.getJobLog(parentJob.id);
   if (reused) {
     validateReleaseChildDispatchBinding({
       child: plannedChild,
-      childReuse,
-      coveragePolicy: parentEvidence.manifest.validationInputs?.coveragePolicy,
+      childReuse: recoveryNormalCiOrigin ? undefined : childReuse,
+      coveragePolicy:
+        recoveryNormalCiOrigin?.coveragePolicy ??
+        parentEvidence.manifest.validationInputs?.coveragePolicy,
       log: parentLog,
       plannedRunAttempt: plannedChild.runAttempt,
       repository,
@@ -2510,6 +3000,7 @@ async function validateStrictChildRun({
     }
     const evidence = composeReleaseChildAttemptEvidence({
       attempts,
+      recordedJobs: childEvidence.jobs,
       expected: {
         ...plannedChild,
         plannedRunAttempt: plannedChild.runAttempt,
@@ -2527,7 +3018,7 @@ async function validateStrictChildRun({
     rawJobs = evidence.jobs.map((job) =>
       attempts
         .find((attempt) => attempt.runAttempt === job.acceptedRunAttempt)
-        .jobs.find((raw) => raw.name === job.name),
+        .jobs.find((raw) => raw.name === job.name && (raw.html_url ?? raw.url ?? "") === job.url),
     );
     if (
       JSON.stringify(sortReleaseJsonValueKeys(childEvidence)) !==
@@ -2722,6 +3213,7 @@ export async function validateReleaseRunEvidence(
     verifierSourceSha,
   },
   client,
+  recoveryDraft = null,
 ) {
   const normalizedRepository = normalizeRepository(repository);
   const normalizedRunId = normalizeRequiredRunId(runId, "full release run ID");
@@ -2793,14 +3285,41 @@ export async function validateReleaseRunEvidence(
     });
     return { ...evidence, qualification: qualificationFacts(evidence) };
   }
-  const currentEvidence = await loadValidatedParentEvidence({
-    client: evidenceClient,
-    preloadedRun: selectedRun,
-    expectedRunAttempts: remainingExpectedRunAttempts,
-    manifestPath,
-    repository: normalizedRepository,
-    runId: normalizedRunId,
-  });
+  const recovery = workflowPath(selectedRun) === ".github/workflows/openclaw-release-prepare.yml";
+  const currentEvidence = recovery
+    ? await loadRecoveryEvidence({
+        client: evidenceClient,
+        selectedRun,
+        runId: normalizedRunId,
+        repository: normalizedRepository,
+        manifestPath,
+        recoveryDraft,
+        expectedRunAttempts: remainingExpectedRunAttempts,
+        verifier,
+        trustedIdentity,
+      })
+    : await loadValidatedParentEvidence({
+        client: evidenceClient,
+        preloadedRun: selectedRun,
+        expectedRunAttempts: remainingExpectedRunAttempts,
+        manifestPath,
+        repository: normalizedRepository,
+        runId: normalizedRunId,
+      });
+  if (
+    recovery &&
+    (qualificationReuse ||
+      reuseRequest ||
+      expectedChangedPaths ||
+      expectedEvidencePolicy ||
+      expectedEvidenceSha ||
+      expectedRootRunId ||
+      expectedSelectedRunId)
+  ) {
+    throw new Error(
+      "Recovery is an explicit original-plan aggregate, not parent discovery or reuse",
+    );
+  }
   const requestedReuse = {
     expectedChangedPaths,
     expectedEvidencePolicy,
@@ -2915,6 +3434,8 @@ export async function validateReleaseRunEvidence(
       admitted.request.inputs.trusted_workflow_json,
     );
     if (
+      (admittedIntent.laneInputs?.publication_artifact_source_json ?? "") !==
+        (manifest.sourceAdmission.coverage.publication_artifact_source_json ?? "") ||
       admittedIntent.validationPurpose !== manifest.sourceAdmission.validationPurpose ||
       !isDeepStrictEqual(
         admittedIntent.publicationSelection,
@@ -3098,6 +3619,35 @@ export async function validateReleaseRunEvidence(
       ) {
         throw new Error("publication admission manifest differs from its original execution plan");
       }
+      if (manifest.sourceAdmission.coverage.publication_artifact_source_json) {
+        const selected = await evidenceClient.selectPublicationArtifactSource(
+          JSON.parse(manifest.sourceAdmission.coverage.publication_artifact_source_json),
+          {
+            GH_TOKEN: process.env.GH_TOKEN,
+            GITHUB_REPOSITORY: normalizedRepository,
+            GITHUB_RUN_ID: manifest.runId,
+            GITHUB_RUN_ATTEMPT: manifest.runAttempt,
+            TARGET_SHA: manifest.targetSha,
+            PARENT_WORKFLOW_SHA: manifest.workflowSha,
+            SOURCE_ADMISSION_JSON: JSON.stringify(manifest.sourceAdmission),
+            CANDIDATE_REQUEST_JSON: JSON.stringify(plan.candidateRequest),
+            PLUGIN_NPM_REQUIRED: String(Boolean(manifest.publicationArtifacts?.pluginNpm)),
+          },
+        );
+        if (
+          !isDeepStrictEqual(selected.source, plan.publicationArtifactSource) ||
+          !isDeepStrictEqual(selected.source, manifest.publicationArtifactSource) ||
+          !isDeepStrictEqual(selected.candidate, plan.candidate) ||
+          !isDeepStrictEqual(selected.candidate, manifest.candidateBinding) ||
+          !isDeepStrictEqual(selected.publicationArtifacts, manifest.publicationArtifacts)
+        ) {
+          throw new Error(
+            "Selected publication bytes differ from the authenticated historical producers",
+          );
+        }
+      } else if (plan.publicationArtifactSource || manifest.publicationArtifactSource) {
+        throw new Error("Historical publication artifacts require explicit admitted selection");
+      }
       sourcePlans.set(manifest.runId, plan);
     }
   }
@@ -3146,8 +3696,9 @@ export async function validateReleaseRunEvidence(
   ) {
     throw new Error("release manifest target version differs from its immutable plan");
   }
+  const childPlan = rootEvidence.recoveryChildPlan ?? executionPlan;
   const plannedByKey = new Map(
-    (executionPlan?.children ?? []).map((plannedChild) => [plannedChild.key, plannedChild]),
+    (childPlan?.children ?? []).map((plannedChild) => [plannedChild.key, plannedChild]),
   );
   if (executionPlan?.attemptEvidenceVersion !== undefined) {
     if (
@@ -3244,7 +3795,9 @@ export async function validateReleaseRunEvidence(
       validateStrictChildRun({
         child,
         childEvidence: rootEvidence.manifest.childEvidence?.[child.manifestKey],
-        childReuse: executionPlan?.childReuse?.[child.manifestKey],
+        childReuse: childPlan?.childReuse?.[child.manifestKey],
+        recoveryNormalCiOrigin:
+          child.manifestKey === "normalCi" ? rootEvidence.recoveryNormalCiOrigin : undefined,
         client: evidenceClient,
         executionPlan,
         parentEvidence: dispatchEvidence,
@@ -3289,6 +3842,9 @@ export async function validateReleaseRunEvidence(
     );
   }
 
+  if (recovery) {
+    await assertRecoveryAttempts(currentEvidence.manifestJson.recovery, evidenceClient);
+  }
   const current = normalizedParentTuple(
     currentEvidence,
     producerIdentities.get(currentEvidence.manifest.runId),
@@ -3678,7 +4234,92 @@ function readSummaryEvidence(runId, repository, label) {
   };
 }
 
+// The recovery CLI has no dispatch capability: request preparation reads the
+// original plan; sealing runs only inside the authenticated P workflow.
+export async function runReleaseRecoveryCli(
+  args,
+  env = process.env,
+  client = createReleaseEvidenceClient(env.GITHUB_REPOSITORY),
+) {
+  if (args[0] === "--prepare-recovery") {
+    if (
+      args[2] !== "--output" ||
+      !(args.length === 4 || (args.length === 6 && args[4] === "--normal-ci-selection"))
+    ) {
+      throw new Error("Use --prepare-recovery RUN --output FILE [--normal-ci-selection FILE]");
+    }
+    const selection =
+      args.length === 6
+        ? JSON.parse(
+            readBoundedRegularFile(args[5], {
+              label: "recovery normal CI selection",
+              maxBytes: 64 * 1024,
+            }).toString("utf8"),
+          )
+        : undefined;
+    const request = await prepareReleaseRecovery(args[1], client, { normalCiSelection: selection });
+    writeFileSync(args[3], JSON.stringify(request) + "\n", { flag: "wx", mode: 0o600 });
+    return true;
+  }
+  if (args[0] !== "--seal-recovery") {
+    return false;
+  }
+  if (args.length !== 1) {
+    throw new Error("Use --seal-recovery inside the P recovery workflow");
+  }
+  const event = JSON.parse(
+    readBoundedRegularFile(env.GITHUB_EVENT_PATH, {
+      label: "recovery workflow event",
+      maxBytes: 256 * 1024,
+    }).toString("utf8"),
+  );
+  const inputs = event.inputs;
+  if (
+    inputs?.operation !== "recover-qualification" ||
+    inputs.publish_inputs ||
+    inputs.preparation_request ||
+    inputs.qualification_request
+  ) {
+    throw new Error("Recovery cannot admit, prepare or publish packages");
+  }
+  const producer = {
+    repository: env.GITHUB_REPOSITORY,
+    runId: Number(env.GITHUB_RUN_ID),
+    runAttempt: Number(env.GITHUB_RUN_ATTEMPT),
+    workflowPath: ".github/workflows/openclaw-release-prepare.yml",
+    workflowEvent: env.GITHUB_EVENT_NAME,
+    workflowHeadBranch: env.GITHUB_REF_NAME,
+    workflowFullRef: env.GITHUB_REF,
+    workflowSha: env.GITHUB_WORKFLOW_SHA,
+  };
+  if (
+    env.GITHUB_WORKFLOW_REF !==
+    producer.repository + "/" + producer.workflowPath + "@" + producer.workflowFullRef
+  ) {
+    throw new Error("Wrong recovery workflow entry point");
+  }
+  const manifest = await sealReleaseRecovery(
+    { request: JSON.parse(inputs.recovery_request), producer },
+    client,
+  );
+  const directory = join(env.RUNNER_TEMP, "qualification-recovery");
+  mkdirSync(directory, { recursive: true, mode: 0o700 });
+  writeFileSync(
+    join(directory, "full-release-validation-manifest.json"),
+    JSON.stringify(manifest) + "\n",
+    { flag: "wx", mode: 0o600 },
+  );
+  appendFileSync(
+    env.GITHUB_OUTPUT,
+    "artifact_name=" + manifestArtifactName(producer.runId, producer.runAttempt) + "\n",
+  );
+  return true;
+}
+
 async function main() {
+  if (await runReleaseRecoveryCli(process.argv.slice(2))) {
+    return;
+  }
   let options;
   try {
     options = parseReleaseCiSummaryArgs(process.argv.slice(2));
@@ -3899,7 +4540,7 @@ async function main() {
 }
 
 if (process.argv[1]?.endsWith("release-ci-summary.mjs")) {
-  await main().catch(
+  void main().catch(
     /** @param {unknown} error */ (error) => {
       console.error(error instanceof Error ? error.message : String(error));
       process.exit(1);

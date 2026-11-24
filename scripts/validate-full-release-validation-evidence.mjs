@@ -11,7 +11,10 @@ import {
 } from "./full-release-publication-contract.mjs";
 import { sortJsonValueKeys } from "./lib/canonical-json.mjs";
 import { resolveReleaseContextIdentity } from "./lib/release-context.mjs";
-import { verifyReceiptRecoveryAuthority } from "./lib/release-evidence-identity.mjs";
+import {
+  retainedPublicationArtifactSource,
+  verifyReceiptRecoveryAuthority,
+} from "./lib/release-evidence-identity.mjs";
 import { resolveReleasePublishInputs } from "./lib/release-publish-inputs.mjs";
 import { createReleaseEvidenceClient, validateReleaseRunEvidence } from "./release-ci-summary.mjs";
 
@@ -455,7 +458,10 @@ function validateCandidateOwnedArtifactBinding(manifest, candidateSha, qualifica
   const qualification = evidence.qualification;
   if (
     qualification.candidateSha !== candidateSha ||
-    qualification.qualificationSha !== qualificationSha ||
+    qualification.qualificationSha !==
+      (manifest.publicationArtifactSource ? manifest.workflowSha : qualificationSha) ||
+    (manifest.publicationArtifactSource &&
+      retainedPublicationArtifactSource(manifest)?.workflow.sha !== qualificationSha) ||
     evidence.current.runAttempt !== Number(manifest.runAttempt) ||
     evidence.current.conclusion !== "success" ||
     !isDeepStrictEqual(evidence.current.manifest, sortJsonValueKeys(manifest))

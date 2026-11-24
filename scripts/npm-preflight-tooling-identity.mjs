@@ -10,7 +10,10 @@ import {
   inspectActionsArtifactZipWithPolicy,
 } from "./lib/actions-artifact-archive.mjs";
 import { isRecord } from "./lib/record-shared.mjs";
-import { retainedPublicationArtifactSource } from "./lib/release-evidence-identity.mjs";
+import {
+  retainedPublicationArtifactSource,
+  releaseEvidenceProducerTuple,
+} from "./lib/release-evidence-identity.mjs";
 import { verifyNpmBundleProducer } from "./npm-prepared-bundle.mjs";
 import {
   runReleaseToolingGh,
@@ -185,6 +188,7 @@ export function validateFullReleaseNpmPreflight({
   sourceSha,
   toolingSha,
 }) {
+  const evidenceProducer = releaseEvidenceProducerTuple(manifest ?? {});
   const qualified = manifest?.publicationArtifacts?.npmPreflight;
   const producer = qualified?.producer;
   const producerRepository = repository ?? producer?.repository;
@@ -204,11 +208,14 @@ export function validateFullReleaseNpmPreflight({
     !/^[1-9][0-9]*$/u.test(String(runId ?? "")) ||
     !/^[1-9][0-9]*$/u.test(String(runAttempt ?? "")) ||
     manifest?.workflowName !== "Full Release Validation" ||
-    String(manifest.runId) !== String(runId) ||
-    String(manifest.runAttempt) !== String(runAttempt) ||
+    String(evidenceProducer.runId) !== String(runId) ||
+    String(evidenceProducer.runAttempt) !== String(runAttempt) ||
     manifest.targetSha !== sourceSha ||
     (manifest.workflowSha !== toolingSha &&
-      !(manifest.receiptRecovery && retainedSource?.workflow.sha === toolingSha)) ||
+      !(
+        (manifest.receiptRecovery || manifest.publicationArtifactSource) &&
+        retainedSource?.workflow.sha === toolingSha
+      )) ||
     qualified?.schema !== "openclaw.qualified-npm-preflight/v1" ||
     qualified.source?.sha !== sourceSha ||
     !/^[a-f0-9]{64}$/u.test(qualified.manifestSha256 ?? "") ||
