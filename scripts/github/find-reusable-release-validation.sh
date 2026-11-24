@@ -396,8 +396,31 @@ for ((index = 0; index < run_count; index += 1)); do
   if ! delta_json="$(jq -ce --arg target "$TARGET_SHA" '
     .reuseSelection | select(.targetSha == $target and (.policy | type == "string")
       and (.changedPaths | type == "array"))' <<< "$validation_record")"; then
-    echo "[evidence-reuse] run ${run_id}: verifier omitted its requested reuse selection; skipping" >&2
-    continue
+    if jq -e 'has("reuseSelection")' <<< "$validation_record" >/dev/null; then
+      echo "[evidence-reuse] run ${run_id}: verifier returned an invalid reuse selection; skipping" >&2
+      continue
+    fi
+    # Retained admissions may pin an older P independently of this Q wrapper.
+    # Preserve their exact/changelog reuse contract, not the new promotion policy.
+    if [[ "$prior_sha" == "$TARGET_SHA" ]]; then
+      delta_json='{"policy":"exact-target-full-validation-v1","changedPaths":[]}'
+    else
+      selected_version="$(jq -r '.manifest.candidateBinding.package.version // .validationInputs.targetVersion // ""' <<< "$validation_record")"
+      if ! delta_json="$(gh api "repos/${REPO}/compare/${prior_sha}...${TARGET_SHA}" \
+        --jq '{status, merge_base_commit: {sha: .merge_base_commit.sha}, files: [.files[] | {filename, status, previous_filename}]}' | \
+        RELEASE_BASE_SHA="$prior_sha" RELEASE_SELECTED_VERSION="$selected_version" \
+        node --input-type=module -e '
+import { readFileSync } from "node:fs";
+import { pathToFileURL } from "node:url";
+const { classifyReleaseEvidenceComparison } = await import(pathToFileURL(process.argv[1]));
+process.stdout.write(JSON.stringify(classifyReleaseEvidenceComparison(JSON.parse(readFileSync(0, "utf8")), {
+  baseSha: process.env.RELEASE_BASE_SHA, version: process.env.RELEASE_SELECTED_VERSION,
+})));
+' "$REPO_ROOT/scripts/full-release-validation-policy.mjs")"; then
+        echo "[evidence-reuse] run ${run_id}: legacy verifier target is not a changelog-only descendant; skipping" >&2
+        continue
+      fi
+    fi
   fi
   evidence_policy="$(jq -r '.policy' <<< "$delta_json")"
   changed_paths="$(jq -c '.changedPaths' <<< "$delta_json")"

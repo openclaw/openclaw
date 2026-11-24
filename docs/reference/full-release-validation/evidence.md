@@ -59,11 +59,13 @@ A regular prerelease such as `2026.11.24-beta.2` can supply product evidence for
    changelog entry, index, and contribution record. Dependencies, product code,
    qualification tooling, and unrelated release notes must remain unchanged.
 3. Admit and run FRV for the final candidate with evidence reuse enabled and the
-   same profile, lane inputs, baselines, and publication roster. The strict
+   same profile, lane inputs, baselines, and package publication roster. The strict
    verifier authenticates both admissions and the complete immutable Git delta
    under `stable-qualified-beta-final-v1`. An incomplete comparison falls back to
    fresh qualification. Beta-version waivers cannot excuse final-version jobs;
    discovery declines such evidence before skipping fresh product checks.
+   Source admission may add the final-only Linux/Android outputs; these retain
+   their own publication gates and do not broaden reused product qualification.
 4. Retain the successful final parent and its original beta evidence root. Product
    children retain their original run/attempt identities. Final npm, plugin npm,
    and Docker artifacts are prepared and qualified afresh; beta publication

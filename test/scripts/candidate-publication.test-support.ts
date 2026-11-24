@@ -154,6 +154,20 @@ export function candidatePublicationFixture(
         .replaceAll('"main"', JSON.stringify(branch))
         .replaceAll("refs/heads/main", tooling.fullRef),
     );
+  // Match source admission for a regular core release with a matching Android
+  // pin: beta omits the final-only Linux/Android outputs, final includes them.
+  const platforms = [
+    ...(!beta && !extended
+      ? [{ id: "android", source: ".github/workflows/android-release.yml" }]
+      : []),
+    { id: "docker", source: ".github/workflows/docker-release.yml" },
+    ...(!beta && !extended
+      ? [{ id: "linux", source: ".github/workflows/linux-app-release-request.yml" }]
+      : []),
+    ...(!extended
+      ? [{ id: "vcr", source: ".github/workflows/vercel-container-registry-publish.yml" }]
+      : []),
+  ];
   const source = createPublicationSourceFact(
     publicationSourceRequest({
       PUBLICATION_INPUTS_JSON: JSON.stringify(inputs),
@@ -173,12 +187,12 @@ export function candidatePublicationFixture(
       GITHUB_RUN_ID: runId,
       GITHUB_RUN_ATTEMPT: "1",
     }),
-    publishing ? { packages: [], platforms: [] } : null,
+    publishing ? { packages: [], platforms } : null,
     publishing
       ? {
           version,
           packages: [{ name: "openclaw", version, targets: ["npm"] }],
-          platforms: [],
+          platforms,
         }
       : null,
   );

@@ -116,6 +116,7 @@ interface NormalizedEvidence {
 }
 
 interface RunFixture {
+  legacyVerifier?: boolean;
   error?: string;
   exitCode?: number;
   rawOutput?: string;
@@ -496,7 +497,7 @@ const delta = exact ? { policy: "exact-target-full-validation-v1", changedPaths:
   rootManifest: { ...record.manifest, validationInputs: record.validationInputs, runReleaseSoak: String(record.runReleaseSoak) },
   readSourceFile: (sha, path) => client.getSourceFile(sha, path),
 });
-record.reuseSelection = { ...delta, targetSha: request.targetSha };
+if (!fixture.legacyVerifier) record.reuseSelection = { ...delta, targetSha: request.targetSha };
 process.stdout.write(\`\${JSON.stringify(record)}\\n\`);
 `;
 
@@ -1135,6 +1136,30 @@ describe("scripts/github/find-reusable-release-validation.sh", () => {
       reuse: "true",
     });
   });
+
+  it.each(["exact", "changelog"])(
+    "preserves %s reuse with an independently pinned older verifier",
+    (mode) => {
+      const { origin, priorSha } = createRepo();
+      const targetSha =
+        mode === "exact"
+          ? priorSha
+          : commitFile(origin, "CHANGELOG.md", "# Final notes\n", "docs: final notes");
+      const record = normalizedEvidence({ targetSha: priorSha });
+      const result = runResolver({
+        ...setUpFixtures([{ record, runId: record.root.runId, legacyVerifier: true }]),
+        compareBaseSha: priorSha,
+        repoDir: cloneHead(origin),
+        targetSha,
+      });
+      expect(result.status, result.stderr).toBe(0);
+      expect(parseOutput(result.stdout), result.stderr).toMatchObject({
+        evidence_policy:
+          mode === "exact" ? "exact-target-full-validation-v1" : "changelog-only-release-v1",
+        reuse: "true",
+      });
+    },
+  );
 
   it("discovers stable-profile beta product evidence for its final version", () => {
     const { origin, priorSha } = createRepo({ version: "2026.7.1-beta.2" });

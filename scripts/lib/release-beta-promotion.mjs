@@ -112,7 +112,7 @@ export function classifyBetaPromotionComparison(
 }
 
 // Called only for this policy after authenticating each original admission.
-// Lane choices, baselines, publication roster and coverage stay exact. Only
+// Lane choices, baselines, package roster and coverage stay exact. Only
 // candidate version, its derived coverage label and the beta/latest selector vary.
 export function promotionValidationInputs(inputs) {
   const result = { ...inputs, targetVersion: "<promoted-version>" };
@@ -144,6 +144,12 @@ export function promotionSourceIdentity(identity) {
     projection: identity.projection && {
       ...identity.projection,
       version: "<promoted-version>",
+      // Source admission derives these final-only outputs from the release train
+      // (and the unchanged Android pin). They have independent publication gates;
+      // neither is a product qualification lane reused from the beta.
+      platforms: identity.projection.platforms.filter(
+        (platform) => !["linux", "android"].includes(platform.id),
+      ),
       packages: identity.projection.packages.map((pkg) => ({
         ...pkg,
         version: pkg.version === identity.projection.version ? "<promoted-version>" : pkg.version,
