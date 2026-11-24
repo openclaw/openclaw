@@ -170,6 +170,12 @@ it.each([
   expectOptionFailure(message, json);
 });
 
+it("rejects empty --agent-name with --modern", async () => {
+  await runCli(["--modern", "--agent-name", ""]);
+  expectOptionFailure("Invalid --agent-name: Agent name is required.", false);
+  expect(systemAgent).not.toHaveBeenCalled();
+});
+
 it.each([
   ["--modern --json", { json: true, interactive: true }, {}],
   [
