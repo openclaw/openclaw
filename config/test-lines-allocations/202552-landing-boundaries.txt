@@ -1,0 +1,8 @@
+1322
+# Whole PR at 0cd4bc4b against merge-base cded11f8: 13,650 net test lines,
+# less the unchanged 400-line allowance and 11,928 existing allocation lines.
+# Retains distinct boundaries: native composer selection and invitation handoff;
+# author-only revoked-input read/copy/remove without session-history access;
+# membership-backed People projection and removal; suggestion tray expansion;
+# lazy English loading and chronological sharing notices. Existing fixtures and
+# table cases are reused. No production threshold, file cap or timeout changes.
