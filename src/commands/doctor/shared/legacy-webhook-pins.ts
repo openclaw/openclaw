@@ -6,6 +6,7 @@ import { resolveConfigPath, resolveIsConfigReadOnly } from "../../../config/path
 import { cloneConfigWithResolutionFacts } from "../../../config/resolution-facts.js";
 import type { ConfigFileSnapshot } from "../../../config/types.openclaw.js";
 import { isTruthyEnvValue } from "../../../infra/env.js";
+import { withStateDatabaseColdAdmission } from "../../../infra/gateway-state-owner.js";
 import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
@@ -19,9 +20,12 @@ import type { PluginOrigin } from "../../../plugins/plugin-origin.types.js";
 import { normalizeOptionalAccountId } from "../../../routing/account-id.js";
 import { writeConfigMachineState } from "../../../state/config-machine-state-write.js";
 import { readConfigMachineState } from "../../../state/config-machine-state.js";
+import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "../../../state/openclaw-state-db-contract.js";
+import { isStatePostgres } from "../../../state/openclaw-state-db-engine.js";
 import { withExistingOpenClawStateDatabaseReadOnly } from "../../../state/openclaw-state-db-readonly.js";
 import { tableExists } from "../../../state/openclaw-state-db-schema-helpers.js";
 import type { DB } from "../../../state/openclaw-state-db.generated.js";
+import { resolveOpenClawStateSqlitePath } from "../../../state/openclaw-state-db.paths.js";
 
 export const HISTORICAL_WEBHOOK_CHANNELS = ["telegram", "feishu", "msteams", "nextcloud-talk"];
 
@@ -66,6 +70,44 @@ export function createHistoricalWebhookPinMigration(env: NodeJS.ProcessEnv = pro
   return applyHistoricalWebhookPins.bind(undefined, state);
 }
 
+/**
+ * Another process may acquire a transient schema lease after startup's async
+ * preparation. Retry only these reads, never plugin migration effects.
+ * Explicit offline maintenance still refuses immediately.
+ */
+function withStartupReadAdmission<T>(env: NodeJS.ProcessEnv, read: () => T): T {
+  if (isStatePostgres()) {
+    return read();
+  }
+  return withStateDatabaseColdAdmission(
+    {
+      databasePath: resolveOpenClawStateSqlitePath(env),
+      busyTimeoutMs: OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
+    },
+    read,
+  );
+}
+
+function hasHistoricalInstallation(env: NodeJS.ProcessEnv): boolean {
+  const read = () =>
+    Boolean(
+      withExistingOpenClawStateDatabaseReadOnly(
+        ({ db }) => {
+          const query = getNodeSqliteKysely<DB>(db);
+          return [
+            query.selectFrom("gateway_boot_lifecycle").select("boot_id as evidence").limit(1),
+            query.selectFrom("channel_ingress_events").select("event_id as evidence").limit(1),
+            // The update ledger exists only after its first write.
+            tableExists(db, "update_runs") &&
+              query.selectFrom("update_runs").select("run_id as evidence").limit(1),
+          ].some((statement) => statement && executeSqliteQueryTakeFirstSync(db, statement));
+        },
+        { env },
+      ),
+    );
+  return withStartupReadAdmission(env, read);
+}
+
 /** Pins and completion travel together through Doctor's config backup and publication. */
 function applyHistoricalWebhookPins(
   state: HistoricalWebhookPinState,
@@ -81,9 +123,11 @@ function applyHistoricalWebhookPins(
   const marker =
     mutation.config.meta?.migrations?.webhookListeners ??
     (state.completion ??= {
-      marker: readConfigMachineState<true | Record<string, string[][]>>(webhookCompletionKey(env), {
-        env,
-      }),
+      marker: withStartupReadAdmission(env, () =>
+        readConfigMachineState<true | Record<string, string[][]>>(webhookCompletionKey(env), {
+          env,
+        }),
+      ),
     }).marker;
   if (marker === true || mutation.warnings?.length) {
     return mutation;
@@ -106,21 +150,7 @@ function applyHistoricalWebhookPins(
   const existing =
     marker !== undefined ||
     isTruthyEnvValue(env.OPENCLAW_UPDATE_IN_PROGRESS) ||
-    (state.existingInstallation ??= Boolean(
-      withExistingOpenClawStateDatabaseReadOnly(
-        ({ db }) => {
-          const query = getNodeSqliteKysely<DB>(db);
-          return [
-            query.selectFrom("gateway_boot_lifecycle").select("boot_id as evidence").limit(1),
-            query.selectFrom("channel_ingress_events").select("event_id as evidence").limit(1),
-            // The update ledger exists only after its first write.
-            tableExists(db, "update_runs") &&
-              query.selectFrom("update_runs").select("run_id as evidence").limit(1),
-          ].some((statement) => statement && executeSqliteQueryTakeFirstSync(db, statement));
-        },
-        { env },
-      ),
-    ));
+    (state.existingInstallation ??= hasHistoricalInstallation(env));
   const completed = { ...marker };
   const channelId = declaration?.channelId;
   if (existing && (!channelId || !accountIds || Object.hasOwn(completed, channelId))) {
