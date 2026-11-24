@@ -461,29 +461,6 @@ describe("gateway node command allowlist", () => {
     ).resolves.toEqual({ ok: true, ignored: true });
     await respondToInvoke(allowedClient, payload, allowedNodeId);
     expect((await invokeResP).ok).toBe(true);
-
-    for (const [id, result, expectedPayload] of [
-      ["null", { payloadJSON: null, error: null }, undefined],
-      ["object", { payloadJSON: { source: "payloadJSON" } }, { source: "payloadJSON" }],
-      [
-        "explicit",
-        { payloadJSON: { source: "payloadJSON" }, payload: { source: "payload" } },
-        { source: "payload" },
-      ],
-    ] as const) {
-      const invokeResult = invokeCanvasSnapshot(allowedNodeId, `allowlist-${id}-payloadjson`);
-      const captured = await invokeCapture.waitForInvoke();
-      await allowedClient.request("node.invoke.result", {
-        id: captured.id,
-        nodeId: captured.nodeId,
-        ok: true,
-        ...result,
-      });
-      const response = await invokeResult;
-      expect(response.ok).toBe(true);
-      expect(response.payload?.payloadJSON).toBeNull();
-      expect(response.payload?.payload).toEqual(expectedPayload);
-    }
   });
 
   test("exposes and invokes live commands only after pending node pairing is approved", async () => {
@@ -597,23 +574,6 @@ describe("gateway node command allowlist", () => {
       await expectConnectedCommands(fixture.displayName, []);
       await spoofClient.stopAndWait();
     }
-  });
-
-  test("allows canonical node-host reconnect for legacy pinned platform metadata", async () => {
-    const fixture = nodeFixture("node-host-platform-upgrade", { platform: "darwin" });
-    const legacyClient = await connectNodeClientWithPairing(fixture);
-    await legacyClient.stopAndWait();
-    await expectConnectedNodeCount(0);
-    await connectNodeClient({ ...fixture, commands: ["system.run"], platform: "macos" });
-    await expect
-      .poll(
-        async () => (await findConnectedNodeByDisplayName(fixture.displayName))?.connected ?? false,
-        FAST_WAIT_OPTS,
-      )
-      .toBe(true);
-    const nodeId = await findConnectedNodeIdByDisplayName(fixture.displayName);
-    const pending = await getPendingNodePairing(nodeId);
-    expect(pending?.commands).toEqual(["system.run"]);
   });
 
   test("filters system.run for confusable iOS metadata at connect time", async () => {

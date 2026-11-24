@@ -16,7 +16,10 @@ export type ModelInputContent = Llm.TextContent | MediaContent;
 export type ProviderUserMessage = Omit<Llm.UserMessage, "content"> & {
   content: string | ModelInputContent[];
 };
-export type ProviderMessage = ProviderUserMessage | Llm.AssistantMessage | Llm.ToolResultMessage;
+export type ProviderMessage =
+  | ProviderUserMessage
+  | Llm.AssistantHistoryMessage
+  | Llm.ToolResultMessage;
 export type ProviderContext = Omit<Llm.Context, "messages"> & { messages: ProviderMessage[] };
 export type ProviderModel<TApi extends Llm.Api = Llm.Api> = Omit<Llm.Model<TApi>, "input"> & {
   input: ModelInputContent["type"][];

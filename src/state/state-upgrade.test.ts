@@ -6,6 +6,8 @@ import { fileURLToPath } from "node:url";
 import { load as loadSqliteVec } from "sqlite-vec";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { acquireGatewayLock } from "../infra/gateway-lock.js";
+import { sqliteDatabaseAdmissionState } from "../infra/sqlite-database-admission-context.js";
+import { captureSqliteDatabaseDescriptorCustodyLocations } from "../infra/sqlite-database-admission.js";
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "./openclaw-agent-schema.js";
 import {
   OPENCLAW_AGENT_SCHEMA_VERSION,
@@ -17,10 +19,11 @@ import {
 } from "./openclaw-state-db-cache.js";
 import { executeExistingOpenClawStateRead } from "./openclaw-state-db-readonly.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.js";
+import { isStateUpgradePending } from "./state-upgrade-databases.js";
 import { createDoctorChain } from "./state-upgrade-doctor.js";
-import { copyTree, pruneGenerations, writePlan } from "./state-upgrade-tree.js";
+import { applyPlan, copyTree, pruneGenerations, writePlan } from "./state-upgrade-tree.js";
 import { ChainStepError } from "./state-upgrade-validate.js";
-import { isStateUpgradePending, upgradeStateDirectory } from "./state-upgrade.js";
+import { upgradeStateDirectory } from "./state-upgrade.js";
 
 const dirs: string[] = [];
 afterEach(async () => {
@@ -29,6 +32,40 @@ afterEach(async () => {
   for (const dir of dirs.splice(0)) {
     fs.rmSync(dir, { recursive: true, force: true });
   }
+});
+
+it("releases admitted source and successor descriptors before replacing a database", () => {
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-upgrade-custody-")));
+  dirs.push(root);
+  const live = path.join(root, "live.sqlite");
+  const next = path.join(root, "next.sqlite");
+  [live, next].forEach((file, index) => {
+    {
+      using db = new DatabaseSync(file);
+      db.exec("CREATE TABLE witness (value INTEGER)");
+      db.prepare("INSERT INTO witness VALUES (?)").run(index);
+    }
+    // Vitest is a worker, not admission's host. Retain the host's real descriptor custody.
+    const descriptor = fs.openSync(file, "r");
+    sqliteDatabaseAdmissionState.registry.retainDescriptorCustody(
+      file,
+      descriptor,
+      fs.fstatSync(descriptor, { bigint: true }),
+    );
+  });
+  expect([...captureSqliteDatabaseDescriptorCustodyLocations()]).toEqual(
+    expect.arrayContaining([live, next]),
+  );
+
+  applyPlan({ appVersion: "custody-test", ops: [{ kind: "replace", live, next }] });
+
+  const retained = [...captureSqliteDatabaseDescriptorCustodyLocations()];
+  expect(retained).not.toContain(live);
+  expect(retained).not.toContain(next);
+  using published = new DatabaseSync(live, { readOnly: true });
+  expect(published.prepare("SELECT value FROM witness").get()).toEqual({ value: 1 });
+  using previous = new DatabaseSync(`${live}.pre-custody-test`, { readOnly: true });
+  expect(previous.prepare("SELECT value FROM witness").get()).toEqual({ value: 0 });
 });
 
 describe("startup reader replacement", () => {
@@ -92,7 +129,7 @@ describe("startup reader replacement", () => {
       type: "plugins.metadata.read",
       rows: [{ state_key: "plugins.bundledDiscovery", value_json: '"allowlist"' }],
     });
-    expect(isStateUpgradePending(env)).toBe(false);
+    expect(await isStateUpgradePending(env)).toBe(false);
   });
 });
 
@@ -179,11 +216,11 @@ describe("startup retained deletion", () => {
         await expect(upgrade).resolves.toMatchObject(
           upgradeShared ? { status: "upgraded", mode: "chain" } : { status: "current" },
         );
-        expect(isStateUpgradePending(env)).toBe(false);
+        expect(await isStateUpgradePending(env)).toBe(false);
       } else {
         await expect(upgrade).rejects.toThrow("no such module: vec0");
         expect(log.warn).toHaveBeenCalledWith(expect.stringContaining("failed at agent-schema"));
-        expect(isStateUpgradePending(env)).toBe(true);
+        expect(await isStateUpgradePending(env)).toBe(true);
       }
       expect(fs.readFileSync(retainedPath)).toEqual(bytes);
       expect(fs.readdirSync(retainedDir)).toEqual(["openclaw-agent.sqlite"]);
@@ -193,25 +230,25 @@ describe("startup retained deletion", () => {
 });
 
 describe("upgradeStateDirectory version zero", () => {
-  it("leaves a PostgreSQL anchor or empty catalog to the normal bootstrap", async () => {
+  it("leaves a fresh empty catalog to the normal bootstrap", async () => {
     const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-upgrade-v0-"));
     dirs.push(stateDir);
     fs.mkdirSync(path.join(stateDir, "state"));
     const anchor = new DatabaseSync(path.join(stateDir, "state", "openclaw.sqlite"));
     anchor.exec("CREATE TABLE anchor (v TEXT)");
     anchor.close();
-    // A SQLite agent family beside PostgreSQL shared state keeps the previous path.
+    // Fresh agent catalogs also belong to bootstrap.
     fs.mkdirSync(path.join(stateDir, "agents", "main", "agent"), { recursive: true });
     const agent = new DatabaseSync(
       path.join(stateDir, "agents", "main", "agent", "openclaw-agent.sqlite"),
     );
-    agent.exec("CREATE TABLE t (v TEXT); PRAGMA user_version = 41");
+    agent.exec("CREATE TABLE t (v TEXT)");
     agent.close();
     const env = {
       OPENCLAW_STATE_DIR: stateDir,
       OPENCLAW_CONFIG_PATH: path.join(stateDir, "x.json"),
     };
-    expect(isStateUpgradePending(env)).toBe(false);
+    expect(await isStateUpgradePending(env)).toBe(false);
     const result = await upgradeStateDirectory({
       env,
       log: { info: () => {}, warn: () => {} },
@@ -463,7 +500,7 @@ describe("startup copy ownership", () => {
     expect(fs.readFileSync(path.join(live, "config.json"), "utf8")).toBe("{}");
   });
 
-  it("prunes only owned file generations and never descends into unrelated trees", () => {
+  it("prunes only owned file generations and never descends into unrelated trees", async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-upgrade-prune-"));
     dirs.push(root);
     fs.mkdirSync(path.join(root, "worktrees"));
@@ -483,10 +520,15 @@ describe("startup copy ownership", () => {
     }
     const reads = vi.spyOn(fs, "readdirSync");
     // A custom build ID names a generation as well as a version does.
-    expect(pruneGenerations(root, "3", new Set(["2"]), new Set([owned])).toSorted()).toEqual([
-      "openclaw.sqlite.pre-1",
-      "openclaw.sqlite.pre-release-blue",
-    ]);
+    expect(
+      (
+        await pruneGenerations(root, "3", new Set(["2"]), new Set([owned]), {
+          config: {},
+          activeAnchors: [],
+          warn: () => {},
+        })
+      ).toSorted(),
+    ).toEqual(["openclaw.sqlite.pre-1", "openclaw.sqlite.pre-release-blue"]);
     expect(reads.mock.calls.map(([file]) => file)).toEqual([root]);
     for (const name of [
       "openclaw.sqlite.pre-2",

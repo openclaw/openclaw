@@ -1,5 +1,6 @@
 import { getEventStreamCompletion } from "@openclaw/ai/internal/runtime";
 import { collectErrorGraphCandidates, formatErrorMessage } from "../../infra/errors.js";
+import type { AssistantMessage } from "../../llm/types.js";
 import { createAssistantMessageEventStream } from "../../llm/utils/event-stream.js";
 import { mapAssistantMessageStream } from "../../llm/utils/stream-wrapper.js";
 import { runPluginStreamConsumer } from "../../plugins/plugin-instance-scope.js";
@@ -18,7 +19,6 @@ export {
   stripThinkingBlocksFromMessage,
 } from "./thinking-replay.js";
 
-type AssistantMessage = Extract<AgentMessage, { role: "assistant" }>;
 type AssistantContentBlock = Extract<AgentMessage, { role: "assistant" }>["content"][number];
 type RecoveryAssessment = "valid" | "incomplete-thinking" | "incomplete-text";
 type RecoverySessionMeta = {

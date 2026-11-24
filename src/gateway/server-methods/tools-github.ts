@@ -84,8 +84,8 @@ const handleGitHubRead: GatewayRequestHandler = async (options) => {
     assertToolAllowed(toolName);
     options.sessionMutationCommitGuard?.();
     signal.throwIfAborted();
-    if (!pluginCurrent() || options.hasCurrentClientAuthority?.() === false) {
-      throw new Error("GitHub read authority is no longer active.");
+    if (!pluginCurrent()) {
+      throw new Error("The GitHub plugin stopped. Start a new request to retry.");
     }
   };
   try {

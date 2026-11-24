@@ -419,6 +419,12 @@ export const mainLanes: DockerE2eLane[] = [
     timeoutMs: 10 * 60 * 1000,
   }),
   upgradeSurvivorLane("upgrade-survivor", upgradeSurvivorCommand, 20 * 60 * 1000),
+  upgradeSurvivorLane(
+    "release-update-survivor",
+    upgradeSurvivorScriptCommand("OPENCLAW_UPGRADE_SURVIVOR_SCENARIO=release-update"),
+    20 * 60 * 1000,
+    "release-update",
+  ),
   upgradeSurvivorLane("published-upgrade-survivor", publishedUpgradeSurvivorCommand, 2580 * 1000),
   // The published 2026.10.9 updater still uses in-place activation and Doctor.
   npmLane("package-installed-recovery-older-runtime", {
@@ -746,6 +752,7 @@ const releasePathPackageMigrationLanes = scheduledLaneList(
 );
 const releasePathPackageSelfUpgradeLanes = scheduledLaneList(
   "upgrade-survivor",
+  "release-update-survivor",
   ...updateFirstHopCompatLanes.map((entry) => entry.name),
 );
 const releasePathPackageUpdateCoreLanes = [

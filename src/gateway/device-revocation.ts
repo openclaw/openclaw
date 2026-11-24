@@ -313,8 +313,8 @@ export function retainGatewayDeviceRevocation(
   if (!capture) {
     return undefined;
   }
-  if (!capture.isCurrent() || capture.state.references === 0) {
-    throw new Error("Gateway caller authority is no longer active.");
+  if (capture.owner.closed || capture.state.references === 0) {
+    throw new Error("Gateway request ended. Start a new request.");
   }
   capture.state.references += 1;
   return releaseHold(capture);

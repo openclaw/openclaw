@@ -185,7 +185,7 @@ it("rejects authority closed while DNS is pending before any HTTP attempt", asyn
     },
   );
   resolved.resolve([{ address: "169.254.1.2", family: 4 }]);
-  await expect(pending).rejects.toThrow("no longer active");
+  await expect(pending).rejects.toThrow("The guarded request ended.");
   expect(fixture).toMatchObject({ attempts: [], requests: [] });
 });
 

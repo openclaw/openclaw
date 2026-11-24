@@ -290,17 +290,7 @@ it.each(["selected", "required-error"])(
         ? [expect.objectContaining({ checkId: "core/doctor/finalize", severity: "error" })]
         : [],
     );
-    expect(result.deferred).toEqual(
-      deferred
-        ? [runtimeCheckId, "core/doctor/standalone"].map((checkId) =>
-            warning(checkId, {
-              requirement: "update-validation-scope",
-              message: expect.stringContaining("after update activation"),
-              fixHint: expect.stringContaining(`--only ${checkId}`),
-            }),
-          )
-        : [],
-    );
+    expect(result.deferred).toEqual([]);
     if (deferred) {
       expect(JSON.parse(result.stdout)).toMatchObject({
         checksRun: required.length + 2,

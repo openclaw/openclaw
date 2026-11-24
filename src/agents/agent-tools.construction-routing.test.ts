@@ -146,7 +146,7 @@ describe("createOpenClawCodingTools cron scope", () => {
     const capability = createCronCreatorAuthorityCapability(
       runId,
       { kind: "unknown" },
-      { source: "channel-owner", isCurrent: () => true },
+      { source: "channel-owner" },
     )!;
     const tools = await runWithCronCreatorAuthorityCapability(capability, () =>
       withGatewayToolCallerIdentity(

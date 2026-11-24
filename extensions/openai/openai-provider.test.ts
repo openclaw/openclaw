@@ -870,7 +870,7 @@ describe("buildOpenAIProvider", () => {
     });
     expect(result.payload.store).toBe(true);
     expect(result.payload.context_management).toEqual([
-      { type: "compaction", compact_threshold: 140_000 },
+      { type: "compaction", compact_threshold: 170_000 },
     ]);
     expect(result.payload.service_tier).toBe("priority");
     expect(result.payload.text).toEqual({ verbosity: "low" });

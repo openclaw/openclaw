@@ -435,6 +435,16 @@ In a non-interactive shell, such as a script, `openclaw gateway stop` requires
 `--force`. For a custom supervisor or foreground Gateway, stop and start it
 through its owner instead of the `openclaw gateway` service commands.
 
+When a refusal or recovery message sends you here so that a newer CLI can run
+`openclaw update repair`, run that repair while the Gateway is still stopped:
+right after `openclaw doctor --fix`, before refreshing and starting the service.
+Recovering an interrupted update handoff counts a Gateway and its workers
+started within that handoff's recovery grace as possible handoff work, so repair
+can refuse with `Handoff descendants remain alive or unverified` and their PIDs.
+If you already started the Gateway, run `openclaw gateway stop`, then
+`openclaw update repair`, then `openclaw gateway start`; repair does not restart
+a Gateway that you stopped. See [`update repair`](/cli/update/repair-and-recovery#update-repair).
+
 Check `openclaw update status` for unfinished plugin upgrades and their repair
 commands. Normal CLI commands and Gateway startup do not apply deferred plugin
 migrations.

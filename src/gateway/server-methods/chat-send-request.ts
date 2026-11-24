@@ -26,6 +26,7 @@ import {
   type AttachedChatWorkContext,
 } from "../../chat/work-context.js";
 import type { SessionGoalOperation } from "../../config/sessions/goals-operations.js";
+import { captureSessionWorkTarget } from "../../config/sessions/session-work-start.js";
 import { loadChatRequestIdentityKeyAsync } from "../../infra/device-identity-async.js";
 import type { InputProvenance } from "../../sessions/input-provenance.js";
 import {
@@ -75,6 +76,7 @@ export type NormalizedChatSendRequest = {
   clientInfo?: GatewayClientInfo;
   supportsTaskSuggestions: boolean;
   p: ChatSendRequestParams;
+  targetPrecondition?: ReturnType<typeof captureSessionWorkTarget>;
   explicitOrigin?: ChatSendExplicitOrigin;
   inboundMessage: string;
   systemInputProvenance?: InputProvenance;
@@ -316,6 +318,7 @@ export function normalizeChatSendRequest(params: {
   const modelMessage = workContext
     ? [rawMessage, formatChatWorkContext(workContext.snapshot)].filter(Boolean).join("\n\n")
     : rawMessage;
+  const targetPrecondition = captureSessionWorkTarget(p);
   const requestInput = JSON.stringify([
     p.message,
     ...(params.activeSteer
@@ -325,6 +328,7 @@ export function normalizeChatSendRequest(params: {
     ...(workContext ? [workContext.snapshot] : []),
     ...(p.appContext ? [{ appContext: stableStringify(p.appContext) }] : []),
     ...(providerReview ? [providerReview.review.id, providerReview.target.sessionId] : []),
+    ...(targetPrecondition ? [targetPrecondition.requestIdentity] : []),
   ]);
 
   const value: NormalizedChatSendRequest = {
@@ -333,6 +337,7 @@ export function normalizeChatSendRequest(params: {
     clientInfo,
     supportsTaskSuggestions,
     p,
+    targetPrecondition,
     ...(params.providerReviewAcknowledgment
       ? { providerReviewAcknowledgment: params.providerReviewAcknowledgment }
       : {}),

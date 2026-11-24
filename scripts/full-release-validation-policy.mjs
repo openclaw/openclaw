@@ -29,13 +29,16 @@ import {
 } from "./lib/full-release-manifest.mjs";
 import { changelogEntryPath, isReleaseChangelogPath } from "./lib/release-changelog.mjs";
 import { resolveReleaseContextIdentity } from "./lib/release-context.mjs";
+import { retainedPublicationArtifactSource } from "./lib/release-evidence-identity.mjs";
 import { validateQualificationBaselines } from "./lib/release-upgrade-baseline.mjs";
 import {
   evaluateReleaseChildPolicy,
+  firstIncompleteReleaseStep,
   isFailedReleaseJob as isFailedJob,
   releaseChildAdvisories,
 } from "./lib/release-validation-waivers.mjs";
 import { classifyReleaseTrain, parseReleaseVersion } from "./lib/release-version.mjs";
+import { sameJobExecution } from "./npm-prepared-bundle.mjs";
 import { parseGithubResponse } from "./pr-lib/gh-api-preflight.mjs";
 import { validateQualificationCoverage } from "./release-qualification-coverage.mjs";
 
@@ -48,7 +51,7 @@ export {
 
 function validateReleaseAdvisoryJobs(value, expected = []) {
   const recorded = value === undefined ? [] : value;
-  if (!Array.isArray(recorded) || jsonSha256(recorded) !== jsonSha256(expected)) {
+  if (!isDeepStrictEqual(recorded, expected)) {
     throw new Error("Release advisory jobs differ from the release policy evidence");
   }
   return expected;
@@ -104,7 +107,7 @@ const CHANGELOG_ONLY_EVIDENCE_REUSE_POLICY = "changelog-only-release-v1";
 export const SPLIT_CHANGELOG_EVIDENCE_REUSE_POLICY = "split-changelog-release-v1";
 // GitHub can leave runnerless same-name copies after any rerun request; they never settle.
 export const GHOST_JOBS_ADVICE =
-  "GitHub ghost jobs detected; stop rerunning, cancel that attempt, and start a fresh all-group FRV";
+  "conflicting job identities; inspect the exact executions before another targeted retry";
 
 export function assertReleasePublicationKnownBudget(plan, context, reusedManifest) {
   serializeReleaseArtifact(plan);
@@ -661,8 +664,10 @@ function normalizedAttemptJob(job, runAttempt) {
   if (!name) {
     throw new Error(`release child attempt ${runAttempt} contains an unnamed job`);
   }
+  const step = isFailedJob(job) && firstIncompleteReleaseStep(job.steps);
   return {
     acceptedRunAttempt: runAttempt,
+    ...(step ? { firstIncompleteStep: step } : {}),
     completedAt: stringValue(job?.completed_at ?? job?.completedAt),
     conclusion: boundedString(job?.conclusion, MAX_LABEL_LENGTH),
     name,
@@ -719,6 +724,76 @@ export function releaseCompositeJobsSha256(value) {
   return jsonSha256(sortJsonValueKeys({ effectiveRunAttempt, jobs, plannedRunAttempt }));
 }
 
+// A frozen v1 producer may have sealed the same complete job inventory before
+// it carried step evidence. Accept that exact projection without changing the
+// original hash, and keep using the live jobs for policy evaluation.
+export function matchesReleaseChildAttemptEvidence(sealed, live) {
+  const matches = (candidate) =>
+    Object.entries(candidate).every(([key, value]) =>
+      isDeepStrictEqual(sortJsonValueKeys(sealed[key]), sortJsonValueKeys(value)),
+    );
+  if (matches(live)) {
+    return true;
+  }
+  if (!live.jobs.some((job) => job.firstIncompleteStep)) {
+    return false;
+  }
+  const legacy = {
+    ...live,
+    jobs: live.jobs.map(({ firstIncompleteStep: _step, ...job }) => job),
+  };
+  legacy.compositeJobsSha256 = releaseCompositeJobsSha256(legacy);
+  return matches(legacy);
+}
+
+// GitHub may expose runnerless queued projections beside a single real execution.
+// Only that unambiguous execution can replace prior evidence; queued-only sets and
+// two actual executions are still conflicts, regardless of their conclusions.
+export function resolveReleaseAttemptJobs(jobs, runAttempt, { allowRunning = false } = {}) {
+  const groups = new Map();
+  for (const job of jobs) {
+    if (job?.status === "completed" && job?.conclusion === "skipped") {
+      continue;
+    }
+    const name = boundedString(job?.name, MAX_LABEL_LENGTH);
+    if (!name) {
+      throw new Error(`release child attempt ${runAttempt} contains an unnamed job`);
+    }
+    const group = groups.get(name) ?? [];
+    group.push(job);
+    groups.set(name, group);
+  }
+  return [...groups.entries()].map(([name, group]) => {
+    if (group.length === 1) {
+      return group[0];
+    }
+    const executions = group.filter(
+      (job) =>
+        !(
+          job.status === "queued" &&
+          !job.conclusion &&
+          !job.completed_at &&
+          !job.runner_id &&
+          !job.runner_name
+        ),
+    );
+    const [execution] = executions;
+    if (
+      executions.length === 1 &&
+      (execution.runner_id || execution.runner_name) &&
+      (execution.status === "completed" || (allowRunning && execution.status === "in_progress"))
+    ) {
+      return execution;
+    }
+    throw Object.assign(
+      new Error(
+        `release child attempt ${runAttempt} is unsealable due to duplicate job identity: ${name}; ${GHOST_JOBS_ADVICE}`,
+      ),
+      { code: "FRV_DUPLICATE_JOB_IDENTITY", runAttempt, jobNames: [name] },
+    );
+  });
+}
+
 export function composeReleaseAttemptJobs(attempts, expected = {}) {
   const plannedRunAttempt = positiveInteger(expected.plannedRunAttempt);
   const effectiveRunAttempt = positiveInteger(expected.effectiveRunAttempt);
@@ -748,69 +823,56 @@ export function composeReleaseAttemptJobs(attempts, expected = {}) {
     if (attempt.runAttempt !== expectedAttempt || attempt.jobs.length === 0) {
       throw new Error("release child attempt evidence is gapped");
     }
-    const identityNames = new Set();
-    for (const job of attempt.jobs) {
-      if (job?.status === "completed" && job?.conclusion === "skipped") {
+    const allowRunning =
+      expectedAttempt === effectiveRunAttempt &&
+      ["queued", "in_progress"].includes(expected.effectiveRunStatus);
+    for (const rawJob of resolveReleaseAttemptJobs(attempt.jobs, expectedAttempt, {
+      allowRunning,
+    })) {
+      const prior = accepted.get(rawJob.name);
+      // A rerun listing re-IDs retained jobs. Keep the authenticated execution's
+      // original URL/attempt, not the later API projection of identical work.
+      if (prior && sameJobExecution(prior.rawJob, rawJob)) {
         continue;
       }
-      const name = boundedString(job?.name, MAX_LABEL_LENGTH);
-      if (!name) {
-        throw new Error(`release child attempt ${expectedAttempt} contains an unnamed job`);
-      }
-      if (identityNames.has(name)) {
-        throw Object.assign(
-          new Error(
-            `release child attempt ${expectedAttempt} is unsealable due to duplicate job identity: ${name || "(unnamed)"}; ${GHOST_JOBS_ADVICE}`,
-          ),
-          { code: "FRV_DUPLICATE_JOB_IDENTITY", runAttempt: expectedAttempt },
-        );
-      }
-      identityNames.add(name);
-    }
-    const names = new Set();
-    const completedNames = new Set(
-      attempt.jobs.filter((job) => job?.status === "completed").map((job) => job.name),
-    );
-    const runningNames = new Set(
-      ["queued", "in_progress"].includes(expected.effectiveRunStatus) &&
-        expectedAttempt === effectiveRunAttempt &&
-        effectiveRunAttempt > plannedRunAttempt
-        ? attempt.jobs
-            .filter((job) => job?.status === "in_progress" && (job.runner_id || job.runner_name))
-            .map((job) => job.name)
-        : [],
-    );
-    for (const rawJob of attempt.jobs) {
-      const job = normalizedAttemptJob(rawJob, expectedAttempt);
-      // GitHub's runnerless queued copies can outlive the real rerun job. While
-      // the latest rerun is active, retain its running job so collection stays
-      // pending even when the aggregate run status still says queued. Terminal
-      // evidence still requires the completed sibling. Mirrored steps do not
-      // identify a real runner.
-      const ghost = job.status === "queued" && !rawJob.runner_id && !rawJob.runner_name;
-      const skipped = job.status === "completed" && job.conclusion === "skipped";
-      if (skipped || (ghost && (completedNames.has(job.name) || runningNames.has(job.name)))) {
-        continue;
-      }
-      names.add(job.name);
-      accepted.set(job.name, job);
+      accepted.set(rawJob.name, { rawJob, job: normalizedAttemptJob(rawJob, expectedAttempt) });
     }
   }
 
+  // Existing sealed receipts can name a later API projection of the same execution.
+  // Preserve that exact authenticated identity only after matching every recorded
+  // field and the execution timestamps/steps; never substitute another execution.
+  for (const recorded of expected.recordedJobs ?? []) {
+    const selected = accepted.get(recorded.name);
+    const attempt = normalizedAttempts.find(
+      (entry) => entry.runAttempt === recorded.acceptedRunAttempt,
+    );
+    const raw = attempt?.jobs.find((job) => {
+      const normalized = normalizedAttemptJob(job, attempt.runAttempt);
+      return Object.entries(normalized).every(([key, value]) => recorded[key] === value);
+    });
+    if (selected && raw && sameJobExecution(selected.rawJob, raw)) {
+      accepted.set(recorded.name, {
+        rawJob: raw,
+        job: normalizedAttemptJob(raw, attempt.runAttempt),
+      });
+    }
+  }
   const composite = {
     effectiveRunAttempt,
-    jobs: [...accepted.values()].toSorted(compareReleaseJobsByName),
+    jobs: [...accepted.values()].map(({ job }) => job).toSorted(compareReleaseJobsByName),
     plannedRunAttempt,
   };
   return { ...composite, sha256: releaseCompositeJobsSha256(composite) };
 }
 
-export function composeReleaseChildAttemptEvidence({ attempts, expected, run }) {
+export function composeReleaseChildAttemptEvidence({ attempts, expected, run, recordedJobs }) {
   const provenance = validateReleaseChildRunProvenance(run, expected);
   const composite = composeReleaseAttemptJobs(attempts, {
     effectiveRunAttempt: provenance.effectiveRunAttempt,
     effectiveRunStatus: run.status,
     plannedRunAttempt: expected.plannedRunAttempt,
+    recordedJobs,
   });
   return {
     compositeJobsSha256: composite.sha256,
@@ -1198,6 +1260,7 @@ function releaseExecutionPlanShape(payload) {
       ...basePlanKeys,
       ...(Object.hasOwn(payload, "knownFlakyJobs") ? ["knownFlakyJobs"] : []),
       ...(Object.hasOwn(payload, "childReuse") ? ["childReuse"] : []),
+      ...(Object.hasOwn(payload, "publicationArtifactSource") ? ["publicationArtifactSource"] : []),
       ...(Object.hasOwn(payload, "qualificationCoverage")
         ? ["qualificationCoverage", "qualificationInputs"]
         : []),
@@ -1260,6 +1323,9 @@ function executionPlanDigestPayload(plan) {
               }
             : {}),
           ...(plan.childReuse !== undefined ? { childReuse: plan.childReuse } : {}),
+          ...(plan.publicationArtifactSource !== undefined
+            ? { publicationArtifactSource: plan.publicationArtifactSource }
+            : {}),
           ...(Object.hasOwn(plan, "knownFlakyJobs") ? { knownFlakyJobs: plan.knownFlakyJobs } : {}),
           attemptEvidenceVersion: plan.attemptEvidenceVersion,
           ...(Object.hasOwn(plan, "sealParentRunAttempt")
@@ -1309,6 +1375,7 @@ export function buildReleaseExecutionPlanArtifact({
   sourceAdmission,
   publicationAdmissionContract,
   publicationAdmission,
+  publicationArtifactSource,
   pendingEvidenceReuse = false,
   qualificationCoverage,
   qualificationInputs,
@@ -1388,6 +1455,7 @@ export function buildReleaseExecutionPlanArtifact({
     }
   }
   const basePlan = {
+    ...(publicationArtifactSource === undefined ? {} : { publicationArtifactSource }),
     ...(frozenCoverage ? { qualificationCoverage: frozenCoverage, qualificationInputs } : {}),
     ...(sourceAdmissionContract !== undefined ? { sourceAdmissionContract, sourceAdmission } : {}),
     ...(publicationAdmissionContract !== undefined
@@ -1536,7 +1604,11 @@ function validateCandidatePlanBinding(plan, expectedCandidateRequest) {
   if (plan.candidate !== null) {
     const candidate = validateFullReleaseCandidateBinding(plan.candidate);
     if (
-      JSON.stringify(candidate.request) !== JSON.stringify(request) ||
+      JSON.stringify(candidate.request) !==
+        JSON.stringify({
+          ...request,
+          toolingSha: retainedPublicationArtifactSource(plan)?.workflow.sha ?? request.toolingSha,
+        }) ||
       // Historical strict plans omitted targetVersion; absence grants no waiver.
       (Object.hasOwn(plan, "targetVersion") && plan.targetVersion !== candidate.package.version)
     ) {
@@ -1666,16 +1738,30 @@ function blockerIndex(issues) {
   return issues.map((issue) => jsonSha256(blockerEvidence(issue))).toSorted();
 }
 
-export function terminalPolicyPass(child, targetVersion, targetSha, waiverPolicy) {
-  const policy = evaluateReleaseChildPolicy({ child, targetVersion, targetSha, waiverPolicy });
+export function terminalPolicyPass(child, targetVersion, targetSha, waiverPolicy, requiredJobs) {
+  return terminalChildPass(
+    child,
+    evaluateReleaseChildPolicy({ child, targetVersion, targetSha, waiverPolicy, requiredJobs }),
+  );
+}
+
+function terminalChildPass(child, policy) {
+  if (policy.workflowWaived) {
+    return true;
+  }
+  if (child.status !== "completed") {
+    return false;
+  }
+  const permittedConclusion =
+    child.conclusion === "success" ||
+    (child.conclusion === "failure" && policy.advisoryJobs.some(isFailedJob)) ||
+    policy.waivedWorkDidNotPass;
   return (
-    child.status === "completed" &&
-    child.jobs.every((job) => job.status === "completed") &&
-    (child.conclusion === "success" ||
-      (child.conclusion === "failure" &&
-        (policy.waivers.length > 0 || policy.advisoryJobs.some(isFailedJob)))) &&
+    permittedConclusion &&
+    child.jobs.every((job) => job.status === "completed" || policy.waivedJobNames.has(job.name)) &&
     policy.advisoryFailureAllowed &&
-    policy.blockingJobs.length === 0
+    policy.blockingJobs.length === 0 &&
+    policy.missingRequiredJobs.length === 0
   );
 }
 
@@ -1762,44 +1848,67 @@ function releaseState(cancelled, activeRunIds, blockers, errors) {
   );
 }
 
-function releaseChildBlockers(selected, targetVersion, targetSha) {
-  const childJobBlockers = selected.flatMap((child) =>
-    evaluateReleaseChildPolicy({ child, targetVersion, targetSha }).blockingJobs.map((job) => ({
-      child: child.key,
-      conclusion: job.conclusion,
-      job: job.name,
-      kind: "job_failure",
-      message: `${child.key} job failed policy`,
-      primaryAt: stringValue(
-        job.completed_at ?? job.completedAt ?? job.started_at ?? job.startedAt,
-      ),
-      runId: child.runId,
-      url: job.html_url ?? job.url ?? child.url,
-    })),
+function releaseChildBlockers(selected, policies) {
+  return selected.flatMap((child) => {
+    const policy = policies.get(child.key);
+    const binding = { child: child.key, runId: child.runId, url: child.url };
+    const blockers = policy.blockingJobs.map((job) =>
+      Object.assign({}, binding, {
+        conclusion: job.conclusion,
+        job: job.name,
+        kind: "job_failure",
+        message: `${child.key} job failed policy`,
+        primaryAt: stringValue(
+          job.completed_at ?? job.completedAt ?? job.started_at ?? job.startedAt,
+        ),
+        url: job.html_url ?? job.url ?? child.url,
+      }),
+    );
+    for (const job of policy.missingRequiredJobs) {
+      blockers.push({
+        ...binding,
+        conclusion: "missing",
+        job,
+        kind: "job_missing",
+        message: "Required release job is missing: " + job,
+        primaryAt: "",
+      });
+    }
+    if (
+      !blockers.length &&
+      child.runId &&
+      child.runAttempt &&
+      child.status === "completed" &&
+      !terminalChildPass(child, policy)
+    ) {
+      blockers.push({
+        ...binding,
+        conclusion: child.conclusion,
+        job: "<workflow>",
+        kind: "workflow_failure",
+        message: `${child.key} workflow failed release policy`,
+        primaryAt: stringValue(child.updatedAt ?? child.createdAt),
+      });
+    }
+    return blockers;
+  });
+}
+
+function releaseSnapshotPolicies(children, { targetVersion, targetSha, qualificationCoverage }) {
+  const requiredJobsByChild = new Map(
+    qualificationCoverage?.children.map(({ key, requiredJobs }) => [key, requiredJobs]),
   );
-  const childJobBlockerKeys = new Set(
-    childJobBlockers.map((blocker) => `${blocker.child}:${blocker.runId}`),
+  return new Map(
+    children.map((child) => [
+      child.key,
+      evaluateReleaseChildPolicy({
+        child,
+        targetVersion,
+        targetSha,
+        requiredJobs: requiredJobsByChild.get(child.key),
+      }),
+    ]),
   );
-  const terminalBlockers = selected
-    .filter(
-      (child) =>
-        child.runId &&
-        child.runAttempt &&
-        child.status === "completed" &&
-        !terminalPolicyPass(child, targetVersion, targetSha) &&
-        !childJobBlockerKeys.has(`${child.key}:${child.runId}`),
-    )
-    .map((child) => ({
-      child: child.key,
-      conclusion: child.conclusion,
-      job: "<workflow>",
-      kind: "workflow_failure",
-      message: `${child.key} workflow failed release policy`,
-      primaryAt: stringValue(child.updatedAt ?? child.createdAt),
-      runId: child.runId,
-      url: child.url,
-    }));
-  return [...childJobBlockers, ...terminalBlockers];
 }
 
 export function classifyReleaseSnapshot({
@@ -1810,19 +1919,29 @@ export function classifyReleaseSnapshot({
   localFailures = [],
   targetVersion,
   targetSha,
+  qualificationCoverage,
 }) {
   const selected = children.filter((child) => child.selected);
+  const policies = releaseSnapshotPolicies(selected, {
+    targetVersion,
+    targetSha,
+    qualificationCoverage,
+  });
   const active = selected.filter(
-    (child) => child.runId && child.runAttempt && child.status !== "completed",
+    (child) =>
+      !policies.get(child.key).workflowWaived &&
+      child.runId &&
+      child.runAttempt &&
+      child.status !== "completed",
   );
   const childErrors = selected.flatMap((child) =>
     (child.errors ?? []).filter((error) => error.kind !== "dispatch_missing"),
   );
-  const childBlockers = releaseChildBlockers(selected, targetVersion, targetSha);
+  const childBlockers = releaseChildBlockers(selected, policies);
   const rawBlockers = [
     ...localFailures,
     ...extraBlockers,
-    ...dispatchBlockers(selected),
+    ...dispatchBlockers(selected).filter((issue) => !policies.get(issue.child).workflowWaived),
     ...childBlockers,
   ];
   const blockers = normalizeIssues(rawBlockers, "release_blocker");
@@ -1836,9 +1955,11 @@ export function classifyReleaseSnapshot({
     activeRunIds,
     advisoryJobs: selected.flatMap(releaseChildAdvisories),
     waivers: selected.flatMap((child) =>
-      evaluateReleaseChildPolicy({ child, targetVersion, targetSha }).waivers.map((waiver) =>
-        Object.assign({}, waiver, { runId: child.runId, runAttempt: child.runAttempt }),
-      ),
+      policies
+        .get(child.key)
+        .waivers.map((waiver) =>
+          Object.assign({}, waiver, { runId: child.runId, runAttempt: child.runAttempt }),
+        ),
     ),
     blockerCount: rawBlockers.length,
     blockerIndex: blockerIndex(rawBlockers),
@@ -1865,6 +1986,7 @@ function childTiming(child) {
       return {
         acceptedRunAttempt: positiveInteger(job.acceptedRunAttempt),
         completedAt,
+        ...(job.firstIncompleteStep ? { firstIncompleteStep: job.firstIncompleteStep } : {}),
         conclusion: stringValue(job.conclusion),
         durationMinutes:
           Number.isFinite(jobStarted) && Number.isFinite(jobCompleted)
@@ -2052,7 +2174,7 @@ function validateExecutionPlanChildBindings(children, payload, expectedCoverage)
     for (const spec of coverage.children) {
       const child = children.find((entry) => entry.key === spec.key);
       // Reuse retains the original producer. Strict validation authenticates
-      // either its child workload closure or the whole-root changelog delta.
+      // either its sealed child evidence or the whole-root changelog delta.
       const producer =
         child.source === "reused"
           ? (payload.childReuse?.[spec.key] ?? reusedProducer ?? payload)
@@ -2345,6 +2467,9 @@ export function validateReleaseStateArtifact(payload, expected, expectedMode) {
             const timingJobs = child.timing.jobs.map((job) => ({
               acceptedRunAttempt: positiveInteger(job?.acceptedRunAttempt),
               completedAt: stringValue(job?.completedAt),
+              ...(typeof job?.firstIncompleteStep === "string" && job.firstIncompleteStep
+                ? { firstIncompleteStep: job.firstIncompleteStep }
+                : {}),
               conclusion: stringValue(job?.conclusion),
               durationMinutes:
                 typeof job?.durationMinutes === "number" ? job.durationMinutes : null,
@@ -2470,13 +2595,17 @@ function effectiveStateGates(executionPlan, expected) {
 
 function verifyStateStructure(state, executionPlan, label, effectiveGates) {
   const selected = executionPlan.children.filter((entry) => entry.selected);
-  const expectedKeys = selected.map((child) => child.key).toSorted();
+  const expectedKeys = selected
+    .filter((child) => child.runId && child.runAttempt)
+    .map((child) => child.key)
+    .toSorted();
   if (JSON.stringify(Object.keys(state.children).toSorted()) !== JSON.stringify(expectedKeys)) {
     throw new Error(`${label} child set differs from the immutable execution plan`);
   }
   const snapshots = selected.map((child) => {
     if (!child.runId || !child.runAttempt) {
-      throw new Error(`selected release child omitted exact identity: ${child.key}`);
+      // No child evidence exists; re-evaluate the sealed dispatch slot.
+      return Object.assign({}, child, { jobs: [], status: "missing" });
     }
     const snapshot = state.children[child.key];
     if (
@@ -2520,6 +2649,7 @@ function verifyStateStructure(state, executionPlan, label, effectiveGates) {
           return {
             acceptedRunAttempt,
             completedAt: job.completedAt,
+            ...(job.firstIncompleteStep ? { firstIncompleteStep: job.firstIncompleteStep } : {}),
             conclusion: job.conclusion,
             name: job.name,
             startedAt: job.startedAt,
@@ -2540,6 +2670,7 @@ function verifyStateStructure(state, executionPlan, label, effectiveGates) {
       jobs: snapshot.timing.jobs.map((job) => ({
         acceptedRunAttempt: job.acceptedRunAttempt,
         conclusion: job.conclusion,
+        firstIncompleteStep: job.firstIncompleteStep,
         html_url: job.url,
         name: job.name,
         status: job.status,
@@ -2566,6 +2697,7 @@ function verifyStateStructure(state, executionPlan, label, effectiveGates) {
     localFailures: releasePlanGateFailures(effectiveGates),
     targetVersion: executionPlan.targetVersion,
     targetSha: executionPlan.targetSha,
+    qualificationCoverage: executionPlan.qualificationCoverage,
   });
   if (!isDeepStrictEqual(state.waivers, baseline.waivers)) {
     throw new Error(`${label} waivers differ from checked-in release tooling policy`);
@@ -2639,16 +2771,17 @@ function verifyStateTransition(decision, drain, executionPlan) {
   if (decision.state.startsWith("blocked_") && drain.state === "blocked_complete") {
     // Display rows are capped and can shift as earlier-sorted jobs finish. The
     // complete index owns retention; child evidence owns permitted replacements.
-    const transitionBlockers = (state) => [
-      ...state.blockers,
-      ...releaseChildBlockers(
-        Object.entries(state.children).map(([key, child]) =>
-          Object.assign({}, child, { key, jobs: child.timing.jobs }),
+    const transitionBlockers = (state) => {
+      const children = Object.entries(state.children).map(([key, child]) =>
+        Object.assign({}, child, { key, jobs: child.timing.jobs }),
+      );
+      return [
+        ...state.blockers,
+        ...releaseChildBlockers(children, releaseSnapshotPolicies(children, executionPlan)).map(
+          (issue) => normalizeIssue(issue, "release_blocker"),
         ),
-        executionPlan.targetVersion,
-        executionPlan.targetSha,
-      ).map((issue) => normalizeIssue(issue, "release_blocker")),
-    ];
+      ];
+    };
     const previous = new Map(
       transitionBlockers(decision).map((blocker) => [blockerIndex([blocker])[0], blocker]),
     );
@@ -2723,7 +2856,9 @@ export function verifyReleaseStateArtifacts(plan, decision, drain, expected = {}
     const outcome = verified.drain.state === "passed" ? verified.decision : verified.drain;
     throw new Error(formatReleaseStateOutcome(outcome));
   }
-  for (const child of verified.executionPlan.children.filter((entry) => entry.selected)) {
+  for (const child of verified.executionPlan.children.filter(
+    (entry) => entry.selected && entry.runId && entry.runAttempt,
+  )) {
     if (
       JSON.stringify(releaseStateChildEvidence(verified.decision.children[child.key])) !==
       JSON.stringify(releaseStateChildEvidence(verified.drain.children[child.key]))
@@ -2806,7 +2941,7 @@ function releaseStateDetailLines(payload, maxItems = MAX_SUMMARY_ISSUES) {
   }
   for (const waiver of payload.waivers ?? []) {
     lines.push(
-      `- Waived (not a test pass): ${waiver.childRole} / ${waiver.jobName}; ${waiver.reason}`,
+      `- Waived (not a test pass): ${waiver.childRole} / ${waiver.jobName ?? "whole child"}; ${waiver.reason}`,
     );
   }
   const omitted =

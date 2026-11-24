@@ -259,7 +259,7 @@ export async function prepareSessionSharingProfiles(
   };
   const requesterChanged = () => {
     throw new SessionMutationAuthorizationChangedError(
-      errorShape(ErrorCodes.FORBIDDEN, "Gateway requester authority changed"),
+      errorShape(ErrorCodes.FORBIDDEN, "Gateway requester identity changed. Retry the request."),
     );
   };
   const prepare = async (profileId: string | undefined) => {
@@ -313,7 +313,6 @@ export async function prepareSessionSharingProfiles(
     }
     if (runAuthority) {
       assertAdmittedRunOperatorAuthority(runAuthority);
-      runAuthority.assertCurrent();
     }
     return { profile: readProfile(), roleProfile: readRoleProfile() };
   };

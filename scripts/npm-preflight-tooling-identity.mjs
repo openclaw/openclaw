@@ -10,7 +10,10 @@ import {
   inspectActionsArtifactZipWithPolicy,
 } from "./lib/actions-artifact-archive.mjs";
 import { isRecord } from "./lib/record-shared.mjs";
-import { retainedPublicationArtifactSource } from "./lib/release-evidence-identity.mjs";
+import {
+  retainedPublicationArtifactSource,
+  releaseEvidenceProducerTuple,
+} from "./lib/release-evidence-identity.mjs";
 import { verifyNpmBundleProducer } from "./npm-prepared-bundle.mjs";
 import {
   runReleaseToolingGh,
@@ -25,6 +28,7 @@ const QUALIFIED_WORKFLOWS = new Set([FULL_RELEASE_WORKFLOW, ARTIFACT_WORKFLOW]);
 /**
  * @typedef {object} NpmPreflightProducerOptions
  * @property {unknown} manifest
+ * @property {unknown} [fastTrackApproval]
  * @property {string} repository
  * @property {string} workflowFullRef
  * @property {string} workflowSha
@@ -141,7 +145,11 @@ export function validateNpmPreflightProducer({
 }
 
 /** @param {NpmPreflightProducerOptions & {manifestSha256?: string, runGh?: typeof runReleaseToolingGh}} options */
-export function verifyNpmPreflightProducer({ runGh = runReleaseToolingGh, ...options }) {
+export function verifyNpmPreflightProducer({
+  runGh = runReleaseToolingGh,
+  fastTrackApproval = process.env.FAST_TRACK_APPROVAL_JSON,
+  ...options
+}) {
   const identity = validateNpmPreflightProducer(options);
   if (options.manifest.version !== 3) {
     return identity;
@@ -149,6 +157,7 @@ export function verifyNpmPreflightProducer({ runGh = runReleaseToolingGh, ...opt
   const producer = options.manifest.producer;
   if (QUALIFIED_WORKFLOWS.has(options.workflowPath)) {
     const { descriptor: qualified } = resolveFullReleaseNpmPreflight({
+      fastTrackApproval,
       manifest: options.fullReleaseManifest,
       repository: options.repository,
       runId: options.fullReleaseRunId ?? options.runId,
@@ -185,6 +194,7 @@ export function validateFullReleaseNpmPreflight({
   sourceSha,
   toolingSha,
 }) {
+  const evidenceProducer = releaseEvidenceProducerTuple(manifest ?? {});
   const qualified = manifest?.publicationArtifacts?.npmPreflight;
   const producer = qualified?.producer;
   const producerRepository = repository ?? producer?.repository;
@@ -204,11 +214,14 @@ export function validateFullReleaseNpmPreflight({
     !/^[1-9][0-9]*$/u.test(String(runId ?? "")) ||
     !/^[1-9][0-9]*$/u.test(String(runAttempt ?? "")) ||
     manifest?.workflowName !== "Full Release Validation" ||
-    String(manifest.runId) !== String(runId) ||
-    String(manifest.runAttempt) !== String(runAttempt) ||
+    String(evidenceProducer.runId) !== String(runId) ||
+    String(evidenceProducer.runAttempt) !== String(runAttempt) ||
     manifest.targetSha !== sourceSha ||
     (manifest.workflowSha !== toolingSha &&
-      !(manifest.receiptRecovery && retainedSource?.workflow.sha === toolingSha)) ||
+      !(
+        (manifest.receiptRecovery || manifest.publicationArtifactSource) &&
+        retainedSource?.workflow.sha === toolingSha
+      )) ||
     qualified?.schema !== "openclaw.qualified-npm-preflight/v1" ||
     qualified.source?.sha !== sourceSha ||
     !/^[a-f0-9]{64}$/u.test(qualified.manifestSha256 ?? "") ||
@@ -240,18 +253,28 @@ export function validateFullReleaseNpmPreflight({
 
 // The FRV run authorizes publication; its descriptor identifies the independent
 // producer whose immutable archive survives a rerun of that authorization.
-/** @param {FullReleaseNpmPreflightOptions & {repository: string, runGh?: typeof runReleaseToolingGh}} options */
-export function resolveFullReleaseNpmPreflight({ runGh = runReleaseToolingGh, ...options }) {
+/** @param {FullReleaseNpmPreflightOptions & {repository: string, fastTrackApproval?: unknown, runGh?: typeof runReleaseToolingGh}} options */
+export function resolveFullReleaseNpmPreflight({
+  runGh = runReleaseToolingGh,
+  fastTrackApproval = process.env.FAST_TRACK_APPROVAL_JSON,
+  ...options
+}) {
   const descriptor = validateFullReleaseNpmPreflight(options);
   const producer = descriptor.producer;
+  // This resolves transport and the exact successful seal only. Publication consumers
+  // must authenticate the packet through the full evidence owner before publishing.
+  const inlineException = Boolean(fastTrackApproval) && producer.runId === String(options.runId);
   const { run } = verifyNpmBundleProducer({
     producer,
     repository: options.repository,
     toolingSha: producer.workflowSha,
     qualified: true,
-    requireCompletedParent: true,
+    requireCompletedParent: !inlineException,
     runGh,
   });
+  if (run.status !== "completed") {
+    throw new Error("npm qualification producer must be completed.");
+  }
   const artifact = parseJson(
     runGh(["api", `repos/${options.repository}/actions/artifacts/${descriptor.artifact.id}`]),
     "qualified npm preflight artifact",
@@ -354,11 +377,12 @@ export function validateNpmPreflightQualification({
   producerRunId,
   producerRunAttempt,
 }) {
+  const evidenceProducer = releaseEvidenceProducerTuple(manifest);
   const qualified = validateFullReleaseNpmPreflight({
     manifest,
     repository,
-    runId: manifest.runId,
-    runAttempt: manifest.runAttempt,
+    runId: evidenceProducer.runId,
+    runAttempt: evidenceProducer.runAttempt,
     sourceSha,
     toolingSha,
   });
@@ -376,6 +400,7 @@ export function validateNpmPreflightQualification({
  *   publisherSha: string, producerRunId: string | number, producerRunAttempt: string | number,
  *   publisherFullRef?: string, runGh?: typeof runReleaseToolingGh,
  *   publicationAuthority?: Parameters<typeof verifyReleaseToolingIdentity>[0],
+ *   fastTrackApproval?: unknown,
  *   evidenceClient?: Parameters<typeof import("./release-ci-summary.mjs").validateReleaseRunEvidence>[1] }} options
  */
 export async function verifyNpmPreflightPublicationLineage({
@@ -387,6 +412,7 @@ export async function verifyNpmPreflightPublicationLineage({
   producerRunId,
   producerRunAttempt,
   evidenceClient,
+  fastTrackApproval,
   publisherFullRef = "refs/heads/main",
   publicationAuthority,
 }) {
@@ -400,6 +426,7 @@ export async function verifyNpmPreflightPublicationLineage({
     publisherSha,
     publisherFullRef,
     client: evidenceClient,
+    fastTrackApproval,
   });
   const qualified = validateNpmPreflightQualification({
     manifest,
