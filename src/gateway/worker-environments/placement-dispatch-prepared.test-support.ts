@@ -44,6 +44,7 @@ export async function preparedHarness(
     recipe?: EnvironmentRecipe;
     lifecycleFailure?: boolean;
     project?: WorkerProjectSnapshot;
+    workspacePath?: string;
     preparation?: WorkerProjectPreparationIdentity;
     provider?: WorkerProvider;
     serviceOptions?: Parameters<typeof support.createService>[1];
@@ -62,6 +63,7 @@ export async function preparedHarness(
     now: () => support.testState.nowMs,
   });
   const harness = await createHarness(support.testState.stateDb, placements, {
+    workspacePath: options.workspacePath,
     ...(options.repository
       ? {
           requiresNodeEnrollment: true,

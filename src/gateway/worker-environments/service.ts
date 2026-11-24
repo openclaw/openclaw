@@ -194,6 +194,8 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     ...options,
     store,
     readStartStatus: providerLifecycle.readStartStatus,
+    preparedRepositorySource: providerLifecycle.preparedRepositorySource,
+    takeInitialSnapshot: providerLifecycle.takeInitialSnapshot,
     prepareCurrentBundle: async () => await prepareInstallation("bundle"),
     now,
     identityResolverFor: providerLifecycle.identityResolverFor,
@@ -690,12 +692,10 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
       environmentAccess.project(
         await providerLifecycle.destroy(environmentId, { retryRequested: false }),
       ),
-    destroyUnattached: async (id: string, createAuthorization?: () => () => void) => {
-      const authorize = (await preparedPool.cancelPreparation(id, createAuthorization?.()))
-        ? undefined
-        : createAuthorization?.();
+    destroyUnattached: async (id: string, admit?: () => () => void) => {
+      const guard = (await preparedPool.cancelPreparation(id, admit?.())) ? undefined : admit?.();
       return environmentAccess.project(
-        await providerLifecycle.destroy(id, { requireUnattached: true, authorize }),
+        await providerLifecycle.destroy(id, { requireUnattached: true, authorize: guard }),
       );
     },
     observeDesktop: environmentAccess.observeDesktop,

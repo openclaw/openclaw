@@ -23,12 +23,21 @@ export async function runProjectScriptWithGitProbe(
     options: cp.SpawnSyncOptionsWithStringEncoding,
   ) => cp.SpawnSyncReturns<string> | undefined,
   manifestProbe?: typeof probe,
+  guest?: {
+    platform: string;
+    arch: string;
+    execPath?: string;
+    env: NodeJS.ProcessEnv;
+    fetch: typeof fetch;
+  },
 ): Promise<string> {
   let stdout = "";
   let stderr = "";
   const guestProcess = {
-    env: { PATH: process.env.PATH, HOME: home },
-    execPath: process.execPath,
+    env: guest?.env ?? { PATH: process.env.PATH, HOME: home },
+    platform: guest?.platform ?? process.platform,
+    arch: guest?.arch ?? process.arch,
+    execPath: guest?.execPath ?? process.execPath,
     umask: () => {},
     exitCode: 0,
     stdout: { write: (text: string) => (stdout += text) },
@@ -57,11 +66,16 @@ export async function runProjectScriptWithGitProbe(
     Buffer,
     URL,
     performance,
+    fetch: guest?.fetch ?? globalThis.fetch,
+    AbortSignal,
+    AbortController,
     setTimeout,
     clearTimeout,
     process: guestProcess,
     console: { error: (text: string) => (stderr += text) },
-    require: (id: string) => modules.get(id) ?? requireModule(id),
+    require: Object.assign((id: string) => modules.get(id) ?? requireModule(id), {
+      resolve: requireModule.resolve,
+    }),
   });
   if (guestProcess.exitCode !== 0) {
     throw new Error(stderr);
@@ -107,11 +121,11 @@ export async function createProjectPreparationFixture(
     namespace: "gateway",
   }))!;
   const runScript = vi.fn(async (script: string) =>
-    cp.execFileSync("sh", ["-c", script], {
+    cp.execFileSync("sh", ["-s"], {
+      input: script,
       env: { ...process.env, HOME: home, PREPARATION_UNRELATED_ENV: "must-not-forward" },
       encoding: "utf8",
       timeout: 30_000,
-      stdio: ["ignore", "pipe", "pipe"],
     }),
   );
   const upload = vi.fn(async (source: string, destination: string) => {

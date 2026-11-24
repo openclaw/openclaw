@@ -416,6 +416,80 @@ describe("node worker bundle installer", () => {
     return { fixture, archivePath, served, ...installation(fixture, served.gatewayUrl) };
   }
 
+  it("reuses completed fresh snapshot runtime through status and validates after admitted writes", async () => {
+    const marker = path.join(root, "fresh-runtime-prewarm");
+    const fixture = await bundleFixture({ prewarmMarker: marker, bundlePrewarm: 1 });
+    const archive = await prepareLocalArchive(fixture);
+    await preparePackagedNodeWorkerBundle(fixture.input);
+    await fs.unlink(marker);
+    const prepared = path.join(path.dirname(archive), "expanded", fixture.input.build.bundleHash);
+    let scans = 0;
+    observeDirectory(prepared, () => {
+      scans++;
+    });
+    const installer = new NodeWorkerBundleInstaller({ root });
+    const served = await serve(fixture);
+    await installer.ensure({
+      input: { ...fixture.input, initialSnapshot: "checkpoint-fresh" },
+      gatewayUrl: served.gatewayUrl,
+    });
+    await installer.retain({
+      gatewayNamespace: fixture.input.gatewayNamespace,
+      bundleHashes: [fixture.input.build.bundleHash],
+    });
+    expect(
+      await installer.inspect({
+        gatewayNamespace: fixture.input.gatewayNamespace,
+        bundleHash: fixture.input.build.bundleHash,
+      }),
+    ).toMatchObject({ status: "installed" });
+    expect(scans).toBe(0);
+    await expect(fs.access(marker)).rejects.toThrow();
+    installer.invalidateSnapshotPreparation();
+    await fs.writeFile(path.join(prepared, "worker.mjs"), "changed runtime");
+    expect(
+      await installer.inspect({
+        gatewayNamespace: fixture.input.gatewayNamespace,
+        bundleHash: fixture.input.build.bundleHash,
+      }),
+    ).toMatchObject({ status: "missing" });
+    expect(scans).toBeGreaterThan(0);
+    // Replaying the original input after a writer cannot re-admit the old content fact.
+    scans = 0;
+    await installer.ensure({
+      input: { ...fixture.input, initialSnapshot: "checkpoint-fresh" },
+      gatewayUrl: served.gatewayUrl,
+    });
+    expect(scans).toBeGreaterThan(0);
+    expect(await fs.readFile(path.join(bundleDirectory(fixture), "worker.mjs"), "utf8")).not.toBe(
+      "changed runtime",
+    );
+  });
+
+  it.each(["missing", "wrong build"])(
+    "validates fresh runtime with a %s receipt",
+    async (receipt) => {
+      const fixture = await bundleFixture();
+      const archive = await prepareLocalArchive(fixture);
+      await preparePackagedNodeWorkerBundle(fixture.input);
+      const prepared = path.join(path.dirname(archive), "expanded", fixture.input.build.bundleHash);
+      const receiptPath = path.join(prepared, "bootstrap-receipt.json");
+      if (receipt === "missing") {
+        await fs.unlink(receiptPath);
+      } else {
+        await fs.writeFile(
+          receiptPath,
+          JSON.stringify({ ...fixture.input.build, bundleHash: "a".repeat(64) }),
+        );
+      }
+      const { ensure, inspect } = installation(fixture, (await serve(fixture)).gatewayUrl);
+      await ensure({ input: { ...fixture.input, initialSnapshot: "checkpoint-fresh" } });
+      // Repair publishes a validated private directory, never trusts the broken package receipt.
+      expect((await fs.lstat(bundleDirectory(fixture))).isSymbolicLink()).toBe(false);
+      expect(await inspect()).toMatchObject({ status: "installed" });
+    },
+  );
+
   it("cancels retry backoff without another request and removes staging", async () => {
     const fixture = await bundleFixture();
     const controller = new AbortController();

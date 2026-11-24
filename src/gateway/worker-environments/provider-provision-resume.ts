@@ -38,6 +38,9 @@ type WorkerProvisionResumeOptions = Pick<
     beforeProvision?: () => void,
     repositorySource?: WorkerProviderRepositorySource,
     wakeRetained?: () => void,
+    recordInitialSnapshot?: (
+      custody: import("./preparation-identity.js").WorkerInitialSnapshotCustody,
+    ) => void,
   ) => Promise<WorkerEnvironmentRecord>;
 };
 
@@ -84,6 +87,9 @@ export function createWorkerProvisionResumer(options: WorkerProvisionResumeOptio
     repositorySource?: WorkerProviderRepositorySource,
     wakeRetained?: () => void,
     originalSource?: () => void,
+    recordInitialSnapshot?: (
+      custody: import("./preparation-identity.js").WorkerInitialSnapshotCustody,
+    ) => void,
   ) => {
     const workSignal = signal
       ? AbortSignal.any([options.ownerSignal, signal])
@@ -151,6 +157,7 @@ export function createWorkerProvisionResumer(options: WorkerProvisionResumeOptio
         assertAdmitted,
         repositorySource,
         wakeRetained,
+        recordInitialSnapshot,
       );
     } catch (error) {
       await retireRefusedProvisionSource(record, error, provider);

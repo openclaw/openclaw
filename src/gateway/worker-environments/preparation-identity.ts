@@ -12,6 +12,13 @@ import {
 } from "./preparation-identity.schema.js";
 import type { WorkerProjectSnapshot } from "./workspace-git-base.js";
 
+export type WorkerInitialSnapshotCustody = {
+  environmentId: string;
+  provisionOperationId: string;
+  nodeDeviceId: string;
+  snapshot: import("../../worker/node-workspace-prepared-protocol.js").NodeWorkerInitialSnapshot;
+};
+
 export type WorkerProviderPreparedIntent = {
   providerId: string;
   retainedPolicy?: WorkerRetentionPolicy;

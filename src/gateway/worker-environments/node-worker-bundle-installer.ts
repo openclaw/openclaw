@@ -34,6 +34,7 @@ export type GatewayNodeWorkerBundleInstall = (
     signal?: AbortSignal;
     assertCurrent?: () => void;
     onProgress?: () => void;
+    initialSnapshot?: string;
   } & (
     | { reason: "prefetch"; environmentId?: never; prewarm?: never }
     | { reason: "provision" | "refresh"; environmentId: string; prewarm: boolean }
@@ -179,6 +180,7 @@ export function createGatewayNodeWorkerBundleInstaller(options: {
           gatewayNamespace: options.gatewayNamespace,
           artifact,
           ...(bundlePrewarm ? { bundlePrewarm } : {}),
+          ...(params.initialSnapshot ? { initialSnapshot: params.initialSnapshot } : {}),
           ...(params.reason === "prefetch" ? { prefetch: 1 } : {}),
           isAuthorized,
           signal: params.signal,

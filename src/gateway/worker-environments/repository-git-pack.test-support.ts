@@ -251,7 +251,8 @@ export async function fixture(fixtureOptions: { setupRecipe?: boolean; bulk?: bo
   const scripts: string[] = [];
   const runScript = async (script: string) => {
     scripts.push(script);
-    return execFileSync("sh", ["-c", script], {
+    return execFileSync("sh", ["-s"], {
+      input: script,
       encoding: "utf8",
       timeout: 30_000,
       env: { PATH: process.env.PATH, HOME: home, USERPROFILE: home },

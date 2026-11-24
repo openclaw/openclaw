@@ -10,6 +10,7 @@ import { sessionLog } from "../session-log.js";
 import { FEATURES, preparedHarness } from "./placement-dispatch-prepared.test-support.js";
 import { createWorkerPreparationIdentity } from "./preparation-identity.js";
 import type { WorkerProjectPreparationIdentity } from "./preparation-identity.schema.js";
+import { readWorkerProjectEnvironmentRecipe } from "./project-preparation.js";
 import { createProjectPreparationFixture } from "./project-preparation.test-support.js";
 import * as support from "./service.test-support.js";
 import { prepareWorkerProjectSnapshot, type WorkerProjectSnapshot } from "./workspace-git-base.js";
@@ -21,8 +22,20 @@ vi.mock("../../config/config.js", async (importOriginal) => ({
   }),
 }));
 
-const profile = { settings: { region: "test" }, executionMode: "worker-turn" as const };
+const profile = {
+  install: "bundle",
+  settings: { region: "test" },
+  executionMode: "worker-turn",
+} as const;
 const target = { machineClass: "standard", platform: "linux", arch: "x64" };
+const artifacts = {
+  nodeBootstrapSha256: "f".repeat(64),
+  enabledPluginIds: [],
+  workerBundleHash: support.BUNDLE_HASH,
+  workerArchiveSha256: support.BUNDLE_ARTIFACT.tarballSha256,
+  openclawVersion: support.BOOTSTRAP_RECEIPT.openclawVersion,
+  protocolFeatures: FEATURES,
+};
 const identityFor = (
   project: WorkerProjectSnapshot,
   overrides: Partial<Parameters<typeof createWorkerPreparationIdentity>[0]> = {},
@@ -34,26 +47,17 @@ const identityFor = (
     profileSnapshot: profile,
     project,
     target,
-    artifacts: {
-      nodeBootstrapSha256: "f".repeat(64),
-      enabledPluginIds: [],
-      workerBundleHash: support.BUNDLE_HASH,
-      workerArchiveSha256: "b".repeat(64),
-      openclawVersion: support.BOOTSTRAP_RECEIPT.openclawVersion,
-      protocolFeatures: FEATURES,
-    },
+    artifacts,
     ...overrides,
   });
-const intentFor = (project: WorkerProjectSnapshot, preparation = identityFor(project)) => ({
-  providerId: "fake",
-  profileSnapshot: { ...profile, project: { ...project, preparation } },
-});
 
 async function refreshFixture(failRefresh = false) {
   const directory = path.join(support.testState.root, "project");
   await fs.mkdir(directory);
   const source = await createProjectPreparationFixture(directory);
-  const preparation = identityFor(source.project);
+  const preparation = identityFor(source.project, {
+    recipe: await readWorkerProjectEnvironmentRecipe(source.project),
+  });
   const initial = await source.preparedOperation(undefined, {
     key: preparation.key,
     cacheKey: preparation.cacheKey,
@@ -90,10 +94,12 @@ async function refreshFixture(failRefresh = false) {
   });
   const fixture = await preparedHarness({
     project: source.project,
+    workspacePath: source.repository,
     preparation,
     provider,
     serviceOptions: {
       projectNamespace: "gateway",
+      prepareNodeArtifacts: async () => ({ artifacts }),
       registerPreparedWorkspace: async ({ record, workspace, assertCurrent }) => {
         assertCurrent();
         await runtime.prepare({
@@ -118,6 +124,12 @@ async function refreshFixture(failRefresh = false) {
   });
   fixture.harness.environments.refreshPreparedEnvironment =
     fixture.workerService.refreshPreparedEnvironment;
+  vi.mocked(fixture.harness.environments.prepareProjectIntent).mockImplementation(
+    fixture.workerService.prepareProjectIntent,
+  );
+  vi.mocked(fixture.harness.environments.assertPreparedIntentCurrent).mockImplementation(
+    fixture.workerService.assertPreparedIntentCurrent,
+  );
   vi.mocked(fixture.harness.environments.getPreparedCandidates).mockImplementation(
     fixture.workerService.getPreparedCandidates,
   );
@@ -130,13 +142,10 @@ async function refreshFixture(failRefresh = false) {
     localPath: source.repository,
     namespace: "gateway",
   }))!;
-  const intentB = intentFor(projectB);
-  vi.mocked(fixture.harness.environments.prepareProjectIntent).mockResolvedValue(intentB);
   return {
     ...fixture,
     source,
     projectB,
-    intentB,
     preparedA,
     runtime,
     provision,
@@ -189,6 +198,10 @@ describe("ready reserve refresh during dispatch", () => {
 
   it("retains profile, recipe, runtime and repository isolation and prefers exact commits", async () => {
     const f = await refreshFixture();
+    const intentB = await f.workerService.prepareProjectIntent(f.request.profileId, {
+      projectPath: f.source.repository,
+      executionMode: f.request.executionMode,
+    });
     const incompatible: WorkerProjectPreparationIdentity[] = [
       identityFor(f.projectB, { profileId: "other-profile" }),
       identityFor(f.projectB, { setupRecipe: "a".repeat(40) }),
@@ -198,16 +211,21 @@ describe("ready reserve refresh during dispatch", () => {
       identityFor({ ...f.projectB, key: "0".repeat(64) }),
     ];
     for (const preparation of incompatible) {
-      expect(f.workerService.getPreparedCandidates(intentFor(f.projectB, preparation))).toEqual([]);
+      expect(
+        f.workerService.getPreparedCandidates({
+          ...intentB,
+          profileSnapshot: { ...profile, project: { ...f.projectB, preparation } },
+        }),
+      ).toEqual([]);
     }
-    expect(
-      f.workerService.getPreparedCandidates(f.intentB).map((row) => row.environmentId),
-    ).toEqual([f.ready.environmentId]);
+    expect(f.workerService.getPreparedCandidates(intentB).map((row) => row.environmentId)).toEqual([
+      f.ready.environmentId,
+    ]);
     const exact = await f.store.createIntent({
       environmentId: "exact-reserve",
       profileId: f.ready.profileId,
       providerId: "fake",
-      profileSnapshot: f.intentB.profileSnapshot,
+      profileSnapshot: intentB.profileSnapshot,
       provisionOperationId: "exact-reserve",
       preparation: {
         purpose: "reserve",
@@ -235,13 +253,14 @@ describe("ready reserve refresh during dispatch", () => {
         }),
       },
     });
-    expect(
-      f.workerService.getPreparedCandidates(f.intentB).map((row) => row.environmentId),
-    ).toEqual([exact.environmentId, f.ready.environmentId]);
+    expect(f.workerService.getPreparedCandidates(intentB).map((row) => row.environmentId)).toEqual([
+      exact.environmentId,
+      f.ready.environmentId,
+    ]);
     delete f.provider.refreshPreparedProject;
-    expect(
-      f.workerService.getPreparedCandidates(f.intentB).map((row) => row.environmentId),
-    ).toEqual([exact.environmentId]);
+    expect(f.workerService.getPreparedCandidates(intentB).map((row) => row.environmentId)).toEqual([
+      exact.environmentId,
+    ]);
     expect(f.store.get(f.ready.environmentId)?.preparation?.consumedAtMs).toBeNull();
   });
 

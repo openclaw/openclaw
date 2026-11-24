@@ -93,6 +93,7 @@ export function createCrabboxWarmImageCapture(dependencies: {
     prepareSource?: () => Promise<{
       timeoutMs: number;
       run: (scrubScript: string) => Promise<void>;
+      inspectPreparedWorkspace?: () => Promise<void>;
     }>,
   ): Promise<boolean | "source-running"> {
     assertCurrent(context);
@@ -281,6 +282,9 @@ export function createCrabboxWarmImageCapture(dependencies: {
         if (source) {
           preparing = true;
           await source.run(SCRUB_WORKER_STATE);
+          // Full cache inspection may prune unselected caches; only this claimed
+          // capture owns it, after runtime preparation and before the capture point.
+          await source.inspectPreparedWorkspace?.();
           preparing = false;
         } else {
           await checkpointCommand(
