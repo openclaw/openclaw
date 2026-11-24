@@ -144,7 +144,7 @@ final class ChatSessionSidebarBatch {
         }, uniquingKeysWith: min)
     }
 
-    static func movingPin(_ entries: [AnyCodable], key: String, target: String?, after: Bool) -> [AnyCodable] {
+    static func movingPin(_ entries: [AnyCodable], key: String, target: String?, after: Bool) throws -> [AnyCodable] {
         guard key != target else { return entries }
         func pinKey(_ entry: AnyCodable) -> String? {
             Self.sessionPinKey(entry.value as? String)
@@ -156,7 +156,7 @@ final class ChatSessionSidebarBatch {
         let entry = sessions.remove(at: source)
         let destination = target.flatMap { target in sessions.firstIndex(where: { pinKey($0) == target }) }
         // Only a drop on the section itself means “at the end.” Do not reinterpret a stale row target.
-        guard target == nil || destination != nil else { return entries }
+        guard target == nil || destination != nil else { throw OpenClawPersonalPinError.placementChanged }
         sessions.insert(entry, at: destination.map { $0 + (after ? 1 : 0) } ?? sessions.count)
         var result = entries
         for (slot, value) in zip(slots, sessions) {
@@ -182,10 +182,10 @@ final class ChatSessionSidebarBatch {
             for attempt in 0..<2 {
                 let previous = try await self.pinEntries(connection)
                 guard self.scope == scope else { return }
-                let next = Self.movingPin(previous, key: key, target: target, after: after)
-                self.sidebarEntries = next.compactMap { $0.value as? String }
-                guard next != previous else { return }
                 do {
+                    let next = try Self.movingPin(previous, key: key, target: target, after: after)
+                    self.sidebarEntries = next.compactMap { $0.value as? String }
+                    guard next != previous else { return }
                     let result: PinWrite = try await connection.read("users.prefs.set", [
                         "entries": .init([Self.pinKey: next]), "expectedEntries": .init([Self.pinKey: previous]),
                     ])

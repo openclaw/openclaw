@@ -1,7 +1,6 @@
 #if os(macOS)
 import Foundation
 import OpenClawProtocol
-import SwiftUI
 import Testing
 @testable import OpenClawChatUI
 
@@ -75,7 +74,7 @@ struct ChatSessionSidebarBatchTests {
         #expect(methods == ["config.get"])
     }
 
-    @Test func `pin reordering permutes session slots without changing foreign bytes or positions`() {
+    @Test func `pin reordering permutes session slots without changing foreign bytes or positions`() throws {
         let entries = [
             "route:usage",
             "session:a",
@@ -86,7 +85,7 @@ struct ChatSessionSidebarBatchTests {
             "session:",
             "",
         ]
-        let moved = ChatSessionSidebarBatch.movingPin(
+        let moved = try ChatSessionSidebarBatch.movingPin(
             entries.map(AnyCodable.init),
             key: "c",
             target: "a",
@@ -104,14 +103,14 @@ struct ChatSessionSidebarBatchTests {
         for index in [0, 2, 4, 6, 7] {
             #expect(Array(moved[index].utf8) == Array(entries[index].utf8))
         }
-        #expect(ChatSessionSidebarBatch
+        #expect(try ChatSessionSidebarBatch
             .movingPin(entries.map(AnyCodable.init), key: "a", target: "a", after: true) == entries
             .map(AnyCodable.init))
     }
 
-    @Test func `reordering cannot restore a pin removed on another client`() {
+    @Test func `reordering cannot restore a pin removed on another client`() throws {
         let entries = ["session:a", "route:usage", "future:reserved"]
-        #expect(ChatSessionSidebarBatch
+        #expect(try ChatSessionSidebarBatch
             .movingPin(entries.map(AnyCodable.init), key: "b", target: "a", after: false) == entries
             .map(AnyCodable.init))
     }
@@ -242,8 +241,8 @@ struct ChatSessionSidebarBatchTests {
     }
 
     @Test(arguments: [false, true])
-    func `a removed row target cannot turn a guarded drop into a move to the section end`(conflict: Bool) async throws {
-        let remaining = ["session:a", "route:usage", "session:c", "session:d"]
+    func `a vanished target reports a failed reorder without moving to the section end`(conflict: Bool) async throws {
+        let remaining = ["session:a", "session-rail:b", "session:c", "session:d"]
         var server = conflict ? remaining + ["session:b"] : remaining
         var attempts = 0
         let connection = try self.connection { request in
@@ -258,14 +257,22 @@ struct ChatSessionSidebarBatchTests {
             return Data(#"{"status":"ok"}"#.utf8)
         }
         let batch = ChatSessionSidebarBatch()
-        try await batch.movePin(key: "a", target: "b", after: false, connection: connection)
+        // An already-satisfied named move needs neither a write nor a warning.
+        try await batch.movePin(key: "c", target: "d", after: false, connection: connection)
+        #expect(attempts == 0)
+        #expect(batch.notices.isEmpty)
+
+        await #expect(throws: (any Error).self) {
+            try await batch.movePin(key: "a", target: "b", after: false, connection: connection)
+        }
+        #expect(batch.notices == [String(localized: "Pin placement changed. Refresh the list and retry.")])
         #expect(attempts == (conflict ? 1 : 0))
         #expect(server == remaining)
         #expect(batch.sidebarEntries == remaining)
 
         // Dropping on the section, rather than on B, still means after the last pin.
         try await batch.movePin(key: "a", target: nil, after: false, connection: connection)
-        #expect(server == ["session:c", "route:usage", "session:d", "session:a"])
+        #expect(server == ["session:c", "session-rail:b", "session:d", "session:a"])
         #expect(batch.sidebarEntries == server)
     }
 
