@@ -1,5 +1,6 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import type { GatewayRequestAuthorityV1 } from "openclaw/plugin-sdk/gateway-request-authority";
 import type { OpenClawPluginServiceContextV2 } from "openclaw/plugin-sdk/plugin-entry";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import {
@@ -26,13 +27,24 @@ import {
 } from "./types.js";
 
 afterEach(() => vi.restoreAllMocks());
+export function beamTestAuthority(
+  overrides: Partial<GatewayRequestAuthorityV1> = {},
+): GatewayRequestAuthorityV1 {
+  return {
+    clientIp: "127.0.0.1",
+    scopes: ["operator.write"],
+    assertCurrent() {},
+    async revalidate() {},
+    ...overrides,
+  };
+}
 export function beamTestHandler(
   store: BeamStore,
   options: Partial<Parameters<typeof createBeamRequestHandler>[0]> = {},
   failureStatus = 500,
 ) {
   const handler = createBeamRequestHandler({
-    resolveClient: () => ({ clientIp: "127.0.0.1", scopes: ["operator.write"] }),
+    resolveAuthority: beamTestAuthority,
     resolveControlUiBasePath: () => undefined,
     ...options,
     store,
