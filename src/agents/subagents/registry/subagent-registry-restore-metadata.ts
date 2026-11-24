@@ -1,6 +1,7 @@
 import { getRuntimeConfig } from "../../../config/config.js";
 import type { OpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.types.js";
 import { resolveSubagentRequesterAgentId } from "../../subagent-requester-owner.js";
+import { updateSwarmCollectorCompletion } from "../swarm/swarm-collector.js";
 import { resolveSubagentChildAuthority } from "./subagent-child-owner-match.js";
 import { updateSubagentArchiveAtMs } from "./subagent-registry-helpers.js";
 import { mutateSubagentRuns } from "./subagent-registry-persistence.js";
@@ -30,7 +31,14 @@ export function restoreSubagentRunMetadata(
         if (ownerChanged) {
           draft.requesterAgentId = requesterAgentId;
         }
-        if (updateSubagentArchiveAtMs(draft, cfg) || ownerChanged) {
+        const unfinishedCollector =
+          draft.collect && draft.execution.status === "terminal" && !draft.collectorCompletion;
+        if (unfinishedCollector) {
+          // Shutdown can retire execution before its waitable collector result publishes.
+          draft.completion = draft.completion ? { ...draft.completion } : undefined;
+          updateSwarmCollectorCompletion(draft, cfg, { entry: undefined });
+        }
+        if (unfinishedCollector || updateSubagentArchiveAtMs(draft, cfg) || ownerChanged) {
           postimages.set(runId, draft);
         }
       }
