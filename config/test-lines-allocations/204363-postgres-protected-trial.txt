@@ -2,4 +2,4 @@
 # mixed-engine failure, rollback and owned-namespace pruning; pre-stop copy refusal;
 # generic boot-refusal cause, under/over-window selection and physical terminal-run reads.
 # Main approved the remaining behavior-focused tests after removing 136 wiring lines.
-488
+508

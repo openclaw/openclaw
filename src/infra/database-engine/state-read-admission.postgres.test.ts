@@ -11,8 +11,11 @@ import {
 } from "../../state/openclaw-state-db.js";
 import { ensureUserBackgroundSchema } from "../../state/user-background.store.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { readGatewayLockProcessNamespace } from "../gateway-lock-payload.js";
+import { acquireGatewayStateOwner } from "../gateway-state-owner.js";
 import { dropPostgresTestSchemas } from "../postgres-sync/schema-cleanup.test-support.js";
 import { getSqliteDatabaseSchemaRevision } from "../sqlite-database-admission.js";
+import { hasVerifiedLiveSqliteOwner } from "../sqlite-live-owner.js";
 import { createSqliteDatabaseAdmissionRelay } from "../sqlite-worker-operation-admission.js";
 import { getUpdateRunWithReconciliationAsync } from "../update-run-reconciliation.js";
 import { createUpdateRunAsync, finishUpdateRunAsync } from "../update-run-write.async.js";
@@ -185,16 +188,33 @@ it.skipIf(!connection)(
           effectiveEngines: resolveDatabaseFamilyEngines({ database: { engine: "postgres" } }),
           postgres: { connection: connection!, schemaPrefix: prefix },
         });
-        withEngineStoreAdmission(() => openOpenClawStateDatabase({ env: state.env }));
+        const database = withEngineStoreAdmission(() =>
+          openOpenClawStateDatabase({ env: state.env }),
+        );
         const run = await createUpdateRunAsync({ trigger: "cli" }, { env: state.env });
         await finishUpdateRunAsync(run.runId, { status: "succeeded" }, { env: state.env });
         await closeOpenClawStateDatabaseAsync();
-        const result = await getUpdateRunWithReconciliationAsync(run.runId, { env: state.env });
-        expect(result.run).toMatchObject({
-          runId: run.runId,
-          status: "succeeded",
-          phase: "finished",
+        const owner = acquireGatewayStateOwner({
+          databasePath: database.path,
+          payload: {
+            pid: process.pid,
+            createdAt: new Date().toISOString(),
+            configPath: state.configPath,
+            role: "gateway",
+            processNamespace: readGatewayLockProcessNamespace(),
+          },
         });
+        try {
+          expect(hasVerifiedLiveSqliteOwner(database.path)).toBe(true);
+          const result = await getUpdateRunWithReconciliationAsync(run.runId, { env: state.env });
+          expect(result.run).toMatchObject({
+            runId: run.runId,
+            status: "succeeded",
+            phase: "finished",
+          });
+        } finally {
+          owner.release();
+        }
       });
     } finally {
       closeOpenClawStateDatabaseForTest();
