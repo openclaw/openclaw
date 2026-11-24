@@ -714,7 +714,7 @@ describe("handleChatGatewayEvent", () => {
       { state: "error", errorKind: "timeout", errorMessage: "agent provider timeout" },
       "timeout",
       "timeout",
-      "Error: agent provider timeout",
+      "agent provider timeout",
     ],
   ] as const)(
     "projects the canonical %s status onto the selected session",
@@ -843,7 +843,7 @@ describe("handleChatGatewayEvent", () => {
       "First thought. Configure provider auth.",
     );
     expect(state.chatMessages[2]).toEqual(terminal);
-    expect(state.chatRunError).toEqual({ summary: "Error: gateway disconnected", runId: "run-1" });
+    expect(state.chatRunError).toEqual({ summary: "gateway disconnected", runId: "run-1" });
   });
 
   it.each([
@@ -898,7 +898,7 @@ describe("handleChatGatewayEvent", () => {
     },
   );
 
-  it("adds bounded OAuth facts to live errors without changing the summary", () => {
+  it("keeps OAuth classification separate from the visible error text", () => {
     const summary =
       "⚠️ Your refresh token has already been used to generate a new access token. Please try signing in again.";
     const state = createState({ chatRunId: "run-1" });
@@ -913,9 +913,13 @@ describe("handleChatGatewayEvent", () => {
       },
     });
     expect(state.chatRunError).toEqual({
-      kind: "auth_refresh",
       runId: "run-1",
-      summary: `${summary}\n\nProvider: openai\nHTTP status: 401\nReason: refresh_token_reused\nType: invalid_request_error`,
+      summary,
+      cause: {
+        provider: "openai",
+        failoverReason: "refresh_token_reused",
+        providerRuntimeFailureKind: "auth_refresh",
+      },
     });
   });
 
@@ -1570,7 +1574,7 @@ describe("aborted chat diagnostics", () => {
   it("keeps first-terminal provider sign-out killed and interrupted", () => {
     const stopReason = "auth-revoked";
     const expectedError =
-      "Error: This reply stopped because the provider was signed out. Sign in again or choose another model.";
+      "This reply stopped because the provider was signed out. Sign in again or choose another model.";
     const state = createAbortDiagnosticState();
     receive(state, "aborted", {
       runId: "run-validation-abort",

@@ -127,16 +127,6 @@
   white-space: normal;
 }
 
-.chat-run-failure__summary {
-  margin: 0;
-  padding: 2px 4px 0;
-  color: var(--text);
-  font-size: calc(13px * var(--control-ui-text-scale));
-  line-height: calc(18 / 13);
-  text-wrap: pretty;
-  overflow-wrap: anywhere;
-}
-
 .chat-run-failure__well {
   --chat-run-failure-copy-size: 26px;
   --chat-run-failure-copy-clearance: calc(var(--chat-run-failure-copy-size) + 10px);

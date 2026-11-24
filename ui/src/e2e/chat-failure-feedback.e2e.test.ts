@@ -74,7 +74,7 @@ suite.define(() => {
         const notice = page.locator(".chat-run-failure");
         const report = notice.getByRole("link", { name: "Report a bug" });
         await report.waitFor();
-        const toggle = notice.getByRole("button", { name: "Couldn’t finish this reply" });
+        const toggle = notice.getByRole("button", { name: summary });
         await toggle.click();
         await notice.locator('[role="dialog"][data-phase="open"]').waitFor();
         expect(await notice.locator(".chat-run-failure__log").textContent()).toBe(summary);

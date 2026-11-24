@@ -28,7 +28,8 @@ suite.define(() => {
               status: "failed",
               hasActiveRun: false,
               lastRunId: "failed-run",
-              lastRunError: "Synthetic reply failure for layout verification.",
+              lastRunError:
+                "Synthetic reply failure for layout verification.\nRetained diagnostic details.",
             },
           ],
           historyMessages: [{ role: "user", content: "Check the example operation." }],
@@ -36,23 +37,18 @@ suite.define(() => {
         await page.goto(new URL("/chat/main", suite.server.baseUrl).href);
         const notice = page.locator(".chat-error");
         const title = notice.locator(".app-toast__message");
-        const description = notice.locator(".app-toast__description");
         const refresh = notice.getByRole("button", { name: "Refresh", exact: true });
         const report = notice.getByRole("link", { name: "Report a bug", exact: true });
-        await waitForControlUiProofSurface(notice, [title, description, refresh]);
+        await waitForControlUiProofSurface(notice, [title, refresh]);
+        expect(await title.textContent()).toBe("Synthetic reply failure for layout verification.");
+        expect(await notice.locator(".app-toast__description").count()).toBe(0);
         const collapsed = await notice.evaluate((element) => {
-          const titleNode = element.querySelector(".app-toast__message")!;
-          const descriptionNode = element.querySelector(".app-toast__description")!;
+          const refreshNode = element.querySelector(".chat-error__refresh")!;
           return {
             height: element.getBoundingClientRect().height,
-            gap:
-              descriptionNode.getBoundingClientRect().top -
-              titleNode.getBoundingClientRect().bottom,
-            fontSize: getComputedStyle(descriptionNode).fontSize,
+            fontSize: getComputedStyle(refreshNode).fontSize,
           };
         });
-        expect.soft(collapsed.gap).toBeGreaterThanOrEqual(2);
-        expect.soft(collapsed.gap).toBeLessThanOrEqual(6);
         if (width === 1280) {
           expect.soft(collapsed.height).toBeLessThanOrEqual(104);
         }

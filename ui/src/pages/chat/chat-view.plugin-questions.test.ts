@@ -278,7 +278,7 @@ it.each(["native", "delegated"] as const)(
     await waitForSolid(() => {
       expect(provider.querySelector(".chat-conversation-loading")).not.toBeNull();
       expect(provider.querySelector(".chat-error.app-toast")?.textContent).toContain(
-        "Couldn't finish this reply.",
+        "Request interrupted.",
       );
     });
     const textarea = provider.querySelector<HTMLTextAreaElement>("textarea")!;
@@ -291,9 +291,7 @@ it.each(["native", "delegated"] as const)(
     await waitForSolid(() => {
       expect(provider.querySelector(".chat-conversation-loading")).toBeNull();
       expect(provider.querySelector(".chat-error.app-toast")).toBe(notice);
-      expect(provider.querySelector(".chat-error")?.textContent).toContain(
-        "Couldn't finish this reply. Check the conversation before trying again.",
-      );
+      expect(provider.querySelector(".chat-error")?.textContent).toContain("Request interrupted.");
     });
     expect(provider.querySelector("textarea")).toBe(textarea);
     expect(textarea.value).toBe("Retain this draft");

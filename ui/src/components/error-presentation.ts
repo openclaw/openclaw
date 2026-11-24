@@ -8,3 +8,11 @@ export function formatWebUiIconErrorText(error: string): string {
     prefix.replace(ERROR_ICON_PREFIX_TOKEN_RE, ""),
   );
 }
+
+export function formatWebUiErrorSummary(error: string): string {
+  return (
+    formatWebUiIconErrorText(error)
+      .trim()
+      .split(/(?<=[.!?])\s+(?=\p{Lu})|\r?\n/u, 1)[0] ?? ""
+  );
+}

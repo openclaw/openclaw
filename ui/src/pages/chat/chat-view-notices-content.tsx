@@ -9,7 +9,10 @@ import { readRunFailureNotice } from "../../../../src/shared/run-failure-notice.
 import { shellEscapeBackslash as shellQuote } from "../../../../src/shared/shell-quote.js";
 import type { ApplicationPlacementStartupStatus } from "../../app/session-placement-startup.ts";
 import { handleCopyButton } from "../../components/copy-button-state.ts";
-import { formatWebUiIconErrorText } from "../../components/error-presentation.ts";
+import {
+  formatWebUiErrorSummary,
+  formatWebUiIconErrorText,
+} from "../../components/error-presentation.ts";
 import { ReportIssueLink } from "../../components/report-issue-link.tsx";
 import { CopyButton } from "../../components/solid/copy-button.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
@@ -26,6 +29,7 @@ import type { ChatComposerNoticesProps, ChatViewNoticesProps } from "./chat-view
 import { ChatGPTUsageLimit } from "./chatgpt-usage-limit.tsx";
 import { ChatSendStatus } from "./components/chat-message-send-status-view.tsx";
 import { RemainingConflictPaths } from "./components/chat-workspace-conflict.tsx";
+import { shouldReportRunFailure } from "./run-failure-reporting.ts";
 import type { ProviderPolicyNotice } from "./tool-stream-contract.ts";
 import {
   visibleWorkspaceConflictPaths,
@@ -304,6 +308,7 @@ function ChatErrorNotice(props: {
   action?: JSX.Element;
   displayError?: string;
   replyActions?: boolean;
+  reportable?: boolean;
   tone?: "danger" | "warn";
   summary?: string;
   onDismiss?: () => void;
@@ -317,15 +322,17 @@ function ChatErrorNotice(props: {
     () => {
       const message =
         props.summary ??
-        (props.detail === undefined
-          ? displayError().trim().split(/\r?\n/u)[0]?.trim() || props.error
-          : props.error);
+        (props.replyActions
+          ? formatWebUiErrorSummary(displayError()) || props.error
+          : props.detail === undefined
+            ? displayError().trim().split(/\r?\n/u)[0]?.trim() || props.error
+            : props.error);
       // Offer details only when they add something beyond the visible message.
       const diagnostic = displayError().trim();
       return {
         message,
         detail:
-          diagnostic && diagnostic !== message.trim()
+          props.reportable !== false && diagnostic && diagnostic !== message.trim()
             ? (props.detail ?? displayError())
             : undefined,
         severity: props.tone === "warn" ? ("warning" as const) : ("error" as const),
@@ -364,7 +371,7 @@ function ChatErrorNotice(props: {
         </button>
       </Show>
       {props.action}
-      <Show when={!inlineDetails()}>
+      <Show when={!inlineDetails() && props.reportable !== false}>
         <ReportIssueLink />
       </Show>
     </div>
@@ -474,26 +481,17 @@ export function ChatComposerNoticesContent(props: ChatComposerNoticesProps) {
       </Show>
       <Show when={!hasTranscriptFailure() && !usageLimit() && props.runError}>
         {(error) => (
-          <>
-            <ChatErrorNotice
-              error={error().summary}
-              replyActions={error().kind !== "stop"}
-              action={refresh}
-              onDismiss={props.onDismissRunError}
-              tone={contention() ? "warn" : "danger"}
-              summary={
-                error().kind === "stop"
-                  ? undefined
-                  : t(
-                      contention()
-                        ? "chat.errorBusySummary"
-                        : error().kind === "auth_refresh"
-                          ? "chat.errorSignInSummary"
-                          : "chat.errorReplySummary",
-                    )
-              }
-            />
-          </>
+          <ChatErrorNotice
+            error={error().summary}
+            replyActions={error().kind !== "stop"}
+            action={refresh}
+            onDismiss={props.onDismissRunError}
+            tone={contention() ? "warn" : "danger"}
+            reportable={shouldReportRunFailure({
+              ...error().cause,
+              errorKind: error().cause?.errorKind ?? error().kind,
+            })}
+          />
         )}
       </Show>
       <Show when={props.workspaceConflict}>

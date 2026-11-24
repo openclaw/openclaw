@@ -267,7 +267,7 @@ suite.define(() => {
               : alert.getByRole("button", { name: "Show details", exact: true });
           const copy = alert.getByRole("button", { name: "Copy error", exact: true });
           const diagnostic = alert.locator(".lazy-view-error__detail");
-          const expected = `${failedState === "request" ? "" : "Couldn’t continue this session. Check its device and try again. "}${workerFailureDiagnostic}`;
+          const expected = workerFailureDiagnostic;
           expect(await toggle.count()).toBe(1);
           expect(await diagnostic.isVisible()).toBe(false);
           for (const width of [1440, 320]) {

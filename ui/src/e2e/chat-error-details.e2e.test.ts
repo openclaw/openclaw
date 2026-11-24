@@ -3,6 +3,7 @@ import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Page, Locator } from "playwright";
 import { assert, expect, it } from "vitest";
+import { prepareChatHistoryFixture } from "../test-helpers/chat-activity-fixtures.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
@@ -48,6 +49,123 @@ async function expectMobileFit(page: Page, alert: Locator) {
 }
 
 suite.define(() => {
+  it.each([
+    {
+      name: "routine",
+      message: "Request timed out.",
+      cause: {
+        provider: "openai",
+        failoverReason: "timeout",
+        providerRuntimeFailureKind: "timeout",
+      },
+      report: false,
+    },
+    {
+      name: "kept",
+      message: "The request format was rejected.",
+      cause: { provider: "openai", failoverReason: "format", providerRuntimeFailureKind: "schema" },
+      report: true,
+    },
+    {
+      name: "unclassified",
+      message: "Request timed out.",
+      cause: { provider: "openai", failoverReason: "unclassified" },
+      report: true,
+    },
+  ])(
+    "keeps $name reporting policy consistent after history reload",
+    async ({ name, message, cause, report }) => {
+      await suite.withPage(diagnosticContext, async ({ page }) => {
+        const gateway = await installMockGateway(page, { sessionKey, historyMessages: [] });
+        await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
+        const { runId } = await sendPrompt(page, gateway, "Check the example operation.");
+        await gateway.emitGatewayEvent("chat", {
+          sessionKey,
+          runId,
+          seq: 1,
+          state: "error",
+          errorMessage: message,
+          errorDetail: cause,
+        });
+        for (const surface of ["live", "history"] as const) {
+          if (surface === "history") {
+            const session = {
+              key: sessionKey,
+              sessionId: `session:${sessionKey}`,
+              status: "failed",
+              hasActiveRun: false,
+              activeRunIds: [],
+              lastRunId: runId,
+              lastRunError: message,
+            };
+            await gateway.setSessionsListResponse({ sessions: [session] });
+            const messages = [
+              {
+                role: "user",
+                content: "Check the example operation.",
+                timestamp: 1,
+                __openclaw: { id: "failure-user", seq: 1, runId },
+              },
+              {
+                role: "custom",
+                customType: "run-failed-before-reply",
+                content: message,
+                timestamp: 2,
+                display: true,
+                openclawRunError: { runId, summary: message, cause },
+                __openclaw: { id: "failure-notice", seq: 2, runId },
+              },
+            ];
+            await gateway.setMethodResponse("chat.history", {
+              ...prepareChatHistoryFixture(messages),
+              sessionId: session.sessionId,
+              sessionInfo: session,
+            });
+            await page.reload();
+          }
+          const notice = page.locator(surface === "live" ? ".chat-error" : ".chat-run-failure");
+          const title = notice.locator(
+            surface === "live" ? ".app-toast__message" : ".chat-run-failure__title",
+          );
+          await title.waitFor();
+          const recovery = notice.getByRole("button", {
+            name: surface === "live" ? "Refresh" : "Try again",
+            exact: true,
+          });
+          await recovery.waitFor();
+          if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1" && name !== "unclassified") {
+            const frame = await takeControlUiScreenshotFrame(page, notice, [title, recovery], {
+              elements: [notice, title, recovery],
+              animations: "disabled",
+            });
+            await writeFile(path.join(suite.artifactDir, name + "-" + surface + ".png"), frame.png);
+            await writeFile(
+              path.join(suite.artifactDir, name + "-" + surface + ".json"),
+              JSON.stringify(
+                {
+                  viewport: page.viewportSize(),
+                  elements: frame.elements.map((element) => element.bounds),
+                },
+                null,
+                2,
+              ),
+            );
+          }
+          expect.soft(await title.textContent()).toContain(message);
+          expect.soft(await notice.locator(".app-toast__description").count()).toBe(0);
+          expect
+            .soft(await notice.getByRole("link", { name: "Report a bug", exact: true }).count())
+            .toBe(report ? 1 : 0);
+          if (!report) {
+            expect
+              .soft(await notice.getByRole("button", { name: "Show details", exact: true }).count())
+              .toBe(0);
+          }
+        }
+      });
+    },
+  );
+
   it("keeps startup failure guidance visible without inventing recovery activity", async () => {
     await suite.withPage(diagnosticContext, async ({ page }) => {
       const runId = "workspace-startup-failure";
@@ -203,7 +321,7 @@ suite.define(() => {
       const recovery =
         "Your message didn't run because the conversation changed. Refresh the conversation, then send it again.";
       const errorMessage = `${recovery}\n\n${diagnostic}`;
-      const safeError = `Error: ${errorMessage.replace("password=synthetic-password", "password=[redacted]")}`;
+      const safeError = errorMessage.replace("password=synthetic-password", "password=[redacted]");
       const gateway = await installMockGateway(page, { sessionKey });
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
       const { runId } = await sendPrompt(page, gateway, prompt);
@@ -227,7 +345,7 @@ suite.define(() => {
       const alert = page.locator(".chat-error");
       await alert.waitFor();
       expect(await alert.locator(".app-toast__message").textContent()).toBe(
-        "Couldn't finish this reply.",
+        "Your message didn't run because the conversation changed.",
       );
       const toggle = alert.getByRole("button", { name: "Show details" });
       expect(await toggle.getAttribute("aria-expanded")).toBe("false");

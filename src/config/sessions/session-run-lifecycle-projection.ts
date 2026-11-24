@@ -48,7 +48,8 @@ export type SessionLifecyclePatchEffects = {
   failedRun?: {
     runId: string;
     error: unknown;
-    errorKind?: "state_contention";
+    errorKind?: string;
+    stopReason?: string;
     suppressErrorNotice?: boolean;
     notice?: string;
     desktopNotice?: string;
@@ -490,7 +491,15 @@ export function projectSessionLifecyclePatch(
       errorObservation: params.event.data?.errorObservation,
       suppressErrorNotice: params.event.data?.suppressErrorNotice === true,
       errorKind:
-        params.event.data?.errorKind === "state_contention" ? "state_contention" : undefined,
+        typeof params.event.data?.errorKind === "string"
+          ? params.event.data.errorKind
+          : patch.status === "timeout"
+            ? "timeout"
+            : undefined,
+      stopReason:
+        typeof params.event.data?.stopReason === "string"
+          ? params.event.data.stopReason
+          : undefined,
       error:
         resolveTerminalOutcome(params.event).error ??
         (patch.status === "timeout" ? "Run timed out" : undefined),

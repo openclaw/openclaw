@@ -69,6 +69,45 @@ it.each([
   },
 );
 
+it("records classification and save-failure facts without raw provider diagnostics", async () => {
+  expect.hasAssertions();
+  vi.mocked(appendSessionTranscriptReport).mockImplementation(async (_target, report) => {
+    if (report.kind !== "custom") {
+      throw new Error("Expected a custom run-failure notice");
+    }
+    const notice = report.selectReport(undefined);
+    expect(notice?.details).toMatchObject({
+      cause: {
+        provider: "openai",
+        failoverReason: "timeout",
+        providerRuntimeFailureKind: "schema",
+        errorKind: "timeout",
+        stopReason: "aborted-partial-persistence-failed",
+      },
+    });
+    expect(JSON.stringify(notice?.details)).not.toContain("PRIVATE_PROVIDER_BODY");
+    return { ok: true, value: undefined };
+  });
+  await recordGatewaySessionRunFailure({
+    target: {
+      agentId: "main",
+      storePath: "/synthetic/sessions.json",
+      sessionKey: "agent:main:failure-policy",
+      sessionId: "failure-policy",
+    },
+    runId: "failed-run",
+    error: "Request timed out.",
+    errorKind: "timeout",
+    stopReason: "aborted-partial-persistence-failed",
+    errorObservation: {
+      provider: "openai",
+      failoverReason: "timeout",
+      providerRuntimeFailureKind: "schema",
+      rawErrorPreview: "PRIVATE_PROVIDER_BODY",
+    },
+  });
+});
+
 it("keeps the update-required code and its instructions in the failure notice", async () => {
   expect.hasAssertions();
   const message =

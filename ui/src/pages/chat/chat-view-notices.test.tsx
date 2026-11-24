@@ -3,6 +3,7 @@
 import type { JSX } from "@solidjs/web";
 import { createSignal, flush } from "solid-js";
 import { afterEach, assert, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { formatWebUiErrorSummary } from "../../components/error-presentation.ts";
 import { t } from "../../i18n/index.ts";
 import { installDialogPolyfill } from "../../test-helpers/modal-dialog.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
@@ -23,10 +24,22 @@ import {
   installTranscriptDomMocks,
   resetTranscriptTestDom,
 } from "./components/chat-transcript.test-support.ts";
+import { shouldReportRunFailure } from "./run-failure-reporting.ts";
 import {
   workspaceConflictPathForDisplay,
   workspaceResultConflictFromTranscript,
 } from "./workspace-conflict.ts";
+
+it.each([
+  [
+    "⚠️ Couldn't sign in to the AI service. Sign in again under Models.",
+    "Couldn't sign in to the AI service.",
+  ],
+  ["Request rejected\nDiagnostic details", "Request rejected"],
+  ["The model v2.1 is unavailable.", "The model v2.1 is unavailable."],
+])("shows the error without appended recovery prose: %s", (error, summary) => {
+  expect(formatWebUiErrorSummary(error)).toBe(summary);
+});
 
 const model = "<img src=x onerror=alert(1)>";
 type ComposerProps = Parameters<typeof renderChatComposerNotices>[0];
@@ -63,9 +76,32 @@ function publishHistory(
   }
 }
 
+it.each([
+  { name: "routine", cause: { failoverReason: "timeout" }, report: false },
+  { name: "kept", cause: { failoverReason: "format" }, report: true },
+  { name: "unclassified", cause: undefined, report: true },
+])(
+  "shows only the actual error and appropriate actions for $name failures",
+  async ({ cause, report }) => {
+    const onRefresh = vi.fn();
+    const { container } = publishedComposer({
+      connected: true,
+      runError: { summary: "Request timed out.", cause },
+      onRefresh,
+    });
+    await waitForSolid(() => expect(container.querySelector(".chat-error")).not.toBeNull());
+    expect(container.querySelector(".app-toast__message")?.textContent).toBe("Request timed out.");
+    expect(container.querySelector(".app-toast__description")).toBeNull();
+    expect(container.querySelector(".chat-error__toggle")).toBeNull();
+    expect(container.querySelector(".report-issue-link") !== null).toBe(report);
+    container.querySelector<HTMLButtonElement>(".chat-error__refresh")!.click();
+    expect(onRefresh).toHaveBeenCalledOnce();
+  },
+);
+
 it.each([false, true])("collapses a replacement diagnostic (mobile=%s)", async (mobile) => {
   const { container, publish } = publishedComposer(
-    { runError: { summary: "First diagnostic" } },
+    { runError: { summary: "First diagnostic\nAdditional detail" } },
     mobile,
   );
   await vi.dynamicImportSettled();
@@ -73,7 +109,7 @@ it.each([false, true])("collapses a replacement diagnostic (mobile=%s)", async (
   assert(toggle instanceof HTMLButtonElement);
   toggle.click();
   await waitForSolid(() => expect(toggle.getAttribute("aria-expanded")).toBe("true"));
-  publish({ messages: [], runError: { summary: "Second diagnostic" } });
+  publish({ messages: [], runError: { summary: "Second diagnostic\nReplacement detail" } });
   await waitForSolid(() => {
     expect(toggle.getAttribute("aria-expanded")).toBe("false");
     expect(container.querySelector<HTMLElement>(".chat-error__details")?.hidden).toBe(true);
@@ -204,12 +240,10 @@ it.each([
     expect(notice?.classList.contains("chat-composer-neighbor-card--danger")).toBe(false);
     expect(notice?.getAttribute("role")).toBe("status");
     const details = notice?.querySelector(".chat-error__details");
-    expect(details).toMatchObject({ hidden: true });
-    expect(notice?.querySelector(".app-toast__message")?.textContent).toBe("OpenClaw is busy.");
-    expect(notice?.querySelector(".app-toast__description")?.textContent).toBe(
-      "Check status before trying again.",
-    );
-    expect(details?.querySelector(".lazy-view-error__detail")?.textContent).toBe(diagnostic);
+    expect(details).toBeNull();
+    expect(notice?.querySelector(".app-toast__message")?.textContent).toBe("Busy");
+    expect(notice?.querySelector(".app-toast__description")).toBeNull();
+    expect(notice?.querySelector(".report-issue-link")).toBeNull();
     expect(notice?.querySelector("img")).toBeNull();
   }
   const action = notice?.querySelector<HTMLButtonElement>(".chat-error__refresh");
@@ -613,4 +647,16 @@ it("offers a static issue form without including error text or diagnostics", asy
       destination,
     );
   });
+});
+
+it.each([
+  { failoverReason: "format" },
+  { failoverReason: "unclassified" },
+  { providerRuntimeFailureKind: "unknown" },
+  { providerRuntimeFailureKind: "schema" },
+  { providerRuntimeFailureKind: "replay_invalid" },
+  { providerRuntimeFailureKind: "gateway_storage" },
+  { stopReason: "aborted-partial-persistence-failed" },
+])("keeps unexpected failures reportable despite a timeout category: %j", (cause) => {
+  expect(shouldReportRunFailure({ errorKind: "timeout", ...cause })).toBe(true);
 });

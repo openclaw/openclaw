@@ -84,7 +84,7 @@ it("replaces the canonical failed run row with one line-icon notice and explicit
   }
   const onRetry = vi.fn();
   drawNotice(item, { failureActionsRunId: "run-a", onRetryRun: onRetry });
-  expect(container.textContent).toContain("Couldn’t finish this reply");
+  expect(part("title")?.textContent).toBe("The AI service needs a short break.");
   const report = container.querySelector<HTMLAnchorElement>("a.report-issue-link");
   expect(report?.textContent).toBe("Report a bug");
   expect(new URL(report!.href).searchParams.get("title")).toBe("[Bug]: Control UI: ");
@@ -115,7 +115,7 @@ it("updates text and callbacks without closing the open details", async () => {
   const item = failure("First failure\nFirst details");
   drawNotice(item, { failureActionsRunId: "run-a", onRetryRun: onRetry });
   const host = query("openclaw-chat-run-failure-notice");
-  expect(part("summary")?.textContent).toBe("First failure");
+  expect(part("title")?.textContent).toBe("First failure");
   expect(part("log")?.textContent).toBe("First failure\nFirst details");
   part("toggle")?.click();
   expect(part("toggle")?.getAttribute("aria-expanded")).toBe("true");
@@ -170,13 +170,9 @@ it("shows a repeat count only for repeated failures", () => {
   }
 });
 
-it("names a provider's billing problem with its declared label and sends its fix to Models", () => {
+it("shows the provider error and sends billing recovery to Models", () => {
   const navigate = vi.fn<ApplicationContext["navigate"]>();
   const onRetryRun = vi.fn<(runId: string) => void>();
-  // The provider plugin's declared label arrives on the chat's model catalog rows.
-  const modelCatalog = [
-    { id: "acme-large", name: "Acme Large", provider: "acme", providerName: "Acme Cloud Plan" },
-  ];
   const draw = (failoverReason: string) =>
     mountSolid(
       () =>
@@ -193,14 +189,14 @@ it("names a provider's billing problem with its declared label and sends its fix
                 },
               },
               recovery: { failureActionsRunId: "run-a", onRetryRun },
-              modelCatalog,
             });
           },
         }),
       { container },
     );
   const billing = draw("billing");
-  expect(part("title")?.textContent).toBe("Acme Cloud Plan reports a billing problem");
+  expect(part("title")?.textContent).toBe("Provider error");
+  expect(query("a.report-issue-link")).toBeNull();
   const [openModels, tryAgain] = container.querySelectorAll<HTMLButtonElement>(
     ".chat-run-failure__retry",
   );
@@ -214,9 +210,8 @@ it("names a provider's billing problem with its declared label and sends its fix
   expect(onRetryRun).not.toHaveBeenCalled();
   billing.unmount();
 
-  // A failure another attempt can fix keeps its generic title and Try again.
   draw("overloaded");
-  expect(part("title")?.textContent).toBe("Couldn’t finish this reply");
+  expect(part("title")?.textContent).toBe("Provider error");
   expect(container.querySelectorAll(".chat-run-failure__retry")).toHaveLength(1);
   expect(query(".chat-run-failure__retry")?.classList.contains("primary")).toBe(true);
 });

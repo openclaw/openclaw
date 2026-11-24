@@ -3,11 +3,14 @@ import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 /** Run failure code: the harness runtime must be updated; clients may offer a new session elsewhere. */
 export const HARNESS_UPDATE_REQUIRED_CODE = "harness_update_required";
 
-/** The provider fact that ended a run, as the run's error observation classified it. */
+/** Bounded classification facts retained by the failed run. */
 export type RunFailureCause = {
-  provider: string;
+  provider?: string;
   failoverReason?: string;
-  code?: typeof HARNESS_UPDATE_REQUIRED_CODE;
+  providerRuntimeFailureKind?: string;
+  errorKind?: string;
+  stopReason?: string;
+  code?: typeof HARNESS_UPDATE_REQUIRED_CODE | "model_request_policy_denied";
 };
 
 /** A diagnostic-only display row owned by the settled run, not a model attempt. */
@@ -18,23 +21,22 @@ const readCauseField = (value: unknown) =>
   typeof value === "string" && value.length <= 120 ? value.trim() || undefined : undefined;
 
 /**
- * Keeps only a bounded provider id and failover reason from an error observation, plus the
- * host-authored update code (observation `providerErrorCode`, recorded cause `code`).
+ * Keeps bounded classification fields and known recovery codes, never raw provider diagnostics.
  */
 export function readRunFailureCause(value: unknown): RunFailureCause | undefined {
   const source = asOptionalRecord(value);
-  const provider = readCauseField(source?.provider);
-  const failoverReason = readCauseField(source?.failoverReason);
-  const updateRequired = [source?.code, source?.providerErrorCode].includes(
-    HARNESS_UPDATE_REQUIRED_CODE,
-  );
-  return provider
-    ? {
-        provider,
-        ...(failoverReason && { failoverReason }),
-        ...(updateRequired && { code: HARNESS_UPDATE_REQUIRED_CODE }),
-      }
-    : undefined;
+  const cause: RunFailureCause = {
+    provider: readCauseField(source?.provider),
+    failoverReason: readCauseField(source?.failoverReason),
+    providerRuntimeFailureKind: readCauseField(source?.providerRuntimeFailureKind),
+    errorKind: readCauseField(source?.errorKind),
+    stopReason: readCauseField(source?.stopReason),
+    code: [source?.code, source?.providerErrorCode].find(
+      (candidate): candidate is NonNullable<RunFailureCause["code"]> =>
+        candidate === HARNESS_UPDATE_REQUIRED_CODE || candidate === "model_request_policy_denied",
+    ),
+  };
+  return Object.values(cause).some(Boolean) ? cause : undefined;
 }
 
 export function readRunFailureNotice(

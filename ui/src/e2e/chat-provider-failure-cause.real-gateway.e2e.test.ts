@@ -102,16 +102,18 @@ suite.define(() => {
         }
         // The cause is on the line itself, without opening the details.
         expect(await failure.locator(".chat-run-failure__title").textContent()).toBe(
-          "Fixture didn’t accept the saved credentials",
+          "Couldn't sign in to the AI service.",
         );
+        expect(await failure.getByRole("link", { name: "Report a bug" }).count()).toBe(0);
         // Reloading reads the same cause back from the stored transcript.
         await page.reload();
         await waitForControlUiGatewayReady(page);
         const stored = page.locator(".chat-run-failure").first();
         await stored.waitFor({ timeout: 30_000 });
         expect(await stored.locator(".chat-run-failure__title").textContent()).toBe(
-          "Fixture didn’t accept the saved credentials",
+          "Couldn't sign in to the AI service.",
         );
+        expect(await stored.getByRole("link", { name: "Report a bug" }).count()).toBe(0);
         await stored.getByRole("button", { name: "Open Models", exact: true }).click();
         await page.waitForURL((url) => url.pathname.endsWith("/settings/model-providers"));
         expect(new URL(page.url()).searchParams.get("provider")).toBe("fixture");

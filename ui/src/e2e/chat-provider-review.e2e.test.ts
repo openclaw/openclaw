@@ -44,18 +44,15 @@ suite.define(() => {
       errorMessage,
     });
     const failure = page.locator(".chat-error").filter({ hasText: errorMessage });
-    await failure
-      .locator(".app-toast__message")
-      .getByText("Couldn't finish this reply.", { exact: true })
-      .waitFor();
-    await failure
-      .locator(".app-toast__description")
-      .getByText("Check the conversation before trying again.", { exact: true })
-      .waitFor();
+    await failure.locator(".app-toast__message").waitFor();
+    expect(await failure.locator(".app-toast__message").textContent()).toContain(
+      "This request was blocked by our safety systems.",
+    );
+    expect(await failure.locator(".app-toast__description").count()).toBe(0);
     await failure.getByRole("button", { name: "Show details", exact: true }).click();
-    const details = failure.getByLabel("Error details", { exact: true });
-    await details.waitFor();
-    expect(await details.textContent()).toContain(errorMessage);
+    expect(await failure.getByLabel("Error details", { exact: true }).textContent()).toContain(
+      errorMessage,
+    );
 
     const providerReview = {
       id: "synthetic-review-one",

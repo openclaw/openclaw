@@ -577,9 +577,14 @@ describe("durable pre-reply run failure", () => {
           message: `${"PRIVATEPROVIDERDETAIL ".repeat(40)}Unsupported parameter`,
         },
       })}`;
+      const cause = {
+        provider: "openai",
+        failoverReason: "format",
+        providerRuntimeFailureKind: "schema",
+      };
       await persistGatewaySessionLifecycleEvent({
         ...target,
-        event: { ...event, data: { ...event.data, error: providerError } },
+        event: { ...event, data: { ...event.data, error: providerError, errorObservation: cause } },
       });
       expect(await reports()).toMatchObject([
         { details: { error: expect.stringContaining("Unsupported parameter") } },
@@ -592,6 +597,7 @@ describe("durable pre-reply run failure", () => {
           runId,
           summary:
             "⚠️ The AI service couldn't accept this request. Try a new conversation with /new, or choose another model in the OpenClaw app.",
+          cause,
         },
       });
       expect(JSON.stringify(visible)).not.toContain("PRIVATEPROVIDERDETAIL");
@@ -942,7 +948,12 @@ describe("CLI history through Gateway terminal persistence", () => {
               "⚠️ The request took too long. Check the conversation for any completed work before trying again.",
             display: true,
             excludeFromContext: true,
-            details: { runId: "cli-timeout-run", error: "Run timed out" },
+            details: {
+              runId: "cli-timeout-run",
+              error: "Run timed out",
+              errorKind: "timeout",
+              cause: { errorKind: "timeout", stopReason: "timeout" },
+            },
           }),
         ]);
         const otherAccount = await f.laterContext("account-b");
@@ -976,7 +987,12 @@ describe("CLI history through Gateway terminal persistence", () => {
             "⚠️ The request took too long. Check the conversation for any completed work before trying again.",
           display: true,
           excludeFromContext: true,
-          details: { runId: "cli-timeout-run", error: "Run timed out" },
+          details: {
+            runId: "cli-timeout-run",
+            error: "Run timed out",
+            errorKind: "timeout",
+            cause: { errorKind: "timeout", stopReason: "timeout" },
+          },
         }),
       );
     });
