@@ -15,6 +15,8 @@ export async function guardedJsonApiRequest<T = unknown>(params: {
   headers: Record<string, string>;
   body?: Record<string, unknown> | URLSearchParams;
   allowNotFound?: boolean;
+  /** Overrides the default provider API timeout for latency-sensitive requests. */
+  timeoutMs?: number;
   allowedHostnames: string[];
   auditContext: string;
   errorPrefix: string;
@@ -35,7 +37,7 @@ export async function guardedJsonApiRequest<T = unknown>(params: {
     },
     policy: { allowedHostnames: params.allowedHostnames },
     auditContext: params.auditContext,
-    timeoutMs: VOICE_CALL_PROVIDER_API_TIMEOUT_MS,
+    timeoutMs: params.timeoutMs ?? VOICE_CALL_PROVIDER_API_TIMEOUT_MS,
   });
 
   try {
