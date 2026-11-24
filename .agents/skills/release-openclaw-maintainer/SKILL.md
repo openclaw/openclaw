@@ -81,13 +81,13 @@ recommended bookkeeping, not another release gate.
 
 ## Fast-track approval is human-only
 
-**NEVER approve your own or another agent's fast-track request. NEVER use an
-available maintainer token to impersonate human approval.** Obtain explicit
-approval from a human member of the normal release-managers group for the
+**NEVER approve a fast-track request, whether you or another agent prepared it.
+NEVER use an available maintainer token to impersonate human approval.** Obtain
+explicit approval from a human member of the normal release-managers group,
+which may be the release manager who requested it, for the
 exact request/digest, candidate, artifacts, publication scope, run/attempt,
 expiry and explicit skip/incomplete-validation action. Preparation authority,
-generic publish authority, silence and previous approvals do not qualify. The
-human may also be the requester; the prohibition applies to agents approving.
+generic publish authority, silence and previous approvals do not qualify.
 If approval is missing, rejected, expired or ambiguous, stop the fast-track path
 and ask that human. Changed contents require a new request and approval.
 
