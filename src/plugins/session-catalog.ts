@@ -201,7 +201,7 @@ export type SessionCatalogProvider = {
   shareRoute?: SessionCatalogShareRoute;
   /** Owned RPCs used when the caller lacks the shared operation's scope. The host verifies ownership. */
   ownedRoute?: {
-    methods: SessionCatalogRouteMethods;
+    methods: Partial<SessionCatalogRouteMethods>;
     /** Owning methods require the caller's live role-required policy from this plugin. */
     requiredGrantPluginId?: string;
   };

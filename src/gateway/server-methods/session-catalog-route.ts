@@ -39,7 +39,7 @@ export function resolveSessionCatalogRoute(
     (requiredGrant === undefined ||
       (requiredGrant === authority?.requiredPolicyPlugin &&
         hasCurrentGatewayOperatorAccess(authority)));
-  const available: SessionCatalogRouteMethods = {};
+  const available: Partial<SessionCatalogRouteMethods> = {};
   for (const operation of ["list", "read", "resolve", "continue"] as const) {
     const supportsShared =
       (operation !== "resolve" || provider.resolveGatewayConversation) &&
@@ -67,7 +67,12 @@ export function resolveSessionCatalogRoute(
       available[operation] = owned.name;
     }
   }
-  return available.list && available.read
-    ? { catalogId: provider.id, routeSegment: route.routeSegment, methods: available }
+  const { list, read } = available;
+  return list && read
+    ? {
+        catalogId: provider.id,
+        routeSegment: route.routeSegment,
+        methods: { ...available, list, read },
+      }
     : null;
 }

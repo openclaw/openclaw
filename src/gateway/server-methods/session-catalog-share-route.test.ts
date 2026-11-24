@@ -8,7 +8,7 @@ import { createGatewayMethodRegistry } from "../methods/registry.js";
 import { bindSessionRowProjection } from "../session-row-projection-access.js";
 import { createSessionRowProjectionFixture } from "../session-row-projection.test-support.js";
 import { catalogProvider } from "./session-catalog.fixtures.test-support.js";
-import type { GatewayClient, GatewayRequestHandlerOptions } from "./types.js";
+import type { GatewayClient, GatewayRequestContext, RespondFn } from "./types.js";
 
 type TestPluginRegistry = Omit<PluginRegistry, "sessionCatalogs"> & {
   sessionCatalogs: Array<{ provider: SessionCatalogProvider; pluginId?: string }>;
@@ -118,7 +118,7 @@ it("resolves a cold route against this caller's read and write scopes", async ()
     issuer = "guest-access",
     signal = new AbortController().signal,
   ) => {
-    const respond = vi.fn();
+    const respond = vi.fn<RespondFn>();
     const client = {
       connect: { scopes },
       ...(identified ? { authenticatedUserProfile: { profileId: "reader" } } : {}),
@@ -132,11 +132,13 @@ it("resolves a cold route against this caller's read and write scopes", async ()
       },
     } as unknown as GatewayClient;
     await sessionCatalogHandlers["sessions.catalog.route"]?.({
+      req: { type: "req", id: "catalog-route", method: "sessions.catalog.route" },
       params,
       respond,
       client,
-      context: { getGatewayMethodRegistry: () => registry },
-    } as GatewayRequestHandlerOptions);
+      isWebchatConnect: () => false,
+      context: { getGatewayMethodRegistry: () => registry } as GatewayRequestContext,
+    });
     return respond.mock.calls[0];
   };
   const lookup = { routeSegment: SHARE_ROUTE.routeSegment };
@@ -174,7 +176,7 @@ it("resolves a cold route against this caller's read and write scopes", async ()
     true,
     null,
   ]);
-  expect((await resolve(["operator.read"], { ...lookup, ...byId }))[0]).toBe(false);
+  expect((await resolve(["operator.read"], { ...lookup, ...byId }))?.[0]).toBe(false);
   ownedRouteMethods.continue = "notebook.readOnly";
   expect(await resolve(["operator.sessions.write"], lookup)).toEqual([
     true,

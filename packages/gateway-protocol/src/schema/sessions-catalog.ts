@@ -61,8 +61,8 @@ export const SessionsCatalogRouteResultSchema = Type.Union([
     catalogId: NonEmptyString,
     routeSegment: RouteSegment,
     methods: closedObject({
-      list: RouteMethod,
-      read: RouteMethod,
+      list: NonEmptyString,
+      read: NonEmptyString,
       resolve: RouteMethod,
       continue: RouteMethod,
     }),
