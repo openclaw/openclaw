@@ -83,11 +83,7 @@ suite.define(() => {
     {
       name: "routine",
       message: "Request timed out.",
-      cause: {
-        provider: "openai",
-        failoverReason: "timeout",
-        providerRuntimeFailureKind: "timeout",
-      },
+      cause: { failoverReason: "timeout" },
       report: false,
     },
     {
