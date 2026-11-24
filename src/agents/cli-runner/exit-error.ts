@@ -5,8 +5,18 @@ import {
   coerceToFailoverError,
   FailoverError,
   isFailoverError,
+  recordModelFallbackStop,
   resolveFailoverStatus,
 } from "../failover-error.js";
+
+export const CLI_STREAM_OUTPUT_LIMIT_CODE = "cli_stream_output_limit";
+
+export function recordCliOutputLimitFallbackStop(error: unknown, hasToolEffects: () => boolean) {
+  // Refusing parser output does not authorize replaying a turn that already ran tools.
+  if (isFailoverError(error) && error.code === CLI_STREAM_OUTPUT_LIMIT_CODE && hasToolEffects()) {
+    recordModelFallbackStop(error);
+  }
+}
 
 type CliResumeAttempt = {
   resumeAtArg?: string;

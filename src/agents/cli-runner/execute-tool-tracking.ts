@@ -659,6 +659,7 @@ export function createCliToolTracking(context: PreparedCliRunContext) {
     resolveCliLoopbackTerminalOutcome,
     finishDeliveryTracking,
     finalizeCapture,
+    hasAcceptedSessionSpawn: () => acceptedSessionSpawns.length > 0,
     withExecutionEvidence(output: CliOutput): CliOutput {
       const current = evidence();
       return {

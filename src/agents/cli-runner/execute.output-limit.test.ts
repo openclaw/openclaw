@@ -8,6 +8,7 @@ import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import type { getProcessSupervisor } from "../../process/supervisor/index.js";
 import { CLI_STREAM_JSON_OUTPUT_LIMITS } from "../cli-output-stream-limits.js";
+import { isRecordedModelFallbackStop } from "../model-fallback-stop.js";
 import { buildContext } from "./execute-events.tool-result-args.test-support.js";
 import { executePreparedCliRun as executePreparedCliRunImpl } from "./execute.js";
 import {
@@ -148,5 +149,30 @@ describe("CLI stream-json output limit", () => {
     expect(yielded).toBe(Math.floor(maxTurnRawChars / recordChars) + 1);
     expect(aborted).toBe(true);
     expect(closed).toBe(true);
+  });
+
+  it("stops model fallback when a turn that already ran a tool exceeds the output limit", async () => {
+    const context = buildClaudeStreamJsonRunContext("run-limit-after-tool");
+    const tool = { type: "tool_use", id: "toolu-1", name: "exec", input: { command: "true" } };
+    const result = { type: "tool_result", tool_use_id: "toolu-1", content: "ok" };
+    const padding = { type: "system", subtype: "fixture_padding", padding: "x".repeat(1 << 20) };
+    context.preparedBackend.backend.command = process.execPath;
+    context.executionTarget = {
+      kind: "plugin",
+      async *execute() {
+        yield { type: "assistant", message: { id: "msg-1", role: "assistant", content: [tool] } };
+        yield { type: "user", message: { role: "user", content: [result] } };
+        for (let i = 0; i < 12; i += 1) {
+          yield padding;
+        }
+      },
+    };
+
+    const failure = await executePreparedCliRun(context).catch((error: unknown) => error);
+    expect(failure).toMatchObject({
+      message: expect.stringContaining("CLI JSONL output exceeded"),
+    });
+    // Another model replaying the prompt would run the completed tool again (#200744).
+    expect(isRecordedModelFallbackStop(failure)).toBe(true);
   });
 });

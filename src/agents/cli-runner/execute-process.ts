@@ -30,6 +30,7 @@ import { executePluginOwnedProcess } from "./execute-plugin.js";
 import type { CliToolTracking } from "./execute-tool-tracking.js";
 import { attachCliReplyBackend } from "./execution-target.js";
 import {
+  CLI_STREAM_OUTPUT_LIMIT_CODE,
   createCliExitFailoverError,
   createCliFailoverError,
   resolveCliResumeAtError,
@@ -281,7 +282,9 @@ export async function executeCliProcess(params: {
           consumeStdout(chunk);
           const errorText = streamingParser?.getErrorText();
           if (errorText) {
-            throw createCliFailoverError(errorText, "format", failoverContext);
+            throw createCliFailoverError(errorText, "format", failoverContext, {
+              code: CLI_STREAM_OUTPUT_LIMIT_CODE,
+            });
           }
         },
         onOutstandingWorkChange: backendActivity?.setOutstandingWork,
@@ -425,7 +428,9 @@ export async function executeCliProcess(params: {
   streamingParser?.finish();
   const streamingParserErrorText = streamingParser?.getErrorText();
   if (streamingParserErrorText) {
-    throw createCliFailoverError(streamingParserErrorText, "format", failoverContext);
+    throw createCliFailoverError(streamingParserErrorText, "format", failoverContext, {
+      code: CLI_STREAM_OUTPUT_LIMIT_CODE,
+    });
   }
   // The node re-injects the terminal result after truncation. If even that is
   // missing, the turn outcome is unknowable and cannot pass as a clean exit.

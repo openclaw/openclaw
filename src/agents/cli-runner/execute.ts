@@ -50,6 +50,7 @@ import { stripGatewayLocalClaudeArgs } from "./execute-node-claude.js";
 import { executeCliProcess } from "./execute-process.js";
 import { createCliToolTracking } from "./execute-tool-tracking.js";
 import { createCliRunCurrentAssertion } from "./execution-target.js";
+import { recordCliOutputLimitFallbackStop } from "./exit-error.js";
 import {
   buildCliArgs,
   isClaudeCliBackendId,
@@ -620,6 +621,10 @@ export async function executePreparedCliRun(
       }
     }
     if (runFailed) {
+      recordCliOutputLimitFallbackStop(
+        runError,
+        () => events.getToolSummary().calls > 0 || toolTracking.hasAcceptedSessionSpawn(),
+      );
       throw toolTracking.attachDeliveryEvidence(runError);
     }
     if (!runOutput) {
