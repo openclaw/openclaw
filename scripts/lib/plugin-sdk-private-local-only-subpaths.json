@@ -20,6 +20,7 @@
   "blob-runtime",
   "browser-cdp",
   "browser-config",
+  "browser-headless-runtime",
   "bundled-channel-config-schema",
   "channel-activity-runtime",
   "channel-config-ui-hints",

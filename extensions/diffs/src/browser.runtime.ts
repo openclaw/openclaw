@@ -2,12 +2,15 @@ import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import {
+  getManagedChromiumExecutablePath,
+  launchHeadlessChromium,
+} from "openclaw/plugin-sdk/browser-headless-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { canAccess } from "openclaw/plugin-sdk/path-existence-runtime";
 import { writeExternalFileWithinRoot } from "openclaw/plugin-sdk/security-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { chromium } from "playwright-core";
 import type { DiffRenderOptions, DiffTheme } from "./types.js";
 import {
   LANGUAGE_PACK_VIEWER_ASSET_PREFIX,
@@ -22,7 +25,7 @@ const PDF_REFERENCE_PAGE_HEIGHT_PX = 1_056;
 const MAX_PDF_PAGES = 50;
 const LOCAL_VIEWER_BASE_HREF = "http://127.0.0.1/plugins/diffs/view/local/local";
 
-type BrowserInstance = Awaited<ReturnType<typeof chromium.launch>>;
+type BrowserInstance = Awaited<ReturnType<typeof launchHeadlessChromium>>;
 
 type BrowserLease = {
   browser: BrowserInstance;
@@ -324,7 +327,7 @@ async function resolveBrowserExecutablePath(config: OpenClawConfig): Promise<str
   // Full-only images omit the shell selected by an unspecified headless launch.
   // Keep discovery owned by the shared browser promise, using Playwright's public
   // full-browser path; absence preserves its default shell-only selection.
-  const playwrightPath = chromium.executablePath();
+  const playwrightPath = getManagedChromiumExecutablePath();
   if (await canAccess(playwrightPath, fsConstants.X_OK)) {
     return playwrightPath;
   }
@@ -336,13 +339,7 @@ async function acquireSharedBrowser(config: OpenClawConfig): Promise<BrowserLeas
   if (!sharedBrowserState) {
     // Browser selection changes take effect after the shared browser's idle close.
     const browserPromise = resolveBrowserExecutablePath(config)
-      .then((executablePath) =>
-        chromium.launch({
-          headless: true,
-          ...(executablePath ? { executablePath } : {}),
-          args: ["--disable-dev-shm-usage"],
-        }),
-      )
+      .then(launchHeadlessChromium)
       .then((browser) => {
         browser.on("disconnected", () => {
           if (sharedBrowserState?.browserPromise === browserPromise) {

@@ -461,6 +461,14 @@ optional second argument captures an actor-currentness assertion. Call it at fin
 serialization along with the caller's session/source checks. It does not grant
 access to the transcript or extend the session reader's lifetime.
 
+## Headless Chromium for file rendering
+
+`browser-headless-runtime` is a private official-plugin entry point for launching
+isolated headless Chromium using the host's patched Playwright. It does not load
+the Browser plugin or connect to a browsing profile. Consumers import it on
+demand and own browser selection, page isolation, and process cleanup. Release
+consumers alongside a host that exports the entry point.
+
 ## Skill authoring
 
 `skill-authoring-runtime` is a private official-plugin runtime for plugins that

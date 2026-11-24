@@ -352,7 +352,8 @@ URL resolution order: tool-call `baseUrl` (after strict validation) -> plugin `v
 
 ## Browser requirements for file mode
 
-`mode: "file"` and `mode: "both"` need a Chromium-compatible browser.
+`mode: "file"` and `mode: "both"` need a Chromium-compatible browser. The Browser
+plugin does not need to be enabled. `mode: "view"` needs no Chromium on the Gateway.
 
 Resolution order:
 
@@ -368,6 +369,10 @@ Resolution order:
   </Step>
   <Step title="Platform fallback">
     Common install paths and `PATH` lookups for Chrome, Chromium, Edge, and Brave.
+  </Step>
+  <Step title="Playwright-managed Chromium">
+    A full Chromium binary installed for the host's Playwright, or its default
+    headless shell when the full binary is absent.
   </Step>
 </Steps>
 

@@ -1201,9 +1201,6 @@ importers:
       '@shikijs/langs':
         specifier: 4.5.0
         version: 4.5.0
-      playwright-core:
-        specifier: 1.64.1
-        version: 1.64.1(patch_hash=eedf680682a6840d82c6ad530a60875857aa8c0372785acf8e8e5df9c2e3ac16)
       typebox:
         specifier: 1.4.3
         version: 1.4.3

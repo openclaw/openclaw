@@ -36,15 +36,13 @@ type ScreenshotParams = Parameters<
   InstanceType<typeof PlaywrightDiffScreenshotter>["screenshotHtml"]
 >[0];
 
-vi.mock("playwright-core", () => ({
-  chromium: {
-    launch: launchMock,
-    executablePath: playwrightExecutablePathMock,
-  },
+vi.mock("openclaw/plugin-sdk/browser-headless-runtime", () => ({
+  launchHeadlessChromium: launchMock,
+  getManagedChromiumExecutablePath: playwrightExecutablePathMock,
 }));
 
 afterAll(() => {
-  vi.doUnmock("playwright-core");
+  vi.doUnmock("openclaw/plugin-sdk/browser-headless-runtime");
   vi.resetModules();
 });
 
@@ -117,8 +115,7 @@ describe("PlaywrightDiffScreenshotter", () => {
     launchMock.mockResolvedValue(createMockBrowser([]));
     const screenshotter = new PlaywrightDiffScreenshotter({ config: {} });
     await screenshotter.screenshotHtml(screenshotParams({ image: { scale: 1 } }));
-    const [options] = expectDefined(launchMock.mock.calls[0], "browser launch");
-    expect(options).not.toHaveProperty("executablePath");
+    expect(launchMock).toHaveBeenCalledWith(undefined);
     const candidates = accessMock.mock.calls.map(([candidate]) => String(candidate));
     expect(candidates).toEqual([
       "C:\\Users\\test\\AppData\\Local\\Google\\Chrome\\Application\\chrome.exe",
@@ -151,14 +148,8 @@ describe("PlaywrightDiffScreenshotter", () => {
       launchMock.mockResolvedValue(createMockBrowser([]));
       const screenshotter = new PlaywrightDiffScreenshotter({ config: {} });
       await screenshotter.screenshotHtml(screenshotParams({ image: { scale: 1 } }));
-      const [launchOptions] = expectDefined(launchMock.mock.calls[0], "browser launch");
-      if (hasFullChromium) {
-        // Playwright's default headless launch requests the absent shell binary.
-        expect(launchOptions.executablePath).toBe(managedPath);
-      } else {
-        // A shell-only installation must retain Playwright's default selection.
-        expect(launchOptions).not.toHaveProperty("executablePath");
-      }
+      // Shell-only installs must retain Playwright's default executable selection.
+      expect(launchMock).toHaveBeenCalledWith(hasFullChromium ? managedPath : undefined);
       await expect(fs.readFile(outputPath, "utf8")).resolves.toBe("png");
     },
   );
@@ -207,9 +198,7 @@ describe("PlaywrightDiffScreenshotter", () => {
       .soft(String(details.viewerUrl))
       .toContain("https://explicit.example/plugins/diffs/view/");
     expect(details.fileError).toBeUndefined();
-    expect(launchMock).toHaveBeenCalledWith(
-      expect.objectContaining({ executablePath: process.execPath }),
-    );
+    expect(launchMock).toHaveBeenCalledWith(process.execPath);
     await expect(fs.readFile(String(details.filePath), "utf8")).resolves.toBe("png");
   });
 
