@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { recordedUpdateRunDrivers } from "../infra/update-run-activity.js";
 import { inspectUpdateRunDriver } from "../infra/update-run-driver.js";
-import { isUpdateRepairRun, type UpdateRunRecord } from "../infra/update-run-record.js";
+import type { UpdateRunRecord } from "../infra/update-run-record.js";
 import { safeParseJsonWithSchema } from "../utils/zod-parse.js";
 
 export const LEGACY_TRIAL_PREPARED = "finalize:legacy-release-prepared";
@@ -63,19 +63,16 @@ export function sameLegacyTrial(left: LegacyTrialReceipt, right: LegacyTrialRece
   );
 }
 
-/** Retain eligible prepared trials; completion also requires the matching ready receipt. */
-export function recoverableLegacyTrial(
-  run: UpdateRunRecord,
-  requireReady = true,
-): LegacyTrialReceipt | undefined {
+/** Only the exact prepared trial observed ready can correct lost completion bookkeeping. */
+export function recoverableLegacyTrial(run: UpdateRunRecord): LegacyTrialReceipt | undefined {
   const prepared = readLegacyTrialReceipt(run);
   const ready = readLegacyTrialReceipt(run, true);
   const abandoned = run.status === "failed" && run.reason === "abandoned";
   const drivers = recordedUpdateRunDrivers(run);
   if (
     !prepared ||
-    (requireReady && !ready) ||
-    (ready && !sameLegacyTrial(prepared, ready)) ||
+    !ready ||
+    !sameLegacyTrial(prepared, ready) ||
     run.target.kind !== "git" ||
     run.repair.length ||
     run.verification.recovery ||
@@ -106,26 +103,6 @@ export function recoverableLegacyTrial(
     return undefined;
   }
   return prepared;
-}
-
-export function verifiedLegacyTrialRepair(
-  run: UpdateRunRecord,
-  repair: UpdateRunRecord | undefined,
-  verification: UpdateRunRecord["verification"] | undefined,
-) {
-  if (
-    !repair ||
-    repair.runId === run.runId ||
-    repair.status !== "running" ||
-    !isUpdateRepairRun(repair) ||
-    repair.steps.some((step) => step.status === "failed") ||
-    !["doctor", "plugins", "targetConfigConvergence"].every((phase) =>
-      repair.steps.some((step) => step.step === `finalize:${phase}` && step.status === "completed"),
-    )
-  ) {
-    return undefined;
-  }
-  return verifiedLegacyTrialReadiness(run, verification);
 }
 
 export function verifiedLegacyTrialReadiness(

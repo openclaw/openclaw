@@ -2,10 +2,7 @@ import { isDeepStrictEqual } from "node:util";
 import { z } from "zod";
 import { runExistingOpenClawStateWriteTransaction } from "../state/openclaw-state-db-existing-write.js";
 import type { DB } from "../state/openclaw-state-db.generated.js";
-import {
-  verifiedLegacyTrialReadiness,
-  verifiedLegacyTrialRepair,
-} from "../update/legacy-trial-record.js";
+import { verifiedLegacyTrialReadiness } from "../update/legacy-trial-record.js";
 import { safeParseJsonWithSchema } from "../utils/zod-parse.js";
 import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "./kysely-sync.js";
 import { claimUpdateResultInTransaction } from "./update-result-claim.js";
@@ -94,33 +91,26 @@ export function persistInterruptedUpdateObservation(
         assertCurrent("commit");
         return { accepted: true, run, ...(updateResult ? { updateResult } : {}) };
       };
-      const repair = input.legacyRepairRunId
-        ? readUpdateRunRecord(db, input.legacyRepairRunId)
-        : undefined;
-      const legacy = input.legacyRepairRunId !== undefined || input.legacyReady === true;
-      const current = legacy
+      const current = input.legacyReady
         ? readUpdateRunRecord(db, input.expected.runId)
         : readLatestUpdateRun(db);
       const active = readActiveUpdateRun(db);
       if (
         !current ||
         !isDeepStrictEqual(current, input.expected) ||
-        (active && active.runId !== current.runId && active.runId !== repair?.runId) ||
+        (active && active.runId !== current.runId) ||
         hasStoredUpdateRecovery(db, current.runId)
       ) {
         return { accepted: false };
       }
-      const legacyCandidate = input.legacyRepairRunId
-        ? verifiedLegacyTrialRepair(current, repair, input.verification)
-        : input.legacyReady
-          ? verifiedLegacyTrialReadiness(current, input.verification)
-          : undefined;
+      const legacyCandidate = input.legacyReady
+        ? verifiedLegacyTrialReadiness(current, input.verification)
+        : undefined;
       if (
-        legacy &&
+        input.legacyReady &&
         (!legacyCandidate ||
-          (input.legacyRepairRunId && (!repair || hasStoredUpdateRecovery(db, repair.runId))) ||
           readUpdateRuns(db, { active: true, limit: 100 }).some(
-            (run) => run.runId !== repair?.runId && run.runId !== current.runId,
+            (run) => run.runId !== current.runId,
           ))
       ) {
         return { accepted: false };

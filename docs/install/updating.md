@@ -227,13 +227,11 @@ healthy release trial armed. An initially unready startup retains its readiness
 reader for the existing maintenance retry. Unsettled observations and failed
 history writes remain eligible for that retry. A ready receipt does not remove
 the trial until eligible original-run completion is durable, so a refused or
-failed completion write can retry. Explicit repair still handles historical
-ready receipts under its maintenance and serving-verification checks, but does
-not regrade a run that startup already completed. Repair retains an eligible
-prepared run while service restoration publishes its matching ready receipt;
-other changes to the captured run still prevent history correction. Native
-activation pins its history namespace inside the admitted executor interval; repair and missing-run commands
-do not create activation receipts or prevent separately authorized service restoration.
+failed completion write can retry. Startup owns this completion; explicit repair
+keeps its existing maintenance, recovery and history-acknowledgment behavior. Native
+activation pins its history namespace inside the admitted executor interval;
+repair and missing-run commands do not create activation receipts or prevent
+separately authorized service restoration.
 
 Prepared-release plugin maintenance normally runs after the candidate has migrated
 state and reported ready. Downgrades retain pre-trial maintenance because older

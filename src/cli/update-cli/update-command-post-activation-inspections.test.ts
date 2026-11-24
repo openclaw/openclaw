@@ -60,6 +60,8 @@ it.each(["none", "info", "warning"] as const)(
       ["core/doctor/hooks-model"],
     );
     expect(observed.status).toBe("ok");
+    expect(observed.steps.at(-1)?.exitCode).toBe(severity === "none" ? 0 : 1);
+    expect(observed.steps.at(-1)?.stderrTail).toBe("");
     if (severity !== "none") {
       const retainedTarget = observed.steps.at(-1)?.doctorLintFindings?.[0]?.target;
       expect(retainedTarget).toContain("survivor/model");

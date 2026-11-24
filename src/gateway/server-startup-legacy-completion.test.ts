@@ -19,6 +19,31 @@ vi.mock("../infra/openclaw-root.js", async (original) => {
         : actual.resolveOpenClawPackageRootSync(options),
   };
 });
+vi.mock("./server-channels.js", async (original) => {
+  const actual = await original<typeof import("./server-channels.js")>();
+  return {
+    ...actual,
+    createChannelManager: (options: Parameters<typeof actual.createChannelManager>[0]) => {
+      const manager = actual.createChannelManager(options);
+      const snapshot = manager.getRuntimeSnapshot;
+      return {
+        ...manager,
+        getRuntimeSnapshot: () => {
+          const current = snapshot();
+          return {
+            ...current,
+            channelAccounts: {
+              ...current.channelAccounts,
+              "unavailable-test-channel": {
+                default: { accountId: "default", enabled: true, configured: true, running: false },
+              },
+            },
+          };
+        },
+      };
+    },
+  };
+});
 vi.mock("../version.js", async (original) => ({
   ...(await original<typeof import("../version.js")>()),
   resolveRuntimeServiceBuildId: () => installed.buildId,
@@ -167,7 +192,12 @@ it("automatically completes the original Git update after its schema-40 driver r
     });
     await server.startupSettled;
     const response = await fetch("http://127.0.0.1:" + port + "/readyz");
-    expect(await response.json()).toMatchObject({ coreReady: true });
+    expect(response.status).toBe(503);
+    expect(await response.json()).toMatchObject({
+      coreReady: true,
+      ready: false,
+      failing: ["unavailable-test-channel"],
+    });
     const { TICK_INTERVAL_MS } = await import("./server-constants.js");
     await clock.advanceBy(TICK_INTERVAL_MS);
     await clock.advanceBy(TICK_INTERVAL_MS);

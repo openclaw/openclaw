@@ -1,13 +1,10 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { createGatewayRestartDeadline } from "../cli/daemon-cli/restart-health-deadline.js";
-import { INTERRUPTED_UPDATE_SETTLE_TIMEOUT_MS } from "../cli/daemon-cli/restart-health.constants.js";
 import { hasErrnoCode } from "../infra/errno.js";
 import { sendUpdateResultTelemetry } from "../infra/update-result-telemetry.js";
-import { observeInterruptedUpdateGateway } from "../infra/update-run-interruption-health.js";
 import { persistInterruptedUpdateObservationAsync } from "../infra/update-run-interruption-worker.js";
 import { getUpdateRunAsync, listUpdateRunsAsync } from "../infra/update-run-reader.js";
-import { isUpdateRepairRun, type UpdateRunRecord } from "../infra/update-run-record.js";
+import { isUpdateRepairRun } from "../infra/update-run-record.js";
 import { recordUpdateRunStepAsync } from "../infra/update-run-write.async.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { resolveRuntimeServiceBuildId, VERSION } from "../version.js";
@@ -174,45 +171,4 @@ export async function settleLegacyTrial(
     return true;
   }
   return false;
-}
-
-/** Explicit repair has finished maintenance; re-observe serving identity before history correction. */
-export async function completeLegacyTrialRepair(
-  expected: UpdateRunRecord,
-  repairRunId: string,
-  root: string,
-): Promise<boolean> {
-  const candidate = recoverableLegacyTrial(expected);
-  if (!candidate || !(await matchesSelectedRelease(root, candidate.target, resolvePrefix()))) {
-    return false;
-  }
-  const context = captureOpenClawStateWorkerContext({ env: process.env });
-  const deadline = createGatewayRestartDeadline({
-    timeoutMs: INTERRUPTED_UPDATE_SETTLE_TIMEOUT_MS,
-  });
-  try {
-    const observation = await deadline.run(() =>
-      observeInterruptedUpdateGateway(candidate, { deadline }),
-    );
-    if (
-      !observation.verification ||
-      deadline.cleanupStatus === "unknown" ||
-      deadline.cleanupStatus === "pending"
-    ) {
-      return false;
-    }
-    const result = await persistInterruptedUpdateObservationAsync(context, {
-      expected,
-      legacyRepairRunId: repairRunId,
-      verification: observation.verification,
-      detail:
-        "Legacy Git release verified after explicit repair completed Doctor and plugin maintenance.",
-    });
-    if (result?.accepted && result.updateResult) {
-      void sendUpdateResultTelemetry(result.updateResult);
-    }
-    return result?.accepted === true;
-  } finally {
-    deadline.dispose();
-  }
 }

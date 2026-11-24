@@ -8,8 +8,6 @@ import {
 } from "../cli/update-cli/update-command-executor.js";
 import { execFileUtf8 } from "../daemon/exec-file.js";
 import { withGatewayServiceUpdateAuthority } from "../daemon/service-update-authority.js";
-import { TICK_INTERVAL_MS } from "../gateway/server-constants.js";
-import { createPreparedReadinessFixture } from "../gateway/server/readiness.test-support.js";
 import * as tempRoot from "../infra/tmp-openclaw-dir.js";
 import { deadDriverFixture } from "../infra/update-run-fixture.test-support.js";
 import { persistInterruptedUpdateObservationAsync } from "../infra/update-run-interruption-worker.js";
@@ -27,33 +25,14 @@ import {
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
-import {
-  createGatewaySchedulerClock,
-  createTestGatewayScheduler,
-} from "../test-utils/gateway-scheduler-clock.js";
 import { VERSION } from "../version.js";
 import { announceReady } from "./gateway-trial.js";
 import { prepareLegacyTrialRun } from "./legacy-trial.js";
-import { prepareUpdateRepairHistory } from "./repair-history.js";
 import { resolvePrefix } from "./store.js";
-
-const startupRoot = vi.hoisted(() => ({ value: "" }));
-vi.mock("../infra/openclaw-root.js", async (original) => ({
-  ...(await original<typeof import("../infra/openclaw-root.js")>()),
-  resolveOpenClawPackageRootSync: () => startupRoot.value,
-}));
 
 vi.mock("../version.js", async (original) => ({
   ...(await original<typeof import("../version.js")>()),
   resolveRuntimeServiceBuildId: () => "legacy-candidate-build",
-}));
-vi.mock("../infra/update-run-interruption-health.js", async (original) => ({
-  ...(await original<typeof import("../infra/update-run-interruption-health.js")>()),
-  observeInterruptedUpdateGateway: async () => ({
-    outcome: "unverified",
-    elapsedMs: 0,
-    phase: "health",
-  }),
 }));
 const directories: string[] = [];
 afterEach(async () => {
@@ -94,7 +73,7 @@ async function fixture() {
   return { root, file, trial, runId: run.runId };
 }
 
-async function recordHistoricalReady(f: Awaited<ReturnType<typeof fixture>>) {
+async function recordReadyReceipt(f: Awaited<ReturnType<typeof fixture>>) {
   const { target, previous, version, buildId, createdAt } = f.trial;
   await recordUpdateRunStepAsync(f.runId, {
     step: "finalize:legacy-release-ready",
@@ -180,77 +159,46 @@ it.each(["missing", "repair", "invalid-grant"] as const)(
   },
 );
 
-it.each(["sidecars", "methods"] as const)(
-  "records the legacy ready receipt before repair four seconds after verified %s startup",
-  async (boundary) => {
+it.each([
+  "running",
+  "abandoned",
+  "complete-oldest-in-long-history",
+  "complete-newest-in-long-history",
+])(
+  "automatically completes the exact healthy legacy update after its driver exits (%s)",
+  async (kind) => {
     const f = await fixture();
-    await prepareLegacyTrialRun(f.runId, f.root, () => {});
-    startupRoot.value = f.root;
-    vi.resetModules();
-    const owner = await import("../gateway/stale-install.js");
-    const { createGatewayReadyAnnouncer, logGatewayReady } =
-      await import("../gateway/server-startup-readiness.js");
-    const dispose = owner.registerGatewayInstallationReplacementHandler(() => {});
-    const clock = createGatewaySchedulerClock();
-    const scheduler = createTestGatewayScheduler(clock.clock);
-    let maintenanceTicks = 0;
-    scheduler.schedule({
-      id: "installation",
-      delayMs: TICK_INTERVAL_MS,
-      run: async () => {
-        maintenanceTicks++;
-        await owner.checkGatewayInstallationReplacement();
-      },
-    });
-    let healthy = false;
-    const params = {
-      getReadiness: createPreparedReadinessFixture(() => ({
-        ready: healthy,
-        coreReady: healthy,
-        failing: healthy ? [] : ["core-startup"],
-        uptimeMs: clock.clock.now(),
-      })),
-      log: { info: vi.fn() },
-      isChatSendAvailable: () => true,
-      areSidecarsReady: () => true,
-      startupTrace: {
-        mark: vi.fn(),
-        detail: vi.fn(),
-        measure: async <T>(_name: string, run: () => T | Promise<T>) => await run(),
-      },
-    };
-    const ready =
-      boundary === "methods" ? createGatewayReadyAnnouncer(params) : () => logGatewayReady(params);
-    try {
-      await ready();
-      expect(await fs.readFile(f.file, "utf8")).toBe(JSON.stringify(f.trial));
-      healthy = true;
-      await ready();
-      await clock.advanceBy(4000);
-      expect(maintenanceTicks).toBe(0);
-      expect((await getUpdateRunAsync(f.runId))?.steps).toContainEqual(
-        expect.objectContaining({ step: "finalize:legacy-release-ready", status: "completed" }),
-      );
-      await expect(fs.stat(f.file)).rejects.toMatchObject({ code: "ENOENT" });
-    } finally {
-      dispose();
-      await scheduler.stop();
+    let historyFailure: UpdateRunRecord | undefined;
+    if (kind.endsWith("-in-long-history")) {
+      for (let index = 0; index < 100; index++) {
+        const other = await createUpdateRunAsync({ trigger: "cli" });
+        await finishUpdateRunAsync(other.runId, { status: "failed", reason: "build-failed" });
+        if (index === 0) {
+          historyFailure = await getUpdateRunAsync(other.runId);
+        }
+      }
+      if (kind === "complete-newest-in-long-history") {
+        await finishUpdateRunAsync(f.runId, { status: "failed", reason: "build-failed" });
+        const newest = await createUpdateRunAsync({
+          trigger: "cli",
+          target: { kind: "git" },
+          origin: { driver: deadDriverFixture().dead },
+        });
+        f.runId = newest.runId;
+        await recordUpdateRunPhaseAsync(f.runId, "restarting");
+      }
     }
-  },
-);
-
-it.each([false, true])(
-  "automatically completes the exact healthy legacy update after its driver exits (already reconciled=%s)",
-  async (abandoned) => {
-    const f = await fixture();
     await prepareLegacyTrialRun(f.runId, f.root, () => {});
     expect((await getUpdateRunAsync(f.runId))?.after).toEqual({});
-    if (abandoned) {
+    if (kind === "abandoned") {
       await reconcileAbandonedUpdateRunsAsync({ runIds: [f.runId] });
     }
     await announceReady(f.trial.buildId, f.root);
     await expect(fs.stat(f.file)).rejects.toMatchObject({ code: "ENOENT" });
     const run = await getUpdateRunAsync(f.runId);
+    if (historyFailure) {
+      expect(await getUpdateRunAsync(historyFailure.runId)).toEqual(historyFailure);
+    }
     expect(run).toMatchObject({
       status: "succeeded",
       after: { version: VERSION, buildId: f.trial.buildId },
@@ -289,21 +237,6 @@ it("does not attribute an uncorrelated healthy trial to the newest failed run", 
   const before = await getUpdateRunAsync(f.runId);
   await announceReady(f.trial.buildId, f.root);
   await expect(fs.stat(f.file)).rejects.toMatchObject({ code: "ENOENT" });
-  expect(await getUpdateRunAsync(f.runId)).toEqual(before);
-});
-
-// Worker contract proof, not a full update: maintenance receipts model the existing
-// repair owner's completed operations; the upgrade lane must exercise those operations.
-it("keeps correlated history selectable when repair cannot verify the serving build", async () => {
-  const f = await fixture();
-  await prepareLegacyTrialRun(f.runId, f.root, () => {});
-  await recordHistoricalReady(f);
-  await reconcileAbandonedUpdateRunsAsync({ runIds: [f.runId] });
-  const before = await getUpdateRunAsync(f.runId);
-  const settle = prepareUpdateRepairHistory([f.runId]);
-  const repair = await createUpdateRunAsync({ trigger: "cli" });
-  await recordUpdateRunPhaseAsync(repair.runId, "repairing");
-  expect(await settle(repair.runId, f.root, true)).toEqual([]);
   expect(await getUpdateRunAsync(f.runId)).toEqual(before);
 });
 
@@ -352,44 +285,21 @@ it("does not attribute an ambiguous publication to any matching run", async () =
 
 it.each([
   "complete",
-  "complete-oldest-in-long-history",
-  "complete-newest-in-long-history",
   "unrelated-failure",
   "live-driver",
   "wrong-candidate",
-  "unfinished-maintenance",
   "changed-row",
   "stored-recovery",
-])("corrects only the correlated interrupted run after repair (%s)", async (kind) => {
+])("completes only the correlated core-ready interrupted run (%s)", async (kind) => {
   const f = await fixture();
-  const completes = kind.startsWith("complete");
-  let historyFailure: UpdateRunRecord | undefined;
-  if (kind.endsWith("-in-long-history")) {
-    for (let index = 0; index < 100; index++) {
-      const other = await createUpdateRunAsync({ trigger: "cli" });
-      await finishUpdateRunAsync(other.runId, { status: "failed", reason: "build-failed" });
-      if (index === 0) {
-        historyFailure = await getUpdateRunAsync(other.runId);
-      }
-    }
-    if (kind === "complete-newest-in-long-history") {
-      await finishUpdateRunAsync(f.runId, { status: "failed", reason: "build-failed" });
-      const newest = await createUpdateRunAsync({
-        trigger: "cli",
-        target: { kind: "git" },
-        origin: { driver: deadDriverFixture().dead },
-      });
-      f.runId = newest.runId;
-      await recordUpdateRunPhaseAsync(f.runId, "restarting");
-    }
-  }
+  const completes = kind === "complete";
   if (kind === "live-driver") {
     await recordUpdateRunPhaseAsync(f.runId, "restarting", {
       origin: { driver: deadDriverFixture().driver },
     });
   }
   await prepareLegacyTrialRun(f.runId, f.root, () => {});
-  await recordHistoricalReady(f);
+  await recordReadyReceipt(f);
   if (kind === "unrelated-failure") {
     await recordUpdateRunStepAsync(f.runId, {
       step: "plugin install",
@@ -404,14 +314,6 @@ it.each([
   const unrelated = await createUpdateRunAsync({ trigger: "cli" });
   await finishUpdateRunAsync(unrelated.runId, { status: "failed", reason: "build-failed" });
   const unrelatedBefore = await getUpdateRunAsync(unrelated.runId);
-  const repair = await createUpdateRunAsync({ trigger: "cli" });
-  await recordUpdateRunPhaseAsync(repair.runId, "repairing");
-  for (const phase of ["doctor", "plugins", "targetConfigConvergence"]) {
-    await recordUpdateRunStepAsync(repair.runId, {
-      step: `finalize:${phase}`,
-      status: kind === "unfinished-maintenance" && phase === "plugins" ? "skipped" : "completed",
-    });
-  }
   if (kind === "changed-row") {
     await recordUpdateRunStepAsync(f.runId, {
       step: "post-activation doctor inspections",
@@ -428,8 +330,8 @@ it.each([
     captureOpenClawStateWorkerContext(),
     {
       expected,
-      legacyRepairRunId: repair.runId,
-      detail: "Repair completed; matching release serves.",
+      legacyReady: true,
+      detail: "The matching release is core-ready.",
       verification: {
         booted: true,
         serviceRunning: true,
@@ -443,9 +345,6 @@ it.each([
   );
   expect(result?.accepted).toBe(completes);
   expect(await getUpdateRunAsync(unrelated.runId)).toEqual(unrelatedBefore);
-  if (historyFailure) {
-    expect(await getUpdateRunAsync(historyFailure.runId)).toEqual(historyFailure);
-  }
   if (completes) {
     expect(await getUpdateRunAsync(f.runId)).toMatchObject({
       status: "succeeded",

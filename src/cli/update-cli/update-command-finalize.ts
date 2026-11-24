@@ -17,8 +17,11 @@ import {
 } from "../../infra/update-doctor-result.js";
 import type { ManagedHandoffRepair } from "../../infra/update-managed-service-handoff-lease-types.js";
 import { readUpdateResultPolicy } from "../../infra/update-result-telemetry.js";
+import { formatUpdateRunOwnership } from "../../infra/update-run-activity.js";
 import { findUpdateGatewayStop } from "../../infra/update-run-gateway-stop.js";
 import {
+  acknowledgeAbandonedUpdateRun,
+  getUpdateRun,
   listUpdateRuns,
   reconcileAbandonedUpdateRunsAsync,
 } from "../../infra/update-run-ledger.js";
@@ -32,7 +35,6 @@ import { withCommandProcessScope } from "../../process/exec-spawn.js";
 import { createNonExitingRuntime, defaultRuntime } from "../../runtime.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { assertOpenClawStateWriteAllowedAtPath } from "../../state/openclaw-state-ownership-preflight.js";
-import { prepareUpdateRepairHistory } from "../../update/repair-history.js";
 import { formatCliCommand } from "../command-format.js";
 import { exitCliAfterOutput } from "../one-shot-exit.js";
 import { retainCliProcessJobUntilExit } from "../runtime-cleanup-scope.js";
@@ -374,7 +376,6 @@ async function updateFinalizeCommandInternal(
   stage?: InterruptedUpdateFinalization,
 ): Promise<() => Promise<void>> {
   const { root, nodeRunner, preFinalizeConfig, requestedChannel, channel } = prepared;
-  const settleHistory = prepareUpdateRepairHistory(recoveryRunIds);
   const interruptedGateway = recoveryRunIds.length
     ? findUpdateGatewayStop(listUpdateRuns({ limit: 100 }))
     : undefined;
@@ -647,7 +648,18 @@ async function updateFinalizeCommandInternal(
         if (result.status !== "error" && !markRefusal && recoveryRunIds.length) {
           // Publish successful recovery only after convergence and the ledger's
           // transactional inactivity/driver check both finish.
-          reconciledRuns.push(...(await settleHistory(invokingRunId, root, !retained)));
+          await reconcileAbandonedUpdateRunsAsync({ explicit: true, runIds: recoveryRunIds });
+          const unresolved = recoveryRunIds
+            .map((runId) => getUpdateRun(runId))
+            .find((run) => run?.status === "running");
+          if (unresolved) {
+            throw new Error(formatUpdateRunOwnership(unresolved));
+          }
+          for (const runId of recoveryRunIds) {
+            if (acknowledgeAbandonedUpdateRun(runId)) {
+              reconciledRuns.push(runId);
+            }
+          }
         }
         const failure =
           result.status === "error"
