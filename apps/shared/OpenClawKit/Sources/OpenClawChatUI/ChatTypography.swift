@@ -3,6 +3,7 @@ import SwiftUI
 #if os(macOS)
 import AppKit
 #elseif os(iOS)
+import CoreText
 import UIKit
 #endif
 
@@ -110,13 +111,32 @@ enum OpenClawChatTypography {
     }
 
     #if os(iOS)
-    /// Sheets sit outside the dense transcript and keep the system text sizes, like Settings.
-    static func sheet(size: CGFloat, weight: Font.Weight = .regular, relativeTo textStyle: Font.TextStyle) -> Font {
-        Font.custom(self.bodyPostScriptName, size: size, relativeTo: textStyle).weight(weight)
+    /// A sheet of settings reads at the app's Settings sizes, not the transcript's. Inter is a
+    /// variable font and `Font.custom` leaves its optical size at 14 pt, so these set both axes.
+    static var settingsBody: Font {
+        settings(size: 17, weight: 400, relativeTo: .body)
     }
 
-    static var sheetTitle: Font {
-        Font.custom(self.displayPostScriptName, size: 17, relativeTo: .headline).weight(.semibold)
+    static var settingsFootnote: Font {
+        settings(size: 13, weight: 400, relativeTo: .footnote)
+    }
+
+    static var settingsSectionHeader: Font {
+        settings(size: 12, weight: 600, relativeTo: .caption1)
+    }
+
+    private static func settings(size: CGFloat, weight: CGFloat, relativeTo textStyle: UIFont.TextStyle) -> Font {
+        guard UIFont(name: self.bodyPostScriptName, size: size) != nil else {
+            return Font(UIFontMetrics(forTextStyle: textStyle).scaledFont(for: .systemFont(ofSize: size)))
+        }
+        let descriptor = UIFontDescriptor(fontAttributes: [
+            .name: self.bodyPostScriptName,
+            kCTFontVariationAttribute as UIFontDescriptor.AttributeName: [
+                NSNumber(value: 2_003_265_652): weight, // "wght"
+                NSNumber(value: 1_869_640_570): min(max(size, 14), 32), // "opsz"
+            ],
+        ])
+        return Font(UIFontMetrics(forTextStyle: textStyle).scaledFont(for: UIFont(descriptor: descriptor, size: size)))
     }
     #endif
 

@@ -44,9 +44,9 @@ extension View {
 private struct ChatComposerPermissionsSheet: View {
     @Bindable var viewModel: OpenClawChatViewModel
     @Environment(\.dismiss) private var dismiss
-    @ScaledMetric(relativeTo: .body) private var glyphSize: CGFloat = 20
+    @ScaledMetric(relativeTo: .body) private var iconScale = 1.0
     @State private var shown: Facts?
-    @State private var contentHeight: CGFloat = 560
+    @State private var sheetHeight: CGFloat = 560
 
     /// Everything the sheet draws. A patch reloads the catalog, which is empty meanwhile, so the
     /// sheet keeps the last settled facts while one is in flight instead of flashing every row off.
@@ -88,30 +88,31 @@ private struct ChatComposerPermissionsSheet: View {
     var body: some View {
         let live = self.live
         let facts = self.shown ?? live
-        ScrollView {
-            VStack(alignment: .leading, spacing: 0) {
-                self.header
-                self.sectionTitle("Access")
-                self.accessCard(facts)
-                self.footnote(
-                    facts.modeReason ??
-                        (facts.notice == OpenClawChatViewModel.permissionsNextRunNotice ? facts.notice : nil))
-                self.sectionTitle("Tools")
-                    .padding(.top, 22)
-                self.toolsCard(facts)
-                self.footnote(
-                    facts.webSearchReason ??
-                        (facts.notice == OpenClawChatViewModel.toolChangesNextRunNotice ? facts.notice : nil))
-                self.footnote(facts.error, color: OpenClawChatTheme.danger)
+        NavigationStack {
+            List {
+                self.accessSection(facts)
+                self.toolsSection(facts)
             }
-            .padding(.horizontal, 16)
-            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { self.contentHeight = $0 }
+            .listStyle(.insetGrouped)
+            // The sheet opens as tall as its rows; the list's insets carry the bar and the home indicator.
+            .onScrollGeometryChange(for: CGFloat.self) {
+                $0.contentSize.height + $0.contentInsets.top + $0.contentInsets.bottom
+            } action: { _, height in
+                self.sheetHeight = height
+            }
+            .navigationTitle("Permissions")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button { self.dismiss() } label: { Image(systemName: "xmark") }
+                        .accessibilityLabel("Close")
+                        .accessibilityIdentifier("chat-composer-permissions-close")
+                }
+            }
         }
-        .scrollBounceBehavior(.basedOnSize)
-        .background(OpenClawChatTheme.sheetBackground)
-        .presentationDetents([.height(self.contentHeight), .large])
+        .tint(.primary)
+        .presentationDetents([.height(self.sheetHeight), .large])
         .presentationDragIndicator(.visible)
-        .presentationBackground(OpenClawChatTheme.sheetBackground)
         .onChange(of: live, initial: true) { _, live in
             if live.isSettled {
                 self.shown = live
@@ -121,172 +122,106 @@ private struct ChatComposerPermissionsSheet: View {
         .accessibilityIdentifier("chat-composer-permissions-sheet")
     }
 
-    private var header: some View {
-        ZStack {
-            Text("Permissions")
-                .font(OpenClawChatTypography.sheetTitle)
-                .foregroundStyle(OpenClawChatTheme.assistantText)
-                .accessibilityAddTraits(.isHeader)
-            HStack {
-                self.closeButton
-                Spacer()
-            }
-        }
-        .padding(.top, 18)
-        .padding(.bottom, 10)
-    }
-
-    private var closeButton: some View {
-        let label = Image(systemName: "xmark")
-            .font(.system(size: 16, weight: .medium))
-            .foregroundStyle(OpenClawChatTheme.assistantText)
-            .frame(width: 44, height: 44)
-            .contentShape(Circle())
-        return Button { self.dismiss() } label: {
-            if #available(iOS 26.0, *) {
-                label.glassEffect(.regular.interactive(), in: Circle())
-            } else {
-                label.background(.regularMaterial, in: Circle())
-            }
-        }
-        .buttonStyle(.plain)
-        .accessibilityLabel("Close")
-        .accessibilityIdentifier("chat-composer-permissions-close")
-    }
-
-    private func sectionTitle(_ title: LocalizedStringKey) -> some View {
-        Text(title)
-            .font(OpenClawChatTypography.sheet(size: 15, relativeTo: .subheadline))
-            .foregroundStyle(OpenClawChatTheme.muted)
-            .padding(.horizontal, 16)
-            .padding(.bottom, 8)
-            .accessibilityAddTraits(.isHeader)
-    }
-
-    @ViewBuilder
-    private func footnote(_ text: String?, color: Color = OpenClawChatTheme.muted) -> some View {
-        if let text {
-            Text(text)
-                .font(OpenClawChatTypography.sheet(size: 13, relativeTo: .footnote))
-                .foregroundStyle(color)
-                .fixedSize(horizontal: false, vertical: true)
-                .padding(.horizontal, 16)
-                .padding(.top, 8)
-        }
-    }
-
-    private func accessCard(_ facts: Facts) -> some View {
-        VStack(spacing: 0) {
+    private func accessSection(_ facts: Facts) -> some View {
+        Section {
             self.modeRow(nil, facts: facts)
             ForEach(OpenClawChatPermissionMode.allCases, id: \.rawValue) { mode in
-                Divider().padding(.leading, self.textInset)
                 self.modeRow(mode, facts: facts)
             }
+        } header: {
+            Text("Access").font(OpenClawChatTypography.settingsSectionHeader)
+        } footer: {
+            self.footer(
+                facts.modeReason ??
+                    (facts.notice == OpenClawChatViewModel.permissionsNextRunNotice ? facts.notice : nil))
         }
-        .background(OpenClawChatTheme.sheetCard)
-        .clipShape(RoundedRectangle(cornerRadius: Self.cardRadius, style: .continuous))
     }
 
     private func modeRow(_ mode: OpenClawChatPermissionMode?, facts: Facts) -> some View {
         let locked = mode == .full && !facts.canSelectFull
-        let enabled = facts.canChangeMode && !locked
         let selected = facts.mode == mode
-        let dimmed = enabled ? 1 : Self.disabledOpacity
         return Button {
             self.select(mode)
         } label: {
-            HStack(spacing: Self.iconGap) {
-                // Full access carries the accent, as in the Control UI, unless it is locked.
-                ChatPermissionModeGlyph(mode: mode, size: self.glyphSize)
-                    .foregroundStyle(mode == .full && !locked ? OpenClawChatTheme.accent : OpenClawChatTheme.muted)
-                    .frame(width: self.iconWidth)
-                    .opacity(dimmed)
-                    .accessibilityHidden(true)
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(mode?.displayName ?? String(localized: "Agent default"))
-                        .font(OpenClawChatTypography.sheet(size: 17, weight: .medium, relativeTo: .body))
-                        .foregroundStyle(OpenClawChatTheme.assistantText)
-                        .opacity(dimmed)
-                    // A locked row keeps its reason at full strength; it is the only thing left to read.
-                    Text(
-                        locked
-                            ? String(localized: "Only admins can turn on Full access.")
-                            : mode?.summary ?? String(localized: "Uses this agent’s settings."))
-                        .font(OpenClawChatTypography.sheet(size: 13, relativeTo: .footnote))
-                        .lineSpacing(2)
-                        .foregroundStyle(OpenClawChatTheme.muted)
-                        .opacity(locked ? 1 : dimmed)
-                        .fixedSize(horizontal: false, vertical: true)
+            HStack(spacing: 8) {
+                Label {
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(mode?.displayName ?? String(localized: "Agent default"))
+                            .font(OpenClawChatTypography.settingsBody)
+                        // A locked row keeps its reason at full strength; it is the only thing left to read.
+                        Text(
+                            locked
+                                ? String(localized: "Only admins can turn on Full access.")
+                                : mode?.summary ?? String(localized: "Uses this agent’s settings."))
+                            .font(OpenClawChatTypography.settingsFootnote)
+                            .foregroundStyle(.secondary)
+                    }
+                } icon: {
+                    // Full access carries the accent, as in the Control UI, unless it is locked.
+                    ChatPermissionModeGlyph(mode: mode, size: 15 * self.iconScale, weight: .regular)
+                        .foregroundStyle(mode == .full && !locked ? AnyShapeStyle(OpenClawChatTheme.accent) :
+                            AnyShapeStyle(.secondary))
                 }
-                .multilineTextAlignment(.leading)
-                Spacer(minLength: 8)
+                Spacer(minLength: 0)
                 // The mark's column stays reserved, so selecting a row never rewraps its summary.
                 ZStack {
                     if selected {
                         Image(systemName: "checkmark")
-                            .font(.system(size: 15, weight: .medium))
-                            .foregroundStyle(OpenClawChatTheme.accent)
-                            .opacity(dimmed)
+                            .font(.subheadline.weight(.semibold))
                     } else if locked {
                         Image(systemName: "lock.fill")
-                            .font(.system(size: 12, weight: .regular))
-                            .foregroundStyle(OpenClawChatTheme.muted)
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
                     }
                 }
                 .frame(width: 20)
                 .accessibilityHidden(true)
             }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 13)
-            .frame(maxWidth: .infinity, minHeight: 52, alignment: .leading)
-            .contentShape(Rectangle())
         }
-        .buttonStyle(ChatPermissionRowButtonStyle())
-        .disabled(!enabled)
+        .disabled(!facts.canChangeMode || locked)
         .accessibilityElement(children: .combine)
         .accessibilityAddTraits(selected ? .isSelected : [])
         .accessibilityIdentifier("chat-composer-permission-\(mode?.rawValue ?? "default")")
     }
 
-    private func toolsCard(_ facts: Facts) -> some View {
-        Toggle(isOn: Binding(
-            get: { facts.webSearchOn },
-            set: { self.setWebSearch($0) }))
-        {
-            HStack(spacing: Self.iconGap) {
-                Image(systemName: "globe")
-                    .font(.system(size: self.glyphSize, weight: .medium))
-                    .foregroundStyle(OpenClawChatTheme.muted)
-                    .frame(width: self.iconWidth)
-                    .accessibilityHidden(true)
-                Text("Web search")
-                    .font(OpenClawChatTypography.sheet(size: 17, weight: .medium, relativeTo: .body))
-                    .foregroundStyle(OpenClawChatTheme.assistantText)
+    private func toolsSection(_ facts: Facts) -> some View {
+        Section {
+            Toggle(isOn: Binding(
+                get: { facts.webSearchOn },
+                set: { self.setWebSearch($0) }))
+            {
+                Label {
+                    Text("Web search").font(OpenClawChatTypography.settingsBody)
+                } icon: {
+                    Image(systemName: "globe")
+                        .font(.system(size: 15 * self.iconScale, weight: .regular))
+                        .foregroundStyle(.secondary)
+                }
             }
-            .opacity(facts.canChangeWebSearch ? 1 : Self.disabledOpacity)
+            .tint(OpenClawChatTheme.switchOn)
+            .disabled(!facts.canChangeWebSearch)
+            .accessibilityIdentifier("chat-composer-web-search")
+        } header: {
+            Text("Tools").font(OpenClawChatTypography.settingsSectionHeader)
+        } footer: {
+            VStack(alignment: .leading, spacing: 6) {
+                self.footer(
+                    facts.webSearchReason ??
+                        (facts.notice == OpenClawChatViewModel.toolChangesNextRunNotice ? facts.notice : nil))
+                if let error = facts.error {
+                    Text(error)
+                        .font(OpenClawChatTypography.settingsFootnote)
+                        .foregroundStyle(OpenClawChatTheme.danger)
+                }
+            }
         }
-        .tint(OpenClawChatTheme.switchOn)
-        .disabled(!facts.canChangeWebSearch)
-        .padding(.horizontal, 16)
-        .padding(.vertical, 8)
-        .frame(minHeight: 52)
-        .background(
-            OpenClawChatTheme.sheetCard,
-            in: RoundedRectangle(cornerRadius: Self.cardRadius, style: .continuous))
-        .accessibilityIdentifier("chat-composer-web-search")
     }
 
-    private static let cardRadius: CGFloat = 26
-    private static let disabledOpacity: Double = 0.45
-    private static let iconGap: CGFloat = 12
-
-    private var iconWidth: CGFloat {
-        self.glyphSize + 6
-    }
-
-    /// Row separators start at the text, as in an inset grouped list.
-    private var textInset: CGFloat {
-        16 + self.iconWidth + Self.iconGap
+    @ViewBuilder
+    private func footer(_ text: String?) -> some View {
+        if let text {
+            Text(text).font(OpenClawChatTypography.settingsFootnote)
+        }
     }
 
     // The view model drops a change while another is in flight, so taps wait for the settled state.
@@ -312,14 +247,6 @@ private struct ChatComposerPermissionsSheet: View {
         choice(&next)
         next.error = nil
         self.shown = next
-    }
-}
-
-/// The row draws its own disabled state, so a locked row can keep its reason readable.
-private struct ChatPermissionRowButtonStyle: ButtonStyle {
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .background(Color.primary.opacity(configuration.isPressed ? 0.06 : 0))
     }
 }
 #endif
