@@ -44,6 +44,7 @@ import { registerStatusInstallRecordReadTests } from "./status.gather.install-re
 import { gatherDaemonStatus } from "./status.gather.js";
 import { registerStatusLaunchdScanTests } from "./status.gather.launchd.test-support.js";
 import {
+  callArg,
   callGatewayStatusProbe,
   capturePrintedDaemonStatus,
   findExtraGatewayServices,
@@ -56,6 +57,7 @@ import {
   inspectPortUsage,
   inspectPortUsages,
   originalReadGatewayLastShutdown,
+  probeInput,
   readGatewayLastShutdownAsync,
   readGatewayRecentCrashesAsync,
   readGatewayRestartHandoffSync,
@@ -253,9 +255,15 @@ vi.mock("../../daemon/diagnostics.js", () => ({
   readLastGatewayErrorLine: (env: NodeJS.ProcessEnv) => readLastGatewayErrorLine(env),
 }));
 
-vi.mock("../../daemon/inspect.js", () => ({
-  findExtraGatewayServices: (env: unknown, opts?: unknown) => findExtraGatewayServices(env, opts),
-}));
+vi.mock("../../daemon/inspect.js", async () => {
+  const hints = await import("../../daemon/inspect-cleanup-hints.js");
+  return {
+    findExtraGatewayServices: (env: unknown, opts?: unknown) => findExtraGatewayServices(env, opts),
+    formatGatewayServiceInspectionErrors: hints.formatGatewayServiceInspectionErrors,
+    gatewayServiceCleanupHintLabel: hints.gatewayServiceCleanupHintLabel,
+    renderGatewayServiceCleanupHints: hints.renderGatewayServiceCleanupHints,
+  };
+});
 
 vi.mock("../../state/openclaw-database-preflight.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../state/openclaw-database-preflight.js")>()),
@@ -386,20 +394,6 @@ vi.mock("../../plugins/installed-plugin-index-record-reader.js", () => ({
 vi.mock("./restart-health.js", () => ({
   inspectGatewayRestart: (opts: unknown) => inspectGatewayRestart(opts),
 }));
-
-function callArg(mock: { mock: { calls: unknown[][] } }, index = 0): unknown {
-  const call = mock.mock.calls[index];
-  if (!call) {
-    throw new Error(`Expected mock call ${index}`);
-  }
-  return call[0];
-}
-
-function probeInput() {
-  const input = callGatewayStatusProbe.mock.calls[0]?.[0];
-  assert(input, "expected status probe");
-  return input;
-}
 
 function gatherStatus(overrides: Partial<Parameters<typeof gatherDaemonStatus>[0]> = {}) {
   return gatherDaemonStatus({ rpc: {}, probe: true, deep: false, ...overrides });
