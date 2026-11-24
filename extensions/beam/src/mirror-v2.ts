@@ -135,9 +135,9 @@ async function request(p: Destination, url: string, init: RequestInit) {
     if (error instanceof GuardedFetchRedirectError) {
       return { status: error.status, body: undefined };
     }
-    // The original durable intent owns recovery, including a lost PUT acknowledgement.
-    throw new Error("Beam mirror request could not be verified; retain the saved request");
   }
+  // Keep transport details private. The original intent owns recovery after a lost acknowledgement.
+  throw new Error("Beam mirror request could not be verified; retain the saved request");
 }
 
 function fenced(status: number) {

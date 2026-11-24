@@ -250,7 +250,7 @@ export function createBeamTestRunner({
 export function createScheduledBeamTestRunner(options: Parameters<typeof createBeamTestRunner>[0]) {
   const scheduler = createTestPluginServiceScheduler();
   const runner = createBeamTestRunner({ ...options, signal: scheduler.signal });
-  scheduler.schedule({ id: "mirror", delayMs: 0, everyMs: 30_000, run: runner.tick });
+  scheduler.schedule({ id: "mirror", delayMs: 0, everyMs: 30_000, run: () => runner.tick() });
   return { tick: () => vi.advanceTimersByTimeAsync(0), stop: scheduler.stop };
 }
 

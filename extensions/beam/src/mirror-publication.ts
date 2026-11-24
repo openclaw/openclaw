@@ -42,7 +42,7 @@ export async function openBeamMirrorEnrollment(params: {
   endpoint: string;
   token?: string;
   signal: AbortSignal;
-  assertCurrent(): void;
+  assertCurrent: () => void;
   explicit?: boolean;
   confirmGeneration?: string;
   revalidate?: () => Promise<void>;
@@ -75,7 +75,7 @@ export async function openBeamMirrorEnrollment(params: {
     row = await store.observe(key);
   }
   if (!row.value) {
-    return;
+    return undefined;
   }
   params.assertCurrent();
   const options = {

@@ -298,7 +298,7 @@ export function createBeamMirrorRunner(params: {
       config.endpoint !== endpoint ||
       config.token === null
     ) {
-      return;
+      return undefined;
     }
     const assertCurrent = () => {
       signal.throwIfAborted();
@@ -317,7 +317,7 @@ export function createBeamMirrorRunner(params: {
     let binding: Awaited<ReturnType<typeof openBeamMirrorEnrollment>>;
     if (config.apiV2) {
       if (!candidate.sourceHomeId || !params.getPublicationStore) {
-        return;
+        return undefined;
       }
       binding = await openBeamMirrorEnrollment({
         store: params.getPublicationStore({ assertCurrent }),
@@ -332,7 +332,7 @@ export function createBeamMirrorRunner(params: {
           return { fingerprint: "", retired: true };
         }
         warnThrottled("beam mirror source is waiting for an explicit beam.mirror.enroll operation");
-        return;
+        return undefined;
       }
     }
     const cleaned = await buildUpload(
@@ -353,7 +353,7 @@ export function createBeamMirrorRunner(params: {
     };
     const fingerprint = mirrorFingerprint(legacy);
     if (!binding && oldFingerprint === fingerprint) {
-      return;
+      return undefined;
     }
     const acknowledged = binding
       ? await binding.publish(packet.beamId, cleaned.raw)

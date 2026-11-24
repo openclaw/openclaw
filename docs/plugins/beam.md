@@ -219,6 +219,8 @@ The mirror sends visible user and agent messages through the packaged native Bea
 
 ### Enroll a v2 publication
 
+For a Codex source, install the official Codex plugin on the source Gateway with `openclaw plugins install codex`. The plugin registers the `codex` catalog and uses its managed app-server to read native threads. The receiving Gateway needs only its bundled Beam plugin enabled. See [Codex harness setup](/plugins/codex-harness).
+
 Set the mirror endpoint to the Team Gateway's final `/api/v2/beam` URL and add the source catalog to `mirror.catalogs`. List native sources with the authenticated `sessions.catalog.list` Gateway method. As an administrator on the **source Gateway**, explicitly create an independent publication with the selected row's five identifiers:
 
 ```bash

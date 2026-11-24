@@ -42,7 +42,7 @@ async function fixture(body: string) {
   resolveExecutable.mockResolvedValue(process.execPath);
   vi.mocked(runCommandBuffered).mockImplementation(([exe, ...args], options) => {
     expect([exe, ...args]).toEqual([process.execPath, "clean", "--protocol", "1"]);
-    return actual.runCommandBuffered([exe, "-e", body, "--", ...args], options);
+    return actual.runCommandBuffered([process.execPath, "-e", body, "--", ...args], options);
   });
 }
 
