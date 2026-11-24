@@ -240,7 +240,6 @@ describe("release readiness contract", () => {
         publish_openclaw_npm: "true",
         publish_docker_only: "false",
         release_evidence_mode: "full-release-validation",
-        wait_for_clawhub: "true",
       });
     },
   );
@@ -280,7 +279,7 @@ describe("release readiness contract", () => {
     ["extra registry", (value) => Object.assign(value.plugins, { other: descriptor("npm") })],
     [
       "missing normalized inputs",
-      (value) => Reflect.deleteProperty(value.inputs, "wait_for_clawhub"),
+      (value) => Reflect.deleteProperty(value.inputs, "publish_openclaw_npm"),
     ],
     ["channel drift", (value) => void (value.inputs.npm_dist_tag = "latest")],
     ["npm producer", (value) => void (value.plugins.npm.workflowSha = "d".repeat(40))],
@@ -631,7 +630,6 @@ describe("release readiness executable handoff", () => {
         PARENT_WORKFLOW_FULL_REF: TOOLING.fullRef,
         RELEASE_TAG: "v2026.9.2-beta.1",
         PUBLISH_OPENCLAW_NPM: lane === "core" ? "true" : "false",
-        WAIT_FOR_CLAWHUB: lane === "clawhub" ? "true" : "false",
         CLAWHUB_PLAN_PATH: plan,
         CLAWHUB_ONLY: lane === "clawhub" ? "true" : "false",
         FIXTURE_FAILED_MANIFEST: failure === "manifest" ? "clawhub" : "",

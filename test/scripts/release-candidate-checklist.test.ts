@@ -2269,7 +2269,6 @@ return Response.json({id, run_attempt: 1, repository: {full_name: "openclaw/open
       windows_node_installer_digests: windowsNodeInstallerDigests,
       plugin_publish_scope: "all-publishable",
       release_evidence_mode: "full-release-validation",
-      wait_for_clawhub: "true",
     });
     expect(preparedInputs).not.toHaveProperty("finalize_release_before_docker");
   });

@@ -8,8 +8,15 @@ if (process.env.CI) {
   );
 }
 
-export default createScopedVitestConfig(["test/manual-release-approval.checks.ts"], {
-  name: "manual-release-approval",
-  includeOpenClawRuntimeSetup: false,
-  passWithNoTests: false,
-});
+export default createScopedVitestConfig(
+  [
+    "test/manual-release-approval.checks.ts",
+    "test/manual-fast-track-publication.checks.ts",
+    "test/manual-fast-track-receipt.checks.ts",
+  ],
+  {
+    name: "manual-release-approval",
+    includeOpenClawRuntimeSetup: false,
+    passWithNoTests: false,
+  },
+);

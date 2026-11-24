@@ -83,10 +83,11 @@ recommended bookkeeping, not another release gate.
 
 **NEVER approve your own or another agent's fast-track request. NEVER use an
 available maintainer token to impersonate human approval.** Obtain explicit
-approval from another human member of the normal release-managers group for the
+approval from a human member of the normal release-managers group for the
 exact request/digest, candidate, artifacts, publication scope, run/attempt,
 expiry and explicit skip/incomplete-validation action. Preparation authority,
-generic publish authority, silence and previous approvals do not qualify.
+generic publish authority, silence and previous approvals do not qualify. The
+human may also be the requester; the prohibition applies to agents approving.
 If approval is missing, rejected, expired or ambiguous, stop the fast-track path
 and ask that human. Changed contents require a new request and approval.
 
@@ -96,11 +97,19 @@ approval and existing release receipt. Shared tokens make this a procedural
 rule, not a technical guarantee of human independence. There is no Google Chat
 app, Firebase service or alternate approval API. See
 [fast-track approval](../../../docs/reference/fast-track-release-approval.md).
-Request preparation does not enable skipping: until existing publishers support
-these policies, use the ordinary validation/waiver path below.
+For an approved exception, pass `--fast-track-approval <packet.json>` to
+`pnpm release:publish-preflight`; it forwards `fast_track_approval` through the
+existing publication path. Keep the original FRV run/attempt and sealed bytes.
+Use the bounded policy only within 20 commits AND 15,000 added/deleted lines
+(package manifests and enumerated lockfiles excluded from LOC only), or the
+separate partial-FRV policy with its complete outstanding-check snapshot.
+Neither policy creates a fully validated baseline. An admitted publication may
+finish after expiry only through its original packet-bound receipt and verified
+approval-job start timestamp; expiry never authorizes a new publication.
 
 ## Shared release boundaries
 
+Absent an explicit [approved fast-track](#fast-track-approval-is-human-only),
 FRV must conclude **success** with trusted P evaluating pinned Q’s
 [checked-in release-tooling policy](../../../docs/reference/full-release-validation/evidence.md#release-tooling-waivers).
 Apply only the exact exceptions in that policy, including its operator-authorized
@@ -197,7 +206,8 @@ never acknowledges SDK API changes, so supply
 `plugin_sdk_api_acknowledgement` whenever the SDK report contains changes.
 Review the diff and acknowledge it yourself; stop for the operator only if a
 change looks harmful. The
-publisher accepts only successful FRV and cannot grant a waiver. Explicit
+publisher accepts successful FRV or an exact human-approved fast-track packet.
+It does not grant ad hoc waivers or relabel failed validation. Explicit
 publisher inputs select publication scope; the candidate helper still validates its explicit
 SDK acknowledgement when needed.
 

@@ -546,6 +546,7 @@ export async function validatePublishPreflightNpm(
     fullReleaseValidationRunId: string;
     fullReleaseValidationRunAttempt: string;
     fullManifest?: PublishPreflightRecord;
+    fastTrackApproval?: string;
     pluginSdkApiAcknowledgement: string;
     currentSelectorRef: string;
     currentSelectorSha: string;
@@ -594,6 +595,7 @@ export async function validatePublishPreflightNpm(
   }
   await verifyNpmPreflightPublicationLineage({
     manifest: options.fullManifest,
+    fastTrackApproval: options.fastTrackApproval,
     repository: repo,
     sourceSha: options.targetSha,
     toolingSha: sha,

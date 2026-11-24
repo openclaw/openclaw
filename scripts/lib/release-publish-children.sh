@@ -332,6 +332,18 @@ dispatch_workflow_at_ref() {
       '$inputs + {($key): $value}')"
   done
 
+  # Carry the exact reviewed exception through the existing publication dispatch owner.
+  case "$workflow" in
+    openclaw-release-publish.yml|openclaw-npm-release.yml|plugin-npm-release.yml|plugin-clawhub-release.yml|plugin-clawhub-new.yml|plugin-clawhub-recovery.yml)
+      if [[ -n "${FAST_TRACK_APPROVAL_JSON:-}" ]]; then
+        inputs_json="$(jq -ce --arg approval "$FAST_TRACK_APPROVAL_JSON" '
+          if has("fast_track_approval") and .fast_track_approval != $approval then
+            error("Child fast-track approval differs from the parent")
+          else . + {fast_track_approval: $approval} end' <<< "$inputs_json")" || return 1
+      fi
+      ;;
+  esac
+
   dispatch_body="$(jq -cn \
     --arg ref "$workflow_ref" \
     --argjson inputs "$inputs_json" \
@@ -1212,6 +1224,14 @@ upload_release_evidence_assets() {
     exit 1
   fi
 
+  if [[ -n "${FAST_TRACK_APPROVAL_JSON:-}" ]]; then
+    local approval_asset="openclaw-${release_version}-fast-track-approval.json"
+    printf '%s\n' "$FAST_TRACK_APPROVAL_JSON" > "${RUNNER_TEMP}/${approval_asset}"
+    (cd "${RUNNER_TEMP}" && sha256sum "$approval_asset" > "${approval_asset}.sha256")
+    attach_or_verify_release_asset "${RUNNER_TEMP}/${approval_asset}" "$approval_asset"
+    attach_or_verify_release_asset "${RUNNER_TEMP}/${approval_asset}.sha256" "${approval_asset}.sha256"
+  fi
+
   cp "${manifest_path}" "${RUNNER_TEMP}/${manifest_asset}"
   cp "${evidence_path}" "${RUNNER_TEMP}/${evidence_asset}"
   (
@@ -1343,6 +1363,10 @@ verify_published_release() {
   fi
   if [[ -n "${NPM_TELEGRAM_RUN_ID// }" ]]; then
     verify_args+=(--npm-telegram-run "${NPM_TELEGRAM_RUN_ID}")
+  fi
+
+  if [[ -n "${FAST_TRACK_APPROVAL_JSON:-}" ]]; then
+    verify_args+=(--full-release-validation-run "$FULL_RELEASE_VALIDATION_RUN_ID")
   fi
 
   verifier="release-verify-beta.ts"

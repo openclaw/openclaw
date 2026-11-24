@@ -58,7 +58,7 @@ const INPUTS = new Set([
   "publish_docker_only",
   "release_profile",
   "release_evidence_mode",
-  "wait_for_clawhub",
+  "fast_track_approval",
 ]);
 
 function requireValue(condition, message) {
@@ -167,7 +167,6 @@ export function validateReleaseButtonInputs(value) {
     publish_openclaw_npm: "true",
     publish_docker_only: "false",
     release_evidence_mode: "full-release-validation",
-    wait_for_clawhub: "true",
   };
 }
 
@@ -587,7 +586,8 @@ async function readReady(descriptor, directory, tooling, token) {
   };
 }
 
-function publicationInputs(ready, resumeRunId) {
+function publicationInputs(ready, resumeRunId, fastTrackApproval = "") {
+  requireValue(typeof fastTrackApproval === "string", "fast_track_approval must be JSON text.");
   const effectiveResumeRunId = resumeRunId || ready.inputs.openclaw_npm_resume_run_id || "";
   requireValue(
     effectiveResumeRunId === "" ||
@@ -598,6 +598,7 @@ function publicationInputs(ready, resumeRunId) {
   return {
     ...ready.inputs,
     ...(resumeRunId ? { openclaw_npm_resume_run_id: resumeRunId } : {}),
+    ...(fastTrackApproval ? { fast_track_approval: fastTrackApproval } : {}),
     prepared_plugins: JSON.stringify(ready.plugins),
   };
 }
@@ -634,7 +635,11 @@ async function readPublicationRequest(path, directory, tooling, token) {
     "Publication request is unknown, unverified, malformed, or inconsistent; do not redispatch.",
   );
   const { ready } = await readReady(request.preparedArtifact, directory, tooling, token);
-  const inputs = publicationInputs(ready, request.openclawNpmResumeRunId ?? "");
+  const inputs = publicationInputs(
+    ready,
+    request.openclawNpmResumeRunId ?? "",
+    request.inputs?.fast_track_approval ?? "",
+  );
   requireValue(
     ready.sourceSha === request.sourceSha &&
       isDeepStrictEqual(inputs, request.inputs) &&
@@ -859,7 +864,11 @@ async function main() {
     const { ready, revalidateAuthority } = await readReady(descriptor, directory, tooling, token);
     // Recovery changes only the existing owner's resume selector. The parent
     // verifies its authority and canonical core bytes before starting writers.
-    const inputs = publicationInputs(ready, resumeRunId);
+    const inputs = publicationInputs(
+      ready,
+      resumeRunId,
+      process.env.FAST_TRACK_APPROVAL_JSON ?? "",
+    );
     const request = {
       schema: "openclaw.release-dispatch/v1",
       repository: REPOSITORY,

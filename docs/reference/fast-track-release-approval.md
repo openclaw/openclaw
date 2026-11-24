@@ -1,16 +1,17 @@
 ---
-summary: "Release-manager review packets for proposed fast-track releases"
+summary: "Human-approved fast-track publication through the existing release publishers"
 title: "Fast-track release approval"
 read_when:
   - Preparing a fast-track release request for the release-managers group
-  - Reviewing the proposed fast-track release policy
+  - Reviewing or publishing a fast-track release
 ---
 
 # Fast-track release approval
 
-**Status: request preparation only. No publisher accepts a validation bypass.**
-The existing parent, npm/plugin, Docker and closeout gates are unchanged. The
-historical `authorized-beta-focused-v1` exception keeps its original contract.
+Fast-track approval is an explicit validation exception in the existing release
+publication path, not a separate release pipeline. Parent, npm/plugin, Docker
+and stable closeout consumers retain source, artifact and publication-approval
+checks. The historical `authorized-beta-focused-v1` contract is unchanged.
 
 ## Approval model
 
@@ -20,8 +21,8 @@ Cloud Run deployment, ID token, callback, custom decision store or status API.
 
 **An agent must never approve a fast-track release, including through a token
 that happens to belong to a release manager.** Before taking any fast-track
-action, obtain explicit approval from **another human in the release-managers
-group**, not the requester acting as their own approver. Generic release
+action, obtain explicit approval from **a human in the release-managers group**.
+That human may also be the person requesting the fast-track. Generic release
 ownership, permission to prepare/publish, silence, a previous approval or an
 agent's interpretation of intent is not explicit fast-track approval.
 
@@ -61,7 +62,7 @@ publication scope, run/attempt, lowercase UUIDv4 request ID, expiry and explicit
 action. Canonical serialization sorts artifacts and scope before hashing.
 Persist the exact packet with release evidence; a digest alone is not approval.
 
-## Policies retained for review
+## Publication policies
 
 - `approved-fast-track-v1`: **at most 20 commits AND 15,000 total added/deleted
   lines** since a published, fully validated ancestor. Exclude only files named
@@ -77,22 +78,80 @@ Persist the exact packet with release evidence; a digest alone is not approval.
   run/attempt and candidate, durable snapshot URL/digest, result summary and every
   outstanding check/job/run/attempt. Preserve original successes, failures and
   incomplete results. Do not relabel a failed FRV as successful. A partially
-  validated release cannot reset the fully validated baseline. The small-delta
-  eligibility helper rejects this policy pending authenticated evidence support.
+  validated release cannot reset the fully validated baseline.
 
 Approval never waives package/build integrity, artifact identity, signing or
-publication authorization. Future enforcement must retain original FRV evidence
-and record **validation skipped by approved fast-track**, not fictional success.
-Both policies remain preparation contracts, not enabled publisher modes.
+publication authorization. Publishers retain original FRV evidence and record
+**validation skipped by approved fast-track**, not fictional success. An artifact
+that was never built and sealed successfully cannot be authorized by approval.
 
-## Remaining integration
+## Publish an approved request
 
-Before enabling either policy, authenticate the reference/original FRV evidence,
-seal exact artifacts, verify the approved request against independently derived
-candidate/artifact/scope/run identities, and migrate the existing parent,
-npm/plugin, Docker and closeout consumers together. Preserve normal release gates
-and test both normal and exception paths. Do not introduce another approval
-service or make a local packet an authorization receipt.
+Keep `release_evidence_mode=full-release-validation`. Supply one additional
+`fast_track_approval` JSON input to the existing publisher; the preflight helper
+reads that JSON from a local file:
+
+```sh
+pnpm release:publish-preflight \
+  --tag v2026.11.9 \
+  --full-release-validation-run-id <original-frv-run-id> \
+  --full-release-validation-run-attempt <original-frv-attempt> \
+  --workflow-sha <trusted-publisher-sha> \
+  --npm-dist-tag latest \
+  --fast-track-approval approved-request.json
+```
+
+The normal preflight prints the dispatch command with the approval packet
+included. Dispatch only within the separately granted publication authority.
+Do not change the candidate, rebuild publication artifacts, or replace the
+original FRV merely to fit the exception.
+
+The packet contains:
+
+- `request`: the existing immutable `FastTrackRequest` reviewed by the human.
+- `digest`: `fastTrackRequestDigest(request)`, including its `sha256:` prefix.
+- `approval`: `approver` (human identity), `decidedAt` (ISO timestamp) and `url`
+  (the explicit decision permalink in the release-managers group).
+- `referenceRunId` and `referenceRunAttempt`: required for
+  `approved-fast-track-v1`, identifying the strictly successful validation of
+  the published, fully validated reference. A previous fast-track is ineligible.
+  The partial-FRV policy does not require these baseline-run fields.
+
+Publishers compare the request with independently authenticated candidate,
+original FRV attempt, admitted publication selection and sealed artifacts:
+
+- `request.run` is the original FRV run and attempt, not the publisher run.
+- `request.artifacts` is exactly one entry named `publication-artifacts`, with
+  the `sha256:` digest of canonical `manifest.publicationArtifacts` JSON.
+- `request.publicationScope` is exactly one string,
+  `publication:sha256:<hex>`, binding canonical
+  `manifest.sourceAdmission.publicationSelection` JSON.
+- For partial-FRV, `validationSnapshot.evidenceDigest` binds canonical original
+  manifest JSON. Its counts and enumerated outstanding checks must match the
+  parent and selected child jobs for the bound attempts. Preserve the snapshot
+  and original run even when the human accepts those failures.
+
+Use the canonical JSON serializer used by the release evidence owner, not
+whitespace-sensitive pretty-printed files, when computing manifest, artifact
+and selection digests. A caller-supplied digest or summary is not authenticated
+evidence.
+
+The original FRV manifest remains unchanged, including failed or incomplete
+results. Retain the approval packet separately with the release evidence;
+postpublish, recovery and closeout must use that same publication binding.
+Neither approved policy establishes a new fully validated baseline. Without a
+packet, the ordinary strict validation requirements still apply.
+
+### Expiry and replay
+
+Approval must be explicit, unexpired and bound to unchanged contents when
+publication starts. An already admitted publisher may finish after expiry;
+recovery and closeout reuse its exact original packet only through the existing
+publication receipt. The receipt binds the full packet digest and its verified
+approval-job start timestamp must precede request expiry. An expired packet
+cannot start an unrelated publication. Do not edit timestamps or substitute a
+new request for already published bytes. Missing original receipt or mismatched
+publication identity blocks replay.
 
 The former service source PR in `openclaw/releases` is superseded. Removing this
 dependency does not delete any previously provisioned cloud resources, stored

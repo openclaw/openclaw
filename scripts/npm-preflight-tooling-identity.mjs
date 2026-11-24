@@ -384,6 +384,7 @@ export function validateNpmPreflightQualification({
  *   publisherSha: string, producerRunId: string | number, producerRunAttempt: string | number,
  *   publisherFullRef?: string, runGh?: typeof runReleaseToolingGh,
  *   publicationAuthority?: Parameters<typeof verifyReleaseToolingIdentity>[0],
+ *   fastTrackApproval?: unknown,
  *   evidenceClient?: Parameters<typeof import("./release-ci-summary.mjs").validateReleaseRunEvidence>[1] }} options
  */
 export async function verifyNpmPreflightPublicationLineage({
@@ -395,6 +396,7 @@ export async function verifyNpmPreflightPublicationLineage({
   producerRunId,
   producerRunAttempt,
   evidenceClient,
+  fastTrackApproval,
   publisherFullRef = "refs/heads/main",
   publicationAuthority,
 }) {
@@ -408,6 +410,7 @@ export async function verifyNpmPreflightPublicationLineage({
     publisherSha,
     publisherFullRef,
     client: evidenceClient,
+    fastTrackApproval,
   });
   const qualified = validateNpmPreflightQualification({
     manifest,

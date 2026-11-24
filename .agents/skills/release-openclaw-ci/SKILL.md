@@ -10,12 +10,19 @@ Use with `$release-openclaw-maintainer` and `$openclaw-testing` for candidate va
 ## Fast-track approval boundary
 
 Agents MUST NOT approve fast-track exceptions, even with a release manager's
-available token. Require explicit approval from another human in the normal
-release-managers group for the exact request/digest and skip or incomplete-FRV
+available token. Require explicit approval from a human in the normal
+release-managers group (who may also be the requester) for the exact request/digest and skip or incomplete-FRV
 action; retain its permalink and original FRV results. Generic release authority
 is insufficient. Use the normal environment approval/receipt, not a separate
-Google/Firebase service. These request contracts do not yet enable a publisher
-bypass. Follow the [release skill](../release-openclaw-maintainer/SKILL.md#fast-track-approval-is-human-only).
+Google/Firebase service. An approved packet is passed with
+`--fast-track-approval <packet.json>` to `pnpm release:publish-preflight` and
+forwarded as `fast_track_approval` through existing publishers. Preserve the
+original FRV and sealed artifact bytes. Bounded policy: 20 commits AND 15,000
+added/deleted lines, excluding enumerated package manifests/lockfiles from LOC
+only. Partial-FRV is a separate policy with a complete outstanding-check
+snapshot and no delta ceiling. Neither can reset the fully validated baseline.
+Post-expiry recovery must use the original packet-bound publication receipt
+and verified approval-job start timestamp, never a new unrelated publisher. Follow the [release skill](../release-openclaw-maintainer/SKILL.md#fast-track-approval-is-human-only).
 
 ## Guardrails
 
@@ -38,7 +45,7 @@ bypass. Follow the [release skill](../release-openclaw-maintainer/SKILL.md#fast-
 - Missing contracts need a deliberate Q repair or candidate backport; never substitute moving main. Q-only repair may preserve C, but needs new Q, request/admission, and a successful parent. Never edit an old request or relabel failed FRV. P-only repair can preserve C/Q and valid original evidence.
 - Candidate tags: absent is allowed; existing lightweight/annotated tags must resolve to exact C. Conflicts or failed remote lookup stop validation; never move a tag to recover.
 - Protected lightweight `release-publish/<12sha>-<provenance-run>` tags identify P, not Q. Suffix = tag-creation provenance, not current parent. Publication/checklist `--workflow-sha` selects **P**; FRV `--workflow-sha` selects **Q**.
-- FRV must succeed with P evaluating pinned Q’s [waiver policy](../../../docs/reference/full-release-validation/evidence.md#release-tooling-waivers); every other required lane must pass. [Stable publication](#publication-requirements) needs stable/full evidence, mandatory soak, and blocking performance. Beta proof cannot qualify stable; only checked-in performance exceptions apply.
+- Unless an exact human-approved fast-track packet is supplied, FRV must succeed with P evaluating pinned Q’s [waiver policy](../../../docs/reference/full-release-validation/evidence.md#release-tooling-waivers); every other required lane must pass. [Stable publication](#publication-requirements) needs stable/full evidence, mandatory soak, and blocking performance. Beta proof cannot qualify stable; only checked-in performance exceptions apply.
 - All-group qualification covers all nine Linux/Windows/macOS Gateway install/upgrade combinations. Preserve first failures, identities, and complete evidence.
 - Regular releases may use one Code SHA = Release SHA and one successful fresh full parent for both roles and exact publication bytes. Later notes-only reuse requires the complete delta from Code SHA to change the selected `CHANGELOG/YYYY.M.PATCH.md`, optionally `CHANGELOG.md` and its matching `CHANGELOG/records/YYYY.M.PATCH.md`; no other paths, renames, or deletions. Changed bytes still need qualification.
 - Extended-stable validates one exact branch tip, not regular Code-SHA/Release-SHA reuse.
@@ -400,9 +407,9 @@ pnpm ci:full-release \
 
 ### Publication requirements
 
-- Publish with `release_profile=from-validation` (sealed profile). Selected FRV must **succeed**; stable needs stable/full evidence, soak, blocking performance.
+- Publish with `release_profile=from-validation` (sealed profile). Ordinary publication requires successful FRV; stable needs stable/full evidence, soak and blocking performance. An exact approved fast-track packet may accept validation gaps, never missing or mismatched sealed artifacts, signing, source admission or publication authority.
 - Decide blocker/flake for every failed test. Same-Release-SHA flakes: at most two reruns plus main fix-in-parallel issue/PR, never flake-only re-cut.
-- An eligible exact failed leaf may receive a reviewed [release-tooling grant](../../../docs/reference/full-release-validation/evidence.md#release-tooling-waivers). Land/pin P, then run/revalidate FRV without changing C/Q. Publisher cannot grant waivers or accept failed FRV. Unwaived failures and missing/skipped/cancelled/unknown required coverage block.
+- An eligible exact failed leaf may receive a reviewed [release-tooling grant](../../../docs/reference/full-release-validation/evidence.md#release-tooling-waivers). Land/pin P, then run/revalidate FRV without changing C/Q. Publisher cannot grant ad hoc waivers. Without an exact approved fast-track packet, failed FRV and missing/skipped/cancelled/unknown required coverage block. Approval accepts the recorded validation gap; the original FRV stays failed or incomplete.
 
 ### Publish children
 
