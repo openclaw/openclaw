@@ -10,6 +10,7 @@ import {
   removeConnectedNodePluginTools,
   replaceConnectedNodePluginTools,
 } from "../gateway/node-plugin-tool-snapshot.js";
+import { NODE_MCP_TOOLS_CALL_COMMAND } from "../infra/node-commands.js";
 import { appendRuntimePluginToolGrant } from "../plugins/tool-grant-allowlist.js";
 import { getPluginToolMeta, setPluginToolMeta } from "../plugins/tool-metadata.js";
 import {
@@ -741,25 +742,38 @@ describe("createNodePluginTools", () => {
       tools: [githubDescriptor],
       registered: true,
     });
-    expect(createNodePluginTools({ toolAllowlist: ["github"] }).map((tool) => tool.name)).toEqual([
-      "remote_repo_search",
-    ]);
+    const registered = createNodePluginTools({ toolAllowlist: ["github"] });
+    expect(registered.map((tool) => tool.name)).toEqual(["remote_repo_search"]);
+    expect(
+      getPluginToolMeta(expectDefined(registered[0], "registered node tool"))?.ownerUnverified,
+    ).toBeUndefined();
 
     replaceNodePluginTools({
       nodeId: "node-1",
-      tools: [{ ...githubDescriptor, pluginId: "node-mcp" }],
+      tools: [
+        {
+          ...remoteEcho,
+          pluginId: "node-mcp",
+          command: NODE_MCP_TOOLS_CALL_COMMAND,
+          mcp: { server: "fixture", tool: "echo" },
+        },
+      ],
     });
-    expect(createNodePluginTools({ toolAllowlist: ["node-mcp"] }).map((tool) => tool.name)).toEqual(
-      ["remote_repo_search"],
-    );
+    const reserved = createNodePluginTools({ toolAllowlist: ["node-mcp"] });
+    expect(reserved.map((tool) => tool.name)).toEqual(["remote_echo"]);
+    const reservedMeta = getPluginToolMeta(expectDefined(reserved[0], "reserved MCP tool"));
+    expect(reservedMeta?.ownerUnverified).toBeUndefined();
+    expect(reservedMeta?.mcp?.node?.id).toBe("node-1");
 
     replaceNodePluginTools({
       nodeId: "node-1",
       tools: [githubDescriptor],
     });
+    const explicitlyAllowed = createNodePluginTools({ toolAllowlist: ["remote_repo_search"] });
+    expect(explicitlyAllowed.map((tool) => tool.name)).toEqual(["remote_repo_search"]);
     expect(
-      createNodePluginTools({ toolAllowlist: ["remote_repo_search"] }).map((tool) => tool.name),
-    ).toEqual(["remote_repo_search"]);
+      getPluginToolMeta(expectDefined(explicitlyAllowed[0], "explicit node tool"))?.ownerUnverified,
+    ).toBe(true);
     expect(
       createNodePluginTools({
         toolAllowlist: ["remote_repo_search"],

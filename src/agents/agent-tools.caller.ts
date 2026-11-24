@@ -9,7 +9,11 @@ import type { ResolvedConversationCapabilityProfile } from "./conversation-capab
 import { isConversationToolAllowed } from "./conversation-tool-policy-pipeline.js";
 import { captureDelegatedToolPolicyAssertion } from "./delegated-tool-policy.js";
 import { createToolPolicyMatcher } from "./tool-policy-match.js";
-import { buildPluginToolGroups, expandPolicyWithPluginGroups } from "./tool-policy.js";
+import {
+  buildPluginToolGroups,
+  expandPolicyWithPluginGroups,
+  normalizeToolPolicyName,
+} from "./tool-policy.js";
 import { wrapToolWithGatewayCallerIdentity } from "./tools/gateway-caller-context.js";
 
 /** Carries the coding surface's prepared policy and requesting route into plugin delegation. */
@@ -22,6 +26,7 @@ export function createCodingToolsGatewayCaller(params: {
   sessionEventSourcePolicy?: SessionEventSourcePolicy;
 }) {
   const { options, agentId, sessionKey, capabilityProfile } = params;
+  const toolMetadata = new Map<string, { pluginId: string; ownerUnverified?: true }>();
   const delegatedPolicy = capabilityProfile.policy.delegatedToolPolicy;
   if (delegatedPolicy && !options?.config) {
     throw new Error("Delegated execution requires its source configuration.");
@@ -58,7 +63,13 @@ export function createCodingToolsGatewayCaller(params: {
             ? [settleBatch.receiptAdmission]
             : undefined,
           assertToolAllowed: (toolName: string) => {
-            if (!isConversationToolAllowed(capabilityProfile, toolName)) {
+            if (
+              !isConversationToolAllowed(
+                capabilityProfile,
+                toolName,
+                toolMetadata.get(normalizeToolPolicyName(toolName)),
+              )
+            ) {
               throw new Error(`${toolName} is not allowed by this conversation's tool policy`);
             }
           },
@@ -73,6 +84,16 @@ export function createCodingToolsGatewayCaller(params: {
         }
       : undefined;
   return (tool: Parameters<typeof wrapToolWithGatewayCallerIdentity>[0]) => {
+    if (identity) {
+      // Assembly binds the full admitted catalog synchronously before any tool executes.
+      const meta = getPluginToolMeta(tool);
+      if (meta) {
+        toolMetadata.set(normalizeToolPolicyName(tool.name), {
+          pluginId: meta.pluginId,
+          ...(meta.ownerUnverified ? { ownerUnverified: true } : {}),
+        });
+      }
+    }
     if (!identity || !assertDelegationCurrent || allowedWithoutDelegation(tool)) {
       return wrapToolWithGatewayCallerIdentity(tool, identity);
     }

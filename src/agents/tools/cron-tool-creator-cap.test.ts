@@ -44,6 +44,22 @@ function readReadyPatch(plan: CronJobUpdatePatchPlan): Record<string, unknown> {
 }
 
 describe("cron tool creator cap", () => {
+  it("keeps creator ownership trust when selecting a synthetic plugin scope", () => {
+    const creator: CronCreatorToolAllowlistEntry[] = [];
+    const tools = [{ name: "fixture_verified" }, { name: "fixture_unverified" }];
+    replaceWithEffectiveCronCreatorToolAllowlist(creator, tools, ({ name }) => ({
+      pluginId: "fixture-owner",
+      ownerUnverified: name === "fixture_unverified",
+    }));
+    const select = (entry: string) => {
+      const job = { payload: { kind: "agentTurn", toolsAllow: [entry] } };
+      capCronJobToolsAllowOnCreate(job, creator);
+      return job.payload.toolsAllow;
+    };
+    expect(select("fixture-owner")).toEqual(["fixture_verified"]);
+    expect(select("fixture_unverified")).toEqual(["fixture_unverified"]);
+  });
+
   it("lets default agent turns follow their owner while scripts and Codex apps keep the creator's tools", () => {
     const triggerJob = {
       trigger: { script: "return true" },

@@ -13,6 +13,7 @@ import { createCodingToolsGatewayCaller } from "./agent-tools.caller.js";
 import { resolveConversationCapabilityProfile } from "./conversation-capability-profile.js";
 import { writeHostFile } from "./host-file-write.js";
 import type { AnyAgentTool } from "./tools/common.js";
+import { getGatewayToolCallerIdentity } from "./tools/gateway-caller-context.js";
 
 const requester = "agent:intake:main";
 const child = "agent:coder:dashboard:task";
@@ -75,6 +76,36 @@ describe("delegated coding action authority", () => {
   afterEach(() => {
     vi.restoreAllMocks();
     clearRuntimeConfigSnapshot();
+  });
+
+  it("projects a synthetic owner scope through the captured caller policy", async () => {
+    const config = { tools: { allow: ["fixture-owner"] } };
+    const identity = { agentId: "main", sessionKey: "agent:main:main" };
+    const verified = { ...tool(vi.fn()), name: "fixture_verified" };
+    const unverified = { ...tool(vi.fn()), name: "fixture_unverified" };
+    setPluginToolMeta(verified, { pluginId: "fixture-owner", optional: false });
+    setPluginToolMeta(unverified, {
+      pluginId: "fixture-owner",
+      optional: false,
+      ownerUnverified: true,
+    });
+    const bind = createCodingToolsGatewayCaller({
+      ...identity,
+      options: { config },
+      capabilityProfile: resolveConversationCapabilityProfile({ config, ...identity }),
+    });
+    bind(verified);
+    bind(unverified);
+    const probe = bind(
+      tool(async () => {
+        const assertAllowed = getGatewayToolCallerIdentity()?.assertToolAllowed;
+        expect(assertAllowed).toBeTypeOf("function");
+        expect(() => assertAllowed?.("fixture_verified")).not.toThrow();
+        expect(() => assertAllowed?.("fixture_unverified")).toThrow("not allowed");
+        return { content: [], details: {} };
+      }),
+    );
+    await probe.execute("fixture-policy-check", {});
   });
 
   it("rejects a retained tool after its preparation wait without executing it", async () => {

@@ -81,7 +81,7 @@ export function assertInheritedCronToolCaptureReady(
 export function replaceWithEffectiveCronCreatorToolAllowlist<T extends { name: string }>(
   target: CronCreatorToolAllowlistEntry[],
   tools: readonly T[],
-  toolMeta?: (tool: T) => { pluginId?: string } | undefined,
+  toolMeta?: (tool: T) => { pluginId?: string; ownerUnverified?: boolean } | undefined,
   options: CronCreatorCapCaptureOptions = {},
 ): void {
   target.length = 0;
@@ -119,6 +119,7 @@ export function replaceWithEffectiveCronCreatorToolAllowlist<T extends { name: s
     captured.set(name, {
       name,
       ...(pluginId ? { pluginId } : {}),
+      ...(meta?.ownerUnverified ? { ownerUnverified: true } : {}),
       ...(aliasName && aliasName !== name ? { aliasName } : {}),
       ...(projection?.execTarget ? { execTarget: { ...projection.execTarget } } : {}),
     });
@@ -147,7 +148,7 @@ export function captureFinalEffectiveCronCreatorToolAllowlist<T extends { name: 
   target: CronCreatorToolAllowlistEntry[],
   captureRef: CronToolsAllowCaptureRef,
   tools: readonly T[],
-  toolMeta?: (tool: T) => { pluginId?: string } | undefined,
+  toolMeta?: (tool: T) => { pluginId?: string; ownerUnverified?: boolean } | undefined,
   options: CronCreatorCapCaptureOptions = {},
 ): void {
   replaceWithEffectiveCronCreatorToolAllowlist(target, tools, toolMeta, options);
@@ -180,6 +181,7 @@ function normalizeCronCreatorToolsAllow(
     normalized.push({
       name,
       ...(pluginId ? { pluginId } : {}),
+      ...(tool.ownerUnverified ? { ownerUnverified: true } : {}),
       ...(aliasName && aliasName !== name ? { aliasName } : {}),
       ...(execTarget ? { execTarget } : {}),
     });
@@ -315,7 +317,10 @@ function capCronJobToolsAllow(params: {
 
   const pluginGroups = buildPluginToolGroups({
     tools: creatorToolsAllow,
-    toolMeta: (tool) => (tool.pluginId ? { pluginId: tool.pluginId } : undefined),
+    toolMeta: (tool) =>
+      tool.pluginId
+        ? { pluginId: tool.pluginId, ownerUnverified: tool.ownerUnverified }
+        : undefined,
   });
   const requestedPolicy = expandPolicyWithPluginGroups(
     { allow: requestedToolsAllow },
