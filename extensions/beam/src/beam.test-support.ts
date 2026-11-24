@@ -15,6 +15,7 @@ import type { PluginServiceExportCatalog } from "openclaw/plugin-sdk/session-cat
 import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { createOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { afterEach, assert, vi } from "vitest";
+import type { cleanBeamCandidate } from "./cleaner.js";
 import { createBeamRequestHandler } from "./http.js";
 import { createBeamMirrorRunner } from "./mirror.js";
 import { createBeamStore, type BeamStore } from "./store.js";
@@ -140,13 +141,17 @@ export function createBeamTestCatalog(
   } = {},
 ): PluginServiceExportCatalog {
   const id = params.id ?? "claude";
+  const catalogHistory = new Map<string, BeamTestSession>();
   return {
     id,
     processHomeFallbackAllowed: params.processHomeFallbackAllowed ?? true,
     assertCurrent: () => {},
-    list: async () => {
+    list: async ({ threadId }) => {
       await params.onList?.();
-      const sessions = typeof params.sessions === "function" ? params.sessions() : params.sessions;
+      const visible = typeof params.sessions === "function" ? params.sessions() : params.sessions;
+      for (const row of visible ?? []) catalogHistory.set(row.threadId, row);
+      const sessions =
+        threadId && catalogHistory.has(threadId) ? [catalogHistory.get(threadId)!] : visible;
       return [
         {
           hostId: params.hostId ?? "gateway:local",
@@ -192,6 +197,26 @@ export function createBeamTestCatalog(
   };
 }
 
+// Existing network/retry cases exercise delivery against a deterministic cleaner fixture.
+// Native child failures, redaction, raw-byte validation and bounds have separate contract tests.
+const cleanBeamTestCandidate: typeof cleanBeamCandidate = async (candidate) => {
+  const items = candidate.items.slice(-12).map(({ type, text }) => ({ type, text }));
+  const packet = {
+    version: 2 as const,
+    beamId: "a".repeat(32),
+    source: candidate.source,
+    title: candidate.title,
+    updatedAt: candidate.updatedAt,
+    completed: candidate.completed,
+    ...(candidate.sourceModel ? { sourceModel: candidate.sourceModel } : {}),
+    ...(candidate.items.length !== items.length || candidate.completeness === "partial"
+      ? { truncated: true }
+      : {}),
+    items,
+  };
+  return { packet, raw: Buffer.from(JSON.stringify(packet)) };
+};
+
 type RunnerOptions = Parameters<typeof createBeamMirrorRunner>[0] & {
   listCatalogs?: () => PluginServiceExportCatalog[];
 };
@@ -202,6 +227,10 @@ export function createBeamTestRunner({
 }: Partial<RunnerOptions> & { endpoint?: string } = {}) {
   return createBeamMirrorRunner({
     catalogExports: { listCatalogs },
+    cleanCandidate: cleanBeamTestCandidate,
+    resolveExecutable: async () => {
+      throw new Error("unexpected test process");
+    },
     runtime: createBeamTestRuntime(beamTestMirrorConfig(endpoint ? { endpoint } : {})),
     logger: beamTestLogger,
     now: () => beamTestNow,

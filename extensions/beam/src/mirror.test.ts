@@ -481,6 +481,9 @@ describe("createBeamMirrorService", () => {
         .spyOn(ssrfRuntime, "fetchWithSsrFGuard")
         .mockRejectedValue(new Error("unexpected upload after stop"));
       const service = createBeamMirrorService({
+        resolveExecutable: async () => {
+          throw new Error("unexpected test process");
+        },
         runtime: createBeamTestRuntime(beamTestMirrorConfig()),
       });
       try {

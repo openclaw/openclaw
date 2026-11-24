@@ -213,11 +213,23 @@ Beam can also act as the sender: an opt-in mirror that continuously publishes th
 
 The v1 mirror keeps the original publication ID when the producer confirms that host and thread identify the same native session across agents and source homes. Every read stays bound to the selected agent and home. Conflicting selections, rebindable aliases, imported copies, and unclassified sources require explicit selection. A previously released publication stays released.
 
-The upload keeps its original v1 publication ID across upgrades. Claude and Pi reads bind to one selected local file and skip conflicting IDs. A Codex home can move between two historical aliases, so use an explicit Beam copy for Codex until a receiver can reconcile its prior publication.
+The upload keeps its original v1 publication ID across upgrades. Claude and Pi reads bind to one selected local file and skip conflicting IDs. A Codex home can move between historical aliases. Use explicit v2 enrollment for automatic updates to a new independent Codex publication.
 
-The mirror uploads user and agent message text, replacing structured reasoning, tool calls, tool results, and raw payloads with compact counts. Titles and messages preserve their original text, including credentials, before clipping. `logging.redactPatterns` applies to logs and diagnostics, not mirrored content. The manual beam skill separately strips setup wrappers, local paths, contact identifiers, and opaque values; automatic mirroring does not apply those rules. Enable it only for catalogs whose visible message text you intend to share.
+The mirror sends visible user and agent messages through the packaged native Beam cleaner. Tool calls, tool results and reasoning contribute counts only. Titles and text use the same redaction as standalone Beam. If the cleaner is missing or fails, the mirror withholds the upload. Source and participant identifiers stay on the sending machine. V2 packets carry packet-local speaker aliases.
 
-The mirror converts newest-first catalog pages into chronological uploads before applying the receiver limits (200 items, 56 KiB), dropping oldest entries first. It marks the upload `truncated` whenever older pages remain, the source reports truncation, or text or items were clipped. Claude catalog pages count individual text, reasoning, and tool blocks and bound their text size. Sessions on paired nodes are not mirrored; the mirror shares only sessions from this Gateway's machine, newest 32 first. A listed session that leaves the active window receives its final completed update even when its catalog has more pages; an absent session is finalized only after a complete, successful host listing.
+### Enroll a v2 publication
+
+Set the mirror endpoint to the Team Gateway's final `/api/v2/beam` URL and add the source catalog to `mirror.catalogs`. List native sources with the authenticated `sessions.catalog.list` Gateway method. As an administrator on the **source Gateway**, explicitly create an independent publication with the selected row's five identifiers:
+
+```bash
+openclaw gateway call beam.mirror.enroll --params '{"source":{"catalogId":"codex","hostId":"gateway:local","threadId":"NATIVE_THREAD","agentId":"main","sourceHomeId":"SOURCE_HOME"}}'
+```
+
+A successful response contains the Beam ID and its receiver-issued generation and revision. Later service polls update only this generation. The source retains its enrollment, receipts and an unacknowledged update in plugin SQLite across restarts and disable/re-enable. Released publications and generation conflicts remain fenced. Restore the original publisher credential if it changes.
+
+If the first response was lost, repeat the command to see its unconfirmed Beam ID and expected digest. Inspect the publication and its generation on the intended Team Gateway. To adopt that existing publication, explicitly repeat enrollment with its exact `confirmGeneration` next to `source`. A missing row, mismatched digest or differing generation leaves the source unconfirmed. The service never retries an initial create.
+
+The mirror converts newest-first catalog pages into chronological uploads before applying the receiver limits (200 items, 56 KiB), dropping oldest entries first. It marks the upload `truncated` whenever older pages remain, the source reports truncation, or text or items were clipped. Claude catalog pages count individual text, reasoning, and tool blocks and bound their text size. Sessions on paired nodes are not mirrored; the mirror shares only sessions from this Gateway's machine, newest 32 first. A listed session that leaves the active window receives its final completed update even when its catalog has more pages; an absent session is finalized only after a complete host listing and a fresh, authorized lookup of its exact source.
 
 When browsing Claude sessions on paired nodes, update those nodes alongside the Gateway. Older node builds without block-resume metadata report an update-required error when a mixed row spans pages.
 
