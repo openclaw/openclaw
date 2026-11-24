@@ -12,8 +12,8 @@ export type OpenAIQuicksilverInboundEvent =
   | { kind: "audio-cleared" }
   | { kind: "audio"; data: string }
   | { kind: "transcript-delta"; role: "user" | "assistant"; text: string }
-  | { kind: "transcript-done"; role: "user" | "assistant"; text: string }
-  | { kind: "delegation"; id: string; prompt?: string }
+  | { kind: "transcript-done"; role: "user" | "assistant"; text: string; turnId?: string }
+  | { kind: "delegation"; id: string; prompt?: string; userTurnId?: string }
   | { kind: "error"; fatalAuth: boolean }
   | { kind: "unknown"; eventType: string };
 
@@ -48,12 +48,17 @@ const framelessSchemas = new Map<string, z.ZodType<OpenAIQuicksilverInboundEvent
     "turn.done",
     z
       .object({
-        turn: z.object({ role: z.enum(["user", "assistant"]), transcript: z.string() }),
+        turn: z.object({
+          id: z.string().min(1).max(512).optional(),
+          role: z.enum(["user", "assistant"]),
+          transcript: z.string(),
+        }),
       })
       .transform(({ turn }) => ({
         kind: "transcript-done",
         role: turn.role,
         text: turn.transcript,
+        ...(turn.id ? { turnId: turn.id } : {}),
       })),
   ],
   [
@@ -72,12 +77,14 @@ const framelessSchemas = new Map<string, z.ZodType<OpenAIQuicksilverInboundEvent
           type: z.literal("delegation"),
           target: z.literal("client"),
           id: z.string().min(1),
+          user_bidi_turn_id: z.string().min(1).max(512).optional(),
           content: z.array(z.object({ type: z.string(), text: z.string().optional() })).optional(),
         }),
       })
       .transform(({ item }) => ({
         kind: "delegation",
         id: item.id,
+        ...(item.user_bidi_turn_id ? { userTurnId: item.user_bidi_turn_id } : {}),
         prompt: (item.content ?? [])
           .filter((part) => part.type === "input_text")
           .map((part) => part.text ?? "")

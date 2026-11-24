@@ -230,6 +230,8 @@ export type RealtimeVoiceProviderCapabilities = {
 
 export type RealtimeVoiceAgentConsultRunner = (params: {
   prompt: string;
+  /** Final user utterance the provider explicitly matched to this consultation. */
+  finalizedUserTranscript?: string;
   signal?: AbortSignal;
 }) => Promise<{ text: string }>;
 

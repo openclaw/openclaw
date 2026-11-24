@@ -167,6 +167,30 @@ describe("Discord voice ingress execution correlation", () => {
     }
   });
 
+  it("pairs a finalized utterance with its Discord speaker and keeps it off delegated turns", async () => {
+    await fixture(true).run({
+      message: "Voice transcript from speaker Owner: Read the agenda.",
+      finalizedTranscript: "Read the agenda.",
+    });
+    await fixture().run({ message: "Check the calendar for the next meeting." });
+
+    expect(mocks.agentCommandFromIngress.mock.calls.map(([input]) => input)).toMatchObject([
+      {
+        runContext: {
+          senderId: "owner",
+          channelContext: {
+            sender: { id: "owner" },
+            voice: { finalizedTranscript: "Read the agenda." },
+          },
+        },
+      },
+      { runContext: { senderId: "guest", channelContext: { sender: { id: "guest" } } } },
+    ]);
+    expect(mocks.agentCommandFromIngress.mock.calls[1]?.[0]).not.toHaveProperty(
+      "runContext.channelContext.voice",
+    );
+  });
+
   it.each([
     { state: "stopped", captureOnly: false },
     { state: "active", captureOnly: true },

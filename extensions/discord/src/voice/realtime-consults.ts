@@ -134,6 +134,7 @@ export class DiscordRealtimeConsults {
     const text = await this.runAgentTurn({
       context,
       message: request.prompt,
+      finalizedTranscript: request.finalizedUserTranscript,
       signal: request.signal,
     });
     request.signal?.throwIfAborted();
@@ -382,6 +383,7 @@ export class DiscordRealtimeConsults {
   private async runAgentTurn(params: {
     context?: DiscordRealtimeSpeakerContext;
     message: string;
+    finalizedTranscript?: string;
     signal?: AbortSignal;
     deliveryOwner?: "consult";
   }): Promise<string> {
@@ -393,6 +395,7 @@ export class DiscordRealtimeConsults {
     const text = await this.params.runAgentTurn({
       context,
       message: params.message,
+      finalizedTranscript: params.finalizedTranscript,
       toolsAllow: this.params.consultToolsAllow(),
       userId: context.userId,
       isCurrent: () => !this.params.stopped() && providerEpoch === this.params.providerEpoch(),

@@ -97,17 +97,24 @@ defineDiscordVoiceTests(
         await emitFinalRealtimeUserTranscript(guest.bridgeParams, "Read the agenda.");
         await emitFinalRealtimeUserTranscript(owner.bridgeParams, "Check the appointment.");
         expect(agentCommandMock).not.toHaveBeenCalled();
-        for (const [index, source] of [guest, owner].entries()) {
+        for (const [index, { source, userId, transcript }] of [
+          { source: guest, userId: "guest", transcript: "Read the agenda." },
+          { source: owner, userId: "owner", transcript: "Check the appointment." },
+        ].entries()) {
           const signal = new AbortController().signal;
           const runner = source.bridgeParams.runAgentConsult;
           expect(runner).toBeTypeOf("function");
-          await expect(runner!({ prompt: "Check my request", signal })).resolves.toEqual({
-            text: "Agenda checked.",
-          });
+          await expect(
+            runner!({ prompt: "Check my request", finalizedUserTranscript: transcript, signal }),
+          ).resolves.toEqual({ text: "Agenda checked." });
           expect(agentCommandArgsAt(index)).toMatchObject({
             senderIsOwner: index === 1,
             sessionKey: "discord:g1:c1",
             abortSignal: expect.any(AbortSignal),
+            runContext: {
+              senderId: userId,
+              channelContext: { voice: { finalizedTranscript: transcript } },
+            },
           });
         }
         await manager.destroy();

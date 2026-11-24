@@ -5,14 +5,17 @@ const MAX_SESSION_DELEGATIONS = 4_096;
 /** Owns delegation identity for one connection, including public notices awaiting transcript. */
 export class OpenAILiveDelegationQueue {
   private readonly claimed = new Set<string>();
-  private readonly pending = new Map<string, ReturnType<typeof setTimeout>>();
+  private readonly pending = new Map<
+    string,
+    { timeout: ReturnType<typeof setTimeout>; readFinalizedInput?: () => string | undefined }
+  >();
   private stopped = false;
 
   constructor(
     private readonly options: {
       isActive: () => boolean;
       readInput: () => string;
-      dispatch: (id: string, input: string) => void;
+      dispatch: (id: string, input: string, finalizedUserTranscript?: string) => void;
       onExpired: (id: string) => void;
       onError: (error: Error) => void;
     },
@@ -37,7 +40,7 @@ export class OpenAILiveDelegationQueue {
     return true;
   }
 
-  enqueue(id: string): void {
+  enqueue(id: string, readFinalizedInput?: () => string | undefined): void {
     if (!this.claim(id)) {
       return;
     }
@@ -53,29 +56,30 @@ export class OpenAILiveDelegationQueue {
         this.options.onError(new Error("GPT-Live could not request missing delegation input"));
       }
     }, INPUT_WAIT_MS).unref();
-    this.pending.set(id, timeout);
+    this.pending.set(id, { timeout, readFinalizedInput });
     this.resume();
   }
 
   resume(): void {
-    for (const [id, timeout] of this.pending) {
+    for (const [id, { timeout, readFinalizedInput }] of this.pending) {
       if (this.stopped || !this.options.isActive()) {
         return;
       }
-      const input = this.options.readInput();
-      if (!input.trim()) {
-        return;
+      const finalized = readFinalizedInput?.();
+      const input = readFinalizedInput ? finalized : this.options.readInput();
+      if (!input?.trim()) {
+        continue;
       }
       this.pending.delete(id);
       clearTimeout(timeout);
       // Dispatch owns consumption; a later notice must reread the remaining context.
-      this.options.dispatch(id, input);
+      this.options.dispatch(id, input, finalized);
     }
   }
 
   stop(): void {
     this.stopped = true;
-    for (const timeout of this.pending.values()) {
+    for (const { timeout } of this.pending.values()) {
       clearTimeout(timeout);
     }
     this.pending.clear();

@@ -15,4 +15,6 @@ export interface PluginHookChannelContext {
   sender?: PluginHookChannelSenderContext;
   /** Chat/conversation metadata supplied by the originating channel. */
   chat?: PluginHookChannelChatContext;
+  /** Current voice turn, when the originating channel has a finalized utterance for its sender. */
+  voice?: Readonly<{ finalizedTranscript: string }>;
 }

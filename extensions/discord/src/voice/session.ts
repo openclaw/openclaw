@@ -54,6 +54,7 @@ export type VoiceRealtimeSpeakerContext = {
 export type VoiceRealtimeAgentTurnParams = {
   context: VoiceRealtimeSpeakerContext;
   message: string;
+  finalizedTranscript?: string;
   toolsAllow?: string[];
   userId: string;
   isCurrent: () => boolean;
