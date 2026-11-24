@@ -15,8 +15,13 @@ const {
 } = await import("./pw-tools-core.activity.js");
 const target = { cdpUrl: "http://127.0.0.1:18792" };
 
+function setTextPage(page: Record<string, unknown>) {
+  const mainFrame = {};
+  setPwToolsCoreCurrentPage({ mainFrame: () => mainFrame, on: vi.fn(), off: vi.fn(), ...page });
+}
+
 function installTextPage(contents: Record<string, string[]>) {
-  setPwToolsCoreCurrentPage({
+  setTextPage({
     locator: (selector: string) => ({
       first: () => ({
         count: async () => (contents[selector]?.length ? 1 : 0),
@@ -38,7 +43,7 @@ describe("page activity", () => {
     const probe = createDeferred<number>();
     const entered = createDeferred<void>();
     const innerText = vi.fn(async () => "late text");
-    setPwToolsCoreCurrentPage({
+    setTextPage({
       locator: () => ({
         first: () => ({
           count: () => {
@@ -99,6 +104,28 @@ describe("page activity", () => {
     expect(
       await getPageTextViaPlaywright({ ...target, maxChars: DEFAULT_AI_SNAPSHOT_MAX_CHARS * 2 }),
     ).toEqual({ text: text.slice(0, DEFAULT_AI_SNAPSHOT_MAX_CHARS), truncated: true });
+  });
+
+  it("rejects text from a replacement document", async () => {
+    const mainFrame = {};
+    const listeners = new Map<string, (frame: object) => void>();
+    setTextPage({
+      mainFrame: () => mainFrame,
+      on: (event: string, listener: (frame: object) => void) => listeners.set(event, listener),
+      off: (event: string) => listeners.delete(event),
+      locator: () => ({
+        first: () => ({
+          innerText: async () => {
+            listeners.get("framenavigated")?.(mainFrame);
+            return "Replacement document";
+          },
+        }),
+      }),
+    });
+    await expect(getPageTextViaPlaywright({ ...target, selector: "main" })).rejects.toThrow(
+      /Frame changed/,
+    );
+    expect(listeners.size).toBe(0);
   });
 
   it("filters by URL or resource type and clears the full network buffer", async () => {
