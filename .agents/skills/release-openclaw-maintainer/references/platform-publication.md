@@ -163,38 +163,38 @@ request `Windows Gateway Release Request` after GitHub activation, through both
 `OpenClaw Release Publish` and `OpenClaw Release Button`. Alpha and extended-stable
 do not request Gateway MSIX publication.
 
-For beta, the detached request dispatches `gateway-msix.yml` from packaging
-`main` with `release_channel=beta`, `signing_mode=official`,
-`publish_release=true`, the exact published `gateway_version`, and its signed
-tag's full source SHA as `openclaw_ref`. It does not follow the moving npm beta
-selector or need a Store credential. The packaging
-workflow owns source and artifact authorization, installed sideload upgrade
-proof, protected Azure signing, and permanent x64, ARM64, and bundle assets as
-GitHub prereleases, never Latest. After that build and publication succeed, core
-requests Store **Development** delivery through the central publisher. The
-packaging workflow must support these beta inputs and retain the Store bundle
-and witness on `main` before this automation is enabled.
+The detached request dispatches `gateway-msix.yml` from packaging `main` with
+`signing_mode=official`, `publish_release=true`, and
+`request_store_publication=true` for both stable and beta. It supplies the signed
+tag's full source SHA as `openclaw_ref`. Beta additionally sets
+`release_channel=beta` and the exact published `gateway_version`, rather than
+following a moving beta selector. Stable leaves `gateway_version` unset: that
+stable input selects an older compatibility payload, not the current release.
+Opted-in packaging preflight rejects a captured payload that differs from its
+release identity, including a stable selector that advanced before capture.
 
-For stable, the detached request builds the exact signed Gateway source in
-`openclaw/openclaw-windows-packaging`, checks both the payload and the independently
-selected MSIX release identity, then requests `windows-store-publish.yml` on
-`openclaw/releases` `main` for Store **Production** delivery. No sideload signing
-or packaging GitHub release is requested for stable.
+Packaging owns source and artifact authorization, installed upgrade proof,
+protected Azure signing, and permanent x64, ARM64, and bundle assets. Stable
+publishes a GitHub release eligible for Latest; beta publishes a prerelease, never
+Latest. Packaging serializes publication and compares Windows package versions
+against current Latest so a delayed older build cannot move it backward. Both
+retain the separate unsigned Store bundle and attempt-bound witness.
 
-Both lanes wait for the exact packaging-main build, check
-`openclaw-source-resolution/source-resolution.json`, and require the current
-API `run_attempt` artifacts `openclaw-gateway-msix-store-submission-<attempt>` and
-`store-release-source-<attempt>/store-source.json`. The snapshot must match the
-published signed source, version, release identity, and channel; beta uses
-`signingMode=official`, stable uses `signingMode=store`. The witness must bind that
-run, attempt, packaging commit, channel, `v<upstream>-msix.N` identity, exact Store
-bundle name, and SHA-256. Old runs without the witness are ineligible. Core does
-not download the Store bundle; the central publisher owns byte/hash verification.
-The central dispatch is `{product: gateway, run_id: <build>, channel: development
-| production, automatic: true}`; beta never targets Production.
+Core finishes after recording the accepted build run. It does not poll the build
+or dispatch the central Store publisher. Packaging's completion-triggered adapter
+runs only after the entire build succeeds. Before acquiring its request token,
+it checks the canonical main-branch build and its unique current-attempt witness,
+including the explicit automatic opt-in, run ID, attempt, packaging commit, and
+stable/beta channel. Ordinary manual builds and old witnesses do not opt in.
+The adapter requests `{product: gateway, run_id: <build>, channel: development
+| production, automatic: true}` from `openclaw/releases`; beta never targets
+Production. The central publisher independently validates the source snapshot,
+release identity, published release, exact artifact, and bundle hash. No Store
+credential or package bytes pass through core's request job.
 
-The release GitHub App must be installed on core, packaging, and releases with
-Actions write and Contents read for both channels. The existing
+Core requests a token scoped to core and packaging, with Actions write and
+Contents read. Packaging separately requests an Actions-write token scoped to
+releases. The release GitHub App must be installed on those repositories. The existing
 `GH_APP_PRIVATE_KEY` supplies the scoped installation tokens; no PAT is needed.
 The central publisher owns source run/attempt,
 artifact, and bundle-hash validation, Store credentials, and the
@@ -205,7 +205,9 @@ is a recorded non-delivery outcome, not proof that a beta reached the flight.
 Core has no Store credential, flight GUID, or second activation policy. Central
 workflow and publisher code require release-manager review.
 
-Enable only after [packaging beta support](https://github.com/openclaw/openclaw-windows-packaging/pull/246),
+Land packaging's `request_store_publication` input and completion adapter before
+this core caller; an older packaging workflow rejects the new input. Enable only
+after [packaging beta support](https://github.com/openclaw/openclaw-windows-packaging/pull/246),
 [current-attempt Store artifacts](https://github.com/openclaw/openclaw-windows-packaging/pull/247),
 [packaging's request-only cutover](https://github.com/openclaw/openclaw-windows-packaging/pull/212),
 and the [central publisher](https://github.com/openclaw/releases/pull/48) plus its
@@ -214,17 +216,17 @@ protection and exclusive Store federation and revoke the old repository's Store
 federation. Cut updated protected release tooling for both core release entry
 points; merging core alone does not update an existing frozen tooling cut.
 
-A successful core request means the central publisher was dispatched, not that
-approval or flight/Production delivery succeeded. Follow the linked releases run
-for activation status, release-manager approval, and its Store commit receipt;
-certification and delivery availability need separate verification. Core/npm
-publication does not wait for MSIX builds, approval, or Store acceptance. The
-detached request waits up to 45 minutes for packaging within its 55-minute job
-timeout. On timeout, follow that retained build without starting another one.
+A successful core request means the packaging build was dispatched, not that a
+GitHub release, Store approval, or delivery succeeded. Follow the linked packaging
+run and its completion request, then the central run for activation status,
+release-manager approval, and its Store receipt. Certification and delivery
+availability need separate verification. Neither core/npm publication nor the
+detached request waits for MSIX builds, approval, or Store acceptance. There is
+no fixed-duration polling window that can abandon a longer build.
 Repeated publication reuses the original request, including failed requests.
-Recover its retained packaging build and central Store run IDs rather than
-rerunning the entire request or starting a duplicate after an ambiguous dispatch.
-Evidence is retained for 90 days.
+Recover the retained packaging run and inspect existing central requests before
+using the manual Store adapter; do not rerun the core request or blindly retry
+an ambiguous dispatch. Evidence is retained for 90 days.
 
 ## Windows Hub
 

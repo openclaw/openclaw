@@ -232,7 +232,9 @@ proposed set for maintainer approval unless selection authority was explicitly
 delegated. During open preparation, a maintainer may instead approve an exact,
 dependency-closed group while independent discovery continues. Record that
 approval and the unfinished audit scope; do not call the full inventory complete
-or advance its scan cursor until every entry is accounted for. Follow the
+or advance its scan cursor until every entry is accounted for. Freezing with an
+unfinished inventory is the operator's call; say how much is still unreviewed
+first. Follow the
 [owner intake procedure](release-owner.md#prepare-and-admit-hotfixes) to integrate
 ready approved groups without waiting for unrelated audit lanes.
 

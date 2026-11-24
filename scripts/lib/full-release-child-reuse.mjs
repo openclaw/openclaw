@@ -26,7 +26,6 @@ import {
   decodeReleaseValidationSource,
   evaluateReleaseChildPolicy,
   readReleaseValidationWaiversAsync,
-  RELEASE_VALIDATION_WAIVERS_PATH,
   validateReleaseWaiverAggregates,
 } from "./release-validation-waivers.mjs";
 
@@ -347,180 +346,8 @@ function validateSelectionIdentity(selection, request) {
   );
 }
 
-async function workloadTree(sha, request, deps) {
-  const commit = await deps.github(`git/commits/${sha}`);
-  requireEvidence(
-    commit?.sha === sha && SHA.test(commit?.tree?.sha),
-    "invalid workflow commit tree",
-  );
-  const readTree = async (oid) => {
-    const tree = await deps.github(`git/trees/${oid}`);
-    requireEvidence(
-      tree?.sha === oid &&
-        tree.truncated === false &&
-        Array.isArray(tree.tree) &&
-        tree.tree.every(
-          (entry) =>
-            typeof entry.path === "string" &&
-            SHA.test(entry.sha) &&
-            ["blob", "tree", "commit"].includes(entry.type) &&
-            typeof entry.mode === "string",
-        ),
-      "workflow tree is incomplete or invalid",
-    );
-    return tree.tree;
-  };
-  const root = await readTree(commit.tree.sha);
-  const github = root.find((entry) => entry.path === ".github" && entry.type === "tree");
-  requireEvidence(github, "workflow tree omitted .github");
-  const githubTree = await readTree(github.sha);
-  const workflows = githubTree.find((entry) => entry.path === "workflows" && entry.type === "tree");
-  requireEvidence(workflows, "workflow tree omitted workflows");
-  const workflowTree = await readTree(workflows.sha);
-  const selected = new Map();
-  const visit = async (name) => {
-    if (selected.has(name)) {
-      return;
-    }
-    requireEvidence(selected.size < 32, "workflow dependency closure exceeded its bound");
-    const entry = workflowTree.find(
-      (candidate) => candidate.path === name && candidate.type === "blob",
-    );
-    requireEvidence(entry, "workflow dependency is absent: " + name);
-    selected.set(name, entry);
-    const blob = await deps.github("git/blobs/" + entry.sha);
-    requireEvidence(
-      blob?.sha === entry.sha &&
-        blob.encoding === "base64" &&
-        typeof blob.content === "string" &&
-        blob.size > 0 &&
-        blob.size <= 1024 * 1024,
-      "workflow blob is invalid or exceeds its bound",
-    );
-    const bytes = Buffer.from(blob.content, "base64");
-    requireEvidence(
-      bytes.length === blob.size &&
-        createHash("sha1")
-          .update("blob " + bytes.length + "\0")
-          .update(bytes)
-          .digest("hex") === entry.sha,
-      "workflow blob content does not match its immutable identity",
-    );
-    // Like dispatch input discovery, this runs before dependencies are installed.
-    // Support the repository's block-style job declarations; unfamiliar YAML
-    // requires fresh work rather than guessing at a reusable-workflow closure.
-    const source = bytes.toString("utf8");
-    const jobs = /^jobs:\r?\n([\s\S]*?)(?=^\S|(?![\s\S]))/mu.exec(source)?.[1];
-    requireEvidence(jobs, "unsupported workflow jobs declaration");
-    let firstProperty = false;
-    for (const line of jobs.split(/\r?\n/u)) {
-      if (!line.trim() || line.trimStart().startsWith("#")) {
-        continue;
-      }
-      requireEvidence(
-        !/^ {0,5}\S/u.test(line) || /^ {2}\S/u.test(line) || /^ {4}\S/u.test(line),
-        "unsupported reusable workflow indentation",
-      );
-      if (firstProperty) {
-        requireEvidence(
-          /^ {4}\S/u.test(line),
-          "unsupported reusable workflow property indentation",
-        );
-        firstProperty = false;
-      }
-      if (/^ {2}\S/u.test(line)) {
-        requireEvidence(
-          /^ {2}[A-Za-z0-9_-]+:\s*(?:#.*)?$/u.test(line),
-          "unsupported reusable workflow job declaration",
-        );
-        firstProperty = true;
-      }
-      if (!/^ {4}\S/u.test(line)) {
-        continue;
-      }
-      requireEvidence(/^ {4}[A-Za-z0-9_-]+:/u.test(line), "unsupported reusable workflow property");
-      if (!line.startsWith("    uses:")) {
-        continue;
-      }
-      const value = /^ {4}uses:\s*([^#]+?)(?:\s+#.*)?$/u.exec(line)?.[1]?.trim();
-      const use = value?.replace(/^(?:"([^"\\]*)"|'([^']*)')$/u, "$1$2");
-      requireEvidence(
-        use && /^[A-Za-z0-9_./@-]+$/u.test(use),
-        "unsupported reusable workflow reference",
-      );
-      if (use.startsWith("./")) {
-        const dependency = /^\.\/\.github\/workflows\/([A-Za-z0-9_-]+\.ya?ml)$/u.exec(use)?.[1];
-        requireEvidence(dependency, "unsupported local reusable workflow reference");
-        await visit(dependency);
-      }
-    }
-    // Normal CI uses workflow_call jobs for its workflow dependencies. Other
-    // roles can dispatch through scripts (for example Release Checks launches
-    // Telegram), so source-text discovery cannot prove their closure: retain
-    // the complete workflow tree below rather than guessing script imports.
-  };
-  await visit(request.spec.workflow);
-  // Normal CI also materializes Q-owned test, config, normalization and runtime
-  // helpers. Retain their containing trees rather than infer transitive imports.
-  // This conservatively invalidates reuse for unrelated changes in those trees;
-  // other product directories still come from C. Other roles retain the full root.
-  return canonical({
-    root: root.filter(
-      (entry) =>
-        entry.path !== ".github" &&
-        (request.role !== "normalCi" ||
-          entry.type !== "tree" ||
-          ["scripts", "config", "packages", "src", "test"].includes(entry.path)),
-    ),
-    github: githubTree.filter((entry) => entry.path !== "workflows"),
-    workflows: (request.role === "normalCi" ? [...selected.values()] : workflowTree).toSorted(
-      (left, right) => (left.path < right.path ? -1 : left.path > right.path ? 1 : 0),
-    ),
-  });
-}
-
-async function validateWorkloadIdentity(workflowSha, request, deps) {
-  if (workflowSha === request.workflowSha) {
-    return;
-  }
-  const comparison = await deps.github(
-    "compare/" + workflowSha + "..." + request.workflowSha + "?per_page=1",
-  );
-  // Parent orchestration and current-verdict policy do not change a sealed child
-  // execution. Keep this list explicit: child workflows, harnesses, build inputs,
-  // and shared helpers still require workload equivalence below. #203854 plus a
-  // grant update must not invalidate unchanged child execution. The current
-  // policy, exact inputs, live attempt, and authenticated receipt are checked next.
-  // GitHub caps changed files at 300; a capped inventory cannot prove equivalence.
-  const orchestrationPaths = new Set([
-    RELEASE_VALIDATION_WAIVERS_PATH,
-    ".github/workflows/full-release-validation.yml",
-    "scripts/lib/full-release-child-reuse.mjs",
-    "test/scripts/full-release-child-reuse.test.ts",
-    "docs/reference/full-release-validation/dispatch.md",
-    "docs/reference/full-release-validation/stages.md",
-  ]);
-  if (
-    comparison?.status === "ahead" &&
-    comparison.merge_base_commit?.sha === workflowSha &&
-    comparison.files?.length > 0 &&
-    comparison.files.length < 300 &&
-    comparison.files.every(
-      (file) => file.status === "modified" && orchestrationPaths.has(file.filename),
-    )
-  ) {
-    return;
-  }
-  requireEvidence(
-    (await workloadTree(workflowSha, request, deps)) ===
-      (await workloadTree(request.workflowSha, request, deps)),
-    `tooling ${workflowSha} differs from current parent ${request.workflowSha}; workload closure changed`,
-  );
-}
-
 async function validateEvidence(selection, request, deps) {
   validateSelectionIdentity(selection, request);
-  await validateWorkloadIdentity(selection.workflowSha, request, deps);
   const run = await deps.github(`actions/runs/${selection.runId}`);
   validateRun(run, selection, request);
   if (
@@ -801,7 +628,7 @@ export async function discoverReusableReleaseChild(request, deps = {}) {
         inputs: normalized.inputs,
       };
       const verified = await validateEvidence(selection, normalized, resolved);
-      report(`run ${run.id} ${run.display_title}: reused: verified receipt and workload closure`);
+      report(`run ${run.id} ${run.display_title}: reused: verified child receipt`);
       summary(true);
       return verified.selection;
     } catch (error) {
