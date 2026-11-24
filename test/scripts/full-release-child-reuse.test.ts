@@ -316,6 +316,7 @@ describe("independent release child reuse", () => {
       data.artifact.expires_at = "2099-01-01T00:00:00Z";
       data.jobs[0]!.name = "a synthetic failing test";
       data.jobs[0]!.conclusion = conclusion;
+      data.jobs[0]!.steps = [{ name: "Run workload", status: "completed", conclusion }];
       data.receipt.workloadConclusion = conclusion;
       data.receipt.jobs = data.receipt.jobs.map((job, index) => ({
         ...job,
@@ -378,6 +379,7 @@ describe("independent release child reuse", () => {
         targetSha: TARGET,
         childRole: "normalCi",
         jobName: "a synthetic failing test",
+        ...(conclusion === "failure" ? { step: "Run workload" } : {}),
         reason: "Synthetic operator approval",
       });
       const request = { ...data.request, workflowSha: nextQ, policyTargetVersion: version };

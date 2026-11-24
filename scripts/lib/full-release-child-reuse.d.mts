@@ -65,6 +65,7 @@ export function validateReusableReleaseChild(
 ): Promise<{
   selection: ReusableReleaseChildSelection;
   receipt: Record<string, unknown>;
+  compositeJobs: Record<string, unknown>[];
   run: Record<string, unknown>;
   jobs: Record<string, unknown>[];
 }>;

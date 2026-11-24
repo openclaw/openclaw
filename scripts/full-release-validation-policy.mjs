@@ -722,6 +722,28 @@ export function releaseCompositeJobsSha256(value) {
   return jsonSha256(sortJsonValueKeys({ effectiveRunAttempt, jobs, plannedRunAttempt }));
 }
 
+// A frozen v1 producer may have sealed the same complete job inventory before
+// it carried step evidence. Accept that exact projection without changing the
+// original hash, and keep using the live jobs for policy evaluation.
+export function matchesReleaseChildAttemptEvidence(sealed, live) {
+  const matches = (candidate) =>
+    Object.entries(candidate).every(([key, value]) =>
+      isDeepStrictEqual(sortJsonValueKeys(sealed[key]), sortJsonValueKeys(value)),
+    );
+  if (matches(live)) {
+    return true;
+  }
+  if (!live.jobs.some((job) => job.firstIncompleteStep)) {
+    return false;
+  }
+  const legacy = {
+    ...live,
+    jobs: live.jobs.map(({ firstIncompleteStep: _step, ...job }) => job),
+  };
+  legacy.compositeJobsSha256 = releaseCompositeJobsSha256(legacy);
+  return matches(legacy);
+}
+
 export function composeReleaseAttemptJobs(attempts, expected = {}) {
   const plannedRunAttempt = positiveInteger(expected.plannedRunAttempt);
   const effectiveRunAttempt = positiveInteger(expected.effectiveRunAttempt);

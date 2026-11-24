@@ -525,7 +525,7 @@ export async function verifyOriginalReceiptQualification(requestValue, dependenc
       runAttempt: selection.runAttempt,
       status: verified.run.status,
       conclusion: verified.run.conclusion,
-      jobs: verified.receipt.jobs,
+      jobs: verified.compositeJobs,
     };
     requireValue(
       terminalPolicyPass(
@@ -547,14 +547,14 @@ export async function verifyOriginalReceiptQualification(requestValue, dependenc
     // Reuse the admitted workload inventory and authenticated composite; recovery
     // does not reconstruct a second matrix policy from historical source files.
     validateQualificationJobs(
-      verified.receipt.jobs,
+      verified.compositeJobs,
       coverage.requiredJobs,
       "Original " + role,
       policy.waivedJobNames,
     );
 
     if (role === "productPerformance") {
-      validatePerformanceArtifactOnlyJobs(verified.receipt.jobs);
+      validatePerformanceArtifactOnlyJobs(verified.compositeJobs);
     }
     const dispatchJobs = parentJobs.filter((job) => job.name === coverage.parentJobName);
     requireValue(

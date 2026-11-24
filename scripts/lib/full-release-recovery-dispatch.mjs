@@ -30,6 +30,7 @@ import {
 import { restoreOriginalPublicationAdmission } from "../release-ci-summary.mjs";
 import { inspectActionsArtifactZip, readBoundedRegularFile } from "./actions-artifact-archive.mjs";
 import { assertRequestPath } from "./full-release-dispatch-request.mts";
+import { isWaived, readReleaseValidationWaiversAsync } from "./release-validation-waivers.mjs";
 
 const REPOSITORY = "openclaw/openclaw";
 const WORKFLOW = ".github/workflows/full-release-receipt-recovery.yml";
@@ -360,9 +361,46 @@ export async function discoverReceiptRecoveryRequest(
     client,
     plan?.candidate,
   );
+  const requestId = randomUUID();
+  let policyQualification;
+  if (policyOptions.policyAdmissionRun) {
+    const admissionRunId = Number(policyOptions.policyAdmissionRun);
+    const run = await client.getRun(policyOptions.policyAdmissionRun);
+    requireValue(
+      Number.isSafeInteger(admissionRunId) && run.id === admissionRunId && run.run_attempt === 1,
+      "waiver policy admission must identify its current first attempt",
+    );
+    policyQualification = {
+      sha: policyOptions.policySha,
+      admission: client.resolveQualificationAdmissionDescriptor({
+        repository: REPOSITORY,
+        runId: admissionRunId,
+        runAttempt: 1,
+        workflowRef: run.head_branch,
+        workflowSha: run.head_sha,
+      }),
+    };
+  }
+  const policy = await verifyReceiptRecoveryPolicy(
+    { requestId, policyQualification },
+    admission,
+    client,
+  );
+  const waivers =
+    policy?.waiverPolicy ??
+    (await readReleaseValidationWaiversAsync((path) =>
+      client.getWorkflowSource(parent.head_sha, path),
+    ));
+  const scope = {
+    targetSha: source.candidateSha,
+    targetVersion: admission.baselinePolicy.candidateVersion,
+  };
   const children = {};
   for (const coverage of admission.coverage.children) {
     const role = coverage.key;
+    if (isWaived({ ...scope, childRole: role }, waivers)) {
+      continue;
+    }
     if (plan?.childReuse?.[role]) {
       children[role] = plan.childReuse[role];
       continue;
@@ -443,29 +481,10 @@ export async function discoverReceiptRecoveryRequest(
       ["success", "failure"].includes(currentParent.conclusion),
     "current parent must be a terminal attempt of the original qualification",
   );
-  let policyQualification;
-  if (policyOptions.policyAdmissionRun) {
-    const admissionRunId = Number(policyOptions.policyAdmissionRun);
-    const run = await client.getRun(policyOptions.policyAdmissionRun);
-    requireValue(
-      Number.isSafeInteger(admissionRunId) && run.id === admissionRunId && run.run_attempt === 1,
-      "waiver policy admission must identify its current first attempt",
-    );
-    policyQualification = {
-      sha: policyOptions.policySha,
-      admission: client.resolveQualificationAdmissionDescriptor({
-        repository: REPOSITORY,
-        runId: admissionRunId,
-        runAttempt: 1,
-        workflowRef: run.head_branch,
-        workflowSha: run.head_sha,
-      }),
-    };
-  }
   return validateReceiptRecoveryRequest({
     ...(policyQualification && { policyQualification }),
     schema: "openclaw.full-release-receipt-recovery/v1",
-    requestId: randomUUID(),
+    requestId,
     workflowSha,
     repository: REPOSITORY,
     originalParent: { runId, runAttempt: 1, currentRunAttempt: currentParent.run_attempt },

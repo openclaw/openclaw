@@ -73,6 +73,31 @@ it("keeps main empty and never falls back from a missing or invalid Q ledger", a
   await expect(readReleaseValidationWaiversAsync(async () => source)).resolves.toEqual([grant]);
 });
 
+it("does not promote frozen outcome- or aggregate-specific approvals to broad grants", () => {
+  const failure = { ...leaf, conclusion: "failure" };
+  const plain = { ...grant, jobName: leaf.name };
+  const frozen = parseReleaseValidationWaivers(
+    JSON.stringify({
+      schema: "openclaw.release-validation-waivers/v1",
+      waivers: [
+        { ...plain, aggregates: [] },
+        { ...plain, aggregates: [], cancelledStep: "Run workload" },
+        { ...plain, aggregates: [], evidence: { runId: "1", runAttempt: 1 } },
+        { ...plain, aggregates: [{ jobName: "gate", stepName: "Verify", causes: [leaf.name] }] },
+      ],
+    }),
+  );
+  expect(terminalPolicyPass(child, targetVersion, targetSha, frozen, [leaf.name])).toBe(false);
+  const failed = { ...child, conclusion: "failure", jobs: [failure] };
+  expect(terminalPolicyPass(failed, targetVersion, targetSha, frozen.slice(1), [leaf.name])).toBe(
+    false,
+  );
+  expect(
+    evaluateReleaseChildPolicy({ child: failed, targetVersion, targetSha, waiverPolicy: frozen })
+      .waivers,
+  ).toEqual([plain]);
+});
+
 it("waives a whole child and its cancelled and never-run descendants without rewriting evidence", () => {
   const requiredJobs = [leaf.name, "never ran"];
   expect(terminalPolicyPass(child, targetVersion, targetSha, [grant], requiredJobs)).toBe(true);

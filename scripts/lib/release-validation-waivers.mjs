@@ -35,6 +35,10 @@ export function parseReleaseValidationWaivers(source) {
             "reason",
             "step",
             "qualificationExemption",
+            "aggregates",
+            "cancelledStep",
+            "evidence",
+            "testFailures",
           ].includes(key),
       ) ||
       !["targetVersion", "childRole", "reason"].every(
@@ -44,6 +48,21 @@ export function parseReleaseValidationWaivers(source) {
         (typeof waiver.jobName !== "string" || !waiver.jobName.trim())) ||
       (waiver.step !== undefined &&
         (waiver.jobName === undefined || typeof waiver.step !== "string" || !waiver.step.trim())) ||
+      (waiver.aggregates === undefined
+        ? ["cancelledStep", "evidence", "testFailures"].some((key) => Object.hasOwn(waiver, key))
+        : waiver.jobName === undefined ||
+          waiver.step !== undefined ||
+          !Array.isArray(waiver.aggregates) ||
+          waiver.aggregates.some(
+            (entry) =>
+              !entry ||
+              typeof entry.jobName !== "string" ||
+              typeof entry.stepName !== "string" ||
+              !Array.isArray(entry.causes) ||
+              !entry.causes.every((cause) => typeof cause === "string") ||
+              (entry.exactCauses !== undefined && typeof entry.exactCauses !== "boolean") ||
+              (entry.logSha256 !== undefined && !/^[a-f0-9]{64}$/u.test(entry.logSha256)),
+          )) ||
       (waiver.targetSha !== undefined &&
         (typeof waiver.targetSha !== "string" || !/^[a-f0-9]{40}$/u.test(waiver.targetSha)))
     ) {
@@ -136,6 +155,15 @@ export function isWaived(
       (waiver.targetSha === undefined || waiver.targetSha === targetSha) &&
       waiver.childRole === childRole &&
       (waiver.jobName === undefined || waiver.jobName === jobName) &&
+      // Frozen v1 rows keep their original failure-only scope. Do not convert
+      // evidence-bound or aggregate exceptions into unconditional grants.
+      (waiver.aggregates === undefined ||
+        (waiver.aggregates.length === 0 &&
+          waiver.cancelledStep === undefined &&
+          waiver.evidence === undefined &&
+          waiver.testFailures === undefined &&
+          job?.status === "completed" &&
+          job.conclusion === "failure")) &&
       (waiver.step === undefined ||
         (job?.status === "completed" &&
           job.conclusion !== "success" &&
@@ -203,9 +231,21 @@ export function evaluateReleaseChildPolicy({
   const workflowWaived = isWaived(scope, waiverPolicy);
   const jobs = new Map(child.jobs.map((job) => [job.name, job]));
   const jobScope = (jobName) => ({ ...scope, jobName, job: jobs.get(jobName) });
-  const waivers = waiverPolicy.filter((waiver) => isWaived(jobScope(waiver.jobName), [waiver]));
+  const matching = waiverPolicy.filter((waiver) => isWaived(jobScope(waiver.jobName), [waiver]));
+  const waivers = matching
+    .filter(({ jobName }) => {
+      const job = jobs.get(jobName);
+      return (
+        jobName === undefined ||
+        job?.status !== "completed" ||
+        isFailedReleaseJob(job) ||
+        (job.conclusion === "skipped" && requiredJobs.includes(jobName))
+      );
+    })
+    // The frozen manifest recorded used exceptions, never the ledger-only aggregates field.
+    .map(({ aggregates: _aggregates, ...waiver }) => waiver);
   const waivedJobNames = new Set(
-    [...requiredJobs, ...jobs.keys()].filter((jobName) => isWaived(jobScope(jobName), waivers)),
+    [...requiredJobs, ...jobs.keys()].filter((jobName) => isWaived(jobScope(jobName), matching)),
   );
   const advisoryJobs = child.jobs.filter((job) => isReleaseAdvisoryJob(child.key, job));
   // Preview failures retain their raw conclusions. Stable compatibility and the
@@ -215,7 +255,7 @@ export function evaluateReleaseChildPolicy({
     !advisoryJobs.some(isFailedReleaseJob) ||
     [WINDOWS_NODE_STABLE_JOB, "Verify release checks"].every(
       (name) =>
-        isWaived(jobScope(name), waivers) ||
+        isWaived(jobScope(name), matching) ||
         (jobs.get(name)?.status === "completed" && jobs.get(name)?.conclusion === "success"),
     );
   return {

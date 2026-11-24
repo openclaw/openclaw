@@ -132,6 +132,10 @@ export function validateReleaseExecutionPlanArtifact(
 ): ReleaseExecutionPlan;
 export function releaseExecutionPlanSha256(plan: ReleaseRecord): string;
 export function releaseCompositeJobsSha256(value: ReleaseRecord): string;
+export function matchesReleaseChildAttemptEvidence(
+  sealed: ReleaseRecord,
+  live: ReleaseRecord,
+): boolean;
 export function compareReleaseJobsByName(left: { name: string }, right: { name: string }): number;
 export function composeReleaseAttemptJobs(
   attempts: Array<{ jobs: ReleaseRecord[]; runAttempt: number }>,

@@ -127,7 +127,16 @@ was skipped, or never ran. Omit `jobName` to waive the entire child role and all
 its descendants: do not dispatch it, look up a run, or require a reuse receipt.
 An optional `step` narrows a named-job waiver to a non-successful terminal job
 whose first incomplete or failed step has exactly that name. A different,
-missing, or unobserved step does not match.
+missing, or unobserved step does not match. A passing job does not record an
+exception just because a grant matches its name.
+
+Frozen v1 ledgers remain readable. A legacy named grant with empty
+`aggregates` and no other selectors remains failure-only. A historical
+aggregate-, run-, step-, or failure-signature-bound grant does not become a
+new unconditional approval. If recovery needs to excuse that work with the new
+policy, use a newly approved exact grant through the separate Q admission below.
+Historical composite hashes remain verified against their original job projection;
+step narrowing uses authenticated attempt evidence, not a rewritten receipt.
 
 Child receipts record execution at their producer Q, not at the current Q. With
 `reuse_evidence=true`, eligible raw successful or failed child receipts may be

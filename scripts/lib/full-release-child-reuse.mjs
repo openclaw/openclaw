@@ -5,6 +5,7 @@ import {
   composeReleaseChildAttemptEvidence,
   evidenceReadRetryDelay,
   isReleaseGhServerError,
+  matchesReleaseChildAttemptEvidence,
   readReleaseJobListing,
   releaseChildSpec,
   releaseCompositeJobsSha256,
@@ -432,9 +433,7 @@ async function validateEvidence(selection, request, deps) {
     composite.jobs.length > 0 &&
       (request.policyTargetVersion ||
         composite.jobs.every((job) => ["success", "neutral"].includes(job.conclusion))) &&
-      Object.entries(composite).every(
-        ([key, value]) => canonical(receipt[key]) === canonical(value),
-      ),
+      matchesReleaseChildAttemptEvidence(receipt, composite),
     "receipt does not match the complete live composite workload",
   );
   // P evaluates raw executions against the current admitted candidate and Q grants.
@@ -479,7 +478,13 @@ async function validateEvidence(selection, request, deps) {
   // A rerun begun during verification invalidates the previously sealed attempt.
   const currentRun = await deps.github(`actions/runs/${selection.runId}`);
   validateRun(currentRun, selection, request);
-  return { selection: { ...selection, receiptSha256: sha256 }, receipt, run: currentRun, jobs };
+  return {
+    selection: { ...selection, receiptSha256: sha256 },
+    receipt,
+    run: currentRun,
+    jobs,
+    compositeJobs: composite.jobs,
+  };
 }
 
 export async function validateReusableReleaseChild(selection, request, deps = {}) {

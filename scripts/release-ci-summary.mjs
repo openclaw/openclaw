@@ -32,6 +32,7 @@ import {
   evidenceReadRetryDelay,
   compareReleaseJobsByName,
   composeReleaseChildAttemptEvidence,
+  matchesReleaseChildAttemptEvidence,
   composeReleaseAttemptJobs,
   formatReleaseStateOutcome,
   isReleaseGhArtifactMissingError,
@@ -2531,10 +2532,7 @@ async function validateStrictChildRun({
               triggering_actor: { login: childEvidence.triggeringActor },
             },
     });
-    if (
-      JSON.stringify(sortReleaseJsonValueKeys(childEvidence)) !==
-      JSON.stringify(sortReleaseJsonValueKeys(evidence))
-    ) {
+    if (!matchesReleaseChildAttemptEvidence(childEvidence, evidence)) {
       throw new Error(`manifest child composite evidence mismatch: ${child.name}`);
     }
     if (childEvidence.effectiveRunAttempt < effectiveRunAttempt) {
@@ -2546,7 +2544,7 @@ async function validateStrictChildRun({
       effectiveRunAttempt: evidence.effectiveRunAttempt,
       jobs: evidence.jobs,
       plannedRunAttempt: evidence.plannedRunAttempt,
-      sha256: evidence.compositeJobsSha256,
+      sha256: childEvidence.compositeJobsSha256,
     };
     jobs = evidence.jobs;
   } else {
