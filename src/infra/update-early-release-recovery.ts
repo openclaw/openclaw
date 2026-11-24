@@ -51,7 +51,7 @@ export type RunCommand = (
 ) => Promise<CommandResult>;
 
 /** Runs a command; `stream` copies its output to this process's (the journal's) output. */
-export const runCommand: RunCommand = (argv, options = {}) =>
+export const runRecoveryCommand: RunCommand = (argv, options = {}) =>
   new Promise((resolve) => {
     const child = spawn(argv[0]!, argv.slice(1), {
       cwd: options.cwd,
@@ -85,7 +85,7 @@ export const runCommand: RunCommand = (argv, options = {}) =>
   });
 
 export const ok = (result: CommandResult) => result.code === 0;
-export const tail = (result: CommandResult) =>
+export const commandTail = (result: CommandResult) =>
   result.output.trim().split("\n").slice(-6).join(" ").slice(-600);
 
 export async function git(run: RunCommand, cwd: string, ...args: string[]) {
@@ -187,10 +187,10 @@ export async function runEarlyGitReleaseRecovery(
     const installed = await cli(root, "gateway", "install", "--force", ...port, "--json");
     const unit = fs.readFileSync(plan.serviceFile, "utf8");
     if (!unit.includes(path.join(root, "dist"))) {
-      return { switched: false, ready: false, detail: tail(installed) };
+      return { switched: false, ready: false, detail: commandTail(installed) };
     }
     const ready = await deps.ready(Number(/--port\s+(\d+)/u.exec(unit)?.[1]) || null);
-    return { switched: true, ready, detail: tail(installed) };
+    return { switched: true, ready, detail: commandTail(installed) };
   };
   const abandon = async (why: string) => {
     log(`stopped before changing the Gateway: ${why}. The next \`openclaw update\` tries again.`);
@@ -238,7 +238,7 @@ export async function runEarlyGitReleaseRecovery(
     log(`fast-forwarding ${plan.branch} to ${plan.target}`);
     const merged = await git(run, plan.checkout, "merge", "--ff-only", "--quiet", plan.target);
     if (!ok(merged)) {
-      return abandon(`the fast-forward failed (${tail(merged)})`);
+      return abandon(`the fast-forward failed (${commandTail(merged)})`);
     }
   }
   // Killed after the final switch: only the finishing step is left.
@@ -311,7 +311,7 @@ export async function runEarlyGitReleaseRecovery(
     if (!ok(built)) {
       return fail(
         "early-release-recovery-build-failed",
-        `The Gateway serves OpenClaw ${VERSION} from the release the update built. \`${argv.join(" ")}\` failed in the checkout (${tail(built)}).`,
+        `The Gateway serves OpenClaw ${VERSION} from the release the update built. \`${argv.join(" ")}\` failed in the checkout (${commandTail(built)}).`,
         `fix the cause, then from the checkout run \`${REBUILD} && openclaw gateway install --force\``,
       );
     }
@@ -328,7 +328,7 @@ export async function runEarlyGitReleaseRecovery(
   }
   const finished = await deps.finish(plan, { downtimeMs, runId });
   if (!ok(finished)) {
-    log(`the rebuilt checkout serves, but cleanup did not finish (${tail(finished)})`);
+    log(`the rebuilt checkout serves, but cleanup did not finish (${commandTail(finished)})`);
   }
   return !fs.existsSync(plan.release);
 }
@@ -518,13 +518,20 @@ const record = async (outcome: RecoveryOutcome) => {
 
 function defaultRunnerDeps(): RunnerDeps {
   return {
-    run: runCommand,
+    run: runRecoveryCommand,
     log,
     driverAlive: (driver) => processStart(driver.pid) === driver.start,
     restarts: async (unit) =>
       Number(
         (
-          await runCommand(["systemctl", "--user", "show", "--property=NRestarts", "--value", unit])
+          await runRecoveryCommand([
+            "systemctl",
+            "--user",
+            "show",
+            "--property=NRestarts",
+            "--value",
+            unit,
+          ])
         ).output.trim(),
       ) || 0,
     // Unreadable state counts as migrated: the old build is never put back on data it may not open.
@@ -554,7 +561,7 @@ function defaultRunnerDeps(): RunnerDeps {
         ...runtimeProcessEntrypoints.updateMigratedFinalize,
         root: current.checkout,
       });
-      return runCommand(
+      return runRecoveryCommand(
         [
           process.execPath,
           fileURLToPath(worker),

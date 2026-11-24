@@ -22,8 +22,8 @@ import {
   processStart,
   readJsonString,
   removeTree,
-  runCommand,
-  tail,
+  runRecoveryCommand,
+  commandTail,
   type RecoveryPlan,
   type RunCommand,
 } from "./update-early-release-recovery.js";
@@ -127,7 +127,7 @@ async function readGatewayService(env: NodeJS.ProcessEnv) {
 const defaultStartDeps = (): StartDeps => ({
   platform: process.platform,
   env: process.env,
-  run: runCommand,
+  run: runRecoveryCommand,
   freeBytes: (dir) => {
     const stats = fs.statfsSync(dir);
     return stats.bavail * stats.bsize;
@@ -278,7 +278,10 @@ export async function startEarlyGitReleaseRecovery(
   const moved = await git(run, plan.checkout, "worktree", "move", change.root, plan.release);
   if (!ok(moved)) {
     fs.rmSync(path.dirname(plan.release), { recursive: true, force: true });
-    return { started: false, reason: `the built release could not be kept (${tail(moved)})` };
+    return {
+      started: false,
+      reason: `the built release could not be kept (${commandTail(moved)})`,
+    };
   }
   const worker = resolveRuntimeWorkerUrl({
     ...runtimeProcessEntrypoints.updateMigratedFinalize,
@@ -305,7 +308,7 @@ export async function startEarlyGitReleaseRecovery(
     if (ok(await git(run, plan.checkout, "worktree", "move", plan.release, change.root))) {
       fs.rmSync(path.dirname(plan.release), { recursive: true, force: true });
     }
-    return { started: false, reason: `systemd-run failed (${tail(started)})` };
+    return { started: false, reason: `systemd-run failed (${commandTail(started)})` };
   }
   return { started: true, unit: plan.unit, target: plan.target };
 }
