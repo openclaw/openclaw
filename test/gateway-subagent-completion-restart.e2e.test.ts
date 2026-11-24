@@ -538,6 +538,12 @@ it
               expect(completedReplies).toBe(1);
               expect(rootReceivedRecovery).toBe(true);
             }
+            // Later child partitions legitimately run with earlier results in history.
+            // Join those turns before the second restart tests settled-receipt idempotence.
+            const requester = readRestartSession(instance.state.agentDir("main"), rootKey);
+            expect(requester).toBeDefined();
+            expect(requester?.lifecycleRunId).toBeUndefined();
+            expect(requester?.resumeAfterRestart).toBeUndefined();
           },
           { timeout: 30_000 },
         );
