@@ -292,6 +292,12 @@ For Xiaomi `mimo-v2.5-tts-voicedesign`, omit `speakerVoice` and set `style` to
 the voice-design prompt. OpenClaw sends that prompt as the TTS `user` message
 and does not send `audio.voice` for the voicedesign model.
 
+### Streaming with OpenAI-compatible endpoints
+
+The OpenAI speech provider assumes raw PCM streams use a 24 kHz sample rate.
+If your endpoint uses a different rate, set `responseFormat` to `wav` if it supports WAV.
+WAV carries its sample rate in the audio header. The browser Talk RPC still returns a complete audio clip.
+
 ### Local Speech Swift and speech-core
 
 [Speech Swift](https://github.com/soniqo/speech-swift) and
