@@ -1,6 +1,6 @@
-5452
+5458
 # Participate split, part 4 of 6 (invited admission): measured with
-# check-test-lines-ratchet against the part-3 branch tip; 5,852 net lines minus
+# check-test-lines-ratchet against the part-3 branch tip; 5,858 net lines minus
 # the ordinary 400-line allowance. This part is the opt-in switch, so it carries
 # the Gateway suites that prove the lower parts' participant limits through the
 # real admission path; before it, nothing can admit a participant run. Reuses the
@@ -16,5 +16,6 @@
 # authority tests cannot prove the admitted run's model/tool dispatch boundary.
 # Also restores the participant-source, same-role recovery narrowing, literal
 # command restore and foreign scope-child refusal cases that part 2 deferred here
-# because they need real admission. No assertion, timeout, file cap or global
+# because they need real admission, and gives Talk handler fixture clients the
+# connection scopes that session access resolution now reads. No assertion, timeout, file cap or global
 # budget is relaxed.
