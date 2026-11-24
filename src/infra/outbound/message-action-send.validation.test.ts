@@ -36,6 +36,29 @@ describe("runMessageAction send validation", () => {
   afterEach(() => {
     setActivePluginRegistry(createTestRegistry([]));
   });
+
+  it("rejects a captionless table before sending the rest of the message", async () => {
+    const send = vi.spyOn(workspaceTestPlugin.outbound!, "sendText");
+    const table = { type: "table", headers: ["Name"], rows: [["Alpha"]] };
+    try {
+      await expect(
+        runMessageAction({
+          cfg: workspaceConfig,
+          action: "send",
+          params: {
+            channel: "workspace",
+            target: "#C12345678",
+            message: "Summary",
+            presentation: { blocks: [table] },
+          },
+        }),
+      ).rejects.toThrow("presentation.blocks[].caption required");
+      expect(send).not.toHaveBeenCalled();
+    } finally {
+      send.mockRestore();
+    }
+  });
+
   it("requires message when no media hint is provided", async () => {
     await expect(
       runDrySend({
