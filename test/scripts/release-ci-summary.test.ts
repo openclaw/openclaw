@@ -816,7 +816,6 @@ withGithubRequestBudget(32, (budget) => {
                       childRole: "normalCi",
                       jobName: "synthetic-selected-test",
                       reason: "Synthetic Q-only grant",
-                      aggregates: [],
                     },
                   ],
           }),
@@ -1647,9 +1646,9 @@ describe("release CI summary child correlation", () => {
       ).rejects.toThrow(
         scenario === "retired-advisory"
           ? /advisory jobs differ/u
-          : scenario === "missing-gate" || scenario === "skipped-gate"
-            ? /openclaw\/ci-gate/u
-            : /manifest child run does not pass release policy/u,
+          : scenario === "windows-shard"
+            ? /manifest child run does not pass release policy/u
+            : /openclaw\/ci-gate/u,
       );
       expect(JSON.stringify(f.manifest)).toBe(before);
     },

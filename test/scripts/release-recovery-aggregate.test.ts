@@ -161,7 +161,13 @@ function fixture(substitute = false, recoveryAttempt = 1) {
         if (JSON.stringify(selection) !== JSON.stringify(normalCiSelection)) {
           throw new Error("Receipt or exact dispatch inputs changed");
         }
-        return { selection, run: await origin.client.getRun(normal.runId), receipt: {}, jobs: [] };
+        return {
+          selection,
+          run: await origin.client.getRun(normal.runId),
+          receipt: {},
+          jobs: [],
+          compositeJobs: [],
+        };
       },
     ),
     loadManifest: vi.fn((id: string, attempt: number) => {
@@ -314,7 +320,16 @@ it("authenticates the sealed recovery attempt while npm and Docker keep their or
     2,
   );
   const { env, manifestPath } = await cliFixture(f, producer, client, normalCiSelection);
+  client.getRun.mockClear();
+  client.validateChildReuse.mockClear();
   await runReleaseRecoveryCli(["--seal-recovery"], env, client);
+  // Sealing observes the original and each child once; the full verifier,
+  // which starts by reading producer 991, owns its own fresh reads.
+  const runReads = client.getRun.mock.calls.map(([id]) => id);
+  const sealReads = runReads.slice(0, runReads.indexOf("991"));
+  expect(sealReads).toEqual([...new Set(sealReads)]);
+  expect(sealReads).toContain(f.runId);
+  expect(client.validateChildReuse).toHaveBeenCalledTimes(3);
   const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
   setSealed(manifest);
   expect(manifest).toMatchObject({

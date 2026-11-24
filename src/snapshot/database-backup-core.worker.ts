@@ -152,6 +152,29 @@ export async function exportPostgresBackup(params: {
   return manifest;
 }
 
+/** One verified server-side copy, shared by frozen captures and private upgrade anchors. */
+export async function clonePostgresSchema(params: {
+  client: Client;
+  descriptor: PortDescriptor;
+  anchor: Anchor;
+  assertCurrent: () => void;
+}) {
+  const namespace = `restore_${randomUUID().replaceAll("-", "")}`;
+  try {
+    const verification = await materializeDatabasePort({
+      source: { engine: "postgres", db: params.client, namespace: params.anchor.namespace },
+      destination: { engine: "postgres", db: params.client, namespace },
+      descriptor: params.descriptor,
+      storeId: params.anchor.storeId,
+      assertCurrent: params.assertCurrent,
+    });
+    return { namespace, verification };
+  } catch (error) {
+    await discardPostgresNamespace(params.client, namespace);
+    throw error;
+  }
+}
+
 /** Capture into a frozen schema on the source server; only the anchor is written locally. */
 export async function capturePostgresSchema(params: {
   client: Client;
@@ -162,7 +185,7 @@ export async function capturePostgresSchema(params: {
   assertCurrent: () => void;
 }): Promise<PostgresExportEnvelope> {
   const { client, descriptor, anchor } = params;
-  const schema = `restore_${randomUUID().replaceAll("-", "")}`;
+  let schema: string | undefined;
   // Schema comments are visible across database roles. Keep local custody paths private.
   const marker = params.prune
     ? JSON.stringify({
@@ -173,10 +196,8 @@ export async function capturePostgresSchema(params: {
       })
     : undefined;
   try {
-    params.assertCurrent();
-    const verification = await materializeDatabasePort({
-      source: { engine: "postgres", db: client, namespace: anchor.namespace },
-      destination: { engine: "postgres", db: client, namespace: schema },
+    const copied = await clonePostgresSchema({
+      ...params,
       // Commit the prune marker with the capture so a lost client cannot leave an
       // unmarked schema behind. Ordinary restores keep their unmarked descriptor.
       descriptor: {
@@ -185,9 +206,8 @@ export async function capturePostgresSchema(params: {
           `${descriptor.postgresPostData?.(namespace) ?? ""}\n;\n` +
           (marker ? `COMMENT ON SCHEMA "${namespace}" IS ${client.escapeLiteral(marker)}` : ""),
       },
-      storeId: anchor.storeId,
-      assertCurrent: params.assertCurrent,
     });
+    schema = copied.namespace;
     const manifest: PostgresExportEnvelope = {
       schemaVersion: 2,
       snapshotId: path.basename(params.directory),
@@ -196,7 +216,7 @@ export async function capturePostgresSchema(params: {
       source: { ...anchor, owner: descriptor.id, schemaVersion: descriptor.version },
       exportSchemaVersion: descriptor.version,
       activeFragments: [...descriptor.activeFragments!],
-      verification,
+      verification: copied.verification,
       carrier: "postgres-schema",
       schema,
       artifacts: { "anchor.sqlite": await artifact(path.join(params.directory, "anchor.sqlite")) },
@@ -206,7 +226,9 @@ export async function capturePostgresSchema(params: {
     await writePostgresExportEnvelope(params.directory, manifest);
     return manifest;
   } catch (error) {
-    await discardPostgresNamespace(client, schema);
+    if (schema) {
+      await discardPostgresNamespace(client, schema);
+    }
     throw error;
   }
 }

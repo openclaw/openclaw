@@ -377,10 +377,6 @@ function ChatThreadContent(
       : input.historySupplement?.height;
     return height === undefined ? null : { content: headerContent, height };
   };
-  const historySentinel = (
-    <div class="chat-history-sentinel" ref={[elementRef(input.props.onHistorySentinelRef)]} />
-  );
-  const sentinel = () => (input.props.historyPagination ? historySentinel : undefined);
   const contents = createMemo(() => {
     if (!renderReady()) {
       return (
@@ -401,7 +397,6 @@ function ChatThreadContent(
     if (isLoading() || isEmpty()) {
       return (
         <div class="chat-thread-inner">
-          {sentinel()}
           {isEmpty() && !showLoadingSkeleton() ? historyHeader()?.content : undefined}
           {showLoadingSkeleton() ? (
             mobile() ? (
@@ -421,7 +416,7 @@ function ChatThreadContent(
         </div>
       );
     }
-    return current().projection.renderRows(sentinel(), historyHeader());
+    return current().projection.renderRows(historyHeader());
   });
   const announcement = createMemo(() => {
     // The row owner records the accepted announcement while rendering its rows.

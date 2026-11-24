@@ -35,6 +35,7 @@ import {
   evidenceReadRetryDelay,
   compareReleaseJobsByName,
   composeReleaseChildAttemptEvidence,
+  matchesReleaseChildAttemptEvidence,
   composeReleaseAttemptJobs,
   resolveReleaseAttemptJobs,
   formatReleaseStateOutcome,
@@ -98,10 +99,10 @@ import {
 import { resolveReleasePublishInputs } from "./lib/release-publish-inputs.mjs";
 import {
   evaluateReleaseChildPolicy,
+  isWaived,
   readReleaseValidationWaivers,
   readReleaseValidationWaiversAsync,
   RELEASE_VALIDATION_WAIVERS_PATH,
-  validateReleaseWaiverAggregates,
 } from "./lib/release-validation-waivers.mjs";
 import {
   resolveQualificationAdmissionDescriptor,
@@ -1120,11 +1121,17 @@ function normalizeManifestChildEvidence(value) {
             throw new Error(`release validation child job attempt is invalid: ${key}`);
           }
           const name = String(job.name ?? "");
-          if (!name) {
+          const firstIncompleteStep = job.firstIncompleteStep;
+          if (
+            !name ||
+            (firstIncompleteStep !== undefined &&
+              (typeof firstIncompleteStep !== "string" || !firstIncompleteStep))
+          ) {
             throw new Error(`release validation child job identity is invalid: ${key}`);
           }
           return {
             acceptedRunAttempt,
+            ...(firstIncompleteStep === undefined ? {} : { firstIncompleteStep }),
             completedAt: String(job.completedAt ?? ""),
             conclusion: String(job.conclusion ?? ""),
             name,
@@ -2272,7 +2279,6 @@ export function createReleaseEvidenceClient(repository = DEFAULT_REPO, { immutab
         immutableReads,
         deadlineMs,
         waiverPolicy,
-        getJobLog: (id) => parentJobLog(id, normalizedRepository, immutableReads),
       });
     },
     getSourceFiles(requests) {
@@ -2573,11 +2579,9 @@ async function recoveryChildProjection(plan, selection, client) {
   };
 }
 
-export async function prepareReleaseRecovery(
-  sourceRunId,
-  client = createReleaseEvidenceClient(),
-  { normalCiSelection } = {},
-) {
+// Sealing reuses this one observation of the original plan and child runs.
+// The full verifier still re-reads them before the manifest is written.
+async function resolveReleaseRecovery(sourceRunId, client, normalCiSelection) {
   const runId = normalizeRequiredRunId(sourceRunId, "original qualification run");
   const run = await client.getRun(runId);
   const original = client.loadExecutionPlanEvidence(runId);
@@ -2586,6 +2590,7 @@ export async function prepareReleaseRecovery(
     client,
   });
   if (
+    String(run.id) !== runId ||
     run.status !== "completed" ||
     plan.evidenceReuse.requested ||
     !plan.sourceAdmission.coverage.publication_artifact_source_json
@@ -2595,6 +2600,7 @@ export async function prepareReleaseRecovery(
     );
   }
   const effective = await recoveryChildProjection(plan, normalCiSelection, client);
+  const childRuns = new Map();
   const childAttempts = {};
   for (const child of effective.plan.children.filter((entry) => entry.selected)) {
     const observed = await client.getRun(child.runId);
@@ -2603,6 +2609,10 @@ export async function prepareReleaseRecovery(
       plannedRunAttempt: child.runAttempt,
       repository: plan.sourceAdmission.repository,
     });
+    if (String(observed.id) !== child.runId || observed.status !== "completed") {
+      throw new Error("Recovery source/child attempt changed or remains active: " + child.runId);
+    }
+    childRuns.set(child.runId, observed);
     childAttempts[child.runId] = observed.run_attempt;
   }
   const request = {
@@ -2613,8 +2623,15 @@ export async function prepareReleaseRecovery(
     ...(normalCiSelection === undefined ? {} : { normalCiSelection }),
     childAttempts,
   };
-  await assertRecoveryAttempts(request, client);
-  return request;
+  return { request, plan, effective, childRuns };
+}
+
+export async function prepareReleaseRecovery(
+  sourceRunId,
+  client = createReleaseEvidenceClient(),
+  { normalCiSelection } = {},
+) {
+  return (await resolveReleaseRecovery(sourceRunId, client, normalCiSelection)).request;
 }
 
 export async function sealReleaseRecovery(
@@ -2622,13 +2639,15 @@ export async function sealReleaseRecovery(
   client = createReleaseEvidenceClient(producer.repository),
 ) {
   client.verifyReleaseRecoveryProducer({ producer, completed: false });
-  const current = await prepareReleaseRecovery(request.sourceRunId, client, {
-    normalCiSelection: request.normalCiSelection,
-  });
-  if (!isDeepStrictEqual(current, request)) {
+  const current = await resolveReleaseRecovery(
+    request.sourceRunId,
+    client,
+    request.normalCiSelection,
+  );
+  if (!isDeepStrictEqual(current.request, request)) {
     throw new Error("Recovery request changed: original plan, artifact or attempts");
   }
-  const { plan } = client.loadExecutionPlanEvidence(request.sourceRunId);
+  const { plan, effective, childRuns } = current;
   const selected = await client.selectPublicationArtifactSource(
     JSON.parse(plan.sourceAdmission.coverage.publication_artifact_source_json),
     {
@@ -2651,7 +2670,6 @@ export async function sealReleaseRecovery(
   ) {
     throw new Error("Recovery publication source or candidate changed");
   }
-  const effective = await recoveryChildProjection(plan, request.normalCiSelection, client);
   const manifest = recoveryManifestFromPlan(
     effective.plan,
     request.sourceRunAttempt,
@@ -2661,7 +2679,7 @@ export async function sealReleaseRecovery(
     client.getWorkflowSource(plan.workflowSha, path),
   );
   for (const child of effective.plan.children.filter((entry) => entry.selected)) {
-    const run = await client.getRun(child.runId);
+    const run = childRuns.get(child.runId);
     const attempts = [];
     for (
       let attempt = child.runAttempt;
@@ -3025,6 +3043,7 @@ async function validateStrictChildRun({
         role: child.manifestKey,
         targetSha: parentEvidence.manifest.targetSha,
         policyTargetVersion: parentEvidence.manifest.validationInputs?.targetVersion,
+        requiredJobs: child.requiredJobs,
         workflowSha: parentEvidence.manifest.workflowSha,
       })
     : undefined;
@@ -3101,7 +3120,8 @@ async function validateStrictChildRun({
   }
   let jobs;
   let composite;
-  let rawJobs;
+  const targetVersion = parentEvidence.manifest.validationInputs?.targetVersion;
+  const targetSha = parentEvidence.manifest.targetSha;
   if (plannedChild && childEvidence) {
     if (childEvidence.effectiveRunAttempt > effectiveRunAttempt) {
       throw new Error(`manifest child composite evidence mismatch: ${child.name}`);
@@ -3132,15 +3152,7 @@ async function validateStrictChildRun({
               triggering_actor: { login: childEvidence.triggeringActor },
             },
     });
-    rawJobs = evidence.jobs.map((job) =>
-      attempts
-        .find((attempt) => attempt.runAttempt === job.acceptedRunAttempt)
-        .jobs.find((raw) => raw.name === job.name && (raw.html_url ?? raw.url ?? "") === job.url),
-    );
-    if (
-      JSON.stringify(sortReleaseJsonValueKeys(childEvidence)) !==
-      JSON.stringify(sortReleaseJsonValueKeys(evidence))
-    ) {
+    if (!matchesReleaseChildAttemptEvidence(childEvidence, evidence)) {
       throw new Error(`manifest child composite evidence mismatch: ${child.name}`);
     }
     if (childEvidence.effectiveRunAttempt < effectiveRunAttempt) {
@@ -3152,7 +3164,7 @@ async function validateStrictChildRun({
       effectiveRunAttempt: evidence.effectiveRunAttempt,
       jobs: evidence.jobs,
       plannedRunAttempt: evidence.plannedRunAttempt,
-      sha256: evidence.compositeJobsSha256,
+      sha256: childEvidence.compositeJobsSha256,
     };
     jobs = evidence.jobs;
   } else {
@@ -3169,28 +3181,26 @@ async function validateStrictChildRun({
     runAttempt: effectiveRunAttempt,
     status: run.status,
   };
-  const targetVersion = parentEvidence.manifest.validationInputs?.targetVersion;
-  const targetSha = parentEvidence.manifest.targetSha;
   const policy = evaluateReleaseChildPolicy({
     child: policyChild,
     targetVersion,
     targetSha,
     waiverPolicy,
+    requiredJobs: child.requiredJobs,
   });
   if (
     run.repository?.full_name !== repository ||
-    run.head_sha !== (plannedChild?.workflowSha ?? parentEvidence.manifest.workflowSha) ||
-    !terminalPolicyPass(policyChild, targetVersion, targetSha, waiverPolicy)
+    run.head_sha !== (plannedChild?.workflowSha ?? parentEvidence.manifest.workflowSha)
   ) {
     throw new Error(`manifest child run does not pass release policy: ${child.name}`);
   }
-  await validateReleaseWaiverAggregates({
-    policy,
-    jobs: rawJobs ?? jobs,
-    getJobLog: (id) => client.getJobLog(id),
-  });
   if (child.requiredJobs) {
     validateQualificationJobs(jobs, child.requiredJobs, child.name, policy.waivedJobNames);
+  }
+  if (
+    !terminalPolicyPass(policyChild, targetVersion, targetSha, waiverPolicy, child.requiredJobs)
+  ) {
+    throw new Error(`manifest child run does not pass release policy: ${child.name}`);
   }
   if (child.manifestKey === "productPerformance") {
     // The authenticated composite selects the newest executed attempt per job,
@@ -4103,12 +4113,7 @@ export async function validateReleaseRunEvidence(
   }
   const expectedChildren = qualification.coverage.children.map((child) => {
     const plannedChild = plannedByKey.get(child.key);
-    if (
-      !plannedChild?.selected ||
-      !plannedChild.required ||
-      !plannedChild.runId ||
-      !plannedChild.runAttempt
-    ) {
+    if (!plannedChild?.selected || !plannedChild.required) {
       throw new Error("execution plan omits required child: " + child.name);
     }
     return Object.assign({}, child, {
@@ -4119,13 +4124,6 @@ export async function validateReleaseRunEvidence(
       plannedChild,
     });
   });
-  if (
-    executionPlan?.attemptEvidenceVersion !== undefined &&
-    JSON.stringify(Object.keys(rootEvidence.manifest.childEvidence).toSorted()) !==
-      JSON.stringify([...selectedKeys].toSorted(compareAscii))
-  ) {
-    throw new Error("release validation manifest composite child set is invalid");
-  }
   const dispatchEvidence = rootEvidence;
   const parentJobs = await evidenceClient.getParentJobs(dispatchEvidence.manifest.runId);
   const attempts = [];
@@ -4165,25 +4163,65 @@ export async function validateReleaseRunEvidence(
       sourcePath,
     ),
   );
+  const missingChildren = new Map();
+  for (const { child, runId: childRunId } of childEntries) {
+    const scope = {
+      childRole: child.manifestKey,
+      targetVersion: executionPlan.targetVersion,
+      targetSha: executionPlan.targetSha,
+    };
+    if (!isWaived(scope, waiverPolicy)) {
+      if (childRunId && child.plannedChild.runAttempt) {
+        continue;
+      }
+      throw new Error("execution plan omits required child: " + child.name);
+    }
+    if (
+      childRunId ||
+      child.plannedChild.runAttempt ||
+      executionPlan.childReuse?.[child.manifestKey] ||
+      rootEvidence.manifest.childEvidence?.[child.manifestKey] !== undefined
+    ) {
+      throw new Error("execution plan includes evidence for waived child: " + child.name);
+    }
+    missingChildren.set(child.manifestKey, {
+      conclusion: "missing",
+      role: child.manifestKey,
+      runId: "",
+      runAttempt: null,
+      waivers: waiverPolicy.filter((grant) => isWaived(scope, [grant])),
+    });
+  }
+  if (
+    executionPlan?.attemptEvidenceVersion !== undefined &&
+    JSON.stringify(Object.keys(rootEvidence.manifest.childEvidence).toSorted()) !==
+      JSON.stringify(
+        [...selectedKeys].filter((key) => !missingChildren.has(key)).toSorted(compareAscii),
+      )
+  ) {
+    throw new Error("release validation manifest composite child set is invalid");
+  }
   const childResults = await Promise.allSettled(
-    childEntries.map(({ child, runId: childRunId }) =>
-      validateStrictChildRun({
-        child,
-        childEvidence: rootEvidence.manifest.childEvidence?.[child.manifestKey],
-        childReuse: childPlan?.childReuse?.[child.manifestKey],
-        recoveryNormalCiOrigin:
-          child.manifestKey === "normalCi" ? rootEvidence.recoveryNormalCiOrigin : undefined,
-        client: evidenceClient,
-        executionPlan,
-        parentEvidence: dispatchEvidence,
-        parentJobs,
-        plannedChild: child.plannedChild,
-        releaseProfile: rootEvidence.manifest.releaseProfile,
-        repository: normalizedRepository,
-        runId: childRunId,
-        expectedRunAttempts: remainingExpectedRunAttempts,
-        waiverPolicy,
-      }),
+    childEntries.map(
+      ({ child, runId: childRunId }) =>
+        missingChildren.get(child.manifestKey) ??
+        validateStrictChildRun({
+          child,
+          childEvidence: rootEvidence.manifest.childEvidence?.[child.manifestKey],
+          childReuse: childPlan?.childReuse?.[child.manifestKey],
+          recoveryNormalCiOrigin:
+            child.manifestKey === "normalCi" ? rootEvidence.recoveryNormalCiOrigin : undefined,
+          client: evidenceClient,
+          executionPlan,
+          parentEvidence: dispatchEvidence,
+          parentJobs,
+          plannedChild: child.plannedChild,
+          releaseProfile: rootEvidence.manifest.releaseProfile,
+          repository: normalizedRepository,
+          runId: childRunId,
+          expectedRunAttempts: remainingExpectedRunAttempts,
+          waiverPolicy,
+        }),
     ),
   );
   const children = childResults.map((result) => {
@@ -4240,7 +4278,7 @@ export async function validateReleaseRunEvidence(
     children.map((child) => [child.role, child.conclusion]),
   );
   const evidence = sortReleaseJsonValueKeys({
-    children,
+    children: children.filter((child) => !missingChildren.has(child.role)),
     waivers,
     conclusions: {
       children: childConclusions,

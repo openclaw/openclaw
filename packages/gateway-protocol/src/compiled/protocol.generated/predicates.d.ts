@@ -1828,6 +1828,11 @@ export function isSessionsCatalogListParams(
 ): value is import("typebox").Static<
   typeof import("../../schema-modules.js").SessionsCatalogListParamsSchema
 >;
+export function isSessionsCatalogRouteParams(
+  value: unknown,
+): value is import("typebox").Static<
+  typeof import("../../schema-modules.js").SessionsCatalogRouteParamsSchema
+>;
 export function isSessionsCatalogReadParams(
   value: unknown,
 ): value is import("typebox").Static<
