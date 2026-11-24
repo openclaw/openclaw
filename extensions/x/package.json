@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/x",
-  "version": "2026.10.33",
+  "version": "2026.10.34",
   "description": "OpenClaw X mentions and public reply channel plugin",
   "type": "module",
   "dependencies": {

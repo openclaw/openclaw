@@ -1,6 +1,6 @@
 {
   "name": "openclaw",
-  "version": "2026.10.33",
+  "version": "2026.10.34",
   "openclaw": {
     "updateAdmissionProtocol": 1,
     "databaseEngines": [

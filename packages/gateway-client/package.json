@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/gateway-client",
-  "version": "2026.10.33",
+  "version": "2026.10.34",
   "description": "Reference WebSocket client for the OpenClaw Gateway protocol",
   "keywords": [
     "client",
