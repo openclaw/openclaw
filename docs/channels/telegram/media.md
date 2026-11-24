@@ -130,3 +130,7 @@ What OpenClaw can send to Telegram beyond text, and how inbound media reaches th
 
   </Accordion>
 </AccordionGroup>
+
+## Inbound attachments that fail to download
+
+A message's attachments, including an album or a forwarded burst, share a two-minute budget for Telegram's file lookups and downloads. Replied-to media has a separate two-minute budget. If an attachment fails or the budget expires, OpenClaw can still deliver the text with a media-unavailable notice and preserve other successfully downloaded attachments. Later messages aren't held behind the failed attachment. If Gateway shutdown interrupts a durable update instead, it can replay after restart.

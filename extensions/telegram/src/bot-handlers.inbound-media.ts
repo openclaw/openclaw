@@ -21,11 +21,7 @@ import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveTelegramAccountConfig } from "./accounts.js";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
 import type { NormalizedAllowFrom } from "./bot-access.js";
-import {
-  hasInboundMedia,
-  isDurablyRetryableInboundMediaError,
-  isRecoverableMediaGroupError,
-} from "./bot-handlers.media.js";
+import { hasInboundMedia } from "./bot-handlers.media.js";
 import {
   latestPromptContextAmbientWatermark,
   latestPromptContextMinTimestampMs,
@@ -397,16 +393,15 @@ export function createTelegramInboundMedia({
         let media;
         try {
           media = await resolveMedia({ ctx, maxBytes: mediaMaxBytes, ...mediaRuntime });
+          mediaRuntime.abortSignal?.throwIfAborted();
         } catch (error) {
-          if (
-            mediaRuntime.abortSignal?.aborted ||
-            isDurablyRetryableInboundMediaError(error) ||
-            !isRecoverableMediaGroupError(error)
-          ) {
+          if (mediaRuntime.abortSignal?.aborted) {
             throw error;
           }
           // A failed attachment must not hide the rest of the album.
-          runtime.log?.(warn(`media group: skipping photo that failed to fetch: ${String(error)}`));
+          runtime.log?.(
+            warn(`media group: skipping ${nativeKind} that failed to fetch: ${String(error)}`),
+          );
         }
         if (media) {
           await recordMessageResolvedMedia({ msg, media, botUserId: ctx.me?.id });

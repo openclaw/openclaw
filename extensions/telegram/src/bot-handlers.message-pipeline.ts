@@ -49,6 +49,18 @@ import {
 } from "./prompt-media-path.js";
 
 const HOUR_MS = 60 * 60_000;
+// Attachment hydration plus reply-chain hydration must fit before ingress adoption stalls.
+const TELEGRAM_MEDIA_BATCH_BUDGET_MS = 2 * 60_000;
+
+function createMediaBatchBudget(): AbortSignal {
+  const timer = new AbortController();
+  // The unref'd timer cannot keep shutdown alive when a batch completes early.
+  setTimeout(
+    () => timer.abort(new Error("Telegram media batch budget expired")),
+    TELEGRAM_MEDIA_BATCH_BUDGET_MS,
+  ).unref?.();
+  return timer.signal;
+}
 
 function resolveRetainedTelegramMedia(params: {
   media?: TelegramResolvedMedia;
@@ -116,6 +128,7 @@ export function createTelegramMessagePipeline({
     return {
       ...mediaRuntimeOptions,
       abortSignal: abortSignals.length > 1 ? AbortSignal.any(abortSignals) : abortSignals[0],
+      budget: createMediaBatchBudget(),
     };
   };
   const sessionRuntime = createTelegramMessageSessionRuntime({
@@ -568,3 +581,4 @@ export function createTelegramMessagePipeline({
 }
 
 export type TelegramMessagePipeline = ReturnType<typeof createTelegramMessagePipeline>;
+export type TelegramMediaRuntime = ReturnType<TelegramMessagePipeline["resolveMediaRuntime"]>;

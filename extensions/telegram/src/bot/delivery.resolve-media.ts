@@ -142,7 +142,7 @@ async function resolveTelegramFileWithRetry(
     }
     const status = err instanceof GrammyError ? err.error_code : undefined;
     // Keep getFile failures on the same typed path as download failures so the
-    // handler can warn the user and durably retry transient spooled updates.
+    // handler can warn the user and deliver a failure-marked message.
     throw new MediaFetchError(
       status ? "http_error" : "fetch_failed",
       `Telegram getFile failed after retries: ${formatErrorMessage(err)}`,
@@ -321,8 +321,10 @@ export async function resolveMedia(params: {
   trustedLocalFileRoots?: readonly string[];
   dangerouslyAllowPrivateNetwork?: boolean;
   abortSignal?: AbortSignal;
+  /** Shared by all downloads in one ingress batch; expiry is not a replay. */
+  budget?: AbortSignal;
 }): Promise<(TelegramResolvedMedia & { path: string; fileName?: string }) | null> {
-  const { ctx, ...downloadOptions } = params;
+  const { ctx, budget, abortSignal, ...downloadOptions } = params;
   const msg = ctx.message;
   const sticker = msg.sticker;
   if (sticker?.is_animated || sticker?.is_video) {
@@ -335,12 +337,16 @@ export async function resolveMedia(params: {
   if (!metadata.fileRef?.file_id) {
     return null;
   }
-  const file = await resolveTelegramFileWithRetry(ctx, params.abortSignal);
+  const signal =
+    abortSignal && budget ? AbortSignal.any([abortSignal, budget]) : (abortSignal ?? budget);
+  signal?.throwIfAborted();
+  const file = await resolveTelegramFileWithRetry(ctx, signal);
   if (!file.file_path) {
     throw new Error(`Telegram getFile returned no file_path${sticker ? " for sticker" : ""}`);
   }
   const saved = await downloadAndSaveTelegramFile({
     ...downloadOptions,
+    abortSignal: signal,
     filePath: file.file_path,
     telegramFileName: metadata.fileName,
     mimeType: metadata.mimeType,

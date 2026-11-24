@@ -5,6 +5,7 @@ import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   holdTelegramMediaTimeouts,
+  resolveFlushTimerForDelay,
   flushChannelPostMediaGroup,
   withTelegramGetFileRetryClock,
 } from "./bot-media-timers.test-support.js";
@@ -332,13 +333,14 @@ describe("createTelegramBot channel_post media", () => {
 
   it.each([
     {
-      name: "retryable shutdown abort",
+      name: "abort-shaped download failure without owner cancellation",
       messageId: 98076,
       error: new MediaFetchError("fetch_failed", "aborted", {
         cause: Object.assign(new Error("aborted"), { name: "AbortError" }),
       }),
-      result: { kind: "failed-retryable", error: expect.any(MediaFetchError) },
-      warning: undefined,
+      result: { kind: "completed" },
+      warning: "⚠️ Failed to download media. Please try again.",
+      notice: "[media unavailable: download failed]",
     },
     {
       name: "permanent oversized media",
@@ -593,62 +595,83 @@ describe("createTelegramBot channel_post media", () => {
   it.each([
     { failure: "shutdown aborts a download", shutdownAbort: true },
     { failure: "Telegram temporarily throttles a download", shutdownAbort: false },
-  ])("durably retries every spooled album update when $failure", async ({ shutdownAbort }) => {
-    setOpenChannelPostConfig();
-    const shutdown = new AbortController();
-    saveRemoteMedia.mockImplementationOnce(async () => {
-      if (shutdownAbort) {
-        shutdown.abort();
-        const cause = Object.assign(new Error("aborted"), { name: "AbortError" });
-        throw new MediaFetchError("fetch_failed", "aborted", { cause });
-      }
-      throw new MediaFetchError("http_error", "rate limited", { status: 429 });
-    });
-
-    const setTimeoutSpy = holdTelegramMediaTimeouts(TELEGRAM_TEST_TIMINGS.mediaGroupFlushMs);
-    const enqueueSpy = vi.spyOn(keyedAsyncQueue, "enqueueKeyedTask");
-    try {
-      await createTelegramBot({
-        token: "tok",
-        testTimings: TELEGRAM_TEST_TIMINGS,
-        fetchAbortSignal: shutdown.signal,
+    { failure: "the shared budget expires", shutdownAbort: false, expiresBudget: true },
+  ])(
+    "settles a spooled album correctly when $failure",
+    async ({ shutdownAbort, expiresBudget }) => {
+      const firstMessageId = shutdownAbort ? 98079 : expiresBudget ? 98179 : 98279;
+      setOpenChannelPostConfig();
+      const shutdown = new AbortController();
+      saveRemoteMedia.mockImplementationOnce(async (params: { requestInit?: RequestInit }) => {
+        if (expiresBudget) {
+          const expire = resolveFlushTimerForDelay(setTimeoutSpy, 120_000);
+          expect(expire).toBeDefined();
+          expire!();
+          expect(params.requestInit?.signal?.aborted).toBe(true);
+          throw new MediaFetchError("fetch_failed", "attachment budget expired");
+        }
+        if (shutdownAbort) {
+          shutdown.abort();
+          const cause = Object.assign(new Error("aborted"), { name: "AbortError" });
+          throw new MediaFetchError("fetch_failed", "aborted", { cause });
+        }
+        throw new MediaFetchError("http_error", "rate limited", { status: 429 });
       });
-      const handler = getOnHandler("channel_post") as (
-        ctx: Record<string, unknown>,
-      ) => Promise<void>;
-      const runs = await Promise.all(
-        [98079, 98080].map((messageId, index) => {
-          const update = { update_id: messageId };
-          return runWithTelegramSpooledReplayUpdate(update, () =>
-            handler({
-              ...createChannelPostContext({
-                messageId,
-                ...(index === 0 ? { caption: "shutdown album" } : {}),
-                date: 1736380800 + index,
-                mediaGroupId: "shutdown-album-1",
-                photoFileId: `p${index + 1}`,
-              }),
-              update,
-            }),
-          );
-        }),
-      );
-      expect(runs.map(({ deferredWork }) => Boolean(deferredWork))).toEqual([true, true]);
-      // Replay participant processing already uses the overall test timeout.
-      await flushChannelPostMediaGroup(setTimeoutSpy, enqueueSpy, 0);
-      expect(await Promise.all(runs.map(({ deferredWork }) => deferredWork!.task))).toEqual([
-        { kind: "failed-retryable", error: expect.any(MediaFetchError) },
-        { kind: "failed-retryable", error: expect.any(MediaFetchError) },
-      ]);
-      expect(sendMessageSpy).not.toHaveBeenCalled();
-      expect(replySpy).not.toHaveBeenCalled();
-    } finally {
-      setTimeoutSpy.mockRestore();
-      enqueueSpy.mockRestore();
-    }
-  });
 
-  it("drops the media group when a non-recoverable media error occurs", async () => {
+      const setTimeoutSpy = holdTelegramMediaTimeouts(TELEGRAM_TEST_TIMINGS.mediaGroupFlushMs);
+      const enqueueSpy = vi.spyOn(keyedAsyncQueue, "enqueueKeyedTask");
+      try {
+        await createTelegramBot({
+          token: "tok",
+          testTimings: TELEGRAM_TEST_TIMINGS,
+          fetchAbortSignal: shutdown.signal,
+        });
+        const handler = getOnHandler("channel_post") as (
+          ctx: Record<string, unknown>,
+        ) => Promise<void>;
+        const runs = await Promise.all(
+          [firstMessageId, firstMessageId + 1].map((messageId, index) => {
+            const update = { update_id: messageId };
+            return runWithTelegramSpooledReplayUpdate(update, () =>
+              handler({
+                ...createChannelPostContext({
+                  messageId,
+                  ...(index === 0 ? { caption: "shutdown album" } : {}),
+                  date: 1736380800 + index,
+                  mediaGroupId: `spooled-album-${firstMessageId}`,
+                  photoFileId: `p${index + 1}`,
+                }),
+                update,
+              }),
+            );
+          }),
+        );
+        expect(runs.map(({ deferredWork }) => Boolean(deferredWork))).toEqual([true, true]);
+        // Replay participant processing already uses the overall test timeout.
+        await flushChannelPostMediaGroup(setTimeoutSpy, enqueueSpy, 0);
+        const settlements = await Promise.all(runs.map(({ deferredWork }) => deferredWork!.task));
+        if (shutdownAbort) {
+          expect(settlements).toEqual([
+            { kind: "failed-retryable", error: expect.any(MediaFetchError) },
+            { kind: "failed-retryable", error: expect.any(MediaFetchError) },
+          ]);
+          expect(sendMessageSpy).not.toHaveBeenCalled();
+          expect(replySpy).not.toHaveBeenCalled();
+        } else {
+          expect(settlements).toEqual([{ kind: "completed" }, { kind: "completed" }]);
+          expect(replySpy).toHaveBeenCalledOnce();
+          if (expiresBudget) {
+            expect(saveRemoteMedia).toHaveBeenCalledOnce();
+          }
+        }
+      } finally {
+        setTimeoutSpy.mockRestore();
+        enqueueSpy.mockRestore();
+      }
+    },
+  );
+
+  it("delivers an album when a member getFile returns no path", async () => {
     replySpy.mockReset();
     setOpenChannelPostConfig();
     saveRemoteMedia.mockResolvedValueOnce({
@@ -680,14 +703,9 @@ describe("createTelegramBot channel_post media", () => {
       expect(replySpy).not.toHaveBeenCalled();
       await flushChannelPostMediaGroup(setTimeoutSpy, enqueueSpy, 1_075);
 
-      expect(runtimeError).toHaveBeenCalledWith(
-        expect.stringContaining("media group handler failed"),
-      );
-      expect(runtimeError).toHaveBeenCalledWith(
-        expect.stringContaining("Telegram getFile returned no file_path"),
-      );
+      expect(runtimeError).not.toHaveBeenCalled();
       expect(saveRemoteMedia).toHaveBeenCalledTimes(1);
-      expect(replySpy).not.toHaveBeenCalled();
+      expect(replySpy).toHaveBeenCalledOnce();
     } finally {
       setTimeoutSpy.mockRestore();
       enqueueSpy.mockRestore();

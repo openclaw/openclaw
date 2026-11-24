@@ -893,7 +893,7 @@ describe("Telegram durable ingress coalescing", () => {
     await telegramTransport.close();
   });
 
-  it("keeps a forwarded burst pending when its deferred attachment download fails transiently", async () => {
+  it("delivers a forwarded burst after a transient attachment failure", async () => {
     const downloadError = new MediaFetchError("http_error", "Telegram file download HTTP 502", {
       status: 502,
     });
@@ -922,28 +922,12 @@ describe("Telegram durable ingress coalescing", () => {
     }
 
     expect(saveRemoteMedia).toHaveBeenCalledOnce();
-    expect(downstreamTurns).not.toHaveBeenCalled();
-    const queue = openTelegramIngressQueue({ stateDir });
-    expect(await queue.listClaims()).toEqual([]);
-    expect(await queue.listFailed?.({ limit: "all" })).toEqual([]);
-    expect(await queue.listPending({ limit: "all" })).toMatchObject([
-      { id: telegramQueueEventId(601), attempts: 1, lastError: downloadError.message },
-      { id: telegramQueueEventId(602), attempts: 1, lastError: downloadError.message },
-    ]);
-    // Released dispatch claims let the replay process both messages again.
-    const replayGuard = messageDispatchDedupe.createTelegramMessageDispatchReplayGuard();
-    for (const update of [
-      forwardedTextUpdate({ updateId: 601, messageId: 1, text: "Forwarded context" }),
-      forwardedPhotoUpdate({ updateId: 602, messageId: 2 }),
-    ]) {
-      expect(
-        await replayGuard.hasRecent({
-          accountId: "default",
-          botUserId: telegramBotInfoForTest.id,
-          msg: update.message,
-        }),
-      ).toBe(false);
-    }
+    expect(downstreamTurns).toHaveBeenCalledOnce();
+    expect(downstreamTurns.mock.calls[0]?.[0].Body).toContain("Forwarded context");
+    expect(downstreamTurns.mock.calls[0]?.[0].Body).toContain(
+      "[media unavailable: download failed]",
+    );
+    await assertSpoolTombstoned({ stateDir, updateIds: [601, 602] });
   });
 
   it("keeps a text update pending when shutdown aborts the turn before adoption", async () => {

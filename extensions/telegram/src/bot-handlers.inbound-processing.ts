@@ -14,13 +14,12 @@ import {
   createTelegramInboundMedia,
   type TelegramMediaGroupInput,
 } from "./bot-handlers.inbound-media.js";
-import {
-  isDurablyRetryableInboundMediaError,
-  isMediaSizeLimitError,
-  TelegramBotApiFileTooLargeError,
-} from "./bot-handlers.media.js";
+import { isMediaSizeLimitError, TelegramBotApiFileTooLargeError } from "./bot-handlers.media.js";
 import { promptContextBoundaryOptions } from "./bot-handlers.message-context.js";
-import type { TelegramMessagePipeline } from "./bot-handlers.message-pipeline.js";
+import type {
+  TelegramMediaRuntime,
+  TelegramMessagePipeline,
+} from "./bot-handlers.message-pipeline.js";
 import type {
   RegisterTelegramHandlerParams,
   TelegramInboundDisposition,
@@ -32,7 +31,6 @@ import type {
 import {
   createTelegramSpooledReplayDeferredParticipant,
   getTelegramSpooledReplayLifecycle,
-  isTelegramSpooledReplayUpdate,
   recordTelegramMessageProcessingResult,
 } from "./bot-processing-outcome.js";
 import { resolveMedia } from "./bot/delivery.resolve-media.js";
@@ -166,11 +164,9 @@ export function createTelegramInboundProcessing({
     }
 
     const nativeMedia = resolveTelegramPrimaryMedia(msg);
-    const replayingSpooledUpdate = isTelegramSpooledReplayUpdate(ctx.update);
     const hydrateMedia = async (
-      abortSignals: readonly AbortSignal[],
+      mediaRuntime: TelegramMediaRuntime,
     ): Promise<TelegramInboundMediaHydration> => {
-      const mediaRuntime = resolveMediaRuntime(...abortSignals);
       let media: Awaited<ReturnType<typeof resolveMedia>> = null;
       let unavailable: TelegramMediaRef["unavailable"];
       try {
@@ -191,7 +187,7 @@ export function createTelegramInboundProcessing({
           await recordMessageResolvedMedia({ msg, media, botUserId: ctx.me?.id });
         }
       } catch (mediaErr) {
-        if (mediaRuntime.abortSignal?.aborted && isDurablyRetryableInboundMediaError(mediaErr)) {
+        if (mediaRuntime.abortSignal?.aborted) {
           // Abort mid-media-resolution must stay retryable for live updates too;
           // a clean claim release would settle the update as handled and silently
           // drop the message during shutdown or deadline cancellation.
@@ -215,9 +211,6 @@ export function createTelegramInboundProcessing({
           logger.warn({ chatId, error: String(mediaErr) }, oversizeLogMessage);
         } else {
           logger.warn({ chatId, error: String(mediaErr) }, "media fetch failed");
-          if (replayingSpooledUpdate && isDurablyRetryableInboundMediaError(mediaErr)) {
-            return { kind: "retry", error: mediaErr };
-          }
           unavailable = { reason: "download-failed" };
           if (mediaDisposition !== "silent-ingest") {
             await sendMediaWarning(mediaInput, "⚠️ Failed to download media. Please try again.");
@@ -269,7 +262,7 @@ export function createTelegramInboundProcessing({
       // Downloading here would spend the forward quiet window and split the burst.
       debounceEntry.hydrateMedia = hydrateMedia;
     } else {
-      const hydration = await hydrateMedia([]);
+      const hydration = await hydrateMedia(resolveMediaRuntime());
       if (hydration.kind === "retry") {
         recordTelegramMessageProcessingResult({ kind: "failed-retryable", error: hydration.error });
         releaseDispatchDedupeClaims(dispatchDedupeClaims, hydration.error);
