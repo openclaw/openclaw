@@ -1,6 +1,9 @@
 import { expect, it, vi } from "vitest";
 import type { RealtimeTranscriptionProviderPlugin } from "../../plugins/types.js";
-import { resolveConfiguredRealtimeTranscriptionProvider } from "./session-config.js";
+import {
+  buildTalkTranscriptionConfig,
+  resolveConfiguredRealtimeTranscriptionProvider,
+} from "./session-config.js";
 
 const mocks = vi.hoisted(() => {
   // "saved-only" is ready only once named, like a provider whose one key is a saved key.
@@ -38,4 +41,31 @@ it("tells a transcription provider it is named, and not during automatic selecti
     ).provider.id;
   expect(await select()).toBe("keyed");
   expect(await select("saved-only")).toBe("saved-only");
+});
+
+const voiceCall = {
+  plugins: { entries: { "voice-call": { config: { streaming: { provider: "keyed" } } } } },
+};
+
+it("keeps the Talk media path selected even when no media model is available", async () => {
+  const config = { ...voiceCall, talk: { transcription: { provider: "media-understanding" } } };
+  await expect(
+    buildTalkTranscriptionConfig(config, undefined, undefined, undefined, Promise.resolve(undefined)),
+  ).resolves.toMatchObject({ source: "media-understanding", file: undefined });
+  await expect(buildTalkTranscriptionConfig(config, "saved-only")).resolves.toMatchObject({
+    source: "streaming",
+    provider: "saved-only",
+  });
+});
+
+it("uses the Talk streaming provider before the Voice Call provider", async () => {
+  const config = { ...voiceCall, talk: { transcription: { provider: "saved-only" } } };
+  await expect(buildTalkTranscriptionConfig(config)).resolves.toMatchObject({
+    source: "streaming",
+    provider: "saved-only",
+  });
+  await expect(buildTalkTranscriptionConfig(voiceCall)).resolves.toMatchObject({
+    source: "streaming",
+    provider: "keyed",
+  });
 });

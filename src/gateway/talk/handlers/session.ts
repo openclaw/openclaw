@@ -432,7 +432,7 @@ export const talkSessionHandlers: GatewayRequestHandlers = {
           params.model,
           target?.agentId,
         );
-        if (transcriptionConfig.file && !transcriptionConfig.file.ready) {
+        if (transcriptionConfig.source === "media-understanding" && !transcriptionConfig.file?.ready) {
           throw new Error(
             "No configured audio transcription provider is available; check tools.media.models",
           );

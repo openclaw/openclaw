@@ -1632,6 +1632,26 @@ describe("talk.session unified handlers", () => {
     },
   );
 
+  it("does not start Voice Call streaming when the selected Talk media path is unavailable", async () => {
+    mocks.listRealtimeTranscriptionProviders.mockReturnValue([
+      { id: "xai", label: "xAI Realtime Transcription", isConfigured: () => true },
+    ] as never);
+
+    const respond = await invokeTalkHandler("talk.session.create", {
+      params: { mode: "transcription", transport: "gateway-relay", brain: "none" },
+      config: {
+        ...voiceCallConfig({ streaming: { provider: "xai" } }),
+        talk: { transcription: { provider: "media-understanding" } },
+      },
+    });
+
+    expectRespondError(respond, {
+      code: ErrorCodes.UNAVAILABLE,
+      message: "Error: No configured audio transcription provider is available; check tools.media.models",
+    });
+    expect(mocks.createTalkTranscriptionRelaySession).not.toHaveBeenCalled();
+  });
+
   it("creates transcription sessions with an aliased provider missing from the active registry", async () => {
     const openai = {
       id: "openai",

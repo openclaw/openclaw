@@ -88,6 +88,15 @@ describe("talk.catalog handler", () => {
     mocks.listRealtimeVoiceProviders.mockReturnValue([]);
   });
 
+  it("reports an explicit media path as unavailable without a configured audio model", async () => {
+    const respond = await invokeTalkHandler("talk.catalog", {
+      config: { talk: { transcription: { provider: "media-understanding" } } },
+    });
+    expectRespondOk(respond, {
+      transcription: { source: "media-understanding", ready: false, providers: [] },
+    });
+  });
+
   it("reads independent provider sections while speech availability is pending", async () => {
     const realtimeRead = createDeferred<boolean>();
     mocks.listSpeechProviders.mockReturnValue([
