@@ -2655,7 +2655,7 @@ function recoveryFixedManifest(manifest) {
   return JSON.stringify(sortReleaseJsonValueKeys(fixed));
 }
 
-async function loadRecoveryEvidence({
+function loadRecoveryProducerEvidence({
   client,
   selectedRun,
   runId,
@@ -2663,8 +2663,6 @@ async function loadRecoveryEvidence({
   manifestPath,
   recoveryDraft,
   expectedRunAttempts,
-  verifier,
-  trustedIdentity,
 }) {
   const retained =
     recoveryDraft ?? client.loadManifest(runId, selectedRun.run_attempt, manifestPath);
@@ -2675,14 +2673,29 @@ async function loadRecoveryEvidence({
   const producer = recovery.producer;
   if (
     String(producer?.runId) !== runId ||
+    String(selectedRun.id) !== runId ||
     producer.repository !== repository ||
     producer.runAttempt !== selectedRun.run_attempt ||
     producer.workflowSha !== selectedRun.head_sha ||
     producer.workflowHeadBranch !== selectedRun.head_branch ||
-    producer.workflowPath !== workflowPath(selectedRun)
+    producer.workflowPath !== workflowPath(selectedRun) ||
+    (!recoveryDraft && (selectedRun.status !== "completed" || selectedRun.conclusion !== "success"))
   ) {
     throw new Error("Recovery producer identity changed");
   }
+  client.verifyReleaseRecoveryProducer({ producer, completed: !recoveryDraft });
+  consumeExpectedRunAttempt(expectedRunAttempts, runId, producer.runAttempt, "recovery producer");
+  if (!recoveryDraft) {
+    validateManifestArtifactBinding(retained.artifact, retained.manifest, selectedRun, runId);
+  }
+  return retained;
+}
+
+async function loadRecoveryEvidence({ verifier, trustedIdentity, ...options }) {
+  const { client, repository, runId, selectedRun } = options;
+  const retained = loadRecoveryProducerEvidence(options);
+  const { recovery } = retained.manifest;
+  const { producer } = recovery;
   if (producer.workflowSha !== verifier.sourceSha) {
     const lineage = client.compareCommitLineage(producer.workflowSha, verifier.sourceSha);
     if (
@@ -2697,11 +2710,6 @@ async function loadRecoveryEvidence({
     client.getRef(trustedIdentity.fullRef)?.object?.sha !== trustedIdentity.sha
   ) {
     throw new Error("Protected publication tooling tag changed");
-  }
-  client.verifyReleaseRecoveryProducer({ producer, completed: !recoveryDraft });
-  consumeExpectedRunAttempt(expectedRunAttempts, runId, producer.runAttempt, "recovery producer");
-  if (!recoveryDraft) {
-    validateManifestArtifactBinding(retained.artifact, retained.manifest, selectedRun, runId);
   }
   const sourceId = normalizeRequiredRunId(recovery.sourceRunId, "original qualification run");
   if (sourceId === runId) {
@@ -3320,13 +3328,22 @@ export async function validateReleaseRunEvidence(
       "Recovery is an explicit original-plan aggregate, not parent discovery or reuse",
     );
   }
+  // A sealed recovery may be checked against the release target without
+  // requesting reuse of a different parent or candidate.
+  if (
+    recovery &&
+    expectedTargetSha !== undefined &&
+    currentEvidence.manifest.targetSha !== normalizeSha(expectedTargetSha, "expected target SHA")
+  ) {
+    throw new Error("Recovery target differs from the consumer");
+  }
   const requestedReuse = {
     expectedChangedPaths,
     expectedEvidencePolicy,
     expectedEvidenceSha,
     expectedRootRunId,
     expectedSelectedRunId,
-    expectedTargetSha,
+    expectedTargetSha: recovery ? undefined : expectedTargetSha,
   };
   let requestedReuseDelta;
   if (reuseRequest !== undefined) {
@@ -4316,6 +4333,35 @@ export async function runReleaseRecoveryCli(
   return true;
 }
 
+// Acquisition binds the exact producer artifact; the publisher must still run
+// strict qualification and publication controls against the acquired bytes.
+export async function acquirePublicationManifest(
+  { repository, runId, expectedRunAttempts },
+  client,
+) {
+  const evidenceClient = client ?? createReleaseEvidenceClient(repository);
+  const selectedRun = await evidenceClient.getRun(runId);
+  const attempts = normalizeExpectedRunAttempts(expectedRunAttempts);
+  if (workflowPath(selectedRun) === ".github/workflows/openclaw-release-prepare.yml") {
+    const retained = loadRecoveryProducerEvidence({
+      client: evidenceClient,
+      selectedRun,
+      repository,
+      runId,
+      expectedRunAttempts: attempts,
+    });
+    return sortReleaseJsonValueKeys(retained.manifest);
+  }
+  const evidence = await loadValidatedParentEvidence({
+    client: evidenceClient,
+    preloadedRun: selectedRun,
+    repository,
+    runId,
+    expectedRunAttempts: attempts,
+  });
+  return evidence.manifestJson;
+}
+
 async function main() {
   if (await runReleaseRecoveryCli(process.argv.slice(2))) {
     return;
@@ -4331,15 +4377,7 @@ async function main() {
   const { repository, runId } = options;
 
   if (options.acquirePublicationManifest) {
-    // Acquisition is not a qualification verdict. Every publisher still runs
-    // the strict validation owner and its existing approval/consumption gates.
-    const evidence = await loadValidatedParentEvidence({
-      client: createReleaseEvidenceClient(repository),
-      repository,
-      runId,
-      expectedRunAttempts: normalizeExpectedRunAttempts(options.expectedRunAttempts),
-    });
-    console.log(JSON.stringify(evidence.manifestJson, null, 2));
+    console.log(JSON.stringify(await acquirePublicationManifest(options), null, 2));
     return;
   }
 
