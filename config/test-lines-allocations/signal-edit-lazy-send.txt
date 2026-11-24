@@ -1,0 +1,2 @@
+40
+# Signal sender lazy-load regression: import the real channel, discover edit, then execute one edit through the real sender and loopback container transport; observe module loading without replacing sender behavior.
