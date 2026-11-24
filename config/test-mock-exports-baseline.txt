@@ -1015,7 +1015,6 @@
 ["src/agents/agent-bundle-mcp-materialize.identity.test.ts","./agent-bundle-mcp-manager-cleanup.js","9b8821a7209560d6ff6cfd0719df018aac30b41d69c9ce7c6934e11e0a495c8c",1]
 ["src/agents/agent-bundle-mcp-materialize.identity.test.ts","./agent-bundle-mcp-requester-connect.js","3a6ff430a304c5ba7bb683097429cf8f40f3f243f9258f9aa69c5e0abc39a5a8",1]
 ["src/agents/agent-bundle-mcp-materialize.identity.test.ts","./mcp-app-sandbox.js","52be6068afb7198a008f55cfecf41fe18de34c98dfd40a1b162d9337b55d2f7b",1]
-["src/agents/agent-bundle-mcp-materialize.identity.test.ts","./mcp-client-elicitation.js","bbe209e50e91839e1545ae38f9ef05cef40aeff60c2006f21b320b060d398037",1]
 ["src/agents/agent-bundle-mcp-materialize.identity.test.ts","./mcp-content.js","4fac1775a8cf23486de6388f49c7dbfb5cb1dec8a9a1ae0289e39f10da3ec942",1]
 ["src/agents/agent-bundle-mcp-materialize.identity.test.ts","./mcp-form-resource-upload.js","3e073c27179fb9f4d42aa0b5bd5f32c9c8c1ff3d342ac287fadf88289059a7c6",1]
 ["src/agents/agent-bundle-mcp-materialize.identity.test.ts","./mcp-ui-resource.js","26da7aee550ffe932de2d98dffefcba280be114b0ceb5c80b61b07126ad66318",1]

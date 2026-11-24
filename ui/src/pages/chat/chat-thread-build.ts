@@ -33,7 +33,11 @@ import {
 } from "./chat-progress.ts";
 import { projectResolvedQuestionPrompts } from "./chat-question-placement.ts";
 import { activeChatReasoning } from "./chat-reasoning.ts";
-import { hasHandoffToolCall, pendingSessionsYield } from "./chat-sessions-yield.ts";
+import {
+  hasHandoffToolCall,
+  pendingSessionsYield,
+  toolCardNeedsUserAction,
+} from "./chat-sessions-yield.ts";
 import {
   createSubmittedModelNoticeProjector,
   projectChatSystemNotice,
@@ -167,10 +171,8 @@ export function buildChatItems(
   };
   const canvasIdentities = new Set<string>();
   const normalizedHistory = history.map(safeNormalizeMessage);
-  const permissionInMessage = (message: unknown) =>
-    extractToolCardsCached(message).some((card) =>
-      readNodePermissionRequest(asRecord(card.details)?.permissionMissing),
-    );
+  const actionRequiredInMessage = (message: unknown) =>
+    extractToolCardsCached(message).some(toolCardNeedsUserAction);
   const automationTools = mode === "history" ? [] : tools;
   const automation =
     props.projectAutomations &&
@@ -331,7 +333,7 @@ export function buildChatItems(
       isToolResult &&
       !(raw.role === "assistant" && extractTextCached(msg)?.trim()) &&
       !hasHandoffToolCall(msg) &&
-      !permissionInMessage(msg) &&
+      !actionRequiredInMessage(msg) &&
       // A resumed run's first row keeps its Resumed rule; its hidden tools render nothing.
       !readProjectedContinuation(msg)
     ) {
@@ -548,7 +550,7 @@ export function buildChatItems(
       tool &&
       (props.showToolCalls ||
         hasHandoffToolCall(tool.projection.item.message) ||
-        permissionInMessage(tool.projection.item.message))
+        actionRequiredInMessage(tool.projection.item.message))
     ) {
       tool.projection.bounds = resolveProjectionBounds(
         tool.runId,

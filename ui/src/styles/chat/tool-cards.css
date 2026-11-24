@@ -159,8 +159,7 @@
 }
 
 .chat-tool-row--file,
-.chat-tool-row--subagent,
-.chat-tool-row--connect {
+.chat-tool-row--subagent {
   position: relative;
 }
 
@@ -179,54 +178,14 @@
 }
 
 .chat-tool-row--file > :not(.chat-tool-row__toggle),
-.chat-tool-row--subagent > :not(.chat-tool-row__toggle),
-.chat-tool-row--connect > :not(.chat-tool-row__toggle) {
+.chat-tool-row--subagent > :not(.chat-tool-row__toggle) {
   position: relative;
   pointer-events: none;
 }
 
 .chat-tool-row--file .chat-tool-row__file-link,
-.chat-tool-row--subagent .chat-tool-row__subagent-link,
-.chat-tool-row--connect .chat-tool-row__connect {
+.chat-tool-row--subagent .chat-tool-row__subagent-link {
   pointer-events: auto;
-}
-
-.chat-tool-row__connect {
-  display: inline-flex;
-  flex: none;
-  align-items: center;
-  gap: 4px;
-  margin-inline-start: 6px;
-  padding: 0 8px 0 7px;
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-full);
-  color: var(--text);
-  background: var(--bg-elevated);
-  line-height: 20px;
-  text-decoration: none;
-  cursor: pointer;
-  transition:
-    border-color 150ms ease-out,
-    background-color 150ms ease-out;
-}
-
-.chat-tool-row__connect svg {
-  width: 12px;
-  height: 12px;
-}
-
-.chat-tool-row__connect-host {
-  color: var(--chat-tool-secondary-color);
-}
-
-.chat-tool-row__connect:hover {
-  border-color: var(--border-hover);
-  background: var(--bg-hover);
-}
-
-.chat-tool-row__connect:focus-visible {
-  outline: 2px solid var(--ring);
-  outline-offset: 1px;
 }
 
 .chat-tool-row__file-link,
@@ -290,7 +249,7 @@
 }
 
 .chat-inline-disclosure[aria-expanded="true"] .chat-tool-row__chevron,
-:is(.chat-tool-row--file, .chat-tool-row--subagent, .chat-tool-row--connect):has(
+:is(.chat-tool-row--file, .chat-tool-row--subagent):has(
     .chat-tool-row__toggle[aria-expanded="true"]
   )
   .chat-tool-row__chevron {

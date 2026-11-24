@@ -30,17 +30,22 @@ export type OperatorMcpConnectContext = {
   toolDenylist?: string[];
 };
 
+function canOfferOperatorMcpSignIn(
+  context: OperatorMcpConnectContext | undefined,
+): context is OperatorMcpConnectContext {
+  return (
+    context?.senderIsOwner === true &&
+    context.chatType === "direct" &&
+    context.isTurnTainted?.() === false
+  );
+}
+
 /** Shared sign-in is turn-bound; never store its authority on the session runtime. */
 async function createOperatorMcpConnect(
   runtime: SessionMcpRuntime,
   context: OperatorMcpConnectContext | undefined,
 ): Promise<RequesterMcpConnect | undefined> {
-  if (
-    !context ||
-    context.senderIsOwner !== true ||
-    context.chatType !== "direct" ||
-    context.isTurnTainted?.() !== false
-  ) {
+  if (!canOfferOperatorMcpSignIn(context)) {
     return undefined;
   }
   const { loaded, fingerprint, safeServerNamesByServer } = loadSessionMcpConfig({
@@ -150,6 +155,7 @@ export async function resolveMcpConnectSurface(
           }
         : undefined;
     },
-    withSignIn: (tools: AnyAgentTool[]) => withMcpSignInCards(tools, context),
+    withSignIn: (tools: AnyAgentTool[]) =>
+      withMcpSignInCards(tools, () => canOfferOperatorMcpSignIn(context)),
   };
 }

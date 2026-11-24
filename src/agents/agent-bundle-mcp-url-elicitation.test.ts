@@ -5,6 +5,7 @@ import { afterEach, expect, it } from "vitest";
 import { materializeBundleMcpToolsForRun } from "./agent-bundle-mcp-materialize.js";
 import { createSessionMcpRuntime } from "./agent-bundle-mcp-runtime.js";
 import { readMcpConnectAction } from "./mcp-connect-action.js";
+import { consumeMcpCodeModeGuestResult } from "./mcp-content.js";
 
 const signInUrl = "https://tracker.example.test/signin?elicitation=renew-1";
 const server = `
@@ -30,7 +31,10 @@ createInterface({ input: process.stdin }).on("line", (line) => {
     send({ jsonrpc: "2.0", id: 900, method: "elicitation/create", params: elicitation });
   } else if (m.id === 900) {
     appendFileSync(log, JSON.stringify({ answer: m.result }) + "\\n");
-    send({ jsonrpc: "2.0", id: call, result: { content: [{ type: "text", text: "Not signed in." }], isError: true } });
+    send({ jsonrpc: "2.0", id: call, result: {
+      content: [{ type: "text", text: "Only public issues are available." }],
+      structuredContent: { issues: [{ id: "PUBLIC-1" }] },
+    } });
   } else if (m.id !== undefined) {
     send({ jsonrpc: "2.0", id: m.id, result: {} });
   }
@@ -66,7 +70,7 @@ async function callTracker(mode: "request" | "error", chatType: "direct" | "grou
     await fs.rm(dir, { recursive: true, force: true });
   });
   const tool = tools.tools.find((entry) => entry.name === "tracker__list_issues")!;
-  const result = await tool.execute("call-1", {}, undefined).catch((error: unknown) => error);
+  const result = await tool.execute("call-1", {}, undefined);
   const log = (await fs.readFile(logPath, "utf8"))
     .trim()
     .split("\n")
@@ -74,12 +78,23 @@ async function callTracker(mode: "request" | "error", chatType: "direct" | "grou
   return { result, log };
 }
 
-it("shows a URL elicitation as the Connect card on an owner's direct chat and answers cancel", async () => {
+it("answers URL elicitation with cancel and retains the completed fallback alongside Connect", async () => {
   const { result, log } = await callTracker("request", "direct");
   expect(log).toEqual([{ caps: { elicitation: { url: {} } } }, { answer: { action: "cancel" } }]);
   expect(readMcpConnectAction(result)).toEqual({
     serverName: "tracker",
     authorizationUrl: signInUrl,
+  });
+  expect(result).toMatchObject({
+    content: [
+      { type: "text", text: 'structuredContent:\n{"issues":[{"id":"PUBLIC-1"}]}' },
+      { type: "text", text: "Only public issues are available." },
+    ],
+    details: { mcpTool: "list_issues", structuredContent: { issues: [{ id: "PUBLIC-1" }] } },
+  });
+  expect(consumeMcpCodeModeGuestResult(result)).toEqual({
+    content: [{ type: "text", text: "Only public issues are available." }],
+    structuredContent: { issues: [{ id: "PUBLIC-1" }] },
   });
 });
 

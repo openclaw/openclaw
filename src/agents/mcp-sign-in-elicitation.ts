@@ -1,5 +1,5 @@
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { getPluginToolMeta } from "../plugins/tool-metadata.js";
-import type { OperatorMcpConnectContext } from "./agent-bundle-mcp-operator-connect.js";
 import { runWithMcpUrlPresenter } from "./mcp-client-elicitation.js";
 import { setMcpCodeModeGuestResultFromAgentResult } from "./mcp-content.js";
 import type { AgentToolResult } from "./runtime/index.js";
@@ -15,7 +15,11 @@ function buildSignInResult(serverName: string, url: string): AgentToolResult<unk
           "The user sees a sign-in button for it. Ask the user to sign in, then try again.",
       },
     ],
-    details: { mcpServer: serverName, mcpConnect: { serverName, authorizationUrl: url } },
+    details: {
+      status: "error",
+      mcpServer: serverName,
+      mcpConnect: { serverName, authorizationUrl: url },
+    },
   });
 }
 
@@ -26,7 +30,7 @@ function buildSignInResult(serverName: string, url: string): AgentToolResult<unk
  */
 export function withMcpSignInCards(
   tools: AnyAgentTool[],
-  turn: OperatorMcpConnectContext | undefined,
+  canOfferSignIn: () => boolean,
 ): AnyAgentTool[] {
   for (const tool of tools) {
     const mcp = getPluginToolMeta(tool)?.mcp;
@@ -37,17 +41,19 @@ export function withMcpSignInCards(
     tool.execute = async (...args) => {
       let url: string | undefined;
       const present = (requested: string) => {
-        if (
-          turn?.senderIsOwner === true &&
-          turn.chatType === "direct" &&
-          turn.isTurnTainted?.() === false
-        ) {
+        if (canOfferSignIn()) {
           url = requested;
         }
       };
       try {
         const result = await runWithMcpUrlPresenter(present, () => execute(...args));
-        return url ? buildSignInResult(mcp.serverName, url) : result;
+        if (url && canOfferSignIn()) {
+          result.details = {
+            ...asOptionalRecord(result.details),
+            mcpConnect: { serverName: mcp.serverName, authorizationUrl: url },
+          };
+        }
+        return result;
       } catch (error) {
         const [{ UrlElicitationRequiredError }, { compileStructuredInputUrl }] = await Promise.all([
           import("@modelcontextprotocol/client"),
@@ -55,20 +61,20 @@ export function withMcpSignInCards(
         ]);
         const request =
           error instanceof UrlElicitationRequiredError ? error.elicitations[0] : undefined;
-        const input = request
-          ? compileStructuredInputUrl({
-              ...request,
-              fallbackMessage: "MCP server needs sign-in",
-              protocolName: "MCP",
-            })
-          : undefined;
-        if (input?.kind === "ready" && input.plan.kind === "url" && input.plan.question.url) {
-          present(input.plan.question.url);
-        }
-        if (!url) {
+        if (!request) {
           throw error;
         }
-        return buildSignInResult(mcp.serverName, url);
+        const input = compileStructuredInputUrl({
+          ...request,
+          fallbackMessage: "MCP server needs sign-in",
+          protocolName: "MCP",
+        });
+        const signInUrl =
+          input.kind === "ready" && input.plan.kind === "url" ? input.plan.question.url : undefined;
+        if (!signInUrl || !canOfferSignIn()) {
+          throw error;
+        }
+        return buildSignInResult(mcp.serverName, signInUrl);
       }
     };
   }
