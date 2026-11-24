@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHmac, randomBytes } from "node:crypto";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type {
   SessionCatalogHost,
@@ -71,14 +71,22 @@ function readAllowedIds(
   );
 }
 
-function projectItem(item: SessionCatalogTranscriptItem): CatalogExportItem {
+function projectItem(
+  item: SessionCatalogTranscriptItem,
+  salt: Buffer,
+  sourceKey: string,
+): CatalogExportItem {
   if (item.type !== "userMessage" && item.type !== "agentMessage") {
     return { type: item.type, ...(item.truncated ? { truncated: true } : {}) };
   }
   const text = item.text && truncateUtf16Safe(item.text, 16_384);
   // A conversation-local exporter needs equality, never profile names or account identifiers.
   const speakerId = item.sender
-    ? createHash("sha256").update(JSON.stringify(item.sender.identity)).digest("hex")
+    ? createHmac("sha256", salt)
+        .update(sourceKey)
+        .update("\0")
+        .update(JSON.stringify(item.sender.identity, Object.keys(item.sender.identity).sort()))
+        .digest("hex")
     : undefined;
   return {
     type: item.type,
@@ -137,6 +145,7 @@ export function createPluginServiceCatalogExports(params: {
         };
         const key = (hostId: string, threadId: string, sourceHomeId?: string) =>
           JSON.stringify([hostId, threadId, sourceHomeId ?? null]);
+        const speakerSalt = randomBytes(32);
         let latest = new Set<string>();
         const assertSource = (locator: Omit<SessionCatalogLocator, "catalogId">) => {
           assertCurrent(locator.agentId);
@@ -255,7 +264,13 @@ export function createPluginServiceCatalogExports(params: {
                 hostId: page.hostId,
                 threadId: page.threadId,
                 nextCursor: page.nextCursor,
-                items: page.items.map(projectItem),
+                items: page.items.map((item) =>
+                  projectItem(
+                    item,
+                    speakerSalt,
+                    key(request.hostId, request.threadId, request.sourceHomeId),
+                  ),
+                ),
               };
             },
           },

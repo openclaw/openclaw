@@ -108,8 +108,12 @@ describe("service-owned catalog exports", () => {
       { type: "toolCall" },
     ]);
     expect(f.read.mock.calls[0]?.[0]).toMatchObject(f.request);
-    f.exports.listCatalogs();
+    const replacement = f.exports.listCatalogs()[0]!;
     await expect(catalog!.read(f.request)).rejects.toThrow("expired");
+    await replacement.list({});
+    expect((await replacement.read(f.request)).items[0]?.speakerId).not.toBe(
+      page.items[0]?.speakerId,
+    );
   });
 
   it.each(["source replaced", "consent removed", "service stopped"] as const)(
