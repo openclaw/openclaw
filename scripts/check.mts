@@ -100,6 +100,8 @@ export async function main(argv = process.argv.slice(2)) {
     return;
   }
 
+  const selected = new Set(args.stages);
+  const runsPreflight = selected.size === 0 || selected.has("preflight");
   const tailChecks = [
     { name: "webhook body guard", args: ["lint:webhook:no-low-level-body-read"] },
     { name: "runtime action config guard", args: ["check:no-runtime-action-load-config"] },
@@ -119,7 +121,11 @@ export async function main(argv = process.argv.slice(2)) {
     { name: "pairing store guard", args: ["lint:auth:no-pairing-store-group"] },
     { name: "pairing account guard", args: ["lint:auth:pairing-account-scope"] },
     args.includeArchitecture
-      ? { name: "architecture import cycles", args: ["check:architecture"] }
+      ? {
+          name: "architecture import cycles",
+          // The completed preflight already enforced the legacy-store guard.
+          args: [runsPreflight ? "check:architecture:after-preflight" : "check:architecture"],
+        }
       : { name: "runtime import cycles", args: ["check:import-cycles"] },
   ].filter((command) => command !== null);
 
@@ -163,7 +169,6 @@ export async function main(argv = process.argv.slice(2)) {
     },
   ];
 
-  const selected = new Set(args.stages);
   const unknown = args.stages.find((key) => !stages.some((stage) => stage.key === key));
   if (unknown !== undefined) {
     console.error(`unknown stage: ${unknown}\n\n${usage()}`);

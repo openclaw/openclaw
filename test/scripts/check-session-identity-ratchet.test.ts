@@ -8,12 +8,18 @@ import { fixtureFiles } from "./script-fixture-files.test-support.js";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => vi.restoreAllMocks());
 
-it("distinguishes absent IDs from comparisons with another identity", () => {
+it("distinguishes ID presence and type checks from identity comparisons", () => {
   const cases: [string, number][] = [
     ["target.sessionId !== undefined", 0],
     ["undefined !== target.sessionId", 0],
     ["target.sessionId === null", 0],
     ["null === target.sessionId", 0],
+    ['typeof entry.sessionId === "string"', 0],
+    ['typeof origin.runId !== "string"', 0],
+    ["typeof target.generation === 'number'", 0],
+    ['typeof target.sessionId === "string" && previous.sessionId === target.sessionId', 2],
+    ['typeof target.sessionId === "identity"', 1],
+    ['typeof expectedSessionId === "string"', 1],
     ["target.sessionId !== undefined && previous.sessionId === target.sessionId", 2],
     ["target.sessionId === undefinedId", 1],
     ["target.sessionId === value.undefined", 1],

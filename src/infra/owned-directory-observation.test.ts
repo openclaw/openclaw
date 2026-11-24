@@ -349,7 +349,13 @@ it("ignores ancestor activity while observing missing subtree creation and repla
   expect(ancestor?.[0]).toBe(root);
   const close = vi.spyOn(watch.mock.results[watch.mock.calls.indexOf(ancestor!)]!.value, "close");
   // SQLite sidecars beside a state database appear and vanish on every write.
-  ancestor![2]("rename", "state.sqlite-journal");
+  const resolve = vi.spyOn(path, "resolve");
+  for (let index = 0; index < 1_000; index++) {
+    ancestor![2]("rename", "state.sqlite-journal");
+    ancestor![2]("change", "agents-sibling");
+  }
+  expect(resolve).not.toHaveBeenCalled();
+  resolve.mockRestore();
   // macOS also reports the parent's own metadata change for sibling writes.
   ancestor![2]("change", path.basename(root));
   expect(changed).not.toHaveBeenCalled();

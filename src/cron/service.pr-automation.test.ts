@@ -510,10 +510,17 @@ it.each([
         idempotencyKey: "repair-publication",
       }),
     );
-    if (!inlineRevocation) {
+    if (mode === "direct-inline-device") {
+      // Removing the browser's device closes its transport, not the admitted publication.
+      expect(response).toEqual({});
+    } else {
       expect(response.ok, JSON.stringify(response)).toBe(true);
+      publication = asRecord(response.payload);
+      if (inlineRevocation) {
+        // A role change applies at the next start; this admitted request returns its result.
+        expect(publication).toMatchObject({ status: "published", headCommit: pr.head.sha });
+      }
     }
-    publication = asRecord(response.payload);
   }
   if (inlineRevocation) {
     if (mode === "direct-inline-device") {
@@ -527,9 +534,8 @@ it.each([
       }),
       "native request receipt",
     );
-    expect(receipt.status).not.toBe("published");
-    expect(publication?.status).not.toBe("published");
-    await assertUnpublished();
+    expect(receipt).toMatchObject({ status: "published", head_commit: pr.head.sha });
+    expect(writes.length).toBeGreaterThan(0);
     return;
   }
   expect(firstEvent).toMatchObject({ status: "ok" });

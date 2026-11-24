@@ -2,6 +2,7 @@ import { randomBytes } from "node:crypto";
 import type { Worker } from "node:worker_threads";
 import { afterEach, expect, test, vi } from "vitest";
 import type { SessionsCreateResult } from "../../packages/gateway-protocol/src/schema/sessions.js";
+import { withWorkerPreload } from "../../test/helpers/runtime-preload.js";
 import { loadSessionEntry, loadTranscriptEvents } from "../config/sessions/session-accessor.js";
 import { loadOrCreateProcessDeviceIdentityAsync } from "../infra/device-identity-async.js";
 import { createGatewayActiveWorkSnapshot } from "../infra/gateway-active-work.js";
@@ -70,15 +71,12 @@ vi.mock("../infra/worker-cpu.js", async (importOriginal) => {
       filename: string | URL,
       options: ConstructorParameters<typeof Worker>[1],
     ) {
-      return actual.createCpuTrackedWorker(filename, {
-        ...options,
-        execArgv: [
-          ...(options?.execArgv ?? []),
-          "--import",
-          `data:text/javascript,${encodeURIComponent(preload)}`,
-        ],
-        workerData: { ...options?.workerData, diskFullState: fault.state },
-      });
+      return actual.createCpuTrackedWorker(
+        filename,
+        withWorkerPreload(options, preload, {
+          diskFullState: fault.state,
+        }),
+      );
     },
   };
 });

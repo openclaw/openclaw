@@ -122,7 +122,7 @@ type Selection = {
   mapError: OpenClawStateReadOptions["mapError"];
 };
 
-/** One async owner joins the query and native cleanup before releasing its snapshot. */
+/** Adopts the producer's command and joins the query and cleanup before releasing its snapshot. */
 export function startOpenClawStateReadOperation(
   command: OpenClawStateReadCommand,
   selection: Selection,
@@ -326,7 +326,7 @@ export function startOpenClawStateReadOperation(
       authority.assertCurrent();
       return undefined;
     }
-    if (!snapshot && preserveArtifacts && !independentWarmSource) {
+    if (!snapshot && !independentWarmSource) {
       const currentMetadata =
         (command.type === "plugins.metadata.read" ||
           command.type === "config.health.read" ||
@@ -342,7 +342,7 @@ export function startOpenClawStateReadOperation(
               context.admission.identity.key,
             ))) &&
         (hasVerifiedLiveSqliteOwner(pathname) || readSqliteDatabaseCleanClose(pathname));
-      if (!native || currentMetadata) {
+      if (preserveArtifacts && (!native || currentMetadata)) {
         await selectedTransport.startValidateFresh(context, authority);
       }
       if (currentMetadata) {

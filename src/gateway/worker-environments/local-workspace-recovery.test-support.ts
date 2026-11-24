@@ -45,8 +45,11 @@ export async function proveRejectedWorkspaceCheckpoint(
   // Model an old, already-staged result refused by reconciliation admission.
   const admission = vi
     .spyOn(staging, "stageWorkerWorkspaceResult")
-    .mockImplementationOnce(async (params) => {
-      await stage(params);
+    .mockImplementation(async (params) => {
+      const result = await stage(params);
+      if (params.blobsOnly) {
+        return result;
+      }
       throw Object.assign(
         new Error("Result changes too many files; add build outputs to .gitignore"),
         {
@@ -285,11 +288,11 @@ export async function proveAggregateWorkspaceRecovery({
   const first = await prepareSandbox();
   const projection = first!.workspaceDir;
   // Real aggregate budget, individually valid files: no limit override can hide a staging bypass.
+  // Use eligible output paths; .NET Debug/Release build directories are excluded.
   const artifactBytes = Math.ceil((768 * 1024 * 1024) / 13);
   const artifacts = Array.from(
     { length: 13 },
-    (_, index) =>
-      "src/App/" + (index % 2 ? "obj" : "bin") + "/Debug/net10.0/output-" + index + ".dll",
+    (_, index) => "src/App/" + (index % 2 ? "obj" : "bin") + "/exports/output-" + index + ".dll",
   );
   const sourceText = "authored edit survives aggregate recovery\n";
   for (const relative of artifacts) {
@@ -489,26 +492,6 @@ export async function proveUnsafePathWorkspaceRecovery(
     const pending = (await readProjection())!;
     expect(pending.pending_target).toBe("canonical");
     expect(pending.pending_ref).toBeTruthy();
-    const { workerWorkspaceResultStaging: staging } = await import("./workspace-result-staging.js");
-    const stage = staging.stageWorkerWorkspaceResult;
-    // Keep the real worker rejection, then revoke its caller before delivery.
-    const revokedStage = vi
-      .spyOn(staging, "stageWorkerWorkspaceResult")
-      .mockImplementationOnce(async (params) => {
-        try {
-          return await stage(params);
-        } catch (failure) {
-          expect(failure).toHaveProperty("code", "WORKSPACE_STAGE_CURRENT_PATH_UNSAFE");
-          setRevoked(true);
-          throw failure;
-        }
-      });
-    try {
-      await expect(prepare()).rejects.toThrow("revoked");
-    } finally {
-      setRevoked(false);
-      revokedStage.mockRestore();
-    }
     await writeText(canonical, "source.txt", "accepted human edit\n");
 
     expect(await prepare()).toBe(projection);

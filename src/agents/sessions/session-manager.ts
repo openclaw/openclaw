@@ -23,8 +23,6 @@ import {
   assertCurrentSessionTranscriptHeader,
   findSessionTranscriptHeader,
 } from "../../config/sessions/session-entry-codec.js";
-import { withSessionTranscriptHydrationCaller } from "../../config/sessions/session-transcript-hydration-caller.js";
-import { prepareSessionTranscriptHydration } from "../../config/sessions/session-transcript-hydration.js";
 import {
   resolveSessionTranscriptReadFence,
   withSessionContextAdmission,
@@ -52,7 +50,6 @@ import type { BashExecutionMessage, CustomMessage } from "./messages.js";
 import { SessionManagerBranching } from "./session-manager-branching.js";
 import { projectSessionModelContextEntries, buildInitialContext } from "./session-manager-codec.js";
 import {
-  sessionManagerOpenCompaction,
   sessionManagerOpenTranscriptCohort,
   sessionManagerReleaseTranscript,
 } from "./session-manager-core.js";
@@ -480,38 +477,6 @@ export class SessionManager extends SessionManagerBranching {
       prepared.snapshot.version,
     );
   }
-
-  /** @internal Read complete current context and compaction facts in one owner snapshot. */
-  static async [sessionManagerOpenCompaction](
-    target: SessionTranscriptRuntimeTarget,
-    options: { cwd?: string; signal?: AbortSignal } = {},
-  ) {
-    const { cwd, signal } = options;
-    const limits = { compaction: true } as const;
-    const hydration = withSessionTranscriptHydrationCaller("compaction", () =>
-      prepareSessionTranscriptHydration(target, limits, signal),
-    );
-    const prepared = await hydration.read({ compaction: true });
-    if (prepared.kind !== "bounded" || !prepared.compaction) {
-      throw new Error("Expected a prepared compaction transcript");
-    }
-    const context = prepared.snapshot;
-    const header = findSessionTranscriptHeader(context.events);
-    return {
-      ...prepared.compaction,
-      eventCount: context.totalEvents,
-      sessionManager: new SessionManager(
-        cwd ?? header?.cwd ?? process.cwd(),
-        prepared.compaction.sessionTarget,
-        context.events,
-        { ...context, limits },
-      ),
-    };
-  }
-
-  static [reload.adoptPreparedCompaction] = reload.createPreparedCompactionAdopter(
-    (...args) => new SessionManager(...args),
-  );
 
   /** @deprecated Await openAsync. Supported through 2026-12-31. Removal in the first January 2027 stable release. */
   static open(

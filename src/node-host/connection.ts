@@ -363,6 +363,9 @@ export function startNodeHostConnection({
               ...(gatewayCapabilities.has(GATEWAY_SERVER_CAPS.NODE_WORKER_CAPTURED_EXEC_POLICY)
                 ? { capturedExecPolicy: true }
                 : {}),
+              ...(gatewayCapabilities.has(GATEWAY_SERVER_CAPS.NODE_WORKER_EXEC_MEMORY_BOUNDARY)
+                ? { execMemoryBoundary: true }
+                : {}),
               ...(gatewayCapabilities.has(GATEWAY_SERVER_CAPS.NODE_WORKER_LAUNCH_TOOL_NAMES)
                 ? { launchToolNames: [...CORE_WORKER_LAUNCH_TOOL_NAMES] }
                 : {}),

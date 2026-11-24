@@ -1,3 +1,5 @@
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+
 export type SlackPostMessageIdentity = {
   username?: string;
   iconUrl?: string;
@@ -17,4 +19,18 @@ export function buildSlackMessageIdentityPayload(identity?: SlackPostMessageIden
 
 export function hasSlackMessageIdentity(identity?: SlackPostMessageIdentity): boolean {
   return Boolean(identity?.username || identity?.iconUrl || identity?.iconEmoji);
+}
+
+export function normalizeSlackSendIdentity(
+  identity?: SlackPostMessageIdentity,
+): SlackPostMessageIdentity | undefined {
+  const username = normalizeOptionalString(identity?.username);
+  const iconUrl = normalizeOptionalString(identity?.iconUrl);
+  const iconEmoji = normalizeOptionalString(identity?.iconEmoji);
+  const normalized = {
+    ...(username ? { username } : {}),
+    ...(iconUrl ? { iconUrl } : {}),
+    ...(iconEmoji ? { iconEmoji } : {}),
+  };
+  return hasSlackMessageIdentity(normalized) ? normalized : undefined;
 }

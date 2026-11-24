@@ -7,6 +7,10 @@ import {
   type ImageProbe,
   type ImageMetadata,
 } from "rastermill";
+import {
+  readImageMetadataFromHeader,
+  resolveDisplayImageMetadata,
+} from "./image-header-metadata.js";
 import { MAX_IMAGE_INPUT_PIXELS } from "./image-processor-config.js";
 import {
   convertBmpToPngWithWorker,
@@ -53,22 +57,6 @@ export function buildImageResizeSideGrid(maxSide: number, sideStart: number): nu
     .map((value) => Math.min(maxSide, value))
     .filter((value, idx, arr) => value > 0 && arr.indexOf(value) === idx)
     .toSorted((a, b) => b - a);
-}
-
-function resolveDisplayImageMetadata(probe: ImageProbe | null): ImageMetadata | null {
-  if (!probe) {
-    return null;
-  }
-  // Rastermill reports encoded axes; orientations 5-8 swap the displayed axes.
-  if (probe.orientation && probe.orientation >= 5 && probe.orientation <= 8) {
-    return { width: probe.height, height: probe.width };
-  }
-  return { width: probe.width, height: probe.height };
-}
-
-/** Reads display dimensions from image header bytes without invoking a full image decode. */
-export function readImageMetadataFromHeader(buffer: Buffer): ImageMetadata | null {
-  return resolveDisplayImageMetadata(readImageProbeFromHeader(buffer));
 }
 
 /** Detects animated WebP before a single-frame image transform can discard its frames. */

@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { beforeEach, expect, it } from "vitest";
+import { beforeEach, expect, it, vi } from "vitest";
 import {
   resetConfigRuntimeState,
   setRuntimeConfigSnapshot,
@@ -55,18 +55,26 @@ it.each([false, true])("rejects removal with a live lease (snapshot retry: %s)",
     await expect(remove()).rejects.toThrow(snapshotFailure);
   }
   const lease = await acquireWorktreeRunLease(created.id, { env });
-  const removalError = await remove(retry || undefined)
-    .then(() => undefined)
-    .catch((error: unknown) => error);
-  expect(removalError).toBeInstanceOf(Error);
-  expect((removalError as Error).message).toContain("worktree is busy");
-  expect(classifyWorktreeRemovalError(removalError)).toBe("busy");
-  expect(getRegistryWorktree(env, created.id)?.snapshotRef).toBeUndefined();
-  expect(getRegistryWorktree(env, created.id)?.removedAt).toBeUndefined();
-  expect(hasLiveWorktreeRunLease(env, created.id)).toBe(true);
-  expect(await fs.stat(created.path)).toBeTruthy();
-
-  await lease.release();
+  try {
+    const removalError = await service
+      .remove({
+        id: created.id,
+        reason: "manual-delete",
+        allowSnapshotLoss: retry,
+        retryPreserved: retry,
+      })
+      .then(() => undefined)
+      .catch((error: unknown) => error);
+    expect(removalError).toBeInstanceOf(Error);
+    expect((removalError as Error).message).toContain("worktree is busy");
+    expect(classifyWorktreeRemovalError(removalError)).toBe("busy");
+    expect(getRegistryWorktree(env, created.id)?.snapshotRef).toBeUndefined();
+    expect(getRegistryWorktree(env, created.id)?.removedAt).toBeUndefined();
+    expect(hasLiveWorktreeRunLease(env, created.id)).toBe(true);
+    expect(await fs.stat(created.path)).toBeTruthy();
+  } finally {
+    await lease.release();
+  }
   if (!retry) {
     expect((await remove()).removed).toBe(true);
     await expectGone();
@@ -117,6 +125,34 @@ it("skips idle garbage collection for a worktree with a live run lease", async (
   expect(getRegistryWorktree(env, created.id)?.removedAt).toBeUndefined();
 
   await lease.release();
+  expect((await service.gc()).removed).toEqual([]);
+  await updateRegistryWorktree(env, created.id, {
+    lastActiveAt: Date.now() - IDLE_GC_MS - 3_600_001,
+  });
   const collected = await service.gc();
   expect(collected.removed).toContain(created.id);
+});
+
+it("retains an old checkout used yesterday after its run lease has ended", async () => {
+  const yesterday = Date.now() - 24 * 60 * 60 * 1000;
+  await updateRegistryWorktree(env, created.id, {
+    lastActiveAt: yesterday - IDLE_GC_MS,
+  });
+  const clock = vi.spyOn(Date, "now").mockReturnValue(yesterday);
+  try {
+    const lease = await acquireWorktreeRunLease(created.id, { env });
+    await lease.release();
+    expect(getRegistryWorktree(env, created.id)?.lastActiveAt).toBe(yesterday);
+    clock.mockReturnValue(yesterday + 60_000);
+    const next = await acquireWorktreeRunLease(created.id, { env });
+    expect(getRegistryWorktree(env, created.id)?.lastActiveAt).toBe(yesterday);
+    // A long-running use refreshes activity when its last holder releases custody.
+    clock.mockReturnValue(yesterday + 10 * 60_000);
+    await next.release();
+  } finally {
+    clock.mockRestore();
+  }
+  expect((await service.gc()).removed).not.toContain(created.id);
+  expect(getRegistryWorktree(env, created.id)?.lastActiveAt).toBe(yesterday + 10 * 60_000);
+  expect(await fs.readFile(path.join(created.path, "README.md"), "utf8")).toBe("base\n");
 });

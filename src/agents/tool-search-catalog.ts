@@ -192,8 +192,11 @@ function toCatalogEntry(
   // SAFETY: source classification excludes client callbacks from the native hook wrapper.
   const nativeTool = tool as AnyAgentTool;
   const catalogTool =
-    source !== "client" && hookContext && !isToolWrappedWithBeforeToolCallHook(nativeTool)
-      ? wrapToolWithBeforeToolCallHook(nativeTool, hookContext)
+    source !== "client" && hookContext
+      ? rewrapToolWithBeforeToolCallHook(nativeTool, {
+          ...getBeforeToolCallHookContext(nativeTool),
+          ...hookContext,
+        })
       : tool;
   return {
     id: `${source}:${sourceName?.trim() || "core"}:${tool.name}`,

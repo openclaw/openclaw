@@ -29,6 +29,7 @@ import { READ_SCOPE } from "./operator-scopes.js";
 import {
   canAccessApprovalSession,
   isApprovalRecordVisibleToClient,
+  readOperatorApprovalRequestSource,
 } from "./server-methods/approval-record-lookup.js";
 import {
   listCurrentWebPushTargets,
@@ -323,8 +324,7 @@ export function createApprovalWebPushDelivery(params: {
                     canAccessApprovalSession({
                       cfg,
                       client,
-                      sessionKey: durableRecord.source.sessionKey,
-                      agentId: durableRecord.source.agentId,
+                      ...readOperatorApprovalRequestSource(durableRecord),
                       prepared: webPushSessionAccess(authority, client),
                     }),
                   );

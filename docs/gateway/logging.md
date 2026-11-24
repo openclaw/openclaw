@@ -188,6 +188,11 @@ an overflow group, reports omitted-group count, and identifies the globally
 slowest statement separately. Statement IDs hash normalized SQL; no SQL text or
 bindings are logged. `rows` counts returned rows (`get`/`all`) or consumed iterator
 rows, including early close; it is not the number of rows SQLite scanned.
+`changes` sums the native rows-affected count from successful `run` calls, including
+zero-row writes. It counts executed changes, even if the transaction later rolls
+back; it excludes trigger and foreign-key cascade effects. Reads keep `rows` and
+do not gain `changes`; writes using `RETURNING` through a read method report only
+returned rows. No additional query is issued to obtain these counts.
 
 ### SQLite snapshot cleanup
 

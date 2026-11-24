@@ -10,7 +10,8 @@ import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { fetchWithSsrFGuard, withStrictGuardedFetchMode } from "../infra/net/fetch-guard.js";
 import { normalizeHostname } from "../infra/net/hostname.js";
 import { isBlockedHostnameOrIp } from "../infra/net/ssrf.js";
-import { createImageProcessor, readImageMetadataFromHeader } from "../media/image-ops.js";
+import { readImageMetadataFromHeader } from "../media/image-header-metadata.js";
+import { createImageProcessor } from "../media/image-ops.js";
 import { monotonicNow } from "../shared/monotonic-time.js";
 import type { ControlUiLinkPreview } from "./control-ui-contract.js";
 

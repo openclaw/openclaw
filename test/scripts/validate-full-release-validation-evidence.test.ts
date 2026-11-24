@@ -10,7 +10,10 @@ import type { PublicationSelection } from "../../scripts/full-release-publicatio
 import { authenticateFullReleaseValidationEvidence } from "../../scripts/validate-full-release-validation-evidence.mjs";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { candidatePublicationFixture } from "./candidate-publication.test-support.js";
-import { trustedMainNpmFixture } from "./release-ci-summary.test-support.js";
+import {
+  trustedMainNpmFixture,
+  trustedMainPackageFixture,
+} from "./release-ci-summary.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -79,42 +82,39 @@ function publicationOptions(f: ReturnType<typeof candidatePublicationFixture>) {
 }
 
 describe("authenticated publication eligibility", () => {
-  it("does not carry historical main evidence into a different publisher trust context", async () => {
-    const f = trustedMainNpmFixture();
-    // Match the retained JSON transport: omitted fields are not undefined properties.
-    const manifestJson = JSON.stringify(f.manifest);
-    const manifest = JSON.parse(manifestJson);
-    const client = {
-      ...f.client,
-      getJobLog: async (id: number) => f.client.getJobLog(id),
-      getParentJobs: async (id: string) => f.client.getParentJobs(id),
-      getRun: async (id: string) => f.client.getRun(id),
-      getRunView: async (id: string) => f.client.getRunView(id),
-      getRunAttemptJobs: async (id: string) => f.client.getRunAttemptJobs(id),
-      loadManifest: () => ({ artifact: f.artifact, manifest }),
-    };
-    const options = {
-      run: f.parentRun,
-      manifest,
-      expectedRepository: "openclaw/openclaw",
-      expectedRunId: f.runId,
-      expectedRunAttempt: 1,
-      expectedTargetSha: f.targetSha,
-      expectedReleaseTag: "v2026.8.28-beta.1",
-      verifierSourceSha: f.workflowSha,
-      verifierSourceContent: readFileSync("scripts/release-ci-summary.mjs"),
-    };
-    const authenticated = await authenticateFullReleaseValidationEvidence(options, client);
-    const protectedContext = {
-      ...options,
-      expectedTrustedWorkflowFullRef: `refs/tags/release-publish/${f.workflowSha.slice(0, 12)}-123`,
-      expectedTrustedWorkflowSha: f.workflowSha,
-    };
-    expect(() => authenticated.forPublication(protectedContext)).toThrow("tooling context differs");
-    await expect(
-      authenticateFullReleaseValidationEvidence(protectedContext, client),
-    ).rejects.toThrow("protected-tag release evidence must use a canonical release-ci branch");
-  });
+  it.each([2, 3, 4] as const)(
+    "rejects unadmitted v%s publication evidence with actionable recovery guidance",
+    async (version) => {
+      const f =
+        version === 4
+          ? trustedMainNpmFixture()
+          : trustedMainPackageFixture({ manifestVersion: version });
+      await expect(
+        authenticateFullReleaseValidationEvidence(
+          {
+            run: f.parentRun,
+            expectedRepository: "openclaw/openclaw",
+            expectedRunId: f.runId,
+            expectedRunAttempt: 1,
+            expectedTargetSha: f.targetSha,
+            expectedReleaseTag: "v2026.8.28-beta.1",
+            verifierSourceSha: f.workflowSha,
+            verifierSourceContent: readFileSync("scripts/release-ci-summary.mjs"),
+          },
+          {
+            ...f.client,
+            getJobLog: async (jobId: number) => f.client.getJobLog(jobId),
+            getParentJobs: async (runId: string) => f.client.getParentJobs(runId),
+            getRunAttemptJobs: async (runId: string) => f.client.getRunAttemptJobs(runId),
+            getRun: async (runId: string) => f.client.getRun(runId),
+            getRunView: async (runId: string) => f.client.getRunView(runId),
+          },
+        ),
+      ).rejects.toThrow(
+        "Release qualification requires authenticated P admission; obtain new admitted qualification",
+      );
+    },
+  );
   it("accepts the exact selection and rejects a different route or release tag at handoff", async () => {
     const f = candidatePublicationFixture();
     const options = publicationOptions(f);

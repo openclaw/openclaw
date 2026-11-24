@@ -14,6 +14,10 @@ export const readText = (...parts: string[]) => fs.readFile(path.join(...parts),
 export const publishWithoutPathExchange = () =>
   vi.spyOn(pathExchange, "supportsPathExchange").mockReturnValue(false);
 
+/** The kernel refuses every exchange, as it does across filesystems; nothing else changes. */
+export const refusePathExchange = (reason: string) =>
+  vi.spyOn(pathExchange, "exchangePaths").mockResolvedValue({ status: "unavailable", reason });
+
 export async function expectVersion(root: string, version: string) {
   expect(await readText(root, "package.json")).toContain(`"version":"${version}"`);
 }

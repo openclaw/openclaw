@@ -66,21 +66,33 @@ printf 'deb [signed-by=/etc/apt/keyrings/openclaw-git-core-ppa.asc] https://ppa.
 "${install_command[@]}" install -o root -g root -m 0644 "$workdir/git-core-ppa.asc" /etc/apt/keyrings/openclaw-git-core-ppa.asc
 "${install_command[@]}" install -o root -g root -m 0644 "$workdir/git-core-ppa.list" /etc/apt/sources.list.d/openclaw-git-core-ppa.list
 apt_options=(-o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 -o Acquire::Retries=0 -o DPkg::Lock::Timeout=30)
+# Refresh only our PPA: unrelated image repositories may require metadata consent.
+# Retain their cached indexes so normal installation can still resolve dependencies.
+apt_update_options=(-o Dir::Etc::sourcelist=/etc/apt/sources.list.d/openclaw-git-core-ppa.list -o Dir::Etc::sourceparts=- -o APT::Get::List-Cleanup=0)
 timeout --signal=TERM --kill-after=5s 120s "${install_command[@]}" \
-  apt-get "${apt_options[@]}" update
+  apt-get "${apt_options[@]}" "${apt_update_options[@]}" update
 # Fresh processes tolerate transient mirrors without enabling the native APT
-# retries affected by CVE-2026-109518. All attempts share the existing deadline.
+# retries affected by CVE-2026-109518. A partial index refresh can exit zero and
+# leave only an older Git available, so refresh again if installation succeeds
+# without the required capability. All attempts share the existing deadline.
 timeout --signal=TERM --kill-after=5s 120s bash -c '
+  update_option_count=$1
+  shift
+  update_options=("${@:1:update_option_count}")
+  shift "$update_option_count"
   for attempt in 1 2 3; do
-    if "$@"; then exit 0; else status=$?; fi
+    if "$@" install -y --no-install-recommends git; then
+      if git --no-lazy-fetch --version >/dev/null 2>&1; then exit 0; fi
+      echo "Git upgrade did not provide --no-lazy-fetch support (Git 2.45 or newer required)." >&2
+      status=1
+      if (( attempt < 3 )); then "$@" "${update_options[@]}" update || exit $?; fi
+    else
+      status=$?
+    fi
     if (( attempt == 3 )); then exit "$status"; fi
-    echo "Git package install failed ($status); retrying after 2s." >&2
+    echo "Git setup failed ($status); retrying after 2s." >&2
     sleep 2
   done
-' -- "${install_command[@]}" apt-get "${apt_options[@]}" install -y --no-install-recommends git
+' -- "${#apt_update_options[@]}" "${apt_update_options[@]}" "${install_command[@]}" apt-get "${apt_options[@]}"
 
 git --version
-if ! git --no-lazy-fetch --version >/dev/null 2>&1; then
-  echo "::error::Git upgrade did not provide --no-lazy-fetch support (Git 2.45 or newer required)." >&2
-  exit 1
-fi

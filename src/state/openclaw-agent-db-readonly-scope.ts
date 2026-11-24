@@ -365,7 +365,10 @@ export function closeIdleOpenClawAgentDatabaseReadOnly(pathname: string): void {
 }
 
 export function retainCachedOpenClawAgentDatabaseReadOnly(options: ReadTarget) {
-  return cachedScope(options).retain(options);
+  const scope = readOnlyScope.getStore();
+  return (scope?.matches(options.agentId, options.path) ? scope : cachedScope(options)).retain(
+    options,
+  );
 }
 
 /** PostgreSQL reads through the caller's read scope share one snapshot until `operation` settles. */

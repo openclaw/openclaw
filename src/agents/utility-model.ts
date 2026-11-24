@@ -204,12 +204,13 @@ function resolveAutomaticUtilityModel(
   const fallbacks = setting.kind === "disabled" ? [] : setting.fallbacks;
   if (fallbacks.length) {
     // Configured fallback shorthand belongs to the agent primary, not a session override.
-    const { provider: defaultProvider } = resolveDefaultModelForAgent({
-      cfg: params.cfg,
-      agentId: params.agentId,
-      allowPluginNormalization: false,
-      manifestPlugins: snapshot?.plugins,
-    });
+    const defaultProvider =
+      resolveDefaultModelForAgent({
+        cfg: params.cfg,
+        agentId: params.agentId,
+        allowPluginNormalization: false,
+        manifestPlugins: snapshot?.plugins,
+      })?.provider ?? provider;
     const aliasIndex = buildModelAliasIndex({
       cfg: params.cfg,
       agentId: params.agentId,
@@ -301,6 +302,10 @@ export function resolveUtilityModelSelectionForAgent(params: {
         agentId: params.agentId,
         manifestPlugins: params.metadataSnapshot?.plugins,
       });
+  // No configured model means no primary to derive a utility model from.
+  if (!primary) {
+    return undefined;
+  }
   const automatic = resolveAutomaticUtilityModel({
     cfg: params.cfg,
     agentId: params.agentId,
@@ -344,7 +349,7 @@ export function resolveAutomaticUtilityRuntimeOverride(params: {
     manifestPlugins: params.metadataSnapshot?.plugins,
   });
   const utilityProvider = params.utilityProvider.trim().toLowerCase();
-  if (!primary.provider || !primary.model || primary.provider.toLowerCase() !== utilityProvider) {
+  if (!primary || primary.provider.toLowerCase() !== utilityProvider) {
     return undefined;
   }
   // The observer passes its derived ref back as modelRef. Match that exact model

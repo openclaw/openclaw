@@ -1,4 +1,6 @@
 import { randomUUID } from "node:crypto";
+import fs from "node:fs/promises";
+import path from "node:path";
 import {
   validateSkillsLibrarySaveParams,
   type SkillsLibraryListParams,
@@ -39,7 +41,7 @@ export async function listSkillLibrary(
   params: SkillsLibraryListParams = {},
   options: OpenClawStateDatabaseOptions = {},
 ): Promise<SkillsLibraryListResult> {
-  return (await captureSkillLibraryAccess(authority, options).read("list", params)).value;
+  return (await captureSkillLibraryAccess(authority, options).read("list", { ...params })).value;
 }
 
 export async function readSkillLibrary(
@@ -103,6 +105,18 @@ export async function saveSkillLibrary(
     ...(params.files ?? []),
   ]);
   const skillId = params.skillId ?? uploadId ?? randomUUID();
+  // Refuse a taken name before writing files; the publish write repeats the check for races.
+  if (
+    !previous &&
+    (await access.read("list", { scope: "mine" })).value.entries.some(
+      (entry) => entry.slug === params.slug && entry.skillId !== skillId,
+    )
+  ) {
+    throw new SkillLibraryError(
+      "NAME_CONFLICT",
+      `A skill named "${params.slug}" already exists in this library. Choose a different slug; existing skills were preserved.`,
+    );
+  }
   const scan = scanSkillBundle(
     params.content,
     bundle.files
@@ -152,6 +166,13 @@ export async function saveSkillLibrary(
         filesJson: JSON.stringify(bundle.files.map(({ bytes: _bytes, ...file }) => file)),
       },
     });
+  } catch (error) {
+    // A refused new skill has no entry, so nothing else refers to its directory.
+    if (!previous && error instanceof SkillLibraryError && error.code === "NAME_CONFLICT") {
+      const revisionDir = skillLibraryRevisionDir(skillId, bundle.revision, access.options.env);
+      await fs.rm(path.dirname(path.dirname(revisionDir)), { recursive: true, force: true });
+    }
+    throw error;
   } finally {
     await staged.cleanup();
   }

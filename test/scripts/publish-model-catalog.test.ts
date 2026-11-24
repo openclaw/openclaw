@@ -26,7 +26,7 @@ import { MODELS_JSON_STATE } from "../../src/agents/models-config-state.js";
 import type { OpenClawConfig } from "../../src/config/types.openclaw.js";
 import { prepareRemoteModelCatalogStartupSnapshot } from "../../src/model-catalog/remote-overlay.js";
 import { setRemoteModelCatalogOverlaySourcesForTest } from "../../src/model-catalog/remote-overlay.test-support.js";
-import { resolveModelCostConfig } from "../../src/utils/usage-format.js";
+import { resolveModelCostConfig } from "../../src/model-catalog/usage-pricing.js";
 
 const tempDirs: string[] = [];
 

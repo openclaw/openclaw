@@ -69,10 +69,6 @@ const TerminalPanel = lazy(() => import("../components/terminal/terminal-panel-r
 const ExecApproval = lazy(() => import("../components/exec-approval-solid.tsx"), {
   export: "ExecApproval",
 });
-const OnboardingMemoryImport = lazy(
-  () => import("../components/onboarding-memory-import-solid.tsx"),
-  { export: "OnboardingMemoryImport" },
-);
 
 declare module "@solidjs/web" {
   namespace JSX {
@@ -83,7 +79,6 @@ declare module "@solidjs/web" {
       "openclaw-exec-approval": ShellElementAttributes<
         NonNullable<ShellOwnedElements["approvalOverlay"]>
       >;
-      "openclaw-onboarding-memory-import": ShellElementAttributes;
     }
   }
 }
@@ -104,10 +99,29 @@ export function ApplicationShell(props: {
     };
   });
   const [navResizing, setNavResizing] = createSignal(false);
+  // Plugin pages decide their sidebar from plugin navigation, which arrives after the route.
+  const [pluginRevision, setPluginRevision] = createSignal(0);
+  onSettled(() =>
+    props.host.context?.plugins.subscribe(() => setPluginRevision((value) => value + 1)),
+  );
   const view = createMemo(() => {
     props.host.shellRevision();
+    pluginRevision();
     return readShellView(props.host);
   });
+  // A page with a sidebar opens it at once after a page without one. Its next collapse
+  // change clears this, so the explicit toggle keeps its motion.
+  const navPageShown = createMemo<{ hidden: boolean; collapsed: boolean; instant: boolean }>(
+    (previous) => {
+      const { navPageHidden: hidden, navCollapsed: collapsed } = view();
+      const opened = previous?.hidden === true && !hidden;
+      return {
+        hidden,
+        collapsed,
+        instant: opened || (previous?.collapsed === collapsed && previous.instant),
+      };
+    },
+  );
   // Single-attribute bindings lack an equality guard; resize-only updates keep inert unchanged.
   const navBackdropInert = createMemo(() => !view().navDrawerOpen);
   const settingsSaveStatusInert = createMemo(() => view().mobileNavLayout && view().navDrawerOpen);
@@ -117,7 +131,9 @@ export function ApplicationShell(props: {
   );
   const shellConnectionStatus = createMemo(() => view().shellConnectionStatus);
   const footerStatus = createMemo(() =>
-    shellConnectionStatus() || view().connectionRecovery ? view().gatewayStatus : null,
+    view().chromeGatewayStatus.kind && (shellConnectionStatus() || view().connectionRecovery)
+      ? view().chromeGatewayStatus
+      : null,
   );
   function NavigationFallback() {
     return (
@@ -134,6 +150,9 @@ export function ApplicationShell(props: {
     );
   }
   const connectionAnnouncement = createMemo(() => {
+    if (view().floatingUpdateCard.refreshRequired) {
+      return "";
+    }
     const kind = shellConnectionStatus();
     return kind
       ? gatewayStatusLabel(kind, view().gatewayStatus.queuedCount)
@@ -164,6 +183,8 @@ export function ApplicationShell(props: {
             "shell--chat": view().chatLikeRoute,
             "shell--session": view().sessionRoute,
             "shell--nav-collapsed": view().navCollapsed,
+            "shell--nav-page-hidden": view().navPageHidden,
+            "shell--nav-page-shown": navPageShown().instant,
             "shell--mobile-nav": view().mobileNavLayout,
             "shell--merged-chat-chrome": view().mergedChatChrome,
             "shell--floating-header": view().floatingHeader,
@@ -178,9 +199,6 @@ export function ApplicationShell(props: {
             "shell--nav-resizing": navResizing(),
           },
         ]}
-        data-background-managed={
-          !view().backgroundReady || view().uiSettings.background !== undefined ? "" : undefined
-        }
         style={{
           "--shell-nav-expanded-width": `${view().expandedNavWidth}px`,
           "--shell-nav-rail-width": `${view().railWidth}px`,
@@ -425,6 +443,7 @@ export function ApplicationShell(props: {
               "content--systems": view().activeRoute === "systems",
               "content--custodian": view().activeRoute === "custodian",
               "content--workboard": view().workboardLayout,
+              "content--refresh-notice": view().floatingUpdateCard.refreshRequired,
             },
           ]}
           ref={(element) => {
@@ -529,6 +548,7 @@ export function ApplicationShell(props: {
           prop:custodianAvailable={view().custodianPanelAvailable && !view().nativeEmbed}
           prop:homeAvailable={view().homePanelAvailable && !view().nativeEmbed}
           prop:custodianSuppressed={view().activeRoute === "custodian"}
+          prop:firstUse={view().firstUse}
           prop:pageSessionKey={(props.host.shellRevision(), props.host.activeSessionKey)}
           prop:getPrimaryChatPane={view().callbacks.getPrimaryChatPane}
           prop:pageAgentId={view().selectedAgentId}
@@ -589,11 +609,6 @@ export function ApplicationShell(props: {
             },
           }}
         />
-        <Show when={view().memoryImportActive}>
-          <ShellComponentBoundary label={t("onboarding.memoryImport.title")} showLoading>
-            <OnboardingMemoryImport active={true} context={view().context} />
-          </ShellComponentBoundary>
-        </Show>
         <openclaw-toast-host ref={(element) => (props.host.toastElement = element)} />
       </div>
     </div>

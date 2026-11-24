@@ -118,6 +118,7 @@ function measureClaudePartialMessage(
 }
 
 const CONTROL_FRAME_EVENT_KEYS = new Map<unknown, ReadonlySet<string>>([
+  ["content_block_start", new Set(["type", "index", "content_block"])],
   ["content_block_delta", new Set(["type", "index", "delta"])],
   ["content_block_stop", new Set(["type", "index"])],
   ["message_stop", new Set(["type"])],
@@ -125,23 +126,19 @@ const CONTROL_FRAME_EVENT_KEYS = new Map<unknown, ReadonlySet<string>>([
 ]);
 const PROGRESS_DELTA_KEYS = new Set(["type", "thinking", "estimated_tokens"]);
 const SIGNATURE_DELTA_KEYS = new Set(["type", "signature"]);
-// At most 8 KiB of a discarded signature or message delta goes uncharged, so a
-// turn may parse up to 20,000 such lines (about 156 MiB) of JSON it never keeps.
-// That is acceptable because the content is discarded, not retained, and the
-// ordinary-line and single-line limits still bound the parse work.
+// At most 8 KiB of a discarded signature or envelope goes uncharged.
 const CONTROL_FRAME_DISCARDED_ALLOWANCE_CHARS = 8 * 1024;
 
 /**
- * Fixed charge for stream events whose content the parser discards. Thinking
- * progress (only `estimated_tokens` is read) and block/message stops have
- * bounded shapes and skip the ordinary-line limit like partial frames, whose
- * per-frame callbacks they match. Signature and message deltas keep the
- * ordinary-line limit and are charged beyond their discarded allowance.
+ * Fixed charge for stream events whose content the parser discards: thinking
+ * progress (only `estimated_tokens` is read), block starts (only the block
+ * header is kept), block/message stops, and signatures and message deltas,
+ * which are charged beyond their discarded allowance.
  */
 function measureClaudeStreamControlFrame(
   parsed: Record<string, unknown>,
   rawLine: string,
-): { chars: number; partialMessage: boolean } | undefined {
+): number | undefined {
   const event = readBoundedStreamEvent(parsed);
   const eventKeys = event ? CONTROL_FRAME_EVENT_KEYS.get(event.type) : undefined;
   if (!event || !eventKeys || Object.keys(event).some((key) => !eventKeys.has(key))) {
@@ -162,6 +159,7 @@ function measureClaudeStreamControlFrame(
     Object.keys(delta).every((key) => SIGNATURE_DELTA_KEYS.has(key));
   if (
     (event.type === "content_block_delta" && !progress && !signature) ||
+    (event.type === "content_block_start" && !isRecord(event.content_block)) ||
     (parsed.thinking_display != null && !progress)
   ) {
     return undefined;
@@ -170,46 +168,56 @@ function measureClaudeStreamControlFrame(
   const padding = Math.max(0, rawLine.length - JSON.stringify(parsed).length);
   if (discarded) {
     const overflow = rawLine.length - CONTROL_FRAME_DISCARDED_ALLOWANCE_CHARS;
-    return { chars: 32 + Math.max(padding, overflow), partialMessage: false };
+    return 32 + Math.max(padding, overflow);
   }
-  const retainedChars = progress ? JSON.stringify({ estimated_tokens: progressTokens }).length : 0;
-  return { chars: 32 + retainedChars + padding, partialMessage: true };
+  const retainedChars = progress
+    ? JSON.stringify({ estimated_tokens: progressTokens }).length
+    : event.type === "content_block_start"
+      ? JSON.stringify(event.content_block).length
+      : 0;
+  return 32 + retainedChars + padding;
 }
 
-/** Discount tool-result payloads, which are handed to consumers and never retained. */
-function measureClaudeToolResultMessage(
+/**
+ * Each model request opens with a `message_start` event and a `system/status`
+ * record whose metadata the parser discards; it reads at most their ids and usage.
+ */
+function measureClaudeRequestEnvelope(
   parsed: Record<string, unknown>,
   rawLine: string,
 ): number | undefined {
+  const envelope =
+    (parsed.type === "stream_event" &&
+      isRecord(parsed.event) &&
+      parsed.event.type === "message_start") ||
+    (parsed.type === "system" && parsed.subtype === "status");
+  return envelope
+    ? 32 + Math.max(0, rawLine.length - CONTROL_FRAME_DISCARDED_ALLOWANCE_CHARS)
+    : undefined;
+}
+
+/** Assistant snapshots keep only their content blocks; envelope and metadata are discarded. */
+function measureClaudeAssistantMessage(parsed: Record<string, unknown>): number | undefined {
+  const content = isRecord(parsed.message) ? parsed.message.content : undefined;
+  return parsed.type === "assistant" && Array.isArray(content)
+    ? 32 + JSON.stringify(content).length
+    : undefined;
+}
+
+/** Pure tool-result records keep only their tool ids; payloads go to consumers unretained. */
+function measureClaudeToolResultMessage(parsed: Record<string, unknown>): number | undefined {
   const content = isRecord(parsed.message) ? parsed.message.content : undefined;
   if (parsed.type !== "user" || !Array.isArray(content) || content.length === 0) {
     return undefined;
   }
-  // Both payload copies are discarded; IDs, metadata, padding, and frames stay charged.
-  // Re-encode numbers as one character because e.g. `1e20` otherwise grows to 21 digits.
-  // This lower bound cannot discount more than the original wire payload.
-  let payloadChars = 0;
-  try {
-    for (const block of content) {
-      if (!isRecord(block) || block.type !== "tool_result") {
-        return undefined;
-      }
-      if (block.content !== undefined) {
-        payloadChars += JSON.stringify(block.content, minimalNumberEncoding).length;
-      }
+  let idChars = 0;
+  for (const block of content) {
+    if (!isRecord(block) || block.type !== "tool_result" || typeof block.tool_use_id !== "string") {
+      return undefined;
     }
-    if (parsed.tool_use_result !== undefined) {
-      payloadChars += JSON.stringify(parsed.tool_use_result, minimalNumberEncoding).length;
-    }
-  } catch {
-    // A payload too deep to re-serialize falls back to raw accounting.
-    return undefined;
+    idChars += block.tool_use_id.length;
   }
-  return Math.max(32, rawLine.length - payloadChars);
-}
-
-function minimalNumberEncoding(_key: string, value: unknown): unknown {
-  return typeof value === "number" ? 0 : value;
+  return 32 + idChars;
 }
 
 // Forwarded child message payloads are discarded; only their progress id survives.
@@ -228,30 +236,39 @@ function measureClaudeSubagentRecord(parsed: Record<string, unknown>): number | 
   return CLAUDE_SUBAGENT_RECORD_CHARS;
 }
 
-/** Budget charge for one Claude stream-json line, and whether it skips the ordinary-line limit. */
+// The character budget bounds every frame: discounted frames pay at least 32
+// characters (at most about 254,000 per turn) and other frames their raw length.
+// The frame limit bounds only the JSON the budget does not see: a frame that
+// leaves more than 1 KiB of its raw line uncharged counts toward it, so uncounted
+// frames add at most about 254 MiB of discarded JSON to a turn's parse work.
+const UNCOUNTED_FRAME_MAX_UNCHARGED_CHARS = 1024;
+
+/** Budget charge for one Claude stream-json line, and whether it counts toward the frame limit. */
 export function chargeClaudeStreamJsonLine(
   record: Record<string, unknown> | undefined,
   rawLine: string,
-): { chars: number; partialMessage: boolean } {
-  const partialChars = record ? measureClaudePartialMessage(record, rawLine) : undefined;
-  const control = record ? measureClaudeStreamControlFrame(record, rawLine) : undefined;
-  const subagentChars = record ? measureClaudeSubagentRecord(record) : undefined;
-  // Measured before media normalization rewrites the record in place.
-  const toolResultChars =
-    record && subagentChars === undefined
-      ? measureClaudeToolResultMessage(record, rawLine)
+): { chars: number; countsFrame: boolean } {
+  let discountedChars: number | undefined;
+  try {
+    discountedChars = record
+      ? (measureClaudeSubagentRecord(record) ??
+        measureClaudePartialMessage(record, rawLine) ??
+        measureClaudeStreamControlFrame(record, rawLine) ??
+        measureClaudeRequestEnvelope(record, rawLine) ??
+        measureClaudeAssistantMessage(record) ??
+        measureClaudeToolResultMessage(record))
       : undefined;
+  } catch {
+    // A record too deep to re-serialize keeps raw accounting.
+  }
   const normalized = record ? normalizeClaudeCliStreamJsonRecord(record) : undefined;
-  // Neither media omission nor envelope/payload discounts may erase wire whitespace.
+  // Media omission may not erase wire whitespace.
   const chars =
-    subagentChars ??
-    partialChars ??
-    control?.chars ??
-    toolResultChars ??
+    discountedChars ??
     (normalized
       ? Math.max(normalized.line.length, rawLine.length - normalized.omittedRawChars)
       : rawLine.length);
-  return { chars, partialMessage: partialChars !== undefined || control?.partialMessage === true };
+  return { chars, countsFrame: rawLine.length - chars > UNCOUNTED_FRAME_MAX_UNCHARGED_CHARS };
 }
 
 /** Frames arbitrary stdout chunks while bounding each individual raw JSONL line. */

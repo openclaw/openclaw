@@ -1,3 +1,4 @@
+import { isMainThread } from "node:worker_threads";
 import type { AgentMessage, SessionTreeEntry } from "@openclaw/agent-core";
 import { sql } from "kysely";
 import {
@@ -30,6 +31,10 @@ import type {
   SessionTranscriptReadScope,
   TranscriptEvent,
 } from "./session-accessor.sqlite-contract.js";
+import {
+  MODEL_CONTEXT_PAYLOAD_BATCH_SIZE,
+  readCompactedModelContextNavigation,
+} from "./session-accessor.sqlite-model-context-navigation.js";
 import { resolveSqliteTranscriptReadScope } from "./session-accessor.sqlite-read-scope.js";
 import { getSessionKysely, toDatabaseOptions } from "./session-accessor.sqlite-scope-helpers.js";
 import {
@@ -44,7 +49,10 @@ import type {
   SessionTranscriptContextSnapshot,
   SessionTranscriptModelContext,
 } from "./session-history-read.types.js";
-import { readModelContextNavigationPages } from "./session-model-context-pages.js";
+import {
+  readModelContextNavigationPages,
+  type ModelContextNavigationRow,
+} from "./session-model-context-pages.js";
 import {
   projectModelContextEventSql,
   projectModelContextJson,
@@ -88,8 +96,6 @@ type TranscriptContextSnapshot = {
     requests: readonly ModelContextRequest[],
   ) => Map<ContextEntry, SessionTreeEntry>;
 };
-
-const MODEL_CONTEXT_PAYLOAD_BATCH_SIZE = 400;
 
 /** Unadmitted context retains the prefix captured by its original read snapshot. */
 export function validateSessionTranscriptContextVersion(
@@ -363,6 +369,54 @@ function withTranscriptContextSnapshot<T>(
               .limit(1),
           );
           assertTranscriptNavigationValid(header?.navigation_valid);
+          function* readRows(
+            after: number,
+            end: number,
+            sequences?: number[],
+          ): Generator<ModelContextNavigationRow> {
+            const page = base
+              .where("seq", ">", after)
+              .where("seq", "<=", end)
+              .$if(sequences !== undefined, (query) => query.where("seq", "in", sequences!));
+            const query = isPostgresSqlConnection(database.db)
+              ? db
+                  .selectFrom(
+                    projectPostgresModelContextRowsSql(
+                      page.select(["seq", "event_json", "navigation_json"]),
+                    ).as("context"),
+                  )
+                  .selectAll()
+              : page
+                  .select([
+                    "seq",
+                    transcriptEventModelNavigationSql(database.db).as("navigation_json"),
+                    transcriptEventModelBytesSql(database.db, sql.lit(0)).as("model_bytes"),
+                    transcriptEventModelBytesSql(database.db, sql.lit(1)).as("retained_bytes"),
+                  ])
+                  .orderBy("seq", "asc");
+            for (const row of iterateSqliteQuerySync(database.db, query)) {
+              const raw =
+                "exceptional_json" in row && typeof row.exceptional_json === "string"
+                  ? row.exceptional_json
+                  : null;
+              const bytes = (native: number, omitCheckpoint: boolean) =>
+                raw === null
+                  ? native
+                  : Buffer.byteLength(projectModelContextJson(raw, false, omitCheckpoint), "utf8");
+              const navigationJson =
+                raw === null ? row.navigation_json : projectModelContextJson(raw, true);
+              // SAFETY: SQL preserves entry discriminants; this fresh object has no other owner.
+              const entry = JSON.parse(navigationJson) as ContextEntry;
+              entry.seq = row.seq;
+              yield {
+                entry,
+                bytes: bytes(row.model_bytes, false),
+                withoutCheckpointBytes: bytes(row.retained_bytes, true),
+                // PostgreSQL rows JSONB cannot decode use the JavaScript projection owner.
+                ...(raw === null ? {} : { exceptional: true as const }),
+              };
+            }
+          }
           const {
             rows: navigation,
             entries,
@@ -379,50 +433,12 @@ function withTranscriptContextSnapshot<T>(
               fence ? fence.beforeRawSeq - 1 : Infinity,
               through?.rawSeq ?? Infinity,
             ),
-            *readRows(after, end) {
-              const page = base.where("seq", ">", after).where("seq", "<=", end);
-              const query = isPostgresSqlConnection(database.db)
-                ? db
-                    .selectFrom(
-                      projectPostgresModelContextRowsSql(
-                        page.select(["seq", "event_json", "navigation_json"]),
-                      ).as("context"),
-                    )
-                    .selectAll()
-                : page
-                    .select([
-                      "seq",
-                      transcriptEventModelNavigationSql(database.db).as("navigation_json"),
-                      transcriptEventModelBytesSql(database.db, sql.lit(0)).as("model_bytes"),
-                      transcriptEventModelBytesSql(database.db, sql.lit(1)).as("retained_bytes"),
-                    ])
-                    .orderBy("seq", "asc");
-              for (const row of iterateSqliteQuerySync(database.db, query)) {
-                const raw =
-                  "exceptional_json" in row && typeof row.exceptional_json === "string"
-                    ? row.exceptional_json
-                    : null;
-                const bytes = (native: number, omitCheckpoint: boolean) =>
-                  raw === null
-                    ? native
-                    : Buffer.byteLength(
-                        projectModelContextJson(raw, false, omitCheckpoint),
-                        "utf8",
-                      );
-                const navigationJson =
-                  raw === null ? row.navigation_json : projectModelContextJson(raw, true);
-                // SAFETY: SQL preserves entry discriminants; this fresh object has no other owner.
-                const entry = JSON.parse(navigationJson) as ContextEntry;
-                entry.seq = row.seq;
-                yield {
-                  entry,
-                  bytes: bytes(row.model_bytes, false),
-                  withoutCheckpointBytes: bytes(row.retained_bytes, true),
-                  // PostgreSQL rows JSONB cannot decode use the JavaScript projection owner.
-                  ...(raw === null ? {} : { exceptional: true as const }),
-                };
-              }
-            },
+            readRows,
+            // Historical/fenced, full-fidelity and PostgreSQL reads keep canonical navigation.
+            readCompacted:
+              limits && !through && !fence && !isMainThread && !isPostgresSqlConnection(database.db)
+                ? () => readCompactedModelContextNavigation(database, resolved, readRows)
+                : undefined,
           });
           if (!anchorFound) {
             throw new SessionTranscriptReadFenceError(

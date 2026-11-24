@@ -17,6 +17,7 @@ import {
   approveOpenClawIdNodeInWorker,
   consumeOpenClawIdNodePairingInWorker,
   removeOpenClawIdNodePairingsInWorker,
+  setOpenClawIdMemberOperatorGrantInWorker,
 } from "./device-pairing-openclaw-id.worker.js";
 import * as tokens from "./device-pairing-tokens.kernel.js";
 
@@ -27,6 +28,10 @@ export const devicePairingOperations = {
   ),
   "devicePairing.removeOpenClawIdNodes": devicePairingMutation(
     removeOpenClawIdNodePairingsInWorker,
+  ),
+  // Persistence rewrites the paired table, so the receipt reads every device, not one.
+  "devicePairing.setOpenClawIdMemberGrant": devicePairingMutation(
+    setOpenClawIdMemberOperatorGrantInWorker,
   ),
   "devicePairing.registerJoinCode": devicePairingMutation(
     (input: Parameters<typeof registerDevicePairingJoinCodeInWorker>[1], { database }) =>

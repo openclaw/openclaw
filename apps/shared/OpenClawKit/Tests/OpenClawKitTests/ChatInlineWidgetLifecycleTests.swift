@@ -230,19 +230,23 @@ private final class WidgetLifecycleFixture {
     }
 
     func update() {
-        let resolver = self.resolver
         let ready = self.ready
+        // Like ChatView, the resources reach the current resolver through their owner at call time.
+        let gateway = ChatGatewayResources(
+            owner: ObjectIdentifier(self.modelOwner),
+            isResolverReady: { [weak self] in self?.ready == true },
+            faviconContext: { nil },
+            loadFavicon: { _ in nil },
+            resolveWidgetResource: { [weak self] path, failed in
+                await self?.resolver.resolve(path: path, failedResource: failed)
+            },
+            loadMedia: { _, _, _ in nil })
         self.host.rootView = AnyView(ChatMessageBubble(
             message: self.message,
             style: .standard,
             markdownVariant: .standard,
-            userAccent: nil,
             displayOptions: [],
-            assistantName: nil,
-            assistantAvatarText: nil,
-            assistantAvatarTint: nil,
             showsAssistantAvatar: false,
-            isClean: false,
             contextWindowTokens: nil,
             userMessageExpanded: false,
             onToggleUserMessageExpanded: {},
@@ -250,13 +254,8 @@ private final class WidgetLifecycleFixture {
                 modelID: ObjectIdentifier(self.modelOwner),
                 sessionTarget: self.target,
                 sessionGeneration: self.sessionGeneration),
-            inlineWidgetResolverReady: ready,
-            inlineWidgetResourceResolver: { path, failed in
-                await resolver.resolve(path: path, failedResource: failed)
-            },
-            mediaArtifactResolverReady: false,
-            mediaPlaybackAllowed: { false },
-            loadMediaArtifact: { _, _, _ in nil })
+            mediaPlaybackAllowed: { false })
+            .environment(\.openClawChatGateway, gateway)
             .onChange(of: ready, initial: true) { [weak self] _, value in
                 self?.renderedReady = value
             })
@@ -294,7 +293,10 @@ private final class WidgetLifecycleFixture {
         self.titleObservation = nil
         self.webView = current
         self.loadedWebView = nil
-        self.titleObservation = current?.observe(\.title, options: [.initial, .new]) { @Sendable [weak self, weak current] _, _ in
+        self.titleObservation = current?.observe(\.title, options: [
+            .initial,
+            .new,
+        ]) { @Sendable [weak self, weak current] _, _ in
             Task { @MainActor in
                 guard let self, let current, self.webView === current else { return }
                 if current.title == "Widget fixture" { self.loadedWebView = current }

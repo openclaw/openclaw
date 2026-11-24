@@ -299,6 +299,9 @@ describe("Where chip", () => {
     expect(container.querySelector(".new-session-page__trigger-summary")?.textContent).toBe(
       "Windows (WSL2) · Tiny Windows",
     );
+    expect(container.querySelector("#new-session-where-trigger")?.getAttribute("aria-label")).toBe(
+      "Where: aws, Windows (WSL2) · Tiny Windows",
+    );
     expect(container.querySelector("openclaw-select-picker")).toBeNull();
   });
 

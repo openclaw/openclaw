@@ -669,10 +669,11 @@ review_guard() {
     },
   );
 
-  itPosix("keeps the admitted workflow after a failed command and main advances", () => {
+  itPosix("keeps the admitted workflow across main advances with collection deferred", () => {
     const fixture = workflowFixture();
     const { source, reviewPath } = fixture;
-    const first = fixture.run("1");
+    const env = { ...fixture.env, OPENCLAW_PR_DEFER_CACHE_COLLECTION: "1" };
+    const first = fixture.run("1", env);
     expect(first.status, first.stderr).toBe(1);
     expect(first.stdout).toContain(`admitted workflow ${source}`);
     const ref = "refs/openclaw/pr-workflow-bindings/123";
@@ -683,7 +684,7 @@ review_guard() {
     );
     fixture.commit(["scripts/pr-lib/review.sh"], true);
 
-    const resumed = fixture.run();
+    const resumed = fixture.run("0", env);
     expect(resumed.status, resumed.stderr).toBe(0);
     expect(resumed.stdout).toContain(`admitted workflow ${source}`);
     expect(resumed.stdout).not.toContain("new workflow");
@@ -714,7 +715,7 @@ esac
 exit "$status"
 `,
     );
-    const raced = fixture.run();
+    const raced = fixture.run("0", env);
     expect(raced.status, raced.stderr).toBe(1);
     expect(raced.stderr).toContain("Workflow selection changed across handoff");
     expect(raced.stdout).not.toContain("admitted workflow");
@@ -1381,6 +1382,123 @@ exec "$anchor/scripts/pr" "$@"
     );
     fixture.commit(["scripts/pr-lib/gates.sh"]);
   }
+
+  function useLegacyBootstrapParent(
+    fixture: ReturnType<typeof makeMismatchedWrapperRepo>,
+    beforeHandoff = "",
+  ) {
+    // Reproduce the archive-based parent: its independently verified bootstrap
+    // has all ten original components, but no standalone exporter.
+    const legacyPrepare = [
+      "pr_prepare_bootstrap() {",
+      "  local anchor selection record revision",
+      '  anchor=$(cd -P -- "$1" && pwd -P) || return 1',
+      '  [ -z "$pr_bootstrap_anchor" ] || [ "$pr_bootstrap_anchor" = "$anchor" ] || return 1',
+      '  pr_bootstrap_anchor="$anchor"',
+      '  pr_bootstrap_root="$anchor/.pr-bootstrap"',
+      '  if [ ! -e "$pr_bootstrap_root" ] && [ ! -L "$pr_bootstrap_root" ]; then',
+      '    selection=$(pr_batch_wrapper_git bootstrap-source "$canonical_repo_root" "" "${2:-${PR_WORKFLOW_SOURCE_REVISION:-}}") || return 1',
+      "    IFS=$'\t' read -r revision record <<< \"$selection\"",
+      '    pr_batch_wrapper_git bootstrap-owner "$canonical_repo_root" "$anchor" "$$" || return 1',
+      '    mkdir -m 700 "$pr_bootstrap_root" || return 1',
+      '    pr_git -C "$canonical_repo_root" archive "$revision" -- "${pr_bootstrap_components[@]}" > "$pr_bootstrap_root/source.tar" || return 1',
+      '    tar -xf "$pr_bootstrap_root/source.tar" -C "$pr_bootstrap_root" || return 1',
+      '    rm "$pr_bootstrap_root/source.tar"',
+      '    printf \'%s\' "$record" > "$pr_bootstrap_root/source.json" || return 1',
+      '    chmod 400 "$pr_bootstrap_root/source.json" || return 1',
+      '    pr_bootstrap_revision="$revision"',
+      "  fi",
+      "  pr_verify_bootstrap",
+      "}",
+    ].join("\n");
+    const path = "scripts/pr";
+    const source = readScript(join(fixture.linked, path))
+      .replace(/pr_prepare_bootstrap\(\) \{[\s\S]*?\n\}/u, () => legacyPrepare)
+      .replace(
+        '"${pr_bootstrap_components[@]}" scripts/pr-lib/export-tree.py',
+        '"${pr_bootstrap_components[@]}"',
+      )
+      .replace(
+        'if python3 -I -B "$pr_bootstrap_root/scripts/pr-lib/export-tree.py" "$GIT_EXEC" \\\n' +
+          '            "$anchor_git_root" "$anchor_commit" "$anchor_exec_dir" "${anchor_components[@]}"; then',
+        'if pr_git -C "$anchor_git_root" archive "$anchor_commit" -- "${anchor_components[@]}" > "$anchor_exec_dir/anchor.tar" &&\n' +
+          '            tar -xf "$anchor_exec_dir/anchor.tar" -C "$anchor_exec_dir"; then\n' +
+          '            rm "$anchor_exec_dir/anchor.tar"',
+      )
+      .replace(
+        '            OPENCLAW_PR_ANCHOR_REPO_ROOT="$canonical_repo_root" \\\n',
+        `${beforeHandoff}\n            OPENCLAW_PR_ANCHOR_REPO_ROOT="$canonical_repo_root" \\\n`,
+      );
+    fixture.write(path, source, fixture.linked);
+    fixture.commit([path], false, fixture.linked);
+    parkCanonicalOffAnchor(fixture);
+  }
+
+  itPosix("completes a verified legacy bootstrap before entering the current child", () => {
+    const fixture = makeMismatchedWrapperRepo({ toolingOnly: true });
+    useLegacyBootstrapParent(fixture);
+    const result = runWrapper(fixture, ["ci-dispatch", "123"], "linked", {
+      env: { ...fixture.env, OPENCLAW_PR_DEFER_CACHE_COLLECTION: "1" },
+    });
+    expect(result.status, result.stdout + result.stderr).toBe(0);
+    expect(result.stderr).toContain("running wrapper code materialized from");
+    expect(result.stdout).toContain("canonical wrapper executed");
+  });
+
+  itPosix.each([
+    [
+      "changed component",
+      'printf changed >> "$anchor_exec_dir/.pr-bootstrap/scripts/windows-cmd-helpers.mjs"',
+    ],
+    ["missing component", 'rm "$anchor_exec_dir/.pr-bootstrap/scripts/windows-cmd-helpers.mjs"'],
+    [
+      "invalid exporter",
+      'printf invalid > "$anchor_exec_dir/.pr-bootstrap/scripts/pr-lib/export-tree.py"',
+    ],
+    [
+      "symlink exporter",
+      'ln -s "$anchor_exec_dir/scripts/pr-lib/export-tree.py" "$anchor_exec_dir/.pr-bootstrap/scripts/pr-lib/export-tree.py"',
+    ],
+    [
+      "changed provenance",
+      'chmod 600 "$anchor_exec_dir/.pr-bootstrap/source.json"; printf \'{}\' > "$anchor_exec_dir/.pr-bootstrap/source.json"; chmod 400 "$anchor_exec_dir/.pr-bootstrap/source.json"',
+    ],
+    ["unexpected entry", 'printf extra > "$anchor_exec_dir/.pr-bootstrap/extra"'],
+    ["missing creator descriptor", "exec 9>&-"],
+  ])("retains a legacy bootstrap with %s before adding its exporter", (fault, mutation) => {
+    const fixture = makeMismatchedWrapperRepo({ toolingOnly: true });
+    useLegacyBootstrapParent(fixture, mutation);
+    const result = runWrapper(fixture, ["ci-dispatch", "123"], "linked", {
+      env: { ...fixture.env, OPENCLAW_PR_DEFER_CACHE_COLLECTION: "1" },
+    });
+    expect(result.status, result.stdout + result.stderr).not.toBe(0);
+    expect(result.stderr).toContain("running wrapper code materialized from");
+    expect(result.stdout).not.toContain("canonical wrapper executed");
+    const anchors = matchingEntries(fixture.root, ANCHOR_PREFIX);
+    expect(anchors).toHaveLength(1);
+    const bootstrap = join(fixture.root, anchors[0]!, ".pr-bootstrap");
+    const exporter = join(bootstrap, "scripts/pr-lib/export-tree.py");
+    if (fault === "invalid exporter") {
+      expect(readScript(exporter)).toBe("invalid");
+    } else if (fault === "symlink exporter") {
+      expect(lstatSync(exporter).isSymbolicLink()).toBe(true);
+    } else {
+      expect(existsSync(exporter)).toBe(false);
+    }
+    const component = join(bootstrap, "scripts/windows-cmd-helpers.mjs");
+    if (fault === "missing component") {
+      expect(existsSync(component)).toBe(false);
+    }
+    if (fault === "changed component") {
+      expect(readScript(component)).toMatch(/changed$/u);
+    }
+    if (fault === "changed provenance") {
+      expect(readScript(join(bootstrap, "source.json"))).toBe("{}");
+    }
+    if (fault === "unexpected entry") {
+      expect(readScript(join(bootstrap, "extra"))).toBe("extra");
+    }
+  });
 
   itPosix.each([
     "scripts/pr-lib/cache-lifetime.mjs",

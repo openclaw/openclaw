@@ -77,6 +77,7 @@ type InstallationObserver = {
   onReplacement: (fact: GatewayInstallationReplacement) => void;
   replacement?: GatewayInstallationReplacement;
   check?: Promise<void>;
+  trialSettled?: boolean;
 };
 
 // SDK chunks and the Gateway share one process owner without loading restart machinery.
@@ -182,6 +183,15 @@ async function readInstallationMetadata(file: string): Promise<unknown> {
 /** The existing maintenance tick owns disk reads; requests only consume recorded facts. */
 export function checkGatewayInstallationReplacement(): Promise<void> {
   const observer = installationState.observer;
+  // The maintenance owner starts only after the Gateway listener is serving.
+  if (observer && !observer.trialSettled) {
+    observer.trialSettled = true;
+    void import("../update/gateway-trial.js")
+      .then(({ announceReady }) => announceReady(observer.running.buildId))
+      .catch(() => {
+        observer.trialSettled = false;
+      });
+  }
   const root = observer?.installationRoot;
   if (
     !observer ||

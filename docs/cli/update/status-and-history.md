@@ -140,18 +140,22 @@ ledger after the last repair pass. Completed obligations leave the final summary
 and persisted warning steps; pending obligations keep their retry command.
 If the ledger cannot be read, the summary retains the warnings. Messages already
 printed during an earlier phase can remain in the terminal scrollback.
-Repeated warnings appear once in the final report. If update Doctor deferred
-agent database path repair to preserve the rollback inventory, its warning points
-to `openclaw doctor --fix` without telling you to wait for the completed update.
+Repeated warnings appear once in the final report. Update Doctor defers agent
+database path repair to preserve the rollback inventory. It warns only when a
+registration needs that repair; the warning gives the count and points to
+`openclaw doctor --fix` without telling you to wait for the completed update.
 
 Status shows each [owed step](/cli/update/how-updates-run#owed-steps) as a warning
 with its reason and what settles it. A successful update's headline counts it
-among its warnings. The newest of the last 50 runs that mentions a step decides
-whether it is still owed, so the warning stays visible after a later run that did
-not settle it. Failed and rolled-back runs owe nothing. JSON lists owed steps as
-`owedSteps` with `id`, `runId`, and `reason`; the field is absent when nothing is
-owed. `openclaw update repair --json` reports the steps it leaves owed in the
-same field, with `id` and `reason`. In the run record, an owed step is a
+among its warnings. The step `id` is `shell-completion`, `service-definition`,
+`plugin-convergence`, or `post-plugin-doctor`. A plugin step also appears in the
+update's `postUpdate.plugins.warnings` with the step `id` as its `reason`. The
+newest of the last 50 runs that mentions a step decides whether it is still
+owed, so the warning stays visible after a later run that did not settle it.
+Failed and rolled-back runs owe nothing. JSON lists owed steps as `owedSteps`
+with `id`, `runId`, and `reason`; the field is absent when nothing is owed.
+`openclaw update repair --json` reports the steps it leaves owed in the same
+field, with `id` and `reason`. In the run record, an owed step is a
 `finalize:owed:<id>` step with status `skipped` and the reason in `detail`. The
 status becomes `completed` once the step is settled. A later run that still owes
 the step records its own row and leaves the earlier one unchanged, so the earlier
@@ -212,6 +216,12 @@ Post-core finalization children report back to their parent without
 creating a separate update run, including when an older updater cannot forward
 a run ID.
 
+When the CLI saves a Markdown report, it prints the path and a **Read report**
+command. Copy the command, not the path alone: `cat -- <quoted-path>` in a POSIX
+shell, or `Get-Content -LiteralPath <quoted-path>` in PowerShell on Windows.
+The report is a private text file, not an executable; reading it does not require
+changing its permissions. JSON output keeps the report path without shell instructions.
+
 On an existing profile, update history admission waits for a database writer using
 the update's step timeout (30 minutes by default, or `--timeout`). If that wait
 expires, the command exits successfully with a deferred `update-ledger-busy`
@@ -228,6 +238,10 @@ use candidate code before its own history admission completes.
 
 Triage preserves the original update report. Any update launched during repair
 gets a separate `runId`.
+
+Standalone `openclaw update repair` reports a repair and shows only its own phases.
+If the newest prior run is a failed update, the repair report retains that run's ID,
+version, failed phase, reason, and failure detail under **Repaired update**.
 
 Unexpected automatic-update campaign failures retain the error code, when present,
 and a redacted diagnostic in the run history as well as the Gateway log. Status

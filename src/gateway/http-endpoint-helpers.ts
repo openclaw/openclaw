@@ -53,16 +53,8 @@ export async function handleGatewayPostJsonEndpoint(
   }
 
   const body = await readJsonBodyOrError(req, res, opts.maxBodyBytes, 60_000);
-  if (body === undefined) {
+  if (body === undefined || res.writableEnded || res.destroyed) {
     return undefined;
-  }
-  try {
-    await requestAuth.revalidate();
-  } catch (error) {
-    if (res.writableEnded || res.destroyed) {
-      return undefined;
-    }
-    throw error;
   }
 
   return { body, requestAuth, operatorScopes };

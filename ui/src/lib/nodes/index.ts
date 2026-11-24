@@ -20,10 +20,6 @@ export type {
   PendingDevice,
 } from "../../../../src/gateway/device-pairing-list.types.js";
 
-// Plain-HTTP origins lack crypto.subtle; load the pure-JS digest only when
-// fingerprinting an identity there. Secure contexts use the platform digest.
-const loadPureSha2 = () => import("@noble/hashes/sha2.js");
-
 type StoredIdentity = DeviceIdentity & {
   version: 1;
   createdAtMs: number;
@@ -233,7 +229,8 @@ async function fingerprintPublicKey(publicKey: Uint8Array): Promise<string> {
     const hash = await subtle.digest("SHA-256", publicKey.slice().buffer);
     return new Uint8Array(hash).toHex();
   }
-  return (await loadPureSha2()).sha256(publicKey).toHex();
+  const { sha256 } = await import("@noble/hashes/sha2.js");
+  return sha256(publicKey).toHex();
 }
 
 async function generateIdentity(): Promise<DeviceIdentity> {
