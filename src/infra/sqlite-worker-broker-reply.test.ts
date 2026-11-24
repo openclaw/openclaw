@@ -114,6 +114,7 @@ it.each(["framed", "close"])("publishes receipts before settling: %s", async (ki
           lastCompletedAtMs: 1,
           consecutiveBlocked: 0,
           warning: false,
+          bytePressure: false,
         },
       },
     };

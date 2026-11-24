@@ -3,6 +3,8 @@ import { formatErrorMessage } from "../infra/errors.js";
 import { readSqliteIntegrityFileIdentityAsync } from "../infra/sqlite-file-generation.js";
 import { assertSqliteIntegrityInWorker } from "../infra/sqlite-integrity-worker.js";
 import { isTerminalSqliteIntegrityError } from "../infra/sqlite-integrity.js";
+import { sqliteReaderDatabasePathKey } from "../infra/sqlite-reader-lifecycle.js";
+import { onSqliteWalCheckpoint } from "../infra/sqlite-wal-checkpoint.js";
 import type { DatabasePathIdentity } from "../infra/sqlite-worker-identity.js";
 import { createSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -50,6 +52,20 @@ export const verifyAgentDatabaseStartupIntegrity: AgentDatabaseStartupVerifier =
       assertCurrent();
     };
     const startedAt = Date.now();
+    const checkpointPath = sqliteReaderDatabasePathKey(identity.canonicalPath);
+    const unobserveCheckpoint = onSqliteWalCheckpoint(({ databasePath, health }) => {
+      if (databasePath !== checkpointPath || !health.bytePressure) {
+        return;
+      }
+      // Only this scan's original physical custody can cancel its owned child.
+      execution.assertCurrent();
+      assertVerificationCurrent();
+      controller.abort(
+        new Error(
+          "Agent database background integrity verification interrupted by WAL byte pressure",
+        ),
+      );
+    });
     try {
       assertVerificationCurrent();
       try {
@@ -135,6 +151,7 @@ export const verifyAgentDatabaseStartupIntegrity: AgentDatabaseStartupVerifier =
         elapsedMs: Date.now() - startedAt,
       });
     } finally {
+      unobserveCheckpoint();
       unobserve();
       await execution.release();
     }

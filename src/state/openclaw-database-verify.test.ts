@@ -1,8 +1,11 @@
-import { spawnSync } from "node:child_process";
+import type * as ChildProcessModule from "node:child_process";
+import { fork, spawnSync } from "node:child_process";
 import fs, { statSync } from "node:fs";
 import { syncBuiltinESMExports } from "node:module";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { withinTest } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
   clearRuntimeConfigSnapshot,
@@ -10,6 +13,7 @@ import {
 } from "../config/runtime-snapshot.js";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
+import * as processUrls from "../infra/runtime-process-url.js";
 import {
   readSqliteDatabaseCleanClose,
   revokeSqliteDatabaseAdmissionsForPath,
@@ -18,6 +22,7 @@ import {
 import { readStableSqliteFileGeneration } from "../infra/sqlite-file-generation.js";
 import { assertSqliteDatabaseHeader } from "../infra/sqlite-integrity.js";
 import { readSqliteNumberPragma } from "../infra/sqlite-pragma.test-support.js";
+import { configureSqliteWalMaintenance } from "../infra/sqlite-wal.js";
 import * as workerAdmission from "../infra/sqlite-worker-operation-admission.js";
 import { createPermitPool } from "../shared/permit-pool.js";
 import { assertAgentDatabaseAdmitted } from "./agent-database-admission.js";
@@ -50,6 +55,13 @@ import {
   openOpenClawStateDatabase,
   repairOpenClawStateDatabaseSchema,
 } from "./openclaw-state-db.js";
+
+vi.mock("node:child_process", async (importOriginal) => {
+  const actual = await importOriginal<typeof ChildProcessModule>();
+  return { ...actual, fork: vi.fn(actual.fork) };
+});
+
+const { fork: nativeFork } = await vi.importActual<typeof ChildProcessModule>("node:child_process");
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
   afterEach(async () => {
@@ -569,3 +581,155 @@ it.each(["healthy", "inconclusive", "corrupt"] as const)(
     });
   },
 );
+
+it("joins only its owned startup scan under same-store byte pressure without publishing a verdict", async ({
+  signal,
+}) => {
+  const env = { OPENCLAW_STATE_DIR: fs.realpathSync(tempDirs.make("startup-wal-pressure-")) };
+  vi.stubEnv("OPENCLAW_STATE_DIR", env.OPENCLAW_STATE_DIR);
+  setRuntimeConfigSnapshot({ agents: { entries: { main: {} } } });
+  const scope = { agentId: "main", env, sessionKey: "agent:main:retained" };
+  await replaceSessionEntry(scope, { sessionId: "retained", updatedAt: 1 });
+  const pathname = openOpenClawAgentDatabase(scope).path;
+  await closeOpenClawAgentDatabasesAsync();
+  closeOpenClawAgentDatabasesForTest();
+  revokeSqliteDatabaseAdmissionsForPath(pathname);
+
+  // Keep a real native snapshot behind IPC, never a fabricated successful check.
+  const worker = path.join(env.OPENCLAW_STATE_DIR, "held-integrity.mjs");
+  fs.writeFileSync(
+    worker,
+    `import { DatabaseSync } from "node:sqlite";
+process.once("message", ({ pathname }) => {
+  const database = new DatabaseSync(pathname, { readOnly: true });
+  database.exec("BEGIN");
+  database.prepare("PRAGMA schema_version").get();
+  process.on("message", (message) => {
+    if (message.type === "test-probe") process.send({ type: "test-alive" });
+  });
+  process.send({ type: "test-pinned" });
+});`,
+  );
+  const entrypoint = processUrls.resolveRuntimeProcessEntrypointUrl;
+  const redirect = vi
+    .spyOn(processUrls, "resolveRuntimeProcessEntrypointUrl")
+    .mockImplementation((name) =>
+      name === "sqliteIntegrity" ? pathToFileURL(worker) : entrypoint(name),
+    );
+  const pinned = Promise.withResolvers<ChildProcessModule.ChildProcess>();
+  const closed = Promise.withResolvers<void>();
+  let child: ChildProcessModule.ChildProcess | undefined;
+  const launch = vi.mocked(fork).mockImplementationOnce((...args) => {
+    const launched = nativeFork(...args);
+    child = launched;
+    launched.on("message", (message) => {
+      if (
+        message &&
+        typeof message === "object" &&
+        "type" in message &&
+        message.type === "test-pinned"
+      ) {
+        pinned.resolve(launched);
+      }
+    });
+    launched.once("error", pinned.reject);
+    launched.once("close", () => {
+      closed.resolve();
+      pinned.reject(new Error("Integrity child closed before pinning its snapshot"));
+    });
+    return launched;
+  });
+  await withAgentDatabaseStartupAdmission(async (admission) => {
+    const owner = admission.adopt();
+    const verifyIntegrity = vi.fn(verifyAgentDatabaseStartupIntegrity);
+    admission.activate({
+      isCurrent: () => true,
+      preparationReady: Promise.resolve(),
+      openAgent: async () => {},
+      migrateAgent: async () => {},
+      publishAgent: async () => {},
+      verifyIntegrity,
+    });
+    try {
+      // As in runtime deferred admission, ordinary preparation starts the scan.
+      await replaceSessionEntry(scope, { sessionId: "retained", updatedAt: 2 });
+      const scan = await withinTest(pinned.promise, signal);
+      using writer = openDatabase(pathname);
+      const maintenance = configureSqliteWalMaintenance(writer, {
+        databasePath: pathname,
+        autoCheckpointPages: 0,
+        checkpointIntervalMs: 0,
+      });
+      const pass = () => maintenance.maintainPeriodic!({ maxPages: 0, checkpointMode: "PASSIVE" });
+      try {
+        writer.exec(
+          "CREATE TABLE wal_pressure(data BLOB); INSERT INTO wal_pressure VALUES (x'01')",
+        );
+        pass();
+        pass();
+        expect(maintenance.health).toMatchObject({ state: "blocked", warning: true });
+        expect(scan.killed).toBe(false);
+
+        const unrelatedPath = path.join(env.OPENCLAW_STATE_DIR, "unrelated.sqlite");
+        using unrelated = openDatabase(unrelatedPath);
+        const unrelatedMaintenance = configureSqliteWalMaintenance(unrelated, {
+          databasePath: unrelatedPath,
+          autoCheckpointPages: 0,
+          checkpointIntervalMs: 0,
+        });
+        using reader = openDatabase(unrelatedPath, true);
+        try {
+          unrelated.exec("CREATE TABLE payload(data BLOB); PRAGMA wal_checkpoint(TRUNCATE)");
+          reader.exec("BEGIN; SELECT * FROM payload");
+          unrelated.exec("INSERT INTO payload VALUES (zeroblob(67108864))");
+          unrelatedMaintenance.maintainPeriodic!({ maxPages: 0, checkpointMode: "PASSIVE" });
+          expect(unrelatedMaintenance.health).toMatchObject({ state: "blocked", warning: true });
+          expect(scan.killed).toBe(false);
+          const alive = Promise.withResolvers<void>();
+          scan.once("message", () => alive.resolve());
+          scan.send({ type: "test-probe" });
+          await withinTest(alive.promise, signal);
+        } finally {
+          reader.exec("ROLLBACK");
+          await unrelatedMaintenance.stop();
+        }
+
+        writer.exec("INSERT INTO wal_pressure VALUES (zeroblob(67108864))");
+        const walBytes = fs.statSync(`${pathname}-wal`).size;
+        expect(walBytes).toBeGreaterThan(
+          Math.max(2 * fs.statSync(pathname).size, 64 * 1024 * 1024),
+        );
+        pass();
+        // Base fails here with the real owned child and its old snapshot still retained.
+        expect(scan.killed).toBe(true);
+        await withinTest(admission.pendingPreparation, signal);
+        await withinTest(closed.promise, signal);
+        expect(scan.signalCode).toBe("SIGKILL");
+        expect(maintenance.health).toEqual(
+          expect.objectContaining({ state: "blocked", bytePressure: true }),
+        );
+        expect(readSqliteDatabaseIntegrityVerification(pathname)).toBeUndefined();
+        expect(() => assertAgentDatabaseAdmitted("main", { env })).not.toThrow();
+        expect(
+          readOpenClawDatabaseQuarantineFailure("agent", pathname, { env, fresh: true }),
+        ).toBeUndefined();
+        pass();
+        expect(maintenance.health).toEqual(
+          expect.objectContaining({ state: "complete", bytePressure: false }),
+        );
+        expect(fs.statSync(`${pathname}-wal`).size).toBe(0);
+        expect(verifyIntegrity).toHaveBeenCalledOnce();
+      } finally {
+        await maintenance.stop();
+      }
+      await closeOpenClawAgentDatabasesAsync();
+      expect(readSqliteDatabaseCleanClose(pathname)).toBe(false);
+    } finally {
+      await owner.stop();
+    }
+  }).finally(async () => {
+    if (child) await closed.promise;
+    launch.mockReset().mockImplementation(nativeFork);
+    redirect.mockRestore();
+  });
+});
