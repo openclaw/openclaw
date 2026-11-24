@@ -1647,7 +1647,8 @@ describe("talk.session unified handlers", () => {
 
     expectRespondError(respond, {
       code: ErrorCodes.UNAVAILABLE,
-      message: "Error: No configured audio transcription provider is available; check tools.media.models",
+      message:
+        "Error: No configured audio transcription provider is available; check tools.media.models",
     });
     expect(mocks.createTalkTranscriptionRelaySession).not.toHaveBeenCalled();
   });

@@ -87,9 +87,11 @@ export async function buildTalkTranscriptionCatalog(
     ready: transcriptionSelection.ready,
     ...(activeTranscriptionProvider ? { activeProvider: activeTranscriptionProvider } : {}),
     providers: useMedia
-      ? (transcriptionConfig.file?.providers ?? []).map((provider) => ({
-          ...provider,
-          label: provider.id,
+      ? (transcriptionConfig.file?.providers ?? []).map(({ id, models, configured }) => ({
+          id,
+          models,
+          configured,
+          label: id,
           modes: ["transcription"],
           transports: ["gateway-relay"],
           brains: ["none"],

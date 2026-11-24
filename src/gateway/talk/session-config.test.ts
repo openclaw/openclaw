@@ -50,7 +50,13 @@ const voiceCall = {
 it("keeps the Talk media path selected even when no media model is available", async () => {
   const config = { ...voiceCall, talk: { transcription: { provider: "media-understanding" } } };
   await expect(
-    buildTalkTranscriptionConfig(config, undefined, undefined, undefined, Promise.resolve(undefined)),
+    buildTalkTranscriptionConfig(
+      config,
+      undefined,
+      undefined,
+      undefined,
+      Promise.resolve(undefined),
+    ),
   ).resolves.toMatchObject({ source: "media-understanding", file: undefined });
   await expect(buildTalkTranscriptionConfig(config, "saved-only")).resolves.toMatchObject({
     source: "streaming",
