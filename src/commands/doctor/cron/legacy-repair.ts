@@ -382,7 +382,9 @@ export async function applyLegacyCronStoreRepair(params: {
               assertRowsUnchanged: assertSnapshotCurrent,
             },
           );
-          changes.push(`Saved pre-repair cron backup: ${backup.backupPath}`);
+          if (backup.backupPath) {
+            changes.push(`Saved pre-repair cron backup: ${backup.backupPath}`);
+          }
           warnings.push(...backup.warnings);
         }
         await saveCronJobsStore(state.storePath, store, {
