@@ -66,18 +66,6 @@ export const BUN_UI_TEST_ENV = {
 
 const unitFastConfig = "test/vitest/vitest.unit-fast.config.ts";
 const exactTestFilePattern = /^[\w./-]+\.test\.[cm]?[jt]sx?$/u;
-function literalTestFileSet(patterns: readonly string[], files: readonly string[] = patterns) {
-  const literal = (file: string) =>
-    exactTestFilePattern.test(file) &&
-    !file.startsWith("/") &&
-    !file.startsWith("../") &&
-    path.posix.normalize(file) === file;
-  // Other platforms retain their glob matcher's case and separator rules.
-  if (process.platform !== "linux" || !patterns.every(literal) || !files.every(literal)) {
-    return undefined;
-  }
-  return new Set(patterns);
-}
 const nativeBunTestHashes: Readonly<Record<string, string>> = nativeBunQualification.tests;
 const nativeBunHelperHashes: Readonly<Record<string, Readonly<Record<string, string>>>> =
   nativeBunQualification.helpers;
@@ -445,16 +433,10 @@ function resolveAllRuntimeSelections(
     args?.length === 0 &&
     (exactTargets || (configs.length === 1 && configs[0] === unitFastConfig))
   ) {
-    const owned = exactTargets ? targets! : unitFastFiles(includes ? [...includes] : undefined);
-    const included = includes ? literalTestFileSet(includes, owned) : undefined;
     const inventory = exactTargets
-      ? owned
-      : owned.filter(
-          (file) =>
-            !includes ||
-            (included
-              ? included.has(file)
-              : includes.some((pattern) => matchesVitestGlob(file, pattern))),
+      ? targets!
+      : unitFastFiles(includes ? [...includes] : undefined).filter(
+          (file) => !includes || includes.some((pattern) => matchesVitestGlob(file, pattern)),
         );
     const bunFiles = inventory.filter((file) => !nodeRequiredFiles.has(file));
     const nativeFiles = qualifiedNativeBunFiles(bunFiles, cwd);
@@ -590,16 +572,12 @@ export function resolveCiTestRuntimeInventory(
         return undefined;
       }
       const args = selection.vitestArgs ?? [];
-      const patterns = selection.includePatterns ?? files;
-      const selected = literalTestFileSet(patterns, files);
       return {
         runtime: selection.runtime,
         engine: "vitest" as const,
         args,
-        files: files.filter(
-          (file) =>
-            (!selected || selected.has(file)) &&
-            matchesVitestCliSelection(file, [file], args, "", {}, selected ? [file] : patterns),
+        files: files.filter((file) =>
+          matchesVitestCliSelection(file, [file], args, "", {}, selection.includePatterns ?? files),
         ),
       };
     });
