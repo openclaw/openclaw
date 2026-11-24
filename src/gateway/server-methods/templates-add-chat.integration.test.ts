@@ -327,8 +327,8 @@ it("keeps chat setup retryable when the opening lists zero jobs and replies succ
     // A receipt saved before declarations were recorded still loads; its opening reads the manifest.
     expect(prompts.at(-1)).toContain("Read `CLAW.md` once for its `automations` entries");
     expect(prompts.at(-1)).toContain('"tz":"America/New_York"');
-    expect(prompts.join()).not.toContain("Asia/Tokyo");
-    expect(prompts.join()).not.toContain('"action":"list","includeDisabled":true');
+    expect(prompts.join("\n")).not.toContain("Asia/Tokyo");
+    expect(prompts.join("\n")).not.toContain('"action":"list","includeDisabled":true');
     expect((await readSessionEntryReadOnlyInWorker(scope))?.templateSetup).toMatchObject({
       requiredAutomationIds: ["weekly-digest"],
       deviceTimeZone: "America/New_York",
