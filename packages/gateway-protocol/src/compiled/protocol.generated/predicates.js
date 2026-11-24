@@ -879,7 +879,7 @@ var External = [
     /(^sessionKey$|^agentId$|^sessionId$|^inputIds$)/u,
     /(^sessionKey$|^agentId$|^sessionId$|^runId$)/u,
     /(^sessionKey$|^runId$)/u,
-    /(^sessionKey$|^agentId$|^sessionId$|^message$|^mentions$|^appContext$|^workContext$|^intent$|^thinking$|^fastMode$|^fastAutoOnSeconds$|^queueMode$|^deliver$|^originatingChannel$|^originatingTo$|^originatingAccountId$|^originatingThreadId$|^replyToId$|^attachments$|^toolBindings$|^timeoutMs$|^systemInputProvenance$|^systemProvenanceReceipt$|^suppressCommandInterpretation$|^expectedLeafEntryId$|^expectedSessionRoutingContract$|^expectedPermissionMode$|^expectedToolOverrides$|^idempotencyKey$)/u,
+    /(^sessionKey$|^agentId$|^sessionId$|^expectedSessionId$|^message$|^mentions$|^appContext$|^workContext$|^intent$|^thinking$|^fastMode$|^fastAutoOnSeconds$|^queueMode$|^deliver$|^originatingChannel$|^originatingTo$|^originatingAccountId$|^originatingThreadId$|^replyToId$|^attachments$|^toolBindings$|^timeoutMs$|^systemInputProvenance$|^systemProvenanceReceipt$|^suppressCommandInterpretation$|^expectedLeafEntryId$|^expectedSessionRoutingContract$|^expectedPermissionMode$|^expectedToolOverrides$|^idempotencyKey$)/u,
     /(^profileId$|^start$|^end$)/u,
     /(^title$|^uri$|^icon$|^description$)/u,
     /(^page$|^title$|^sessionKey$|^sessionId$|^agentId$|^workspace$|^file$|^selection$|^detail$)/u,
@@ -6296,6 +6296,9 @@ var External = [
     check_49(value.sessionKey) &&
     (value.agentId === void 0 || !("agentId" in value) || check_63(value.agentId)) &&
     (value.sessionId === void 0 || !("sessionId" in value) || check_63(value.sessionId)) &&
+    (value.expectedSessionId === void 0 ||
+      !("expectedSessionId" in value) ||
+      check_63(value.expectedSessionId)) &&
     check_12(value.message) &&
     (value.mentions === void 0 || !("mentions" in value) || check_856(value.mentions)) &&
     (value.appContext === void 0 || !("appContext" in value) || check_858(value.appContext)) &&
