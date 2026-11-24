@@ -1,4 +1,4 @@
-import { symlinkSync } from "node:fs";
+import { existsSync, mkdirSync, symlinkSync } from "node:fs";
 import { copyFile, rename } from "node:fs/promises";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
@@ -705,3 +705,40 @@ it("retains physical sentinels and stable store precedence after a primary updat
     }
   });
 });
+
+it("reads an agentDir row through another spelling of its database file (#201423)", () =>
+  withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    // The reporter's layout: an upper-case agentDir that the lower-case default locator also
+    // reaches. Case-sensitive volumes get the second spelling through a link.
+    const agentDir = state.statePath("agents", "Worker", "agent");
+    mkdirSync(agentDir, { recursive: true });
+    if (!existsSync(state.statePath("agents", "worker"))) {
+      symlinkSync(
+        path.dirname(agentDir),
+        state.statePath("agents", "worker"),
+        process.platform === "win32" ? "junction" : "dir",
+      );
+    }
+    const cfg: OpenClawConfig = { agents: { entries: { main: {}, worker: { agentDir } } } };
+    setRuntimeConfigSnapshot(cfg);
+    const query = {
+      agentId: "worker",
+      key: "agent:worker:subagent:child",
+      storePath: resolveSessionStorePathCore(undefined, { agentId: "worker", env: state.env }),
+    };
+    replaceSessionEntrySync(
+      { agentId: query.agentId, sessionKey: query.key, storePath: query.storePath },
+      { sessionId: "child-id", updatedAt: 1 },
+    );
+    registerOpenClawAgentDatabase({
+      agentId: "worker",
+      path: path.join(agentDir, "openclaw-agent.sqlite"),
+    });
+    const projection = await createSessionRowProjection({ cfg, modelCatalog: [] });
+    try {
+      await projection.ensureMaterialized();
+      expect(projection.readCapabilityEntry(query)?.entry?.sessionId).toBe("child-id");
+    } finally {
+      await projection.dispose();
+    }
+  }));

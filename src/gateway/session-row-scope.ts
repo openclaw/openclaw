@@ -8,6 +8,7 @@ import { projectionLane } from "../config/sessions/session-transcript-worker-res
 import { withSessionHistoryWorkerDatabases } from "../config/sessions/session-transcript-worker-runtime.js";
 import { MAX_SESSION_ROW_FACTS_KEYS } from "../config/sessions/session-transcript-worker.types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolveDatabasePathKey } from "../infra/sqlite-worker-identity.js";
 import {
   isIncognitoSessionKey,
   normalizeAgentId,
@@ -252,6 +253,20 @@ export function prepareSessionRowScopes(
 ) {
   const ownerAgentIds: ReadonlySet<string> = new Set(listAgentIds(cfg));
   const residentPath = (pathname: string) => residentPaths.get(pathname) ?? pathname;
+  // Admission can spell an existing file differently from the resident canonical pathname.
+  // Normalize distinct physical targets once at topology publication, not during row reads.
+  const residentTargets = new Map<string, string>();
+  const residentTarget = (pathname: string) => {
+    let target = residentTargets.get(pathname);
+    if (target === undefined) {
+      target =
+        residentPaths.get(pathname) ??
+        residentPaths.get(resolveDatabasePathKey(pathname)) ??
+        pathname;
+      residentTargets.set(pathname, target);
+    }
+    return target;
+  };
   const filenames = new Map([...residentPaths].map(([filename, locator]) => [locator, filename]));
   const aliases = new Map<string, Map<string, string>>();
   const capture = (options: { agentId?: string; configuredAgentsOnly?: boolean }) => {
@@ -275,11 +290,11 @@ export function prepareSessionRowScopes(
         const agentId = identity.slice(0, separator);
         const locator = path.resolve(identity.slice(separator + 1));
         const owners = aliases.get(locator) ?? new Map<string, string>();
-        owners.set(agentId, residentPath(physical.storePath));
+        owners.set(agentId, residentTarget(physical.storePath));
         aliases.set(locator, owners);
       }
       const paths = resolved.durableTargets.map((target) =>
-        residentPath(
+        residentTarget(
           expectDefined(
             resolved.physicalTargets.get(`${target.agentId}\0${target.storePath}`),
             "physical source",
