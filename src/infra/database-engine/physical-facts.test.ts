@@ -3,18 +3,140 @@ import path from "node:path";
 import { getEnvironmentData, threadId } from "node:worker_threads";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import { admitSqliteSchema } from "../sqlite-schema-facts.js";
+import { readAgentDatabaseSchemaVersion } from "../../state/openclaw-agent-db-schema-read.js";
+import { openNodeSqliteDatabase } from "../node-sqlite.js";
+import {
+  beginPostgresReadOnlyTransaction,
+  runPostgresTransactionSync,
+} from "../postgres-sync/transaction.js";
+import type { PostgresSqlConnection } from "../sql-connection.js";
+import { publishSqliteDatabaseSchemaChange } from "../sqlite-database-admission.js";
+import { admitSqliteSchema, getSqliteReadOperationRevision } from "../sqlite-schema-facts.js";
 import { conformanceWorkerResult, spawnConformanceWorker } from "./conformance.test-support.js";
 import {
   physicalFactsTestEntrypoint,
   type PhysicalFactsTestResult,
 } from "./physical-facts-runtime.test-support.js";
-import { requireNativeDatabaseFile } from "./physical-facts.js";
+import { admitPostgresPhysicalFacts, requireNativeDatabaseFile } from "./physical-facts.js";
 import { assertPostgresCatalog, readPostgresCatalog } from "./postgres-catalog.js";
 
 const configured = getEnvironmentData("openclaw.test.workboard.connection");
 const connection = typeof configured === "string" ? configured : undefined;
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+it.each([
+  { held: false, stage: "begin" },
+  { held: false, stage: "read" },
+  { held: true, stage: "begin" },
+  { held: true, stage: "read" },
+  { held: false, stage: "begin-failure" },
+  { held: true, stage: "begin-failure" },
+])(
+  "keeps admitted agent schema during concurrent publication (held=$held, stage=$stage)",
+  ({ held, stage }) => {
+    const filename = path.join(tempDirs.make("pg-snapshot-admission-"), "anchor.sqlite");
+    using anchor = openNodeSqliteDatabase(filename);
+    using peer = openNodeSqliteDatabase(filename);
+    let isTransaction = false;
+    let changeSchema = false;
+    const db: PostgresSqlConnection = {
+      [Symbol.for("openclaw.postgres-sync-connection")]: true,
+      anchor,
+      advisoryLockKey: 1n,
+      mutationRevision: 0,
+      get isOpen() {
+        return anchor.isOpen;
+      },
+      get isTransaction() {
+        return isTransaction;
+      },
+      exec(sql) {
+        if (sql.startsWith("BEGIN")) {
+          isTransaction = true;
+          if (changeSchema && stage !== "read") {
+            publishSqliteDatabaseSchemaChange(peer);
+            if (stage === "begin-failure") {
+              throw new Error("BEGIN failed");
+            }
+          }
+        } else if (sql === "ROLLBACK" || sql === "COMMIT") {
+          isTransaction = false;
+        }
+      },
+      query() {
+        return {
+          rows: [{ catalog: "[]", metadata: JSON.stringify({ version: 7, store_id: "agent" }) }],
+          rowCount: 1,
+          columns: [],
+        };
+      },
+      prepare() {
+        return {
+          get: () => ({ version: 180006, server_encoding: "UTF8", client_encoding: "UTF8" }),
+          all: () => [],
+          iterate: () => [][Symbol.iterator](),
+          run: () => ({ changes: 0, lastInsertRowid: 0 }),
+          columns: () => [],
+          setReadBigInts() {},
+        };
+      },
+      close() {},
+      releaseIdleTransport() {},
+      runTransaction(operation, options, ...modes) {
+        return runPostgresTransactionSync(this, operation, options, ...modes);
+      },
+    };
+    const admit = () =>
+      admitPostgresPhysicalFacts({
+        db,
+        namespace: "agent",
+        storeId: "agent",
+        store: "agent",
+        version: 7,
+      });
+    admit();
+    changeSchema = true;
+    let reads = 0;
+    const read = () => {
+      reads++;
+      if (stage === "read") {
+        publishSqliteDatabaseSchemaChange(peer);
+      }
+      expect(readAgentDatabaseSchemaVersion(db)).toBe(7);
+      expect(getSqliteReadOperationRevision(db)).toBeUndefined();
+      db.runTransaction(() => expect(readAgentDatabaseSchemaVersion(db)).toBe(7), undefined, true);
+    };
+    const run = () => {
+      if (held) {
+        const end = beginPostgresReadOnlyTransaction(db);
+        try {
+          read();
+        } finally {
+          end();
+        }
+      } else {
+        db.runTransaction(read, undefined, true);
+      }
+    };
+    if (stage === "begin-failure") {
+      expect(run).toThrow("BEGIN failed");
+      expect(reads).toBe(0);
+    } else {
+      run();
+      expect(reads).toBe(1);
+    }
+    changeSchema = false;
+    db.exec("BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY");
+    try {
+      expect(() => readAgentDatabaseSchemaVersion(db)).toThrow("no PostgreSQL schema admission");
+    } finally {
+      db.exec("ROLLBACK");
+    }
+    expect(() => readAgentDatabaseSchemaVersion(db)).toThrow("no PostgreSQL schema admission");
+    admit();
+    expect(readAgentDatabaseSchemaVersion(db)).toBe(7);
+  },
+);
 
 it("keeps native housekeeping and copied-file recovery specific to SQLite", () => {
   for (const operation of ["integrity", "repair", "file-snapshot"] as const) {
