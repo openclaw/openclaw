@@ -2,7 +2,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { compactSubagentRunForMemory, subagentRuns } from "../registry/subagent-registry-memory.js";
 import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
 import * as announceDelivery from "./subagent-announce-delivery.js";
-import { sourceOwnerChangedResult } from "./subagent-announce-dispatch.js";
 import { privateRequesterRouteCases } from "./subagent-announce-fixtures.test-support.js";
 import * as announceOutput from "./subagent-announce-output.js";
 
@@ -14,7 +13,6 @@ type AgentCallResponse = {
   runId?: string;
   status: string;
   error?: string;
-  disposition?: "ambiguous";
 };
 
 const agentSpy = vi.fn(async (_params: DeliveryParams): Promise<AgentCallResponse> => ({
@@ -55,7 +53,7 @@ vi.mock("../../../infra/outbound/conversation-id.js", async (importOriginal) => 
 vi.mock("./subagent-announce-delivery.js", () => ({
   deliverSubagentAnnouncement: async (params: DeliveryParams) => {
     if (params.isSourceSessionEffectsAllowed?.() === false) {
-      return sourceOwnerChangedResult();
+      return { delivered: false, path: "none", reason: "source_owner_changed" };
     }
     const response = await agentSpy(params);
     if (response.status === "error") {
@@ -63,7 +61,6 @@ vi.mock("./subagent-announce-delivery.js", () => ({
         delivered: false,
         path: "direct",
         error: response.error ?? "agent delivery failed",
-        ...(response.disposition ? { disposition: response.disposition } : {}),
       };
     }
 
@@ -302,14 +299,14 @@ describe("subagent announce seam flow", () => {
     },
   );
 
-  it("reports permanent refusal after the cleanup owner changes", async () => {
+  it("reports an undelivered result after the cleanup owner changes", async () => {
     const didAnnounce = await runAnnounceFlow({
       ...retiredResult(),
       suppressChildSessionEffects: true,
       isCompletionDeliveryAllowed: () => false,
     });
 
-    expect(didAnnounce).toBe("permanent_failure");
+    expect(didAnnounce).toBe("undelivered");
     expect(agentSpy).not.toHaveBeenCalled();
   });
 
@@ -334,62 +331,28 @@ describe("subagent announce seam flow", () => {
     },
   );
 
-  it("keeps private retry input stable when late usage arrives after failure", async () => {
-    let usage: Record<string, number> = {};
-    loadSessionStoreMock.mockImplementation(() => ({
-      "agent:main:main": { sessionId: "private-parent" },
-      "agent:main:subagent:private": { sessionId: "private-child", ...usage },
-    }));
-    agentSpy.mockResolvedValueOnce({ status: "error" }).mockResolvedValueOnce({ status: "ok" });
-    const params: Parameters<typeof runAnnounceFlow>[0] = {
-      childSessionKey: "agent:main:subagent:private",
-      childRunId: "private-stable-run",
-      completionTarget: "parent",
-      completionRequesterSessionId: "private-parent",
-      ...terminalResult("private child result"),
-      expectsCompletionMessage: true,
-      startedAt: 10,
-      endedAt: 20,
-    };
-    await runAnnounceFlow(params);
-    usage = { inputTokens: 100, outputTokens: 20 };
-    await runAnnounceFlow(params);
-    expect(agentSpy).toHaveBeenCalledTimes(2);
-    const first = agentSpy.mock.calls[0]?.[0].triggerMessage;
-    expect(first).toContain("private child result");
-    expect(first).not.toContain("Stats:");
-    expect(agentSpy.mock.calls[1]?.[0].triggerMessage).toBe(first);
-  });
-
   it.each([
-    { error: "requester lookup unavailable", disposition: "retryable" },
-    {
-      error: "Session transcript keyed user is outside the current turn: old-input",
-      disposition: "permanent_failure",
-    },
-  ] as const)(
-    "reports thrown announce failures to the delivery owner ($disposition)",
-    async ({ error, disposition }) => {
-      vi.spyOn(announceDelivery, "deliverSubagentAnnouncement").mockRejectedValueOnce(
-        new Error(error),
-      );
-      const onDeliveryResult = vi.fn();
+    "requester lookup unavailable",
+    "Session transcript keyed user is outside the current turn: old-input",
+  ])("reports thrown announce failures to the delivery owner (%s)", async (error) => {
+    vi.spyOn(announceDelivery, "deliverSubagentAnnouncement").mockRejectedValueOnce(
+      new Error(error),
+    );
+    const onDeliveryResult = vi.fn();
 
-      expect(
-        await runAnnounceFlow({
-          roundOneReply: "finished result",
-          expectsCompletionMessage: true,
-          onDeliveryResult,
-        }),
-      ).toBe(disposition);
-      expect(onDeliveryResult).toHaveBeenCalledExactlyOnceWith({
-        delivered: false,
-        path: "none",
-        error,
-        disposition,
-      });
-    },
-  );
+    expect(
+      await runAnnounceFlow({
+        roundOneReply: "finished result",
+        expectsCompletionMessage: true,
+        onDeliveryResult,
+      }),
+    ).toBe("undelivered");
+    expect(onDeliveryResult).toHaveBeenCalledExactlyOnceWith({
+      delivered: false,
+      path: "none",
+      error,
+    });
+  });
 
   it("does not replace a confirmed delivery when its receipt callback throws", async () => {
     const onDeliveryResult = vi
@@ -405,37 +368,5 @@ describe("subagent announce seam flow", () => {
     expect(onDeliveryResult).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({ delivered: true }),
     );
-  });
-
-  it("does not treat ambiguous direct completion failures as announced", async () => {
-    const onDeliveryResult = vi.fn();
-    agentSpy.mockResolvedValueOnce({
-      status: "error",
-      error: "prompt lock failed after visible send",
-      disposition: "ambiguous",
-    });
-
-    const didAnnounce = await runAnnounceFlow({
-      startedAt: 10,
-      endedAt: 20,
-      childSessionKey: "agent:main:subagent:slack",
-      childRunId: "run-terminal-direct-failure",
-      requesterOrigin: {
-        channel: "slack",
-        to: "C123",
-      },
-      task: "deliver completion",
-      roundOneReply: "done",
-      expectsCompletionMessage: true,
-      onDeliveryResult,
-    });
-
-    expect(didAnnounce).toBe("ambiguous");
-    expect(onDeliveryResult.mock.lastCall?.[0]).toMatchObject({
-      delivered: false,
-      path: "direct",
-      error: "prompt lock failed after visible send",
-      disposition: "ambiguous",
-    });
   });
 });

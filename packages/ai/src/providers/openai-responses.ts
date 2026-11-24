@@ -114,7 +114,13 @@ export const streamOpenAIResponses: StreamFunction<"openai-responses", OpenAIRes
           cacheRetention === "none" || !compat.supportsPromptCacheKey
             ? undefined
             : clampOpenAIPromptCacheKey(options?.promptCacheKey ?? options?.sessionId),
-        ...resolveOpenAIPromptCacheParams(model, cacheRetention, compat, options?.promptCacheTtl),
+        ...resolveOpenAIPromptCacheParams(
+          model,
+          cacheRetention,
+          compat,
+          options?.promptCacheTtl,
+          options?.cachePrewarm,
+        ),
         store: false,
       };
 

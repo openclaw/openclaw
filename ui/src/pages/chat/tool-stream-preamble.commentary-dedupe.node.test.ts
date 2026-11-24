@@ -8,7 +8,9 @@ import {
   activeHistory,
   buildStateItems,
   createState,
+  renderedText,
 } from "./chat-history.inflight.test-support.ts";
+import { loadChatHistory } from "./chat-history.ts";
 import { applySessionMessagePayload } from "./session-message-apply.ts";
 import {
   materializeVisibleStreamState,
@@ -216,4 +218,56 @@ it("completes a keyed handoff when the last chat chunk arrives between update an
   h.stream("source-b", "A later observation.");
   h.preamble("item-a", text);
   h.expectParts([text, "item-a"], ["A later observation.", undefined]);
+});
+
+it("keeps only keyed commentary and hidden cumulative prefixes through history and later deltas", async () => {
+  const h = commentaryHarness();
+  const visibleText = () => renderedText(h.host).filter((text) => typeof text === "string");
+  vi.stubGlobal("window", globalThis);
+  try {
+    h.agent("item", { kind: "preamble", progressText: COMMENTARY });
+    expect(h.host.chatStreamSegments).toMatchObject([
+      { itemId: expect.any(String), text: COMMENTARY },
+    ]);
+    h.tool();
+    vi.advanceTimersByTime(100);
+    expect(h.host.chatToolMessages).toHaveLength(1);
+    const commentaryId = h.host.chatStreamSegments[0]!.itemId!;
+    const commentary = h.persist(commentaryId, COMMENTARY);
+    h.stream("answer-source", "Before steer.");
+    const prefix = {
+      ...assistant("Before steer."),
+      __openclaw: { id: "saved-prefix", seq: 2, runId: RUN_ID },
+    };
+    const history = {
+      messages: [commentary, prefix],
+      sessionInfo: activeHistory(RUN_ID).sessionInfo,
+    };
+    vi.spyOn(h.host.client!, "request").mockResolvedValue(history);
+    await loadChatHistory(h.host);
+    expect(h.host.chatRunId).toBe(RUN_ID);
+    expect(h.host.chatStreamSegments).toEqual([
+      { text: "Before steer.", ts: expect.any(Number), runId: RUN_ID, persisted: true },
+    ]);
+    h.stream("answer-source", "Before steer. After steer.");
+    h.expectParts(["After steer.", undefined]);
+    history.messages.push({
+      ...assistant("After steer."),
+      __openclaw: { id: "saved-followup", seq: 3, runId: RUN_ID },
+    });
+    await loadChatHistory(h.host);
+    expect(h.host.chatStreamSegments).toMatchObject([
+      { text: "Before steer.", persisted: true },
+      { text: "Before steer. After steer.", persisted: true },
+    ]);
+    h.stream("answer-source", "Before steer. After steer. Continued.");
+    h.expectParts(["Continued.", undefined]);
+    expect(visibleText()).toEqual([COMMENTARY, "Before steer.", "After steer.", "Continued."]);
+    handleChatGatewayEvent(h.host, { sessionKey: "main", runId: RUN_ID, state: "aborted" });
+    expect(h.host.chatStreamSegments).toEqual([]);
+    expect(h.host.chatRunId).toBeNull();
+    expect(visibleText()).toEqual([COMMENTARY, "Before steer.", "After steer.", "Continued."]);
+  } finally {
+    vi.unstubAllGlobals();
+  }
 });

@@ -283,6 +283,21 @@ describe("authorizeSlackSystemEventSender", () => {
     await expect(authorizeSystemEvent(ctx, request)).resolves.toEqual(expected);
   });
 
+  it("rejects a C-prefixed conversation whose type lookup returned no type", async () => {
+    // A C-prefixed ID can be an MPIM; guessing "channel" would apply the open policy.
+    const result = await authorizeSystemEvent(
+      { ...owner, resolveChannelName: async () => ({}) },
+      { senderId: "U_ATTACKER", channelId: "C0MPDM42" },
+    );
+
+    expect(result).toEqual({
+      allowed: false,
+      reason: "ambiguous-channel-type",
+      channelType: "channel",
+      channelName: undefined,
+    });
+  });
+
   it("does not use pairing-store allowFrom for MPIM system events", async () => {
     readChannelIngressStoreAllowFromForDmPolicyMock.mockResolvedValue(["U_ATTACKER"]);
     const result = await authorizeSystemEvent(

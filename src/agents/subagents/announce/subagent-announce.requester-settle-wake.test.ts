@@ -118,9 +118,7 @@ describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
         return {
           delivered: false,
           path: "direct",
-          reason: "requester_aborted",
           error: "requester execution aborted",
-          disposition: "retryable",
         };
       });
       expect(
@@ -142,8 +140,6 @@ describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
       expect(completeBatchSpy).toHaveBeenCalledExactlyOnceWith(["run-a", "run-b", "run-c"], 1, {
         delivered: false,
         path: "direct",
-        disposition: "retryable",
-        reason: "requester_aborted",
         error: "requester execution aborted",
       });
     },
@@ -243,7 +239,7 @@ describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
       deliverSpy.mockImplementationOnce(async (params) => {
         await prepareDispatch(params);
         stop.abort();
-        return { delivered: false, path: "direct", disposition: "retryable" };
+        return { delivered: false, path: "direct" };
       });
       expect(await wake({ signal: stop.signal })).toBe(false);
       const first = deliveredCallArg();
@@ -513,7 +509,7 @@ describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
       await prepareDispatch(params);
       const input = [...sessionControllerMailboxes()][0]!.entries[0]!;
       await input.onTranscriptCommitted!("requester-continuation");
-      return { delivered: false, path: "direct", disposition: "permanent_failure", error: "529" };
+      return { delivered: false, path: "direct", error: "529" };
     });
     expect(
       await wake({
@@ -530,7 +526,6 @@ describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
     expect(completeBatchSpy).toHaveBeenCalledExactlyOnceWith(["run-a", "run-b"], undefined, {
       delivered: false,
       path: "direct",
-      disposition: "permanent_failure",
       error: "529",
     });
   });

@@ -33,7 +33,6 @@ import type {
 import { refreshFrozenResultFromSession } from "./subagent-registry-lifecycle-delivery.js";
 import {
   finalizeResumedAnnounceGiveUp,
-  finalizeResumedAnnounceGiveUpInBackground,
   resumeSubagentAfterDrain,
 } from "./subagent-registry-lifecycle-finalize-cleanup.js";
 import {
@@ -461,12 +460,6 @@ export class SubagentLifecycleController {
 
   finalizeResumedAnnounceGiveUp = (params: Parameters<typeof finalizeResumedAnnounceGiveUp>[1]) =>
     finalizeResumedAnnounceGiveUp(this, params);
-
-  finalizeResumedAnnounceGiveUpInBackground = (
-    runId: string,
-    entry: SubagentRunRecord,
-    reason: "expiry" | "permanent_failure",
-  ) => finalizeResumedAnnounceGiveUpInBackground(this, runId, entry, reason);
 
   resumeAfterDrain = (
     runId: string,

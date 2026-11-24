@@ -69,7 +69,6 @@ function steerAsGrace(operation: ReturnType<typeof createReplyOperation> | undef
       scopes: ["operator.read", "operator.write"],
       gatewayAccessGrant: null,
       modelPolicy: prepareOperatorModelPolicy({ cfg: {}, policy: {} }),
-      assertCurrent() {},
     }),
     gatewayUiCommandTarget: { connId: "grace-connection", profileId: "grace-profile" },
   });
@@ -82,28 +81,24 @@ async function withTurn<T>(
       senderId?: string;
       replyOperation?: ReturnType<typeof createReplyOperation>;
     };
-    revoke: () => void;
+    stop: () => void;
   }) => Promise<T>,
   turnKind: "visible" | "queued_followup" = "visible",
   stampRequester = true,
 ) {
-  let revoked = false;
+  const stop = new AbortController();
   const authority = createAdmittedRunOperatorAuthority({
     profileId,
     canonicalIdentity: { profileId },
     scopes: ["operator.read", "operator.write"],
     gatewayAccessGrant: null,
     modelPolicy: prepareOperatorModelPolicy({ cfg: {}, policy: {} }),
-    assertCurrent() {
-      if (revoked) {
-        throw new Error("source revoked");
-      }
-    },
   });
   return admitted(async ({ admittedRunContext }) => {
     const input = {
       ...attempt,
       senderId: undefined,
+      abortSignal: stop.signal,
       messageChannel: "webchat",
       gatewayUiCommandTarget: { connId: `${profileId}-connection`, profileId },
     };
@@ -137,9 +132,7 @@ async function withTurn<T>(
         async (prepared) =>
           run({
             turn: prepared,
-            revoke: () => {
-              revoked = true;
-            },
+            stop: () => stop.abort(),
           }),
       );
     } finally {
@@ -186,8 +179,8 @@ it("creates separate personal OAuth links for two people in the same Webchat ses
   expect(keys[0]).toBe(keys[2]);
 });
 
-it("refuses a retained connect executor after source revocation and after turn end", async () => {
-  const retained = await withTurn("ada-profile", async ({ turn, revoke }) => {
+it("refuses a retained connect executor after Stop and after turn end", async () => {
+  const retained = await withTurn("ada-profile", async ({ turn, stop }) => {
     const requester = readWebchatMcpRequester(turn)!;
     const acquisition = await manager.acquire({
       sessionId: turn.sessionId,
@@ -202,8 +195,8 @@ it("refuses a retained connect executor after source revocation and after turn e
       assertRequesterCurrent: requester.assertCurrent,
     });
     const connect = view.tools[0]!;
-    revoke();
-    await expect(connect.execute("revoked", {})).rejects.toThrow();
+    stop();
+    await expect(connect.execute("stopped", {})).rejects.toThrow();
     expect(oauth.start).not.toHaveBeenCalled();
     return { connect, dispose: view.dispose };
   });
@@ -350,9 +343,9 @@ it("closes a released native view before its parent turn ends", async () => {
 });
 
 it.each([
-  ["native", "revoked"],
+  ["native", "stopped"],
   ["native", "steered"],
-  ["harness", "revoked"],
+  ["harness", "stopped"],
   ["harness", "steered"],
 ] as const)(
   "blocks real %s OAuth discovery and persistence when the participant is %s during preparation",
@@ -388,7 +381,7 @@ it.each([
         mcp: { servers: { calendar: { ...cfg.mcp.servers.calendar, url: `${origin}/mcp` } } },
       };
       try {
-        await withTurn("ada-profile", async ({ turn, revoke }) => {
+        await withTurn("ada-profile", async ({ turn, stop }) => {
           const requester = readWebchatMcpRequester(turn)!;
           await bindSessionMcpRuntimeTestScheduler();
           const acquisition = await manager.acquire({
@@ -432,15 +425,15 @@ it.each([
                 throw error;
               }),
             ]);
-            if (change === "revoked") {
-              revoke();
+            if (change === "stopped") {
+              stop();
             } else {
               steerAsGrace(turn.replyOperation);
             }
             release.resolve();
             expect(await settled).toMatchObject({
-              message: expect.stringContaining(
-                change === "revoked" ? "source revoked" : "Several people have steered",
+              message: expect.stringMatching(
+                change === "stopped" ? /no longer active|aborted/i : /Several people have steered/,
               ),
             });
             expect(paths).toHaveLength(1);

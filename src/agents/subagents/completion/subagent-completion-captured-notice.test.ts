@@ -7,10 +7,11 @@ import {
 } from "../../../config/sessions/session-accessor.js";
 import { loadSubagentRegistryFromSqlite } from "../registry/subagent-registry-state.fixture.test-support.js";
 import { useCompletionDatabase } from "./completion-database.test-support.js";
-import { appendChildStatusToRequester } from "./subagent-completion-admission.store.js";
 import {
+  armRequesterWake,
   records,
   seedSubagentCompletionOwner,
+  settleRequesterCompletionBatch,
 } from "./subagent-completion-admission.test-helpers.js";
 
 const db = useCompletionDatabase("openclaw-completion-failure-notice-");
@@ -31,7 +32,6 @@ async function fixture(count: number) {
     subagent.requesterStorePath = scope.storePath;
     subagent.delivery = { status: "pending", generation: 1 };
     subagent.completion!.resultText = `answer-${id}\n${"🌊".repeat(3_000)}\nTAIL-${id}`;
-    seedSubagentCompletionOwner({ subagent, databaseOptions: { database: db.value } });
     return subagent;
   });
   const readNotice = async () => {
@@ -52,14 +52,24 @@ async function fixture(count: number) {
 it("preserves captured results in model-visible requester history", async () => {
   const { batch, readNotice } = await fixture(4);
   batch[1]!.completionTarget = "parent";
-  batch[2]!.requesterSettleWake = {
-    status: "pending",
-    attemptCount: 0,
-    privateInput: { runId: "private-wake", message: "private input" },
+  const runIds = batch.map((child) => child.runId);
+  for (const subagent of batch) {
+    armRequesterWake({ subagent }, runIds);
+  }
+  batch[2]!.requesterSettleWake!.privateInput = {
+    runId: "private-wake",
+    message: "private input",
   };
   batch[3]!.completion!.resultText = null;
   batch[3]!.execution.outcome = { status: "error", error: "Gateway stopped" };
-  await appendChildStatusToRequester(batch);
+  for (const subagent of batch) {
+    seedSubagentCompletionOwner({ subagent, databaseOptions: { database: db.value } });
+  }
+  await settleRequesterCompletionBatch({
+    entries: batch,
+    databaseOptions: { database: db.value },
+    outcome: { delivered: false, path: "direct" },
+  });
   const notice = await readNotice();
   expect(notice).toMatchObject({
     display: false,

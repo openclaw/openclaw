@@ -6,6 +6,7 @@ import { registerModelSetupEnglish } from "../../i18n/locales/en-model-setup.ts"
 import { registerEnglishCatalog } from "../../lib/reactive/i18n.ts";
 import { installDialogPolyfill } from "../../test-helpers/modal-dialog.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
+import { waitForFast } from "../../test-helpers/wait-for.ts";
 import type { ModelSetupWizardState } from "./state.ts";
 import { ModelSetupWizard } from "./wizard-view-solid.tsx";
 
@@ -45,6 +46,9 @@ it("keeps the wizard draft mounted while typing and presenting a pending save", 
   flush();
   const modal = container.querySelector("openclaw-modal-dialog")!;
   await modal.updateComplete;
+  await waitForFast(() =>
+    expect(container.querySelector("#model-setup-wizard-text-input")).not.toBeNull(),
+  );
   const input = container.querySelector<HTMLInputElement>("#model-setup-wizard-text-input")!;
   input.focus();
   input.value = "initial typed";
@@ -99,7 +103,7 @@ it("shows live sign-in activity and focuses the primary action as each step chan
   flush();
   await container.querySelector("openclaw-modal-dialog")!.updateComplete;
   const wizard = container.querySelector(".model-setup-wizard");
-  expect(document.activeElement?.textContent).toContain("Continue");
+  await waitForFast(() => expect(document.activeElement?.textContent).toContain("Continue"));
   const deviceStep = {
     id: "device-code",
     type: "progress" as const,
@@ -110,6 +114,7 @@ it("shows live sign-in activity and focuses the primary action as each step chan
   setState(stepState(deviceStep, true));
   flush();
   expect(document.activeElement?.textContent).toContain("Reopen browser tab");
+  await waitForFast(() => expect(container.querySelector(".wizard-sign-in__title")).not.toBeNull());
   expect(container.querySelector(".wizard-sign-in__title")?.textContent).toBe(
     "Enter this code in your browser",
   );
@@ -172,6 +177,7 @@ it("presents browser sign-in as a provider badge with quiet recovery and corner 
   expect(container.querySelector(".wizard-sign-in__title")?.textContent).toBe(
     "Continue in your browser",
   );
+  await waitForFast(() => expect(container.querySelector(".wizard-sign-in__lead")).not.toBeNull());
   expect(container.querySelector(".wizard-sign-in__lead")?.textContent).toBe(
     "Linear is open in a new tab. Approve access there. This window updates by itself.",
   );
@@ -298,6 +304,7 @@ it.each([
   ));
   flush();
   await container.querySelector("openclaw-modal-dialog")!.updateComplete;
+  await waitForFast(() => expect(container.querySelector("[role=alert]")).not.toBeNull());
   const alert = container.querySelector("[role=alert]");
   expect(alert?.textContent).toBe(message);
   // The waiting dialog keeps its way back to the provider; the paste field shows it beneath.

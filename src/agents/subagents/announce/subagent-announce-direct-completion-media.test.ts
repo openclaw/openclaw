@@ -144,8 +144,6 @@ it("does not settle or retry a partially sent media batch", async () => {
   const { result } = await deliver({ event: imageEvent, sendMessage, onDeliveryResult });
   expect(result).toMatchObject({
     delivered: false,
-    terminal: true,
-    disposition: "permanent_failure",
   });
   expect(sendMessage).toHaveBeenCalledOnce();
   expect(onDeliveryResult).not.toHaveBeenCalled();

@@ -290,6 +290,7 @@ describe("warm text compaction at the request boundary", () => {
     expect(requests.map(isSummaryRequest)).toEqual([false, true]);
     expect(JSON.stringify(requests[1])).toContain("large tool output.");
     const compaction = manager.getEntries().findLast((entry) => entry.type === "compaction");
+    expect(compaction).toBeDefined();
     expect(compaction && "summary" in compaction ? compaction.summary : "").not.toContain(
       "Turn Context (split turn)",
     );

@@ -611,7 +611,7 @@ export async function materializeBundleMcpToolsForRun(params: {
     }
 
     return {
-      tools,
+      tools: connectSurface.withSignIn(tools),
       appTools: appTools.toSorted((a, b) => a.name.localeCompare(b.name)),
       ...(catalog.diagnostics && catalog.diagnostics.length > 0
         ? { diagnostics: catalog.diagnostics }

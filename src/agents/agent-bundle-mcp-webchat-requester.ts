@@ -65,7 +65,6 @@ export function captureRunMcpRequester(params: {
         // A verified-profile route must never fall back to the backend sender.
         throw new Error("Personal MCP requires the current authenticated requester.");
       }
-      operatorAuthority.assertCurrent();
       const person = participants?.resolve();
       if (
         (participants && person?.profileId !== profileId) ||
@@ -78,7 +77,6 @@ export function captureRunMcpRequester(params: {
       ) {
         throw new Error("Personal MCP requires the current authenticated requester.");
       }
-      person?.assertCurrent();
     },
   });
 }

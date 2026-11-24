@@ -157,6 +157,14 @@ function toGenericClaudeHost(
       return [
         {
           ...metadata,
+          exportPolicy:
+            host.hostId === CLAUDE_LOCAL_SESSION_HOST_ID
+              ? {
+                  origin: "native-local" as const,
+                  automatic: true,
+                  ...(session.sourceHomeId ? { stableHostThreadIdentity: true as const } : {}),
+                }
+              : { origin: "federated" as const, automatic: false },
           ...(name ? { name } : {}),
           ...(recencyAt != null ? { recencyAt } : {}),
           ...(continuable && existingSessionKey ? { sessionKey: existingSessionKey } : {}),
@@ -193,6 +201,7 @@ export function createClaudeSessionCatalogRuntime(
         allowPartialResults: _allowPartialResults,
         agentId: _agentId,
         listNodes,
+        exportSource,
         onHost,
         waitUntil,
         signal,
@@ -204,6 +213,7 @@ export function createClaudeSessionCatalogRuntime(
       const result = await listClaudeSessionCatalog({
         runtime: api.runtime,
         query: gatewayQuery,
+        exportSource,
         allowProcessHomeFallback,
         listNodes,
         waitUntil,
@@ -226,6 +236,7 @@ export function createClaudeSessionCatalogRuntime(
       const page = await readClaudeSessionTranscript({
         runtime: api.runtime,
         hostId: request.hostId,
+        sourceHomeId: request.sourceHomeId,
         threadId,
         cursor: blockCursor?.[2] ?? cursor,
         limit,

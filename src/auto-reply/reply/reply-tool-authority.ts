@@ -63,7 +63,7 @@ import {
   type CapturedReplyToolAuthoritySession,
 } from "./reply-tool-authority-cohort.js";
 import {
-  assertCurrentOperatorAuthority,
+  assertIssuedOperatorAuthority,
   captureReplyToolAuthorityContinuation,
   projectReplyToolAuthorityInput,
 } from "./reply-tool-authority-inbound.js";
@@ -190,7 +190,7 @@ function resolveFollowupRunToolAuthorityFingerprint(
   const execution = snapshot.run;
   const { provider, model, capabilityProfile } = preparedContext;
   const authority = snapshot.operatorAuthority;
-  assertCurrentOperatorAuthority(authority);
+  assertIssuedOperatorAuthority(authority);
   const { screenTarget, themeProfileId } = resolveReplyPersonalToolTargets(
     snapshot,
     capabilityProfile,
@@ -380,7 +380,7 @@ export function prepareReplyToolAuthority(
         ? resolveSessionStorePathCore(configuredStore, { agentId, env })
         : undefined,
     },
-    () => assertCurrentOperatorAuthority(snapshot.operatorAuthority),
+    () => assertIssuedOperatorAuthority(snapshot.operatorAuthority),
   );
   const readMemoryEntry = memory?.readEntry;
   const memoryCapabilities = memory?.capabilities;
@@ -392,7 +392,7 @@ export function prepareReplyToolAuthority(
     if (closed) {
       throw new Error("Reply tool authority is closed");
     }
-    assertCurrentOperatorAuthority(snapshot.operatorAuthority);
+    assertIssuedOperatorAuthority(snapshot.operatorAuthority);
   };
   const close = () => {
     closed = true;
@@ -467,7 +467,7 @@ export function prepareReplyToolAuthority(
   };
   const prepareFresh = async (input: ReplyToolAuthorityInput, route?: ReplyToolAuthorityRoute) => {
     assertOpen();
-    assertCurrentOperatorAuthority(input.operatorAuthority);
+    assertIssuedOperatorAuthority(input.operatorAuthority);
     let entry: SessionEntry | undefined;
     if (readMemoryEntry) {
       entry = readMemoryEntry();
@@ -510,7 +510,7 @@ export function prepareReplyToolAuthority(
   ) => {
     const prepared = await prepare(projectInput(caller), route);
     if (!("requesterOrigin" in caller)) {
-      assertCurrentOperatorAuthority(caller.operatorAuthority);
+      assertIssuedOperatorAuthority(caller.operatorAuthority);
     }
     projectionRead = prepared;
     return prepared.read();
@@ -599,7 +599,7 @@ export function prepareReplyToolAuthority(
           assertCurrent();
           const participant = caller && "kind" in caller ? caller.caller : caller;
           if (participant && !("requesterOrigin" in participant)) {
-            assertCurrentOperatorAuthority(participant.operatorAuthority);
+            assertIssuedOperatorAuthority(participant.operatorAuthority);
           }
         };
         assertCallerCurrent();

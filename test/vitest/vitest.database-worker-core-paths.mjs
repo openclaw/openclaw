@@ -561,6 +561,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/infra/sqlite-worker-open-retention.test.ts",
   "src/infra/sqlite-worker-operation-attachment.test.ts",
   "src/secrets/job-egress.test.ts",
+  "src/secrets/store/secret-store-clawhub-template.worker.test.ts",
   "src/secrets/store/secret-store-config-ref.worker.test.ts",
   "src/secrets/store/secret-store-metadata.worker.test.ts",
   "src/secrets/store/secret-store.redaction.test.ts",
@@ -626,8 +627,9 @@ export const databaseWorkerCoreTestFiles = [
   "src/agents/code-mode.tool-result-middleware.test.ts",
   "src/agents/code-mode.source-reply.loop.test.ts",
   "src/agents/command/attempt-execution.shared.test.ts",
-  "src/agents/command/session-store.snooze.test.ts",
   "src/agents/command/session-store.test.ts",
+  // The run end reads the transcript's newest visible reply through the agent database worker.
+  "src/shared/session-unread.test.ts",
   "src/agents/core-coding-tools.exec-workdir.test.ts",
   "src/agents/subagents/registry/subagent-registry-sweeper-recovery.test.ts",
   "src/agents/subagents/spawn/acp-spawn.authority.test.ts",

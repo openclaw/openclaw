@@ -13,6 +13,7 @@ import {
 import type { OpenClawCanvasWidgetView } from "../../../components/canvas-widget-view.tsx";
 import { dispatchWidgetPrompt } from "../../../components/mcp-app-security.ts";
 import type { McpAppViewProps } from "../../../components/mcp-app-view-types.ts";
+import { IconButton } from "../../../components/solid/icon-button.tsx";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
 import { registerChatToolWidgetsEnglish } from "../../../i18n/locales/en-chat-tool-widgets.ts";
@@ -46,6 +47,10 @@ import { ChatLazyBoundary } from "./chat-lazy-boundary.tsx";
 import { RawOutputToggle } from "./chat-tool-content.solid.tsx";
 import { TranscriptRowKeyContext } from "./chat-transcript-layout.ts";
 import { WidgetCardMenu, type WidgetRawDetailsLabel } from "./widget-card-menu.tsx";
+import {
+  createWidgetCommentInteraction,
+  widgetInspectionOutlineStyle,
+} from "./widget-comment-interaction.ts";
 import { exportWidget } from "./widget-export.ts";
 import { WidgetPinButton, type WidgetPinTarget } from "./widget-pin-button.tsx";
 import {
@@ -491,7 +496,7 @@ function CanvasPreview(props: {
   surface: string;
   options?: WidgetCardOptions;
 }) {
-  let exportSource: WidgetExportSource;
+  const [exportSource, setExportSource] = createSignal<WidgetExportSource>();
   const sandbox = () =>
     resolveEmbedSandbox(props.options?.embedSandboxMode ?? "scripts", props.preview.sandbox);
   const provider = () => props.options?.boardProvider;
@@ -519,8 +524,21 @@ function CanvasPreview(props: {
   };
   const canExportImage = () => !props.preview.mcpApp && isInternalCanvasEntryUrl(props.preview.url);
   const hasMenu = () => canExportImage() || Boolean(props.options?.rawText);
-  const hasActions = () =>
-    props.options?.mediaReadAllowed !== false && Boolean(canPin() || hasMenu());
+  const canAnnotate = () =>
+    !props.preview.mcpApp &&
+    sandbox().includes("allow-scripts") &&
+    isManagedCanvasDocumentPreview(props.preview);
+  const mediaAllowed = () => props.options?.mediaReadAllowed !== false;
+  const annotationSource = () => {
+    const source = exportSource();
+    return source instanceof HTMLIFrameElement ? undefined : source;
+  };
+  const annotation = createWidgetCommentInteraction({
+    enabled: () => mediaAllowed() && canAnnotate(),
+    source: annotationSource,
+    title: () => props.preview.title?.trim() || t("chat.toolCards.canvas"),
+  });
+  const hasActions = () => mediaAllowed() && Boolean(canAnnotate() || canPin() || hasMenu());
   const pinTarget = createMemo(
     (): WidgetPinTarget | undefined =>
       canPin()
@@ -545,11 +563,23 @@ function CanvasPreview(props: {
       class="chat-tool-card__preview"
       data-content-kind={props.preview.mcpApp ? "mcp-app" : "canvas-html"}
       data-has-widget-actions={hasActions() ? "" : undefined}
+      data-widget-inspecting={annotation.inspecting() ? "" : undefined}
       data-kind="canvas"
       data-surface={props.surface}
     >
       <Show when={hasActions()}>
         <div class="chat-tool-card__preview-actions" data-widget-actions>
+          <Show when={canAnnotate()}>
+            <IconButton
+              class="chat-tool-card__widget-action"
+              icon="penLine"
+              label={t("chat.toolCards.annotateWidget")}
+              pressed={annotation.inspecting()}
+              disabled={!annotationSource()}
+              ref={annotation.setPen}
+              onClick={annotation.toggleAnnotation}
+            />
+          </Show>
           <Show when={pinTarget()} keyed>
             {(target) => <WidgetPinButton target={target} title={props.preview.title} />}
           </Show>
@@ -558,7 +588,7 @@ function CanvasPreview(props: {
               canExportImage={canExportImage()}
               hasRawDetails={Boolean(props.options?.rawText)}
               onAction={(value): WidgetRawDetailsLabel | void => {
-                const source = exportSource;
+                const source = exportSource();
                 const title = props.preview.title;
                 const toggleRawDetails = props.options?.toggleRawDetails;
                 // Raw details belong to the enclosing tool card; canvas islands own their iframe DOM.
@@ -601,13 +631,32 @@ function CanvasPreview(props: {
           </Show>
         </div>
       </Show>
-      <div class="chat-tool-card__preview-panel" data-side="canvas">
+      <div
+        class="chat-tool-card__preview-panel"
+        data-side="canvas"
+        ref={annotation.setPanel}
+        style={{ position: "relative" }}
+      >
         <WidgetContent
           preview={props.preview}
           sandbox={sandbox()}
           options={props.options}
-          onExportSource={(source) => (exportSource = source)}
+          onExportSource={(source) => {
+            if (!source) {
+              annotation.reset();
+            }
+            setExportSource(source);
+          }}
         />
+        <Show when={annotation.outline()}>
+          {(rect) => (
+            <div
+              class="widget-inspect-outline"
+              aria-hidden="true"
+              style={widgetInspectionOutlineStyle(rect())}
+            />
+          )}
+        </Show>
       </div>
     </div>
   );

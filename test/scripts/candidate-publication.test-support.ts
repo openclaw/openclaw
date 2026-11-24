@@ -44,6 +44,8 @@ export function candidatePublicationFixture(
     candidateVersion?: string;
     targetContextRef?: string;
     qualificationBaselines?: { upgradeBaseline: string; upgradeSurvivorBaselines: string[] };
+    publicationArtifactSource?: { runId: string; runAttempt: number };
+    reuseEvidence?: boolean;
     releaseProfile?: "beta" | "stable" | "full" | "extended-stable";
     transportRef?: string;
     runId?: string;
@@ -67,7 +69,7 @@ export function candidatePublicationFixture(
     selectedProfile === "extended-stable"
       ? "stable"
       : (selectedProfile ?? (beta ? "beta" : "stable"));
-  const fixture = trustedMainNpmFixture(beta ? "beta" : "stable", {
+  const fixture = trustedMainNpmFixture(profile === "beta" ? "beta" : "stable", {
     targetVersion: extended ? "2026.8.28" : version,
   });
   const c = options.candidateSha ?? defaultQ;
@@ -90,6 +92,9 @@ export function candidatePublicationFixture(
   const publishing = purpose === "publish";
   const tooling = { fullRef: "refs/heads/" + branch, ref: branch, sha: q };
   const laneInputs = {
+    ...(options.publicationArtifactSource
+      ? { publication_artifact_source_json: JSON.stringify(options.publicationArtifactSource) }
+      : {}),
     qualification_baselines_json: options.qualificationBaselines
       ? JSON.stringify(options.qualificationBaselines)
       : extended
@@ -117,9 +122,10 @@ export function candidatePublicationFixture(
       options.targetContextRef ??
       (extended ? "extended-stable/" : "release/") + version.split("-")[0],
     release_profile: profile,
+    reuse_evidence: String(options.reuseEvidence ?? true),
     rerun_group: "all",
     mode: "both",
-    run_release_soak: String(!beta),
+    run_release_soak: String(profile !== "beta"),
     trusted_workflow_json: publicationDispatchEnvelope(tooling, intent, laneInputs),
   });
   const admission = admissionFixture(options.protectedTag ?? true, {
@@ -148,6 +154,20 @@ export function candidatePublicationFixture(
         .replaceAll('"main"', JSON.stringify(branch))
         .replaceAll("refs/heads/main", tooling.fullRef),
     );
+  // Match source admission for a regular core release with a matching Android
+  // pin: beta omits the final-only Linux/Android outputs, final includes them.
+  const platforms = [
+    ...(!beta && !extended
+      ? [{ id: "android", source: ".github/workflows/android-release.yml" }]
+      : []),
+    { id: "docker", source: ".github/workflows/docker-release.yml" },
+    ...(!beta && !extended
+      ? [{ id: "linux", source: ".github/workflows/linux-app-release-request.yml" }]
+      : []),
+    ...(!extended
+      ? [{ id: "vcr", source: ".github/workflows/vercel-container-registry-publish.yml" }]
+      : []),
+  ];
   const source = createPublicationSourceFact(
     publicationSourceRequest({
       PUBLICATION_INPUTS_JSON: JSON.stringify(inputs),
@@ -155,20 +175,24 @@ export function candidatePublicationFixture(
       PUBLICATION_TARGET_CONTEXT: inputs.target_context_ref,
       PUBLICATION_TARGET_SHA: c,
       PUBLICATION_COVERAGE_POLICY:
-        extended || profile === "full" ? "" : beta ? "npm-beta-v1" : "npm-stable-v1",
-      PUBLICATION_SKIP_TELEGRAM: String(beta),
+        extended || profile === "full" || (beta && profile !== "beta")
+          ? ""
+          : beta
+            ? "npm-beta-v1"
+            : "npm-stable-v1",
+      PUBLICATION_SKIP_TELEGRAM: String(profile === "beta"),
       GITHUB_REPOSITORY: repository,
       GITHUB_REF: tooling.fullRef,
       GITHUB_SHA: q,
       GITHUB_RUN_ID: runId,
       GITHUB_RUN_ATTEMPT: "1",
     }),
-    publishing ? { packages: [], platforms: [] } : null,
+    publishing ? { packages: [], platforms } : null,
     publishing
       ? {
           version,
           packages: [{ name: "openclaw", version, targets: ["npm"] }],
-          platforms: [],
+          platforms,
         }
       : null,
   );
@@ -231,17 +255,7 @@ export function candidatePublicationFixture(
     qualificationInputs: inputs,
     trustedWorkflow: tooling,
   };
-  const plan = Object.assign(mapped(fixture.executionPlan), admissionFields, {
-    releaseProfile: profile,
-    targetVersion: version,
-    coveragePolicy: source.coverage.coverage_policy || undefined,
-  });
-  plan.children = plan.children.filter((child) => child.selected);
   const qualificationBaselines = JSON.parse(laneInputs.qualification_baselines_json);
-  Object.assign(expectDefined(plan.candidateRequest, "candidate request"), {
-    upgradeBaseline: qualificationBaselines.upgradeBaseline,
-    upgradeSurvivorBaselines: qualificationBaselines.upgradeSurvivorBaselines,
-  });
   const candidate = fullReleaseCandidateManifestFixture({
     targetSha: c,
     toolingSha: q,
@@ -263,8 +277,17 @@ export function candidatePublicationFixture(
       runAttempt: "1",
     },
   });
-  plan.candidate = candidateBinding;
-  plan.candidateRequest = candidate.request;
+  const plan = Object.assign(mapped(fixture.executionPlan), admissionFields, {
+    releaseProfile: profile,
+    targetVersion: version,
+    coveragePolicy: source.coverage.coverage_policy || undefined,
+    candidate: candidateBinding,
+    candidateRequest: candidate.request,
+  });
+  if (plan.coveragePolicy === undefined) {
+    delete plan.coveragePolicy;
+  }
+  plan.children = plan.children.filter((child) => child.selected);
   const qualificationSources = new Map<string, string>();
   const qualificationSource = (path: string) => {
     const bytes = admission.sources.get(q + ":" + path) ?? readFileSync(path, "utf8");
@@ -387,8 +410,14 @@ export function candidatePublicationFixture(
     getArtifact() {
       throw new Error("Fresh candidate fixture does not reuse publication artifacts");
     },
+    verifyRetainedPublicationArtifacts() {
+      throw new Error("Fresh candidate fixture does not verify retained publication artifacts");
+    },
+    readWorkloadIdentity: denied,
     compareCommitLineage: denied,
     compareCommits: denied,
+    getCommit: denied,
+    resolveQualificationAdmissionDescriptor: denied,
     verifyQualificationAdmission: (
       verification: Parameters<typeof verifyQualificationAdmission>[0],
     ) =>
