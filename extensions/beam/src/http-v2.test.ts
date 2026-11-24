@@ -3,7 +3,7 @@ import http from "node:http";
 import { expect, it } from "vitest";
 import { listenOnLoopback } from "../../test-support/hanging-loopback-server.js";
 import { sampleUpload, staffReceipt } from "./beam-store.test-support.js";
-import { persistentBeamTestStore } from "./beam.test-support.js";
+import { beamTestAuthority, persistentBeamTestStore } from "./beam.test-support.js";
 import { createBeamV2Handler } from "./http-v2.js";
 import { createBeamIngressLimits, createBeamRequestHandler } from "./http.js";
 import { createBeamSessionCatalog } from "./session-catalog.js";
@@ -307,21 +307,17 @@ it("shares the publishing budget between both protocol versions", async () => {
   const { store, close } = await persistentBeamTestStore();
   const limits = createBeamIngressLimits();
   const addr = "127.0.0.1";
+  const authority = beamTestAuthority({ clientIp: addr });
   const v1 = createBeamRequestHandler({
     store,
     limits,
-    resolveClient: () => ({ clientIp: addr, scopes: ["operator.write"] }),
+    resolveAuthority: () => authority,
     resolveControlUiBasePath: () => undefined,
   });
   const v2 = createBeamV2Handler({
     ...store,
     limits,
-    currentAuthority: () => ({
-      clientIp: addr,
-      scopes: ["operator.write"],
-      assertCurrent() {},
-      async revalidate() {},
-    }),
+    currentAuthority: () => authority,
     controlUiBasePath: () => undefined,
   });
   await using server = http.createServer(
