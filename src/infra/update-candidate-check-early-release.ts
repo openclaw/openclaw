@@ -7,7 +7,11 @@ import { readStateSchemaContentVersion } from "../state/openclaw-state-db-schema
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { VERSION } from "../version.js";
 import { resolveUserPath } from "./home-dir.js";
-import { openNodeSqliteDatabase, resolveReadOnlyShmSqliteFileUri } from "./node-sqlite.js";
+import {
+  openNodeSqliteDatabase,
+  resolveImmutableSqliteFileUri,
+  resolveReadOnlyShmSqliteFileUri,
+} from "./node-sqlite.js";
 import { readSqliteUserVersion } from "./sqlite-user-version.js";
 import { collectRegisteredPaths } from "./update-candidate-state.shared.js";
 
@@ -63,9 +67,15 @@ export function readSchemaVersions(env: NodeJS.ProcessEnv = process.env): Schema
     for (const id of fs.existsSync(agentsDir) ? fs.readdirSync(agentsDir) : []) {
       agentPaths.add(path.join(agentsDir, id, "agent", "openclaw-agent.sqlite"));
     }
-    // readonly_shm reads committed WAL content without touching the serving Gateway's sidecars.
+    // readonly_shm reads committed WAL content without touching the serving Gateway's sidecars;
+    // it cannot open a WAL store a stopped Gateway closed (no -shm), whose file is then whole.
     const open = (file: string) =>
-      openNodeSqliteDatabase(resolveReadOnlyShmSqliteFileUri(file), { readOnly: true });
+      openNodeSqliteDatabase(
+        fs.existsSync(`${file}-wal`)
+          ? resolveReadOnlyShmSqliteFileUri(file)
+          : resolveImmutableSqliteFileUri(file),
+        { readOnly: true },
+      );
     const db = open(shared);
     try {
       // A PostgreSQL store keeps a version-0 SQLite anchor; its schema lives on the server and

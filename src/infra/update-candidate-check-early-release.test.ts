@@ -16,12 +16,12 @@ afterEach(() => cleanupTempDirs(roots));
 function sqlite(file: string, version: number, setup = "") {
   fs.mkdirSync(path.dirname(file), { recursive: true });
   const db = new DatabaseSync(file);
-  db.exec(`${setup} PRAGMA user_version = ${version};`);
+  db.exec(`PRAGMA journal_mode = WAL; ${setup} PRAGMA user_version = ${version};`);
   db.close();
 }
 
 /**
- * State and a release worktree as an updater leaves them when it runs this release's check:
+ * State (WAL stores, closed as a stopped Gateway leaves them) and a release worktree as an updater leaves them when it runs this release's check:
  * the 2026-11-17 main layout (`releases/<id>/build` beside `lib/node_modules/openclaw`) by default.
  */
 function install(params: {
