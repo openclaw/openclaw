@@ -11,9 +11,10 @@ import {
 import { closeOpenClawAgentDatabasesAsync } from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { readUpdateCandidateStateInventoryInProcess } from "./update-candidate-state.js";
 import { runUpdateCandidateSnapshotWorker } from "./update-candidate-state.test-support.js";
 
-it("copies file-backed transcripts into an independently usable update rehearsal", async () => {
+it.each(["present", "missing"])("rehearses with a %s file-backed archive", async (condition) => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const relative = path.join("agents", "main", "agent", "openclaw-agent.sqlite");
     const fixture = await createSessionColdStorageFixture(state.statePath(relative));
@@ -29,13 +30,25 @@ it("copies file-backed transcripts into an independently usable update rehearsal
     await closeOpenClawAgentDatabasesAsync();
     await closeOpenClawStateDatabaseAsync();
     const targetStateDir = state.path("rehearsal");
-    await runUpdateCandidateSnapshotWorker({
+    if (condition === "missing") {
+      await fs.unlink(source);
+    }
+    const input = {
       candidateRoot: state.path("candidate"),
       stateDir: state.stateDir,
       targetStateDir,
       config: {},
       env: state.env,
-    });
+    };
+    await runUpdateCandidateSnapshotWorker(input);
+    if (condition === "missing") {
+      const inventory = await readUpdateCandidateStateInventoryInProcess({
+        ...input,
+        targetStateDir: state.path("rehearsal-inventory"),
+      });
+      expect(inventory.warnings).toEqual([expect.stringContaining(archive.archive_name)]);
+      return;
+    }
     // The fixture's rehearsal remains usable after the source pathname disappears.
     await fs.rename(source, source + ".retired");
     const destination = resolveSessionColdArchivePath(

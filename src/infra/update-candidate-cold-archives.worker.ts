@@ -4,6 +4,7 @@ import type { DatabaseSync } from "node:sqlite";
 import { resolveSessionColdArchivePath } from "../config/sessions/session-cold-storage-codec.js";
 import type { DB } from "../state/openclaw-agent-db.generated.js";
 import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
+import { isMissingPathError } from "./errno.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { tryInspectSqliteReadOnlyInProcess } from "./sqlite-readonly-inspection.js";
@@ -32,8 +33,9 @@ function readColdArchiveNames(database: DatabaseSync): string[] {
 export async function measureColdArchiveBytes(
   databases: ReadonlyMap<string, StateDatabaseDiscovery>,
   stagingRoot: string,
-): Promise<number> {
+): Promise<{ bytes: number; warnings: string[] }> {
   const measured = new Set<string>();
+  const missing: string[] = [];
   let bytes = 0;
   for (const { spellings } of databases.values()) {
     const file = spellings[0];
@@ -53,13 +55,26 @@ export async function measureColdArchiveBytes(
       ));
     for (const name of names) {
       const payload = resolveSessionColdArchivePath(file, name);
-      if (!measured.has(payload)) {
+      if (measured.has(payload)) {
+        continue;
+      }
+      measured.add(payload);
+      try {
         bytes += (await fs.stat(payload)).size;
-        measured.add(payload);
+      } catch (error) {
+        if (!isMissingPathError(error)) {
+          throw error;
+        }
+        missing.push(payload);
       }
     }
   }
-  return bytes;
+  const warnings = missing.length
+    ? [
+        `${missing.length} referenced cold transcript archive file(s) are missing (first: ${missing[0]}); the rehearsal keeps them missing.`,
+      ]
+    : [];
+  return { bytes, warnings };
 }
 
 /** Preserve the copied row's storage and do not mutate or borrow live archive ownership. */
@@ -73,6 +88,13 @@ export async function copyColdArchives(
     const target = resolveSessionColdArchivePath(targetStorePath, name);
     await fs.mkdir(path.dirname(target), { recursive: true, mode: 0o700 });
     // An independent copy also avoids Windows cleanup changing a shared inode's attributes.
-    await fs.copyFile(source, target, fs.constants.COPYFILE_FICLONE | fs.constants.COPYFILE_EXCL);
+    try {
+      await fs.copyFile(source, target, fs.constants.COPYFILE_FICLONE | fs.constants.COPYFILE_EXCL);
+    } catch (error) {
+      // A payload already missing from live state stays missing, not repaired or invented.
+      if (!isMissingPathError(error)) {
+        throw error;
+      }
+    }
   }
 }
