@@ -299,8 +299,8 @@ merge-tree package. Both source SHAs are recorded. T's own Gateway writers
 seed shared cron and agent session/history data. The candidate is killed at
 its Gateway listen barrier, and copied stores are inspected before rollback.
 Advanced stores must have committed target schemas; lazy stores that did not
-advance are recorded as untouched. The projection restores only stores whose
-reader floor rose, retaining all other candidate-written bytes, then runs
+advance are recorded as untouched. The projection restores T's config preimage
+and raised-floor SQLite stores only, retaining other database bytes, then runs
 T's authenticated read smoke. Compatibility is report-only until the
 source-provenanced reader-floor contract is present; setup and store-integrity
 failures always fail. This adds one previous-source build only for selected

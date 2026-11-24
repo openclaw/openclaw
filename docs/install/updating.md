@@ -268,8 +268,8 @@ scratch source only, without changing the shipped schema or other platform cells
 For schema-version or migration changes, CI additionally boots the tested
 merge build on a fixture created by the PR fork-point release, kills it
 before Gateway listen, and records committed schemas and reader floors from
-copies. Its rollback projection restores raised-floor stores only; compatible
-stores stay exactly as the candidate left them. The previous release must
+copies. Its rollback projection restores T's config preimage and raised-floor
+SQLite stores only; other databases stay byte-exact. The previous release must
 then serve its seeded cron, sessions, and message history. Lazy stores that
 did not advance are reported as untouched, not claimed migrated. The
 compatibility gate becomes required when the candidate includes the

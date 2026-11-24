@@ -1,5 +1,6 @@
-// Genuine merge-base T -> PR-head T+1 -> projected rollback state -> genuine T.
+// Genuine fork-point T -> tested merge T+1 -> projected rollback state -> genuine T.
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
@@ -15,6 +16,7 @@ import {
 const barrierPath = fileURLToPath(new URL("./schema-downgrade-barrier.mjs", import.meta.url));
 const positiveVersion = (value) => Number.isSafeInteger(value) && value > 0;
 const errorText = (error) => String(error?.message ?? error).slice(-4096);
+const fileSha256 = (file) => createHash("sha256").update(fs.readFileSync(file)).digest("hex");
 
 // The controller and its receipt consumer use the same classification of observed facts.
 // ReaderFloor capability comes from candidate source provenance, not column presence:
@@ -187,6 +189,7 @@ export async function runSchemaDowngrade({
       candidate: { ...candidateBuild, root: candidateRoot },
     },
     fixture: null,
+    config: null,
     before: [],
     after: [],
     candidate: null,
@@ -259,6 +262,14 @@ export async function runSchemaDowngrade({
     const baselineRoot = path.join(artifacts, "schema-downgrade-baseline");
     // createReaderFixture has stopped and reaped T before returning.
     receipt.before = snapshotFixtureStores(fixture.stateDir, baselineRoot);
+    const configPreimage = path.join(root, "config.before-candidate");
+    fs.copyFileSync(fixture.configPath, configPreimage, fs.constants.COPYFILE_EXCL);
+    receipt.config = {
+      path: fixture.configPath,
+      beforeSha256: fileSha256(configPreimage),
+      afterCandidateSha256: null,
+      restoredSha256: null,
+    };
     save();
     const sentinel = path.join(root, "candidate-prelisten.json");
     fs.rmSync(sentinel, { force: true });
@@ -302,6 +313,7 @@ export async function runSchemaDowngrade({
       fixture.stateDir,
       path.join(artifacts, "schema-downgrade-post-candidate"),
     );
+    receipt.config.afterCandidateSha256 = fileSha256(fixture.configPath);
     Object.assign(
       receipt,
       classifySchemaDowngrade({
@@ -329,6 +341,17 @@ export async function runSchemaDowngrade({
       0,
       "Rollback projection must restore every raised-floor store",
     );
+    // The real launcher also restores config; its version stamp is not a SQLite reader floor.
+    const configRestore = path.join(root, "config.restore");
+    fs.copyFileSync(configPreimage, configRestore, fs.constants.COPYFILE_EXCL);
+    fs.renameSync(configRestore, fixture.configPath);
+    receipt.config.restoredSha256 = fileSha256(fixture.configPath);
+    assert.equal(
+      receipt.config.restoredSha256,
+      receipt.config.beforeSha256,
+      "Rollback projection did not restore the previous config",
+    );
+    save();
     try {
       receipt.smoke = await smokeReaderFixture(fixture, previousRoot);
     } catch (error) {
