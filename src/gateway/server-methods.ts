@@ -523,10 +523,7 @@ export async function handleGatewayRequest(
               assertCurrent,
             });
             if (result.ok) {
-              handlerOptions.respond(
-                true,
-                result.sessionKey ? { sessionKey: result.sessionKey } : null,
-              );
+              handlerOptions.respond(true, result.destination);
             } else {
               handlerOptions.respond(false, undefined, result.error);
             }
