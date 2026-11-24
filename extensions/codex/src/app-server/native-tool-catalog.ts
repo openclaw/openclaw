@@ -173,7 +173,7 @@ export async function loadCodexNativeToolCatalog(params: {
   const { binding, client, appServer, agentDir, assertCurrent } = params;
   assertCurrent();
   const runtimeIdentity = client.getRuntimeIdentity();
-  const home = resolveCodexAppServerVerifiedLocalHomeDir(
+  const home = await resolveCodexAppServerVerifiedLocalHomeDir(
     appServer,
     agentDir,
     runtimeIdentity?.codexHome,
@@ -196,6 +196,7 @@ export async function loadCodexNativeToolCatalog(params: {
       "Saved Codex declarations require the original verified local binding and selected native connection; the thread is preserved.",
     );
   }
+  assertCurrent();
   const metadata = await withCodexClientWorkspace(client, (state, maxCachedSessions) =>
     readCodexWorkspaceSessionMeta(
       client,

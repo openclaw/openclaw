@@ -1,3 +1,4 @@
+import { realpath } from "node:fs/promises";
 import { homedir as readHomeDir } from "node:os";
 import path from "node:path";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -48,11 +49,11 @@ export function resolveCodexAppServerLocalHomeDir(
  * Rollout paths name files on this host only when a local transport runs Codex
  * against the home OpenClaw selected; remote or redirected homes stay unreadable.
  */
-export function resolveCodexAppServerVerifiedLocalHomeDir(
+export async function resolveCodexAppServerVerifiedLocalHomeDir(
   appServer: Pick<CodexAppServerRuntimeOptions, "start" | "remoteWorkspaceRoot">,
   agentDir: string | undefined,
   actualHome: string | undefined,
-): string | undefined {
+): Promise<string | undefined> {
   if (
     (appServer.start.transport !== "stdio" && appServer.start.transport !== "unix") ||
     appServer.remoteWorkspaceRoot ||
@@ -61,7 +62,17 @@ export function resolveCodexAppServerVerifiedLocalHomeDir(
     return undefined;
   }
   const home = resolveCodexAppServerLocalHomeDir(appServer.start, agentDir);
-  return path.resolve(actualHome) === path.resolve(home) ? home : undefined;
+  const reportedHome = path.resolve(actualHome);
+  if (reportedHome === path.resolve(home)) {
+    return home;
+  }
+  try {
+    // Codex reports a canonical home even when its launch environment names a symlink.
+    const canonicalHome = await realpath(home);
+    return canonicalHome === reportedHome ? canonicalHome : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 /** Forces OpenClaw-owned Codex auth to remain process-local. */
