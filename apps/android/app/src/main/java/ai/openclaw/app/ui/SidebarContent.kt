@@ -719,7 +719,7 @@ internal fun OpenClawSidebar(
       palette = palette,
       onClick = { onSelectSession(session) },
       onDragCommit =
-        if (pinAccess.canEdit(session.sharingRole) && dragSource != null) {
+        if (pinAccess.canToggleSessionPin(session, sessionNowMs) && dragSource != null) {
           { direction ->
             sidebarSessionPinnedAfterDrag(dragSource, direction)?.let { pinned ->
               setSessionPinned(session.key, session.ownerAgentId, pinned)
@@ -1091,6 +1091,7 @@ internal fun OpenClawSidebar(
                         onLoadMore = viewModel::loadMoreSessionCatalog,
                         canMutateSessions = canMutateSessions,
                         pinAccess = pinAccess,
+                        nowMs = sessionNowMs,
                         onPinSession = setSessionPinned,
                         onDragActiveChange = onDragActiveChange,
                       )
@@ -1359,6 +1360,7 @@ private fun SidebarSessionCatalog(
   onLoadMore: (String) -> Unit,
   canMutateSessions: Boolean,
   pinAccess: PersonalSessionPinAccess,
+  nowMs: Long,
   onPinSession: (String, String?, Boolean) -> Unit,
   onDragActiveChange: (Boolean) -> Unit,
 ) {
@@ -1474,7 +1476,7 @@ private fun SidebarSessionCatalog(
                   palette = palette,
                   onClick = { onSelectSession(session) },
                   canMutateSessions = canMutateSessions,
-                  onPinSession = onPinSession.takeIf { pinAccess.canEdit(liveSession?.sharingRole) },
+                  onPinSession = onPinSession.takeIf { liveSession != null && pinAccess.canToggleSessionPin(liveSession, nowMs) },
                   onDragActiveChange = onDragActiveChange,
                 )
               }

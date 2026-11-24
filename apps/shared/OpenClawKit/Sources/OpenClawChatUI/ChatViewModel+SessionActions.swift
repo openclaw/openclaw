@@ -946,16 +946,22 @@ extension OpenClawChatViewModel {
     public func setSessionPinned(key: String, pinned: Bool, agentID: String? = nil) {
         let target = self.sessionMutationTarget(key: key, agentID: agentID)
         let row = self.sidebarData?.row(key: key, agentID: target.agentID ?? self.activeAgentId)
+        #if os(macOS)
+        if pinned,
+           self.rosterEntry(key: key, agentID: target.agentID ?? self.activeAgentId)?.isSnoozed() == true { return }
+        #endif
         let pinnedAt = pinned ? Date().timeIntervalSince1970 * 1000 : nil
         self.mutateSessionOptimistically(
             target: target,
             field: .pinned,
             update: { $0.pinned = pinned
                 $0.pinnedAt = pinnedAt
+                #if !os(macOS)
                 if pinned {
                     $0.snoozedUntil = nil
                     $0.snoozedAt = nil
                 }
+                #endif
             },
             mutation: { routeLease in
                 try await routeLease.patchSession(

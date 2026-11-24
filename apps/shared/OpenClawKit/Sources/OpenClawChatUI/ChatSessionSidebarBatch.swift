@@ -453,7 +453,7 @@ final class ChatSessionSidebarBatch {
             {
                 return .selfDrop
             }
-            guard ChatSessionSidebarEligibility.canPin(row) else { return nil }
+            guard ChatSessionSidebarEligibility.canPin(row), !row.isSnoozed() else { return nil }
             if row.pinned == true {
                 return .mutation(nil)
             }

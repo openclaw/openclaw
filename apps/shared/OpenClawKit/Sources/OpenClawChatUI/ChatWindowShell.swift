@@ -425,7 +425,7 @@ public struct OpenClawChatWindowShell: View {
                         : String(localized: "Pin")),
                     systemImage: self.activeSessionEntry?.pinned == true ? "pin.slash" : "pin")
             }
-            .disabled(!self.windowCommands.sessionMenuActions.canEditPins)
+            .disabled(self.activeSessionEntry.map { self.windowCommands.sessionMenuActions.canTogglePin($0) } != true)
 
             Button {
                 self.viewModel.setSessionUnread(

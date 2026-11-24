@@ -124,7 +124,9 @@ struct ChatSessionSidebarMenuTests {
         }
     }
 
-    enum PinAccess: CaseIterable { case legacy, verified, groupWriter, missing, unavailable, readOnly, reconnected }
+    enum PinAccess: CaseIterable { case legacy, verified, groupWriter, sleeping, awake, missing, unavailable, readOnly,
+                                        reconnected
+    }
 
     @Test(arguments: PinAccess.allCases)
     func `Threads offers pin edits only to the current durable preference owner with write access`(
@@ -149,8 +151,9 @@ struct ChatSessionSidebarMenuTests {
             current = false
             #expect(!retired.canEditPins)
         }
+        let hasSharedWrite = [.groupWriter, .sleeping, .awake].contains(access)
         let scope = access == .readOnly ? "operator.read" :
-            (access == .groupWriter ? "operator.write" : "operator.sessions.write")
+            (hasSharedWrite ? "operator.write" : "operator.sessions.write")
         try commands.setSessionMenuConnection(sidebarMenuConnection(
             selfProfileID: "presence-only",
             scopes: [scope],
@@ -173,8 +176,15 @@ struct ChatSessionSidebarMenuTests {
             groups: .constant([]),
             previews: .init(),
             menuActions: commands.sessionMenuActions)
-        #expect(pages.interactionSections().contains { $0.id == "pinned" } == (access == .groupWriter))
-        fixture.model.sessions = [fixture.row]
+        #expect(pages.interactionSections().contains { $0.id == "pinned" } == hasSharedWrite)
+        var row = fixture.row
+        if access == .sleeping || access == .awake {
+            row.pinned = false
+            row.pinnedAt = nil
+            row.snoozedUntil = (access == .sleeping ? Date.distantFuture : Date.distantPast)
+                .timeIntervalSince1970 * 1000
+        }
+        fixture.model.sessions = [row]
         let host = NSHostingController(rootView: ChatSessionsSheet(viewModel: fixture.model)
             .environment(\.openClawChatWindowCommands, commands)
             .defaultAppStorage(fixture.defaults))
@@ -204,11 +214,17 @@ struct ChatSessionSidebarMenuTests {
             menu.update()
             return (row, menu)
         }
-        let (index, menu) = try #require(menus.first { $0.1.item(withTitle: "Unpin") != nil })
-        let canEdit = access == .verified || access == .groupWriter
-        #expect(menu.item(withTitle: "Unpin")?.isEnabled == canEdit)
+        let pinTitle = row.isPinned ? "Unpin" : "Pin"
+        let (index, menu) = try #require(menus.first { $0.1.item(withTitle: pinTitle) != nil })
+        let canEdit = access == .verified || access == .groupWriter || access == .awake
+        #expect(menu.item(withTitle: pinTitle)?.isEnabled == canEdit)
+        let sidebarMenu = NSHostingMenu(rootView: pages.contextMenu(for: row, isChild: false))
+        sidebarMenu.update()
+        #expect(sidebarMenu.item(withTitle: pinTitle)?.isEnabled == canEdit)
+        if access ==
+            .sleeping { #expect(sidebarMenu.items.first { $0.title.hasPrefix("Wake session · ") }?.isEnabled == true) }
         let leading = table.delegate?.tableView?(table, rowActionsForRow: index, edge: .leading)
-        #expect(leading?.map(\.title) == (canEdit ? ["Unpin"] : []))
+        #expect(leading?.map(\.title) == (canEdit ? [pinTitle] : []))
         if access != .readOnly { #expect(menu.item(withTitle: "Archive")?.isEnabled == true) }
     }
 

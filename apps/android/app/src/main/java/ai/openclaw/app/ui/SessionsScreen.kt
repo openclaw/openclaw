@@ -865,7 +865,7 @@ private fun SessionRow(
               session.pinned == true -> nativeString("Unpin")
               else -> nativeString("Pin")
             }
-          SessionMenuItem(pinLabel, enabled = canEditPin) {
+          SessionMenuItem(pinLabel, enabled = pinAccess.canToggleSessionPin(session, nowMs)) {
             menuExpanded = false
             coroutineScope.launch {
               viewModel.patchChatSession(ChatSessionPatch(key = session.key, ownerAgentId = session.ownerAgentId, pinned = session.pinned != true))
@@ -1129,6 +1129,11 @@ internal fun isSessionVisibleInNavigation(
   currentSessionKey: String,
   nowMs: Long = System.currentTimeMillis(),
 ): Boolean = !session.isSnoozed(nowMs) && (session.key == currentSessionKey || (session.archived != true && !isAutomationSession(session)))
+
+internal fun PersonalSessionPinAccess.canToggleSessionPin(
+  session: ChatSessionEntry,
+  nowMs: Long,
+): Boolean = canEdit(session.sharingRole) && (session.pinned == true || !session.isSnoozed(nowMs))
 
 internal fun canSnoozeSession(session: ChatSessionEntry): Boolean {
   val key = session.key.trim().lowercase()
