@@ -173,7 +173,6 @@ export async function handleChatSendWithStorage(
     hasExplicitOrigin: request.explicitOrigin !== undefined,
     hasRestoredCronContinuation: entry?.cronRunContinuation !== undefined,
     isIncognitoEntry: entry?.incognito === true,
-    isReconnectResume: reconnectResumeRequested,
     isSystemGenerated:
       request.suppressCommandInterpretation || request.systemProvenanceReceipt !== undefined,
     turnKind: request.turnKind,

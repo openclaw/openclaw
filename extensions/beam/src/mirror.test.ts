@@ -2,7 +2,6 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { buffer as consumeBuffer } from "node:stream/consumers";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
-import * as sessionCatalogRuntime from "openclaw/plugin-sdk/session-catalog-runtime";
 import * as ssrfRuntime from "openclaw/plugin-sdk/ssrf-runtime";
 import { withServer } from "openclaw/plugin-sdk/test-env";
 import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
@@ -27,12 +26,6 @@ beforeEach(() => {
 });
 
 afterEach(() => vi.useRealTimers());
-
-vi.mock("openclaw/plugin-sdk/session-catalog-runtime", async (importOriginal) => {
-  const actual =
-    await importOriginal<typeof import("openclaw/plugin-sdk/session-catalog-runtime")>();
-  return { ...actual, listActiveSessionCatalogs: vi.fn(actual.listActiveSessionCatalogs) };
-});
 
 async function withMirrorServer(
   respond: (req: IncomingMessage, res: ServerResponse, body: string) => void,
@@ -475,13 +468,15 @@ describe("createBeamMirrorService", () => {
         pause = beamTestBarrier();
       const list = stage === "list" ? pause.run : vi.fn();
       const read = stage === "read" ? pause.run : vi.fn();
-      vi.spyOn(sessionCatalogRuntime, "listActiveSessionCatalogs").mockReturnValue([
-        createBeamTestCatalog({
-          sessions: beamTestSessions(["t1", "t2"], Date.now()),
-          onList: list,
-          onRead: read,
-        }),
-      ]);
+      context.catalogExports = {
+        listCatalogs: () => [
+          createBeamTestCatalog({
+            sessions: beamTestSessions(["t1", "t2"], Date.now()),
+            onList: list,
+            onRead: read,
+          }),
+        ],
+      };
       const upload = vi
         .spyOn(ssrfRuntime, "fetchWithSsrFGuard")
         .mockRejectedValue(new Error("unexpected upload after stop"));

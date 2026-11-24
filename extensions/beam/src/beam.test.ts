@@ -4,6 +4,7 @@ import { afterEach, assert, describe, expect, it } from "vitest";
 import { listenOnLoopback } from "../../test-support/hanging-loopback-server.js";
 import { memoryStore, sampleUpload } from "./beam-store.test-support.js";
 import {
+  beamTestAuthority,
   createBeamTestCatalog,
   createBeamTestRunner,
   beamTestHandler,
@@ -21,7 +22,8 @@ function postUpload(endpoint: string, body = sampleUpload()) {
   });
 }
 
-const writeClient = () => ({ clientIp: "127.0.0.1", scopes: ["operator.write"] });
+const writeClient = (profileId?: string) =>
+  beamTestAuthority({ personProfileId: profileId, attributionProfileId: profileId });
 const catalogParams = { agentId: "main", hostId: "gateway", threadId: sampleUpload().beamId };
 const sourceModel = { provider: "openai", model: "gpt-5.6-sol" };
 const otherBeamId = "fedcba9876543210fedcba9876543210";
@@ -68,7 +70,7 @@ describe("Beam receiver", () => {
   it("acknowledges an explicit source release and rejects later source turns without changing history", async () => {
     const store = memoryStore();
     const endpoint = await serve(store, {
-      resolveClient: () => ({ ...writeClient(), profileId: "source-publisher" }),
+      resolveAuthority: () => writeClient("source-publisher"),
     });
     const published = (await (await postUpload(endpoint)).json()) as { publicationId: string };
     expect(published.publicationId).toMatch(/^[a-f0-9]{32}$/);
@@ -96,7 +98,7 @@ describe("Beam receiver", () => {
     const store = memoryStore();
     let profileId: string | undefined = "uploader-profile";
     const endpoint = await serve(store, {
-      resolveClient: () => ({ ...writeClient(), profileId }),
+      resolveAuthority: () => writeClient(profileId),
     });
     const upload = (body = sampleUpload()) => postUpload(endpoint, body);
     const read = () => createBeamSessionCatalog(store).read(catalogParams);
@@ -122,7 +124,7 @@ describe("Beam receiver", () => {
     let profileId = "terminal-publisher";
     const endpoint = await serve(store, {
       now: () => receivedAt,
-      resolveClient: () => ({ ...writeClient(), profileId }),
+      resolveAuthority: () => writeClient(profileId),
     });
     const updatedAt = "2026-07-20T12:00:00.000100Z";
     const entryFor = async (beamId: string) =>
@@ -161,17 +163,21 @@ describe("Beam receiver", () => {
           expect(publicationId).toBe(previousEntry.value.publicationId);
         }
         const after = Date.now();
+        const stored = await store.get(body.beamId);
         if (accepted) {
+          expect(stored?.revision).toMatch(/^[a-f0-9-]{36}$/);
+          expect(stored?.revision).not.toBe(previousEntry?.value.revision);
           expected = {
             ...body,
             publicationId,
+            revision: stored?.revision,
             receivedAt,
             createdAt: second ? 600 : 100,
             uploaderProfileId: profileId,
             publisherProfileId: second ? "publisher-600" : "publisher-100",
           };
         }
-        expect(await store.get(body.beamId)).toEqual(expected);
+        expect(stored).toEqual(expected);
         const entry = await entryFor(body.beamId);
         if (accepted) {
           assert(entry, "Beam upload did not persist its entry");
@@ -191,12 +197,12 @@ describe("Beam receiver", () => {
     const store = memoryStore();
     let profileId = "guest-publisher";
     const endpoint = await serve(store, {
-      resolveClient: () => ({
-        clientIp: "127.0.0.1",
-        scopes: ["operator.sessions.write"],
-        profileId,
-        visitorGrant: { assertCurrent() {} },
-      }),
+      resolveAuthority: () =>
+        beamTestAuthority({
+          scopes: ["operator.sessions.write"],
+          personProfileId: profileId,
+          requiredGrantPluginId: "visitor-access",
+        }),
     });
     const response = await postUpload(endpoint);
     expect(response.status).toBe(200);
@@ -217,16 +223,16 @@ describe("Beam receiver", () => {
   it.each([
     { scopes: ["operator.read"] },
     { scopes: ["operator.sessions.write"] },
-    { scopes: ["operator.sessions.write"], profileId: "guest" },
+    { scopes: ["operator.sessions.write"], personProfileId: "guest" },
     {
       scopes: ["operator.sessions.read"],
-      profileId: "guest",
-      visitorGrant: { assertCurrent() {} },
+      personProfileId: "guest",
+      requiredGrantPluginId: "visitor-access",
     },
   ])("denies insufficient publisher authority before reading the body: %j", async (client) => {
     const store = memoryStore();
     const endpoint = await serve(store, {
-      resolveClient: () => ({ clientIp: "127.0.0.1", ...client }),
+      resolveAuthority: () => beamTestAuthority(client),
     });
     const response = await postUpload(endpoint);
 
@@ -295,7 +301,7 @@ it("stops mirror polling a source after the receiver acknowledges its ownership 
   let requests = 0;
   const endpoint = await serve(
     store,
-    { resolveClient: () => ({ ...writeClient(), profileId: "source-publisher" }) },
+    { resolveAuthority: () => writeClient("source-publisher") },
     () => {
       requests++;
       return false;

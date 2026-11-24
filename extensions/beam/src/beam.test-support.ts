@@ -1,5 +1,6 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import type { GatewayRequestAuthorityV1 } from "openclaw/plugin-sdk/gateway-request-authority";
 import type { OpenClawPluginServiceContextV2 } from "openclaw/plugin-sdk/plugin-entry";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import {
@@ -8,10 +9,10 @@ import {
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { createTestPluginServiceScheduler } from "openclaw/plugin-sdk/plugin-test-api";
 import type {
+  PluginServiceExportCatalog,
   SessionCatalogHost,
   SessionCatalogTranscriptItem,
 } from "openclaw/plugin-sdk/session-catalog";
-import * as sessionCatalogRuntime from "openclaw/plugin-sdk/session-catalog-runtime";
 import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { createOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { afterEach, assert, vi } from "vitest";
@@ -20,19 +21,31 @@ import { createBeamMirrorRunner } from "./mirror.js";
 import { createBeamStore, type BeamStore } from "./store.js";
 import {
   BEAM_MAX_SESSIONS,
+  BEAM_MAX_WRITE_RECEIPTS,
   BEAM_RETENTION_MS,
   type BeamStoredSession,
   type BeamUpload,
 } from "./types.js";
 
 afterEach(() => vi.restoreAllMocks());
+export function beamTestAuthority(
+  overrides: Partial<GatewayRequestAuthorityV1> = {},
+): GatewayRequestAuthorityV1 {
+  return {
+    clientIp: "127.0.0.1",
+    scopes: ["operator.write"],
+    assertCurrent() {},
+    async revalidate() {},
+    ...overrides,
+  };
+}
 export function beamTestHandler(
   store: BeamStore,
   options: Partial<Parameters<typeof createBeamRequestHandler>[0]> = {},
   failureStatus = 500,
 ) {
   const handler = createBeamRequestHandler({
-    resolveClient: () => ({ clientIp: "127.0.0.1", scopes: ["operator.write"] }),
+    resolveAuthority: beamTestAuthority,
     resolveControlUiBasePath: () => undefined,
     ...options,
     store,
@@ -67,10 +80,25 @@ export async function persistentBeamTestStore() {
     { namespace: "handoffs", retention: "retained", env },
     { assertCurrent() {} },
   );
+  const writeStore = createPluginStateKeyedStoreV2ForTests(
+    "beam",
+    {
+      namespace: "publication-requests",
+      maxEntries: BEAM_MAX_WRITE_RECEIPTS,
+      overflowPolicy: "reject-new",
+      defaultTtlMs: BEAM_RETENTION_MS,
+      env,
+    },
+    { assertCurrent() {} },
+  );
   const store = createBeamStore({
     state: {
       openKeyedStoreV2: ({ namespace }: { namespace: string }) =>
-        namespace === "handoffs" ? handoffStore : keyedStore,
+        namespace === "handoffs"
+          ? handoffStore
+          : namespace === "publication-requests"
+            ? writeStore
+            : keyedStore,
     },
   } as unknown as PluginRuntime);
   const close = async () => {
@@ -78,7 +106,7 @@ export async function persistentBeamTestStore() {
     resetPluginStateStoreForTests();
     await state.cleanup();
   };
-  return { keyedStore, handoffStore, store, close };
+  return { keyedStore, handoffStore, writeStore, store, close };
 }
 
 export const beamTestNow = Date.parse("2026-07-27T12:00:00.000Z");
@@ -138,13 +166,12 @@ export function createBeamTestCatalog(
     onRead?: (threadId: string, sourceHomeId?: string, agentId?: string) => unknown;
     processHomeFallbackAllowed?: boolean;
   } = {},
-): sessionCatalogRuntime.ActiveSessionCatalog {
+): PluginServiceExportCatalog {
   const id = params.id ?? "claude";
   return {
-    pluginId: id,
     id,
-    label: id,
     processHomeFallbackAllowed: params.processHomeFallbackAllowed ?? true,
+    assertCurrent: () => {},
     list: async () => {
       await params.onList?.();
       const sessions = typeof params.sessions === "function" ? params.sessions() : params.sessions;
@@ -194,15 +221,15 @@ export function createBeamTestCatalog(
 }
 
 type RunnerOptions = Parameters<typeof createBeamMirrorRunner>[0] & {
-  listCatalogs?: () => sessionCatalogRuntime.ActiveSessionCatalog[];
+  listCatalogs?: () => PluginServiceExportCatalog[];
 };
 export function createBeamTestRunner({
   endpoint,
   listCatalogs = () => [createBeamTestCatalog()],
   ...options
 }: Partial<RunnerOptions> & { endpoint?: string } = {}) {
-  vi.spyOn(sessionCatalogRuntime, "listActiveSessionCatalogs").mockImplementation(listCatalogs);
   return createBeamMirrorRunner({
+    catalogExports: { listCatalogs },
     runtime: createBeamTestRuntime(beamTestMirrorConfig(endpoint ? { endpoint } : {})),
     logger: beamTestLogger,
     now: () => beamTestNow,
