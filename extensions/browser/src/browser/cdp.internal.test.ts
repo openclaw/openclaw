@@ -281,7 +281,7 @@ it("does not count ignored nodes or unnamed generic wrappers toward page depth",
     wsUrl: server.wsUrl,
     options: { interactive: true, compact: true, maxDepth: 1 },
   });
-  expect(efficient.snapshot).toBe(`${"  ".repeat(10)}- button "Deep" [ref=e1]`);
+  expect(efficient.snapshot).toBe('- button "Deep" [ref=e1]');
 
   const full = await snapshotRoleViaCdp({ wsUrl: server.wsUrl, options: { maxDepth: 1 } });
   expect(full.snapshot.split("\n")).toHaveLength(11);
