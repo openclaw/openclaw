@@ -80,6 +80,7 @@ import {
 import { hydratePromptMediaMessages } from "./images.js";
 import type { EmbeddedRunAttemptInternalParams } from "./internal-params.js";
 import { MidTurnPrecheckSignal, type MidTurnPrecheckRequest } from "./midturn-precheck.js";
+import { resolveAttemptCurrentUserTurnContextKey } from "./pre-persisted-user-turn.js";
 import { resolveProjectedRequestPressure } from "./preemptive-compaction.js";
 import { promptImageSessionKey } from "./prompt-image-decisions.js";
 import type { EmbeddedRunAttemptParams, EmbeddedRunAttemptResult } from "./types.js";
@@ -366,6 +367,8 @@ export function installEmbeddedAttemptContextGuards(input: {
           }
         : {}),
       getPrePromptMessageCount: input.getPrePromptMessageCount,
+      getCurrentUserTurnKey: () =>
+        resolveAttemptCurrentUserTurnContextKey(activeSession.messages, attempt),
       // Only the outer accepted-turn owner may advance an admitted engine.
       deferredTurn: attempt.onContextEngineTurnCandidate
         ? {

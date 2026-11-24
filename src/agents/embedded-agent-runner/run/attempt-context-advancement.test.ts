@@ -340,4 +340,137 @@ describe("context advancement through embedded attempt guards", () => {
       }
     },
   );
+
+  it("keeps a replayed pre-persisted user turn across deferred tool rounds", async () => {
+    // Control UI persists the user row before the run, so prompt() replays it in
+    // place instead of appending it. An engine whose store has not committed the
+    // live row (a summarized lossless-claw conversation) returns only its stored
+    // prefix; the host must still deliver the admitted user turn.
+    const prompt = "Build a cleanup procedure.";
+    const sessionId = "replayed-user-boundary";
+    const persistedUser = {
+      role: "user" as const,
+      content: prompt,
+      timestamp: 0,
+      idempotencyKey: "turn-replayed-user",
+    };
+    let toolCalls = 0;
+    const { session } = await createTestSession({
+      model,
+      customTools: [
+        fixtureTool(Type.Object({}), async () => ({
+          content: text(`fixture observation ${++toolCalls}`),
+          details: {},
+        })),
+      ],
+    });
+    session.agent.state.messages = [
+      userMessage("Earlier accepted request."),
+      createAssistant(model, text("Earlier accepted answer.")),
+      persistedUser,
+    ];
+    const modelRequests: Message[][] = [];
+    session.agent.streamFn = (_model, context) => {
+      modelRequests.push(structuredClone(context.messages));
+      const round = modelRequests.length;
+      return createAssistantResultStream(
+        createAssistant(
+          model,
+          round === 1 ? toolCall("call-1") : text("done"),
+          round === 1 ? "toolUse" : "stop",
+        ),
+      );
+    };
+    using promptStateLease = retainEmbeddedSessionPromptState(sessionId);
+    const sessionPromptState = promptStateLease.state;
+    const promptContext = await prepareEmbeddedAttemptPromptContext({
+      attempt: { config: {}, contextTokenBudget: 8192, sessionId },
+      capabilityToolNames: new Set(["read_fixture"]),
+      includeBoundaryTimestamp: false,
+      isRawModelRun: false,
+      messages: session.messages,
+      prompt: { effectivePrompt: prompt, effectiveTranscriptPrompt: prompt },
+      replaceSessionMessages: (messages) => {
+        session.agent.state.messages = messages;
+      },
+      sessionAgentId: "synthetic",
+      systemPromptText: "",
+      toolResultPromptProjectionState: sessionPromptState.toolResults,
+    });
+    const attempt = {
+      config: {},
+      prompt,
+      contextTokenBudget: 8192,
+      model,
+      modelId: model.id,
+      provider: model.provider,
+      sessionId,
+      sessionFile: "unused",
+      onContextEngineTurnCandidate: vi.fn(),
+      userTurnTranscriptRecorder: {
+        message: persistedUser,
+        hasPersisted: () => true,
+        getPersistedMessage: () => persistedUser,
+        isBlocked: () => false,
+        waitForRuntimePersistence: async () => {},
+      },
+    };
+    const guards = installEmbeddedAttemptContextGuards({
+      activeContextEngine: makeEngine(),
+      activeSession: session,
+      agentDir: process.cwd(),
+      attempt,
+      computerContextEpoch: { value: 0 },
+      dropThinkingBlocksForEstimate: false,
+      effectiveCwd: process.cwd(),
+      effectiveFsWorkspaceOnly: true,
+      effectiveWorkspace: process.cwd(),
+      getPrePromptMessageCount: () => promptContext.prePromptMessageCount,
+      getPromptCache: () => ({ retention: "none" }),
+      getPromptCacheRetention: () => "none",
+      getCompactionReplayEnabled: () => false,
+      getServerToolClearingEnabled: () => false,
+      toolResultPromptProjectionState: sessionPromptState.toolResults,
+      getSystemPrompt: () => "",
+      isOpenAIResponsesApi: true,
+      repairToolUseResultPairing: false,
+      sessionAgentId: "synthetic",
+      sessionManager: {},
+      settingsManager: { getBlockImages: () => false, getCompactionReserveTokens: () => 1024 },
+    } as never);
+    try {
+      await submitEmbeddedAttemptPrompt({
+        attempt: attempt as never,
+        activeSession: session,
+        contextTokenBudget: promptContext.contextTokenBudget,
+        images: [],
+        modelPrompt: promptContext.promptForModel,
+        onFinalPromptText: () => {},
+        persistToolResultProjections: async () => {},
+        promptActiveSession: (value, options) => session.prompt(value, options),
+        runtimeOnly: false,
+        systemPrompt: "",
+        toolResultAggregateMaxChars: promptContext.promptToolResultAggregateMaxChars,
+        toolResultMaxChars: promptContext.promptToolResultMaxChars,
+        toolResultPromptProjectionState: sessionPromptState.toolResults,
+        trajectoryRecorder: null,
+        transcriptLeafId: null,
+        transcriptPrompt: promptContext.promptForSession,
+      });
+      expect(modelRequests).toHaveLength(2);
+      for (const messages of modelRequests) {
+        const userTexts = messages.flatMap((message) =>
+          message.role === "user" && Array.isArray(message.content)
+            ? message.content.flatMap((part) => (part.type === "text" ? [part.text] : []))
+            : message.role === "user" && typeof message.content === "string"
+              ? [message.content]
+              : [],
+        );
+        expect(userTexts.some((value) => value.includes(prompt))).toBe(true);
+      }
+    } finally {
+      guards.remove();
+      clearEmbeddedSessionPromptStates([sessionId]);
+    }
+  });
 });

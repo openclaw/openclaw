@@ -600,7 +600,7 @@ export async function persistCompactedCurrentUserTurnReplay(params: {
 }
 
 /** The key under which the current turn sits in live context: its own row or its replay copy. */
-export function resolveCurrentUserTurnContextKey(
+function resolveCurrentUserTurnContextKey(
   messages: readonly AgentMessage[],
   turnKey: string | undefined,
 ): string | undefined {
@@ -618,6 +618,23 @@ export function resolveCurrentUserTurnContextKey(
   return match && "idempotencyKey" in match && typeof match.idempotencyKey === "string"
     ? match.idempotencyKey
     : turnKey;
+}
+
+/** The current turn's live-context key when its user row is persisted ahead of submission. */
+export function resolveAttemptCurrentUserTurnContextKey(
+  messages: readonly AgentMessage[],
+  attempt: {
+    skipPreparedUserTurnMessage?: boolean;
+    userTurnTranscriptRecorder?: UserTurnTranscriptRecorder;
+  },
+): string | undefined {
+  const recorder = attempt.userTurnTranscriptRecorder;
+  return resolveCurrentUserTurnContextKey(
+    messages,
+    attempt.skipPreparedUserTurnMessage !== true && recorder?.hasPersisted() === true
+      ? (recorder.getPersistedMessage?.() ?? recorder.message)?.idempotencyKey
+      : undefined,
+  );
 }
 
 type ForeignPendingUserTurns = {

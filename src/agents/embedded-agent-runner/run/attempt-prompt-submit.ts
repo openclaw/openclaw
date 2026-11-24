@@ -38,7 +38,7 @@ import {
 import { waitForEmbeddedAbortSettle } from "./attempt-subscription-cleanup.js";
 import { wrapStreamFnWithMessageTransform } from "./message-transform-stream-wrapper.js";
 import { isMidTurnPrecheckSignal, type MidTurnPrecheckRequest } from "./midturn-precheck.js";
-import { resolveCurrentUserTurnContextKey } from "./pre-persisted-user-turn.js";
+import { resolveAttemptCurrentUserTurnContextKey } from "./pre-persisted-user-turn.js";
 import type { createRequestBoundaryCompaction } from "./request-boundary-compaction.js";
 import type { RuntimeContextCustomMessage } from "./runtime-context-prompt.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
@@ -122,11 +122,9 @@ export async function submitEmbeddedAttemptPrompt(input: {
     attempt.skipPreparedUserTurnMessage || input.runtimeOnly || userTurnRecorder?.isBlocked()
       ? undefined
       : userTurnRecorder;
-  const persistedUserIdempotencyKey = resolveCurrentUserTurnContextKey(
+  const persistedUserIdempotencyKey = resolveAttemptCurrentUserTurnContextKey(
     activeSession.messages,
-    attempt.skipPreparedUserTurnMessage !== true && userTurnRecorder?.hasPersisted() === true
-      ? (userTurnRecorder.getPersistedMessage?.() ?? userTurnRecorder.message)?.idempotencyKey
-      : undefined,
+    attempt,
   );
 
   const installProviderPromptHistoryTransform = (): (() => void) => {

@@ -165,6 +165,28 @@ function resolveMidTurnHistoryTokenBudget(params: {
   return Math.max(1, Math.floor(promptBudget - fixedTokens));
 }
 
+// A pre-persisted user row is replayed in place, so it sits before the pre-prompt
+// count. It is still the admitted turn the engine has not stored: end accepted
+// history before it so the host keeps delivering it with the tool exchange.
+function resolveDeferredHistoryLength(
+  messages: readonly AgentMessage[],
+  prePromptMessageCount: number,
+  currentUserTurnKey: string | undefined,
+): number {
+  if (!currentUserTurnKey) {
+    return prePromptMessageCount;
+  }
+  const replayedIndex = messages.findIndex(
+    (message) =>
+      message.role === "user" &&
+      "idempotencyKey" in message &&
+      message.idempotencyKey === currentUserTurnKey,
+  );
+  return replayedIndex >= 0 && replayedIndex < prePromptMessageCount
+    ? replayedIndex
+    : prePromptMessageCount;
+}
+
 /**
  * Reassemble each tool-loop iteration for engines that own compaction.
  * Admitted turns advance through their accepted-turn owner; standalone
@@ -184,6 +206,8 @@ export function installContextEngineLoopHook(params: {
   modelId: string;
   repairAssembledMessages?: (messages: AgentMessage[]) => AgentMessage[];
   getPrePromptMessageCount?: () => number;
+  /** Key of the current turn's user row; a pre-persisted row is replayed inside pre-prompt history. */
+  getCurrentUserTurnKey?: () => string | undefined;
   onAfterTurnCheckpoint?: (messageCount: number) => void;
   deferredTurn?: { prompt: string; readonly availableTools: Set<string> };
   getRuntimeContext?: (params: {
@@ -278,7 +302,11 @@ export function installContextEngineLoopHook(params: {
       // An admitted turn is not in the engine's store yet. Assemble accepted
       // history separately, then retain the host-owned user/tool exchange.
       const historyLength = params.deferredTurn
-        ? (params.getPrePromptMessageCount?.() ?? 0)
+        ? resolveDeferredHistoryLength(
+            providerMessages,
+            params.getPrePromptMessageCount?.() ?? 0,
+            params.getCurrentUserTurnKey?.(),
+          )
         : providerMessages.length;
       const pendingMessages = providerMessages.slice(historyLength);
       const assembled = await contextEngine.assemble({
