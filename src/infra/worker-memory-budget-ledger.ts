@@ -114,6 +114,8 @@ export function createWorkerMemoryBudget(params: {
   hasSharedHost?: () => boolean;
   /** PROTOTYPE: longest wait before a pool may start a worker over budget, and how to relieve. */
   startWaitMs?: number;
+  /** PROTOTYPE: pooled workers alive at once; without it the measured budget decides. */
+  maxPoolWorkers?: number;
   relievePressure?: () => void;
 }) {
   const { budgetBytes } = params;
@@ -301,13 +303,22 @@ export function createWorkerMemoryBudget(params: {
           if (params.startWaitMs === undefined) {
             return true;
           }
-          lastUsage = params.readUsageBytes() ?? null;
-          if (
-            lastUsage === null ||
-            lastUsage + entry.estimate < budgetBytes ||
-            waitedMs >= params.startWaitMs
-          ) {
+          if (waitedMs >= params.startWaitMs) {
             return true;
+          }
+          if (params.maxPoolWorkers !== undefined) {
+            let live = 0;
+            for (const count of params.countLive().pools.values()) {
+              live += count;
+            }
+            if (live < params.maxPoolWorkers) {
+              return true;
+            }
+          } else {
+            lastUsage = params.readUsageBytes() ?? null;
+            if (lastUsage === null || lastUsage + entry.estimate < budgetBytes) {
+              return true;
+            }
           }
           entry.family.refusals++;
           // Idle workers in every pool leave so this one can start.

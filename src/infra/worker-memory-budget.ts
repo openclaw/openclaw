@@ -119,6 +119,7 @@ export function initializeWorkerMemoryBudget(
     hosted: () => state.hosted,
     hasSharedHost: () => state.hasSharedHost(),
     startWaitMs: leanPrototype.startWaitMs,
+    maxPoolWorkers: leanPrototype.maxPoolWorkers,
     relievePressure: () => memoryPressure.publish(true),
   });
   const pressurePercent = leanPrototype.pressurePercent;

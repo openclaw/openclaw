@@ -23,6 +23,8 @@ export const leanPrototype = {
   historyIdleMs: knobs.get("historyIdle"),
   /** Longest a task waits for memory before it starts a new worker anyway. */
   startWaitMs: knobs.get("wait"),
+  /** Pooled workers alive at once; a start beyond this waits for an idle one to retire. */
+  maxPoolWorkers: knobs.get("maxWorkers"),
 };
 
 /** Shorten an owner's idle retirement; owners that never retire idle workers keep theirs. */
