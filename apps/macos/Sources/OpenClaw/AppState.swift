@@ -518,12 +518,15 @@ final class AppState {
         self.voiceWakeTriggersTalkMode = AppDefaults.standard
             .object(forKey: voiceWakeTriggersTalkModeKey) as? Bool ?? false
         self.talkEnabled = AppDefaults.standard.bool(forKey: talkEnabledKey)
-        self.talkStartChimeEnabled = AppDefaults.standard
-            .object(forKey: TalkChimePlayer.startPreferenceKey) as? Bool ?? true
-        self.talkEndChimeEnabled = AppDefaults.standard
-            .object(forKey: TalkChimePlayer.endPreferenceKey) as? Bool ?? true
-        self.talkReplyChimeEnabled = AppDefaults.standard
-            .object(forKey: TalkChimePlayer.replyPreferenceKey) as? Bool ?? true
+        self.talkStartChimeEnabled = TalkChimePlayer.isEnabled(
+            TalkChimePlayer.startPreferenceKey,
+            in: AppDefaults.standard)
+        self.talkEndChimeEnabled = TalkChimePlayer.isEnabled(
+            TalkChimePlayer.endPreferenceKey,
+            in: AppDefaults.standard)
+        self.talkReplyChimeEnabled = TalkChimePlayer.isEnabled(
+            TalkChimePlayer.replyPreferenceKey,
+            in: AppDefaults.standard)
         self.talkPhaseSoundsEnabled = Self.loadEnabledPreference(key: talkPhaseSoundsEnabledKey)
         self.talkShiftToStopEnabled = Self.loadEnabledPreference(key: talkShiftToStopEnabledKey)
         self.heartbeatsEnabled = Self.loadEnabledPreference(key: heartbeatsEnabledKey)

@@ -8,6 +8,12 @@ public final class TalkChimePlayer {
     public static let endPreferenceKey = "talk.chimes.end"
     public static let replyPreferenceKey = "talk.chimes.reply"
 
+    /// Cue preferences are opt-out: a device that never stored a key (every install from before
+    /// the chimes shipped) reads on, and an explicit stored choice always wins.
+    public nonisolated static func isEnabled(_ key: String, in defaults: UserDefaults = .standard) -> Bool {
+        defaults.object(forKey: key) as? Bool ?? true
+    }
+
     private var player: AVAudioPlayer?
 
     public init() {}

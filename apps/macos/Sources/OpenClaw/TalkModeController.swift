@@ -39,6 +39,15 @@ final class TalkModeController {
 
     func stopChime() {
         self.chimePlayer.stop()
+        self.listeningSoundCovered = false
+    }
+
+    /// A status chime is about to mark the next listening transition. Skip the built-in
+    /// listening sound for that one transition so the user hears a single cue.
+    @ObservationIgnored private var listeningSoundCovered = false
+
+    func coverNextListeningSound() {
+        self.listeningSoundCovered = true
     }
 
     private let logger = Logger(subsystem: "ai.openclaw", category: "talk.controller")
@@ -132,7 +141,9 @@ final class TalkModeController {
         }
         self.owners.overlay.updatePhase(phase)
 
-        if phase != previousPhase {
+        let covered = self.listeningSoundCovered
+        self.listeningSoundCovered = false
+        if phase != previousPhase, !(covered && phase == .listening) {
             self.playPhaseSound(phase, previousPhase: previousPhase)
         }
         self.publishPhase()

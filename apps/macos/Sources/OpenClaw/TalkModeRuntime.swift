@@ -37,6 +37,9 @@ actor TalkModeRuntime {
 
     var chimeLifecycle = TalkChimeLifecycle()
 
+    /// True only when the latest assistant reply played to its end (not failed, interrupted or replaced).
+    private var assistantSpeechCompleted = false
+
     func chimeEnabled(_ cue: TalkChimeLifecycle.Cue) async -> Bool {
         if cue == .follow, self.realtimeSession != nil || self.realtimeRelayStartGeneration != nil { return false }
         return await MainActor.run {
@@ -658,9 +661,9 @@ extension TalkModeRuntime {
             }
             guard !self.isPaused else { return }
 
-            await self.playAssistant(text: assistantText)
+            let spoke = await self.playAssistant(text: assistantText)
             guard self.isCurrent(gen), !Task.isCancelled else { return }
-            await self.resumeListeningIfNeeded(afterNativeReply: true)
+            await self.resumeListeningIfNeeded(afterNativeReply: spoke)
             return
         } catch {
             self.logger.error("talk chat.send failed: \(error.localizedDescription, privacy: .public)")
@@ -696,6 +699,8 @@ extension TalkModeRuntime {
         if let cue {
             await self.playChime(cue)
             guard self.isCurrent(lifecycleGeneration), !self.isPaused else { return }
+            // The reply chime replaces the built-in listening sound for this transition.
+            await MainActor.run { self.controller()?.coverNextListeningSound() }
         }
         await self.startListening()
     }
@@ -862,7 +867,15 @@ extension TalkModeRuntime {
         }
     }
 
-    private func playAssistant(text: String) async {
+    /// Returns true only when the reply was spoken to completion.
+    @discardableResult
+    private func playAssistant(text: String) async -> Bool {
+        self.assistantSpeechCompleted = false
+        await self.speakAssistant(text: text)
+        return self.assistantSpeechCompleted
+    }
+
+    private func speakAssistant(text: String) async {
         guard let input = await preparePlaybackInput(text: text) else { return }
 
         switch Self.playbackPlan(provider: input.provider, apiKey: input.apiKey, voiceId: input.voiceId) {
@@ -1080,6 +1093,7 @@ extension TalkModeRuntime {
                 NSLocalizedDescriptionKey: "audio playback failed",
             ])
         }
+        if result.finished { self.assistantSpeechCompleted = true }
         if !result.finished, let interruptedAt = result.interruptedAt, phase == .speaking {
             if self.config?.interruptOnSpeech ?? true {
                 self.lastInterruptedAtSeconds = interruptedAt
@@ -1138,6 +1152,7 @@ extension TalkModeRuntime {
                 "talk gateway audio provider=\(result.provider, privacy: .public) " +
                     "format=\(result.outputformat ?? "unknown", privacy: .public) " +
                     "finished=\(playback.finished, privacy: .public)")
+        if playback.finished { self.assistantSpeechCompleted = true }
         if !playback.finished, playback.interruptedAt == nil {
             throw NSError(domain: "TalkSpeak", code: 2, userInfo: [
                 NSLocalizedDescriptionKey: "gateway talk.speak audio playback failed",
@@ -1156,6 +1171,7 @@ extension TalkModeRuntime {
             try await TalkSystemSpeechSynthesizer.shared.speak(
                 text: input.cleanedText,
                 language: ttsLanguage)
+            self.assistantSpeechCompleted = self.isCurrent(input.generation)
             self.ttsLogger.info("talk system voice done")
         } catch {
             self.ttsLogger.error("talk system voice failed: \(error.localizedDescription, privacy: .public)")
@@ -1196,6 +1212,7 @@ extension TalkModeRuntime {
             await self.dependencies.stopMLX()
             throw TalkMLXSpeechSynthesizer.SynthesizeError.audioPlaybackFailed
         }
+        if result.finished { self.assistantSpeechCompleted = true }
         self.ttsLogger.info("talk mlx done")
     }
 

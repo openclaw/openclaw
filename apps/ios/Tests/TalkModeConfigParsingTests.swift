@@ -335,6 +335,37 @@ struct TalkModeManagerTests {
         #expect(manager._test_runtimeRoute() == .realtimeRelay)
     }
 
+    @Test(.testWaitLimit)
+    func `native fallback from a realtime route offers the reply chime and cues call end`() async {
+        let parsed = Self.parseRealtime(
+            provider: "openai",
+            mode: "realtime",
+            transport: "gateway-relay")
+        let chimes = AsyncStream<TalkChimeLifecycle.Cue>.makeStream()
+        defer { chimes.continuation.finish() }
+        let manager = TalkModeManager(
+            allowSimulatorCapture: true,
+            chimePlaybackOverride: { chimes.continuation.yield($0) })
+        manager._test_applyLoadedTalkConfig(parsed)
+        #expect(manager._test_runtimeRoute() == .realtimeRelay)
+        #expect(!manager.talkReplyChimeAvailable)
+
+        manager.updateGatewayConnected(true)
+        manager.gatewayTalkConfigLoaded = true
+        manager.isEnabled = true
+        await manager.start()
+        // No gateway is attached, so the configured realtime relay cannot start and native speech
+        // owns the call. The configured route still says realtime.
+        #expect(manager.isListening)
+        #expect(manager._test_runtimeRoute() == .realtimeRelay)
+        #expect(manager.talkReplyChimeAvailable)
+        manager.stop()
+        #expect(!manager.talkReplyChimeAvailable)
+        var cues = chimes.stream.makeAsyncIterator()
+        #expect(await cues.next() == .wake)
+        #expect(await cues.next() == .bye)
+    }
+
     @Test func `preserves the released realtime model override`() {
         let parsed = Self.parseRealtime(
             provider: "openai",

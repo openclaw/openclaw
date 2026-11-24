@@ -1,3 +1,4 @@
+import Foundation
 import OpenClawKit
 import Testing
 
@@ -50,3 +51,44 @@ struct TalkChimeLifecycleTests {
         #expect(call.resumedListening(isRealtime: false, enabled: true) == nil)
     }
 }
+
+#if os(iOS) || os(macOS)
+struct TalkChimePreferenceUpgradeTests {
+    private func makeDefaults() throws -> (UserDefaults, String) {
+        let name = "talk-chime-upgrade-\(UUID().uuidString)"
+        return (try #require(UserDefaults(suiteName: name)), name)
+    }
+
+    @Test func `defaults saved before chimes existed read all three cues on`() throws {
+        let (defaults, name) = try self.makeDefaults()
+        defer { defaults.removePersistentDomain(forName: name) }
+        // A snapshot from the previous release: other Talk preferences, none of the chime keys.
+        defaults.set(false, forKey: "talk.phaseSounds")
+        defaults.set(true, forKey: "talk.pushToTalk")
+        defaults.set("elevenlabs", forKey: "talk.voice")
+
+        for key in [
+            TalkChimePlayer.startPreferenceKey,
+            TalkChimePlayer.endPreferenceKey,
+            TalkChimePlayer.replyPreferenceKey,
+        ] {
+            #expect(defaults.object(forKey: key) == nil)
+            #expect(TalkChimePlayer.isEnabled(key, in: defaults))
+        }
+        // Reading never writes: the stored snapshot is unchanged.
+        #expect(defaults.object(forKey: TalkChimePlayer.startPreferenceKey) == nil)
+        #expect(defaults.bool(forKey: "talk.phaseSounds") == false)
+    }
+
+    @Test func `an explicit stored choice survives and a mixed snapshot reads per key`() throws {
+        let (defaults, name) = try self.makeDefaults()
+        defer { defaults.removePersistentDomain(forName: name) }
+        defaults.set(false, forKey: TalkChimePlayer.endPreferenceKey)
+        defaults.set(true, forKey: TalkChimePlayer.replyPreferenceKey)
+
+        #expect(TalkChimePlayer.isEnabled(TalkChimePlayer.startPreferenceKey, in: defaults))
+        #expect(!TalkChimePlayer.isEnabled(TalkChimePlayer.endPreferenceKey, in: defaults))
+        #expect(TalkChimePlayer.isEnabled(TalkChimePlayer.replyPreferenceKey, in: defaults))
+    }
+}
+#endif

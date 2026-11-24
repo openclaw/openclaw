@@ -151,11 +151,19 @@ final class TalkModeManager {
     private var byeChimeTask: Task<Void, Never>?
 
     private func chimeEnabled(_ key: String) -> Bool {
-        UserDefaults.standard.object(forKey: key) as? Bool ?? true
+        TalkChimePlayer.isEnabled(key)
+    }
+
+    /// True while native speech recognition (not a realtime session) owns the call, including
+    /// native fallback after the configured realtime route failed to start.
+    private(set) var nativeSpeechActive = false
+
+    private var activeRouteIsRealtime: Bool {
+        self.runtimeRoute.usesRealtime && !self.nativeSpeechActive
     }
 
     var talkReplyChimeAvailable: Bool {
-        !self.runtimeRoute.usesRealtime
+        !self.activeRouteIsRealtime
     }
 
     private(set) var phase: TalkPhase = .idle
@@ -692,6 +700,7 @@ final class TalkModeManager {
                 : await self.startRealtimeIfAvailable(attemptID: attemptID)
             switch realtimeStart {
             case .started, .ignored:
+                self.nativeSpeechActive = false
                 return
             case let .unavailable(issue):
                 self.pendingRealtimeIssue = issue
@@ -722,6 +731,7 @@ final class TalkModeManager {
             try configureOwnedAudioSession(reuseActiveSession: true)
             // Set this before starting recognition so any early speech errors are classified correctly.
             self.captureMode = .continuous
+            self.nativeSpeechActive = true
             try await self.startRecognitionWithChime(afterNativeReply: afterNativeReply)
             guard self.isCurrentStartAttempt(attemptID) else { return }
             self.isListening = !self.isMicrophoneMuted
@@ -806,10 +816,10 @@ final class TalkModeManager {
 
     private func startRecognitionWithChime(afterNativeReply: Bool) async throws {
         if afterNativeReply {
-            self.chimeLifecycle.replyFinished(isRealtime: self.runtimeRoute.usesRealtime)
+            self.chimeLifecycle.replyFinished(isRealtime: self.activeRouteIsRealtime)
         }
         let replyCue = self.chimeLifecycle.resumedListening(
-            isRealtime: self.runtimeRoute.usesRealtime,
+            isRealtime: self.activeRouteIsRealtime,
             enabled: afterNativeReply && !self.isMicrophoneMuted &&
                 self.chimeEnabled(TalkChimePlayer.replyPreferenceKey))
         let gate = replyCue != nil || self.chimeEnabled(TalkChimePlayer.startPreferenceKey)
@@ -835,9 +845,12 @@ final class TalkModeManager {
     }
 
     func stop() {
+        // A call ends cleanly when the user (or the output owner) stops it, whether or not
+        // recognition is capturing at that moment; push-to-talk is not a call.
         let cue = self.chimeLifecycle.end(
-            clean: self.captureMode == .continuous,
+            clean: self.captureMode != .pushToTalk,
             enabled: self.chimeEnabled(TalkChimePlayer.endPreferenceKey))
+        self.nativeSpeechActive = false
         self.isEnabled = false
         self.invalidateRealtimeVoiceSelection()
         self.cancelPendingStart()
