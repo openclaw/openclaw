@@ -142,7 +142,9 @@ it("lets a launcher child exit naturally while its IPC peer remains connected", 
   child.stderr!.setEncoding("utf8").on("data", (chunk: string) => {
     stderr += chunk;
   });
-  const exited = once(child, "exit", { signal: AbortSignal.timeout(10_000) });
+  // No wall-clock deadline: a child the IPC channel keeps alive fails at the test timeout,
+  // and the tsx import of the module graph on a loaded runner cannot lose a race.
+  const exited = once(child, "exit");
   try {
     const [message] = await once(child, "message");
     expect(message).toBe("loaded");
