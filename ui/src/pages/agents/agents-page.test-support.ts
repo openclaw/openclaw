@@ -81,7 +81,12 @@ export function completeContext(context: ApplicationContext) {
     config: context.config ?? { current: { assistantIdentity: {} }, subscribe },
     navigation: context.navigation ?? { snapshot: { pinnedAgentIds: [] }, subscribe },
     router: context.router ?? {
-      getState: () => ({ matches: [{ routeId: "agents" }], pendingMatches: [] }),
+      getState: () => ({
+        matches: [{ routeId: "agents" }],
+        pendingMatches: [],
+        location: { pathname: "/settings/agents", search: "", hash: "" },
+      }),
+      subscribe,
     },
     navigate: context.navigate ?? vi.fn(),
     replace: context.replace ?? vi.fn(),
@@ -308,7 +313,14 @@ export function pageContext(
     gateway: currentGateway,
     agents,
     settingsAgentSelection: settingsSelection(agents.state.agentsList),
-    router: { getState: () => ({ matches: [{ routeId: "agents" }], pendingMatches: [] }) },
+    router: {
+      getState: () => ({
+        matches: [{ routeId: "agents" }],
+        pendingMatches: [],
+        location: { pathname: "/settings/agents", search: "", hash: "" },
+      }),
+      subscribe,
+    },
     navigate: vi.fn(),
     replace: vi.fn(),
     agentIdentity:

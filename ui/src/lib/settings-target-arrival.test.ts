@@ -86,6 +86,14 @@ describe("createPendingSettingsTarget", () => {
     expect(row.hasAttribute(ARRIVAL)).toBe(false);
   });
 
+  it("marks a provider row like a settings row", () => {
+    const { row } = settingRow("providers.openai");
+    row.className = "provider-row";
+    arrive(row.id).frames.run(6);
+    expect(row.hasAttribute(ARRIVAL)).toBe(true);
+    expect(document.activeElement).toBe(row);
+  });
+
   it("lands on the enclosing setting when the linked one has no row", () => {
     const { row } = settingRow("agents.defaults.modelPolicy");
     arrive("agents.defaults.modelPolicy.allow").frames.run(6);

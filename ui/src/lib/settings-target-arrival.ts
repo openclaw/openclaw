@@ -81,7 +81,8 @@ function arriveAtSettingsTarget(target: HTMLElement): () => void {
     }
   }
   const behavior = resolveScrollBehavior();
-  if (!target.classList.contains("settings-row")) {
+  // A provider is one row too, drawn by its own list markup.
+  if (!target.matches(".settings-row, .provider-row")) {
     target.scrollIntoView?.({ behavior, block: "start" });
     return () => {};
   }
