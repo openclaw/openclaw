@@ -4,7 +4,6 @@ import {
   GATEWAY_CLIENT_CAPS,
   hasGatewayClientCap,
 } from "../../../packages/gateway-protocol/src/client-info.js";
-import type { AdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import {
   resolveConversationCapabilityPolicy,
@@ -52,7 +51,6 @@ import {
   captureReplyMessageJoinObservation,
   type ReplyMessageJoinObservation,
 } from "../../sessions/session-controller.message-join-observation.js";
-import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import { getCommandOwnerAuthority } from "../command-owner-authority.js";
 import { readTransferredRequesterProfile } from "../requester-profile.js";
 import { MessageInjectionPolicyMismatchError } from "./message-injection-authority.js";
@@ -71,6 +69,7 @@ import {
   captureMemoryReplyToolAuthoritySession,
   prepareMemoryReplyToolAuthorityCaller,
 } from "./reply-tool-authority-memory.js";
+import { resolveReplyOperatorAuthorityKey } from "./reply-tool-authority-operator.js";
 import { captureReplyToolAuthorityInput } from "./reply-tool-authority-snapshot.js";
 import type { ReplyToolAuthorityInput } from "./reply-tool-authority.types.js";
 
@@ -150,36 +149,6 @@ export function resolveReplyPersonalToolTargets(
         : undefined,
     themeProfileId: target?.profileId && isAllowed("theme") ? target.profileId : undefined,
   };
-}
-
-const operatorAuthorityIdentities = resolveGlobalSingleton(
-  Symbol.for("openclaw.replyOperatorAuthorityIdentities"),
-  () => ({ keys: new WeakMap<object, number>(), nextId: 1 }),
-);
-
-/** Compare original live owners without treating profile labels as authority. */
-export function resolveReplyOperatorAuthorityKey(
-  authority: AdmittedRunOperatorAuthority | undefined,
-): string {
-  if (!authority) {
-    return "";
-  }
-  const identities = [authority.source ?? authority, authority.invocation].map((owner) => {
-    if (!owner) {
-      return null;
-    }
-    let identity = operatorAuthorityIdentities.keys.get(owner);
-    if (identity === undefined) {
-      identity = operatorAuthorityIdentities.nextId++;
-      operatorAuthorityIdentities.keys.set(owner, identity);
-    }
-    return identity;
-  });
-  return JSON.stringify([
-    authority.profileId,
-    [...new Set(authority.scopes.map((scope) => scope.trim()).filter(Boolean))].toSorted(),
-    ...identities,
-  ]);
 }
 
 /** Fingerprints the complete model-facing tool authority owned by one queued turn. */
