@@ -307,7 +307,7 @@ it("keeps chat setup retryable when the opening lists zero jobs and replies succ
     // Recover its requirements from the pinned source, not the editable workspace manifest.
     const scope = { agentId: chatAdd.agentId, sessionKey };
     await patchSessionEntryCore(scope, (entry) => {
-      const { requiredAutomationIds: _ids, ...legacy } = entry!.templateSetup!;
+      const { requiredAutomationIds: _i, declared: _d, ...legacy } = entry!.templateSetup!;
       return { templateSetup: { ...legacy, openingComplete: true } };
     });
     await fs.writeFile(
@@ -321,14 +321,14 @@ it("keeps chat setup retryable when the opening lists zero jobs and replies succ
       initializationPending: true,
       error: { code: "template_automations_incomplete" },
     });
-    // The retried opening is handed the declared automation in the original Add's zone.
-    const retried = greeting.mock.calls.at(-1)![4] as string;
-    expect(retried).toContain(
-      '"schedule":{"kind":"cron","expr":"0 17 * * 5","tz":"America/New_York"}',
-    );
-    expect(retried).toContain("is kept exactly as it is");
-    expect(retried).not.toContain("Asia/Tokyo");
-    expect(retried).not.toContain('"action":"list","includeDisabled":true');
+    const prompts = greeting.mock.calls.map((call) => call[4] as string);
+    const zoned = '"schedule":{"kind":"cron","expr":"0 17 * * 5","tz":"America/New_York"}';
+    expect(prompts[0]).toContain(zoned);
+    // A receipt saved before declarations were recorded still loads; its opening reads the manifest.
+    expect(prompts.at(-1)).toContain("Read `CLAW.md` once for its `automations` entries");
+    expect(prompts.at(-1)).toContain('"tz":"America/New_York"');
+    expect(prompts.join()).not.toContain("Asia/Tokyo");
+    expect(prompts.join()).not.toContain('"action":"list","includeDisabled":true');
     expect((await readSessionEntryReadOnlyInWorker(scope))?.templateSetup).toMatchObject({
       requiredAutomationIds: ["weekly-digest"],
       deviceTimeZone: "America/New_York",

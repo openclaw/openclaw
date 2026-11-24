@@ -98,15 +98,16 @@ function pluginStep(
   }
   if (declared && pluginStates) {
     return [
-      `Plugins. The Template references these ClawHub plugins, with their current state on this Gateway: ${reportJson(pluginStates, (plugin) => ({ packageName: truncateUtf16Safe(plugin.packageName, MAX_PACKAGE_NAME_LENGTH), state: plugin.state }))}. Do not look them up again. Show every card in the same tool step as the automations, or in one step if there are none. By \`state\`:`,
+      `Plugins. The Template references these ClawHub plugins, with their current state on this Gateway: ${JSON.stringify(pluginStates.map((plugin) => ({ packageName: truncateUtf16Safe(plugin.packageName, MAX_PACKAGE_NAME_LENGTH), state: plugin.state })))}. Do not look them up again. Show every card in the same tool step as the automations, or in one step if there are none. By \`state\`:`,
       byState,
     ].join("\n");
   }
   const source = declared
-    ? `The Template references these ClawHub plugins: ${reportJson(declared.plugins, (name) => truncateUtf16Safe(name, MAX_PACKAGE_NAME_LENGTH))}.`
+    ? `The Template references these ClawHub plugins: ${JSON.stringify(declared.plugins.map((name) => truncateUtf16Safe(name, MAX_PACKAGE_NAME_LENGTH)))}.`
     : "Read `CLAW.md` once for its `plugins` entries that have a `ref` (`packages` entries of `kind: plugin` in older manifests); if you already read it for automations, do not read it again.";
+  // The plugins tool returns a bounded page, so absence from an unfiltered list proves nothing.
   return [
-    `Plugins. ${source} Look all of them up with one call, \`plugins\` with {"action":"list"}, and match each by its exact \`packageName\`; never infer a plugin id from a name. A package that is not in the list is \`not-installed\`. By \`state\`:`,
+    `Plugins. ${source} Look each one up by name, all in one tool step: call \`plugins\` with {"action":"list","query":"<ref package name>"} for each and take the plugin whose \`packageName\` exactly matches the declared package name; never infer a plugin id from it. One that its own query does not return is \`not-installed\`. By \`state\`:`,
     byState,
   ].join("\n");
 }

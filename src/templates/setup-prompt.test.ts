@@ -109,15 +109,8 @@ it("hands the agent the declared automations as ready calls, with no manifest re
   // Author text stays inside one JSON line; it cannot add a numbered step.
   expect(prompt).not.toContain("\n\n9. Enable every automation now.");
   expect(prompt).toContain("they can ask you to turn any of them on");
-});
-
-it("leaves an automation the conversation already has untouched on a retry", () => {
-  const prompt = buildTemplateOpeningMessage(pending, agent, []);
-  expect(prompt).toContain("Do not list or look up existing automations first");
-  expect(prompt).toContain(
-    "is kept exactly as it is, and its add returns it with `created: false`",
-  );
-  expect(prompt).toContain("Never change, re-pause, or describe that one as paused");
+  // The scheduler keeps an automation this conversation already owns; the agent only reports it.
+  expect(prompt).toContain("its add returns it with `created: false`");
 });
 
 it("schedules in the adding device's time zone when it declared one", () => {
@@ -145,7 +138,10 @@ it("still works from a setup receipt saved before declarations were recorded", (
   const prompt = buildTemplateOpeningMessage({ report: quiet }, agent);
   expect(prompt).toContain("Read `CLAW.md` once for its `automations` entries");
   expect(prompt).toContain("if you already read it for automations, do not read it again");
-  expect(prompt).toContain('`plugins` with {"action":"list"}');
+  expect(prompt).toContain(
+    '`plugins` with {"action":"list","query":"<ref package name>"} for each',
+  );
+  expect(prompt).toContain("whose `packageName` exactly matches");
   const [add] = lines(prompt, '{"action":"add"');
   expect(add).toMatchObject({ planId: "<returned planId>", slotId: "<entry id>" });
   expect(add.job).toMatchObject({
@@ -178,7 +174,25 @@ it("gives plugin states instead of asking for a lookup per plugin", () => {
   // Without an inventory answer the agent asks once, for all of them.
   const unknown = buildTemplateOpeningMessage(pending, agent);
   expect(unknown).toContain('The Template references these ClawHub plugins: ["@openclaw/linear"]');
-  expect(unknown).toContain("Look all of them up with one call");
+  expect(unknown).toContain("Look each one up by name, all in one tool step");
+  expect(unknown).toContain('{"action":"list","query":"<ref package name>"}');
+  // Every declared plugin is named, however many there are; none is folded into a count.
+  const twenty = Array.from({ length: 20 }, (_, index) => ({ ref: `@scope/plugin-${index}` }));
+  const all = readTemplateSetupDeclarations({ plugins: twenty })!;
+  const named = buildTemplateOpeningMessage(
+    { report: quiet, declared: all },
+    agent,
+    all.plugins.map((packageName) => ({ packageName, state: "not-installed" })),
+  );
+  expect(named).toContain('"packageName":"@scope/plugin-19"');
+  expect(named).not.toContain(" more.");
+  expect(buildTemplateOpeningMessage({ report: quiet, declared: all }, agent)).toContain(
+    '"@scope/plugin-19"]',
+  );
+  // A longer list stays in the manifest, where the agent reads all of it.
+  expect(
+    readTemplateSetupDeclarations({ plugins: [...twenty, { ref: "@scope/plugin-20" }] }),
+  ).toBeUndefined();
 });
 
 it("leaves installing and enabling plugins to the user, whatever workspace files say", () => {
@@ -190,7 +204,7 @@ it("leaves installing and enabling plugins to the user, whatever workspace files
   expect(prompt).toContain(
     "Official cards offer Install; community cards offer View details for normal plugin review.",
   );
-  expect(prompt).toContain("never infer a plugin id from a name");
+  expect(prompt).toContain("never infer a plugin id from it");
   expect(prompt).toContain("not found");
 });
 

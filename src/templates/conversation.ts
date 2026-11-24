@@ -48,6 +48,8 @@ export type TemplateSetupDeclarations = {
 
 /** The automations tool accepts at most this many slots in one plan. */
 const MAX_DECLARED_AUTOMATIONS = 24;
+/** Every declared plugin is named in the first message; a longer list stays in the manifest. */
+const MAX_DECLARED_PLUGINS = 20;
 /** Larger declarations stay in the manifest instead of the session receipt and first message. */
 const MAX_DECLARED_BYTES = 16_384;
 
@@ -76,6 +78,7 @@ export function readTemplateSetupDeclarations(manifest: {
     }),
   };
   return declared.automations.length <= MAX_DECLARED_AUTOMATIONS &&
+    declared.plugins.length <= MAX_DECLARED_PLUGINS &&
     Buffer.byteLength(JSON.stringify(declared)) <= MAX_DECLARED_BYTES
     ? declared
     : undefined;
