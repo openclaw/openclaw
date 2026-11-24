@@ -77,7 +77,7 @@ export function readBackupEngineImage(imagePath: string, sourcePath: string): Ba
     row?.engine !== "postgres" ||
     typeof row.store_id !== "string" ||
     typeof row.schema !== "string" ||
-    !/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(row.schema)
+    !/^[a-zA-Z_][a-zA-Z0-9_-]*$/.test(row.schema)
   ) {
     throw new Error(`Invalid PostgreSQL anchor: ${sourcePath}. Restore its matched backup.`);
   }

@@ -17,7 +17,7 @@ const location = z.discriminatedUnion("engine", [
   z.strictObject({
     engine: z.literal("postgres"),
     anchorPath: absolutePath,
-    namespace: z.string().regex(/^[a-z_][a-z0-9_]*$/),
+    namespace: z.string().regex(/^[a-z_][a-z0-9_-]*$/),
   }),
 ]);
 const target = z.strictObject({

@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { readBackupEngineImage } from "../snapshot/database-backup.js";
 import {
   archiveDatabasePortManifest,
   assertDatabasePortRecoveryAllowed,
@@ -12,6 +13,7 @@ import {
   writeDatabasePortManifest,
 } from "./database-port-recovery.js";
 import { makeDatabasePortManifest } from "./database-port-recovery.test-support.js";
+import { openNodeSqliteDatabase } from "./node-sqlite.js";
 
 vi.mock("node:fs", async (importOriginal) => {
   const original = await importOriginal<typeof import("node:fs")>();
@@ -237,6 +239,34 @@ describe.skipIf(process.platform === "win32")("durable port manifest lifecycle",
 });
 
 describe.skipIf(process.platform === "win32")("manifest-bound recovery admission", () => {
+  it("recovers a PostgreSQL port whose original store has a quoted Team Reports namespace", () => {
+    const target = manifest.targets[0]!;
+    const namespace = "openclaw_team-reports_0123456789abcdef";
+    const anchorPath = path.join(stateDir, "team-reports.sqlite");
+    manifest.direction = { from: "postgres", to: "sqlite" };
+    target.original = { engine: "postgres", anchorPath, namespace };
+    target.intended = { engine: "sqlite", path: anchorPath };
+    {
+      using db = openNodeSqliteDatabase(anchorPath);
+      db.exec("CREATE TABLE openclaw_engine_anchor (store_id TEXT, engine TEXT, schema TEXT)");
+      db.prepare("INSERT INTO openclaw_engine_anchor VALUES (?, 'postgres', ?)").run(
+        target.storeId,
+        namespace,
+      );
+    }
+    expect(readBackupEngineImage(anchorPath, anchorPath)).toEqual({
+      engine: "postgres",
+      storeId: target.storeId,
+      namespace,
+    });
+    write();
+    expect(assertDatabasePortRecoveryAllowed(stateDir, intent()).targets[0]?.original).toEqual(
+      target.original,
+    );
+    target.original.namespace = "schema.name";
+    expect(() => write()).toThrow();
+  });
+
   it("admits only the fixed active manifest for the selected root and operation", () => {
     write();
     expect(assertDatabasePortRecoveryAllowed(stateDir, intent())).toEqual(manifest);

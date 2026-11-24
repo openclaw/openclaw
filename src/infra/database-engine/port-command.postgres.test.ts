@@ -9,7 +9,7 @@ import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js"
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { openNodeSqliteDatabase } from "../node-sqlite.js";
 import { runWorkboardPortTask } from "./port-command.worker.js";
-import { readPostgresPortCapabilities } from "./port.worker.js";
+import { materializeDatabasePort, readPostgresPortCapabilities } from "./port.worker.js";
 import metadata from "./workboard-port.generated.json" with { type: "json" };
 import { loadWorkboardPortDescriptor } from "./workboard-port.js";
 
@@ -61,6 +61,50 @@ it("redacts unresolved connection SecretRefs", async () => {
 });
 
 describe.skipIf(!connection)("workboard port PostgreSQL refusal boundaries", () => {
+  it("round-trips a quoted Team Reports namespace through the port worker", async () => {
+    const directory = tempDirs.make("port-team-reports-");
+    const sourcePath = path.join(directory, "source.sqlite");
+    const restoredPath = path.join(directory, "restored.sqlite");
+    const storeId = randomUUID();
+    const namespace = "openclaw_team-reports_" + storeId.replaceAll("-", "");
+    {
+      using db = openNodeSqliteDatabase(sourcePath);
+      db.exec(metadata.sqlite);
+      db.exec(
+        "INSERT INTO workboard_schema_migrations VALUES ('schema-3', 1); INSERT INTO workboard_boards (id, name, created_at, updated_at) VALUES ('board', 'Team Reports', 1, 1)",
+      );
+    }
+    const client = new Client({ connectionString: connection });
+    await client.connect();
+    try {
+      const descriptor = await loadWorkboardPortDescriptor();
+      const postgres = { engine: "postgres" as const, db: client, namespace };
+      const options = { descriptor, storeId, assertCurrent: scope.assertCurrent };
+      using source = openNodeSqliteDatabase(sourcePath, { readOnly: true, readBigInts: true });
+      using restored = openNodeSqliteDatabase(restoredPath);
+      const forward = await materializeDatabasePort({
+        ...options,
+        source: { engine: "sqlite", db: source },
+        destination: postgres,
+      });
+      const reverse = await materializeDatabasePort({
+        ...options,
+        source: postgres,
+        destination: { engine: "sqlite", db: restored },
+      });
+      expect(reverse).toEqual(forward);
+      expect(restored.prepare("SELECT id, name FROM workboard_boards").all()).toEqual([
+        { id: "board", name: "Team Reports" },
+      ]);
+    } finally {
+      try {
+        await client.query('DROP SCHEMA IF EXISTS "' + namespace + '" CASCADE');
+      } finally {
+        await client.end();
+      }
+    }
+  });
+
   it("probes real privileges, refuses occupied/wrong-owner/RLS sources, and resumes verified staging", async (context) => {
     const client = new Client({ connectionString: connection });
     await client.connect();
