@@ -12,7 +12,10 @@ import {
 import type { SessionEntry } from "../../config/sessions/types.js";
 import { sha256Base64Url } from "../../infra/crypto-digest.js";
 import { isIncognitoSessionKey } from "../../shared/incognito-session-key.js";
-import { supportsSessionArchiveUndo } from "../session-pin-compatibility.js";
+import {
+  isSessionArchiveUndoIssuer,
+  supportsSessionArchiveUndo,
+} from "../session-pin-compatibility.js";
 import { invalidSessionRequest } from "../session-request-error.js";
 import { SessionMutationAuthorizationChangedError } from "../session-sharing.js";
 import type { SessionPatchTargetIdentity } from "./session-unread-ack.js";
@@ -74,7 +77,7 @@ export function admitArchiveUndo(
       client.connId === connId &&
       profileId &&
       client.authenticatedUserProfile?.profileId === profileId &&
-      supportsSessionArchiveUndo(client, context.getRuntimeConfig()) &&
+      isSessionArchiveUndoIssuer(client) &&
       (context.isConnectionActive?.(connId, client) ||
         // Only the Archive mutation can outlive an ordinary socket close. Each drain
         // checks the live issuer before cancellation; Undo and delivery never detach.
@@ -84,7 +87,12 @@ export function admitArchiveUndo(
           !client.invalidated &&
           options.hasCurrentClientAuthority?.() === true)),
     );
-  if (!profileId || !connId || !isCurrent()) {
+  if (
+    !profileId ||
+    !connId ||
+    !supportsSessionArchiveUndo(client, context.getRuntimeConfig()) ||
+    !isCurrent()
+  ) {
     return {
       ok: false,
       error: errorShape(

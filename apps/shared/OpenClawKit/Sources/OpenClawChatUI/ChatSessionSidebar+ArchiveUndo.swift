@@ -11,6 +11,14 @@ struct ChatSidebarArchiveRecovery: Identifiable {
     let message: String
     let archivedAt: Int
     let lifecycleRevision: String?
+
+    @MainActor var title: String { ChatSessionSidebarModel.sidebarDisplayName(for: self.row) }
+
+    var targetDescription: String {
+        let key = OpenClawChatSessionKey.agentID(from: self.row.key) == nil
+            ? [self.row.agentId, self.row.key].compactMap { $0 }.joined(separator: " · ") : self.row.key
+        return [key, self.row.sessionId].compactMap { $0 }.joined(separator: " · ")
+    }
 }
 
 struct ChatSidebarArchiveReceipt {
@@ -285,8 +293,11 @@ extension ChatSessionSidebar {
                 if recoveries.count == 1 {
                     self.restoreSnapshotButton(first)
                 } else {
+                    let byTitle = Dictionary(grouping: recoveries, by: \.title)
                     Menu(String(localized: "Restore")) {
-                        ForEach(recoveries) { self.restoreSnapshotButton($0) }
+                        ForEach(recoveries) { recovery in
+                            self.restoreSnapshotButton(recovery, distinguish: (byTitle[recovery.title]?.count ?? 0) > 1)
+                        }
                     }
                 }
                 Button(String(localized: "Dismiss"), systemImage: "xmark") {
@@ -296,8 +307,8 @@ extension ChatSessionSidebar {
         }
     }
 
-    private func restoreSnapshotButton(_ recovery: ChatSidebarArchiveRecovery) -> some View {
-        let title = ChatSessionSidebarModel.sidebarDisplayName(for: recovery.row)
+    private func restoreSnapshotButton(_ recovery: ChatSidebarArchiveRecovery, distinguish: Bool = false) -> some View {
+        let title = distinguish ? "\(recovery.title) · \(recovery.targetDescription)" : recovery.title
         return Button(String(format: String(localized: "Restore “%@”"), title)) {
             Task { @MainActor in
                 await self.batch.restoreArchivedSnapshot(recovery, owner: self.viewModel.sidebarData)

@@ -11,18 +11,26 @@ import {
 } from "./server-methods/gateway-personal-caller.js";
 import type { GatewaySessionRow } from "./session-utils.types.js";
 
-/** Hello and RPC admission must agree before clients request a receipt on ordinary Archive. */
-export function supportsSessionArchiveUndo(
-  client: GatewayClient | null,
-  cfg: OpenClawConfig,
-): boolean {
+/** Live issuer identity; negotiation and storage support are checked at admission, not after Stop. */
+export function isSessionArchiveUndoIssuer(client: GatewayClient | null): boolean {
   return Boolean(
     client?.connId &&
     client.authenticatedUserProfile?.profileId &&
     client.connect.role === "operator" &&
     !client.internal?.remoteIngressPrincipal &&
     !client.internal?.operatorRunAuthority &&
-    !isIneligiblePersonalGatewayCaller(client) &&
+    !isIneligiblePersonalGatewayCaller(client),
+  );
+}
+
+/** Hello and RPC admission must agree before clients request a receipt on ordinary Archive. */
+export function supportsSessionArchiveUndo(
+  client: GatewayClient | null,
+  cfg: OpenClawConfig,
+): boolean {
+  return Boolean(
+    client &&
+    isSessionArchiveUndoIssuer(client) &&
     hasGatewayClientCap(client.connect.caps, GATEWAY_CLIENT_CAPS.PERSONAL_SESSION_PINS) &&
     resolveDatabaseFamilyEngines(cfg).agent === "sqlite",
   );
