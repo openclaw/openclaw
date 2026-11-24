@@ -124,6 +124,20 @@ suite.define(() => {
             return keys;
           };
           const keys = await expand();
+          if (!openAI) {
+            const visibleRows = summary.locator("..").locator(".chat-tool-row:visible");
+            const boxes = await visibleRows.evaluateAll((elements) =>
+              elements.map((element) => {
+                const rect = element.getBoundingClientRect();
+                return { top: rect.top, bottom: rect.bottom };
+              }),
+            );
+            expect(boxes).toHaveLength(5);
+            const normalGap = boxes[1]!.top - boxes[0]!.bottom;
+            expect(boxes[3]!.top - boxes[2]!.bottom).toBeCloseTo(normalGap, 0);
+            expect(boxes[4]!.top - boxes[3]!.bottom).toBeCloseTo(normalGap, 0);
+          }
+          expect(await thread.locator(".chat-divider").count()).toBe(0);
           await rows.first().locator("summary").click();
           const metrics = rows.first().getByText("saved 60k tokens (75%)", { exact: true });
           await metrics.waitFor();
@@ -193,10 +207,23 @@ suite.define(() => {
               phase: "start",
               ts: now,
             });
-            await page.locator(".chat-compaction--active").waitFor();
+            await page.locator(".chat-thread").getByText("Compacting", { exact: true }).waitFor();
             expect(
               await page.locator(".chat-thread").getByText("Compacting", { exact: true }).count(),
             ).toBe(1);
+            if (entry === "/compact") {
+              const active = page.locator(".chat-compaction-activity > summary");
+              await active.waitFor();
+              await writeFile(
+                join(suite.artifactDir, "layers-active.png"),
+                (
+                  await takeControlUiScreenshotFrame(page, page.locator(".chat-thread"), [active], {
+                    animations: "disabled",
+                  })
+                ).png,
+              );
+              console.log("LAYERS_ACTIVE_PROOF", suite.artifactDir);
+            }
             expect(await gateway.getRequests("chat.send")).toHaveLength(0);
             expect(
               await page.locator(".chat-thread").getByText("Checked.", { exact: true }).count(),
@@ -216,7 +243,7 @@ suite.define(() => {
           const compact = page.locator(".chat-compaction-activity");
           await compact.getByText("Compacted context", { exact: true }).waitFor();
           expect(await compact.count()).toBe(1);
-          expect(await compact.locator(".chat-compaction--active").count()).toBe(0);
+          expect(await compact.locator(".chat-tool-row__title.text-shimmer").count()).toBe(0);
         },
       );
     },

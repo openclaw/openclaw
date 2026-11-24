@@ -57,6 +57,7 @@ type AgentRunFrameOptions = {
   basePath?: string;
   sessionPublicOrigin?: string;
   streamOptions: StreamGroupOptions;
+  compactActivityGap?: boolean;
   renderGroupOptions: (group: MessageGroupData) => NativeMessageGroupOptions;
   partDependencies: (part: BodyPart) => readonly unknown[];
   isWorkExpanded: (key: string) => boolean;
@@ -471,6 +472,7 @@ function RunFrame(props: FrameProps) {
         frameActionOwner: state().actionOwner,
         frameHeader: props.frame.fragment?.first,
         frameFooter: props.frame.fragment?.last,
+        compactActivityGap: props.options.compactActivityGap,
       }}
     />
   );

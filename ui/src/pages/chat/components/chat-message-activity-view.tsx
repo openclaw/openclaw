@@ -624,7 +624,10 @@ export function ActivityGroupContent(props: ActivityGroupContentProps) {
       {(activity) => (
         <Show when={props.presentation === "standalone"} fallback={body()}>
           <div
-            class="chat-group tool chat-group--turn-block chat-group--activity chat-group--with-footer"
+            class={[
+              "chat-group tool chat-group--turn-block chat-group--activity chat-group--with-footer",
+              { "chat-group--compact-activity-gap": props.options.compactActivityGap },
+            ]}
             data-chat-row-key={activity().firstGroup.key}
           >
             <div class="chat-group-messages">{body()}</div>

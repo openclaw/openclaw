@@ -61,6 +61,45 @@ it("keeps an idle manual operation outside agent frames and deduplicates its dur
   }
 });
 
+it("keeps live and persisted compaction with its proven tool run", () => {
+  const runId = "automatic-run";
+  const operation = { runId, itemId: "compact-item", startedAt: 3000 };
+  const messages = [
+    { role: "user", content: "Read the release notes", timestamp: 1000 },
+    {
+      role: "assistant",
+      timestamp: 2000,
+      stopReason: "toolUse",
+      content: [{ type: "toolCall", id: "read", name: "read", arguments: {} }],
+      __openclaw: { runId },
+    },
+  ];
+  const marker = {
+    role: "system",
+    timestamp: 3000,
+    __openclaw: { runId, itemId: operation.itemId, id: "persisted", kind: "compaction" },
+  };
+  const live = buildItems(
+    createProps({
+      messages,
+      runId,
+      compactionStatus: { ...operation, phase: "active", completedAt: null },
+    }),
+  );
+  const settled = buildItems(
+    createProps({
+      messages: [...messages, marker],
+      runId,
+      compactionStatus: { ...operation, phase: "complete", completedAt: 4000 },
+    }),
+  );
+  const reload = buildItems(createProps({ messages: [...messages, marker] }));
+  for (const items of [live, settled, reload]) {
+    const activity = coalesceActivityRuns(items).find((item) => item.kind === "activity-run");
+    expect(activity).toMatchObject({ groups: [{ runId }, { runId, compaction: { runId } }] });
+  }
+});
+
 it("describes repeated compaction without counters and preserves main's tool summary rules", () => {
   const operation = (
     itemId: string,

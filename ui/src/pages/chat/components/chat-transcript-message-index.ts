@@ -671,6 +671,52 @@ export type PlacedContentRow = Extract<TranscriptRow, { kind: "content" }> & {
   after?: string | null;
 };
 
+const activitySpacing = new WeakMap<
+  readonly TranscriptRow<ChatRenderItem>[],
+  { gaps: ReadonlySet<string>; rows: readonly TranscriptRow<ChatRenderItem>[] }
+>();
+
+/** Visual adjacency does not give an idle or legacy operation an agent-run owner. */
+export function projectCompactActivitySpacing(rows: readonly TranscriptRow<ChatRenderItem>[]) {
+  const cached = activitySpacing.get(rows);
+  if (cached) {
+    return cached;
+  }
+  const compactActivityGaps = new Set<string>();
+  for (const [index, row] of rows.entries()) {
+    const next = rows[index + 1];
+    if (row.kind !== "item" || next?.kind !== "item") {
+      continue;
+    }
+    const item = row.item;
+    const following = next.item;
+    const isStandaloneCompaction =
+      following.kind === "group" && following.compaction && !following.runId;
+    if (
+      isStandaloneCompaction &&
+      !following.startsActivityGroup &&
+      (item.kind === "activity-run" ||
+        (item.kind === "agent-run-frame" &&
+          (item.outcome.kind === "active" ||
+            (item.outcome.kind === "completed" && !item.outcome.actionOwner)) &&
+          item.parts.every((part) => part.kind === "activity-run")))
+    ) {
+      compactActivityGaps.add(item.key);
+    }
+  }
+  // Keep the row key, but do not restore a height measured with roomier chrome.
+  const spacedRows = compactActivityGaps.size
+    ? rows.map((row) =>
+        row.kind === "item" && compactActivityGaps.has(row.item.key) && row.revision
+          ? { ...row, revision: row.revision + ":compact-activity" }
+          : row,
+      )
+    : rows;
+  const result = { gaps: compactActivityGaps, rows: spacedRows };
+  activitySpacing.set(rows, result);
+  return result;
+}
+
 export function projectTranscriptRows(
   rows: readonly TranscriptRow<ChatRenderItem>[],
   contentRows: readonly PlacedContentRow[],

@@ -511,12 +511,15 @@ function FramedMessageGroup(props: {
   return (
     <div
       ref={(element) => (replyElements.group = element)}
-      class={frame().className}
+      class={[
+        frame().className,
+        { "chat-group--compact-activity-gap": options().compactActivityGap },
+      ]}
       style={`${
         frame().normalizedRole === "user" || frame().isForwarded
           ? (participantPalette.read()?.style(frame().senderHue) ?? "")
           : ""
-      }${options().frameFooter === false ? ";margin-block-end:calc(var(--chat-run-block-gap) - 2px)" : ""}`}
+      }${options().frameFooter === false && !options().compactActivityGap ? ";margin-block-end:calc(var(--chat-run-block-gap) - 2px)" : ""}`}
       data-chat-row-key={props.group.key}
       data-chat-streaming={props.group.isStreaming ? "true" : undefined}
       data-file-session-key={frame().sessionKey}

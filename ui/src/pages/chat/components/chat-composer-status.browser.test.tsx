@@ -13,6 +13,7 @@ import composerStatusStyles from "../../../styles/chat/composer-status.css?inlin
 import chatComposerStyles from "../../../styles/chat/composer.css?inline";
 import groupedStyles from "../../../styles/chat/grouped.css?inline";
 import chatLayoutStyles from "../../../styles/chat/layout.css?inline";
+import toolCardStyles from "../../../styles/chat/tool-cards.css?inline";
 import componentStyles from "../../../styles/components.css?inline";
 
 function mountCompaction(container: HTMLElement) {
@@ -31,7 +32,7 @@ function mountCompaction(container: HTMLElement) {
   };
 }
 
-describe("inline compaction motion", () => {
+describe("inline compaction status", () => {
   let container: HTMLDivElement;
   let styles: HTMLStyleElement;
   let session: CDPSession;
@@ -49,6 +50,7 @@ describe("inline compaction motion", () => {
       chatLayoutStyles,
       chatComposerStyles,
       composerStatusStyles,
+      toolCardStyles,
     ].join("\n");
     document.head.append(styles);
     container = document.createElement("div");
@@ -62,69 +64,28 @@ describe("inline compaction motion", () => {
     await session.send("Emulation.setEmulatedMedia", { features: [] });
   });
 
-  it("folds lines inline without a floating scrim, then reveals the completion check", async () => {
-    const setPhase = mountCompaction(container);
-    const indicator = container.querySelector<HTMLElement>(".chat-compaction")!;
-    const lines = Array.from(container.querySelectorAll(".chat-compaction__line"));
-    const check = container.querySelector<SVGElement>(".chat-compaction__glyph svg")!;
-    expect(lines.length).toBeGreaterThan(0);
-    expect(getComputedStyle(indicator).backgroundColor).toBe("rgba(0, 0, 0, 0)");
-    expect(getComputedStyle(indicator).boxShadow).toBe("none");
-    expect(getComputedStyle(indicator).borderTopWidth).toBe("0px");
-    expect(getComputedStyle(indicator).animationName).toBe("none");
-    expect(getComputedStyle(check).opacity).toBe("0");
-    for (const line of lines) {
-      expect(getComputedStyle(line).animationName).not.toBe("none");
-      expect(getComputedStyle(line).animationIterationCount).toBe("infinite");
-    }
-    for (const element of container.querySelectorAll("*")) {
-      expect(getComputedStyle(element).animationName).not.toContain("spin");
-    }
-
-    setPhase("complete");
-    for (const line of lines) {
-      expect(getComputedStyle(line).visibility).toBe("hidden");
-      expect(getComputedStyle(line).animationName).toBe("none");
-    }
-    await expect.poll(() => getComputedStyle(check).opacity).toBe("1");
-    await expect
-      .poll(() =>
-        indicator
-          .getAnimations({ subtree: true })
-          .some((animation) => animation.playState === "running"),
-      )
-      .toBe(false);
-  });
-
-  it("keeps active and complete states readable without reduced-motion animations", async () => {
-    await session.send("Emulation.setEmulatedMedia", {
-      features: [{ name: "prefers-reduced-motion", value: "reduce" }],
-    });
-    expect(matchMedia("(prefers-reduced-motion: reduce)").matches).toBe(true);
-    const setPhase = mountCompaction(container);
-    for (const phase of ["active", "complete"] as const) {
-      setPhase(phase);
-      const indicator = container.querySelector<HTMLElement>(".chat-compaction")!;
+  it.each(["no-preference", "reduce"])(
+    "keeps Layers and phase text with motion preference %s",
+    async (motion) => {
+      await session.send("Emulation.setEmulatedMedia", {
+        features: [{ name: "prefers-reduced-motion", value: motion }],
+      });
+      const setPhase = mountCompaction(container);
+      const icon = container.querySelector<SVGElement>(".chat-tool-msg-summary__icon svg")!;
       const label = container.querySelector<HTMLElement>(".chat-tool-row__title")!;
-      const check = container.querySelector<SVGElement>(".chat-compaction__glyph svg")!;
-      expect(label.textContent?.trim()).not.toBe("");
-      expect(getComputedStyle(label).webkitTextFillColor).not.toBe("rgba(0, 0, 0, 0)");
-      expect(getComputedStyle(label).backgroundImage).toBe("none");
-      await expect
-        .poll(() => getComputedStyle(check).opacity)
-        .toBe(phase === "complete" ? "1" : "0");
-      for (const element of container.querySelectorAll("*")) {
-        expect(getComputedStyle(element).animationName).toBe("none");
+      expect(icon.querySelector("path")?.getAttribute("d")).toBe("m12 3 10 5-10 5L2 8Z");
+      expect(icon.getBoundingClientRect()).toMatchObject({ width: 16, height: 16 });
+      expect(label.textContent).toBe("Compacting");
+      expect(label.classList.contains("text-shimmer")).toBe(true);
+      if (motion === "reduce") {
+        expect(getComputedStyle(label).webkitTextFillColor).not.toBe("rgba(0, 0, 0, 0)");
       }
-      await expect
-        .poll(() =>
-          indicator
-            .getAnimations({ subtree: true })
-            .some((animation) => animation.playState === "running"),
-        )
-        .toBe(false);
-    }
-  });
+      setPhase("complete");
+      expect(container.querySelector(".chat-tool-msg-summary__icon svg")).toBe(icon);
+      expect(label.textContent).toBe("Compacted context");
+      expect(label.classList.contains("text-shimmer")).toBe(false);
+    },
+  );
 
   it("keeps the expanded compaction savings readable in a narrow pane", () => {
     container.style.width = "260px";

@@ -84,6 +84,35 @@
   max-width: none;
 }
 
+/* An adjacent standalone activity is not part of this run. Keep its neighbor's
+   identity available, without reserving a second row between operations. */
+.chat-group.assistant.chat-group--compact-activity-gap {
+  grid-template-columns: var(--chat-avatar-column) minmax(0, 1fr) fit-content(30%);
+  grid-template-rows: auto;
+}
+
+.chat-group.assistant.chat-group--compact-activity-gap > .chat-avatar,
+.chat-group.assistant.chat-group--compact-activity-gap > .chat-avatar-slot {
+  width: 21px;
+  height: 21px;
+  margin-block-end: 0;
+  grid-row: 1;
+  justify-self: center;
+}
+
+.chat-group.assistant.chat-group--compact-activity-gap > .chat-group-footer {
+  grid-column: 3;
+  grid-row: 1;
+  width: auto;
+  min-width: 0;
+  min-height: 0;
+  margin-block-start: 0;
+}
+
+.chat-group--compact-activity-gap .chat-group-footer__meta {
+  min-width: 0;
+}
+
 /* Expanded work-group contents keep the smaller text/tool boundary. */
 .chat-group-messages
   > :is(

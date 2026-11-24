@@ -6,7 +6,6 @@ import { createInterval } from "../../../lib/reactive/timers.ts";
 import { ContentPresentation } from "../../../lib/solid/presentation.ts";
 import type { PluginToolIcons } from "../chat-tool-icon-controller.ts";
 import type { ActivityHeadline } from "./chat-activity-headline-selection.ts";
-import { ChatCompactionGlyph } from "./chat-compaction-activity.tsx";
 import { ChatToolIcon } from "./chat-tool-card-chrome.tsx";
 
 export type ChatActivityHeadlineProps = {
@@ -140,7 +139,7 @@ export function ChatActivityHeadline(props: ChatActivityHeadlineProps) {
                 </Show>
               }
             >
-              {(phase) => <ChatCompactionGlyph phase={phase()} />}
+              <Icon name="layers" />
             </Show>
           </span>
         }

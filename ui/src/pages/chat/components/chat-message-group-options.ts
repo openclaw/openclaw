@@ -61,6 +61,7 @@ export type NativeMessageGroupOptions = Omit<RenderMessageGroupOptions, "frameCo
   frameContent?: JSX.Element[];
   frameHeader?: boolean;
   frameFooter?: boolean;
+  compactActivityGap?: boolean;
 };
 
 export function resolveFileLinkOwnerOptions(

@@ -4,31 +4,6 @@ import type { ChatCompaction } from "../../../lib/chat/chat-types.ts";
 import { formatTimeMs } from "../../../lib/format.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 
-/** The existing folding-lines/check glyph, at ordinary activity-row weight. */
-export function ChatCompactionGlyph(props: { phase: ChatCompaction["phase"] }) {
-  return (
-    <span
-      class={[
-        "chat-compaction",
-        {
-          "chat-compaction--active": props.phase === "active",
-          "chat-compaction--complete": props.phase === "complete",
-        },
-      ]}
-      aria-hidden="true"
-    >
-      <span class="chat-compaction__glyph">
-        <span class="chat-compaction__line" />
-        <span class="chat-compaction__line" />
-        <span class="chat-compaction__line" />
-        <span class="chat-compaction__line" />
-        <span class="chat-compaction__line" />
-        <Icon name="check" />
-      </span>
-    </span>
-  );
-}
-
 export function ChatCompactionActivity(props: { item: ChatCompaction }) {
   return (
     <details
@@ -38,7 +13,7 @@ export function ChatCompactionActivity(props: { item: ChatCompaction }) {
     >
       <summary class="chat-inline-disclosure chat-tool-msg-summary chat-tool-row">
         <span class="chat-tool-msg-summary__icon">
-          <ChatCompactionGlyph phase={props.item.phase} />
+          <Icon name="layers" />
         </span>
         <span class="chat-tool-disclosure__content" role="status" aria-live="polite">
           <span class={["chat-tool-row__title", { "text-shimmer": props.item.phase === "active" }]}>

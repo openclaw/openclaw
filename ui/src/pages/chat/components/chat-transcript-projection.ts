@@ -54,6 +54,7 @@ import {
 import type { TranscriptRow } from "./chat-transcript-layout.ts";
 import {
   expandReplyTargetWork,
+  projectCompactActivitySpacing,
   projectTranscriptChain,
   projectTranscriptIndex,
   projectTranscriptRows,
@@ -499,6 +500,43 @@ export function projectChatTranscript(
     props.queuedMessageAction?.onDiscard,
     props.replyMessageAccess?.navigationId ?? "",
   ]);
+  transcript.entryAnimations.project(chatItems);
+  transcript.syncMessageRows(messageRowKeysById, transcriptMessageKeys);
+  const contentRows: PlacedContentRow[] = [];
+  const appendContent = (key: string, content: NativeTranscriptView, after?: string | null) =>
+    contentRows.push({
+      kind: "content",
+      key,
+      content: new GuardedTranscriptItem([content], content),
+      after,
+    });
+  for (const { afterMessageId, content } of realtimeConversation.blocks()) {
+    appendContent(
+      afterMessageId === undefined ? "realtime-talk" : `realtime-talk:${afterMessageId ?? ""}`,
+      content,
+      afterMessageId ? messageRowKeysById.get(afterMessageId) : afterMessageId,
+    );
+  }
+  if (subagents.wait && !subagents.placedWait && !searchFiltering) {
+    appendContent("waiting-subagents", {
+      kind: "wait",
+      sessionKey: props.sessionKey,
+      wait: subagents.wait,
+      options: streamGroupOptions,
+    });
+  }
+  if (props.typingActors?.length) {
+    appendContent("presence:typing", {
+      kind: "typing",
+      actors: props.typingActors,
+      avatarPlacement,
+      overflow: props.typingOverflow,
+    });
+  }
+  const placedRows = projectTranscriptRows(rows, contentRows);
+  const activitySpacing = searchFiltering ? undefined : projectCompactActivitySpacing(placedRows);
+  const transcriptRows = activitySpacing?.rows ?? placedRows;
+  const compactActivityGaps = activitySpacing?.gaps;
   const renderDependencies = createTranscriptRenderDependencies(
     state.transcriptRenderDependencies,
     (item) => {
@@ -512,6 +550,7 @@ export function projectChatTranscript(
         asyncQuestions &&
         groups.some((group) => group.messages.some(({ message }) => readAsyncQuestions(message)));
       return [
+        compactActivityGaps?.has(item.key),
         liveStatusSignature(item),
         item.kind === "stream" || item.key === liveItem?.key ? resolveLiveStream : undefined,
         ...transcriptContextDependencies(item, loadedReplySources, props, presented),
@@ -563,7 +602,10 @@ export function projectChatTranscript(
       return {
         kind: "activity",
         groups: item.groups,
-        options: renderGroupOptions(firstGroup),
+        options: {
+          ...renderGroupOptions(firstGroup),
+          compactActivityGap: compactActivityGaps?.has(item.key),
+        },
         presentation: "standalone",
       };
     }
@@ -575,6 +617,7 @@ export function projectChatTranscript(
           basePath: props.basePath,
           sessionPublicOrigin: props.sessionPublicOrigin,
           streamOptions: streamGroupOptions,
+          compactActivityGap: compactActivityGaps?.has(item.key),
           renderGroupOptions,
           partDependencies: renderDependencies,
           isWorkExpanded,
@@ -596,40 +639,6 @@ export function projectChatTranscript(
     }
     return undefined;
   });
-  transcript.entryAnimations.project(chatItems);
-  transcript.syncMessageRows(messageRowKeysById, transcriptMessageKeys);
-  const contentRows: PlacedContentRow[] = [];
-  const appendContent = (key: string, content: NativeTranscriptView, after?: string | null) =>
-    contentRows.push({
-      kind: "content",
-      key,
-      content: new GuardedTranscriptItem([content], content),
-      after,
-    });
-  for (const { afterMessageId, content } of realtimeConversation.blocks()) {
-    appendContent(
-      afterMessageId === undefined ? "realtime-talk" : `realtime-talk:${afterMessageId ?? ""}`,
-      content,
-      afterMessageId ? messageRowKeysById.get(afterMessageId) : afterMessageId,
-    );
-  }
-  if (subagents.wait && !subagents.placedWait && !searchFiltering) {
-    appendContent("waiting-subagents", {
-      kind: "wait",
-      sessionKey: props.sessionKey,
-      wait: subagents.wait,
-      options: streamGroupOptions,
-    });
-  }
-  if (props.typingActors?.length) {
-    appendContent("presence:typing", {
-      kind: "typing",
-      actors: props.typingActors,
-      avatarPlacement,
-      overflow: props.typingOverflow,
-    });
-  }
-  const transcriptRows = projectTranscriptRows(rows, contentRows);
   state.transcriptRenderContext.threadMediaMessages = snapshot.threadMediaMessages;
   state.transcriptRenderContext.onSetReply = props.onSetReply;
   state.transcriptRenderContext.onOpenReply = (replyToId) => {

@@ -6,6 +6,7 @@ import {
   phases,
   scheduledCallbacks,
 } from "./chat-transcript-layout.test-support.ts";
+import { projectCompactActivitySpacing } from "./chat-transcript-message-index.ts";
 import {
   installTranscriptDomMocks,
   resetTranscriptTestDom,
@@ -13,6 +14,34 @@ import {
 
 beforeEach(installTranscriptDomMocks);
 afterEach(resetTranscriptTestDom);
+
+it("invalidates a warmed tool row height while retaining its identity", () => {
+  const activity = { kind: "activity-run" as const, key: "tool", groups: [] };
+  const compaction = {
+    kind: "group" as const,
+    key: "compact",
+    role: "tool",
+    messages: [],
+    visibleContent: "none" as const,
+    timestamp: 2,
+    isStreaming: false,
+    compaction: {
+      kind: "compaction" as const,
+      key: "compact",
+      phase: "complete" as const,
+      timestamp: 2,
+      label: "Compacted context",
+    },
+  };
+  const tool = { kind: "item" as const, key: activity.key, item: activity, revision: "measured" };
+  const standalone = { kind: "item" as const, key: compaction.key, item: compaction };
+  expect(projectCompactActivitySpacing([tool]).rows[0]).toBe(tool);
+  const neighbors = [tool, standalone];
+  const compacted = projectCompactActivitySpacing(neighbors);
+  expect(compacted.rows[0]).toMatchObject({ key: tool.key, revision: "measured:compact-activity" });
+  expect(compacted.rows[1]).toBe(standalone);
+  expect(projectCompactActivitySpacing(neighbors)).toBe(compacted);
+});
 
 describe("transcript layout callbacks", () => {
   it.each(phases)("ignores an obsolete $label after reconnecting", (phase) => {
