@@ -449,18 +449,17 @@ export class NewSessionModelControl extends NewSessionModelSelection {
   }
 
   accessProgramForSubmission(): CyberAccessProgram | undefined {
-    return (
-      this.cyberAccessProgram ??
-      (this.ownsMetadata() && this.metadataState.status === "ready"
-        ? resolveDraftAccessProgram({
-            model: this.effectiveModel,
-            agentRuntime: this.agentRuntime,
-            agent: this.pendingAgent,
-            defaults: this.pendingContext?.sessions.state.result?.defaults,
-            ...this.metadataState,
-          })
-        : undefined)
-    );
+    if (!this.ownsMetadata() || this.metadataState.status !== "ready") {
+      return this.cyberAccessProgram;
+    }
+    return resolveDraftAccessProgram({
+      model: this.effectiveModel,
+      agentRuntime: this.agentRuntime,
+      agent: this.pendingAgent,
+      defaults: this.pendingContext?.sessions.state.result?.defaults,
+      requested: this.cyberAccessProgram,
+      ...this.metadataState,
+    }).submission;
   }
 
   modelForSubmission(): string {
@@ -586,6 +585,7 @@ export class NewSessionModelControl extends NewSessionModelSelection {
         modelSelectionPolicy: this.metadataState.modelSelectionPolicy,
       },
       this.effectiveModel,
+      this.ownsMetadata() && this.metadataState.status === "ready",
     );
     if (change === false) {
       return;
@@ -700,7 +700,6 @@ export class NewSessionModelControl extends NewSessionModelSelection {
         (this.ownsMetadata() && this.metadataState.status === "ready"
           ? modelControls.accessProgramDefault
           : undefined),
-      daybreakAccessProgram: this.daybreakAccessProgram,
       selectedAgentRuntime: this.agentRuntime,
       sessionsResult: agentDefaultsAvailable ? sourceResult : null,
       stream: null,
