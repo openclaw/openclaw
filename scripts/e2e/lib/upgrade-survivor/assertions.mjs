@@ -498,15 +498,21 @@ function assertConfigSurvived() {
 
   if (coverage && acceptsIntent(coverage, "skill-library-split")) {
     const baseline = process.env.OPENCLAW_UPGRADE_SURVIVOR_ASSERT_STAGE === "baseline";
+    const mode = process.env.OPENCLAW_FROZEN_UPGRADE_SURVIVOR_SKILL_LIBRARY_MODE ?? "current";
+    assert(mode === "current" || mode === "preserve", "Unknown skill library migration contract");
+    const preserve = baseline || mode === "preserve";
     assert(
       JSON.stringify(config.tools?.allow) ===
         JSON.stringify(
-          baseline ? ["read", "skill_workshop"] : ["read", "skill_workshop", "skill_library"],
+          preserve ? ["read", "skill_workshop"] : ["read", "skill_workshop", "skill_library"],
         ),
       "Pre-split skill_workshop allowlist did not keep covering skill_library exactly once",
     );
     assert(
-      baseline || config.meta?.migrations?.skillLibraryToolSplit === true,
+      baseline ||
+        (mode === "preserve"
+          ? config.meta?.migrations?.skillLibraryToolSplit === undefined
+          : config.meta?.migrations?.skillLibraryToolSplit === true),
       "Skill library split migration marker was not recorded",
     );
   }
@@ -1880,9 +1886,27 @@ function assertSuccessfulUpdateJson([file, expectedVersion, observationRoot]) {
   }
 }
 
+// Published releases print the command result; newer candidates print the lifecycle record.
+// Drop the command-result branch once no tested release prints it. Returns true for a record.
+function requireCompletedUpdate(result) {
+  if (result?.phase === undefined) {
+    assert(result?.status === "ok", `update did not report ok: ${String(result?.status)}`);
+    return false;
+  }
+  assert(
+    result.phase === "finished" && result.status === "succeeded" && result.runId,
+    `update did not finish successfully: ${String(result.phase)}/${String(result.status)}`,
+  );
+  assert(
+    result.steps?.every((step) => step.status === "completed" || step.status === "skipped"),
+    "successful update contained an unfinished step",
+  );
+  return true;
+}
+
 function assertSuccessfulUpdateResult(result, expectedVersion) {
   const plugins = result?.postUpdate?.plugins;
-  assert(result?.status === "ok", `update did not report ok: ${String(result?.status)}`);
+  const lifecycle = requireCompletedUpdate(result);
   if (["projects-doctor", "projects-startup-migration"].includes(getScenario())) {
     assertStrict.equal(
       result.before?.version,
@@ -1912,39 +1936,80 @@ function assertSuccessfulUpdateResult(result, expectedVersion) {
     result?.after?.version === expectedVersion,
     `successful update version changed: ${String(result?.after?.version)}`,
   );
-  assert(
-    Array.isArray(result?.steps) &&
-      result.steps.every(
+  if (lifecycle) {
+    return;
+  }
+  const rejectedStepIndex = Array.isArray(result?.steps)
+    ? result.steps.findIndex(
         (step) =>
-          step?.exitCode === 0 ||
-          (step?.name === "openclaw doctor" &&
-            step.exitCode === 86 &&
-            step.advisory?.kind === "package-post-install-doctor") ||
-          (step?.name === "candidate-gateway-startup-cleanup" &&
-            step.exitCode === null &&
-            step.advisory?.kind === "recoverable-maintenance" &&
-            !step.termination &&
-            !step.signal &&
-            !step.killed &&
-            !step.outputLimitExceeded &&
-            !step.failureFacts?.length &&
-            result.steps.some(
-              (primary) => primary?.name === "candidate-gateway-startup" && primary.exitCode === 0,
-            )) ||
-          // Doctor lint exits 1 for selected INFO findings after verified activation.
-          (step?.name === "post-activation doctor inspections" &&
-            step.exitCode === 1 &&
-            step.advisory?.kind === "recoverable-maintenance" &&
-            step.termination === "exit" &&
-            !step.signal &&
-            !step.killed &&
-            !step.outputLimitExceeded &&
-            !step.failureFacts?.length &&
-            Array.isArray(step.doctorLintFindings) &&
-            step.doctorLintFindings.length > 0 &&
-            step.doctorLintFindings.every((finding) => finding?.severity === "info")),
-      ),
-    "successful update contained a failed core step",
+          !(
+            step?.exitCode === 0 ||
+            (step?.name === "openclaw doctor" &&
+              step.exitCode === 86 &&
+              step.advisory?.kind === "package-post-install-doctor") ||
+            // The update owner intentionally skips this probe for remote/TLS profiles
+            // and when an existing Gateway owns the state; restart proof is separate.
+            (step?.name === "activated-gateway-startup" &&
+              step.exitCode === null &&
+              step.advisory?.kind === "recoverable-maintenance" &&
+              !step.termination &&
+              !step.signal &&
+              !step.killed &&
+              !step.outputLimitExceeded &&
+              !step.failureFacts?.length) ||
+            (step?.name === "candidate-gateway-startup-cleanup" &&
+              step.exitCode === null &&
+              step.advisory?.kind === "recoverable-maintenance" &&
+              !step.termination &&
+              !step.signal &&
+              !step.killed &&
+              !step.outputLimitExceeded &&
+              !step.failureFacts?.length &&
+              result.steps.some(
+                (primary) =>
+                  primary?.name === "candidate-gateway-startup" && primary.exitCode === 0,
+              )) ||
+            // Doctor lint exits 1 for selected INFO findings after verified activation.
+            (step?.name === "post-activation doctor inspections" &&
+              step.exitCode === 1 &&
+              step.advisory?.kind === "recoverable-maintenance" &&
+              step.termination === "exit" &&
+              !step.signal &&
+              !step.killed &&
+              !step.outputLimitExceeded &&
+              !step.failureFacts?.length &&
+              Array.isArray(step.doctorLintFindings) &&
+              step.doctorLintFindings.length > 0 &&
+              step.doctorLintFindings.every((finding) => finding?.severity === "info"))
+          ),
+      )
+    : -1;
+  const rejectedStep = result?.steps?.[rejectedStepIndex];
+  const rejectedDoctorFindings = Array.isArray(rejectedStep?.doctorLintFindings)
+    ? rejectedStep.doctorLintFindings
+    : undefined;
+  const rejectedStepMetadata = {
+    termination: String(rejectedStep?.termination).slice(0, 24),
+    signal: String(rejectedStep?.signal).slice(0, 24),
+    killed: Boolean(rejectedStep?.killed),
+    outputLimitExceeded: Boolean(rejectedStep?.outputLimitExceeded),
+    failureFactsCount: Array.isArray(rejectedStep?.failureFacts)
+      ? rejectedStep.failureFacts.length
+      : "missing",
+    doctorFindingsCount: rejectedDoctorFindings?.length ?? "missing",
+    doctorFindings: rejectedDoctorFindings?.slice(0, 8).map((finding) => ({
+      checkId: String(finding?.checkId).slice(0, 120),
+      severity: String(finding?.severity).slice(0, 16),
+      target: String(finding?.target ?? "").slice(0, 160),
+    })),
+  };
+  const rejectedStepContext =
+    rejectedStepIndex < 0
+      ? ""
+      : `: step ${rejectedStepIndex + 1} of ${result.steps.length}; name=${JSON.stringify(String(rejectedStep?.name).slice(0, 160))}; exitCode=${String(rejectedStep?.exitCode).slice(0, 16)}; advisory=${JSON.stringify(String(rejectedStep?.advisory?.kind).slice(0, 80))}; metadata=${JSON.stringify(rejectedStepMetadata)}`;
+  assert(
+    Array.isArray(result?.steps) && rejectedStepIndex === -1,
+    `successful update contained a failed core step${rejectedStepContext}`,
   );
 }
 

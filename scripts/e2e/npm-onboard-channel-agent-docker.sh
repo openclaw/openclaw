@@ -89,7 +89,7 @@ export OPENCLAW_GATEWAY_TOKEN="npm-onboard-channel-agent-token"
 
 CHANNEL="${OPENCLAW_NPM_ONBOARD_CHANNEL:?missing OPENCLAW_NPM_ONBOARD_CHANNEL}"
 PORT="18789"
-MOCK_PORT="44080"
+MOCK_PORT="0"
 SUCCESS_MARKER="OPENCLAW_AGENT_E2E_OK_ASSISTANT"
 scenario_tmp="$(mktemp -d "${TMPDIR:-/tmp}/openclaw-npm-onboard-channel-agent.XXXXXX")"
 MOCK_REQUEST_LOG="$scenario_tmp/mock-openai-requests.jsonl"
@@ -199,7 +199,7 @@ if [ -n "$fixture_consent" ]; then
 fi
 
 mock_pid="$(openclaw_e2e_start_mock_openai "$MOCK_PORT" /tmp/openclaw-mock-openai.log)"
-openclaw_e2e_wait_mock_openai "$MOCK_PORT"
+MOCK_PORT="$(openclaw_e2e_wait_mock_openai "$MOCK_PORT" 80 400 "" "$mock_pid" /tmp/openclaw-mock-openai.log)"
 
 echo "Running non-interactive onboarding..."
 openclaw onboard --non-interactive --accept-risk \

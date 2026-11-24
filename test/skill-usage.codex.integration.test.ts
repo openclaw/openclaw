@@ -98,7 +98,6 @@ function createBridge(kind: ReadOutcome | "read" = "read") {
     hookContext: {
       agentId: "main",
       workspaceDir: testState.workspaceDir,
-      loopDetection: { enabled: false },
       skillsSnapshot: {
         prompt: "",
         skills: [{ name: skillName }],

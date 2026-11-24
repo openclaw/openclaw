@@ -31,11 +31,13 @@ registerEnglishCatalog(registerOpenClawIdEnglish);
 const VALUE_PREFIX = "openclaw-id:";
 const SIGN_IN = `${VALUE_PREFIX}sign-in`;
 const MAKE_REACHABLE = `${VALUE_PREFIX}make-reachable`;
+const APPROVE_DEVICE = `${VALUE_PREFIX}approve-device`;
 const DEVICES = `${VALUE_PREFIX}devices`;
 const SIGN_OUT = `${VALUE_PREFIX}sign-out`;
 const COPY_LINK = `${VALUE_PREFIX}copy-link`;
 const MOVE_KEYS = `${VALUE_PREFIX}move-keys`;
 const PUBLISH_KEYS = `${VALUE_PREFIX}publish-keys`;
+const UNLINK = `${VALUE_PREFIX}unlink`;
 
 /** Derives the compact account header without ever displaying an account ID. */
 export function openClawIdMenuIdentity(status: OpenClawIdStatusResult) {
@@ -186,6 +188,21 @@ function keyAttentionEntries(
   return entries;
 }
 
+// Unlinking signs with this computer's Gateway key over direct loopback; it needs no OpenClaw ID
+// sign-in, so it stays reachable when the account session expired, and when only the endpoint key
+// is refused. Hidden when the Gateway key is refused. Never offered over the tunnel.
+function unlinkEntries(status: OpenClawIdStatusResult): MenuEntry[] {
+  const gatewayKeyRefused =
+    status.status.state === "keys_refused" && status.status.key !== "endpoint";
+  return status.channel === "local_operator" && status.link.linked && !gatewayKeyRefused
+    ? [renderSidebarMenuAction(UNLINK, t("openclawId.unlinkFromOpenClawId"), "circleX")]
+    : [];
+}
+
+function isTunnelMember(status: OpenClawIdStatusResult): boolean {
+  return status.channel === "tunnel" && status.connection?.kind === "member" && !status.owner;
+}
+
 /**
  * One claw card, followed by its account actions. `publication` is the owner-only
  * publication state (`openclawId.people`), read on this computer; a personal admin's comes
@@ -244,6 +261,7 @@ export function openClawIdMenuEntries(
           </button>
         ),
       },
+      ...unlinkEntries(status),
     ];
   }
   const card: MenuEntry[] = [];
@@ -349,6 +367,7 @@ export function openClawIdMenuEntries(
   if (status.channel === "local_operator" && status.link.linked && openClawIdAccount()) {
     entries.push(...keyAttentionEntries(status, publication));
     entries.push(renderSidebarMenuAction(MOVE_KEYS, t("openclawId.moveToNewKeys"), "key"));
+    entries.push(...unlinkEntries(status));
   } else if (
     status.remoteAccessSetup === "personal_admin" &&
     status.link.linked &&
@@ -357,7 +376,16 @@ export function openClawIdMenuEntries(
     // Moving to new keys stays on the computer that runs this claw; publishing them does not.
     entries.push(...keyAttentionEntries(status, publication ?? status.publication));
   }
-  if (status.owner && status.link.linked && (status.channel === "tunnel" || openClawIdAccount())) {
+  if (isTunnelMember(status)) {
+    entries.push(
+      renderSidebarMenuAction(APPROVE_DEVICE, t("openclawId.approveNewDevice"), "plus"),
+      renderSidebarMenuAction(DEVICES, t("openclawId.yourDevices"), "monitor"),
+    );
+  } else if (
+    status.owner &&
+    status.link.linked &&
+    (status.channel === "tunnel" || openClawIdAccount())
+  ) {
     entries.push(renderSidebarMenuAction(DEVICES, t("openclawId.yourDevices"), "monitor"));
   }
   return entries;
@@ -468,7 +496,11 @@ export function selectOpenClawIdMenuValue(
     return false;
   }
   const { client, status } = context;
-  if (value === DEVICES && client && status?.owner) {
+  if ((value === APPROVE_DEVICE || value === DEVICES) && isTunnelMember(status)) {
+    window.location.assign(
+      `/_loader/?stay=1&view=${value === APPROVE_DEVICE ? "approve" : "devices"}`,
+    );
+  } else if (value === DEVICES && client && status?.owner) {
     openDialog(async () =>
       (await import("./owner-devices-dialog.tsx")).showOwnerDevicesDialog({ client }),
     );
@@ -533,6 +565,19 @@ export function selectOpenClawIdMenuValue(
         }
       });
     }
+  } else if (
+    value === UNLINK &&
+    client &&
+    status.channel === "local_operator" &&
+    status.link.linked &&
+    status.link.hostname
+  ) {
+    const hostname = status.link.hostname;
+    openDialog(async () => {
+      if (await (await import("./unlink-dialog.tsx")).showUnlinkDialog({ client, hostname })) {
+        context.onKeysChanged?.();
+      }
+    });
   } else if (value === PUBLISH_KEYS && client) {
     const signedIn = setupSignedIn(status);
     if (signedIn) {

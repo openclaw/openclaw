@@ -641,6 +641,8 @@ export async function waitForAgentJob(params: {
   runId: string;
   timeoutMs: number;
   source?: "agent" | "chat";
+  canRestoreCompletion?: () => boolean;
+  readRestoredCompletion?: () => Promise<AgentJobObservation | undefined> | undefined;
   /** A caller-owned nonterminal observation can finish this wait without ending the run. */
   stopWaiting?: () => boolean;
 }): Promise<AgentJobObservation | null> {
@@ -650,8 +652,35 @@ export async function waitForAgentJob(params: {
     return projectAgentJobObservation(cached);
   }
   const signal = getAsyncWorkSignal();
-  if (params.timeoutMs <= 0 || signal?.aborted) {
+  if (signal?.aborted) {
     return null;
+  }
+  const mayRestore = () =>
+    params.canRestoreCompletion?.() &&
+    !pendingAgentRunTerminals.has(params.runId) &&
+    !agentRunStarts.has(params.runId);
+  const readRecovery = () => (mayRestore() ? params.readRestoredCompletion?.() : undefined);
+  const currentRecovery = (restored: AgentJobObservation | undefined) => {
+    const published = getAgentRunSnapshot(params);
+    return published
+      ? projectAgentJobObservation(published)
+      : restored && mayRestore()
+        ? restored
+        : null;
+  };
+  if (params.timeoutMs <= 0) {
+    // A poll may inspect the existing startup record but never waits for a future event.
+    let restored: AgentJobObservation | undefined;
+    try {
+      const recovery = readRecovery();
+      if (!recovery) {
+        return null;
+      }
+      restored = await recovery;
+    } catch {
+      // A live completion may have arrived while the historical read was failing.
+    }
+    return currentRecovery(restored);
   }
 
   return await new Promise((resolve) => {
@@ -710,6 +739,22 @@ export async function waitForAgentJob(params: {
       onClose();
     } else {
       onWake();
+      // The same deadline and close listener cover both recovery and live observations.
+      if (!settled) {
+        void readRecovery()?.then(
+          (restored) => {
+            if (!settled) {
+              const snapshot = currentRecovery(restored);
+              if (snapshot) {
+                finish(snapshot);
+              }
+            }
+          },
+          () => {
+            // An unavailable historical read leaves the live waiter in charge.
+          },
+        );
+      }
     }
   });
 }

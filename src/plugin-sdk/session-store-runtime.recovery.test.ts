@@ -93,7 +93,7 @@ describe("session-store-runtime recovery boundary", () => {
 
   it("rejects private shutdown state from runtime-escaped creation inputs", async () => {
     const injected = {
-      resumeAfterRestart: { queuedInputIds: [] },
+      resumeAfterRestart: {},
       pendingProjectGitUrl: "https://github.com/openclaw/injected.git",
       sessionId: "created",
       updatedAt: 10,

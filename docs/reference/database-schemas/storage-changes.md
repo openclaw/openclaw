@@ -959,6 +959,18 @@ outcomes fence affected rows until restoration from the store; they never author
 The digest requires no new column, schema migration, or updater behavior, and also
 detects writes from older processes that cannot maintain a new revision column.
 
+New subagent runs record the spawning requester's restart source in
+`requesterOperatorSource` inside `subagent_runs.payload_json`. It uses the same
+bounded recovery-source codec as queued inputs; unavailable sources are not
+stored. After a Gateway restart, completion recovery re-admits that source under
+current policy, so the woken parent turn has the requester's original scopes, and
+the turn's own admission still checks session access. A refused source leaves the
+result unbound, the same as any other failed recovery. Rows without the field
+(older runs) use the recorded session principal, otherwise the System write
+baseline, never admin. This adds no table, column, index, schema version, or
+backfill. Older builds ignore the field and apply the fallback they use for rows
+they write themselves; the retired `operatorRecoverySource` field stays ignored.
+
 Private requester-settle wakes retain `privateInput` (the dispatch run ID and raw
 prompt) inside their existing `subagent_runs.payload_json` wake state before
 Gateway dispatch. The same row transition owns retries; this adds no table,
@@ -3238,11 +3250,43 @@ distinguish this version phase from any separate maintenance or update backup.
 PostgreSQL keeps its existing exact-predecessor backup owner; this declaration
 does not narrow that engine's backup scope.
 
-Old rows retain their fallback cost until an ordinary write or rebuild covers
-them. A recent 512-event window can become covered after 512 ordinary, well-formed
-appends. Malformed rows retain their fallback, and old dependency candidates can
-remain uncovered indefinitely. A background backfill is a separate storage and
-lifecycle decision.
+After readiness and restart recovery, the Gateway's idle maintenance scheduler
+backfills historical SQLite facts in its existing agent database worker. It
+waits for the existing startup-methods barrier to admit recovered inputs, then
+for the RestartRecovery lane to empty before each batch. It
+prioritizes sessions updated within seven days, largest active path first, then
+older sessions by size, and finishes each session before advancing. Background
+writer admission waits for the foreground FIFO to drain; active runs and other
+background work do not prevent progress. The delay after each batch is at least
+250 ms and twenty times its admitted publication execution, including worker
+preparation and reply delivery and bounded below by the native transaction duration.
+Waiting behind foreground work is excluded. Index-only discovery receives the same
+execution-time charge. Lock contention doubles a
+separate backoff up to five seconds; a clean batch resets it. One worker client
+serves the pass and closes on completion or cancellation. Drain cancels pending work and permits only an already
+admitted bounded transaction to settle. This work never runs during database
+open, migration, or readiness.
+
+A foreground operation arriving after background admission can wait for its whole
+publication, including preparation and reply delivery. An indivisible cold payload
+read, commit, or runtime pause can exceed the soft time budget; the following delay
+limits average writer duty, not the duration of an individual foreground wait.
+
+Each transaction reads the current active rows and derives facts with the same
+helpers as ordinary writers. Cold, rebuilding, and malformed rows retain their
+fallback. Derived-only fills preserve session snapshot tokens while advancing
+database-wide write tracking; actual transcript mutations retain their normal
+session invalidation. Progress comes from the companion primary key: restart scans bounded
+active identity ranges but does not reread covered payloads. No progress table,
+schema change, or new setting is introduced. Progress logs report filled and
+skipped rows, visited sessions, payload bytes, maximum native batch and admitted
+execution durations, and lock contention. A completed pass can leave skipped rows or rows invalidated behind
+its cursor unknown; ordinary writers or the next restart can cover them.
+
+PostgreSQL keeps ordinary writer population and the existing fallback. Its
+background pass reports that it is unsupported: SQLite's immediate transaction
+excludes concurrent payload changes, whereas PostgreSQL would require a separately
+validated source-row locking protocol.
 
 Older binaries refuse agent41 stores: their writers cannot keep these facts
 current, so an additive-table reader exception is unsafe. With writers stopped,
@@ -3252,6 +3296,27 @@ restoring both version markers before the matching older build opens the store.
 This version phase does not rewrite transcripts; the scoped restore leaves
 those canonical rows and other undeclared tables intact. It is not a general
 rollback for other migrations or external effects.
+
+## Session member access levels
+
+Agent schema 44 adds a nullable `session_members.access` column. A value of
+`read`, `suggest`, or `send` records the most an invited person may do in a
+shared session. Null means no level was ever set; existing memberships keep
+null, and readers treat it exactly as they treated membership before this
+version. The membership writer is the only writer. It sets the level inside the
+same sharing-worker transaction as other membership changes and publishes the
+change through the existing session collaboration facts. The session actor's
+member snapshot carries the same value.
+
+The version migration adds the column with a `CHECK` constraint and touches no
+other table. Validating the constraint can scan the existing rows once; they
+are all null, and `session_members` holds one row per invited person per
+session. There is no rewrite, backfill, or new index.
+The declared scoped migration backup covers `session_members` and the version
+markers. Older binaries refuse an agent44 store. To go back, stop writers and
+restore the verified scoped backup with
+`openclaw database restore-migration-backup` before the matching older build
+opens the store.
 
 ## Review checkpoint for material changes
 

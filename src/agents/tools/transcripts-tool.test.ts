@@ -3,10 +3,8 @@ import { describe, expect, it, vi } from "vitest";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { startTranscripts } from "../../transcripts/capture.js";
-import type {
-  TranscriptSessionDescriptor,
-  TranscriptSourceProvider,
-} from "../../transcripts/provider-types.js";
+import type { TranscriptSourceProvider } from "../../transcripts/provider-types.js";
+import type { TranscriptSessionDescriptor } from "../../transcripts/types.js";
 import { createEnteredGate } from "../entered-gate.test-support.js";
 import { createTranscriptsTool } from "./transcripts-tool.js";
 import {

@@ -26,7 +26,7 @@ import {
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import type { EngineConnection } from "./sql-connection.js";
 import { withPreparedSqliteSnapshot } from "./sqlite-readonly-location-cleanup.js";
-import { resolveSqliteInspectionSignal } from "./sqlite-readonly-worker.js";
+import { resolveSqliteInspectionSignal } from "./sqlite-readonly-worker-context.js";
 import { prepareSqliteReadOnlyLocation } from "./sqlite-snapshot-source.js";
 import { runSqliteImmediateTransactionSync } from "./sqlite-transaction.js";
 import type { PreparedAgentDatabaseMigrationDiscovery } from "./state-migrations.media-persistence-targets.js";

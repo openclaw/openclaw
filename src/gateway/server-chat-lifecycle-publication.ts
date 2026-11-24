@@ -154,16 +154,21 @@ export function createSessionLifecyclePublisher(
       case "end":
       case "error": {
         const { persistence, projection } = params;
-        const broadcastSessionChange = (snapshotEvent?: AgentEventPayload) =>
-          withPreparedSessionEventRow(projection, sessionKey, agentId, (read, ancestors) => {
-            if (params.publishLifecycle === false || parseCronRunScopeSuffix(sessionKey).runId) {
-              return;
-            }
+        const broadcastSessionChange = (snapshotEvent?: AgentEventPayload) => {
+          if (
+            params.publishLifecycle === false ||
+            parseCronRunScopeSuffix(sessionKey).runId ||
+            !hasSessionChangeReceivers(deps.sessionEventSubscribers.getAll())
+          ) {
+            return undefined;
+          }
+          return withPreparedSessionEventRow(projection, sessionKey, agentId, (read, ancestors) => {
             const sessionEventConnIds = deps.sessionEventSubscribers.getAll();
             if (hasSessionChangeReceivers(sessionEventConnIds)) {
               broadcastSnapshot(snapshotEvent, sessionEventConnIds, projection, read, ancestors);
             }
           });
+        };
         // Terminal writes serialize with restart markers. Reload only after the
         // write so subscribers see the canonical post-race session state.
         void persistence

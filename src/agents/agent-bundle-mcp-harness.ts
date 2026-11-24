@@ -3,6 +3,7 @@ import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { SessionToolOverrides } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
+import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import { getPluginToolMeta, setPluginToolMeta } from "../plugins/tool-metadata.js";
 import type { McpToolCatalog } from "./agent-bundle-mcp-catalog.types.js";
 import {
@@ -149,6 +150,8 @@ type MaterializeRequesterScopedMcpToolsForHarnessRunParams = {
   agentDir?: string;
   cfg?: OpenClawConfig;
   manifestRegistry?: Pick<PluginManifestRegistry, "plugins">;
+  metadata?: PluginMetadataSnapshot;
+  isTurnTainted?: () => boolean;
   toolOverrides?: Pick<SessionToolOverrides, "mcpServers" | "mcpToolsDeny">;
   requesterSenderId?: string | null;
   agentAccountId?: string | null;
@@ -280,6 +283,18 @@ export async function materializeStaticMcpToolsForHarnessRunCore(
   const liveRuntime = await materializeBundleMcpToolsForRun({
     ...acquisition,
     agentId: params.agentId,
+    operatorConnect: params.cfg
+      ? {
+          cfg: params.cfg,
+          metadata: params.metadata,
+          senderIsOwner:
+            params.policyContext?.senderIsOwner ?? conversationCapabilityProfile?.sender.isOwner,
+          chatType: params.policyContext?.chatType,
+          isTurnTainted: params.isTurnTainted,
+          toolOverrides: params.toolOverrides,
+          toolDenylist: conversationCapabilityProfile?.policy.explicitToolDenylist,
+        }
+      : undefined,
     reservedToolNames: params.reservedToolNames,
     ...(retireSnapshotRuntime ? { disposeRuntime: retireSnapshotRuntime } : {}),
   });

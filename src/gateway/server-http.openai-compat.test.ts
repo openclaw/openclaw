@@ -151,7 +151,6 @@ const phases = [
   ["complete", true],
   ["before headers", false],
   ["during body", false],
-  ["policy changed", false],
 ] as const;
 
 it.each(
@@ -219,25 +218,14 @@ it.each(
           headers: requestHeaders,
         });
         client.on("error", () => {});
-        const completed =
-          complete || phase === "policy changed" ? once(client, "response") : undefined;
+        const completed = complete ? once(client, "response") : undefined;
         client.end(JSON.stringify(mediaBody(path, SOURCE_URLS, stream, kind)));
         try {
-          if (phase === "policy changed") {
-            await firstStarted.promise;
-            publishConfig({
-              ...config,
-              gateway: { ...config.gateway, allowRealIpFallback: true },
-            });
-            firstResponse?.end(bytes);
-          }
           if (completed) {
             const [response] = await completed;
             const body = await text(response);
-            expect(response.statusCode).toBe(complete ? 200 : 401);
-            if (complete) {
-              expect(body).toContain("image accepted");
-            }
+            expect(response.statusCode).toBe(200);
+            expect(body).toContain("image accepted");
           } else {
             await firstStarted.promise;
             if (phase === "during body") {

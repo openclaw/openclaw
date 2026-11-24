@@ -1,9 +1,7 @@
 import { writeFileSync } from "node:fs";
-import type { ServerResponse } from "node:http";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { bindHttpResponseAuthority } from "./http-request-authority.js";
 import { createTestGatewayHttpServer } from "./http-server.test-support.js";
 
 const mocks = vi.hoisted(() => ({
@@ -14,12 +12,10 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("./http-utils.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./http-utils.js")>()),
-  authorizeControlUiReadRequestOrReply: ({ res }: { res: ServerResponse }) =>
-    bindHttpResponseAuthority(
-      { authMethod: "token", operatorScopes: ["operator.admin", "operator.read"] },
-      res,
-      () => true,
-    ),
+  authorizeControlUiReadRequestOrReply: () => ({
+    authMethod: "token",
+    operatorScopes: ["operator.admin", "operator.read"],
+  }),
 }));
 
 vi.mock("../media/fetch.js", async (importOriginal) => ({

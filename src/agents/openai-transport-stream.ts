@@ -1,5 +1,4 @@
 import { buildOpenAICompletionsParams as buildOpenAICompletionsParamsImpl } from "@openclaw/ai/transports";
-import "./ai-transport-runtime-host.js";
 import type { OpenAICompletionsOptions, OpenAIModeModel } from "@openclaw/ai/transports";
 /**
  * Public OpenAI transport surface.
@@ -8,6 +7,7 @@ import type { OpenAICompletionsOptions, OpenAIModeModel } from "@openclaw/ai/tra
  * established imports stable while sharing only transport-neutral primitives between them.
  */
 import type { Context } from "../llm/types.js";
+import { configureAiTransportRuntimeHost } from "./ai-transport-runtime-host.js";
 
 export { createOpenAIResponsesTransportStreamFn } from "@openclaw/ai/transports";
 
@@ -18,5 +18,6 @@ export function buildOpenAICompletionsParams(
   context: Context,
   options: OpenAICompletionsOptions | undefined,
 ): Record<string, unknown> {
+  configureAiTransportRuntimeHost();
   return buildOpenAICompletionsParamsImpl(model, context, options);
 }

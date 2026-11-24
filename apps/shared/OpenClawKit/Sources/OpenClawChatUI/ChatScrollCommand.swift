@@ -1,12 +1,67 @@
 import SwiftUI
 
-/// The view's own one-shot positioning always runs in a nil-animation transaction, so
-/// `.animating` only comes from system scrolls (status-bar scroll-to-top, keyboard
-/// avoidance). Not releasing there lets the next timeline tick yank the reader back down.
-func chatReaderScrollReleasesFollow(_ phase: ScrollPhase) -> Bool {
+enum ChatReaderUserTransition: Equatable {
+    case unchanged
+    case added(UUID)
+    case removed(latestRemainingID: UUID?)
+}
+
+enum ChatReaderInitialRestorePolicy: Equatable {
+    case liveEdge
+    case latestTurn
+}
+
+func chatReaderInitialRestorePolicy() -> ChatReaderInitialRestorePolicy {
+    #if os(iOS)
+    .liveEdge
+    #else
+    .latestTurn
+    #endif
+}
+
+func chatReaderUserTransition(
+    previousID: UUID?,
+    visibleIDs: [UUID]) -> ChatReaderUserTransition
+{
+    let latestID = visibleIDs.last
+    if let previousID, !visibleIDs.contains(previousID) {
+        return .removed(latestRemainingID: latestID)
+    }
+    if let latestID, latestID != previousID {
+        return .added(latestID)
+    }
+    return .unchanged
+}
+
+func chatReaderHasNewerContent(
+    after messageID: UUID,
+    visibleIDs: [UUID],
+    hasTransientContent: Bool) -> Bool
+{
+    guard let messageIndex = visibleIDs.firstIndex(of: messageID) else { return false }
+    return messageIndex < visibleIDs.index(before: visibleIDs.endIndex) || hasTransientContent
+}
+
+/// `hasNewerContentBelow` is derived structurally (a later message or streaming text exists),
+/// which is true from the first Writing tick of a turn even when the whole transcript is on
+/// screen. Gating on the live-edge geometry keeps the jump affordance hidden until content is
+/// actually below the viewport; without it the button flashes during every reply (#108693).
+func chatReaderShowsJumpToLatest(
+    hasNewerContentBelow: Bool,
+    isAtLiveEdge: Bool,
+    hasVisibleContent: Bool,
+    isLoading: Bool) -> Bool
+{
+    hasNewerContentBelow && !isAtLiveEdge && hasVisibleContent && !isLoading
+}
+
+/// Reader navigation releases following; keyboard avoidance alone keeps the live-edge pin.
+func chatReaderScrollReleasesFollow(_ phase: ScrollPhase, keyboardTransition: Bool = false) -> Bool {
     switch phase {
-    case .interacting, .animating:
+    case .interacting:
         true
+    case .animating:
+        !keyboardTransition
     case .idle, .tracking, .decelerating:
         false
     @unknown default:
@@ -24,10 +79,28 @@ enum ScrollFollowTarget: Equatable {
 @MainActor
 @Observable
 final class ChatScrollFollowState {
+    #if os(iOS)
+    /// The iOS transcript's only offset writer. It owns the mode; reads here are not observed.
+    @ObservationIgnored let readingPosition = ChatReadingPosition()
+    var followTarget: ScrollFollowTarget? {
+        get { self.readingPosition.mode }
+        set { self.readingPosition.setMode(newValue) }
+    }
+    #else
     var followTarget: ScrollFollowTarget? = .latest
+    #endif
     var isAtLiveEdge = true
     var isUserScrolling = false
     var hasNewerContentBelow = false
+    #if os(iOS)
+    var isKeyboardTransitioning = false
+    #endif
+
+    init() {
+        #if os(iOS)
+        self.readingPosition.follow = self
+        #endif
+    }
 }
 
 /// Keeps the end of the transcript in view while it follows the latest content.
@@ -41,6 +114,9 @@ struct ChatScrollFollowAnchorModifier: ViewModifier {
     @State private var position = ScrollPosition()
 
     func body(content: Content) -> some View {
+        #if os(iOS)
+        content
+        #else
         content
             .defaultScrollAnchor(self.follows ? .bottom : nil, for: .sizeChanges)
             .scrollPosition(self.$position)
@@ -48,6 +124,7 @@ struct ChatScrollFollowAnchorModifier: ViewModifier {
                 guard self.follows else { return }
                 withTransaction(Transaction(animation: nil)) { self.position.scrollTo(edge: .bottom) }
             }
+        #endif
     }
 
     private var follows: Bool {
@@ -111,18 +188,29 @@ struct ChatScrollCommand {
 struct ChatScrollCommandModifier: ViewModifier {
     @Binding var command: ChatScrollCommand
     let currentSessionTarget: @MainActor () -> OpenClawChatSessionTarget
+    var shouldNavigate: @MainActor (UUID) -> Bool = { _ in true }
 
     func body(content: Content) -> some View {
+        self.proxyContent(content)
+    }
+
+    private func proxyContent(_ content: Content) -> some View {
         ScrollViewReader { proxy in
             content.onChange(of: self.command.pending) { _, request in
                 guard let request else { return }
                 // Let the new rows lay out without retaining an ID-based scroll constraint.
                 DispatchQueue.main.async {
-                    guard let command = self.command.take(request, sessionTarget: self.currentSessionTarget()) else {
+                    guard let command = self.command.take(request, sessionTarget: self.currentSessionTarget()),
+                          self.shouldNavigate(command.targetID)
+                    else {
                         return
                     }
                     withTransaction(Transaction(animation: nil)) {
+                        #if os(iOS)
+                        proxy.scrollTo(ChatAssistantListCell.ID.row(command.targetID), anchor: command.anchor)
+                        #else
                         proxy.scrollTo(command.targetID, anchor: command.anchor)
+                        #endif
                     }
                 }
             }

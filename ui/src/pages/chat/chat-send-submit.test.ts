@@ -553,7 +553,7 @@ describe("handleSendChat immediate local commands", () => {
       expect(exportCurrentChat).not.toHaveBeenCalled();
       expect(host.request).not.toHaveBeenCalled();
       expect(host.chatError).toBe(
-        "Control UI exports Markdown through your browser. Run /export without a file path.",
+        "The web app exports Markdown through your browser. Run /export without a file path.",
       );
       expect(host.chatMessage).toBe(draft);
       expect(host.chatAttachments).toEqual([attachment]);

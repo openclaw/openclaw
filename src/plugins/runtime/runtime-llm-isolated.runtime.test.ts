@@ -267,6 +267,13 @@ describe("runtime.llm.complete isolated agent runtime", () => {
         ...(tiered
           ? {
               tieredPricing: [
+                {
+                  input: 1,
+                  output: 0,
+                  cacheRead: 0,
+                  cacheWrite: 0,
+                  range: [0, 200_000] as [number, number],
+                },
                 { input: 2, output: 0, cacheRead: 0, cacheWrite: 0, range: [200_000] as [number] },
               ],
             }

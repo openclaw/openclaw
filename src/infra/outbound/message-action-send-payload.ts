@@ -1,5 +1,5 @@
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
-import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
+import type { ReplyMediaAttachment, ReplyPayload } from "../../auto-reply/reply-payload.js";
 import type {
   MessageActionNormalization,
   MessageActionResult,
@@ -17,6 +17,12 @@ export type SendPayloadParts = {
   silent?: boolean;
   normalization?: MessageActionNormalization;
 };
+
+export function resolveReplyMediaAttachmentType(value: unknown): ReplyMediaAttachment["type"] {
+  return value === "image" || value === "audio" || value === "video" || value === "file"
+    ? value
+    : undefined;
+}
 
 const LEGACY_SEND_MEDIA_SOURCE_KEYS = ["path", "filePath", "fileUrl", "image"] as const;
 

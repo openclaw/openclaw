@@ -13,6 +13,7 @@ import type {
 import type { RetainedWorkerTransactionAdmission } from "../../infra/sqlite-worker-operation-settlement.js";
 import { createSqliteWorkerTransferCollector } from "../../infra/sqlite-worker-transfer.js";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
+import { freezeTrustedJsonSnapshot } from "../../shared/immutable-data.js";
 import {
   parseConversationPublications,
   retainConversationWorkerPublication,
@@ -45,6 +46,7 @@ import {
   type SessionActorEntryReference,
 } from "./session-actor-receipt.js";
 import type { createSessionActorReplica } from "./session-actor-replica.js";
+import { sessionMemberAccessFacts } from "./session-member-access-facts.js";
 import { publishCommittedSessionTranscriptReceipts } from "./session-transcript-authority.js";
 
 type NativeAdmission = {
@@ -67,6 +69,7 @@ export type SessionActorTransport = {
       grant: () => boolean,
     ) => void,
     concurrentBoardReads?: "transcript-only",
+    source?: Pick<SessionActorAuthority, "readCustody" | "workspaceEvidence">,
   ): Promise<T>;
   /** Read-only committed evidence; follow-up work runs after releasing the command FIFO. */
   afterCommitted?<Value extends SessionActorPhaseResults[SessionActorPhase]>(
@@ -120,7 +123,7 @@ export function createSqliteSessionActorExecutor(
       native: NativeAdmission,
       publication: unknown,
       stage: "transaction" | "commit",
-      snapshot: SessionActorAuthorityFacts,
+      snapshot: SessionActorAuthorityFacts & { writeToken?: string },
     ) => void,
     beforeFinalGrant?: (conversationPublication: unknown) => void,
     entryReference?: () => SessionActorEntryReference | undefined,
@@ -149,7 +152,7 @@ export function createSqliteSessionActorExecutor(
           throw new Error("Session actor admission belongs to another target");
         }
         // SAFETY: The paired kernel owns these facts; references require its exact preimage.
-        let snapshot = facts.snapshot as SessionActorAuthorityFacts;
+        let snapshot = facts.snapshot as SessionActorAuthorityFacts & { writeToken?: string };
         if ("entryReference" in facts.snapshot) {
           const preimage = entryReference?.();
           if (!preimage || facts.snapshot.entryReference !== preimage.writeToken) {
@@ -190,30 +193,35 @@ export function createSqliteSessionActorExecutor(
   const read = async (authority: SessionActorAuthority) => {
     for (let attempt = 0; ; attempt += 1) {
       try {
-        return await params.transport.run(async (scope) => {
-          params.assertReadable();
-          authority.assertCurrent();
-          let snapshot = params.replica.read();
-          if (!snapshot) {
-            const install = params.replica.beginRead();
-            snapshot = await scope.execute({ type: "session.actor.read", input: { target } });
-            install(snapshot);
-            // Disclose the immutable installed revision, including a superseding receipt.
-            snapshot = params.replica.read();
-          }
-          if (!snapshot) {
-            throw new SessionActorReadInvalidatedError();
-          }
-          fenced = undefined;
-          params.assertReadable();
-          authority.assertCurrent();
-          authority.authorize("commit", snapshot);
-          authority.assertCurrent();
-          params.assertReadable();
-          // Policy callbacks do not write session state. A synchronous bookkeeping
-          // change during authorization is visible to the next read.
-          return snapshot;
-        }, authorize(authority));
+        return await params.transport.run(
+          async (scope) => {
+            params.assertReadable();
+            authority.assertCurrent();
+            let snapshot = params.replica.read();
+            if (!snapshot) {
+              const install = params.replica.beginRead();
+              snapshot = await scope.execute({ type: "session.actor.read", input: { target } });
+              install(snapshot);
+              // Disclose the immutable installed revision, including a superseding receipt.
+              snapshot = params.replica.read();
+            }
+            if (!snapshot) {
+              throw new SessionActorReadInvalidatedError();
+            }
+            fenced = undefined;
+            params.assertReadable();
+            authority.assertCurrent();
+            authority.authorize("commit", snapshot);
+            authority.assertCurrent();
+            params.assertReadable();
+            // Policy callbacks do not write session state. A synchronous bookkeeping
+            // change during authorization is visible to the next read.
+            return snapshot;
+          },
+          authorize(authority),
+          undefined,
+          authority,
+        );
       } catch (error) {
         // No command was accepted. Reenter the physical FIFO once with fresh
         // caller authority after a newer publication revoked the read.
@@ -374,6 +382,7 @@ export function createSqliteSessionActorExecutor(
                       new Set(
                         committed.receipt.postimage.members.map((member) => member.identityId),
                       ),
+                      sessionMemberAccessFacts(committed.receipt.postimage.members),
                     );
                     if (entry && (previousEntry || !metadata?.length)) {
                       // Metadata publication owns initial age facts; later settlement can release claims.
@@ -394,10 +403,7 @@ export function createSqliteSessionActorExecutor(
                     committed.receipt.transcript.authorityReceipts,
                   );
                   try {
-                    observer?.committed(committed);
-                  } finally {
-                    // Record input custody before fallible identity notifications; row facts
-                    // still settle when the receipt observer reports a committed failure.
+                    // Publish committed row facts before observers read the resident list.
                     if (target.database.kind === "file" && metadata?.length) {
                       // Terminal accounting may change the row without appending a transcript event.
                       const databaseIdentity = target.database.physicalIdentity;
@@ -426,6 +432,9 @@ export function createSqliteSessionActorExecutor(
                         publication.settle(undefined, false);
                       }
                     }
+                  } finally {
+                    // Input custody must still be recorded if publication notification fails.
+                    observer?.committed(committed);
                   }
                 } catch (error) {
                   result = preserveFailure(error);
@@ -506,6 +515,13 @@ export function createSqliteSessionActorExecutor(
             if (stage === "transaction" && !capturedPreviousEntry) {
               previousEntry = snapshot.entry;
               capturedPreviousEntry = true;
+              if (snapshot.writeToken !== undefined) {
+                entryReference = {
+                  target: snapshot.target,
+                  entry: freezeTrustedJsonSnapshot(snapshot.entry),
+                  writeToken: snapshot.writeToken,
+                };
+              }
             }
             if (isRecord(publication) && publication.kind === "session-actor-outcome") {
               transfer.accept(publication.transfer);
@@ -527,6 +543,7 @@ export function createSqliteSessionActorExecutor(
           !captured.reducers?.length
           ? "transcript-only"
           : undefined,
+        authority,
       );
     } catch (error) {
       // A transport timeout is not native settlement. The accepted callback keeps

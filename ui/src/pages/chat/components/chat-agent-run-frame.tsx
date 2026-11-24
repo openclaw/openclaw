@@ -24,9 +24,15 @@ import {
   chatItemGroups,
   type AgentRunFrameRenderItem,
 } from "../chat-agent-run-grouping.ts";
-import type { TurnRecap } from "../chat-progress.ts";
+import { readHandoffDisplay } from "../chat-sessions-yield.ts";
 import { rawMessageTimestamp } from "../chat-thread-items.ts";
+import {
+  readProjectedContinuation,
+  type ProjectedContinuationSource,
+} from "../chat-turn-boundary.ts";
+import { ChatHandoffResume } from "./chat-handoff-sessions.tsx";
 import { ChatLazyBoundary } from "./chat-lazy-boundary.tsx";
+import { McpConnectCards } from "./chat-mcp-connect-card.tsx";
 import {
   ActivityGroup,
   MessageGroup,
@@ -56,7 +62,6 @@ type AgentRunFrameOptions = {
   partDependencies: (part: BodyPart) => readonly unknown[];
   isWorkExpanded: (key: string) => boolean;
   onToggleWork: (key: string, expanded: boolean) => void;
-  turnRecap?: TurnRecap;
 };
 type FrameProps = { frame: AgentRunFrameRenderItem; options: AgentRunFrameOptions };
 type BodyPart =
@@ -260,16 +265,48 @@ function prepareFrame(frame: AgentRunFrameRenderItem, opts: AgentRunFrameOptions
               : [],
         )
         .at(0) ?? null);
+  const replyGroups = source.detachedGroups ? [...source.detachedGroups, ...groups] : groups;
   const sourcePreviews = actionOwner
     ? extractChatSourcePreviews({
         // Cited results can sit in an earlier rollup that no visible reply owns.
-        groups: frame.detachedGroups ? [...frame.detachedGroups, ...groups] : groups,
+        groups: replyGroups,
         answer: actionOwner.message,
         runId: frame.runId,
         basePath: opts.basePath,
         sessionPublicOrigin: opts.sessionPublicOrigin,
       })
     : [];
+  // Work that resumed after a hidden wake marks where it picked up again. Rows
+  // split from one resumed message share its time, so only the first draws it.
+  // A virtualized fragment scans its whole run: work may stop in an earlier one.
+  const resumes = new Map<
+    string,
+    { yieldedAt: number; resumedAt: number; source: ProjectedContinuationSource }
+  >();
+  let stopped: unknown;
+  const runParts = fragment
+    ? fragment.source.parts.flatMap<BodyPart>((part) =>
+        part.kind === "stream-run" ? part.parts : [part],
+      )
+    : bodyParts;
+  for (const part of runParts) {
+    const partGroups = chatItemGroups(part);
+    const first = partGroups[0]?.messages[0]?.message;
+    const wokenBy = readProjectedContinuation(first);
+    const resumedAt = rawMessageTimestamp(first);
+    const yieldedAt = rawMessageTimestamp(stopped);
+    // A spoken acknowledgment already marks where its handoff resumed.
+    if (
+      wokenBy &&
+      resumedAt &&
+      yieldedAt &&
+      yieldedAt < resumedAt &&
+      !readHandoffDisplay(stopped)
+    ) {
+      resumes.set(`${part.kind}:${part.key}`, { yieldedAt, resumedAt, source: wokenBy });
+    }
+    stopped = partGroups.at(-1)?.messages.at(-1)?.message ?? stopped;
+  }
   return {
     shell,
     actionOwner,
@@ -277,6 +314,8 @@ function prepareFrame(frame: AgentRunFrameRenderItem, opts: AgentRunFrameOptions
     bodyParts,
     firstBubbleKey,
     sourcePreviews,
+    replyGroups,
+    resumes,
   };
 }
 
@@ -296,13 +335,14 @@ function RunFrame(props: FrameProps) {
   const footerReactionMessageKey = () =>
     shellOptions().bubbleMode ? undefined : state().actionOwner?.key;
   const firstBubbleKey = createMemo(() => state().firstBubbleKey);
+  const completedFragment = () => Boolean(props.frame.fragment && !props.frame.fragment.last);
   const frameContent = [
     <FrameBody
       parts={state().bodyParts}
       options={props.options}
       // Completed nonfinal fragments cannot contain widgets. Keep the final
       // reply's owner unchanged as it transitions from active to completed.
-      completedFragment={Boolean(props.frame.fragment && !props.frame.fragment.last)}
+      completedFragment={completedFragment()}
     >
       {(input) => {
         const part = () => input().part;
@@ -336,69 +376,84 @@ function RunFrame(props: FrameProps) {
           const value = part();
           return value.kind === "group" ? value : undefined;
         };
+        const resume = () => state().resumes.get(`${part().kind}:${part().key}`);
         return (
-          <Switch>
-            <Match when={streamPart()}>
-              {(stream) => (
-                <StreamPartView part={stream()} options={streamOptions} presentation="standalone" />
+          <>
+            <Show when={resume()}>
+              {(display) => (
+                <ChatHandoffResume handoff={display()} source={display().source} sessions={[]} />
               )}
-            </Match>
-            <Match when={workPart()}>
-              {(work) => (
-                <>
-                  <WorkGroupSummary
-                    item={work()}
-                    options={{
-                      expanded: options().isWorkExpanded(work().key),
-                      bubbleMode: options().streamOptions.bubbleMode,
-                      onToggle: () =>
-                        options().onToggleWork(work().key, options().isWorkExpanded(work().key)),
-                      presentation: "continuation",
-                    }}
+            </Show>
+            <Switch>
+              <Match when={streamPart()}>
+                {(stream) => (
+                  <StreamPartView
+                    part={stream()}
+                    options={streamOptions}
+                    presentation="standalone"
                   />
-                  <Show when={!props.frame.fragment && options().isWorkExpanded(work().key)}>
-                    <For each={work().groups} keyed={(group) => group.key}>
-                      {(group) => (
-                        <MessageGroupContent
-                          group={group()}
-                          options={groupOptions(group())}
-                          footerReactionMessageKey={footerReactionMessageKey()}
+                )}
+              </Match>
+              <Match when={workPart()}>
+                {(work) => (
+                  <>
+                    <WorkGroupSummary
+                      item={work()}
+                      options={{
+                        expanded: options().isWorkExpanded(work().key),
+                        bubbleMode: options().streamOptions.bubbleMode,
+                        onToggle: () =>
+                          options().onToggleWork(work().key, options().isWorkExpanded(work().key)),
+                        presentation: "continuation",
+                      }}
+                    />
+                    <Show when={!props.frame.fragment && options().isWorkExpanded(work().key)}>
+                      <For each={work().groups} keyed={(group) => group.key}>
+                        {(group) => (
+                          <MessageGroupContent
+                            group={group()}
+                            options={groupOptions(group())}
+                            footerReactionMessageKey={footerReactionMessageKey()}
+                          />
+                        )}
+                      </For>
+                    </Show>
+                  </>
+                )}
+              </Match>
+              <Match when={activityPart()}>
+                {(activity) => {
+                  const groups = () => activity().groups;
+                  return (
+                    <Show when={groups()[0]}>
+                      {(first) => (
+                        <ActivityGroup
+                          groups={groups()}
+                          options={options().renderGroupOptions(first())}
+                          presentation="continuation"
                         />
                       )}
-                    </For>
-                  </Show>
-                </>
-              )}
-            </Match>
-            <Match when={activityPart()}>
-              {(activity) => {
-                const groups = () => activity().groups;
-                return (
-                  <Show when={groups()[0]}>
-                    {(first) => (
-                      <ActivityGroup
-                        groups={groups()}
-                        options={options().renderGroupOptions(first())}
-                        presentation="continuation"
-                      />
-                    )}
-                  </Show>
-                );
-              }}
-            </Match>
-            <Match when={messageGroup()}>
-              {(group) => (
-                <MessageGroupContent
-                  group={group()}
-                  options={groupOptions(group())}
-                  footerReactionMessageKey={footerReactionMessageKey()}
-                />
-              )}
-            </Match>
-          </Switch>
+                    </Show>
+                  );
+                }}
+              </Match>
+              <Match when={messageGroup()}>
+                {(group) => (
+                  <MessageGroupContent
+                    group={group()}
+                    options={groupOptions(group())}
+                    footerReactionMessageKey={footerReactionMessageKey()}
+                  />
+                )}
+              </Match>
+            </Switch>
+          </>
         );
       }}
     </FrameBody>,
+    <Show when={props.frame.outcome.kind !== "active" && !completedFragment()}>
+      <McpConnectCards groups={state().replyGroups} />
+    </Show>,
     <Show when={state().sourcePreviews.length > 0}>
       <ChatLazyBoundary>
         <ChatSourcePreviews
@@ -423,8 +478,6 @@ function RunFrame(props: FrameProps) {
         frameActionOwner: state().actionOwner,
         frameHeader: props.frame.fragment?.first,
         frameFooter: props.frame.fragment?.last,
-        turnRecap:
-          !props.frame.fragment || props.frame.fragment.last ? props.options.turnRecap : undefined,
       }}
     />
   );

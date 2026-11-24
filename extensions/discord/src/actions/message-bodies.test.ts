@@ -290,13 +290,13 @@ describe("Discord action message bodies", () => {
     expect(writes()).toHaveLength(1);
   });
 
-  it.each(["", "  Changed caption\n"])(
-    "preserves body %j and attachments while normalizing IDs",
-    async (content) => {
-      await edit(content, cfg, ` ${messageId} `);
-      expectEdit(channelId, content);
-    },
-  );
+  it.each([
+    ["", ""],
+    ["  Changed __caption__\n", "  Changed **caption**\n"],
+  ])("renders %j while preserving attachments and IDs", async (content, expected) => {
+    await edit(content, cfg, ` ${messageId} `);
+    expectEdit(channelId, expected);
+  });
 
   it.each([
     ["absent edit content", () => edit(undefined), /required/],

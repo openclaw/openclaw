@@ -17,9 +17,8 @@ import {
   AuthProfileMigrationRequiredError,
   AuthProfileStoreUnreadableError,
   assertAuthProfileMigrationReady,
-  assertAuthProfileMigrationCandidates,
+  assertAuthProfileMigrationStateAtDatabasePath,
 } from "../auth-profiles/legacy-source-diagnostic.js";
-import { resolveLegacyAuthProfileSourceCandidates } from "../auth-profiles/legacy-source-files.js";
 import { normalizeOAuthRefreshCredential } from "../auth-profiles/oauth-refresh-fence.js";
 import {
   isOAuthRefreshFence,
@@ -162,6 +161,10 @@ class SqliteAuthStorageBackend implements StorageBackend {
     return this.scope.agentDir;
   }
 
+  prepareProviderReady(): Promise<void> {
+    return this.scope.prepareProviderReady();
+  }
+
   assertProviderReady(provider?: string, baseUrl?: string): void {
     this.scope.assertProviderReady(provider, baseUrl);
   }
@@ -261,14 +264,7 @@ class SqliteAuthStorageBackend implements StorageBackend {
       envOnly: this.scope.envOnly,
       options: { env: this.scope.env },
       update: ({ store }, owner) => {
-        assertAuthProfileMigrationCandidates({
-          databasePath: owner.databasePath,
-          candidates: resolveLegacyAuthProfileSourceCandidates({
-            agentDir: this.agentDir,
-            env: owner.env,
-          }),
-          hasCredentials: () => Object.keys(store.profiles).length > 0,
-        });
+        assertAuthProfileMigrationStateAtDatabasePath(owner.databasePath);
         const materializedData = projectAuthoritativeAuthStorageData(
           store,
           this.resolveMaterializedRuntimeStores(),
@@ -690,8 +686,10 @@ export class AuthStorage {
     if (this.storage.readAsync) {
       await this.reloadAsync();
     }
+    await this.storage.prepareProviderReady?.();
     this.assertProviderReady(providerId, options);
     const { apiKey, source } = await this.resolveStoredOrFallbackApiKey(providerId, options);
+    await this.storage.prepareProviderReady?.();
     this.assertProviderReady(providerId, options);
     if (source) {
       this.storage.assertCredentialReady?.(source, options?.baseUrl);
@@ -726,12 +724,20 @@ export class AuthStorage {
     };
 
     if (cred?.type === "api_key" && !cred.nativeAuth) {
-      return resolved(await resolveConfigValue(cred.key, beforeCommand));
+      return resolved(
+        await resolveConfigValue(cred.key, beforeCommand, () =>
+          this.storage.prepareProviderReady?.(),
+        ),
+      );
     }
 
     if (cred?.type === "token") {
       if (cred.expires === undefined || Date.now() < cred.expires) {
-        return resolved(await resolveConfigValue(cred.token, beforeCommand));
+        return resolved(
+          await resolveConfigValue(cred.token, beforeCommand, () =>
+            this.storage.prepareProviderReady?.(),
+          ),
+        );
       }
     }
 

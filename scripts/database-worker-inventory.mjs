@@ -443,6 +443,17 @@ const reviewed = new Map([
 // Match lexical operation paths, not moving line numbers or whole mixed modules.
 const reviewedOperations = new Map([
   [
+    "src/cron/store/save.kernel.ts",
+    [
+      {
+        tier: "T3",
+        operations: ["replaceCronRuntimeAuthorityRows"],
+        evidence:
+          "Moved unchanged from runtime-authority-store.ts. Save calls run in save.worker.ts and guarded-mutation.worker.ts; native callers retain Doctor store-repair transactions and the heartbeat task/cadence migration owners.",
+      },
+    ],
+  ],
+  [
     "src/config/sessions/transcript-payload.ts",
     [
       {
@@ -706,6 +717,12 @@ const reviewedOperations = new Map([
   [
     "src/config/sessions/session-cold-storage-navigation.ts",
     [
+      {
+        tier: "T3",
+        operations: ["retainSessionColdNavigationInTransaction"],
+        evidence:
+          "Runtime callers execute in session-cold-storage-worker.ts under the archive mutation worker. The only direct non-worker caller is scripts/perf/restart-resume-measure.ts preparing its explicitly selected synthetic fixture before measurement; no Gateway call bypasses the worker owner.",
+      },
       {
         tier: "T3",
         operations: ["backfillSessionColdNavigationInTransaction"],
@@ -1481,6 +1498,12 @@ const reviewedOperations = new Map([
     [
       {
         tier: "T3",
+        operations: ["readActivePathNavigationMovedFromProjection"],
+        evidence:
+          "Only session-transcript-anchor-read.kernel.ts reads this fact, beside the active-path relation it already resolves there; that kernel is reached by entry-read, entry-cohort, hydration-read and history-read-operation workers, plus openclaw-agent-execution-operations.ts registered in execution.worker.ts. chat-send admission consumes the prepared boolean, never this query, and the incognito route resolves it in the memory actor before SQLite opens.",
+      },
+      {
+        tier: "T3",
         operations: ["readActiveTranscriptEntryIdentityInSnapshot"],
         evidence:
           "Current-turn, anchor, activity and entry-patch reads execute in workers. The native entry-patch branch requires !useWorker; execution-scope permits durable native work only under maintenance/cleanup custody. chat-send-active-leaf.ts calls the relation helper only for incognito, whose database opener rejects before SQLite. No SDK value export; the sibling anchor-facts query remains mixed.",
@@ -1947,7 +1970,7 @@ const reviewedOperations = new Map([
       },
       {
         tier: "W",
-        operations: ["readCursor", "readMaterialCursors", "updateMaterialCursor"],
+        operations: ["readCursor", "readMaterialCursors", "writeMaterialCursors"],
         evidence:
           "Watch/record workers and subagent-registry.store.worker.ts execute these queries",
       },
@@ -2116,13 +2139,14 @@ const reviewedOperations = new Map([
         operations: [
           "readUserPreferences",
           "writeUserPreferences",
+          "upsertUserPreferenceValues",
           "deleteUserPreference",
           "selectUserPreferenceValues",
           "readPreferenceKeys",
           "mergeUserPreferences",
         ],
         evidence:
-          "Preference read/write dispatch at user-preferences.worker.ts:52,74; merge/GitHub helpers only in user-profile-writes.worker.ts:375,425,482 and openclaw-state-read.worker.ts:616; private key scans serve these worker writers",
+          "Preference read/write dispatch at user-preferences.worker.ts:52,74; merge/GitHub helpers only in user-profile-writes.worker.ts:375,425,482 and openclaw-state-read.worker.ts:616; acknowledgements and profile merges share the same worker-owned preference upsert",
       },
     ],
   ],
@@ -3535,9 +3559,12 @@ const reviewedOperations = new Map([
     [
       {
         tier: "W",
-        operations: ["appendSqliteTrajectoryRuntimeEventsWithWriter"],
+        operations: [
+          "appendSqliteTrajectoryRuntimeEventsWithWriter",
+          "prepareSqliteTrajectoryRuntimeWindow",
+        ],
         evidence:
-          "Durable sinks dispatch trajectory.events.append through openclaw-agent-execution-operations.ts. Incognito sinks append through the session actor memory backend without SQLite. Synchronous fixture append and retention exist only in runtime-store.test-support.ts.",
+          "Durable sinks dispatch trajectory.events.append through openclaw-agent-execution-operations.ts. Its append kernel is the sole caller of the private window preparation helper. Incognito sinks append through the session actor memory backend without SQLite. Synchronous fixture append and retention exist only in runtime-store.test-support.ts.",
       },
       {
         tier: "T3",
@@ -3565,6 +3592,8 @@ const reviewedOperations = new Map([
   ],
 ]);
 const workerModules = new Set([
+  "src/config/sessions/session-message-cut-in-place.kernel.ts", // session-message-cut.worker.ts owns both callers: commitSessionMessageCut installs the cut inside its write transaction, and preflightSessionMessageCut reads through session.messageCut.preflight. The remaining native caller in session-accessor.sqlite-message-cut.ts runs only when agent-database execution is unavailable (worker thread or unserved store) and passes its own handle.
+  "src/config/sessions/session-transcript-active-path-repoint.ts", // Only session-message-cut-in-place.kernel.ts plans and applies the repoint, inside the message-cut write transaction; the full-rebuild owner shares its projection fact columns by type.
   "src/config/sessions/session-transcript-replay.kernel.ts", // Only session-history-read-operation.worker.ts and openclaw-agent-execution-transcript.worker.ts import and call this reader.
   "src/plugins/installed-plugin-snapshot-candidates.kernel.ts", // Only plugins/state.worker.ts mutates the journal; installed-index commits transfer ownership inside that worker's transaction.
   "src/config/sessions/session-accessor.sqlite-compaction.ts", // Only session-manager-metadata.worker.ts calls the required-worker entry point; the async facade imports its type only.
@@ -3768,6 +3797,10 @@ const cliModules = new Map([
   [
     "scripts/perf/session-cold-navigation.ts",
     "Explicit developer-only measurement of cold archive publication, navigation backfill and bounded reads on synthetic state; no runtime imports or Gateway callers",
+  ],
+  [
+    "scripts/perf/session-cold-writer.mjs",
+    "Explicit developer-only writer-hold and restore benchmark on synthetic state; no runtime imports or Gateway callers",
   ],
   [
     "scripts/perf/session-cold-selection.ts",
@@ -4027,8 +4060,13 @@ export function loadInventorySources(root = defaultRoot, ref = "", staged = fals
       : [
           "--files",
           "--null",
-          "-g",
-          "*.{ts,tsx,js,mjs,mts,cts,cjs}",
+          // Match Git membership: type filters keep ignore rules (a positive -g glob would list
+          // ignored build outputs), and tracked hidden stubs stay in the source set.
+          "--hidden",
+          "--type-add",
+          "inventory:*.{ts,tsx,js,mjs,mts,cts,cjs}",
+          "--type",
+          "inventory",
           ...roots.filter((dir) => fs.existsSync(path.join(root, dir))),
         ],
     { cwd: root, encoding: "utf8", maxBuffer: 16 * 1024 * 1024 },
@@ -4278,11 +4316,23 @@ function render(rows) {
 
 if (isDirectRunUrl(process.argv[1], import.meta.url)) {
   const args = process.argv.slice(2);
-  if (args.length !== 1 || !["--write", "--check", "--json"].includes(args[0])) {
-    console.error("Usage: node scripts/database-worker-inventory.mjs --write|--check|--json");
+  const snapshot = args.length === 2 && args[0] === "--json" && args[1] === "--snapshot";
+  if (!snapshot && (args.length !== 1 || !["--write", "--check", "--json"].includes(args[0]))) {
+    console.error(
+      "Usage: node scripts/database-worker-inventory.mjs --write|--check|--json [--snapshot]",
+    );
     process.exitCode = 2;
   } else {
-    const rows = inventory();
+    /** @type {{ root: string; ref: string; staged: boolean; sources: [string, string][]; trace: boolean } | undefined} */
+    const request = snapshot ? JSON.parse(fs.readFileSync(0, "utf8")) : undefined;
+    const rows = request
+      ? inventory(request.root, request.ref, request.staged, new Map(request.sources), {
+          observer: request.trace
+            ? (phase, facts) =>
+                console.error("[inventory-phase] " + JSON.stringify({ phase, facts }))
+            : undefined,
+        })
+      : inventory();
     if (args[0] === "--json") {
       console.log(
         JSON.stringify(

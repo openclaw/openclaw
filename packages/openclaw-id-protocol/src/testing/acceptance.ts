@@ -8,7 +8,7 @@ export type AcceptanceOwner = "loader" | "gateway" | "tunnel-child" | "discovery
 export type AcceptanceCase = {
   id: number;
   title: string;
-  /** Protocol-level coverage in src/acceptance/*.test.ts (empty when only the full system can show it). */
+  /** Protocol-level coverage in this package (false when only the full system can show it). */
   protocol: boolean;
   /** Tests that need the full system, with the component that owns them. */
   integration: { name: string; owner: AcceptanceOwner; asserts: string }[];

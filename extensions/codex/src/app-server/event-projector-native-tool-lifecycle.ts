@@ -119,8 +119,6 @@ export class CodexNativeToolLifecycleProjector {
     this.terminalPresentationClearedItemIds.add(item.id);
     this.context.onToolOutcome?.({
       toolName: itemName(item) ?? item.type,
-      argsHash: "",
-      resultHash: "",
       ...(toolCallOrdinal !== undefined ? { toolCallOrdinal } : {}),
       terminalPresentation: undefined,
       presentationOnly: true,

@@ -35,12 +35,18 @@ import {
 } from "../../ui/src/test-helpers/transcripts.test-support.ts";
 import { parityBaseScenario, parityWorkboardScenario } from "../control-ui-parity/fixtures.ts";
 import { dataActivityScenarios } from "./control-ui-data-activity-scenarios.ts";
-import { dataCatalogScenarios } from "./control-ui-data-catalog-scenarios.ts";
+import { dataCatalogScenarios, dataCatalogSkillCard } from "./control-ui-data-catalog-scenarios.ts";
 import {
   engineProbeInitScript,
   waitForEngineTranscript,
   type EngineScenario,
 } from "./control-ui-engine-boot-scenarios.ts";
+import {
+  filterInstalledDiscoverySkills,
+  openInstalledDiscoverySkills,
+  waitForEnginePageReady as ready,
+  type EnginePageReadiness,
+} from "./control-ui-engine-page-interactions.ts";
 import { frames } from "./control-ui-interaction-navigation.ts";
 import { interactionScenarios } from "./control-ui-interaction-scenarios.ts";
 import type {
@@ -51,19 +57,16 @@ import { workboardResourceRoute } from "./control-ui-workboard-resource-fixture.
 
 type PageAction = {
   label: string;
+  prepare?: InteractionScenario["prepare"];
   run: InteractionScenario["run"];
 };
 type NoChangeAction = PageAction & {
   kind: "push" | "refresh" | "poll" | "presence-push" | "model-push";
-  prepare?: InteractionScenario["prepare"];
 };
-type PageDefinition = {
-  ready: string;
+type PageDefinition = EnginePageReadiness & {
   pathname?: string;
-  rows?: { selector: string; minimum: number; totalSelector?: string };
-  /** Keep the measurement open through incremental mounting, after first visibility. */
-  completion?: { selector: string; minimum: number; maximum?: number }[];
-  landed?: RouteId;
+  /** First rows can precede the code font's final layout. */
+  fontFamily?: string;
   search?: string;
   action?: PageAction;
   actionUnavailable?: string;
@@ -729,7 +732,7 @@ const definitions: Partial<Record<RouteId, PageDefinition>> = {
       "The measured action edits the access value; provider activation and verification are excluded.",
   },
   plugins: {
-    ready: "openclaw-plugins-page .plugin-catalog-card",
+    ready: "openclaw-plugins-page .plugin-catalog-card[data-plugin-id]",
     source: requiredScenario(dataCatalogScenarios, "data-catalog-category-first-render"),
     action: {
       label: "Open the Tools catalog category",
@@ -738,6 +741,7 @@ const definitions: Partial<Record<RouteId, PageDefinition>> = {
   },
   "plugin-settings": {
     ready: "openclaw-plugins-page [data-plugin-id]",
+    fontFamily: "JetBrains Mono",
     completion: [
       { selector: "openclaw-plugins-page [data-plugin-id]", minimum: quantity.catalog },
       {
@@ -825,6 +829,7 @@ const definitions: Partial<Record<RouteId, PageDefinition>> = {
     },
   },
   secrets: {
+    fontFamily: "JetBrains Mono",
     ready:
       "openclaw-secrets-page .secrets-store__table tbody tr, openclaw-secrets-page .secrets-store__list .secrets-store__row",
     rows: {
@@ -873,29 +878,22 @@ const definitions: Partial<Record<RouteId, PageDefinition>> = {
     },
   },
   skills: {
-    ready: ".skill-discovery [data-skill-id]",
+    // The default view summarizes the full installed inventory alongside one registry page.
+    ready: '.skill-installed-shelf data[value="1000"]',
     rows: {
-      selector: ".skill-discovery [data-skill-id]",
-      minimum: 1000,
-      totalSelector: ".skill-discovery [aria-setsize]",
+      selector:
+        '.skill-discovery [data-catalog-section="clawhub"] [aria-busy="false"] [data-skill-id]',
+      minimum: 20,
     },
     action: {
-      label: "Filter discovered skills to one installed skill",
-      run: async (page) => {
-        await page.locator(".skill-discovery input[type=search]").fill("Data skill 0999");
-        await page.waitForFunction(() => {
-          const rows = document.querySelectorAll(".skill-discovery [data-skill-id]");
-          return (
-            rows.length === 1 && rows[0]?.getAttribute("data-skill-id") === "local:data-skill-0999"
-          );
-        });
-        await frames(page);
-        return { matchingSkills: 1 };
-      },
+      label: "Filter 1,000 installed skills to one match from discovery",
+      prepare: openInstalledDiscoverySkills,
+      run: filterInstalledDiscoverySkills,
     },
   },
   "skill-settings": {
     ready: ".skills-group .plugins-item",
+    fontFamily: "JetBrains Mono",
     rows: { selector: ".skills-group .plugins-item", minimum: 1000 },
     action: {
       label: "Type a search to filter 1,000 installed skills to one match",
@@ -1304,18 +1302,16 @@ function createPageFixture(
     };
     const templates = templateEntries();
     const templateCategories = [
-      "personal",
-      "health",
+      "engineering",
+      "operations",
+      "household",
+      "entertainment",
       "travel",
       "productivity",
       "research",
-      "engineering",
-      "governance",
-      "operations",
-      "finance",
+      "health",
       "sales",
       "product",
-      "people",
       "other",
     ];
     const environments: EnvironmentSummary[] = [
@@ -1383,6 +1379,7 @@ function createPageFixture(
           "skills.workshop.list",
           "skills.workshop.changes",
           "skills.workshop.read",
+          ...(id === "skills" ? ["skills.skillCard"] : []),
           "skills.search",
           "secrets.store.set",
           "users.setDisplayName",
@@ -1508,7 +1505,39 @@ function createPageFixture(
           content: "# Census skill\n\nReview source and verify behavior.\n",
           files: ["SKILL.md"],
         },
-        "skills.search": { results: [] },
+        ...(id === "skills"
+          ? {
+              "skills.skillCard": {
+                cases: [
+                  {
+                    match: { skillKey: dataCatalogSkillCard.skillKey },
+                    response: dataCatalogSkillCard,
+                  },
+                ],
+              },
+            }
+          : {}),
+        // Route transitions use this shared fixture for every destination, so
+        // Skills readiness needs the registry page even when another page is the origin.
+        "skills.search": {
+          cases: [
+            { match: { query: "Data skill 0999", limit: 20 }, response: { results: [] } },
+            {
+              match: { limit: 20 },
+              response: {
+                results: Array.from({ length: 20 }, (_, index) => ({
+                  slug: `registry-skill-${index}`,
+                  installRef: `@census/registry-skill-${index}`,
+                  displayName: `Registry skill ${index}`,
+                  summary: "Synthetic registry skill for discovery.",
+                  registry: "https://clawhub.example.invalid",
+                  ownerHandle: "census",
+                  score: 1,
+                })),
+              },
+            },
+          ],
+        },
         "models.authStatus": {
           ts: time,
           providers: [
@@ -1738,66 +1767,6 @@ async function navigate(page: Page, id: RouteId, search = "") {
     { id, pathname: pathForRoute(id), search },
   );
 }
-async function ready(page: Page, id: RouteId, definition: PageDefinition) {
-  await waitForControlUiRoute(page, { routeId: definition.landed ?? id });
-  await page
-    .locator(definition.ready)
-    .filter({ visible: true })
-    .first()
-    .waitFor({ state: "visible" });
-  if (definition.rows) {
-    await page.waitForFunction(
-      ({ selector, minimum, totalSelector }) =>
-        document.querySelectorAll(selector).length >= minimum ||
-        Boolean(
-          totalSelector &&
-          [...document.querySelectorAll(totalSelector)].some(
-            (row) => row.getAttribute("aria-setsize") === String(minimum),
-          ),
-        ),
-      definition.rows,
-    );
-  }
-  if (definition.completion) {
-    await page.waitForFunction(
-      (requirements) =>
-        requirements.every(({ selector, minimum, maximum }) => {
-          const count = document.querySelectorAll(selector).length;
-          return count >= minimum && (maximum === undefined || count <= maximum);
-        }),
-      definition.completion,
-    );
-  }
-  if (id === "cloud-workers") {
-    await page.waitForFunction(() => {
-      const reads: { rpcs: ColdLoadRpcRecord[]; pendingMethods: string[]; queued: number } =
-        Reflect.get(window, "__coldLoad").read();
-      const completed = reads.rpcs.filter(
-        (rpc) =>
-          rpc.method === "environments.list" && rpc.responseOk && rpc.dispatchMs !== undefined,
-      );
-      return (
-        reads.queued === 0 &&
-        !reads.pendingMethods.includes("environments.list") &&
-        completed.some(
-          ({ params }) =>
-            params !== null &&
-            typeof params === "object" &&
-            "projection" in params &&
-            params.projection === "profiles",
-        ) &&
-        completed.some(
-          ({ params }) =>
-            params !== null &&
-            typeof params === "object" &&
-            "includePreparedDetails" in params &&
-            params.includePreparedDetails === true,
-        )
-      );
-    });
-  }
-  await frames(page);
-}
 export async function collectEnginePageStructure(page: Page): Promise<InteractionEvidence> {
   return page
     .locator(".content")
@@ -1833,6 +1802,7 @@ async function measureVisit(
       selector,
       rows,
       completion,
+      fontFamily,
       timeoutMs: limitMs,
     }) =>
       new Promise<{
@@ -1928,6 +1898,13 @@ async function measureVisit(
           const contentReady =
             pageReady &&
             anchorSettled &&
+            (!fontFamily ||
+              ([...document.fonts].some(
+                (face) =>
+                  face.family.replace(/^['"]|['"]$/gu, "") === fontFamily &&
+                  face.status === "loaded",
+              ) &&
+                document.fonts.check(`12px "${fontFamily}"`))) &&
             (!completion ||
               completion.every(({ selector: contentSelector, minimum, maximum }) => {
                 const count = document.querySelectorAll(contentSelector).length;
@@ -1958,6 +1935,7 @@ async function measureVisit(
       selector: definition.ready,
       rows: definition.rows,
       completion: definition.completion,
+      fontFamily: definition.fontFamily,
       timeoutMs,
     },
   );
@@ -2160,6 +2138,7 @@ export function createEnginePageScenarios(
       prepare: async (page, gateway) => {
         await enter(page);
         await definition.source?.prepare(page, gateway);
+        await definition.action?.prepare?.(page, gateway);
       },
       run: async (page, gateway) => {
         const evidence = await definition.action!.run(page, gateway);

@@ -12,10 +12,14 @@ import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot
 import { getPluginModuleLoaderStats } from "../plugins/plugin-module-loader-cache.js";
 import type { PluginRegistry } from "../plugins/registry.js";
 import { getPluginRegistryVersion } from "../plugins/runtime-state.js";
-import { getGatewayContextLifetime } from "../plugins/runtime/gateway-request-scope.js";
+import {
+  getGatewayContextLifetime,
+  withPluginRuntimeGatewayContextResolver,
+} from "../plugins/runtime/gateway-request-scope.js";
 import type { PluginServiceCronHost } from "../plugins/service-cron.js";
 import type { PluginServicesHandle } from "../plugins/services.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { broadcastPluginRegistryChanged } from "./events.js";
 import type { GatewayBroadcastFn, GatewayBroadcastToConnIdsFn } from "./server-broadcast-types.js";
 import type { GatewayControlUiRootLifecycle } from "./server-control-ui-root.js";
 import type { GatewayClient, GatewayContextResolver } from "./server-methods/shared-types.js";
@@ -112,8 +116,10 @@ export async function startGatewayPostAttachRuntime(params: {
   let durableRuntime: typeof import("../agents/bash-process-durable.js") | undefined;
   let durableStartup: Promise<void> | undefined;
   let durableStopped = false;
+  // Every platform reports ordinary background commands a restart lost; only Linux and
+  // macOS can also launch durable ones.
   const startDurableProcesses =
-    !params.minimalTestGateway && !candidateCanary && process.platform === "linux"
+    !params.minimalTestGateway && !candidateCanary
       ? (signal: AbortSignal) => {
           durableStartup ??= (async () => {
             const assertCurrent = () => {
@@ -125,7 +131,17 @@ export async function startGatewayPostAttachRuntime(params: {
             assertCurrent();
             durableRuntime = await import("../agents/bash-process-durable.js");
             assertCurrent();
-            await durableRuntime.initializeDurableProcesses({ assertCurrent });
+            const runtime = durableRuntime;
+            // Restart reports wait for agent readiness through the Gateway's preparation owner.
+            await withPluginRuntimeGatewayContextResolver(
+              params.resolveGatewayContext,
+              () =>
+                runtime.initializeDurableProcesses({
+                  assertCurrent,
+                  crashWindows: params.resolveGatewayContext()?.restartResumeWindows,
+                }),
+              { inheritRequestScope: false },
+            );
           })();
           return durableStartup;
         }
@@ -208,11 +224,7 @@ export async function startGatewayPostAttachRuntime(params: {
       return await disposeUnattached();
     }
     pluginRegistry = loaded.pluginRegistry;
-    params.broadcast?.(
-      "plugins.changed",
-      { generation: getPluginRegistryVersion(pluginRegistry) },
-      { dropIfSlow: true },
-    );
+    broadcastPluginRegistryChanged(params.broadcast, getPluginRegistryVersion(pluginRegistry));
     params.startupTrace?.detail("plugins.runtime-post-bind", [
       [
         "loadedPluginCount",

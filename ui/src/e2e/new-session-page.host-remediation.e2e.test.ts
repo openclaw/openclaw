@@ -81,7 +81,7 @@ suite.define(() => {
         const details = tooltip(row).locator('[slot="content"]');
         await details.waitFor({ state: "visible" });
         expect(await details.textContent()).toContain("Session hosting is disabled");
-        expect(await row.textContent()).toContain("Unavailable");
+        expect(await row.getAttribute("aria-disabled")).toBe("true");
         if (width === 390) {
           await tapRow(row);
           await tooltip(row).getByRole("tooltip").waitFor({ state: "hidden" });
@@ -97,6 +97,7 @@ suite.define(() => {
         await palette.locator(".cmd-palette__input").press("Tab");
         await palette.locator(".palette-session-settings__trigger").click();
         const settings = palette.locator(".oc-popover.palette-session-settings");
+        await settings.locator(".palette-session-settings__workspace").click();
         await settings
           .locator('[data-machine="local"][data-project="docs"]')
           .waitFor({ state: "visible" });

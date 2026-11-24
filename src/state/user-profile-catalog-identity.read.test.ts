@@ -5,6 +5,7 @@ import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { openOpenClawStateDatabase } from "./openclaw-state-db.js";
 import { readUserProfileCatalogIdentity } from "./user-profile-catalog-identity.read.js";
+import * as githubIdentity from "./user-profile-github-identity.js";
 import { setCanonicalUserProfileDisplayName } from "./user-profile-writes.js";
 import { syncGitHubIdentity } from "./user-profile-writes.worker.js";
 
@@ -86,5 +87,22 @@ it("does not replay terminal cohort corruption as scalar profile reads", async (
     expect(failure.mock.calls.filter(([sql]) => sql.includes('from "user_profiles"'))).toHaveLength(
       1,
     );
+  });
+});
+
+it("does not select an ambiguous GitHub account", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const { db } = fixture();
+    const account = { accountId: 301, login: "person" };
+    vi.spyOn(githubIdentity, "selectStoredGitHubIdentities").mockReturnValue(
+      new Map([
+        ["first", { accounts: [account], primary: account }],
+        ["second", { accounts: [account], primary: account }],
+      ]),
+    );
+    const facts = runSqliteReadOperationSync(db, () =>
+      readUserProfileCatalogIdentity(db, { kind: "link", accountIds: ["301"], owners: [] }),
+    );
+    expect(facts.accounts.has("301")).toBe(false);
   });
 });

@@ -42,10 +42,10 @@ struct RootTabsPresentationTests {
     @Test func `session activity clamps current and future timestamps to just now`() {
         let now = Date(timeIntervalSince1970: 1_750_000_000)
 
-        #expect(CommandCenterTab.relativeTimeText(
+        #expect(SessionPresentation.relativeTimeText(
             forMilliseconds: now.timeIntervalSince1970 * 1000,
             relativeTo: now) == "just now")
-        #expect(CommandCenterTab.relativeTimeText(
+        #expect(SessionPresentation.relativeTimeText(
             forMilliseconds: now.addingTimeInterval(30).timeIntervalSince1970 * 1000,
             relativeTo: now) == "just now")
     }
@@ -293,6 +293,19 @@ struct RootTabsPresentationTests {
             shouldPresentOnLaunch: true)
 
         #expect(route == .none)
+    }
+
+    @Test func `first gateway help requires a loaded empty registry and no configured route`() {
+        #expect(!RootTabs.shouldOfferFirstGatewaySetup(
+            hasConnectedOnce: false, hasSavedGateway: nil, hasRuntimeOrLegacyGatewayConfig: false))
+        #expect(!RootTabs.shouldOfferFirstGatewaySetup(
+            hasConnectedOnce: false, hasSavedGateway: true, hasRuntimeOrLegacyGatewayConfig: false))
+        #expect(!RootTabs.shouldOfferFirstGatewaySetup(
+            hasConnectedOnce: false, hasSavedGateway: false, hasRuntimeOrLegacyGatewayConfig: true))
+        #expect(!RootTabs.shouldOfferFirstGatewaySetup(
+            hasConnectedOnce: true, hasSavedGateway: false, hasRuntimeOrLegacyGatewayConfig: false))
+        #expect(RootTabs.shouldOfferFirstGatewaySetup(
+            hasConnectedOnce: false, hasSavedGateway: false, hasRuntimeOrLegacyGatewayConfig: false))
     }
 
     @Test func `fresh install presents onboarding`() {
@@ -699,16 +712,6 @@ struct RootTabsPresentationTests {
         #expect(keys.contains("agent:main:cron:daily") == showsAutomation)
     }
 
-    @Test func `sidebar agent badges use canonical identity fallback`() {
-        #expect(RootSidebar.agentBadge(
-            name: "Research Agent",
-            identity: ["emoji": AnyCodable(" 🦞 ")]) == "🦞")
-        #expect(RootSidebar.agentBadge(
-            name: "Research Agent",
-            identity: ["emoji": AnyCodable("?")]) == "RA")
-        #expect(RootSidebar.agentBadge(name: "Research Agent", identity: nil) == "RA")
-    }
-
     @Test func `session work subtitle mirrors the web repo and branch line`() {
         func entry(repoRoot: String?, branch: String?) -> OpenClawChatSessionEntry {
             Self.sessionEntry(
@@ -967,23 +970,12 @@ struct RootTabsPresentationTests {
         #expect(!RootTabs.sidebarVisibility(layoutMode: .drawer, splitPreference: nil))
     }
 
-    @Test func `destination headers own hidden sidebar reveal control`() {
-        #expect(
-            RootTabs.shouldShowSidebarRevealInDestinationHeader(
-                isSidebarVisible: false,
-                layoutMode: .drawer))
-        #expect(
-            RootTabs.shouldShowSidebarRevealInDestinationHeader(
-                isSidebarVisible: false,
-                layoutMode: .split))
-        #expect(
-            !RootTabs.shouldShowSidebarRevealInDestinationHeader(
-                isSidebarVisible: true,
-                layoutMode: .drawer))
-        #expect(
-            RootTabs.shouldShowSidebarRevealInDestinationHeader(
-                isSidebarVisible: true,
-                layoutMode: .split))
+    @Test func `destination header control hides only a visible split sidebar`() {
+        // A drawer opening must not change the destination toolbar, so its control stays Show.
+        #expect(!RootTabs.sidebarHeaderControlHidesSidebar(isSidebarVisible: false, layoutMode: .drawer))
+        #expect(!RootTabs.sidebarHeaderControlHidesSidebar(isSidebarVisible: true, layoutMode: .drawer))
+        #expect(!RootTabs.sidebarHeaderControlHidesSidebar(isSidebarVisible: false, layoutMode: .split))
+        #expect(RootTabs.sidebarHeaderControlHidesSidebar(isSidebarVisible: true, layoutMode: .split))
     }
 
     private static func sessionEntry(

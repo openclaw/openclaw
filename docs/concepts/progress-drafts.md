@@ -80,10 +80,11 @@ For raw tool progress, the label appears once the agent starts meaningful work
 and stays busy for the initial delay.
 It sits at the top of the rolling progress-line list, so it scrolls away once
 enough concrete work lines appear. The implicit label is hidden while a status
-headline is present unless you configure one explicitly. Plain text-only
-replies never show a progress draft; a line appears only for real work updates,
-for example `Bash: run tests`, `Web Search: for "discord edit message"`,
-or `Write: to /tmp/file`.
+headline is present unless you configure one explicitly. A straightforward text
+reply can finish without a progress draft. Drafts can show work such as
+`Bash: run tests`, `Web Search: for "discord edit message"`, or
+`Write: to /tmp/file`. When Codex retries a model request on a channel that
+shows model waits, the draft shows a retry status until the reply arrives.
 
 Final delivery depends on the channel and transport. OpenClaw either finalizes
 the draft or sends a separate answer and cleans up or stops updating the draft
@@ -370,6 +371,8 @@ matching what the draft shows.
 
 Narration belongs to the current turn. Ending or replacing that turn cancels its
 pending utility-model request and prevents late results from updating the draft.
+If the channel's progress callback is no longer available, narration stops and
+clears its retry timer without interrupting the Gateway or other turns.
 Tool activity that accumulates during a narration request is reconsidered when
 that request finishes, so an eligible status update needs no additional event.
 

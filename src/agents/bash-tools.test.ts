@@ -23,7 +23,11 @@ import {
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
 import { createOpenClawCodingTools } from "./agent-tools.js";
-import { getFinishedSession, waitForExecScope } from "./bash-process-registry.js";
+import {
+  getFinishedSession,
+  processSessionInstanceId,
+  waitForExecScope,
+} from "./bash-process-registry.js";
 import { resetProcessRegistryForTests } from "./bash-process-registry.test-support.js";
 import * as supervisorExit from "./bash-tools.exec-runtime.test-support.js";
 import { createExecTool, createProcessTool } from "./bash-tools.js";
@@ -242,7 +246,7 @@ it("awaits terminal shell results past the yield window without enabling notific
     expect(settled).toBe(false);
   });
   await expect(execution).resolves.toMatchObject({
-    details: { status: "completed", exitCode: 0, aggregated: "before\nafter" },
+    details: { status: "completed", exitCode: 0, aggregated: "before\nafter\n" },
   });
   expect(peekSystemEvents(sessionKey)).toEqual([]);
   await expect(
@@ -346,23 +350,31 @@ describe("background completion notifications", () => {
   });
 
   it.each([
+    { name: "defaults to notifying a chat provider", chat: true, emits: true },
+    // Dashboard and API sessions have no chat provider; silent success still wakes them.
+    { name: "defaults to notifying a non-chat session", chat: false, emits: true },
     {
-      name: "defaults to notifying chat providers",
-      notifyOnExitEmptySuccess: undefined,
-      emits: true,
+      name: "honors an explicit silent override",
+      chat: true,
+      notifyOnExitEmptySuccess: false,
+      emits: false,
     },
-    { name: "honors an explicit silent override", notifyOnExitEmptySuccess: false, emits: false },
-  ])("$name on empty success", async ({ notifyOnExitEmptySuccess, emits }) => {
+  ])("$name on empty success", async ({ chat, notifyOnExitEmptySuccess, emits }) => {
     const id = await startAndFinish(
       notifyTool({
-        messageProvider: " Telegram ",
-        currentChannelId: "telegram:-100123:topic:47",
-        currentThreadTs: "47",
+        ...(chat
+          ? {
+              messageProvider: " Telegram ",
+              currentChannelId: "telegram:-100123:topic:47",
+              currentThreadTs: "47",
+            }
+          : {}),
         notifyOnExitEmptySuccess,
       }),
       isWin ? "$null" : ":",
     );
-    expect(getFinishedSession(id)).toMatchObject({ id, terminalStatus: "completed", exitCode: 0 });
+    const finished = expectDefined(getFinishedSession(id), "finished process");
+    expect(finished).toMatchObject({ id, terminalStatus: "completed", exitCode: 0 });
     expect(receipts).toHaveLength(emits ? 1 : 0);
     if (emits) {
       const receipt = expectDefined(receipts[0], "completion receipt");
@@ -370,13 +382,15 @@ describe("background completion notifications", () => {
       expect(peekSystemEventEntries(sessionKey)).toContainEqual(
         expect.objectContaining({
           id: receipt.id,
-          contextKey: `exec:${id}`,
-          deliveryContext: {
-            channel: "telegram",
-            to: "telegram:-100123:topic:47",
-            threadId: "47",
-            accountId: undefined,
-          },
+          contextKey: `exec:${processSessionInstanceId(finished)}`,
+          deliveryContext: chat
+            ? {
+                channel: "telegram",
+                to: "telegram:-100123:topic:47",
+                threadId: "47",
+                accountId: undefined,
+              }
+            : undefined,
         }),
       );
       expect(
@@ -389,9 +403,13 @@ describe("background completion notifications", () => {
         }),
       ).toBeUndefined();
     }
-    expect(peekSystemEvents(sessionKey)).toEqual(
-      emits ? [`Exec completed (${id.slice(0, 8)}, code 0)`] : [],
-    );
+    const events = peekSystemEvents(sessionKey);
+    expect(events).toHaveLength(emits ? 1 : 0);
+    if (emits) {
+      expect(events[0]).toMatch(
+        new RegExp(`^Exec completed \\(${id.slice(0, 8)}, code 0, [^)]+\\) with no output\\.$`),
+      );
+    }
   });
 });
 

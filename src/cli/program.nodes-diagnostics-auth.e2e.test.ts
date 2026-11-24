@@ -1,6 +1,12 @@
 import type { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PushTestResult } from "../../packages/gateway-protocol/src/index.js";
+import { ExitError } from "../runtime.js";
+import {
+  formatCliFailureLines,
+  formatCliJsonFailure,
+  ReportedCliCommandError,
+} from "./failure-output.js";
 import {
   createNodesProgram,
   gatewayRequests,
@@ -285,20 +291,30 @@ describe("cli program (nodes push)", () => {
     async ({ environment, json }) => {
       mockPushResult(pushResult());
       const invalidEnvironment = "invalid --environment (use sandbox|production)";
-      await expect(
-        runPush(["--environment", environment, ...(json ? ["--json"] : [])]),
-      ).rejects.toThrow(json ? invalidEnvironment : "exit");
+      if (json) {
+        // Match the real runtime exit that the shared JSON failure owner catches.
+        runtime.exit.mockImplementationOnce(() => {
+          throw new ExitError(1);
+        });
+      }
+      const rejected = runPush(["--environment", environment, ...(json ? ["--json"] : [])]);
+      if (json) {
+        const error = await rejected.catch((caught: unknown) => caught);
+        expect(error).toBeInstanceOf(ReportedCliCommandError);
+        expect(formatCliJsonFailure(error)).toEqual({
+          ok: false,
+          error: { type: "cli_error", message: invalidEnvironment },
+        });
+        expect(formatCliFailureLines({ title: "failed", error })).toEqual([]);
+      } else {
+        await expect(rejected).rejects.toThrow("exit");
+      }
       expect(programGatewayCallMock).not.toHaveBeenCalled();
       expect(getRuntimeOutput()).toBe("");
-      if (json) {
-        expect(runtime.error).not.toHaveBeenCalled();
-        expect(runtime.exit).not.toHaveBeenCalled();
-      } else {
-        expect(runtime.error).toHaveBeenCalledExactlyOnceWith(
-          expect.stringContaining(`nodes push failed: ${invalidEnvironment}`),
-        );
-        expect(runtime.exit).toHaveBeenCalledWith(1);
-      }
+      expect(runtime.error).toHaveBeenCalledExactlyOnceWith(
+        expect.stringContaining(`nodes push failed: ${invalidEnvironment}`),
+      );
+      expect(runtime.exit).toHaveBeenCalledExactlyOnceWith(1);
     },
   );
 

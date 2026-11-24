@@ -1,0 +1,4 @@
+/** Browser uploads share the wire limits without constructing protocol validators. */
+export const SKILL_LIBRARY_MAX_FILES = 256;
+export const SKILL_LIBRARY_MAX_FILE_BYTES = 1024 * 1024;
+export const SKILL_LIBRARY_MAX_BUNDLE_BYTES = 8 * 1024 * 1024;

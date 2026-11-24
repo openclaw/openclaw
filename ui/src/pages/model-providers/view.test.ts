@@ -5,8 +5,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { i18n, t } from "../../i18n/index.ts";
 import { choosePickerValue, openPicker, updatePickers } from "../../test-helpers/select-picker.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
-import { resolveDefaultModelPresentation } from "./data.ts";
-import { card, mount, props, settingsRow, text } from "./view.test-support.tsx";
+import { resolveDefaultModelPresentation, type ModelProviderCard } from "./data.ts";
+import { card, mount, openMoreSettings, props, settingsRow, text } from "./view.test-support.tsx";
 
 function expand(container: Element, providerId = "openai"): Element {
   container
@@ -217,9 +217,7 @@ describe("renderModelProviders", () => {
   });
 
   it("surfaces a provider-usage failure on the provider list", () => {
-    const container = document.createElement("div");
-    mount(props({ providerUsageFailed: true }), container);
-
+    const container = mount(props({ cards: [], providerUsageFailed: true }));
     expect(container.textContent).toContain("Couldn’t load provider usage. Refresh to try again.");
   });
 
@@ -244,9 +242,7 @@ describe("renderModelProviders", () => {
     const container = mount(
       props({ catalogDiscovering: true, catalogDiscoveryError: "A provider failed discovery." }),
     );
-    expect(
-      container.querySelector('.model-providers__catalog-progress[role="status"]'),
-    ).not.toBeNull();
+    expect(container.querySelector('.model-providers__catalog-progress[role="status"]')).toBeNull();
     await waitForFast(() =>
       expect(
         container.querySelector('.model-providers__catalog-progress[role="alert"] span')
@@ -266,22 +262,27 @@ describe("renderModelProviders", () => {
       container.querySelector('.model-providers__catalog-progress[role="alert"]');
     // Providers that failed discovery still get a row; none is connected on a fresh install.
     const unconnected = card({ apiKey: undefined, modelCount: 0, availableModelCount: 0 });
-    const fresh = mount(
-      props({
-        cards: [unconnected],
-        defaultModels: { primary: "", fallbacks: [], utilityModel: null },
-        catalogDiscoveryError: failure,
-      }),
-    );
-    const configured = mount(
-      props({
-        cards: [unconnected],
-        defaultModels: { primary: "openai/gpt-5.5", fallbacks: [], utilityModel: null },
-        catalogDiscoveryError: failure,
-      }),
+    const view = (cards: ModelProviderCard[], primary: string) =>
+      mount(
+        props({
+          cards,
+          configuredModels: [],
+          thinkingOverridden: false,
+          fastModeOverridden: false,
+          defaultModels: { primary, fallbacks: [], utilityModel: null },
+          catalogDiscoveryError: failure,
+        }),
+      );
+    const fresh = view([unconnected], "");
+    const configured = view([unconnected], "openai/gpt-5.5");
+    // Saved credentials with no default yet: the listing failure is why nothing works.
+    const signedIn = view(
+      [card({ profiles: [{ profileId: "a", type: "oauth", status: "ok" }] })],
+      "",
     );
     await waitForFast(() => expect(alert(configured)?.textContent).toContain(failure));
-    // Both views settled the same way; only the set-up one reports the failure.
+    await waitForFast(() => expect(alert(signedIn)?.textContent).toContain(failure));
+    // All settled the same way; only the fresh install keeps quiet.
     expect(alert(fresh)).toBeNull();
   });
 
@@ -306,7 +307,7 @@ describe("renderModelProviders", () => {
     expect(text(fastRow)).not.toContain("Default: Model policy");
     const thinkingHelp = thinkingRow.querySelector('openclaw-tooltip [slot="content"]');
     const fastModeHelp = fastRow.querySelector('openclaw-tooltip [slot="content"]');
-    expect(thinkingHelp?.textContent).toContain("model's thinking policy");
+    expect(thinkingHelp?.textContent).toContain("model’s own effort setting");
     expect(fastModeHelp?.textContent).toContain("Unlike Auto");
     expect(thinkingRow.querySelector(".settings-segmented__btn button")).toBeNull();
     expect(fastRow.querySelector(".settings-segmented__btn button")).toBeNull();
@@ -357,12 +358,13 @@ describe("renderModelProviders", () => {
 
   it("keeps decision model help behind the standard info button", () => {
     const container = mount(props());
+    openMoreSettings(container);
     const row = settingsRow(container, "Decision model");
     const help = row.querySelector('button[aria-label="About the decision model"]');
     expect(help).not.toBeNull();
     expect(row.querySelector(".settings-row__desc")).toBeNull();
     expect(text(row.querySelector('openclaw-tooltip [slot="content"]'))).toBe(
-      "Makes typed choices, scores, and yes/no judgments. Disabled until you select a decision model; conversational models aren’t used as a fallback.",
+      "Handles structured choices and scores. Select a decision model to enable it; chat models are not used as fallback.",
     );
   });
 
@@ -472,7 +474,7 @@ describe("renderModelProviders", () => {
     ).toBe(true);
     // The open form stands in for the button that opened it.
     expect(button(provider!, "Replace")).toBeUndefined();
-    expect(button(provider!, "Remove provider")?.disabled).toBe(true);
+    expect(button(provider!, "Remove saved access")?.disabled).toBe(true);
     expect(
       provider?.querySelector<HTMLButtonElement>(".model-providers__profile-logout")?.disabled,
     ).toBe(true);
@@ -632,36 +634,32 @@ describe("renderModelProviders", () => {
     expect(text(provider)).not.toContain("9145");
   });
 
-  it("puts model recovery first when credentials expose no selectable models", () => {
-    const onConnectProvider = vi.fn();
+  it("leads a new user with the provider catalog and holds defaults until a model exists", () => {
+    const onCatalogConnect = vi.fn();
+    const openai = { id: "openai", label: "OpenAI", choices: [], authProviders: ["openai"] };
     const container = mount(
       props({
-        cards: [
-          card({
-            auth: { kind: "ok" },
-            profiles: [{ profileId: "openai:chatgpt", type: "oauth", status: "ok" }],
-            modelCount: 0,
-            availableModelCount: 0,
-          }),
-        ],
+        cards: [],
         configuredModels: [],
         defaultModels: { primary: "", fallbacks: [], utilityModel: null },
-        onConnectProvider,
+        thinkingOverridden: false,
+        fastModeOverridden: false,
+        catalogProviders: [{ ...openai, apiKeyProvider: "openai" }],
+        onCatalogConnect,
       }),
     );
-
-    const readiness = container.querySelector('[data-model-readiness="model-required"]');
-    expect(text(readiness)).toContain(t("modelProviders.login.action"));
-    expect(text(readiness)).toContain("Model required");
+    const catalog = container.querySelector("[data-models-catalog]");
+    expect(text(catalog)).toContain(t("modelProviders.catalog.firstTitle"));
+    expect(container.querySelector(".model-providers__defaults")).toBeNull();
+    button(catalog!, "Connect")?.click();
+    expect(onCatalogConnect).toHaveBeenCalledWith("openai");
+    // Connected: the catalog moves below as "Add a provider" and marks the provider in use.
+    mount(props({ catalogProviders: [openai] }), container);
     expect(container.querySelector(".model-providers__defaults")).not.toBeNull();
-    // Setup has one way to connect; the access section offers its own again once it ends.
-    expect(container.querySelectorAll("[data-models-connect]")).toHaveLength(1);
-
-    button(readiness!, "Add account")?.click();
-    expect(onConnectProvider).toHaveBeenCalledOnce();
-
-    mount(props(), container);
-    expect(container.querySelector("[data-model-readiness]")).toBeNull();
+    const later = container.querySelector("[data-models-catalog]");
+    expect(text(later)).toContain(t("modelProviders.catalog.title"));
+    const openaiRow = later?.querySelector('[data-models-catalog-provider="openai"] p');
+    expect(text(openaiRow ?? null)).toContain("Connected");
   });
 
   it.each([true])(
@@ -820,6 +818,7 @@ describe("renderModelProviders", () => {
           automaticUtilityModel,
         }),
       );
+      openMoreSettings(automatic);
       await updatePickers(automatic);
       await openPicker(automatic.querySelector("openclaw-select-picker")!);
       expect(
@@ -987,7 +986,7 @@ describe("renderModelProviders", () => {
         onRequestLogout,
       }),
     );
-    button(expand(container), "Remove provider")!.click();
+    button(expand(container), "Remove saved access")!.click();
     expect(onRequestLogout).toHaveBeenCalledWith(
       expect.objectContaining({
         cardId: "openai",

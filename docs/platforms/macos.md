@@ -261,11 +261,13 @@ In the macOS app's embedded dashboard, clicking an external web link opens it as
 
 Use the tab strip to select or close a page, the URL bar to navigate, and the back, forward, reload, stop, and **Open in Default Browser** controls to manage the active Mac tab. Stop keeps the current page, including when the next navigation is still starting. When a page fails to load, the tab keeps the address you tried and shows the error with a **Reload** button that retries it. If a page's content keeps quitting, the tab reloads it automatically at most twice, then shows the failure and waits for **Reload**. Opening the same link again reuses its existing tab, including a retained original URL after an initial redirect. Mac tabs belong to each window and survive chat session switches. **Annotate** and **Inspect** capture a one-shot snapshot of a Mac tab for sharing page context with the agent. Navigating that tab to a different URL discards the capture and restores its live view. The window's titlebar back/forward controls and trackpad swipes navigate dashboard history; the Browser panel's controls navigate the active page.
 
+With the page focused in a **Mac tab**, press **⌘F** or **Ctrl+F** to find text in that page. **Return** moves to the next match, **Shift+Return** moves to the previous one, and **Escape** closes the find bar and returns focus to the page.
+
 The titlebar controls follow the app sidebar: while it is expanded, back/forward sit at its right edge next to the sidebar toggle; while it is collapsed, they make way for a search button (opens the command palette) and a new-session button.
 
 Drag the empty space beside the side-panel tabs to move the window. The full height of the header is available, and the draggable space follows tabs as they are added, removed, or resized. Tabs and header buttons keep their normal click and tab-reordering behavior.
 
-Mac tabs stay visible when a menu or hover card opens elsewhere in the dashboard. A tab's page temporarily hides only when the menu overlaps its Browser pane, or while a modal dialog or the command palette is open, and returns when the obstruction clears.
+Mac tabs stay visible when a menu or hover card opens elsewhere in the dashboard. If a menu overlaps the Browser pane or a modal dialog opens, the live page temporarily hides. The command palette leaves a dimmed, non-interactive image of the page behind it. Dismiss the palette to return to the same live page without reloading it.
 
 Drag the empty header space or title in the docked OpenClaw chat panel to move the app window. Its dock-position and close buttons remain clickable.
 

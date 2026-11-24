@@ -44,6 +44,8 @@ async function mountChildSessions(
     ]),
   });
   await sidebar.updateComplete;
+  sidebar.querySelector<HTMLButtonElement>("[data-child-session-toggle]")!.click();
+  await sidebar.updateComplete;
   return { sidebar, find: sidebar.querySelector.bind(sidebar) };
 }
 

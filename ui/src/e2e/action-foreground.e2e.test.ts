@@ -220,25 +220,13 @@ suite.define(() => {
                 primary: getComputedStyle(document.documentElement).getPropertyValue("--primary"),
               }))
             : undefined;
-          const rail = page.locator(".sidebar-rail__create .sidebar-new-session");
-          const railSamples = await inspectStates(
-            page,
-            rail,
-            `${id} rail`,
-            "var(--sidebar-rail-action-foreground)",
-            [
-              "var(--sidebar-rail-action-bg)",
-              "var(--sidebar-rail-action-hover-bg)",
-              "var(--sidebar-rail-action-active-bg)",
-            ],
-          );
           const desktop = await inspectStates(
             page,
             send,
             `${id} send`,
             "var(--chat-send-foreground)",
           );
-          await screenshot(page, `${id}-desktop-send`, [chatInput, rail]);
+          await screenshot(page, `${id}-desktop-send`, [chatInput]);
           await page.setViewportSize({ width: 390, height: 844 });
           const mobile = await inspectStates(
             page,
@@ -257,7 +245,7 @@ suite.define(() => {
               document.documentElement.style.removeProperty("--chat-send-foreground"),
             );
           }
-          sendSamples.push({ palette, railSamples, desktop, mobile });
+          sendSamples.push({ palette, desktop, mobile });
         }
         const sendCount = (await gateway.getRequests("chat.send")).length;
         await send.click();

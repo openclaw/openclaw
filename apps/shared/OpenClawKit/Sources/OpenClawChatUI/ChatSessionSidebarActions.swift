@@ -206,7 +206,7 @@ extension OpenClawChatViewModel {
             return try await connection.read("chat.history", params)
         }
         let changed = NSError(domain: "SessionMenu", code: 1, userInfo: [NSLocalizedDescriptionKey:
-                String(localized: "The transcript changed. Try copying it again.")])
+                String(localized: "The chat changed. Try copying it again.")])
         let first = try await page(0)
         guard session.sessionId == nil || session.sessionId == first.sessionId else { throw changed }
         var current = first

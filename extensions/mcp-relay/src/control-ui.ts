@@ -313,7 +313,7 @@ const mountConnectedApps: ControlUiView = (container, initialContext) => {
   function render() {
     page.innerHTML = `
       <header class="mcp-connected-apps__header">
-        <div><h1>Connected apps</h1><p>Manage apps connected to your Gateway through the MCP relay.</p></div>
+        <div><h1 class="plugin-page-title">Connected apps</h1><p>Manage apps connected to your Gateway through the MCP relay.</p></div>
       </header>`;
     page.querySelector("header")!.append(button("Refresh", () => void refresh()));
     if (!canUse()) {
@@ -400,7 +400,15 @@ const mountConnectedApps: ControlUiView = (container, initialContext) => {
     }
     const list = page.querySelector(".mcp-connected-apps__list")!;
     if (!snapshot.grants.length) {
-      list.innerHTML = `<h2>No connected apps yet</h2><p>Sign in with your Gateway from an app, or pair with a single-use code.</p>`;
+      list.append(
+        element("h2", "No connected apps yet"),
+        element(
+          "p",
+          connectedCaller.canPair
+            ? "Sign in with your Gateway from an app, or pair with a single-use code."
+            : "Your Gateway role cannot connect apps. Ask your administrator for access.",
+        ),
+      );
     }
     for (const grant of snapshot.grants) {
       const row = element("article", undefined, "mcp-connected-apps__grant");

@@ -10,6 +10,7 @@ import {
 } from "../infra/delivery-queue-sqlite.js";
 import { computeBackoffMs } from "../infra/delivery-recovery.shared.js";
 import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
+import { isConstrainedProcessLowOnMemory } from "../infra/host-memory.js";
 import type { DeliverOutboundPayloadsParams } from "../infra/outbound/deliver.js";
 import {
   schedulePendingSessionDeliveries,
@@ -23,6 +24,10 @@ import {
   runWithGatewayIndependentRootWorkAdmission,
 } from "../process/gateway-work-admission.js";
 import { CommandLane } from "../process/lanes.js";
+import {
+  startAgentExecCgroupCleanup,
+  sweepAgentExecCgroups,
+} from "../process/linux-exec-cgroup.js";
 import { startSessionUpstreamMonitor } from "../sessions/session-upstream-monitor.js";
 import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
@@ -40,6 +45,7 @@ import {
 } from "./server-maintenance-lifecycle.js";
 import type { GatewayContextResolver } from "./server-methods/types.js";
 import type { GatewayRuntimeServiceLogger } from "./server-runtime-service-shared.js";
+import type { GatewaySessionFactsBackfillScheduler } from "./server-startup-session-migration.js";
 import { measureStartup } from "./server-startup-trace.js";
 import { reportSessionAutomationSourceLoadFailed } from "./session-automation-index.js";
 export { scheduleGatewayIdleTask, type GatewayIdleTaskHandle } from "./server-idle-task.js";
@@ -100,6 +106,7 @@ export function scheduleGatewayPostReadyMaintenance(params: {
   delayMs: number;
   isClosing: () => boolean;
   waitForPostReadyWork: () => Promise<void>;
+  scheduleSessionFactsBackfill?: GatewaySessionFactsBackfillScheduler;
   startupMaintenance: GatewayStartupMaintenance;
   startMaintenance: () => Promise<GatewayMaintenanceHandles | null>;
   applyMaintenance: (maintenance: GatewayMaintenanceHandles) => Promise<void> | void;
@@ -121,17 +128,27 @@ export function scheduleGatewayPostReadyMaintenance(params: {
     delayMs: params.delayMs,
     retryDelayMs: Math.max(1_000, params.delayMs),
     isClosing: () => params.signal.aborted || params.isClosing(),
-    isBusy: isRecovering,
+    isBusy: () => isRecovering() || isConstrainedProcessLowOnMemory(),
     waitForReady: params.waitForPostReadyWork,
     log: params.log,
   };
   if (process.platform === "linux") {
+    startAgentExecCgroupCleanup(
+      AbortSignal.any([params.signal, params.scheduler.signal]),
+      params.log,
+    );
     scheduleGatewayIdleTask({
       ...idle,
       id: "database:page-cache",
+      // Reclaim remains useful under memory pressure; defer the warmer's import below.
+      isBusy: isRecovering,
       repeatDelayMs: 15 * 60 * 1000,
       errorMessage: "database page-cache probe failed",
       run: async (signal) => {
+        void sweepAgentExecCgroups();
+        if (isConstrainedProcessLowOnMemory()) {
+          return;
+        }
         try {
           const { warmGatewayDatabasePageCache } = await import("./server-database-page-cache.js");
           signal.throwIfAborted();
@@ -177,17 +194,25 @@ export function scheduleGatewayPostReadyMaintenance(params: {
   params.scheduler.schedule({
     id: "startup:maintenance",
     delayMs: params.delayMs,
-    run: () => {
+    run: async () => {
       if (params.isClosing()) {
+        return undefined;
+      }
+      // Wait outside admission: a root held here would keep lean's post-ready release busy.
+      await params.waitForPostReadyWork();
+      if (params.isClosing() || params.signal.aborted) {
         return undefined;
       }
       return runWithGatewayIndependentRootWorkAdmission(
         async () => {
-          await params.waitForPostReadyWork();
-          if (params.isClosing()) {
+          if (params.isClosing() || params.signal.aborted) {
             return;
           }
           try {
+            // Registration must not wait for optional globally idle maintenance.
+            params.scheduleSessionFactsBackfill?.(
+              params.startupMaintenance.startupSessionDatabases,
+            );
             if (!params.isClosing()) {
               const maintenance = await params.startMaintenance();
               if (params.isClosing()) {

@@ -28,7 +28,7 @@ const suite = createNewSessionPageE2eSuite();
 const environment = {
   id: "node:paired-runner",
   type: "node",
-  label: "Paired runner",
+  label: "Design laptop",
   status: "available",
   sessionHost: true,
   workerSlots: { total: 2, available: 1 },
@@ -99,31 +99,36 @@ suite.define(() => {
         .toContain("Not available with this model");
       await page.keyboard.press("Escape");
       await selectModel("worker");
+      await message.fill("Work in the existing device folder");
       await project.click();
       await folderChoice.click();
-      await input.waitFor();
-      await message.fill("Work in the existing device folder");
-      await expect.poll(() => start.isDisabled()).toBe(true);
+      const use = page.getByRole("button", { name: "Use this folder" });
+      await expect.poll(() => use.isDisabled()).toBe(true);
       await input.fill("relative/folder");
-      await expect.poll(() => start.isDisabled()).toBe(true);
+      await expect.poll(() => use.isDisabled()).toBe(true);
       await input.fill(deviceFolder.path);
+      await use.click();
+      await expect.poll(() => input.isVisible()).toBe(false);
       await expect.poll(() => start.isEnabled()).toBe(true);
       expect(await page.locator("#new-session-checkout-trigger").count()).toBe(0);
       await selectModel("remote");
       await expect.poll(() => start.isDisabled()).toBe(true);
-      expect(await input.inputValue()).toBe(deviceFolder.path);
-      const folder = page.locator(".new-session-page__device-folder");
-      await expect.poll(() => folder.textContent()).toContain("This model can’t work");
+      await expect
+        .poll(() => project.getAttribute("aria-description"))
+        .toContain("This model can’t work");
       await message.press("Enter");
       expect(await gateway.getRequests("sessions.create")).toHaveLength(0);
       expect(await gateway.getRequests("sessions.dispatch")).toHaveLength(0);
       await selectModel("worker");
+      await expect.poll(() => project.getAttribute("aria-description")).toBe(deviceFolder.path);
+      await project.click();
+      await folderChoice.click();
       expect(await input.inputValue()).toBe(deviceFolder.path);
+      await input.fill("/not-applied");
+      await page.keyboard.press("Escape");
+      await expect.poll(() => input.isVisible()).toBe(false);
+      expect(await project.getAttribute("aria-description")).toBe(deviceFolder.path);
       await expect.poll(() => start.isEnabled()).toBe(true);
-      await page.setViewportSize({ width: 390, height: 844 });
-      await expect
-        .poll(() => folder.evaluate((element) => element.scrollWidth <= element.clientWidth))
-        .toBe(true);
       await start.click();
       const create = await gateway.waitForRequest("sessions.create");
       expect(create.params).toMatchObject({ agentId: "main", message: "", deviceFolder });
@@ -155,8 +160,9 @@ suite.define(() => {
   it("browses folders on the selected device and creates the session in the chosen one", () =>
     suite.withPage({ locale: "en-US", serviceWorkers: "block" }, async ({ page }) => {
       const sessionKey = "agent:main:browsed-device-folder";
-      const home = { path: "/Users/dev", home: "/Users/dev", parent: "/Users" };
-      const { gateway, input, message, start } = await setup(page, {
+      await page.setViewportSize({ width: 390, height: 844 });
+      const home = { path: "/workspace", home: "/workspace", parent: "/Users" };
+      const { gateway, input, project, message, start } = await setup(page, {
         featureMethods: [
           "agent.wait",
           "chat.metadata",
@@ -171,46 +177,53 @@ suite.define(() => {
             ...folderEnvironment,
             invocableCommands: ["fs.listDir"],
           }),
-          "fs.listDir": { ...home, entries: [{ name: "src", path: "/Users/dev/src" }] },
+          "fs.listDir": {
+            ...home,
+            entries: [{ name: "field-notes", path: "/workspace/field-notes" }],
+          },
           "sessions.create": { key: sessionKey },
           "sessions.list": createdSessionListResult(sessionKey),
           ...launchResponses(sessionKey),
         },
       });
-      await page.getByRole("button", { name: "Existing folder on Paired runner" }).click();
+      await page.getByRole("button", { name: "Existing folder on Design laptop" }).click();
       expect((await gateway.waitForRequest("fs.listDir")).params).toEqual({
         nodeId: "paired-runner",
       });
       await expect
         .poll(() => page.locator(".new-session-page__browser-path").getAttribute("placeholder"))
-        .toBe("Paired runner");
-      const src = page.getByRole("option", { name: "src" });
+        .toBe("Design laptop");
+      const src = page.getByRole("option", { name: "field-notes" });
       await src.waitFor();
       await gateway.setMethodResponse("fs.listDir", {
-        path: "/Users/dev/src",
-        home: "/Users/dev",
-        parent: "/Users/dev",
+        path: "/workspace/field-notes",
+        home: "/workspace",
+        parent: "/workspace",
         entries: [],
       });
       const listed = (await gateway.getRequests("fs.listDir")).length;
       await src.click();
       expect((await gateway.waitForRequest("fs.listDir", { after: listed })).params).toEqual({
         nodeId: "paired-runner",
-        path: "/Users/dev/src",
+        path: "/workspace/field-notes",
       });
       await page.getByRole("button", { name: "Use this folder" }).click();
-      await expect.poll(() => input.inputValue()).toBe("/Users/dev/src");
+      await expect.poll(() => project.textContent()).toContain("field-notes");
+      expect(await input.isVisible()).toBe(false);
+      expect(
+        await page.getByText("Work in place on the selected device.", { exact: false }).isVisible(),
+      ).toBe(false);
       // Gateway checkout probes never run against a path that exists only on the device.
       expect(await gateway.getRequests("worktrees.branches")).toHaveLength(0);
-      await message.fill("Work in the browsed folder");
+      await message.fill("Plan the catalog review.");
       await start.click();
       expect((await gateway.waitForRequest("sessions.create")).params).toMatchObject({
-        deviceFolder: { deviceId: "paired-runner", path: "/Users/dev/src" },
+        deviceFolder: { deviceId: "paired-runner", path: "/workspace/field-notes" },
       });
     }));
   it("offers device browsing only to admins", () =>
     suite.withPage({ locale: "en-US", serviceWorkers: "block" }, async ({ page }) => {
-      await setup(page, {
+      const { gateway, input, project } = await setup(page, {
         operatorScopes: ["operator.read", "operator.write"],
         methodResponses: {
           "environments.list": environments({
@@ -219,15 +232,31 @@ suite.define(() => {
           }),
         },
       });
-      // Writers type the device path: the row selects it instead of opening a browser.
+      // Writers can apply a path without listing device directories.
       const folderChoice = page.locator('[data-value="device-folder"]');
       await folderChoice.waitFor();
-      expect(await folderChoice.locator(".new-session-page__submenu-chevron").count()).toBe(0);
+      await folderChoice.click();
+      await expect.poll(() => input.evaluate((el) => el === document.activeElement)).toBe(true);
+      await input.fill("/workspace/manual");
+      const offset = await input.evaluate((field) => {
+        const label = field.closest("label")!;
+        const text = document.createTreeWalker(label, NodeFilter.SHOW_TEXT).nextNode()!;
+        const range = document.createRange();
+        range.selectNodeContents(text);
+        const textStart =
+          field.getBoundingClientRect().left +
+          Number.parseFloat(getComputedStyle(field).paddingInlineStart);
+        return Math.abs(range.getBoundingClientRect().left - textStart);
+      });
+      expect(offset).toBeLessThanOrEqual(1);
+      await input.press("Enter");
+      await expect.poll(() => project.textContent()).toContain("manual");
+      expect(await gateway.getRequests("fs.listDir")).toHaveLength(0);
     }));
   it("restores a pending device-folder create without changing its device or path", () =>
     suite.withPage({ locale: "en-US", serviceWorkers: "block" }, async ({ page }) => {
       const deviceFolder = { deviceId: "paired-runner", path: "/srv/existing" };
-      const { gateway, input, message, start } = await setup(page, {
+      const { gateway, input, project, message, start } = await setup(page, {
         deferredMethods: ["sessions.create"],
         workspace: "/srv/gateway",
         methodResponses: {
@@ -237,6 +266,7 @@ suite.define(() => {
       });
       await page.locator('[data-value="device-folder"]').click();
       await input.fill(deviceFolder.path);
+      await input.press("Enter");
       await message.fill("Keep this folder");
       await start.click();
       const first = await gateway.waitForRequest("sessions.create");
@@ -247,7 +277,7 @@ suite.define(() => {
       }
       await page.reload();
       await gateway.waitForRequest("environments.list");
-      await expect.poll(() => input.inputValue()).toBe(deviceFolder.path);
+      await expect.poll(() => project.getAttribute("aria-description")).toBe(deviceFolder.path);
       await expect
         .poll(() => page.locator("#new-session-where-trigger").getAttribute("data-device-id"))
         .toBe(deviceFolder.deviceId);

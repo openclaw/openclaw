@@ -92,6 +92,22 @@ const modelConfig = (modelPolicy: unknown, extraRoles = {}) => ({
   ...rolesConfig({ definitions: { guest: { ...validRole, modelPolicy }, ...extraRoles } }),
 });
 
+test.each(["none", "view", "invited"])("preserves explicit session access mode %s", (others) => {
+  const config = validated(
+    rolesConfig({
+      definitions: { guest: { ...validRole, sessions: { others } } },
+    }),
+  );
+  expect(config.gateway?.roles?.definitions.guest?.sessions.others).toBe(others);
+});
+
+test("does not enable invitation-only access in an unconfigured Gateway", () => {
+  expect(validated({}).gateway?.roles).toBeUndefined();
+  expect(validated(rolesConfig({})).gateway?.roles?.definitions.guest?.sessions.others).toBe(
+    "view",
+  );
+});
+
 test("accepts a conversation-scoped automation role without operator.write", () => {
   const scopes = ["operator.sessions.write", "operator.cron"];
   const config = validated(rolesConfig({ definitions: { guest: { ...validRole, scopes } } }));
@@ -141,6 +157,18 @@ test("accepts only explicit nonstandard Access grants independently of model pol
   });
 });
 
+test("accepts project grants as every project or trimmed unique project IDs", () => {
+  const project = (projects: unknown) =>
+    validated(rolesConfig({ definitions: { guest: { ...validRole, projects } } })).gateway?.roles
+      ?.definitions.guest?.projects;
+  expect(project("*")).toBe("*");
+  expect(project([" handbook ", "handbook", "site"])).toEqual(["handbook", "site"]);
+  expect(project([])).toEqual([]);
+  expect(
+    validated(rolesConfig({ definitions: { guest: validRole } })).gateway?.roles?.definitions.guest,
+  ).not.toHaveProperty("projects");
+});
+
 test.each([
   { sourceAgent: "missing", deny: ["fixture/restricted-*"] },
   { sourceAgent: "shared", deny: ["fixture/restricted-**"] },
@@ -168,6 +196,8 @@ test.each([
   ["blank operator scope", { scopes: [" \t"] }],
   ["wildcard in an agent allowlist", { agents: ["*"] }],
   ["blank access-policy plugin", { accessPolicyPlugin: " " }],
+  ["blank project grant", { projects: [" "] }],
+  ["non-wildcard project grant string", { projects: "handbook" }],
   ["missing session policy", { sessions: undefined, agents: "*", scopes: ["operator.read"] }],
   ["freeform capability", { capability: "sessions.delete" }],
 ] as const)("rejects %s", (_name, overrides) => {

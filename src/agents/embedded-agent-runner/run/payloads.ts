@@ -1,5 +1,5 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { REPEATED_TOOL_ERROR_CODE } from "../../../../packages/agent-core/src/errors.js";
+import { TOOL_REPEAT_LIMIT_CODE } from "../../../../packages/agent-core/src/tool-repeat-guard.js";
 import type { SourceReplyDeliveryMode } from "../../../auto-reply/get-reply-options.types.js";
 import { buildProviderLoginRecovery } from "../../../auto-reply/provider-login-recovery.js";
 import {
@@ -18,7 +18,7 @@ import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { readAgentAssistantSource } from "../../../infra/agent-events.js";
 import { hasMeaningfulAutomationResult } from "../../../infra/agent-run-registry.automation.js";
 import { hasReplyPayloadContent } from "../../../interactive/payload.js";
-import type { AssistantMessage } from "../../../llm/types.js";
+import type { AssistantHistoryMessage } from "../../../llm/types.js";
 import { resolveRawAssistantAnswerText } from "../../../shared/assistant-answer-text.js";
 import { readAssistantTextBlocksForPhase } from "../../../shared/chat-message-content.js";
 import { sanitizeAssistantVisibleText } from "../../../shared/text/assistant-visible-text.js";
@@ -28,6 +28,7 @@ import {
   prepareAgentRunTerminalReply,
   type PreparedAgentRunTerminalReply,
 } from "../../agent-run-terminal-reply.js";
+import { withAgentTerminalPayloadSnapshot } from "../../agent-terminal-snapshot.js";
 import { classifyOAuthRefreshFailure } from "../../auth-profiles/oauth-refresh-failure.js";
 import { classifyAssistantFailoverReason } from "../../embedded-agent-helpers/assistant-message-failures.js";
 import {
@@ -63,7 +64,7 @@ import { buildFailureWarning } from "./tool-error-warning.js";
 import type { EmbeddedRunAttemptResult } from "./types.js";
 
 function renderNativeAssistantReply(
-  assistant: AssistantMessage,
+  assistant: AssistantHistoryMessage,
   rawText: string,
   preparedText: string,
 ): string | undefined {
@@ -119,8 +120,9 @@ export function buildEmbeddedRunPayloads(params: {
   assistantMessageIndex?: number;
   assistantTranscriptOwned?: boolean;
   assistantTranscriptIdempotencyKey?: string;
-  lastAssistant: AssistantMessage | undefined;
-  currentAssistant?: AssistantMessage | null;
+  lastAssistant: AssistantHistoryMessage | undefined;
+  currentAssistant?: AssistantHistoryMessage | null;
+  agentTerminal?: EmbeddedRunAttemptResult["agentTerminal"];
   lastToolError?: ToolErrorSummary;
   config?: OpenClawConfig;
   sandboxRuntime?: EmbeddedRunAttemptResult["sandboxRuntime"];
@@ -163,6 +165,7 @@ export function buildEmbeddedRunPayloads(params: {
     sourceReplies.filter((payload) => !payload.toolAuthored),
   );
   const replyItems = ordinarySourceReplies.replyItems;
+  let selectedProviderErrorPayload: ReplyPayload | undefined;
   const pendingAuthoredReplies = new Set(sourceReplies.filter((payload) => payload.toolAuthored));
   const useMarkdown = params.toolResultFormat === "markdown";
   let suppressFailureArtifacts = false;
@@ -249,7 +252,7 @@ export function buildEmbeddedRunPayloads(params: {
     const rawErrorMessage = lastAssistantNeedsErrorSurface
       ? normalizeOptionalString(assistantForPayload?.errorMessage)
       : undefined;
-    const repeatedToolError = assistantForPayload?.errorCode === REPEATED_TOOL_ERROR_CODE;
+    const repeatedToolError = assistantForPayload?.errorCode === TOOL_REPEAT_LIMIT_CODE;
     const oauthRefreshFailure =
       rawErrorMessage && !repeatedToolError ? classifyOAuthRefreshFailure(rawErrorMessage) : null;
     const providerLoginRecovery = buildProviderLoginRecovery({
@@ -289,6 +292,9 @@ export function buildEmbeddedRunPayloads(params: {
         isError: true,
         ...(providerLoginRecovery ? { presentation: providerLoginRecovery.presentation } : {}),
       };
+      if (!runAborted && lastAssistantErrored && assistantForPayload === params.currentAssistant) {
+        selectedProviderErrorPayload = errorPayload;
+      }
       replyItems.push(
         setReplyPayloadMetadata(errorPayload, {
           terminalProviderError: true,
@@ -553,7 +559,10 @@ export function buildEmbeddedRunPayloads(params: {
       if (hasAudioAsVoiceTag && item.mediaUrls?.length) {
         payload.audioAsVoice = true;
       }
-      return payload;
+      // Tag the final producer-owned payload, after normalization creates its copy.
+      return item === selectedProviderErrorPayload
+        ? withAgentTerminalPayloadSnapshot(payload, params.agentTerminal)
+        : payload;
     })
     .filter((payload) => hasReplyPayloadContent(payload) || hasReplyPayloadSpeechContent(payload));
 }

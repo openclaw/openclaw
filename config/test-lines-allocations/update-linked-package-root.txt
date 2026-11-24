@@ -1,0 +1,6 @@
+# Release directories behind a linked package root: link capture/switch/rollback at the swap boundary,
+# SIGKILL crash points in real children, adoption, retention, interrupted handoff and executor admission,
+# and the swap fallback for every layout condition that used to refuse the update (launcher change,
+# unusable releases/, unadoptable directory, release-bound service updated in place), and the journal
+# kept for a package reached through a symlinked prefix, and the unmanaged-launcher control.
+1076

@@ -23,6 +23,8 @@ import {
 import { useSessionStoreTempDirs } from "../../../../src/test-utils/session-state-cleanup.js";
 import { createDeferred, withTestTimeout } from "../../../../test/helpers/promise.js";
 import { Agent } from "../../../agent-core/src/agent.js";
+import { PROVIDER_STATE_SCOPE } from "../provider-types.js";
+import { claimConversationProviderState, cleanupSessionResources } from "../session-resources.js";
 import type { SdkResponse } from "./openai-responses-sdk.test-support.js";
 import {
   completedResponse,
@@ -72,7 +74,6 @@ vi.mock("openai/resources/responses/ws.js", () => ({
 
 import { configureAiTransportHost, getAiTransportHost } from "../host.js";
 import { makeProviderModel } from "../providers/provider-model.test-support.js";
-import { cleanupSessionResources } from "../session-resources.js";
 import { createOpenAIResponsesTransportStreamFn } from "./openai-responses-client.js";
 import type { OpenAIResponsesOptions } from "./openai-responses-contracts.js";
 
@@ -168,6 +169,7 @@ async function run(
   const stream = await createOpenAIResponsesTransportStreamFn()(requestModel, context, {
     apiKey: "test-key",
     sessionId: options.sessionId ?? "session-1",
+    [PROVIDER_STATE_SCOPE]: claimConversationProviderState(options.sessionId ?? "session-1"),
     cacheRetention: options.cacheRetention,
     transport: options.transport ?? "sse",
     reasoningEffort: options.reasoningEffort ?? "low",
@@ -867,11 +869,37 @@ describe("native OpenAI Responses SSE continuation", () => {
       { onPayload: stateful },
     );
 
-    expect(sseState.requests[1]).toMatchObject({ previous_response_id: "resp_1" });
-    expect(JSON.stringify(sseState.requests[1]?.input)).toContain('"compaction"');
+    expect(sseState.requests).toHaveLength(4);
+    expect(sseState.requests[1]).toMatchObject({
+      store: false,
+      input: [
+        { role: "user", content: [{ type: "input_text", text: "first question" }] },
+        { role: "assistant", content: [{ type: "output_text", text: "first answer" }] },
+        { role: "user", content: [{ type: "input_text", text: "second question" }] },
+        { type: "compaction", encrypted_content: "opaque" },
+      ],
+    });
+    expect(sseState.requests[1]).not.toHaveProperty("previous_response_id");
     expect(sseState.requests[2]).not.toHaveProperty("previous_response_id");
+    expect(sseState.requests[2]).toMatchObject({
+      store: false,
+      input: [
+        { role: "user", content: [{ type: "input_text", text: "first question" }] },
+        { role: "assistant", content: [{ type: "output_text", text: "first answer" }] },
+        { role: "user", content: [{ type: "input_text", text: "second question" }] },
+      ],
+    });
     expect(JSON.stringify(sseState.requests[2]?.input)).not.toContain('"compaction"');
-    expect(sseState.requests[3]).toMatchObject({ previous_response_id: "resp_2" });
+    // The unstored recovery cannot advance the stored prefix past the first response.
+    expect(sseState.requests[3]).toMatchObject({
+      store: true,
+      previous_response_id: "resp_1",
+      input: [
+        { role: "user", content: [{ type: "input_text", text: "second question" }] },
+        { role: "assistant", content: [{ type: "output_text", text: "second answer" }] },
+        { role: "user", content: [{ type: "input_text", text: "third question" }] },
+      ],
+    });
   });
 
   it.each([

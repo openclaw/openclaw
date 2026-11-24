@@ -12,6 +12,11 @@ import type { RouteElements } from "./route-elements.ts";
 export const NAVIGATION_RAIL_WIDTH = 52;
 export const NAV_DRAWER_TOGGLE_REGISTRATION = "nav-drawer-toggle";
 
+export type NavDrawerCloseOptions = {
+  restoreFocus?: boolean;
+  finishMotion?: boolean;
+};
+
 export type ShellNavigationElements = {
   shellElement?: HTMLElement;
   navDrawerElement?: HTMLElement;
@@ -70,7 +75,7 @@ function trapNavDrawerFocus(drawer: HTMLElement | undefined, event: KeyboardEven
 
 export function handleNavDrawerKeydown(
   host: Pick<ShellNavigationElements, "navDrawerElement"> & {
-    closeNavDrawer(options?: { restoreFocus?: boolean }): void;
+    closeNavDrawer(options?: NavDrawerCloseOptions): void;
   },
   event: KeyboardEvent,
 ): void {

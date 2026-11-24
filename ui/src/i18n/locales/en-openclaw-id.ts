@@ -18,6 +18,9 @@ const enOpenClawId = {
     errorNotPrepared: "Setup is not ready. Close this dialog and start again.",
     errorAlreadyLinked:
       "Remote access is already set up. Close this dialog and check its status in the account menu.",
+    errorBindingUnpublished:
+      "OpenClaw ID doesn't have this claw's new keys yet. Publish them from the account menu, then unlink.",
+    errorClawChanged: "This claw changed since this warning. Close it and check again.",
     errorNotLinked:
       "Remote access is not set up. Turn it on from the computer that runs this claw.",
     errorIssuerUnavailable: "Could not reach OpenClaw ID. Try again shortly.",
@@ -69,7 +72,22 @@ const enOpenClawId = {
     error_open: "Could not open this. Try again.",
     menuTitle: "OpenClaw ID",
     approveNewDevice: "Approve a new device",
-    approvalNotice: "A new browser is asking for owner access",
+    approvalNotice: "A new device is asking for owner access",
+    approvalMemberClaim: "This request says it’s from {member}.",
+    browserRequestClaim: "Browser request from {name}",
+    browserRequestUnverified: "Unverified request",
+    browserRequestContext: "{browser} · {time} left",
+    browserRequestMember: "a member",
+    browserRequestLocation: "Location reported by OpenClaw ID: {location}",
+    memberDeviceAddedNotice: "A member added a device",
+    memberDeviceAddedNoticeBody:
+      "It has the member’s existing role. Review or remove member devices in Remote access.",
+    memberKitUsedNotice: "{name} used their recovery kit",
+    memberKitUsedNoticeBody: "{device} was added. Review it in Remote access.",
+    kitUsedNotice: "Your recovery kit was used to add {device}",
+    kitUsedNoticeUnknown: "Your recovery kit was used to add a device",
+    kitUsedNoticeBody:
+      "If this wasn’t you, remove it in Your devices. Your recovery kit can still add devices: to stop it, relink this claw as a new claw on the computer that runs it.",
     signIn: "Sign in with OpenClaw ID",
     signInLocalOnly:
       "Sign in through Tailscale or another personal sign-in, or on the computer that runs this claw.",
@@ -109,6 +127,7 @@ const enOpenClawId = {
     roleOperator: "Operator",
     roleViewer: "Viewer",
     moveToNewKeys: "Move to new keys",
+    unlinkFromOpenClawId: "Unlink from OpenClaw ID",
     keyRecoverySignIn: "Sign in with OpenClaw ID from the account menu, then move to new keys.",
     keysMissing: "Remote access is off: a key file is missing",
     keysMismatch: "Remote access is off: a key file doesn't match",
@@ -121,6 +140,16 @@ const enOpenClawId = {
     needsLinkCodeDetail: "Publish them so your devices can reach this claw.",
     publishNewKeys: "Publish new keys",
     newKeysPublished: "New keys published",
+    memberAskedToJoin: "{name} asked to join",
+    nodeAskedToJoin: "{name} asked to join as a node",
+    joinRequestDetail: "Approve or deny it in Access → People.",
+    joinRequestTimeLeft: "{time} left to decide",
+    joinRequestPrompt: "Join request",
+    joinRequestMore: "{count} more waiting",
+    joinRequestLater: "Later",
+    joinRequestReview: "Review",
+    memberUsedRecoveryKit: "{name} used a recovery kit",
+    memberRecoveryUseDetail: "{browser} was added. Review access in Access → People.",
   },
 } satisfies TranslationMap;
 

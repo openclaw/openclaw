@@ -1,12 +1,14 @@
 import {
-  gatewayOperatorAccessError,
   readGatewayOperatorAccessCause,
   type GatewayOperatorAccessCause,
 } from "../../packages/gateway-protocol/src/connect-error-details.js";
 import { GATEWAY_OWNER_PROFILE_ID } from "../../packages/gateway-protocol/src/schema/users.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { OperatorAccessDecision } from "../infra/operator-access-decision.js";
-import { GatewayOperatorAccessUnavailableError } from "../infra/operator-authority-error.js";
+import {
+  GatewayOperatorAccessDeniedError,
+  GatewayOperatorAccessUnavailableError,
+} from "../infra/operator-authority-error.js";
 import { redactSensitiveText } from "../logging/redact.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { assertBoundGatewayAccessDecision } from "../plugins/gateway-access-policy-registration.js";
@@ -21,18 +23,13 @@ import { captureResidentUserProfileAccess } from "../state/user-profile-list.js"
 import type { UserProfileAccessFacts } from "../state/user-profiles.types.js";
 import type { OpenClawIdTunnelPrincipal } from "./openclaw-id/tunnel-principal.js";
 import type { GatewayOperatorAccessAuthority } from "./operator-access-policy.types.js";
-import { isNamedOperatorRoleEnforcementEnabled } from "./operator-role-enforcement.js";
+import { isOperatorRoleEnforcedFor, operatorRoleSubject } from "./operator-role-enforcement.js";
 import { resolveOperatorRolePolicyForAssignment } from "./operator-role-policy.js";
 
 export const GATEWAY_OPERATOR_ACCESS_DENIED_MESSAGE =
   "Gateway access is not active for this account; ask a Gateway administrator to grant or restore access.";
 
-export class GatewayOperatorAccessDeniedError extends Error {
-  constructor(readonly accessCause: GatewayOperatorAccessCause = "policy-check-failed") {
-    super(gatewayOperatorAccessError(accessCause).message);
-    this.name = "GatewayOperatorAccessDeniedError";
-  }
-}
+export { GatewayOperatorAccessDeniedError };
 
 export { GatewayOperatorAccessUnavailableError } from "../infra/operator-authority-error.js";
 const log = createSubsystemLogger("gateway/access");
@@ -82,25 +79,60 @@ function currentAccessPolicies() {
   );
 }
 
-export function hasGatewayOperatorAccessPolicies(config: OpenClawConfig): boolean {
+type GatewayOperatorAccessSource = {
+  profileId?: string;
+  openclawIdAccountIds?: readonly string[];
+  /** Attested connection or retained source; never inferred from profile identities. */
+  openclawIdPrincipal?: OpenClawIdTunnelPrincipal;
+  /** Original grant fact; its owner may resume it or answer current authorization. */
+  grant?: GatewayAccessGrantRef | null;
+};
+
+export function hasGatewayOperatorAccessPolicies(
+  config: OpenClawConfig,
+  _source: GatewayOperatorAccessSource = {},
+): boolean {
   return (
-    usesGitHubRoleAssignments(config, null) ||
+    usesGitHubRoleAssignments(config, null, _source) ||
     currentAccessPolicies().length > 0 ||
-    (isNamedOperatorRoleEnforcementEnabled(config) &&
+    (isOperatorRoleEnforcedFor(config, operatorRoleSubject(_source)) &&
       Object.values(config.gateway?.roles?.definitions ?? {}).some(
         (role) => role.accessPolicyPlugin,
       ))
   );
 }
 
-function usesGitHubRoleAssignments(config: OpenClawConfig, assignedRole: string | null): boolean {
+function usesGitHubRoleAssignments(
+  config: OpenClawConfig,
+  assignedRole: string | null,
+  _source: GatewayOperatorAccessSource = {},
+): boolean {
   const roles = config.gateway?.roles;
   return Boolean(
     roles &&
-    isNamedOperatorRoleEnforcementEnabled(config) &&
+    isOperatorRoleEnforcedFor(config, operatorRoleSubject(_source)) &&
     Object.keys(roles.assignments?.byGithubLogin ?? {}).length > 0 &&
     (!assignedRole || !Object.hasOwn(roles.definitions, assignedRole)),
   );
+}
+
+function resolveAccessPolicyRole(
+  profileId: string,
+  assignedRole: string | null,
+  config: OpenClawConfig,
+  githubLogin: string | null,
+  _source: GatewayOperatorAccessSource,
+) {
+  return {
+    assignedRole,
+    policy: resolveOperatorRolePolicyForAssignment(
+      profileId,
+      assignedRole,
+      config,
+      githubLogin,
+      operatorRoleSubject(_source),
+    ),
+  };
 }
 
 function pluginProfile(
@@ -119,23 +151,33 @@ function pluginProfile(
 export function resolveGatewayOperatorAccessAuthority(
   profileId: string,
   config: OpenClawConfig,
-  options: { requireLivePolicySet?: boolean } = {},
+  inputOptions: GatewayOperatorAccessSource & { requireLivePolicySet?: boolean } = {},
 ): GatewayOperatorAccessAuthority | null {
   if (profileId === GATEWAY_OWNER_PROFILE_ID) {
     return null;
   }
-  if (!options.requireLivePolicySet && !hasGatewayOperatorAccessPolicies(config)) {
+  if (
+    !inputOptions.requireLivePolicySet &&
+    !config.gateway?.openclawId?.enabled &&
+    !hasGatewayOperatorAccessPolicies(config, inputOptions)
+  ) {
     return null;
   }
   const resident = captureResidentUserProfileAccess(profileId);
   const profile = resident.readCurrentFacts();
+  const options = {
+    ...inputOptions,
+    profileId: profile.profileId,
+    openclawIdAccountIds: profile.openclawIdAccountIds,
+  };
   const emails = [...profile.emails];
   const githubAccountIds = [...(profile.githubAccountIds ?? [])];
-  const usesGithubAssignments = usesGitHubRoleAssignments(config, profile.assignedRole);
+  const usesGithubAssignments = usesGitHubRoleAssignments(config, profile.assignedRole, options);
   let profileVersion = readUserProfileVersion();
   return resolvePreparedGatewayOperatorAccessAuthority(
     {
       profileId: profile.profileId,
+      openclawIdAccountIds: profile.openclawIdAccountIds,
       emails,
       githubAccountIds,
       role: profile.assignedRole,
@@ -155,7 +197,10 @@ export function resolveGatewayOperatorAccessAuthority(
             current.profileId !== profileId ||
             (usesGithubAssignments && current.githubLogin !== profile.githubLogin) ||
             emails.some((email) => !currentEmails.has(email)) ||
-            githubAccountIds.some((accountId) => !current.githubAccountIds?.includes(accountId))
+            githubAccountIds.some((accountId) => !current.githubAccountIds?.includes(accountId)) ||
+            (profile.openclawIdAccountIds ?? []).some(
+              (accountId) => !current.openclawIdAccountIds?.includes(accountId),
+            )
           ) {
             return false;
           }
@@ -174,31 +219,42 @@ export function resolvePreparedGatewayOperatorAccessAuthority(
   profile: Readonly<{
     profileId: string;
     emails: readonly string[];
+    openclawIdAccountIds?: readonly string[];
     githubAccountIds?: readonly number[];
     githubLogin?: string | null;
     role: string | null;
     isCurrent: () => boolean;
   }>,
   config: OpenClawConfig,
-  options: { requireLivePolicySet?: boolean } = {},
+  inputOptions: GatewayOperatorAccessSource & { requireLivePolicySet?: boolean } = {},
 ): GatewayOperatorAccessAuthority | null {
   if (profile.profileId === GATEWAY_OWNER_PROFILE_ID) {
     return null;
   }
+  const options = {
+    ...inputOptions,
+    profileId: profile.profileId,
+    openclawIdAccountIds: profile.openclawIdAccountIds,
+  };
   const policies = currentAccessPolicies();
+  if (options.grant && !policies.some(({ pluginId }) => pluginId === options.grant?.pluginId)) {
+    throw new GatewayOperatorAccessUnavailableError();
+  }
   if (
     !options.requireLivePolicySet &&
     policies.length === 0 &&
-    !hasGatewayOperatorAccessPolicies(config)
+    !hasGatewayOperatorAccessPolicies(config, options)
   ) {
     return null;
   }
-  const requiredPlugin = resolveOperatorRolePolicyForAssignment(
+  const role = resolveAccessPolicyRole(
     profile.profileId,
     profile.role,
     config,
     profile.githubLogin ?? null,
-  )?.accessPolicyPlugin;
+    options,
+  );
+  const requiredPlugin = role.policy?.accessPolicyPlugin;
   if (requiredPlugin && !policies.some((entry) => entry.pluginId === requiredPlugin)) {
     throw new GatewayOperatorAccessDeniedError("policy-unavailable");
   }
@@ -244,11 +300,23 @@ export function resolvePreparedGatewayOperatorAccessAuthority(
     assertProfileCurrent();
     let requiredPolicyConfirmed = !requiredPlugin;
     authorities = policies.flatMap(({ policy, pluginId }) => {
-      const authority = policy.authorize({
+      const input = {
         config,
-        profile: pluginProfile(profile, profile.role),
+        profile: pluginProfile(profile, role.assignedRole),
         requiredByRole: pluginId === requiredPlugin,
-      });
+      };
+      let authority: PluginGatewayAccessAuthority | undefined;
+      if (options.grant && pluginId === options.grant.pluginId) {
+        // Without resume, the owner's current authorization may legitimately name a new grant.
+        authority = policy.resume
+          ? policy.resume({ ...input, grantId: options.grant.grantId })
+          : policy.authorize(input);
+        if (policy.resume && (!authority || authority.grantId !== options.grant.grantId)) {
+          throw new GatewayOperatorAccessDeniedError("grant-revoked");
+        }
+      } else {
+        authority = policy.authorize(input);
+      }
       if (authority && pluginId === requiredPlugin) {
         requiredPolicyConfirmed = true;
       }
@@ -284,7 +352,7 @@ export function resolvePreparedGatewayOperatorAccessAuthority(
     if (
       !options.requireLivePolicySet &&
       authorities.length === 0 &&
-      !usesGitHubRoleAssignments(config, profile.role)
+      !usesGitHubRoleAssignments(config, profile.role, options)
     ) {
       releaseProfiles();
       return null;
@@ -333,7 +401,7 @@ export function resolvePreparedGatewayOperatorAccessAuthority(
             try {
               const input = {
                 config,
-                profile: pluginProfile(profile, profile.role),
+                profile: pluginProfile(profile, role.assignedRole),
                 requiredByRole: pluginId === requiredPlugin,
               };
               current =
@@ -393,89 +461,6 @@ export function resolvePreparedGatewayOperatorAccessAuthority(
       ? invalidate(error.accessCause)
       : unavailablePolicy(error);
   }
-}
-
-/**
- * Recheck current facts, returning the original grant's live authority for retained work.
- * `subject` is the run's OpenClaw ID principal. A linked owner device was admitted as the
- * owner, outside its person's access policies, and resumes the same way; the caller checks
- * that its principal is current.
- */
-export function resumeGatewayOperatorAccessGrant(
-  profile: UserProfileAccessFacts,
-  config: OpenClawConfig,
-  grant: GatewayAccessGrantRef | null,
-  retained?: PluginGatewayAccessAuthority,
-  subject?: OpenClawIdTunnelPrincipal,
-): PluginGatewayAccessAuthority | undefined {
-  if (subject?.kind === "owner" && grant === null) {
-    return undefined;
-  }
-  const policies = currentAccessPolicies();
-  const requiredPlugin = resolveOperatorRolePolicyForAssignment(
-    profile.profileId,
-    profile.assignedRole,
-    config,
-    profile.githubLogin ?? null,
-  )?.accessPolicyPlugin;
-  if (requiredPlugin && requiredPlugin !== grant?.pluginId) {
-    // A newly required policy cannot replace the original request's recorded basis.
-    throw new GatewayOperatorAccessDeniedError("policy-set-changed");
-  }
-  let policyProfile: ReturnType<typeof pluginProfile> | undefined;
-  let resumed: PluginGatewayAccessAuthority | undefined;
-  if (grant) {
-    const policy = policies.find(({ pluginId }) => pluginId === grant.pluginId)?.policy;
-    if (!policy?.resume) {
-      throw new GatewayOperatorAccessUnavailableError();
-    }
-    let authority: PluginGatewayAccessAuthority | undefined;
-    try {
-      // The admitted authority owns live grant checks; resuming again creates a second owner.
-      authority =
-        retained ??
-        policy.resume({
-          config,
-          profile: (policyProfile ??= pluginProfile(profile, profile.assignedRole)),
-          grantId: grant.grantId,
-          requiredByRole: requiredPlugin === grant.pluginId,
-        });
-    } catch {
-      // Startup and unavailable observations are not evidence that a grant ended.
-      throw new GatewayOperatorAccessUnavailableError();
-    }
-    if (!authority || authority.grantId !== grant.grantId) {
-      throw new GatewayOperatorAccessDeniedError("grant-revoked");
-    }
-    resumed = authority;
-  }
-  for (const { pluginId, policy } of policies) {
-    if (pluginId === grant?.pluginId) {
-      continue;
-    }
-    let authority: PluginGatewayAccessAuthority | undefined;
-    try {
-      authority = policy.authorize({
-        config,
-        profile: (policyProfile ??= pluginProfile(profile, profile.assignedRole)),
-        requiredByRole: requiredPlugin === pluginId,
-      });
-    } catch {
-      throw new GatewayOperatorAccessUnavailableError();
-    }
-    if (authority) {
-      // A newly applicable policy needs a fresh request bound to that dependency.
-      throw new GatewayOperatorAccessDeniedError("policy-set-changed");
-    }
-  }
-  try {
-    // Other policies can synchronously invalidate the original grant without aborting its signal.
-    resumed?.signal.throwIfAborted();
-    resumed?.assertCurrent();
-  } catch {
-    throw new GatewayOperatorAccessUnavailableError();
-  }
-  return resumed;
 }
 
 export function hasCurrentGatewayOperatorAccess(

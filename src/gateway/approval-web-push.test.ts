@@ -71,7 +71,8 @@ vi.mock("./operator-role-policy.js", async (importOriginal) => ({
 }));
 
 // mock-isolation: Control approval visibility without opening session and approval stores.
-vi.mock("./server-methods/approval-record-lookup.js", () => ({
+vi.mock("./server-methods/approval-record-lookup.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./server-methods/approval-record-lookup.js")>()),
   canAccessApprovalSession: () => true,
   isApprovalRecordVisibleToClient: mocks.visible,
 }));
@@ -220,7 +221,7 @@ beforeEach(() => {
   );
   mocks.approval.mockReturnValue({
     outcome: "found",
-    record: { reviewerDeviceIds: [], source: { agentId: null, sessionKey: null } },
+    record: { requester: {}, reviewerDeviceIds: [], source: { agentId: null, sessionKey: null } },
   });
 });
 

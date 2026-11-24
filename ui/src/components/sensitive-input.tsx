@@ -73,20 +73,18 @@ export function SensitiveInput(props: {
         onFocus={(event) => syncMask(event.currentTarget)}
         onScroll={(event) => syncMask(event.currentTarget)}
       />
-      <openclaw-tooltip prop:content={visibilityLabel()}>
-        <button
-          type="button"
-          class="oc-sensitive-toggle"
-          aria-label={visibilityLabel()}
-          aria-controls={props.id}
-          aria-pressed={props.revealed ? "true" : "false"}
-          data-sensitive-icon={props.revealed ? "eye-off" : "eye"}
-          disabled={props.disabled}
-          onClick={() => props.onToggle()}
-        >
-          <Icon name={props.revealed ? "eyeOff" : "eye"} />
-        </button>
-      </openclaw-tooltip>
+      <button
+        type="button"
+        class="oc-sensitive-toggle"
+        aria-label={visibilityLabel()}
+        aria-controls={props.id}
+        aria-pressed={props.revealed ? "true" : "false"}
+        data-sensitive-icon={props.revealed ? "eye-off" : "eye"}
+        disabled={props.disabled}
+        onClick={() => props.onToggle()}
+      >
+        <Icon name={props.revealed ? "eyeOff" : "eye"} />
+      </button>
     </span>
   );
 }

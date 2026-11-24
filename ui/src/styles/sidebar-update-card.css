@@ -128,13 +128,17 @@ body.update-dialog-open .sidebar-update-card__status {
   background: color-mix(in srgb, var(--warn) 10%, transparent);
 }
 
-.sidebar-update-card__icon {
+.sidebar-update-card__icon,
+.refresh-notice__icon {
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  flex: none;
+}
+
+.sidebar-update-card__icon {
   width: 24px;
   height: 24px;
-  flex: 0 0 auto;
   border-radius: var(--radius-md);
   background: color-mix(in srgb, var(--accent) 14%, transparent);
   color: var(--accent);
@@ -171,9 +175,13 @@ body.update-dialog-open .sidebar-update-card__status {
   white-space: nowrap;
 }
 
-.sidebar-update-card__icon svg {
+.sidebar-update-card__icon svg,
+.refresh-notice__icon svg {
   width: 16px;
   height: 16px;
+}
+
+.sidebar-update-card__icon svg {
   stroke: currentColor;
   fill: none;
   stroke-width: 1.7px;
@@ -181,63 +189,151 @@ body.update-dialog-open .sidebar-update-card__status {
   stroke-linejoin: round;
 }
 
-/* Server-updated refresh notice: over the sidebar's bottom edge like the reconnecting
-   row, bottom-left while collapsed, below the phone header like its badge. */
+/* Inactive split cells retain composers but must not anchor the notice. */
+.agent-chat__composer-shell:not(.chat-pane-cache__pane:not(.chat-pane-cache__pane--active) *) {
+  anchor-name: --openclaw-refresh-composer;
+}
+
 .refresh-notice {
   position: fixed;
   z-index: 45;
-  bottom: 8px;
-  left: 60px;
-  width: calc(var(--shell-nav-width) - 68px);
+  /* Engines without anchor positioning center it below the top chrome. */
+  top: calc(var(--safe-area-top, 0px) + 56px);
+  left: 50%;
+  max-width: min(520px, calc(100vw - 24px));
+  translate: -50% 0;
+  transition:
+    opacity var(--duration-normal) var(--ease-out),
+    translate var(--duration-normal) var(--ease-out);
 }
 
-.shell--nav-collapsed .refresh-notice {
-  left: calc(var(--shell-nav-width) + 12px);
-  width: 280px;
+@supports (anchor-name: --a) {
+  .refresh-notice {
+    top: auto;
+    bottom: calc(anchor(--openclaw-refresh-composer top, 14px) + 10px);
+    /* Without a composer, center on the content column like top-center toasts. */
+    left: anchor(
+      --openclaw-refresh-composer center,
+      calc(
+        var(--shell-nav-width, 0px) +
+          (100vw - var(--shell-nav-width, 0px) - var(--shell-dock-reserve-right, 0px)) / 2
+      )
+    );
+  }
+}
+
+@starting-style {
+  .refresh-notice {
+    opacity: 0;
+  }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  @starting-style {
+    .refresh-notice {
+      translate: -50% 8px;
+    }
+  }
 }
 
 .refresh-notice__surface {
-  display: grid;
-  grid-template-columns: 1fr auto;
+  display: flex;
   align-items: center;
-  gap: 2px 8px;
-  width: 100%;
-  padding: 8px 12px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
-  background: var(--bg-elevated);
+  gap: 8px;
+  max-width: 100%;
+  min-height: 44px;
+  padding: 8px 8px 8px 14px;
+  border: 1px solid color-mix(in srgb, var(--text-strong) 16%, transparent);
+  border-radius: min(28px, calc(28px * var(--openclaw-corner-radius-scale)));
+  background:
+    linear-gradient(var(--chat-composer-surface), var(--chat-composer-surface)),
+    var(--bg-content, var(--bg));
+  box-shadow: 0 4px 16px rgb(0 0 0 / 5%);
+  color: var(--text-strong);
+  cursor: var(--cursor-action);
+  font-family: var(--font-body);
+  font-size: calc(14px * var(--control-ui-text-scale));
+  font-weight: 500;
+  line-height: calc(20px * var(--control-ui-text-scale));
   text-align: start;
 }
 
-.refresh-notice__detail {
-  grid-area: 2 / 1 / 3 / 3;
+:root[data-theme-mode="dark"] .refresh-notice__surface {
+  border-color: color-mix(in srgb, var(--text-strong) 9%, transparent);
+}
+
+:root[data-theme-mode="light"] .refresh-notice__surface {
+  border-color: transparent;
+  box-shadow:
+    0 0 0 1px rgb(0 0 0 / 6%),
+    0 1px 2px -1px rgb(0 0 0 / 6%),
+    0 2px 4px rgb(0 0 0 / 4%);
+}
+
+.refresh-notice__surface:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--text-strong) 28%, transparent);
+  outline-offset: 2px;
+}
+
+.refresh-notice__surface:disabled {
+  padding-inline-end: 16px;
+  cursor: wait;
+}
+
+.refresh-notice__icon {
+  width: 16px;
+  height: 16px;
+  color: var(--muted);
+}
+
+.refresh-notice__icon svg {
+  stroke-width: 1.8px;
+}
+
+.refresh-notice__spinner {
+  width: 14px;
+  height: 14px;
+}
+
+.refresh-notice__label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .refresh-notice__action {
-  grid-area: 1 / 2;
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  min-height: 28px;
+  margin-inline-start: 8px;
+  padding: 0 12px;
+  border-radius: calc(14px * var(--openclaw-corner-radius-scale));
+  background: var(--accent);
+  color: var(--accent-foreground);
+  font-size: calc(13px * var(--control-ui-text-scale));
+  font-weight: 600;
+  line-height: calc(18px * var(--control-ui-text-scale));
+  white-space: nowrap;
+  transition: background-color 120ms ease;
 }
 
-.refresh-notice__surface--warn,
-.refresh-notice__surface--warn > * {
-  border-color: var(--warn);
+.refresh-notice__surface:hover:not(:disabled) .refresh-notice__action {
+  background: var(--accent-hover);
+}
+
+/* An unreachable server is a warning, not a second accent. */
+.refresh-notice__surface--warn .refresh-notice__icon {
   color: var(--warn);
 }
 
-.shell--mobile-nav .refresh-notice {
-  top: calc(var(--safe-area-top) + 62px);
-  bottom: auto;
-  left: 50%;
-  width: max-content;
-  translate: -50%;
+/* Keep the last turn and the jump-to-latest control clear of the pill. */
+.content--refresh-notice .chat {
+  --chat-scroll-to-bottom-gap: 62px;
+}
 
-  & .refresh-notice__surface {
-    display: flex;
-    min-height: 44px;
-    padding: 5px 5px 5px 16px;
-    border-radius: 99px;
-  }
-
-  & .refresh-notice__detail + span {
-    display: none;
-  }
+.content--refresh-notice .chat-thread-viewport,
+.content--refresh-notice .chat-thread {
+  --chat-thread-padding-bottom: calc(56px + var(--chat-composer-overlap, 0px));
 }

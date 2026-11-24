@@ -6,15 +6,15 @@ import {
   normalizeMessageClientSources,
   readMessageClientSources,
 } from "../../chat/message-client-source.js";
+import * as origin from "../../gateway/operator-run-recovery-source.codec.js";
 import { MAX_PAYLOAD_BYTES } from "../../gateway/payload-limits.js";
 import {
   getAgentEventLifecycleGeneration,
   assertAgentRunLifecycleGenerationCurrent,
 } from "../../infra/agent-events.js";
 import { observeDiagnosticsTimelinePhases } from "../../infra/diagnostics-timeline.js";
-import { throwIfSettledRejected } from "../../infra/error-graph-internal.js";
 import { hasSqliteWorkerOutcomeUnknown } from "../../infra/sqlite-worker-contract.js";
-import type { PersistedUserTurnMessage } from "../../sessions/user-turn-transcript.types.js";
+import type { PersistedUserTurnMessage } from "../../sessions/user-turn-input.types.js";
 import { rethrowIncognitoSessionError } from "../../state/incognito-session-error.js";
 import { runOpenClawAgentWriteAdmission } from "../../state/openclaw-agent-write-admission.js";
 import {
@@ -54,17 +54,22 @@ import {
   type SessionPendingInputAuthority,
 } from "./session-pending-input-authority.js";
 import { SessionPendingInputCustodyError } from "./session-pending-input-custody-error.js";
+import type { SessionPendingInputEndCause } from "./session-pending-input-end-cause.types.js";
 import {
   bindPendingInputMentionInvitation,
   finishPendingInputSources,
+  releasePendingInputSources,
+  relinquishPendingInputSources,
+  settlePendingInputReceipts,
 } from "./session-pending-input-live-owner.js";
 import type { PendingInputCustodyGrant } from "./session-pending-input-operations.types.js";
 import type { SessionPendingInputOwner } from "./session-pending-input-owner.types.js";
 import type { SessionPendingInputReceipt } from "./session-pending-input-receipt.types.js";
 import { preparePendingInputStore, type PendingInputScope } from "./session-pending-input-store.js";
 import {
+  consumedPendingInputReceipt,
   isFinalInputCompletion,
-  isSessionPendingInputRetiredByUser,
+  isRetryableSessionPendingInputEndCause,
   parseSessionPendingInputMessage,
 } from "./session-pending-input-value.js";
 import type { PreparedSessionMentionInvitation } from "./session-sharing-authority.types.js";
@@ -136,6 +141,8 @@ function ownerReceipt(
       ),
     assertLifetimeCurrent: () => assertSessionPendingInputLifetimeCurrent(owner),
     finish: owner.finish,
+    release: owner.release,
+    relinquish: owner.relinquish,
   };
   receiptOwners.set(receipt, owner);
   return receipt;
@@ -201,7 +208,7 @@ export function bindSessionPendingInputSources(
     throw new Error("Collected input exceeds the Gateway payload limit");
   }
   const aggregateInputId = randomUUID();
-  const aggregate = ownerReceipt({
+  const aggregateOwner: SessionPendingInputOwner = {
     ...first,
     // Source owners release their admission closures when settlement completes.
     assertCurrent: assertSessionPendingInputLifetimeCurrent.bind(undefined, first),
@@ -214,11 +221,16 @@ export function bindSessionPendingInputSources(
     messageJson,
     sources,
     finish: finishPendingInputSources.bind(undefined, sources),
-  });
-  aggregate.settled = async () => {
-    const results = await Promise.allSettled(receipts.map(async (receipt) => receipt.settled?.()));
-    throwIfSettledRejected(results, "Failed to settle collected input custody");
+    release: releasePendingInputSources.bind(undefined, sources),
+    relinquish: relinquishPendingInputSources.bind(undefined, sources),
   };
+  // A timer's owner must not retain this scope's original settlement receipts.
+  aggregateOwner.assertReadCurrent = assertSessionPendingInputLifetimeCurrent.bind(
+    undefined,
+    aggregateOwner,
+  );
+  const aggregate = ownerReceipt(aggregateOwner);
+  aggregate.settled = () => settlePendingInputReceipts(receipts);
   return aggregate;
 }
 
@@ -226,10 +238,12 @@ type PendingInputStageOptions = PendingInputRequest & {
   lifecycleAdmission?: SessionInputLifecycleAdmission;
   onCommitted?: (receipt: SessionPendingInputReceipt) => void;
   authority?: SessionPendingInputAuthority;
-  recoverySource?: SessionPendingInputOwner["recoverySource"];
+  recoverySource?: origin.QueuedOperatorRecoverySource;
   trackCompletion?: boolean;
   /** A current explicit operation may retry its cancelled, unconsumed input. */
   retryCancelled?: boolean;
+  /** Exact queued row authorized by its relinquished recorder or current startup replay. */
+  reattachInputId?: string;
   /**
    * Durable channel redelivery mints a new run for the same source turn. It may
    * reopen only its own byte-identical attempt that was cancelled before consumption.
@@ -325,9 +339,7 @@ async function stagePreparedPendingInput(
     return guard();
   };
   const assertCurrent = () =>
-    options.authority
-      ? options.authority.withCurrent(() => options.assertCurrent())
-      : options.assertCurrent();
+    options.authority?.withCurrent(options.assertCurrent) ?? options.assertCurrent();
   try {
     const identity = {
       sessionKey: store.sessionKey,
@@ -354,22 +366,18 @@ async function stagePreparedPendingInput(
       return undefined;
     }
     const replayRequest = resolvePendingInputReplayRequest(preparedRequest, previous ?? existing);
-    const { message, stableMessage } = replayRequest;
+    const { message, stableMessage, owed } = replayRequest;
     let requestHash = replayRequest.requestHash;
     if (previous && (previous.request_hash !== requestHash || previous.run_id !== options.runId)) {
       throw new Error("Input completion idempotency key conflicts with the accepted input");
     }
     if (previous && isFinalInputCompletion(previous.outcome)) {
-      return {
-        state: "consumed",
-        inputId: identity.idempotencyKey,
+      return consumedPendingInputReceipt(
+        identity.idempotencyKey,
         message,
-        completion: previous.outcome,
-        run: () => {
-          throw new Error("Input processing has already completed");
-        },
-        finish: () => {},
-      };
+        "Input processing has already completed",
+        previous.outcome,
+      );
     }
     const assertUnowned = (row = existing) => {
       if (row && hasRegisteredSessionPendingInputOwner(store.workerDatabasePath, row)) {
@@ -378,43 +386,43 @@ async function stagePreparedPendingInput(
         );
       }
     };
-    // A channel retry after a pre-consumption failure carries a fresh run ID. Without
-    // reopening that dead attempt, every redelivery conflicts until ingress gives up.
     const reclaimsCancelledSourceTurn =
       options.reclaimCancelledSourceTurn === true &&
       !previous &&
       existing?.state === "cancelled" &&
+      isRetryableSessionPendingInputEndCause(existing.end_cause) &&
       existing.consumed_event_id == null &&
-      existing.request_hash === requestHash &&
-      !isSessionPendingInputRetiredByUser(existing.message_json);
+      existing.request_hash === requestHash;
+    // Explicit retries are caller-authorized; a recorded user Stop still wins.
     const reopensCancelled =
       existing?.state === "cancelled" &&
-      (options.retryCancelled === true || reclaimsCancelledSourceTurn);
+      ((options.retryCancelled === true && existing.end_cause !== "user-stop") ||
+        reclaimsCancelledSourceTurn);
     if (existing) {
       if (
         !matchesSessionPendingInputRequest(existing, stableMessage, requestHash) ||
-        (existing.run_id !== options.runId && !reclaimsCancelledSourceTurn)
+        (existing.run_id !== options.runId && !reclaimsCancelledSourceTurn && !owed)
       ) {
         throw new Error("Pending input idempotency key conflicts with the accepted input");
       }
       if (existing.consumed_event_id != null) {
-        return {
-          state: "consumed",
-          inputId: existing.input_id,
-          message: parseSessionPendingInputMessage(existing.message_json),
-          run: () => {
-            throw new Error("Pending input has already been consumed");
-          },
-          finish: () => {},
-        };
+        return consumedPendingInputReceipt(
+          existing.input_id,
+          parseSessionPendingInputMessage(existing.message_json),
+          "Pending input has already been consumed",
+        );
       }
       assertUnowned();
+      // A queued row alone does not authorize retry after failed terminal settlement.
+      // The original recorder or startup replay must retain this exact input ID.
+      const canRetry =
+        options.trackCompletion ||
+        owed ||
+        (existing.state === "queued" && options.reattachInputId === existing.input_id);
       if (
-        (!options.requestFingerprint && !options.trackCompletion && !reclaimsCancelledSourceTurn) ||
+        (!options.requestFingerprint && !canRetry && !reclaimsCancelledSourceTurn) ||
         (existing.state !== "queued" && !reopensCancelled) ||
-        (existing.lifecycle_generation === lifecycleGeneration &&
-          !options.trackCompletion &&
-          !reopensCancelled)
+        (existing.lifecycle_generation === lifecycleGeneration && !canRetry && !reopensCancelled)
       ) {
         throw new Error("Pending input ownership ended; submit a new turn to continue");
       }
@@ -467,7 +475,10 @@ async function stagePreparedPendingInput(
           return completion;
         }
       : undefined;
-    const finish = (disposition: "cancelled" | "interrupted", userInitiated?: true) => {
+    const settle = (terminal?: {
+      disposition: "cancelled" | "interrupted";
+      endCause: SessionPendingInputEndCause;
+    }) => {
       if (finished) {
         return;
       }
@@ -477,16 +488,13 @@ async function stagePreparedPendingInput(
       }
       // Prompt authority ends now; history custody lasts through terminal settlement.
       const settleDisposition = async () => {
-        if (owner && !owner.consumed && !owner.preserveQueuedForRestart) {
+        if (terminal && owner && !owner.consumed && !owner.preserveQueuedForRestart) {
           const receipt = await store.mutate(
             {
               ...settlementIdentity(),
               kind: "finish",
               inputId: owner.inputId,
-              disposition,
-              ...(disposition === "cancelled" && userInitiated
-                ? { cancelledByUser: true as const }
-                : {}),
+              ...terminal,
             },
             () => assertRegisteredSessionPendingInputOwner(owner!),
           );
@@ -521,6 +529,14 @@ async function stagePreparedPendingInput(
         ),
       );
     };
+    const finish: SessionPendingInputOwner["finish"] = (disposition, endCause) =>
+      settle({ disposition, endCause });
+    const release = () => {
+      if (!owner?.consumed) {
+        throw new Error("Cannot release pending input before consumption");
+      }
+      settle();
+    };
     store.bindCustody(() => {
       finished = true;
       if (owner) {
@@ -532,8 +548,6 @@ async function stagePreparedPendingInput(
       settled: store.settled,
     };
     const ownerScope = {
-      runId: options.runId,
-      recoverySource: options.recoverySource,
       sessionActor: scope.sessionActor,
       agentId: scope.agentId,
       databaseAgentId: store.databaseAgentId,
@@ -545,26 +559,22 @@ async function stagePreparedPendingInput(
       lifecycleGeneration,
       config: options.config,
       authority: options.authority,
+      finish,
+      release,
+      relinquish: () => settle(),
     };
     if (committed) {
-      if (options.trackCompletion) {
+      // A matched receipt already proves the raw request. Its committed input owns
+      // the once-only hook decision and JSON projection; only retired receipts need reconstruction.
+      if (options.trackCompletion && !previous && !existing) {
         const committedHash = resolveCommittedPendingInputRequestHash(
-          {
-            ...options,
-            message,
-            replaySourceSessionKeys:
-              previous || existing ? undefined : options.replaySourceSessionKeys,
-          },
+          { ...options, message },
           committed.message,
         );
         if (!committedHash) {
           return undefined;
         }
-        // A retained receipt owns the raw request hash, even when JSON storage
-        // normalized its message. Reconstruct identity only after receipt retirement.
-        if (!previous && !existing) {
-          requestHash = committedHash;
-        }
+        requestHash = committedHash;
         await assertCurrent();
       }
       owner = {
@@ -576,8 +586,11 @@ async function stagePreparedPendingInput(
           store.assertCurrent();
           options.assertCurrent();
         },
+        async assertReadCurrent() {
+          await store.assertReadCurrent();
+          options.assertCurrent();
+        },
         consumed: true,
-        finish,
       };
       registerSessionPendingInputOwner(owner);
       retained = true;
@@ -599,7 +612,7 @@ async function stagePreparedPendingInput(
     }
     phase.mark("persist.stage.sourceAuthority");
     return await runWithSessionSourceScope(
-      existing ? undefined : options.assertFreshInputCurrent,
+      existing && !owed ? undefined : options.assertFreshInputCurrent,
       async () => {
         phase.mark("persist.stage.message");
         const prepareMessage = () => {
@@ -607,18 +620,21 @@ async function stagePreparedPendingInput(
           options.assertFreshInputCurrent?.();
           return options.prepareMessageAfterIdempotencyCheck!(message);
         };
-        const prepared = existing
-          ? parseSessionPendingInputMessage(existing.message_json)
-          : options.prepareMessageAfterIdempotencyCheck
-            ? options.authority
-              ? await options.authority.withCurrent(prepareMessage)
-              : prepareMessage()
-            : message;
+        // An adopted owed row takes the turn's bytes: a shared turn carries every result it answers.
+        const prepared =
+          existing && !owed
+            ? parseSessionPendingInputMessage(existing.message_json)
+            : options.prepareMessageAfterIdempotencyCheck
+              ? options.authority
+                ? await options.authority.withCurrent(prepareMessage)
+                : prepareMessage()
+              : message;
         if (!prepared) {
           return undefined;
         }
         const messageJson =
-          existing?.message_json ?? JSON.stringify(sanitizeTranscriptMessageForStorage(prepared));
+          (owed ? undefined : existing?.message_json) ??
+          JSON.stringify(sanitizeTranscriptMessageForStorage(prepared));
         if (Buffer.byteLength(messageJson, "utf8") > MAX_PAYLOAD_BYTES) {
           throw new Error("Approved pending input exceeds the Gateway payload limit");
         }
@@ -633,6 +649,11 @@ async function stagePreparedPendingInput(
             trackCompletion: options.trackCompletion === true,
             inputId,
             messageJson,
+            originSourceJson:
+              existing?.origin_source_json ??
+              (options.recoverySource && options.recoverySource.kind !== "unavailable"
+                ? JSON.stringify(origin.decodeQueuedOperatorRecoverySource(options.recoverySource))
+                : undefined),
           },
           (_stage, facts) => {
             assertPrepared(facts, () => {
@@ -661,8 +682,11 @@ async function stagePreparedPendingInput(
                 store.assertCurrent();
                 assertAdmittedCurrent();
               },
+              async assertReadCurrent() {
+                await store.assertReadCurrent();
+                assertAdmittedCurrent();
+              },
               ...(existing ? { dedupeRetryAvailable: true as const } : {}),
-              finish,
             };
             // COMMIT already accepted this custody. Preserve it before fallible publication.
             registerSessionPendingInputOwner(owner);
@@ -683,7 +707,6 @@ async function stagePreparedPendingInput(
             "Pending input did not publish its committed owner",
           );
         }
-        retained = true;
         return Object.assign(ownerReceipt(owner), completionMethods);
       },
       // Committed input now belongs to the receiver; the original source can retire.

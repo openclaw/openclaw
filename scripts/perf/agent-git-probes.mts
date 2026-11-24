@@ -2,6 +2,7 @@ import { spawnSync } from "node:child_process";
 // Synthetic Git-only benchmark; run: node --import ./scripts/tsx.mjs scripts/perf/agent-git-probes.mts --scratch-parent <directory>
 // Historical blobs: add --history-blobs --commits 600 --baseline-shim <saved-shim>;
 // --pickaxe selects range-wide content search; --history-repository uses an existing complete Git fixture.
+// --bounded-history exercises the unscoped pickaxe budget with fixed-size historical blobs.
 // --aa-only/--ab-only split controls from comparisons; --warm hydrates before measurement.
 import { createHash } from "node:crypto";
 import {
@@ -19,7 +20,7 @@ import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
-import { AGENT_GIT_SHIM } from "../../src/infra/agent-git-shim.ts";
+import { buildAgentGitShimInstallCommand } from "../../src/infra/agent-git-shim-install.ts";
 import { parseStrictIntegerOption } from "../lib/strict-integer-option.ts";
 
 const { values } = parseArgs({
@@ -31,6 +32,7 @@ const { values } = parseArgs({
     "shared-shallow": { type: "boolean" },
     "history-blobs": { type: "boolean" },
     pickaxe: { type: "boolean" },
+    "bounded-history": { type: "boolean" },
     "history-repository": { type: "string" },
     "aa-only": { type: "boolean" },
     "ab-only": { type: "boolean" },
@@ -48,7 +50,8 @@ const files = integer("files", 62_000);
 const commits = integer("commits", 20_000);
 const samples = integer("samples", 5);
 const sharedShallow = values["shared-shallow"] === true;
-const pickaxe = values.pickaxe === true;
+const boundedHistory = values["bounded-history"] === true;
+const pickaxe = values.pickaxe === true || boundedHistory;
 const historyBlobs = values["history-blobs"] === true || pickaxe;
 const historyRepository = values["history-repository"];
 if (historyRepository && !pickaxe) {
@@ -122,7 +125,13 @@ try {
       : `Synthetic fixture: ${files} files, ${commits} history commits; ${root}`,
   );
   mkdirSync(bin);
-  writeFileSync(path.join(bin, "git"), AGENT_GIT_SHIM, { mode: 0o755 });
+  const installed = spawnSync("/bin/sh", ["-c", buildAgentGitShimInstallCommand(bin)], {
+    env,
+    encoding: "utf8",
+  });
+  if (installed.status !== 0) {
+    throw new Error(installed.stderr);
+  }
   if (sharedShallow || historyBlobs) {
     mkdirSync(baselineBin);
     writeFileSync(path.join(baselineBin, "git"), readFileSync(baselineShimPath), { mode: 0o755 });
@@ -139,7 +148,11 @@ try {
     }
     input += "\n";
     for (let index = 0; index < commits; index++) {
-      history = historyBlobs ? `${history}history ${index}\n` : `history ${index}\n`;
+      history = boundedHistory
+        ? `selectThemeSettings ${index}\n`.padEnd(4096, "x") + "\n"
+        : historyBlobs
+          ? `${history}history ${index}\n`
+          : `history ${index}\n`;
       const text = history;
       input += `commit refs/heads/main\ncommitter Fixture <fixture@example.invalid> ${1700000001 + index} +0000\ndata 7\nhistory\nM 100644 inline history.txt\ndata ${text.length}\n${text}\n`;
     }
@@ -332,12 +345,16 @@ try {
   };
   if (historyBlobs) {
     report(
-      "Rule: identical output and object counts; many promisor packs become bounded batches; lower wall/CPU without >20% regression. A/A controls use the baseline shim twice.",
+      boundedHistory
+        ? "Rule: oversized cold searches refuse with guidance and zero new packs/transports; hydrated searches preserve output. A/A controls use the baseline shim twice."
+        : "Rule: identical output and object counts; many promisor packs become bounded batches; lower wall/CPU without >20% regression. A/A controls use the baseline shim twice.",
     );
     for (const command of pickaxe ? ["pickaxe"] : ["log", "blame"]) {
       const args =
         command === "pickaxe"
-          ? ["log", "--oneline", "-S", historyRepository ? "gateway" : "history 100", "HEAD"]
+          ? boundedHistory
+            ? ["log", "--oneline", "-S", "selectThemeSettings"]
+            : ["log", "--oneline", "-S", historyRepository ? "gateway" : "history 100", "HEAD"]
           : command === "log"
             ? ["log", "-p", "--format=%H", "HEAD", "--", "history.txt"]
             : ["blame", "--line-porcelain", "HEAD", "--", "history.txt"];
@@ -352,11 +369,18 @@ try {
               `${command}-${control ? "AA" : "AB"}-${candidate ? "B" : "A"}`,
               candidate && !control,
               args,
-              0,
+              boundedHistory && candidate && !control && !values.warm ? 2 : 0,
             );
           const first = runSample(index % 2 === 1);
           const second = runSample(index % 2 === 0);
-          if (first.outputSha256 !== second.outputSha256) {
+          if (boundedHistory && !control && !values.warm) {
+            const guarded = index % 2 === 1 ? first : second;
+            if (guarded.newPacks || guarded.transports || !guarded.hint) {
+              throw new Error(
+                "Oversized content search must stop without fetching and give guidance",
+              );
+            }
+          } else if (first.outputSha256 !== second.outputSha256) {
             throw new Error(`${command}: baseline and candidate output differs`);
           }
         }
@@ -491,7 +515,9 @@ try {
           sharedShallow || historyBlobs
             ? createHash("sha256").update(readFileSync(baselineShimPath)).digest("hex")
             : undefined,
-        shimSha256: createHash("sha256").update(AGENT_GIT_SHIM).digest("hex"),
+        shimSha256: createHash("sha256")
+          .update(readFileSync(path.join(bin, "git")))
+          .digest("hex"),
         platform: process.platform,
         cpuScope:
           process.platform === "darwin"

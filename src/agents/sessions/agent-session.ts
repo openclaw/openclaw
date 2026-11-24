@@ -2,7 +2,7 @@ import { basename, dirname } from "node:path";
 import { isResponsesOutputLimitToolCallError } from "@openclaw/ai/diagnostics";
 import { isContextOverflow } from "@openclaw/ai/internal/runtime";
 import { setInternalBeforeRequest } from "../../../packages/agent-core/src/internal-hooks.js";
-import type { AssistantMessage } from "../../llm/types.js";
+import type { AssistantHistoryMessage } from "../../llm/types.js";
 import { isRetryableAssistantError } from "../../llm/utils/retry.js";
 import { sleep } from "../../utils/sleep.js";
 import { classifyRateLimitWindow } from "../failover/retry-evidence.js";
@@ -339,7 +339,7 @@ export class AgentSession extends AgentSessionCompaction {
    * Check if an error is retryable (overloaded, rate limit, server errors).
    * Context overflow errors are NOT retryable (handled by compaction instead).
    */
-  protected isRetryableError(message: AssistantMessage): boolean {
+  protected isRetryableError(message: AssistantHistoryMessage): boolean {
     if (message.stopReason !== "error" || !message.errorMessage) {
       return false;
     }
@@ -356,7 +356,7 @@ export class AgentSession extends AgentSessionCompaction {
    * Prepare a retryable error for continuation with exponential backoff.
    * @returns true if the caller should continue the agent, false otherwise
    */
-  protected async prepareRetry(message: AssistantMessage): Promise<boolean> {
+  protected async prepareRetry(message: AssistantHistoryMessage): Promise<boolean> {
     const settings = this.settingsManager.getRetrySettings();
     if (!settings.enabled) {
       return false;

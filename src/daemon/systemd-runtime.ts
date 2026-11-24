@@ -183,8 +183,10 @@ export async function readSystemdServiceRuntime(
     state: entries.activestate || undefined,
     subState: entries.substate || undefined,
     pid: parseStrictPositiveInteger(entries.mainpid),
-    lastExitStatus: parseStrictInteger(entries.execmainstatus),
-    lastExitReason: entries.execmaincode || undefined,
+    // ExecMainCode stays 0 until the current main process exits; 0/0 is not an exit.
+    lastExitStatus:
+      entries.execmaincode === "0" ? undefined : parseStrictInteger(entries.execmainstatus),
+    lastExitReason: entries.execmaincode === "0" ? undefined : entries.execmaincode || undefined,
     systemd: {
       scope: installed?.scope ?? "user",
       transport: installed?.scope === "system" ? undefined : await readSystemdUserTransport(env),
