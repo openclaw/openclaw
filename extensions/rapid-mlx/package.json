@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/rapid-mlx-provider",
-  "version": "2026.11.3",
+  "version": "2026.11.7",
   "private": true,
   "description": "OpenClaw Rapid-MLX provider plugin",
   "type": "module",
