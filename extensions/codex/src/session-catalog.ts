@@ -348,7 +348,9 @@ export function registerCodexSessionCatalog(params: {
         agentId,
       ),
     list: async ({ exportSource, ...query }) => {
-      if (!exportSource) return runCatalogListInline(createListOperation(query));
+      if (!exportSource) {
+        return runCatalogListInline(createListOperation(query));
+      }
       const { control, source } = await bindLocalRequest({
         ...exportSource,
         agentId: query.agentId,
@@ -358,8 +360,9 @@ export function registerCodexSessionCatalog(params: {
         !exportSource.sourceHomeId ||
         !permitsLocalCatalogExport(source) ||
         !query.hostIds?.includes(source.hostId)
-      )
+      ) {
         return [];
+      }
       source.assertCurrent();
       query.signal?.throwIfAborted();
       // The existing native action guard validates the managed marker, exact rollout
@@ -369,7 +372,9 @@ export function registerCodexSessionCatalog(params: {
       query.signal?.throwIfAborted();
       const prepared = projectCodexCatalogNativeThread(thread, sanitizeTerminalText);
       const session = toCatalogSession(prepared, prepared.preview);
-      if (!session || session.threadId !== exportSource.threadId) return [];
+      if (!session || session.threadId !== exportSource.threadId) {
+        return [];
+      }
       const mapHost = catalogHostMapper(false, [source], false);
       return [
         mapHost({

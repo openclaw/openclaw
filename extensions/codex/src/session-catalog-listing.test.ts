@@ -603,7 +603,9 @@ it.each([
             },
           }),
         ).rejects.toThrow("native membership changed");
-      } else expect(exact).toEqual([]);
+      } else {
+        expect(exact).toEqual([]);
+      }
       expect(forRequest.mock.calls.every(([agentId]) => agentId === "beta")).toBe(true);
       expect(forRequest.mock.calls.every(([, source]) => source?.agentDir === betaAgentDir)).toBe(
         true,
