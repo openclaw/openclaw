@@ -18,6 +18,832 @@ const enChatToolOperations = {
       searchedTools: "Searched tools",
       searchTools: "Search tools",
       operationLabels: {
+        message: {
+          send: { action: "Send message", running: "Sending message", done: "Send message" },
+          broadcast: {
+            action: "Broadcast message",
+            running: "Broadcasting message",
+            done: "Broadcast message",
+          },
+          poll: { action: "Create poll", running: "Creating poll", done: "Created poll" },
+          "poll-vote": { action: "Vote in poll", running: "Voting in poll", done: "Voted in poll" },
+          react: {
+            action: "React to message",
+            running: "Reacting to message",
+            done: "Reacted to message",
+          },
+          reactions: {
+            action: "Read reactions",
+            running: "Reading reactions",
+            done: "Read reactions",
+          },
+          read: { action: "Read messages", running: "Reading messages", done: "Read messages" },
+          edit: { action: "Edit message", running: "Editing message", done: "Edited message" },
+          unsend: {
+            action: "Unsend message",
+            running: "Unsending message",
+            done: "Unsent message",
+          },
+          reply: {
+            action: "Reply to message",
+            running: "Replying to message",
+            done: "Reply to message",
+          },
+          sendWithEffect: {
+            action: "Send message with effect",
+            running: "Sending message with effect",
+            done: "Send message with effect",
+          },
+          renameGroup: { action: "Rename group", running: "Renaming group", done: "Renamed group" },
+          setGroupIcon: {
+            action: "Set group icon",
+            running: "Setting group icon",
+            done: "Set group icon",
+          },
+          addParticipant: {
+            action: "Add participant",
+            running: "Adding participant",
+            done: "Added participant",
+          },
+          removeParticipant: {
+            action: "Remove participant",
+            running: "Removing participant",
+            done: "Removed participant",
+          },
+          leaveGroup: { action: "Leave group", running: "Leaving group", done: "Left group" },
+          sendAttachment: {
+            action: "Send attachment",
+            running: "Sending attachment",
+            done: "Sent attachment",
+          },
+          delete: {
+            action: "Delete message",
+            running: "Deleting message",
+            done: "Deleted message",
+          },
+          pin: { action: "Pin message", running: "Pinning message", done: "Pinned message" },
+          unpin: {
+            action: "Unpin message",
+            running: "Unpinning message",
+            done: "Unpinned message",
+          },
+          "list-pins": {
+            action: "List pinned messages",
+            running: "Listing pinned messages",
+            done: "Listed pinned messages",
+          },
+          permissions: {
+            action: "Read conversation permissions",
+            running: "Reading conversation permissions",
+            done: "Read conversation permissions",
+          },
+          "thread-create": {
+            action: "Create thread",
+            running: "Creating thread",
+            done: "Created thread",
+          },
+          "thread-list": {
+            action: "List threads",
+            running: "Listing threads",
+            done: "Listed threads",
+          },
+          "thread-reply": {
+            action: "Reply to thread",
+            running: "Replying to thread",
+            done: "Replyed to thread",
+          },
+          search: {
+            action: "Search messages",
+            running: "Searching messages",
+            done: "Searched messages",
+          },
+          sticker: { action: "Send sticker", running: "Sending sticker", done: "Sent sticker" },
+          "sticker-search": {
+            action: "Search stickers",
+            running: "Searching stickers",
+            done: "Searched stickers",
+          },
+          "member-info": {
+            action: "Read member information",
+            running: "Reading member information",
+            done: "Read member information",
+          },
+          "role-info": {
+            action: "Read role information",
+            running: "Reading role information",
+            done: "Read role information",
+          },
+          "emoji-list": { action: "List emoji", running: "Listing emoji", done: "Listed emoji" },
+          "emoji-upload": {
+            action: "Upload emoji",
+            running: "Uploading emoji",
+            done: "Uploaded emoji",
+          },
+          "sticker-upload": {
+            action: "Upload sticker",
+            running: "Uploading sticker",
+            done: "Uploaded sticker",
+          },
+          "role-add": { action: "Add role", running: "Adding role", done: "Added role" },
+          "role-remove": { action: "Remove role", running: "Removing role", done: "Removed role" },
+          "channel-info": {
+            action: "Read channel information",
+            running: "Reading channel information",
+            done: "Read channel information",
+          },
+          "channel-list": {
+            action: "List channels",
+            running: "Listing channels",
+            done: "Listed channels",
+          },
+          "channel-create": {
+            action: "Create channel",
+            running: "Creating channel",
+            done: "Created channel",
+          },
+          "conversation-open": {
+            action: "Open conversation",
+            running: "Opening conversation",
+            done: "Opened conversation",
+          },
+          "channel-edit": {
+            action: "Edit channel",
+            running: "Editing channel",
+            done: "Edited channel",
+          },
+          "channel-delete": {
+            action: "Delete channel",
+            running: "Deleting channel",
+            done: "Deleted channel",
+          },
+          "channel-move": {
+            action: "Move channel",
+            running: "Moving channel",
+            done: "Moved channel",
+          },
+          "category-create": {
+            action: "Create category",
+            running: "Creating category",
+            done: "Created category",
+          },
+          "category-edit": {
+            action: "Edit category",
+            running: "Editing category",
+            done: "Edited category",
+          },
+          "category-delete": {
+            action: "Delete category",
+            running: "Deleting category",
+            done: "Deleted category",
+          },
+          "topic-create": {
+            action: "Create topic",
+            running: "Creating topic",
+            done: "Created topic",
+          },
+          "topic-edit": { action: "Edit topic", running: "Editing topic", done: "Edited topic" },
+          "voice-status": {
+            action: "Check voice status",
+            running: "Checking voice status",
+            done: "Checked voice status",
+          },
+          "event-list": { action: "List events", running: "Listing events", done: "Listed events" },
+          "event-create": {
+            action: "Create event",
+            running: "Creating event",
+            done: "Created event",
+          },
+          timeout: {
+            action: "Time out member",
+            running: "Timing out member",
+            done: "Timed out member",
+          },
+          kick: { action: "Remove member", running: "Removing member", done: "Removed member" },
+          ban: { action: "Ban member", running: "Banning member", done: "Banned member" },
+          "set-profile": { action: "Set profile", running: "Setting profile", done: "Set profile" },
+          "set-presence": {
+            action: "Set presence",
+            running: "Setting presence",
+            done: "Set presence",
+          },
+          "download-file": {
+            action: "Download message file",
+            running: "Downloading message file",
+            done: "Downloaded message file",
+          },
+          "upload-file": {
+            action: "Upload message file",
+            running: "Uploading message file",
+            done: "Uploaded message file",
+          },
+        },
+        discussion: {
+          default: {
+            action: "Discuss question",
+            running: "Discussing question",
+            done: "Discussed question",
+          },
+        },
+        facetime_call: {
+          get_status: {
+            action: "Check FaceTime call",
+            running: "Checking FaceTime call",
+            done: "Checked FaceTime call",
+          },
+          check_readiness: {
+            action: "Check FaceTime setup",
+            running: "Checking FaceTime setup",
+            done: "Checked FaceTime setup",
+          },
+          initiate_call: {
+            action: "Request FaceTime call",
+            running: "Requesting FaceTime call",
+            done: "Requested FaceTime call",
+          },
+          end_call: {
+            action: "End FaceTime call",
+            running: "Ending FaceTime call",
+            done: "Ended FaceTime call",
+          },
+        },
+        feishu_app_scopes: {
+          default: {
+            action: "Read Feishu app permissions",
+            running: "Reading Feishu app permissions",
+            done: "Read Feishu app permissions",
+          },
+        },
+        feishu_bitable_create_app: {
+          default: {
+            action: "Create Feishu table app",
+            running: "Creating Feishu table app",
+            done: "Created Feishu table app",
+          },
+        },
+        feishu_bitable_create_field: {
+          default: {
+            action: "Create Feishu table field",
+            running: "Creating Feishu table field",
+            done: "Created Feishu table field",
+          },
+        },
+        feishu_bitable_create_record: {
+          default: {
+            action: "Create Feishu table record",
+            running: "Creating Feishu table record",
+            done: "Created Feishu table record",
+          },
+        },
+        feishu_bitable_get_meta: {
+          default: {
+            action: "Read Feishu table metadata",
+            running: "Reading Feishu table metadata",
+            done: "Read Feishu table metadata",
+          },
+        },
+        feishu_bitable_get_record: {
+          default: {
+            action: "Read Feishu table record",
+            running: "Reading Feishu table record",
+            done: "Read Feishu table record",
+          },
+        },
+        feishu_bitable_list_fields: {
+          default: {
+            action: "List Feishu table fields",
+            running: "Listing Feishu table fields",
+            done: "Listed Feishu table fields",
+          },
+        },
+        feishu_bitable_list_records: {
+          default: {
+            action: "List Feishu table records",
+            running: "Listing Feishu table records",
+            done: "Listed Feishu table records",
+          },
+        },
+        feishu_bitable_update_record: {
+          default: {
+            action: "Update Feishu table record",
+            running: "Updating Feishu table record",
+            done: "Updated Feishu table record",
+          },
+        },
+        feishu_chat: {
+          members: {
+            action: "List Feishu chat members",
+            running: "Listing Feishu chat members",
+            done: "Listed Feishu chat members",
+          },
+          info: {
+            action: "Read Feishu chat",
+            running: "Reading Feishu chat",
+            done: "Read Feishu chat",
+          },
+          member_info: {
+            action: "Read Feishu member",
+            running: "Reading Feishu member",
+            done: "Read Feishu member",
+          },
+        },
+        feishu_doc: {
+          read: {
+            action: "Read Feishu document",
+            running: "Reading Feishu document",
+            done: "Read Feishu document",
+          },
+          write: {
+            action: "Write Feishu document",
+            running: "Writing Feishu document",
+            done: "Wrote Feishu document",
+          },
+          append: {
+            action: "Append to Feishu document",
+            running: "Appending to Feishu document",
+            done: "Appended to Feishu document",
+          },
+          insert: {
+            action: "Insert into Feishu document",
+            running: "Inserting into Feishu document",
+            done: "Inserted into Feishu document",
+          },
+          create: {
+            action: "Create Feishu document",
+            running: "Creating Feishu document",
+            done: "Created Feishu document",
+          },
+          list_blocks: {
+            action: "List document blocks",
+            running: "Listing document blocks",
+            done: "Listed document blocks",
+          },
+          get_block: {
+            action: "Read document block",
+            running: "Reading document block",
+            done: "Read document block",
+          },
+          update_block: {
+            action: "Update document block",
+            running: "Updating document block",
+            done: "Updated document block",
+          },
+          delete_block: {
+            action: "Delete document block",
+            running: "Deleting document block",
+            done: "Deleted document block",
+          },
+          create_table: {
+            action: "Create document table",
+            running: "Creating document table",
+            done: "Created document table",
+          },
+          write_table_cells: {
+            action: "Write table cells",
+            running: "Writing table cells",
+            done: "Wrote table cells",
+          },
+          create_table_with_values: {
+            action: "Create populated document table",
+            running: "Creating populated document table",
+            done: "Created populated document table",
+          },
+          insert_table_row: {
+            action: "Insert table row",
+            running: "Inserting table row",
+            done: "Inserted table row",
+          },
+          insert_table_column: {
+            action: "Insert table column",
+            running: "Inserting table column",
+            done: "Inserted table column",
+          },
+          delete_table_rows: {
+            action: "Delete table rows",
+            running: "Deleting table rows",
+            done: "Deleted table rows",
+          },
+          delete_table_columns: {
+            action: "Delete table columns",
+            running: "Deleting table columns",
+            done: "Deleted table columns",
+          },
+          merge_table_cells: {
+            action: "Merge table cells",
+            running: "Merging table cells",
+            done: "Merged table cells",
+          },
+          upload_image: {
+            action: "Upload document image",
+            running: "Uploading document image",
+            done: "Uploaded document image",
+          },
+          upload_file: {
+            action: "Upload document file",
+            running: "Uploading document file",
+            done: "Uploaded document file",
+          },
+          color_text: {
+            action: "Set text color",
+            running: "Setting text color",
+            done: "Set text color",
+          },
+        },
+        feishu_drive: {
+          list: {
+            action: "List Feishu files",
+            running: "Listing Feishu files",
+            done: "Listed Feishu files",
+          },
+          info: {
+            action: "Read Feishu file information",
+            running: "Reading Feishu file information",
+            done: "Read Feishu file information",
+          },
+          create_folder: {
+            action: "Create Feishu folder",
+            running: "Creating Feishu folder",
+            done: "Created Feishu folder",
+          },
+          move: {
+            action: "Move Feishu file",
+            running: "Moving Feishu file",
+            done: "Moved Feishu file",
+          },
+          delete: {
+            action: "Delete Feishu file",
+            running: "Deleting Feishu file",
+            done: "Deleted Feishu file",
+          },
+          list_comments: {
+            action: "List file comments",
+            running: "Listing file comments",
+            done: "Listed file comments",
+          },
+          list_comment_replies: {
+            action: "List comment replies",
+            running: "Listing comment replies",
+            done: "Listed comment replies",
+          },
+          add_comment: {
+            action: "Comment on Feishu file",
+            running: "Commenting on Feishu file",
+            done: "Commented on Feishu file",
+          },
+          reply_comment: {
+            action: "Reply to file comment",
+            running: "Replying to file comment",
+            done: "Replyed to file comment",
+          },
+        },
+        feishu_perm: {
+          list: {
+            action: "List Feishu permissions",
+            running: "Listing Feishu permissions",
+            done: "Listed Feishu permissions",
+          },
+          add: {
+            action: "Add Feishu permission",
+            running: "Adding Feishu permission",
+            done: "Added Feishu permission",
+          },
+          remove: {
+            action: "Remove Feishu permission",
+            running: "Removing Feishu permission",
+            done: "Removed Feishu permission",
+          },
+        },
+        feishu_wiki: {
+          spaces: {
+            action: "List Feishu wiki spaces",
+            running: "Listing Feishu wiki spaces",
+            done: "Listed Feishu wiki spaces",
+          },
+          nodes: {
+            action: "List Feishu wiki pages",
+            running: "Listing Feishu wiki pages",
+            done: "Listed Feishu wiki pages",
+          },
+          get: {
+            action: "Read Feishu wiki page",
+            running: "Reading Feishu wiki page",
+            done: "Read Feishu wiki page",
+          },
+          search: {
+            action: "Search Feishu wiki",
+            running: "Searching Feishu wiki",
+            done: "Searched Feishu wiki",
+          },
+          create: {
+            action: "Create Feishu wiki page",
+            running: "Creating Feishu wiki page",
+            done: "Created Feishu wiki page",
+          },
+          move: {
+            action: "Move Feishu wiki page",
+            running: "Moving Feishu wiki page",
+            done: "Moved Feishu wiki page",
+          },
+          rename: {
+            action: "Rename Feishu wiki page",
+            running: "Renaming Feishu wiki page",
+            done: "Renamed Feishu wiki page",
+          },
+        },
+        google_meet: {
+          join: {
+            action: "Join Google Meet",
+            running: "Joining Google Meet",
+            done: "Joined Google Meet",
+          },
+          create: {
+            action: "Create Google Meet",
+            running: "Creating Google Meet",
+            done: "Created Google Meet",
+          },
+          status: {
+            action: "Check Google Meet",
+            running: "Checking Google Meet",
+            done: "Checked Google Meet",
+          },
+          transcript: {
+            action: "Read meeting transcript",
+            running: "Reading meeting transcript",
+            done: "Read meeting transcript",
+          },
+          participation_context: {
+            action: "Read meeting participation context",
+            running: "Reading meeting participation context",
+            done: "Read meeting participation context",
+          },
+          participate: {
+            action: "Participate in meeting",
+            running: "Participating in meeting",
+            done: "Participated in meeting",
+          },
+          setup_status: {
+            action: "Check meeting setup",
+            running: "Checking meeting setup",
+            done: "Checked meeting setup",
+          },
+          resolve_space: {
+            action: "Resolve meeting space",
+            running: "Resolving meeting space",
+            done: "Resolved meeting space",
+          },
+          preflight: {
+            action: "Check meeting readiness",
+            running: "Checking meeting readiness",
+            done: "Checked meeting readiness",
+          },
+          latest: {
+            action: "Read latest meeting",
+            running: "Reading latest meeting",
+            done: "Read latest meeting",
+          },
+          calendar_events: {
+            action: "List calendar meetings",
+            running: "Listing calendar meetings",
+            done: "Listed calendar meetings",
+          },
+          artifacts: {
+            action: "List meeting artifacts",
+            running: "Listing meeting artifacts",
+            done: "Listed meeting artifacts",
+          },
+          attendance: {
+            action: "Read meeting attendance",
+            running: "Reading meeting attendance",
+            done: "Read meeting attendance",
+          },
+          export: {
+            action: "Export meeting",
+            running: "Exporting meeting",
+            done: "Exported meeting",
+          },
+          recover_current_tab: {
+            action: "Recover meeting tab",
+            running: "Recovering meeting tab",
+            done: "Recovered meeting tab",
+          },
+          leave: {
+            action: "Leave Google Meet",
+            running: "Leaving Google Meet",
+            done: "Left Google Meet",
+          },
+          end_active_conference: {
+            action: "End active conference",
+            running: "Ending active conference",
+            done: "Ended active conference",
+          },
+          speak: {
+            action: "Speak in meeting",
+            running: "Speaking in meeting",
+            done: "Spoke in meeting",
+          },
+          test_speech: {
+            action: "Check meeting speech",
+            running: "Checking meeting speech",
+            done: "Checked meeting speech",
+          },
+          test_listen: {
+            action: "Check meeting audio",
+            running: "Checking meeting audio",
+            done: "Checked meeting audio",
+          },
+        },
+        slack_huddles: {
+          join: {
+            action: "Join Slack huddle",
+            running: "Joining Slack huddle",
+            done: "Joined Slack huddle",
+          },
+          leave: {
+            action: "Leave Slack huddle",
+            running: "Leaving Slack huddle",
+            done: "Left Slack huddle",
+          },
+          status: {
+            action: "Check Slack huddle",
+            running: "Checking Slack huddle",
+            done: "Checked Slack huddle",
+          },
+          transcript: {
+            action: "Read Slack huddle transcript",
+            running: "Reading Slack huddle transcript",
+            done: "Read Slack huddle transcript",
+          },
+          speak: {
+            action: "Speak in Slack huddle",
+            running: "Speaking in Slack huddle",
+            done: "Spoke in Slack huddle",
+          },
+        },
+        talk_voice: {
+          list: { action: "List voices", running: "Listing voices", done: "Listed voices" },
+          set: { action: "Set voice", running: "Setting voice", done: "Set voice" },
+        },
+        teams_meetings: {
+          join: {
+            action: "Join Teams meeting",
+            running: "Joining Teams meeting",
+            done: "Joined Teams meeting",
+          },
+          leave: {
+            action: "Leave Teams meeting",
+            running: "Leaving Teams meeting",
+            done: "Left Teams meeting",
+          },
+          status: {
+            action: "Check Teams meeting",
+            running: "Checking Teams meeting",
+            done: "Checked Teams meeting",
+          },
+          transcript: {
+            action: "Read Teams meeting transcript",
+            running: "Reading Teams meeting transcript",
+            done: "Read Teams meeting transcript",
+          },
+          speak: {
+            action: "Speak in Teams meeting",
+            running: "Speaking in Teams meeting",
+            done: "Spoke in Teams meeting",
+          },
+        },
+        voice_call: {
+          initiate_call: {
+            action: "Request voice call",
+            running: "Requesting voice call",
+            done: "Requested voice call",
+          },
+          steer_call: {
+            action: "Guide voice call",
+            running: "Guiding voice call",
+            done: "Guided voice call",
+          },
+          continue_call: {
+            action: "Continue voice call",
+            running: "Continuing voice call",
+            done: "Continued voice call",
+          },
+          speak_to_user: {
+            action: "Speak in call",
+            running: "Speaking in call",
+            done: "Spoke in call",
+          },
+          send_dtmf: {
+            action: "Send call keypad tones",
+            running: "Sending call keypad tones",
+            done: "Sent call keypad tones",
+          },
+          end_call: {
+            action: "End voice call",
+            running: "Ending voice call",
+            done: "Ended voice call",
+          },
+          get_status: {
+            action: "Check voice call",
+            running: "Checking voice call",
+            done: "Checked voice call",
+          },
+        },
+        whatsapp_call: {
+          status: {
+            action: "Check WhatsApp call",
+            running: "Checking WhatsApp call",
+            done: "Checked WhatsApp call",
+          },
+          call: {
+            action: "Request WhatsApp call",
+            running: "Requesting WhatsApp call",
+            done: "Requested WhatsApp call",
+          },
+        },
+        whatsapp_login: {
+          start: {
+            action: "Start WhatsApp sign-in",
+            running: "Starting WhatsApp sign-in",
+            done: "Started WhatsApp sign-in",
+          },
+          wait: {
+            action: "Wait for WhatsApp sign-in",
+            running: "Waiting for WhatsApp sign-in",
+            done: "Waited for WhatsApp sign-in",
+          },
+        },
+        zalouser: {
+          send: {
+            action: "Send Zalo message",
+            running: "Sending Zalo message",
+            done: "Sent Zalo message",
+          },
+          image: {
+            action: "Send Zalo image",
+            running: "Sending Zalo image",
+            done: "Sent Zalo image",
+          },
+          link: { action: "Send Zalo link", running: "Sending Zalo link", done: "Sent Zalo link" },
+          friends: {
+            action: "List Zalo friends",
+            running: "Listing Zalo friends",
+            done: "Listed Zalo friends",
+          },
+          groups: {
+            action: "List Zalo groups",
+            running: "Listing Zalo groups",
+            done: "Listed Zalo groups",
+          },
+          me: {
+            action: "Read Zalo profile",
+            running: "Reading Zalo profile",
+            done: "Read Zalo profile",
+          },
+          status: {
+            action: "Check Zalo connection",
+            running: "Checking Zalo connection",
+            done: "Checked Zalo connection",
+          },
+        },
+        zoom_meetings: {
+          join: {
+            action: "Join Zoom meeting",
+            running: "Joining Zoom meeting",
+            done: "Joined Zoom meeting",
+          },
+          leave: {
+            action: "Leave Zoom meeting",
+            running: "Leaving Zoom meeting",
+            done: "Left Zoom meeting",
+          },
+          status: {
+            action: "Check Zoom meeting",
+            running: "Checking Zoom meeting",
+            done: "Checked Zoom meeting",
+          },
+          transcript: {
+            action: "Read Zoom meeting transcript",
+            running: "Reading Zoom meeting transcript",
+            done: "Read Zoom meeting transcript",
+          },
+          speak: {
+            action: "Speak in Zoom meeting",
+            running: "Speaking in Zoom meeting",
+            done: "Spoke in Zoom meeting",
+          },
+        },
+        facetime_end_call: {
+          default: {
+            action: "End FaceTime call",
+            running: "Ending FaceTime call",
+            done: "Ended FaceTime call",
+          },
+        },
+        openclaw_end_call: {
+          default: {
+            action: "End voice call",
+            running: "Ending voice call",
+            done: "Ended voice call",
+          },
+        },
         web_search: {
           default: {
             action: "Search the web",

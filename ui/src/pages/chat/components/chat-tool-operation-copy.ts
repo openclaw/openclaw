@@ -10,6 +10,33 @@ registerEnglishCatalog(registerChatToolOperationsEnglish);
 const catalog = registerChatToolOperationsEnglish.catalog.chat.toolCards.operationLabels;
 
 const operationIcons = new Map<string, IconName>([
+  ["discussion", "messageSquare"],
+  ["facetime_call", "audioLines"],
+  ["feishu_app_scopes", "fileText"],
+  ["feishu_bitable_create_app", "fileText"],
+  ["feishu_bitable_create_field", "fileText"],
+  ["feishu_bitable_create_record", "fileText"],
+  ["feishu_bitable_get_meta", "fileText"],
+  ["feishu_bitable_get_record", "fileText"],
+  ["feishu_bitable_list_fields", "fileText"],
+  ["feishu_bitable_list_records", "fileText"],
+  ["feishu_bitable_update_record", "fileText"],
+  ["feishu_chat", "fileText"],
+  ["feishu_doc", "fileText"],
+  ["feishu_drive", "fileText"],
+  ["feishu_perm", "fileText"],
+  ["feishu_wiki", "fileText"],
+  ["google_meet", "users"],
+  ["slack_huddles", "users"],
+  ["talk_voice", "audioLines"],
+  ["teams_meetings", "users"],
+  ["voice_call", "audioLines"],
+  ["whatsapp_call", "messageCircle"],
+  ["whatsapp_login", "messageCircle"],
+  ["zalouser", "messageCircle"],
+  ["zoom_meetings", "users"],
+  ["facetime_end_call", "audioLines"],
+  ["openclaw_end_call", "audioLines"],
   ["x_search", "search"],
   ["theme", "pipette"],
   ["portal", "panelsTopLeft"],
@@ -108,7 +135,12 @@ export function catalogToolLabel(
   if (!Object.hasOwn(labels, operation)) {
     return undefined;
   }
-  const phase = outcome === "running" ? "running" : outcome === "succeeded" ? "done" : "action";
+  const phase =
+    outcome === "running"
+      ? "running"
+      : outcome === "succeeded" && !(name === "message" && args?.dryRun === true)
+        ? "done"
+        : "action";
   const label = t(`chat.toolCards.operationLabels.${name}.${operation}.${phase}`);
   const actionLabel = addressed?.name
     ? t("chat.toolCards.namedOperation", { action: label, name: addressed.name })
