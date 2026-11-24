@@ -43,7 +43,10 @@ export async function searchTemplates(
     {
       ...(trimmed ? { query: trimmed } : {}),
       limit,
-      ...options,
+      ...(options.category ? { category: options.category } : {}),
+      ...(options.featured ? { featured: true } : {}),
+      ...(options.paged ? { paged: true } : {}),
+      ...(options.cursor ? { cursor: options.cursor } : {}),
     },
     ...(signal ? [{ signal }] : []),
   );

@@ -35,11 +35,11 @@ it.each(["page-skills-action", "remount-from-new-session", "remount-from-skills"
     );
 
     expect(responses.select("skills.status", {})).toHaveProperty("value.skills.length", 1000);
-    expect(responses.select("skills.search", { limit: 20 })).toHaveProperty(
+    expect(responses.select("skills.search", { limit: 80 })).toHaveProperty(
       "value.results.length",
       20,
     );
-    expect(responses.select("skills.search", { query: "Data skill 0999", limit: 20 })).toEqual({
+    expect(responses.select("skills.search", { query: "Data skill 0999", limit: 80 })).toEqual({
       found: true,
       value: { results: [] },
     });
