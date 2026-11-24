@@ -11,9 +11,9 @@ read_when:
 **Automatic update checks send a daily request by default.** It asks whether a
 newer version exists and includes the OpenClaw version, operating system, Node.js
 version, CPU architecture, and request surface.
-An identifier-free count-only request can follow a successful daily update check
-by default when its receiver explicitly supports counting. Settled update outcomes also send a bounded report by default, subject to the
-same automatic-request opt-outs. Anonymous feature statistics are opt-in.
+Identifier-free [installation counts](#identifier-free-installation-counting)
+and [update outcome reports](#update-outcomes) can be sent without feature opt-in,
+but only when the receiver advertises support. Anonymous feature statistics are opt-in.
 This page describes update-check telemetry, not requests made by configured
 providers, channels, or other services.
 
@@ -23,12 +23,25 @@ When you enable them, they ride along with that same daily update check instead
 of adding a second request.
 
 These reports help inform maintenance priorities. They do not measure individual
-plugin invocations, messages, model requests, or active users. Anonymous usage aggregates
-are available at
-[telemetry.openclaw.ai](https://telemetry.openclaw.ai).
+plugin invocations, messages, model requests, or active users. The hosted service
+publishes a [collection disclosure](https://telemetry.openclaw.ai/), not usage aggregates.
 
-Declining is a completely normal choice and changes nothing about how OpenClaw
-works for you.
+Declining feature statistics does not disable any OpenClaw features.
+
+## Telemetry controls
+
+| To stop                                                                                                                                                         | Use                                                                                                                             | What to know                                                                                                          |
+| --------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
+| All Gateway update telemetry: daily version checks and their analytics records, feature statistics, installation counts, and update outcome probes and reports. | `update.checkOnStart: false` or `OPENCLAW_NO_AUTO_UPDATE=1`. [Nix mode](/install/nix#telemetry) also suppresses these requests. | Manual updates remain available on installs that support them. Automatic update checks and applies stop.              |
+| Only feature statistics and installation counts.                                                                                                                | `openclaw telemetry off`, `telemetry.enabled: false`, or `DO_NOT_TRACK=1`.                                                      | Daily update checks, including approximate location in their analytics records, and update outcomes are not disabled. |
+| ClawHub install reporting and analytics attribution on Control UI plugin searches.                                                                              | `CLAWHUB_DISABLE_TELEMETRY=1` in each process that uses ClawHub. See [ClawHub telemetry](/clawhub/telemetry).                   | Searches still send their queries to ClawHub to return results.                                                       |
+| Operator-configured OpenTelemetry exports.                                                                                                                      | See [Disable OpenTelemetry export](/gateway/opentelemetry/setup#disable).                                                       | Gateway update telemetry and ClawHub use their own controls.                                                          |
+| OpenClaw website analytics.                                                                                                                                     | See the [website privacy policy](https://openclaw.ai/privacy).                                                                  | Website preferences do not change Gateway or ClawHub settings.                                                        |
+
+There is no built-in setting to keep the hosted daily update check while
+preventing its analytics record. Opting out stops future reporting; it does not
+delete past records. See the [Docker Compose](/install/docker/environment-variables#telemetry)
+and [Nix](/install/nix#telemetry) guides for where to set these controls.
 
 ## Inspect what is sent
 
@@ -168,8 +181,7 @@ Recorded update checks include these fields even when anonymous feature statisti
 are off or `DO_NOT_TRACK` is set. Missing or invalid fields stay empty.
 No additional client payload or prompt is needed.
 
-Analytics Engine retains records for **three months**. Public aggregates exclude
-location information. Disabling requests does not erase existing records.
+Analytics Engine retains records for **three months**.
 
 This section describes the hosted service at
 [telemetry.openclaw.ai](https://telemetry.openclaw.ai). A replacement endpoint
@@ -300,8 +312,8 @@ It is controlled by the existing automatic update-request policy, not by
 remain off by default. `openclaw telemetry off` and `DO_NOT_TRACK` suppress
 feature statistics and installation counting, not the daily check or update outcomes.
 
-Set `update.checkOnStart: false` or `OPENCLAW_NO_AUTO_UPDATE=1` to stop both
-daily checks and outcome reports. CI and Nix mode also suppress outcomes. Unlike
+The [Gateway update telemetry opt-outs](#telemetry-controls) stop both daily
+checks and outcome reports. CI and Nix mode also suppress outcomes. Unlike
 the daily-check test exception, a custom endpoint does **not** override CI
 suppression for outcomes. Current update-request policy is checked when a new
 update run is admitted, again before the capability probe, and again before the
@@ -376,14 +388,8 @@ Abandonment diagnoses are not submitted because they can subsequently be repaire
 
 ## Automated environments
 
-OpenClaw sends nothing when it detects an automated environment, meaning the
-`CI` environment variable is set to a truthy value. Continuous integration jobs
-are not installations: they would outnumber real operators by orders of
-magnitude and make version and platform counts meaningless, and your pipeline
-should not report to us on every job.
-
-This applies to both tiers, so a CI job sends no update check and no anonymous
-feature statistics. A custom `OPENCLAW_TELEMETRY_ENDPOINT` can exercise daily
+OpenClaw suppresses Gateway update telemetry to the hosted receiver when the
+`CI` environment variable is truthy. A custom `OPENCLAW_TELEMETRY_ENDPOINT` can exercise daily
 checks against a test receiver in CI, but explicitly pointing it at
 `telemetry.openclaw.ai` does not override suppression. CI requests to test
 receivers do not follow redirects, so a receiver cannot redirect them to
@@ -392,7 +398,7 @@ custom endpoint.
 
 ## Disable every automatic update request
 
-To go fully dark, disable the existing startup update check:
+To stop Gateway update telemetry, disable the existing startup update check:
 
 ```json5
 {
@@ -402,11 +408,10 @@ To go fully dark, disable the existing startup update check:
 }
 ```
 
-This stops every automatic update request, including outcome reports: no daily check,
-update-outcome report, anonymous feature statistics, or update notice, even when
-`update.auto.enabled` is `true`.
-Setting `OPENCLAW_NO_AUTO_UPDATE=1` also prevents automatic update requests.
-Explicit update commands remain available when you choose to run them.
+Setting `OPENCLAW_NO_AUTO_UPDATE=1` has the same effect. Both settings stop the
+Gateway's automatic update checks and applies, even when `update.auto.enabled`
+is `true`. You can still run explicit update commands. See [Telemetry controls](#telemetry-controls)
+for what these settings do not affect.
 
 See [Configuration reference](/gateway/config-observability#telemetry) for
 the full `telemetry` configuration and

@@ -65,7 +65,11 @@ read_when:
   </Accordion>
 
   <Accordion title="What does OpenClaw send to the Foundation?">
-    By default, a daily update check carrying the OpenClaw version, OS, Node version, and CPU architecture: the same information any package registry sees. Optional anonymous feature statistics are off by default and carry no identifier. No prompts, messages, model names, keys, paths, or machine identifiers are ever sent to the Foundation. Set `update.checkOnStart: false` to send nothing at all. Traffic to the model providers and chat platforms you configure is separate and goes to them, as always; see [Is all data used with OpenClaw saved locally?](/help/faq/where-things-live-on-disk#is-all-data-used-with-openclaw-saved-locally). Details: [Usage telemetry and update checks](/gateway/telemetry).
+    By default, OpenClaw checks for updates daily. The Foundation's update service records the OpenClaw version, operating system, Node.js version, CPU architecture, whether the request came from the Gateway or CLI, and Cloudflare-derived country, region, city, and timezone. The analytics record does not contain the raw IP address.
+
+    Anonymous feature statistics are opt-in. Identifier-free installation counts and update outcomes can be sent without feature opt-in when the receiver advertises support. Gateway update telemetry does not send prompts, messages, model names, credentials, file paths, or persistent install or machine identifiers.
+
+    Set `update.checkOnStart: false` or `OPENCLAW_NO_AUTO_UPDATE=1` to stop Gateway update telemetry and automatic updates. Manual updates still work. [ClawHub and other controls](/gateway/telemetry#telemetry-controls) are separate, as is traffic to the model providers and chat platforms you configure. See [Is all data used with OpenClaw saved locally?](/help/faq/where-things-live-on-disk#is-all-data-used-with-openclaw-saved-locally).
 
   </Accordion>
 
