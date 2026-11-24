@@ -58,7 +58,7 @@ import {
   type NodeHostManifest,
   type NodeHostInventory,
 } from "./runtime-manifest.js";
-import { resolveExecutableTrustPathFromEnv, SkillBinsCache } from "./runtime-skill-bins.js";
+import { resolveClaudeLaunchPathFromEnv, SkillBinsCache } from "./runtime-skill-bins.js";
 import { scanNodeHostedSkills } from "./skills.js";
 export type { NodeHostInventory } from "./runtime-manifest.js";
 
@@ -168,7 +168,7 @@ export async function prepareNodeHostRuntime(params?: {
   // cannot advertise or enable this command on the host's behalf.
   const claudePath =
     params?.enableAgentRuns === true && config.nodeHost?.agentRuns?.claude?.enabled === true
-      ? await resolveExecutableTrustPathFromEnv("claude", pathEnv)
+      ? await resolveClaudeLaunchPathFromEnv(pathEnv)
       : null;
   let workerRunsEnabled =
     !commandAllowlist &&
