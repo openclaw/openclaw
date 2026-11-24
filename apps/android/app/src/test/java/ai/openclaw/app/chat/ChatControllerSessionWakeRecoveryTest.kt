@@ -97,6 +97,9 @@ class ChatControllerSessionWakeRecoveryTest {
         assertEquals(false.takeIf { key == "recent" }, access.nextSessionPin(row, wake - 1))
         assertEquals(true, access.nextSessionPin(row, wake))
       }
+      // A socket reconnect keeps the cache scope but may reach a restarted Gateway clock.
+      controller.onDisconnected("socket closed")
+      assertFalse(peerSnoozes("recent").isSnoozed(after))
       connection = connection.copy(connectionGeneration = connection.connectionGeneration + 1)
       assertFalse(peerSnoozes("new").isSnoozed(after))
     }

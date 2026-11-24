@@ -352,9 +352,20 @@ internal fun SessionsScreen(
             modifier = Modifier.fillParentMaxHeight(0.56f).fillMaxWidth(),
             contentAlignment = Alignment.Center,
           ) {
-            when (sessionEmptyMode(searchState.query, searchState.loading)) {
+            when (sessionEmptyMode(searchState.query, searchState.loading, searchState.unavailable)) {
+              SessionEmptyMode.Loading -> {
+                ClawLoadingState(title = nativeString("Loading threads…"))
+              }
+
               SessionEmptyMode.SearchLoading -> {
                 ClawLoadingState(title = nativeString("Searching threads"))
+              }
+
+              SessionEmptyMode.Unavailable -> {
+                ClawEmptyState(
+                  title = nativeString("Threads unavailable"),
+                  body = nativeString("Check the Gateway connection and try again."),
+                )
               }
 
               SessionEmptyMode.SearchNoMatches -> {
@@ -1052,6 +1063,8 @@ internal data class SessionBrowserSearchState(
   val query: String,
   val entries: List<ChatSessionEntry>,
   val loading: Boolean,
+  /** No Gateway read has succeeded for this query, so an empty list is not an answer. */
+  val unavailable: Boolean = false,
 )
 
 @Composable
@@ -1081,7 +1094,7 @@ internal fun rememberSessionBrowserSearchState(
         searchLoading = false
       }
     }
-    SessionBrowserSearchState(normalizedQuery, searchResults.orEmpty(), searchLoading)
+    SessionBrowserSearchState(normalizedQuery, searchResults.orEmpty(), searchLoading, unavailable = !searchLoading && searchResults == null)
   }
 }
 
@@ -1527,17 +1540,21 @@ internal fun groupSessionEntries(
 
 internal enum class SessionEmptyMode {
   Filter,
+  Loading,
   SearchLoading,
+  Unavailable,
   SearchNoMatches,
 }
 
 internal fun sessionEmptyMode(
   query: String,
   loading: Boolean,
+  unavailable: Boolean = false,
 ): SessionEmptyMode =
   when {
+    loading -> if (query.isBlank()) SessionEmptyMode.Loading else SessionEmptyMode.SearchLoading
+    unavailable -> SessionEmptyMode.Unavailable
     query.isBlank() -> SessionEmptyMode.Filter
-    loading -> SessionEmptyMode.SearchLoading
     else -> SessionEmptyMode.SearchNoMatches
   }
 

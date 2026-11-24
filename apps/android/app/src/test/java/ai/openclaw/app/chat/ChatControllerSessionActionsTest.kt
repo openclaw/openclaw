@@ -131,6 +131,42 @@ class ChatControllerSessionActionsTest {
     }
 
   @Test
+  fun aPinPushBeforeItsAcknowledgementLoadsTheRosterOnce() =
+    runTest {
+      val gateway = ScriptedGateway(json)
+      gateway.respondWith("sessions.list", """{"sessions":[]}""")
+      var pushBeforeAck = true
+      lateinit var controller: ChatController
+      gateway.respond("sessions.patch") {
+        if (pushBeforeAck) controller.handleGatewayEvent("users.prefs.changed", """{"keys":["ui.railShortcuts"]}""")
+        "{}"
+      }
+      controller =
+        ChatController(
+          scope = this,
+          json = json,
+          commandOutbox = createChatCommandOutbox(),
+          cacheScope = { ChatCacheScope("gateway-test", 1L) },
+          requestGateway = gateway::request,
+          captureRequestLease = {
+            GatewaySession.RequestLease("gateway-test", advertisedCapabilities = setOf("personal-session-pins")) { method, params, _, enqueue ->
+              enqueue {}
+              gateway.request(method, params)
+            }
+          },
+        )
+      controller.outboxPresentationRestored.first { it }
+      val pin = ChatSessionPatch(key = "thread", ownerAgentId = "main", expectedSessionId = "thread-id", pinned = true)
+      // Without the push, the acknowledgement still refreshes the roster.
+      for ((push, reads) in listOf(true to 1, false to 2)) {
+        pushBeforeAck = push
+        assertTrue(controller.patchSession(pin))
+        runCurrent()
+        assertEquals(reads, gateway.callCount("sessions.list"))
+      }
+    }
+
+  @Test
   fun personalPinChangesRefreshTheOpenRosterButUnrelatedPreferencesDoNot() =
     runTest {
       val gateway = ScriptedGateway(json)
