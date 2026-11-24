@@ -181,6 +181,10 @@ does not present old screenshots as newly attached images. If context limits
 remove an image's original message, its image input is omitted too; the saved
 transcript and attachment remain unchanged.
 
+Images returned in Codex tool output, such as a screenshot the agent viewed,
+are attached to a visible final reply. A silent reply (`NO_REPLY`) does not
+post them; generated images still deliver.
+
 Sending another attachment does not suppress generated images from the final
 reply. OpenClaw omits a generated image only when it can match confirmed delivery
 of that image to the reply destination. A partial delivery with uncertain

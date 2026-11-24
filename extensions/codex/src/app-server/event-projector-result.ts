@@ -404,7 +404,10 @@ export abstract class CodexTurnProjection {
       Boolean(toolTelemetry.successfulCronAdds || toolTelemetry.acceptedSessionSpawns?.length) ||
       this.generatedMediaProjection.hasGeneratedMedia() ||
       this.toolProgressProjection.hasPotentialSideEffects;
-    const mediaDelivery = this.generatedMediaProjection.projectDelivery(toolTelemetry);
+    const mediaDelivery = this.generatedMediaProjection.projectDelivery({
+      ...toolTelemetry,
+      silentReply: preparedTerminalReply.terminalReply.disposition === "silent",
+    });
     const sentMediaUrls = new Set(
       mediaDelivery.messagingToolSentMediaUrls.map((url) => url.trim()),
     );

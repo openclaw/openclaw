@@ -41,7 +41,10 @@ type GeneratedImageResult = {
 export class CodexGeneratedMediaProjection {
   private readonly itemIds = new Set<string>();
   private generatedMediaObserved = false;
-  private readonly mediaByItemId = new Map<string, { mediaUrl?: string; savedPath?: string }>();
+  private readonly mediaByItemId = new Map<
+    string,
+    { mediaUrl?: string; savedPath?: string; toolOutput?: boolean }
+  >();
   private readonly gatewayMaterializedItemIds = new Set<string>();
   private readonly pendingMaterializationsByItemId = new Map<string, Promise<void>>();
   private readonly observedToolOutputImageIds = new Set<string>();
@@ -404,6 +407,7 @@ export class CodexGeneratedMediaProjection {
       this.mediaByItemId.set(params.itemId, {
         ...this.mediaByItemId.get(params.itemId),
         mediaUrl: saved.path,
+        toolOutput: params.source === "tool-output",
       });
     } catch (error) {
       embeddedAgentLog.warn(
@@ -419,6 +423,7 @@ export class CodexGeneratedMediaProjection {
   }
 
   projectDelivery(params: {
+    silentReply: boolean;
     toolMediaUrls?: string[];
     messagingToolSentMediaUrls: string[];
     messagingToolSentTargets: MessagingToolSend[];
@@ -428,11 +433,15 @@ export class CodexGeneratedMediaProjection {
   }) {
     const generatedUrls = new Set<string>();
     const generatedUrlBySource = new Map<string, string>();
-    for (const { mediaUrl, savedPath } of this.mediaByItemId.values()) {
+    for (const { mediaUrl, savedPath, toolOutput } of this.mediaByItemId.values()) {
       if (!mediaUrl) {
         continue;
       }
-      generatedUrls.add(mediaUrl);
+      // A tool-output image is what the model looked at. A silent reply sends
+      // nothing the model did not send itself, so it must not post that image.
+      if (!(toolOutput && params.silentReply)) {
+        generatedUrls.add(mediaUrl);
+      }
       generatedUrlBySource.set(normalizeMediaReferenceForComparison(mediaUrl), mediaUrl);
       if (savedPath) {
         generatedUrlBySource.set(normalizeMediaReferenceForComparison(savedPath), mediaUrl);
