@@ -80,7 +80,7 @@ const recommendedInstalls = [
   install("ollama", "ollama", "Ollama", "Run open models locally", "https://ollama.com/download"),
   install(
     "lmstudio",
-    undefined,
+    "lmstudio",
     "LM Studio",
     "Local model desktop app",
     "https://lmstudio.ai/download",
@@ -109,6 +109,7 @@ const detected: Detection = {
   ],
   authOptions: [chatgpt, deviceCode, anthropic],
   prepareOptions: [
+    { id: "ollama", brandId: "ollama", label: "Ollama", actionLabel: "Choose connection" },
     {
       id: "lmstudio",
       brandId: "lmstudio",
@@ -430,10 +431,11 @@ suite.define(() => {
         await back.click();
         await row(card, "A model on your own computer").click();
         const ollama = card.getByRole("link", { name: /^Ollama/ });
+        const lmStudio = card.getByRole("link", { name: /^LM Studio/ });
         expect(await ollama.getAttribute("href")).toBe("https://ollama.com/download");
-        await card.getByRole("button", { name: /^LM Studio/ }).waitFor();
+        expect(await lmStudio.getAttribute("href")).toBe("https://lmstudio.ai/download");
         const checkAgain = card.getByRole("button", { name: "Check again" });
-        await capture(page, "setup-11-local-card", card, [ollama, checkAgain]);
+        await capture(page, "setup-11-local-card", card, [ollama, lmStudio, checkAgain]);
         await back.click();
         await card.getByRole("button", { name: "More providers" }).click();
         const pair = card.getByRole("button", { name: /^Codex login \(device code\)/ });

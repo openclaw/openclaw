@@ -72,12 +72,7 @@ export function setupPicker(detection: SetupDetection) {
     rows.push({ id: "api-key", action: { type: "api-key" }, detected: false });
   }
   const installs = detection.recommendedInstalls ?? [];
-  const localApps = new Set(
-    [...local.map((entry) => entry.brandId ?? ""), ...prepareOptions.map((o) => o.brandId ?? o.id)]
-      .filter(Boolean)
-      .map((id) => id.toLowerCase()),
-  );
-  // A download only for a local app the card cannot already use or connect.
+  const localApps = new Set(local.map(({ modelRef }) => modelRef.split("/", 1)[0]?.toLowerCase()));
   const localDownloads = installs.filter((install) => {
     const id = (install.brandId ?? install.id).toLowerCase();
     return isLocalProvider(id) && !localApps.has(id);

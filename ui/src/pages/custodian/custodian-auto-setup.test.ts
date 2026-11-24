@@ -393,6 +393,41 @@ it("sets up a local model from the card, as on the Mac", async () => {
   text(page).toContain("You’re all set!");
 });
 
+it("offers each local app download until the Gateway finds a model from that app", async () => {
+  const ollama = {
+    id: "ollama",
+    brandId: "ollama",
+    label: "Ollama",
+    actionLabel: "Choose connection",
+  };
+  const lmStudioInstall = {
+    id: "lmstudio",
+    brandId: "lmstudio",
+    label: "LM Studio",
+    hint: "Local model desktop app",
+    website: "https://lmstudio.ai/download",
+    icon: "https://cdn.simpleicons.org/lmstudio",
+  };
+  let candidates: Detection["candidates"] = [];
+  const request = setupRequest(() => ({
+    ...detection(candidates),
+    prepareOptions: [ollama, lmStudio],
+    recommendedInstalls: [ollamaInstall, lmStudioInstall],
+  }));
+  const { page } = await mountSetup(request);
+  await openAiStep(page);
+  await click(page, "A model on your own computer");
+  const downloads = () =>
+    [...page.querySelectorAll<HTMLAnchorElement>(".custodian-setup a[href]")].map(
+      (link) => link.href,
+    );
+  expect(downloads()).toEqual([ollamaInstall.website, lmStudioInstall.website]);
+
+  candidates = [local];
+  await click(page, "Check again");
+  expect(downloads()).toEqual([lmStudioInstall.website]);
+});
+
 it("activates the prepared Ollama model when discovery omits it", async () => {
   const modelRef = "ollama/qwen3:0.6b";
   const request = setupRequest(

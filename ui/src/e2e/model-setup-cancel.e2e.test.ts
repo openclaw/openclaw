@@ -138,6 +138,12 @@ suite.define(() => {
           ]);
           expect(await gateway.getRequests("openclaw.chat")).toHaveLength(0);
 
+          if (decision === "Yes") {
+            await gateway.setMethodResponse(
+              rpc.detect,
+              makeDetection({ configuredModel: "provider/selected", setupComplete: true }),
+            );
+          }
           await button(dialog.locator("openclaw-modal-actions"), decision).click();
           if (decision === "Yes") {
             await expect.poll(() => new URL(page.url()).pathname).toBe("/custodian");
