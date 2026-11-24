@@ -20,7 +20,13 @@ import { formatUiError } from "../../../lib/format-error.ts";
 import { listen } from "../../../lib/reactive/listener.ts";
 import type { RealtimeTalkInputOwner } from "./input.ts";
 
-export type RealtimeTalkStatus = "idle" | "connecting" | "listening" | "thinking" | "error";
+export type RealtimeTalkStatus =
+  | "idle"
+  | "connecting"
+  | "listening"
+  | "thinking"
+  | "speaking"
+  | "error";
 export type RealtimeTalkEvent = TalkEvent;
 
 export type RealtimeTalkTranscript = {

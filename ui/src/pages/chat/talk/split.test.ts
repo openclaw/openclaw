@@ -33,10 +33,12 @@ const config = (provider?: string) => ({
 });
 
 class FakeAudioContext {
+  private playback = false;
   readonly sampleRate = 8000;
   readonly destination = {};
   close = vi.fn(async () => undefined);
-  createMediaStreamSource() {
+  createMediaStreamSource(stream: { playback?: boolean }) {
+    this.playback = Boolean(stream.playback);
     return { connect() {}, disconnect() {} };
   }
   createGain() {
@@ -51,7 +53,7 @@ class FakeAudioContext {
     return {
       fftSize: 0,
       smoothingTimeConstant: 0,
-      getFloatTimeDomainData: (samples: Float32Array) => samples.fill(0),
+      getFloatTimeDomainData: (samples: Float32Array) => samples.fill(this.playback ? 0.25 : 0),
       disconnect() {},
     };
   }
@@ -267,6 +269,18 @@ it.each([
   "routes configured split Talk through STT, chat and Gateway speech (provider: $provider)",
   async ({ provider, leaf }) => {
     const h = harness(provider);
+    const stopPlaybackTrack = vi.fn();
+    if (provider) {
+      const OriginalAudio = FakeAudio;
+      vi.stubGlobal(
+        "Audio",
+        class extends OriginalAudio {
+          captureStream() {
+            return { playback: true, getTracks: () => [{ stop: stopPlaybackTrack }] };
+          }
+        },
+      );
+    }
     h.state.chatDisplayedLeafEntryId = leaf;
     await h.state.toggleRealtimeTalk();
     expect(h.state.realtimeTalk.snapshot.realtimeTalkStatus).toBe("listening");
@@ -289,9 +303,18 @@ it.each([
       text: "The local model answered.",
     });
     expect(audios).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(100);
+    expect(h.state.realtimeTalk.snapshot.realtimeTalkStatus).toBe("speaking");
+    if (provider) {
+      expect(h.state.realtimeTalk.snapshot.realtimeTalkInputLevel.value).toBeGreaterThan(0);
+    }
     expect(tracks).toHaveLength(1);
     expectDefined(audios[0], "speech playback").dispatchEvent(new Event("ended"));
     await h.nextCapture.promise;
+    expect(h.state.realtimeTalk.snapshot.realtimeTalkInputLevel.value).toBe(0);
+    if (provider) {
+      expect(stopPlaybackTrack).toHaveBeenCalledOnce();
+    }
     expect(h.state.realtimeTalk.snapshot.realtimeTalkConversationState.entries).toEqual([]);
     await h.state.toggleRealtimeTalk();
   },

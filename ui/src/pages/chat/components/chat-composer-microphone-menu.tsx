@@ -18,6 +18,15 @@ export function MicrophoneMenu(props: {
   const items = createMemo(
     () => {
       const keyed = props.picker.apiKeyProviders ?? {};
+      const splitMissing = props.picker.splitTalkMissing;
+      const talkUnavailableReason =
+        splitMissing === "both"
+          ? t("chat.composer.splitTalkProvidersUnavailable")
+          : splitMissing === "speech"
+            ? t("chat.composer.splitTalkSpeechUnavailable")
+            : splitMissing === "transcription"
+              ? t("chat.composer.dictationProviderUnavailableShort")
+              : t("chat.composer.realtimeTalkProviderUnavailable");
       const capabilityRow = (
         key: "realtime" | "dictation",
         status: MicrophonePickerProps["realtimeStatus"],
@@ -40,11 +49,16 @@ export function MicrophoneMenu(props: {
             }
           : { key, status, ...fallback, provider: undefined };
       let capabilities = [
-        capabilityRow("realtime", props.picker.realtimeStatus, keyed.talk ?? keyed.speech, {
-          label: t("chat.composer.realtimeTalkCapability"),
-          unavailableReason: t("chat.composer.realtimeTalkProviderUnavailable"),
-          canConfigure: Boolean(props.picker.onOpenTalkSettings),
-        }),
+        capabilityRow(
+          "realtime",
+          props.picker.realtimeStatus,
+          splitMissing === "both" ? undefined : (keyed.talk ?? keyed.speech),
+          {
+            label: t("chat.composer.realtimeTalkCapability"),
+            unavailableReason: talkUnavailableReason,
+            canConfigure: Boolean(props.picker.onOpenTalkSettings),
+          },
+        ),
         capabilityRow("dictation", props.picker.dictationStatus, keyed.dictation, {
           label: t("chat.composer.dictationCapability"),
           unavailableReason: t("chat.composer.dictationProviderUnavailableShort"),

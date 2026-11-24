@@ -530,6 +530,7 @@ export function createChatComposerContext(
         voiceActive: Boolean(props.realtimeTalkActive),
         issue: devicePicker.issue,
         realtimeStatus: devicePicker.realtimeStatus,
+        splitTalkMissing: devicePicker.splitTalkMissing,
         dictationStatus: devicePicker.dictationStatus,
         onOpen: devicePicker.handleOpen,
         onClose: devicePicker.handleClose,

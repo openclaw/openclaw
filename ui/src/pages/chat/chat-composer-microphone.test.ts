@@ -84,15 +84,19 @@ async function mountPicker(
   };
 }
 
-function catalogClient(realtime: boolean, transcription: boolean) {
+function catalogClient(realtime: boolean, transcription: boolean, speech?: boolean) {
   const request = vi.fn(async (method: string) => {
     if (method === "talk.config") {
-      return { config: {} };
+      return {
+        config:
+          speech === undefined ? {} : { talk: { provider: "test", realtime: { mode: "stt-tts" } } },
+      };
     }
     if (method === "talk.catalog") {
       return {
         realtime: { ready: realtime, providers: [] },
         transcription: { ready: transcription, providers: [] },
+        speech: { activeProvider: "test", providers: [{ id: "test", configured: speech }] },
       };
     }
     throw new Error(`unexpected request: ${method}`);
@@ -340,3 +344,35 @@ it("tracks devicechange only while open", async () => {
   await Promise.resolve();
   expect(discover.mock.calls.length).toBe(callsWhileClosed);
 });
+
+it.each([
+  [false, true, true, undefined],
+  [true, true, false, "splitTalkSpeechUnavailable"],
+  [true, false, true, "dictationProviderUnavailableShort"],
+  [true, false, false, "splitTalkProvidersUnavailable"],
+] as const)(
+  "renders split Talk from transcription and speech, not realtime (%s/%s/%s)",
+  async (realtime, transcription, speech, reason) => {
+    discover.mockResolvedValue(emptyDevices);
+    const { gatewayClient } = catalogClient(realtime, transcription, speech);
+    const toggle = vi.fn();
+    const v = await mountPicker({ gatewayClient, onToggleRealtimeTalk: toggle });
+    await v.open();
+    if (reason) {
+      const row = () => v.root.querySelector('[data-chat-talk-capability="realtime"]');
+      await waitForSolid(() => expect(row()?.textContent).toContain(copy(reason)));
+      expect(row()?.textContent).not.toContain(copy("realtimeTalkProviderUnavailable"));
+      expect(
+        v.root.querySelector('[aria-label="' + copy("realtimeTalkCapability") + '"]'),
+      ).toBeNull();
+    } else {
+      const talkButton = () =>
+        v.root.querySelector<HTMLButtonElement>(
+          '[aria-label="' + copy("realtimeTalkCapability") + '"]',
+        );
+      await waitForSolid(() => expect(talkButton()).not.toBeNull());
+      talkButton()?.click();
+      await waitForSolid(() => expect(toggle).toHaveBeenCalledOnce());
+    }
+  },
+);

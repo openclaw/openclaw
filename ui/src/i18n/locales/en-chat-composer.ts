@@ -144,6 +144,8 @@ const catalog = {
       realtimeTalkCapability: "Tap to talk",
       dictationCapability: "Dictation",
       realtimeTalkProviderUnavailable: "No realtime voice provider is configured.",
+      splitTalkProvidersUnavailable: "Talk needs a transcription provider and a speech provider.",
+      splitTalkSpeechUnavailable: "No speech provider is configured.",
       dictationProviderUnavailableShort: "No transcription provider is configured.",
       talkCapabilityChecking: "Checking provider availability…",
       talkCapabilityUnknown: "Couldn’t check provider availability. Try again.",
@@ -263,6 +265,7 @@ const catalog = {
     },
     permissions: {},
     voice: {
+      speaking: "Speaking…",
       asking: "Asking the agent…",
       replyFailed: "The voice reply was interrupted. Start Talk again to retry.",
       replyTimedOut:

@@ -23,7 +23,9 @@ export function voiceStatusLabel(
         ? "chat.voice.asking"
         : status === "connecting"
           ? "chat.voice.connecting"
-          : "chat.voice.listening",
+          : status === "speaking"
+            ? "chat.voice.speaking"
+            : "chat.voice.listening",
     )
   );
 }
