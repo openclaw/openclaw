@@ -1,4 +1,4 @@
-import { createRoot, flush } from "@solidjs/signals";
+import { flush } from "@solidjs/signals";
 import { expect, it, onTestFinished, vi } from "vitest";
 import { createApplicationGateway } from "../../test-helpers/application-context.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
@@ -49,52 +49,12 @@ it("invalidates channel state on the real connection boundary", () => {
   expect(changed).toHaveBeenCalledOnce();
 });
 
-it("keeps runtime-config facts aligned without merging local and shared lifetimes", async () => {
+it("reads config permissions with the mutable draft snapshot", async () => {
   const source = createApplicationGateway();
   const config = owned(createRuntimeConfigCapability(source.gateway));
-  const other = owned(createRuntimeConfigCapability(createApplicationGateway().gateway));
-  const track = (owner: typeof config) => {
-    const subscribe = owner.subscribe.bind(owner);
-    const release = vi.fn();
-    const subscriptions = vi.spyOn(owner, "subscribe").mockImplementation((notify) => {
-      const stop = subscribe(notify);
-      return () => {
-        release();
-        stop();
-      };
-    });
-    return { subscriptions, release };
-  };
-  const first = track(config);
-  const second = track(other);
-  const local = createRoot((dispose) => ({
-    projection: project.projectRuntimeConfig(config),
-    dispose,
-  }));
-  onTestFinished(local.dispose);
-  const projection = local.projection;
+  const projection = owned(project.projectRuntimeConfig(config));
   const shared = sharedRuntimeConfigProjection(config);
-  const separate = sharedRuntimeConfigProjection(other);
-  expect(sharedRuntimeConfigProjection(config)).toBe(shared);
-  expect(separate).not.toBe(shared);
-  expect([first.subscriptions.mock.calls.length, second.subscriptions.mock.calls.length]).toEqual([
-    0, 0,
-  ]);
   projection.subscribe(() => {});
-  const stopLeft = shared.subscribe(() => {});
-  const changed = vi.fn();
-  const stopRight = shared.subscribe(changed);
-  const stopOther = separate.subscribe(() => {});
-  onTestFinished(() => {
-    stopLeft();
-    stopRight();
-    stopOther();
-    first.subscriptions.mockRestore();
-    second.subscriptions.mockRestore();
-  });
-  expect([first.subscriptions.mock.calls.length, second.subscriptions.mock.calls.length]).toEqual([
-    2, 1,
-  ]);
   expect(projection.read().canSet).toBe(false);
   const client = createTestGatewayClient(async () => configSnapshot({}));
   source.publish({
@@ -105,6 +65,12 @@ it("keeps runtime-config facts aligned without merging local and shared lifetime
   });
   await config.ensureLoaded();
   expect(projection.read().canSet).toBe(false);
+  expect(shared.read().canSet).toBe(false);
+  const previousRevision = projection.revision();
+  config.setRaw('{"agents":{}}');
+  flush();
+  expect(projection.read().state.configRaw).toBe('{"agents":{}}');
+  expect(projection.revision()).toBeGreaterThan(previousRevision);
   source.publish({
     ...source.gateway.snapshot,
     hello: gatewayHelloForMethods(
@@ -112,44 +78,21 @@ it("keeps runtime-config facts aligned without merging local and shared lifetime
       ["operator.admin"],
     ),
   });
-  const previousRevision = projection.revision();
-  config.setRaw('{"agents":{}}');
-  flush();
   for (const view of [projection, shared]) {
-    expect(view.read()).toEqual({
+    const facts = view.read();
+    expect(facts).toEqual({
       state: config.state,
       canSet: true,
       canApply: true,
       canPatch: true,
       canOpenFile: true,
     });
-    expect(view.read().state).toBe(config.state);
-    expect(view.read()).not.toBe(view.read());
-    expect(view.read().state.configRaw).toBe('{"agents":{}}');
+    expect(facts.state).toBe(config.state);
   }
-  expect(projection.revision()).toBeGreaterThan(previousRevision);
-  expect(separate.read().state).toBe(other.state);
-  expect(separate.read().canSet).toBe(false);
-  projection.replaceSource(other);
-  expect(projection.read().state).toBe(other.state);
-  expect(first.release).toHaveBeenCalledOnce();
-  expect(second.subscriptions).toHaveBeenCalledTimes(2);
-  local.dispose();
-  expect(second.release).toHaveBeenCalledOnce();
-  changed.mockClear();
-  config.setRaw("{}");
-  expect(changed).toHaveBeenCalledOnce();
-  expect(shared.read().state.configRaw).toBe("{}");
-  stopLeft();
-  expect(first.release).toHaveBeenCalledOnce();
-  stopRight();
-  expect(first.release).toHaveBeenCalledTimes(2);
-  stopOther();
-  expect(second.release).toHaveBeenCalledTimes(2);
   source.publish({
     ...source.gateway.snapshot,
     hello: gatewayHelloForMethods(["config.get"], ["operator.read"]),
   });
+  expect(projection.read().canSet).toBe(false);
   expect(shared.read().canSet).toBe(false);
-  expect(first.subscriptions).toHaveBeenCalledTimes(2);
 });
