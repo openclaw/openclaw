@@ -70,6 +70,7 @@ export function prepareExecExitNotification(
     operatorAuthority: getGatewayToolCallerIdentity()?.operatorAuthority,
     // The completion continues the requester's own command, not a new sender's request.
     retainRequesterOwner: true,
+    ownerContinuation: true,
   }).then(
     (target) => {
       if (oneShot && sessionsYieldAvailable) {
