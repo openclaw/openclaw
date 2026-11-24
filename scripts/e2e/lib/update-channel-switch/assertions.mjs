@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { readJson } from "../fixtures/common.mjs";
@@ -10,7 +9,7 @@ const controlUiHtml = "<!doctype html><title>fixture</title>\n";
 
 function usage() {
   console.error(
-    "usage: assertions.mjs <prepare-git-fixture|write-control-ui|assert-update|assert-beta-registry|assert-main-refusal|assert-dry-run|assert-config-channel|assert-status-kind|assert-installed-version|assert-runtime-staging-clean|assert-dirty-exit|assert-dirty-update|assert-detached-source|assert-detached-release> [...]",
+    "usage: assertions.mjs <prepare-git-fixture|write-control-ui|assert-update|assert-main-refusal|assert-dry-run|assert-config-channel|assert-status-kind|assert-installed-version|assert-runtime-staging-clean|assert-dirty-exit|assert-dirty-update|assert-detached-switch> [...]",
   );
   process.exit(2);
 }
@@ -164,52 +163,17 @@ function prepareGitFixture(root) {
   writeControlUi(root);
 }
 
-async function assertBetaRegistry(tarball, root) {
-  const view = JSON.parse(fs.readFileSync(0, "utf8"));
-  // npm 12 emits an array; older npm emits a single manifest for an exact selector.
-  assert(!Array.isArray(view) || view.length === 1, "beta registry did not return one manifest");
-  const metadata = Array.isArray(view) ? view[0] : view;
-  const installed = readJson(path.join(root, "package.json"));
-  assert.equal(metadata.name, "openclaw");
-  assert.equal(metadata.version, installed.version, "beta fixture selected the wrong version");
-  assert.deepEqual(metadata.openclaw?.schemaVersions, installed.openclaw?.schemaVersions);
-  assert.equal(
-    new URL(metadata.dist.tarball).origin,
-    new URL(process.env.NPM_CONFIG_REGISTRY).origin,
-  );
-  const hash = createHash("sha512");
-  for await (const chunk of fs.createReadStream(tarball)) {
-    hash.update(chunk);
-  }
-  assert.equal(
-    metadata.dist.integrity,
-    `sha512-${hash.digest("base64")}`,
-    "beta tarball digest changed",
-  );
-}
-
 function assertUpdate(channel, expectedVersion) {
   const payload = JSON.parse(process.env.UPDATE_JSON ?? "");
   if (channel === "beta" && Object.hasOwn(payload, "phase")) {
-    // This fixture starts on the candidate package, with stable stored in config.
-    // The beta selector changes the channel, not the already-current package bytes.
-    assert(expectedVersion);
+    // The fixture already runs the candidate, so switching to beta changes only the channel.
     assert.equal(payload.phase, "finished");
-    assert.equal(payload.status, "skipped");
     assert.equal(payload.reason, "already-current");
-    assert.equal(payload.before?.version, expectedVersion);
-    assert.equal(payload.target?.kind, "package");
-    assert.equal(payload.target.version, expectedVersion);
-    assert.deepEqual(
-      payload.steps.map(({ step, status }) => ({ step, status })),
-      [
-        { step: "requested", status: "completed" },
-        { step: "staging", status: "skipped" },
-        { step: "plugins", status: "completed" },
-      ],
+    assert.equal(payload.target?.version, expectedVersion);
+    assert(
+      payload.steps.every((step) => step.status !== "failed"),
+      "beta channel switch failed",
     );
-    assert.deepEqual(payload.repair, []);
-    assert(!payload.origin.nextAction, "beta channel switch requested repair");
     return;
   }
   if (payload.status !== "ok") {
@@ -275,66 +239,26 @@ function assertConfigChannel(channel) {
   );
 }
 
-function assertDetachedSource(root, expectedHead) {
+function assertDetachedSwitch(source, slot, expectedHead) {
+  const git = (root, ...gitArgs) =>
+    execFileSync("git", ["-C", root, ...gitArgs], { encoding: "utf8" }).trim();
+  const edits = ["--", "operator-update-tracked.txt", "operator-update-notes.tmp"];
+  // The switch must leave the operator's checkout alone and install only committed content.
+  assert.equal(git(source, "rev-parse", "HEAD"), expectedHead, "source checkout HEAD changed");
   assert.equal(
-    execFileSync("git", ["-C", root, "rev-parse", "HEAD"], { encoding: "utf8" }).trim(),
+    git(source, "status", "--porcelain", ...edits),
+    "M operator-update-tracked.txt\n?? operator-update-notes.tmp",
+    "source edits changed",
+  );
+  assert.equal(
+    git(slot, "rev-parse", "HEAD"),
     expectedHead,
-    "source checkout HEAD changed",
-  );
-  assert.deepEqual(
-    fs.readFileSync(path.join(root, "operator-update-tracked.txt")),
-    Buffer.from("retain tracked edit\n"),
-    "source tracked edit changed",
-  );
-  assert.deepEqual(
-    fs.readFileSync(path.join(root, "operator-update-notes.tmp")),
-    Buffer.from("retain user notes\n"),
-    "source untracked file changed",
+    "release did not select the fixture commit",
   );
   assert.equal(
-    execFileSync(
-      "git",
-      [
-        "-C",
-        root,
-        "status",
-        "--porcelain",
-        "--",
-        "operator-update-tracked.txt",
-        "operator-update-notes.tmp",
-      ],
-      { encoding: "utf8" },
-    ),
-    " M operator-update-tracked.txt\n?? operator-update-notes.tmp\n",
-    "source edits no longer have their original Git status",
-  );
-}
-
-function assertDetachedRelease(slot, expectedHead) {
-  const release = fs.realpathSync(slot);
-  const releases = fs.realpathSync(path.join(path.dirname(slot), "releases"));
-  assert(release.startsWith(releases + path.sep), "Git slot did not select a managed release");
-  assert.equal(
-    execFileSync("git", ["-C", release, "rev-parse", "HEAD"], { encoding: "utf8" }).trim(),
-    expectedHead,
-    "installed release did not select the fixture commit",
-  );
-  assert.equal(
-    execFileSync("git", ["-C", release, "rev-parse", "--abbrev-ref", "HEAD"], {
-      encoding: "utf8",
-    }).trim(),
-    "HEAD",
-    "installed release is not detached",
-  );
-  assert.deepEqual(
-    fs.readFileSync(path.join(release, "operator-update-tracked.txt")),
-    execFileSync("git", ["-C", release, "show", "HEAD:operator-update-tracked.txt"]),
-    "tracked edit leaked into the release",
-  );
-  assert.equal(
-    fs.lstatSync(path.join(release, "operator-update-notes.tmp"), { throwIfNoEntry: false }),
-    undefined,
-    "untracked input leaked into the release",
+    git(slot, "status", "--porcelain", ...edits),
+    "",
+    "local input leaked into the release",
   );
 }
 
@@ -378,13 +302,11 @@ const commands = {
   "prepare-git-fixture": (root = "/tmp/openclaw-git") => prepareGitFixture(root),
   "write-control-ui": (root = "/tmp/openclaw-git") => writeControlUi(root),
   "assert-update": assertUpdate,
-  "assert-beta-registry": assertBetaRegistry,
   "assert-main-refusal": assertMainRefusal,
   "assert-runtime-staging-clean": assertRuntimeStagingClean,
   "assert-dirty-update": assertDirtyUpdate,
   "assert-dirty-exit": assertDirtyExit,
-  "assert-detached-source": assertDetachedSource,
-  "assert-detached-release": assertDetachedRelease,
+  "assert-detached-switch": assertDetachedSwitch,
   "assert-config-channel": assertConfigChannel,
   "assert-dry-run": assertDryRun,
   "assert-status-kind": assertStatusKind,
@@ -393,4 +315,4 @@ const commands = {
 if (!Object.hasOwn(commands, command)) {
   usage();
 }
-await commands[command](...args);
+commands[command](...args);

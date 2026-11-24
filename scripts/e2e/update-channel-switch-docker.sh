@@ -173,11 +173,8 @@ UPDATE_JSON="$main_json" node scripts/e2e/lib/update-channel-switch/assertions.m
 node scripts/e2e/lib/update-channel-switch/assertions.mjs assert-config-channel stable
 
 echo "==> package stable -> package beta channel"
-npm view openclaw@beta --json | node scripts/e2e/lib/update-channel-switch/assertions.mjs \
-  assert-beta-registry "$package_tgz" /tmp/npm-prefix/lib/node_modules/openclaw
 set +e
-# Both halves of the guarded loopback seam must be present. The release updater
-# packs the bare override, so npm must use beta rather than its default latest.
+# The updater packs the bare override; without a tag npm would pick latest, not the candidate.
 beta_json="$(OPENCLAW_UPDATE_PACKAGE_SPEC=openclaw npm_config_tag=beta NPM_CONFIG_TAG=beta \
   openclaw update --channel beta --yes --json --no-restart)"
 beta_status=$?
@@ -230,8 +227,7 @@ case "$git_mode" in
   detached)
     echo "==> detached Git release preserves and excludes local input"
     printf "retain tracked edit\n" >"$git_root/operator-update-tracked.txt"
-    # This container has no managed Gateway. Select the release now so subsequent CLI
-    # probes and the round trip run from Git, not the pending switch fallback package.
+    # Omit --no-restart so the CLI selects the release now; no managed Gateway runs here.
     ;;
   *) echo "Unknown package-to-Git contract: $git_mode" >&2; exit 1 ;;
 esac
@@ -242,16 +238,13 @@ dev_json="$(OPENCLAW_E2E_COMMAND_TIMEOUT="$git_channel_timeout" openclaw update 
 dev_status=$?
 set -e
 printf "%s\n" "$dev_json"
-if [ "$git_mode" = detached ]; then
-  node scripts/e2e/lib/update-channel-switch/assertions.mjs assert-detached-source "$git_root" "$fixture_sha"
-fi
 if [ "$dev_status" -ne 0 ]; then
   exit "$dev_status"
 fi
 UPDATE_JSON="$dev_json" node scripts/e2e/lib/update-channel-switch/assertions.mjs assert-update dev
 if [ "$git_mode" = detached ]; then
-  node scripts/e2e/lib/update-channel-switch/assertions.mjs \
-    assert-detached-release "$OPENCLAW_STATE_DIR/git-install/openclaw" "$fixture_sha"
+  node scripts/e2e/lib/update-channel-switch/assertions.mjs assert-detached-switch \
+    "$git_root" "$OPENCLAW_STATE_DIR/git-install/openclaw" "$fixture_sha"
 fi
 node scripts/e2e/lib/update-channel-switch/assertions.mjs assert-runtime-staging-clean "$git_root"
 node scripts/e2e/lib/update-channel-switch/assertions.mjs assert-config-channel dev

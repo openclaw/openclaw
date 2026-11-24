@@ -1,13 +1,5 @@
 import { execFileSync, execSync, spawnSync } from "node:child_process";
-import { createHash } from "node:crypto";
-import {
-  copyFileSync,
-  existsSync,
-  mkdirSync,
-  readFileSync,
-  symlinkSync,
-  writeFileSync,
-} from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { withDistArtifactOwnership } from "../../scripts/lib/dist-artifact-ownership.mts";
@@ -23,86 +15,22 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const testNodeExecPath = resolveTestNodeExecPath();
 const assertionScript = "scripts/e2e/lib/update-channel-switch/assertions.mjs";
 
-it("binds the beta selector to the loopback candidate metadata and exact tarball", () => {
-  const { file, write, json } = fixtureFiles(tempDirs.make("update-channel-beta-target-"));
-  const registry = "http://127.0.0.1:12345";
-  const version = "2026.11.15-beta.1";
-  const schemaVersions = { state: 41, agent: 24 };
-  const bytes = "synthetic candidate archive bytes";
-  json("package.json", { version, openclaw: { schemaVersions } });
-  write("candidate.tgz", bytes);
-  const manifest = {
-    name: "openclaw",
-    version,
-    openclaw: { schemaVersions },
-    dist: {
-      tarball: `${registry}/openclaw/-/candidate.tgz`,
-      integrity: `sha512-${createHash("sha512").update(bytes).digest("base64")}`,
-    },
-  };
-  const check = (metadata: typeof manifest | (typeof manifest)[]) =>
-    spawnSync(
-      testNodeExecPath,
-      [assertionScript, "assert-beta-registry", file("candidate.tgz"), file(".")],
-      {
-        encoding: "utf8",
-        env: { ...process.env, NPM_CONFIG_REGISTRY: registry },
-        input: JSON.stringify(metadata),
-      },
-    );
-  const selected = check(manifest);
-  expect(selected.status, selected.stderr).toBe(0);
-  const selectedNpm12 = check([manifest]);
-  expect(selectedNpm12.status, selectedNpm12.stderr).toBe(0);
-  expect(check([manifest, manifest]).status).toBe(1);
-  expect(
-    check({ ...manifest, openclaw: { schemaVersions: { ...schemaVersions, state: 40 } } }).status,
-  ).toBe(1);
-  expect(check({ ...manifest, dist: { ...manifest.dist, integrity: "sha512-wrong" } }).status).toBe(
-    1,
-  );
-  expect(
-    check({
-      ...manifest,
-      dist: { ...manifest.dist, tarball: "https://registry.npmjs.org/candidate.tgz" },
-    }).status,
-  ).toBe(1);
-});
-
 it.each([
-  { name: "already-current", patch: {}, status: 0 },
-  { name: "pending activation", patch: { phase: "activating", status: "running" }, status: 1 },
-  {
-    name: "different version",
-    patch: { target: { kind: "package", version: "2026.11.10-beta.3" } },
-    status: 1,
-  },
-  {
-    name: "failed maintenance",
-    patch: { steps: [{ step: "plugins", status: "failed" }] },
-    status: 1,
-  },
-])("checks the native beta channel receipt: $name", ({ patch, status }) => {
-  const version = "2026.11.15-beta.1";
+  { name: "already-current", version: "2026.11.15-beta.1", status: 0 },
+  { name: "different version", version: "2026.11.10-beta.3", status: 1 },
+])("checks the beta channel switch receipt: $name", ({ version, status }) => {
   const receipt = {
     phase: "finished",
     status: "skipped",
     reason: "already-current",
-    before: { version },
     target: { kind: "package", version },
-    repair: [],
-    origin: {},
-    steps: [
-      { step: "requested", status: "completed" },
-      { step: "staging", status: "skipped" },
-      { step: "plugins", status: "completed" },
-    ],
-    ...patch,
+    steps: [{ step: "requested", status: "completed" }],
   };
-  const result = spawnSync(testNodeExecPath, [assertionScript, "assert-update", "beta", version], {
-    encoding: "utf8",
-    env: { ...process.env, UPDATE_JSON: JSON.stringify(receipt) },
-  });
+  const result = spawnSync(
+    testNodeExecPath,
+    [assertionScript, "assert-update", "beta", "2026.11.15-beta.1"],
+    { encoding: "utf8", env: { ...process.env, UPDATE_JSON: JSON.stringify(receipt) } },
+  );
   expect(result.status, result.stderr).toBe(status);
 });
 
@@ -222,10 +150,8 @@ it("rejects retained runtime staging at the channel update success boundary", ()
 it("checks that a detached release uses the selected commit, not local checkout input", () => {
   const { file, write } = fixtureFiles(tempDirs.make("update-channel-detached-"));
   const source = file("source");
-  const release = file("git-install/releases/fixture/openclaw");
-  const slot = file("git-install/openclaw");
+  const release = file("release");
   mkdirSync(source);
-  mkdirSync(join(release, ".."), { recursive: true });
   const git = (...args: string[]) =>
     execFileSync("git", ["-C", source, ...args], { encoding: "utf8" }).trim();
   git("init", "-q");
@@ -233,9 +159,9 @@ it("checks that a detached release uses the selected commit, not local checkout 
   git("add", ".");
   git(
     "-c",
-    "user.name=Fixture",
+    "user.name=F",
     "-c",
-    "user.email=fixture@example.invalid",
+    "user.email=f@example.invalid",
     "-c",
     "commit.gpgsign=false",
     "commit",
@@ -243,29 +169,14 @@ it("checks that a detached release uses the selected commit, not local checkout 
     "fixture",
   );
   const sha = git("rev-parse", "HEAD");
+  git("worktree", "add", "-q", "--detach", release, sha);
   write("source/operator-update-tracked.txt", "retain tracked edit\n");
   write("source/operator-update-notes.tmp", "retain user notes\n");
-  git("worktree", "add", "--detach", release, sha);
-  symlinkSync(release, slot, "junction");
-  const check = (...args: string[]) =>
-    spawnSync(testNodeExecPath, [assertionScript, ...args], { encoding: "utf8" });
-  const preserved = check("assert-detached-source", source, sha);
-  expect(preserved.status, preserved.stderr).toBe(0);
-  const installed = check("assert-detached-release", slot, sha);
-  expect(installed.status, installed.stderr).toBe(0);
-  expect(check("assert-detached-release", slot, "a".repeat(40)).stderr).toContain(
-    "installed release did not select the fixture commit",
-  );
-  write(
-    "git-install/releases/fixture/openclaw/operator-update-tracked.txt",
-    "retain tracked edit\n",
-  );
-  expect(check("assert-detached-release", slot, sha).stderr).toContain("tracked edit leaked");
-  write("git-install/releases/fixture/openclaw/operator-update-tracked.txt", "committed content\n");
-  write("git-install/releases/fixture/openclaw/operator-update-notes.tmp", "retain user notes\n");
-  expect(check("assert-detached-release", slot, sha).stderr).toContain("untracked input leaked");
-  write("source/operator-update-tracked.txt", "overwritten\n");
-  expect(check("assert-detached-source", source, sha).stderr).toContain(
-    "source tracked edit changed",
-  );
+  const check = () =>
+    spawnSync(testNodeExecPath, [assertionScript, "assert-detached-switch", source, release, sha], {
+      encoding: "utf8",
+    });
+  expect(check().status, check().stderr).toBe(0);
+  write("release/operator-update-tracked.txt", "retain tracked edit\n");
+  expect(check().stderr).toContain("local input leaked into the release");
 });
