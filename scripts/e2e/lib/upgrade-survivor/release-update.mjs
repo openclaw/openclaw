@@ -9,6 +9,7 @@ import { backup, DatabaseSync } from "node:sqlite";
 import { setTimeout as delay } from "node:timers/promises";
 import { readDatabase } from "./observations.mjs";
 import { mapRegistryHosts, prepareRegistryTls, startRegistryTlsRelay } from "./registry-tls.mjs";
+import { startNodeFixture } from "./release-process.mjs";
 
 assert(
   fs.existsSync("/.dockerenv") || fs.existsSync("/run/.containerenv"),
@@ -100,53 +101,6 @@ const seedConfig = (gatewayPort) => ({
   update: { channel: "stable", checkOnStart: false },
 });
 
-// Own both the Gateway and its identity-query CLI, including respawned children.
-function startBackwardReadChild(args, probeEnv) {
-  let output = Buffer.alloc(0);
-  const child = spawn(process.execPath, args, {
-    env: probeEnv,
-    cwd: probeEnv.HOME,
-    detached: true,
-    stdio: ["ignore", "pipe", "pipe"],
-  });
-  let spawnError;
-  const done = new Promise((resolve) => {
-    child.once("error", (error) => {
-      spawnError = error;
-      resolve();
-    });
-    child.once("close", resolve);
-  });
-  for (const stream of [child.stdout, child.stderr]) {
-    stream.on("data", (chunk) => {
-      output = Buffer.concat([output, chunk]).subarray(-65536);
-    });
-  }
-  return {
-    child,
-    done,
-    output: () => output.toString("utf8"),
-    error: () => spawnError,
-    async stop() {
-      const signal = (name) => {
-        if (child.pid) {
-          try {
-            process.kill(-child.pid, name);
-          } catch (error) {
-            if (error.code !== "ESRCH") {
-              throw error;
-            }
-          }
-        }
-      };
-      signal("SIGTERM");
-      await Promise.race([done, delay(2000)]);
-      signal("SIGKILL");
-      await Promise.race([done, delay(2000)]);
-    },
-  };
-}
-
 async function reportBackwardRead(previous, previousBuild) {
   const probeHome = path.join(root, "backward-read");
   const probeState = path.join(probeHome, ".openclaw");
@@ -204,7 +158,7 @@ async function reportBackwardRead(previous, previousBuild) {
       (db) => db.prepare("PRAGMA user_version").get().user_version,
     );
     assert.equal(receipt.snapshot.beforeSchema, fixture.next.schema, "snapshot is not schema N+1");
-    gateway = startBackwardReadChild(args, probeEnv);
+    gateway = startNodeFixture(args, probeEnv);
     const deadline = Date.now() + 60_000;
     while (Date.now() < deadline) {
       if (gateway.error()) {
@@ -224,7 +178,7 @@ async function reportBackwardRead(previous, previousBuild) {
         // Readiness remains an observation, not a lane assertion.
       }
       if (receipt.ready) {
-        identity = startBackwardReadChild(
+        identity = startNodeFixture(
           [
             path.join(previous, "openclaw.mjs"),
             "gateway",
