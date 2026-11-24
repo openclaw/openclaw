@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ErrorCodes } from "../../../../packages/gateway-protocol/src/index.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../../../config/config.js";
+import { validateConfigObject } from "../../../config/validation-core.js";
 import type { RealtimeVoiceProviderResolveConfigContext } from "../../../talk/provider-contexts.js";
 import { bindSessionRowProjection } from "../../session-row-projection-access.js";
 import { roleClient, rolePolicyConfig } from "../../session-sharing.test-utils.js";
@@ -89,9 +90,13 @@ describe("talk.catalog handler", () => {
   });
 
   it("reports an explicit media path as unavailable without a configured audio model", async () => {
-    const respond = await invokeTalkHandler("talk.catalog", {
-      config: { talk: { transcription: { provider: "media-understanding" } } },
+    const prepared = validateConfigObject({
+      talk: { agentId: "main", transcription: { provider: "media-understanding" } },
     });
+    if (!prepared.ok) {
+      throw new Error("Talk fixture did not validate");
+    }
+    const respond = await invokeTalkHandler("talk.catalog", { config: prepared.config });
     expectRespondOk(respond, {
       transcription: { source: "media-understanding", ready: false, providers: [] },
     });

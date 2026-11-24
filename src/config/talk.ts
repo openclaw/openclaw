@@ -142,6 +142,7 @@ export function normalizeTalkSection(value: TalkConfig | undefined): TalkConfig 
     return undefined;
   }
 
+  const transcriptionProvider = normalizeOptionalString(value.transcription?.provider);
   return omitUndefinedTalkFields<TalkConfig>({
     agentId: normalizeOptionalString(value.agentId),
     speechLocale: normalizeOptionalString(value.speechLocale),
@@ -152,6 +153,7 @@ export function normalizeTalkSection(value: TalkConfig | undefined): TalkConfig 
     silenceTimeoutMs: normalizeInteger(value.silenceTimeoutMs, 1),
     providers: normalizeTalkProviders(value.providers),
     realtime: normalizeTalkRealtimeConfig(value.realtime),
+    transcription: transcriptionProvider ? { provider: transcriptionProvider } : undefined,
     provider: normalizeOptionalString(value.provider),
   });
 }
