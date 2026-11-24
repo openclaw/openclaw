@@ -566,9 +566,6 @@
       "@openclaw/ai/providers": [
         "../../packages/plugin-sdk/dist/packages/ai/src/providers.d.ts"
       ],
-      "@openclaw/ai/provider-types": [
-        "../../packages/plugin-sdk/dist/packages/ai/src/provider-types.d.ts"
-      ],
       "@openclaw/ai/transports": [
         "../../packages/plugin-sdk/dist/packages/ai/src/transports.d.ts"
       ],
