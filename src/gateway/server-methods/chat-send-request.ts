@@ -325,6 +325,7 @@ export function normalizeChatSendRequest(params: {
     ...(workContext ? [workContext.snapshot] : []),
     ...(p.appContext ? [{ appContext: stableStringify(p.appContext) }] : []),
     ...(providerReview ? [providerReview.review.id, providerReview.target.sessionId] : []),
+    ...(p.expectedSessionId === undefined ? [] : [{ expectedSessionId: p.expectedSessionId }]),
   ]);
 
   const value: NormalizedChatSendRequest = {
