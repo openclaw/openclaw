@@ -95,6 +95,13 @@ suite.define(() => {
     await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
       const forbidden: string[] = [];
       let patches = 0;
+      let holdCatalog = true;
+      const catalogRequests = new Set<string>();
+      const catalogReplies: Array<() => void> = [];
+      const releaseCatalog = () => {
+        holdCatalog = false;
+        catalogReplies.splice(0).forEach((send) => send());
+      };
       let hold = true;
       let release: (() => void) | undefined;
       const releaseWrite = () => {
@@ -106,6 +113,13 @@ suite.define(() => {
         socket.onMessage((message) => {
           const frame = record(JSON.parse(message.toString()));
           if (frame.type === "req") {
+            if (
+              frame.method === "environments.list" &&
+              typeof frame.id === "string" &&
+              record(frame.params).projection === "profiles"
+            ) {
+              catalogRequests.add(frame.id);
+            }
             if (
               ["environments.prepare", "sessions.create", "sessions.dispatch"].includes(
                 String(frame.method),
@@ -124,7 +138,19 @@ suite.define(() => {
           }
           server.send(message);
         });
-        server.onMessage((message) => socket.send(message));
+        server.onMessage((message) => {
+          const frame = record(JSON.parse(message.toString()));
+          if (
+            frame.type === "res" &&
+            typeof frame.id === "string" &&
+            catalogRequests.delete(frame.id) &&
+            holdCatalog
+          ) {
+            catalogReplies.push(() => socket.send(message));
+          } else {
+            socket.send(message);
+          }
+        });
       });
       try {
         expect((await page.goto(url.href))?.status()).toBe(200);
@@ -135,11 +161,18 @@ suite.define(() => {
         await lifetime.fill("9h");
         await waitForSettledFormControls(page, [{ locator: lifetime, value: "9h" }]);
         const input = await lifetime.elementHandle();
+        await expect.poll(() => catalogReplies.length).toBeGreaterThan(0);
         const save = page.getByRole("button", { name: "Save", exact: true });
         await save.click();
         await expect.poll(() => Boolean(release)).toBe(true);
         expect(patches).toBe(1);
         expect(await lifetime.isDisabled()).toBe(true);
+        releaseCatalog();
+        await page
+          .locator(".settings-row")
+          .filter({ has: page.locator("code", { hasText: /^proof$/ }) })
+          .getByText(/^(Advertised|Unavailable)$/)
+          .waitFor();
         expect(await lifetime.evaluate((element, original) => element === original, input)).toBe(
           true,
         );
@@ -194,6 +227,7 @@ suite.define(() => {
         expect(patches).toBe(2);
         expect(forbidden).toEqual([]);
       } finally {
+        releaseCatalog();
         releaseWrite();
       }
     });

@@ -160,7 +160,15 @@ export function CloudWorkersPage() {
   }
 
   function canManage(): boolean {
-    return configSave.editable() && !configSave.loading();
+    const configState = configProjection.read().state;
+    // Controls read saving separately; page eligibility must not join its optimistic lane.
+    return Boolean(
+      hasManageAccess() &&
+      configState.configSnapshot?.hash &&
+      !configState.configLoading &&
+      !configState.configSaving &&
+      !saveState().busy,
+    );
   }
 
   function openEditor(profile?: ConfiguredCloudWorkerProfile) {
