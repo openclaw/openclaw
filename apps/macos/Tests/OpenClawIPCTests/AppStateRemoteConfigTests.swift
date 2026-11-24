@@ -53,6 +53,25 @@ private actor GatewayConfigReadGate {
 @MainActor
 struct AppStateRemoteConfigTests {
     @Test
+    func `settings stored by the previous stable release load with chimes on and phase sounds off kept`() async {
+        // The previous stable release stored no chime keys. A user who had turned Phase sounds off keeps
+        // that choice for the thinking sound; the chime settings are separate and default on.
+        await TestIsolation.withIsolatedState(defaults: [
+            talkPhaseSoundsEnabledKey: false,
+            TalkChimePlayer.startPreferenceKey: nil,
+            TalkChimePlayer.endPreferenceKey: nil,
+            TalkChimePlayer.replyPreferenceKey: nil,
+        ]) {
+            let state = AppState(preview: true)
+            #expect(!state.talkPhaseSoundsEnabled)
+            #expect(state.talkStartChimeEnabled)
+            #expect(state.talkEndChimeEnabled)
+            #expect(state.talkReplyChimeEnabled)
+            #expect(AppDefaults.standard.object(forKey: talkPhaseSoundsEnabledKey) as? Bool == false)
+        }
+    }
+
+    @Test
     func `July discovery preference remains readable`() async {
         await TestIsolation.withIsolatedState(defaults: ["gateway.preferredStableID": "gateway-july"]) {
             #expect(GatewayDiscoveryPreferences.preferredStableID() == "gateway-july")
