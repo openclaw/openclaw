@@ -860,6 +860,11 @@ export async function packOpenClawPackageForDocker(
     packageOptions.restoreManifest ??
     sourceManifestLifecycle?.restorePackageManifest ??
     (async () => false);
+  const sourcePluginAssets = await loadSourcePackageLifecycle(
+    sourcePath,
+    "package-plugin-assets.mts",
+    ["preparePackagedPluginAssets"],
+  );
   const sourceWorkerBundlePrepareLifecycle = packageOptions.prepareWorkerBundle
     ? null
     : await loadSourcePackageLifecycle(sourcePath, "package-worker-bundle.mts", [
@@ -897,6 +902,7 @@ export async function packOpenClawPackageForDocker(
   };
   try {
     await prepareWorkerBundle(sourcePath);
+    await sourcePluginAssets?.preparePackagedPluginAssets(sourcePath);
     console.error("==> Writing OpenClaw package inventory");
     await writePackageInventoryForDocker(sourcePath, packageOptions.runImpl ?? run);
 

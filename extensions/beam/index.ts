@@ -1,5 +1,8 @@
+import path from "node:path";
 import { getGatewayRequestAuthorityV1 } from "openclaw/plugin-sdk/gateway-request-authority";
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
+import manifest from "./openclaw.plugin.json" with { type: "json" };
+import { createBeamExecutableResolver } from "./src/executable.js";
 import { createBeamV2Handler } from "./src/http-v2.js";
 import { createBeamRequestHandler } from "./src/http.js";
 import { createBeamMirrorService } from "./src/mirror.js";
@@ -12,6 +15,24 @@ export default definePluginEntry({
   name: "Beam",
   description: "Receive redacted coding-session snapshots for review or Team continuation",
   register(api) {
+    const resolveExecutable = createBeamExecutableResolver(api.rootDir ?? path.dirname(api.source));
+    api.registerCli(
+      ({ program }) => {
+        const beam = program.command("beam").description(manifest.cliCommands[0]!.description);
+        beam
+          .command("doctor")
+          .description("Check the installed native Beam cleaner for outbound mirroring")
+          .option("--json", "Print machine-readable cleaner status")
+          .action(async (options: { json?: boolean }) => {
+            const { runBeamDoctor } = await import("./src/doctor.js");
+            await runBeamDoctor(options, resolveExecutable);
+          });
+      },
+      { descriptors: manifest.cliCommands },
+    );
+    if (api.registrationMode === "cli-metadata") {
+      return;
+    }
     const store = createBeamStore(api.runtime);
     api.registerSessionCatalog(createBeamSessionCatalog(store));
     for (const operation of ["list", "read", "resolve", "continue"] as const) {

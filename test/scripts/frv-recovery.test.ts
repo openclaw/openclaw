@@ -159,14 +159,19 @@ function fixture(candidateSha = Q) {
         _verification: Parameters<
           typeof import("../../scripts/release-qualification-admission.mjs").verifyQualificationAdmission
         >[0],
-      ) => ({ coverage: { children: roles.map((key) => ({ key, parentJobName: key })) } }),
+      ) => ({
+        baselinePolicy: { candidateVersion: "2026.11.1" },
+        coverage: { children: roles.map((key) => ({ key, parentJobName: key })) },
+      }),
     ),
-    getWorkflowSource: vi.fn((sha: string) =>
-      sha === P
-        ? 'env:\n  FULL_RELEASE_RECEIPT_RECOVERY_CONTRACT: "1"\n  FULL_RELEASE_RECEIPT_RECOVERY_REQUEST_CONTRACT: "1"\nrun-name: Receipt Recovery ' +
-          "$" +
-          "{{ fromJSON(inputs.request).requestId }}"
-        : "jobs:\n  npm:\n    name: npm\n    env:\n      CHILD_WORKFLOW_KIND: artifact-npm\n  candidate:\n    name: candidate\n    env:\n      CHILD_WORKFLOW_KIND: artifact-candidate\n  docker:\n    name: docker\n    env:\n      CHILD_WORKFLOW_KIND: artifact-docker\n",
+    getWorkflowSource: vi.fn((sha: string, sourcePath?: string) =>
+      sourcePath === "scripts/lib/release-validation-waivers.json"
+        ? JSON.stringify({ schema: "openclaw.release-validation-waivers/v1", waivers: [] })
+        : sha === P
+          ? 'env:\n  FULL_RELEASE_RECEIPT_RECOVERY_CONTRACT: "1"\n  FULL_RELEASE_RECEIPT_RECOVERY_REQUEST_CONTRACT: "1"\nrun-name: Receipt Recovery ' +
+            "$" +
+            "{{ fromJSON(inputs.request).requestId }}"
+          : "jobs:\n  npm:\n    name: npm\n    env:\n      CHILD_WORKFLOW_KIND: artifact-npm\n  candidate:\n    name: candidate\n    env:\n      CHILD_WORKFLOW_KIND: artifact-candidate\n  docker:\n    name: docker\n    env:\n      CHILD_WORKFLOW_KIND: artifact-docker\n",
     ),
     getRef: vi.fn(async () => ({ object: { type: "commit", sha: P } })),
     listRecoveryRuns: vi.fn(async (): Promise<Array<Record<string, unknown>>> => []),
@@ -213,10 +218,11 @@ describe("retained receipt recovery operator", () => {
       }
       f.runs.get(10)!.head_branch = original.branch;
       const frozen = f.client.getWorkflowSource(Q);
-      f.client.getWorkflowSource.mockImplementation(
-        () =>
-          frozen +
-          `
+      f.client.getWorkflowSource.mockImplementation((_sha, path) =>
+        path === "scripts/lib/release-validation-waivers.json"
+          ? JSON.stringify({ schema: "openclaw.release-validation-waivers/v1", waivers: [] })
+          : frozen +
+            `
   resolve_target:
     name: Resolve target ref
     steps:
@@ -264,6 +270,28 @@ describe("retained receipt recovery operator", () => {
       }
     },
   );
+  it("does not read the witness or receipt for an undispatched waived role", async () => {
+    const f = fixture();
+    const originalSource = f.client.getWorkflowSource.getMockImplementation()!;
+    f.client.getWorkflowSource.mockImplementation((sha, path) =>
+      path === "scripts/lib/release-validation-waivers.json"
+        ? JSON.stringify({
+            schema: "openclaw.release-validation-waivers/v1",
+            waivers: [
+              { targetVersion: "2026.11.1", childRole: "normalCi", reason: "Synthetic omission" },
+            ],
+          })
+        : originalSource(sha, path),
+    );
+    const roleJob = f.jobs.find((job) => job.name === "normalCi")!;
+    f.logs.delete(roleJob.id);
+    f.runs.delete(30);
+    const request = await discoverReceiptRecoveryRequest("10", P, f.client);
+    expect(Object.keys(request.children)).toEqual(roles.filter((role) => role !== "normalCi"));
+    expect(f.client.getJobLog).not.toHaveBeenCalledWith(roleJob.id);
+    expect(f.client.getRunArtifacts).not.toHaveBeenCalledWith("30");
+  });
+
   it("discovers a rerun parent without changing qualification attempt 1", async () => {
     const f = fixture();
     const parent = f.runs.get(10)!;
@@ -399,6 +427,7 @@ describe("retained receipt recovery operator", () => {
     const f = fixture();
     f.client.verifyQualificationAdmission
       .mockImplementationOnce(async () => ({
+        baselinePolicy: { candidateVersion: "2026.11.1" },
         coverage: { children: roles.map((key) => ({ key, parentJobName: key })) },
       }))
       .mockRejectedValueOnce(new Error("admission authority revoked"));
