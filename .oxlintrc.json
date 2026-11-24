@@ -532,6 +532,14 @@
       }
     },
     {
+      "files": ["src/cli/gateway-cli/run-loop.ts"],
+      "rules": {
+        // #204868: inherited 1235 lines plus two for the existing stop-budget custody join.
+        // The cohesive persistence/custody release block already moved to run-loop-cleanup.ts.
+        "max-lines": ["error", { "max": 1237, "skipBlankLines": true, "skipComments": true }]
+      }
+    },
+    {
       "files": ["**/*.{ts,tsx,mts,cts}"],
       "rules": {
         // tsgo owns TypeScript type/value namespace validity; no-var still rejects var declarations.

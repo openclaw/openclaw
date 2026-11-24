@@ -8,7 +8,6 @@ import { registerProcessExitCleanup } from "../infra/process-exit-cleanup.js";
 import { isPostgresSqlConnection, type EngineConnection } from "../infra/sql-connection.js";
 import {
   observeSqliteDatabaseAdmissionLocation,
-  retireSqliteDatabaseAdmissionForPath,
   retireSqliteDatabaseDescriptorCustody,
 } from "../infra/sqlite-database-admission.js";
 import { isSqliteCorruptionError } from "../infra/sqlite-error-diagnostics.js";
@@ -28,6 +27,7 @@ import {
 import {
   assertStateDatabaseBorrowersReleased,
   createStateDatabaseRetainer,
+  joinStateDatabaseBorrowersReleased,
   type StateDatabaseBorrowers,
 } from "./openclaw-state-db-borrow.js";
 import { createStateDatabaseCacheAdmission } from "./openclaw-state-db-cache.admission.js";
@@ -654,6 +654,15 @@ export async function closeOpenClawStateDatabaseAsync(
     await stopOpenClawStateDatabaseMaintenance();
     return retireOpenClawStateDatabaseHandles(undefined, options);
   });
+}
+
+/** The Gateway stop owner joins admitted native reads before mandatory custody retirement. */
+export async function joinOpenClawStateDatabaseBorrowers(): Promise<void> {
+  await Promise.all(
+    stateDatabaseHandlesAt().map((database) =>
+      joinStateDatabaseBorrowersReleased(borrowers.get(database.db), database.path),
+    ),
+  );
 }
 
 /** Join native consumers and identity descriptors before transferring store custody. */

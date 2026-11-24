@@ -16,7 +16,6 @@ import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { GatewayDrainReason } from "../../process/gateway-work-admission.js";
 import { runWithProcessCleanupBudget } from "../../process/supervisor/cleanup-budget.js";
 import { drainGlobalSingletonLifecycleState } from "../../shared/global-singleton.js";
-import { releaseOpenClawStateDatabaseCustody } from "../../state/openclaw-state-db-cache.js";
 import { handOffGatewayStartupSignals, registerSignalExitOwner } from "../signal-exit-barrier.js";
 import { measureGatewayBootstrapStep } from "../startup-trace.js";
 import { createGatewayHostLifecycle } from "./host-lifecycle.js";
@@ -176,12 +175,7 @@ export async function runGatewayLoop(params: GatewayRunLoopParams): Promise<numb
     gatewayLog,
   );
   const releaseLockIfHeld = async (): Promise<void> => {
-    if (
-      !(await cleanup.waitForPersistence(bootCompletion)) ||
-      !(await cleanup.waitForPersistence(lock?.release()))
-    ) {
-      throw new Error("Gateway state custody release did not settle; successor cannot start");
-    }
+    await cleanup.releaseStateCustody(lock, bootCompletion);
     lock = null;
   };
   const exitReplacedInstallation = async (replacement: GatewayInstallationReplacement) => {
@@ -772,67 +766,77 @@ export async function runGatewayLoop(params: GatewayRunLoopParams): Promise<numb
         const error = loopCompletion.combineShutdownFailures(err, startupFailure);
         shutdownFailure = cleanup.classifyShutdownFailure(error, shutdownStep);
       } finally {
-        await cleanup.stopOwnedProcesses();
-        signals.openStore();
-        const handoffClosed =
-          managedUpdateCancellation !== false && managedUpdateCancellation !== "restart-after-exit";
-        if (handoffClosed) {
-          server = null;
-        }
-        if (forcedExitStarted) {
-          // A deadline records failure, not permission to abandon cleanup that later settles.
-          // Do not overwrite its boot outcome or start a successor from the old generation.
-          await cleanup.drainProcessResources();
-        } else if (action === "restart") {
-          if (!acceptedRequest.hostedStop) {
-            await cleanup.retireHost(hostLifecycle);
-          }
-          if (shutdownFailure) {
-            if (installationReplacement && supervisorMode && !getManagedUpdateOwner()) {
-              writeStabilityBundle(
-                "gateway.restart_close_failed",
-                shutdownFailure.error,
-                shutdownFailure.step,
-              );
-              await handleRestartAfterServerClose(undefined, false, shutdownFailure);
+        await runWithProcessCleanupBudget(
+          budget.cleanupBudget(shutdownDeadline, HARD_EXIT_WATCHDOG_GRACE_MS),
+          async () => {
+            await cleanup.stopOwnedProcesses();
+            signals.openStore();
+            const handoffClosed =
+              managedUpdateCancellation !== false &&
+              managedUpdateCancellation !== "restart-after-exit";
+            if (handoffClosed) {
+              server = null;
+            }
+            if (forcedExitStarted) {
+              // A deadline records failure, not permission to abandon cleanup that later settles.
+              // Do not overwrite its boot outcome or start a successor from the old generation.
+              await cleanup.drainProcessResources();
+            } else if (action === "restart") {
+              if (!acceptedRequest.hostedStop) {
+                await cleanup.retireHost(hostLifecycle);
+              }
+              if (shutdownFailure) {
+                if (installationReplacement && supervisorMode && !getManagedUpdateOwner()) {
+                  writeStabilityBundle(
+                    "gateway.restart_close_failed",
+                    shutdownFailure.error,
+                    shutdownFailure.step,
+                  );
+                  await handleRestartAfterServerClose(undefined, false, shutdownFailure);
+                } else {
+                  await forceExitAfterStabilityBundle(
+                    "gateway.restart_close_failed",
+                    1,
+                    shutdownFailure,
+                  );
+                }
+              } else if (handoffClosed) {
+                await handleRestartAfterServerClose(
+                  managedUpdateOwner,
+                  managedUpdateCancellation === "restored-in-process",
+                );
+              }
+            } else if (acceptedRequest.hostedStop) {
+              await handleHostedStopAfterServerClose(acceptedRequest.hostedStop, shutdownFailure);
             } else {
-              await forceExitAfterStabilityBundle(
-                "gateway.restart_close_failed",
-                1,
-                shutdownFailure,
-              );
+              await cleanup.retireHost(hostLifecycle);
+              if (isRestart && shutdownFailure) {
+                await forceExitAfterStabilityBundle(
+                  "gateway.restart_close_failed",
+                  1,
+                  shutdownFailure,
+                );
+              } else {
+                if (shutdownFailure) {
+                  writeStabilityBundle(
+                    "gateway.stop_close_failed",
+                    shutdownFailure.error,
+                    shutdownFailure.step,
+                  );
+                }
+                completeBoot(
+                  loopCompletion.formatShutdownCompletion(
+                    acceptedRequest,
+                    Boolean(shutdownFailure),
+                    hostExitReason,
+                  ),
+                );
+                await releaseLockIfHeld();
+                await finishLoopAfterCleanup(shutdownFailure ? 1 : 0);
+              }
             }
-          } else if (handoffClosed) {
-            await handleRestartAfterServerClose(
-              managedUpdateOwner,
-              managedUpdateCancellation === "restored-in-process",
-            );
-          }
-        } else if (acceptedRequest.hostedStop) {
-          await handleHostedStopAfterServerClose(acceptedRequest.hostedStop, shutdownFailure);
-        } else {
-          await cleanup.retireHost(hostLifecycle);
-          if (isRestart && shutdownFailure) {
-            await forceExitAfterStabilityBundle("gateway.restart_close_failed", 1, shutdownFailure);
-          } else {
-            if (shutdownFailure) {
-              writeStabilityBundle(
-                "gateway.stop_close_failed",
-                shutdownFailure.error,
-                shutdownFailure.step,
-              );
-            }
-            completeBoot(
-              loopCompletion.formatShutdownCompletion(
-                acceptedRequest,
-                Boolean(shutdownFailure),
-                hostExitReason,
-              ),
-            );
-            await releaseLockIfHeld();
-            await finishLoopAfterCleanup(shutdownFailure ? 1 : 0);
-          }
-        }
+          },
+        );
         // Keep deadlines through final cleanup and updater handoff, not merely
         // server close. The next iteration also joins native watchdog retirement.
         if (!forcedExitStarted && cleanup.canClearRequestWatchdogs()) {

@@ -1,4 +1,4 @@
 # Physical descriptor retirement across shared/control/agent SQLite families,
 # unlinked identity FDs, native reader exit, bounded trial/scope waits, and repair facts
-# plus native dispatch refusal require distinct owning-boundary regressions.
-249
+# plus full-lock borrower settlement, real-process stop deadlines and successor admission.
+415

@@ -1,5 +1,8 @@
 import type { OpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
-import { releaseOpenClawStateDatabaseCustody } from "../state/openclaw-state-db-cache.js";
+import {
+  joinOpenClawStateDatabaseBorrowers,
+  releaseOpenClawStateDatabaseCustody,
+} from "../state/openclaw-state-db-cache.js";
 import type { GatewayLockRole } from "./gateway-lock-payload.js";
 import type { GatewayOwnerLease } from "./gateway-owner-lease.js";
 
@@ -10,6 +13,9 @@ export async function drainGatewayLockResources(
   role: GatewayLockRole,
 ): Promise<void> {
   await lease?.release();
+  if (role === "gateway") {
+    await joinOpenClawStateDatabaseBorrowers();
+  }
   await maintenance?.close();
   if (role === "gateway") {
     await releaseOpenClawStateDatabaseCustody();
