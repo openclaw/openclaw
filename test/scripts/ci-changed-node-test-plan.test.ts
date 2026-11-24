@@ -15,12 +15,12 @@ import { encodeNodeTestGroups } from "../../scripts/lib/ci-node-test-groups-code
 import {
   createNodeTestShardBundles,
   createSelectedNodeTestShardBundles,
-  isRuntimeTestFileIncluded,
   type CompactNodeTestShard,
   type NodeTestShard,
 } from "../../scripts/lib/ci-node-test-plan.mts";
 import { resolvePolicyTestTargets } from "../../scripts/lib/ci-policy-test-watch.mts";
 import { PR_PROTECTED_RUNTIME_TEST_FILES } from "../../scripts/lib/ci-proof-test-inventory.mts";
+import { isRuntimeTestFileIncluded } from "../../scripts/lib/ci-runtime-test-eligibility.mts";
 import { CI_PROOF_TEST_FILES, isCiProofTestFile } from "../../scripts/lib/ci-test-tier-policy.mts";
 import { refitTestTimings } from "../../scripts/lib/ci-test-timings-refit.mts";
 import * as testTimings from "../../scripts/lib/ci-test-timings.mts";

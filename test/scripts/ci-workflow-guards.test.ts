@@ -24,11 +24,11 @@ import { minimatch } from "minimatch";
 import { afterAll, afterEach, describe, expect, it } from "vitest";
 import { isAlias, isScalar, parse, parseDocument, visit } from "yaml";
 import { encodeNodeTestGroups } from "../../scripts/lib/ci-node-test-groups-codec.mts";
+import { SOURCE_CHANNEL_TEST_POLICY } from "../../scripts/lib/ci-node-test-plan.mts";
 import {
-  SOURCE_CHANNEL_TEST_POLICY,
   createUiRealGatewayTestShards,
   createUiTestShardGroups,
-} from "../../scripts/lib/ci-node-test-plan.mts";
+} from "../../scripts/lib/ci-ui-test-plan.mts";
 import { createNativeTypeScriptParser } from "../../scripts/lib/native-typescript.mts";
 import { pnpmLockfileDocuments } from "../../scripts/lib/pnpm-lockfile-documents.mjs";
 import { collectRuntimeImportClosure } from "../../scripts/lib/runtime-import-closure.mts";
@@ -5719,72 +5719,88 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(workflow).not.toContain('"testbox_id": "${testbox_id}"');
   });
 
-  it.each([false, true])("loads the Node shard planner from its owner (frozen=%s)", (frozen) => {
-    const workflow = readCiWorkflow();
-    const targetResolver = expectDefined(
-      manifestSource.match(/const fromTarget = [^;]*;/u)?.[0],
-      "target import resolver",
-    );
-    const selection = expectDefined(
-      manifestSource.match(/const nodeTestPlanPath =[\s\S]*?(?=const importTargetPlan)/u)?.[0],
-      "Node planner selection",
-    );
-    const root = tempDirs.make("ci-planner-owner-");
-    writeFileSync(path.join(root, "candidate.txt"), "candidate-source");
-    for (const [directory, owner] of [
-      ["scripts/lib", "candidate"],
-      [".ci-harness/scripts/lib", "workflow"],
-    ] as const) {
-      mkdirSync(path.join(root, directory), { recursive: true });
-      writeFileSync(
-        path.join(root, directory, "ci-node-test-plan.mts"),
-        `import { readFileSync } from "node:fs";
+  it.each([false, true])(
+    "loads the Node and UI shard planners from their owners (frozen=%s)",
+    (frozen) => {
+      const workflow = readCiWorkflow();
+      const targetResolver = expectDefined(
+        manifestSource.match(/const fromTarget = [^;]*;/u)?.[0],
+        "target import resolver",
+      );
+      const selection = expectDefined(
+        manifestSource.match(/const nodeTestPlanPath =[\s\S]*?(?=const importTargetPlan)/u)?.[0],
+        "Node and UI planner selection",
+      );
+      const root = tempDirs.make("ci-planner-owner-");
+      writeFileSync(path.join(root, "candidate.txt"), "candidate-source");
+      for (const [directory, owner] of [
+        ["scripts/lib", "candidate"],
+        [".ci-harness/scripts/lib", "workflow"],
+      ] as const) {
+        mkdirSync(path.join(root, directory), { recursive: true });
+        writeFileSync(
+          path.join(root, directory, "ci-node-test-plan.mts"),
+          `import { readFileSync } from "node:fs";
          export const SOURCE_CHANNEL_TEST_POLICY = ${JSON.stringify(SOURCE_CHANNEL_TEST_POLICY)};
          export const createNodeTestShardBundles = () =>
            [${JSON.stringify(owner)}, readFileSync("candidate.txt", "utf8")];`,
-      );
-    }
-    const entrypoint = path.join(root, ".ci-harness/scripts/ci-build-manifest.mjs");
-    writeFileSync(
-      entrypoint,
-      `import { existsSync } from "node:fs";
+        );
+        writeFileSync(
+          path.join(root, directory, "ci-ui-test-plan.mts"),
+          `import { readFileSync } from "node:fs";
+         export const createUiTestShardGroups = () =>
+           [${JSON.stringify(`${owner}-ui`)}, readFileSync("candidate.txt", "utf8")];`,
+        );
+      }
+      const entrypoint = path.join(root, ".ci-harness/scripts/ci-build-manifest.mjs");
+      writeFileSync(
+        entrypoint,
+        `import { existsSync } from "node:fs";
         import path from "node:path";
         import { pathToFileURL } from "node:url";
         ${targetResolver}
         const frozenTarget = ${frozen};
         const compatibilityTarget = true;
         ${selection}
-        console.log(JSON.stringify(createNodeTestPlan()));`,
-    );
-    const run = spawnSync(testNodeExecPath, [entrypoint], {
-      cwd: root,
-      encoding: "utf8",
-    });
-    expect(run.status, run.stderr).toBe(0);
-    expect(JSON.parse(run.stdout)).toEqual([frozen ? "workflow" : "candidate", "candidate-source"]);
-    if (frozen) {
-      const checkout = workflow.jobs.preflight.steps.find(
-        (entry: WorkflowStep) => entry.name === "Checkout trusted CI harness",
+        console.log(JSON.stringify({
+          node: createNodeTestPlan(),
+          ui: uiTestPlan.createUiTestShardGroups(),
+        }));`,
       );
-      expect(checkout.with.ref).toBe("${{ github.workflow_sha }}");
-      expect(checkout.with["sparse-checkout"]).toContain("/scripts/");
-      expect(checkout.with["sparse-checkout"]).toContain("/test/vitest/");
-      expect(checkout.with["sparse-checkout"]).toContain("/config/ci-test-timings.json");
-      const sparseRoot = tempDirs.make("ci-planner-sparse-");
-      for (const entry of String(checkout.with["sparse-checkout"]).trim().split("\n")) {
-        const relative = entry.replace(/^\//u, "");
-        const destination = path.join(sparseRoot, ".ci-harness", relative);
-        mkdirSync(path.dirname(destination), { recursive: true });
-        cpSync(relative, destination, { recursive: true });
-      }
-      const importResult = spawnSync(testNodeExecPath, ["--input-type=module"], {
-        cwd: sparseRoot,
-        input: 'await import("./.ci-harness/scripts/lib/ci-node-test-plan.mts");',
+      const run = spawnSync(testNodeExecPath, [entrypoint], {
+        cwd: root,
         encoding: "utf8",
       });
-      expect(importResult.status, importResult.stderr).toBe(0);
-    }
-  });
+      expect(run.status, run.stderr).toBe(0);
+      expect(JSON.parse(run.stdout)).toEqual({
+        node: [frozen ? "workflow" : "candidate", "candidate-source"],
+        ui: [frozen ? "workflow-ui" : "candidate-ui", "candidate-source"],
+      });
+      if (frozen) {
+        const checkout = workflow.jobs.preflight.steps.find(
+          (entry: WorkflowStep) => entry.name === "Checkout trusted CI harness",
+        );
+        expect(checkout.with.ref).toBe("${{ github.workflow_sha }}");
+        expect(checkout.with["sparse-checkout"]).toContain("/scripts/");
+        expect(checkout.with["sparse-checkout"]).toContain("/test/vitest/");
+        expect(checkout.with["sparse-checkout"]).toContain("/config/ci-test-timings.json");
+        const sparseRoot = tempDirs.make("ci-planner-sparse-");
+        for (const entry of String(checkout.with["sparse-checkout"]).trim().split("\n")) {
+          const relative = entry.replace(/^\//u, "");
+          const destination = path.join(sparseRoot, ".ci-harness", relative);
+          mkdirSync(path.dirname(destination), { recursive: true });
+          cpSync(relative, destination, { recursive: true });
+        }
+        const importResult = spawnSync(testNodeExecPath, ["--input-type=module"], {
+          cwd: sparseRoot,
+          input: `await import("./.ci-harness/scripts/lib/ci-node-test-plan.mts");
+          await import("./.ci-harness/scripts/lib/ci-ui-test-plan.mts");`,
+          encoding: "utf8",
+        });
+        expect(importResult.status, importResult.stderr).toBe(0);
+      }
+    },
+  );
 
   it.skipIf(process.platform === "win32")(
     "runs the dependency-free preflight manifest from the owner-exported harness",
