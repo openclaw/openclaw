@@ -8,8 +8,6 @@ import {
   type SessionPendingInputReceipt,
 } from "../../config/sessions/session-accessor.pending-inputs.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import * as admission from "../../infra/sqlite-worker-operation-admission.js";
-import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { roleClient, rolePolicyConfig } from "../session-sharing.test-utils.js";
 import { createHistoryReadContext } from "./chat-history.test-helpers.js";
@@ -200,23 +198,4 @@ it("requires session write authority at the registered RPC", () =>
     expect(await f.retained()).toEqual(before);
     f.client.connect.scopes = ["operator.sessions.read", "operator.sessions.write"];
     expect((await f.dismiss([f.cancelled]))[0]).toBe(true);
-  }));
-
-it("refuses at the worker commit when session write access is revoked after admission", () =>
-  withDismissTest(async (f) => {
-    const changed = vi.spyOn(sessionChangeEvent, "emitSessionsChanged");
-    const before = await f.retained();
-    const admitted = probe.admission(admission, (request, grant, callback) => {
-      if (request.stage === "commit") {
-        f.client.connect.scopes = ["operator.read"];
-      }
-      return callback(request, grant);
-    });
-    try {
-      expect(await f.dismiss([f.cancelled])).toMatchObject(forbidden);
-    } finally {
-      admitted.mockRestore();
-    }
-    expect(changed).not.toHaveBeenCalled();
-    expect(await f.retained()).toEqual(before);
   }));

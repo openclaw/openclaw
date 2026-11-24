@@ -29,8 +29,10 @@ import { hasSessionActiveAutoModelFallback } from "../config/sessions/model-over
 import { applySessionEntryReplacements } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { updateLegacySessionStore } from "../infra/state-migrations.legacy-session-store.js";
+import { preparePluginDoctorContractModules } from "../plugins/doctor-contract-preparation.js";
 import { listPluginDoctorSessionRouteStateOwners } from "../plugins/doctor-contract-registry.js";
 import type { DoctorSessionRouteStateOwner } from "../plugins/doctor-session-route-state-owner-types.js";
+import { prepareProviderModelPolicySurfaces } from "../plugins/provider-model-routes.js";
 import { groupPluginRecords as groupRecords } from "../plugins/record-groups.js";
 import { isValidAgentHarnessSessionStoreEntry } from "../sessions/agent-harness-session-key.js";
 import { parseAgentSessionKey } from "../sessions/session-key-utils.js";
@@ -318,6 +320,19 @@ function scanEntryForOwner(params: {
 }
 
 /** Streams session entries into compact plugin-owned route-state findings. */
+/** Prepare the route-state owners and model policies the synchronous scanner reads. */
+export async function preparePluginSessionStateDoctorScan(params: {
+  cfg: OpenClawConfig;
+  env: NodeJS.ProcessEnv;
+}): Promise<void> {
+  await preparePluginDoctorContractModules({
+    config: params.cfg,
+    env: params.env,
+    surfaces: ["sessionRouteStateOwners"],
+  });
+  await prepareProviderModelPolicySurfaces();
+}
+
 export function createPluginSessionStateDoctorScanner(params: {
   agentId?: string;
   cfg: OpenClawConfig;

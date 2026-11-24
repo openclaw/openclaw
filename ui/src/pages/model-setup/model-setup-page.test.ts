@@ -629,7 +629,7 @@ describe("Model setup account connections", () => {
         expect(verificationRuns).toBe(operation === "connect" ? 0 : 1);
         expect(page.textContent).not.toContain("Approve this account in your browser.");
         expect(page.textContent).not.toContain(url);
-        expect(setupButton.textContent?.trim()).toBe("Set up & verify");
+        expect(setupButton.textContent?.trim()).toBe("Setup-only account");
         if (operation === "connect") {
           expect(request).toHaveBeenCalledWith(
             "models.authLogin",

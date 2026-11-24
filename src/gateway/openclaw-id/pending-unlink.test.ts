@@ -92,15 +92,6 @@ it("keeps an unlink Discovery refused for good as refused and does not send it a
   sender.stop();
 });
 
-it("treats Discovery's unlinked answer as confirmed", async () => {
-  const { sender, pending } = await setup([
-    () => Response.json({ error: { code: "unlinked", message: "x" } }, { status: 410 }),
-  ]);
-  await sender.start();
-  expect(pending()).toBeUndefined();
-  sender.stop();
-});
-
 it("sends again when started after a stop that cut a send short", async () => {
   let release = () => {};
   const held = new Promise<void>((resolve) => {

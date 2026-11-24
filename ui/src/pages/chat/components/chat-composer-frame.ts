@@ -74,7 +74,11 @@ export function createChatComposerContext(
   props: ChatComposerProps,
   interaction: ComposerInteraction,
   goalComposer: GoalComposer,
-  voice: { dictation: ComposerDictationOwner; picker: ComposerMicrophoneOwner },
+  voice: {
+    dictation: ComposerDictationOwner;
+    picker: ComposerMicrophoneOwner;
+    configureApiKey?: (modelProvider: string | undefined) => void;
+  },
   prediction: ComposerPrediction | undefined,
   questionPanelProps: QuestionPanelProps | null,
   streaming: boolean,
@@ -503,10 +507,16 @@ export function createChatComposerContext(
     props.onTypingChange?.(false);
   };
   const devicePicker = voice.picker;
+  const talkModelKey = devicePicker.apiKeyProviders.talk;
+  const talkKey = talkModelKey ?? devicePicker.apiKeyProviders.speech;
   const startRealtimeTalk = () => {
     // Catalog help does not require history; only starting Talk does.
     if (devicePicker.realtimeStatus !== "ready") {
-      devicePicker.handleOpen();
+      if (talkKey && voice.configureApiKey) {
+        devicePicker.setTalkApiKeyNotice(true);
+      } else {
+        devicePicker.handleOpen();
+      }
       return;
     }
     if (props.submitDisabledReason) {
@@ -555,6 +565,8 @@ export function createChatComposerContext(
         onOpenDictationSettings: devicePicker.canConfigure
           ? props.onOpenDictationSettings
           : undefined,
+        apiKeyProviders: devicePicker.apiKeyProviders,
+        onConfigureApiKey: devicePicker.canConfigure ? voice.configureApiKey : undefined,
       }
     : undefined;
   const dictationOptions = createComposerDictationOptions(
@@ -620,6 +632,14 @@ export function createChatComposerContext(
     onToggleVoice: props.onToggleRealtimeTalk ? handleVoicePrimaryAction : undefined,
     onToggleCamera: props.onToggleRealtimeCamera,
     microphonePicker,
+    talkApiKeyNotice:
+      devicePicker.talkApiKeyNotice && talkKey
+        ? {
+            provider: talkKey,
+            onConfigure: () => voice.configureApiKey?.(talkModelKey),
+            onDismiss: () => devicePicker.setTalkApiKeyNotice(false),
+          }
+        : undefined,
     readDictation: dictation ? () => dictation : undefined,
     onDictationPointerDown: handleDictationStart,
     onDirectDictationStart: handleDictationStart,

@@ -26,6 +26,7 @@ import { registerChatFailedMessageEditEnglish } from "../../ui/src/i18n/locales/
 import { registerChatGoalsEnglish } from "../../ui/src/i18n/locales/en-chat-goals.ts";
 import { registerChatMediaEnglish } from "../../ui/src/i18n/locales/en-chat-media.ts";
 import { registerChatMessageMetadataEnglish } from "../../ui/src/i18n/locales/en-chat-message-metadata.ts";
+import { registerChatMoveToProjectEnglish } from "../../ui/src/i18n/locales/en-chat-move-to-project.ts";
 import { registerChatOutputsEnglish } from "../../ui/src/i18n/locales/en-chat-outputs.ts";
 import { registerChatPermissionsEnglish } from "../../ui/src/i18n/locales/en-chat-permissions.ts";
 import { registerChatProviderReviewEnglish } from "../../ui/src/i18n/locales/en-chat-provider-review.ts";
@@ -38,6 +39,7 @@ import { registerChatSystemNoticeEnglish } from "../../ui/src/i18n/locales/en-ch
 import { registerChatToolContentEnglish } from "../../ui/src/i18n/locales/en-chat-tool-content.ts";
 import { registerChatToolLabelsEnglish } from "../../ui/src/i18n/locales/en-chat-tool-labels.ts";
 import { registerChatToolWidgetsEnglish } from "../../ui/src/i18n/locales/en-chat-tool-widgets.ts";
+import { registerChatVoiceApiKeyEnglish } from "../../ui/src/i18n/locales/en-chat-voice-api-key.ts";
 import { registerChatWorktreeEnglish } from "../../ui/src/i18n/locales/en-chat-worktree.ts";
 import { registerCodeBlocksEnglish } from "../../ui/src/i18n/locales/en-code-blocks.ts";
 import { registerCommandPaletteEnglish } from "../../ui/src/i18n/locales/en-command-palette.ts";
@@ -150,6 +152,7 @@ const sourceFiles = [
   "en-board.ts",
   "en-browser.ts",
   "en-chat-camera.ts",
+  "en-chat-voice-api-key.ts",
   "en-chat-dictation.ts",
   "en-chat-ci.ts",
   "en-chat-command-results.ts",
@@ -160,6 +163,7 @@ const sourceFiles = [
   "en-chat-goals.ts",
   "en-chat-message-metadata.ts",
   "en-chat-failed-message-edit.ts",
+  "en-chat-move-to-project.ts",
   "en-chat-media.ts",
   "en-chat-provider-review.ts",
   "en-chat-public-qr.ts",
@@ -603,6 +607,7 @@ export function loadControlUiSourceCatalog(): TranslationMap {
         },
         sessionHeader: {
           ...registerChatSessionEnglish.catalog.chat.sessionHeader,
+          moveToProject: registerChatMoveToProjectEnglish.catalog.chat.sessionHeader.moveToProject,
           continueInTerminal,
         },
         sessionSuggestions: {
@@ -658,6 +663,7 @@ export function loadControlUiSourceCatalog(): TranslationMap {
     registerSecretsStoreEnglish.catalog,
     registerBrowserEnglish.catalog,
     registerChatCameraEnglish.catalog,
+    registerChatVoiceApiKeyEnglish.catalog,
     registerChatDictationEnglish.catalog,
     { chat: { pullRequests: { ...ciPullRequests, automationNoChecks, automationRetry } } },
     registerChatCommandResultsEnglish.catalog,

@@ -717,6 +717,31 @@ else process.stdout.write(JSON.stringify(value));
 }
 
 describe("publication status real CLI", () => {
+  it.each([false, true])(
+    "keeps verified qualification separate from publication inputs without changing JSON (json=%s)",
+    async (json) => {
+      const result = await runPublicationCli(publicationFixture(), [
+        "verify",
+        "--run",
+        "77",
+        ...(json ? ["--json"] : []),
+      ]);
+      expect(result.status, result.stderr).toBe(0);
+      if (json) {
+        expect(JSON.parse(result.stdout)).toEqual({ valid: true });
+      } else {
+        expect(result.stdout).toContain("VERIFIED: Full Release Validation run 77");
+        expect(result.stdout).toContain(`Qualification tooling (Q): ${SHA}`);
+        expect(result.stdout.split("\n").find((line) => line.startsWith("Candidate inputs:"))).toBe(
+          `Candidate inputs: --target-sha ${TARGET_SHA} --full-release-validation-run-id 77 --release-profile beta --skip-dispatch`,
+        );
+        expect(result.stdout).toContain(
+          "Supply independently pinned publication tooling (P) via --workflow-sha <P> or --publish-workflow-ref <tag>",
+        );
+      }
+    },
+  );
+
   it.each(["current grant", "removed grant", "missing ledger", "forbidden"])(
     "joins publication status with authenticated Q policy: %s",
     async (mode) => {
@@ -779,8 +804,6 @@ describe("publication status real CLI", () => {
                           childRole: "normalCi",
                           jobName: failedJob.name,
                           reason: "Synthetic joined status grant",
-                          evidence: { runId: "101", runAttempt: 1 },
-                          aggregates: [],
                         },
                       ]
                     : [],
@@ -1999,8 +2022,6 @@ describe("publication status real CLI", () => {
                   childRole: "normalCi",
                   jobName: "synthetic failure",
                   reason: "Synthetic Q status grant",
-                  aggregates: [],
-                  evidence: { runId: "101", runAttempt: 1 },
                 },
               ]
             : [],

@@ -11,7 +11,7 @@ import {
   withSessionMetadataPublication,
   withSessionTranscriptWriteAssertion,
 } from "../../config/sessions/transcript-write-context.js";
-import type { Model, AssistantMessage } from "../../llm/types.js";
+import type { Model, AssistantHistoryMessage } from "../../llm/types.js";
 import { assertionSucceeds } from "../../shared/assertion.js";
 import {
   type ThinkingLevel,
@@ -378,7 +378,7 @@ export abstract class AgentSessionInspection extends AgentSessionPrompting {
 
   getLastAssistantText(): string | undefined {
     const message = this.messages.findLast(
-      (entry): entry is AssistantMessage =>
+      (entry): entry is AssistantHistoryMessage =>
         entry.role === "assistant" &&
         (entry.stopReason !== "aborted" || hasPersistedAssistantContent(entry.content)),
     );

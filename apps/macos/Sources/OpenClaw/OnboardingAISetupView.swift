@@ -740,13 +740,17 @@ struct OnboardingAISetupView: View {
         case "custom": ("point.3.connected.trianglepath.dotted", "Configure…")
         default: ("person.crop.circle.badge.checkmark", "Sign in")
         }
+        let useChoiceLabel = option.actionLabel == nil &&
+            (option.kind == "oauth" || option.kind == "device-code")
+        let buttonLabel = option.actionLabel ?? (useChoiceLabel ? option.label : nil)
+        let title = buttonLabel == nil ? option.label : option.groupLabel ?? option.label
         return self.providerChoiceRow(
             icon: option.icon,
             brandCandidates: [option.brandId, option.id],
-            label: Text(option.label),
+            label: useChoiceLabel && title == option.label ? nil : Text(title),
             hint: self.providerHint(option.hint),
             fallbackSymbol: fallbackSymbol,
-            actionLabel: Text(actionLabel))
+            actionLabel: buttonLabel.map { Text($0) } ?? Text(actionLabel))
         {
             self.model.startProviderWizard(option, kind: .auth)
         }
@@ -762,7 +766,7 @@ struct OnboardingAISetupView: View {
     private func providerChoiceRow(
         icon: String?,
         brandCandidates: [String?],
-        label: Text,
+        label: Text?,
         hint: some View,
         fallbackSymbol: String,
         actionLabel: Text,
@@ -776,7 +780,9 @@ struct OnboardingAISetupView: View {
                     brandCandidates: brandCandidates,
                     fallbackSymbol: fallbackSymbol)
                 VStack(alignment: .leading, spacing: 2) {
-                    label.font(.callout.weight(.semibold))
+                    if let label {
+                        label.font(.callout.weight(.semibold))
+                    }
                     hint.font(.caption).foregroundStyle(.secondary)
                 }
                 Spacer(minLength: 0)

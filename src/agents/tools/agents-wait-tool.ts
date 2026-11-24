@@ -12,6 +12,7 @@ import { createAbortError } from "../../infra/abort-signal.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
+import { retireAcceptedSessionSpawnCollectionForRun } from "../accepted-session-spawn.js";
 import { resolveSubagentCompletionResultText } from "../subagents/completion/subagent-completion-result.js";
 import { capFrozenResultText } from "../subagents/registry/subagent-registry-helpers.js";
 import { subscribeSubagentRunChanges } from "../subagents/registry/subagent-registry-publication.js";
@@ -523,6 +524,14 @@ async function collectNativeSubagentResults(
     assertCurrent: params.assertCurrent,
     abortError: () => createAbortError("agents_wait aborted."),
   });
+  // Every harness runs tools under its admitted run, so collection settles that run's receipts.
+  const run = getGatewayToolCallerIdentity()?.operationalRunInstance;
+  if (run) {
+    retireAcceptedSessionSpawnCollectionForRun(
+      run,
+      result.completed.flatMap((entry) => (entry.status === "done" ? [entry.runId] : [])),
+    );
+  }
   const noAuthorizedTargets =
     result.completed.length === 0 && result.pending.length === 0 && Boolean(result.errors?.length);
   return noAuthorizedTargets ? { ...result, success: false as const } : result;

@@ -315,7 +315,11 @@ describe("sessions_send direct queue source authority", () => {
                   gatewayContextResolver: () => context,
                   operationalRunInstance: instance,
                   approvalAuthority: authority,
-                  receiptAuthority: () => validateAgentRunDelegatedAuthority(authority),
+                  receiptAuthority: () => {
+                    if (!validateAgentRunDelegatedAuthority(authority)) {
+                      throw new Error("agent tool caller authority is no longer active");
+                    }
+                  },
                 }),
           },
           send,

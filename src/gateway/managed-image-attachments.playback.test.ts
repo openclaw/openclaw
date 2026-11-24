@@ -11,7 +11,6 @@ import { createManagedArtifactDownload } from "./artifact-download-grants.js";
 import {
   assistantMessage,
   authorizeGatewayHttpRequestOrReplyMock,
-  bindHttpResponseAuthority,
   handleManagedOutgoingImageHttpRequest,
   mediaMessage,
   mediaPath,
@@ -128,9 +127,7 @@ describe("managed attachment playback", () => {
   });
   it("closes the opened managed-media descriptor when playback resolution rejects", async () => {
     const { attachmentId, sessionKey, originalPath } = await playbackFixture(stateDir);
-    authorizeGatewayHttpRequestOrReplyMock.mockImplementation(async ({ res }) =>
-      bindHttpResponseAuthority({ ok: true, authMethod: "token" }, res, () => true),
-    );
+    authorizeGatewayHttpRequestOrReplyMock.mockResolvedValue({ ok: true, authMethod: "token" });
     resolveSharedSecretHttpOperatorScopesMock.mockReturnValue(["operator.read"]);
     resolveOpenAiCompatibleHttpSenderIsOwnerMock.mockReturnValue(true);
     mockSessionEntry(path.join(stateDir, "gateway-sessions.json"));
@@ -224,15 +221,13 @@ describe("managed attachment playback", () => {
     const entered = createDeferred();
     const release = createDeferred();
     let started = 0;
-    const probe = vi
-      .spyOn(mediaProbe, "probePlaybackMediaFileDescriptor")
-      .mockImplementation(async () => {
-        if (++started === 2) {
-          entered.resolve();
-        }
-        await release.promise;
-        return { durationMs: 1000, audioCodec: "mp3", audioStreamIndex: 0 };
-      });
+    const probe = vi.spyOn(mediaProbe, "probePlaybackMediaFile").mockImplementation(async () => {
+      if (++started === 2) {
+        entered.resolve();
+      }
+      await release.promise;
+      return { durationMs: 1000, audioCodec: "mp3", audioStreamIndex: 0 };
+    });
     const abort = new AbortController();
     const pending: Promise<unknown>[] = [];
     onTestFinished(async () => {

@@ -6,6 +6,7 @@ on:
       mode:
         type: string
         required: true
+      # Retained for callers pinned to the existing reusable-workflow interface.
       runner_label:
         type: string
         required: true
@@ -73,10 +74,8 @@ jobs:
       (github.workflow_ref == 'openclaw/openclaw/.github/workflows/full-release-validation.yml@refs/heads/main' ||
       startsWith(github.workflow_ref, 'openclaw/openclaw/.github/workflows/full-release-validation.yml@refs/heads/release-ci/')) &&
       (inputs.mode == 'decision' || inputs.mode == 'drain')
-    runs-on: >-
-      ${{ vars.OPENCLAW_CI_RUNNER_BACKEND == 'boat' &&
-      fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(vars.BOAT_RELEASE_RUNNER_GROUP),
-      toJSON(inputs.runner_label))) || (vars.OPENCLAW_RELEASE_RUNNER_GROUP != '' && fromJSON(format('{{"group":{0},"labels":{1}}}',       toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON(vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' &&       'ubuntu-24.04' || 'blacksmith-2vcpu-ubuntu-2404'))) || (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github'       && 'ubuntu-24.04' || 'blacksmith-2vcpu-ubuntu-2404')) }}
+    # Release-only routing: normal CI and nightly keep their existing backend.
+    runs-on: blacksmith-2vcpu-ubuntu-2404
     timeout-minutes: 720
     env:
       OPENCLAW_RELEASE_WAIVERS_PATH: ${{ github.workspace }}/scripts/lib/release-validation-waivers.json

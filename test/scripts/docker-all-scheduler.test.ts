@@ -499,9 +499,9 @@ describe("scripts/test-docker-all scheduler", () => {
       preparePluginRegistry: true,
     });
     expect(
-      parseDockerAllCliArgs(["--lanes=package-installed-recovery", "--plan-json"]),
+      parseDockerAllCliArgs(["--lanes=published-upgrade-survivor", "--plan-json"]),
     ).toMatchObject({
-      lanes: "package-installed-recovery",
+      lanes: "published-upgrade-survivor",
       planJson: true,
     });
     for (const selector of ["", " ", ", ,"]) {
@@ -517,7 +517,7 @@ describe("scripts/test-docker-all scheduler", () => {
     ).toThrow("conflicting plan/prep options");
   });
 
-  it.for(["package-installed-recovery", "published-upgrade-survivor"])(
+  it.for(["published-upgrade-survivor"])(
     "selects the %s package family over inherited lane settings",
     (family) => {
       const scripts = JSON.parse(readFileSync("package.json", "utf8")).scripts;
@@ -546,7 +546,7 @@ describe("scripts/test-docker-all scheduler", () => {
       expect(inherited.status, inherited.stderr).toBe(0);
       const plan = JSON.parse(explicit.stdout);
       expect(plan).toEqual(JSON.parse(inherited.stdout));
-      expect(plan.lanes).toHaveLength(family === "package-installed-recovery" ? 7 : 1);
+      expect(plan.lanes).toHaveLength(1);
       expect(plan.lanes.every((lane: { name: string }) => lane.name.startsWith(family))).toBe(true);
     },
   );

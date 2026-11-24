@@ -21,6 +21,7 @@ import { readMemoryUsage } from "./diagnostic-memory-bundle.js";
 import {
   assignOptionalFields,
   readCodeString,
+  readNumberMap,
   readObject,
   readOptionalCodeString,
   readOptionalNumber,
@@ -445,18 +446,6 @@ function readBundleEvidence(value: unknown): DiagnosticStabilityBundleEvidence |
     : undefined;
 }
 
-function readNumberMap(value: unknown, label: string): Record<string, number> {
-  const source = readObject(value, label);
-  const result: Record<string, number> = {};
-  for (const [key, entry] of Object.entries(source)) {
-    if (!SAFE_REASON_CODE.test(key)) {
-      continue;
-    }
-    result[key] = readRequiredNumber(entry, `${label}.${key}`);
-  }
-  return result;
-}
-
 function readMemorySummary(
   value: unknown,
 ): NonNullable<DiagnosticStabilitySnapshot["summary"]["memory"]> {
@@ -843,6 +832,7 @@ export function writeDiagnosticStabilityBundleForFailureSync(
       `${BUNDLE_PREFIX}${formatDiagnosticFilenameTimestamp(now)}-${process.pid}-${normalizedReason}${BUNDLE_SUFFIX}`,
     );
     replaceFileAtomicSync({
+      allowDrvfsRenameRecovery: true,
       filePath: file,
       content: `${JSON.stringify(bundle, null, 2)}\n`,
       dirMode: 0o700,

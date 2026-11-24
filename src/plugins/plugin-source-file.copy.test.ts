@@ -5,6 +5,7 @@ import * as fsSafe from "@openclaw/fs-safe/advanced";
 import { FsSafeError } from "@openclaw/fs-safe/errors";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { createPluginGenerationReceipt } from "./plugin-generation-receipt.js";
 import { copyPluginSourceFile, pluginSourceStatIdentity } from "./plugin-source-file.js";
 
 vi.mock("@openclaw/fs-safe/advanced", async (importOriginal) => ({
@@ -40,6 +41,62 @@ it("copies small files through owned descriptors with the same bytes, identity a
   fs.writeFileSync(source, "edited");
   expect(fs.readFileSync(target)).toEqual(bytes);
 });
+
+it.each(["capture", "receipt"])(
+  "closes native batch descriptors without Node warnings during %s",
+  (operation) => {
+    const { root, source, target, bytes } = fixture();
+    const createBatch = fsSafe.createRootFileOpenBatchSync;
+    const close = fs.closeSync;
+    const nativeDescriptors = new Set<number>();
+    const warnings = vi.spyOn(process, "emitWarning").mockImplementation(() => {});
+    vi.spyOn(fs, "closeSync").mockImplementation((fd) => {
+      if (nativeDescriptors.has(fd)) {
+        process.emitWarning(`File descriptor ${fd} closed but not opened in unmanaged mode`);
+      }
+      close(fd);
+    });
+    vi.spyOn(fsSafe, "createRootFileOpenBatchSync").mockImplementation(() => {
+      const batch = createBatch();
+      return {
+        ...batch,
+        openFile(params) {
+          const opened = batch.openFile(params);
+          if (!opened.ok) {
+            return opened;
+          }
+          nativeDescriptors.add(opened.fd);
+          return {
+            ...opened,
+            close: () => {
+              nativeDescriptors.delete(opened.fd);
+              close(opened.fd);
+            },
+          };
+        },
+      };
+    });
+    if (operation === "capture") {
+      using batch = fsSafe.createRootFileOpenBatchSync();
+      copyPluginSourceFile(source, root, target, { openFile: batch.openFile.bind(batch) });
+      expect(fs.readFileSync(target)).toEqual(bytes);
+    } else {
+      const receipt = createPluginGenerationReceipt();
+      receipt.file({
+        target: source,
+        boundary: root,
+        sizeBytes: bytes.length,
+        native: true,
+        onContent() {},
+      });
+      expect(receipt.finish().sourceDigest).toBe(
+        createHash("sha256").update(String(bytes.length)).update("\0").update(bytes).digest("hex"),
+      );
+    }
+    expect(warnings).not.toHaveBeenCalled();
+    expect(nativeDescriptors.size).toBe(0);
+  },
+);
 
 it("refuses source growth during the bounded transfer", () => {
   const { source, copy } = fixture();

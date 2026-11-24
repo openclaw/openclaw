@@ -622,7 +622,7 @@ async function runGuidedOnboardingFlow(
       }),
       t("wizard.guided.nextStepsTitle"),
     );
-    await prompter.outro(t("wizard.guided.setupDone"));
+    await prompter.outro(t("wizard.guided.completeWithoutAi"));
     return null;
   }
   const { runMemorySetupFlow } = await import("../flows/memory-setup.js");

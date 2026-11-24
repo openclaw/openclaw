@@ -17,7 +17,6 @@ import {
   bindGatewayContextResolver,
   getPluginRuntimeGatewayRequestScope,
 } from "../../plugins/runtime/gateway-request-scope.js";
-import { captureCommandOwnerAssertion } from "../command-owner-authority.js";
 import type { AgentTurnParams } from "./agent-runner-execution.types.js";
 import { resolveReplyScheduledToolPolicy } from "./agent-runner-run-params.js";
 import { prepareChannelRunAdmission } from "./channel-run-admission.js";
@@ -38,9 +37,6 @@ export async function prepareReplyTurnExecution(params: AgentTurnParams, runId: 
       sessionKey,
       storePath: params.storePath,
     }),
-    params.followupRun.run.senderIsOwner === true
-      ? captureCommandOwnerAssertion(params.followupRun.run)
-      : undefined,
     params.followupRun.run.internalEventExecution?.assertCurrent,
     automation?.assertCurrent,
   ]);
