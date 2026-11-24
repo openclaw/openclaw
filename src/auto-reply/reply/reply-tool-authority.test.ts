@@ -115,7 +115,6 @@ it("keeps same-requester steering independent of session personal-context reassi
       profileId: "original-operator",
       scopes: ["operator.read", "operator.write"],
       source: {},
-      assertCurrent: () => {},
     });
     const { operation, fingerprint, queueMessage, inject } = await admit(
       run,

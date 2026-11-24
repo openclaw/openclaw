@@ -101,7 +101,6 @@ export abstract class ChatPaneStateOwner {
   awaitDomCommit = (): Promise<boolean> => this.updateComplete;
   isConnected = false;
   headerElement: HTMLElement | null = null;
-  historySentinel: HTMLElement | null = null;
   transcriptAnnouncement: HTMLElement | null = null;
   composerShell: HTMLElement | null = null;
   composerFloat: HTMLElement | null = null;
@@ -114,12 +113,7 @@ export abstract class ChatPaneStateOwner {
     this.transcript.syncViewportGeometry();
   };
   private registerPaneElement(
-    key:
-      | "headerElement"
-      | "historySentinel"
-      | "transcriptAnnouncement"
-      | "composerShell"
-      | "composerFloat",
+    key: "headerElement" | "transcriptAnnouncement" | "composerShell" | "composerFloat",
   ) {
     return (element: HTMLElement) => {
       this[key] = element;
@@ -137,7 +131,6 @@ export abstract class ChatPaneStateOwner {
     };
   }
   protected readonly registerHeaderElement = this.registerPaneElement("headerElement");
-  protected readonly registerHistorySentinel = this.registerPaneElement("historySentinel");
   protected readonly registerTranscriptAnnouncement =
     this.registerPaneElement("transcriptAnnouncement");
   protected readonly registerComposerShell = this.registerPaneElement("composerShell");
@@ -690,9 +683,7 @@ export abstract class ChatPaneStateOwner {
   protected catalogLoadGeneration = 0;
   protected catalogRequestedSessionKey: string | null = null;
   protected olderLoadGeneration = 0;
-  protected historyObserver: IntersectionObserver | null = null;
-  protected historyObserverSentinel: HTMLElement | null = null;
-  protected historyObserverArmed = false;
+  protected historyReaderIntent = false;
   protected historyAutoLoadBlocked = false;
   protected historyIntentTimer: number | null = null;
   protected transcriptScrollTop: number | null = null;

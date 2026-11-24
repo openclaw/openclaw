@@ -495,7 +495,7 @@ export function buildGatewayReloadPlan(
 ): GatewayReloadPlan {
   const noopPaths = new Set(options.noopPaths);
   const forceChangedPaths = new Set(options.forceChangedPaths);
-  const roleModelPolicyOnly =
+  const roleLivePolicyOnly =
     haveSameOperatorRoleSourcePolicies(
       options.previousConfig?.gateway?.roles,
       options.candidateConfig?.gateway?.roles,
@@ -525,11 +525,12 @@ export function buildGatewayReloadPlan(
 
   for (const path of changedPaths) {
     if (
-      roleModelPolicyOnly &&
+      roleLivePolicyOnly &&
       matchesReloadPrefix(path, "gateway.roles") &&
       !forceChangedPaths.has(path)
     ) {
-      // The committed snapshot notifies model bindings without replacing permitted runtimes.
+      // The committed snapshot notifies model bindings without replacing permitted runtimes;
+      // project grants are read live from it.
       plan.noopPaths.push(path);
       continue;
     }

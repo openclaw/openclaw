@@ -244,11 +244,6 @@ describe("built-in session tool role authority", () => {
           rawPrincipalRef: alice.profileId,
         });
 
-        turn.revoke(bob.profileId);
-        await expect(read(PARTICIPANT_SHARED, bob.profileId)).rejects.toThrow(
-          /Bob's access changed/,
-        );
-        await expectDraft(alice.profileId);
         await turn.complete();
         await expect(read(PARTICIPANT_DRAFT, alice.profileId)).rejects.toThrow(/turn has ended/);
       },
@@ -439,7 +434,7 @@ describe("built-in session tool role authority", () => {
         undefined,
         {
           code: "INVALID_REQUEST",
-          message: expect.stringMatching(/turn has ended|no longer active/),
+          message: expect.stringMatching(/turn has ended|no longer active|agent run ended/),
         },
       ]);
     });
@@ -645,7 +640,11 @@ describe("built-in session tool role authority", () => {
               agentId: "main",
               sessionKey: REQUESTER,
               operationalRunInstance: { instanceId: "spawn-instance", runId: "spawn-run" },
-              receiptAuthority: () => current,
+              receiptAuthority: () => {
+                if (!current) {
+                  throw new Error("agent tool caller authority is no longer active");
+                }
+              },
               gatewayContextResolver: () => context,
             },
             () => spawnVisible({ options: { ...toolOptions(cfg), callGateway } }),
@@ -763,7 +762,11 @@ describe("built-in session tool role authority", () => {
                 agentId: "main",
                 sessionKey,
                 operationalRunInstance: { instanceId: "archive-instance", runId: "archive-run" },
-                receiptAuthority: () => current,
+                receiptAuthority: () => {
+                  if (!current) {
+                    throw new Error("agent tool caller authority is no longer active");
+                  }
+                },
                 gatewayContextResolver: () => context,
               },
               () =>

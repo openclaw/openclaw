@@ -16,7 +16,6 @@ import {
   derivePersistedSessionLifecyclePatch,
   restartResumeSkipReason,
 } from "../config/sessions/session-run-lifecycle-projection.js";
-import { composeSessionSourceAssertion } from "../config/sessions/session-source-authority.js";
 import { resolveSessionWorkStartBlock } from "../config/sessions/session-work-start.js";
 import type { InternalSessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -350,10 +349,11 @@ async function resumeRestartStore(
   deferred: Map<string, () => Promise<void>>,
 ): Promise<boolean> {
   let completed = true;
-  const { assertCurrent: assertRecoveryCurrent, resume } = await prepareRestartCompletionCustody(
-    { context, signal, log },
-    { target, entries },
-  );
+  const {
+    assertCurrent: assertRecoveryCurrent,
+    ownsInput,
+    resume,
+  } = await prepareRestartCompletionCustody({ context, signal, log }, { target, entries });
   const summary = createRestartResumeSummary("startup");
   const queuedKeys = new Set(orphaned.map(({ sessionKey }) => sessionKey));
   const ended = new Set(outOfScope);
@@ -527,13 +527,7 @@ async function resumeRestartStore(
                 context,
                 signal,
                 runId: randomUUID(),
-                assertCurrent: composeSessionSourceAssertion(
-                  [authority?.authority.assertCurrent],
-                  (assertSources) => {
-                    assertRecoveryCurrent();
-                    assertSources();
-                  },
-                ),
+                assertCurrent: assertRecoveryCurrent,
                 runSetupScript: authority?.authority.scopes.includes(ADMIN_SCOPE) === true,
               });
             }
@@ -600,7 +594,12 @@ async function resumeRestartStore(
         const remaining = await continueSessionQueuedInputs(
           context,
           { ...target, ...session, agentId },
-          { signal, assertCurrent: () => signal.throwIfAborted(), endCause },
+          {
+            signal,
+            assertCurrent: () => signal.throwIfAborted(),
+            endCause,
+            ownsInput: (row) => ownsInput(row, agentId),
+          },
         );
         if (remaining) {
           completed = false;

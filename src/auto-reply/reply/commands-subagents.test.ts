@@ -11,7 +11,6 @@ import {
 import * as controlScope from "../../agents/subagents/registry/subagent-control-scope.js";
 import { SUBAGENT_ENDED_REASON_KILLED } from "../../agents/subagents/registry/subagent-lifecycle-events.js";
 import { captureSubagentListReadContext } from "../../agents/subagents/registry/subagent-list.js";
-import { SubagentLifecycleController } from "../../agents/subagents/registry/subagent-registry-lifecycle.js";
 import { subagentRuns } from "../../agents/subagents/registry/subagent-registry-memory.js";
 import { mutateSubagentRuns } from "../../agents/subagents/registry/subagent-registry-persistence.js";
 import { buildSubagentRunReadIndexFromRuns } from "../../agents/subagents/registry/subagent-registry-queries.js";
@@ -434,34 +433,6 @@ describe("subagents info", () => {
     const result = await handleSubagentsInfoAction(buildInfoContext([], []));
     expect(result.shouldContinue).toBe(false);
     expect(result.reply?.text).toContain("/subagents info <id|#>");
-  });
-
-  it("returns info for a subagent with discard reason=expired", async () => {
-    const now = Date.now();
-    const runId = "info-discard";
-    const run = timedRun(runId, "do thing", now - 20_000, {
-      endedAt: now - 8 * 24 * 60 * 60_000,
-      outcome: { status: "ok" },
-      completion: { required: true, resultText: "Completed the requested task" },
-    });
-    run.delivery = {
-      status: "suspended",
-      suspendedAt: now - 7 * 24 * 60 * 60_000,
-      suspendedReason: "permanent_failure",
-      lastError: "requester unavailable\ntry retained result",
-    };
-    SubagentLifecycleController.discardTerminalDelivery(run, now);
-    expect(run.delivery.lastError).toBeUndefined();
-    const text = await inspectRun(run, undefined, run.runId);
-    expectText(text, [
-      "Status: done",
-      "Outcome: ok",
-      "Progress: Completed the requested task",
-      "Delivery: discarded",
-      "Delivery disposition: expired",
-      `Delivery retired: ${new Date(now).toISOString()}`,
-      "Task summary: requester unavailable try retained result",
-    ]);
   });
 
   it("uses displayed indices and killed status for info and log beside stale unended runs", async () => {

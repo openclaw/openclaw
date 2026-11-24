@@ -429,7 +429,8 @@ export async function runPreparedEmbeddedLoop(
         }
         if (refusal?.category !== "misalignment" && permissionChanges.prepareRestart()) {
           input.laneController.throwIfAborted();
-          sessionPromptState.continueFromCurrentTranscript();
+          // The operator aborted this attempt mid-flight; its tail can hold partial output.
+          sessionPromptState.continueFromCurrentTranscript({ unsettledTail: true });
           // Operator-directed continuation is not a failed-model retry. The old
           // attempt's usage and tool evidence were normalized above, not replayed.
           recordRunRetry(runRetryBudget, "progress_continuation");

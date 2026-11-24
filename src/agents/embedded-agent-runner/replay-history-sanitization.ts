@@ -438,8 +438,7 @@ function ensureAssistantUsageSnapshots(messages: AgentMessage[]): AgentMessage[]
     out[i] = {
       ...message,
       // Do not synthesize billing evidence for sparse legacy usage.
-      // SAFETY: Token fields are canonical; replay consumers accept missing cost via normalizeUsage.
-      usage: normalizedUsage as AssistantUsageSnapshot,
+      usage: normalizedUsage,
     };
     touched = true;
   }

@@ -138,6 +138,13 @@ failures are keyed by the normalized page origin (for example
 so each origin gets its own bucket; from non-loopback addresses the key
 stays the client IP. This is not configurable.
 
+Assistant media reads that use a credential in the URL also enforce a lockout on
+direct loopback. Requests marked `Sec-Fetch-Site: same-origin` have a separate
+budget from other URL reads at that address. URL failures also count toward the IP
+history. They use the lockout without the loopback failure delay.
+With `exemptLoopback: false`, the configured per-IP limit also applies. Local
+clients that send a bearer header continue to use their configured IP policy.
+
 ### Unconfigured same-host reverse proxies
 
 When a request arrives from a loopback socket with forwarding headers but the

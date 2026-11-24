@@ -45,15 +45,7 @@ export async function prepareAndAdmitChatSend(
   releaseSessionStorage?: () => void,
 ) {
   const phase = diagnostics?.scope("admission");
-  const assertCurrent =
-    sessionMutationAuthorization || hasCurrentClientAuthority
-      ? () => {
-          sessionMutationAuthorization?.assertCurrent();
-          if (hasCurrentClientAuthority?.() === false) {
-            throw new Error("Gateway caller authority is no longer active.");
-          }
-        }
-      : undefined;
+  const assertCurrent = sessionMutationAuthorization?.assertCurrent;
   const withCurrent = sessionMutationAuthorization?.withCurrent;
   const assertCurrentAsync = async () =>
     withCurrent ? withCurrent(() => assertCurrent?.()) : assertCurrent?.();

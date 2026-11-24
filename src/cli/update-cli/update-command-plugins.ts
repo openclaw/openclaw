@@ -64,6 +64,7 @@ import { resolvePluginCapabilityConsentCliOptions } from "../plugin-capability-c
 import { readPackageVersion } from "./shared.js";
 import { withUpdateConfigWriteAuthority } from "./update-command-config.js";
 import {
+  collectPluginReloadTargets,
   createPluginRecordPublicationHooks,
   publishPluginRecordsWithoutConfigWrite,
 } from "./update-command-plugin-records.js";
@@ -72,6 +73,7 @@ import {
   createOwedPluginStepWarning,
   createPostCorePluginUpdateResult,
   createPluginUpdateWarning,
+  formatMissingPluginPayloadReason,
   pluginConvergenceFailureBlocksUpdate,
   type PluginUpdateWarning,
   type PostCorePluginUpdateResult,
@@ -85,14 +87,6 @@ class PluginFinalizationConfigConflictError extends ConfigMutationConflictError 
       retryable: false,
     });
   }
-}
-
-function formatMissingPluginPayloadReason(entry: MissingPluginInstallPayload): string {
-  return entry.reason === "missing-install-path"
-    ? "installPath is missing"
-    : entry.reason === "missing-package-json"
-      ? `package.json is missing under ${entry.installPath}`
-      : `package directory is missing: ${entry.installPath}`;
 }
 
 export async function updatePluginsAfterCoreUpdate(params: {
@@ -690,6 +684,9 @@ async function updatePluginsAfterCoreUpdateWithLease(
       outcomes: pluginUpdateOutcomes,
     },
     integrityDrifts,
+    reloadTargets: pluginsChanged
+      ? collectPluginReloadTargets(pluginInstallRecords, pluginConfig.plugins?.installs ?? {})
+      : undefined,
   };
 
   if (params.json) {

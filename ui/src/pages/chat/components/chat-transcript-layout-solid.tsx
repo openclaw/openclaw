@@ -122,7 +122,6 @@ function TranscriptRows(props: {
         {props.snapshot.header}
       </div>
       <div class="chat-virtual-sizer" ref={(element) => props.columnRef(element)}>
-        {props.snapshot.overlay}
         <div
           class="chat-virtual-block"
           style={{

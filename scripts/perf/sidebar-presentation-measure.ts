@@ -5,7 +5,8 @@
  * --surge-detail instruments present/child/select/freeze/share using the churn probe;
  * run separately from uninstrumented timing and allocation. This uses real prepared
  * event and list owners and loopback WebSockets, without a Gateway process or model.
- * The mix is explicit and synthetic: aggregate production stacks do not supply ratios.
+ * --entry-surge uses four physical agent stores and replaces 40% of logical events
+ * with committed metadata changes. The mix is synthetic.
  *
  * Default: warm sessions.list owner benchmark with persisted synthetic rows and
  * recipient policy. No socket, model, or end-to-end Gateway latency claim.
@@ -58,8 +59,10 @@ import WebSocket, { WebSocketServer } from "ws";
 import { rawDataToString } from "../../packages/gateway-client/src/websocket-data.ts";
 import type { SessionsListParams } from "../../packages/gateway-protocol/src/index.js";
 import { expandSessionRowFacts } from "../../packages/gateway-protocol/src/session-row-fields.js";
+import type { InternalSessionEntry } from "../../src/config/sessions/types.js";
 import type { OpenClawConfig } from "../../src/config/types.openclaw.js";
 import type { GatewayClient } from "../../src/gateway/server-methods/types.js";
+import { parseAgentSessionKey } from "../../src/routing/session-key.js";
 import { writeGatewayGcTraceMarker, readGatewayGcTrace } from "../lib/gateway-bench-profile.ts";
 import { createGatewayBenchEnv } from "../lib/gateway-bench-runtime.ts";
 import { recordGcCollections } from "../lib/perf-gc-collections.ts";
@@ -81,17 +84,23 @@ const { values } = parseArgs({
     "row-mode": { type: "string", default: "sidebar" },
     "sandbox-required": { type: "boolean", default: false },
     surge: { type: "boolean", default: false },
+    "entry-surge": { type: "boolean", default: false },
     "surge-detail": { type: "boolean", default: false },
     churn: { type: "boolean", default: false },
     clients: { type: "string", default: "10" },
     "background-processes": { type: "string", default: "0" },
     operations: { type: "string", default: "1000" },
     allocations: { type: "boolean", default: false },
+    "cpu-profile": { type: "boolean", default: false },
     "max-presentation-bytes-per-call": { type: "string" },
   },
 });
 assert(values["state-dir"] && values.output, "--state-dir and --output are required");
 assert(global.gc, "run with --expose-gc");
+assert(
+  !values.allocations || !values["cpu-profile"],
+  "Measure CPU attribution and allocation separately",
+);
 assert(
   values["row-mode"] === "sidebar" ||
     values["row-mode"] === "compact" ||
@@ -127,7 +136,11 @@ if (barrierDir) {
   mkdirSync(barrierDir, { recursive: true });
 }
 const pageSize = Math.min(integer("page-size", 2), sessions);
-const keyFor = (index: number) => `agent:main:sidebar-${index.toString().padStart(5, "0")}`;
+assert(!values["entry-surge"] || values.surge, "--entry-surge requires --surge");
+const agentIds = values["entry-surge"] ? ["main", "second", "third", "fourth"] : ["main"];
+const agentFor = (index: number) => agentIds[Math.floor(index / 150) % agentIds.length]!;
+const keyFor = (index: number) =>
+  `agent:${agentFor(index)}:sidebar-${index.toString().padStart(5, "0")}`;
 const root = path.resolve(values["state-dir"]);
 mkdirSync(root);
 for (const dir of ["home", "tmp"]) {
@@ -222,7 +235,7 @@ if (sources.size || values["surge-detail"]) {
   });
 }
 const cfg: OpenClawConfig = {
-  agents: { ownership: "explicit", entries: { main: {} } },
+  agents: { ownership: "explicit", entries: Object.fromEntries(agentIds.map((id) => [id, {}])) },
   plugins: { enabled: false },
   gateway: {
     roles: {
@@ -424,34 +437,38 @@ try {
       }),
     );
   }
-  runOpenClawAgentWriteTransaction(
-    (database) => {
-      for (let index = 0; index < sessions; index++) {
-        writeSessionEntry(database, keyFor(index), {
-          sessionId: `sidebar-${index}`,
-          updatedAt:
-            1_800_000_000_000 + (values.surge && index % 150 === 0 ? sessions + index : index),
-          ...(values.surge && index % 150 !== 0
-            ? {
-                parentSessionKey: keyFor(index - (index % 150)),
-                spawnedBy: keyFor(index - (index % 150)),
-                spawnDepth: 1,
-                status: "done" as const,
-                archivedAt: 1_800_000_000_000,
-              }
-            : {}),
-          label: `Synthetic sidebar row ${index}`,
-          visibility: "shared",
-          createdActor: {
-            type: "human",
-            source: "profile",
-            id: profiles[index % profiles.length]!.id,
-          },
-        });
-      }
+  const entryFor = (index: number): InternalSessionEntry => ({
+    sessionId: `sidebar-${index}`,
+    updatedAt: 1_800_000_000_000 + (values.surge && index % 150 === 0 ? sessions + index : index),
+    ...(values.surge && index % 150 !== 0
+      ? {
+          parentSessionKey: keyFor(index - (index % 150)),
+          spawnedBy: keyFor(index - (index % 150)),
+          spawnDepth: 1,
+          status: "done" as const,
+          archivedAt: 1_800_000_000_000,
+        }
+      : {}),
+    label: `Synthetic sidebar row ${index}`,
+    visibility: "shared",
+    createdActor: {
+      type: "human",
+      source: "profile",
+      id: profiles[index % profiles.length]!.id,
     },
-    { agentId: "main" },
-  );
+  });
+  for (const agentId of agentIds) {
+    runOpenClawAgentWriteTransaction(
+      (database) => {
+        for (let index = 0; index < sessions; index++) {
+          if (agentFor(index) === agentId) {
+            writeSessionEntry(database, keyFor(index), entryFor(index));
+          }
+        }
+      },
+      { agentId },
+    );
+  }
   const coldStart = performance.now();
   const coldCpu = process.cpuUsage();
   projection = await createSessionRowProjection({ cfg, modelCatalog: [] });
@@ -487,14 +504,17 @@ try {
     limit: pageSize,
     archived: "all" as const,
   };
-  const hotKeys = Array.from({ length: 8 }, (_, index) => keyFor(index * 150 + 1));
+  const hotRows = Array.from({ length: 8 }, (_, index) => {
+    const rowIndex = index * 150 + 1;
+    return { key: keyFor(rowIndex), agentId: agentFor(rowIndex), entry: entryFor(rowIndex) };
+  });
   if (values.surge) {
     assert(sessions >= 1200 && pageSize >= sessions / 150);
-    for (const [index, key] of hotKeys.entries()) {
+    for (const [index, { key, agentId, entry }] of hotRows.entries()) {
       registerAgentRunContext(`surge-${index}`, {
         sessionKey: key,
-        agentId: "main",
-        sessionId: `sidebar-${index * 150 + 1}`,
+        agentId,
+        sessionId: entry.sessionId,
         projectSessionActive: true,
         registeredAt: 1_800_000_000_000,
       });
@@ -502,7 +522,7 @@ try {
   }
   if (values.surge) {
     await projection.withPreparedExactRows(
-      () => hotKeys.map((key) => ({ key, agentId: "main" })),
+      () => hotRows,
       () => {},
     );
   }
@@ -536,7 +556,7 @@ try {
   const selectedPage = await list(0, false);
   const pendingBackfill = new Set(selectedPage.sessions.map((row) => row.key));
   if (values.surge) {
-    for (const key of hotKeys) {
+    for (const { key } of hotRows) {
       pendingBackfill.add(key);
     }
   }
@@ -546,8 +566,8 @@ try {
     await list(0);
     for (const key of pendingBackfill) {
       if (
-        projection.capture({ agentId: "main", key })?.retainedDatabaseFacts
-          ?.transcriptAssistantMessage === null
+        projection.capture({ agentId: parseAgentSessionKey(key)!.agentId, key })
+          ?.retainedDatabaseFacts?.transcriptAssistantMessage === null
       ) {
         pendingBackfill.delete(key);
       }
@@ -595,7 +615,7 @@ try {
     packedGolden.push(packedDigest(result));
   }
   writeFileSync(`${output}.wire.json`, JSON.stringify([...packedSamples.values()]));
-  if (values.allocations) {
+  if (values.allocations || values["cpu-profile"]) {
     inspector.connect();
     connected = true;
   }
@@ -634,6 +654,10 @@ try {
         includeObjectsCollectedByMinorGC: true,
       });
     }
+    if (values["cpu-profile"]) {
+      await inspector.post("Profiler.enable");
+      await inspector.post("Profiler.start");
+    }
     observer.observe({ entryTypes: ["gc"] });
     loop.enable();
     await delay(10);
@@ -657,7 +681,7 @@ try {
       Date.now = () => fixtureNow;
     }
     let eventFrames = 0;
-    const eventKinds = { delta: 0, activity: 0, model: 0, child: 0 };
+    const eventKinds = { delta: 0, activity: 0, model: 0, child: 0, entry: 0 };
     start = performance.now();
     for (let index = 0; index < operations; index++) {
       if (values.surge) {
@@ -667,14 +691,20 @@ try {
           1_800_000_000_000 + Math.floor((((repeat - 1) * operations + index) * 1000) / 470);
         const mutationAt = performance.now();
         const mutationCpu = process.threadCpuUsage();
-        const slot = index % hotKeys.length;
-        const key = hotKeys[slot]!;
+        const slot = index % hotRows.length;
+        const { key, agentId, entry } = hotRows[slot]!;
         const kind = index % 10;
-        if (kind < 6) {
+        if (values["entry-surge"] && kind >= 4 && kind < 8) {
+          eventKinds.entry++;
+          replaceSessionEntrySync(
+            { agentId, sessionKey: key },
+            { ...entry, label: `Committed metadata ${index}` },
+          );
+        } else if (kind < 6) {
           eventKinds.delta++;
         } else if (kind < 8) {
           eventKinds.activity++;
-          sessionChanges.emit({ sessionKey: key, agentId: "main", scope: "automation" });
+          sessionChanges.emit({ sessionKey: key, agentId, scope: "automation" });
         } else if (kind === 8) {
           eventKinds.model++;
           recordAgentRunModel(`surge-${slot}`, {
@@ -685,18 +715,18 @@ try {
           eventKinds.child++;
           registerAgentRunContext(`surge-${slot}`, {
             sessionKey: key,
-            sessionId: `sidebar-${slot * 150 + 1}`,
-            agentId: "main",
+            sessionId: entry.sessionId,
+            agentId,
             projectSessionActive: !getAgentRunContext(`surge-${slot}`)?.projectSessionActive,
           });
         }
         recordSyncSlice(mutationAt, mutationCpu);
-        await withPreparedEventRow(projection, { key, agentId: "main" }, (read, ancestors) => {
+        await withPreparedEventRow(projection, { key, agentId }, (read, ancestors) => {
           assert(read);
           const publication = prepareSessionRowPublication(projection!, Date.now(), read);
           for (const [recipientIndex, client] of recipients.entries()) {
             const presentation = publication(client).getPresentation();
-            const row = presentation.snapshot({ key, agentId: "main" }).row;
+            const row = presentation.snapshot({ key, agentId }).row;
             const parents = ancestors?.map((record) => presentation.present(record));
             sockets[recipientIndex]!.send(
               serializeGatewayFrame({
@@ -757,8 +787,9 @@ try {
       await nextTurn();
     }
     end = performance.now();
+    const { tasks, materializationWork } = sessionRowChurnProbe.snapshot();
     const surgeBreakdown = Object.fromEntries(
-      Object.entries(sessionRowChurnProbe.snapshot().tasks).map(([name, task]) => [
+      Object.entries(tasks).map(([name, task]) => [
         name,
         {
           calls: task.calls,
@@ -788,6 +819,10 @@ try {
     const usedCpu = process.cpuUsage(cpu);
     const usedThread = process.threadCpuUsage(threadCpu);
     loop.disable();
+    if (values["cpu-profile"]) {
+      const { profile } = await inspector.post("Profiler.stop");
+      writeFileSync(`${repeatOutput}.cpuprofile`, JSON.stringify(profile));
+    }
     await nextTurn();
     recordGcCollections(observer.takeRecords(), collections, start, end);
     observer.disconnect();
@@ -897,10 +932,15 @@ try {
           "session-list-view-cache.ts",
           "session-utils-list.ts",
           "session-row-prepared-read.ts",
+          "session-row-projection-ancestors.ts",
+          "session-row-projection-identities.ts",
+          "session-row-projection-materialize.ts",
+          "session-row-projection-record.ts",
+          "session-row-projection.ts",
           "session-utils-display.ts",
           "session-utils-core.ts",
+          "session-utils-projection.ts",
           "session-utils-row.ts",
-          "session-row-projection-record.ts",
           "bash-process-observation.ts",
           "agent-run-registry-state.ts",
         ].map((name) => [
@@ -926,6 +966,7 @@ try {
       surge: values.surge
         ? {
             eventKinds,
+            agents: agentIds.length,
             eventFrames,
             targetEventsPerSecond: 470,
             longestSyncMs: measuredLongestSyncMs,
@@ -934,6 +975,7 @@ try {
             receivedSequences: [...receivedSequences],
             eventDigests: eventDigests.map((digest) => digest.digest("hex")),
             breakdown: surgeBreakdown,
+            materializationWork,
           }
         : undefined,
       sessions,

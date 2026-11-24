@@ -1,6 +1,13 @@
 import { execFileSync } from "node:child_process";
-import { chmodSync, copyFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { delimiter, dirname, join } from "node:path";
+import {
+  chmodSync,
+  copyFileSync,
+  mkdirSync,
+  readFileSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
+import { delimiter, dirname, join, resolve } from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { buildFrozenTargetWorkflowRequest } from "../../scripts/lib/frozen-target-workflow-request.mjs";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
@@ -68,6 +75,25 @@ it.each([
   });
   expect(result.allowFrozenTargetScenarioOmissions).toBe(omissions);
 });
+function writeChildWaiverFixture(root: string, waivers: unknown[] = []) {
+  const scripts = join(root, "workflow/scripts");
+  mkdirSync(join(scripts, "lib"), { recursive: true });
+  symlinkSync(
+    resolve("scripts/find-reusable-release-child.mjs"),
+    join(scripts, "find-reusable-release-child.mjs"),
+  );
+  const verifier = join(root, "qualification-verifier/scripts");
+  mkdirSync(verifier, { recursive: true });
+  symlinkSync(
+    resolve("scripts/find-reusable-release-child.mjs"),
+    join(verifier, "find-reusable-release-child.mjs"),
+  );
+  writeFileSync(
+    join(scripts, "lib/release-validation-waivers.json"),
+    JSON.stringify({ schema: "openclaw.release-validation-waivers/v1", waivers }),
+  );
+}
+
 function canonicalRequest(root: string, distinct: boolean, admitted: boolean) {
   // The real CLI checks its physical entrypoint; a symlink would import it
   // without executing main and would not model an Actions checkout.
@@ -166,12 +192,20 @@ else console.log(JSON.stringify({id:202,workflow_id:88,head_branch:process.env.C
     expect(dispatchStep.env?.CANDIDATE_REQUEST_JSON).toBe(
       "${{ needs.resolve_target.outputs.candidate_request_json }}",
     );
-    execFileSync("bash", ["-c", String(dispatchStep.run)], {
+    writeChildWaiverFixture(root);
+    const run = String(dispatchStep.run)
+      .replaceAll(
+        "${{ fromJSON(needs.resolve_target.outputs.source_admission_json || '{}').qualificationAdmission != null }}",
+        String(admitted),
+      )
+      .replaceAll("${{ needs.resolve_target.outputs.target_version }}", "2026.9.23");
+    execFileSync("bash", ["-c", run], {
       cwd: root,
       timeout: 10_000,
       env: {
         ...workflowEnv(),
-        PATH: bin + delimiter + process.env.PATH,
+        PATH: bin + delimiter + dirname(process.execPath) + delimiter + process.env.PATH,
+        GITHUB_WORKSPACE: root,
         CALLS: calls,
         GITHUB_OUTPUT: join(root, "output"),
         GITHUB_STEP_SUMMARY: join(root, "summary"),
@@ -209,6 +243,45 @@ else console.log(JSON.stringify({id:202,workflow_id:88,head_branch:process.env.C
 );
 
 it.each([false, true])(
+  "does not look up or dispatch a waived child (admitted P=%s)",
+  (admitted) => {
+    const root = tempDirs.make("release-waived-parent-");
+    const bin = join(root, "bin");
+    mkdirSync(bin);
+    writeFileSync(join(bin, "gh"), "#!/bin/sh\nexit 91\n", { mode: 0o755 });
+    writeChildWaiverFixture(root, [
+      {
+        targetVersion: "2026.9.23",
+        targetSha,
+        childRole: "normalCi",
+        reason: "Synthetic whole-child waiver",
+      },
+    ]);
+    const run = String(step("normal_ci", "Dispatch CI").run)
+      .replaceAll(
+        "${{ fromJSON(needs.resolve_target.outputs.source_admission_json || '{}').qualificationAdmission != null }}",
+        String(admitted),
+      )
+      .replaceAll("${{ needs.resolve_target.outputs.target_version }}", "2026.9.23");
+    const output = execFileSync("bash", ["-c", run], {
+      cwd: root,
+      timeout: 10_000,
+      encoding: "utf8",
+      env: {
+        ...workflowEnv(),
+        PATH: bin + delimiter + dirname(process.execPath) + delimiter + process.env.PATH,
+        GITHUB_WORKSPACE: root,
+        GITHUB_STEP_SUMMARY: join(root, "summary"),
+        CHILD_EVIDENCE_REUSE: "false",
+        CHILD_WORKFLOW_KIND: "ci",
+        TARGET_REF: targetSha,
+      },
+    });
+    expect(output).toContain("Waived ci.yml; no child run is required.");
+  },
+);
+
+it.each([false, true])(
   "adopts child evidence with current policy without dispatch (admitted P=%s)",
   (admitted) => {
     const root = tempDirs.make("release-reuse-policy-");
@@ -222,6 +295,7 @@ it.each([false, true])(
         process.execPath +
         `
 const fs = require('node:fs');
+if (process.argv.includes("--waiver-only")) process.exit(3);
 fs.writeFileSync(process.env.CALLS, JSON.stringify({args: process.argv.slice(2), version: process.env.TARGET_VERSION, directory: process.env.CHILD_WORKFLOW_DIRECTORY}));
 `,
     );

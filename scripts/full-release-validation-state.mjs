@@ -56,11 +56,7 @@ import {
   releaseManifestChildEvidence,
 } from "./lib/full-release-manifest.mjs";
 import { createReleasePublishInputs } from "./lib/release-publish-inputs.mjs";
-import {
-  evaluateReleaseChildPolicy,
-  ReleaseAggregateValidationError,
-  validateReleaseWaiverAggregates,
-} from "./lib/release-validation-waivers.mjs";
+import { isWaived } from "./lib/release-validation-waivers.mjs";
 import { downloadFullReleaseNpmPreflight } from "./npm-preflight-tooling-identity.mjs";
 import { verifyQualificationAdmission } from "./release-qualification-admission.mjs";
 
@@ -159,20 +155,6 @@ async function runGh(args, options = {}) {
   throw lastError;
 }
 
-// gh 2.97+ refuses raw job logs containing terminal escapes, even off a TTY;
-// older gh rejects the flag before issuing the request.
-async function readJobLog(id, signal) {
-  const args = ["api", `repos/${process.env.GITHUB_REPOSITORY}/actions/jobs/${id}/logs`];
-  try {
-    return await runGh([...args, "--allow-escape-sequences"], { signal });
-  } catch (error) {
-    if (!String(error?.stderr).includes("unknown flag: --allow-escape-sequences")) {
-      throw error;
-    }
-    return runGh(args, { signal });
-  }
-}
-
 async function githubJson(path, signal) {
   return JSON.parse(
     await runGh(["api", `repos/${process.env.GITHUB_REPOSITORY}/${path}`], { signal }),
@@ -269,6 +251,15 @@ export async function readChild(child, previous, signal, options = {}) {
   if (!child.selected) {
     return { ...child, errors: [], jobs: [], status: "skipped" };
   }
+  if (
+    isWaived({
+      childRole: child.key,
+      targetVersion: options.targetVersion,
+      targetSha: options.targetSha,
+    })
+  ) {
+    return { ...child, errors: [], jobs: [], status: "missing" };
+  }
   if (!child.runId || !child.runAttempt) {
     const error = issue("dispatch_missing", child, `${child.key} omitted its exact run identity`);
     return { ...child, errors: [error], jobs: [], status: "missing" };
@@ -327,36 +318,11 @@ export async function readChild(child, previous, signal, options = {}) {
       },
       run,
     });
-    const snapshot = validateChildBinding(child, run, {
+    return validateChildBinding(child, run, {
       jobs: evidence.jobs,
       observedRunAttempts: evidence.observedRunAttempts,
       sha256: evidence.compositeJobsSha256,
     });
-    if (snapshot.status === "completed") {
-      const policy = evaluateReleaseChildPolicy({
-        child: snapshot,
-        targetVersion: options.targetVersion,
-        targetSha: options.targetSha,
-      });
-      const jobs = evidence.jobs.map((job) =>
-        attempts
-          .find((attempt) => attempt.runAttempt === job.acceptedRunAttempt)
-          .jobs.find((raw) => raw.name === job.name),
-      );
-      try {
-        await validateReleaseWaiverAggregates({
-          policy,
-          jobs,
-          getJobLog: options.readJobLog ?? ((id) => readJobLog(id, signal)),
-        });
-      } catch (error) {
-        if (!(error instanceof ReleaseAggregateValidationError)) {
-          throw error;
-        }
-        snapshot.errors.push(issue("aggregate_validation", child, error.message));
-      }
-    }
-    return snapshot;
   } catch (error) {
     const degraded = classifyReleaseGhTransportError(error) === "transient";
     const provenanceMismatch =
@@ -498,6 +464,9 @@ async function validateReuse(executionPlan, signal) {
           repository: executionPlan.repository,
           targetSha: executionPlan.targetSha,
           policyTargetVersion: executionPlan.targetVersion,
+          requiredJobs: executionPlan.qualificationCoverage?.children.find(
+            ({ key }) => key === role,
+          )?.requiredJobs,
           workflowSha: executionPlan.workflowSha,
           role,
           inputs: selection.inputs,
@@ -1313,6 +1282,7 @@ async function planMode() {
     sourceAdmission: planInputs.sourceAdmission,
     publicationAdmissionContract: planInputs.publicationAdmissionContract,
     publicationAdmission: planInputs.publicationAdmission,
+    publicationArtifactSource: planInputs.publicationArtifactSource,
     qualificationCoverage: planInputs.qualificationCoverage,
     qualificationInputs: planInputs.qualificationInputs,
     candidate,
@@ -1429,6 +1399,7 @@ async function collectMode(mode) {
   const abortController = new AbortController();
   let decisionReuse = { blockers: [], children: plan, errors: [] };
   let transport = { status: "certain" };
+  const qualificationCoverage = executionPlan.qualificationCoverage;
 
   const writePayload = (decision, cancellation = {}) => {
     const payload = buildReleaseStateArtifact({
@@ -1465,6 +1436,7 @@ async function collectMode(mode) {
         },
       ],
       localFailures: gateFailures,
+      qualificationCoverage,
       targetVersion: executionPlan.targetVersion,
       targetSha: executionPlan.targetSha,
     });
@@ -1539,6 +1511,7 @@ async function collectMode(mode) {
       extraBlockers: [...executionPlan.blockers, ...decisionReuse.blockers],
       extraErrors,
       localFailures: gateFailures,
+      qualificationCoverage,
       targetVersion: executionPlan.targetVersion,
       targetSha: executionPlan.targetSha,
     });
@@ -1568,27 +1541,25 @@ async function collectMode(mode) {
             ...cancellationErrors,
           ],
           localFailures: gateFailures,
+          qualificationCoverage,
           targetVersion: executionPlan.targetVersion,
           targetSha: executionPlan.targetSha,
         });
       }
     }
     // The displayed errors are capped; drain admission uses every fatal input.
-    const hasNonAggregateError =
-      extraErrors.some((error) => error.kind !== "aggregate_validation") ||
+    const hasFatalError =
+      extraErrors.length > 0 ||
       snapshots.some(
         (child) =>
-          child.selected &&
-          child.errors.some(
-            (error) => !["dispatch_missing", "aggregate_validation"].includes(error.kind),
-          ),
+          child.selected && child.errors.some((error) => error.kind !== "dispatch_missing"),
       );
     const done =
       mode === "decision"
         ? decision.state !== "qualifying" &&
           !(decision.state === "passed" && transport.status === "uncertain")
         : transport.status !== "uncertain" &&
-          ((decision.state === "orchestration_error" && hasNonAggregateError) ||
+          ((decision.state === "orchestration_error" && hasFatalError) ||
             (decision.state !== "qualifying" && decision.activeRunIds.length === 0));
     if (done) {
       const payload = writePayload(decision, { cancelledRunIds, requested: false });
@@ -1632,7 +1603,7 @@ function readStateCandidates(root, prefix, runId, maxParentRunAttempt, filename)
   return candidates;
 }
 
-async function validateManifestMode() {
+async function validateManifestMode({ preserveValidationOutcome = false } = {}) {
   const expected = stateArtifactExpected();
   const manifestPath = requiredString(
     process.env.RELEASE_VALIDATION_MANIFEST_PATH,
@@ -1645,23 +1616,46 @@ async function validateManifestMode() {
   const executionPlan = validateReleaseExecutionPlanArtifact(executionPlanPayload, expected);
   const verified =
     executionPlan.attemptEvidenceVersion !== undefined
-      ? verifyReleaseStateArtifacts(
-          executionPlanPayload,
-          readArtifact(
+      ? (() => {
+          const decision = readArtifact(
             requiredString(process.env.RELEASE_DECISION_PATH, "release decision path"),
             "release decision",
-          ),
-          readArtifact(
+          );
+          const drain = readArtifact(
             requiredString(process.env.DIAGNOSTIC_DRAIN_PATH, "diagnostic drain path"),
             "diagnostic drain",
-          ),
-          { ...expected, effectiveGates: effectiveReleasePlanGates(executionPlan.gates) },
-        )
+          );
+          const stateExpected = {
+            ...expected,
+            effectiveGates: effectiveReleasePlanGates(executionPlan.gates),
+          };
+          // Retain failed validation honestly, without weakening state identity,
+          // plan binding, or monotonic decision-to-drain evidence checks.
+          return preserveValidationOutcome
+            ? selectReleaseStateArtifacts(
+                executionPlanPayload,
+                [
+                  {
+                    name: `full-release-decision-${executionPlan.parentRunId}-${decision.parentRunAttempt}`,
+                    payload: decision,
+                  },
+                ],
+                [
+                  {
+                    name: `full-release-diagnostics-${executionPlan.parentRunId}-${drain.parentRunAttempt}`,
+                    payload: drain,
+                  },
+                ],
+                stateExpected,
+              )
+            : verifyReleaseStateArtifacts(executionPlanPayload, decision, drain, stateExpected);
+        })()
       : undefined;
   const drain = verified?.drain;
   const rawManifest = readArtifact(manifestPath, "release validation manifest");
   const { validateParentManifest } = await import("./release-ci-summary.mjs");
   const manifest = validateParentManifest(rawManifest, {
+    deferWaiverPolicy: preserveValidationOutcome,
     sourceAdmissionContract: expected.sourceAdmissionContract,
     candidateBinding: executionPlan.candidate ?? null,
     repository: expected.repository,
@@ -1799,6 +1793,8 @@ function main() {
       return selectMode();
     case "validate-manifest":
       return validateManifestMode();
+    case "validate-manifest-evidence":
+      return validateManifestMode({ preserveValidationOutcome: true });
     case "decision":
     case "drain":
       return collectMode(mode);

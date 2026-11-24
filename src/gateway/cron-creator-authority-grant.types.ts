@@ -13,10 +13,10 @@ export type CronAuthenticatedChannelRequester = {
   senderId: string;
 };
 
-/** Admission fact, independent of a run lifetime so an authorized yield can transfer it. */
-export type CronManagementEntitlement =
-  | Readonly<{ source: "control-ui-admin" | "native-app-admin" }>
-  | Readonly<{ source: "channel-owner"; isCurrent: () => boolean }>;
+/** Admission fact, checked once at run start; an authorized yield can transfer it. */
+export type CronManagementEntitlement = Readonly<{
+  source: "control-ui-admin" | "native-app-admin" | "channel-owner";
+}>;
 
 export type CronCreatorAuthorityRunScope = {
   readonly runId: string;
@@ -26,7 +26,6 @@ export type CronCreatorAuthorityRunScope = {
   readonly managementEntitlement?: CronManagementEntitlement;
   /** Separately admitted channel-owner identity, not implied by automation management rights. */
   readonly requesterOwner?: Readonly<{
-    isCurrent: () => boolean;
     senderId?: string;
     channel?: string;
     accountId?: string;

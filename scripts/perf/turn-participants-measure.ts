@@ -30,7 +30,6 @@ const authority = createAdmittedRunOperatorAuthority({
   canonicalIdentity: null,
   profileId: "synthetic-profile",
   scopes: ["operator.admin"],
-  assertCurrent() {},
 });
 const fixture = {
   operatorAuthority: authority,

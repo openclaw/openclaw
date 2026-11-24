@@ -155,6 +155,10 @@ export type PreparedModelPromptProjection = {
 
 export type UserTurnTranscriptRecorder = {
   readonly message: PersistedUserTurnMessage | undefined;
+  /** Records observed audio authorization failures against their original attachment references. */
+  recordAudioApiKeyFailures?: (
+    failures: readonly { reference: string; provider: string }[],
+  ) => Promise<void>;
   resolveMessage: () => Promise<PersistedUserTurnMessage | undefined>;
   /** Committed or delivered input, accepted pending custody, and blocked notices are exempt. */
   assertOriginalInputCommit?: SessionSourceAssertion;

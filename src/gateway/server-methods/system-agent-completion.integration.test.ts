@@ -50,7 +50,6 @@ it("returns an approved change after its requesting run ends before result deliv
     const operator = createTestOperatorAuthority({
       profileId: GATEWAY_OWNER_PROFILE_ID,
       scopes: ["operator.admin"],
-      assertCurrent: () => {},
     });
     const admission = prepareSystemAgentRunAdmission(
       config,

@@ -7,7 +7,7 @@ import { loadOrCreateDeviceIdentity } from "../../src/infra/device-identity.js";
 import { sleep } from "../../src/utils.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../../src/utils/message-channel.js";
 import { acquireGatewayTestClient, GatewayTestClientCleanupError } from "./gateway-client.js";
-import { createOpenClawTestInstance, type OpenClawTestInstance } from "./openclaw-test-instance.js";
+import type { OpenClawTestInstance } from "./openclaw-test-instance.js";
 import { runQaGatewayFixture } from "./qa-gateway-cleanup.js";
 
 export type GatewayInstance = OpenClawTestInstance;
@@ -22,17 +22,6 @@ type PostJsonOptions = {
   maxResponseBytes?: number;
   timeoutMs?: number;
 };
-
-export async function spawnGatewayInstance(name: string): Promise<GatewayInstance> {
-  const inst = await createOpenClawTestInstance({ name });
-  try {
-    await inst.startGateway();
-    return inst;
-  } catch (err) {
-    await inst.cleanup();
-    throw err;
-  }
-}
 
 export async function stopGatewayInstance(inst: GatewayInstance) {
   await inst.cleanup();
