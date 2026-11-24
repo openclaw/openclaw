@@ -266,7 +266,11 @@ describe("installToolResultContextGuard", () => {
       const { agent } = hook(engine);
       const messages =
         route === "compact_then_truncate"
-          ? [makeUser("first"), makeToolResult("big", "x".repeat(80_000))]
+          ? [
+              makeUser("first"),
+              makeAssistant("tool use"),
+              makeToolResult("big", "x".repeat(80_000)),
+            ]
           : [makeUser("u".repeat(80_000)), makeToolResult("small", "small output")];
       const pending = pressureCheck(
         agent,
