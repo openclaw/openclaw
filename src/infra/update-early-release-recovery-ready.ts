@@ -1,6 +1,7 @@
-import type { RunCommand } from "./update-early-release-recovery.js";
-
 /** The early release recovery's readiness wait (see `update-early-release-recovery.ts`). */
+
+/** The runner's command runner, as far as reading `systemctl show` needs it. */
+type SystemctlShow = (argv: string[]) => Promise<{ output: string }>;
 
 /** A boot migration of a large agent database runs before the Gateway reports ready. */
 const READY_TIMEOUT_MS = 20 * 60_000;
@@ -14,7 +15,7 @@ const READY_TIMEOUT_MS = 20 * 60_000;
 export async function waitForGatewayReady(
   unit: string,
   probe: () => Promise<boolean>,
-  { run, now, log }: { run: RunCommand; now: () => number; log: (line: string) => void },
+  { run, now, log }: { run: SystemctlShow; now: () => number; log: (line: string) => void },
 ): Promise<boolean> {
   const show = async (key: string) =>
     (

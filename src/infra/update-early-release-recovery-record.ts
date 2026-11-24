@@ -1,5 +1,5 @@
 import { VERSION } from "../version.js";
-import type { RecoveryOutcome, RecoveryPlan } from "./update-early-release-recovery.js";
+import type { SchemaVersions } from "./update-candidate-check-early-release.js";
 
 /**
  * The early release recovery's update runs (see `update-early-release-recovery.ts`): opening one
@@ -7,6 +7,35 @@ import type { RecoveryOutcome, RecoveryPlan } from "./update-early-release-recov
  * Loaded only by the runner and its finishing step, which run this release's code on migrated
  * state. Remove with it.
  */
+
+export type RecoveryPlan = {
+  unit: string;
+  checkout: string;
+  branch: string;
+  target: string;
+  /** The release the updater built, kept here for the rebuild window. */
+  release: string;
+  prefix: string;
+  serviceFile: string;
+  /** `systemctl --user is-enabled` of the Gateway service when the recovery was planned. */
+  enabled: string;
+  /** Every store's schema version when the recovery was planned. */
+  schema: SchemaVersions;
+  fromVersion: string;
+  driver: { pid: number; start: string };
+  /** When `--check` planned this recovery (epoch milliseconds). */
+  plannedAt: number;
+};
+
+export type RecoveryOutcome = {
+  plan: RecoveryPlan;
+  runId?: string;
+  status: "succeeded" | "failed";
+  reason: string;
+  detail: string;
+  nextAction?: string;
+  downtimeMs?: number;
+};
 
 /** The runner's install and build (an hour each at most) and both Gateway switches. */
 const LOCK_DEADLINE_MS = 3 * 60 * 60_000;

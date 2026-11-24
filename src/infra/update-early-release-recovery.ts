@@ -11,7 +11,12 @@ import { runtimeProcessEntrypoints } from "./runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
 import { readSchemaVersions, type SchemaVersions } from "./update-candidate-check-early-release.js";
 import { waitForGatewayReady } from "./update-early-release-recovery-ready.js";
-import { holdUpdateLock, recordOutcome } from "./update-early-release-recovery-record.js";
+import {
+  holdUpdateLock,
+  recordOutcome,
+  type RecoveryOutcome,
+  type RecoveryPlan,
+} from "./update-early-release-recovery-record.js";
 
 /**
  * Automatic recovery for Git checkouts whose installed updater has the early release layout
@@ -31,25 +36,6 @@ const DRIVER_EXIT_TIMEOUT_MS = 30 * 60_000;
 /** Each rebuild command's limit. */
 const COMMAND_TIMEOUT_MS = 60 * 60_000;
 const MAX_RESTARTS = 2;
-
-export type RecoveryPlan = {
-  unit: string;
-  checkout: string;
-  branch: string;
-  target: string;
-  /** The release the updater built, kept here for the rebuild window. */
-  release: string;
-  prefix: string;
-  serviceFile: string;
-  /** `systemctl --user is-enabled` of the Gateway service when the recovery was planned. */
-  enabled: string;
-  /** Every store's schema version when the recovery was planned. */
-  schema: SchemaVersions;
-  fromVersion: string;
-  driver: { pid: number; start: string };
-  /** When `--check` planned this recovery (epoch milliseconds). */
-  plannedAt: number;
-};
 
 export type CommandResult = { code: number | null; output: string };
 export type RunCommand = (
@@ -174,15 +160,6 @@ export type RunnerDeps = {
 
 /** `downtimeMs` is left out when a restart of the runner lost the first switch's timing. */
 export type FinishFacts = { downtimeMs?: number; runId?: string };
-export type RecoveryOutcome = {
-  plan: RecoveryPlan;
-  runId?: string;
-  status: "succeeded" | "failed";
-  reason: string;
-  detail: string;
-  nextAction?: string;
-  downtimeMs?: number;
-};
 
 const REBUILD = "pnpm install --frozen-lockfile && pnpm build";
 /** The Gateway service's own definition before the recovery changed it, kept beside it. */

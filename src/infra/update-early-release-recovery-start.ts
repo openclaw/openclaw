@@ -16,6 +16,7 @@ import {
   type EarlyGitReleaseSchemaChange,
   type SchemaVersions,
 } from "./update-candidate-check-early-release.js";
+import type { RecoveryPlan } from "./update-early-release-recovery-record.js";
 import {
   buildCommit,
   EARLY_RELEASE_RECOVERY_FLAG,
@@ -26,7 +27,6 @@ import {
   removeTree,
   runRecoveryCommand,
   commandTail,
-  type RecoveryPlan,
   type RunCommand,
 } from "./update-early-release-recovery.js";
 
