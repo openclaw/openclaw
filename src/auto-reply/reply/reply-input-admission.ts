@@ -127,16 +127,22 @@ export function createReplyInputAdmission(params: {
           expectedSessionState: buildSessionTranscriptTurnExpectedState(entry),
           // Consuming queued custody must not precede the durable run fact used
           // by restart recovery, even if execution dies before source adoption.
-          sessionLifecyclePatch: derivePersistedSessionLifecyclePatch({
-            entry,
-            currentLifecycleGeneration:
-              replyOperation.lifecycleGeneration ?? getAgentEventLifecycleGeneration(),
-            event: {
-              runId: params.runId,
-              ts: Date.now(),
-              data: { phase: "start", startedAt: replyOperation.startedAtMs },
-            },
-          }),
+          // Like fresh chat input, the run also takes the writer claim here:
+          // runtimes without their own claim (Claude CLI) would otherwise keep
+          // the previous run's claim and refuse this run's Stop partial.
+          sessionLifecyclePatch: {
+            ...derivePersistedSessionLifecyclePatch({
+              entry,
+              currentLifecycleGeneration:
+                replyOperation.lifecycleGeneration ?? getAgentEventLifecycleGeneration(),
+              event: {
+                runId: params.runId,
+                ts: Date.now(),
+                data: { phase: "start", startedAt: replyOperation.startedAtMs },
+              },
+            }),
+            activeWriterRunId: params.runId,
+          },
         });
         if (persisted?.sessionEntry) {
           params.setEntry(persisted.sessionEntry);
