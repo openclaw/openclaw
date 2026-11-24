@@ -2,7 +2,8 @@
 // Cover the tracked tests that have no other unattended scheduled owner.
 import { appendFileSync } from "node:fs";
 import { encodeNodeTestGroups } from "./lib/ci-node-test-groups-codec.mts";
-import { listUnscheduledTestFiles, type NodeTestShardGroup } from "./lib/ci-node-test-plan.mts";
+import type { NodeTestShardGroup } from "./lib/ci-node-test-plan.mts";
+import { listUnscheduledTestFiles } from "./lib/ci-scheduled-coverage.mts";
 import { readRepoE2eFileTimings, readToolingFileTimings } from "./lib/ci-test-timings.mts";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
 import {

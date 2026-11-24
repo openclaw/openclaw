@@ -7,7 +7,7 @@ import { SCHEDULED_COVERAGE_EXCEPTIONS } from "../../scripts/lib/ci-node-test-in
 import {
   listScheduledTestFiles,
   listUnscheduledTestFiles,
-} from "../../scripts/lib/ci-node-test-plan.mts";
+} from "../../scripts/lib/ci-scheduled-coverage.mts";
 import { listGitTrackedFiles } from "../../src/test-utils/repo-files.js";
 
 function listTrackedTests(): string[] {
