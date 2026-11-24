@@ -24,7 +24,9 @@ import {
 import { Tooltip } from "../../components/solid/tooltip.tsx";
 import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
 import { formatUiError } from "../../lib/format-error.ts";
+import { useOptionalApplication } from "../../lib/reactive/context.ts";
 import { t, registerEnglishCatalog } from "../../lib/reactive/i18n.ts";
+import { projectTheme } from "../../lib/reactive/theme.ts";
 import { SettingsSelectRow } from "./settings-select-row.tsx";
 import { DeviceTalk, VoiceWakeEditor, type VoiceWakeEditorState } from "./talk-device.tsx";
 import { resolveTalkModelFamilySettings, type TalkRealtimeSelection } from "./talk-schema.ts";
@@ -376,7 +378,11 @@ export function Talk(props: TalkViewProps) {
     "--check-fill": "color-mix(in srgb, var(--text) 55%, var(--border))",
     "--check-mark": "var(--field-bg)",
   };
-  const [chimes, setChimes] = createSignal(loadSettings());
+  // The application theme owner republishes storage changes, so a second tab stays in sync.
+  const application = useOptionalApplication();
+  const theme = application?.theme ? projectTheme(application.theme) : undefined;
+  const [standalone, setChimes] = createSignal(loadSettings());
+  const chimes = () => (theme ? theme.preferences.read() : standalone());
   const splitMode = () => props.selection.mode === "stt-tts";
   const updateChime = (
     key: "talkChimeStart" | "talkChimeEnd" | "talkChimeReply",
