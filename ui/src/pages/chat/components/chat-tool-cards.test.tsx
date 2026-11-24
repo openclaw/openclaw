@@ -528,7 +528,7 @@ it.each([
     await mountCard(card, { expanded }, container);
     if (name === "tool_call") {
       expect(textOf(container, ".chat-tool-row__title")).toBe(
-        'Search the web for "OpenClaw release notes"',
+        "Search the web for “OpenClaw release notes”",
       );
     }
     expect(container.textContent?.toLowerCase()).toContain("skipped");
@@ -539,7 +539,7 @@ it.each([
 
 it("renders Tool Search like a direct call and retains the sidebar identity", async () => {
   const name = "web_search";
-  const args = { query: "OpenClaw release notes" };
+  const args = { query: "OpenClaw release notes", count: 5 };
   const input = { id: name, args };
   const card: ToolCard = {
     id: "search-release",
@@ -553,7 +553,7 @@ it("renders Tool Search like a direct call and retains the sidebar identity", as
   const onOpenSidebar = vi.fn();
   for (const expanded of [false, true]) {
     const container = await mountCard(card, { expanded, onOpenSidebar });
-    expect(textOf(container, ".chat-tool-row__title")).toBe(`Searched the web for "${args.query}"`);
+    expect(textOf(container, ".chat-tool-row__title")).toBe(`Searched the web for “${args.query}”`);
     const direct = await mountCard(
       { ...card, name, args, inputText: JSON.stringify(args, null, 2) },
       { expanded, onOpenSidebar },
@@ -566,11 +566,31 @@ it("renders Tool Search like a direct call and retains the sidebar identity", as
       direct.querySelector(".chat-tool-card")?.className,
     );
     if (expanded) {
+      expect(
+        Array.from(container.querySelectorAll(".chat-tool-kv__row"), (row) => [
+          textOf(row, ".chat-tool-kv__key"),
+          textOf(row, ".chat-tool-kv__value"),
+        ]),
+      ).toEqual([
+        ["query:", args.query],
+        ["count:", "5"],
+      ]);
       query(container, ".chat-tool-card__action-btn")?.click();
       expect(onOpenSidebar.mock.calls[0]?.[0].card).toBe(card);
     }
   }
   expect([card.name, card.args]).toEqual(["tool_call", { id: name, args }]);
+});
+
+it("bounds the literal web search title without changing the expanded query", async () => {
+  const prefix = "with <b>{query}</b> ";
+  const padding = "a".repeat(118 - prefix.length);
+  const args = { query: `  with\n<b>{query}</b>\u202e${padding}🦞 more  ` };
+  const container = await mountTool("web_search", { args, inputText: JSON.stringify(args) });
+  const title = query(container, ".chat-tool-row__title");
+  expect(title?.textContent).toBe(`Search the web for “${prefix}${padding}…” · no result recorded`);
+  expect(title?.querySelector("b")).toBeNull();
+  expect(textOf(container, ".chat-tool-kv__value")).toBe(args.query);
 });
 
 it("keeps command progress neutral across the row, expanded body, and sidebar until completion", async () => {

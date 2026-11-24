@@ -1,9 +1,9 @@
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { unwrapToolCallForDisplay } from "../../../../../src/agents/tool-display-call.js";
+import { truncateUtf16WithEllipsis } from "../../../../../src/shared/text-truncate.js";
 import type { IconName } from "../../../components/icon-data.ts";
 import { registerChatToolOperationsEnglish } from "../../../i18n/locales/en-chat-tool-operations.ts";
 import type { ToolCard, ToolCardOutcome } from "../../../lib/chat/chat-types.ts";
-import { resolveToolDisplay } from "../../../lib/chat/tool-display.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 
 registerEnglishCatalog(registerChatToolOperationsEnglish);
@@ -111,9 +111,17 @@ export function catalogToolLabel(
     return undefined;
   }
   const phase = outcome === "running" ? "running" : outcome === "succeeded" ? "done" : "action";
-  const phaseLabel = t(`chat.toolCards.operationLabels.${name}.${operation}.${phase}`);
-  const queryDetail = name === "web_search" ? resolveToolDisplay(call).detail : undefined;
-  const label = queryDetail ? `${phaseLabel} ${queryDetail}` : phaseLabel;
+  const query =
+    name === "web_search" && typeof args?.query === "string"
+      ? truncateUtf16WithEllipsis(
+          args.query.replace(/[\s\p{Cc}\p{Bidi_Control}]+/gu, " ").trim(),
+          120,
+        )
+      : undefined;
+  const label = t(
+    `chat.toolCards.operationLabels.${name}.${operation}.${phase}${query ? "WithQuery" : ""}`,
+    query ? { query } : undefined,
+  );
   const actionLabel = addressed?.name
     ? t("chat.toolCards.namedOperation", { action: label, name: addressed.name })
     : label;

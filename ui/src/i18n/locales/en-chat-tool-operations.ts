@@ -23,6 +23,9 @@ const enChatToolOperations = {
             action: "Search the web",
             running: "Searching the web",
             done: "Searched the web",
+            actionWithQuery: "Search the web for “{query}”",
+            runningWithQuery: "Searching the web for “{query}”",
+            doneWithQuery: "Searched the web for “{query}”",
           },
         },
         web_fetch: {
