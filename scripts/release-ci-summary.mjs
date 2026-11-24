@@ -2472,11 +2472,9 @@ async function recoveryChildProjection(plan, selection, client) {
   };
 }
 
-export async function prepareReleaseRecovery(
-  sourceRunId,
-  client = createReleaseEvidenceClient(),
-  { normalCiSelection } = {},
-) {
+// Sealing reuses this one observation of the original plan and child runs.
+// The full verifier still re-reads them before the manifest is written.
+async function resolveReleaseRecovery(sourceRunId, client, normalCiSelection) {
   const runId = normalizeRequiredRunId(sourceRunId, "original qualification run");
   const run = await client.getRun(runId);
   const original = client.loadExecutionPlanEvidence(runId);
@@ -2485,6 +2483,7 @@ export async function prepareReleaseRecovery(
     client,
   });
   if (
+    String(run.id) !== runId ||
     run.status !== "completed" ||
     plan.evidenceReuse.requested ||
     !plan.sourceAdmission.coverage.publication_artifact_source_json
@@ -2494,6 +2493,7 @@ export async function prepareReleaseRecovery(
     );
   }
   const effective = await recoveryChildProjection(plan, normalCiSelection, client);
+  const childRuns = new Map();
   const childAttempts = {};
   for (const child of effective.plan.children.filter((entry) => entry.selected)) {
     const observed = await client.getRun(child.runId);
@@ -2502,6 +2502,10 @@ export async function prepareReleaseRecovery(
       plannedRunAttempt: child.runAttempt,
       repository: plan.sourceAdmission.repository,
     });
+    if (String(observed.id) !== child.runId || observed.status !== "completed") {
+      throw new Error("Recovery source/child attempt changed or remains active: " + child.runId);
+    }
+    childRuns.set(child.runId, observed);
     childAttempts[child.runId] = observed.run_attempt;
   }
   const request = {
@@ -2512,8 +2516,15 @@ export async function prepareReleaseRecovery(
     ...(normalCiSelection === undefined ? {} : { normalCiSelection }),
     childAttempts,
   };
-  await assertRecoveryAttempts(request, client);
-  return request;
+  return { request, plan, effective, childRuns };
+}
+
+export async function prepareReleaseRecovery(
+  sourceRunId,
+  client = createReleaseEvidenceClient(),
+  { normalCiSelection } = {},
+) {
+  return (await resolveReleaseRecovery(sourceRunId, client, normalCiSelection)).request;
 }
 
 export async function sealReleaseRecovery(
@@ -2521,13 +2532,15 @@ export async function sealReleaseRecovery(
   client = createReleaseEvidenceClient(producer.repository),
 ) {
   client.verifyReleaseRecoveryProducer({ producer, completed: false });
-  const current = await prepareReleaseRecovery(request.sourceRunId, client, {
-    normalCiSelection: request.normalCiSelection,
-  });
-  if (!isDeepStrictEqual(current, request)) {
+  const current = await resolveReleaseRecovery(
+    request.sourceRunId,
+    client,
+    request.normalCiSelection,
+  );
+  if (!isDeepStrictEqual(current.request, request)) {
     throw new Error("Recovery request changed: original plan, artifact or attempts");
   }
-  const { plan } = client.loadExecutionPlanEvidence(request.sourceRunId);
+  const { plan, effective, childRuns } = current;
   const selected = await client.selectPublicationArtifactSource(
     JSON.parse(plan.sourceAdmission.coverage.publication_artifact_source_json),
     {
@@ -2550,7 +2563,6 @@ export async function sealReleaseRecovery(
   ) {
     throw new Error("Recovery publication source or candidate changed");
   }
-  const effective = await recoveryChildProjection(plan, request.normalCiSelection, client);
   const manifest = recoveryManifestFromPlan(
     effective.plan,
     request.sourceRunAttempt,
@@ -2560,7 +2572,7 @@ export async function sealReleaseRecovery(
     client.getWorkflowSource(plan.workflowSha, path),
   );
   for (const child of effective.plan.children.filter((entry) => entry.selected)) {
-    const run = await client.getRun(child.runId);
+    const run = childRuns.get(child.runId);
     const attempts = [];
     for (
       let attempt = child.runAttempt;
