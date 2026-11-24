@@ -33,6 +33,8 @@ import type { GatewayRequestContext } from "./types.js";
 export type GatewayAssistantInjection = {
   sessionKey: string;
   agentId?: string;
+  /** Optional caller-observed physical session incarnation. */
+  sessionId?: string;
   message: string;
   /** Trusted in-process display content; never accepted from chat.inject wire params. */
   content?: Array<Record<string, unknown>>;
@@ -96,6 +98,10 @@ export async function injectGatewayAssistantMessage(
   if (!sessionId || !storePath) {
     retained?.release();
     return err(errorShape(ErrorCodes.INVALID_REQUEST, "session not found"));
+  }
+  if (params.sessionId && params.sessionId !== sessionId) {
+    retained?.release();
+    return err(errorShape(ErrorCodes.INVALID_REQUEST, `Session "${sessionKey}" changed. Retry.`));
   }
 
   let appended: Awaited<ReturnType<typeof appendInjectedAssistantMessageToTranscript>>;

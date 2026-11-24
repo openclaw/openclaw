@@ -61,7 +61,6 @@ import {
   captureSessionControllerSettlement,
   captureSessionTarget,
   getSessionControllerWorkCount,
-  runSessionMutation,
 } from "../../sessions/session-controller.lifecycle.js";
 import { testing as controllerTesting } from "../../sessions/session-controller.test-support.js";
 import { rpcSourceTesting } from "../../sessions/session-lifecycle-admission.test-support.js";
@@ -73,7 +72,6 @@ import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shar
 import { consumeCronCreatorAuthorityGrant } from "../cron-creator-authority-grant.js";
 import type { CronCreatorAuthorityCapability } from "../cron-creator-authority-grant.types.js";
 import { createChatRunState } from "../server-chat-state.js";
-import * as gatewaySessionWorker from "../session-utils-store-worker.js";
 import { STALE_WORKER_BUILD_REASON } from "../worker-environments/admission.js";
 import { agentHandlers } from "./agent.js";
 import { createScopedCliClient } from "./chat-client.test-support.js";
@@ -110,6 +108,7 @@ import {
   readChatDirectiveConfig,
   seedChatDirectiveFileTranscript,
 } from "./chat.directive-tags.test-support.js";
+import { registerChatInjectSessionFenceTests } from "./chat.inject-session-fence.suite.js";
 import { createActiveRpcSourceForTest } from "./rpc-source-fixtures.test-support.js";
 import { initializeSessionReadContext } from "./sessions-read-cache.test-support.js";
 import type { GatewayRequestContext, RespondFn } from "./types.js";
@@ -3781,65 +3780,13 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     expect(JSON.stringify(payload?.message)).not.toContain(`MEDIA:${inlineUrl}`);
   });
 
-  it("chat.inject rechecks archive state after lifecycle admission waits", async () => {
-    await createTranscriptFixture("openclaw-chat-inject-archive-race-");
-    const storePath = mockState.storePath;
-    const mutationStarted = createDeferred();
-    const releaseMutation = createDeferred();
-    const sessionSelected = createDeferred();
-    const { loadGatewaySessionEntryReadOnlyInWorker } = await vi.importActual<
-      typeof import("../session-utils-store-worker.js")
-    >("../session-utils-store-worker.js");
-    const readSession = vi
-      .spyOn(gatewaySessionWorker, "loadGatewaySessionEntryReadOnlyInWorker")
-      .mockImplementationOnce(async (params) =>
-        loadGatewaySessionEntryReadOnlyInWorker({
-          ...params,
-          onSelected: (target) => {
-            params.onSelected?.(target);
-            sessionSelected.resolve();
-          },
-        }),
-      );
-    const mutation = runSessionMutation({
-      scope: storePath,
-      identities: ["main", mockState.sessionId],
-      run: async () => {
-        mutationStarted.resolve();
-        await releaseMutation.promise;
-        await seedSqliteSessionEntry({ archivedAt: Date.now() });
-      },
-    });
-    await mutationStarted.promise;
-    const { context, respond } = createChatRequestFixture();
-
-    try {
-      const inject = expectDefined(
-        chatHandlers["chat.inject"],
-        'chatHandlers["chat.inject"] test invariant',
-      )({
-        params: { sessionKey: "main", message: "must lose the archive race" },
-        respond,
-        req: {} as never,
-        client: null as never,
-        isWebchatConnect: () => false,
-        context,
-      });
-      await withinTest(sessionSelected.promise, testSignal);
-      releaseMutation.resolve();
-      await mutation;
-      await inject;
-
-      const response = lastRespondCall(respond);
-      expect(response?.[0]).toBe(false);
-      expect(response?.[2]?.message).toMatch(/archived/i);
-      expect(context.broadcast).not.toHaveBeenCalled();
-      expect(readTranscriptJsonLines(mockState.transcriptPath)).toHaveLength(1);
-    } finally {
-      releaseMutation.resolve();
-      await mutation;
-      readSession.mockRestore();
-    }
+  registerChatInjectSessionFenceTests({
+    mockState,
+    createTranscriptFixture,
+    createChatRequestFixture,
+    readTranscriptJsonLines,
+    seedSqliteSessionEntry,
+    signal: () => testSignal,
   });
 
   it.each([

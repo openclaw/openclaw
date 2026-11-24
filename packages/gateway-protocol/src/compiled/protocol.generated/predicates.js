@@ -891,7 +891,7 @@ var External = [
     /^.*$/u,
     /^.*$/u,
     /(^sessionKey$|^agentId$|^sessionId$|^runId$|^preserveSideRuns$|^discardPendingInput$|^userInitiated$)/u,
-    /(^sessionKey$|^agentId$|^message$|^label$)/u,
+    /(^sessionKey$|^agentId$|^sessionId$|^message$|^label$)/u,
     /(^limit$|^cursor$|^query$|^providerId$|^accountId$|^agentId$|^startedAfter$|^startedBefore$)/u,
     IsDateTime,
     /(^selector$)/u,
@@ -6555,6 +6555,7 @@ var External = [
     ) &&
     check_6(value.sessionKey) &&
     (value.agentId === void 0 || !("agentId" in value) || check_63(value.agentId)) &&
+    (value.sessionId === void 0 || !("sessionId" in value) || check_63(value.sessionId)) &&
     check_6(value.message) &&
     (value.label === void 0 || !("label" in value) || check_896(value.label)),
   check_896 = (value) =>
