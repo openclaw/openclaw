@@ -29,10 +29,15 @@ install command. Targets supporting older database schemas are refused by the
 existing schema compatibility check before release preparation.
 
 A resident launcher selects the pending release when the Gateway next starts.
-The Gateway migrates state at boot and confirms that it is ready. If the new
-Gateway cannot start, the launcher restores the previous release and the SQLite
-migration originals. Writes during a failed trial can be lost. PostgreSQL
-migrations do not have data rollback.
+The Gateway migrates private state copies at boot and confirms that it is ready.
+For a PostgreSQL schema upgrade, it makes and migrates a private server-side copy
+before switching the local anchor; the original schema and application rows stay
+unchanged. If the new Gateway cannot start, the launcher restores the previous
+release, SQLite migration originals, and PostgreSQL anchors. PostgreSQL fallback
+selects the original namespace; it does not run a database restore.
+Writes made only during a failed trial are discarded.
+See [PostgreSQL update recovery](/gateway/postgresql#updates-and-schema-migrations)
+for storage, permissions, and namespace changes.
 
 `--no-restart` prepares the release but leaves the running Gateway alone; its next
 start still receives the same automatic trial and rollback protection.
@@ -117,10 +122,12 @@ The Gateway's `update.run` and `openclaw update` both use one path:
    it serves from.
 4. The release is published, and the Gateway restarts one time.
 5. The resident launcher starts the new release as a trial. It commits when the
-   Gateway reports ready. After two failed starts, or when the trial budget ends,
-   it restores the previous release and the SQLite migration originals.
+   Gateway reports ready. After two failed starts, a configuration refusal
+   (exit 78), or when the trial budget ends, it restores the previous release,
+   SQLite migration originals, and PostgreSQL anchors.
 6. The Gateway that serves after the switch records the outcome. Only a Gateway
-   that runs the target build records success.
+   that runs the target build records success. Restored files alone do not prove
+   that the previous Gateway is serving.
 7. After success is recorded, the serving release runs advisory Doctor inspections
    in the background. The same update details receive their results without a page
    reload. Only warning and error findings add advice; inspections do not delay
@@ -129,6 +136,26 @@ The Gateway's `update.run` and `openclaw update` both use one path:
    changed plugins through the existing runtime lifecycle. Plugin failures appear
    in the same update details and warning count; they never fail the core update
    or trigger rollback.
+
+Startup prepares all state and agent migration inputs privately, including mixed
+SQLite/PostgreSQL installations. PostgreSQL uses only a server-side copy in a
+fresh namespace. The candidate migrates and validates that copy before writing
+the durable file-swap plan or publishing its anchor. Original PostgreSQL
+application schema and rows remain unchanged.
+
+If protection cannot be prepared, the candidate uses the existing configuration
+refusal (exit 78), with the obstruction in its diagnostics. It never falls back
+to a portable export or an unprotected in-place migration. A missing `CREATE`
+grant must be repaired, not bypassed. `--no-restart` delays this work until the
+next actual Gateway start; a same-schema release does not need a PostgreSQL copy.
+
+Each PostgreSQL schema-changing update changes the affected store's namespace
+name and lengthens the restart. Plan for the original and private server copies,
+indexes, WAL, temporary work, and retained recovery generations. Keep namespace
+and anchor generations together. Pruning may drop only update-created or
+verified-owned namespaces; a failed drop retains the recovery pair and reports
+a warning without failing a serving release. These recovery copies are not an
+off-server backup.
 
 Before a startup migration replaces a SQLite database, the swap owner drains its
 readers and retires the retained admission descriptors for both the live database
@@ -678,9 +705,9 @@ must contain the diagnostic repair; an older updater cannot gain it from a newer
 candidate alone. If capture refuses before the package changes, final recovery
 restarts and verifies the previous owned Gateway unless recorded data is at risk.
 
-PostgreSQL update rollback uses a fresh prepared anchor on each attempt. After a
-prepublication refusal, correcting the reported obstruction allows the same native
-`update restore` request to retry without overwriting an earlier recovery preparation.
+Legacy PostgreSQL `update restore` uses a fresh prepared anchor on each attempt.
+After a prepublication refusal, correcting the reported obstruction allows the
+same native request to retry without overwriting an earlier recovery preparation.
 The candidate restore implementation must contain this fix; the supervisor needs no change.
 
 When artifact-preserving SQLite inspection exhausts its stabilization attempts,
@@ -727,11 +754,11 @@ discarding its record. The candidate must contain these repairs; the installed
 updater needs no new protocol. Restore the verified pre-migration database with
 its matching binary for rollback rather than lowering version markers.
 
-PostgreSQL original-state captures acquire offline custody before using the exact
-database backup provider. The installed updater must contain this repair.
+Legacy in-place PostgreSQL original-state captures acquire offline custody before
+using the exact database backup provider. The installed updater must contain this repair.
 
-The pre-migration database backup for PostgreSQL families needs exclusive state
-ownership, and it runs after activation replaces the install. When ownership is
+On that legacy path, the pre-migration database backup for PostgreSQL families
+needs exclusive state ownership, and it runs after activation replaces the install. When ownership is
 unavailable after the service stop, for example because a Gateway the updater does
 not manage is still serving, the update now refuses before activation, leaving
 the install unchanged and the Gateway running. Stop the Gateway through its service
@@ -2141,10 +2168,11 @@ Its schema inspection reads each agent and local store's schema version directly
 milliseconds and without a copy, even while the serving Gateway writes. The shared
 state database keeps its consistent online-backup read.
 
-The new Gateway can apply supported SQLite migrations at startup. For PostgreSQL
-shared-state and agent schema upgrades, use Doctor with writers stopped. Before
-starting the Gateway directly on a release that needs one of these migrations,
-stop the Gateway and embedded writers and run the target release's `openclaw doctor --fix`.
+Release-managed Gateway startup applies supported SQLite and PostgreSQL state
+and agent migrations to private copies before publication. PostgreSQL uses the
+protected server-copy and anchor rollback path described above. Outside that
+release trial, stop the Gateway and embedded writers and run the target release's
+`openclaw doctor --fix` before a PostgreSQL schema upgrade.
 See [PostgreSQL updates and schema migrations](/gateway/postgresql#updates-and-schema-migrations).
 
 A Git checkout that runs from releases keeps each release at
@@ -2171,8 +2199,8 @@ The rebuild moves the service back to the checkout, which ends the startup failu
 reinstalled service starts the rebuilt Gateway, which migrates state at boot. If an earlier step
 fails, the command starts the previous service again and exits non-zero; a failed `pnpm build`
 can leave the checkout's build incomplete, so fix the reported error and run the line again.
-PostgreSQL-backed stores are not covered: follow the stopped-writer Doctor procedure in
-[PostgreSQL updates and schema migrations](/gateway/postgresql#updates-and-schema-migrations).
+For this historical rebuild, PostgreSQL-backed stores still require the stopped-writer
+Doctor procedure in [PostgreSQL updates and schema migrations](/gateway/postgresql#updates-and-schema-migrations).
 Later `openclaw update` runs use the rebuilt checkout's updater; their first trial falls back to
 the rebuilt checkout. The older layout's `git-install/lib/node_modules/openclaw` link and the
 release it names stay on disk (about 4.6 GiB) and are no longer used. To free that space, remove

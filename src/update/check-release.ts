@@ -34,6 +34,7 @@ import {
   OPENCLAW_STATE_SCHEMA_VERSION,
 } from "../state/openclaw-schema-versions.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import { preflightStateUpgrade } from "../state/state-upgrade-databases.js";
 import { listStateDatabases } from "./preflight.js";
 
 type ReleaseSurface = { plugin: string; surface: string; error?: string };
@@ -114,6 +115,9 @@ export async function checkRelease(
       );
     }
     const config = validated.config;
+    // Candidate code runs here while the old Gateway still serves. Refuse a
+    // PostgreSQL update that cannot protect its data before requesting a stop.
+    await preflightStateUpgrade(env, config);
     return await withPluginCache(createPluginCache(), async () => {
       // Feed the production inventory owner its existing metadata, read directly above.
       // Its normal state reader enforces today's schema and would reject an upgrade
