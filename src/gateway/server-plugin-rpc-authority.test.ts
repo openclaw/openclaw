@@ -144,6 +144,8 @@ describe("registered plugin RPC authority through the real dispatcher", () => {
   it("preserves each concurrent HTTP caller in a registered RPC and expires the nested lease", async () => {
     const { registry, config } = createPluginRegistryFixture();
     const path = "/authority-proof";
+    const log = createSubsystemLogger("test/plugin-rpc-authority");
+    const warnings = vi.spyOn(log, "warn");
     const retained: NonNullable<ReturnType<typeof getGatewayRequestAuthorityV1>>[] = [];
     registerVirtualTestPlugin({
       registry,
@@ -168,7 +170,7 @@ describe("registered plugin RPC authority through the real dispatcher", () => {
           { scope: "operator.read", profileAccess: "independent" },
         );
         api.registerHttpRoute({
-          path: path,
+          path,
           match: "exact",
           auth: "gateway",
           async handler(_req, res) {
@@ -184,13 +186,14 @@ describe("registered plugin RPC authority through the real dispatcher", () => {
       registry.registry,
     );
     const context = createDirectChatContext({
+      getRuntimeConfig: () => config,
       trackExecution: trackAsyncWork,
       getGatewayMethodRegistry: () => methods,
     });
     setTestPluginRegistry(registry.registry);
     const handler = createGatewayPluginRequestHandler({
       registry: registry.registry,
-      log: createSubsystemLogger("test/plugin-rpc-authority"),
+      log,
       getGatewayRequestContext: () => context,
     });
     const results = await Promise.all(
@@ -198,6 +201,7 @@ describe("registered plugin RPC authority through the real dispatcher", () => {
         const profileId = authMethod === "trusted-proxy" ? "individual" : "shared-display";
         const response = makeMockHttpResponse();
         response.res.req.url = path;
+        response.res.req.method = "GET";
         await handler(response.res.req, response.res, undefined, {
           gatewayAuthSatisfied: true,
           gatewayRequestOperatorScopes: ["operator.read"],
@@ -216,7 +220,7 @@ describe("registered plugin RPC authority through the real dispatcher", () => {
         return response.end.mock.calls[0]?.[0];
       }),
     );
-    expect(results).toEqual([
+    expect(results, JSON.stringify(warnings.mock.calls)).toEqual([
       JSON.stringify({ person: "individual", attribution: "individual" }),
       JSON.stringify({ attribution: "shared-display" }),
     ]);
