@@ -1,3 +1,4 @@
+import { listen } from "../../../lib/reactive/listener.ts";
 import type { RealtimeTalkStatus } from "./shared.ts";
 
 type Cue = "wake" | "bye" | "follow";
@@ -13,12 +14,10 @@ const buffers: Partial<Record<Cue, Promise<AudioBuffer | undefined>>> = {};
 let playing: AudioBufferSourceNode | undefined;
 let playbackGeneration = 0;
 
-// Call synchronously from the Talk button gesture, before starting the transport.
-export function prepareTalkChimes(): void {
+export function loadTalkChimes(audio: AudioContext): void {
   cancelTalkChime();
   try {
-    const audio = (context ??= new AudioContext());
-    void audio.resume().catch(() => undefined);
+    context = audio;
     const load = async (cue: Cue) => {
       const response = await fetch(assets[cue]);
       if (!response.ok) {
@@ -55,7 +54,8 @@ async function playTalkChime(cue: Cue): Promise<void> {
     const source = context.createBufferSource();
     source.buffer = buffer;
     source.connect(context.destination);
-    source.addEventListener(
+    listen(
+      source,
       "ended",
       () => {
         source.disconnect();

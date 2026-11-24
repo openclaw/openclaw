@@ -22,7 +22,7 @@ input.oc-checkbox.oc-checkbox,
   border-radius: min(3px, var(--radius-sm));
   background: var(--field-bg);
   box-shadow: none;
-  color: var(--accent-foreground);
+  color: var(--check-mark, var(--accent-foreground));
   vertical-align: middle;
   transition:
     background-color var(--duration-fast) ease,
@@ -46,16 +46,8 @@ input.oc-checkbox.oc-checkbox:indeterminate::before {
 
 input.oc-checkbox.oc-checkbox:is(:checked, :indeterminate),
 :is(.chat-text, .chat-thinking) input.task-list-item-checkbox:checked {
-  border-color: var(--accent);
-  background: var(--accent);
-}
-
-input.oc-checkbox.oc-checkbox--quiet:is(:checked, :indeterminate) {
-  --checkbox-quiet-fill: color-mix(in srgb, var(--text) 55%, var(--border));
-
-  border-color: var(--checkbox-quiet-fill);
-  background: var(--checkbox-quiet-fill);
-  color: var(--field-bg);
+  border-color: var(--check-fill, var(--accent));
+  background: var(--check-fill, var(--accent));
 }
 
 input.oc-checkbox.oc-checkbox:is(:checked, :indeterminate)::before,
@@ -90,16 +82,4 @@ input.oc-checkbox.oc-checkbox:disabled {
   :is(.chat-text, .chat-thinking) input.task-list-item-checkbox::before {
     content: none;
   }
-}
-
-.talk-chime-options {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--space-4);
-}
-
-.talk-chime-options .settings-row__desc {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
 }

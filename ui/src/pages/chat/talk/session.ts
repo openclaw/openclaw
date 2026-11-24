@@ -11,7 +11,7 @@ import type { GatewayBrowserClient } from "../../../api/gateway.ts";
 import { t } from "../../../i18n/index.ts";
 import { formatUiError } from "../../../lib/format-error.ts";
 import type { GatewaySpeechPlayback } from "../../../lib/speech-playback.ts";
-import { TalkChimes, type TalkChimePreferences } from "./chimes.ts";
+import type { TalkChimes, TalkChimePreferences } from "./chimes.ts";
 import { RealtimeTalkInputOwner } from "./input.ts";
 import type {
   RealtimeTalkCallbacks,
@@ -113,12 +113,22 @@ export class RealtimeTalkSession {
       void this.retireTransport();
       const lifecycleGeneration = this.lifecycleGeneration;
       this.chimes?.end(false);
-      this.chimes = this.localOptions.talkChimes
-        ? new TalkChimes(this.localOptions.talkChimes, Boolean(this.options.voiceChangeId))
-        : undefined;
+      this.chimes = undefined;
       this.canPlayWake = undefined;
       this.closed = false;
       this.callbacks.onStatus?.("connecting", t("chat.voice.preparing"));
+      if (this.localOptions.talkChimes) {
+        const chimes = await import("./chimes.ts").catch(() => undefined);
+        if (this.closed || lifecycleGeneration !== this.lifecycleGeneration) {
+          return;
+        }
+        if (chimes) {
+          this.chimes = new chimes.TalkChimes(
+            this.localOptions.talkChimes,
+            Boolean(this.options.voiceChangeId),
+          );
+        }
+      }
       if (this.localOptions.split) {
         const { SplitTalkTransport } = await import("./split.ts");
         if (this.closed || lifecycleGeneration !== this.lifecycleGeneration) {

@@ -371,6 +371,11 @@ function TalkCatalogRows(props: TalkViewProps) {
 }
 
 export function Talk(props: TalkViewProps) {
+  const chimeLabelStyle = { display: "flex", "align-items": "center", gap: "var(--space-2)" };
+  const chimeCheckboxStyle = {
+    "--check-fill": "color-mix(in srgb, var(--text) 55%, var(--border))",
+    "--check-mark": "var(--field-bg)",
+  };
   const [chimes, setChimes] = createSignal(loadSettings());
   const splitMode = () => props.selection.mode === "stt-tts";
   const updateChime = (
@@ -431,31 +436,31 @@ export function Talk(props: TalkViewProps) {
         <SettingsSection title={t("talkPage.chimesSection.title")}>
           <div class="settings-row">
             <div
-              class="talk-chime-options"
+              style={{ display: "flex", "flex-wrap": "wrap", gap: "var(--space-4)" }}
               role="group"
               aria-label={t("talkPage.chimesSection.title")}
             >
-              <label class="settings-row__desc">
+              <label class="settings-row__desc" style={chimeLabelStyle}>
                 <Checkbox
-                  class="oc-checkbox--quiet"
+                  style={chimeCheckboxStyle}
                   checked={chimes().talkChimeStart === true}
                   onChange={(event) => updateChime("talkChimeStart", event.currentTarget.checked)}
                 />
                 {t("talkPage.chimeStart")}
               </label>
-              <label class="settings-row__desc">
+              <label class="settings-row__desc" style={chimeLabelStyle}>
                 <Checkbox
-                  class="oc-checkbox--quiet"
+                  style={chimeCheckboxStyle}
                   checked={chimes().talkChimeEnd === true}
                   onChange={(event) => updateChime("talkChimeEnd", event.currentTarget.checked)}
                 />
                 {t("talkPage.chimeEnd")}
               </label>
               <Tooltip content={t("talkPage.chimeReplyLive")} disabled={splitMode()}>
-                <span tabIndex={splitMode() ? undefined : 0}>
-                  <label class="settings-row__desc">
+                <span tabindex={splitMode() ? undefined : 0}>
+                  <label class="settings-row__desc" style={chimeLabelStyle}>
                     <Checkbox
-                      class="oc-checkbox--quiet"
+                      style={chimeCheckboxStyle}
                       aria-label={t("talkPage.chimeReply")}
                       checked={splitMode() && chimes().talkChimeReply === true}
                       disabled={!splitMode()}

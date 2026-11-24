@@ -79,6 +79,7 @@ function preview(nextDeviceId: string, label: string) {
   return stream;
 }
 
+let stopSpy: MockInstance<RealtimeTalkSession["stop"]>;
 let startSpy: MockInstance<RealtimeTalkSession["start"]>;
 let prepareSpy: MockInstance<GatewaySpeechPlayback["prepare"]>;
 
@@ -88,7 +89,7 @@ beforeEach(() => {
     .spyOn(GatewaySpeechPlayback.prototype, "prepare")
     .mockImplementation(() => document.createElement("audio"));
   startSpy = vi.spyOn(RealtimeTalkSession.prototype, "start").mockResolvedValue(undefined);
-  vi.spyOn(RealtimeTalkSession.prototype, "stop").mockResolvedValue(undefined);
+  stopSpy = vi.spyOn(RealtimeTalkSession.prototype, "stop").mockResolvedValue(undefined);
   vi.spyOn(RealtimeTalkSession.prototype, "switchCamera").mockResolvedValue(undefined);
   state = {
     client: {
@@ -231,10 +232,7 @@ it.each([true, false])(
     } else {
       stopChatRealtimeTalk(state, { disposition: "abort" });
     }
-    expect(RealtimeTalkSession.prototype.stop).toHaveBeenCalledExactlyOnceWith(
-      { disposition: "abort" },
-      userStopped,
-    );
+    expect(stopSpy).toHaveBeenCalledExactlyOnceWith({ disposition: "abort" }, userStopped);
   },
 );
 

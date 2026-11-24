@@ -1,5 +1,6 @@
 import { expect, it, vi } from "vitest";
-import { prepareTalkChimes, TalkChimes } from "./chimes.ts";
+import { prepareTalkChimes } from "./chimes-gesture.ts";
+import { TalkChimes } from "./chimes.ts";
 
 const allCues = { wake: true, bye: true, follow: true };
 
@@ -96,6 +97,7 @@ it("retries a failed cue download on the next Talk call", async () => {
   );
   try {
     prepareTalkChimes();
+    await vi.dynamicImportSettled();
     new TalkChimes(allCues, false).status("listening", true);
     await new Promise<void>((resolve) => {
       setTimeout(resolve, 0);
@@ -103,6 +105,7 @@ it("retries a failed cue download on the next Talk call", async () => {
     expect(start).not.toHaveBeenCalled();
 
     prepareTalkChimes();
+    await vi.dynamicImportSettled();
     new TalkChimes(allCues, false).status("listening", true);
     await vi.waitFor(() => expect(start).toHaveBeenCalledOnce());
     expect(fetchCue).toHaveBeenCalledTimes(4);

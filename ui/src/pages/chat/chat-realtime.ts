@@ -6,7 +6,7 @@ import { loadSettings, type UiSettings } from "../../app/settings.ts";
 import { t } from "../../i18n/index.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { GatewaySpeechPlayback } from "../../lib/speech-playback.ts";
-import { prepareTalkChimes } from "./talk/chimes.ts";
+import { prepareTalkChimes } from "./talk/chimes-gesture.ts";
 import {
   createRealtimeTalkConversationState,
   continueRealtimeTalkConversation,
