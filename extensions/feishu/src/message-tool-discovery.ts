@@ -37,7 +37,13 @@ export function describeFeishuMessageTool({
     enabledAccounts.length > 0 ||
     (!accountId &&
       cfg.channels?.feishu?.enabled !== false &&
-      Boolean(inspectFeishuCredentials(cfg.channels?.feishu as FeishuConfig | undefined, cfg)));
+      Boolean(
+        inspectFeishuCredentials(
+          // SAFETY: Config validation checks channels.feishu against FeishuChannelConfigSchema.
+          cfg.channels?.feishu as FeishuConfig | undefined,
+          cfg,
+        ),
+      ));
   if (enabledAccounts.length === 0) {
     return {
       actions: [],

@@ -74,9 +74,9 @@ const discordActionGroups: ReadonlyArray<{
   { gate: "presence", actions: ["set-presence"], defaultEnabled: false },
 ];
 
-const optionalString = (description?: string) =>
+const optionalStringField = (description?: string) =>
   Type.Optional(Type.String(description === undefined ? undefined : { description }));
-const optionalBoolean = (description?: string) =>
+const optionalBooleanField = (description?: string) =>
   Type.Optional(Type.Boolean(description === undefined ? undefined : { description }));
 const actionFields = (
   actions: readonly ChannelMessageActionName[],
@@ -119,23 +119,23 @@ const discordActionFieldSchemas: readonly ChannelMessageToolSchemaContribution[]
       "sticker-upload",
       "voice-status",
     ],
-    { guildId: optionalString() },
+    { guildId: optionalStringField() },
   ),
-  actionFields(["role-add", "role-remove"], { roleId: optionalString() }),
+  actionFields(["role-add", "role-remove"], { roleId: optionalStringField() }),
   actionFields(["search"], { authorIds: Type.Optional(Type.Array(Type.String())) }),
   actionFields(["emoji-upload"], {
-    emojiName: optionalString("Name for an uploaded custom emoji."),
+    emojiName: optionalStringField("Name for an uploaded custom emoji."),
     roleIds: Type.Optional(Type.Array(Type.String())),
   }),
   actionFields(["sticker-upload"], {
-    stickerName: optionalString(),
-    stickerDesc: optionalString(),
-    stickerTags: optionalString(),
+    stickerName: optionalStringField(),
+    stickerDesc: optionalStringField(),
+    stickerTags: optionalStringField(),
   }),
   actionFields(moderationActions, {
     deleteDays: optionalNonNegativeIntegerSchema({ maximum: 7 }),
     durationMin: optionalNonNegativeIntegerSchema(),
-    until: optionalString(),
+    until: optionalStringField(),
   }),
   actionFields(channelLayoutActions, {
     channelType: Type.Optional(
@@ -145,10 +145,10 @@ const discordActionFieldSchemas: readonly ChannelMessageToolSchemaContribution[]
       }),
     ),
     position: optionalNonNegativeIntegerSchema(),
-    nsfw: optionalBoolean(),
+    nsfw: optionalBooleanField(),
     rateLimitPerUser: optionalNonNegativeIntegerSchema(),
-    categoryId: optionalString(),
-    clearParent: optionalBoolean("Clear parent/category when supported."),
+    categoryId: optionalStringField(),
+    clearParent: optionalBooleanField("Clear parent/category when supported."),
   }),
 ];
 
