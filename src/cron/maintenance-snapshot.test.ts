@@ -23,6 +23,8 @@ import {
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { startCronMaintenance, stopCronMaintenance } from "./maintenance.js";
 import { saveCronStore } from "./store.js";
+import * as historyChanges from "./store/run-history-changes.js";
+import { recordCronRun } from "./store/run-history.js";
 import { makeCronReceiptJob } from "./store/run-receipt-store.test-support.js";
 
 afterEach(() => {
@@ -40,7 +42,9 @@ it.each([
 ])("handles snapshot invalidation: %s through the real maintenance scheduler", async (change) => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     resetGatewayWorkAdmission();
-    setRuntimeConfigSnapshot({});
+    const config = { agents: { defaults: { promptCacheKeepWarm: false } } };
+    await state.writeConfig(config);
+    setRuntimeConfigSnapshot(config);
     vi.spyOn(hostMemory, "isConstrainedProcessLowOnMemory").mockReturnValue(false);
     const now = Date.now();
     const clock = createGatewaySchedulerClock(now);
@@ -90,11 +94,39 @@ it.each([
       discovery.mockImplementationOnce((...args) => pauseAfter(discover(...args)));
     }
     let sweep: void | Promise<void> = undefined;
+    let afterHistoryChange: (() => void) | undefined;
+    if (change === "completed deletion") {
+      const subscribe = historyChanges.subscribeCronRunHistoryChanges;
+      vi.spyOn(historyChanges, "subscribeCronRunHistoryChanges").mockImplementation((listener) =>
+        subscribe((databasePath) => {
+          listener(databasePath);
+          afterHistoryChange?.();
+        }),
+      );
+    }
     const logs = createWarnLogCapture("cron-maintenance-snapshot");
     try {
       startCronMaintenance(scheduler, () => cronStorePath);
       sweep = clock.advanceBy(5_000);
       await discovered.promise;
+      expect(discovery.mock.calls[0]?.[1]?.registeredDatabases).toEqual(expect.any(Array));
+      if (change === "completed deletion") {
+        // A committed history write can wake maintenance before the registry retry.
+        const historyChange = createDeferredCore();
+        afterHistoryChange = () => historyChange.resolve();
+        await recordCronRun({
+          storeKey: cronStorePath,
+          jobId: "expired",
+          runId: "expired-run",
+          startedAt: now - 8 * 86_400_000,
+          endedAt: now - 8 * 86_400_000,
+          status: "succeeded",
+          detail: {},
+        });
+        await historyChange.promise;
+        afterHistoryChange = undefined;
+        await clock.advanceBy(1_000);
+      }
       if (change === "registration removal") {
         unregisterOpenClawAgentDatabase({
           agentId: "retired",
@@ -135,7 +167,8 @@ it.each([
         expect(readRetired()).toEqual(retiredBefore);
         return;
       }
-      await clock.advanceTo(scheduler.nextWakeAtMs!);
+      // The next wake may serve history; advance until the registry retry is due too.
+      await clock.advanceBy(60_000);
       expect(loadSessionEntry(healthy)).toBeUndefined();
       if (change === "registration removal") {
         expect(loadSessionEntry(retired)).toBeUndefined();

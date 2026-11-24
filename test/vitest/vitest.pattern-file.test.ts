@@ -300,6 +300,17 @@ it("stops collecting excludes at the separator", () => {
   ).toEqual(["before"]);
 });
 
+it.each([
+  [infraFile, ["run"], "", true],
+  [infraFile, ["run"], "src/infra", true],
+  [infraFile, ["run"], "ui", false],
+  [infraFile, ["run", "--exclude", "**/example.test.ts"], "src/infra", false],
+  [infraFile, ["run", "unrelated"], "src/infra", false],
+  ["src/infra/[example].test.ts", ["run"], "", false],
+])("preserves exact inventory selection for %s with %j", (file, args, dir, selected) => {
+  expect(cli.matchesVitestCliSelection(file, [file], args, dir, {}, [file])).toBe(selected);
+});
+
 it.each(["plain", "[selection]"])("matches native discovery exclusions under %s", (name) => {
   const root = path.join(tempDirs.make("vitest-effective-exclusions-"), name);
   const files = [

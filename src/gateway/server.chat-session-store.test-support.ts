@@ -23,7 +23,7 @@ export const writeStoredMainSession = (entry: StoredChatSessionEntry = {}) =>
 
 export const futureFixtureUpdatedAt = (): number => Date.now() + 60_000;
 
-export async function holdSessionMutation(
+export function holdSessionMutation(
   scope: string,
   release: ReturnType<typeof createDeferred<void>>,
   options: {
@@ -40,8 +40,7 @@ export async function holdSessionMutation(
       await release.promise;
     },
   });
-  await started.promise;
-  return { mutation };
+  return { mutation, started: started.promise };
 }
 
 export const writeMainSessionStore = (sessionId = "sess-main") =>

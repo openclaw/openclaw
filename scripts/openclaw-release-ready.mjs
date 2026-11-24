@@ -58,7 +58,7 @@ const INPUTS = new Set([
   "publish_docker_only",
   "release_profile",
   "release_evidence_mode",
-  "wait_for_clawhub",
+  "fast_track_approval",
 ]);
 
 function requireValue(condition, message) {
@@ -115,6 +115,9 @@ export function validateReleaseButtonInputs(value) {
   );
   const inputs = Object.fromEntries(
     Object.entries(value).map(([key, entry]) => {
+      if (key === "fast_track_approval" && typeof entry === "string" && entry) {
+        return [key, JSON.stringify(JSON.parse(entry))];
+      }
       requireValue(
         (typeof entry === "string" || typeof entry === "boolean") &&
           !/[\r\n\0]/u.test(String(entry)),
@@ -167,7 +170,6 @@ export function validateReleaseButtonInputs(value) {
     publish_openclaw_npm: "true",
     publish_docker_only: "false",
     release_evidence_mode: "full-release-validation",
-    wait_for_clawhub: "true",
   };
 }
 
@@ -388,6 +390,7 @@ function authenticateReadyNpm({
   toolingSha,
   toolingFullRef,
   evidenceClient,
+  fastTrackPublication,
 }) {
   return authenticatePreparedNpmArtifact({
     artifact,
@@ -399,6 +402,8 @@ function authenticateReadyNpm({
     selectionMode: "all-publishable",
     plugins: "",
     npmDistTag: inputs.npm_dist_tag === "extended-stable" ? "extended-stable" : "default",
+    fastTrackApproval: inputs.fast_track_approval,
+    fastTrackPublication,
     fullReleaseValidationRunId: inputs.full_release_validation_run_id,
     fullReleaseValidationRunAttempt: inputs.full_release_validation_run_attempt,
     publisherPolicySha256: createHash("sha256")
@@ -542,7 +547,7 @@ export async function prefetchPreparedPlugins(options) {
   return { ...manifests, inputs };
 }
 
-async function readReady(descriptor, directory, tooling, token) {
+async function readReady(descriptor, directory, tooling, token, fastTrackPublication) {
   requireValue(
     descriptor?.workflowPath === PREPARE_WORKFLOW &&
       descriptor.repository === REPOSITORY &&
@@ -571,6 +576,7 @@ async function readReady(descriptor, directory, tooling, token) {
   const sourceSha = api(`commits/${encodeURIComponent(value.inputs?.tag)}`, ["--jq", "{sha}"]).sha;
   const adoption = await authenticateReadyNpm({
     artifact: value.plugins?.npm,
+    fastTrackPublication,
     inputs: value.inputs,
     sourceSha,
     toolingSha: tooling.sha,
@@ -587,7 +593,17 @@ async function readReady(descriptor, directory, tooling, token) {
   };
 }
 
-function publicationInputs(ready, resumeRunId) {
+function publicationInputs(ready, resumeRunId, fastTrackApproval = "") {
+  requireValue(typeof fastTrackApproval === "string", "fast_track_approval must be JSON text.");
+  requireValue(
+    !fastTrackApproval ||
+      !ready.inputs.fast_track_approval ||
+      isDeepStrictEqual(
+        JSON.parse(fastTrackApproval),
+        JSON.parse(ready.inputs.fast_track_approval),
+      ),
+    "Publication must retain the approval bound to release preparation.",
+  );
   const effectiveResumeRunId = resumeRunId || ready.inputs.openclaw_npm_resume_run_id || "";
   requireValue(
     effectiveResumeRunId === "" ||
@@ -598,6 +614,7 @@ function publicationInputs(ready, resumeRunId) {
   return {
     ...ready.inputs,
     ...(resumeRunId ? { openclaw_npm_resume_run_id: resumeRunId } : {}),
+    ...(fastTrackApproval ? { fast_track_approval: fastTrackApproval } : {}),
     prepared_plugins: JSON.stringify(ready.plugins),
   };
 }
@@ -633,8 +650,15 @@ async function readPublicationRequest(path, directory, tooling, token) {
       }),
     "Publication request is unknown, unverified, malformed, or inconsistent; do not redispatch.",
   );
-  const { ready } = await readReady(request.preparedArtifact, directory, tooling, token);
-  const inputs = publicationInputs(ready, request.openclawNpmResumeRunId ?? "");
+  const { ready } = await readReady(request.preparedArtifact, directory, tooling, token, {
+    runId: request.releaseRunId,
+    runAttempt: request.releaseRunAttempt,
+  });
+  const inputs = publicationInputs(
+    ready,
+    request.openclawNpmResumeRunId ?? "",
+    request.inputs?.fast_track_approval ?? "",
+  );
   requireValue(
     ready.sourceSha === request.sourceSha &&
       isDeepStrictEqual(inputs, request.inputs) &&
@@ -699,6 +723,7 @@ async function main() {
       sourceSha,
       workflowSha: tooling.sha,
       workflowFullRef: tooling.fullRef,
+      fastTrackApproval: inputs.fast_track_approval,
       fullReleaseValidationRunId: inputs.full_release_validation_run_id,
       fullReleaseValidationRunAttempt: inputs.full_release_validation_run_attempt,
       releaseTag: inputs.tag,
@@ -859,7 +884,11 @@ async function main() {
     const { ready, revalidateAuthority } = await readReady(descriptor, directory, tooling, token);
     // Recovery changes only the existing owner's resume selector. The parent
     // verifies its authority and canonical core bytes before starting writers.
-    const inputs = publicationInputs(ready, resumeRunId);
+    const inputs = publicationInputs(
+      ready,
+      resumeRunId,
+      process.env.FAST_TRACK_APPROVAL_JSON ?? "",
+    );
     const request = {
       schema: "openclaw.release-dispatch/v1",
       repository: REPOSITORY,

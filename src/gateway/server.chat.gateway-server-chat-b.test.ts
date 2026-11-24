@@ -4,6 +4,7 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, afterEach, beforeAll, describe, expect, test, vi } from "vitest";
 import { createDeferred, withinTest } from "../../test/helpers/promise.js";
+import { runQaGatewayFixture } from "../../test/helpers/qa-gateway-cleanup.js";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { upsertAcpSessionMeta } from "../acp/runtime/session-meta.js";
 import { bindActiveOperatorTurnAuthority } from "../agents/cron-creator-authority-context.js";
@@ -31,10 +32,7 @@ import { resolveSessionStorePathForScope } from "../config/sessions/session-stor
 import { SessionTranscriptProjectionUnavailableError } from "../config/sessions/session-transcript-projection-error.js";
 import { waitForSessionTranscriptIndexReconcile } from "../config/sessions/session-transcript-reconcile.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import {
-  rotateAgentEventLifecycleGeneration,
-  type AgentEventStream,
-} from "../infra/agent-events.js";
+import type { AgentEventStream } from "../infra/agent-events.js";
 import { onDiagnosticEvent, type DiagnosticEventPayload } from "../infra/diagnostic-events.js";
 import { throwIfSettledRejected } from "../infra/error-graph-internal.js";
 import { withSessionTurn } from "../sessions/session-controller.admission.js";
@@ -78,6 +76,10 @@ import {
   callDirectChatHandler,
   callDirectChat,
 } from "./server.chat-direct-handler.test-support.js";
+import {
+  registerChatLifecycleAdmissionTests,
+  startPendingChat,
+} from "./server.chat-lifecycle-admission.test-support.js";
 import {
   captureChatResponse,
   captureChatResult,
@@ -244,25 +246,6 @@ async function requestControlUiChat(
   const responses: CapturedChatResponse[] = [];
   await sendControlUiChat({ ...options, respond: capture(responses) });
   return responses;
-}
-
-async function startPendingChat(
-  context: GatewayRequestContext,
-  params: ReturnType<typeof makeChatSendParams>,
-  options: Pick<Parameters<typeof callDirectChat>[1], "client"> & { id?: string } = {},
-) {
-  const responses: CapturedChatResponse[] = [];
-  const send = callDirectChat("chat.send", {
-    id: "send",
-    ...options,
-    params,
-    context,
-    respond: captureChatResponse(responses),
-  });
-  await waitForFast(() => {
-    expect(context.dedupe.has(pendingChatSendDedupeKey(params.idempotencyKey))).toBe(true);
-  }, FAST_WAIT_OPTS);
-  return { send, responses };
 }
 
 function runEvent(
@@ -1301,129 +1284,14 @@ describe("gateway server chat", () => {
     settle: getDirectChatSessionWorkRelease,
   });
 
-  test("chat.abort cancels chat.send while lifecycle admission waits", async () => {
-    const { storePath } = openDirectChatSession();
-    const releaseMutation = createDeferred();
-    try {
-      await writeStoredMainSession({});
-      const { mutation } = await holdSessionMutation(storePath, releaseMutation);
-
-      const context = createDirectChatContext();
-      const runId = "idem-lifecycle-wait-abort";
-      const collidingFinalKey = `chat:pending:${runId}`;
-      const collidingFinalEntry = {
-        ts: Date.now(),
-        ok: true,
-        payload: { runId: `pending:${runId}`, status: "ok" },
-      };
-      context.dedupe.set(collidingFinalKey, collidingFinalEntry);
-      const params = makeChatSendParams({ message: "do not dispatch", idempotencyKey: runId });
-      const client = {
-        connId: "conn-owner",
-        connect: { device: { id: "dev-owner" }, scopes: ["operator.write"] },
-      } as never;
-      const { send, responses: sendResponses } = await startPendingChat(context, params, {
-        client,
-      });
-      expect(context.dedupe.get(collidingFinalKey)).toBe(collidingFinalEntry);
-      expect(isRpcSourceQueued(rpcSourceTesting.get(runId))).toBe(true);
-
-      const retryResponses = await requestChat("chat.send", context, params, { client });
-      expect(retryResponses).toEqual([
-        chatResponse(false, undefined, {
-          code: "UNAVAILABLE",
-          message: "Chat input is being admitted; retry the same request.",
-          retryable: true,
-        }),
-      ]);
-      expect(context.dedupe.has(pendingChatSendDedupeKey(runId))).toBe(true);
-
-      const abortResponses = await requestChat(
-        "chat.abort",
-        context,
-        makeMainSessionParams({ runId }),
-        { client },
-      );
-      releaseMutation.resolve();
-      await mutation;
-      await send;
-
-      expect(abortResponses).toEqual([
-        chatResponse(true, { ok: true, aborted: true, runIds: [runId] }),
-      ]);
-      expect(sendResponses).toEqual([
-        chatResponse(true, {
-          runId,
-          status: "timeout",
-          summary: "aborted",
-          stopReason: "rpc",
-          endedAt: expect.any(Number),
-        }),
-      ]);
-      expect(context.dedupe.has(pendingChatSendDedupeKey(runId))).toBe(false);
-      expect(context.dedupe.get(collidingFinalKey)).toBe(collidingFinalEntry);
-      expect(rpcSourceTesting.has(runId)).toBe(false);
-      expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
-    } finally {
-      releaseMutation.resolve();
-      await resetDirectChatSession();
-    }
+  registerChatLifecycleAdmissionTests({
+    openDirectChatSession,
+    requestChat,
+    makeChatSendParams,
+    makeMainSessionParams,
+    chatResponse,
+    resetDirectChatSession,
   });
-
-  test.each(["restart", "reset"] as const)(
-    "chat.send rejects %s replacement while lifecycle admission waits",
-    async (replacement) => {
-      const { storePath } = openDirectChatSession();
-      const releaseMutation = createDeferred();
-      try {
-        await writeStoredMainSession({ sessionId: "sess-main" });
-        const { mutation } = await holdSessionMutation(storePath, releaseMutation, {
-          ...(replacement === "reset" ? { kind: "reset" } : {}),
-          identities: ["agent:main:main", "sess-main"],
-        });
-        const context = createDirectChatContext();
-        const runId = `idem-${replacement}-lifecycle`;
-        const { send, responses } = await startPendingChat(
-          context,
-          makeChatSendParams({
-            message: "do not enter replacement work",
-            idempotencyKey: runId,
-          }),
-        );
-        if (replacement === "restart") {
-          rotateAgentEventLifecycleGeneration();
-        } else {
-          await writeStoredMainSession({ sessionId: "sess-after-reset" });
-        }
-        releaseMutation.resolve();
-        await mutation;
-        await send;
-        if (replacement === "restart") {
-          expect(responses).toEqual([
-            chatResponse(true, {
-              runId,
-              status: "timeout",
-              summary: "aborted",
-              stopReason: "restart",
-              endedAt: expect.any(Number),
-            }),
-          ]);
-          expect(context.dedupe.has(pendingChatSendDedupeKey(runId))).toBe(false);
-        } else {
-          expect(responses).toHaveLength(1);
-          expect(responses[0]?.ok).toBe(false);
-          expect(responses[0]?.error).toMatchObject({
-            message: expect.stringMatching(/changed while starting work/i),
-          });
-        }
-        expect(rpcSourceTesting.has(runId)).toBe(false);
-        expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
-      } finally {
-        releaseMutation.resolve();
-        await resetDirectChatSession();
-      }
-    },
-  );
 
   test("chat.send does not recreate a session deleted while admission waits", async () => {
     openDirectChatSession({ fresh: true });
@@ -1526,75 +1394,95 @@ describe("gateway server chat", () => {
     const { storePath } = openDirectChatSession();
     const releaseMutation = createDeferred();
     const releaseTerminalMutation = createDeferred();
-    try {
-      await writeStoredMainSession({});
-      const { mutation } = await holdSessionMutation(storePath, releaseMutation);
+    const pending: Array<Promise<PromiseSettledResult<unknown>[]>> = [];
+    await runQaGatewayFixture(
+      async () => {
+        await writeStoredMainSession({});
+        const { mutation, started } = holdSessionMutation(storePath, releaseMutation);
+        pending.push(Promise.allSettled([mutation]));
+        await started;
 
-      const context = createDirectChatContext();
-      const runId = "idem-replaced-reservation";
-      const pendingKey = pendingChatSendDedupeKey(runId);
-      const params = makeChatSendParams({
-        message: "only the replacement may run",
-        idempotencyKey: runId,
-      });
-      const { send, responses: sendResponses } = await startPendingChat(context, params);
-      const original = context.dedupe.get(pendingKey);
-      const originalPayload = original?.payload as Record<string, unknown>;
-      const replacement = {
-        ts: Date.now(),
-        ok: true,
-        payload: {
-          ...originalPayload,
-          attemptId: "replacement-attempt",
-          expiresAtMs: Date.now() + 120_000,
-        },
-      };
-      context.dedupe.set(pendingKey, replacement);
+        const context = createDirectChatContext();
+        const runId = "idem-replaced-reservation";
+        const pendingKey = pendingChatSendDedupeKey(runId);
+        const params = makeChatSendParams({
+          message: "only the replacement may run",
+          idempotencyKey: runId,
+        });
+        const {
+          send,
+          responses: sendResponses,
+          waitForPending,
+        } = startPendingChat(context, params);
+        pending.push(Promise.allSettled([send]));
+        await waitForPending();
+        const original = context.dedupe.get(pendingKey);
+        const originalPayload = original?.payload as Record<string, unknown>;
+        const replacement = {
+          ts: Date.now(),
+          ok: true,
+          payload: {
+            ...originalPayload,
+            attemptId: "replacement-attempt",
+            expiresAtMs: Date.now() + 120_000,
+          },
+        };
+        context.dedupe.set(pendingKey, replacement);
 
-      releaseMutation.resolve();
-      await mutation;
-      await send;
+        releaseMutation.resolve();
+        await mutation;
+        await send;
 
-      expect(sendResponses).toEqual([chatResponse(true, { runId, status: "in_flight" })]);
-      expect(context.dedupe.get(pendingKey)).toBe(replacement);
-      expect(rpcSourceTesting.has(runId)).toBe(false);
-      expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
+        expect(sendResponses).toEqual([chatResponse(true, { runId, status: "in_flight" })]);
+        expect(context.dedupe.get(pendingKey)).toBe(replacement);
+        expect(rpcSourceTesting.has(runId)).toBe(false);
+        expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
 
-      const { mutation: terminalMutation } = await holdSessionMutation(
-        storePath,
-        releaseTerminalMutation,
-      );
-      const terminalRunId = "idem-terminal-replacement";
-      const terminalPendingKey = pendingChatSendDedupeKey(terminalRunId);
-      const terminalParams = makeChatSendParams({
-        message: "preserve the replacement result",
-        idempotencyKey: terminalRunId,
-      });
-      const { send: terminalSend, responses: terminalResponses } = await startPendingChat(
-        context,
-        terminalParams,
-        { id: "terminal-send" },
-      );
-      const terminalResult = {
-        ts: Date.now(),
-        ok: true,
-        payload: { runId: terminalRunId, status: "ok", summary: "replacement completed" },
-      };
-      context.dedupe.delete(terminalPendingKey);
-      context.dedupe.set(`chat:${terminalRunId}`, terminalResult);
+        const { mutation: terminalMutation, started: terminalStarted } = holdSessionMutation(
+          storePath,
+          releaseTerminalMutation,
+        );
+        pending.push(Promise.allSettled([terminalMutation]));
+        await terminalStarted;
+        const terminalRunId = "idem-terminal-replacement";
+        const terminalPendingKey = pendingChatSendDedupeKey(terminalRunId);
+        const terminalParams = makeChatSendParams({
+          message: "preserve the replacement result",
+          idempotencyKey: terminalRunId,
+        });
+        const {
+          send: terminalSend,
+          responses: terminalResponses,
+          waitForPending: waitForTerminalPending,
+        } = startPendingChat(context, terminalParams, { id: "terminal-send" });
+        pending.push(Promise.allSettled([terminalSend]));
+        await waitForTerminalPending();
+        const terminalResult = {
+          ts: Date.now(),
+          ok: true,
+          payload: { runId: terminalRunId, status: "ok", summary: "replacement completed" },
+        };
+        context.dedupe.delete(terminalPendingKey);
+        context.dedupe.set(`chat:${terminalRunId}`, terminalResult);
 
-      releaseTerminalMutation.resolve();
-      await terminalMutation;
-      await terminalSend;
+        releaseTerminalMutation.resolve();
+        await terminalMutation;
+        await terminalSend;
 
-      expect(terminalResponses).toEqual([chatResponse(true, terminalResult.payload)]);
-      expect(context.dedupe.get(`chat:${terminalRunId}`)).toBe(terminalResult);
-      expect(context.chatRunState.runs.get(terminalRunId)?.abortMarker).toBeUndefined();
-    } finally {
-      releaseMutation.resolve();
-      releaseTerminalMutation.resolve();
-      await resetDirectChatSession();
-    }
+        expect(terminalResponses).toEqual([chatResponse(true, terminalResult.payload)]);
+        expect(context.dedupe.get(`chat:${terminalRunId}`)).toBe(terminalResult);
+        expect(context.chatRunState.runs.get(terminalRunId)?.abortMarker).toBeUndefined();
+      },
+      async () => {
+        releaseMutation.resolve();
+        releaseTerminalMutation.resolve();
+        throwIfSettledRejected(
+          (await Promise.all(pending)).flat(),
+          "Pending chat fixture work failed",
+        );
+      },
+      resetDirectChatSession,
+    );
   });
 
   registerChatConnectionIdentityTest({
@@ -1611,65 +1499,78 @@ describe("gateway server chat", () => {
     const releaseMutation = createDeferred();
     const dispatchRelease = createDeferred();
     const runId = "idem-concurrent-admission-owner";
-    try {
-      await writeStoredMainSession(makeDoneSessionEntry());
-      const { mutation } = await holdSessionMutation(storePath, releaseMutation);
-      const context = createDirectChatContext();
-      dispatchInboundMessageMock.mockImplementationOnce(async () => dispatchRelease.promise);
-      const firstAdmission = vi.fn(async () => true);
-      const secondAdmission = vi.fn(async () => true);
-      const responses: CapturedChatResponse[] = [];
-      const send = (onAdmissionOwned: () => Promise<boolean>) =>
-        sendControlUiChat({
-          context,
-          idempotencyKey: runId,
-          message: "admit exactly once",
-          onAdmissionOwned,
-          respond: captureChatResponse(responses),
-        });
+    const pending: Array<Promise<PromiseSettledResult<unknown>[]>> = [];
+    await runQaGatewayFixture(
+      async () => {
+        await writeStoredMainSession(makeDoneSessionEntry());
+        const { mutation, started } = holdSessionMutation(storePath, releaseMutation);
+        pending.push(Promise.allSettled([mutation]));
+        await started;
+        const context = createDirectChatContext();
+        dispatchInboundMessageMock.mockImplementationOnce(async () => dispatchRelease.promise);
+        const firstAdmission = vi.fn(async () => true);
+        const secondAdmission = vi.fn(async () => true);
+        const responses: CapturedChatResponse[] = [];
+        const send = (onAdmissionOwned: () => Promise<boolean>) => {
+          const work = sendControlUiChat({
+            context,
+            idempotencyKey: runId,
+            message: "admit exactly once",
+            onAdmissionOwned,
+            respond: captureChatResponse(responses),
+          });
+          pending.push(Promise.allSettled([work]));
+          return work;
+        };
 
-      // Keep the retry in pending admission, before the first input is accepted.
-      const outcomes = await Promise.allSettled([
-        send(firstAdmission),
-        (async () => {
-          try {
-            await waitForFast(() => {
-              expect(context.dedupe.has(pendingChatSendDedupeKey(runId))).toBe(true);
-            }, FAST_WAIT_OPTS);
-            await send(secondAdmission);
-          } finally {
-            releaseMutation.resolve();
-          }
-        })(),
-        mutation,
-      ]);
-      throwIfSettledRejected(outcomes, "Concurrent chat admission failed");
+        // Keep the retry in pending admission, before the first input is accepted.
+        const outcomes = await Promise.allSettled([
+          send(firstAdmission),
+          (async () => {
+            try {
+              await waitForFast(() => {
+                expect(context.dedupe.has(pendingChatSendDedupeKey(runId))).toBe(true);
+              }, FAST_WAIT_OPTS);
+              await send(secondAdmission);
+            } finally {
+              releaseMutation.resolve();
+            }
+          })(),
+          mutation,
+        ]);
+        throwIfSettledRejected(outcomes, "Concurrent chat admission failed");
 
-      expect(firstAdmission.mock.calls.length + secondAdmission.mock.calls.length).toBe(1);
-      expect(responses).toHaveLength(2);
-      expect(responses).toContainEqual(
-        chatResponse(
-          false,
-          undefined,
-          expect.objectContaining({ code: "UNAVAILABLE", retryable: true }),
-        ),
-      );
-      expect(
-        responses.filter(
-          (response) =>
-            (response.payload as { status?: unknown } | undefined)?.status === "started",
-        ),
-      ).toHaveLength(1);
+        expect(firstAdmission.mock.calls.length + secondAdmission.mock.calls.length).toBe(1);
+        expect(responses).toHaveLength(2);
+        expect(responses).toContainEqual(
+          chatResponse(
+            false,
+            undefined,
+            expect.objectContaining({ code: "UNAVAILABLE", retryable: true }),
+          ),
+        );
+        expect(
+          responses.filter(
+            (response) =>
+              (response.payload as { status?: unknown } | undefined)?.status === "started",
+          ),
+        ).toHaveLength(1);
 
-      dispatchRelease.resolve(undefined);
-      await getDirectChatSessionWorkRelease();
-      expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1);
-      expect(context.removeChatRun).toHaveBeenCalledTimes(1);
-    } finally {
-      releaseMutation.resolve();
-      dispatchRelease.resolve(undefined);
-      await resetDirectChatSession();
-    }
+        dispatchRelease.resolve(undefined);
+        await getDirectChatSessionWorkRelease();
+        expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1);
+        expect(context.removeChatRun).toHaveBeenCalledTimes(1);
+      },
+      async () => {
+        releaseMutation.resolve();
+        dispatchRelease.resolve(undefined);
+        throwIfSettledRejected(
+          (await Promise.all(pending)).flat(),
+          "Pending chat fixture work failed",
+        );
+      },
+      resetDirectChatSession,
+    );
   });
 
   test("chat.abort still sees a replacement while its admission callback is running", async () => {
