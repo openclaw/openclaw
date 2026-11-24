@@ -137,21 +137,38 @@ process.stdout.write("ready:" + process.pid + "\\n");`,
     const scope = new AsyncWorkScope();
     const abort = new AbortController();
     const finished = vi.fn();
+    const callbackReturned = vi.fn();
     const scopeDrained = vi.fn();
     const exitDrained = vi.fn();
     let pid: number | undefined;
     let raw: SpawnResult | undefined;
     let drains: Promise<unknown> | undefined;
+    let nested: Promise<void> | undefined;
+    let nestedOutcome: Promise<unknown> | undefined;
     const work = scope
       .run(() =>
-        withCommandProcessScope(async (stop) => {
-          runtime.log = (line) => {
-            if (typeof line === "string" && line.startsWith("ready:")) {
-              pid = Number(line.slice(6));
-              stop();
-            }
-          };
-          await runDoctorProcess(runtime);
+        withCommandProcessScope(async () => {
+          nested = withCommandProcessScope(async (stop) => {
+            runtime.log = (line) => {
+              if (typeof line === "string" && line.startsWith("ready:")) {
+                pid = Number(line.slice(6));
+                stop();
+              }
+            };
+            await runDoctorProcess(runtime);
+          });
+          nestedOutcome = nested.catch((error: unknown) => error);
+          await withinTest(
+            awaitGateBeforeSettlement(
+              returned.promise,
+              nested,
+              "Doctor did not return its provisional result",
+            ),
+            signal,
+          );
+          // Only declared cleanup can hold the parent after its callback returns.
+          callbackReturned();
+          return "callback returned";
         }, abort.signal),
       )
       .finally(finished);
@@ -173,12 +190,14 @@ process.stdout.write("ready:" + process.pid + "\\n");`,
       ]);
       void drains.catch(() => {});
       await nextEventLoopTurn();
+      expect(callbackReturned).toHaveBeenCalledOnce();
       expect(finished).not.toHaveBeenCalled();
       expect(scopeDrained).not.toHaveBeenCalled();
       expect(exitDrained).not.toHaveBeenCalled();
       expect(scope.hasPendingWork).toBe(true);
       birth.resolve();
-      await expect(withinTest(work, signal)).rejects.toThrow(/aborted/i);
+      await expect(withinTest(work, signal)).resolves.toBe("callback returned");
+      await expect(withinTest(nested!, signal)).rejects.toThrow(/aborted/i);
       await withinTest(drains, signal);
       expect(scopeDrained).toHaveBeenCalledOnce();
       expect(exitDrained).toHaveBeenCalledOnce();
@@ -193,6 +212,7 @@ process.stdout.write("ready:" + process.pid + "\\n");`,
         child.kill("SIGKILL");
       }
       await outcome;
+      await nestedOutcome;
       await closed?.catch(() => {});
       if (raw) {
         await readCommandProcessCleanup(raw)?.catch(() => {});
