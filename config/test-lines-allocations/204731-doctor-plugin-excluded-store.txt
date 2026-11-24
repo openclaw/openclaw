@@ -1,0 +1,5 @@
+# Net regression-test lines for #204731: an absent database store only gets the
+# "Store is not present. Initialize it" advice when its owning plugin is enabled,
+# so a plugin excluded from the allowlist reports no remediation
+# (src/infra/database-engine/diagnostics.test.ts).
+23

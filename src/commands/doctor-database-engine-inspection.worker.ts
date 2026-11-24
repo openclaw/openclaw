@@ -44,7 +44,9 @@ serveWorkerTasks<DoctorDatabaseEngineInspection, DoctorDatabaseEngineInspectionI
       result.discoveryFailed = true;
     }
     const inspect = async () => {
-      let plugins: Pick<ReturnType<typeof resolvePluginMetadataSnapshot>, "plugins">;
+      let plugins: Pick<ReturnType<typeof resolvePluginMetadataSnapshot>, "plugins"> & {
+        index?: ReturnType<typeof resolvePluginMetadataSnapshot>["index"];
+      };
       try {
         plugins = resolvePluginMetadataSnapshot({ ...input, env });
       } catch {
@@ -117,13 +119,19 @@ serveWorkerTasks<DoctorDatabaseEngineInspection, DoctorDatabaseEngineInspectionI
             unreadableRoots.add(root);
           }
         }
+        // The owning plugin of an excluded store is never initialized, so no
+        // "initialize it" remediation applies. Readiness still needs the
+        // descriptor only when a physical store exists; report that store even
+        // after its plugin is disabled.
+        const pluginRecord = plugins.plugins.find((plugin) => plugin.id === provider.id);
+        const pluginEnabled = plugins.index?.plugins.find(
+          (record) => record.pluginId === provider.id,
+        )?.enabled;
         let descriptor;
         // Absent optional stores need no port API or plugin runtime to inspect.
         if (hasPhysicalStore) {
           try {
-            descriptor = await provider.loadDescriptor(
-              plugins.plugins.find((plugin) => plugin.id === provider.id),
-            );
+            descriptor = await provider.loadDescriptor(pluginRecord);
           } catch {
             result.discoveryFailed = true;
           }
@@ -147,6 +155,9 @@ serveWorkerTasks<DoctorDatabaseEngineInspection, DoctorDatabaseEngineInspectionI
             descriptor,
             postgres: selection?.postgres,
             inspectionError: file && unreadableRoots.has(file) ? "unreadable-root" : undefined,
+            plugin: pluginRecord
+              ? { id: provider.id, enabled: pluginEnabled !== false }
+              : undefined,
           });
           diagnostic.legacyMigrations = legacy[family.id] ?? { state: "unknown", pending: [] };
           if (diagnostic.legacyMigrations.state !== "none") {
