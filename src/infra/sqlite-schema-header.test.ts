@@ -340,7 +340,11 @@ describe("schema-header native reader lifetime", () => {
             await expect(operation).resolves.toEqual({
               version: 7,
               ...(reader !== "agent-shape" ? { writerAppVersion: "writer-7" } : {}),
-              agentSchemaMeta: { role: "agent", agentId: "owner-7", schemaVersion: 7 },
+              agentSchemaMeta: {
+                role: "agent",
+                agentId: "owner-7",
+                schemaVersion: 7,
+              },
             });
           }
         }

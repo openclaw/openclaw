@@ -137,7 +137,6 @@ export function collectSqliteSchemaIssues(
         actualTable.definition,
         expectedTable.definition,
         compatibility,
-        !allowedMissingTables.has(tableName),
       ),
     );
     for (const issue of compareTablePragmaFacts(
@@ -626,7 +625,6 @@ function compareTableDefinitions(
   actual: SqliteTableDefinition | null,
   expected: SqliteTableDefinition | null,
   compatibility: SqliteSchemaCompatibility,
-  allowCompatibleAdditiveColumns: boolean,
 ): SqliteSchemaIssue[] {
   const issues: SqliteSchemaIssue[] = [];
   const add = (code: SqliteSchemaIssueCode, objectName: string) => {
@@ -647,7 +645,6 @@ function compareTableDefinitions(
         continue;
       }
       if (
-        allowCompatibleAdditiveColumns &&
         compatibility.allowCompatibleAdditiveColumns &&
         isCompatibleAdditiveColumnDefinition(definition)
       ) {
