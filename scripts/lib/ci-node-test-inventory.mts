@@ -5,8 +5,6 @@ import {
   agentVitestProjectOwners,
   embeddedAgentVitestProjectOwners,
 } from "../../test/vitest/vitest.agents-paths.mjs";
-import { BUNDLED_PLUGIN_E2E_TEST_GLOB } from "../../test/vitest/vitest.bundled-plugin-paths.ts";
-import { coreChannelTestInclude } from "../../test/vitest/vitest.channel-paths.mjs";
 import { getCliVitestProjectOwner } from "../../test/vitest/vitest.cli-paths.mjs";
 import { cliProcessTestFiles } from "../../test/vitest/vitest.cli-process-paths.mjs";
 import { commandsLightTestFiles } from "../../test/vitest/vitest.commands-light-paths.mjs";
@@ -31,12 +29,7 @@ import {
   isPlainRepoRelativePath,
 } from "../../test/vitest/vitest.include-patterns.ts";
 import { markdownTestFiles } from "../../test/vitest/vitest.markdown-paths.mjs";
-import {
-  isSharedVitestExcludedPath,
-  sharedVitestExcludePatterns,
-  vitestE2eTestGlob,
-} from "../../test/vitest/vitest.pattern-file.ts";
-import { pluginSdkLightTestFiles } from "../../test/vitest/vitest.plugin-sdk-paths.mjs";
+import { isSharedVitestExcludedPath } from "../../test/vitest/vitest.pattern-file.ts";
 import {
   autoReplyCoreTestInclude,
   autoReplyCoreTestExclude,
@@ -50,17 +43,9 @@ import {
   toolingTestExclude,
   toolingTestInclude,
 } from "../../test/vitest/vitest.tooling-paths.mjs";
-import { uiIsolatedTestFiles } from "../../test/vitest/vitest.ui-isolated-paths.mjs";
-import {
-  controlUiE2eTestGlobs,
-  isUiTestTarget,
-  uiE2eRealGatewayTestFiles,
-  uiTimingTestFiles,
-} from "../../test/vitest/vitest.ui-paths.mjs";
 import {
   getUnitFastTestFiles,
   getUnitFastIsolatedTestFiles,
-  getUnitFastTimerTestFiles,
 } from "../../test/vitest/vitest.unit-fast-paths.mjs";
 import {
   boundaryTestFiles,
@@ -145,93 +130,7 @@ const runtimeSharedProjectOwners = [
   },
 ];
 
-const CONFIG_FILE_OWNERS = new Map<
-  string,
-  Parameters<typeof listScopedOwnerTestFiles>[0] | (() => string[])
->([
-  ...["media", "media-understanding", "wizard", "secrets", "logging", "process"].map(
-    (area): [string, Parameters<typeof listScopedOwnerTestFiles>[0]] => [
-      `test/vitest/vitest.${area}.config.ts`,
-      {
-        root: `src/${area}`,
-        include: [`src/${area}/**/*.test.ts`],
-        exclude: databaseWorkerCoreTestFiles,
-      },
-    ],
-  ),
-  [
-    "test/vitest/vitest.commands-light.config.ts",
-    { root: "src/commands", include: commandsLightTestFiles, exclude: databaseWorkerCoreTestFiles },
-  ],
-  [
-    "test/vitest/vitest.daemon.config.ts",
-    { root: "src/daemon", include: ["src/daemon/**/*.test.ts"], exclude: cliProcessTestFiles },
-  ],
-  [
-    "test/vitest/vitest.plugin-sdk-light.config.ts",
-    { root: "src/plugin-sdk", include: pluginSdkLightTestFiles, exclude: [] },
-  ],
-  [
-    "test/vitest/vitest.plugin-sdk.config.ts",
-    {
-      root: "src/plugin-sdk",
-      include: ["src/plugin-sdk/**/*.test.ts"],
-      exclude: [
-        ...pluginSdkLightTestFiles,
-        ...bundledPluginDependentUnitTestFiles,
-        ...databaseWorkerCoreTestFiles,
-      ],
-    },
-  ],
-  [
-    "test/vitest/vitest.channels.config.ts",
-    {
-      root: "src/channels",
-      include: coreChannelTestInclude,
-      exclude: [
-        "src/gateway/**",
-        "src/channels/plugins/contracts/**",
-        ...databaseWorkerCoreTestFiles,
-      ],
-    },
-  ],
-  [
-    "test/vitest/vitest.unit-fast-fake-timers.config.ts",
-    () => getUnitFastTimerTestFiles().filter((file) => !isSharedVitestExcludedPath(file)),
-  ],
-  ["test/vitest/vitest.ui-isolated.config.ts", () => uiIsolatedTestFiles],
-  ["test/vitest/vitest.ui-timing.config.ts", () => uiTimingTestFiles],
-  ["ui/vitest.config.ts", () => scheduledTrackedTestFiles().filter(isUiTestTarget)],
-  [
-    "test/vitest/vitest.ui-e2e.config.ts",
-    () =>
-      scheduledTrackedTestFiles().filter(
-        (file) =>
-          [...controlUiE2eTestGlobs, ...uiE2eRealGatewayTestFiles].some((pattern) =>
-            matchesGlob(file, pattern),
-          ) && !scheduledE2eExcludes().some((pattern) => matchesGlob(file, pattern)),
-      ),
-  ],
-  [
-    "test/vitest/vitest.e2e.config.ts",
-    () =>
-      scheduledTrackedTestFiles().filter(
-        (file) =>
-          [
-            "test/**/*.e2e.test.ts",
-            "src/**/*.e2e.test.ts",
-            "packages/**/*.e2e.test.ts",
-            "src/gateway/gateway.test.ts",
-            BUNDLED_PLUGIN_E2E_TEST_GLOB,
-          ].some((pattern) => matchesGlob(file, pattern)) &&
-          ![
-            ...scheduledE2eExcludes(),
-            ...tuiPtyTestFiles,
-            ...controlUiE2eTestGlobs,
-            ...uiE2eRealGatewayTestFiles,
-          ].some((pattern) => matchesGlob(file, pattern)),
-      ),
-  ],
+const CONFIG_FILE_OWNERS = new Map<string, Parameters<typeof listScopedOwnerTestFiles>[0]>([
   ...[...runtimeSharedProjectOwners, ...embeddedAgentVitestProjectOwners].map(
     (owner) => [owner.config, owner] as const,
   ),
@@ -316,7 +215,7 @@ export function listNodeTestConfigFiles(config: string): string[] | undefined {
   }
   let files = configFileCache.get(config);
   if (!files) {
-    files = typeof owner === "function" ? owner() : listScopedOwnerTestFiles(owner);
+    files = listScopedOwnerTestFiles(owner);
     configFileCache.set(config, files);
   }
   return files;
@@ -550,10 +449,6 @@ export function scheduledTrackedTestFiles(): string[] {
     throw new Error("Scheduled test coverage requires git ls-files");
   }
   return files.filter((file) => /\.test\.(?:tsx?|mts|mjs|cjs|py)$/u.test(file));
-}
-
-function scheduledE2eExcludes(): string[] {
-  return sharedVitestExcludePatterns.filter((pattern) => pattern !== vitestE2eTestGlob);
 }
 
 export const SCHEDULED_COVERAGE_EXCEPTIONS: Array<{
