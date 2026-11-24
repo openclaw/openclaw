@@ -2,7 +2,10 @@ import fs from "node:fs";
 import path from "node:path";
 import { resolveStateDir } from "../config/paths.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db-contract.js";
-import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
+import {
+  OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
+  OPENCLAW_STATE_SCHEMA_VERSION,
+} from "../state/openclaw-state-db-contract.js";
 import { readStateSchemaContentVersion } from "../state/openclaw-state-db-schema-version.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { VERSION } from "../version.js";
@@ -52,6 +55,17 @@ function readPendingSchemaChange(
   return { state: versions.state, agent };
 }
 
+/** The header's read and write format versions are 2 for a WAL database. */
+function isClosedWalStore(file: string): boolean {
+  const header = Buffer.alloc(20);
+  const fd = fs.openSync(file, "r");
+  try {
+    return fs.readSync(fd, header, 0, 20, 0) === 20 && header[18] === 2 && header[19] === 2;
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
 export function readSchemaVersions(env: NodeJS.ProcessEnv = process.env): SchemaVersions | null {
   const stateDir = resolveStateDir(env);
   let state: number;
@@ -68,14 +82,21 @@ export function readSchemaVersions(env: NodeJS.ProcessEnv = process.env): Schema
       agentPaths.add(path.join(agentsDir, id, "agent", "openclaw-agent.sqlite"));
     }
     // readonly_shm reads committed WAL content without touching the serving Gateway's sidecars;
-    // it cannot open a WAL store a stopped Gateway closed (no -shm), whose file is then whole.
-    const open = (file: string) =>
-      openNodeSqliteDatabase(
-        fs.existsSync(`${file}-wal`)
-          ? resolveReadOnlyShmSqliteFileUri(file)
-          : resolveImmutableSqliteFileUri(file),
-        { readOnly: true },
-      );
+    // it cannot open a WAL store a stopped Gateway closed (no -wal), whose file is then whole.
+    // A rollback-journal store (network filesystems) has no -wal while live: it is read with
+    // locks, which wait out a writer's commit and see a hot -journal.
+    const open = (file: string) => {
+      if (fs.existsSync(`${file}-wal`)) {
+        return openNodeSqliteDatabase(resolveReadOnlyShmSqliteFileUri(file), { readOnly: true });
+      }
+      if (!fs.existsSync(`${file}-journal`) && isClosedWalStore(file)) {
+        return openNodeSqliteDatabase(resolveImmutableSqliteFileUri(file), { readOnly: true });
+      }
+      return openNodeSqliteDatabase(file, {
+        readOnly: true,
+        timeout: OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
+      });
+    };
     const db = open(shared);
     try {
       // A PostgreSQL store keeps a version-0 SQLite anchor; its schema lives on the server and

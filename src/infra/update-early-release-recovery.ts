@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import { isDeepStrictEqual } from "node:util";
 import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
 import { VERSION } from "../version.js";
+import { GATEWAY_SERVICE_STOP_TIMEOUT_MS } from "./gateway-shutdown-budget.js";
 import { runtimeProcessEntrypoints } from "./runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
 import { readSchemaVersions, type SchemaVersions } from "./update-candidate-check-early-release.js";
@@ -92,6 +93,17 @@ export const runRecoveryCommand: RunCommand = (argv, options = {}) =>
 export const ok = (result: CommandResult) => result.code === 0;
 export const commandTail = (result: CommandResult) =>
   result.output.trim().split("\n").slice(-6).join(" ").slice(-600);
+
+/** A time span as `systemctl show` prints it ("5min 30s"); null for "infinity" or anything else. */
+function parseSystemdSpanMs(text: string): number | null {
+  const units: Record<string, number> = { us: 1e-3, ms: 1, s: 1e3, min: 6e4, h: 36e5, d: 864e5 };
+  let total = 0;
+  const rest = text.trim().replace(/(\d+(?:\.\d+)?)(min|ms|us|h|d|s)\b\s*/gu, (_, n, unit) => {
+    total += Number(n) * units[unit as string]!;
+    return "";
+  });
+  return text.trim() && !rest ? total : null;
+}
 
 export async function git(run: RunCommand, cwd: string, ...args: string[]) {
   return run(["git", "-C", cwd, ...args]);
@@ -247,23 +259,32 @@ export async function runEarlyGitReleaseRecovery(
     return false;
   };
   let runId: string | undefined;
-  const fail = async (reason: string, detail: string, nextAction: string) => {
+  const fail = async (reason: string, detail: string, nextAction: string, always = false) => {
     log(`${detail} Next step: ${nextAction}`);
     await keepEnablement();
-    // Recording opens state through this release, which migrates it: only once it moved, or
-    // once this runner holds a run, whose opening already wrote state.
-    if (runId || moved()) {
+    // Recording opens state through this release, which migrates it: only once it moved, once
+    // this runner holds a run, whose opening already wrote state, or when the service keeps the
+    // release, which migrates state anyway when it starts.
+    if (always || runId || moved()) {
       await deps.record({ plan, runId, status: "failed", reason, detail, nextAction });
     }
     return false;
   };
   const kept = () => `The service definition from before the recovery is kept at ${original}.`;
+  const activeState = async () =>
+    (await systemctl("show", "--property=ActiveState", "--value", gateway)).output.trim();
   /** The release does not serve. Unmigrated databases get the previous build back. */
   const notReady = async (why: string) => {
+    let unconfirmed = false;
     if (!moved() && fs.existsSync(original)) {
-      // Stopped first, so nothing can start migrating between the comparison and the switch.
-      await systemctl("stop", gateway);
-      if (!moved()) {
+      // Stopped and confirmed down before the second comparison: a release inside a migration
+      // commits it before it exits, so this waits as long as systemd lets the unit stop, plus a
+      // minute for its final kill.
+      const limit = await systemctl("show", "--property=TimeoutStopUSec", "--value", gateway);
+      const stopMs = parseSystemdSpanMs(limit.output) ?? GATEWAY_SERVICE_STOP_TIMEOUT_MS;
+      const stop = await run(["systemctl", "--user", "stop", gateway], { timeoutMs: stopMs + 6e4 });
+      unconfirmed = !ok(stop) || !["inactive", "failed"].includes(await activeState());
+      if (!unconfirmed && !moved()) {
         const temporary = `${plan.serviceFile}.${process.pid}.tmp`;
         fs.writeFileSync(temporary, fs.readFileSync(original), {
           mode: fs.statSync(original).mode & 0o777,
@@ -275,11 +296,14 @@ export async function runEarlyGitReleaseRecovery(
         await keepEnablement();
         const back = await deps.ready(unitPort(), gateway);
         fs.rmSync(original);
-        await removeRelease();
+        // The release goes only once the previous build serves; until then it is the other build.
+        if (back) {
+          await removeRelease();
+        }
         const next = back
           ? `see \`journalctl --user -u ${gateway}\` and \`journalctl --user -u ${plan.unit}\` for why it stopped, fix that, then run \`openclaw update\` again`
           : `run \`systemctl --user status ${gateway}\` and \`journalctl --user -u ${gateway}\` for why the previous build does not start`;
-        const detail = `${why}. Nothing was migrated, so the Gateway service starts the previous build again${back ? " and it serves" : ", which did not report ready either"}.`;
+        const detail = `${why}. Nothing was migrated, so the Gateway service starts the previous build again${back ? " and it serves" : `, which did not report ready either; the new release stays at ${path.dirname(plan.release)}`}.`;
         if (runId) {
           await deps.record({
             plan,
@@ -296,14 +320,26 @@ export async function runEarlyGitReleaseRecovery(
         return false;
       }
     }
-    // The release keeps being started, also once its unit hit the start limit.
-    await systemctl("reset-failed", gateway);
-    await systemctl("start", gateway);
-    return fail(
+    const cause = unconfirmed
+      ? "the Gateway service did not confirm it stopped, so whether the new release migrated your databases is unknown"
+      : !fs.existsSync(original)
+        ? "its definition from before the recovery is missing"
+        : deps.schema()
+          ? "your databases are no longer as the previous build left them"
+          : "your databases could not be read, so whether they were migrated is unknown";
+    const state = await activeState();
+    // Recorded before the release starts again, so the two do not open state at the same time.
+    const failed = await fail(
       "early-release-recovery-start-failed",
-      `${why}, and ${moved() ? "your databases are no longer as the previous build left them" : "its definition from before the recovery is missing"}, so the previous build was not put back; the Gateway service keeps starting the new release. ${kept()}`,
+      `${why}, and ${cause}, so the previous build was not put back. ${state === "active" ? "The Gateway service still runs the new release." : `The Gateway service ${state === "failed" ? "had failed" : `was ${state || "not running"}`}; it starts the new release again, and systemd restarts it after a failure until its start limit.`} ${kept()}`,
       `see \`journalctl --user -u ${gateway}\` for why the new release does not start, fix that, then from the checkout run \`${REBUILD} && openclaw gateway install --force\``,
+      true,
     );
+    if (state !== "active") {
+      await systemctl("reset-failed", gateway);
+      await systemctl("start", "--no-block", gateway);
+    }
+    return failed;
   };
 
   const recover = async (): Promise<boolean> => {
@@ -530,10 +566,10 @@ export async function finishEarlyGitReleaseRecovery(
     removed.push(path.relative(plan.prefix, dir));
   }
   await git(deps.run, plan.checkout, "worktree", "prune");
-  // Removals a killed process renamed away but did not finish.
+  // Removals a killed process renamed away but did not finish, and dead checks' start locks.
   for (const dir of [plan.prefix, releases]) {
     for (const name of fs.existsSync(dir) ? fs.readdirSync(dir) : []) {
-      if (name.startsWith(".removing-")) {
+      if (name.startsWith(".removing-") || name.startsWith(".recovery-start.stale-")) {
         fs.rmSync(path.join(dir, name), { recursive: true, force: true });
       }
     }
@@ -579,8 +615,7 @@ async function recordOutcome(outcome: RecoveryOutcome) {
     import("../update/store.js"),
   ]);
   // Without a held run, take the lock as `hold` does: that settles an interrupted runner's run.
-  const runId =
-    outcome.runId ?? (await holdUpdateLock(outcome.plan)) ?? (await openRun(outcome.plan));
+  const runId = outcome.runId ?? (await openHeldRun(outcome.plan)).runId;
   try {
     await recordUpdateRunStepAsync(runId, {
       step: "early-release-recovery",
@@ -617,8 +652,8 @@ async function openRun(plan: RecoveryPlan): Promise<string> {
   return run.runId;
 }
 
-/** The release updater's lock, held by this runner's update run until its outcome is recorded. */
-async function holdUpdateLock(plan: RecoveryPlan): Promise<string | null> {
+/** A new run for this recovery, holding the release updater's lock unless another update does. */
+async function openHeldRun(plan: RecoveryPlan) {
   const [{ finishUpdateRunAsync }, store] = await Promise.all([
     import("./update-run-write.async.js"),
     import("../update/store.js"),
@@ -633,7 +668,14 @@ async function holdUpdateLock(plan: RecoveryPlan): Promise<string | null> {
     // An interrupted runner's run; the Gateway would otherwise settle it at its next start.
     await finishUpdateRunAsync(lock.previous.runId, { status: "failed", reason: "interrupted" });
   }
-  if (!lock.acquired) {
+  return { runId, acquired: lock.acquired };
+}
+
+/** The release updater's lock, held by this runner's update run until its outcome is recorded. */
+async function holdUpdateLock(plan: RecoveryPlan): Promise<string | null> {
+  const { runId, acquired } = await openHeldRun(plan);
+  if (!acquired) {
+    const { finishUpdateRunAsync } = await import("./update-run-write.async.js");
     await finishUpdateRunAsync(runId, { status: "skipped", reason: "update-running" });
     return null;
   }
@@ -665,6 +707,43 @@ export function readEarlyGitReleaseRecoveryArgs(argv: readonly string[]) {
 }
 
 const log = (line: string) => process.stdout.write(`[openclaw update recovery] ${line}\n`);
+
+/**
+ * Waits for `probe` (the Gateway's `/readyz`). A migrating Gateway stays up while it works. One
+ * that keeps exiting before it serves gives up when its unit fails (the start limit, or an exit
+ * systemd does not restart), or once systemd restarted it as often as that limit allows starts:
+ * a boot that crashes later than the limit's window allows never reaches the limit itself.
+ */
+export async function waitForGatewayReady(
+  unit: string,
+  probe: () => Promise<boolean>,
+  run: RunCommand = runRecoveryCommand,
+  now: () => number = Date.now,
+): Promise<boolean> {
+  const show = async (key: string) =>
+    (
+      await run(["systemctl", "--user", "show", `--property=${key}`, "--value", unit])
+    ).output.trim();
+  const restartCount = async () => Number(await show("NRestarts")) || 0;
+  // The installed Gateway unit's burst, when systemd does not report one.
+  const burst = Number(await show("StartLimitBurst")) || 10;
+  let first = await restartCount();
+  const until = now() + READY_TIMEOUT_MS;
+  while (now() < until) {
+    if (await probe()) {
+      return true;
+    }
+    const [state, restarts] = [await show("ActiveState"), await restartCount()];
+    // A start that is not systemd's own restart resets the count.
+    first = Math.min(first, restarts);
+    if (state === "failed" || restarts - first >= burst) {
+      const result = state === "failed" ? await show("Result") : "";
+      log(`${unit} ${result ? `failed (${result})` : `restarted ${restarts - first} times`}`);
+      return false;
+    }
+  }
+  return false;
+}
 const record = async (outcome: RecoveryOutcome) => {
   try {
     await recordOutcome(outcome);
@@ -702,35 +781,17 @@ export function defaultRunnerDeps(): RunnerDeps {
         import("../cli/daemon-cli/restart-health-probe.js"),
       ]);
       const config = await readSourceConfigBestEffort().catch(() => ({}));
-      const until = Date.now() + READY_TIMEOUT_MS;
-      while (Date.now() < until) {
-        const readiness = await waitForGatewayHttpReadiness({
-          config,
-          port,
-          attempts: 5,
-          deadlineAt: performance.now() + 5000,
-          delayMs: 1000,
-        });
-        if (readiness.readyz === 200) {
-          return true;
-        }
-        // A migrating Gateway stays up while it works. One that keeps exiting before it serves
-        // is restarted until the unit's own start limit fails it; that limit is sized for a
-        // Gateway waiting out a previous one, so it is the crash-loop signal.
-        const state = await runRecoveryCommand([
-          "systemctl",
-          "--user",
-          "show",
-          "--property=ActiveState",
-          "--value",
-          unit,
-        ]);
-        if (state.output.trim() === "failed") {
-          log(`${unit} failed at its start limit before it served`);
-          return false;
-        }
-      }
-      return false;
+      const probe = async () =>
+        (
+          await waitForGatewayHttpReadiness({
+            config,
+            port,
+            attempts: 5,
+            deadlineAt: performance.now() + 5000,
+            delayMs: 1000,
+          })
+        ).readyz === 200;
+      return waitForGatewayReady(unit, probe);
     },
     record,
     hold: holdUpdateLock,

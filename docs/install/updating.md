@@ -2189,11 +2189,16 @@ beside it and names that path in its outcome. Drop-ins under `openclaw-gateway.s
 separate files and are not touched; environment files the unit names are not copied. A service
 whose autostart you disabled stays disabled.
 
-If the new release fails before it migrates anything, the recovery stops it, puts that unit file
-back, restarts the previous build and checks that it serves; the journal says why and what to
-fix before the next `openclaw update`. That outcome is not recorded for `openclaw update status`,
-because recording through the new release would migrate the databases the previous build uses.
-Once the release has migrated anything, the previous build is never put back.
+If the new release does not report ready (it fails, or restarts as often as its unit's
+`StartLimitBurst` allows, or 20 minutes pass) and has migrated nothing, the recovery stops it,
+waiting as long as the unit's `TimeoutStopSec` lets a migration in progress finish, then puts that
+unit file back, restarts the previous build and checks that it serves; the journal says why and
+what to fix before the next `openclaw update`. That outcome is not recorded for
+`openclaw update status`, because recording through the new release would migrate the databases
+the previous build uses. The new release is removed only once the previous build serves. Once the
+release has migrated anything, or when the stop does not finish so that cannot be known, the
+previous build is never put back: the outcome is recorded, and then the Gateway service is
+started again on the new release.
 
 It never resets, stashes, cleans or rebases the checkout. It starts nothing, and the update
 prints the rebuild below with the reason, when the checkout has uncommitted changes to tracked

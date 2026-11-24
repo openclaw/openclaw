@@ -331,8 +331,8 @@ export async function startEarlyGitReleaseRecovery(
   // Exclusive before anything is cleaned: a concurrent check that got this far reports the
   // running recovery instead of removing the release this one is keeping.
   const lock = path.join(plan.prefix, ".recovery-start");
-  const held = takeStartLock(lock);
-  if (!held) {
+  const owner = `${process.pid} ${processStart(process.pid) ?? ""}`;
+  if (!takeStartLock(lock, owner)) {
     return { started: false, running: plan.unit };
   }
   try {
@@ -340,21 +340,21 @@ export async function startEarlyGitReleaseRecovery(
   } catch (error) {
     return { started: false, reason: `the built release could not be kept (${String(error)})` };
   } finally {
-    fs.rmSync(lock, { recursive: true, force: true });
+    // Only this check's own lock; a lock another check holds stays with it.
+    if (readText(path.join(lock, "owner")) === owner) {
+      fs.rmSync(lock, { recursive: true, force: true });
+    }
   }
 }
 
-/** A start lock, or false while a live check holds it; a dead check's lock is taken over. */
-function takeStartLock(lock: string): boolean {
+/** True once this check holds the start lock; false while a live check holds it. */
+function takeStartLock(lock: string, owner: string): boolean {
   // Published whole by a rename, so the lock always names its owner.
   const staged = `${lock}.${process.pid}`;
-  for (let attempt = 0; attempt < 2; attempt++) {
+  for (let attempt = 0; attempt < 3; attempt++) {
     fs.rmSync(staged, { recursive: true, force: true });
     fs.mkdirSync(staged);
-    fs.writeFileSync(
-      path.join(staged, "owner"),
-      `${process.pid} ${processStart(process.pid) ?? ""}`,
-    );
+    fs.writeFileSync(path.join(staged, "owner"), owner);
     try {
       fs.renameSync(staged, lock);
       return true;
@@ -364,27 +364,20 @@ function takeStartLock(lock: string): boolean {
     const seen = readText(path.join(lock, "owner"));
     const [pid, start = ""] = seen.split(" ");
     try {
-      if (Number(pid) > 0 && process.kill(Number(pid), 0)) {
-        if ((processStart(Number(pid)) ?? "") === start) {
+      if (!seen || (process.kill(Number(pid), 0) && (processStart(Number(pid)) ?? "") === start)) {
+        // Released a moment ago (try again), or held by a live check.
+        if (seen) {
           return false;
         }
+        continue;
       }
     } catch {}
-    // Take the dead check's lock aside and confirm it is the one read: a concurrent check
-    // may have taken it over first and published its own live lock in its place.
-    const aside = `${lock}.stale-${process.pid}`;
+    // A dead check's lock moves to a name only it has, so of two checks that saw it dead the
+    // second moves nothing: its rename finds that name taken and leaves a newer live lock alone.
+    // The tombstone stays (the finishing step removes it), so that name is never free again.
     try {
-      fs.renameSync(lock, aside);
-    } catch {
-      continue;
-    }
-    if (readText(path.join(aside, "owner")) !== seen) {
-      try {
-        fs.renameSync(aside, lock);
-      } catch {}
-      return false;
-    }
-    fs.rmSync(aside, { recursive: true, force: true });
+      fs.renameSync(lock, `${lock}.stale-${pid}-${start}`);
+    } catch {}
   }
   return false;
 }
@@ -437,8 +430,11 @@ async function keepAndStart(
     "--property=RestartSec=15s",
     `--working-directory=${plan.checkout}`,
     ...PASSED_ENV.flatMap((key) => (deps.env[key] ? [`--setenv=${key}=${deps.env[key]}`] : [])),
-    // The state directory this check read, resolved: the runner's working directory differs.
-    `--setenv=OPENCLAW_STATE_DIR=${path.resolve(change.stateDir)}`,
+    // Resolved, because the runner's working directory differs. Only when set: the runner's
+    // `gateway install --force` writes it into the service definition.
+    ...(deps.env.OPENCLAW_STATE_DIR
+      ? [`--setenv=OPENCLAW_STATE_DIR=${path.resolve(change.stateDir)}`]
+      : []),
     // systemd expands `$NAME` in a service's command line; `$$` passes a literal `$`.
     ...[
       process.execPath,

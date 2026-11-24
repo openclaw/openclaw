@@ -1,3 +1,5 @@
+import { spawn } from "node:child_process";
+import { once } from "node:events";
 import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -133,6 +135,18 @@ it("lets the early release updater through when nothing migrates or state is unr
   expect(inspect(unreadable.root, unreadable.env)).toBeNull();
 });
 
+it("reads a rollback-journal store with locks, so a writer's commit is not skipped", async () => {
+  const { root, env, stateDir } = install({});
+  const file = path.join(stateDir, "agents", "a0", "agent", "openclaw-agent.sqlite");
+  // A Gateway on a network filesystem, inside the transaction that migrates this store.
+  const sql = `PRAGMA journal_mode = DELETE; BEGIN EXCLUSIVE; PRAGMA user_version = ${OPENCLAW_AGENT_SCHEMA_VERSION};`;
+  const code = `const db = new (require("node:sqlite").DatabaseSync)(process.argv[1]); db.exec(process.argv[2]); console.log(); setTimeout(() => db.exec("COMMIT"), 300);`;
+  const writer = spawn(process.execPath, ["-e", code, file, sql]);
+  await once(writer.stdout, "data");
+  expect(inspect(root, env)?.pending?.agent).toBe(OPENCLAW_AGENT_SCHEMA_VERSION);
+  await once(writer, "exit");
+});
+
 it("stops a concurrent early updater while an automatic recovery's release exists", () => {
   const { root, env, stateDir } = install({ state: OPENCLAW_STATE_SCHEMA_VERSION, agents: [] });
   fs.mkdirSync(path.join(stateDir, "git-install", "recovery", "openclaw"), { recursive: true });
@@ -153,12 +167,7 @@ it("never refuses another updater, which can finish a schema change", () => {
   }
   // A `build` directory outside this state directory's releases is not the early layout.
   const { env } = install({});
-  const elsewhere = path.join(
-    makeTempDir(roots, "openclaw-early-release-other-"),
-    "releases",
-    "x",
-    "build",
-  );
+  const elsewhere = path.join(makeTempDir(roots, "openclaw-early-other-"), "releases/x/build");
   fs.mkdirSync(elsewhere, { recursive: true });
   expect(inspect(elsewhere, env)).toBeNull();
 });

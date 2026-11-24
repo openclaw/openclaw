@@ -116,10 +116,7 @@ const refusals: Array<[string, (fx: Fx) => unknown]> = [
   ["cannot fast-forward", (fx) => git(fx, "git commit -q --allow-empty -m c")],
   ["has no upstream", (fx) => git(fx, "git branch -q --unset-upstream")],
   ["local commits", (fx) => git(fx, `git push -qf origin @:main && git merge -q ${fx.target}`)],
-  [
-    "upstream does not contain",
-    (fx) => git(fx, "git push -q origin @:x && git branch -qu origin/x"),
-  ],
+  ["does not contain", (fx) => git(fx, "git push -q origin @:x && git branch -qu origin/x")],
   ["4 GiB", (fx) => (fx.deps.freeBytes = () => 1)],
   ["not a managed systemd user service", (fx) => (fx.deps.readService = async () => null)],
   ["another state directory", (fx) => (fx.service.environment = { OPENCLAW_STATE_DIR: "/x" })],
@@ -167,15 +164,54 @@ posix("starts nothing while another recovery runs or another check is starting o
     }
     return run(argv, options);
   };
+  // A dead check's lock is taken over. An unset state directory stays out of the service.
+  publish(fx, "99999999 1");
+  delete fx.deps.env.OPENCLAW_STATE_DIR;
   const first = startEarlyGitReleaseRecovery(fx.change, fx.deps);
   await reached.promise;
   const running = { started: false, running: "openclaw-update-recovery" };
   expect(await startEarlyGitReleaseRecovery(second, fx.deps)).toEqual(running);
+  expect(fs.existsSync(second.root)).toBe(true);
+  // A lock that is no longer this check's stays with its holder.
+  fs.writeFileSync(path.join(fx.prefix, ".recovery-start", "owner"), LIVE);
   gate.resolve();
   expect(await first).toMatchObject({ started: true });
+  expect(fs.readFileSync(path.join(fx.prefix, ".recovery-start", "owner"), "utf8")).toBe(LIVE);
+  expect(fx.systemd.flat().filter((arg) => arg.includes("OPENCLAW_STATE_DIR"))).toEqual([]);
   expect(sh(path.join(fx.prefix, "recovery", "openclaw"), "git rev-parse HEAD")).toBe(fx.target);
   fx.state.active = "active";
   expect(await startEarlyGitReleaseRecovery(second, fx.deps)).toEqual(running);
+});
+
+const LIVE = `${process.ppid} ${recovery.processStart(process.ppid) ?? ""}`;
+function publish(fx: Fx, owner: string) {
+  const lock = path.join(fx.prefix, ".recovery-start");
+  fs.mkdirSync(`${lock}.p`);
+  fs.writeFileSync(path.join(`${lock}.p`, "owner"), owner);
+  fs.renameSync(`${lock}.p`, lock);
+}
+
+posix("moves a dead check's lock once, whichever check sees it first", async () => {
+  const fx = install();
+  const [lock, rename] = [path.join(fx.prefix, ".recovery-start"), fs.renameSync];
+  publish(fx, "99999999 1");
+  vi.spyOn(fs, "renameSync").mockImplementation((from, to) => {
+    // Another check that saw the same dead lock moves it and publishes its own first.
+    if (from === lock && fs.readFileSync(path.join(lock, "owner"), "utf8") !== LIVE) {
+      rename(lock, `${lock}.stale-99999999-1`);
+      publish(fx, LIVE);
+    }
+    rename(from, to);
+    // A third check takes the lock path whenever it is free.
+    if (from === lock && !fs.existsSync(lock)) {
+      publish(fx, "1 third");
+    }
+  });
+  const running = { started: false, running: "openclaw-update-recovery" };
+  expect(await startEarlyGitReleaseRecovery(fx.change, fx.deps)).toEqual(running);
+  expect(fs.readFileSync(path.join(lock, "owner"), "utf8")).toBe(LIVE);
+  const locks = fs.readdirSync(fx.prefix).filter((name) => name.startsWith(".recovery-start"));
+  expect(locks.toSorted()).toEqual([".recovery-start", ".recovery-start.stale-99999999-1"]);
 });
 
 /** The runner's world: a hand-edited service definition, the kept release, scripted systemd. */
@@ -184,7 +220,9 @@ type Opts = {
   resumed?: boolean;
   restarts?: number;
   migrates?: boolean;
-  late?: boolean;
+  past?: boolean;
+  /** How long the release takes to stop. */
+  stopMs?: number;
 };
 function runner(opts: Opts) {
   const { fail = {}, resumed = false, restarts = 0 } = opts;
@@ -199,7 +237,7 @@ function runner(opts: Opts) {
     base,
     `git init -q -b main co && cd co && ${commit} a && ${commit} b && git rev-parse @`,
   );
-  sh(checkout, resumed ? "true" : "git reset -q --hard @~1");
+  sh(checkout, resumed ? "true" : opts.past ? `${commit} c` : "git reset -q --hard @~1");
   const planned = { state: 40, agents: { "/a": 1, "/b": 1 } };
   const migrated = { state: 41, agents: { "/a": 2, "/b": 2 } };
   const where = { checkout, release, prefix, serviceFile, unit: "u", branch: "main", target };
@@ -212,13 +250,14 @@ function runner(opts: Opts) {
   }
   let schema = opts.migrates && restarts > 2 ? migrated : planned;
   // A resumed runner can find the release still migrating; it holds state until ready.
-  let [migrating, alive, running, enabled] = [resumed, 2, true, false];
+  let [migrating, alive, running, enabled, failed] = [resumed, 2, true, false, false];
   const [calls, records, finished] = [[] as string[], [] as RecoveryOutcome[], [] as FinishFacts[]];
+  const logs: string[] = [];
   const serves = () => {
     const text = fs.readFileSync(serviceFile, "utf8");
     return text === original ? "original" : text.includes(release) ? "release" : "checkout";
   };
-  const run: RunCommand = async (argv) => {
+  const run: RunCommand = async (argv, options) => {
     const cli = argv[1]?.endsWith("openclaw.mjs") ? path.dirname(argv[1]) : "";
     const role = cli === release ? "release" : cli ? "checkout" : "";
     const words = argv.filter((arg) => !/^([/-]|\d+$|[0-9a-f]{40}$)/u.test(arg));
@@ -234,21 +273,29 @@ function runner(opts: Opts) {
     if (name.endsWith("gateway install") && !fail[name]) {
       fs.writeFileSync(serviceFile, unit(cli));
       [running, enabled] = [true, true];
-      // A release that crashes part-way through its boot migration.
-      schema = opts.migrates && cli === release ? migrated : schema;
+      // A release that crashes part-way through its boot migration, until its unit fails.
+      if (opts.migrates && cli === release) {
+        [schema, running, failed] = [migrated, false, true];
+      }
     }
+    const shown = argv.find((arg) => arg.startsWith("--property="))?.slice(11);
+    const state = running ? "active" : failed ? "failed" : "inactive";
+    const output = { ActiveState: state, TimeoutStopUSec: "5min 30s" }[shown ?? ""] ?? "";
     const verb = words[2] === "openclaw-gateway.service" ? words[1] : "";
-    running = verb === "stop" ? false : verb === "start" ? true : running;
-    enabled = verb === "disable" ? false : enabled;
-    // One store the stopping release migrated after the first comparison.
-    if (opts.late && name.startsWith("systemctl stop")) {
-      schema = { ...planned, agents: { "/a": 1, "/b": 2 } };
+    // Killed at the client's timeout while the release still works; it commits a migration later.
+    if (verb === "stop" && (options?.timeoutMs ?? 120_000) < (opts.stopMs ?? 0)) {
+      return { code: null, output: "" };
     }
-    return { code: fail[name] ?? 0, output: "" };
+    // The release commits one store's migration and exits while it stops.
+    schema = verb === "stop" && opts.stopMs ? { ...planned, agents: { "/a": 1, "/b": 2 } } : schema;
+    [running, failed] =
+      verb === "stop" ? [false, false] : verb === "start" ? [true, false] : [running, failed];
+    enabled = verb === "disable" ? false : enabled;
+    return { code: fail[name] ?? 0, output };
   };
   const deps: RunnerDeps = {
     run,
-    log: () => {},
+    log: (line) => void logs.push(line),
     driverAlive: () => calls.push("driver alive") > 0 && alive-- > 0,
     restarts: async () => restarts,
     schema: () => schema,
@@ -261,9 +308,10 @@ function runner(opts: Opts) {
       if (role === "release" && !fail["release ready"]) {
         [migrating, schema] = [false, migrated];
       }
-      return !fail[`${role} ready`];
+      // The previous build refuses migrated data.
+      return !fail[`${role} ready`] && !(role === "original" && schema === migrated);
     },
-    record: async (outcome) => void records.push(outcome),
+    record: async (outcome) => void (records.push(outcome), calls.push("record")),
     finish: async (_plan, facts) => {
       finished.push(facts);
       fs.rmSync(path.dirname(release), { recursive: true });
@@ -273,29 +321,33 @@ function runner(opts: Opts) {
     sleep: async () => {},
   };
   const state = () => ({ running, enabled });
-  return { plan: full, calls, records, finished, deps, release, original, serves, state };
+  return { plan: full, calls, records, finished, logs, deps, release, original, serves, state };
 }
 
-const MERGE = "git merge";
-const f = (step: string, more = {}) => ({ fail: { [step]: 1 }, ...more });
-const [migrates, resumed, late] = [{ migrates: true }, { resumed: true }, { late: true }];
+const [MERGE, READY, OLD, SF] = ["git merge", "release ready", "original ready", "start-failed"];
+const f = (step: string, more: Opts = {}) => ({ ...more, fail: { [step]: 1, ...more.fail } });
+const [migrates, resumed] = [{ migrates: true }, { resumed: true }];
 const gaveUp = { resumed: true, restarts: 3, migrates: true };
-type Run = [string, Opts, "original" | "release" | "checkout", string?];
+type Run = [string, Opts, "original" | "release" | "checkout", string?, string?];
 const runs: Run[] = [
   ["moves the service to the release, rebuilds, then serves the checkout", {}, "checkout"],
   ["resumes during the boot migration and waits for it", { ...resumed, restarts: 1 }, "checkout"],
   ["changes nothing when the fast-forward fails", f(MERGE), "original"],
+  ["never builds past the target", { past: true }, "original", "", "moved past"],
   ["changes nothing when the service cannot move", f("release gateway install"), "original"],
   ["puts the previous build back when unmigrated", f("release ready"), "original"],
   ["never puts it back once migrated", f("release ready", migrates), "release", "start-failed"],
-  ["never puts it back when one store moved", f("release ready", late), "release", "start-failed"],
+  // A release that commits one store while it takes most of its stop timeout to exit.
+  ["never puts it back when one store moved", f(READY, { stopMs: 3e5 }), "release", SF],
+  ["keeps the release if not stopped", f(READY, { stopMs: Infinity }), "release", SF, "confirm"],
+  ["keeps it while the old one fails", f(READY, { fail: { [OLD]: 1 } }), "original", "", "stays"],
   ["keeps the release serving when the build fails", f("pnpm build"), "release", "build-failed"],
   ["back to the release when the checkout fails", f("checkout ready"), "release", "switch-failed"],
   ["records that another update holds the lock", f("hold"), "release", "update-running"],
   ["records an unexpected error with its next step", f("throw"), "release", "error"],
   ["stops after repeated interruptions", gaveUp, "release", "interrupted"],
 ];
-it.each(runs)("%s", async (_name, opts, serves, reason) => {
+it.each(runs)("%s", async (_name, opts, serves, reason, said) => {
   const fx = runner(opts);
   const done = serves === "checkout";
   expect(await recovery.runEarlyGitReleaseRecovery(fx.plan, fx.deps)).toBe(done);
@@ -304,35 +356,50 @@ it.each(runs)("%s", async (_name, opts, serves, reason) => {
   const merged = fx.calls.indexOf(MERGE);
   expect(merged === -1 || merged > fx.calls.lastIndexOf("driver alive")).toBe(true);
   // Recorded only once state migrated, and always with a command that finishes the update.
-  const recorded = fx.records.map((record) => [
-    record.reason,
-    record.nextAction?.includes("--force"),
-  ]);
+  const recorded = fx.records.map((r) => [r.reason, r.nextAction?.includes("--force")]);
   expect(recorded).toEqual(reason ? [[`early-release-recovery-${reason}`, true]] : []);
-  // The release stays while the service may start it, the user's definition while it does not.
-  expect(fs.existsSync(fx.release)).toBe(serves === "release");
+  // The release stays while the service may start it, and until the previous build serves.
+  const previousServes = serves === "original" && !opts.fail?.[OLD];
+  expect(fs.existsSync(fx.release)).toBe(serves !== "checkout" && !previousServes);
   const copy = `${fx.plan.serviceFile}.before-update-recovery`;
   const kept = fs.existsSync(copy) && fs.readFileSync(copy, "utf8");
   expect(kept).toBe(serves !== "original" && fx.original);
   const timing = opts.resumed ? {} : { downtimeMs: expect.any(Number) };
   expect(fx.finished).toEqual(done ? [{ runId: "run-1", ...timing }] : []);
-  // A Gateway serves at the end, and a disabled autostart ends disabled.
+  // A Gateway runs at the end, and a disabled autostart ends disabled.
   expect(fx.state()).toEqual({ running: true, enabled: false });
+  // Recorded before the Gateway starts again on the state the runner opened to record.
+  const started = fx.calls.lastIndexOf("systemctl start openclaw-gateway.service");
+  expect(fx.calls.lastIndexOf("record")).toBeLessThan(started === -1 ? Infinity : started);
+  expect(fx.logs.join("\n")).toContain(said ?? "");
 });
 
-it.each([0, 1])(
-  "releases only its own interrupted build's lock (restarts %i)",
-  async (restarts) => {
-    const fx = runner({ resumed: true, restarts });
-    const lock = path.join(fx.plan.checkout, ".artifacts", "dist-artifacts.lock");
-    fs.mkdirSync(lock, { recursive: true });
-    // A PID above the kernel's maximum is never alive.
-    const owner = '{"pid":99999999,"startedAt":"2026-11-24T00:00:00Z"}';
-    fs.writeFileSync(path.join(lock, "owner.json"), owner);
-    await recovery.runEarlyGitReleaseRecovery(fx.plan, fx.deps);
-    expect(fs.existsSync(lock)).toBe(restarts === 0);
-  },
-);
+it("gives up on a slow crash loop at the unit's restart allowance, not on a long migration", async () => {
+  vi.spyOn(process.stdout, "write").mockReturnValue(true);
+  for (const crashEveryMs of [35_000, 0]) {
+    let clock = 0;
+    const restarts = () => (crashEveryMs ? Math.floor(clock / crashEveryMs) : 0);
+    const run: RunCommand = async (argv) => {
+      const facts = { StartLimitBurst: "10", NRestarts: String(restarts()), ActiveState: "active" };
+      return { code: 0, output: facts[argv[3]?.slice(11) as keyof typeof facts] ?? "" };
+    };
+    // Each probe takes 5 s; the migration is done after 15 minutes.
+    const probe = async () => (clock += 5000) >= 15 * 60_000;
+    expect(await recovery.waitForGatewayReady("u", probe, run, () => clock)).toBe(!crashEveryMs);
+    expect(restarts()).toBe(crashEveryMs ? 10 : 0);
+  }
+});
+
+it.each([0, 1])("releases only its own interrupted build lock (restarts %i)", async (restarts) => {
+  const fx = runner({ resumed: true, restarts });
+  const lock = path.join(fx.plan.checkout, ".artifacts", "dist-artifacts.lock");
+  fs.mkdirSync(lock, { recursive: true });
+  // A PID above the kernel's maximum is never alive.
+  const owner = '{"pid":99999999,"startedAt":"2026-11-24T00:00:00Z"}';
+  fs.writeFileSync(path.join(lock, "owner.json"), owner);
+  await recovery.runEarlyGitReleaseRecovery(fx.plan, fx.deps);
+  expect(fs.existsSync(lock)).toBe(restarts === 0);
+});
 
 posix("finishes the run the runner holds and removes what the early layout left", async () => {
   vi.stubEnv("OPENCLAW_STATE_DIR", makeTempDir(roots, "openclaw-early-store-"));
@@ -343,7 +410,7 @@ posix("finishes the run the runner holds and removes what the early layout left"
   sh(
     fx.plan.prefix,
     `mkdir -p releases/git-old/lib/node_modules/openclaw releases/now/openclaw lib/node_modules
-    mkdir .removing-r-1 releases/.removing-r-2 && echo '{"attempts":1}' > releases/.trial
+    mkdir .removing-r-1 releases/.removing-r-2 .recovery-start.stale-1-2 && echo '{"attempts":1}' > releases/.trial
     ln -s ../../releases/git-old lib/node_modules/openclaw`,
   );
   // The real store: the runner takes the update lock; the worker's `<plan> finish <facts>`
