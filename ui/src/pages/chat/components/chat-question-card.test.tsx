@@ -238,6 +238,11 @@ describe("shared question panel", () => {
     other.value = "Metrics";
     other.dispatchEvent(new InputEvent("input", { bubbles: true }));
     flush();
+    expect(
+      container.querySelector(
+        ".chat-question-panel__option--other .chat-question-panel__option-marker",
+      )?.textContent,
+    ).toBe("✓");
     container.querySelector<HTMLButtonElement>(".chat-question-panel__advance")?.click();
 
     expect(onSubmit).toHaveBeenCalledWith({

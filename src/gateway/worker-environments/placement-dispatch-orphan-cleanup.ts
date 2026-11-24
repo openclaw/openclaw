@@ -94,6 +94,16 @@ export function subscribeWorkspaceResultOrphanChanges(
     if (!pass?.unresolved.size || (change.kind !== "committed" && change.kind !== "unknown")) {
       return;
     }
+    // Lease-only receipts cannot restore a workspace; reject them before scanning lookups.
+    if (change.kind === "committed") {
+      let hasWorktree = false;
+      change.receipt.facts.forEach((_fact, key) => {
+        hasWorktree ||= key.startsWith('["worktrees",');
+      });
+      if (!hasWorktree) {
+        return;
+      }
+    }
     wake(pass, (target) => {
       if (target && !target.worktreeId) {
         return false;

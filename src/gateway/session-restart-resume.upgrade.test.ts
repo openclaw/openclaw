@@ -89,7 +89,6 @@ it.for(["message", "interrupted", "shared-message"] as const)(
                     completion: { required: true },
                     delivery: {
                       status: "pending",
-                      ...(waiting ? { disposition: "intentional_non_delivery" } : {}),
                     },
                     requesterSettleWake: {
                       status: "pending",
@@ -133,12 +132,9 @@ it.for(["message", "interrupted", "shared-message"] as const)(
               log: { warn() {} },
             });
           }
-          expect(resume.mock.calls.map(([, options]) => options.sessionKey)).toEqual(
-            source === "interrupted" ? [target.sessionKey] : [],
-          );
-          if (waiting) {
-            expect(await readSessionEntryReadOnlyInWorker(target)).toMatchObject(session);
-          }
+          expect(resume.mock.calls.map(([, options]) => options.sessionKey)).toEqual([
+            target.sessionKey,
+          ]);
         } finally {
           resume.mockRestore();
           subagentRuns.delete(childRunId);

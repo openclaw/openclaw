@@ -4,7 +4,7 @@ import {
   resolveExpiresAtMsFromDurationMs,
 } from "openclaw/plugin-sdk/number-runtime";
 import type { ProviderAuthContext } from "openclaw/plugin-sdk/plugin-entry";
-import type { OAuthCredential } from "openclaw/plugin-sdk/provider-auth";
+import { ProviderAuthFailure, type OAuthCredential } from "openclaw/plugin-sdk/provider-auth";
 import { readProviderJsonObjectResponse } from "openclaw/plugin-sdk/provider-http";
 import {
   createOAuthRefreshError,
@@ -202,17 +202,15 @@ export async function loginRadiusOAuth(ctx: ProviderAuthContext): Promise<OAuthC
             intervalMs = Math.min(intervalMs + 5_000, MAX_TIMER_TIMEOUT_MS);
             break;
           case "access_denied":
-            throw new Error("Radius sign-in was denied. Retry sign-in when ready.", {
-              cause: error,
-            });
+            throw new ProviderAuthFailure("device_code_denied", { cause: error });
           case "expired_token":
-            throw new Error("Radius device code expired. Start sign-in again.", { cause: error });
+            throw new ProviderAuthFailure("device_code_expired", { cause: error });
           default:
             throw error;
         }
       }
     }
-    throw new Error("Radius device code expired. Start sign-in again.");
+    throw new ProviderAuthFailure("device_code_expired");
   } finally {
     progress.stop(completed ? "Radius sign-in complete" : "Radius sign-in stopped");
   }

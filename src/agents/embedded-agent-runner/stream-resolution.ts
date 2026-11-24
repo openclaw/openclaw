@@ -5,7 +5,7 @@ import { createBoundaryAwareStreamFnForModel } from "@openclaw/ai/transports";
 import { hasNonEmptyString as hasResolvedRuntimeApiKey } from "@openclaw/normalization-core/string-coerce";
 import { getStreamLlmRuntime } from "../../llm/model-runtime-binding.js";
 import { admitProviderRateLimitStream } from "../../llm/provider-rate-limit-stream.js";
-import "../ai-transport-runtime-host.js";
+import { configureAiTransportRuntimeHost } from "../ai-transport-runtime-host.js";
 import { createAnthropicVertexStreamFnForModel } from "../anthropic-vertex-stream.js";
 import type { StreamFn } from "../runtime/index.js";
 import type { EmbeddedRunAttemptParams } from "./run/types.js";
@@ -100,6 +100,7 @@ export function selectEmbeddedAgentStream(params: EmbeddedAgentStreamParams): {
   /** Attaches the run credential when the selected transport sends it. */
   wrapApiKey: (streamFn: StreamFn) => StreamFn;
 } {
+  configureAiTransportRuntimeHost();
   const llmRuntime = params.llmRuntime ?? getStreamLlmRuntime(params.currentStreamFn);
   if (!llmRuntime) {
     throw new Error("Embedded stream has no lifecycle runtime owner.");

@@ -3,7 +3,7 @@ import { getPluginToolMeta } from "../plugins/tool-metadata.js";
 import { resolveGatewayMessageChannel } from "../utils/message-channel.js";
 import { bindAgentToolSourceExecutionGuard } from "./agent-tool-source-execution-guard.js";
 import { rewrapToolWithBeforeToolCallHook } from "./agent-tools.before-tool-call.wrapper.js";
-import type { OpenClawCodingToolsOptions } from "./agent-tools.options.js";
+import type { InternalCodingToolsOptions } from "./agent-tools.options.js";
 import type { AnyAgentTool } from "./agent-tools.types.js";
 import { isToolWrappedWithBeforeToolCallHook } from "./before-tool-call-metadata.js";
 import type { ResolvedConversationCapabilityProfile } from "./conversation-capability-profile.js";
@@ -14,6 +14,7 @@ import {
   buildPluginToolGroups,
   expandPolicyWithPluginGroups,
   normalizeToolPolicyName,
+  toolPolicyRestrictsTools,
 } from "./tool-policy.js";
 import {
   getGatewayToolCallerIdentity,
@@ -22,7 +23,7 @@ import {
 
 /** Carries the coding surface's prepared policy and requesting route into plugin delegation. */
 export function createCodingToolsGatewayCaller(params: {
-  options?: OpenClawCodingToolsOptions;
+  options?: InternalCodingToolsOptions;
   agentId?: string;
   sessionKey?: string;
   accountId?: string;
@@ -32,11 +33,14 @@ export function createCodingToolsGatewayCaller(params: {
 }) {
   const { options, agentId, sessionKey, capabilityProfile } = params;
   // Dispatch controls and their targets share the same admitted ownership snapshot.
-  const toolMetadata = new Map<string, { pluginId: string }>();
+  const toolMetadata = new Map<string, { pluginId: string; ownerUnverified?: true }>();
   for (const tool of params.tools ?? []) {
     const meta = getPluginToolMeta(tool);
     if (meta) {
-      toolMetadata.set(normalizeToolPolicyName(tool.name), { pluginId: meta.pluginId });
+      toolMetadata.set(normalizeToolPolicyName(tool.name), {
+        pluginId: meta.pluginId,
+        ...(meta.ownerUnverified ? { ownerUnverified: true as const } : {}),
+      });
     }
   }
   const activeCaller = getGatewayToolCallerIdentity();
@@ -68,14 +72,20 @@ export function createCodingToolsGatewayCaller(params: {
               ? (activeCaller.requesterOrigin ?? capabilityProfile.requesterOrigin)
               : capabilityProfile.requesterOrigin,
           sessionEventToolsAllow: params.sessionEventSourcePolicy?.toolsAllow,
+          // A conversation-scoped list is this session's own policy, which its follow-ups re-derive.
+          // Group, per-DM and sender policy come from the inbound request, so they keep the cap.
+          ...(!options.sessionEventSourcePolicy &&
+          options.toolPolicyScope === "conversation" &&
+          !toolPolicyRestrictsTools(capabilityProfile.policy.groupPolicy) &&
+          !toolPolicyRestrictsTools(capabilityProfile.policy.senderPolicy)
+            ? { sessionEventToolsAllowSessionScoped: true as const }
+            : {}),
           sessionEventSettings: params.sessionEventSourcePolicy?.settings ?? {
             permissionMode: options.sessionPermissionPolicy?.mode,
           },
           ...(options.sourceReplyDeliveryMode === "message_tool_only"
             ? { sessionEventDelivery: false as const }
             : {}),
-          // The existing source fence rechecks this after tool preparation and at final I/O.
-          receiptAuthority: settleBatch?.isCurrent,
           receiptAdmissions: settleBatch?.receiptAdmission
             ? [settleBatch.receiptAdmission]
             : undefined,
@@ -111,13 +121,7 @@ export function createCodingToolsGatewayCaller(params: {
       isToolWrappedWithBeforeToolCallHook(guarded)
         ? rewrapToolWithBeforeToolCallHook(guarded)
         : guarded,
-      {
-        ...identity,
-        receiptAuthority: () => {
-          assertDelegationCurrent();
-          return identity.receiptAuthority?.() ?? true;
-        },
-      },
+      { ...identity, receiptAuthority: assertDelegationCurrent },
     );
   };
 }

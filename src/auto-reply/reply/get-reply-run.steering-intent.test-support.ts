@@ -91,6 +91,7 @@ async function prepareIngress(body: string, authorized = true): Promise<Prepared
       ...params,
       ...routed.result,
       ...levels,
+      model: params.model,
       defaultActivation: routed.result.defaultActivation,
       ctx,
       sessionCtx,

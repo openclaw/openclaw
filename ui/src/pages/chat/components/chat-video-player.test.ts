@@ -74,6 +74,32 @@ it("starts metadata loading only when the video card reaches the viewport", asyn
   expect(source(recovered)).toBe("https://example.com/recovered.mp4");
 });
 
+it.each(["native", "transcode"] as const)(
+  "starts activated %s playback before loadeddata",
+  async (playback) => {
+    vi.useFakeTimers();
+    stubManualIntersectionObserver(() => {});
+    const play = vi.spyOn(HTMLMediaElement.prototype, "play").mockResolvedValue();
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(new Response(null, { status: 202 }))
+      .mockResolvedValueOnce(new Response(null, { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+    const player = await open("activated", { autoplay: true, playback });
+    const video = media(player)!;
+    expect(video.preload).toBe("auto");
+    if (playback === "transcode") {
+      expect(play).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(2_000);
+      await player.updateComplete;
+    }
+    expect(play).toHaveBeenCalledOnce();
+    video.dispatchEvent(new Event("loadeddata"));
+    await player.updateComplete;
+    expect(play).toHaveBeenCalledOnce();
+  },
+);
+
 it("keeps a loaded preview through rebuffering and applies a renewed ticket on resume", async () => {
   const player = await open("clip", { preview: true, src: "/media/clip.mp4?mediaTicket=A" });
   const video = media(player)!;
@@ -131,6 +157,24 @@ it("keeps one video element mounted across 202 preparation", async () => {
   expand.click();
   expect(pause).toHaveBeenCalledOnce();
   expect(onExpand).toHaveBeenCalledWith(src + "&playback=1");
+});
+
+it("does not show preparation when the first video request is ready", async () => {
+  stubManualIntersectionObserver(() => {});
+  const play = vi.spyOn(HTMLMediaElement.prototype, "play").mockResolvedValue();
+  const response = Promise.withResolvers<Response>();
+  const fetchMock = vi.fn<typeof fetch>(() => response.promise);
+  vi.stubGlobal("fetch", fetchMock);
+  const player = await open("recording", { autoplay: true, playback: "transcode" });
+  const video = media(player);
+  expect(fetchMock).toHaveBeenCalledOnce();
+  expect(player.textContent).not.toContain("Preparing playback…");
+  expect(video?.parentElement?.hidden).toBe(false);
+
+  response.resolve(new Response(null, { status: 200 }));
+  await vi.waitFor(() => expect(play).toHaveBeenCalledOnce());
+  expect(media(player)).toBe(video);
+  expect(fetchMock).toHaveBeenCalledOnce();
 });
 
 it("does not preserve a previous attachment when a new rendition fails", async () => {

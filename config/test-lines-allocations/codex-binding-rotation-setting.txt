@@ -1,2 +1,0 @@
-# Extend native-ownership lifecycle coverage to assert the refusing setting and preserved binding.
-10

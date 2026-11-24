@@ -1,9 +1,11 @@
 import { createHash } from "node:crypto";
 import { appendFileSync, readFileSync, realpathSync } from "node:fs";
 import { pathToFileURL } from "node:url";
-import { isPreparedClawHubTrustedPublisher } from "./clawhub-prepared-artifact.mjs";
 import { canonicalizeJsonValue, compareAscii } from "./lib/canonical-json.mjs";
-import { classifyClawHubPublication } from "./lib/clawhub-publication-state.mjs";
+import {
+  classifyClawHubPublication,
+  isPreparedClawHubTrustedPublisher,
+} from "./lib/clawhub-publication-state.mjs";
 import {
   dispatchEnvelopeFromInputs,
   publicationInputRecord as object,
@@ -11,6 +13,7 @@ import {
   publicationPackageNamePattern as packageName,
   publicationIntentInputs,
   publicationSourceJson,
+  validatePublicationArtifactSelection,
 } from "./lib/full-release-publication-inputs.mjs";
 import corePackages from "./lib/npm-core-release-packages.json" with { type: "json" };
 import { resolveNpmPublishPlan } from "./lib/npm-publish-plan.mjs";
@@ -23,6 +26,38 @@ export {
   publicationIntentInputs,
   publicationSourceJson,
 } from "./lib/full-release-publication-inputs.mjs";
+
+// Qualification preflight and source admission share the same committed-version policy.
+export function validatePublicationVersionSelection(version, selection) {
+  const parsed = parseReleaseVersion(version);
+  if (!parsed) {
+    throw new Error("invalid publication source version");
+  }
+  if (parsed.channel === "alpha") {
+    throw new Error("Alpha releases are retired; use a beta prerelease instead.");
+  }
+  const train = classifyReleaseTrain(parsed);
+  if (train === "unsupported-extended-stable-correction") {
+    throw new Error("unsupported extended-stable correction");
+  }
+  const extended = selection.route === "extended-stable";
+  const allowedTags =
+    train === "stable"
+      ? ["beta", "latest"]
+      : train === "extended-stable"
+        ? ["extended-stable"]
+        : [parsed.channel];
+  if (!allowedTags.includes(selection.npmDistTag) || (train === "extended-stable") !== extended) {
+    throw new Error("publication selection does not match the committed release version");
+  }
+  if (selection.route === "prepared" && !["beta", "stable"].includes(train)) {
+    throw new Error("prepared publication requires a regular beta/stable candidate");
+  }
+  if (selection.windowsNodeTag && train !== "stable") {
+    throw new Error("Windows assets require a stable publication");
+  }
+  return parsed;
+}
 
 export const FULL_RELEASE_SOURCE_ADMISSION_CONTRACT = "1";
 export const FULL_RELEASE_PUBLICATION_ADMISSION_CONTRACT = "1";
@@ -43,6 +78,7 @@ const coverageInputs = {
   plugin_prerelease_node_exclude_patterns_json: "pluginPrereleaseNodeExcludePatternsJson",
   extension_test_exclude_patterns_json: "extensionTestExcludePatternsJson",
   qualification_baselines_json: "qualificationBaselinesJson",
+  publication_artifact_source_json: "publicationArtifactSourceJson",
   skip_package_telegram_e2e: "skipPackageTelegramE2e",
   allow_unreleased_changelog: "allowUnreleasedChangelog",
 };
@@ -199,8 +235,7 @@ function validatePublicationSourceFact(value, expected = {}) {
     "run_release_soak",
     "coverage_policy",
   ];
-  // Pre-cutover evidence binds this empty field into its original digest.
-  // Retire with those release lines and their retained publication recovery.
+  // Pre-cutover evidence can bind these empty legacy fields into its digest.
   object(
     value.coverage,
     [...coverageKeys, "known_flaky_jobs_json", "telegram_waiver"],
@@ -218,14 +253,25 @@ function validatePublicationSourceFact(value, expected = {}) {
   if (
     coverageKeys.some(
       (key) =>
-        !["extension_test_exclude_patterns_json", "qualification_baselines_json"].includes(key) &&
-        !Object.hasOwn(value.coverage, key),
+        ![
+          "extension_test_exclude_patterns_json",
+          "qualification_baselines_json",
+          "publication_artifact_source_json",
+        ].includes(key) && !Object.hasOwn(value.coverage, key),
     )
   ) {
     throw new Error("source admission coverage is incomplete");
   }
   for (const entry of Object.values(value.coverage)) {
     text(entry, "source admission coverage");
+  }
+  const artifactSource = value.coverage.publication_artifact_source_json;
+  if (
+    artifactSource &&
+    JSON.stringify(validatePublicationArtifactSelection(JSON.parse(artifactSource))) !==
+      artifactSource
+  ) {
+    throw new Error("source admission publication artifact source is not canonical");
   }
   if (value.validationPurpose === "publish") {
     if (value.status !== "source-admitted" || !digest.test(value.inventoryDigest)) {
@@ -1023,7 +1069,8 @@ if (invokedAsMain) {
       );
       appendFileSync(
         process.env.GITHUB_OUTPUT,
-        `qualification_baselines_json=${envelope.laneInputs?.qualification_baselines_json ?? ""}\n`,
+        `qualification_baselines_json=${envelope.laneInputs?.qualification_baselines_json ?? ""}\n` +
+          `publication_artifact_source_json=${envelope.laneInputs?.publication_artifact_source_json ?? ""}\n`,
       );
     } else if (process.argv[2] === "--request") {
       const request = publicationSourceRequest(process.env);

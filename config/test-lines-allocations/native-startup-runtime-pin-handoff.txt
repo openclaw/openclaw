@@ -1,2 +1,0 @@
-# Native first-launch credential cutover must settle runtime intent, preserve pins, and refuse interrupted handoff conflicts.
-117

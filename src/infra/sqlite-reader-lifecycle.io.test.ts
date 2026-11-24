@@ -20,6 +20,11 @@ const counters = new Map<string, SqliteReaderCounter>();
 let stopCounters: () => unknown;
 beforeEach(() => {
   Object.defineProperty(process, "platform", { value: "linux" });
+  vi.spyOn(process, "argv", "get").mockReturnValue([
+    "node",
+    "/synthetic/src/config/sessions/session-transcript.worker.ts",
+  ]);
+  vi.spyOn(fs, "readlinkSync").mockReturnValue("1234/task/5678");
   warn.mockReset();
   stopCounters = observeSqliteReaderCounters((counter) => counters.set(counter.operation, counter));
 });
@@ -88,6 +93,8 @@ it.each(["sync", "async", "rejected"])(
       "heavy SQLite reader operation",
       expect.objectContaining({
         operation: "sessions.history.summary",
+        workerScript: "session-transcript.worker.js",
+        nativeThreadId: 5678,
         readBytes: 64 * 1024 * 1024,
         context: {
           ...context,
@@ -122,6 +129,23 @@ it("counts sub-threshold and zero-byte operations without additional registratio
   expect([...counters.get("sessions.small")!.values]).toEqual([2n, 4096n]);
   expect(registered).toHaveBeenCalledTimes(1);
   expect(warn).not.toHaveBeenCalled();
+});
+
+it("keeps heavy-read diagnostics when procfs identity is unavailable without exposing paths", () => {
+  vi.spyOn(process, "argv", "get").mockReturnValue(["node", "/private/custom-worker.js"]);
+  vi.spyOn(fs, "readlinkSync").mockImplementation(() => {
+    throw new Error("procfs unavailable");
+  });
+  procfs(0, 64 * 1024 * 1024);
+  withSqliteReaderOwner({ operation: "synthetic", ownerKind: "worker" }, () => {}, undefined, {
+    warn,
+  });
+  expect(warn).toHaveBeenCalledExactlyOnceWith(
+    "heavy SQLite reader operation",
+    expect.objectContaining({ workerScript: "other", readBytes: 64 * 1024 * 1024 }),
+  );
+  expect(warn.mock.calls[0]?.[1]).not.toHaveProperty("nativeThreadId");
+  expect(JSON.stringify(warn.mock.calls)).not.toContain("/private/");
 });
 
 it.each([

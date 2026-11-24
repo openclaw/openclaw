@@ -756,7 +756,7 @@ it.each([
   },
 );
 
-it("snapshots a verified live writer once despite checkpoints that exhaust raw-copy retries", async () => {
+it("takes one read transaction when a live WAL writer outlasts every raw copy", async () => {
   const root = tempDirs.make("sqlite-live-metadata-");
   const source = path.join(root, "state", "openclaw.sqlite");
   const staging = path.join(root, "staging");
@@ -775,11 +775,18 @@ it("snapshots a verified live writer once despite checkpoints that exhaust raw-c
       await writer.commit();
       return result;
     });
-    await expect(prepareSqliteReadOnlyCopyInProcess(source, staging)).rejects.toThrow(
-      "reason=wal-copy-unstable, attempts=10",
-    );
+    const fallback = await prepareSqliteReadOnlyCopyInProcess(source, staging);
     expect(raw).toHaveBeenCalledTimes(MAX_SNAPSHOT_ATTEMPTS);
     raw.mockRestore();
+    try {
+      using db = new (requireNodeSqlite().DatabaseSync)(fallback.location, { readOnly: true });
+      const rows = db.prepare("SELECT generation FROM snapshot_pair ORDER BY id").all();
+      expect(rows[0]?.generation).toBeGreaterThan(0);
+      expect(rows[0]).toEqual(rows[1]);
+    } finally {
+      expect(fallback.cleanup()).toBe(true);
+    }
+    // A verified live owner skips the raw attempts and takes that transaction directly.
     const prepared = await prepareSnapshot(source, snapshotOptions(source));
     try {
       using db = new (requireNodeSqlite().DatabaseSync)(prepared.location, { readOnly: true });
@@ -803,6 +810,40 @@ it("snapshots a verified live writer once despite checkpoints that exhaust raw-c
     await writer.stop();
     owner.release();
   }
+});
+
+it("keeps a WAL family without its index byte-neutral when every raw copy changes", async () => {
+  const root = tempDirs.make("sqlite-unindexed-churn-");
+  const source = path.join(root, "openclaw.sqlite");
+  {
+    using db = new (requireNodeSqlite().DatabaseSync)(source);
+    db.exec(
+      "PRAGMA journal_mode=WAL; CREATE TABLE probe(value); INSERT INTO probe VALUES('kept');",
+    );
+  }
+  fs.writeFileSync(`${source}-wal`, Buffer.alloc(0));
+  fs.rmSync(`${source}-shm`, { force: true });
+  const before = fs.readFileSync(source);
+  const copy = copies.copySqliteFile;
+  const raw = vi.spyOn(copies, "copySqliteFile").mockImplementation(async (...args) => {
+    const result = await copy(...args);
+    if (args[1].endsWith("database.sqlite.partial")) {
+      const bytes = fs.readFileSync(args[1]);
+      bytes.writeUInt32BE(bytes.readUInt32BE(60) + 1, 60);
+      fs.writeFileSync(args[1], bytes);
+    }
+    return result;
+  });
+  try {
+    await expect(prepareSqliteReadOnlyCopyInProcess(source)).rejects.toThrow(
+      "reason=main-changed-during-copy, attempts=10",
+    );
+  } finally {
+    raw.mockRestore();
+  }
+  expect(fs.existsSync(`${source}-shm`)).toBe(false);
+  expect(fs.readFileSync(`${source}-wal`)).toEqual(Buffer.alloc(0));
+  expect(fs.readFileSync(source)).toEqual(before);
 });
 
 it.each(["absent", "unverifiable"])(

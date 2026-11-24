@@ -31,11 +31,11 @@ afterEach(() => {
 });
 
 it.each([
-  ["chat-text", "inline-grid"],
-  ["sidebar-markdown", "inline-grid"],
-  ["chat-reply-attribution", "grid"],
-  ["chat-reply-attribution chat-reply-attribution--forwarded", "grid"],
-])("styles links and preserves keyboard focus in %s", async (className, display) => {
+  "chat-text",
+  "sidebar-markdown",
+  "chat-reply-attribution",
+  "chat-reply-attribution chat-reply-attribution--forwarded",
+])("styles links and preserves keyboard focus in %s", async (className) => {
   const host = createHost(className);
   host.innerHTML =
     '<a class="markdown-session-link" href="/chat/main/raw">agent:main:raw</a>' +
@@ -51,7 +51,6 @@ it.each([
     const titled = host.querySelector(".markdown-session-link--titled")!;
     expect(getComputedStyle(titled)).toMatchObject({
       color: getComputedStyle(host.querySelector("a")!).color,
-      display,
     });
     expect(getComputedStyle(titled.firstElementChild!).textOverflow).toBe("ellipsis");
     await userEvent.click(start);

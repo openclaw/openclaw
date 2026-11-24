@@ -7,8 +7,6 @@ const ref = (suffix: string) => ({ ref: `${prefix}/${suffix}`, sha });
 const codes = [2026090401, 2026090451];
 const input = {
   gatewayVersion: "2026.9.6-beta.1",
-  pinnedVersion: "2026.8.2",
-  pinnedVersionCode: 2026080201,
   sourceSha: sha,
   snapshot: { uploadedVersionCodes: codes, tracks: [] },
   refs: [ref("2026.9.4-2026090401")],
@@ -31,10 +29,10 @@ const publicTracks = (phone = 2026090401, wear = 2026090451) => [
   track("wear:production", wear),
 ];
 
-it("starts from pinned metadata without previous uploads", () => {
+it("starts at the first code pair without previous uploads", () => {
   expectPlan({ snapshot: snapshot([], []), refs: [] }).toMatchObject({
-    versionCode: 2026080252,
-    wearVersionCode: 2026080253,
+    versionCode: 1,
+    wearVersionCode: 2,
     legacyMaxVersionCode: 0,
   });
 });

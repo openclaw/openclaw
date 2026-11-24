@@ -3,13 +3,14 @@ import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { FeatureInput } from "openclaw/plugin-sdk/feature-contract";
 import { expect, it } from "vitest";
-import { contract } from "./contract.js";
+import type { FullOutputContract } from "./contract.js";
 import type { ExtractSectionInput } from "./mutation-contract.js";
 import { PAGE_BUDGET_CHARS } from "./page-budget.js";
 import { createKnowledgeService } from "./service.js";
 import { storeFixture, toolContext, useTestTempDirs } from "./test-support.js";
 
 const tempDirs = useTestTempDirs();
+const byText = (a: string, b: string) => a.localeCompare(b);
 
 // One isolated private vault driven through the agent tool handlers.
 async function fixture() {
@@ -20,14 +21,14 @@ async function fixture() {
     owner = toolContext(api);
   const call = async <K extends keyof typeof service>(
     op: K,
-    input: FeatureInput<typeof contract, K>,
+    input: FeatureInput<FullOutputContract, K>,
   ) => service[op](input, owner);
   const vaultId = (await call("status", {})).vault,
     fingerprint = (await call("ontology", {})).fingerprint;
   const save = (title: string, type: string, body: string, extra = {}) =>
     call("save_page", { requestId: randomUUID(), title, type, body, ...extra });
   const read = async (id: string, extra = {}) =>
-    (await call("record", { id, view: "summary", metadataView: "full", ...extra })).record!;
+    (await call("record_detail", { id, view: "summary", metadataView: "full", ...extra })).record!;
   const fence = async (id: string) => {
     const r = await read(id);
     return { id, expectedRevision: r.revision, expectedHash: r.hash };
@@ -246,12 +247,14 @@ it("extracts a section with its links, evidence, claim subjects and history, or 
       text.slice(start + billing.length),
   );
   const links = async (id: string) =>
-    (await f.call("connections", { id, direction: "links" })).connections
-      .map((c) => c.record.id)
-      .toSorted();
-  expect(await links(destination.id)).toStrictEqual([ledger.id, owner.id, provider.id].toSorted());
+    (await f.call("connections_detail", { id, direction: "links" })).connections
+      .map((c: any) => c.id)
+      .toSorted(byText);
+  expect(await links(destination.id)).toStrictEqual(
+    [ledger.id, owner.id, provider.id].toSorted(byText),
+  );
   expect(await links(atlas.id)).toStrictEqual([destination.id, ledger.id, search.id].toSorted());
-  const carried = await f.call("record", {
+  const carried = await f.call("record_detail", {
     id: destination.id,
     includeEvidence: true,
     view: "summary",

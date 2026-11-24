@@ -17,6 +17,10 @@ export interface PublicationSelection {
   windowsNodeTag?: string;
   windowsNodeInstallerDigests?: Record<string, string>;
 }
+export function validatePublicationVersionSelection(
+  version: string,
+  selection: PublicationSelection,
+): NonNullable<ReturnType<typeof import("./lib/release-version.mjs").parseReleaseVersion>>;
 export interface PublicationIntent {
   validationPurpose: ValidationPurpose;
   publicationSelection: PublicationSelection | null;
@@ -27,6 +31,7 @@ export interface PublicationDispatchEnvelope extends PublicationIntent {
   laneInputs?: {
     extension_test_exclude_patterns_json?: string;
     qualification_baselines_json?: string;
+    publication_artifact_source_json?: string;
   };
 }
 export interface PublicationSourceRequest extends PublicationIntent {

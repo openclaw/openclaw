@@ -41,10 +41,10 @@ import {
 import { loadBundledPluginFacade } from "../../test-utils/bundled-plugin-public-surface.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import {
-  createAdmittedRunOperatorAuthority,
   prepareSystemAgentRunAdmission,
   readRunOperatorAuthority,
 } from "../admitted-run-context.js";
+import { createTestOperatorAuthority } from "../admitted-run-context.test-support.js";
 import { createDeferredEmbeddedRunLifecycleManager } from "../embedded-agent-runner/run/deferred-lifecycle-owner.js";
 import {
   bindWorkerToolPreparation,
@@ -135,18 +135,6 @@ it("steers configured, session and explicit inputs through current authority int
       senderIsOwner: true,
       traceAuthorized: false,
     });
-    let rejectSourceCleanup = false;
-    params.assertCurrent = Object.assign(() => {}, {
-      prepareSessionSourceScope: async () => ({
-        checks: [],
-        assertCurrent: () => {},
-        release: () => {
-          if (rejectSourceCleanup) {
-            throw new Error("Source scope cleanup failed after stdin submission");
-          }
-        },
-      }),
-    });
     context.workspaceDir = root;
     context.cwd = root;
     params.inputProvenance = { kind: "internal_system", sourceTool: "future_wake" };
@@ -173,11 +161,9 @@ it("steers configured, session and explicit inputs through current authority int
     });
     const execute = expectDefined(prepared?.execute, "Claude native transport");
     const ready = createDeferred();
-    const cleanupInputObserved = createDeferred();
     const completionObserved = createDeferred();
     const observations = new Map([
       ["initial", ready],
-      ["post-submit-cleanup", cleanupInputObserved],
       [RUNTIME_EVENT_USER_PROMPT, completionObserved],
     ]);
     const run = executePluginOwnedProcess({
@@ -397,12 +383,6 @@ it("steers configured, session and explicit inputs through current authority int
       expect(refusal).toMatchObject({ status: "rejected", reason: "tool_authority_mismatch" });
       expect(await readInputs()).toEqual(["initial", ...routeInputs]);
       vi.restoreAllMocks();
-      rejectSourceCleanup = true;
-      const uncertain = await beginReplyMessageInjectionTarget(target, "post-submit-cleanup");
-      await expect(uncertain.acceptance).resolves.toBe(true);
-      await expect(uncertain.outcome).resolves.toMatchObject({ status: "indeterminate" });
-      rejectSourceCleanup = false;
-      await cleanupInputObserved.promise;
       const exitRecorder = recordInput("started-exit");
       const exit = await beginReplyMessageInjectionTarget(target, "started-exit", {
         userTurnTranscriptRecorder: exitRecorder,
@@ -411,12 +391,7 @@ it("steers configured, session and explicit inputs through current authority int
       await expect(exit.outcome).resolves.toMatchObject({ status: "accepted" });
       await expect(run).rejects.toThrow();
       const expectedInputs = [...routeInputs, "started-exit"];
-      expect(await readInputs()).toEqual([
-        "initial",
-        ...routeInputs,
-        "post-submit-cleanup",
-        "started-exit",
-      ]);
+      expect(await readInputs()).toEqual(["initial", ...routeInputs, "started-exit"]);
       expect(exitRecorder.hasPersisted()).toBe(true);
       const messages = await readTranscriptMessages({
         sessionId,
@@ -444,17 +419,11 @@ it("steers a spawned Claude child for its requester and refuses other sources", 
     const { context } = await createExecution({ config, timeoutMs: 30_000 });
     const { params } = context;
     const { sessionId } = params;
-    let revoked = false;
     // Spawn admits the child with the requester's operator source and origin.
-    const operatorAuthority = createAdmittedRunOperatorAuthority({
+    const operatorAuthority = createTestOperatorAuthority({
       profileId: "owner",
       scopes: ["operator.read", "operator.write"],
       gatewayAccessGrant: null,
-      assertCurrent: () => {
-        if (revoked) {
-          throw new Error("operator source revoked");
-        }
-      },
     });
     const admission = prepareSystemAgentRunAdmission(
       config,
@@ -575,8 +544,6 @@ it("steers a spawned Claude child for its requester and refuses other sources", 
           tools: { ...config.tools, deny: ["read"] },
         }),
       ).resolves.toMatchObject({ status: "rejected", reason: "tool_authority_mismatch" });
-      revoked = true;
-      await expect(steer("revoked source")).resolves.toMatchObject({ status: "rejected" });
       expect(await readInputs()).toEqual(["initial", "guidance"]);
     } finally {
       operation.abortByUser();

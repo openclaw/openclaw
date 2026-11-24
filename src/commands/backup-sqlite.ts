@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { terminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { resolveConfiguredAgentId } from "../agents/agent-scope-config.js";
+import { throwExpectedCliError } from "../cli/expected-cli-error.js";
 import { captureRuntimeConfigAsyncReader, resolveStateDir } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -175,13 +176,13 @@ async function resolveSnapshotDatabase(
 ) {
   const rawAgentId = options.agent?.trim();
   if (options.agent !== undefined && !rawAgentId) {
-    throw new Error("--agent must not be blank");
+    throwExpectedCliError("--agent must not be blank");
   }
   if (options.global === true && rawAgentId) {
-    throw new Error("Choose exactly one SQLite snapshot source: --global or --agent <id>.");
+    throwExpectedCliError("Choose exactly one SQLite snapshot source: --global or --agent <id>.");
   }
   if (options.global !== true && !rawAgentId) {
-    throw new Error("Choose a SQLite snapshot source: --global or --agent <id>.");
+    throwExpectedCliError("Choose a SQLite snapshot source: --global or --agent <id>.");
   }
   if (globalPath) {
     return {

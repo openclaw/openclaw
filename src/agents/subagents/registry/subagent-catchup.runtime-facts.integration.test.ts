@@ -118,7 +118,7 @@ it("reads a cold private envelope without changing delivery or processing receip
   });
   assert(receipt?.completeAsync, "Expected a private processing completion owner");
   await receipt.completeAsync(buildAgentRunTerminalOutcome({ status: "ok" }));
-  receipt.finish("interrupted");
+  receipt.finish("interrupted", "failed");
   await resetSubagentRegistryForTests({ persist: false });
   await closeOpenClawAgentDatabasesAsync();
   closeOpenClawAgentDatabasesForTest();
@@ -251,7 +251,7 @@ it("refreshes a warm reader after another writer persists a result", async () =>
   }
 });
 
-it.each(["suppressed", "intentional non-delivery", "already delivered"])(
+it.each(["suppressed", "already delivered"])(
   "does not revive %s obligations",
   async (disposition) => {
     const delivered = disposition === "already delivered";
@@ -272,9 +272,6 @@ it.each(["suppressed", "intentional non-delivery", "already delivered"])(
         delivery: {
           status: delivered ? "delivered" : "failed",
           ...(delivered ? { deliveredAt: Date.now() } : {}),
-          ...(disposition === "intentional non-delivery"
-            ? { disposition: "intentional_non_delivery" as const }
-            : {}),
         },
         suppressCompletionDelivery: disposition === "suppressed",
       }),

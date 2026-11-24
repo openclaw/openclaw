@@ -8,7 +8,7 @@ import { getMachineDisplayName } from "../infra/machine-name.js";
 import { defaultRuntime } from "../runtime.js";
 import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import { normalizeNodeHostCommands } from "./config-shared.js";
-import { loadNodeHostConfig } from "./config.js";
+import { loadNodeHostConfig, refreshNodeHostOpenClawIdTarget } from "./config.js";
 import { enrollNode } from "./openclaw-id-enrollment.js";
 import { parseNodeDiscoveryOrigin } from "./openclaw-id-target.js";
 import { loadNodeTunnelKey } from "./openclaw-id-transport.js";
@@ -24,7 +24,7 @@ export type NodeJoinOptions = {
   allCommands?: boolean;
 };
 
-/** Enrollment does not alter the saved target until owner admission and pin checks succeed. */
+/** Enrollment switches targets only after admission; stronger facts for the saved claw are retained. */
 export async function runNodeJoin(linkText: string, opts: NodeJoinOptions): Promise<void> {
   const link = parseNodeJoinLink(linkText);
   if (!link) {
@@ -37,7 +37,9 @@ export async function runNodeJoin(linkText: string, opts: NodeJoinOptions): Prom
     throw new Error("Labs OpenClaw ID node transport currently requires Unix sockets");
   }
   const saved = await loadNodeHostConfig();
-  const discovery = opts.discoveryUrl ?? saved?.gateway?.openclawId?.discoveryUrl;
+  // An explicit flag wins over the origin the owner's link carries, then the saved deployment.
+  const discovery =
+    opts.discoveryUrl ?? link.discovery_url ?? saved?.gateway?.openclawId?.discoveryUrl;
   if (!discovery) {
     throw new Error(
       "Discovery API origin is not configured; pass --discovery-url <https-origin> from the claw owner.",
@@ -67,13 +69,26 @@ export async function runNodeJoin(linkText: string, opts: NodeJoinOptions): Prom
     installedAppsSharingEnabled: saved?.installedAppsSharing,
     commands,
   });
-  const key = loadNodeTunnelKey();
+  const key = await loadNodeTunnelKey();
   const signer = await ed25519SignerFromSeed(key).finally(() => key.fill(0));
+  const previous = saved?.gateway?.openclawId;
   const target = await enrollNode({
     link,
     discoveryUrl,
     signer,
-    previousPin: saved?.gateway?.openclawId?.pin,
+    previous:
+      previous && saved
+        ? {
+            target: previous,
+            persist: (next) =>
+              refreshNodeHostOpenClawIdTarget({
+                nodeId: saved.nodeId,
+                expected: previous,
+                // Retain trust without switching routing before enrollment succeeds.
+                target: { ...next, discoveryUrl: previous.discoveryUrl },
+              }),
+          }
+        : undefined,
     description: {
       display_name: displayName,
       platform: process.platform,

@@ -10,13 +10,13 @@
  * covered by relay tests. Excludes socket I/O, TLS, concurrency and provider latency.
  */
 import assert from "node:assert/strict";
-import type { HeapProfiler } from "node:inspector";
 import { Session } from "node:inspector/promises";
 import { loadavg } from "node:os";
 import { parseArgs } from "node:util";
 import { createCodexInferenceContext } from "../../extensions/codex/src/app-server/inference-context.js";
 import { createCodexInferenceDispatch } from "../../extensions/codex/src/app-server/inference-dispatch.js";
 import { createUploadAdmission } from "../../extensions/codex/src/app-server/inference-upload.js";
+import { sumSampledHeapBytes } from "../lib/heap-sampling.ts";
 
 const { values } = parseArgs({ options: { sample: { type: "boolean", default: false } } });
 const iterations = 1000;
@@ -57,9 +57,6 @@ const frames = Array.from({ length: 64 }, (_, index) =>
     }),
   ),
 );
-function sampledBytes(node: HeapProfiler.SamplingHeapProfileNode): number {
-  return node.selfSize + node.children.reduce((sum, child) => sum + sampledBytes(child), 0);
-}
 function fixture() {
   const lifetime = new AbortController();
   const connection = new AbortController();
@@ -125,7 +122,7 @@ try {
       const wallMs = performance.now() - start;
       const cpu = process.cpuUsage(cpuBefore);
       const allocationBytes = inspector
-        ? sampledBytes((await inspector.post("HeapProfiler.stopSampling")).profile.head)
+        ? sumSampledHeapBytes((await inspector.post("HeapProfiler.stopSampling")).profile.head)
         : undefined;
       results.push({
         pair,

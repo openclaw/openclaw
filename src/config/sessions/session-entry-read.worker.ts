@@ -1,6 +1,9 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { ok } from "@openclaw/normalization-core/result";
-import { readStoredSessionRowTranscriptProjection } from "../../gateway/session-row-transcript-preview.js";
+import {
+  EMPTY_SESSION_ROW_TRANSCRIPT_PROJECTION,
+  readStoredSessionRowTranscriptProjection,
+} from "../../gateway/session-row-transcript-preview.js";
 import {
   executeSqliteQuerySync,
   getNodeSqliteKysely,
@@ -50,22 +53,17 @@ import {
   canonicalSessionKeyMigrationRequiredError,
   readWithCanonicalSessionReaderContinuation,
 } from "./session-canonical-key.js";
+import { readSessionColdMetadataInDatabase } from "./session-cold-storage-inventory.js";
 import { prepareSessionColdSourceGuard } from "./session-cold-storage-source-guard.worker.js";
-import { readSessionColdTranscript } from "./session-cold-storage-state.js";
 import { readSessionCreationReceipt } from "./session-creation-receipts.js";
 import { createSessionEntryReadScope } from "./session-entry-cohort.worker.js";
 import { prepareSessionEntryInspectionSnapshot } from "./session-entry-inspection-snapshot.worker.js";
 import { captureSessionEntryReadSource } from "./session-entry-read-source.js";
 import type {
-  SessionEntryReadWorkerInput,
-  SessionEntryReadWorkerResult,
   SessionExactEntriesWorkerInput,
   SessionExactEntriesWorkerResult,
-  SessionRuntimeTargetWorkerInput,
-  SessionRuntimeTargetWorkerResult,
 } from "./session-entry-read.types.js";
 import type { SessionRowDatabaseFacts } from "./session-row-facts.types.js";
-import { readSessionRuntimeTargetWorkerRequest } from "./session-runtime-target-read.worker.js";
 import { listSessionMembersInDatabase } from "./session-sharing-store.kernel.js";
 import { readSessionSourceChecks } from "./session-source-predicate.worker.js";
 import type { SessionStoreProjectionWorkerInput } from "./session-store-projection.types.js";
@@ -116,18 +114,6 @@ export function readSessionStoreProjection(
     { ...request.database, env },
   );
   return { kind: "session-store-projection", ...(result.found ? result.value : { entries: [] }) };
-}
-
-/** Private entry and transcript-target reads share the same admitted reader and error codec. */
-export async function readSessionEntryWorkerRequest(
-  request: SessionEntryReadWorkerInput | SessionRuntimeTargetWorkerInput,
-): Promise<SessionEntryReadWorkerResult | SessionRuntimeTargetWorkerResult> {
-  if (request.kind === "session-runtime-target") {
-    return readSessionRuntimeTargetWorkerRequest(request);
-  }
-  // Keep the exact-read owner off the lazy reader import graph.
-  const { readSessionEntryResult } = await import("./session-entry-read-result.worker.js");
-  return readSessionEntryResult(request);
 }
 
 function selectsChildEntries(
@@ -360,9 +346,10 @@ export function readExactSessionEntriesWithLifecycle(
             ...(request.manualCompact
               ? {
                   manualCompact: {
-                    archive: readSessionColdTranscript(
-                      database.db,
+                    ...readSessionColdMetadataInDatabase(
+                      database,
                       request.manualCompact.sessionId,
+                      request.readCustody,
                     ),
                     refusedSource: sourceGuard.read(
                       database,
@@ -681,21 +668,23 @@ export function readSessionRowDatabaseFacts(
                 return [];
               }
               const { entry } = selected;
-              const storedTranscript =
-                selected.row.row_transcript_window_id === null
-                  ? { lastMessagePreview: null, lastAssistantMessage: null, terminalModel: null }
-                  : readStoredSessionRowTranscriptProjection({
-                      json: selected.row.row_transcript_json,
-                      updatedAt: selected.row.row_transcript_updated_at,
-                      transcriptUpdatedAt: selected.row.row_transcript_source_updated_at,
-                      indexedSeq: selected.row.row_transcript_indexed_seq,
-                    });
+              // Metadata creates a window before any transcript exists. Its missing
+              // preview cache is not an unknown history requiring optional backfill.
+              const storedTranscript = !selected.row.row_transcript_present
+                ? EMPTY_SESSION_ROW_TRANSCRIPT_PROJECTION
+                : readStoredSessionRowTranscriptProjection({
+                    json: selected.row.row_transcript_json,
+                    updatedAt: selected.row.row_transcript_updated_at,
+                    transcriptUpdatedAt: selected.row.row_transcript_source_updated_at,
+                    indexedSeq: selected.row.row_transcript_indexed_seq,
+                  });
               const facts: SessionRowDatabaseFacts = {
                 sessionKey,
                 entry,
                 hasBoard:
                   selected.row.session_key === sessionKey && selected.row.board_present === 1,
                 transcriptPreview: storedTranscript?.lastMessagePreview,
+                transcriptHasMessages: storedTranscript?.hasMessages,
                 transcriptAssistantMessage: storedTranscript
                   ? storedTranscript.lastAssistantMessage
                   : "unknown",

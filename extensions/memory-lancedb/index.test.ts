@@ -232,10 +232,8 @@ function memoryRow(text: string, overrides: Record<string, unknown> = {}) {
 }
 
 function firstAddedMemory(add: ReturnType<typeof vi.fn>) {
-  const batch = firstMockArg(add as MockCallSource, "memory add") as
-    | Array<Record<string, unknown>>
-    | undefined;
-  return expectDefined(batch?.[0], "first added memory");
+  const table = firstMockArg(add as MockCallSource, "memory add") as import("apache-arrow").Table;
+  return expectDefined(table.get(0), "first added memory");
 }
 
 function embeddingInputs(mock: ReturnType<typeof vi.fn>) {
@@ -1193,6 +1191,7 @@ describe("memory plugin e2e", () => {
       on,
       vectorSearch,
     } = setupMemoryHarness({
+      embedding: { apiKey: OPENAI_API_KEY, model: "text-embedding-3-small", dimensions: 3 },
       autoCapture: true,
       autoRecall: false,
     });
@@ -1229,16 +1228,17 @@ describe("memory plugin e2e", () => {
     expect(embeddingsCreate).toHaveBeenCalledWith({
       model: "text-embedding-3-small",
       input: "I prefer Helix for editing code every day.",
+      dimensions: 3,
     });
     expect(vectorSearch).toHaveBeenCalledTimes(1);
     expect(add).toHaveBeenCalledTimes(1);
     const memory = firstAddedMemory(add);
     expect(memory).toMatchObject({
       text: "I prefer Helix for editing code every day.",
-      vector: [0.1, 0.2, 0.3],
       importance: 0.7,
       category: "preference",
     });
+    expect([...memory.vector]).toEqual([Math.fround(0.1), Math.fround(0.2), Math.fround(0.3)]);
   });
 
   function preferences(...values: string[]) {
@@ -1385,7 +1385,7 @@ describe("memory plugin e2e", () => {
       "I prefer Fish for shell commands every day.",
     ]);
     expect(
-      harness.add.mock.calls.flatMap(([entries]) => entries).map((entry) => entry.text),
+      harness.add.mock.calls.flatMap(([table]) => table.toArray()).map((entry) => entry.text),
     ).toContain("I prefer Fish for shell commands every day.");
     expect(harness.logger.warn.mock.calls.map(([message]) => String(message))).toEqual([
       "memory-lancedb: capture failed: Error: temporary embedding failure",

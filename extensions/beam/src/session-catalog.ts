@@ -26,7 +26,7 @@ export class BeamTranscriptCursorError extends Error {
   readonly kind: "invalid" | "stale";
 
   constructor(kind: "invalid" | "stale") {
-    super(`${kind} Beam transcript cursor`);
+    super(`${kind} Beam chat history cursor`);
     this.kind = kind;
   }
 }
@@ -88,8 +88,18 @@ function readBeamSession(
         type: item.type,
         text: item.text,
         timestamp: session.updatedAt,
-        sender:
-          item.type === "userMessage" && session.uploaderProfileId
+        sender: item.speaker
+          ? {
+              identity: {
+                type: "observation" as const,
+                pluginId: "beam",
+                accountId: null,
+                senderKind: "unknown" as const,
+                id: `${session.beamId}:${session.revision}:${item.speaker}`,
+              },
+              label: item.speaker,
+            }
+          : item.type === "userMessage" && !session.portable && session.uploaderProfileId
             ? { identity: { type: "profile" as const, id: session.uploaderProfileId } }
             : undefined,
       }))
@@ -115,6 +125,15 @@ export function createBeamSessionCatalog(store: BeamStore): SessionCatalogProvid
     label: "Beam",
     audience: "gateway-operators",
     shareRoute: BEAM_SESSION_SHARE_ROUTE,
+    ownedRoute: {
+      requiredGrantPluginId: "visitor-access",
+      methods: {
+        list: "beam.owned.list",
+        read: "beam.owned.read",
+        resolve: "beam.owned.resolve",
+        continue: "beam.owned.continue",
+      },
+    },
     supportsProcessHomeIsolation: true,
     async list(params) {
       // Normalize comparison text only; uploaded titles and stored identities stay original.
@@ -147,6 +166,7 @@ export function createBeamSessionCatalog(store: BeamStore): SessionCatalogProvid
           connected: true,
           sessions: page.map((session) => ({
             threadId: session.beamId,
+            exportPolicy: { origin: "imported", automatic: false },
             name: session.title,
             status: session.completed ? "completed" : "live",
             createdAt: session.createdAt,

@@ -134,6 +134,8 @@ export async function handleNodeNotificationEvent(
         occurrences: [occurrence],
         createIfMissing: true,
         assertAcceptanceCurrent,
+        // Most notifications need no answer; the producer permits silence, provenance does not.
+        replyExpectation: "optional",
       });
       source?.pending.push(receipt.settled);
       const accepted = await receipt.accepted;

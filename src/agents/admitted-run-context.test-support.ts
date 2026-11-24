@@ -1,9 +1,22 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { prepareGatewayContextBindingOwner } from "../plugins/runtime/gateway-context-binding-owner.js";
-import type { AdmittedRunContext, PreparedAgentRunAdmission } from "./admitted-run-context.js";
+import {
+  createAdmittedRunOperatorAuthority,
+  type AdmittedRunContext,
+  type AdmittedRunOperatorAuthority,
+  type PreparedAgentRunAdmission,
+} from "./admitted-run-context.js";
 import { createOperationalRunInstanceRef } from "./operational-run-instance.js";
 
 const diagnosticFixtureContexts = new WeakSet<AdmittedRunContext>();
+
+/** Fixtures below the identity owner issue opaque grants unless they bind a real profile. */
+export function createTestOperatorAuthority(
+  source: Omit<AdmittedRunOperatorAuthority, "canonicalIdentity"> &
+    Partial<Pick<AdmittedRunOperatorAuthority, "canonicalIdentity">>,
+): AdmittedRunOperatorAuthority {
+  return createAdmittedRunOperatorAuthority({ canonicalIdentity: null, ...source });
+}
 
 /** Explicit no-audit carrier for fixtures that enter below the admission owner. */
 export function createTestAdmittedRunContext(runId: string): AdmittedRunContext {

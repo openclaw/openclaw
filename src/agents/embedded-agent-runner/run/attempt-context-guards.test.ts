@@ -8,7 +8,7 @@ import { createAssistantMessageEventStream } from "../../../llm/utils/event-stre
 import { forceFullGc } from "../../../test-utils/retention.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import { agentSessionDeferThresholdCompaction } from "../../sessions/agent-session-types.js";
-import type { AgentSession } from "../../sessions/index.js";
+import { SessionManager, type AgentSession } from "../../sessions/index.js";
 import { makeAgentAssistantMessage } from "../../test-helpers/agent-message-fixtures.js";
 import { makeProviderModelFixture } from "../../test-helpers/provider-model-fixture.js";
 import { createToolResultPromptProjectionState } from "../session-prompt-state.js";
@@ -27,7 +27,8 @@ vi.mock("../tool-result-context-guard.js", () => ({
   installContextEngineLoopHook: hoisted.installContextEngineLoopHook,
   installToolResultContextGuard: hoisted.installToolResultContextGuard,
 }));
-vi.mock("../../tools/computer-tool.js", () => ({
+vi.mock("../../tools/computer-tool-shared.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../tools/computer-tool-shared.js")>()),
   invalidateComputerFrameIfMissing: hoisted.invalidateComputerFrameIfMissing,
 }));
 vi.mock("../cache-ttl.js", () => ({
@@ -66,7 +67,7 @@ function createInput(overrides: Record<string, unknown> = {}) {
     toolResultPromptProjectionState: createToolResultPromptProjectionState(),
     repairToolUseResultPairing: false,
     sessionAgentId: "main",
-    sessionManager: {},
+    sessionManager: SessionManager.inMemory(),
     settingsManager,
     ...overrides,
   };

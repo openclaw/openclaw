@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -14,9 +15,11 @@ import { CommandProcessCleanupError } from "../process/exec-result.js";
 import { createOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
 import { admitOpenClawMaintenanceLiveAuthorityReads } from "../state/openclaw-state-maintenance-context.js";
 import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
+import * as physicalStore from "./database-engine/physical-store.js";
 import * as durability from "./directory-durability.js";
 import { listDirectoryTreeStrict } from "./directory-walk.js";
 import * as diskSpace from "./disk-space.js";
+import { ignoreMissingPath } from "./errno.js";
 import * as fileDescriptor from "./file-descriptor.js";
 import * as sqliteIntegrity from "./sqlite-integrity.js";
 import * as readOnlyLocation from "./sqlite-readonly-location.js";
@@ -273,10 +276,7 @@ it.each([
       database.exec("PRAGMA journal_mode=WAL; INSERT INTO payload VALUES ('checkpoint pending');");
       before = await readFiles(files);
     }
-    if (activity === "reader-empty-wal") {
-      // A fully checkpointed WAL-mode database has no sidecars until a reader opens it.
-      before = [await fs.readFile(f.shared), Buffer.alloc(0)];
-    } else {
+    if (activity !== "reader-empty-wal") {
       // Retain WAL without a live native connection whose POSIX locks copying could release.
       for (const [index, file] of files.entries()) {
         if (activity !== "reader-new-shm" || index !== 2) {
@@ -291,6 +291,8 @@ it.each([
         if (phase !== "pre-migration database backup" || source !== f.shared) {
           return;
         }
+        // The stopped owner may checkpoint first; subsequent readers must not change those bytes.
+        before = [readFileSync(f.shared), Buffer.alloc(0)];
         runSqlitePeer(
           f.shared,
           reader,
@@ -300,14 +302,13 @@ it.each([
     });
     if (!reader) {
       await expect(capture).rejects.toThrow(
-        /Update database file changed during backup: .*openclaw\.sqlite(?:-wal)?\./u,
+        /Update database (?:file changed during backup|journal state changed during stopped backup): .*openclaw\.sqlite(?:-wal)?\./u,
       );
       return;
     }
     const backup = await capture;
-    expect(await Promise.all(files.slice(0, 2).map((file) => fs.readFile(file)))).toEqual(
-      before.slice(0, 2),
-    );
+    expect(await fs.readFile(f.shared)).toEqual(before[0]);
+    expect((await fs.stat(`${f.shared}-wal`).catch(ignoreMissingPath))?.size ?? 0).toBe(0);
     const entry = backup.databases[0]!;
     const restored = path.join(f.root, "restored.sqlite");
     await sqliteSnapshot.publishVerifiedSqliteFile({
@@ -369,6 +370,31 @@ it.each(["original-custody", "rollback", "ordinary", "maintenance"] as const)(
     }
   },
 );
+
+it("classifies maintenance-owned sources once for the backup worker", async () => {
+  const f = await fixture(true);
+  const worker = vi.spyOn(inspection, "runUpdateStateInspectionWorker");
+  await using scope = maintenanceScope();
+  await scope.run(() =>
+    createUpdateDatabaseBackup({
+      ...f.input,
+      backupRoot: path.join(f.root, "maintenance-owned"),
+      acquisition: { mode: "maintenance-owner" },
+    }),
+  );
+  const [engines] = worker.mock.calls.flatMap(([{ input }]) =>
+    input.mode === "database-backup" ? [input.sourceEngines] : [],
+  );
+  const classified = Object.keys(engines ?? {});
+  const sqlite = { engine: "sqlite" } as const;
+  const sourceEngines = Object.fromEntries(classified.map((file) => [file, sqlite]));
+  expect(engines).toEqual(sourceEngines);
+
+  // Each engine probe copies the whole source; the worker must not repeat the parent's.
+  const probes = vi.spyOn(physicalStore, "readBackupEngine");
+  await f.capture({ originalCaptureSourcePaths: classified, sourceEngines });
+  expect(probes.mock.calls.filter(([file]) => classified.includes(file))).toEqual([]);
+});
 
 it("keeps the verified digest when a snapshot is replaced before backup metadata is recorded", async () => {
   const f = await fixture();
@@ -432,7 +458,9 @@ it.each(["opens", "commits"] as const)(
     expect(backup.warnings).toEqual(
       opens
         ? []
-        : [`Database changed during capture; its snapshot requires manual recovery: ${f.shared}`],
+        : [
+            `Database write generation changed or could not be confirmed during capture (the running Gateway may have written to it); automatic rollback keeps the live database instead of this snapshot: ${f.shared}`,
+          ],
     );
   },
 );
@@ -948,15 +976,15 @@ it("seals a live manual image without generation warnings while a writer commits
   }
 });
 
-it.each(["insufficient", "unknown"] as const)(
-  "preflights a separate source volume whose available capacity is %s",
+it.each(["tight", "unknown"] as const)(
+  "captures without reserving restore output on a separate source volume whose capacity is %s",
   async (capacity) => {
     const f = await fixture(true);
     const externalDirectories = f.external.map((file) => path.dirname(file));
     const largest = Math.max(
       ...(await Promise.all(f.external.map(async (file) => (await fs.stat(file)).size))),
     );
-    // Enough for either agent separately; insufficient for both retained originals plus publication.
+    // Too little for both retained originals plus publication, which restore checks itself.
     const available = 64 * 1024 * 1024 + 2 * largest;
     const stat = fs.stat;
     const backupDevice = (await stat(f.directory, { bigint: true })).dev;
@@ -985,17 +1013,13 @@ it.each(["insufficient", "unknown"] as const)(
       };
     });
     const originals = await readFiles([f.shared, ...f.external]);
-    if (capacity === "insufficient") {
-      await expect(f.capture()).rejects.toThrow(`near ${externalDirectories[0]}`);
-      expect(await fs.readdir(f.directory)).toEqual([]);
-    } else {
+    {
       const backup = await f.capture();
       expect(backup.databases.map((entry) => entry.path).toSorted()).toEqual(
         [f.shared, ...f.external].toSorted(),
       );
-      expect(backup.warnings).toContain(
-        `Available disk space could not be measured near ${externalDirectories[0]}; database backup will be attempted.`,
-      );
+      // The image volume is measured; source volumes are restore's own check, made when it runs.
+      expect(backup.warnings).toEqual([]);
       const retainedAgentFiles = (
         await listDirectoryTreeStrict(backup.directory).then((inventory) =>
           inventory.map((entry) => entry.relativePath),

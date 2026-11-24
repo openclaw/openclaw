@@ -16,6 +16,12 @@ All plugin APIs are [experimental](/plugins/sdk-overview#api-stability),
 including these entry helpers. Pin and test the OpenClaw host versions your
 plugin supports.
 
+`openclaw/plugin-sdk/plugin-entry` also exports the named
+`PluginHookBeforeModelRequestEvent` and `PluginHookBeforeModelRequestResult`
+contracts for [model request hooks](/plugins/hooks/prompt-and-session#final-model-request-policy),
+plus `PluginMetricFamilyDeclaration`, `PluginMetricLabels`, `PluginMetrics`, and
+`PluginMetricFamily` for [plugin metrics](/gateway/prometheus#plugin-metric-families).
+
 Gateway adapters use the existing `core` or `gateway-runtime`
 `GatewayRequestHandlerOptions.context.githubPublicationService` contract for
 GitHub publication. Prepare its required capabilities with
@@ -221,6 +227,12 @@ configured remote workspace during registration so callers cannot fall back to
 local files before its service starts. Register its bridge when ready and release
 it when the service stops. Callers keep their existing document authorization.
 
+`AgentHarnessHostCapabilities.prepareLocalExecScratch({ cwd })` prepares the admitted local workspace's
+`.openclaw/tmp/` and returns `TMPDIR`, `TMP`, and `TEMP` for its child shells.
+The host closes this operation with its admitted run. Native harnesses apply these values to the session's shell environment, without
+changing a shared server's process environment. Do not project local paths into
+remote or sandbox processes; those execution owners select their own paths.
+
 The bridge's optional `createFileExclusive` operation publishes a complete file
 only if its path does not exist, returning `"created"` or `"exists"`. It must use
 an atomic exclusive-create operation, never a separate existence check followed
@@ -354,6 +366,15 @@ personal-overlay refresh, turn-scoped project or memory guidance, native forks,
 or Gateway-to-hosted-workspace path projection. Those remain MVP integration gaps;
 shared preparation does not enable those operations.
 
+## Subagent progress references
+
+`formatSubagentProgressReference(id)` from
+`openclaw/plugin-sdk/agent-harness-runtime` returns a display-only four-character
+UUID suffix, or `undefined` when no UUID is available. Keep human labels and
+the original identity: short references can collide and must never be used
+for routing, authorization, deduplication, or lifecycle keys. Native harnesses
+should pass their actual worker/thread ID, not infer a session ID from a path.
+
 ## Tool failure diagnostics
 
 Agent harnesses can import `readToolOperatorHint(error)` from
@@ -423,8 +444,10 @@ after awaited preparation, use
 `session-store-runtime`) with `stores: [{ agentId, storePath, sessionKeys }]`.
 It retains all selected physical sources until its synchronous callback returns.
 An optional `involvingProfileId` matches exact canonical owners or direct profile
-participants, including merge aliases; it never matches mentions or display
-prefixes. After preparing the selected stores, the shared-state worker reads a
+participants, including merge aliases; it does not interpret names, logins or
+display prefixes. A separate optional `profileRelation` accepts a numeric GitHub
+account target and an `owned` or `involving` relationship. `involving` additionally
+matches recorded mentions. Both selectors intersect when supplied together. After preparing the selected stores, the shared-state worker reads a
 fresh canonical profile snapshot, without reusing an earlier inspection snapshot
 or resident catalog. Local identity changes invalidate that prepared selection.
 Final native reads observe the selected session rows after the last await. Profile
@@ -515,10 +538,33 @@ database writer and file publication boundaries too. Versioned owner-bound RPC
 names let CLI callers require updated plugin handlers without assuming that an
 updated Gateway also upgraded an independently installed plugin.
 
+## Prepared Decision HTTP runtime
+
+`openclaw/plugin-sdk/decisions-http-runtime` is the one HTTP executor for
+provider-owned JSON Decision protocols. Import it lazily.
+`evaluateDecisionHttp(context, route)` projects the host-prepared V2 context;
+`executeDecisionHttp(execution)` takes the same facts explicitly for other
+contracts. The provider supplies only its route: base URL, relative endpoint
+path, serialized body (omit it for a GET), and a decoder for the bounded JSON
+payload. Optional route fields cover real provider differences: `authHeaders`
+replaces the default `Authorization: Bearer` header, `statusReason` maps a
+documented provider status, and `maxResponseBytes` changes the 1 MiB read bound.
+
+The executor owns the deadline and timeout signal, one admission check when the
+request starts, guarded fetch with the trusted env-proxy mode, no redirects,
+status classification (401/403 authentication, 429 rate-limited with
+Retry-After, 400/413/422 unsupported input, otherwise transport), the bounded
+read, credential-reflection rejection, and release. Cancellation and thrown
+admission errors pass through. A decoder that throws returns an invalid
+response. It makes one request, never discovers credentials, and never retries.
+A provider with a queue wait or retry calls it again, which checks admission
+again. The provider owns request eligibility, native semantics, retention
+controls, and validation of decoded results.
+
 ## OpenAI-compatible Decisions runtime
 
 `openclaw/plugin-sdk/decisions-openai-runtime` supplies the shared native
-Decisions codec and HTTP executor used by OpenAI and ClawRouter. Import it
+Decisions codec used by OpenAI, Celeris, Nace, and ClawRouter. Import it
 only from a lazy decision runtime, not a plugin's eager entrypoint.
 
 `evaluateOpenAICompatibleDecision(batch, context, route)` accepts a host-prepared
@@ -530,13 +576,6 @@ deadline, and live admission assertion. It never discovers credentials or
 constructs conversation history. Consumers own endpoint eligibility and any
 account-specific route grant before calling it.
 
-`executeOpenAIDecision(batch, execution)` accepts those same prepared facts as
-explicit fields: provider, model ID, base URL, headers, auth, request overrides,
-signal, deadline, admission assertion, and optional reasoning. Use it when a
-provider has already projected its execution inputs. Pass the full prepared
-request overrides, including auth metadata used to reject credential reflection.
-The context-based helper remains supported and delegates to this executor.
-
 `supportsOpenAIDecisionBatch(batch, reasoning)` gates protocol kinds, image and
 question bounds, and automatic reasoning before transport/discovery. Malformed
 caller contracts throw; structurally valid requests outside protocol support or
@@ -547,6 +586,14 @@ The lightweight `decisions` subpath exports
 `ModelInferenceCapabilitiesSchema` for provider-owned catalog augmentation using
 the canonical capability schema rather than a competing normalizer. Static
 capability declarations do not confer account entitlement.
+
+## Resource profile
+
+`openclaw/plugin-sdk/resource-profile` exports `getResourceProfile`,
+`onResourceProfileChange`, and the `ResourceProfile` type. It reads the existing
+Gateway decision without selecting another profile or exposing a setter.
+See [Resource profile](/plugins/sdk-runtime#resource-profile) for lifecycle and
+subscription semantics.
 
 ## Runtime request headers
 
@@ -564,6 +611,10 @@ before a process effect. The lease and invocation own its lifetime; saved copies
 do not survive release or cancellation. Use `redactOutput` at diagnostic egress.
 This capability is host-local and is never a wire environment override.
 
+`process-runtime` exports `AGENT_GIT_CONFIG_PARAMETERS` for the host-owned agent Git
+maintenance defaults. Native execution adapters append these parameters after
+resolving their own inherited Git configuration and environment filtering.
+
 `process-runtime` exports `createBoundedLineFramer` for bounded LF-delimited byte
 streams. It preserves incomplete lines and leaves CR handling to the consumer.
 `stripGatewayAllocatorEnv` removes `MALLOC_CONF` and jemalloc `LD_PRELOAD`
@@ -571,3 +622,16 @@ entries in place from a caller-owned child environment. Copy inherited values
 first; never pass `process.env`. Other preload libraries remain available.
 Node duplex calls may supply `assertCurrent` to compose caller-owned liveness with
 the runtime's existing dispatch and delivery authority.
+
+Session Share keeps the legacy list/read contracts unchanged. Optional node
+catalog commands are `openclaw.sessions.catalog.list.v1` and
+`openclaw.sessions.catalog.read.v1`, explicitly allowed on the receiver and
+advertised/approved on the source. Node list accepts `profileRelation` and
+`includeOriginalPath`; read accepts `profileRelation`. The only source target is
+`{ type: "github-account", id: "123" }`, with relationship `owned` or `involving`.
+The outbound Gateway pair is `session-share.catalog.list/read`, advertised in
+`features.methods`. Its list accepts `profileRelation`, but never `includeOriginalPath`;
+Gateway sources cannot supply original links. Receivers use the advertised catalog
+pair for every list/read, and the legacy pair only when the catalog pair is absent.
+These selectors narrow publication, not reader authority.
+See [Session Share](/plugins/session-share) for numbered setup and disclosure.

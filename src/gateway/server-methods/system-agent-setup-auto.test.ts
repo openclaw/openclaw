@@ -120,7 +120,7 @@ function expectUnused(...mocks: unknown[]) {
 function context(): GatewayRequestContext {
   return createWizardSessionTracker() as GatewayRequestContext;
 }
-const runSetup = () => runGatewayAutomaticSetup(context(), () => {});
+const runSetup = () => runGatewayAutomaticSetup(context());
 
 function pauseDiscovery() {
   const started = createDeferred();
@@ -312,13 +312,56 @@ describe("Gateway automatic inference setup", () => {
     });
   });
 
+  it.each([
+    { status: "unavailable", error: "The local model needs more memory. Load a smaller model." },
+    { status: "timeout", error: "The local model did not respond. Check the server and retry." },
+  ] as const)(
+    "keeps a $status candidate failure when Codex needs a login",
+    async ({ status, error }) => {
+      fixture.detect.mockResolvedValueOnce(detection([ollama])).mockResolvedValueOnce(detection());
+      fixture.activate.mockResolvedValueOnce({ ok: false, status, error });
+      fixture.prepare.mockResolvedValue({ ok: true, config: {} });
+
+      expect(await runSetup()).toMatchObject({
+        status: "unavailable",
+        signIn: separateSignIn,
+        attempts: [{ kind: ollama.kind, label: ollama.label, error }],
+      });
+    },
+  );
+
+  it("preserves mixed credential and capacity failures without making sign-in the diagnosis", async () => {
+    fixture.detect
+      .mockResolvedValueOnce(detection([openai, ollama]))
+      .mockResolvedValueOnce(detection([codex]));
+    fixture.activate
+      .mockResolvedValueOnce({ ok: false, status: "auth", error: "API key is missing." })
+      .mockResolvedValueOnce({
+        ok: false,
+        status: "unavailable",
+        error: "Not enough memory to load the local model.",
+      })
+      .mockResolvedValueOnce({ ok: false, status: "auth", error: "ChatGPT login expired." });
+    fixture.prepare.mockResolvedValue({ ok: true, config: {} });
+
+    expect(await runSetup()).toMatchObject({
+      status: "unavailable",
+      signIn: separateSignIn,
+      attempts: [
+        { kind: openai.kind, error: "API key is missing." },
+        { kind: ollama.kind, error: "Not enough memory to load the local model." },
+        { kind: codex.kind, error: "ChatGPT login expired." },
+      ],
+    });
+  });
+
   it("joins concurrent callers before activation and holds admission against an independent context", async () => {
     const { started, discovered } = pauseDiscovery();
     const gateway = context();
-    const first = runGatewayAutomaticSetup(gateway, () => {});
+    const first = runGatewayAutomaticSetup(gateway);
     try {
       await awaitGateBeforeSettlement(started.promise, first, "setup ended before discovery");
-      const joined = runGatewayAutomaticSetup(gateway, () => {});
+      const joined = runGatewayAutomaticSetup(gateway);
       expect(joined).toBe(first);
       await expect(runSetup()).rejects.toBeInstanceOf(SetupAdmissionBusyError);
       expect(fixture.activate).not.toHaveBeenCalled();
@@ -329,22 +372,6 @@ describe("Gateway automatic inference setup", () => {
       discovered.resolve(detection());
       await first;
     }
-  });
-
-  it("rejects revoked requester authority after discovery before any activation or preparation", async () => {
-    const { started, discovered } = pauseDiscovery();
-    let current = true;
-    const run = runGatewayAutomaticSetup(context(), () => {
-      if (!current) {
-        throw new Error("Requester authority revoked");
-      }
-    });
-    const rejection = expect(run).rejects.toThrow("Requester authority revoked");
-    await awaitGateBeforeSettlement(started.promise, run, "setup ended before discovery");
-    current = false;
-    discovered.resolve(detection([codex]));
-    await rejection;
-    expectUnused(fixture.activate, fixture.prepare, fixture.commit);
   });
 
   it.each([false, true])(

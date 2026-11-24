@@ -1,5 +1,6 @@
 import { writeFileSync } from "node:fs";
 import path from "node:path";
+import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Locator, Page } from "playwright";
 import { afterAll, beforeAll, expect, it, onTestFinished } from "vitest";
 import type { PluginDiscoveryDetailResult } from "../../lib/plugins/index.ts";
@@ -54,7 +55,91 @@ describeControlUiE2e("Plugin overview", () => {
   beforeAll(setupPluginsE2e);
   afterAll(teardownPluginsE2e);
 
-  it("gives failed plugin actions shared callout padding and space before capabilities", async () => {
+  it("shows the official publisher for an installed bundled plugin", async () => {
+    const bundled = {
+      ...calendarPlugin,
+      id: "huggingface",
+      name: "Hugging Face",
+      description: "Run models through Hugging Face Inference Providers.",
+      packageName: "@openclaw/huggingface-provider",
+      version: "2026.11.3",
+      catalogId: "local_aHVnZ2luZ2ZhY2U",
+      origin: "bundled" as const,
+      removable: false,
+    };
+    const catalog: PluginDiscoveryDetailResult = {
+      plugin: {
+        id: bundled.catalogId,
+        catalog: { name: bundled.name, official: true, categories: ["models"] },
+        local: {
+          present: true,
+          installed: true,
+          enabled: true,
+          state: "enabled",
+          pluginId: bundled.id,
+          action: "manage",
+        },
+      },
+      detail: {
+        origin: "local",
+        author: { handle: "openclaw", displayName: "OpenClaw", official: true },
+        topics: [],
+        configuration: [],
+        mcpServers: [],
+        skills: [],
+        versions: [],
+      },
+    };
+    const context = await newContext();
+    onTestFinished(() => context.close());
+    const page = await context.newPage();
+    const gateway = await installMockGateway(
+      page,
+      {
+        featureMethods: pluginMethods,
+        methodResponses: {
+          ...pluginMethodResponses(),
+          "plugins.list": inventory([bundled]),
+          "plugins.inspect": {
+            ...calendarInspection,
+            plugin: bundled,
+            source: { kind: "npm", packageName: bundled.packageName },
+            declared: { ...calendarInspection.declared, tools: [] },
+            overview: {
+              readme: "# Hugging Face\n\nUse hosted models through Inference Providers.",
+            },
+          },
+        },
+      },
+      {
+        requestHandlers: {
+          "plugins.catalog.get": (params) =>
+            asNullableRecord(params)?.version
+              ? {
+                  __mockError: {
+                    code: "INVALID_REQUEST",
+                    message: "Local plugin details do not select releases.",
+                  },
+                }
+              : catalog,
+        },
+      },
+    );
+    await page.goto(server.baseUrl + "plugins/" + bundled.catalogId);
+    await page.getByRole("switch", { name: "Hugging Face", checked: true, exact: true }).waitFor();
+    await gateway.waitForRequest("plugins.catalog.get");
+    await page.locator(".plugin-metadata__loading").waitFor({ state: "hidden" });
+    await captureScreenshot(page, "bundled-publisher.png", "viewport");
+    expect(await role(page, "link", "@openclaw").count()).toBe(1);
+    expect(
+      await page.locator(".plugin-catalog-detail__publisher .plugin-official-badge").count(),
+    ).toBe(1);
+    expect((await gateway.getRequests("plugins.catalog.get"))[0]?.params).toEqual({
+      id: bundled.catalogId,
+    });
+  });
+
+  it("keeps failed plugin actions visible above capabilities on desktop and mobile", async () => {
     const message =
       "Another plugin or config operation is already running; retry when it completes.";
     const disabled = { ...calendarPlugin, enabled: false, state: "disabled" as const };
@@ -64,12 +149,14 @@ describeControlUiE2e("Plugin overview", () => {
       "plugins.setEnabled": { __mockError: { code: "UNAVAILABLE", message } },
     });
     await page.goto(server.baseUrl + "settings/plugins/calendar-plus");
-    await role(page, "button", "Enable Calendar Plus").click();
+    await page.getByRole("switch", { name: "Calendar Plus", checked: false, exact: true }).click();
     await gateway.waitForRequest("plugins.setEnabled");
-    const alert = page.locator(
-      '.plugin-catalog-detail__panel > .plugins-row-message[role="alert"]',
-    );
+    const detail = page.locator(".plugin-catalog-detail");
+    const alert = detail.getByRole("alert").filter({ hasText: message });
     await alert.getByText(message, { exact: true }).waitFor();
+    await expect
+      .poll(() => page.getByRole("switch", { name: "Calendar Plus", exact: true }).isChecked())
+      .toBe(false);
     const artifactDir =
       process.env.OPENCLAW_UPDATE_E2E_SCREENSHOTS === "1"
         ? createControlUiE2eArtifactDir("plugin-action-alert")
@@ -86,25 +173,15 @@ describeControlUiE2e("Plugin overview", () => {
         writeFileSync(path.join(artifactDir, `alert-${width}.png`), frame.png);
       }
       await expect
-        .poll(async () => {
-          const geometry = await alert.evaluate((element) => {
-            const style = getComputedStyle(element);
-            const next = element.nextElementSibling;
-            return {
-              paddingTop: Number.parseFloat(style.paddingTop),
-              paddingBottom: Number.parseFloat(style.paddingBottom),
-              gap: next
-                ? next.getBoundingClientRect().top - element.getBoundingClientRect().bottom
-                : 0,
-              contained: element.scrollWidth <= element.clientWidth,
-            };
-          });
-          expect(geometry.paddingTop).toBeGreaterThanOrEqual(14);
-          expect(geometry.paddingBottom).toBeGreaterThanOrEqual(14);
-          expect(geometry.gap).toBeGreaterThanOrEqual(16);
-          return geometry.contained;
-        })
+        .poll(() => alert.evaluate((element) => element.scrollWidth <= element.clientWidth))
         .toBe(true);
+      const [notice, panel] = await Promise.all([
+        alert.boundingBox(),
+        detail.locator(".plugin-catalog-detail__panel").boundingBox(),
+      ]);
+      expect(notice).not.toBeNull();
+      expect(panel).not.toBeNull();
+      expect(notice!.y + notice!.height).toBeLessThanOrEqual(panel!.y);
     }
     expect((await gateway.getRequests("plugins.setEnabled"))[0]?.params).toEqual({
       pluginId: "calendar-plus",
@@ -232,10 +309,12 @@ describeControlUiE2e("Plugin overview", () => {
           .getAttribute("disabled"),
       ).not.toBeNull();
       await captureScreenshot(page, `direct-settings-${entry}-permissions.png`, "viewport");
-      expect(new URL(page.url())).toMatchObject({
-        pathname: `/plugins/${plugin.catalogId}`,
-        search: "?view=settings",
-      });
+      // The detail's Settings action opens Settings; an existing inline link still renders.
+      expect(new URL(page.url())).toMatchObject(
+        entry === "refresh"
+          ? { pathname: `/settings/plugins/${plugin.id}`, search: "?view=settings&from=plugins" }
+          : { pathname: `/plugins/${plugin.catalogId}`, search: "?view=settings" },
+      );
     },
   );
 
@@ -309,7 +388,7 @@ describeControlUiE2e("Plugin overview", () => {
       },
     });
     await page.goto(server.baseUrl + "plugins/ch_bGluZWFy");
-    const disable = role(page, "button", "Disable Linear");
+    const disable = page.getByRole("switch", { name: "Linear", checked: true, exact: true });
     await disable.waitFor();
     await page.locator(".plugin-capability__disclosure summary").click();
     const details = page.locator(".plugin-capability__details");
@@ -354,7 +433,7 @@ describeControlUiE2e("Plugin overview", () => {
         packageName: "@acme/calendar",
         author: { handle: "acme", displayName: "Acme", official: true },
         topics: [],
-        readme: `# Calendar guide\n\n${"A complete guide to calendar search.\n\n".repeat(80)}README_TAIL`,
+        readme: `# Calendar guide\n\n${"A complete guide to calendar search.\n\n".repeat(80)}README_TAIL\n\n[Calendar guide link](https://example.com/calendar/guide)`,
         repositoryUrl: "git+https://github.com/Acme/calendar.git",
         documentationUrl: "https://example.com/calendar/docs",
         configuration: [],
@@ -415,7 +494,7 @@ describeControlUiE2e("Plugin overview", () => {
       [...pluginMethods, "tools.catalog"],
     );
     await page.goto(`${server.baseUrl}plugins/ch_Y2FsZW5kYXI`);
-    await role(page, "button", "Disable Calendar Plus").waitFor();
+    await page.getByRole("switch", { name: "Calendar Plus", checked: true, exact: true }).waitFor();
     const content = (selector: string) => page.locator(selector).textContent();
     expect(new URL(page.url()).pathname).toBe("/plugins/ch_Y2FsZW5kYXI");
     expect(await page.locator(".plugin-catalog-detail [role=tablist]").count()).toBe(0);
@@ -423,11 +502,29 @@ describeControlUiE2e("Plugin overview", () => {
     expect(await page.locator(".plugin-catalog-detail__security .is-filled").count()).toBe(2);
     expect(await content(".plugin-metadata__repository")).toContain("Acme/calendar");
     expect(await content(".plugin-catalog-detail__readme")).toContain("README_TAIL");
+    const readmeLink = role(page, "link", "Calendar guide link");
+    await role(page, "button", "Show more").waitFor();
+    await readmeLink.focus();
+    await expect
+      .poll(() =>
+        readmeLink.evaluate((link) => {
+          const preview = link.closest(".plugin-catalog-detail__readme-body")!;
+          return (
+            getComputedStyle(preview).maskImage === "none" &&
+            link.getBoundingClientRect().bottom <= preview.getBoundingClientRect().bottom
+          );
+        }),
+      )
+      .toBe(true);
+
     expect(await page.locator(".plugin-capabilities h2").allTextContents()).toEqual([
       "Skills",
       "Tools",
       "MCP server",
     ]);
+    const skills = page.locator(".plugin-skills-section");
+    expect(await skills.textContent()).toContain("Calendar planning");
+    expect(await skills.textContent()).not.toMatch(/ClawHub|Version/);
     await page.getByRole("button", { name: /calendar_search/ }).click();
     await page.getByRole("dialog", { name: "calendar_search" }).waitFor();
     const preview = page.locator(".plugin-tool-preview");
@@ -482,6 +579,8 @@ describeControlUiE2e("Plugin overview", () => {
     }
     await role(page.locator(".plugin-catalog-detail__actions"), "link", "Settings").click();
     await expect.poll(() => new URL(page.url()).searchParams.get("view")).toBe("settings");
-    expect(new URL(page.url()).pathname).toBe("/plugins/ch_Y2FsZW5kYXI");
+    // Settings stay in Settings, which returns to the Plugins workspace.
+    expect(new URL(page.url()).pathname).toBe("/settings/plugins/calendar-plus");
+    expect(new URL(page.url()).searchParams.get("from")).toBe("plugins");
   });
 });

@@ -208,14 +208,6 @@ function compareSessionRowsByTimestamp(
   b: GatewaySessionRow,
   timestamp: (row: GatewaySessionRow) => number,
 ): number {
-  const pinnedStateDiff = Number(b.pinned === true) - Number(a.pinned === true);
-  if (pinnedStateDiff !== 0) {
-    return pinnedStateDiff;
-  }
-  const pinnedDiff = (b.pinnedAt ?? 0) - (a.pinnedAt ?? 0);
-  if (pinnedDiff !== 0) {
-    return pinnedDiff;
-  }
   const timeDiff = timestamp(b) - timestamp(a);
   // Stable key tie-break mirrors the gateway comparator (session-list-order.ts)
   // so tied rows don't swap when the canonical refresh replaces an event merge.
@@ -224,12 +216,21 @@ function compareSessionRowsByTimestamp(
 
 /** Gateway list order: metadata writes (rename, pin, settings) also advance updatedAt. */
 export function compareSessionRowsByUpdatedAt(a: GatewaySessionRow, b: GatewaySessionRow): number {
+  const pinnedStateDiff = Number(b.pinned === true) - Number(a.pinned === true);
+  if (pinnedStateDiff !== 0) {
+    return pinnedStateDiff;
+  }
+  const pinnedDiff = (b.pinnedAt ?? 0) - (a.pinnedAt ?? 0);
+  if (pinnedDiff !== 0) {
+    return pinnedDiff;
+  }
   return compareSessionRowsByTimestamp(a, b, (row) => row.updatedAt ?? 0);
 }
 
 /**
  * Sidebar "Last updated": conversation activity (messages and run results), falling back to
- * updatedAt for sessions recorded before the activity clocks existed.
+ * updatedAt for sessions recorded before the activity clocks existed. Personal pins have
+ * their own saved order; shared stored pin metadata must not prioritize ordinary rows.
  */
 export function compareSessionRowsByActivity(a: GatewaySessionRow, b: GatewaySessionRow): number {
   return compareSessionRowsByTimestamp(a, b, sessionActivityTimestamp);

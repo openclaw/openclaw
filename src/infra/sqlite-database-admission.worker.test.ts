@@ -1,11 +1,12 @@
 import { execFileSync } from "node:child_process";
 import { once } from "node:events";
-import { existsSync, linkSync, renameSync } from "node:fs";
+import { existsSync, linkSync, realpathSync, renameSync, statSync } from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { MessagePort, Worker } from "node:worker_threads";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { observeMainThreadFs } from "../test-utils/main-thread-fs-spies.test-support.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { runWithSqliteDatabaseAdmissionTurn } from "./sqlite-database-admission-turn.js";
 import {
@@ -16,7 +17,10 @@ import {
   readSqliteDatabaseScopedWriteToken,
   retireSqliteDatabaseWriteScopes,
   publishSqliteDatabaseAdmission,
+  prepareOwnedSqliteDatabaseAdmission,
   getSqliteDatabaseAdmission,
+  retireSqliteDatabaseAdmissionForPath,
+  trackSqliteDatabaseAdmissionWorker,
 } from "./sqlite-database-admission.js";
 import type {
   AdmissionTaskInput,
@@ -30,7 +34,11 @@ import { admitSqliteSchema, getAdmittedSqliteSchemaFacts } from "./sqlite-schema
 import { runSqliteImmediateTransactionSync } from "./sqlite-transaction.js";
 import { SqliteWorkerBroker } from "./sqlite-worker-broker.js";
 import type { SqliteWorkerReply } from "./sqlite-worker-contract.js";
-import { createSqliteWorkerOperationAdmission } from "./sqlite-worker-operation-admission.js";
+import { readDatabaseIdentityBirthtime } from "./sqlite-worker-identity.js";
+import {
+  createSqliteDatabaseAdmissionRelay,
+  createSqliteWorkerOperationAdmission,
+} from "./sqlite-worker-operation-admission.js";
 import { createOwnedWorkerTaskPool } from "./worker-task-pool.js";
 
 const ownedBrokers: SqliteWorkerBroker[] = [];
@@ -89,7 +97,7 @@ function hostAdmission(
   });
 }
 
-function readerWorker(location: string, program: string) {
+function readerWorker(location: string, program: string, port?: MessagePort) {
   return new Worker(
     `
     const { parentPort, workerData } = require("node:worker_threads");
@@ -106,6 +114,8 @@ function readerWorker(location: string, program: string) {
       execArgv: [],
       workerData: {
         location,
+        port,
+        relay: new URL("./sqlite-worker-database-admission-relay.ts", import.meta.url).href,
         key: hostFactKey.name,
         loader: import.meta.resolve("tsx/esm/api"),
         native: new URL("./node-sqlite.ts", import.meta.url).href,
@@ -113,6 +123,7 @@ function readerWorker(location: string, program: string) {
         schema: new URL("./sqlite-schema-facts.ts", import.meta.url).href,
         transaction: new URL("./sqlite-transaction.ts", import.meta.url).href,
       },
+      transferList: port ? [port] : [],
     },
   );
 }
@@ -403,6 +414,71 @@ function createDatabase(location: string, value: number): void {
   database.prepare("INSERT INTO proof VALUES (?)").run(value);
 }
 
+it("does not lend captured admission to a retained replacement", async () => {
+  const root = tempDirs.make("sqlite-admission-captured-replacement-");
+  const location = path.join(root, "proof.sqlite");
+  const replacementPath = path.join(root, "replacement.sqlite");
+  const archived = path.join(root, "original.sqlite");
+  createDatabase(location, 42);
+  const database = openDatabase(location);
+  admitSqliteSchema(database);
+  const original = captureSqliteDatabaseAdmissions().find(
+    (record) => record.location === location,
+  )!;
+  const relay = createSqliteDatabaseAdmissionRelay(() => {});
+  relay.bindDatabaseAuthority({
+    databasePath: location,
+    databaseIdentity: { ...original.physicalIdentity, databasePath: location },
+    assertAccess() {},
+    acquireSchema() {
+      throw new Error("Unexpected schema acquisition");
+    },
+  });
+  const worker = readerWorker(
+    location,
+    `
+    const { admitSqliteSchema } = await import(workerData.schema);
+    const { withSqliteDatabaseAdmissionExchange, readSqliteDatabaseScopedWriteToken } = await import(workerData.admission);
+    const { exchangeSqliteDatabaseAdmissions } = await import(workerData.relay);
+    const exchange = (callback) => withSqliteDatabaseAdmissionExchange(
+      (records, location, create, observed) => exchangeSqliteDatabaseAdmissions(workerData.port, records, location, create, observed), callback);
+    parentPort.postMessage("ready");
+    await new Promise((resolve) => parentPort.once("message", resolve));
+    let database;
+    try {
+      database = exchange(() => openNodeSqliteDatabase(workerData.location));
+      exchange(() => admitSqliteSchema(database));
+      parentPort.postMessage({ admitted: exchange(() => readSqliteDatabaseScopedWriteToken(database, ["proof"])) !== undefined });
+    } catch { parentPort.postMessage({ admitted: false }); }
+    if (database) exchange(() => database.close());
+    workerData.port.close();
+    unregister();
+  `,
+    relay.port,
+  );
+  trackSqliteDatabaseAdmissionWorker(worker);
+  let replacement: DatabaseSync | undefined;
+  try {
+    expect((await once(worker, "message"))[0]).toBe("ready");
+    createDatabase(replacementPath, 42);
+    replacement = openDatabase(replacementPath);
+    admitSqliteSchema(replacement);
+    renameSync(location, archived);
+    renameSync(replacementPath, location);
+    const reply = once(worker, "message");
+    worker.postMessage("open", []);
+    expect((await reply)[0]).toEqual({ admitted: false });
+    expect(database.prepare("SELECT value FROM proof").get()).toEqual({ value: 42 });
+  } finally {
+    await worker.terminate();
+    await relay.finish();
+    database.close();
+    replacement?.close();
+    retireSqliteDatabaseAdmissionForPath(archived);
+    retireSqliteDatabaseAdmissionForPath(location);
+  }
+});
+
 it("publishes through a retained physical database after its original pathname is replaced", async () => {
   const root = tempDirs.make("sqlite-retained-admission-");
   const location = path.join(root, "original.sqlite");
@@ -433,28 +509,56 @@ it("publishes through a retained physical database after its original pathname i
   expect(getAdmittedSqliteSchemaFacts(replacement)?.tables.has("worker_publication")).toBe(false);
   expect(replacement.prepare("SELECT value FROM proof").get()).toEqual({ value: 99 });
 });
-it("preserves a sibling writer's POSIX lock when an unhosted worker retires", async () => {
-  const location = path.join(tempDirs.make("sqlite-unhosted-lock-"), "shared.sqlite");
-  createDatabase(location, 1);
-  const writer = new DatabaseSync(location);
-  writer.exec("PRAGMA journal_mode=WAL; BEGIN IMMEDIATE");
-  const worker = readerWorker(
-    location,
-    `
+it.each([false, true, "prepared"] as const)(
+  "preserves a sibling writer's POSIX lock when a worker retires (hosted: %s)",
+  async (hosted) => {
+    const location = path.join(tempDirs.make("sqlite-unhosted-lock-"), "shared.sqlite");
+    createDatabase(location, 1);
+    const broker = hosted ? createBroker() : undefined;
+    if (hosted === "prepared") {
+      const canonical = realpathSync.native(location);
+      const file = statSync(canonical, { bigint: true });
+      using filesystem = observeMainThreadFs();
+      await prepareOwnedSqliteDatabaseAdmission({
+        location: canonical,
+        expectedIdentity: {
+          key: `file:${file.dev}:${file.ino}`,
+          birthtime: readDatabaseIdentityBirthtime(file),
+        },
+        assertCurrent() {},
+      });
+      expect(filesystem.calls()).toEqual({});
+    } else if (hosted) {
+      const admitted = openDatabase(location);
+      admitSqliteSchema(admitted);
+      admitted.close();
+    }
+    const writer = new DatabaseSync(location);
+    writer.exec("PRAGMA journal_mode=WAL; BEGIN IMMEDIATE");
+    const worker = hosted
+      ? undefined
+      : readerWorker(
+          location,
+          `
       const { admitSqliteSchema } = await import(workerData.schema);
       const database = openNodeSqliteDatabase(workerData.location, { readOnly: true });
       admitSqliteSchema(database);
       database.close();
       unregister();
   `,
-  );
-  try {
-    await once(worker, "exit");
-    const outcome = execFileSync(
-      process.execPath,
-      [
-        "-e",
-        `
+        );
+    try {
+      if (broker) {
+        await openStore(broker, location);
+        await broker.close();
+      } else {
+        await once(worker!, "exit");
+      }
+      const outcome = execFileSync(
+        process.execPath,
+        [
+          "-e",
+          `
       const { DatabaseSync } = require("node:sqlite");
       const db = new DatabaseSync(process.argv[1]);
       try {
@@ -465,17 +569,18 @@ it("preserves a sibling writer's POSIX lock when an unhosted worker retires", as
         process.stdout.write("busy");
       } finally { db.close(); }
     `,
-        location,
-      ],
-      { encoding: "utf8" },
-    );
-    expect(outcome).toBe("busy");
-  } finally {
-    await worker.terminate();
-    writer.exec("ROLLBACK");
-    writer.close();
-  }
-});
+          location,
+        ],
+        { encoding: "utf8" },
+      );
+      expect(outcome).toBe("busy");
+    } finally {
+      await worker?.terminate();
+      writer.exec("ROLLBACK");
+      writer.close();
+    }
+  },
+);
 
 it("scopes admission replies to one database, shares them across isolates, and revalidates replacements", async () => {
   const root = tempDirs.make("sqlite-admission-workers-");

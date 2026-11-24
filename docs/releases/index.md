@@ -14,6 +14,24 @@ who contributed, with links to the source changes.
 ### November 2026
 
 <CardGroup cols={2}>
+  <Card title="v2026.11.8" href="/releases/2026.11.8">
+    Reliability fixes across chats, updates, models, automations, apps, plugins, and the Web UI.
+  </Card>
+  <Card title="v2026.11.7" href="/releases/2026.11.7">
+    Changes to updates, messaging, models and session reliability.
+  </Card>
+  <Card title="v2026.11.6" href="/releases/2026.11.6">
+    Bug fixes and quality-of-life improvements throughout OpenClaw.
+  </Card>
+  <Card title="v2026.11.5" href="/releases/2026.11.5">
+    OpenClaw v2026.11.5 lets you run your agent’s chats through Requesty.
+  </Card>
+  <Card title="v2026.11.4" href="/releases/2026.11.4">
+    Fixes for updates, conversations, data recovery and privacy.
+  </Card>
+  <Card title="v2026.11.3" href="/releases/2026.11.3">
+    Fixes for update recovery, backup discovery, privacy and reliability.
+  </Card>
   <Card title="v2026.11.2" href="/releases/2026.11.2">
     Fixes for updates, scheduled reminders, chat and model connections.
   </Card>

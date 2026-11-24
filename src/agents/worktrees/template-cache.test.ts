@@ -29,6 +29,7 @@ async function idle() {
   return record;
 }
 function preparationGate() {
+  assert(params.validate, "Mutable fixture requires idle validation");
   const entered = createDeferred();
   const finish = createDeferred();
   const block = <Args extends unknown[], Result>(run: (...args: Args) => Promise<Result>) =>
@@ -175,7 +176,7 @@ it.each(["cold", "idle"])("shares %s preparation and reader custody", async (sta
   expect(left).toMatchObject({ id: right?.id, status: "ready" });
   expect(right).toMatchObject({ status: "ready" });
   expect(build).toHaveBeenCalledTimes(state === "cold" ? 1 : 0);
-  expect(mutate).toHaveBeenCalledTimes(1);
+  expect(mutate).toHaveBeenCalledTimes(state === "cold" ? 1 : 0);
   assert(left && right, "Both callers must acquire the prepared template");
   const warm = await allocation.withWorktreeMutationLease(
     { env, ...options, id: `template:${params.cacheKey}` },
@@ -337,6 +338,7 @@ it.each([
 ])("retains $phase custody ($uncertain)", async ({ phase, uncertain }) => {
   const prepared = phase === "build" ? undefined : await idle();
   const failure = uncertain ? new CommandProcessCleanupError() : new Error("settled");
+  const request = new AbortController();
   if (phase === "retire") {
     vi.spyOn(nativeWorktreeFilesystem, "remove").mockImplementationOnce(async (directory) => {
       await fs.unlink(path.join(directory, "source"));
@@ -346,7 +348,12 @@ it.each([
     await collect(onError);
     expect(onError).toHaveBeenCalledWith(failure, prepared?.id);
   } else {
-    const fail = () => Promise.reject(failure);
+    const fail = () => {
+      if (phase === "validate") {
+        request.abort(new Error("request retired"));
+      }
+      return Promise.reject(failure);
+    };
     const build: typeof params.prepare = (...args) => params.prepare(...args).then(fail);
     await expect(
       prepare(
@@ -357,7 +364,13 @@ it.each([
                 contentKey: "commit-2",
                 refresh: (_existing, record, guard) => build(record, guard).then(() => true),
               }
-            : { validate: fail },
+            : {
+                validate: fail,
+                options: {
+                  ...options,
+                  workerAuthority: { assertCurrent: () => request.signal.throwIfAborted() },
+                },
+              },
       ),
     ).rejects.toBe(failure);
   }

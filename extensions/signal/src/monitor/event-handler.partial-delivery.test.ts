@@ -380,7 +380,6 @@ describe("Signal durable ingress and final delivery", () => {
       vi.setSystemTime(time);
       const { tasks } = await createIntegratedMonitor();
       await monitor?.waitForIdle();
-      await vi.advanceTimersByTimeAsync(10);
       expect(getReplyFromConfigMock).toHaveBeenCalledTimes(dispatches);
       expect(tasks).toHaveLength(0);
       await stop();

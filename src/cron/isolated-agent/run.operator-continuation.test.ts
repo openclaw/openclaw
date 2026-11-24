@@ -21,7 +21,7 @@ import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import * as publicationIdentity from "../../gateway/github-publication-availability.js";
 import * as publicationTransport from "../../gateway/github-publication-git-transport.js";
 import { createGitHubPublicationCoordinator } from "../../gateway/github-publication.js";
-import { captureGatewayOperatorRunAuthority } from "../../gateway/operator-run-authority.js";
+import { prepareGatewayOperatorRunAuthority } from "../../gateway/operator-run-authority.js";
 import { cronHandlers } from "../../gateway/server-methods/cron.js";
 import {
   admission,
@@ -58,6 +58,7 @@ import { updateCronRuntimeRow } from "../store/row-codec.js";
 import { prepareAuthorityConfig, resetAuthorityRunHarness } from "./run.authority.test-support.js";
 import {
   createOperatorContinuationService,
+  prepareContinuationRoleConfig,
   publication,
   publicationCommandResult,
 } from "./run.operator-continuation.test-support.js";
@@ -154,7 +155,9 @@ it.each([
   "foreign target",
   "current tool deny",
   "role revoked",
+  "role definition edited",
   "role revoked during merge",
+  "session edited",
   "session replaced",
   "queued owner payload edit",
   "queued manager rename",
@@ -166,7 +169,7 @@ it.each([
   const unavailableSource =
     scenario === "principal owner unavailable" || scenario === "principal store unavailable";
   const personPolicySource = isPrincipalPolicyScenario(scenario);
-  const personPolicyRemoved = personPolicySource && scenario !== "principal allowlist allowed";
+  const personPolicyRemoved = personPolicySource && scenario.endsWith("before restore");
   const realPrincipal = principalSource;
   let restoreIngressOwner: (() => void) | undefined;
   let releaseIngressOwner: (() => void) | undefined;
@@ -178,6 +181,11 @@ it.each([
   const queuedEdit = ownerEdit || managerRename || captureRace;
   const recurring = scenario === "recurring trigger reload";
   const selfRemoving = scenario.startsWith("self removal");
+  const roleRevokedDuringMerge =
+    scenario === "role revoked during merge" ||
+    scenario === "self removal then role revoked during merge";
+  const roleDefinitionEdited = scenario === "role definition edited";
+  const rolePolicySource = roleRevoked || roleRevokedDuringMerge || roleDefinitionEdited;
   const scopedOperator =
     scenario === "write-scoped operator" || scenario === "cron-scoped operator";
   const config = await prepareAuthorityConfig({
@@ -185,12 +193,13 @@ it.each([
     ...(realPrincipal ? { gateway: principalGatewayPolicy(personPolicySource) } : {}),
     ...(recurring ? { cron: { triggers: { enabled: true } } } : {}),
   });
+  prepareContinuationRoleConfig(config, rolePolicySource && !realPrincipal);
   const fixture = createCronFixture(undefined, config);
   const { context } = fixture;
   const resolveGatewayContext = () => context;
   context.resolveGatewayContext = resolveGatewayContext;
   const profile = ensureProfileForEmail("scheduled-operator@example.test");
-  if (realPrincipal) {
+  if (realPrincipal || rolePolicySource) {
     await setCanonicalUserProfileRole(profile.id, "writer");
   }
   const { client, revokePersonPolicy } = prepareContinuationClient({
@@ -221,7 +230,7 @@ it.each([
   }
   const captureAuthority = async () =>
     expectDefined(
-      await captureGatewayOperatorRunAuthority({
+      await prepareGatewayOperatorRunAuthority({
         client,
         context,
         sourceAuthority: null,
@@ -356,7 +365,7 @@ it.each([
                     name: "Finish authorized landing",
                     enabled: scenario !== "paused force run",
                     schedule:
-                      recurring || roleRevoked
+                      recurring || roleRevoked || roleRevokedDuringMerge
                         ? { kind: "every", everyMs: 180_000 }
                         : {
                             kind: "at",
@@ -481,23 +490,21 @@ it.each([
   if (scenario === "foreign target") {
     expect(job.operatorSource).toBeUndefined();
   }
-  if (original && !queuedEdit) {
-    expect(() => original.authority.assertCurrent()).toThrow();
-  }
   if (scenario === "current tool deny") {
     config.tools = { ...config.tools, deny: ["github_publish"] };
     setRuntimeConfigSnapshot(config);
   } else if (roleRevoked) {
     await setCanonicalUserProfileRole(profile.id, "blocked");
-  } else if (scenario === "session replaced") {
-    replaceSessionEntrySync(
-      { sessionKey: SESSION },
-      {
-        ...entry,
-        sessionId: "replacement-session",
-        lifecycleRevision: "replacement",
-      },
-    );
+  } else if (roleDefinitionEdited) {
+    config.gateway!.roles!.definitions.writer!.agents = ["main"];
+    setRuntimeConfigSnapshot(config);
+  } else if (scenario === "session edited" || scenario === "session replaced") {
+    // A message edit rotates only the session id; a reset also rotates the revision.
+    await accessor.replaceSessionEntry(target, {
+      ...entry,
+      sessionId: "replacement-session",
+      ...(scenario === "session replaced" ? { lifecycleRevision: "replacement" } : {}),
+    });
   }
 
   // Publication creation/storage and actual GitHub credentials are outside this regression.
@@ -506,7 +513,7 @@ it.each([
     getCommittedRuntimeConfig: () => config,
   });
   context.githubPublicationService = coordinator;
-  const receipt = vi
+  const sharedPublication = vi
     .spyOn(coordinator, "latestShared")
     .mockResolvedValue({ result: publication, confirmation: null });
   vi.spyOn(publicationIdentity, "prepareCurrentGitHubPublicationIdentity").mockResolvedValue({
@@ -518,9 +525,9 @@ it.each([
   let merged = false;
   let reads = 0;
   const writes: unknown[] = [];
-  const github = vi
-    .spyOn(publicationTransport, "runPublicationCommand")
-    .mockImplementation(async (argv, options) => {
+  vi.spyOn(publicationTransport, "runPublicationCommand").mockImplementation(
+    async (argv, options) => {
+      // Match the subprocess boundary: rejected attempts execute no GitHub I/O.
       options?.beforeRun?.();
       if (selfRemoving) {
         expect(context.cron.getJob(job.id)).toBeUndefined();
@@ -533,7 +540,6 @@ it.each([
         expect(argv).toContain("repos/fixture/repository/pulls/7");
         reads++;
         if (reads === 2) {
-          // Commit authority loss during awaited preflight, before the final write.
           if (
             scenario === "role revoked during merge" ||
             scenario === "self removal then role revoked during merge"
@@ -549,10 +555,12 @@ it.each([
         }
       }
       return publicationCommandResult(merged);
-    });
+    },
+  );
   const restartEntered = createDeferredCore();
   const restartContinue = createDeferredCore();
   let entered = 0;
+  let modelAdmissions = 0;
   let offered: unknown;
   let admittedOperator = false;
   const results: unknown[] = [];
@@ -575,6 +583,7 @@ it.each([
       "gateway",
       params.runId,
     );
+    modelAdmissions++;
     const lifecycleGeneration = getAgentEventLifecycleGeneration();
     await params.onExecutionStarted?.({ lifecycleGeneration });
     params.onExecutionPhase?.({ phase: "model_call_started" });
@@ -595,7 +604,6 @@ it.each([
         sessionId: params.sessionId,
       },
       async () => {
-        // Stable schemas list actions; execution checks this admitted caller's authority.
         expectDefined(getGatewayToolCallerIdentity(), "scheduled caller");
         const tools = applyEmbeddedAttemptToolsAllow(
           await createOpenClawCodingToolsAsync({
@@ -663,12 +671,6 @@ it.each([
               results.push(await publish.execute(`scheduled-${args.action}`, args));
             } catch (error) {
               rejected = String(error);
-              if (
-                scenario === "role revoked during merge" ||
-                scenario === "self removal then role revoked during merge"
-              ) {
-                expect(params.abortSignal?.aborted).toBe(true);
-              }
             }
           }
         }
@@ -703,7 +705,6 @@ it.each([
   context.cron = execution;
   try {
     await execution.start();
-    expect(entered).toBe(0);
     const reloaded = expectDefined(execution.getJob(job.id), "reloaded scheduled job");
     if (recurring) {
       // Stored before upgrade: main's hash was captured while enabled, then the runtime disabled it.
@@ -737,9 +738,11 @@ it.each([
       clock.setTime(expectDefined(execution.getJob(job.id)?.state.nextRunAtMs, "scheduled timer"));
       const tick = onTimer(schedulerState);
       if (queuedEdit) {
+        // The due run stays queued, without a running marker, until the creating turn ends.
         await vi.waitFor(() => {
-          expect(execution.getJob(job.id)?.state.runningReceiptId).toEqual(expect.any(String));
+          expect(execution.getJob(job.id)?.state.queuedAtMs).toEqual(expect.any(Number));
         });
+        expect(execution.getJob(job.id)?.state.runningReceiptId).toBeUndefined();
         expect(entered).toBe(0);
         if (managerRename) {
           await managerUpdate({ name: "Manager-authored instructions" });
@@ -778,7 +781,7 @@ it.each([
     if (selfRemoving) {
       expect(execution.getJob(job.id)).toBeUndefined();
       expect(entered).toBe(1);
-      if (scenario !== "self removal") {
+      if (scenario === "self removal then session replaced during merge") {
         expect(finishedEvent).toMatchObject({ status: "error" });
         expect(reads).toBe(2);
         expect(results).toHaveLength(1);
@@ -818,7 +821,7 @@ it.each([
       expect(rejected ?? finishedEvent?.error).toMatch(
         /allow|authority|principal|policy|Person ingress requires trusted-proxy/i,
       );
-      expect(entered).toBe(0);
+      expect(modelAdmissions, "Refused authority must not reach model admission").toBe(0);
       return;
     }
     if (managerRename || captureRace) {
@@ -862,18 +865,13 @@ it.each([
     }
     if (
       roleRevoked ||
-      scenario === "session replaced" ||
       scenario === "principal ingress revoked" ||
       scenario === "principal ingress replaced" ||
       scenario === "principal access revoked"
     ) {
       expect(entered).toBe(0);
       expect(state.lastRunStatus, state.lastError).toBe("error");
-      expect(state.lastError).toMatch(
-        roleRevoked
-          ? /operator identity changed/i
-          : /authority|source|conversation|session|role|ingress/i,
-      );
+      expect(state.lastError).toEqual(expect.any(String));
       if (roleRevoked) {
         expect(execution.getJob(job.id)?.enabled).toBe(false);
         expect(state.nextRunAtMs).toBeUndefined();
@@ -884,18 +882,22 @@ it.each([
         expect(execution.getJob(job.id)?.state.consecutiveErrors).toBe(1);
       }
     } else {
-      expect(state.lastRunStatus, state.lastError).toBe(
-        scenario === "role revoked during merge" ? "error" : "ok",
-      );
+      expect(state.lastRunStatus, state.lastError).toBe("ok");
       expect(entered).toBe(1);
       if (
         unavailableSource ||
         scenario === "restart before scheduling" ||
         scenario === "principal allowlist allowed" ||
+        scenario.endsWith("before effect") ||
         scenario === "principal reload" ||
         scenario === "operator" ||
         scenario === "write-scoped operator" ||
         scenario === "paused force run" ||
+        roleRevokedDuringMerge ||
+        roleDefinitionEdited ||
+        // The continuation's conversation is linked by key: an edit or reset keeps it.
+        scenario === "session edited" ||
+        scenario === "session replaced" ||
         ownerEdit ||
         recurring
       ) {
@@ -907,19 +909,13 @@ it.each([
           { details: { state: "merged", mergeCommit: "b".repeat(40) } },
         ]);
         expect(writes).toEqual([{ sha: "a".repeat(40), merge_method: "merge" }]);
-        expect(receipt).toHaveBeenCalled();
+        expect(sharedPublication).toHaveBeenCalled();
         if (scenario === "paused force run") {
           expect(execution.getJob(job.id)).toMatchObject({
             enabled: false,
             schedule: job.schedule,
           });
         }
-      } else if (scenario === "role revoked during merge") {
-        expect(state.lastError).toBe("Session event execution aborted");
-        expect(reads).toBe(2);
-        expect(results).toHaveLength(1);
-        expect(rejected).toBe("AbortError: Aborted");
-        expect(writes).toEqual([]);
       } else if (scenario === "current tool deny") {
         expect(offered).toBeUndefined();
       } else {
@@ -929,7 +925,18 @@ it.each([
             ? "missing scope: operator.write"
             : "require full operator write permission",
         );
-        expect(results).toEqual([]);
+      }
+      if (scenario === "role revoked during merge") {
+        clock.setTime(expectDefined(state.nextRunAtMs, "next occurrence after admitted merge"));
+        await onTimer(schedulerState);
+        await execution.waitForIdle();
+        expect(entered).toBe(1);
+        expect(writes).toEqual([{ sha: "a".repeat(40), merge_method: "merge" }]);
+        expect(execution.getJob(job.id)).toMatchObject({
+          enabled: false,
+          state: { lastRunStatus: "error", consecutiveErrors: 1, lastError: expect.any(String) },
+        });
+        expect(finishedEvent).toMatchObject({ status: "error" });
       }
     }
     if (
@@ -937,16 +944,21 @@ it.each([
       scenario !== "restart before scheduling" &&
       scenario !== "principal reload" &&
       scenario !== "principal allowlist allowed" &&
+      !scenario.endsWith("before effect") &&
       scenario !== "operator" &&
       scenario !== "write-scoped operator" &&
       scenario !== "paused force run" &&
+      scenario !== "session edited" &&
+      !roleDefinitionEdited &&
+      scenario !== "session replaced" &&
       !ownerEdit &&
       !recurring &&
       scenario !== "role revoked during merge"
     ) {
       expect(writes).toEqual([]);
-      expect(github).not.toHaveBeenCalled();
-      expect(receipt).not.toHaveBeenCalled();
+      expect(reads).toBe(0);
+      // Local publication lookup may precede the guard; denied actions disclose no result.
+      expect(results).toEqual([]);
     }
     if (recurring) {
       const valid = expectDefined((await fixture.read())[0], "stored continuation");

@@ -112,7 +112,10 @@ export function useQueuedCollectorFixture() {
     state = await createOpenClawTestState({ label: "queued-collector-projection" });
     await state.writeConfig({
       tools: { swarm: { enabled: true, maxConcurrent: 1 } },
-      agents: { entries: { main: { workspace: state.workspaceDir } } },
+      agents: {
+        defaults: { model: { primary: "openai/gpt-6-astra" } },
+        entries: { main: { workspace: state.workspaceDir } },
+      },
     });
     await captureRuntimeConfigAsyncReader()();
     await loadOrCreateProcessDeviceIdentityAsync();
@@ -134,7 +137,6 @@ export function useQueuedCollectorFixture() {
           normalizedSpawned: {},
           requestDeliveryHint: undefined,
           expectedExistingSessionId: entry?.sessionId,
-          hasRestoredCronContinuation: false,
           resetPolicy: resolveSessionResetPolicy({ resetType: "direct" }),
           now: Date.now(),
           isSystemGatewayRun: true,

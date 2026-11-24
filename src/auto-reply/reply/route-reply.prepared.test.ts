@@ -2,6 +2,7 @@ import path from "node:path";
 import { assert, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelOutboundAdapter } from "../../channels/plugins/types.public.js";
 import { createStructuredOutboundPayloadPlan } from "../../infra/outbound/payloads.js";
+import { chatRef } from "../../sessions/chat-ref.js";
 import { setReplyPayloadMetadata } from "../reply-payload.js";
 import type { ReplyPayload } from "../types.js";
 import { installRouteReplyFixture } from "./route-reply.fixture.test-support.js";
@@ -134,7 +135,7 @@ describe("prepared reply routing", () => {
       sessionKey: session.sessionKey,
       ...(owner === "generation"
         ? {
-            sessionGeneration: { ...session, ...entry, lifecycleRevision: "original-generation" },
+            sessionGeneration: chatRef(session),
           }
         : {}),
     };

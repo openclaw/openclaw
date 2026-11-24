@@ -3,7 +3,9 @@ import { GatewayClientRequestError } from "../../../../packages/gateway-client/s
 import {
   GATEWAY_CLIENT_IDS,
   GATEWAY_CLIENT_MODES,
+  isNativeAppUiClient,
 } from "../../../../packages/gateway-protocol/src/client-info.js";
+import { gatewayOperatorAccessError } from "../../../../packages/gateway-protocol/src/connect-error-details.js";
 import type {
   ConnectParams,
   ErrorShape,
@@ -21,6 +23,7 @@ import {
   parseDiagnosticTraceparent,
   runWithDiagnosticTraceContext,
 } from "../../../infra/diagnostic-trace-context.js";
+import { isOperatorAuthorityUnavailable } from "../../../infra/operator-authority-error.js";
 import { runOutsideGatewayRootWorkAdmission } from "../../../process/gateway-work-admission.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
 import { createLazyPromise } from "../../../shared/lazy-runtime.js";
@@ -37,12 +40,9 @@ import {
   isOpenClawIdTunnelPrincipalCurrent,
   recordOpenClawIdTunnelActivity,
 } from "../../openclaw-id/tunnel-principal.js";
-import {
-  GATEWAY_OPERATOR_ACCESS_DENIED_MESSAGE,
-  hasCurrentGatewayOperatorAccess,
-} from "../../operator-access-policy.js";
+import { hasCurrentGatewayOperatorAccess } from "../../operator-access-policy.js";
 import { onOperatorRolePolicyChanged } from "../../operator-role-policy.js";
-import { bindWebSocketRequestMutationAuthority } from "../../server-methods/session-mutation-guards.js";
+import { isPublicationTransportCurrent } from "../../publication-reader.js";
 import type { GatewayRequestEntry } from "../../server-request-entry.js";
 import { SharedGatewaySessionGenerationState } from "../../server-shared-auth-generation.js";
 import { classifyGatewayStaleInstall } from "../../stale-install.js";
@@ -185,30 +185,52 @@ export function createGatewayAuthenticatedRequestDispatcher(params: {
       invalidateGatewayPolicyClient(client, {
         reason: "remote-control-ui-ingress-closed",
         code: 4001,
-        message: "remote Control UI ingress closed",
-        close: () => close(4001, "remote Control UI ingress closed"),
+        message: "remote web app ingress closed",
+        close: () => close(4001, "remote web app ingress closed"),
       });
       return false;
     };
     const reconnectDevice =
-      client.internal?.authenticatedControlUi === true && client.isDeviceTokenAuth === true
+      (client.internal?.authenticatedControlUi === true ||
+        (client.internal?.authenticatedOperator === true &&
+          isNativeAppUiClient(client.connect.client))) &&
+      client.isDeviceTokenAuth === true
         ? client.internal.operatorDeviceTokenIdentity
         : undefined;
     const reconnectProfile = client.authenticatedUserProfile?.profileId;
+    const hasCurrentPublicationTransport = () => {
+      const reader = client.internal?.publicationTransport;
+      if (!reader || isPublicationTransportCurrent(reader)) {
+        return true;
+      }
+      invalidateGatewayPolicyClient(client, {
+        reason: "publication-transport-authority-changed",
+        code: 4001,
+        message: "Publication transport credentials changed. Reconnect and try again.",
+        close: () =>
+          close(4001, "Publication transport credentials changed. Reconnect and try again."),
+      });
+      return false;
+    };
     const clientAuthority = captureGatewayDeviceRevocation(
       context,
       { deviceId: client.connect.device?.id, role: client.connect.role },
       () => {
-        if (!hasCurrentIngress()) {
+        if (!hasCurrentPublicationTransport() || !hasCurrentIngress()) {
           return false;
         }
         if (!hasCurrentGatewayOperatorAccess(client.internal?.operatorAccessAuthority)) {
+          const denial = gatewayOperatorAccessError(
+            client.internal?.operatorAccessAuthority?.failureCause ?? "policy-check-failed",
+          );
+          setCloseCause("operator-access-closed", { accessCause: denial.details.accessCause });
           invalidateGatewayPolicyClient(client, {
             reason: "operator-access-closed",
             code: 4001,
-            message: GATEWAY_OPERATOR_ACCESS_DENIED_MESSAGE,
-            close: () => close(4001, GATEWAY_OPERATOR_ACCESS_DENIED_MESSAGE),
+            message: denial.message,
+            close: () => close(4001, denial.message),
           });
+          return false;
         }
         if (closeInvalidatedClient(client, req.method, isCommittedGrantCurrent)) {
           return false;
@@ -265,6 +287,7 @@ export function createGatewayAuthenticatedRequestDispatcher(params: {
                 : {}),
             },
             isCurrent: () =>
+              hasCurrentPublicationTransport() &&
               hasCurrentIngress() &&
               hasCurrentGatewayPolicyClientSource(client) &&
               isCommittedGrantCurrent(),
@@ -324,24 +347,48 @@ export function createGatewayAuthenticatedRequestDispatcher(params: {
       });
       deviceCredentialMutationBarrier = barrier;
     }
+    let handlerStarted = false;
+    const responseOutcome = (failure: ErrorShape) => {
+      if (
+        handlerStarted &&
+        asOptionalRecord(failure.details)?.code === "OPERATOR_ACCESS_UNAVAILABLE"
+      ) {
+        failure.retryable = false;
+        failure.message =
+          "Gateway access policy is unavailable. The operation may have completed; check its status before retrying.";
+      }
+      return failure;
+    };
     try {
       const expectedProfileBinding =
         req.expectedProfileId === undefined
           ? undefined
-          : await createExpectedProfileBinding(req.expectedProfileId, client, () => {
-              if (!hasCurrentClientAuthority()) {
-                throw new Error("Gateway requester authority changed");
-              }
-            });
+          : await createExpectedProfileBinding(req.expectedProfileId, client);
       const publishResponse = (
-        ok: boolean,
-        payload?: unknown,
-        error?: ErrorShape,
+        initialOk: boolean,
+        initialPayload?: unknown,
+        initialError?: ErrorShape,
         meta?: Record<string, unknown>,
       ) => {
-        if (!policyResponse?.pending && !hasCurrentClientAuthority()) {
-          diagnostics?.response("suppressed");
-          return;
+        let ok = initialOk;
+        let payload = initialPayload;
+        let error = initialError;
+        try {
+          if (!policyResponse?.pending && !hasCurrentClientAuthority()) {
+            diagnostics?.response("suppressed");
+            return;
+          }
+        } catch (cause) {
+          if (!isOperatorAuthorityUnavailable(cause)) {
+            throw cause;
+          }
+          // A policy outage may disclose only its identity-free failure, never the payload.
+          ok = false;
+          payload = undefined;
+          error = errorShapeFromError(ErrorCodes.UNAVAILABLE, cause);
+        }
+        if (error) {
+          error = responseOutcome(error);
         }
         try {
           let responseOk = ok;
@@ -426,33 +473,7 @@ export function createGatewayAuthenticatedRequestDispatcher(params: {
       };
 
       const respond = expectedProfileBinding?.guardResponse(publishResponse) ?? publishResponse;
-      const agentRuntimeIdentity = client.internal?.agentRuntimeIdentity;
-      const hasCurrentRuntimeAuthority = () => {
-        if (
-          agentRuntimeIdentity &&
-          context.validateAgentRuntimeApprovalAuthority?.(agentRuntimeIdentity) !== true
-        ) {
-          respond(
-            false,
-            undefined,
-            errorShape(ErrorCodes.INVALID_REQUEST, "agent runtime authority is no longer active"),
-          );
-          setCloseCause("agent-runtime-authority-closed", { method: req.method });
-          close(4001, "agent runtime authority closed");
-          return false;
-        }
-        return true;
-      };
-      const respondWithAuthority: typeof respond = (ok, payload, error, meta) => {
-        if (hasCurrentRuntimeAuthority()) {
-          respond(ok, payload, error, meta);
-        }
-      };
-      const policyResponse = registerGatewayPolicyResponse(
-        req.method,
-        client,
-        respondWithAuthority,
-      );
+      const policyResponse = registerGatewayPolicyResponse(req.method, client, respond);
 
       const executeRequest = async () => {
         diagnostics?.bindTrace();
@@ -499,7 +520,7 @@ export function createGatewayAuthenticatedRequestDispatcher(params: {
               return;
             }
           }
-          if (!hasCurrentClientAuthority() || !hasCurrentRuntimeAuthority()) {
+          if (!hasCurrentClientAuthority()) {
             return;
           }
           const { handleGatewayRequest } = await loadGatewayServerMethods();
@@ -516,7 +537,7 @@ export function createGatewayAuthenticatedRequestDispatcher(params: {
               context.requestEntryLifetime?.signal,
             );
             if (!start) {
-              respondWithAuthority(
+              respond(
                 false,
                 undefined,
                 errorShape(
@@ -538,31 +559,30 @@ export function createGatewayAuthenticatedRequestDispatcher(params: {
           entry?.assertOpen();
           // Waiting never grants authority. Ordinary requests may outlive their socket;
           // only request-owned cancellation and current authority fence their start.
-          if (signal?.aborted || !hasCurrentClientAuthority() || !hasCurrentRuntimeAuthority()) {
+          if (signal?.aborted || !hasCurrentClientAuthority()) {
             return;
           }
           await runOutsideGatewayRootWorkAdmission(() =>
             handleGatewayRequest(
-              bindWebSocketRequestMutationAuthority(
-                {
-                  req,
-                  respond: respondWithAuthority,
-                  acceptsSerializedJson: true,
-                  acceptsDeflatedSegments: params.handler.socket.acceptsDeflatedSegments,
-                  client,
-                  isWebchatConnect: params.isWebchatConnect,
-                  hasCurrentClientAuthority,
-                  expectedProfileBinding,
-                  extraHandlers,
-                  methodRegistry: getMethodRegistry?.(),
-                  context,
-                  ...(admission ? { admission } : {}),
-                  requestEntry: entry,
-                  ...(signal ? { signal } : {}),
-                },
+              {
+                req,
+                respond,
+                acceptsSerializedJson: true,
+                acceptsDeflatedSegments: params.handler.socket.acceptsDeflatedSegments,
                 client,
-                getRequiredSharedGatewaySessionGeneration,
-              ),
+                isWebchatConnect: params.isWebchatConnect,
+                hasCurrentClientAuthority,
+                expectedProfileBinding,
+                extraHandlers,
+                methodRegistry: getMethodRegistry?.(),
+                context,
+                ...(admission ? { admission } : {}),
+                requestEntry: entry,
+                onHandlerStart: () => {
+                  handlerStarted = true;
+                },
+                ...(signal ? { signal } : {}),
+              },
               diagnostics,
             ),
           );
@@ -570,11 +590,14 @@ export function createGatewayAuthenticatedRequestDispatcher(params: {
           const startTimedOut = err instanceof GatewayRequestStartTimeoutError;
           dispatchOutcome = startTimedOut ? "returned" : "threw";
           // Failure diagnostics and responses belong to the same request trace as the handler.
-          if (!startTimedOut) {
+          if (!startTimedOut && client.connectionSignal?.aborted) {
+            // The requester has gone and its close is already logged; nobody can act on this.
+            logGateway.debug(`request handler failed after disconnect: ${formatForLog(err)}`);
+          } else if (!startTimedOut) {
             logGateway.error(`request handler failed: ${formatForLog(err)}`);
           }
           const staleInstall = classifyGatewayStaleInstall(err);
-          respondWithAuthority(
+          respond(
             false,
             undefined,
             staleInstall?.error ??
@@ -614,6 +637,17 @@ export function createGatewayAuthenticatedRequestDispatcher(params: {
           ? params.handler.nodeLifecycleDispatch.dispatch(req.method, dispatchRequest)
           : dispatchRequest();
       await requestDispatch;
+    } catch (error) {
+      if (!isOperatorAuthorityUnavailable(error)) {
+        throw error;
+      }
+      // Profile binding can fail before the ordinary response guard has been installed.
+      sendResponse({
+        type: "res",
+        id: req.id,
+        ok: false,
+        error: responseOutcome(errorShapeFromError(ErrorCodes.UNAVAILABLE, error)),
+      });
     } finally {
       try {
         releaseAuthority();

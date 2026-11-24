@@ -226,6 +226,22 @@ all incompatibilities without modifying the source files.
 
 Changes may stay at the same schema version only when downgraded readers remain safe. New tables qualify because older builds ignore them. An explicitly compatible column on an existing table qualifies only when its declaration is exactly one bare nullable SQLite `STRICT` datatype: `ANY`, `BLOB`, `INT`, `INTEGER`, `REAL`, or `TEXT`. The declaration cannot have a default, `NOT NULL`, a primary or unique key, a check, a reference, a collation, a generated expression, or another suffix. Constrained existing-table additions require a schema-version bump or a companion table instead.
 
+Template setup adds a bare nullable `workspace_setup_state.bootstrap_deferred INTEGER`
+column through the startup-additive owner. A value of `1` keeps package bootstrap
+seeding with the initializer across restarts and failed dependency setup; normal
+workspace preparation does not seed defaults or mark setup complete. Successful
+package seeding clears the flag. Existing milestones and attestation hashes are
+unchanged, and existing rows need no backfill. Older SQLite builds ignore the
+column and do not resume this new Template setup flow.
+
+PostgreSQL stores created by v2026.11.5 start at schema 36 without the column.
+Predecessor verification expects the column to be absent through schema 38 and recognizes both
+historical layouts at schema 39. Inspection and backups keep the exact source
+layout. The existing migration to schema 40 adds the nullable `bigint` column
+when needed and seals the destination in the migration transaction. Existing
+deferral values are preserved. To return to a build that predates the migration,
+restore its matching PostgreSQL schema and anchor from before the upgrade.
+
 Session-window preview caching adds bare nullable `row_transcript_json TEXT` and
 `row_transcript_updated_at INTEGER` columns without a numeric version bump.
 Admission adds the columns to existing stores; each row fills lazily through the
@@ -939,9 +955,11 @@ quick check plus full checks of affected tables, or a whole-database full check
 when `--full-integrity-check` is selected. AUTOINCREMENT, virtual/shadow tables, unsupported SQLite runtimes,
 or sources outside the active state directory fall back to full backups.
 Fresh credential capture also uses Doctor's full image when a legacy
-`sqlite_stat4` table cannot be recreated by the current runtime. The image must
-still contain the tables and rows being retired; a changed retry source preserves
-its original backup and reports a data-risk refusal instead of losing credentials.
+`sqlite_stat4` table cannot be recreated by the current runtime. Candidate Doctor
+keeps that shared image during an update rehearsal, although it omits its other
+disposable backups there. The image must still contain the tables and rows being
+retired; a changed retry source preserves its original backup and reports a
+data-risk refusal instead of losing credentials.
 Historical migrations keep their full-file backup when no scoped backup is
 declared, while integrity admission uses the same quick-plus-affected-tables
 policy. Backup eligibility and integrity coverage are separate contracts.

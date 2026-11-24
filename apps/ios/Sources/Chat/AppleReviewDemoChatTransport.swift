@@ -420,6 +420,7 @@ struct LocalFixtureChatTransport: OpenClawChatTransport {
                 status: "running",
                 hasActiveRun: true))
         }
+        if ScreenshotFixtureMode.groupControlsEnabled { sessions += await DrawerGroupFixture.store.sessions() }
         if archived {
             sessions = []
         }
@@ -554,6 +555,7 @@ private actor LocalFixtureChatStore {
     private var permissionMode: OpenClawChatPermissionMode? = .guarded
     private var toolOverrides: OpenClawChatSessionToolOverrides?
     private var reactionOverrides: [String: [OpenClawChatReactionSummary]] = [:]
+    private var nestedSuccessPending = false
 
     init(fixture: LocalChatFixture) {
         self.fixture = fixture
@@ -603,10 +605,77 @@ private actor LocalFixtureChatStore {
         } else {
             self.messages
         }
+        var historyWireMessages = try JSONDecoder().decode(
+            [AnyCodable].self, from: JSONEncoder().encode(historyMessages))
+        var historyActivity: [OpenClawChatHistoryActivity]?
+        if ProcessInfo.processInfo.arguments.contains("--openclaw-step-labels-fixture") {
+            historyActivity = try JSONDecoder().decode([OpenClawChatHistoryActivity].self, from: Data("""
+            [{"messageId":"fixture-step-call","items":[
+              {"itemId":"tool:fixture-exec","toolCallId":"fixture-exec","kind":"tool","phase":"end",
+               "title":"Exec — outcome unknown","name":"exec"},
+              {"itemId":"tool:fixture-no-result","toolCallId":"fixture-no-result","kind":"tool","phase":"end",
+               "title":"Exec — outcome unknown","name":"exec"},
+              {"itemId":"tool:fixture-success","toolCallId":"fixture-success","kind":"tool","phase":"end",
+               "title":"Exec","name":"exec","status":"completed"}
+            ]}]
+            """.utf8))
+        }
+        if ProcessInfo.processInfo.arguments.contains("--openclaw-nested-tools-fixture") {
+            // Keep the existing step transcript/latest reply intact. These earlier raw carriers
+            // cross the real history JSON decoder; the public message initializer cannot mark them.
+            var nested = try JSONDecoder().decode([AnyCodable].self, from: Data(#"""
+            [
+              {"role":"custom","customType":"openclaw.nested-tool.v1","display":true,"excludeFromContext":true,
+               "__openclaw":{"id":"fixture-nested-pending-row","runId":"fixture-nested-run"},"timestamp":1,
+               "content":[{"type":"toolCall","id":"fixture-nested-pending","name":"knowledge_status",
+                 "arguments":{"query":"Original pending control"},
+                 "runId":"fixture-nested-run","parentToolCallId":"fixture-parent"}]},
+              {"role":"custom","customType":"openclaw.nested-tool.v1","display":true,"excludeFromContext":true,
+               "__openclaw":{"id":"fixture-nested-failed-row","runId":"fixture-nested-run"},"timestamp":2,
+               "content":[{"type":"toolCall","id":"fixture-nested-failed","name":"read",
+                 "arguments":{"path":"synthetic.txt"},"parentToolCallId":"fixture-parent"},
+                 {"type":"toolResult","role":"toolResult","toolCallId":"fixture-nested-failed","toolName":"read",
+                  "isError":true,"content":[{"type":"text","text":"Recorded nested output"}]}]},
+              {"role":"custom","customType":"openclaw.nested-tool.v1","display":true,"excludeFromContext":true,
+               "__openclaw":{"id":"fixture-nested-success-row","runId":"fixture-nested-run"},"timestamp":3,
+               "content":[{"type":"toolCall","id":"fixture-nested-success","name":"knowledge_status",
+                 "arguments":{},"runId":"fixture-nested-run","parentToolCallId":"fixture-parent"},
+                 {"type":"toolResult","role":"toolResult","toolCallId":"fixture-nested-success",
+                  "toolName":"knowledge_status","runId":"fixture-nested-run","parentToolCallId":"fixture-parent",
+                  "afterEntryId":"fixture-nested-failed-row","isError":false,
+                  "content":[{"type":"text","text":"Sanitized nested success output"}]}]}
+            ]
+            """#.utf8))
+            if self.nestedSuccessPending,
+               let index = nested.firstIndex(where: {
+                   $0.dictionaryValue?["__openclaw"]?.dictionaryValue?["id"]?.stringValue ==
+                       "fixture-nested-success-row"
+               }),
+               var carrier = nested[index].dictionaryValue,
+               let content = carrier["content"]?.arrayValue
+            {
+                carrier["content"] = AnyCodable(content.filter {
+                    $0.dictionaryValue?["type"]?.stringValue != "toolResult"
+                })
+                nested[index] = AnyCodable(carrier)
+            }
+            historyWireMessages.insert(contentsOf: nested, at: 0)
+            historyActivity = try (historyActivity ?? []) + JSONDecoder().decode(
+                [OpenClawChatHistoryActivity].self, from: Data("""
+                [{"messageId":"fixture-nested-success-row","items":\(self.nestedSuccessPending ? """
+                [{"itemId":"tool:fixture-nested-success","toolCallId":"fixture-nested-success","kind":"tool",
+                  "phase":"start","status":"running","title":"Knowledge status","name":"knowledge_status"}]
+                """ : "[]")},
+                {"messageId":"fixture-nested-pending-row","items":[
+                  {"itemId":"tool:fixture-nested-pending","toolCallId":"fixture-nested-pending","kind":"tool",
+                   "phase":"start","status":"running","title":"Knowledge status","name":"knowledge_status"}
+                ]}]
+                """.utf8))
+        }
         return try OpenClawChatHistoryPayload(
             sessionKey: normalizedSessionKey,
             sessionId: "\(self.fixture.sessionIDPrefix)-\(normalizedSessionKey)",
-            messages: JSONDecoder().decode([AnyCodable].self, from: JSONEncoder().encode(historyMessages)),
+            messages: historyWireMessages,
             thinkingLevel: self.thinkingLevel,
             // The progress card is read only for a session whose owner the history names.
             sessionInfo: OpenClawChatSessionInfo(
@@ -622,17 +691,7 @@ private actor LocalFixtureChatStore {
                         runId: $0,
                         text: String(repeating: "Streaming layout response. ", count: 12))
                 } : nil),
-            activity: ProcessInfo.processInfo.arguments.contains("--openclaw-step-labels-fixture")
-                ? JSONDecoder().decode([OpenClawChatHistoryActivity].self, from: Data("""
-                [{"messageId":"fixture-step-call","items":[
-                  {"itemId":"tool:fixture-exec","toolCallId":"fixture-exec","kind":"tool","phase":"end",
-                   "title":"Exec — outcome unknown","name":"exec"},
-                  {"itemId":"tool:fixture-no-result","toolCallId":"fixture-no-result","kind":"tool","phase":"end",
-                   "title":"Exec — outcome unknown","name":"exec"},
-                  {"itemId":"tool:fixture-success","toolCallId":"fixture-success","kind":"tool","phase":"end",
-                   "title":"Exec","name":"exec","status":"completed"}
-                ]}]
-                """.utf8)) : nil)
+            activity: historyActivity)
     }
 
     func sendMessage(
@@ -640,6 +699,17 @@ private actor LocalFixtureChatStore {
         message: String,
         runId: String) -> OpenClawChatSendResponse
     {
+        if self.fixture.sessionIDPrefix == "screenshot-fixture",
+           ProcessInfo.processInfo.arguments.contains("--openclaw-screenshot-mode"),
+           ProcessInfo.processInfo.arguments.contains("--openclaw-nested-tools-fixture"),
+           ["main", "agent:main:main"].contains(sessionKey),
+           message == "Transition the nested success fixture to pending"
+        {
+            // This store owns both history content and its canonical descriptor. The normal
+            // terminal-ok send refresh reads the changed history; no timer or model poke.
+            self.nestedSuccessPending = true
+            return OpenClawChatSendResponse(runId: runId, status: "ok")
+        }
         let now = Date().timeIntervalSince1970 * 1000
         let userMessage = Self.message(
             role: "user",
@@ -923,6 +993,7 @@ private actor LocalFixtureChatStore {
         self.duplicateReplaySessionKey = nil
         self.duplicateReplayStarted = false
         self.messages = Self.seedMessages(fixture: self.fixture)
+        self.nestedSuccessPending = false
         self.reactionOverrides.removeAll()
         self.modelID = self.fixture.modelID
         self.thinkingLevel = nil
@@ -1343,5 +1414,106 @@ private actor LocalFixtureChatStore {
 extension ScreenshotFixtureMode {
     static var holdsInitialChatRun: Bool {
         ProcessInfo.processInfo.arguments.contains("--openclaw-hold-initial-chat-run")
+    }
+}
+
+/// This fixture uses only local, launch-argument-selected data; no operator Gateway requests.
+extension ScreenshotFixtureMode {
+    static var groupControlsEnabled: Bool {
+        ProcessInfo.processInfo.arguments.contains("--openclaw-group-controls-fixture")
+    }
+}
+
+enum DrawerGroupFixture {
+    static let store = DrawerGroupFixtureStore()
+
+    @MainActor
+    static func connection() -> OpenClawSessionMenuConnection {
+        var connection = OpenClawSessionMenuConnection(
+            methods: [
+                "sessions.groups.list",
+                "sessions.groups.put",
+                "sessions.groups.rename",
+                "sessions.groups.delete",
+                "sessions.groups.defaults",
+                "sessions.groups.update",
+                "sessions.create",
+            ],
+            scopes: ["operator.admin"],
+            isCurrent: { ScreenshotFixtureMode.groupControlsEnabled },
+            request: { try await self.store.request($0) })
+        connection.groupDefaultsBrowser = OpenClawGroupDefaultsBrowser(
+            listDirectory: { _ in FsListDirResult(path: "/work", home: "/work", entries: []) },
+            inspectRepository: { _ in .git })
+        return connection
+    }
+}
+
+actor DrawerGroupFixtureStore {
+    private var names = ["Projects", "Research"]
+    private var rows = [
+        OpenClawChatSessionEntry(
+            key: "agent:main:dashboard:fixture-project", displayName: "Project notes", category: "Projects"),
+        OpenClawChatSessionEntry(
+            key: "agent:main:dashboard:fixture-research", displayName: "Research notes", category: "Research"),
+    ]
+    private var cwd = "/work/repo"
+    private var worktree = true
+    private var catalogReads = 0
+    private var readsAtDefaults = 0
+
+    func sessions() -> [OpenClawChatSessionEntry] {
+        self.rows
+    }
+
+    func request(_ request: OpenClawChatGatewayRequest) async throws -> Data {
+        let name = request.params["name"]?.value as? String ?? ""
+        switch request.method {
+        case "sessions.groups.list": self.catalogReads += 1
+        case "sessions.groups.put":
+            if ProcessInfo.processInfo.arguments.contains("--openclaw-failed-group-change-fixture") {
+                throw NSError(domain: "DrawerGroupFixture", code: 1, userInfo: [
+                    NSLocalizedDescriptionKey: "Fixture group mutation rejected",
+                ])
+            }
+            // Keep this local mutation pending long enough to inspect the header's progress indicator.
+            try await Task.sleep(for: .seconds(5))
+            guard self.catalogReads > self.readsAtDefaults else { throw URLError(.badServerResponse) }
+            // AnyCodable retains array elements as AnyCodable after decoding, and native arrays when constructed.
+            let raw = request.params["names"]?.value
+            self.names = raw as? [String] ?? (raw as? [AnyCodable] ?? []).compactMap { $0.value as? String }
+        case "sessions.groups.rename":
+            let next = request.params["to"]?.value as? String ?? ""
+            self.names = self.names.map { $0 == name ? next : $0 }
+            for index in self.rows.indices where self.rows[index].category == name {
+                self.rows[index].category = next
+            }
+        case "sessions.groups.delete":
+            self.names.removeAll { $0 == name }
+            for index in self.rows.indices where self.rows[index].category == name {
+                self.rows[index].category = nil
+            }
+        case "sessions.groups.defaults":
+            self.readsAtDefaults = self.catalogReads
+            return try JSONSerialization.data(withJSONObject: ["defaults": self.names.map {
+                ["name": $0, "cwd": self.cwd, "worktree": self.worktree] as [String: Any]
+            }])
+        case "sessions.groups.update":
+            self.cwd = request.params["cwd"]?.value as? String ?? ""
+            self.worktree = request.params["worktree"]?.value as? Bool ?? false
+            return Data(#"{"ok":true}"#.utf8)
+        case "sessions.create":
+            guard request.params["cwd"]?.value as? String == self.cwd,
+                  request.params["worktree"]?.value as? Bool == self.worktree
+            else { throw URLError(.badServerResponse) }
+            let key = request.params["key"]?.value as? String ?? ""
+            let category = request.params["category"]?.value as? String
+            self.rows.append(OpenClawChatSessionEntry(key: key, displayName: "New grouped session", category: category))
+            return try JSONEncoder().encode(OpenClawChatCreateSessionResponse(ok: true, key: key, sessionId: key))
+        default: throw URLError(.unsupportedURL)
+        }
+        return try JSONSerialization.data(withJSONObject: [
+            "ok": true, "groups": self.names.enumerated().map { ["name": $0.element, "position": $0.offset] },
+        ])
     }
 }

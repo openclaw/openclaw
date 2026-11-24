@@ -1,0 +1,1 @@
+{ "name": "corpus-plugin", "version": "1.2.3", "type": "module", "openclaw": { "extensions": ["./index.js"] } }

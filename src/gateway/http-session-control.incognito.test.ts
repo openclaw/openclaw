@@ -24,7 +24,6 @@ import { handleChannelAvatarHttpRequest } from "./channel-avatar-http.js";
 import { buildControlUiChannelAvatarUrl } from "./control-ui-contract.js";
 import { readOperatorToolGatewayAuthority } from "./operator-tool-gateway-authority.js";
 import { readSseEvent } from "./session-history-fixtures.test-support.js";
-import * as historyState from "./session-history-state.js";
 import { handleSessionKillHttpRequest } from "./session-kill-http.js";
 import { handleSessionHistoryHttpRequest } from "./sessions-history-http.js";
 import { invokeGatewayTool } from "./tools-invoke-shared.js";
@@ -240,49 +239,29 @@ function observeHostSql() {
   return { ...host, [Symbol.dispose]: host.restore };
 }
 
-it.each([
-  ["application/json", false],
-  ["text/event-stream", false],
-  ["application/json", true],
-  ["text/event-stream", true],
-] as const)("serves memory history as %s, revoked=%s", async (accept, revoked) => {
-  const key = await seed();
-  using host = revoked ? undefined : observeHostSql();
-  const gate = pauseGate();
-  if (revoked) {
-    const read = historyState.readSessionHistorySnapshotAsync;
-    vi.spyOn(historyState, "readSessionHistorySnapshotAsync").mockImplementation(
-      async (...args) => {
-        const result = await read(...args);
-        await gate.pause();
-        return result;
-      },
-    );
-  }
-  const pending = fetch(historyUrl(revoked ? key : key.toUpperCase()), { headers: { accept } });
-  const response = await (revoked
-    ? gate.during(pending, () => {
-        runtime.current = false;
-      })
-    : pending);
-  expect(response.status).toBe(revoked ? 404 : 200);
-  let text: string;
-  if (!revoked && accept === "text/event-stream") {
-    const reader = response.body!.getReader();
-    try {
-      text = JSON.stringify(await readSseEvent(reader, { buffer: "" }));
-    } finally {
-      await reader.cancel();
+it.each(["application/json", "text/event-stream"] as const)(
+  "serves memory history as %s",
+  async (accept) => {
+    const key = await seed();
+    using host = observeHostSql();
+    const response = await fetch(historyUrl(key.toUpperCase()), { headers: { accept } });
+    expect(response.status).toBe(200);
+    let text: string;
+    if (accept === "text/event-stream") {
+      const reader = response.body!.getReader();
+      try {
+        text = JSON.stringify(await readSseEvent(reader, { buffer: "" }));
+      } finally {
+        await reader.cancel();
+      }
+    } else {
+      text = JSON.stringify(await response.json());
     }
-  } else {
-    text = revoked ? await response.text() : JSON.stringify(await response.json());
-  }
-  expect(text.includes("Private actor history")).toBe(!revoked);
-  if (host) {
+    expect(text).toContain("Private actor history");
     await lastHandled;
     expect(host.queries).toEqual([]);
-  }
-});
+  },
+);
 
 it("checks the captured avatar source after its media wait", async () => {
   const key = await seed();

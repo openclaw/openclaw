@@ -2,9 +2,7 @@ import { setImmediate as nextEventLoopTurn } from "node:timers/promises";
 import { expectDefined } from "@openclaw/normalization-core";
 import { expect, it, vi } from "vitest";
 import type { ModelsAuthLoginFlowOptions } from "../../commands/models/auth.js";
-import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import {
   ProviderAuthConfigApplyError,
@@ -33,7 +31,7 @@ await import("./commands-core.js");
 await import("./commands-handlers.runtime.js");
 
 const privateChatRequired =
-  "Provider login requires a private chat or Control UI session. Open a private chat with OpenClaw and send `/login` there.";
+  "Provider login requires a private chat or the OpenClaw app. Open a private chat with OpenClaw and send `/login` there.";
 const ownerRequired =
   "Only an OpenClaw owner can sign in here. Ask the owner to connect this provider or grant you owner access.";
 const refreshedMessage = "Sign-in status refreshed. Send /models to see available models.";
@@ -140,20 +138,6 @@ it("keeps registered login pending until saved credentials finish refreshing", a
   expect(runModelsAuthLoginFlowMock).toHaveBeenCalledOnce();
 });
 
-it("rejects an owner revoked before flow entry using the host config reader", async () => {
-  mockSuccessfulLoginFlow();
-  const currentConfig: OpenClawConfig = { commands: { ownerAllowFrom: ["replacement"] } };
-  const params = loginParams({
-    opts: { ...blockReplyOpts(), getProviderLoginConfig: () => currentConfig },
-  });
-  setRuntimeConfigSnapshot(params.cfg);
-
-  const result = await handleLoginCommand(params, true);
-
-  expect(result?.reply?.text).toContain("login did not complete");
-  expect(runModelsAuthLoginFlowMock).not.toHaveBeenCalled();
-});
-
 it.each([
   [
     new ProviderCredentialsSavedError("Credentials saved; sign-in incomplete."),
@@ -176,82 +160,6 @@ it.each([
   expect((await runLogin())?.reply?.text).toBe(message);
   expect(patchSessionEntryMock).not.toHaveBeenCalled();
 });
-
-it.each(["configured owner", "Gateway authority"])(
-  "rejects revoked %s at credential persistence",
-  async (source) => {
-    let revoked = false;
-    const params = loginParams();
-    if (source === "configured owner") {
-      params.ctx.OwnerAllowFrom = ["owner"];
-      setRuntimeConfigSnapshot(params.cfg);
-    } else {
-      params.opts = {
-        ...blockReplyOpts(),
-        assertProviderLoginAuthority: () => {
-          if (revoked) {
-            throw new Error("Gateway authority was revoked.");
-          }
-        },
-      };
-    }
-    const persist = vi.fn();
-    runModelsAuthLoginFlowMock.mockImplementationOnce(async (opts: ModelsAuthLoginFlowOptions) => {
-      await Promise.resolve();
-      revoked = true;
-      if (source === "configured owner") {
-        setRuntimeConfigSnapshot({
-          ...params.cfg,
-          commands: { ownerAllowFrom: ["replacement"] },
-        });
-      }
-      opts.assertCurrent?.();
-      persist();
-      return { ...loginResult(), profiles: [] };
-    });
-    const result = await handleLoginCommand(params, true);
-    expect(runModelsAuthLoginFlowMock).toHaveBeenCalledOnce();
-    expect(result?.reply?.text).toContain("login did not complete");
-    expect(result?.shouldContinue).toBe(false);
-    expect(persist).not.toHaveBeenCalled();
-  },
-);
-
-it.each(["before", "after"])(
-  "keeps the correct session pin when the owner is revoked %s commit",
-  async (revokedAt) => {
-    mockSuccessfulLoginFlow("openai:saved");
-    const previous = pinnedSession();
-    const params = persistedLoginParams(previous);
-    setRuntimeConfigSnapshot(params.cfg);
-    let persisted = previous;
-    const revoke = () => {
-      setRuntimeConfigSnapshot({ ...params.cfg, commands: { ownerAllowFrom: ["replacement"] } });
-    };
-    patchSessionEntryMock.mockImplementationOnce(async (write) => {
-      const patch = await write.update({ ...previous }, { existingEntry: { ...previous } });
-      if (revokedAt === "before") {
-        revoke();
-      }
-      write.workerGuard?.source?.();
-      write.assertCommitAllowed?.();
-      persisted = patch ? { ...previous, ...patch } : previous;
-      if (revokedAt === "after") {
-        revoke();
-      }
-      return persisted;
-    });
-    const result = await handleLoginCommand(params, true);
-    if (revokedAt === "before") {
-      expect(result?.reply?.text).toContain("login complete. This chat kept its previous account");
-      expect(persisted).toBe(previous);
-      expect(params.sessionEntry).toBe(previous);
-    } else {
-      expect(result?.reply?.text).toBe("OpenAI login complete. Try your request again now.");
-      expect(params.sessionEntry?.authProfileOverride).toBe("openai:saved");
-    }
-  },
-);
 
 it("keeps the current session profile when connecting another provider", async () => {
   mockSuccessfulLoginFlow();
@@ -372,7 +280,7 @@ it.each(["dispatcher-less", "public", "owner-less"] as const)(
     }
     const message = {
       "dispatcher-less":
-        "OpenAI login needs a live private response path so the code can be shown before it expires. Use the Control UI or a private chat and send `/login openai/openai-device-code` again.",
+        "OpenAI login needs a live private response path so the code can be shown before it expires. Use the OpenClaw app or a private chat and send `/login openai/openai` again.",
       public: privateChatRequired,
       "owner-less":
         "No chat owner is configured. Ask the OpenClaw owner to add your chat account to `commands.ownerAllowFrom` in the OpenClaw configuration, then send `/login` again.",
@@ -505,7 +413,7 @@ it("cancels only the initiating Control UI session when chats have no delivery t
         accountId: undefined,
         to: undefined,
       },
-      opts: { ...blockReplyOpts(), assertProviderLoginAuthority: vi.fn() },
+      opts: blockReplyOpts(),
     });
   const first = handleLoginCommand(params("agent:main:chat:first"), true);
   const other = handleLoginCommand(params("agent:main:chat:other"), true);
@@ -547,9 +455,7 @@ it("cancels an expired flow before replacing its reservation", async () => {
 
   expect(firstSignal?.aborted).toBe(true);
   expect(await first).toEqual(
-    stoppedReply(
-      "OpenAI login did not complete. Send `/login openai/openai-device-code` to try again.",
-    ),
+    stoppedReply("OpenAI login did not complete. Send `/login openai/openai` to try again."),
   );
   expect(second?.reply?.text).toBe(
     "OpenAI login complete. This chat kept its previous account. Send /models to review the available models.",

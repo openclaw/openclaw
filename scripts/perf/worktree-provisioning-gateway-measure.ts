@@ -16,6 +16,20 @@
  * checks every payload after readiness, outside timing. --acceleration enables
  * native source templates. Alternate built --entry revisions in separate runs;
  * --profile cpu|heap records the Gateway itself (heap includes collected objects).
+ * --fixture dependencies seeds 65,880 selected dependency files with the literal
+ * .env.local, .convex/, node_modules/ include and nested .artifacts dependencies.
+ * Guarded-to-batched acceptance: provisionCopy <10s, >=5x owner wall/allocation.
+ * Resident-parent follow-up: provisionCopy <10s, >=5x owner wall/parent spawns,
+ * no >20% CPU/allocation regression.
+ * Compare the first 100 concurrent probes at matched request count; full-window
+ * probe tails also remain recorded but span very different preparation durations.
+ * --dependency-proof verifies that shape and its creation ledger on later runs;
+ * --ledger-snapshot ordinary|exact also verifies the later mode/chunks ledger.
+ * --resident-gib 8 retains touched memory only in the Gateway main process and
+ * forwards NODE_OPTIONS, LD_PRELOAD and MALLOC_CONF for service-runtime proofs.
+ * --advance-commit is only for a disposable synthetic repository. It commits a
+ * new tracked marker after warmup and before each measured preparation, exercising
+ * warm templates with commit-changed misses. Never pass an operator checkout.
  * --watcher-snapshots <dir> records native watch paths and post-GC main snapshots
  * before churn, with each session/worktree active, and after retirement. The same
  * agent stays live; --watcher-agent-churn separately exercises agent retirement.
@@ -26,7 +40,7 @@
  */
 import assert from "node:assert/strict";
 import { execFileSync, spawn } from "node:child_process";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { createWriteStream } from "node:fs";
 import fs from "node:fs/promises";
 import { createServer } from "node:net";
@@ -36,6 +50,11 @@ import { setTimeout as delay } from "node:timers/promises";
 import { parseArgs } from "node:util";
 import { PROTOCOL_VERSION } from "../../packages/gateway-protocol/src/version.ts";
 import { isRecord } from "../../packages/normalization-core/src/record-coerce.ts";
+import {
+  getRegistryWorktreeProvisionedPaths,
+  getRegistryWorktreeProvisionedState,
+} from "../../src/agents/worktrees/registry-read.js";
+import { drainGlobalSingletonLifecycleState } from "../../src/shared/global-singleton.js";
 import { applyMockOpenAiModelConfig } from "../e2e/lib/fixtures/mock-openai-config.mjs";
 import { stopChild } from "../lib/gateway-bench-child.ts";
 import { getFreePort } from "../lib/gateway-bench-probes.ts";
@@ -53,6 +72,11 @@ import {
   waitForInitialProbe,
 } from "../lib/gateway-bench-runtime.ts";
 import { createGatewayWsClient } from "../lib/gateway-ws-client.ts";
+import {
+  dependencyFixturePaths,
+  seedDependencyFixture,
+  verifyDependencyFixture,
+} from "./worktree-provisioning-dependency-fixture.js";
 
 const { values } = parseArgs({
   options: {
@@ -62,6 +86,8 @@ const { values } = parseArgs({
     samples: { type: "string", default: "5" },
     port: { type: "string", default: "40980" },
     fixture: { type: "string" },
+    "dependency-proof": { type: "boolean", default: false },
+    "ledger-snapshot": { type: "string" },
     "verify-fixture": { type: "boolean", default: false },
     acceleration: { type: "boolean", default: false },
     profile: { type: "string" },
@@ -71,12 +97,19 @@ const { values } = parseArgs({
     "watcher-snapshots": { type: "string" },
     "session-churn": { type: "string", default: "0" },
     "watcher-agent-churn": { type: "boolean", default: false },
+    "resident-gib": { type: "string" },
+    "advance-commit": { type: "boolean", default: false },
   },
 });
 assert(values.repo && values.output, "--repo and --output are required");
 assert(!values.profile || ["cpu", "heap"].includes(values.profile));
+assert(!values["ledger-snapshot"] || ["ordinary", "exact"].includes(values["ledger-snapshot"]));
+assert(!values["ledger-snapshot"] || !values.retain);
+assert(!values["advance-commit"] || (values.acceleration && !values["skip-warmup"]));
+const residentGiB = Number(values["resident-gib"] ?? 0);
+assert(Number.isSafeInteger(residentGiB) && residentGiB >= 0 && residentGiB <= 16);
 if (values.fixture) {
-  assert(["source", "included"].includes(values.fixture));
+  assert(["source", "included", "dependencies"].includes(values.fixture));
   await fs.mkdir(path.resolve(values.repo), { mode: 0o700 });
   const fixture = path.resolve(values.repo);
   const git = (...args: string[]) =>
@@ -90,13 +123,20 @@ if (values.fixture) {
   git("config", "user.email", "fixture@example.invalid");
   git("config", "maintenance.auto", "false");
   const bytes = Buffer.alloc(20_000, 120);
-  for (let directory = 0; directory < 620; directory++) {
+  for (
+    let directory = 0;
+    directory < (values.fixture === "dependencies" ? 120 : 620);
+    directory++
+  ) {
     const root = path.join(fixture, directory < 120 ? "source" : "prepared", String(directory));
     await fs.mkdir(root, { recursive: true });
     for (let file = 0; file < 100; file++) {
       bytes.writeUInt32LE(directory * 100 + file, 0);
       await fs.writeFile(path.join(root, `${file}.bin`), bytes);
     }
+  }
+  if (values.fixture === "dependencies") {
+    await seedDependencyFixture(fixture);
   }
   if (values.fixture === "included") {
     await fs.writeFile(path.join(fixture, ".gitignore"), "prepared/\n");
@@ -120,6 +160,10 @@ if (values.fixture) {
 }
 const repo = await fs.realpath(values.repo);
 const output = path.resolve(values.output);
+const dependencyProof = values.fixture === "dependencies" || values["dependency-proof"];
+assert(!values["ledger-snapshot"] || dependencyProof);
+const stateDirectory = path.resolve(values["state-dir"] ?? path.join(output, "state"));
+const registryEnv = { ...process.env, OPENCLAW_STATE_DIR: stateDirectory };
 const samples = Number(values.samples);
 const sessionChurn = Number(values["session-churn"]);
 assert(Number.isSafeInteger(sessionChurn) && sessionChurn >= 0);
@@ -151,6 +195,23 @@ if (mockPort) {
   applyMockOpenAiModelConfig(config, { mockPort, modelRef: "openai/gpt-4.1" });
 }
 await fs.writeFile(configPath, JSON.stringify(config));
+const residentPreload = path.join(output, "resident-memory.mjs");
+if (residentGiB) {
+  await fs.writeFile(
+    residentPreload,
+    `
+import { isMainThread } from "node:worker_threads";
+if (isMainThread && process.env.OPENCLAW_BENCH_RESIDENT_GIB) {
+  const gib = Number(process.env.OPENCLAW_BENCH_RESIDENT_GIB);
+  delete process.env.OPENCLAW_BENCH_RESIDENT_GIB;
+  const memory = Array.from({ length: gib }, () => Buffer.alloc(1024 ** 3, 120));
+  process.once("exit", () => {
+    if (memory.some((bytes) => bytes[0] !== 120)) throw new Error("Resident fixture changed");
+  });
+}
+`,
+  );
+}
 const mock = mockPort
   ? spawn(process.execPath, ["scripts/e2e/mock-openai-server.mjs"], {
       detached: true,
@@ -162,6 +223,7 @@ const trace = path.join(output, "git-trace.jsonl");
 const gateway = spawn(
   process.execPath,
   buildGatewayBenchChildArgs(path.resolve(values.entry), port, [
+    ...(residentGiB ? ["--import", residentPreload] : []),
     ...(values["watcher-snapshots"]
       ? ["--expose-gc", "--import", path.resolve("scripts/perf/fswatcher-retention-preload.mjs")]
       : []),
@@ -176,13 +238,21 @@ const gateway = spawn(
     env: createGatewayBenchEnv(path.join(output, "home"), configPath, {
       startupTrace: false,
       caseEnv: {
-        OPENCLAW_STATE_DIR: path.resolve(values["state-dir"] ?? path.join(output, "state")),
+        OPENCLAW_STATE_DIR: stateDirectory,
         OPENCLAW_PROFILE: `provisioning-${port}`,
         OPENCLAW_SKIP_CHANNELS: "1",
         TMPDIR: path.join(output, "tmp"),
         GIT_TRACE2_EVENT: trace,
         DEVELOPER_DIR: process.env.DEVELOPER_DIR ?? "/Applications/Xcode.app/Contents/Developer",
         ...(mockPort ? { OPENAI_API_KEY: "synthetic-localhost-fixture" } : {}),
+        ...(residentGiB ? { OPENCLAW_BENCH_RESIDENT_GIB: String(residentGiB) } : {}),
+        ...(values["resident-gib"] === undefined
+          ? {}
+          : Object.fromEntries(
+              ["NODE_OPTIONS", "LD_PRELOAD", "MALLOC_CONF"].flatMap((key) =>
+                process.env[key] === undefined ? [] : [[key, process.env[key]]],
+              ),
+            )),
       },
     }),
   },
@@ -219,7 +289,7 @@ try {
   client = createGatewayWsClient({ url: `ws://127.0.0.1:${port}` });
   await client.waitOpen();
   const rpc = async (method: string, params: unknown) => {
-    const response = await client!.request(method, params, 300_000);
+    const response = await client!.request(method, params, 600_000);
     assert(response.ok, `${method}: ${JSON.stringify(response.error)}`);
     return response.payload;
   };
@@ -270,7 +340,31 @@ try {
   }
   await watcherCensus("baseline");
   const rows = [];
+  const commitMarker = `.provision-benchmark-${randomUUID()}`;
   for (let index = values["skip-warmup"] ? 1 : 0; index <= samples; index++) {
+    if (values["advance-commit"] && index > 0) {
+      await fs.writeFile(path.join(repo, commitMarker), `Synthetic preparation ${index}\n`);
+      const git = (...args: string[]) =>
+        execFileSync(
+          "git",
+          [
+            "-c",
+            "core.hooksPath=/dev/null",
+            "-c",
+            "commit.gpgsign=false",
+            "-c",
+            "user.name=Synthetic Fixture",
+            "-c",
+            "user.email=fixture@example.invalid",
+            "-C",
+            repo,
+            ...args,
+          ],
+          { stdio: "ignore" },
+        );
+      git("add", "--", commitMarker);
+      git("commit", "-m", `Synthetic provisioning commit ${index}`);
+    }
     const loadBefore = loadavg();
     const profile = values.profile as "cpu" | "heap" | undefined;
     const profilePath = path.join(
@@ -365,8 +459,29 @@ try {
     };
     rows.push(row);
     console.log(JSON.stringify(row));
+    if (dependencyProof) {
+      await verifyDependencyFixture(record.path);
+      const expectedPaths = dependencyFixturePaths().toSorted();
+      assert.deepEqual(
+        await getRegistryWorktreeProvisionedPaths(registryEnv, record.id),
+        expectedPaths,
+      );
+      assert.equal(await getRegistryWorktreeProvisionedState(registryEnv, record.id), undefined);
+      const extents = execFileSync(
+        "btrfs",
+        ["filesystem", "du", "-s", "--raw", repo, record.path],
+        { encoding: "utf8" },
+      );
+      console.log(
+        JSON.stringify({
+          verifiedFiles: expectedPaths.length,
+          ledger: "creation-path-strings",
+          extents,
+        }),
+      );
+    }
     if (values.fixture || values["verify-fixture"]) {
-      for (let directory = 0; directory < 620; directory++) {
+      for (let directory = 0; directory < (dependencyProof ? 120 : 620); directory++) {
         const relative = path.join(directory < 120 ? "source" : "prepared", String(directory));
         assert.equal((await fs.readdir(path.join(record.path, relative))).length, 100);
         for (let file = 0; file < 100; file++) {
@@ -377,19 +492,65 @@ try {
           assert.deepEqual(actual, expected, target);
         }
       }
-      console.log(JSON.stringify({ verifiedFiles: 62_000, verifiedBytes: 1_240_000_000 }));
+      console.log(JSON.stringify({ verifiedTrackedFiles: dependencyProof ? 12_000 : 62_000 }));
     }
     if (values.retain) {
       console.log(JSON.stringify({ retained: { id: record.id, path: record.path } }));
       continue;
     }
     // The task-owned fixture is disposable; snapshot failures remain in the log.
-    const removed = await rpc("worktrees.remove", { id: record.id, force: true });
+    const worktreePath = record.path;
+    const branch = record.branch;
+    assert(typeof branch === "string");
+    const git = (...args: string[]) =>
+      execFileSync("git", ["-C", worktreePath, ...args], { encoding: "utf8" }).trim();
+    if (values["ledger-snapshot"] === "exact") {
+      git("checkout", "--detach", "HEAD");
+    }
+    const exactState =
+      values["ledger-snapshot"] === "exact"
+        ? {
+            ownerKind: record.ownerKind,
+            ownerId: record.ownerId,
+            createdAt: record.createdAt,
+            lastActiveAt: record.lastActiveAt,
+            head: git("rev-parse", "HEAD"),
+            branchHead: git("rev-parse", `refs/heads/${branch}`),
+            indexSha256: createHash("sha256")
+              .update(
+                await fs.readFile(
+                  path.resolve(record.path, git("rev-parse", "--git-path", "index")),
+                ),
+              )
+              .digest("hex"),
+          }
+        : undefined;
+    const removed = await rpc("worktrees.remove", {
+      id: record.id,
+      ...(exactState ? { exactState } : { force: !values["ledger-snapshot"] }),
+    });
     console.log(JSON.stringify({ cleanup: removed }));
     assert(
       isRecord(removed) && removed.removed === true,
       `Fixture cleanup failed: ${JSON.stringify(removed)}`,
     );
+    if (values["ledger-snapshot"]) {
+      assert(isRecord(removed) && removed.snapshotRef && !removed.snapshotError);
+      const states = await getRegistryWorktreeProvisionedState(registryEnv, record.id);
+      assert(states);
+      const expected = dependencyFixturePaths().filter(
+        (file) => exactState || !/(^|\/)node_modules\//u.test(file),
+      );
+      assert.deepEqual(states.map((state) => state.path).toSorted(), expected.toSorted());
+      assert(states.every((state) => state.chunks === 1 && state.mode !== null));
+      console.log(
+        JSON.stringify({
+          ledger: "snapshot-mode-chunks",
+          kind: values["ledger-snapshot"],
+          files: states.length,
+        }),
+      );
+    }
     await delay(250);
     await watcherCensus(`retired-${index}`);
   }
@@ -399,6 +560,8 @@ try {
     .toSorted((a, b) => a - b);
   const result = {
     repo,
+    residentGiB,
+    advanceCommit: values["advance-commit"],
     entry: path.resolve(values.entry),
     samples,
     rows,
@@ -414,4 +577,5 @@ try {
     await stopChild(mock);
   }
   log.end();
+  await drainGlobalSingletonLifecycleState();
 }

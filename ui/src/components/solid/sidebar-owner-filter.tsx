@@ -108,7 +108,11 @@ export function SidebarOwnerFilter(params: {
                     <span class="sidebar-session-owner-count">{params.owners.length}</span>
                   )}
                 </span>
-                {params.compact ? <Icon name="chevronRight" /> : undefined}
+                {params.compact ? (
+                  <span class="oc-menu-item__submenu-icon" aria-hidden="true">
+                    <Icon name="chevronRight" />
+                  </span>
+                ) : undefined}
               </>
             ),
           },

@@ -63,6 +63,37 @@ describe("config raw editing and redaction", () => {
     ]);
   }
 
+  it("wraps a long model path and keeps both preview values inside the change card", () => {
+    const model = "openrouter/qwen/qwen3-coder-480b-a35b-instruct";
+    const raw = (alias: string) =>
+      JSON.stringify({ agents: { defaults: { models: { [model]: { alias } } } } });
+    const { container } = setup({
+      originalRaw: raw("code-review-release-candidate-europe"),
+      raw: raw("code-review-release-candidate-canada"),
+    });
+    attach(container);
+    openDiff(container);
+    const card = element(container, ".config-diff", HTMLDetailsElement);
+    card.style.width = "366px";
+    const bounds = card.getBoundingClientRect();
+    expectDiff(
+      container,
+      "agents.defaults.models." + model + ".alias",
+      '"code-review-release-candidate-europe"',
+      '"code-review-release-candidate-canada"',
+    );
+    for (const part of ["path", "from", "arrow", "to"]) {
+      const range = document.createRange();
+      range.selectNodeContents(element(container, ".config-diff__" + part, HTMLElement));
+      const lines = Array.from(range.getClientRects());
+      expect(lines.length).toBeGreaterThan(0);
+      for (const line of lines) {
+        expect(line.left).toBeGreaterThanOrEqual(bounds.left);
+        expect(line.right).toBeLessThanOrEqual(bounds.right);
+      }
+    }
+  });
+
   function expectHidden(container: HTMLElement) {
     expect(text(container, ".config-raw-field .settings-count")).toBe("1 secret redacted");
     expect(text(container, ".config-raw-field .callout.info")).toBe(

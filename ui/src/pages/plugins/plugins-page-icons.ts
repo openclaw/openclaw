@@ -51,6 +51,7 @@ export function createPluginsPageIcons(host: {
       >,
       rendered: ReadonlySet<string>,
       detail?: PluginDiscoveryDetailResult | null,
+      previewIcon?: string,
     ): void {
       // Both inventories follow the same rendered sorting, filtering, and collapse policy.
       installed.sync(result, rendered);
@@ -61,7 +62,7 @@ export function createPluginsPageIcons(host: {
           ...discovery.trending,
           ...(detail ? [detail.plugin] : []),
         ],
-        detail?.detail.author?.imageUrl ? [detail.detail.author.imageUrl] : [],
+        [previewIcon, detail?.detail.author?.imageUrl].filter((url) => url !== undefined),
         rendered,
       );
     },

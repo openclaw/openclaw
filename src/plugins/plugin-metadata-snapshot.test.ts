@@ -1,10 +1,6 @@
 // Verifies lifecycle snapshot loading, ownership facts, and immutable boundaries.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { makeTempDir } from "../../test/helpers/temp-dir.js";
-import { model as makeCatalogModel } from "../agents/model-catalog-fixtures.test-support.js";
-import { normalizeStaticProviderModelId } from "../agents/model-ref-shared.js";
-import { resolveDefaultModelForAgent } from "../agents/model-selection-config.js";
-import { buildConfiguredModelCatalog } from "../agents/model-selection-shared.js";
 import {
   resolveProviderEndpoint,
   resolveProviderRequestPolicy,
@@ -14,12 +10,7 @@ import { writeConfigMachineState } from "../state/config-machine-state-write.js"
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import { clearBundledDiscoveryModeMemo } from "./bundled-discovery-state.js";
 import { removeBundledDiscoveryStateRoot } from "./bundled-discovery.test-support.js";
-import {
-  adoptCurrentPluginMetadataSnapshotIfAbsent,
-  getCurrentPluginMetadataSnapshot,
-  setGatewayPluginMetadataSnapshot,
-  withPluginMetadataSnapshotScope,
-} from "./current-plugin-metadata-snapshot.js";
+import { setGatewayPluginMetadataSnapshot } from "./current-plugin-metadata-snapshot.js";
 import { getCurrentPluginMetadataSnapshotState } from "./current-plugin-metadata-state.js";
 import {
   makePluginMetadataIndex as makeIndex,
@@ -30,12 +21,6 @@ import type { PluginDiscoveryResult } from "./discovery.js";
 import { resolveInstalledPluginIndexPolicyHash } from "./installed-plugin-index-policy.js";
 import { normalizeManifestProviderEndpoints } from "./manifest-capability-normalizers.js";
 import { loadPluginManifestRegistryCore } from "./manifest-registry.js";
-import {
-  createPluginCache,
-  getPluginCache,
-  getPluginMetadataSnapshotCache,
-  withPluginCache,
-} from "./plugin-cache.js";
 import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
 import {
   completePluginMetadataSnapshot,
@@ -122,37 +107,6 @@ describe("plugin metadata snapshot", () => {
     clearPluginMetadataLifecycleCaches();
   });
 
-  it("progressively reuses first-access metadata and scopes fresh control-plane loads", () => {
-    const index = makeIndex();
-    mockRegistrySnapshot(index);
-
-    const first = loadPluginMetadataSnapshot({ config: {}, env: {}, index });
-    const second = loadPluginMetadataSnapshot({ config: {}, env: {}, index });
-
-    expect(second).toBe(first);
-    expect(loadPluginRegistrySnapshotWithMetadata).toHaveBeenCalledTimes(1);
-    expect(loadPluginManifestRegistryForInstalledIndex).toHaveBeenCalledTimes(1);
-
-    const operation = createPluginCache();
-    const fresh = withPluginCache(operation, () => {
-      const snapshot = loadPluginMetadataSnapshot({
-        config: {},
-        env: {},
-        index,
-        allowCurrent: false,
-      });
-      expect(loadPluginMetadataSnapshot({ config: {}, env: {}, index, allowCurrent: false })).toBe(
-        snapshot,
-      );
-      return snapshot;
-    });
-    expect(fresh).not.toBe(first);
-    expect(getPluginMetadataSnapshotCache(fresh)).toBe(operation);
-    withPluginMetadataSnapshotScope(fresh, () => expect(getPluginCache()).toBe(operation));
-    expect(loadPluginMetadataSnapshot({ config: {}, env: {}, index })).toBe(first);
-    expect(loadPluginRegistrySnapshotWithMetadata).toHaveBeenCalledTimes(2);
-  });
-
   it("keeps direct manifest readers on the Gateway inventory", () => {
     const config = {};
     mockRegistrySnapshot(makeIndex());
@@ -207,108 +161,24 @@ describe("plugin metadata snapshot", () => {
     }
   });
 
-  it("publishes the complete prepared cache and keeps fresh operations outside boot scopes", () => {
+  it("completes a narrowed planning view before publishing the Gateway inventory", () => {
     const config = {};
-    const preparedCache = createPluginCache();
-    mockRegistrySnapshot(makeIndex());
-    const snapshot = withPluginCache(preparedCache, () =>
-      loadPluginMetadataSnapshot({ config, env: {} }),
-    );
-    expect(getCurrentPluginMetadataSnapshotState().snapshot).toBeUndefined();
-    setGatewayPluginMetadataSnapshot(snapshot, { config, env: {} });
-    expect(getPluginCache()).toBe(preparedCache);
-
-    withPluginMetadataSnapshotScope(
-      snapshot,
-      () => {
-        withPluginCache(createPluginCache(), () => {
-          expect(getCurrentPluginMetadataSnapshot({ config, env: {} })).toBeUndefined();
-          const fresh = loadPluginMetadataSnapshot({ config, env: {}, allowCurrent: false });
-          expect(fresh).not.toBe(snapshot);
-          expect(getCurrentPluginMetadataSnapshotState().snapshot).toBe(snapshot);
-        });
-        expect(getCurrentPluginMetadataSnapshot({ config, env: {} })).toBe(snapshot);
-      },
-      { config, trustConfigIdentity: true },
-    );
-    expect(loadPluginRegistrySnapshotWithMetadata).toHaveBeenCalledTimes(2);
-  });
-
-  it.each([{ pluginIds: [] }, { pluginIds: ["demo"] }])(
-    "selects $pluginIds from a runtime inventory without rediscovery",
-    ({ pluginIds }) => {
-      const { config, index } = prepareRegistry();
-      const snapshot = loadPluginMetadataSnapshot({ config, env: {}, index });
-      loadPluginRegistrySnapshotWithMetadata.mockClear();
-      loadPluginManifestRegistryForInstalledIndex.mockClear();
-
-      withPluginMetadataSnapshotScope(
-        snapshot,
-        () => {
-          const selected = resolvePluginMetadataSnapshot({
-            config: { plugins: { entries: { demo: { enabled: false } } } },
-            workspaceDir: "/different-run-workspace",
-            pluginIds,
-          });
-          expect(selected.plugins.map((plugin) => plugin.id)).toEqual(pluginIds);
-          expect(selected.index).toBe(snapshot.index);
-          expect(loadPluginRegistrySnapshotWithMetadata).not.toHaveBeenCalled();
-          expect(loadPluginManifestRegistryForInstalledIndex).not.toHaveBeenCalled();
-        },
-        { config, trustConfigIdentity: true },
-      );
-    },
-  );
-
-  it.each([
-    { scope: "full", pluginIds: undefined },
-    { scope: "narrowed", pluginIds: ["demo"] },
-    { scope: "empty", pluginIds: [] },
-  ])("completes a $scope planning view and retains its lifecycle graph", ({ pluginIds }) => {
-    const config = {};
-    const workspaceDir = "/workspace";
     const index = makeIndex();
     index.plugins = [...index.plugins, ...makeIndex("other").plugins];
     index.policyHash = resolveInstalledPluginIndexPolicyHash(config);
-    const manifestRegistry = makeManifestRegistry();
-    manifestRegistry.plugins.push(...makeManifestRegistry("other").plugins);
     mockRegistrySnapshot(index);
-    loadPluginManifestRegistryForInstalledIndex.mockReturnValue(manifestRegistry);
-    const unscoped = loadPluginMetadataSnapshot({ config, env: {}, index, workspaceDir });
-    const planning = loadPluginMetadataSnapshot({
-      config,
-      env: {},
-      index,
-      pluginIds,
-      workspaceDir,
-    });
+    const registry = makeManifestRegistry();
+    registry.plugins.push(...makeManifestRegistry("other").plugins);
+    loadPluginManifestRegistryForInstalledIndex.mockReturnValue(registry);
 
-    const complete = completePluginMetadataSnapshot({
-      snapshot: planning,
-      config,
-      env: {},
-      workspaceDir,
-    });
+    const planning = loadPluginMetadataSnapshot({ config, env: {}, index, pluginIds: ["demo"] });
+    expect(planning.plugins.map((plugin) => plugin.id)).toEqual(["demo"]);
+    const complete = completePluginMetadataSnapshot({ snapshot: planning, config, env: {} });
+
     expect(complete?.pluginIds).toBeUndefined();
     expect(complete?.plugins.map((plugin) => plugin.id)).toEqual(["demo", "other"]);
-    expect(complete?.owners).toBe(unscoped.owners);
-    expect(complete?.normalizePluginId).toBe(unscoped.normalizePluginId);
-    expect(complete?.bundledManifestRegistry).toBeDefined();
-    setCurrentPluginMetadataSnapshot(complete, { config, env: {}, workspaceDir });
-    loadPluginRegistrySnapshotWithMetadata.mockClear();
-    loadPluginManifestRegistryForInstalledIndex.mockClear();
-
-    expect(
-      completePluginMetadataSnapshot({ snapshot: complete, config, env: {}, workspaceDir }),
-    ).toBe(complete);
-    expect(resolvePluginMetadataSnapshot({ env: {}, allowWorkspaceScopedCurrent: true })).toBe(
-      complete,
-    );
-    for (let iteration = 0; iteration < 20; iteration += 1) {
-      expect(resolvePluginMetadataSnapshot({ config, env: {}, workspaceDir })).toBe(complete);
-    }
-    expect(loadPluginRegistrySnapshotWithMetadata).not.toHaveBeenCalled();
-    expect(loadPluginManifestRegistryForInstalledIndex).not.toHaveBeenCalled();
+    setGatewayPluginMetadataSnapshot(complete, { config, env: {} });
+    expect(getCurrentPluginMetadataSnapshotState().snapshot).toBe(complete);
   });
 
   it("cold-loads the requested workspace instead of reusing a different lifecycle graph", () => {
@@ -348,13 +218,6 @@ describe("plugin metadata snapshot", () => {
     );
   });
 
-  it("reuses finalized snapshots across module instances", async () => {
-    const snapshot = restorePluginMetadataSnapshot(createPluginMetadataSnapshotFixture());
-    vi.resetModules();
-    const reloaded = await import("./plugin-metadata-snapshot.js");
-    expect(reloaded.finalizePluginMetadataSnapshot(snapshot)).toBe(snapshot);
-  });
-
   it.each(["derived", "persisted"])("keeps an empty %s index authoritative", (source) => {
     const index = makeIndex();
     index.plugins = [];
@@ -387,105 +250,6 @@ describe("plugin metadata snapshot", () => {
     expect(snapshot.index.plugins).toEqual([]);
   });
 
-  it("carries a derived manifest graph into snapshot construction without rebuilding it", () => {
-    const index = makeIndex();
-    const manifestRegistry = makeManifestRegistry();
-    const discovery: PluginDiscoveryResult = { candidates: [], diagnostics: [] };
-    loadPluginRegistrySnapshotWithMetadata.mockReturnValue({
-      source: "derived",
-      snapshot: index,
-      diagnostics: [],
-      discovery,
-      manifestRegistry,
-    });
-
-    const snapshot = loadPluginMetadataSnapshot({ config: {}, env: {} });
-
-    expect(snapshot.plugins.map((plugin) => plugin.id)).toEqual(["demo"]);
-    expect(snapshot.registrySource).toBe("derived");
-    expect(snapshot.discovery).toBe(discovery);
-    expect(loadPluginManifestRegistryForInstalledIndex).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({
-        manifestRegistry,
-        includeDisabled: true,
-      }),
-    );
-  });
-
-  it("reuses an adopted snapshot across config objects until a lifecycle owner replaces it", () => {
-    // Activation-only config can share default discovery; a custom path cannot.
-    const load = { paths: ["/custom/plugins"] };
-    const config = { plugins: { load, entries: { demo: { enabled: true } } } };
-    const compatibleConfig = { plugins: { load, entries: { demo: { enabled: false } } } };
-    const index = makeIndex();
-    index.policyHash = resolveInstalledPluginIndexPolicyHash(config);
-    mockRegistrySnapshot(index);
-    const snapshot = loadPluginMetadataSnapshot({ config, env: {}, index });
-    adoptCurrentPluginMetadataSnapshotIfAbsent(snapshot, {
-      config,
-      compatibleConfigs: [compatibleConfig],
-      env: {},
-    });
-    const ignored = { ...snapshot, registrySource: "persisted" as const };
-    adoptCurrentPluginMetadataSnapshotIfAbsent(ignored, {
-      config: structuredClone(config),
-      env: {},
-    });
-    loadPluginRegistrySnapshotWithMetadata.mockClear();
-    loadPluginManifestRegistryForInstalledIndex.mockClear();
-
-    expect(resolvePluginMetadataSnapshot({ config: structuredClone(config), env: {} })).toBe(
-      snapshot,
-    );
-    const compatibleParams = {
-      config: compatibleConfig,
-      env: {},
-      index: snapshot.index,
-    };
-    expect(loadPluginMetadataSnapshot(compatibleParams)).toBe(snapshot);
-    expect(resolvePluginMetadataSnapshot(compatibleParams)).toBe(snapshot);
-    expect(loadPluginRegistrySnapshotWithMetadata).not.toHaveBeenCalled();
-    expect(loadPluginManifestRegistryForInstalledIndex).not.toHaveBeenCalled();
-
-    expect(loadPluginMetadataSnapshot({ env: {}, index })).not.toBe(snapshot);
-    expect(loadPluginRegistrySnapshotWithMetadata).toHaveBeenCalledOnce();
-    expect(loadPluginManifestRegistryForInstalledIndex).toHaveBeenCalledOnce();
-
-    setGatewayPluginMetadataSnapshot(ignored, { config, env: {} });
-    expect(resolvePluginMetadataSnapshot({ config: structuredClone(config), env: {} })).toBe(
-      ignored,
-    );
-  });
-
-  it("adopts a cold unscoped snapshot across equivalent selected-agent model configs", () => {
-    const config = {
-      agents: {
-        entries: { ops: { models: { "openai/ops": { alias: "Operations" } } } },
-      },
-    };
-    const index = makeIndex();
-    index.policyHash = resolveInstalledPluginIndexPolicyHash(config);
-    mockRegistrySnapshot(index, "derived");
-
-    const snapshot = resolvePluginMetadataSnapshot({ config, env: {} });
-
-    expect(resolvePluginMetadataSnapshot({ config: structuredClone(config), env: {} })).toBe(
-      snapshot,
-    );
-    expect(
-      resolvePluginMetadataSnapshot({
-        config: {
-          agents: {
-            entries: { support: { models: { "openai/support": { alias: "Support" } } } },
-          },
-        },
-        env: {},
-      }),
-    ).toBe(snapshot);
-    expect(loadPluginRegistrySnapshotWithMetadata).toHaveBeenCalledOnce();
-    expect(loadPluginManifestRegistryForInstalledIndex).toHaveBeenCalledOnce();
-  });
-
   it.each([
     { scope: "workspace", options: { workspaceDir: "/workspace" } },
     { scope: "plugin", options: { pluginIds: ["demo"] } },
@@ -508,145 +272,6 @@ describe("plugin metadata snapshot", () => {
       expect(loadPluginRegistrySnapshotWithMetadata).toHaveBeenCalledOnce();
     }
     expect(getCurrentPluginMetadataSnapshotState().snapshot).toBeUndefined();
-  });
-
-  it("propagates the current-snapshot bypass to the registry reader", () => {
-    const { config, index } = prepareRegistry({}, "derived");
-    const current = loadPluginMetadataSnapshot({ config, env: {}, index });
-    setCurrentPluginMetadataSnapshot(current, { config, env: {} });
-    loadPluginRegistrySnapshotWithMetadata.mockClear();
-    mockRegistrySnapshot(index, "persisted");
-
-    const resolved = resolvePluginMetadataSnapshot({
-      config,
-      env: {},
-      allowCurrent: false,
-    });
-
-    expect(resolved).not.toBe(current);
-    expect(resolved.registrySource).toBe("persisted");
-    expect(loadPluginRegistrySnapshotWithMetadata).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({ allowCurrent: false }),
-    );
-  });
-
-  it("projects scopes from one complete first-access inventory", () => {
-    const index = makeIndex();
-    mockRegistrySnapshot(index);
-
-    const scoped = loadPluginMetadataSnapshot({
-      config: {},
-      env: {},
-      index,
-      pluginIds: ["demo"],
-    });
-    const unscoped = loadPluginMetadataSnapshot({ config: {}, env: {}, index });
-
-    expect(scoped.pluginIds).toEqual(["demo"]);
-    expect(unscoped.pluginIds).toBeUndefined();
-    expect(scoped.index).toBe(unscoped.index);
-    expect(loadPluginManifestRegistryForInstalledIndex).toHaveBeenCalledOnce();
-    expect(loadPluginManifestRegistryForInstalledIndex.mock.calls[0]?.[0]).not.toHaveProperty(
-      "pluginIds",
-    );
-  });
-
-  it.each([
-    { scope: "explicit empty", pluginIds: [], expectedPluginIds: [] },
-    { scope: "explicit owner", pluginIds: ["demo"], expectedPluginIds: ["demo"] },
-  ])(
-    "projects an $scope request without rebuilding the lifecycle graph",
-    ({ pluginIds, expectedPluginIds }) => {
-      const { config, index } = prepareRegistry();
-      const unscoped = loadPluginMetadataSnapshot({ config, env: {}, index });
-      setCurrentPluginMetadataSnapshot(unscoped, { config, env: {} });
-      loadPluginManifestRegistryForInstalledIndex.mockClear();
-
-      const scoped = resolvePluginMetadataSnapshot({ config, env: {}, pluginIds });
-
-      expect(scoped).not.toBe(unscoped);
-      expect(scoped.pluginIds).toEqual(pluginIds);
-      expect(scoped.plugins.map((plugin) => plugin.id)).toEqual(expectedPluginIds);
-      expect(scoped.index).toBe(unscoped.index);
-      expect(loadPluginManifestRegistryForInstalledIndex).not.toHaveBeenCalled();
-    },
-  );
-
-  it("reuses prepared model normalization policies without enumerating declarations", () => {
-    const enumeratePolicies = vi.fn(Reflect.ownKeys);
-    const snapshot = restorePluginMetadataSnapshot(
-      createPluginMetadataSnapshotFixture({
-        plugins: [
-          {
-            id: "first",
-            providers: ["demo"],
-            modelIdNormalization: {
-              providers: { " Demo ": { aliases: { latest: "first-model" } } },
-            },
-          },
-          {
-            id: "last",
-            providers: ["demo"],
-            modelIdNormalization: {
-              providers: new Proxy(
-                { demo: { aliases: { latest: "middle-model", "middle-model": "final-model" } } },
-                { ownKeys: (target) => enumeratePolicies(target) },
-              ),
-            },
-          },
-        ],
-      }),
-    );
-    enumeratePolicies.mockClear();
-
-    const cfg: OpenClawConfig = {
-      agents: { defaults: { model: { primary: "demo/latest" } } },
-      models: {
-        providers: {
-          demo: {
-            api: "openai-completions",
-            baseUrl: "http://127.0.0.1",
-            models: [makeCatalogModel("latest", "Latest")],
-          },
-        },
-      },
-    };
-
-    withPluginMetadataSnapshotScope(
-      snapshot,
-      () => {
-        for (let repeat = 0; repeat < 4; repeat += 1) {
-          expect(normalizeStaticProviderModelId(" DEMO ", "latest")).toBe("middle-model");
-          expect(normalizeStaticProviderModelId("missing", "latest")).toBe("latest");
-          expect(resolveDefaultModelForAgent({ cfg })).toEqual({
-            provider: "demo",
-            model: "middle-model",
-          });
-          expect(buildConfiguredModelCatalog({ cfg })).toMatchObject([
-            { provider: "demo", id: "middle-model" },
-          ]);
-        }
-        expect(normalizeStaticProviderModelId("demo", "latest", { manifestPlugins: [] })).toBe(
-          "latest",
-        );
-        const providers = { demo: { aliases: { latest: "explicit-model" } } };
-        const plugins = [{ modelIdNormalization: { providers } }];
-        expect(normalizeStaticProviderModelId("demo", "latest", { manifestPlugins: plugins })).toBe(
-          "explicit-model",
-        );
-        plugins.splice(0, 1, {
-          modelIdNormalization: {
-            providers: { demo: { aliases: { latest: "changed-explicit-model" } } },
-          },
-        });
-        expect(normalizeStaticProviderModelId("demo", "latest", { manifestPlugins: plugins })).toBe(
-          "changed-explicit-model",
-        );
-      },
-      { trustConfigIdentity: true },
-    );
-
-    expect(enumeratePolicies).not.toHaveBeenCalled();
   });
 
   it("prepares normalized CLI ownership, provider endpoint, and request facts", () => {

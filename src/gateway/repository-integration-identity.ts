@@ -42,13 +42,6 @@ export async function withRepositoryIdentity<T>(
       : Object.freeze({ kind: "admitted-operation" as const });
   const actorFacts = Object.freeze({ ...actor, authorization });
   const assertCurrent = () => {
-    if (
-      getRepositoryIntegration() !== integration ||
-      resolveGitHubHost() !== host ||
-      resolveGitHubApiBaseUrl() !== apiBaseUrl
-    ) {
-      throw new Error("Repository operation authority changed");
-    }
     actor.assertCurrent();
     credential.assertCurrent();
     profile.readCurrentFacts();

@@ -88,7 +88,7 @@ export function reconcileUpdateRunCandidatesInWorker(
           history.incomplete
         ) {
           throw new Error(
-            "Update history changed during inspection and now needs post-core maintenance. Retry openclaw update repair; if the managed Gateway cannot stop, run openclaw gateway stop first.",
+            "Update history changed during inspection and now needs post-core maintenance. Retry openclaw update repair; if the managed Gateway cannot stop, run openclaw gateway stop --force first.",
           );
         }
       }

@@ -354,6 +354,12 @@ export function fitCodexProjectedContextForTurnStart(params: {
     const retained = truncateOlderContext(params.promptText.slice(start, end), budget);
     return { ...retained, sourceStart: start + retained.retainedStart, sourceEnd: end };
   };
+  // The current request opens with its instruction and untrusted-content marker
+  // and closes with the matching marker and run guidance; only its middle may go.
+  const sliceCurrent = (start: number, end: number, budget: number) => {
+    const retained = truncateCurrentRequest(params.promptText.slice(start, end), budget);
+    return { ...retained, sourceStart: start + retained.retainedStart, sourceEnd: end };
+  };
   const finish = (...parts: ReturnType<typeof slice>[]) => {
     const imageGroups: CodexProjectedImageGroup[] = [];
     let offset = 0;
@@ -386,7 +392,7 @@ export function fitCodexProjectedContextForTurnStart(params: {
       return finish(slice(0, params.promptText.length, maxChars));
     }
     if (preservedText.length >= maxChars) {
-      return finish(slice(preservedRange.start, preservedRange.end, maxChars));
+      return finish(sliceCurrent(preservedRange.start, preservedRange.end, maxChars));
     }
     return finish(
       slice(0, preservedRange.start, maxChars - preservedText.length),
@@ -404,10 +410,10 @@ export function fitCodexProjectedContextForTurnStart(params: {
   ) {
     const request = params.promptText.slice(requestRange.start, requestRange.end);
     if (request.length >= maxChars) {
-      return finish(slice(requestRange.start, requestRange.end, maxChars));
+      return finish(sliceCurrent(requestRange.start, requestRange.end, maxChars));
     }
     // Keep current request and hook context ahead of history when they fit.
-    // If they exceed the limit, retain the existing request/tail-first priority.
+    // A request that alone exceeds the limit loses only its middle (above).
     const fittedAppendedContext = slice(
       requestRange.end,
       params.promptText.length,
@@ -435,7 +441,7 @@ export function fitCodexProjectedContextForTurnStart(params: {
   // Hook-added prefixes can make the non-context text exceed the limit. Keep
   // the current context tail before the user's request; dropping it would make
   // a duplicated earlier projection crowd out the newest assembled context.
-  const afterContextText = slice(range.end, params.promptText.length, maxChars);
+  const afterContextText = sliceCurrent(range.end, params.promptText.length, maxChars);
   const contextBudgetAfterRequest = maxChars - afterContextText.text.length;
   return finish(slice(range.start, range.end, contextBudgetAfterRequest), afterContextText);
 }
@@ -624,6 +630,32 @@ function truncateText(text: string, maxChars: number): string {
   }
   const truncated = truncateUtf16Safe(text, maxChars);
   return `${truncated}\n[truncated ${text.length - truncated.length} chars]`;
+}
+
+function truncateCurrentRequest(
+  text: string,
+  maxChars: number,
+): { text: string; retainedStart: number; prefixLength: number } {
+  if (text.length <= maxChars) {
+    return { text, retainedStart: 0, prefixLength: 0 };
+  }
+  const buildMarker = (omittedChars: number): string =>
+    `\n[truncated ${omittedChars} chars from the middle of the current request]\n`;
+  // Sized for the full length, so the real (smaller) count always fits.
+  const keptChars = Math.max(0, maxChars - buildMarker(text.length).length);
+  const head = truncateUtf16Safe(text, Math.ceil(keptChars / 2));
+  const tailChars = Math.floor(keptChars / 2);
+  const tail = tailChars > 0 ? sliceUtf16Safe(text, -tailChars) : "";
+  const marker = buildMarker(text.length - head.length - tail.length);
+  if (head.length + marker.length > maxChars) {
+    return { text: marker.slice(0, maxChars), retainedStart: text.length, prefixLength: maxChars };
+  }
+  // The kept tail keeps its source position so history images inside it still map.
+  return {
+    text: `${head}${marker}${tail}`,
+    retainedStart: text.length - tail.length,
+    prefixLength: head.length + marker.length,
+  };
 }
 
 function truncateOlderContext(

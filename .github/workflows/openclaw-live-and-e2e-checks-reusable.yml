@@ -593,6 +593,8 @@ on:
         required: false
       ZAI_API_KEY:
         required: false
+      ZAI_CODING_API_KEY:
+        required: false
       Z_AI_API_KEY:
         required: false
       BYTEPLUS_ACCESS_KEY_ID:
@@ -1277,8 +1279,8 @@ jobs:
     runs-on: &linux_runner_medium >-
       ${{ inputs.runner_group != '' && fromJSON(format('{{"group":{0},"labels":{1}}}',
       toJSON(inputs.runner_group), toJSON(inputs.use_github_hosted_runners && 'ubuntu-24.04' ||
-      'blacksmith-2vcpu-ubuntu-2404'))) || (inputs.use_github_hosted_runners && 'ubuntu-24.04' ||
-      'blacksmith-2vcpu-ubuntu-2404') }}
+      vars.OPENCLAW_CI_RUNNER_BACKEND == 'boat' && 'boat' || 'blacksmith-2vcpu-ubuntu-2404'))) || (inputs.use_github_hosted_runners && 'ubuntu-24.04' ||
+      vars.OPENCLAW_CI_RUNNER_BACKEND == 'boat' && 'boat' || 'blacksmith-2vcpu-ubuntu-2404') }}
     timeout-minutes: 30
     env:
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
@@ -1429,8 +1431,8 @@ jobs:
     runs-on: &linux_runner_xlarge >-
       ${{ inputs.runner_group != '' && fromJSON(format('{{"group":{0},"labels":{1}}}',
       toJSON(inputs.runner_group), toJSON(inputs.use_github_hosted_runners && 'ubuntu-24.04' ||
-      'blacksmith-8vcpu-ubuntu-2404'))) || (inputs.use_github_hosted_runners && 'ubuntu-24.04' ||
-      'blacksmith-8vcpu-ubuntu-2404') }}
+      vars.OPENCLAW_CI_RUNNER_BACKEND == 'boat' && 'boat-xlarge' || 'blacksmith-8vcpu-ubuntu-2404'))) || (inputs.use_github_hosted_runners && 'ubuntu-24.04' ||
+      vars.OPENCLAW_CI_RUNNER_BACKEND == 'boat' && 'boat-xlarge' || 'blacksmith-8vcpu-ubuntu-2404') }}
     timeout-minutes: ${{ matrix.timeout_minutes }}
     strategy:
       fail-fast: false
@@ -2096,10 +2098,11 @@ jobs:
   plan_docker_lane_groups:
     needs: validate_selected_ref
     if: (!inputs.prepare_only) && inputs.docker_lanes != ''
-    runs-on: ${{ inputs.runner_group != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(inputs.runner_group), toJSON(inputs.use_github_hosted_runners && 'ubuntu-24.04' || 'blacksmith-2vcpu-ubuntu-2404'))) || (inputs.use_github_hosted_runners && 'ubuntu-24.04' || 'blacksmith-2vcpu-ubuntu-2404') }}
+    runs-on: ${{ inputs.runner_group != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(inputs.runner_group), toJSON(inputs.use_github_hosted_runners && 'ubuntu-24.04' || vars.OPENCLAW_CI_RUNNER_BACKEND == 'boat' && 'boat' || 'blacksmith-2vcpu-ubuntu-2404'))) || (inputs.use_github_hosted_runners && 'ubuntu-24.04' || vars.OPENCLAW_CI_RUNNER_BACKEND == 'boat' && 'boat' || 'blacksmith-2vcpu-ubuntu-2404') }}
     timeout-minutes: 90
     outputs:
       groups_json: ${{ steps.groups.outputs.groups_json }}
+      max_parallel: ${{ steps.groups.outputs.max_parallel }}
     steps:
       - name: Checkout trusted release harness
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -2121,6 +2124,8 @@ jobs:
         env:
           LANES: ${{ inputs.docker_lanes }}
           GROUP_SIZE: ${{ inputs.targeted_docker_lane_group_size }}
+          # Share the existing capacity decision with ordering and matrix admission.
+          MAX_PARALLEL: ${{ inputs.use_github_hosted_runners && inputs.runner_group == '' && needs.validate_selected_ref.outputs.package_artifact_present == 'true' && contains(inputs.docker_lanes, 'published-upgrade-survivor') && !contains(inputs.docker_lanes, 'update-migration') && inputs.published_upgrade_survivor_scenarios != '' && 64 || 32 }}
           OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC: ${{ needs.validate_selected_ref.outputs.upgrade_baseline }}
           OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SCOPE: ${{ needs.validate_selected_ref.outputs.upgrade_baseline_scope }}
           OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPECS: ${{ needs.validate_selected_ref.outputs.upgrade_baselines }}
@@ -2130,6 +2135,7 @@ jobs:
           echo "artifact_name=upgrade-baseline-checks-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-$(node -p 'crypto.randomUUID()')" >> "$GITHUB_OUTPUT"
           groups_json="$(node scripts/plan-targeted-docker-lane-groups.mjs --check-baselines .artifacts/upgrade-baseline-checks)"
           echo "groups_json=${groups_json}" >> "$GITHUB_OUTPUT"
+          echo "max_parallel=${MAX_PARALLEL}" >> "$GITHUB_OUTPUT"
 
       - name: Summarize published baseline checks
         if: always()
@@ -2151,7 +2157,7 @@ jobs:
     timeout-minutes: ${{ matrix.group.timeout_minutes || 60 }}
     strategy:
       fail-fast: false
-      max-parallel: 32
+      max-parallel: ${{ fromJSON(needs.plan_docker_lane_groups.outputs.max_parallel) }}
       matrix:
         group: ${{ fromJson(needs.plan_docker_lane_groups.outputs.groups_json) }}
     env:
@@ -2457,7 +2463,7 @@ jobs:
     needs: [validate_selected_ref, prepare_docker_e2e_image]
     if: (!inputs.prepare_only) && inputs.include_openwebui && inputs.docker_lanes == '' && (inputs.release_test_profile == 'stable' || inputs.release_test_profile == 'full')
     name: Docker E2E (openwebui)
-    runs-on: ${{ inputs.runner_group != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(inputs.runner_group), toJSON((vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' || inputs.use_github_hosted_runners) && 'ubuntu-24.04' || 'blacksmith-8vcpu-ubuntu-2404'))) || ((vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' || inputs.use_github_hosted_runners) && 'ubuntu-24.04' || 'blacksmith-8vcpu-ubuntu-2404') }}
+    runs-on: ${{ inputs.runner_group != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(inputs.runner_group), toJSON((vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' || inputs.use_github_hosted_runners) && 'ubuntu-24.04' || vars.OPENCLAW_CI_RUNNER_BACKEND == 'boat' && 'boat-xlarge' || 'blacksmith-8vcpu-ubuntu-2404'))) || ((vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' || inputs.use_github_hosted_runners) && 'ubuntu-24.04' || vars.OPENCLAW_CI_RUNNER_BACKEND == 'boat' && 'boat-xlarge' || 'blacksmith-8vcpu-ubuntu-2404') }}
     timeout-minutes: 60
     env:
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
@@ -3236,6 +3242,7 @@ jobs:
         if: steps.create_prepublish_plugin_registry.outputs.manifest_sha256 != ''
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
+          compression-level: 0
           name: docker-e2e-prepublish-plugin-registry-${{ github.run_id }}-${{ github.run_attempt }}
           path: .artifacts/prepublish-plugin-registry/
           if-no-files-found: error
@@ -3600,6 +3607,7 @@ jobs:
           fetch-depth: 1
           path: .release-harness
           persist-credentials: false
+          sparse-checkout: scripts
 
       - name: Restore exact trusted workflow revision
         env:
@@ -3643,11 +3651,6 @@ jobs:
             throw new Error("trusted harness checkout did not resolve to the authenticated workflow SHA");
           }
           NODE
-
-      - name: Setup trusted release harness
-        uses: ./.release-harness/.github/actions/setup-release-harness
-        with:
-          node-version: ${{ env.NODE_VERSION }}
 
       - name: Create full release candidate evidence
         id: candidate_evidence
@@ -4439,7 +4442,7 @@ jobs:
         include:
           - suite_id: native-live-src-agents
             label: Native live agents
-            command: OPENCLAW_LIVE_OPENAI_COMPACTION=1 OPENCLAW_LIVE_OPENAI_COMPACTION_FULL=0 node .release-harness/scripts/test-live-shard.mjs native-live-src-agents
+            command: OPENCLAW_LIVE_RETAINED_CHILD=1 OPENCLAW_LIVE_OPENAI_COMPACTION=1 OPENCLAW_LIVE_OPENAI_COMPACTION_FULL=0 node .release-harness/scripts/test-live-shard.mjs native-live-src-agents
             timeout_minutes: 60
             profile_env_only: false
             profiles: stable full
@@ -4523,9 +4526,9 @@ jobs:
             label: Native live gateway profiles OpenCode Go DeepSeek/GLM
             # The release workspace does not enable Global regions, so the active DeepSeek V4
             # routes reject every request, and upstream metadata deprecated
-            # deepseek-v4-flash-vision-exp, so discovery no longer lists it. These GLM refs
-            # were proven reachable from the release workspace.
-            command: OPENCLAW_LIVE_GATEWAY_PROVIDERS=opencode-go OPENCLAW_LIVE_GATEWAY_MODELS=opencode-go/glm-5.2,opencode-go/glm-5.3 node .release-harness/scripts/test-live-shard.mjs native-live-src-gateway-profiles
+            # deepseek-v4-flash-vision-exp, so discovery no longer lists it. The authenticated
+            # catalog on 2026-11-21 lists glm-5.3 but no longer lists glm-5.2.
+            command: OPENCLAW_LIVE_GATEWAY_PROVIDERS=opencode-go OPENCLAW_LIVE_GATEWAY_MODELS=opencode-go/glm-5.3 node .release-harness/scripts/test-live-shard.mjs native-live-src-gateway-profiles
             timeout_minutes: 30
             profile_env_only: false
             profiles: full
@@ -4555,9 +4558,9 @@ jobs:
             # Pinned while the release OpenCode workspace lacks Global regions: deepseek-v4.1-flash
             # returns 400 "requires Global regions", and upstream metadata deprecated the V4 Flash
             # routes. Restore dynamic selection (drop OPENCLAW_LIVE_GATEWAY_MODELS) once the
-            # workspace enables Global. Release-workspace discovery stopped listing glm-5.3 on
-            # 2026-10-18, so the smoke pins glm-5.2.
-            command: OPENCLAW_LIVE_GATEWAY_PROVIDERS=opencode-go OPENCLAW_LIVE_GATEWAY_MODELS=opencode-go/glm-5.2 OPENCLAW_LIVE_GATEWAY_SMOKE=1 OPENCLAW_LIVE_GATEWAY_MAX_MODELS=1 node .release-harness/scripts/test-live-shard.mjs native-live-src-gateway-profiles
+            # workspace enables Global. The authenticated catalog on 2026-11-21 lists glm-5.3
+            # but no longer lists glm-5.2; this smoke must still verify real inference.
+            command: OPENCLAW_LIVE_GATEWAY_PROVIDERS=opencode-go OPENCLAW_LIVE_GATEWAY_MODELS=opencode-go/glm-5.3 OPENCLAW_LIVE_GATEWAY_SMOKE=1 OPENCLAW_LIVE_GATEWAY_MAX_MODELS=1 node .release-harness/scripts/test-live-shard.mjs native-live-src-gateway-profiles
             timeout_minutes: 45
             profile_env_only: false
             profiles: stable
@@ -4734,6 +4737,17 @@ jobs:
         uses: ./.release-harness/.github/actions/setup-playwright-chromium
         with:
           cache-mode: restore
+
+      - name: Select Z.AI Coding Plan credential
+        if: steps.selection.outputs.run == 'true' && matrix.suite_id == 'native-live-src-agents-zai-coding'
+        shell: bash
+        env:
+          ZAI_CODING_API_KEY: ${{ secrets.ZAI_CODING_API_KEY }}
+        run: |
+          set -euo pipefail
+          : "${ZAI_CODING_API_KEY:?Set the ZAI_CODING_API_KEY Actions secret for Coding Plan tests}"
+          # Select before profile hydration; never fall back to standard API billing.
+          printf 'ZAI_API_KEY=%s\nZ_AI_API_KEY=\n' "$ZAI_CODING_API_KEY" >> "$GITHUB_ENV"
 
       - name: Hydrate live auth/profile inputs
         if: steps.selection.outputs.run == 'true'

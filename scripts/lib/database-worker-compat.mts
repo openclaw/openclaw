@@ -1,9 +1,11 @@
 import path from "node:path";
 import * as ts from "typescript/ast";
 import { serverFS } from "typescript/fs";
-import { SymbolFlags, type Symbol } from "typescript/sync";
+import { SymbolFlags, type Symbol, type Type } from "typescript/sync";
 import {
+  containsTrigger,
   createNativeTypeScriptProject,
+  identifierTokens,
   reportNativeTypeScriptPhase,
   type NativeTypeScriptObserver,
 } from "./native-typescript.mts";
@@ -604,7 +606,7 @@ export function inspectDatabaseWorkerBoundaries(
       declarations.set(node, operation);
       declarationNames.add(nameNode);
     }
-    return { file, source };
+    return { file, source, text: sourceTexts.get(file)! };
   });
   session.checkpoint?.("sources-registration");
   if (validateCredentialWriters) {
@@ -835,11 +837,19 @@ export function inspectDatabaseWorkerBoundaries(
       pending.push(operation);
     }
   }
+  session.checkpoint?.("closure-expansion");
   const aliases: [string, string][] = [];
   const namespaces: (ts.Identifier | ts.StringLiteral)[] = [];
   const bindings: ts.VariableDeclaration[] = [];
-  for (const { source } of sources) {
-    const visit = (node: ts.Node) => {
+  // Specifiers sit in import/export declarations; only dynamic-import bindings are consumed.
+  const moduleKeywords = /\b(?:import|export)\b/g;
+  for (const { source, text } of sources) {
+    const descend = containsTrigger(text, moduleKeywords);
+    const visit = (node: ts.Node, declaration = false) => {
+      // Type subtrees hold no specifiers or value bindings; skip them before they materialize.
+      if (ts.isTypeNode(node)) {
+        return;
+      }
       if (ts.isImportSpecifier(node) || ts.isExportSpecifier(node)) {
         aliases.push([node.propertyName?.text ?? node.name.text, node.name.text]);
       } else if (ts.isImportClause(node) && node.name) {
@@ -849,9 +859,12 @@ export function inspectDatabaseWorkerBoundaries(
       } else if (ts.isVariableDeclaration(node) && node.initializer) {
         bindings.push(node);
       }
-      node.forEachChild(visit);
+      const whole = declaration || ts.isImportDeclaration(node) || ts.isExportDeclaration(node);
+      if (whole || descend(node)) {
+        node.forEachChild((child) => visit(child, whole));
+      }
     };
-    source.forEachChild(visit);
+    source.forEachChild((child) => visit(child));
   }
   const contained = new Map<Symbol, Set<BoundaryOperation>>();
   const targets = (rawSymbol: Symbol | undefined): Set<BoundaryOperation> => {
@@ -960,6 +973,7 @@ export function inspectDatabaseWorkerBoundaries(
       handledImports.add(dynamicImport);
     }
   }
+  session.checkpoint?.("binding-forwarding");
   const edges = new Map<BoundaryOperation, Set<BoundaryOperation>>();
   const callerEdges = new Map<BoundaryOperation, Set<BoundaryOperation>>();
   const runtimeReferences = new Set<BoundaryOperation>();
@@ -1015,8 +1029,14 @@ export function inspectDatabaseWorkerBoundaries(
         ts.isStringLiteral(expression.parent.argumentExpression))
     );
   };
-  const sourceReferences = sources.map(({ file, source }) => {
+  const bindingMembers = new Map<ts.Node, Symbol>();
+  const receiverBindings = new Map<ts.Identifier, ts.ObjectBindingPattern>();
+  // A reference spells a candidate name; an unhandled dynamic import spells `import`.
+  const referenceTokens = identifierTokens(names);
+  const isReferenceToken = (token: string) => token === "import" || names.has(token);
+  const sourceReferences = sources.map(({ file, source, text }) => {
     const references: ts.Node[] = [];
+    const descend = containsTrigger(text, referenceTokens, isReferenceToken);
     const visit = (node: ts.Node) => {
       // `extends` is a runtime reference even though its AST wrapper is a type.
       if (
@@ -1050,19 +1070,12 @@ export function inspectDatabaseWorkerBoundaries(
       ) {
         references.push(node);
       }
-      node.forEachChild(visit);
+      if (descend(node)) {
+        node.forEachChild(visit);
+      }
     };
     source.forEachChild(visit);
-    return { file, source, references };
-  });
-  // Reference discovery is independent across files in this immutable snapshot.
-  // Resolve the full batch before classifying callers instead of one RPC per file.
-  symbolsAt(sourceReferences.flatMap(({ references }) => references));
-  for (const { file, source, references } of sourceReferences) {
-    const symbols = symbolsAt(references);
-    const pendingAccesses = new Set<ts.Expression>();
-    const receiverBindings = new Map<ts.Node, ts.ObjectBindingPattern>();
-    for (const [index, node] of references.entries()) {
+    for (const node of references) {
       if (
         ts.isIdentifier(node) &&
         ts.isBindingElement(node.parent) &&
@@ -1072,7 +1085,52 @@ export function inspectDatabaseWorkerBoundaries(
       ) {
         receiverBindings.set(node, node.parent.parent);
       }
-      if (symbols[index]) {
+    }
+    return { file, source, references };
+  });
+  // Members share a receiver type, and both queries are independent across files.
+  // Bound native responses just like the raw-symbol prefetch below.
+  const patterns = [...new Set(receiverBindings.values())];
+  const bindingTypes = new Map<ts.ObjectBindingPattern, Type>();
+  for (let offset = 0; offset < patterns.length; offset += 256) {
+    const batch = patterns.slice(offset, offset + 256);
+    const types = session.api.batch(
+      ...batch.map((pattern) => checker.getTypeAtLocation.gen(pattern)),
+    );
+    for (const [index, pattern] of batch.entries()) {
+      bindingTypes.set(pattern, types[index]!);
+    }
+  }
+  const members = [...receiverBindings];
+  for (let offset = 0; offset < members.length; offset += 256) {
+    const batch = members.slice(offset, offset + 256);
+    const symbols = session.api.batch(
+      ...batch.map(([node, pattern]) => bindingTypes.get(pattern)!.getProperty.gen(node.text)),
+    );
+    for (const [index, [node]] of batch.entries()) {
+      const member = symbols[index];
+      if (member) {
+        bindingMembers.set(node, member);
+      }
+    }
+  }
+  // Reference discovery is independent across files in this immutable snapshot.
+  // Resolved receiver members do not need the raw binding symbol.
+  // Shorthand properties use their value-symbol query during caller classification.
+  symbolsAt(
+    sourceReferences.flatMap(({ references }) =>
+      references.filter(
+        (node) => !bindingMembers.has(node) && !ts.isShorthandPropertyAssignment(node.parent),
+      ),
+    ),
+  );
+  session.checkpoint?.("reference-prefetch");
+  // Pack immutable fallback lookups across files without retaining another full inventory.
+  const accessBatch: ts.Expression[] = [];
+  for (const { references } of sourceReferences) {
+    const pendingAccesses = new Set<ts.Expression>();
+    for (const node of references) {
+      if (compilerSymbols.get(node)) {
         continue;
       }
       const parent = node.parent;
@@ -1084,6 +1142,13 @@ export function inspectDatabaseWorkerBoundaries(
             : undefined;
       while (receiver && !pendingAccesses.has(receiver)) {
         pendingAccesses.add(receiver);
+        if (!compilerSymbols.has(receiver)) {
+          accessBatch.push(receiver);
+          if (accessBatch.length === 256) {
+            symbolsAt(accessBatch);
+            accessBatch.length = 0;
+          }
+        }
         receiver =
           ts.isAwaitExpression(receiver) ||
           ts.isParenthesizedExpression(receiver) ||
@@ -1095,23 +1160,13 @@ export function inspectDatabaseWorkerBoundaries(
               : undefined;
       }
     }
-    // Query the same receiver nodes as the fallback, without a round trip per access.
-    const accessLocations = [...pendingAccesses];
-    symbolsAt(accessLocations);
-    // Members of one destructuring share a receiver type; query each pattern once.
-    const patterns = [...new Set(receiverBindings.values())];
-    const receiverTypes = patterns.length ? checker.getTypeAtLocation(patterns) : [];
-    const bindingTypes = new Map(
-      patterns.map((pattern, index) => [pattern, receiverTypes[index]!]),
-    );
+  }
+  symbolsAt(accessBatch);
+  for (const { file, source, references } of sourceReferences) {
+    const symbols = references.map((node) => compilerSymbols.get(node));
     for (const [index, node] of references.entries()) {
-      const pattern = receiverBindings.get(node);
-      const bindingMember =
-        pattern && ts.isIdentifier(node)
-          ? bindingTypes.get(pattern)!.getProperty(node.text)
-          : undefined;
       let symbol = resolveSymbol(
-        bindingMember ??
+        bindingMembers.get(node) ??
           (ts.isShorthandPropertyAssignment(node.parent)
             ? checker.getShorthandAssignmentValueSymbol(node.parent)
             : symbols[index]),
@@ -1242,6 +1297,7 @@ export function inspectDatabaseWorkerBoundaries(
       }
     }
   }
+  session.checkpoint?.("caller-classification");
   const compatibilityReachable = new Set(
     [...registered.values()].filter((operation) => operation.reviewed && !operation.candidate),
   );

@@ -142,6 +142,14 @@ it("keeps browser manifest producers early while deferring selected isolated hoo
   }
 });
 
+it("prepares release assets only for plugins present in the built distribution", async () => {
+  const { rootDir } = pluginAssetFixture({ package: "node scripts/package-runtime.mjs" });
+  await expect(readHooks(rootDir, { phase: "package" })).resolves.toEqual([]);
+  fileWriter(rootDir)("dist/extensions/canvas/package.json", { name: "@openclaw/canvas" });
+  const hooks = await readHooks(rootDir, { phase: "package" });
+  expect(hooks).toMatchObject([{ phase: "package", command: "node scripts/package-runtime.mjs" }]);
+});
+
 it("dispatches discovered build hooks and propagates their failure", async () => {
   const { rootDir, pluginDir } = pluginAssetFixture();
   const failure = Object.assign(new Error("joined timeout"), { code: "ETIMEDOUT" });

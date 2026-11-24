@@ -1,6 +1,11 @@
 import { setImmediate } from "node:timers/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { withTestTimeout } from "../../test/helpers/promise.js";
+import { createOwnedTestInstance } from "../plugins/plugin-instance.test-support.js";
+import {
+  getPluginRuntimeGatewayRequestScope,
+  withPluginRuntimeGatewayRequestScope,
+} from "../plugins/runtime/gateway-request-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { createNodeMeetingRealtimeAudioTransport } from "./realtime-node-audio-transport.js";
 
@@ -83,6 +88,40 @@ describe("node meeting realtime audio transport", () => {
       lastInputError: fatal ? "pullAudio base64 must be a valid audio payload" : undefined,
     });
 
+    await transport.stop();
+  });
+
+  it("keeps pulling after the joining request has responded", async () => {
+    let responded = false;
+    const join = {
+      isWebchatConnect: () => false,
+      signal: new AbortController().signal,
+      hasCurrentClientAuthority: () => !responded,
+    };
+    const pulls: ReturnType<typeof createDeferredCore<object>>[] = [];
+    const invoke = vi.fn(async ({ params }: { params: { action: string } }) => {
+      if (getPluginRuntimeGatewayRequestScope()?.hasCurrentClientAuthority?.() === false) {
+        throw new Error("Gateway client authority closed before dispatching node.invoke.");
+      }
+      if (params.action !== "pullAudio") {
+        return {};
+      }
+      pulls.push(createDeferredCore<object>());
+      return await pulls.at(-1)!.promise;
+    });
+    const owner = createOwnedTestInstance("meeting-owner");
+    const transport = withPluginRuntimeGatewayRequestScope(join, () =>
+      owner.run(() => {
+        const created = createTransport(invoke);
+        created.startInput(vi.fn());
+        return created;
+      }),
+    );
+    await vi.waitFor(() => expect(pulls).toHaveLength(1));
+    responded = true;
+    pulls.shift()?.resolve({});
+    await vi.waitFor(() => expect(pulls).toHaveLength(1));
+    pulls.shift()?.resolve({});
     await transport.stop();
   });
 

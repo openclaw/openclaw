@@ -18,6 +18,7 @@ import { openSqliteReadOnlyDatabase } from "../../infra/sqlite-snapshot-source.j
 import type { DatabaseFileIdentity } from "../../infra/sqlite-worker-identity.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { openAgentEngineStore } from "../../state/openclaw-agent-db-engine.js";
+import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import { agentDatabaseLifecycle } from "../../state/openclaw-agent-db-lifecycle.js";
 import { openOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import {
@@ -29,6 +30,7 @@ import {
   type OpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
 import { openClawStateDatabaseCache } from "../../state/openclaw-state-db-cache.js";
+import { readTrackedStateDatabaseIdentity } from "../../state/openclaw-state-db-handle.js";
 import { withExistingOpenClawStateDatabaseReadOnly } from "../../state/openclaw-state-db-readonly.js";
 import {
   openOpenClawStateDatabase,
@@ -37,7 +39,10 @@ import {
 } from "../../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { resolveUserPath } from "../../utils.js";
-import { resolveRegisteredAgentIdForDir } from "../agent-dir-registry.js";
+import {
+  resolveRegisteredAgentIdForDir,
+  resolveRegisteredAgentIdForDirAsync,
+} from "../agent-dir-registry.js";
 import {
   prepareAuthProfileAuthorizationWrite,
   readAuthProfileAuthorizationLifetimes,
@@ -84,6 +89,18 @@ export { closeAuthProfileReadPool };
 
 export type AuthProfileDatabase = OpenClawAgentDatabase | OpenClawStateDatabase;
 
+function readNativeAuthProfileIdentity(database: AuthProfileDatabase) {
+  if (!("agentId" in database)) {
+    return readTrackedStateDatabaseIdentity(database.db);
+  }
+  const identity = readOpenClawAgentDatabaseIdentity(database);
+  return {
+    key: `file:${identity.identity}`,
+    canonicalPath: identity.canonicalPath,
+    birthtime: identity.birthtime,
+  };
+}
+
 export function resolveAuthProfileStoreOwner(
   database: AuthProfileDatabase,
   env: NodeJS.ProcessEnv = process.env,
@@ -95,11 +112,17 @@ export function resolveAuthProfileStoreOwner(
   // A supplied shared connection already names its owner; ambient discovery can
   // select another database (or fail on it) before this connection is ever used.
   if (!("agentId" in database)) {
-    return { databasePath: database.path, sharedDatabasePath: database.path, location: "state-db" };
+    return {
+      databasePath: database.path,
+      sharedDatabasePath: database.path,
+      location: "state-db",
+      databaseIdentity: readNativeAuthProfileIdentity(database),
+    };
   }
   return {
     ...prepareAuthProfileSharedOwner(env),
     databasePath: database.path,
+    databaseIdentity: readNativeAuthProfileIdentity(database),
   };
 }
 
@@ -169,6 +192,11 @@ export function resolveAuthProfileDatabaseOwnerId(agentDir: string): string {
     throw new Error("agent auth database unexpectedly resolved to shared state");
   }
   return target.agentId;
+}
+
+export async function resolveAuthProfileDatabaseOwnerIdAsync(agentDir: string): Promise<string> {
+  const directory = path.dirname(resolveAuthProfileDatabasePath(agentDir));
+  return (await resolveRegisteredAgentIdForDirAsync(directory)) ?? inferAgentIdFromDir(directory);
 }
 
 /** Resolves the SQLite database and sidecar paths used by auth profiles. */
@@ -585,6 +613,7 @@ export async function prepareAuthProfileWriteTransactionAsync(
   agentDir: string | undefined,
   options: AuthProfileWriteOptions,
   assertCurrent?: () => void,
+  existingDatabaseTarget?: AuthProfileDatabaseTarget,
 ) {
   const env = prepareAuthProfileWriteEnvironment(options);
   const capturedAgentDir = agentDir ? resolveUserPath(agentDir, env) : undefined;
@@ -596,10 +625,9 @@ export async function prepareAuthProfileWriteTransactionAsync(
   });
   options.assertEnvironment?.(env);
   assertCurrent?.();
-  const databaseTarget = resolveAuthProfileDatabaseOptions(
-    sharedStoreWrite ? undefined : capturedAgentDir,
-    env,
-  );
+  const databaseTarget =
+    existingDatabaseTarget ??
+    resolveAuthProfileDatabaseOptions(sharedStoreWrite ? undefined : capturedAgentDir, env);
   return { databaseTarget, sharedOwner: prepareAuthProfileSharedOwner(env) };
 }
 
@@ -655,7 +683,11 @@ export function runAuthProfileWriteTransaction<T>(
       const run = (database: AuthProfileDatabase) => {
         retain?.(database.db);
         const previous = authProfileTransactions.get(database);
-        const owner = previous ?? { ...sharedOwner, databasePath: database.path };
+        const owner = previous ?? {
+          ...sharedOwner,
+          databasePath: database.path,
+          databaseIdentity: readNativeAuthProfileIdentity(database),
+        };
         authProfileTransactions.set(database, owner);
         try {
           return operation(database, owner);

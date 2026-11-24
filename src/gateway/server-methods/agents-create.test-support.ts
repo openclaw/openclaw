@@ -18,7 +18,7 @@ type AgentCreateMocks = {
   loadConfigReturn: Record<string, unknown>;
   captureDeletedAgentDatabaseFences: Mock<() => [string, string][]>;
   reviveAgentDatabases: Mock<(agentIds: readonly string[]) => Promise<void>>;
-  captureGatewayOperatorRunAuthority: Mock;
+  prepareGatewayOperatorRunAuthority: Mock;
   configApplicationStatus: Mock<() => RuntimeConfigWriteApplicationStatus>;
   prepareAgentOnboarding: Mock;
   completeAgentOnboarding: Mock;
@@ -50,7 +50,7 @@ export function registerAgentCreateTests({
     beforeEach(() => {
       mocks.captureDeletedAgentDatabaseFences.mockReturnValue([]);
       mocks.reviveAgentDatabases.mockReset().mockResolvedValue(undefined);
-      mocks.captureGatewayOperatorRunAuthority.mockReset();
+      mocks.prepareGatewayOperatorRunAuthority.mockReset();
       mocks.loadConfigReturn = agentConfig({ main: {} });
     });
 
@@ -65,7 +65,11 @@ export function registerAgentCreateTests({
       agentDir: "/agents/test-agent",
       onboarding: { status: "completed", sessionKey: "agent:bot-stable:home" },
     };
-    const preparation = () => ({ expectedConfigHash: "test-hash", assertCurrent: vi.fn() });
+    const preparation = () => ({
+      expectedConfigHash: "test-hash",
+      assertAuthorityCurrent: vi.fn(),
+      assertCurrent: vi.fn(),
+    });
     function holdOnboarding() {
       const started = createDeferred<unknown>();
       const onboarding = createDeferred();
@@ -155,14 +159,14 @@ export function registerAgentCreateTests({
         internal: { authenticatedOperator: true },
       };
       const hasCurrentClientAuthority = vi.fn(() => true);
-      mocks.captureGatewayOperatorRunAuthority.mockImplementationOnce(async () => {
+      mocks.prepareGatewayOperatorRunAuthority.mockImplementationOnce(async () => {
         expect(hasCurrentClientAuthority()).toBe(true);
         return { authority: operatorAuthority, release: releaseAuthority };
       });
       let response!: ReturnType<typeof vi.fn<(ok: boolean) => void>>;
       await runWithGatewayRootWorkAdmissionForTest(async () => {
         response = vi.fn((_ok: boolean) => {
-          expect(mocks.captureGatewayOperatorRunAuthority).toHaveBeenCalledOnce();
+          expect(mocks.prepareGatewayOperatorRunAuthority).toHaveBeenCalledOnce();
         });
         const handler = expectDefined(agentsHandlers["agents.create"], "agents.create handler");
         await handler({

@@ -141,7 +141,7 @@ export function seedLegacyOperatorState() {
   set("models.providers.survivor", {
     baseUrl: `http://127.0.0.1:${mockPort}/v1`,
     api: "openai-completions",
-    apiKey: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
+    apiKey: { source: "env", provider: "default", id: "OPENCLAW_UPGRADE_SURVIVOR_API_KEY" },
     models: [
       {
         id: "gpt-5.6-luna",

@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import * as tar from "tar";
+import * as tar from "tar/raw";
 import { describe, expect, it, vi } from "vitest";
 import {
   planStandaloneRuntime,
@@ -34,6 +34,7 @@ type WorkerBundleArtifact = Extract<WorkerInstallationArtifact, { install: "bund
 const ARTIFACTS = {
   "client-credential.worker.mjs": "export const clientCredentials = true;\n",
   "code-mode-node.worker.mjs": "export const codeModeNode = true;\n",
+  "file-log.worker.mjs": "export const fileLog = true;\n",
   "file-tool-planning.worker.mjs": "export const fileToolPlanning = true;\n",
   "file-tool-read.worker.mjs": "export const fileToolRead = true;\n",
   "fs-safe-darwin-arm64.node": "arm64-native-fixture",

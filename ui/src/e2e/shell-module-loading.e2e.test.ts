@@ -7,11 +7,20 @@ import {
   startControlUiE2eServer,
   waitForControlUiRoute,
 } from "../test-helpers/control-ui-e2e.ts";
+import { navigationDrawerToggle } from "../test-helpers/control-ui-navigation.ts";
+import {
+  compactCronJobFixture,
+  createCronJob,
+  cronJobsListResponse,
+  cronListResponseFixture,
+} from "../test-helpers/cron.ts";
 import {
   createControlUiE2eContextOptions,
   createControlUiE2eSuite,
   holdModuleResponse,
 } from "./control-ui-e2e-suite.test-support.ts";
+import { cronSidebarFeatureMethods } from "./cron-fixtures.test-support.ts";
+import { captureSidebarUiProof } from "./sidebar-customization.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI shell module loading",
@@ -42,6 +51,98 @@ function visibleHitTarget(element: Locator) {
 }
 
 suite.define(() => {
+  it("aligns the Automations loading rows with the navigation items they replace", async () => {
+    await suite.withPage(
+      { viewport: { width: 1280, height: 800 }, colorScheme: "dark" },
+      async ({ page }) => {
+        const job = createCronJob("digest", "Weekly digest");
+        const list = cronJobsListResponse([job]);
+        const match = { compact: true };
+        const gateway = await installMockGateway(page, {
+          featureMethods: cronSidebarFeatureMethods,
+          heldRequests: [{ method: "cron.list", match }],
+          methodResponses: { "cron.list": cronListResponseFixture(list) },
+        });
+        const sidebar = page.locator("openclaw-app-sidebar:visible");
+        const anchors = (items: Locator) =>
+          items.evaluateAll((nodes) =>
+            nodes.map((node) => {
+              const box = node.getBoundingClientRect();
+              return { x: box.left, y: box.top + box.height / 2 };
+            }),
+          );
+        await page.goto(suite.server.baseUrl + "new");
+        await sidebar.getByRole("link", { name: "Automations", exact: true }).click();
+        const lines = sidebar.locator('.sidebar-view-loading[aria-busy="true"] .skeleton-line');
+        await lines.first().waitFor({ timeout: 10000 });
+        const loading = (await anchors(lines)).slice(0, 2);
+        await captureSidebarUiProof(suite, page, "automations-loading.png");
+        await gateway.resolveDeferred(
+          "cron.list",
+          { ...list, jobs: [compactCronJobFixture(job)] },
+          { match },
+        );
+        const actions = sidebar.locator(".sidebar-automations > .nav-item .nav-item__icon");
+        await actions.nth(1).waitFor();
+        expect(loading).toEqual(await anchors(actions));
+      },
+    );
+  });
+  it("insets pairing fallback content and recovers the real lazy dialog", async () => {
+    await suite.withPage(
+      { ...createControlUiE2eContextOptions(), viewport: { width: 390, height: 360 } },
+      async ({ page }) => {
+        const failure = createDeferredCore();
+        let fail = true;
+        await page.route("**/src/pages/devices/view-pairing.tsx*", async (route) => {
+          await failure.promise;
+          await (fail ? route.abort() : route.fallback());
+        });
+        const gateway = await installMockGateway(page, {
+          operatorScopes: ["operator.admin"],
+          methodResponses: { "device.pair.list": { paired: [], pending: [] } },
+        });
+        try {
+          await page.goto(suite.server.baseUrl + "new");
+          await navigationDrawerToggle(page).click();
+          await page.locator("openclaw-app-sidebar:visible .sidebar-identity-card").click();
+          await page.locator('[data-value="command:pair-mobile"]').click();
+          const dialog = page.getByRole("dialog", { name: "Connect a device" });
+          await dialog.locator('[aria-busy="true"]').waitFor();
+          for (const failed of [false, true]) {
+            if (failed) {
+              failure.resolve();
+              await dialog.getByRole("button", { name: "Retry", exact: true }).waitFor();
+            }
+            const insets = await dialog.evaluate((element) => {
+              const box = element.getBoundingClientRect();
+              const title = element.querySelector("h2")!.getBoundingClientRect();
+              const actions = [...element.querySelectorAll("button")].map((button) =>
+                button.getBoundingClientRect(),
+              );
+              return {
+                left: title.left - box.left,
+                right: box.right - Math.max(...actions.map((r) => r.right)),
+                bottom: box.bottom - Math.max(...actions.map((r) => r.bottom)),
+              };
+            });
+            expect.soft(insets.left).toBeGreaterThanOrEqual(16);
+            expect.soft(insets.right).toBeGreaterThanOrEqual(16);
+            expect.soft(insets.bottom).toBeGreaterThanOrEqual(16);
+          }
+          fail = false;
+          await dialog.getByRole("button", { name: "Retry", exact: true }).click();
+          await dialog.getByRole("button", { name: "Create setup code", exact: true }).waitFor();
+          expect(await gateway.getRequests("device.pair.setupCode")).toHaveLength(0);
+          await dialog.getByRole("button", { name: "Dismiss", exact: true }).click();
+          await dialog.waitFor({ state: "hidden" });
+        } finally {
+          failure.resolve();
+        }
+      },
+    );
+  });
+
   it("keeps the connecting presentation until the shell module can commit", async () => {
     await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
       const held = await holdModuleResponse(page, shellModule);

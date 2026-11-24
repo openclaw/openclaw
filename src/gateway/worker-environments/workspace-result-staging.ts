@@ -1,8 +1,18 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import {
+  nativeWorktreeFilesystem,
+  prepareWorktreeFilesystemMutation,
+} from "../../agents/worktrees/filesystem-native.js";
+import type { WorktreeWorkerAuthority } from "../../agents/worktrees/types.js";
+import {
+  composeSessionSourceAssertion,
+  prepareSessionSourceEffect,
+  type SessionSourceAssertion,
+} from "../../config/sessions/session-source-authority.js";
 import { runBestEffortCleanup } from "../../infra/non-fatal-cleanup.js";
-import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { openCommandStdinFile } from "../../process/command-stdin-file.js";
 import { runCommandWithTimeout, runExec } from "../../process/exec.js";
 import type { WorkerLocalWorkspaceReconcileRequest } from "./tunnel-contract.js";
 import { boundedWorkerError } from "./worker-error.js";
@@ -15,6 +25,7 @@ import { parseChangedWorkspaceResult } from "./workspace-manifest-comparison.js"
 import type { WorkspaceStageInputSource } from "./workspace-manifest-computation.js";
 import {
   prepareWorkspaceStageInput,
+  prepareWorkspaceTemporaryDirectory,
   computeWorkspaceManifest,
 } from "./workspace-manifest-worker.js";
 import type {
@@ -156,10 +167,12 @@ async function stageWorkerWorkspaceResult(
     stagingRoot: string;
     stagedResultRef: string;
     buildCacheInputs?: string[];
-    assertCurrent?: () => void;
+    assertCurrent?: SessionSourceAssertion;
+    workerAuthority?: WorktreeWorkerAuthority;
     gitHistory?: WorkerWorkspaceGitHistory;
     gitPackPath?: string;
     parentCommit?: string;
+    blobsOnly?: true;
   },
 ): Promise<string> {
   const root = await fs.realpath(params.root);
@@ -172,27 +185,44 @@ async function stageWorkerWorkspaceResult(
   const commonDir =
     probe.termination === "exit" && probe.code === 0 ? probe.stdout.trim() : undefined;
   if (commonDir === undefined) {
-    params.assertCurrent?.();
-    await requireGit(root, ["init", "--quiet", "--object-format=sha1"], { baseEnv });
+    await requireGit(root, ["init", "--quiet", "--object-format=sha1"], {
+      baseEnv,
+      beforeRun: params.assertCurrent,
+      workerAuthority: params.workerAuthority,
+    });
   }
   params.assertCurrent?.();
-  const temporary = await fs.mkdtemp(
-    path.join(resolvePreferredOpenClawTmpDir(), "openclaw-workspace-import-"),
-  );
+  const temporary = await prepareWorkspaceTemporaryDirectory("openclaw-workspace-import-", params);
   try {
     const inputPath = path.join(temporary, "fast-import");
     await importWorkerWorkspaceHistory({ ...params, root });
     // Preparation owns only a private input file, never the accepted refs.
     params.assertCurrent?.();
-    await prepareWorkspaceStageInput({ ...params, inputPath });
-    await using input = await fs.open(inputPath, "r");
+    await prepareWorkspaceStageInput({ ...params, inputPath }, params);
+    await using input = await openCommandStdinFile(inputPath);
     const { stdout } = await withWorkspaceResultRefMutation(
       root,
-      (queuedEnv) => {
-        params.assertCurrent?.();
-        return runExec("git", gitCommand(root, ["fast-import", "--quiet"]).slice(1), {
+      async (queuedEnv) => {
+        const commitGuard = composeSessionSourceAssertion([
+          params.assertCurrent,
+          params.workerAuthority?.assertCurrent,
+        ]);
+        const source = await prepareSessionSourceEffect(commitGuard);
+        await using _ = {
+          [Symbol.asyncDispose]: async () => await source.release?.(),
+        };
+        await prepareWorktreeFilesystemMutation(
+          {
+            commitGuard,
+            workerAuthority: params.workerAuthority,
+            signal: params.workerAuthority?.signal,
+          },
+          source,
+        );
+        source.assertCurrent();
+        return await runExec("git", gitCommand(root, ["fast-import", "--quiet"]).slice(1), {
           baseEnv: queuedEnv,
-          stdinFileDescriptor: input.fd,
+          stdinFile: input.stdinFile,
           timeoutMs: PATCH_TIMEOUT_MS,
           maxBuffer: 1024 * 1024,
         });
@@ -264,15 +294,13 @@ async function withMaterializedWorkerWorkspaceResult<Snapshot, T>(
   read: (stagingRoot: string) => Promise<Snapshot>,
   use: (snapshot: Snapshot & { stagingRoot: string }) => Promise<T>,
 ): Promise<T> {
-  const stagingRoot = await fs.mkdtemp(
-    path.join(resolvePreferredOpenClawTmpDir(), "openclaw-checkpoint-payload-"),
-  );
+  const stagingRoot = await prepareWorkspaceTemporaryDirectory("openclaw-checkpoint-payload-");
   try {
     const snapshot = await read(stagingRoot);
     return await use({ ...snapshot, stagingRoot });
   } finally {
     await runBestEffortCleanup({
-      cleanup: () => fs.rm(stagingRoot, { recursive: true, force: true }),
+      cleanup: () => nativeWorktreeFilesystem.remove(stagingRoot, { commitGuard: () => {} }),
       onError: (error) =>
         workspaceLog.warn(`worker workspace staging cleanup failed: ${boundedWorkerError(error)}`),
     });
@@ -286,7 +314,8 @@ export async function applyStagedWorkerWorkspaceResult(params: {
   alreadyAccepted?: boolean;
   additionalPaths?: ReadonlySet<string>;
   journal: WorkerWorkspaceReconciliationJournalAdapter;
-  assertCurrent?: () => void;
+  assertCurrent?: SessionSourceAssertion;
+  workerAuthority?: WorktreeWorkerAuthority;
   publishAcceptedManifest?: (
     accepted: Omit<WorkerWorkspaceApplyResult, "verifyLocalStable">,
   ) => Promise<void>;
@@ -336,6 +365,7 @@ export async function applyStagedWorkerWorkspaceResult(params: {
           additionalPaths: params.additionalPaths,
           journal: params.journal,
           assertCurrent: params.assertCurrent,
+          workerAuthority: params.workerAuthority,
           acceptance: { kind: "reconcile", publish: params.publishAcceptedManifest },
         });
         return { ...applied, changed: staged.changed };
@@ -443,7 +473,8 @@ async function prepareRequestedWorkerWorkspaceResult(params: {
 export async function deleteStagedWorkerWorkspaceResult(params: {
   root: string;
   stagedResultRef: string;
-  assertCurrent?: () => void;
+  assertCurrent?: SessionSourceAssertion;
+  workerAuthority?: WorktreeWorkerAuthority;
 }): Promise<void> {
   const root = await fs.realpath(params.root);
   const stagedResultRef = requireWorkerResultStorageRef(params.stagedResultRef);
@@ -456,13 +487,15 @@ export async function deleteStagedWorkerWorkspaceResult(params: {
         : []),
     ],
     params.assertCurrent,
+    params.workerAuthority,
   );
 }
 
 export async function moveStagedWorkerWorkspaceResultToCleanup(params: {
   root: string;
   stagedResultRef: string;
-  assertCurrent?: () => void;
+  assertCurrent?: SessionSourceAssertion;
+  workerAuthority?: WorktreeWorkerAuthority;
 }): Promise<string> {
   const root = await fs.realpath(params.root);
   const stagedResultRef = requireWorkerResultRef(params.stagedResultRef);
@@ -478,6 +511,7 @@ export async function moveStagedWorkerWorkspaceResultToCleanup(params: {
       { ref: preparedWorkerWorkspaceResultRef(stagedResultRef) },
     ],
     params.assertCurrent,
+    params.workerAuthority,
   );
   return cleanupRef;
 }
@@ -486,7 +520,8 @@ export async function restoreStagedWorkerWorkspaceResultFromCleanup(params: {
   root: string;
   cleanupRef: string;
   stagedResultRef: string;
-  assertCurrent?: () => void;
+  assertCurrent?: SessionSourceAssertion;
+  workerAuthority?: WorktreeWorkerAuthority;
 }): Promise<void> {
   const root = await fs.realpath(params.root);
   const cleanupRef = requireWorkerResultStorageRef(params.cleanupRef);
@@ -499,6 +534,7 @@ export async function restoreStagedWorkerWorkspaceResultFromCleanup(params: {
     root,
     [{ ref: stagedResultRef, objectId: commit }, { ref: cleanupRef }],
     params.assertCurrent,
+    params.workerAuthority,
   );
 }
 

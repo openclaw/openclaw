@@ -55,13 +55,13 @@ struct ChatMessageDetailsPreservationTests {
                 sourceTool: "restart-sentinel"))
     }
 
-    @MainActor @Test func `decode pipeline keeps message details`() throws {
+    @MainActor @Test func `decode pipeline keeps message details`() async throws {
         let payloadData = try JSONEncoder().encode([self.toolResultMessage(), self.systemNoticeMessage()])
         let anyMessages = try JSONDecoder().decode([AnyCodable].self, from: payloadData)
         let activity = try JSONDecoder().decode(
             [OpenClawChatHistoryActivity].self,
             from: Data(#"[{"messageId":"tool-result","items":[]}]"#.utf8))
-        let decoded = OpenClawChatViewModel.decodeMessages(anyMessages, activity: activity)
+        let decoded = await OpenClawChatViewModel.decodeMessages(anyMessages, activity: activity)
 
         #expect(decoded.first?.activity == [])
         #expect(decoded.last?.activity == nil)

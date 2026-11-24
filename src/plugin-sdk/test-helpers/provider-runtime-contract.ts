@@ -3,8 +3,11 @@ import { normalizeModelCatalog } from "@openclaw/model-catalog-core/model-catalo
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createPluginMetadataSnapshot } from "../../config/plugin-auto-enable.test-helpers.js";
+import {
+  registerProviderPlugin,
+  requireRegisteredProvider,
+} from "../../test-utils/plugin-registration.js";
 import type { ProviderRuntimeModel } from "../plugin-entry.js";
-import { registerProviderPlugin, requireRegisteredProvider } from "../plugin-test-runtime.js";
 import { buildManifestModelProviderConfig } from "../provider-catalog-shared.js";
 import type { ProviderPlugin } from "../provider-model-shared.js";
 

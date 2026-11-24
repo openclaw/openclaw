@@ -94,11 +94,11 @@ export function hasGatewayOwnerToolAuthority(
   operatorAuthority?: AdmittedRunOperatorAuthority,
   turnTainted = false,
 ): boolean {
-  if (turnTainted) {
+  // Network content limits inherited custody, not an explicit owner's live authority.
+  if (turnTainted && senderIsOwner !== true) {
     return false;
   }
   if (operatorAuthority) {
-    operatorAuthority.assertCurrent();
     return roleScopesAllow({
       role: "operator",
       requestedScopes: ["operator.admin"],
@@ -122,7 +122,7 @@ export function assertGatewayOwnerToolAuthority(
     (senderIsOwner !== true && !retainedOperatorToolNames.has(toolName))
   ) {
     throw new Error(
-      turnTainted
+      turnTainted && senderIsOwner !== true
         ? "Owner-level tools cannot run on a tainted turn."
         : `${toolName} requires current owner-level tool authority.`,
     );

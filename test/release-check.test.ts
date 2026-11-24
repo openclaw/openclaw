@@ -218,11 +218,11 @@ it.skipIf(process.platform === "win32")("flags non-executable skill shell script
 });
 
 describe("collectForbiddenPackPaths", () => {
-  it.each(["//#region", "//"])(
+  it.each(["//#region ", "// ", "//!"])(
     "blocks root dist chunks that still reference private qa lab sources (%s)",
     (label) => {
       const tempRoot = fixture({
-        "dist/entry.js": `${label} extensions/qa-lab/src/runtime-api.ts\n`,
+        "dist/entry.js": `${label}extensions/qa-lab/src/runtime-api.ts\n`,
         "CHANGELOG.md": "local QA notes mention extensions/qa-lab/\n",
       });
 
@@ -232,11 +232,11 @@ describe("collectForbiddenPackPaths", () => {
     },
   );
 
-  it.each(["//#region", "//"])(
+  it.each(["//#region ", "// ", "//!"])(
     "blocks root plugin SDK declarations that still reference private test helpers (%s)",
     (label) => {
       const file = "dist/plugin-sdk/channel-test-helpers.d.ts";
-      const tempRoot = fixture({ [file]: `${label} src/plugin-sdk/test-helpers/session.ts\n` });
+      const tempRoot = fixture({ [file]: `${label}src/plugin-sdk/test-helpers/session.ts\n` });
 
       expect(collectForbiddenPackContentPaths([file], tempRoot)).toEqual([file]);
     },

@@ -10,7 +10,7 @@ import {
 } from "../sqlite-database-admission.js";
 import { stageSqliteTransactionState } from "../sqlite-post-commit.js";
 import { runSqliteImmediateTransactionSync } from "../sqlite-transaction.js";
-import { beginUpdatePostgresMigration } from "../update-doctor-migration-attribution.js";
+import { beginUpdatePostgresMigration } from "../update-doctor-migration-context.js";
 import { databaseEngineAdapters } from "./adapters.js";
 import type { AdmittedStore, EngineConnection, StoreSchema } from "./contract.js";
 import { observeConnection } from "./observation.js";
@@ -271,6 +271,7 @@ export function openEngineStore(ref: {
           admit(!meta);
         },
         {
+          maintenance: true,
           withCommit(commit) {
             assertMigrationCurrent?.();
             migration?.beforeCommit();

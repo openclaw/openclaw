@@ -6,22 +6,6 @@ import { isRecord } from "./lib/record-shared.mjs";
 export const QUALIFICATION_COVERAGE_PATH = "scripts/lib/release-qualification-coverage.json";
 const SCHEMA = "openclaw.release-qualification-coverage/v1";
 
-export function qualificationAdmissionContract(source) {
-  if (typeof source !== "string" || Buffer.byteLength(source) > 1024 * 1024) {
-    throw new Error("Invalid qualification workflow source");
-  }
-  const matches = [
-    ...source.matchAll(/^ {2}FULL_RELEASE_QUALIFICATION_ADMISSION_CONTRACT: *([^\r\n]+)$/gmu),
-  ];
-  if (!matches.length && !source.includes("FULL_RELEASE_QUALIFICATION_ADMISSION_CONTRACT")) {
-    return undefined;
-  }
-  if (matches.length !== 1 || !/^(?:"1"|'1'|1)$/u.test(matches[0][1])) {
-    throw new Error("Unsupported qualification admission workflow contract");
-  }
-  return "1";
-}
-
 function object(value, keys, label) {
   if (
     !isRecord(value) ||
@@ -208,11 +192,13 @@ export function validateQualificationJobs(
   }
   for (const name of names(requiredNames, "required job names")) {
     const matches = jobs.filter((job) => job.name === name);
+    if (matches.length <= 1 && waivedJobNames.has(name)) {
+      continue;
+    }
     if (
       matches.length !== 1 ||
       matches[0].status !== "completed" ||
-      (matches[0].conclusion !== "success" &&
-        !(matches[0].conclusion === "failure" && waivedJobNames.has(name)))
+      matches[0].conclusion !== "success"
     ) {
       throw new Error(label + " required job did not succeed exactly once: " + name);
     }

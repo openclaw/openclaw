@@ -28,6 +28,9 @@ import {
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "../../src/state/openclaw-agent-schema.js";
 import { withLegacyAgentStorageSchema } from "../../src/state/openclaw-agent-storage-schema.js";
 import { DEPLOYED_FTS_ROWS_SCHEMA } from "../../src/state/openclaw-agent-transcript-fts-schema-source.js";
+import { withLegacyWorkspaceBootstrapDeferred } from "../../src/state/openclaw-state-db-schema-v40-lazy-additions.js";
+import { withLegacyWorkerProvisionSource } from "../../src/state/openclaw-state-db-schema-v40-worker-provision-source.js";
+import { withLegacyApprovalProfile } from "../../src/state/openclaw-state-db-schema-v41-approval-profile.js";
 import {
   getOpenClawStateFeatureSchemaSql,
   listOpenClawStateFeatureSchemas,
@@ -57,9 +60,15 @@ export function listSqliteSchemaInputs(): SqliteSchemaInput[] {
     inputs.push({ id, store, sql });
   };
   add("state", "state", OPENCLAW_STATE_SCHEMA_SQL);
-  for (const version of [39, 38, 37, 36, 35, 31, 27, 26]) {
+  for (const version of [41, 40, 39, 38, 37, 36, 35, 31, 27, 26]) {
     add(`state-before-v${version}`, "state", getOpenClawStatePredecessorSchema(version - 1));
   }
+  // An already-loaded updater can read replacement catalog assets after a build swap.
+  const beforeApprovalProfile = withLegacyApprovalProfile(OPENCLAW_STATE_SCHEMA_SQL);
+  const beforeProvisionSource = withLegacyWorkerProvisionSource(beforeApprovalProfile);
+  add("state-before-provision-source", "state", beforeProvisionSource);
+  const beforeBootstrap = withLegacyWorkspaceBootstrapDeferred(beforeProvisionSource);
+  add("state-before-bootstrap-deferred", "state", beforeBootstrap);
   add("agent", "agent", OPENCLAW_AGENT_SCHEMA_SQL);
   add("daemon-runtime-pins-v1", "daemon", DAEMON_RUNTIME_PIN_SCHEMA_SQL);
   add("client-credentials-v1", "client", CLIENT_CREDENTIAL_SCHEMA_SQL);
@@ -142,6 +151,21 @@ export function listSqliteSchemaInputs(): SqliteSchemaInput[] {
           includeAgentDeletionJournal,
         }),
       );
+      for (const [era, schema] of [
+        ["before-v41", beforeApprovalProfile],
+        ["before-provision-source", beforeProvisionSource],
+        ["before-bootstrap-deferred", beforeBootstrap],
+        ["before-v40", getOpenClawStatePredecessorSchema(39)],
+      ] as const) {
+        add(
+          `state-runtime-${era}-${Number(includeVersionLazyAdditiveTables)}-${Number(includeAgentDeletionJournal)}`,
+          "state",
+          getOpenClawStateRuntimeSchema(
+            { includeVersionLazyAdditiveTables, includeAgentDeletionJournal },
+            schema,
+          ),
+        );
+      }
     }
   }
 

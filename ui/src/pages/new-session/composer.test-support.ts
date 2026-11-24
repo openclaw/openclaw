@@ -6,12 +6,13 @@ import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/c
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { installChatComposerPickerDismissal } from "../chat/components/chat-picker-overlay.ts";
 import { NewSessionAttachmentDraft } from "./attachment-draft.ts";
+import type { NewSessionComposerOptions } from "./composer-options.ts";
 import { NewSessionComposerTextareaContext } from "./composer-textarea-context.ts";
 import {
   createNewSessionComposerTextarea,
   type NewSessionComposerTextarea,
 } from "./composer-textarea.ts";
-import { NewSessionComposer, type NewSessionComposerOptions } from "./composer.tsx";
+import { NewSessionComposer } from "./composer.tsx";
 import { NewSessionModelControl } from "./model-control.ts";
 
 const attachmentDrafts: NewSessionAttachmentDraft[] = [];

@@ -114,17 +114,24 @@ async function upload(
   text: string,
   headers: Record<string, string>,
   expectedStatus = 200,
+  handoffId?: string,
 ) {
   const response = await fetch(`${origin}${routePath}`, {
     method: "POST",
     headers: { "content-type": "application/json", ...headers },
-    body: JSON.stringify(snapshot(beamId, text)),
+    body: JSON.stringify({ ...snapshot(beamId, text), ...(handoffId ? { handoffId } : {}) }),
     signal: AbortSignal.timeout(10_000),
   });
   const textBody = await response.text();
   expect(response.status, textBody).toBe(expectedStatus);
   const body: unknown = JSON.parse(textBody);
   expect(body).toMatchObject(expectedStatus === 200 ? { ok: true, beamId } : { ok: false });
+  return body &&
+    typeof body === "object" &&
+    "publicationId" in body &&
+    typeof body.publicationId === "string"
+    ? body.publicationId
+    : undefined;
 }
 
 describe("Beam authenticated uploader identity", () => {
@@ -201,6 +208,13 @@ describe("Beam authenticated uploader identity", () => {
         expect(
           (await read(secondBeamId)).items.find((item) => item.type === "userMessage")?.sender,
         ).toEqual({ identity: { type: "profile", id: profileIds[1] } });
+        const ownerless = "c".repeat(32);
+        const sharedHeaders = { authorization: `Bearer ${tokenAuth.token}` };
+        const publicationId = await upload(origin, ownerless, "Shared snapshot", sharedHeaders);
+        if (!publicationId) {
+          throw new Error("Expected a new publication");
+        }
+        await upload(origin, ownerless, "Shared snapshot", sharedHeaders, 403, publicationId);
         expect(await listProfiles()).toHaveLength(3);
       });
     });
