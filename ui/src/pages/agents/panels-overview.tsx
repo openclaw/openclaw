@@ -179,7 +179,7 @@ export function AgentOverview(
       ),
     ];
   });
-  // Own subagent model: unset inherits agents.defaults.subagents.model, then the parent session.
+  // Own subagent model, for children that run as this agent; unset inherits the default.
   const subagentModel = createMemo(() =>
     modelSettingPrimary(readModelSetting(config().entry?.subagents?.model)),
   );
@@ -190,7 +190,7 @@ export function AgentOverview(
         value: INHERIT_SUBAGENT,
         label: inherited
           ? t("agents.overview.inheritDefaultModel", { model: inherited })
-          : t("agents.overview.subagentModelInheritParent"),
+          : t("agents.overview.inheritDefault"),
       },
       ...buildModelOptions(
         configForm(),

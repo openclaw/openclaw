@@ -439,7 +439,7 @@ export type DefaultModelSelection = {
   utilityModel: AgentModelConfig | null;
   /** Unset or null disables decisions globally. */
   decisionModel?: string | null;
-  /** agents.defaults.subagents.model. Unset: children run on their parent session's model. */
+  /** agents.defaults.subagents.model. Unset: the spawn resolver picks the parent's or target agent's model. */
   subagentModel?: AgentModelConfig | null;
 };
 

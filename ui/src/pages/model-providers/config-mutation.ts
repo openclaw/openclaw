@@ -74,10 +74,16 @@ export function modelDefaultsActions(
       });
     },
     onDecisionChange: (model: string | null) => stageDefaults({ decisionModel: model }),
-    onSubagentChange: (model: string | null) =>
+    // The picker edits only the primary; a saved fallback chain is kept exactly as written.
+    onSubagentChange: (model: string | null) => {
+      const current = getDefaults().subagentModel;
+      const fallbacks = typeof current === "object" ? current?.fallbacks : undefined;
       stageDefaults({
-        subagentModel: withModelSettingPrimary(getDefaults().subagentModel ?? null, model),
-      }),
+        subagentModel: fallbacks
+          ? { ...(model !== null ? { primary: model } : {}), fallbacks }
+          : model,
+      });
+    },
     onThinkingChange: (level: string) =>
       stageDefaults({ thinkingLevel: level, thinkingOverridden: true }, "thinking"),
     onThinkingReset: () =>
@@ -113,7 +119,6 @@ export function readModelBehaviorConfig(
 const DEFAULT_MODELS_REPLACE_PATHS = [
   "agents.defaults.model.fallbacks",
   "agents.defaults.utilityModel.fallbacks",
-  "agents.defaults.subagents.model.fallbacks",
 ];
 
 const PROBE_FAILURE_PRIORITY: readonly ModelsProbeResult["status"][] = [
