@@ -28,6 +28,7 @@ import { collectActionMediaSourceHints } from "./message-action-params.js";
 import type { MessagePollResult, MessageSendResult } from "./message.js";
 import { sendMessage, sendPoll } from "./message.js";
 import type { OutboundMirror } from "./mirror.js";
+import { createOutboundPayloadPlan, projectOutboundPayloadPlanForMirror } from "./payloads.js";
 
 const log = createSubsystemLogger("outbound/send-service");
 
@@ -206,14 +207,18 @@ export async function executeSendAction(params: SendActionParams): Promise<{
           if (partialDelivery || !params.ctx.mirror) {
             return;
           }
-          const mirrorText =
-            pluginMessage !== params.message
-              ? pluginMessage
-              : params.ctx.mirror.text?.trim() || pluginMessage;
-          const mirrorMediaUrls =
-            params.ctx.mirror.mediaUrls ??
-            params.mediaUrls ??
-            (params.mediaUrl ? [params.mediaUrl] : undefined);
+          const rendered = projectOutboundPayloadPlanForMirror(
+            createOutboundPayloadPlan([
+              {
+                ...defaultPayload,
+                text:
+                  pluginMessage !== params.message
+                    ? pluginMessage
+                    : params.ctx.mirror.text?.trim() || pluginMessage,
+                mediaUrls: params.ctx.mirror.mediaUrls ?? defaultPayload.mediaUrls,
+              },
+            ]),
+          );
           try {
             const writerFence = getOwnedSessionTranscriptWriterFence({
               sessionKey: params.ctx.mirror.sessionKey,
@@ -226,8 +231,8 @@ export async function executeSendAction(params: SendActionParams): Promise<{
                 ? { expectedLifecycleRevision: writerFence.expectedLifecycleRevision }
                 : {}),
               ...(writerFence ? { expectedWriterRunId: writerFence.expectedWriterRunId } : {}),
-              text: mirrorText,
-              mediaUrls: mirrorMediaUrls,
+              text: rendered.text,
+              mediaUrls: rendered.mediaUrls,
               idempotencyKey: params.ctx.mirror.idempotencyKey,
               deliveryMirror: params.ctx.mirror.deliveryMirror,
               config: params.ctx.cfg,
@@ -303,6 +308,7 @@ export async function executeSendAction(params: SendActionParams): Promise<{
     queuePolicy,
     deps: params.ctx.input.deps,
     gateway: params.ctx.gateway,
+    gatewayClientScopes: params.ctx.input.gatewayClientScopes,
     idempotencyKey: params.ctx.idempotencyKey,
     runId: params.ctx.input.runId,
     executionIdentityToken: params.ctx.input.executionIdentityToken,

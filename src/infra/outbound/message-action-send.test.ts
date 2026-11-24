@@ -99,17 +99,14 @@ describe("runMessageAction plugin dispatch", () => {
       {
         name: "suppressed",
         receipt: { status: "suppressed", reason: "cancelled_by_message_sending_hook" },
-        accepted: false,
       },
       {
         name: "failed with an attempt ID",
         receipt: { ok: false, error: "send failed", messageId: "attempt-id" },
-        accepted: false,
       },
       {
         name: "dry-run",
         receipt: { ok: true, dryRun: true, messageId: "dry-run-id" },
-        accepted: false,
       },
       {
         name: "explicit partial delivery",
@@ -119,14 +116,12 @@ describe("runMessageAction plugin dispatch", () => {
           sentBeforeError: true,
           messageId: "partial-receipt",
         },
-        accepted: true,
       },
       {
         name: "successful delivery",
         receipt: { ok: true, messageId: "sent-1" },
-        accepted: true,
       },
-    ])("handles Gateway-relayed $name receipts", async ({ receipt, accepted }) => {
+    ])("does not write local routes for Gateway-relayed $name receipts", async ({ receipt }) => {
       vi.mocked(resolveOutboundSessionRoute).mockResolvedValueOnce({
         sessionKey: "agent:main:gatewaychat:direct:user-123",
         baseSessionKey: "agent:main:gatewaychat:direct:user-123",
@@ -155,7 +150,7 @@ describe("runMessageAction plugin dispatch", () => {
         gateway: { clientName: "cli", mode: "cli" },
       });
       expect(result.payload).toEqual(receipt);
-      expect(ensureOutboundSessionEntry).toHaveBeenCalledTimes(accepted ? 1 : 0);
+      expect(ensureOutboundSessionEntry).not.toHaveBeenCalled();
     });
     it.each([{ name: "data URL", buffer: "data:application/octet-stream;base64,SGVsbG8=" }])(
       "preserves $name bytes and MIME for gateway-side materialization",

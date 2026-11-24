@@ -513,6 +513,11 @@ function isDeliveredCurrentSourceReplyAction(params: SourceReplyTranscriptMirror
   return Boolean(repliedToMessageId && currentMessageId && repliedToMessageId === currentMessageId);
 }
 
+/** Selects the source mirror before dispatch under the same requested-route policy as settlement. */
+export function ownsSourceReplyTranscript(params: SourceReplyTranscriptMirrorParams): boolean {
+  return isCurrentSourceConversation(params, params.sourceReplyFinal === true);
+}
+
 /** Mirrors successful outbound source replies into the owning session transcript. */
 export async function mirrorDeliveredSourceReplyToTranscript(
   params: SourceReplyTranscriptMirrorParams,

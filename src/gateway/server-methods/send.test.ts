@@ -285,7 +285,11 @@ function fixedStoreContext(): GatewayRequestContext {
 function mockMutableMessageRouteAccounts(resolveDefaultAccountId: (channel: string) => string) {
   mocks.getChannelPlugin.mockImplementation((channel: string) => ({
     id: channel,
-    actions: { handleAction: true },
+    actions: {
+      describeMessageTool: () => ({ actions: ["send"] }),
+      handleAction: async () => jsonResult({ ok: true }),
+    },
+    messaging: { targetResolver: { looksLikeId: () => true } },
     outbound: { sendPoll: mocks.sendPoll },
     config: {
       listAccountIds: () => ["primary", "secondary"],
@@ -309,6 +313,13 @@ describe("gateway send mirroring", () => {
 
   beforeEach(async () => {
     vi.clearAllMocks();
+    // Refused sends may never consume a provider result queued by the previous case.
+    mocks.dispatchChannelMessageAction.mockReset();
+    mocks.deliverOutboundPayloads.mockReset();
+    mocks.appendAssistantMessageToSessionTranscript.mockReset();
+    mocks.beginRestartRecoveryTerminalDelivery.mockReset();
+    mocks.cancelRestartRecoveryTerminalDelivery.mockReset();
+    mocks.completeRestartRecoveryTerminalDelivery.mockReset();
     registrySeq += 1;
     setActivePluginRegistry(createTestRegistry([]), `send-test-${registrySeq}`);
     mocks.getRuntimeConfigSnapshot.mockReturnValue(null);
@@ -326,17 +337,22 @@ describe("gateway send mirroring", () => {
             : `agent:${agentId ?? "main"}:${channel ?? "main"}:resolved`,
       }),
     );
-    mocks.resolveMessageChannelSelection.mockResolvedValue({
-      channel: "slack",
-      configured: ["slack"],
-    });
+    mocks.resolveMessageChannelSelection.mockImplementation(async ({ channel = "slack" }) => ({
+      channel,
+      plugin: mocks.getChannelPlugin(channel),
+      configured: [channel],
+    }));
     mocks.dispatchChannelMessageAction.mockResolvedValue({
       details: { action: "handled" },
     });
     mocks.sendPoll.mockResolvedValue({ messageId: "poll-1" });
     mocks.getChannelPlugin.mockImplementation((channel: string) => ({
       id: channel,
-      actions: { handleAction: true },
+      actions: {
+        describeMessageTool: () => ({ actions: ["send"] }),
+        handleAction: async () => jsonResult({ ok: true }),
+      },
+      messaging: { targetResolver: { looksLikeId: () => true } },
       outbound: { sendPoll: mocks.sendPoll },
       config: {
         listAccountIds: (cfg: { channels?: Record<string, { accounts?: object }> }) => {
@@ -658,6 +674,7 @@ describe("gateway send mirroring", () => {
   });
 
   it("reports queue custody without advertising retryability", async () => {
+    registerMessageActionPlugin({ id: "slack", registrySuffix: "queue-custody" });
     const error = new OutboundDeliveryError("connect ECONNREFUSED", {
       cause: new Error("connect ECONNREFUSED"),
       stage: "platform_send",
@@ -668,7 +685,7 @@ describe("gateway send mirroring", () => {
       {
         channel: "slack",
         action: "send",
-        params: { channelId: "C1", message: "hi" },
+        params: { to: "C1", message: "hi" },
         idempotencyKey: "queue-custody",
       },
       directCliClient(),
@@ -773,7 +790,15 @@ describe("gateway send mirroring", () => {
         validateAgentRuntimeApprovalAuthority: () => authorityActive,
       },
     );
-    await firstSendStarted.promise;
+    await Promise.race([
+      firstSendStarted.promise,
+      request.then(({ respond }) => {
+        throw new Error(
+          "Send finished before transport suspension: " +
+            JSON.stringify(firstRespondCall(respond)[2]),
+        );
+      }),
+    ]);
     authorityActive = false;
     releaseFirstSend.resolve();
     const { respond } = await request;
@@ -2033,7 +2058,7 @@ describe("gateway send mirroring", () => {
     expect(actionCall?.requesterSenderId).toBe("blocked-sender");
     expect(actionCall?.mediaAccess.workspaceDir).toBe(TEST_AGENT_WORKSPACE);
     expect(actionCall?.mediaAccess).not.toHaveProperty("readFile");
-    expect(actionCall).not.toHaveProperty("mediaReadFile");
+    expect(actionCall?.mediaReadFile).toBeUndefined();
   });
 
   it("applies signed sender aliases to gateway send media policy", async () => {
@@ -2097,12 +2122,8 @@ describe("gateway send mirroring", () => {
 
         expect(firstRespondCall(respond)[0]).toBe(true);
         const actionCall = lastDispatchChannelMessageActionCall();
-        expect(actionCall).toMatchObject({
-          requesterSenderId: "allowed-id",
-          requesterSenderName: "Blocked Sender",
-          requesterSenderUsername: "blocked-user",
-          requesterSenderE164: "+15551234567",
-        });
+        expect(actionCall?.requesterSenderId).toBe("allowed-id");
+        // The runner consumes the signed aliases in media policy; adapters do not need them.
         expect(actionCall?.params).toMatchObject({ mediaUrl: workspaceFile });
         expect(actionCall?.params).not.toHaveProperty("buffer");
         const mediaAccess = actionCall?.mediaAccess;

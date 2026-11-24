@@ -236,6 +236,7 @@ export function createMessageMethodPluginFixtures(mocks: {
         supportsAction: ({ action: requestedAction }) => requestedAction === action,
         handleAction: async () => jsonResult({ ok: true, ...(messageId ? { messageId } : {}) }),
       },
+      messaging: { targetResolver: { looksLikeId: () => true } },
       ...(threading ? { threading } : {}),
     };
     mocks.getChannelPlugin.mockReturnValue(plugin);

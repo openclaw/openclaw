@@ -38,6 +38,7 @@ import { buildOutboundSessionContext } from "../../infra/outbound/session-contex
 import {
   beginTerminalSourceReplyDelivery,
   cancelTerminalSourceReplyDelivery,
+  ownsSourceReplyTranscript,
   reconcileTerminalSourceReplyDelivery,
 } from "../../infra/outbound/source-reply-mirror.js";
 import { maybeResolvePluginMessagingTarget } from "../../infra/outbound/target-normalization.js";
@@ -201,7 +202,7 @@ export const sendHandlers: GatewayRequestHandlers = {
               if (sessionOwner && !sessionOwner.ok) {
                 return { ok: false, error: sessionOwner.error, meta: { channel } };
               }
-              const agentId = sessionOwner?.agentId ?? requestedAgentId;
+              let agentId = sessionOwner?.agentId ?? requestedAgentId;
               const sourceReplySessionKey = trustedContext.sourceReplySessionKey;
               const sourceReplyOwner = sourceReplySessionKey
                 ? resolveRequestedSessionAgentId(cfg, sourceReplySessionKey, agentId)
@@ -209,21 +210,19 @@ export const sendHandlers: GatewayRequestHandlers = {
               if (sourceReplyOwner && !sourceReplyOwner.ok) {
                 return { ok: false, error: sourceReplyOwner.error, meta: { channel } };
               }
-              // Default-agent resolution may fail, so role-free sends must not enter this policy path.
-              if (request.action === "send" && cfg.gateway?.roles) {
-                const actionAgent =
-                  agentId ??
-                  sourceReplyOwner?.agentId ??
-                  resolveRequestedSessionAgentId(cfg, "main");
-                if (typeof actionAgent !== "string" && !actionAgent.ok) {
-                  return { ok: false, error: actionAgent.error, meta: { channel } };
+              if (request.action === "send" && !agentId) {
+                const implicitOwner =
+                  sourceReplyOwner ?? resolveRequestedSessionAgentId(cfg, "main");
+                if (!implicitOwner.ok) {
+                  return { ok: false, error: implicitOwner.error, meta: { channel } };
                 }
-                const actionAgentId =
-                  typeof actionAgent === "string" ? actionAgent : actionAgent.agentId;
+                agentId = implicitOwner.agentId;
+              }
+              if (request.action === "send" && cfg.gateway?.roles && agentId) {
                 const agentAccessError = authorizeGatewaySessionCreation({
                   cfg,
                   client,
-                  agentId: actionAgentId,
+                  agentId,
                 });
                 if (agentAccessError) {
                   return { ok: false, error: agentAccessError, meta: { channel } };
@@ -233,7 +232,6 @@ export const sendHandlers: GatewayRequestHandlers = {
                 request.params.accountId = accountId;
               }
               if (
-                canonicalAction &&
                 request.action === "send" &&
                 !normalizeOptionalString(request.params.target) &&
                 !actionHasTarget("send", request.params, {
@@ -394,7 +392,11 @@ export const sendHandlers: GatewayRequestHandlers = {
               };
               let payload: unknown;
               try {
-                if (canonicalAction || messageAuthority.assertScheduledWriteCurrent) {
+                if (
+                  request.action === "send" ||
+                  canonicalAction ||
+                  messageAuthority.assertScheduledWriteCurrent
+                ) {
                   const { runMessageAction } =
                     await import("../../infra/outbound/message-action-runner.js");
                   const result = await runMessageAction({
@@ -403,7 +405,7 @@ export const sendHandlers: GatewayRequestHandlers = {
                     ...(request.action === "send"
                       ? {
                           // This RPC owns source-reply receipts and their transcript mirror.
-                          suppressTranscriptMirror: true,
+                          suppressTranscriptMirror: ownsSourceReplyTranscript(sourceReplyMirror),
                           actionOrigin: trustedContext.runtimeAgentId
                             ? ("message-tool" as const)
                             : undefined,

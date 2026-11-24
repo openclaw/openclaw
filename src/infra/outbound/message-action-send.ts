@@ -538,10 +538,7 @@ export async function executeMessageSend(ctx: ResolvedActionContext): Promise<Me
         }),
       });
   if (gatewayPluginAction) {
-    const deliveryFact = projectPluginMessageDeliveryFact(gatewayPluginAction.payload);
-    if (!deliveryFact || deliveryFact.status === "settled") {
-      await commitOutboundSessionRoute();
-    }
+    // The resident Gateway owns both the accepted route and its destination history.
     return await annotateSourceDelivery(
       withSendNormalization(gatewayPluginAction, sendPayload.normalization),
       ctx,

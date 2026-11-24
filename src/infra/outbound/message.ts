@@ -56,6 +56,7 @@ type MessageSendParams = Pick<
   | "to"
   | "runId"
   | "executionIdentityToken"
+  | "gatewayClientScopes"
   | "gifPlayback"
   | "forceDocument"
   | "accountId"
@@ -344,6 +345,7 @@ export async function sendMessage(params: MessageSendParams): Promise<MessageSen
         session: outboundSession,
         runId: params.runId,
         executionIdentityToken: params.executionIdentityToken,
+        gatewayClientScopes: params.gatewayClientScopes,
         accountId: params.accountId,
         conversationReadOrigin: params.conversationReadOrigin,
         payloads: normalizedPayloads,
