@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { dispatchGatewayMethod } from "../plugin-sdk/gateway-method-runtime.js";
+import { getGatewayRequestAuthorityV1 } from "../plugin-sdk/gateway-request-authority.js";
 import {
   createPluginRegistryFixture,
   registerVirtualTestPlugin,
@@ -136,6 +137,48 @@ async function waitForPause(f: ReturnType<typeof fixture>, pending: Promise<unkn
 }
 
 describe("registered plugin RPC authority through the real dispatcher", () => {
+  it.each(["login", "shared"] as const)(
+    "binds individual identity to the %s source for this RPC",
+    async (source) => {
+      const f = fixture("immediate");
+      f.client.internal =
+        source === "shared"
+          ? { authenticatedOperator: true, operatorRoleActor: { kind: "system" } }
+          : { authenticatedOperator: true };
+      if (source === "login") {
+        f.client.authenticatedUserId = "person@example.test";
+      }
+      f.client.authenticatedUserProfile = {
+        profileId: "visitor-profile",
+        displayName: null,
+        hasAvatar: false,
+        avatarRevision: "1",
+        updatedAt: 1,
+      };
+      let captured: ReturnType<typeof getGatewayRequestAuthorityV1>;
+      f.outer.mockImplementationOnce(({ respond }) => {
+        captured = getGatewayRequestAuthorityV1();
+        captured?.assertCurrent();
+        respond(true, {
+          person: captured?.personProfileId ?? null,
+          attribution: captured?.attributionProfileId,
+          scopes: captured?.scopes,
+        });
+      });
+      await f.dispatch();
+      const response = await f.harness.awaitResponseFrame("nested");
+      expect(response).toMatchObject({
+        ok: true,
+        payload: {
+          person: source === "login" ? "visitor-profile" : null,
+          attribution: "visitor-profile",
+          scopes: ["operator.read", "operator.write"],
+        },
+      });
+      expect(() => captured?.assertCurrent()).toThrow("Gateway request authority expired");
+    },
+  );
+
   it.each([true, false])("enforces the nested target's scope (allowed=%s)", async (allowed) => {
     const f = fixture(
       "immediate",

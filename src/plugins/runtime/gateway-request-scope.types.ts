@@ -7,8 +7,10 @@ import type { PluginOrigin } from "../plugin-origin.types.js";
 import type { DeclaredProviderOwnerIndex } from "../provider-owner-index.js";
 import type { PluginRegistry } from "../registry-types.js";
 import type { OpenClawPluginNodeWorkspace } from "../types.node-host.js";
+import type { GatewayRequestAuthorityV1 } from "./gateway-request-authority.js";
 
 export type PluginRuntimeGatewayRequestScope = {
+  readRequestAuthority?: () => GatewayRequestAuthorityV1 | undefined;
   /** Request-owned reader headroom expires when the interactive handler settles. */
   canUseInteractiveStateReadCapacity?: () => boolean;
   /** Exact registration and Gateway owner retained across awaited system operations. */

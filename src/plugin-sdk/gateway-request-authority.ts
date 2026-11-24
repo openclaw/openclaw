@@ -1,0 +1,9 @@
+import { getPluginRuntimeExecutionFrame } from "../plugins/runtime/execution-frame.js";
+import type { GatewayRequestAuthorityV1 } from "../plugins/runtime/gateway-request-authority.js";
+
+export type { GatewayRequestAuthorityV1 };
+
+/** Read the Gateway's authority for this HTTP or RPC handler, if admitted. */
+export function getGatewayRequestAuthorityV1(): GatewayRequestAuthorityV1 | undefined {
+  return getPluginRuntimeExecutionFrame()?.gatewayScope?.readRequestAuthority?.();
+}

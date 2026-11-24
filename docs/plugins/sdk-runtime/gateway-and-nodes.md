@@ -107,6 +107,20 @@ only its service scope, leaving the CLI scheduler available to other work.
 
 ## Gateway and node namespaces
 
+### Request authority
+
+A Gateway-authenticated HTTP route or registered operator RPC handler can call
+`getGatewayRequestAuthorityV1()` from `openclaw/plugin-sdk/gateway-request-authority`.
+It returns the scopes admitted for that request, an optional client IP, and the
+plugin ID of any access grant explicitly required by the caller's role.
+`personProfileId` identifies an authenticated individual. Use `attributionProfileId`
+for display. Shared credentials can carry Gateway owner attribution.
+
+Check the scopes and grant your operation requires. Call `await authority.revalidate()`
+before an effect or protected response and pass `authority.assertCurrent` to the
+synchronous commit. The guards retain the original access grant and expire when
+the handler settles. Outside an admitted handler the getter returns `undefined`.
+
 ### Session control
 
 The session controller owns turn admission, queued input, and Stop. Gateway

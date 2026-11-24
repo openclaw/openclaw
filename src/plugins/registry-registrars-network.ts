@@ -13,6 +13,7 @@ import {
   type GatewayMethodProfileAccess,
 } from "../gateway/methods/descriptor.js";
 import type { OperatorScope } from "../gateway/operator-scopes.js";
+import { resolvePluginRequestPersonProfileId } from "../gateway/server-methods/gateway-personal-caller.js";
 import type { GatewayRequestHandler, RespondFn } from "../gateway/server-methods/types.js";
 import { normalizePluginGatewayMethodScope } from "../shared/gateway-method-policy.js";
 import { normalizePluginHttpPath } from "./http-path.js";
@@ -37,10 +38,8 @@ import {
   PluginCapabilityRemovedError,
   removedPluginCapabilityDescriptor,
 } from "./removed-capability-error.js";
-import {
-  getPluginRuntimeGatewayRequestScope,
-  withPluginRuntimeGatewayRequestScope,
-} from "./runtime/gateway-request-scope.js";
+import { withPluginGatewayRequestAuthority } from "./runtime/gateway-request-authority.js";
+import { getPluginRuntimeGatewayRequestScope } from "./runtime/gateway-request-scope.js";
 import type { SessionCatalogProvider } from "./session-catalog.js";
 import type {
   OpenClawPluginApi,
@@ -130,9 +129,18 @@ function adaptPluginGatewayMethodHandler(
     // admitted client, never a synthetic identity or inherited unrelated grant.
     try {
       const result = scope
-        ? await withPluginRuntimeGatewayRequestScope(
+        ? await withPluginGatewayRequestAuthority(
             { ...scope, gatewayMethodDispatchAllowed: mayDispatch && scope.client != null },
             invoke,
+            opts.client?.internal?.authenticatedOperator && opts.client.connect.role === "operator"
+              ? {
+                  personProfileId: resolvePluginRequestPersonProfileId(opts.client),
+                  assertCurrent() {
+                    assertHandlerCurrent();
+                    opts.sessionMutationAuthorization?.assertCurrent();
+                  },
+                }
+              : undefined,
           )
         : await invoke();
       if (!responded && result !== undefined) {
