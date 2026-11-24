@@ -1,6 +1,7 @@
 import { writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import path from "node:path";
+import { resolveCompactionThreshold } from "@openclaw/ai/internal/shared";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, expect, it } from "vitest";
 import { isCompactionSummaryRequest } from "../../test/helpers/compaction-summary-request.js";
@@ -46,8 +47,12 @@ it(
         let toolRounds = 0;
         let overWindow = 0;
         let largestRequestTokens = 0;
-        let largestPromptBeforeSummary = 0;
-        let firstSummaryPrompt = 0;
+        let largestPrompt = 0;
+        const longTurnRequests: Array<{
+          tokens: number;
+          summary: boolean;
+          lastItemTokens: number;
+        }> = [];
         let publishedBeforeSummary = 0;
         let lastToolTokens = 0;
         let lastAnswerTokens = 0;
@@ -59,6 +64,12 @@ it(
           createListener: () =>
             createServer((request, response) => {
               const work = (async () => {
+                // Only model requests are POSTs; a bare GET (reachability probe) has no body.
+                if (request.method !== "POST") {
+                  request.resume();
+                  response.writeHead(404).end();
+                  return;
+                }
                 let body = "";
                 for await (const chunk of request) {
                   body += String(chunk);
@@ -76,6 +87,7 @@ it(
                     tools: wire.tools,
                   }).length / 4,
                 );
+                largestPrompt = Math.max(largestPrompt, tokens);
                 const requestTokens = tokens + (wire.max_output_tokens ?? 4_096);
                 largestRequestTokens = Math.max(largestRequestTokens, requestTokens);
                 if (requestTokens > 1_000_000) {
@@ -90,10 +102,16 @@ it(
                   const row = await expectDefined(listRow, "connected list reader")(longKey);
                   publishedBeforeSummary = row?.totalTokens ?? 0;
                 }
-                if (isCompactionSummaryRequest(body)) {
-                  if (summaryRequests === 0) {
-                    firstSummaryPrompt = tokens;
-                  }
+                const summary = isCompactionSummaryRequest(body);
+                if (longTurn) {
+                  const last = JSON.stringify(wire.input.at(-1) ?? "");
+                  longTurnRequests.push({
+                    tokens,
+                    summary,
+                    lastItemTokens: Math.ceil(last.length / 4),
+                  });
+                }
+                if (summary) {
                   summaryRequests += 1;
                   writeOpenAiResponsesText(response, {
                     text: "Earlier report evidence summarized; finish the scheduled task.",
@@ -109,7 +127,6 @@ it(
                 };
                 if (longTurn && summaryRequests === 0 && toolRounds < 64) {
                   expect.soft(publishedBeforeSummary).toBeGreaterThanOrEqual(lastToolTokens);
-                  largestPromptBeforeSummary = Math.max(largestPromptBeforeSummary, tokens);
                   lastToolTokens = usage.total_tokens;
                   toolRounds += 1;
                   writeOpenAiResponsesItem(
@@ -282,8 +299,7 @@ it(
               toolRounds,
               summaryRequests,
               largestRequestTokens,
-              largestPromptBeforeSummary,
-              firstSummaryPrompt,
+              largestPrompt,
               publishedBeforeSummary,
               lastToolTokens,
             });
@@ -291,8 +307,24 @@ it(
           expect(overWindow).toBe(0);
           expect(toolRounds).toBeGreaterThan(1);
           expect(summaryRequests).toBeGreaterThan(0);
-          expect(largestPromptBeforeSummary).toBeLessThan(850_000);
-          expect(firstSummaryPrompt).toBeGreaterThanOrEqual(850_000);
+          // The warm summary request is the request that crossed the shared trigger plus one
+          // instruction: it exceeds the trigger by at most one tool round and that instruction.
+          const summaryAt = longTurnRequests.findIndex((request) => request.summary);
+          const beforeSummary = longTurnRequests.slice(0, summaryAt);
+          const toolRound = Math.max(
+            ...beforeSummary
+              .slice(1)
+              .map((request, index) => request.tokens - beforeSummary[index]!.tokens),
+          );
+          const trigger = resolveCompactionThreshold({
+            contextWindowTokens: 1_000_000,
+            reserveTokensFloor: 0,
+          });
+          expect(largestPrompt).toBeLessThan(
+            Math.min(1_000_000, trigger + toolRound + longTurnRequests[summaryAt]!.lastItemTokens),
+          );
+          expect(Math.max(...beforeSummary.map((request) => request.tokens))).toBeLessThan(trigger);
+          expect(longTurnRequests[summaryAt]!.tokens).toBeGreaterThanOrEqual(trigger);
           expect(largestRequestTokens).toBeLessThanOrEqual(1_000_000);
           expect(publishedBeforeSummary).toBeGreaterThan(700_000);
         } finally {
