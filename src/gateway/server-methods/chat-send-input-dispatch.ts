@@ -53,6 +53,7 @@ import {
   prepareChatSendSteerDocumentContext,
 } from "./chat-send-message-injection.js";
 import type { ChatSendInternalOptions } from "./chat-send-options.js";
+import { captureChatSendQuestionReplacement } from "./chat-send-question-replacement.js";
 import { readChatSendRetryComparison } from "./chat-send-retry-comparison.js";
 import { createChatSendSessionInitialization } from "./chat-send-session-binding.js";
 import { prepareAndAdmitChatSend } from "./chat-send-setup.js";
@@ -168,7 +169,6 @@ export async function handleChatSendWithStorage(
       !resolveSessionChildController(sessionKey, entry),
     ),
     client,
-    isCurrent: hasCurrentClientAuthority,
     inputProvenance: systemInputProvenance,
     hasExplicitOrigin: request.explicitOrigin !== undefined,
     hasRestoredCronContinuation: entry?.cronRunContinuation !== undefined,
@@ -547,6 +547,13 @@ export async function handleChatSendWithStorage(
       imageOrder,
       documentContext: steerDocumentContext,
       userTurnTranscriptRecorder: userTurnRecorder,
+      replaceQuestion: captureChatSendQuestionReplacement(
+        options ? undefined : handlerOptions,
+        request,
+        sessionKey,
+        messageInjectionTarget?.runId,
+        isInternalTextSlashCommandTurn,
+      ),
       logGateway: context.logGateway,
       assertCurrent:
         req.expectedProfileId === undefined &&

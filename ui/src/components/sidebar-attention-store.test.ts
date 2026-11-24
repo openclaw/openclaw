@@ -28,7 +28,6 @@ import {
 import {
   createStore,
   cronPage,
-  eventJob,
   inventoryRequest,
   startAuthenticatedStore,
   type CompactCronPage,
@@ -115,13 +114,6 @@ describe("sidebar attention source publication", () => {
         auth.resolve(emptyAuth());
       },
     };
-  }
-  function emitFinished(harness: ReturnType<typeof createGatewayHarness>) {
-    harness.emitEvent("cron", {
-      action: "finished",
-      jobId: "current",
-      job: eventJob({ id: "current" }),
-    });
   }
   function repeatEvent(emit: () => void) {
     for (let index = 0; index < 20; index++) {
@@ -255,8 +247,8 @@ describe("sidebar attention source publication", () => {
       expectLabels("incident");
 
       failed = true;
-      harness.emitEvent("cron", {});
-      await vi.advanceTimersByTimeAsync(0);
+      harness.emitEvent("cron.inventory.changed", {});
+      await vi.advanceTimersByTimeAsync(50);
       request.mockClear();
       harness.update(unavailable);
       harness.emitEvent("cron", {});
@@ -267,7 +259,7 @@ describe("sidebar attention source publication", () => {
 
       failed = false;
       harness.update({ restartPending: false, suspensionPhase: "accepting" });
-      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(50);
       expectCalls(request, 1);
       expectLabels("incident");
     },
@@ -294,27 +286,32 @@ describe("sidebar attention source publication", () => {
       store = activate(harness);
       await vi.advanceTimersByTimeAsync(0);
       const cronCalls = () => request.mock.calls.filter(([name]) => name === "cron.list").length;
+      const recoveredListCalls = failedMethod === "cron.list" ? 3 : 1;
       await vi.advanceTimersByTimeAsync(59_999);
       expect(cronCalls()).toBe(1);
       await vi.advanceTimersByTimeAsync(1);
-      expect(cronCalls()).toBe(2);
+      expectCalls(request, 2, [failedMethod]);
       await vi.advanceTimersByTimeAsync(60_000);
-      expect(cronCalls()).toBe(3);
+      expect(cronCalls()).toBe(recoveredListCalls);
+      expectCalls(request, 3, ["cron.status"]);
       expectLabels("incident");
       await vi.advanceTimersByTimeAsync(30 * 60_000);
       setVisibility("hidden");
       await vi.advanceTimersByTimeAsync(60_001);
       setVisibility("visible");
       await vi.advanceTimersByTimeAsync(0);
-      expectCalls(request, 3);
+      expect(cronCalls()).toBe(recoveredListCalls);
+      expectCalls(request, 3, ["cron.status"]);
       expect(modelAuthRequests(request)).toHaveLength(1);
       harness.emitEvent("config.changed", {});
-      await vi.advanceTimersByTimeAsync(0);
-      expectCalls(request, 4);
+      await vi.advanceTimersByTimeAsync(50);
+      expect(cronCalls()).toBe(recoveredListCalls + 1);
+      expectCalls(request, 4, ["cron.status"]);
       harness.update({ phase: "reconnecting" });
       harness.update({ phase: "connected" });
       await vi.advanceTimersByTimeAsync(0);
-      expectCalls(request, 5);
+      expect(cronCalls()).toBe(recoveredListCalls + 2);
+      expectCalls(request, 5, ["cron.status"]);
     },
   );
 
@@ -621,7 +618,7 @@ describe("sidebar attention source publication", () => {
           ? { ...cronPage("previous"), total: 2, hasMore: true, nextOffset: 1 }
           : cronPage("current");
       }, 2);
-      const { attention } = startAuthenticatedStore(request);
+      const { attention, emitEvent } = startAuthenticatedStore(request);
       store = attention;
       await waitForFast(() => expect(offsets).toEqual([0, 1]));
 
@@ -630,6 +627,7 @@ describe("sidebar attention source publication", () => {
       } else {
         attention.dispose();
       }
+      emitEvent("cron.inventory.changed", {});
       pendingAppend.resolve({ ...cronPage("changed"), total: 2, offset: 1 });
       await settleRefresh();
       expect(offsets).toEqual([0, 1]);
@@ -669,9 +667,10 @@ describe("sidebar attention source publication", () => {
         dismissSidebarAttention(key, { kind: "cronFailed", signature: "current" });
       }
       setVisibility("hidden");
-      repeatEvent(() => emitFinished(harness));
+      repeatEvent(() => harness.emitEvent("cron.inventory.changed", {}));
       pendingList.resolve(cronPage("previous"));
-      await waitLabels("previous");
+      await settleRefresh();
+      expectLabels(...(initial === "settled" ? ["previous"] : []));
       expectCalls(request, 1, ["cron.list", "cron.status", "models.authStatus"]);
       if (initial === "pending with dismissal") {
         expect(loadDismissals(key)).toEqual({ cronFailed: ["current"] });
@@ -679,6 +678,7 @@ describe("sidebar attention source publication", () => {
       setVisibility("visible");
       document.dispatchEvent(new Event("visibilitychange"));
       await waitForFast(() => {
+        expectCalls(request, 2);
         if (initial === "pending with dismissal") {
           expect(store?.entries).toEqual([]);
         } else {
@@ -693,7 +693,7 @@ describe("sidebar attention source publication", () => {
     },
   );
 
-  it("publishes progress but retires dismissals only after a fresh complete inventory", async () => {
+  it("retains attention and dismissals until a fresh complete inventory settles", async () => {
     vi.stubGlobal("localStorage", createStorageMock());
     const pages = Array.from({ length: 5 }, () => pending(cronPage()));
     let listCalls = 0;
@@ -705,20 +705,21 @@ describe("sidebar attention source publication", () => {
     const legacyKey = resolveSidebarAttentionKey(harness.gateway);
     dismissSidebarAttention(legacyKey, { kind: "cronOverdue", signature: "dismissed@1" });
 
-    harness.emitEvent("cron", {});
+    harness.emitEvent("cron.inventory.changed", {});
     for (const index of [1, 2]) {
       await waitForFast(() => expect(listCalls).toBe(index + 1));
-      harness.emitEvent("cron", {});
+      repeatEvent(() => harness.emitEvent("cron.inventory.changed", {}));
       pages[index]!.resolve(cronPage(`current-${index}`));
-      await waitLabels(`current-${index}`);
+      await waitForFast(() => expect(listCalls).toBe(index + 2));
+      expectLabels("dismissed");
       expect(dismissalState(harness)).toEqual({ cronOverdue: ["dismissed@1"] });
     }
-    pages[3]!.resolve({ ...cronPage("partial"), hasMore: true, total: 2, nextOffset: 1 });
+    pages[3]!.resolve({ ...cronPage("fresh-a"), hasMore: true, total: 2, nextOffset: 1 });
     await waitForFast(() => expect(listCalls).toBe(5));
-    expectLabels("current-2");
+    expectLabels("dismissed");
     expect(dismissalState(harness)).toEqual({ cronOverdue: ["dismissed@1"] });
-    pages[4]!.resolve({ ...cronPage("fresh"), snapshotRevision: "partial", total: 2, offset: 1 });
-    await waitLabels("partial", "fresh");
+    pages[4]!.resolve({ ...cronPage("fresh-b"), snapshotRevision: "fresh-a", total: 2, offset: 1 });
+    await waitLabels("fresh-a", "fresh-b");
     expect(dismissalState(harness)).toEqual({});
   });
 
@@ -808,19 +809,19 @@ describe("sidebar attention source publication", () => {
     await settleRefresh();
     expectLabels(...(disabled ? [] : ["overdue"]));
     failing = true;
-    harness.emitEvent("cron", {});
-    await settleRefresh();
+    harness.emitEvent("cron.inventory.changed", {});
+    await waitForFast(() => expectCalls(request, 2));
     expectLabels(...(disabled ? [] : ["overdue"]));
     if (disabled) {
       return;
     }
     harness.attention.dismiss({ kind: "cronOverdue", signature: "overdue@1" });
-    harness.emitEvent("cron", {});
-    await settleRefresh();
+    harness.emitEvent("cron.inventory.changed", {});
+    await waitForFast(() => expectCalls(request, 3));
     expect(dismissalState(harness)).toEqual({ cronOverdue: ["overdue@1"] });
     failing = false;
-    harness.emitEvent("cron", {});
-    await settleRefresh();
+    harness.emitEvent("cron.inventory.changed", {});
+    await waitForFast(() => expectCalls(request, 4));
     expect(store?.entries).toEqual([]);
   });
 
@@ -835,7 +836,7 @@ describe("sidebar attention source publication", () => {
       const publish = vi.fn();
       store.subscribe(publish);
       store.activate(SidebarAttentionStoreOwner);
-      harness.emitEvent("cron", {});
+      harness.emitEvent("cron.inventory.changed", {});
       document.dispatchEvent(new Event("visibilitychange"));
 
       if (boundary === "disconnect") {

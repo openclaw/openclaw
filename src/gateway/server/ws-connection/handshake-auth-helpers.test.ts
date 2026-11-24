@@ -340,6 +340,21 @@ describe("handshake auth helpers", () => {
     }
   });
 
+  it("keeps outbound-blocked special-use IPv6 clients remote", () => {
+    for (const remoteAddress of [
+      "2001:3::1",
+      "2001:4:112::1",
+      "2001:10::1",
+      "2001:30::1",
+      "5f00::1",
+      "2620:4f:8000::1",
+    ]) {
+      expect(resolveDockerPublishedBrowserLocality({ remoteAddress }), remoteAddress).toBe(
+        "remote",
+      );
+    }
+  });
+
   it("keeps non-Control-UI clients remote for browser-container-local conditions", () => {
     expect(
       resolveDockerPublishedBrowserLocality({

@@ -13,6 +13,7 @@ import {
   isStagedInputPath,
   stagedInputPathDirectory,
 } from "../../media/staged-inputs.js";
+import { openCommandStdinFile } from "../../process/command-stdin-file.js";
 import { runCommandBuffered, runCommandWithTimeout, runExec } from "../../process/exec.js";
 import { WorkspaceResultLimitError } from "./workspace-inventory-limits.js";
 import { sameEntry } from "./workspace-manifest-comparison.js";
@@ -92,9 +93,9 @@ async function writeRawWorkspaceTree(params: {
   const inputPath = path.join(root, ".git", "snapshot-input");
   try {
     await prepareWorkspaceTreeInput({ ...params, inputPath, ref });
-    await using input = await fs.open(inputPath, "r");
+    await using input = await openCommandStdinFile(inputPath);
     const { stdout } = await runExec("git", ["-C", root, "fast-import", "--quiet"], {
-      stdinFileDescriptor: input.fd,
+      stdinFile: input.stdinFile,
       timeoutMs: PATCH_TIMEOUT_MS,
       maxBuffer: 1024 * 1024,
     });

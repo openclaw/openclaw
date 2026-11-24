@@ -2920,7 +2920,6 @@ function createReleasePublishFixture(
     full_release_validation_run_id: overrides.FULL_RELEASE_VALIDATION_RUN_ID ?? "66",
     full_release_validation_run_attempt: overrides.FULL_RELEASE_VALIDATION_RUN_ATTEMPT ?? "3",
     publish_openclaw_npm: overrides.PUBLISH_OPENCLAW_NPM ?? "true",
-    wait_for_clawhub: overrides.WAIT_FOR_CLAWHUB ?? "true",
     prepared_plugins: overrides.PREPARED_PLUGINS ?? "{}",
     plugin_sdk_api_acknowledgement: overrides.PLUGIN_SDK_API_ACKNOWLEDGEMENT ?? "",
   };
@@ -3041,7 +3040,6 @@ ${functions}
           PLUGIN_SDK_API_ACKNOWLEDGEMENT: "",
           PUBLISH_OPENCLAW_NPM: inputs.publish_openclaw_npm,
           CLAWHUB_ONLY: "false",
-          WAIT_FOR_CLAWHUB: inputs.wait_for_clawhub,
           PLUGINS: "",
           NPM_TELEGRAM_RUN_ID: "",
           CHILD_PLUGIN_NPM_RUN_ID: "101",
@@ -3590,6 +3588,9 @@ function runFullReleaseChildDispatch(
   const workdir = tempDirs.make("full-release-child-dispatch-");
   const ghPath = resolve(workdir, "gh");
   const sleepPath = resolve(workdir, "sleep");
+  const waiverTools = resolve(workdir, "workflow/scripts");
+  mkdirSync(waiverTools, { recursive: true });
+  writeFileSync(resolve(waiverTools, "find-reusable-release-child.mjs"), "process.exit(3);\n");
   const callsPath = resolve(workdir, "gh-calls");
   const statusPath = resolve(workdir, "status-polls");
   writeFileSync(callsPath, "");
@@ -3655,6 +3656,7 @@ function runFullReleaseChildDispatch(
     GITHUB_RUN_ATTEMPT: "2",
     GITHUB_RUN_ID: "77",
     GITHUB_STEP_SUMMARY: resolve(workdir, "github-summary"),
+    GITHUB_WORKSPACE: workdir,
     MOCK_GH_CALLS: callsPath,
     MOCK_GH_CHILD_SHA: parentSha,
     MOCK_GH_CONCLUSION: "success",
@@ -3736,11 +3738,19 @@ exit 2
 `,
   );
   writeExecutable(sleepPath, "#!/bin/sh\nexit 0\n");
-  const result = runBash(script, {
-    cwd: workdir,
-    env,
-    timeout: 10_000,
-  });
+  const result = runBash(
+    script
+      .replaceAll(
+        "${{ fromJSON(needs.resolve_target.outputs.source_admission_json || '{}').qualificationAdmission != null }}",
+        "false",
+      )
+      .replaceAll("${{ needs.resolve_target.outputs.target_version }}", "2026.8.1"),
+    {
+      cwd: workdir,
+      env,
+      timeout: 10_000,
+    },
+  );
   // A count-prefixed NUL record preserves empty, quoted, and multiline arguments.
   const fields = readFileSync(callsPath, "utf8").split("\0");
   const calls: { args: string[]; childWorkflowRef: string; dispatchRunName?: string }[] = [];
@@ -4263,6 +4273,7 @@ function runReleasePublishInputValidation(overrides: Record<string, string>) {
   const githubOutput = resolve(tempDirs.make("release-publish-inputs-"), "github-output");
   const result = runBash(script, {
     env: {
+      FAST_TRACK_APPROVAL_JSON: "",
       CLAWHUB_ONLY: "false",
       FINALIZE_RELEASE_BEFORE_DOCKER: "false",
       FULL_RELEASE_VALIDATION_RUN_ATTEMPT: "1",
@@ -6801,7 +6812,6 @@ render_github_release_notes() { cp "$2" "$1"; printf '%s\\n' '{"verificationIncl
           publish_docker_only: "false",
           finalize_release_before_docker: "false",
           openclaw_npm_resume_run_id: "",
-          wait_for_clawhub: "true",
           full_release_validation_run_attempt: "3",
           prepared_plugins: prepared,
           plugin_sdk_api_acknowledgement: acknowledgement,
@@ -6894,7 +6904,6 @@ render_github_release_notes() { cp "$2" "$1"; printf '%s\\n' '{"verificationIncl
 
   it.each([false, true])("preserves detached ClawHub and npm resume=%s", (resume) => {
     const fixture = createReleasePublishFixture({
-      WAIT_FOR_CLAWHUB: "false",
       CHILD_OPENCLAW_NPM_ALREADY_PUBLISHED: String(resume),
       CHILD_OPENCLAW_NPM_EXPECTED_WORKFLOW_REF: "refs/tags/release-publish/aaaaaaaaaaaa-42",
       CHILD_OPENCLAW_NPM_RUN_ATTEMPT: resume ? "1" : "",
@@ -8003,9 +8012,64 @@ NODE
       'String(run.run_attempt ?? "") !== process.env.FULL_RELEASE_VALIDATION_RUN_ATTEMPT',
       'manifest_asset="openclaw-${evidence_version}-release-manifest.json"',
       'gh_with_retry release download "$EVIDENCE_TAG"',
-      ".runId == $run_id",
-      ".runAttempt == $run_attempt",
     ]);
+    const identityPredicate = evidenceStep.run?.match(
+      /--arg run_attempt "\$FULL_RELEASE_VALIDATION_RUN_ATTEMPT" '\n([\s\S]*?)\n\s*' "\$manifest_dir\/\$manifest_asset"/u,
+    )?.[1];
+    if (!identityPredicate) {
+      throw new Error("Missing closeout manifest identity predicate");
+    }
+    const originalIdentity = { runId: "123", runAttempt: "2" };
+    const retainedProducer = { runId: 123, runAttempt: 2 };
+    const recoveredManifest = {
+      runId: "999",
+      runAttempt: "1",
+      recovery: { producer: retainedProducer },
+    };
+    const targetSha = "a".repeat(40);
+    for (const [label, manifest, status] of [
+      ["ordinary manifest", originalIdentity, 0],
+      ["recovered manifest", recoveredManifest, 0],
+      ["numeric ordinary identity", retainedProducer, 1],
+      [
+        "matching outer identity but wrong producer run",
+        { ...originalIdentity, recovery: { producer: { ...retainedProducer, runId: 999 } } },
+        1,
+      ],
+      [
+        "wrong retained attempt",
+        { ...recoveredManifest, recovery: { producer: { ...retainedProducer, runAttempt: 1 } } },
+        1,
+      ],
+      ["wrong target SHA", { ...recoveredManifest, targetSha: "b".repeat(40) }, 1],
+    ] as const) {
+      const result = spawnSync(
+        "jq",
+        [
+          "-e",
+          "--arg",
+          "tag_sha",
+          targetSha,
+          "--arg",
+          "run_id",
+          "123",
+          "--arg",
+          "run_attempt",
+          "2",
+          identityPredicate,
+        ],
+        {
+          encoding: "utf8",
+          input: JSON.stringify({
+            workflowName: "Full Release Validation",
+            targetSha,
+            ...manifest,
+          }),
+        },
+      );
+      expect(result.error, label).toBeUndefined();
+      expect(result.status, label + ": " + result.stderr).toBe(status);
+    }
     expect(workflow).toContain(
       '--full-release-validation-run-attempt "$FULL_RELEASE_VALIDATION_RUN_ATTEMPT"',
     );
@@ -9188,7 +9252,9 @@ test "$package_manager" = "pnpm@12.1.0"
         for (const [attempt, reused, dispatched] of [
           [1, "false", true],
           [2, "false", false],
-          [1, "true", child.kind === "artifact-candidate"],
+          // Retained evidence already binds the candidate; none of the producers redispatch.
+          [1, "true", false],
+          [2, "true", false],
         ] as const) {
           expect(
             runInNewContext(step.if ?? "true", {
@@ -10065,9 +10131,14 @@ describe("package artifact reuse", () => {
       OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SCOPE:
         "${{ needs.validate_selected_ref.outputs.upgrade_baseline_scope }}",
     });
-    const maxParallel = workflowJob(LIVE_E2E_WORKFLOW, "validate_docker_lanes").strategy?.[
-      "max-parallel"
-    ];
+    expect(workflowJob(LIVE_E2E_WORKFLOW, "plan_docker_lane_groups").outputs?.max_parallel).toBe(
+      "${{ steps.groups.outputs.max_parallel }}",
+    );
+    expect(groupPlanner.run).toContain('echo "max_parallel=${MAX_PARALLEL}" >> "$GITHUB_OUTPUT"');
+    expect(workflowJob(LIVE_E2E_WORKFLOW, "validate_docker_lanes").strategy?.["max-parallel"]).toBe(
+      "${{ fromJSON(needs.plan_docker_lane_groups.outputs.max_parallel) }}",
+    );
+    const maxParallel = groupPlanner.env?.MAX_PARALLEL;
     const hostedDefault = reusable.on?.workflow_call?.inputs?.use_github_hosted_runners?.default;
     for (const [overrides, packagePresent, expected] of [
       [{}, "true", 64],
@@ -10694,7 +10765,7 @@ describe("package artifact reuse", () => {
 
     expect(workflow.on?.schedule).toEqual([{ cron: "23 4 * * *" }, { cron: "41 6 * * 1" }]);
     expect(daily.if).toBe(
-      "github.repository == 'openclaw/openclaw' && (github.event_name == 'workflow_dispatch' || github.event.schedule == '23 4 * * *')",
+      "github.repository == 'openclaw/openclaw' && ((github.event_name == 'workflow_dispatch' && !inputs.every_file_only) || github.event.schedule == '23 4 * * *')",
     );
     expect(daily.with).toMatchObject({
       enable_prepublish_plugin_registry: true,
@@ -15286,7 +15357,7 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
       "node scripts/openclaw-npm-extended-stable-release.mjs verify-manifest",
     );
     expect(npmCheckout.with?.["fetch-depth"]).toBe(
-      "${{ inputs.release_evidence_mode == 'authorized-beta-focused-v1' && 0 || (inputs.preflight_run_id != '' && 1 || 0) }}",
+      "${{ (inputs.fast_track_approval != '' || inputs.release_evidence_mode == 'authorized-beta-focused-v1') && '0' || (inputs.preflight_run_id != '' && '1' || '0') }}",
     );
 
     const publishSteps = publishJob.steps ?? [];

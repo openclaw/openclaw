@@ -141,17 +141,23 @@ and [Codex runtime behavior](/plugins/codex-harness/runtime-behavior#automatic-d
 
 ### Chat Access control
 
-The chat and new-session model controls provide a **Daybreak** toggle and an
-**Access** selector when the account advertises a Daybreak program for the selected
-model and runtime and your operator role permits it. Turning Daybreak off selects
-**Standard**; turning it on restores the last permitted Blue or Red choice. Saved
-choices remain scoped to the authenticated user and agent.
+The chat and new-session model controls provide a single **Daybreak** toggle.
+The selected model and runtime determine whether the toggle uses **Daybreak Blue**
+or **Daybreak Red**, based on the programs advertised for the account. Turning
+Daybreak off selects **Standard**. A model that requires Daybreak keeps the
+toggle on and disables it once its program is selected. If a saved selection
+needs a different Daybreak program, turn on Daybreak to apply the model's program
+in the same chat. When you switch models with Daybreak on, the control uses
+the new model's advertised Daybreak program when available. Saved choices remain
+scoped to the authenticated user and agent.
 
 An unset session choice follows the configured model/agent Access default. Without
-a configured default, supported OpenAI routes use Standard. An explicit session
-choice overrides the default; an explicit empty model `accessPrograms: {}` retains
-provider/native inheritance. If the saved choice becomes unavailable, select
-Standard rather than silently downgrading the request.
+a configured default, supported OpenAI routes use Standard, except that a model whose
+advertised programs exclude Standard uses its one Daybreak program: cyber models
+advertise only Daybreak Red, so they default to Red. An explicit session
+choice overrides the default. An explicit empty model setting
+`accessPrograms: {}` retains provider/native inheritance. A stale saved choice
+can fail before submission. Follow the error's guidance for the selected model.
 
 The session choice survives `/new` and session reset, and is inherited by a fork
 unless replaced. Changes affect the next admitted turn, not an already-running
@@ -173,7 +179,7 @@ omits `accessPrograms`. An explicit
 operator: `[]` permits Standard only, and Blue and Red are listed independently.
 For restricted operators, omission also permits Standard only. The actual model
 must separately be allowed by the role's model policy, and account access and
-provider entitlement are still required. Configured defaults do not bypass
+provider entitlement are still required. Configured and advertised defaults do not bypass
 explicit ceilings or restricted-role grants. Server-side checks cover direct requests, creation,
 execution, and retained or recovered authority after permissions change.
 
@@ -213,7 +219,9 @@ the provider enforces entitlement on every actual request.
 For the OpenClaw runtime on an official OpenAI Platform or ChatGPT subscription
 Responses endpoint, set the selected
 model's `params.accessPrograms.cyber` to `standard`, `daybreak_blue`, or
-`daybreak_red`. Omitting the setting defaults supported routes to Standard; use
+`daybreak_red`. Omitting the setting defaults supported routes to Standard, or to
+the model's one advertised Daybreak program when the account's metadata for that
+model excludes Standard; use
 `accessPrograms: {}` to retain OpenAI's model/account/project defaults. Neither `accessPrograms` nor `cyber` accepts
 `null`. Native Codex also accepts this model setting on ChatGPT authentication,
 with the session override taking precedence. This setting never grants access.

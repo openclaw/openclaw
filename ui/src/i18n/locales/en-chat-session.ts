@@ -273,6 +273,7 @@ const enChatSession = {
       untitledInput: "message without text",
     },
     sessionSuggestions: {
+      awaitingApproval: "Awaiting approval",
       attachmentsUnsupported: "Remove attachments before submitting a text suggestion.",
       sendNow: "Send {author}'s suggestion now",
       queue: "Queue {author}'s suggestion",

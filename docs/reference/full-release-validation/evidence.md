@@ -108,12 +108,8 @@ The pinned release-tooling **Q** owns grant data in
 `scripts/lib/release-validation-waivers.json`. Trusted **P** owns the evaluator in
 `scripts/lib/release-validation-waivers.mjs`: it authenticates Q’s data and applies
 it to raw evidence, rather than using grants from P or the candidate **C**.
-Operator-approved entries require exact version, child role, job name, and short
-reason; optional `targetSha` and `evidence: { runId, runAttempt }` restrict the
-candidate and execution. Each entry also requires an `aggregates` array: use
-`[]` when no failed aggregate depends on the job, otherwise record each aggregate’s
-exact `jobName`, failed `stepName`, and accepted `causes`. Keep `exactCauses` or
-`logSha256` restrictions when present. The Q-pinned ledger is authoritative.
+Each operator-approved entry names the exact `targetVersion` and `childRole`,
+with a short `reason`. Add `targetSha` only to restrict a grant to one candidate.
 
 For an authorized grant, commit only the ledger change directly to the selected
 release-tooling Q branch, then pin its new full SHA in a fresh qualification
@@ -126,56 +122,40 @@ an empty ledger; actual grants belong only on the selected release Q branch.
 Missing or malformed Q ledgers, failed authentication, and transport errors remain
 blocking. There is no fallback to historical grants from main or another revision.
 
-For a newly approved job waiver, default to the exact release version, child
-role, and job across all future FRV runs, attempts, and candidates for that
-release. Omit `evidence` and `targetSha` restrictions unless the operator
-explicitly limits the approval. Reserve attempt-specific waivers for
-exceptionally high-risk cases where only the reviewed execution is accepted;
-record the risk and the explicit limit in the PR or handoff. A diagnostic run
-ID is evidence of the original failure, not a reason to restrict an ordinary
-waiver to that attempt. This default does not broaden existing grants or waive
-other jobs, versions, required execution, or evidence-integrity checks.
+Set `jobName` to waive one exact job, whether it passed, failed, was cancelled,
+was skipped, or never ran. Omit `jobName` to waive the entire child role and all
+its descendants: do not dispatch it, look up a run, or require a reuse receipt.
+An optional `step` narrows a named-job waiver to a non-successful terminal job
+whose first incomplete or failed step has exactly that name. A different,
+missing, or unobserved step does not match. A passing job does not record an
+exception just because a grant matches its name.
 
-A `testFailures` entry additionally requires the sole failed step and the complete
-ordered set of exact test/error signatures from the native test-evidence parser.
-The verifier reads the original leaf log and requires completed invocation
-evidence before accepting it. Changed or additional errors, incomplete logs, and
-setup failures remain blocking; aggregate causes are also checked exactly.
+Frozen v1 ledgers remain readable. A legacy named grant with empty
+`aggregates` and no other selectors remains failure-only. A historical
+aggregate-, run-, step-, or failure-signature-bound grant does not become a
+new unconditional approval. If recovery needs to excuse that work with the new
+policy, use a newly approved exact grant through the separate Q admission below.
+Historical composite hashes remain verified against their original job projection;
+step narrowing uses authenticated attempt evidence, not a rewritten receipt.
 
-An explicitly approved cancellation uses `cancelledStep` instead of
-`testFailures`. It matches only a completed job whose raw conclusion is
-`cancelled`; its only unsuccessful step must have that exact name and also be
-cancelled. It does not accept a different cancelled step, another failed step,
-a timed-out job, or a cancelled workflow. Ordinary failure grants never accept
-cancellation. The original job conclusion remains visible as cancelled, not passed.
-
-Plain-output native extension batches in CI retain separate invocation streams and emit a
-completion receipt only after every planned invocation and its descendants settle.
-An ordinary test failure does not skip later planned batches. Historical logs
-without that framing remain incomplete; never synthesize receipts or infer missing
-signatures from a later replay. Blank lines between a native failure header and
-its error are accepted, but unrelated errors and inconsistent counts still block.
-
-A Q change limited to the grant ledger does not change workload identity. With
+Child receipts record execution at their producer Q, not at the current Q. With
 `reuse_evidence=true`, eligible raw successful or failed child receipts may be
-reused after authentication and reevaluation under the new Q grants. Preserve
-original producer Q, run/attempt, candidate, inputs, artifact digests, and raw
-conclusions; a prior accepted verdict is not a substitute for reevaluation.
-Removing or narrowing a grant can make retained failures blocking again. Broad
-Q changes to executable scripts, workflows, actions, dependencies, or other
-workload inputs still invalidate affected workload evidence; the ledger exception
-is not a general control-only exemption.
+reused across Q after authenticating the producer and reevaluating the raw results
+under current Q grants. Preserve original producer Q, run/attempt, candidate,
+inputs, artifact digests, and raw conclusions. A prior accepted verdict is not a
+substitute for reevaluation: removing or narrowing a grant can make retained
+failures blocking again.
 
-Accepted receipts return before another child is dispatched; the required initial
-run cannot be skipped. Failed parents without final manifests can supply eligible
-child receipts, not be relabeled successful. The new parent must complete
-admission, collection, and final verification. Missing, expired, or incompatible
-evidence requires fresh work. A P-only change does not replace Q’s grants.
+Accepted receipts return before another unwaived child is dispatched. A waiver
+does not create a receipt or turn an old failed parent green. A new parent must
+complete admission, collection of required evidence, and final verification.
+Missing, expired, or incompatible unwaived evidence requires fresh work. A
+P-only change does not replace Q’s grants.
 
-State, manifests, and summaries retain raw failures and reasons. Grants neither
-skip tests nor mark passes; failed aggregates must contain only granted causes.
-Missing, cancelled, timed-out, incomplete, or mismatched required evidence and
-ungranted failures block. Package, dispatch, seal, and provenance integrity remain
+State, manifests, and summaries retain raw outcomes and reasons. A failed gate
+blocks unless it is itself waived. Unwaived missing, cancelled, or failed required
+coverage blocks, as do timed-out, incomplete, or mismatched evidence. Package,
+dispatch, seal, and provenance integrity remain
 mandatory. Publication still requires a successful FRV parent under its admitted
 Q/P tuple; a publisher cannot add grants or swap Q after qualification.
 
@@ -221,8 +201,8 @@ original publication selection. Fresh qualification is a separate, explicit oper
 Use a separately admitted policy Q only when an authorized operator approved new
 waivers for the original candidate. It must be a signed direct child of the
 original Q that modifies only the waiver ledger, preserves existing entries, and
-appends grants bound to the original candidate, version, and selected receipt attempts.
-It cannot change coverage or excuse missing receipts.
+appends grants bound to the original candidate, version, and admitted child roles.
+It cannot change unwaived coverage. A whole-child grant does not require a receipt.
 
 1. Generate the exact admission request without dispatching anything:
 
@@ -245,9 +225,9 @@ It cannot change coverage or excuse missing receipts.
    ```
 
 Recovery and publisher verification both authenticate the separate admission and
-reevaluate the original raw jobs and aggregate logs against exactly that ledger.
+reevaluate the original raw jobs against exactly that ledger.
 Child attempts, workflow provenance, artifacts, and the failed original run
-remain unchanged. A missing, changed, or unwaived receipt still blocks recovery.
+remain unchanged. Missing or changed required receipts still block recovery.
 
 ## Workflow files
 

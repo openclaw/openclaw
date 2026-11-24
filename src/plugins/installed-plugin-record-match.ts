@@ -8,6 +8,7 @@ import {
 } from "./candidate-install-owner.js";
 import { isConversationAccessAccepted } from "./capability-summary.js";
 import type { PluginCandidate } from "./discovery.js";
+import { isImmutableGitCommitRef, parseGitPluginSpec } from "./git-source-spec.js";
 import {
   isThirdPartyNpmInstallRecord,
   isTrustedOfficialPluginInstallRecord,
@@ -120,6 +121,17 @@ export function resolvePluginTrust(params: {
     reason = "provenance-missing";
   } else if (isThirdPartyNpmInstallRecord(installOwner, params.candidate.packageName, record)) {
     reason = "third-party-npm";
+  } else if (record.source === "git") {
+    const spec = record.spec ? parseGitPluginSpec(record.spec) : null;
+    reason =
+      spec &&
+      spec.url === record.gitUrl &&
+      spec.ref === record.gitRef &&
+      isImmutableGitCommitRef(record.gitCommit) &&
+      (!isImmutableGitCommitRef(spec.ref) ||
+        spec.ref?.toLowerCase() === record.gitCommit?.toLowerCase())
+        ? "third-party-git"
+        : "provenance-invalid";
   } else {
     reason = "provenance-invalid";
   }

@@ -147,6 +147,7 @@ export function createBeamSessionCatalog(store: BeamStore): SessionCatalogProvid
           connected: true,
           sessions: page.map((session) => ({
             threadId: session.beamId,
+            exportPolicy: { origin: "imported", automatic: false },
             name: session.title,
             status: session.completed ? "completed" : "live",
             createdAt: session.createdAt,

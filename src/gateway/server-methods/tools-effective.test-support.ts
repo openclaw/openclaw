@@ -54,6 +54,7 @@ vi.mock("../../agents/agent-bundle-mcp-tools.js", async (importOriginal) => ({
   peekSessionMcpRuntime: vi.fn(() => undefined),
   resolveSessionMcpConfigSummary: vi.fn(() => ({
     fingerprint: "mcp:0",
+    pluginIdsByServer: new Map<string, string>(),
     serverNames: new Array<string>(),
   })),
 }));

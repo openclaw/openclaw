@@ -96,6 +96,8 @@ export type ModelProviderCard = ProviderPresentation & {
   /** Configuration owner that pins priority for each auth owner. */
   profileOrderLocks: Record<string, NonNullable<ModelAuthStatusProvider["profileOrderLocked"]>>;
   apiKey?: ModelAuthStatusProvider["apiKey"];
+  /** The saved sign-in doesn't cover voice; an API key would. */
+  voiceApiKeyRequired?: true;
   configApiKeys: Array<{ key: string; reference: boolean }>;
   modelCount: number;
   availableModelCount: number;
@@ -337,6 +339,9 @@ export function buildModelProviderCards(input: ModelProviderCardsInput): ModelPr
         .map((profile) => profile.profileId),
     );
     draft.card.apiKey ??= provider.apiKey;
+    if (provider.voiceApiKeyRequired) {
+      draft.card.voiceApiKeyRequired = true;
+    }
     // Generic auth discovery also includes tool-only API keys; those alone do not make a model card.
     draft.hasModelAuth ||= isMonitoredAuthProvider(provider) || apiKeyCapabilities.has(id);
     const usage = provider.usage;
