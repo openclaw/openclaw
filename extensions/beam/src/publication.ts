@@ -14,10 +14,14 @@ export function parsePublicationId(
 }
 
 export function publicationHead(
-  row: Pick<BeamHandoff, "beamId" | "title" | "revision" | "publicationId" | "handoffId">,
+  row: Pick<
+    BeamHandoff,
+    "beamId" | "title" | "revision" | "publicationId" | "handoffId" | "publisherProfileId"
+  >,
   digest: string,
   basePath: string | undefined,
   requestPath: string,
+  publisherProfileId?: string,
 ) {
   const publicationId = row.publicationId ? `${row.beamId}.${row.publicationId}` : undefined;
   const revision = snapshotRevision(row, digest);
@@ -35,7 +39,12 @@ export function publicationHead(
     revision,
     digest,
     ...(view ? { url: reference(view) } : {}),
-    canRelease: false,
+    canRelease: Boolean(
+      publicationId &&
+      !row.handoffId &&
+      publisherProfileId &&
+      row.publisherProfileId === publisherProfileId,
+    ),
     ...(publicationId
       ? {
           publicationId,

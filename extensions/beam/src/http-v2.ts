@@ -1,6 +1,7 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { GatewayRequestAuthorityV1 } from "openclaw/plugin-sdk/gateway-request-authority";
 import { sendJsonNoStore } from "openclaw/plugin-sdk/http-response-runtime";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   isJsonContentType,
   isRequestBodyLimitError,
@@ -8,8 +9,13 @@ import {
 } from "openclaw/plugin-sdk/webhook-ingress";
 import { sendHttpRequestRejection } from "openclaw/plugin-sdk/webhook-request-guards";
 import { parseBeamPacket } from "../packet-contract/packet-v2.generated.js";
-import type { BeamPublishInput, BeamPublicationOperations } from "../publication-operation-api.js";
+import type {
+  BeamPublishInput,
+  BeamPublicationOperations,
+  BeamReleaseInput,
+} from "../publication-operation-api.js";
 import type { BeamPublisher } from "../upload-operation-api.js";
+import { readBeamDestination } from "./destination-v2.js";
 import { createBeamIngressLimits } from "./http.js";
 import { packetDigest, snapshotBytes } from "./packet-state.js";
 import { BEAM_V2_API, parsePublicationId, publicationHead } from "./publication.js";
@@ -65,6 +71,10 @@ export function createBeamV2Handler(options: {
     input: BeamPublishInput,
     assertCurrent: () => void,
   ) => Promise<BeamPublicationOperations["publish"]["output"]>;
+  releasePublication: (
+    input: BeamReleaseInput,
+    assertCurrent: () => void,
+  ) => Promise<BeamPublicationOperations["release"]["output"]>;
   currentAuthority(): ReadAuthority | undefined;
   controlUiBasePath(): string | undefined;
 }) {
@@ -115,6 +125,101 @@ export function createBeamV2Handler(options: {
         await authority.revalidate();
       }
       authority.assertCurrent(grant);
+      const selected =
+        path[0] === "publications" && path[1] ? parsePublicationId(path[1]) : undefined;
+      if (req.method === "POST" && path.length === 3 && selected && path[2] === "release") {
+        if (!publisher?.profileId) {
+          unavailable();
+          return true;
+        }
+        const requestId = req.headers["idempotency-key"];
+        const revision = req.headers["if-match"];
+        if (
+          typeof requestId !== "string" ||
+          !REQUEST_ID.test(requestId) ||
+          typeof revision !== "string" ||
+          !/^"[^"\s]{1,128}"$/.test(revision) ||
+          req.headers["if-none-match"] !== undefined
+        ) {
+          fail(
+            res,
+            400,
+            "invalid_request",
+            "Use a UUID Idempotency-Key and the exact selected revision in If-Match.",
+          );
+          return true;
+        }
+        if (!isJsonContentType(req.headers["content-type"])) {
+          fail(res, 415, "unsupported_media", "Submit a JSON release request.");
+          return true;
+        }
+        const ip = authority.clientIp ?? req.socket.remoteAddress ?? "unknown";
+        if (rate.isRateLimited(ip) || !inFlight.tryAcquire(ip)) {
+          res.setHeader("Retry-After", "60");
+          fail(res, 429, "rate_limited", "Retry after the current limit window.");
+          return true;
+        }
+        try {
+          let body: unknown;
+          const raw = await readRequestBodyWithLimit(req, {
+            maxBytes: 1024,
+            timeoutMs: 10_000,
+            destroyOnLimit: false,
+          });
+          try {
+            body = JSON.parse(raw);
+          } catch {
+            body = undefined;
+          }
+          if (
+            !isRecord(body) ||
+            Object.keys(body).length !== 1 ||
+            typeof body.digest !== "string" ||
+            !/^sha256:[a-f0-9]{64}$/.test(body.digest)
+          ) {
+            fail(res, 400, "invalid_request", "Release requires the selected packet digest.");
+            return true;
+          }
+          await authority.revalidate();
+          const result = await options.releasePublication(
+            {
+              ...selected,
+              requestId: requestId.toLowerCase(),
+              revision,
+              digest: body.digest,
+              profileId: publisher.profileId,
+            },
+            () => authority.assertCurrent(),
+          );
+          await authority.revalidate();
+          authority.assertCurrent();
+          if (typeof result === "string") {
+            if (result === "unavailable") {
+              unavailable();
+            } else {
+              fail(
+                res,
+                result === "revision_changed" ? 412 : result === "expired" ? 410 : 409,
+                result,
+                "Inspect the selected publication before retrying release.",
+              );
+            }
+            return true;
+          }
+          const head = publicationHead(
+            result,
+            result.digest,
+            options.controlUiBasePath(),
+            pathname,
+          );
+          res.setHeader("ETag", head.revision);
+          sendJsonNoStore(res, 200, head);
+        } finally {
+          inFlight.release(ip);
+        }
+        return true;
+      }
+
       if (
         req.method === "PUT" &&
         path.length === 2 &&
@@ -234,6 +339,7 @@ export function createBeamV2Handler(options: {
             result.digest,
             options.controlUiBasePath(),
             pathname,
+            publisher.profileId,
           );
           res.setHeader("ETag", head.revision);
           res.setHeader("Beam-Digest", result.digest);
@@ -244,7 +350,7 @@ export function createBeamV2Handler(options: {
         return true;
       }
       if (req.method !== "GET") {
-        res.setHeader("Allow", "GET, PUT");
+        res.setHeader("Allow", "GET, PUT, POST");
         fail(res, 405, "method_not_allowed", "Use a method supported by the Beam receiver.");
         return true;
       }
@@ -253,7 +359,11 @@ export function createBeamV2Handler(options: {
         sendJsonNoStore(res, 200, {
           protocol: 2,
           packetVersions: [2],
-          operations: [...(allowed ? ["read"] : []), ...(publisher ? ["publish"] : [])],
+          operations: [
+            ...(allowed ? ["read", "resolve"] : []),
+            ...(publisher ? ["publish"] : []),
+            ...(publisher?.profileId ? ["release"] : []),
+          ],
           maxBodyBytes: BEAM_MAX_BODY_BYTES,
           sendReceiptRetentionSeconds: 0,
         });
@@ -261,7 +371,9 @@ export function createBeamV2Handler(options: {
       }
       const [kind, id = "", operation] = path;
       const publication =
-        kind === "publications" && operation === "snapshot" ? parsePublicationId(id) : undefined;
+        kind === "publications" && (operation === "snapshot" || operation === "destination")
+          ? selected
+          : undefined;
       const beamId =
         publication?.beamId ??
         (kind === "snapshots" &&
@@ -290,13 +402,37 @@ export function createBeamV2Handler(options: {
         unavailable();
         return true;
       }
+      if (operation === "destination") {
+        const destination = await readBeamDestination(row, Boolean(snapshot), authority);
+        authority.assertCurrent();
+        if (destination === "unavailable") {
+          unavailable();
+        } else if (destination === "source_owned") {
+          fail(res, 409, "source_owned", "Release this publication before continuing it.");
+        } else {
+          sendJsonNoStore(
+            res,
+            200,
+            destination.state === "ready"
+              ? { state: destination.state, reference: destination.reference }
+              : destination,
+          );
+        }
+        return true;
+      }
       if (!snapshot) {
         fail(res, 410, "expired", "The snapshot is no longer retained.");
         return true;
       }
       const entity = snapshotBytes(snapshot);
       const digest = packetDigest(entity);
-      const head = publicationHead(snapshot, digest, options.controlUiBasePath(), pathname);
+      const head = publicationHead(
+        snapshot,
+        digest,
+        options.controlUiBasePath(),
+        pathname,
+        publisher?.profileId,
+      );
       if (
         kind === "snapshots" &&
         operation === "snapshot" &&

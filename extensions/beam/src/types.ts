@@ -66,6 +66,8 @@ export type BeamStoredSession = Omit<BeamUpload, "items"> & {
     creating?: string;
     ready?: true;
   };
+  /** An accepted guarded release outlives the transcript and all later v1 retries. */
+  releaseReceipt?: { requestId: string; revision: string; digest: string };
   /** Immutable verified initial publisher. Older ownerless live rows remain ownerless. */
   publisherProfileId?: string;
   /** Verified uploader of this accepted snapshot; never accepted from the upload body. */
