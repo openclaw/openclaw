@@ -1,4 +1,8 @@
 import { afterEach, assert, expect, it, vi } from "vitest";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../src/config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../../src/config/types.openclaw.js";
 import { createPluginServiceCatalogExports } from "../../src/plugins/service-catalog-exports.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
@@ -8,7 +12,10 @@ import {
 } from "./native-catalog-export.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-afterEach(() => vi.unstubAllEnvs());
+afterEach(() => {
+  clearRuntimeConfigSnapshot();
+  vi.unstubAllEnvs();
+});
 
 it.each(["claude", "pi"] as const)(
   "grants and reads the exact %s source beyond the first search page",
@@ -18,6 +25,7 @@ it.each(["claude", "pi"] as const)(
       agents: { entries: { main: {} } },
       plugins: { entries: { beam: { enabled: true, config: { mirror: { catalogs: [id] } } } } },
     };
+    setRuntimeConfigSnapshot(config);
     const { registry } = createNativeCatalogTestRegistry(config);
     const [catalog] = createPluginServiceCatalogExports({
       pluginId: "beam",
