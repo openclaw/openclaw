@@ -335,6 +335,7 @@
     "native.android.2ca936c17640d182": "Dinonaktifkan untuk semua agen.",
     "native.android.2d208270fa6f9dfb": "Terlama dahulu",
     "native.android.2d2ffc024bab2296": "Milidetik epoch (opsional)",
+    "native.android.2d32c414b2610a23": "Proyek Sesi",
     "native.android.2d3b2b540314c7c4": "Tanpa fase",
     "native.android.2d45445f9ff24e2e": "${line.oldLine ?: \"\"} ${line.newLine ?: \"\"} ",
     "native.android.2d4dba9cbde90bf1": "Mikrofon pilihan tidak tersedia; menggunakan perutean otomatis.",

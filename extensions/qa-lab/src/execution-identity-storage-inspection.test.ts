@@ -61,7 +61,7 @@ it("awaits worker counts through the scenario flow without caller-thread SQLite"
           requesterSessionKey,
           ...(privateCompletion ? { completionTarget: "parent" } : {}),
           execution: { status: "terminal", outcome: { status: "ok" } },
-          delivery: { status: "not_required", disposition: "intentional_non_delivery" },
+          delivery: { status: "not_required" },
           task: "private fixture prompt must not be returned",
         };
         insert.run(
@@ -92,7 +92,7 @@ it("awaits worker counts through the scenario flow without caller-thread SQLite"
           { set: "runs", value: { expr: "readNativeQaSubagentRuns(env, 'parent')" } },
           {
             assert:
-              "runs.length === 2 && runs[0].runId === 'parent-private' && runs[0].createdAt === 2 && runs[1].runId === 'parent-public' && runs[1].createdAt === 1 && runs.every(run => run.requesterSessionKey === 'parent' && run.childSessionKey === 'parent-child' && run.execution.outcome.status === 'ok' && run.delivery.disposition === 'intentional_non_delivery' && !('task' in run) && !('completionTarget' in run))",
+              "runs.length === 2 && runs[0].runId === 'parent-private' && runs[0].createdAt === 2 && runs[1].runId === 'parent-public' && runs[1].createdAt === 1 && runs.every(run => run.requesterSessionKey === 'parent' && run.childSessionKey === 'parent-child' && run.execution.outcome.status === 'ok' && run.delivery.status === 'not_required' && !('task' in run) && !('completionTarget' in run))",
           },
         ],
       },

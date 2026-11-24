@@ -6,6 +6,7 @@ import {
   progressCardPresentation,
 } from "../../../components/session-progress-card.ts";
 import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
+import { createSessionAutomationSchedule } from "../../../lib/cron/session-automation-schedule-loader.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { listSubagents, projectProgressCardRuntime } from "../chat-subagent-wait.ts";
 import {
@@ -29,8 +30,8 @@ import {
   type MobileTaskProgressProps,
 } from "./chat-details-progress.tsx";
 import type { ChatDetailsProps } from "./chat-details-types.ts";
-import type { GitHubPublicationMobileProps } from "./chat-github-publication-mobile.tsx";
 import "../../../styles/chat/github-publication-mobile.css";
+import type { GitHubPublicationMobileProps } from "./chat-github-publication-mobile.tsx";
 import { ChatLazyBoundary } from "./chat-lazy-boundary.tsx";
 import { ChatMobilePeopleBody, type ChatMobilePeopleBodyProps } from "./chat-mobile-people.tsx";
 import { getChatOutputsCount } from "./chat-outputs-data.ts";
@@ -53,12 +54,11 @@ import {
   ChatSessionVersionsMobile,
   type ChatSessionVersionsMobileProps,
 } from "./chat-session-versions-mobile.tsx";
+import "../../../styles/chat/details.css";
 import {
   SessionAutomationRead,
   type SessionAutomationInventory,
 } from "./chat-summary-automations.tsx";
-import "../../../styles/chat/details.css";
-import { createSessionAutomationSchedule } from "./session-automation-schedule-loader.ts";
 
 registerEnglishCatalog(registerChatSessionEnglish);
 

@@ -2,6 +2,10 @@ import { spawn, type ChildProcessByStdio } from "node:child_process";
 import { EventEmitter } from "node:events";
 import type { Readable, Writable } from "node:stream";
 import { MessageChannel, type MessagePort } from "node:worker_threads";
+import {
+  raiseChildOomScoreInBackground,
+  shouldAdjustChildOomScore,
+} from "../process/linux-oom-score-spawn.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { resolveRuntimeProcessEntrypointUrl } from "./runtime-process-url.js";
 import { resolveRuntimeWorkerArgv } from "./runtime-worker-url.js";
@@ -42,6 +46,7 @@ const state = resolveGlobalSingleton<{
 const MAX_RETIRED_WATCHES = 64;
 
 function startHost(): Host {
+  const env = { ...process.env, NODE_OPTIONS: undefined };
   // The caller passes its PID so a helper that starts after it died still exits.
   const child = spawn(
     process.execPath,
@@ -54,9 +59,14 @@ function startHost(): Host {
       // Terminal signals reach the caller first; the helper exits when its input ends
       // or its caller is gone.
       detached: true,
-      env: { ...process.env, NODE_OPTIONS: undefined },
+      env,
     },
   );
+  // Under memory pressure the kernel should end this recoverable helper, not its caller:
+  // lost watches fall back to scans and the next watch starts a fresh helper.
+  if (shouldAdjustChildOomScore({ env })) {
+    raiseChildOomScoreInBackground(child.pid);
+  }
   const started: Host = { child, watches: new Map(), retired: 0 };
   let buffered = "";
   child.stdout.setEncoding("utf8").on("data", (chunk: string) => {

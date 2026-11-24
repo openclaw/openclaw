@@ -499,6 +499,65 @@ it.each([undefined, "auth-rejected"] as const)(
   },
 );
 
+it.each([
+  { labels: ["Week"], credits: 0 },
+  { labels: ["5h"], credits: undefined },
+  { labels: [], credits: 12.75 },
+  { labels: [], credits: undefined },
+  { labels: ["5h", "Week", "30d"], credits: 4 },
+])(
+  "reconciles reserved slots against reported windows $labels and credits $credits",
+  async ({ labels, credits }) => {
+    const slow = Promise.withResolvers<void>();
+    const client = createTestGatewayClient(async (_method, params) => {
+      if ((params as { profileId: string }).profileId === pair.openai[1]) {
+        await slow.promise;
+      }
+      return {
+        updatedAt: 1,
+        providers: [
+          {
+            provider: "openai",
+            displayName: "OpenAI",
+            windows: labels.map((label) => ({ label, usedPercent: 25 })),
+            billing:
+              credits === undefined ? [] : [{ type: "balance", amount: credits, unit: "credits" }],
+          },
+        ],
+      };
+    });
+    const { container } = mount(orderedCard(pair), {
+      ...props(),
+      accountUsage: { client, agentId: "main", revision: 0 },
+    });
+    const waiting = ".model-providers__usage-segment[aria-hidden=true]";
+    await waitForSolid(() =>
+      expect(container.querySelectorAll(".model-providers__credit > :empty")).toHaveLength(1),
+    );
+    // No returned account still looks pending, even if it omitted a common window entirely.
+    for (const slot of container.querySelectorAll(".model-providers__usage-track")) {
+      expect(slot.firstElementChild?.matches(waiting)).toBe(false);
+    }
+    expect(container.querySelectorAll(waiting)).toHaveLength(
+      new Set(["5h", "Week", ...labels]).size,
+    );
+    slow.resolve();
+    await waitForSolid(() =>
+      expect(
+        [...container.querySelectorAll(".model-providers__credit > span[aria-hidden=true]")].map(
+          (el) => el.textContent,
+        ),
+      ).toEqual(Array(2).fill(credits === undefined ? "—" : String(credits))),
+    );
+    expect(
+      [...container.querySelectorAll(".model-providers__usage-window[role=group]")].map(
+        (row) => row.ariaLabel,
+      ),
+    ).toEqual([...labels, "Credits"]);
+    expect(container.querySelector(".model-providers__usage-segment[aria-hidden=true]")).toBeNull();
+  },
+);
+
 it("moves a key across collapsed subscriptions and keeps credit and recovery details on the right account", async () => {
   const healthy = makeProfile("openai:other", { email: "other@example.com" });
   const key = makeProfile("openai:key", { type: "api_key", status: "static" });

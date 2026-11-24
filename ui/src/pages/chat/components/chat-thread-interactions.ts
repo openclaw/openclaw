@@ -60,6 +60,7 @@ import type { SidebarContent, SidebarFullMessageLoader } from "./chat-sidebar-co
 import { mountThreadMenu, type ThreadMenuAction } from "./chat-thread-menu.tsx";
 import { TranscriptSearchState } from "./chat-transcript-search-state.ts";
 import type { ChatWelcomeIdentityProps } from "./chat-welcome.tsx";
+import type { WidgetCommentEditorScope } from "./widget-comment-intent.ts";
 
 registerChatMessageMetadataEnglish();
 
@@ -213,7 +214,7 @@ export type ChatThreadProps = Omit<
     workspaceFileLinkScope?: string;
     onWorkspaceFileLinks?: (links: HTMLElement[]) => void;
     onOpenSessionLink?: (target: SessionLinkTarget) => void;
-    onNavigate?: (routeId: "cron", options: { search: string }) => void;
+    onNavigate?: ApplicationContext["navigate"];
     onHistoryIntent?: (event: Event) => void;
     onHistorySentinelRef?: (element: HTMLElement) => void | (() => void);
     onTranscriptAnnouncementRef?: (element: HTMLElement) => void | (() => void);
@@ -224,7 +225,11 @@ export type ChatThreadProps = Omit<
     onFocusComposer?: () => void;
     commentAttachments?: readonly ChatAttachment[];
     commentsDisabled?: boolean;
-    onAddToChat?: (selection: ChatSelectionSource, anchorRect: DOMRect) => void;
+    onAddToChat?: (
+      selection: ChatSelectionSource,
+      anchorRect: DOMRect,
+      widget?: WidgetCommentEditorScope,
+    ) => void;
     onCompanionSelection?: (selection: ChatSelectionSource, anchorRect: DOMRect) => void;
     onNewSessionSelection?: (selection: ChatSelectionSource) => void;
     /** Shows one of the session's subagents. */

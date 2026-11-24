@@ -1,5 +1,6 @@
 import AppKit
 import Foundation
+import QuartzCore
 import Testing
 import WebKit
 @testable import OpenClaw
@@ -366,6 +367,40 @@ struct DashboardNativeBrowserHostTests {
         #expect(second.superview == nil)
     }
 
+    @Test func `toast cutouts preserve browser frame and route clicks to the dashboard until removed`() throws {
+        let fixture = self.fixture()
+        defer { fixture.host.dispose() }
+        try fixture.host.open(tabId: "mac-first", url: #require(URL(string: "about:blank")), sessionKey: "")
+        let tab = try #require(fixture.host.webView(for: "mac-first"))
+        let view = try #require(tab.superview)
+        try fixture.host.present(
+            scope: "panel", tabId: "mac-first", rect: .init(x: 50, y: 80, width: 600, height: 400), visible: true)
+        let frame = view.frame
+        let first = DashboardBrowserCutout(rect: .init(x: 100, y: 65, width: 100, height: 44), radius: 22)
+        let second = DashboardBrowserCutout(rect: .init(x: 170, y: 75, width: 120, height: 48), radius: 14)
+        let overlap = CGPoint(x: 205, y: 535) // Dashboard viewport (185, 95).
+        let clear = CGPoint(x: 400, y: 400)
+        func hit(_ point: CGPoint) -> NSView? { fixture.container.hitTest(point) }
+        func belongs(_ hit: NSView?, to webView: WKWebView) -> Bool {
+            hit === webView || hit?.isDescendant(of: webView) == true
+        }
+        #expect(belongs(hit(overlap), to: tab))
+
+        fixture.host.setOverlayCutouts([first, second])
+        #expect(view.frame == frame)
+        #expect(!tab.isHidden)
+        let mask = try #require(view.layer?.mask as? CAShapeLayer)
+        let visible = try #require(mask.path)
+        #expect(!visible.contains(view.convert(overlap, from: fixture.container)))
+        #expect(visible.contains(view.convert(clear, from: fixture.container)))
+        #expect(belongs(hit(overlap), to: fixture.dashboard))
+        #expect(belongs(hit(clear), to: tab))
+
+        fixture.host.setOverlayCutouts([])
+        #expect(view.layer?.mask == nil)
+        #expect(belongs(hit(overlap), to: tab))
+    }
+
     @Test func `most recent scope wins and releasing it restores the surviving presentation`() throws {
         let fixture = self.fixture()
         defer { fixture.host.dispose() }
@@ -590,6 +625,95 @@ private enum DashboardArticleFixture {
 @Suite(.serialized, .timeLimit(.minutes(1)))
 @MainActor
 struct DashboardNativeBrowserFaviconTests {
+    @Test func `tabs follow the dashboard appearance without reloading`() async throws {
+        func icon(_ fill: String) -> String {
+            let svg = "<svg xmlns='http://www.w3.org/2000/svg' width='16' height='16'>" +
+                "<circle cx='8' cy='8' r='8' fill='\(fill)'/></svg>"
+            return "data:image/svg+xml;base64," + Data(svg.utf8).base64EncodedString()
+        }
+        let light = icon("black")
+        let dark = icon("white")
+        let server = try await DashboardHTTPFixture.start(html: """
+        <!doctype html><html data-theme-mode="light"><title>Theme fixture</title><link rel="icon">
+        <script>
+          const preference = matchMedia('(prefers-color-scheme: dark)');
+          const icon = document.querySelector('link');
+          const update = () => { icon.href = preference.matches ? '\(dark)' : '\(light)'; };
+          preference.addEventListener('change', update);
+          update();
+        </script>
+        """, contentSecurityPolicy: "default-src 'none'; script-src 'unsafe-inline'; img-src data:; connect-src data:")
+        defer { server.stop() }
+        let controller = Self.controller(server)
+        defer { controller.closeDashboard() }
+        controller.show(url: controller.currentURL, auth: controller.auth)
+        let window = try #require(controller.window)
+        window.appearance = NSAppearance(named: .darkAqua)
+        try await waitForNativeDashboardDocument(controller)
+
+        let browser = controller.nativeBrowser
+        try browser.open(tabId: "mac-theme", url: server.url("/article"), sessionKey: "")
+        let webView = try #require(browser.webView(for: "mac-theme"))
+        try await TestWait.state("light favicon on a dark system appearance") {
+            browser.state.tabs.first?.favicon == light
+        }
+        let dashboardStillDark = try await controller.webView.evaluateJavaScript(
+            "matchMedia('(prefers-color-scheme: dark)').matches")
+        #expect(dashboardStillDark as? Bool == true)
+        _ = try await webView.evaluateJavaScript("window.openclawFixtureLoaded = true")
+
+        _ = try await controller.webView.evaluateJavaScript("document.documentElement.dataset.themeMode = 'dark'")
+        try await TestWait.state("dark favicon after a dashboard theme change") {
+            browser.state.tabs.first?.favicon == dark
+        }
+        let sameDocument = try await webView.evaluateJavaScript("window.openclawFixtureLoaded === true")
+        #expect(sameDocument as? Bool == true)
+
+        let requestReceived = AsyncTestGate()
+        let stalled = try await DashboardHTTPFixture.start(beforeResponse: {
+            requestReceived.open()
+            await AsyncTestGate().wait()
+        })
+        defer { stalled.stop() }
+        try browser.navigate(tabId: "mac-theme", url: stalled.url("/pending"))
+        try await requestReceived.wait("the navigation is waiting for its response")
+        _ = try await controller.webView.evaluateJavaScript("document.documentElement.dataset.themeMode = 'light'")
+        try await TestWait.state("the reading view adopts light while loading") {
+            webView.appearance?.name == .aqua && webView.isLoading
+        }
+        try browser.perform(.stop, tabId: "mac-theme")
+        try await TestWait.state("the retained page gets the new favicon when navigation stops") {
+            !webView.isLoading && browser.state.tabs.first?.favicon == light
+        }
+        let retainedDocument = try await webView.evaluateJavaScript("window.openclawFixtureLoaded === true")
+        #expect(retainedDocument as? Bool == true)
+
+        controller.hideForExperience()
+        try #require(controller.isHiddenForExperience)
+        let closeAllowed = try await controller.webView.callAsyncJavaScript(
+            """
+            document.documentElement.dataset.themeMode = 'dark';
+            const reply = await window.webkit.messageHandlers.openclawBrowser
+              .postMessage({type: 'close', tabId: 'mac-theme'});
+            return reply.ok;
+            """,
+            arguments: [:],
+            in: nil,
+            contentWorld: .page)
+        #expect(closeAllowed as? Bool == false)
+        try await TestWait.state("the native tab adopts the appearance while hidden") {
+            browser.state.tabs.first?.favicon == dark
+        }
+        controller.show()
+        try await TestWait.state("the reopened dashboard receives the retained tab’s current favicon") {
+            let favicon = try await controller.webView.evaluateJavaScript(
+                "window.__OPENCLAW_NATIVE_BROWSER__?.tabs.find(tab => tab.id === 'mac-theme')?.favicon ?? null")
+            return favicon as? String == dark
+        }
+        let reopenedDocument = try await webView.evaluateJavaScript("window.openclawFixtureLoaded === true")
+        #expect(reopenedDocument as? Bool == true)
+    }
+
     @Test func `navigations that keep the displayed page keep its favicon`() async throws {
         let unreachable = try await DashboardHTTPFixture.start()
         let unreachableURL = unreachable.url("/gone")

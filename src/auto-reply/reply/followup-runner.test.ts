@@ -1,6 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import { createTestOperatorAuthority } from "../../agents/admitted-run-context.test-support.js";
 import {
   resolveSessionTranscriptReadFence,
   runWithSessionTranscriptReadFence,
@@ -11,7 +10,6 @@ import {
   getPluginRuntimeGatewayRequestScope,
   withPluginRuntimeGatewayRequestScope,
 } from "../../plugins/runtime/gateway-request-scope.js";
-import { defaultRuntime } from "../../runtime.js";
 import { getReplyPayloadMetadata, setReplyPayloadMetadata } from "../reply-payload.js";
 import type { ReplyPayload } from "../types.js";
 import type { FollowupExecutionResult } from "./followup-turn-execution.js";
@@ -460,45 +458,31 @@ describe("createFollowupRunner", () => {
 
   it.each([
     "unrecorded authority",
-    "unrecorded assertion",
-    "revoked before admission",
-    "revoked after admission",
-    "revoked without target",
+    "unrecorded failure",
     "user abort",
     "progress failure",
   ] as const)(
     "settles %s without replay and preserves its visible classification",
     async (phase) => {
       const unrecorded = phase.startsWith("unrecorded");
-      const revoked = phase.startsWith("revoked");
-      const admitted = !unrecorded && phase !== "revoked before admission";
+      const admitted = !unrecorded;
       const failure =
         phase === "unrecorded authority"
           ? new GatewayOperatorAccessUnavailableError()
-          : new Error(revoked ? "original operator role changed" : phase);
-      if (phase === "revoked after admission" || phase === "user abort") {
+          : new Error(phase);
+      if (phase === "user abort") {
         turn = createTurn([], { kind: "aborted", code: "aborted_by_user" });
       }
       const deliver = attachSource(turn);
-      if (phase === "revoked without target") {
-        turn.queued.run.sessionKey = undefined;
-        turn.queued.run.sessionId = "";
-      }
-      if (revoked || unrecorded) {
+      if (unrecorded) {
         const authority = {
           canonicalIdentity: null,
           profileId: "guest",
           scopes: ["operator.write"],
-          assertCurrent: () => {
-            throw failure;
-          },
         };
-        turn.queued.operatorAuthority = unrecorded
-          ? { ...authority, signal: new AbortController().signal }
-          : createTestOperatorAuthority(authority);
+        turn.queued.operatorAuthority = { ...authority, signal: new AbortController().signal };
       }
       const refuse = async () => {
-        turn.queued.operatorAuthority?.assertCurrent();
         throw failure;
       };
       if (!admitted) {
@@ -521,14 +505,6 @@ describe("createFollowupRunner", () => {
         return;
       }
       await expect(createRunner()(turn.queued)).resolves.toBeUndefined();
-      if (phase === "revoked without target") {
-        expect(state.recordFailure).not.toHaveBeenCalled();
-        expect(defaultRuntime.error).toHaveBeenCalledWith(
-          expect.stringContaining(
-            '"recorded":"none","nonOutcomes":["history: no cron receipt handle","session-notice: no session target"]',
-          ),
-        );
-      }
       expect(state.execute).toHaveBeenCalledTimes(admitted ? 1 : 0);
       expect(turn.operation.fail.mock.calls).toEqual(
         admitted && phase !== "user abort" ? [["run_failed", failure]] : [],
@@ -541,7 +517,6 @@ describe("createFollowupRunner", () => {
               : {
                   kind: "failed",
                   error: failure.message,
-                  ...(revoked ? { notice: `withheld: ${failure.message}` } : {}),
                 },
           payloads: [],
         }),

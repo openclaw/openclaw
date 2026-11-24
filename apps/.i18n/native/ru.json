@@ -335,6 +335,7 @@
     "native.android.2ca936c17640d182": "Отключено для всех агентов.",
     "native.android.2d208270fa6f9dfb": "Сначала старые",
     "native.android.2d2ffc024bab2296": "Миллисекунды с начала эпохи Unix (необязательно)",
+    "native.android.2d32c414b2610a23": "Проект сеанса",
     "native.android.2d3b2b540314c7c4": "Без фазы",
     "native.android.2d45445f9ff24e2e": "${line.oldLine ?: \"\"} ${line.newLine ?: \"\"} ",
     "native.android.2d4dba9cbde90bf1": "Предпочтительный микрофон недоступен; используется автоматическая маршрутизация.",

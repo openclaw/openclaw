@@ -99,7 +99,7 @@ export function registryAuthorityChanged(
 ): Error {
   switch (kind) {
     case "publication":
-      return new SessionWorktreeSourceChangedError("GitHub publication worktree authority changed");
+      return new SessionWorktreeSourceChangedError("The GitHub publication worktree changed");
     case "snapshot-retirement":
       return new Error("Worktree snapshot retirement identity changed");
     case "exact-snapshot":

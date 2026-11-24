@@ -7,6 +7,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { validateTemplateDraftDocument } from "../../../packages/gateway-protocol/src/index.js";
+import { GATEWAY_OWNER_PROFILE_ID } from "../../../packages/gateway-protocol/src/schema/user-profile-constants.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import {
   templateDraftRevision,
@@ -38,7 +39,9 @@ async function requestDraft(
   // SAFETY: These are the live socket fields read by draft authority.
   const client = {
     connId: "draft-author",
-    authenticatedUserProfile: gatewayProfile("creator"),
+    authenticatedUserProfile: gatewayProfile(
+      condition === "other-person" ? "creator" : GATEWAY_OWNER_PROFILE_ID,
+    ),
     connect: { role: "operator", scopes: ["operator.admin"] },
     internal: { syntheticClient: condition === "synthetic", operatorRoleActor: { kind: "system" } },
   } as GatewayClient;
@@ -351,6 +354,19 @@ describe("Template draft reviewed publication", () => {
   afterEach(() => {
     vi.unstubAllEnvs();
     expect(registryErrors.splice(0)).toEqual([]);
+  });
+
+  it("asks a different administrator to sign in rather than borrowing the host account", async () => {
+    const fixture = await publicationFixture();
+    const reply = await requestDraft(
+      "review",
+      fixture.workspaceDir,
+      { draftId: fixture.draft.draftId },
+      "other-person",
+    );
+    expect(reply[0]).toBe(false);
+    expect(reply[2]).toMatchObject({ details: { templateSignIn: { required: true } } });
+    expect(fixture.uploads).toHaveLength(0);
   });
 
   it("publishes exactly the reviewed selections under the personal publisher", async () => {

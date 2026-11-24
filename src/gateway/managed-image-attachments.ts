@@ -853,7 +853,7 @@ export async function readManagedOutgoingImageThumbnail(
         const thumbnail = await readImageThumbnailFromFile(opened, maxBytes);
         assertCurrent();
         signal.throwIfAborted();
-        return thumbnail;
+        return thumbnail.data;
       } finally {
         await opened.handle.close();
       }

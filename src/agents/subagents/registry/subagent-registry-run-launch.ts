@@ -17,6 +17,7 @@ import { emitSessionLifecycleEvent } from "../../../sessions/session-lifecycle-e
 import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
 import { normalizeDeliveryContext } from "../../../utils/delivery-context.shared.js";
 import { resolveSubagentRequesterAgentId } from "../../subagent-requester-owner.js";
+import { getGatewayToolCallerIdentity } from "../../tools/gateway-caller-context.js";
 import {
   prepareTerminatedCollectorLaunch,
   prepareSwarmCollectorCompletion,
@@ -365,7 +366,11 @@ export class SubagentLaunchManager extends SubagentRecoveryManager {
                 subagentRuns.bindCompletionAuthority(
                   entry,
                   authority,
-                  options.requesterRunInstance,
+                  options.requesterRunInstance ??
+                    getGatewayToolCallerIdentity()?.operationalRunInstance,
+                  options.requesterRunInstance
+                    ? { runId: options.requesterRunInstance.runId }
+                    : undefined,
                 );
                 custodyTransferred = true;
               }
