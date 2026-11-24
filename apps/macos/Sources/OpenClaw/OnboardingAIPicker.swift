@@ -38,7 +38,6 @@ struct OnboardingAIPicker {
     let moreAuthOptions: [Model.AuthOption]
     /// Downloads for local model apps with no model found yet, beside Check again.
     let localInstalls: [Model.RecommendedInstall]
-    /// The other downloads, behind More providers.
     let otherInstalls: [Model.RecommendedInstall]
 
     /// The usual rows, shown before the Gateway answers so the page never starts empty.
@@ -86,11 +85,26 @@ struct OnboardingAIPicker {
         if !manualProviders.isEmpty {
             rows.append(Row(id: .apiKey, action: .apiKey(nil), detected: false))
         }
-        // The Gateway already drops downloads for apps that are running; a found model means installed.
-        let localApps = Set(local.compactMap { $0.brandId?.lowercased() })
-        let localInstalls = recommendedInstalls.filter {
+        let detectedProviders = Set(local.map { Self.modelProvider($0.modelRef) })
+        var localInstalls = recommendedInstalls.filter {
             let id = ($0.brandId ?? $0.id).lowercased()
-            return Self.isLocalProvider(id) && !localApps.contains(id)
+            return Self.isLocalProvider(id) && !detectedProviders.contains(id)
+        }
+        // The Gateway can omit a running app from its recommendations before it finds a model.
+        for option in prepareOptions {
+            let provider = (option.brandId ?? option.id).lowercased()
+            guard provider == "ollama" || provider == "lmstudio",
+                  !detectedProviders.contains(provider),
+                  !localInstalls.contains(where: { ($0.brandId ?? $0.id).lowercased() == provider }),
+                  let website = option.website
+            else { continue }
+            localInstalls.append(Model.RecommendedInstall(
+                id: option.id,
+                label: option.label,
+                hint: option.hint ?? "",
+                website: website,
+                icon: option.icon ?? "",
+                brandId: option.brandId))
         }
         if !local.isEmpty || !localOptions.isEmpty || !prepareOptions.isEmpty || !localInstalls.isEmpty {
             rows.append(Row(id: .localModel, action: .localModel, detected: !local.isEmpty))
@@ -117,7 +131,11 @@ struct OnboardingAIPicker {
     }
 
     static func isLocalModelRef(_ modelRef: String) -> Bool {
-        self.isLocalProvider(modelRef.split(separator: "/", maxSplits: 1).first.map(String.init) ?? "")
+        self.isLocalProvider(self.modelProvider(modelRef))
+    }
+
+    private static func modelProvider(_ modelRef: String) -> String {
+        modelRef.split(separator: "/", maxSplits: 1).first?.lowercased() ?? ""
     }
 
     /// Model services that run where the user chooses. Their endpoints may still be remote.

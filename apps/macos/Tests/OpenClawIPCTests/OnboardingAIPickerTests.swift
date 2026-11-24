@@ -9,7 +9,8 @@ struct OnboardingAIPickerTests {
 
     private static let authOptions = """
     [
-      {"id":"openai-device-code","brandId":"openai","label":"Codex login (device code)","kind":"device-code","featured":true},
+      {"id":"openai-device-code","brandId":"openai","label":"Codex login (device code)",
+       "kind":"device-code","featured":true},
       {"id":"anthropic-cli","brandId":"anthropic","label":"Anthropic Claude CLI","kind":"install","featured":true},
       {"id":"openai","brandId":"openai","label":"Codex login (browser)","kind":"oauth","featured":false},
       {"id":"openai-token-sharing","brandId":"openai","label":"Sign in with ChatGPT","kind":"oauth","featured":false},
@@ -32,8 +33,10 @@ struct OnboardingAIPickerTests {
         let candidates: [Model.Candidate] = try Self.decode("""
         [
           {"kind":"claude-cli","label":"Claude Code","detail":"installed","modelRef":"claude-cli/claude-sonnet"},
-          {"kind":"ollama-auto","brandId":"ollama","label":"Ollama","detail":"available locally","modelRef":"ollama/llama3.2"},
-          {"kind":"saved:openrouter","brandId":"openrouter","label":"Saved OpenRouter sign-in","detail":"saved","modelRef":"openrouter/auto"}
+          {"kind":"ollama-auto","brandId":"ollama","label":"Ollama",
+           "detail":"available locally","modelRef":"ollama/llama3.2"},
+          {"kind":"saved:openrouter","brandId":"openrouter","label":"Saved OpenRouter sign-in",
+           "detail":"saved","modelRef":"openrouter/auto"}
         ]
         """)
         let picker = try OnboardingAIPicker(
@@ -67,33 +70,48 @@ struct OnboardingAIPickerTests {
     }
 
     @Test func `local downloads sit on the local model card until the app has a model`() throws {
-        // The Gateway's bundled install catalog (scripts/lib/recommended-tool-installs.json).
         let installs: [Model.RecommendedInstall] = try Self.decode("""
         [
           {"id":"ollama","brandId":"ollama","label":"Ollama","hint":"Run open models locally","website":"https://ollama.com/download","icon":"https://cdn.simpleicons.org/ollama"},
           {"id":"lmstudio","label":"LM Studio","hint":"Local model desktop app","website":"https://lmstudio.ai/download","icon":"https://cdn.simpleicons.org/lmstudio"},
-          {"id":"claude-code","brandId":"claude","label":"Claude Code","hint":"Anthropic's coding agent CLI","website":"https://code.claude.com/docs/en/quickstart","icon":"https://cdn.simpleicons.org/claudecode"}
+          {"id":"claude-code","brandId":"claude","label":"Claude Code","hint":"Anthropic's coding agent CLI",
+           "website":"https://code.claude.com/docs/en/quickstart","icon":"https://cdn.simpleicons.org/claudecode"}
         ]
         """)
-        // A real Gateway always offers both app-guided local setups.
-        let prepareOptions: [Model.PrepareOption] = try Self.decode("""
-        [{"id":"ollama","brandId":"ollama","label":"Ollama","actionLabel":"Choose connection"},
-         {"id":"lmstudio","brandId":"lmstudio","label":"LM Studio","actionLabel":"Connect server"}]
-        """)
         let fresh = OnboardingAIPicker(
-            candidates: [], authOptions: [], manualProviders: [],
-            prepareOptions: prepareOptions, recommendedInstalls: installs)
+            candidates: [],
+            authOptions: [],
+            manualProviders: [],
+            prepareOptions: [],
+            recommendedInstalls: installs)
         #expect(fresh.rows.map(\.id) == [.localModel])
         #expect(fresh.localInstalls.map(\.id) == ["ollama", "lmstudio"])
         #expect(fresh.otherInstalls.map(\.id) == ["claude-code"])
 
         let ollamaModel: [Model.Candidate] = try Self.decode("""
-        [{"kind":"ollama-auto","brandId":"ollama","label":"Ollama","detail":"available locally","modelRef":"ollama/llama3.2"}]
+        [{"kind":"ollama-auto","label":"Ollama","detail":"available locally","modelRef":"ollama/llama3.2"}]
         """)
         let found = OnboardingAIPicker(
-            candidates: ollamaModel, authOptions: [], manualProviders: [],
-            prepareOptions: prepareOptions, recommendedInstalls: installs)
+            candidates: ollamaModel,
+            authOptions: [],
+            manualProviders: [],
+            prepareOptions: [],
+            recommendedInstalls: installs)
         #expect(found.localInstalls.map(\.id) == ["lmstudio"])
+    }
+
+    @Test func `a running app without a model keeps its download link`() throws {
+        let prepareOptions: [Model.PrepareOption] = try Self.decode("""
+        [{"id":"ollama","brandId":"ollama","label":"Ollama","website":"https://ollama.com/download"}]
+        """)
+        let picker = OnboardingAIPicker(
+            candidates: [],
+            authOptions: [],
+            manualProviders: [],
+            prepareOptions: prepareOptions,
+            recommendedInstalls: [])
+
+        #expect(picker.localInstalls.map(\.website) == ["https://ollama.com/download"])
     }
 
     @Test func `late discovery keeps the selected Gemini key form available`() throws {

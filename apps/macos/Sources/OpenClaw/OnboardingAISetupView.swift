@@ -578,7 +578,7 @@ struct OnboardingAISetupView: View {
         Button("Check again") { self.model.retryFromScratch() }
             .buttonStyle(.bordered)
             .controlSize(.small)
-            .disabled(self.model.isBusy)
+            .disabled(self.model.isBusy || self.model.discovering)
     }
 
     private func moreProviders(_ picker: OnboardingAIPicker) -> some View {
