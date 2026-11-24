@@ -162,7 +162,11 @@ describe("invocation-owned session mutations", () => {
         expect((await dispatch(method, params, member)).mock.calls[0]).toMatchObject([
           false,
           undefined,
-          { code: "FORBIDDEN" },
+          {
+            code: "INVALID_REQUEST",
+            message: "session is shared for this connection",
+            details: { code: "SESSION_PARTICIPATION_REQUIRED" },
+          },
         ]);
       }
       for (const requestClient of [client, member]) {
