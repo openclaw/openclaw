@@ -1,6 +1,11 @@
-import { onSettled } from "solid-js";
+import { createMemo, onSettled } from "solid-js";
+import {
+  findControlUiSetting,
+  type ControlUiSettingId,
+} from "../../../../src/shared/control-ui-settings/index.ts";
 import { createPendingSettingsTarget } from "../settings-target-arrival.ts";
-import { useApplication } from "./context.ts";
+import { useApplication, useOptionalApplication } from "./context.ts";
+import { projectOwner } from "./projection.ts";
 
 /** How long a page may take to render the linked setting before the link is dropped. */
 const TARGET_WAIT_MS = 10_000;
@@ -48,5 +53,32 @@ export function createSettingsTargetArrival(host: () => HTMLElement): void {
       clearTimeout(timer);
       pending.dispose();
     };
+  });
+}
+
+/**
+ * Whether the route's `#<setting-id>` names a setting inside `disclosure`, so the disclosure
+ * opens for the link instead of hiding its target. Outside the application it never opens.
+ */
+export function createSettingsTargetReveal(disclosure: ControlUiSettingId): () => boolean {
+  const context = useOptionalApplication();
+  if (!context) {
+    return () => false;
+  }
+  const router = projectOwner(context.router, (source) => source.getState().location.hash);
+  return createMemo(() => {
+    let id: string | undefined;
+    try {
+      id = decodeURIComponent(router.read().slice(1));
+    } catch {
+      return false;
+    }
+    for (let place = id ? findControlUiSetting(id) : undefined; place?.entry.within;) {
+      if (place.entry.within === disclosure) {
+        return true;
+      }
+      place = findControlUiSetting(place.entry.within);
+    }
+    return false;
   });
 }

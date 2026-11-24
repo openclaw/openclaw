@@ -1,24 +1,12 @@
 import type { RouteLocation } from "@openclaw/uirouter";
-import { CONTROL_UI_SETTINGS_PLACES as PLACES } from "../../../../src/shared/control-ui-settings-places.ts";
 import { INTERNAL_MEMORY_PATH_PARAM, pathForRoute } from "../../app-route-paths.ts";
 import type { AgentSelectionCapability } from "../../app/agent-selection.ts";
 import { configSettingSection } from "../../lib/config-form-utils.ts";
 
-// Rows a link can name take their ID from the shared list of places, so a link and its row
-// cannot drift apart. A row that edits one config value carries that value's path.
+// Blocks on the Models page that older links and settings search name.
 export const MODEL_SETTINGS_TARGET_IDS = {
   behavior: "settings-model-behavior",
-  primary: PLACES["models.primary"].hash,
-  fallback: PLACES["models.fallbacks"].hash,
-  thinking: PLACES["models.thinking"].hash,
-  providers: PLACES["models.providers"].hash,
-} as const;
-
-// The agent is named by the route, so these IDs are the same for every agent.
-export const AGENT_SETTINGS_TARGET_IDS = {
-  model: PLACES["agent.model"].hash,
-  fallbacks: PLACES["agent.fallbacks"].hash,
-  thinking: "agent.thinkingDefault",
+  providers: "settings-model-providers",
 } as const;
 
 export const APPEARANCE_SETTINGS_TARGET_IDS = {

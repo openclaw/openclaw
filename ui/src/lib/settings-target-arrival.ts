@@ -1,3 +1,4 @@
+import { CONTROL_UI_SETTING_ID_ALIASES } from "../../../src/shared/control-ui-settings/index.ts";
 import { listen } from "./reactive/listener.ts";
 import { resolveScrollBehavior } from "./scroll-behavior.ts";
 
@@ -10,12 +11,12 @@ const SETTLED_FRAMES = 4;
 const MAX_SCROLL_FRAMES = 120;
 
 /**
- * The element a settings link names inside `root`. A setting that has no row yet, such as
- * a field of an object the config does not define, resolves to the nearest enclosing
- * setting that is rendered.
+ * The element a settings link names inside `root`. A former setting ID resolves to its
+ * current one. A setting that has no row yet, such as a field of an object the config does
+ * not define, resolves to the nearest enclosing setting that is rendered.
  */
 function findSettingsTarget(root: HTMLElement, targetId: string): HTMLElement | null {
-  for (let id = targetId; id;) {
+  for (let id = CONTROL_UI_SETTING_ID_ALIASES[targetId] ?? targetId; id;) {
     const target = root.ownerDocument.getElementById(id);
     if (target && root.contains(target)) {
       return target;

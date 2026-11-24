@@ -233,7 +233,7 @@ function ConfigBody(props: {
               sectionTitle={t("mcpPage.settings")}
               sectionPrelude={
                 <SettingsToggleRow
-                  id="mcp.apps.enabled"
+                  setting="mcp.apps.enabled"
                   title={t("mcpPage.apps")}
                   description={
                     localizedHintForPath(["mcp", "apps", "enabled"], config().uiHints)?.help

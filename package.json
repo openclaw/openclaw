@@ -1856,6 +1856,7 @@
     "check:changelog-attributions": "node --import ./scripts/tsx.mjs scripts/check-changelog-attributions.mts",
     "check:coercion-helpers": "node --import ./scripts/tsx.mjs scripts/check-coercion-helper-declarations.mts",
     "check:control-ui-controllers": "node --import ./scripts/tsx.mjs scripts/check-control-ui-controllers.mts",
+    "check:control-ui-setting-ids": "node --import ./scripts/tsx.mjs scripts/check-control-ui-setting-ids.mts",
     "check:database-first-legacy-stores": "node --import ./scripts/tsx.mjs scripts/check-database-first-legacy-stores.mts",
     "check:database-dialect-ratchet": "node --import ./scripts/tsx.mjs scripts/check-database-dialect-ratchet.mts",
     "check:database-worker-ratchet": "node --max-old-space-size=4096 --import ./scripts/tsx.mjs scripts/check-database-worker-ratchet.mts",

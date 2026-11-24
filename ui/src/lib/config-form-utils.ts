@@ -87,9 +87,13 @@ export function pathKey(path: Array<string | number>): string {
  * element ID and the anchor a settings link names. A section root is addressed by its
  * `config-section-*` ID, and list items share their list's path, so neither has one.
  */
-export function configSettingId(path: Array<string | number>): string | undefined {
+/** A setting ID taken from a config path; only {@link configSettingId} makes one. */
+export type ConfigSettingPath = string & { readonly configSettingPath: true };
+
+export function configSettingId(path: Array<string | number>): ConfigSettingPath | undefined {
   return path.length > 1 && path.every((segment) => typeof segment === "string")
-    ? path.join(".")
+    ? // SAFETY: a joined config path of string segments is what the brand names.
+      (path.join(".") as ConfigSettingPath)
     : undefined;
 }
 

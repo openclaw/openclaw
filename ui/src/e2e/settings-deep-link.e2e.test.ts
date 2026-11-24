@@ -1,7 +1,10 @@
 // Control UI tests cover links that open one setting: arrival, mark, focus and no writes.
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
-import { CONTROL_UI_SETTINGS_PLACES } from "../../../src/shared/control-ui-settings-places.ts";
+import {
+  CONTROL_UI_SETTINGS_PAGES,
+  findControlUiSetting,
+} from "../../../src/shared/control-ui-settings/index.ts";
 import { pathForRoute } from "../app-route-paths.ts";
 import { sourceConfigSnapshot } from "../lib/config/config-snapshot.test-support.ts";
 import { configPageForSection } from "../pages/config/config-sections.ts";
@@ -44,15 +47,16 @@ const gatewayScenario = {
 };
 const WRITE_METHODS = ["config.set", "config.patch", "config.apply"] as const;
 const settingRow = (page: Page, id: string) => page.locator(`[id="${id}"]`);
-type PlaceId = keyof typeof CONTROL_UI_SETTINGS_PLACES;
-type Place = { path: string; agent?: true; agentPanel?: string; hash?: string };
-/** The link a message carries for a place, as the server will build it. */
-function placeHref(id: PlaceId) {
-  const place: Place = CONTROL_UI_SETTINGS_PLACES[id];
-  const agent = place.agent ? `/main${place.agentPanel ? `/${place.agentPanel}` : ""}` : "";
-  return `${place.path}${agent}${place.hash ? `#${place.hash}` : ""}`;
+/** The link a message carries for a setting, as the server will build it. */
+function placeHref(id: string) {
+  const place = findControlUiSetting(id);
+  const page = place?.page;
+  const path = page
+    ? `${page.path}${page.agent ? `/main${page.agentPanel ? `/${page.agentPanel}` : ""}` : ""}`
+    : pathForRoute(configPageForSection(id.split(".")[0]!));
+  return `${path}#${id}`;
 }
-const placeUrl = (id: PlaceId) => `${suite.server.baseUrl}${placeHref(id).slice(1)}`;
+const placeUrl = (id: string) => `${suite.server.baseUrl}${placeHref(id).slice(1)}`;
 
 async function expectArrival(page: Page, row: Locator, title: string) {
   await expect.poll(() => row.getAttribute("data-settings-arrival")).toBe("");
@@ -77,7 +81,7 @@ suite.define(() => {
             content: [
               {
                 type: "text",
-                text: `I could not finish this reply. The model stopped responding and no fallback model is set up.\n\n[Set up a fallback model](${placeHref("models.fallbacks")})`,
+                text: `I could not finish this reply. The model stopped responding and no fallback model is set up.\n\n[Set up a fallback model](${placeHref("agents.defaults.model.fallbacks")})`,
               },
             ],
           },
@@ -109,7 +113,7 @@ suite.define(() => {
     await withPage(
       async ({ page }) => {
         await installMockGateway(page, gatewayScenario);
-        await page.goto(placeUrl("models.fallbacks"));
+        await page.goto(placeUrl("agents.defaults.model.fallbacks"));
         const row = settingRow(page, "agents.defaults.model.fallbacks");
         await expectArrival(page, row, "Fallback model");
         const style = await row.evaluate((element) => {
@@ -131,35 +135,27 @@ suite.define(() => {
         ...gatewayScenario,
         methodResponses: { ...gatewayScenario.methodResponses, "config.schema": schema },
       });
-      for (const id of Object.keys(CONTROL_UI_SETTINGS_PLACES) as PlaceId[]) {
-        const place: Place = CONTROL_UI_SETTINGS_PLACES[id];
+      const listed = CONTROL_UI_SETTINGS_PAGES.flatMap((listedPage) =>
+        Object.keys(listedPage.settings).filter((id) => !id.endsWith(".*")),
+      );
+      for (const id of [...listed, "gateway.publicOrigin", "agents.defaults.timeoutSeconds"]) {
         await page.goto(placeUrl(id));
-        if (!place.hash) {
-          await expect
-            .poll(() => new URL(page.url()).pathname, { message: id })
-            .toBe(new URL(placeUrl(id)).pathname);
-          continue;
-        }
-        const target = settingRow(page, place.hash);
-        if (id === "agents.modelPolicy") {
-          // The config defines no model policy, so its fields have no rows; the link lands
-          // on the policy itself.
-          const policy = settingRow(page, "agents.defaults.modelPolicy");
-          await expect
-            .poll(() => policy.getAttribute("data-settings-arrival"), { message: id })
-            .toBe("");
-          continue;
-        }
-        await target.waitFor({ state: "visible" });
-        if (await target.evaluate((element) => element.classList.contains("settings-row"))) {
-          await expect
-            .poll(() => target.getAttribute("data-settings-arrival"), { message: id })
-            .toBe("");
-        }
+        const target = settingRow(page, id);
+        await expect
+          .poll(() => target.getAttribute("data-settings-arrival"), { message: id })
+          .toBe("");
         await expect
           .poll(async () => (await target.boundingBox())!.y, { message: id })
           .toBeLessThan(page.viewportSize()!.height);
       }
+      // The config defines no model policy, so its fields have no rows; the link lands on
+      // the policy itself.
+      await page.goto(placeUrl("agents.defaults.modelPolicy.allow"));
+      await expect
+        .poll(() =>
+          settingRow(page, "agents.defaults.modelPolicy").getAttribute("data-settings-arrival"),
+        )
+        .toBe("");
       // A key press ends the mark and edits nothing.
       await page.goto(placeUrl("gateway.publicOrigin"));
       const row = settingRow(page, "gateway.publicOrigin");

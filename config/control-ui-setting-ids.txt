@@ -1,0 +1,12 @@
+agent.model.fallbacks
+agent.model.primary
+agent.thinkingDefault
+agents.defaults.decisionModel
+agents.defaults.fastModeDefault
+agents.defaults.model.fallbacks
+agents.defaults.model.primary
+agents.defaults.thinkingDefault
+agents.defaults.utilityModel.fallbacks
+agents.defaults.utilityModel.primary
+mcp.apps.enabled
+modelProviders.moreSettings

@@ -431,7 +431,7 @@ function BooleanNode(props: { params: ConfigNodeRenderParams }): JSX.Element {
       </Match>
       <Match when={props.params.showLabel !== false}>
         <SettingsToggleRow
-          id={configSettingId(props.params.path)}
+          setting={configSettingId(props.params.path)}
           title={
             <>
               {configLabelInContext(meta().label, props.params.contextLabel)}

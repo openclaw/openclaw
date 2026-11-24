@@ -151,6 +151,8 @@ const CONTROL_UI_I18N_VERIFY_PATH_RE =
   /^(?:package\.json$|ui\/(?:src\/|config\/control-ui-locales\.ts$)|scripts\/(?:control-ui-i18n(?:-(?:report|verify))?\.ts|lib\/(?:control-ui-i18n-[^/]+\.ts|control-ui-i18n-config\.json))$|test\/scripts\/control-ui-i18n[^/]*\.test\.ts$)/u;
 const CONTROL_UI_CONTROLLERS_PATH_RE =
   /^(?:package\.json$|ui\/src\/|extensions\/(?:(?:workboard|memory-core|nostr|whatsapp)\/browser\/|(?:clawrouter|x)\/src\/control-ui\.tsx$)|config\/(?:control|plugin)-ui-\w+-baseline\.txt$|scripts\/(?:check-control-ui-controllers|control-ui-solid-inventory)\.mts$|scripts\/lib\/shrink-ratchet\.mts$|test\/scripts\/check-control-ui-controllers\.test\.ts$)/u;
+const CONTROL_UI_SETTING_IDS_PATH_RE =
+  /^(?:package\.json$|ui\/src\/|src\/shared\/control-ui-settings\/|config\/control-ui-setting-ids[^/]*\.txt$|scripts\/check-control-ui-setting-ids\.mts$)/u;
 const SHRINK_RATCHET_OWNER_PATH = "scripts/lib/shrink-ratchet.mts";
 const CORE_OXLINT_TS_CONFIG = "config/tsconfig/oxlint.core.json";
 const EXTENSIONS_OXLINT_TS_CONFIG = "extensions/tsconfig.json";
@@ -673,6 +675,11 @@ export function createChangedCheckPlan(
             if (command.args[0] === "lint") {
               return [
                 { ...command, name: "Control UI controller guard", args: controllerGuardArgs },
+                {
+                  ...command,
+                  name: "Control UI setting IDs",
+                  args: ["check:control-ui-setting-ids"],
+                },
                 { ...command, name: "Control UI i18n catalog", args: ["lint:ui:i18n"] },
                 {
                   ...command,
@@ -1083,6 +1090,9 @@ export function createChangedCheckPlan(
   }
   if (!runAll && result.paths.some((file) => CONTROL_UI_CONTROLLERS_PATH_RE.test(file))) {
     addLint("Control UI controller guard", controllerGuardArgs);
+  }
+  if (!runAll && result.paths.some((file) => CONTROL_UI_SETTING_IDS_PATH_RE.test(file))) {
+    addLint("Control UI setting IDs", ["check:control-ui-setting-ids"]);
   }
 
   if (typeLanes.all) {

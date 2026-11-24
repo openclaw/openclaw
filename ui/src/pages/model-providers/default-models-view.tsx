@@ -15,6 +15,7 @@ import {
   SettingsRow,
   SettingsSection,
   SettingsSegmented,
+  type SettingIdentifier,
 } from "../../components/solid/settings-ui.tsx";
 import { isChatFastModeProviderSupported } from "../../lib/chat/model-select-state.ts";
 import { thinkingLevelLabel } from "../../lib/chat/thinking-level-label.ts";
@@ -33,12 +34,12 @@ import {
 import { modelSettingFallbacks, modelSettingPrimary } from "../../lib/model-setting.ts";
 import { handleNavigationClick } from "../../lib/navigation-click.ts";
 import { t } from "../../lib/reactive/i18n.ts";
+import { createSettingsTargetReveal } from "../../lib/reactive/settings-target-arrival.ts";
 import type {
   ModelDefaultsSaveField,
   ModelProviderRowMessage,
   ModelRuntimePick,
 } from "./config-mutation.ts";
-import { MODEL_SETTINGS_TARGET_IDS } from "../config/route-data.ts";
 import type { ModelProviderCatalogReceipt } from "./core-load.ts";
 import {
   modelCatalogRef,
@@ -183,7 +184,11 @@ function BehaviorSetting<Value extends string>(props: {
   );
   return (
     <SettingsRow
-      id={props.field === "thinking" ? MODEL_SETTINGS_TARGET_IDS.thinking : undefined}
+      setting={
+        props.field === "thinking"
+          ? "agents.defaults.thinkingDefault"
+          : "agents.defaults.fastModeDefault"
+      }
       title={
         <HelpTitle
           title={t(`quickSettings.model.${props.field}`)}
@@ -257,7 +262,7 @@ function CatalogProgress(props: DefaultModelsViewProps): JSX.Element {
 }
 
 function FallbackModel(props: {
-  id?: string;
+  setting: SettingIdentifier;
   label: string;
   fallbacks: string[];
   primary: string | undefined;
@@ -284,7 +289,7 @@ function FallbackModel(props: {
   });
   return (
     <SettingsRow
-      id={props.id}
+      setting={props.setting}
       title={props.label}
       description={
         props.fallbacks.length > 1
@@ -514,9 +519,12 @@ export function DefaultModels(props: DefaultModelsViewProps) {
   const catalogProgress = <CatalogProgress {...props} />;
   // Fallback, utility and decision models stay folded until one of them is set. Once open they
   // stay open, so clearing the last one never folds the row under the pointer; a click wins.
+  // A link to one of them opens the fold too.
+  const revealMore = createSettingsTargetReveal("modelProviders.moreSettings");
   const [moreOpen, setMoreOpen] = createSignal<boolean>(
     (open) =>
       open === true ||
+      revealMore() ||
       props.selection.fallbacks.length > 0 ||
       props.selection.utilityModel !== null ||
       Boolean(props.selection.decisionModel),
@@ -529,7 +537,7 @@ export function DefaultModels(props: DefaultModelsViewProps) {
     >
       <div class="model-providers__defaults">
         <SettingsRow
-          id={MODEL_SETTINGS_TARGET_IDS.primary}
+          setting="agents.defaults.model.primary"
           title={t("modelProviders.defaults.primary")}
           description={props.agentModel}
           control={
@@ -568,6 +576,7 @@ export function DefaultModels(props: DefaultModelsViewProps) {
         />
         <button
           type="button"
+          id="modelProviders.moreSettings"
           class="settings-row settings-row--nav settings-details-toggle"
           aria-expanded={moreOpen() ? "true" : "false"}
           data-models-more-settings
@@ -584,7 +593,7 @@ export function DefaultModels(props: DefaultModelsViewProps) {
         </button>
         <Show when={moreOpen()}>
           <FallbackModel
-            id={MODEL_SETTINGS_TARGET_IDS.fallback}
+            setting="agents.defaults.model.fallbacks"
             label={t("modelProviders.defaults.fallback")}
             fallbacks={props.selection.fallbacks}
             primary={props.selection.primary}
@@ -596,6 +605,7 @@ export function DefaultModels(props: DefaultModelsViewProps) {
             }
           />
           <SettingsRow
+            setting="agents.defaults.utilityModel.primary"
             title={
               <HelpTitle
                 title={t("modelProviders.defaults.utility")}
@@ -632,6 +642,7 @@ export function DefaultModels(props: DefaultModelsViewProps) {
             }
           />
           <FallbackModel
+            setting="agents.defaults.utilityModel.fallbacks"
             label={t("modelProviders.defaults.utilityFallback")}
             fallbacks={modelSettingFallbacks(props.selection.utilityModel)}
             primary={modelSettingPrimary(props.selection.utilityModel)}
@@ -641,6 +652,7 @@ export function DefaultModels(props: DefaultModelsViewProps) {
             onChange={props.onUtilityFallbackChange}
           />
           <SettingsRow
+            setting="agents.defaults.decisionModel"
             title={
               <HelpTitle
                 title={t("chat.modelControls.decisionLabel")}
