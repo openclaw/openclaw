@@ -3,7 +3,7 @@ import { fileURLToPath } from "node:url";
 import { registerSignalExitGate } from "../cli/signal-exit-barrier.js";
 import { resolveRuntimeProcessEntrypointUrl } from "../infra/runtime-process-url.js";
 import { resolveRuntimeWorkerArgv } from "../infra/runtime-worker-url.js";
-import { CommandProcessCleanupError } from "../process/exec-result.js";
+import { CommandProcessCleanupError, readCommandProcessCleanup } from "../process/exec-result.js";
 import {
   resolveCommandProcessSignal,
   retainCommandProcessCleanup,
@@ -50,27 +50,46 @@ export async function runDoctorProcess(runtime: RuntimeEnv): Promise<void> {
   };
   // Hosted diagnosis is read-only. Bound its lifetime, then join process-tree cleanup.
   const worker = trackAsyncWork(() =>
-    runOutsideCommandProcessScope(() =>
-      runUtf8CommandWithTimeout([process.execPath, ...resolveRuntimeWorkerArgv(workerUrl)], {
-        input: "",
-        timeoutMs: 120_000,
-        signal: signal ? AbortSignal.any([signal, cancellation.signal]) : cancellation.signal,
-        cwd: process.cwd(),
-        baseEnv: process.env,
-        ...(/\.[cm]?ts$/.test(fileURLToPath(workerUrl))
-          ? { env: { TSX_TSCONFIG_PATH: fileURLToPath(new URL("../../tsconfig.json", workerUrl)) } }
-          : {}),
-        killProcessTree: true,
-        requireProcessTreeExtinction: true,
-        outputCapture: "discard",
-        onOutputChunk(chunk, stream) {
-          const accepted = chunk.subarray(0, remaining);
-          remaining -= accepted.byteLength;
-          truncated ||= accepted.byteLength < chunk.byteLength;
-          append(stream, output[stream].decoder.write(accepted));
+    runOutsideCommandProcessScope(async () => {
+      let result = await runUtf8CommandWithTimeout(
+        [process.execPath, ...resolveRuntimeWorkerArgv(workerUrl)],
+        {
+          input: "",
+          timeoutMs: 120_000,
+          signal: signal ? AbortSignal.any([signal, cancellation.signal]) : cancellation.signal,
+          cwd: process.cwd(),
+          baseEnv: process.env,
+          ...(/\.[cm]?ts$/.test(fileURLToPath(workerUrl))
+            ? {
+                env: {
+                  TSX_TSCONFIG_PATH: fileURLToPath(new URL("../../tsconfig.json", workerUrl)),
+                },
+              }
+            : {}),
+          killProcessTree: true,
+          requireProcessTreeExtinction: true,
+          outputCapture: "discard",
+          onOutputChunk(chunk, stream) {
+            const accepted = chunk.subarray(0, remaining);
+            remaining -= accepted.byteLength;
+            truncated ||= accepted.byteLength < chunk.byteLength;
+            append(stream, output[stream].decoder.write(accepted));
+          },
         },
-      }),
-    ),
+      );
+      // Startup cancellation returns before cleanup. All Doctor lifetime owners
+      // must join that cleanup before classifying or releasing the worker.
+      const cleanup = readCommandProcessCleanup(result);
+      if (cleanup) {
+        result = {
+          ...result,
+          cleanup: await cleanup.catch((cause: unknown) => {
+            throw new CommandProcessCleanupError({ cause });
+          }),
+        };
+      }
+      return result;
+    }),
   );
   const settlement = worker.then((result) => {
     if (result.cleanup === "uncertain") {
