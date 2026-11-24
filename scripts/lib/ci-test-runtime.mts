@@ -299,6 +299,7 @@ function resolveAllRuntimeSelections(
   selection: TestSelection,
   policy: "bun-all" | "dual-all",
   cwd: string,
+  configInventories?: ReadonlyMap<string, readonly string[]>,
 ): CiTestRuntimeSelection[] {
   const node: CiTestRuntimeSelection = { runtime: "node" };
   const args = selectionVitestArgs(selection);
@@ -343,7 +344,12 @@ function resolveAllRuntimeSelections(
     const owner = fullSuiteVitestShards.find(
       ({ projects }) => projects?.length === 1 && projects[0] === config,
     );
-    return owner ? listWholeConfigFiles(owner.name) : undefined;
+    const aggregateInventory = owner ? listWholeConfigFiles(owner.name) : undefined;
+    // Accounting already qualified this complete owner inventory. It supplies
+    // exception membership only; execution selectors and native qualification stay unchanged.
+    return (
+      aggregateInventory ?? (knownConfigs.has(config) ? configInventories?.get(config) : undefined)
+    );
   });
   const unresolvedConfigs = ownerConfigs.filter((_, index) => !inventories[index]);
   const matches = (file: string, include: readonly string[]) =>
@@ -526,6 +532,8 @@ export function resolveCiTestRuntimeInventory(
   env: Record<string, string | undefined> | undefined,
   policy: CiTestRuntimePolicy,
   execution?: Pick<TestSelection, "configs" | "includePatterns" | "targets">,
+  // Complete config ownership, before projecting the selected files above.
+  configInventory?: readonly string[],
 ) {
   if (
     env?.OPENCLAW_VITEST_INCLUDE_FILE ||
@@ -534,10 +542,20 @@ export function resolveCiTestRuntimeInventory(
   ) {
     return undefined;
   }
-  return resolveCiTestRuntimeSelections(
-    { ...(execution ?? { configs: [config], includePatterns: files }), env },
-    policy,
-  )
+  const executionSelection = {
+    ...(execution ?? { configs: [config], includePatterns: files }),
+    env,
+  };
+  const selections =
+    configInventory === undefined || policy === "node"
+      ? resolveCiTestRuntimeSelections(executionSelection, policy)
+      : resolveAllRuntimeSelections(
+          executionSelection,
+          policy,
+          process.cwd(),
+          new Map([[config, configInventory]]),
+        );
+  return selections
     .filter((selection) => !selection.configs || selection.configs.includes(config))
     .map((selection) => {
       if (selection.engine === "bun-test") {
