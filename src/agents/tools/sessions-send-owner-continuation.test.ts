@@ -162,7 +162,11 @@ async function inRun<T>(
         ...requester,
         operationalRunInstance,
         approvalAuthority,
-        receiptAuthority: () => agentRuns.validateAgentRunDelegatedAuthority(approvalAuthority),
+        receiptAuthority: () => {
+          if (!agentRuns.validateAgentRunDelegatedAuthority(approvalAuthority)) {
+            throw new Error("agent tool caller authority is no longer active");
+          }
+        },
       },
       () => (scope ? runWithCronCreatorAuthorityCapability(scope, work) : work()),
     );
@@ -242,24 +246,21 @@ describe("child followup requester continuation", () => {
   it.each([
     "success",
     "child error",
-    "owner revoked",
     "custody revoked",
     "new user turn",
     "observer closed",
     "receipt replay",
     "requester failed while pending",
   ])("returns the original owner's plugin authority after %s", async (outcome) => {
-    let ownerCurrent = true;
     const owner = {
       senderId: "owner",
       channel: "telegram",
       accountId: "test",
-      isCurrent: () => ownerCurrent,
     };
     const capability = createCronCreatorAuthorityCapability(
       "original",
       { kind: "unknown" },
-      { source: "channel-owner", isCurrent: () => ownerCurrent },
+      { source: "channel-owner" },
       () => true,
       undefined,
       owner,
@@ -269,9 +270,6 @@ describe("child followup requester continuation", () => {
       () => prepareCompletion(bindRequesterYieldCronAuthority("original")),
       capability,
     );
-    if (outcome === "owner revoked") {
-      ownerCurrent = false;
-    }
     if (outcome === "custody revoked") {
       fixture.assertCustody.mockImplementation(() => {
         throw new Error("custody revoked");
@@ -344,7 +342,7 @@ describe("child followup requester continuation", () => {
           : visibleReply("ready"),
     });
     await released.promise;
-    const rejected = ["owner revoked", "custody revoked", "new user turn"].includes(outcome);
+    const rejected = ["custody revoked", "new user turn"].includes(outcome);
     expect(invoked).toHaveBeenCalledTimes(rejected ? 0 : 1);
     if (outcome === "requester failed while pending") {
       expect(callGateway).toHaveBeenCalledOnce();

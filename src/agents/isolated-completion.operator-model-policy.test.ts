@@ -1,5 +1,4 @@
 import { beforeEach, expect, it, vi } from "vitest";
-import { awaitGateBeforeSettlement } from "../../test/helpers/promise.js";
 import { runIsolatedAgentRuntimeCompletion } from "../plugins/runtime/runtime-llm-isolated.js";
 import { createTestOperatorAuthority } from "./admitted-run-context.test-support.js";
 import type { CliOutput } from "./cli-output-contracts.js";
@@ -26,35 +25,24 @@ const { attachProviderAuthAuthority } = await import("../plugins/provider-auth-a
 const { readRunOperatorAuthority } = await import("./admitted-run-context.js");
 const { prepareOperatorModelPolicy } = await import("./operator-model-policy.js");
 const { withGatewayToolCallerIdentity } = await import("./tools/gateway-caller-context.js");
-const { AsyncWorkScope } = await import("../shared/async-work-scope.js");
-const { createDeferredCore } = await import("../shared/deferred.js");
 
 const config = {
   agents: { entries: { main: {} }, defaults: { model: "test-provider/allowed" } },
 };
 type ModelPolicy = NonNullable<Parameters<typeof prepareOperatorModelPolicy>[0]["policy"]>;
 function operator(initial?: Partial<ModelPolicy>) {
-  const prepare = (overrides: Partial<ModelPolicy>) =>
-    prepareOperatorModelPolicy({
-      cfg: config,
-      policy: { sourceAgent: "main", ...overrides },
-      manifestPlugins: [],
-    });
-  let policy = prepare(initial ?? {});
+  const policy = prepareOperatorModelPolicy({
+    cfg: config,
+    policy: { sourceAgent: "main", ...initial },
+    manifestPlugins: [],
+  });
   const authority = createTestOperatorAuthority({
     profileId: "isolated-reader",
     scopes: ["operator.write"],
-    assertCurrent: () => {},
-    get modelPolicy() {
-      return policy;
-    },
+    modelPolicy: policy,
   });
   return {
     authority,
-    setPolicy(this: void, overrides: Partial<ModelPolicy>) {
-      policy = prepare(overrides);
-      return policy;
-    },
   };
 }
 const denied = {
@@ -70,13 +58,6 @@ function answer(text: string, model: string) {
       model,
     },
   };
-}
-function waitForStart<T>(started: Promise<T>, ...runs: Promise<unknown>[]) {
-  return awaitGateBeforeSettlement(
-    started,
-    Promise.all(runs),
-    "Completion settled before dispatch",
-  );
 }
 
 function runPluginCompletion(
@@ -111,56 +92,6 @@ beforeEach(() => {
   });
 });
 
-it("keeps admitted completions and siblings alive while the next start uses current policy", async () => {
-  const { authority, setPolicy } = operator({
-    allow: ["test-provider/model-a", "test-provider/model-b"],
-  });
-  mocks.resolveModelAsync.mockImplementation(async (provider, model) => ({
-    logicalRef: { provider, model },
-    model: { provider, id: model, api: "openai-completions" },
-  }));
-  const started = createDeferredCore();
-  const finishA = createDeferredCore();
-  const finishB = createDeferredCore();
-  const signals = new Map<string, AbortSignal>();
-  registerIsolatedHarness({
-    id: "test-harness",
-    runIsolatedCompletionV2: async (params) => {
-      if (!params.abortSignal) {
-        throw new Error("isolated model has no cancellation signal");
-      }
-      signals.set(params.modelId, params.abortSignal);
-      if (signals.size === 2) {
-        started.resolve();
-      }
-      await (params.modelId === "model-a" ? finishA.promise : finishB.promise);
-      return answer("Allowed answer.", params.modelId);
-    },
-  });
-  const work = new AsyncWorkScope();
-  const first = work.track(() => runPluginCompletion(authority, "model-a"));
-  const second = work.track(() => runPluginCompletion(authority, "model-b"));
-  try {
-    await waitForStart(started.promise, first, second);
-    const modelPolicy = setPolicy({ allow: ["test-provider/model-b"] });
-    expect([signals.get("model-a")?.aborted, signals.get("model-b")?.aborted]).toEqual([
-      false,
-      false,
-    ]);
-    expect(() => authority.assertCurrent()).not.toThrow();
-    const nextAuthority = createTestOperatorAuthority({ ...authority, modelPolicy });
-    await expect(runPluginCompletion(nextAuthority, "model-a")).rejects.toMatchObject(denied);
-    finishA.resolve();
-    await expect(first).resolves.toMatchObject({ text: "Allowed answer." });
-    finishB.resolve();
-    await expect(second).resolves.toMatchObject({ text: "Allowed answer." });
-  } finally {
-    finishA.resolve();
-    finishB.resolve();
-    await Promise.allSettled([first, second]);
-    await work.drain();
-  }
-});
 it.each(["host", "harness"] as const)(
   "rejects a denied model resolved during %s preparation",
   async (owner) => {

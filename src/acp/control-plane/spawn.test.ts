@@ -229,7 +229,9 @@ describe("failed ACP provisional cleanup", () => {
               agentId,
               sessionKey: "agent:main:main",
               operationalRunInstance: { instanceId: "parent-instance", runId: "parent-run" },
-              receiptAuthority: () => false,
+              receiptAuthority: () => {
+                throw new Error("agent tool caller authority is no longer active");
+              },
               gatewayContextResolver: resolveGatewayContext,
             },
             async () => {

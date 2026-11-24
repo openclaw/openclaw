@@ -416,7 +416,6 @@ export async function publish(ctx: ReleaseContext): Promise<void> {
         ctx.log("publish", command);
       }
     }
-    inputs.set("wait_for_clawhub", "false");
     // flip-github activates the release itself; keep Docker off the activation gate.
     inputs.delete("finalize_release_before_docker");
     const dispatched = await dispatchReleaseWorkflow(ctx, {

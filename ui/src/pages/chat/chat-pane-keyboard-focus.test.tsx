@@ -94,8 +94,6 @@ it.each([
       <div onKeyDown={(event) => pane.handleTranscriptHistoryIntent(event)}>{content()}</div>
     ));
     const thread = container.querySelector("div")!;
-    pane.historySentinel = thread.appendChild(document.createElement("div"));
-    pane.historySentinel.className = "chat-history-sentinel";
     vi.spyOn(pane.transcript, "scrollElement", "get").mockReturnValue(thread);
     onTestFinished(configureNativeKeyTarget(thread.firstElementChild!, fixture));
     thread.firstElementChild!.dispatchEvent(

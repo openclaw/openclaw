@@ -38,10 +38,7 @@ const placement: NewSessionPreference = {
 const preference = (choice: NewSessionPreference, browser = choice) => ({ choice, browser });
 it.each([
   preference(placement),
-  preference(
-    { ...placement, cyberAccessProgram: "standard", daybreakAccessProgram: "daybreak_red" },
-    placement,
-  ),
+  preference({ ...placement, cyberAccessProgram: "standard" }, placement),
   preference(
     {
       remoteProject: {
@@ -75,6 +72,17 @@ it.each([
   expect(load()).toBeNull();
   replace({ folder: "/gateway" });
   expect(load()).toEqual({ folder: "/gateway" });
+});
+
+it("ignores the retired remembered color in stored identity preferences", () => {
+  expect(
+    decode({
+      "new-session.v1:main": {
+        cyberAccessProgram: "standard",
+        daybreakAccessProgram: "daybreak_red",
+      },
+    }),
+  ).toEqual({ main: { cyberAccessProgram: "standard" } });
 });
 
 it("keeps a legacy cloud source after unavailable Git clears the stored worktree flag", () => {

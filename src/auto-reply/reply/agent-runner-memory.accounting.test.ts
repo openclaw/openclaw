@@ -1,8 +1,5 @@
 import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
-import { createTestOperatorAuthority } from "../../agents/admitted-run-context.test-support.js";
-import * as sessionEntryWriter from "../../config/sessions/session-accessor.entry-mutation.js";
 import type { SessionTranscriptAccountingSnapshot } from "../../config/sessions/session-transcript-accounting.types.js";
 import { SESSION_TOTAL_TOKENS_VERSION } from "../../config/sessions/types.js";
 import {
@@ -40,19 +37,8 @@ beforeEach(() => {
 });
 afterEach(() => clearMemoryPluginState());
 
-function runAccounting(
-  kind: "memory" | "compaction",
-  assertCurrent?: () => void,
-  alreadyFlushed = false,
-) {
+function runAccounting(kind: "memory" | "compaction", alreadyFlushed = false) {
   const followupRun = createTestFollowupRun();
-  if (assertCurrent) {
-    followupRun.operatorAuthority = createTestOperatorAuthority({
-      profileId: "guest",
-      scopes: ["operator.write"],
-      assertCurrent,
-    });
-  }
   const params = {
     followupRun,
     defaultModel: "anthropic/claude-opus-4-6",
@@ -83,53 +69,12 @@ function runAccounting(
   });
 }
 
-it.each(["memory", "compaction"] as const)(
-  "rechecks live authority after delayed %s accounting before effects",
-  async (kind) => {
-    const entered = createDeferred();
-    const release = createDeferred();
-    let current = true;
-    const persist = vi.spyOn(sessionEntryWriter, "updateSessionEntry").mockResolvedValue(null);
-    accounting.mockImplementation(async () => {
-      entered.resolve();
-      await release.promise;
-      return {
-        byteSize: 2000,
-        turnTainted: false,
-        usage: { promptTokens: 90000, outputTokens: 7, trailingMessages: [] },
-      };
-    });
-    const pending = runAccounting(kind, () => {
-      if (!current) {
-        throw new Error("authority retired during accounting");
-      }
-    });
-    try {
-      await awaitGateBeforeSettlement(entered.promise, pending, "accounting was not awaited");
-      for (const effect of [compact, flush, runEntry]) {
-        expect(effect).not.toHaveBeenCalled();
-      }
-      current = false;
-      const rejected = expect(pending).rejects.toThrow("authority retired during accounting");
-      release.resolve();
-      await rejected;
-      for (const effect of [increment, persist, compact, flush, runEntry]) {
-        expect(effect).not.toHaveBeenCalled();
-      }
-    } finally {
-      release.resolve();
-      await Promise.allSettled([pending]);
-      persist.mockRestore();
-    }
-  },
-);
-
 it.each([
   { state: "unavailable accounting", alreadyFlushed: false, reads: 1 },
   { state: "already flushed", alreadyFlushed: true, reads: 0 },
 ])("skips memory flush with $state without retrying history", async ({ alreadyFlushed, reads }) => {
   accounting.mockRejectedValue(new Error("accounting worker unavailable"));
-  const result = await runAccounting("memory", undefined, alreadyFlushed);
+  const result = await runAccounting("memory", alreadyFlushed);
   expect(accounting).toHaveBeenCalledTimes(reads);
   expect(result).toMatchObject({ outcome: "skipped" });
   expect(flush).not.toHaveBeenCalled();

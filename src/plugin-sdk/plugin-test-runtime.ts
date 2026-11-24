@@ -98,7 +98,7 @@ type AgentHarnessHostTestAttempt = Omit<
 
 type PluginHarnessTestOperatorSource = Pick<
   AdmittedRunOperatorAuthority,
-  "profileId" | "scopes" | "assertCurrent" | "modelPolicy" | "onModelPolicyChanged"
+  "profileId" | "scopes" | "modelPolicy"
 >;
 
 async function admitPluginHarnessRunForTest(params: {

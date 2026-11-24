@@ -571,18 +571,15 @@ async function executeAgentTurnOutcome(
   const requester = executionParams.followupRun.operatorAuthority;
   if (requester) {
     assertAdmittedRunOperatorAuthority(requester);
-    requester.assertCurrent();
   }
   let modelContextLease: AppContextTurnParams["mcpAppContextLease"];
   const prepareMcpAppModelContext = async () => {
-    requester?.assertCurrent();
     modelContextLease = await leaseMcpAppModelContextForSessionTurn({
       agentId: executionParams.followupRun.run.agentId,
       sessionId: executionParams.followupRun.run.sessionId,
       sessionKey: executionParams.sessionKey ?? executionParams.followupRun.run.sessionKey,
       requesterId: requester?.profileId,
     });
-    requester?.assertCurrent();
     return modelContextLease;
   };
   // Keep committed facts outside cleanup so a restart cannot erase them.

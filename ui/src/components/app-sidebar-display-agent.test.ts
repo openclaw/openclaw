@@ -40,6 +40,46 @@ describe("sidebar agent chip while an agent is created", () => {
     expect(resolve({}).agent).toEqual({ id: "cooking-companion", name: "Cooking Companion" });
   });
 
+  it("shows the Template's image until the new agent has an avatar of its own", () => {
+    const avatarUrl = "data:image/png;base64,AAAA";
+    const creation = { ...creating(), avatarUrl };
+    const pending = { id: "cooking-companion", name: "Cooking Companion" };
+    expect(resolve({ creation, pending })).toMatchObject({
+      agent: { ...pending, identity: { avatarUrl } },
+      identity: null,
+    });
+    // The agent is admitted before the Template's identity is written.
+    const admitted = { agentId: "cooking-companion", name: "Cooking Companion", avatar: "" };
+    expect(resolve({ creation, pending, identities: [admitted] }).identity).toEqual({
+      ...admitted,
+      avatar: avatarUrl,
+    });
+    const saved = { ...admitted, avatar: "/avatar/cooking-companion" };
+    const own = resolve({ creation, pending, identities: [saved] });
+    expect(own.agent).toBe(pending);
+    expect(own.identity).toBe(saved);
+    // Another agent's chip never borrows it.
+    expect(resolve({ creation, sessionKey: "agent:main:main" }).agent).toBe(main);
+  });
+
+  it("keeps the Template's image across admission until the agent's own avatar arrives", () => {
+    const avatarUrl = "data:image/png;base64,AAAA";
+    const creation = { ...creating(true), avatarUrl };
+    const row = { id: "cooking-companion", name: "Cooking Companion" };
+    const input = { creation, activeId: "cooking-companion", roster: [row, main] };
+    // The identity cached at admission still has no avatar, or was just retired.
+    const stale = { agentId: "cooking-companion", name: "Cooking Companion", avatar: "" };
+    expect(resolve({ ...input, identities: [stale] })).toMatchObject({
+      agent: { ...row, identity: { avatarUrl } },
+      identity: { ...stale, avatar: avatarUrl },
+    });
+    expect(resolve(input).agent).toEqual({ ...row, identity: { avatarUrl } });
+    const saved = { ...row, identity: { avatarUrl: "/avatar/cooking-companion" } };
+    expect(resolve({ ...input, roster: [saved, main] }).agent).toBe(saved);
+    // The selected agent of an admitted creation is still only that creation's agent.
+    expect(resolve({ ...input, activeId: "main" }).agent).toBe(main);
+  });
+
   it("returns to the selected agent once the creation is admitted or another chat is open", () => {
     expect(resolve({ creation: creating(true) }).agent).toBe(main);
     expect(resolve({ sessionKey: "agent:main:main" }).agent).toBe(main);

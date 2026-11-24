@@ -146,7 +146,6 @@ export function enqueueSessionEventForHost(
       throw new Error("Session event occurrence is settled");
     }
     signal.throwIfAborted();
-    capturedOperatorAuthority?.assertCurrent();
     if (!accepted) {
       acceptanceAssertion?.();
     }
@@ -180,7 +179,6 @@ export function enqueueSessionEventForHost(
   const captureSources = () =>
     composeSessionSourceAssertion(
       [
-        operatorAuthority?.assertCurrent,
         accepted ? undefined : acceptanceAssertion,
         options.assertCurrent,
         options.expectedTarget?.assertCurrent,
@@ -188,7 +186,7 @@ export function enqueueSessionEventForHost(
         createDynamicSessionSourceAssertion(
           () => generationLease?.assertCurrent,
           () => {
-            throw new Error("Session event destination authority changed");
+            throw new Error("The session event destination changed. Start a new turn to retry.");
           },
         ),
       ],
