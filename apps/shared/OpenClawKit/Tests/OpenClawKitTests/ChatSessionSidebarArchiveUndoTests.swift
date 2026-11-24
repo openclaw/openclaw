@@ -289,7 +289,7 @@ struct ChatSessionSidebarArchiveUndoTests {
         #expect(batch.archiveUndo == nil)
     }
 
-    enum RestoreOutcome: CaseIterable { case restored, reconnect, unavailable, timedOut }
+    enum RestoreOutcome: CaseIterable { case restored, reconnect, unavailable, timedOut, disconnected }
 
     @Test(arguments: RestoreOutcome.allCases)
     func `retired checkout offers a separate ordinary Restore on the original connection`(_ outcome: RestoreOutcome) async throws {
@@ -308,6 +308,11 @@ struct ChatSessionSidebarArchiveUndoTests {
             if outcome == .unavailable {
                 throw GatewayResponseError(method: "sessions.patch", code: "UNAVAILABLE", message: "Not ready",
                                            details: nil, retryable: true)
+            }
+            if outcome == .disconnected {
+                current = false
+                batch.reset()
+                throw URLError(.networkConnectionLost)
             }
             if outcome == .timedOut { throw URLError(.timedOut) }
             return try self.acknowledgement(row, archived: false)
@@ -330,7 +335,11 @@ struct ChatSessionSidebarArchiveUndoTests {
         #expect(params["expectedLifecycleRevision"]?.value as? String == "generation")
         #expect(params["expectedArchivedAt"]?.value as? Int == 20)
         #expect(params["archived"]?.value as? Bool == false)
-        if outcome == .restored { #expect(batch.errors.isEmpty) } else {
+        if outcome == .timedOut || outcome == .disconnected {
+            batch.reset() // Disconnect can arrive before or after the failed completion.
+            #expect(batch.restoreOutcomeUnknown)
+            #expect(batch.errors.isEmpty && batch.notices.isEmpty && batch.archiveRecoveries.isEmpty)
+        } else if outcome == .restored { #expect(batch.errors.isEmpty && !batch.restoreOutcomeUnknown) } else {
             let message = try #require(batch.errors[OpenClawChatSessionSidebarData.identity(row)])
             #expect(message.contains("Threads… → Archived"))
         }

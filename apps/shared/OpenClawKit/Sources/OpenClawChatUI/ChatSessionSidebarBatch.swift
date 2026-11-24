@@ -87,6 +87,8 @@ final class ChatSessionSidebarBatch {
     var notices: [String] = []
     var archiveUndo: ChatSidebarArchiveReceipt?
     var archiveRecoveries: [String: ChatSidebarArchiveRecovery] = [:]
+    // Survives a connection reset; never retain a target, endpoint, or error from the old lease.
+    var restoreOutcomeUnknown = false
     var pendingArchives: [String: UUID] = [:]
     var running = false
     var pendingDelete: [OpenClawChatSessionEntry] = []

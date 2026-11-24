@@ -183,10 +183,13 @@ extension ChatSessionSidebarBatch {
             }
             return confirmed
         } catch {
+            if recovery != nil, !connection.isCurrent() || !(error is GatewayResponseError) {
+                self.restoreOutcomeUnknown = true
+                return nil
+            }
             if connection.isCurrent() {
                 var message = error.localizedDescription
                 if recovery != nil {
-                    // A lost acknowledgement is not proof of failure. The caller refreshes both rosters.
                     message += " " + String(localized: "Check Threads… → Archived after refreshing. If the thread is Active, it was restored.")
                 }
                 errors[OpenClawChatSessionSidebarData.identity(row)] = message
@@ -292,6 +295,13 @@ extension ChatSessionSidebar {
 
     @ViewBuilder var archiveUndoNotice: some View {
         ChatSidebarArchiveNotice(batch: batch, undo: undoSidebarArchive)
+        if batch.restoreOutcomeUnknown {
+            HStack {
+                Text(String(localized: "Restore was not confirmed. On the original Gateway, check Threads… → Archived and Active before trying again."))
+                Button(String(localized: "Dismiss"), systemImage: "xmark") { self.batch.restoreOutcomeUnknown = false }
+                    .labelStyle(.iconOnly)
+            }.padding(8)
+        }
         let recoveries = batch.archiveRecoveries.values.sorted { $0.row.key < $1.row.key }
         if let first = recoveries.first {
             HStack {
@@ -317,6 +327,7 @@ extension ChatSessionSidebar {
         return Button(String(format: String(localized: "Restore “%@”"), title)) {
             Task { @MainActor in
                 await self.batch.restoreArchivedSnapshot(recovery, owner: self.viewModel.sidebarData)
+                guard recovery.connection.isCurrent() else { return }
                 self.viewModel.refreshSessions(limit: 200)
                 self.viewModel.refreshSidebarData()
             }
