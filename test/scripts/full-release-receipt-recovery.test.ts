@@ -24,8 +24,15 @@ import {
   revalidateQualificationAdmissionAuthority,
   verifyQualificationAdmission,
 } from "../../scripts/release-qualification-admission.mjs";
+import {
+  authenticateFullReleaseValidationEvidence,
+  revalidateCandidateArtifactAuthority,
+} from "../../scripts/validate-full-release-validation-evidence.mjs";
 import { makeStoredZip } from "./actions-artifact-zip.test-support.js";
-import { recoveryConsumptionFixture } from "./release-evidence-consumption.test-support.js";
+import {
+  consumptionOptions,
+  recoveryConsumptionFixture,
+} from "./release-evidence-consumption.test-support.js";
 import { fixture as admissionFixture } from "./release-qualification-admission.test-support.js";
 
 function fixture(independentQ = false) {
@@ -147,14 +154,14 @@ describe("receipt-backed aggregate recovery", () => {
       workflowSha: q,
       conclusion: "failure",
     });
+    Object.assign(f.manifest, {
+      receiptRecovery: request,
+      waivers,
+      retainedPublicationPayloads: verified.publication.payloads,
+    });
     const authenticate = () =>
       authenticateReceiptRecovery({
-        manifest: {
-          ...f.manifest,
-          receiptRecovery: request,
-          waivers,
-          retainedPublicationPayloads: verified.publication.payloads,
-        },
+        manifest: f.manifest,
         artifact: f.aggregateArtifact,
         run: f.run,
         client,
@@ -162,7 +169,16 @@ describe("receipt-backed aggregate recovery", () => {
         expectedRunAttempts: undefined,
       });
     await expect(authenticate()).resolves.toMatchObject({ valid: true, waivers });
+    // Later publication commands restore this carrier record instead of re-running recovery.
+    const consumed = await authenticateFullReleaseValidationEvidence(
+      { ...consumptionOptions(f.direct), run: f.run, manifest: f.manifest, expectedRunId: "900" },
+      client,
+    );
+    expect(consumed.publicationAuthority.policy?.descriptor).toEqual(newPolicy.descriptor);
     newPolicy.authority.permission = "read";
+    expect(() =>
+      revalidateCandidateArtifactAuthority(consumed.publicationAuthority, client),
+    ).toThrow("no longer has repository qualification authority");
     await expect(authenticate()).rejects.toThrow(
       "no longer has repository qualification authority",
     );
