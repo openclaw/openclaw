@@ -65,7 +65,11 @@ it.each([false, true])("proves creator actions remotely with pin denied=%s", asy
         content,
       });
       return action === "send"
-        ? { ok: true, result: { messageId: "$send", roomId: context.roomId } }
+        ? {
+            channel: "matrix",
+            deliveryStatus: "sent",
+            result: { messageId: "$send", target: { kind: "room", id: context.roomId } },
+          }
         : action === "edit"
           ? { ok: true, result: { eventId: "$edit" } }
           : action === "react"
