@@ -307,7 +307,9 @@ export function ModelSetupWizard(props: WizardViewProps): JSX.Element {
                                     </button>
                                   }
                                 >
-                                  {formatUiError(error())}
+                                  {isStaleChunkImportError(error())
+                                    ? t("modelSetup.wizard.controlsLoadFailed")
+                                    : formatUiError(error())}
                                 </InlineAlert>
                               );
                             }}

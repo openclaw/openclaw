@@ -76,10 +76,10 @@ suite.define(() => {
           expect(await gateway.getRequests(rpc.auth)).toHaveLength(1);
           expect(await gateway.getRequests(rpc.cancel)).toHaveLength(1);
         } else {
-          await Promise.all([
-            page.waitForEvent("load"),
-            page.getByRole("alert").getByRole("button", { name: "Reload", exact: true }).click(),
-          ]);
+          const alert = page.getByRole("alert");
+          const reload = alert.getByRole("button", { name: "Reload", exact: true });
+          await expectText(alert, "Couldn’t load this step. Reload the page to start over.");
+          await Promise.all([page.waitForEvent("load"), reload.click()]);
           await openModelSetup(page);
           await button(
             page.locator('[data-auth-choice="provider-login"]'),
