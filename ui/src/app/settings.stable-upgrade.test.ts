@@ -179,3 +179,31 @@ it("defaults the Talk chime preferences on for stable settings and keeps explici
   patchSettings({ navWidth: 340 });
   expect(loadSettings().talkChimeEnd).toBe(false);
 });
+
+// Captured by running the v2026.11.8 release writer (commit 2d4ab292114): patchSettings with
+// themeMode light, locale de and navWidth 320 on wss://gateway.example.
+const v20261108Settings =
+  '{"gatewayUrl":"wss://gateway.example","theme":"claw","themeMode":"light","chatShowThinking":true,"chatShowToolCalls":true,"chatPersistCommentary":true,"navWidth":320,"sidebarAgentsMode":"chip","navigationByProfile":{},"sessionsByGateway":{"wss://gateway.example":{"sessionKey":"main","lastActiveSessionKey":"main"}},"locale":"de"}';
+
+it("loads settings saved by v2026.11.8 with Talk chimes on, and keeps a later opt-out", () => {
+  localStorage.removeItem(pendingKey);
+  localStorage.setItem(settingsKey, v20261108Settings);
+  expect(JSON.parse(v20261108Settings)).not.toHaveProperty("talkChimeStart");
+  expect(loadSettings()).toMatchObject({
+    themeMode: "light",
+    locale: "de",
+    navWidth: 320,
+    talkChimeStart: true,
+    talkChimeEnd: true,
+    talkChimeReply: true,
+  });
+  patchSettings({ talkChimeReply: false });
+  expect(loadSettings()).toMatchObject({
+    themeMode: "light",
+    locale: "de",
+    navWidth: 320,
+    talkChimeStart: true,
+    talkChimeEnd: true,
+    talkChimeReply: false,
+  });
+});
