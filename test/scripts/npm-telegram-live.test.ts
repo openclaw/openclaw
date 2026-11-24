@@ -108,6 +108,33 @@ it("keeps bounded installation and redacted runtime logging", () => {
   expect(script).not.toContain('cat "$run_log"');
 });
 
+it("reports a redirected hot-path command failure outside its private log", () => {
+  const root = mkTempRoot();
+  const diagnostics = script.slice(
+    script.indexOf("\n\n", script.indexOf("trap cleanup_recovery EXIT")),
+    script.indexOf('test -x "$sut_command"'),
+  );
+  const result = spawnSync(
+    "bash",
+    [
+      "-c",
+      `set -Eeuo pipefail
+source scripts/lib/openclaw-e2e-instance.sh
+openclaw_e2e_print_log() { return 0; }
+${diagnostics}
+fail() { bash -c 'exit 23'; }
+fail >"$1/command.log" 2>&1`,
+      "bash",
+      root,
+    ],
+    { cwd: repoRoot, encoding: "utf8" },
+  );
+  expect(result.status, result.stderr).toBe(23);
+  expect(result.stderr).toContain(
+    "installed-package onboarding recovery hot path failed with exit code 23",
+  );
+});
+
 it("uses unique direct-run output dirs by default", () => {
   const root = mkTempRoot();
   const firstDir = testing.resolvePackageTelegramOutputDir({}, root);
