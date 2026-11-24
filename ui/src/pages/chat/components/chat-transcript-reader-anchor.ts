@@ -79,6 +79,7 @@ export class TranscriptReaderAnchor {
   private columnShift = 0;
   private landedShift = 0;
   private owedScroll = 0;
+  private settleFrame: number | null = null;
   private observer: ResizeObserver | null = null;
   private readerContent: ReaderContent | null = null;
   // A measured predecessor changed the virtual flow's start in this batch.
@@ -135,11 +136,16 @@ export class TranscriptReaderAnchor {
     this.observer?.unobserve(row);
   }
 
-  /** Native writes can stop a gesture; hold the correction in the column until it ends. */
+  /**
+   * Native writes can stop a gesture; hold the correction in the column until it ends. Once the
+   * input has produced its own scrolling, only its own idle ends the hold, not virtual-core's
+   * debounced `isScrolling`, which can lapse between frames of a slow native smooth scroll.
+   */
   private holdsNativeOffset(): boolean {
+    const { nativeInputActive, inputAwaitingScroll, touchActive } = this.host.offsetState;
     return (
-      (this.host.virtualizer.isScrolling && this.host.offsetState.nativeInputActive) ||
-      this.host.offsetState.touchActive
+      (nativeInputActive && (this.host.virtualizer.isScrolling || !inputAwaitingScroll)) ||
+      touchActive
     );
   }
 
@@ -574,6 +580,19 @@ export class TranscriptReaderAnchor {
     // A held negative shift cannot be reached by native scrolling past zero.
     const reachesStart = shift < 0 && offset + shift <= 0;
     if (!force && this.holdsNativeOffset() && !reachesStart) {
+      // Virtual-core's idle flush can precede the input's own idle, and nothing else may flush
+      // after it. Recheck next frame: a continuing smooth scroll delivers its scroll event (and
+      // re-asserts the gesture) before animation-frame callbacks run; an ended one does not.
+      if (
+        !this.host.virtualizer.isScrolling &&
+        !this.host.offsetState.touchActive &&
+        this.settleFrame === null
+      ) {
+        this.settleFrame = requestAnimationFrame(() => {
+          this.settleFrame = null;
+          this.settle();
+        });
+      }
       return;
     }
     // A write during elastic overscroll snaps back and drops the correction; retry in range.

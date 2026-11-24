@@ -7,7 +7,7 @@ export async function runPluginAssetCommand(params: {
   command: string;
   cwd: string;
   pluginId: string;
-  phase: "build" | "copy";
+  phase: "build" | "copy" | "package";
 }): Promise<number> {
   // The hook builds the package's own source tree. Release tooling pins
   // TSX_TSCONFIG_PATH to its trusted checkout; inheriting it would map the

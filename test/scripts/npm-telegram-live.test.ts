@@ -108,6 +108,47 @@ it("keeps bounded installation and redacted runtime logging", () => {
   expect(script).not.toContain('cat "$run_log"');
 });
 
+it("prints redacted hotpath failures outside the failed command's log", () => {
+  const root = mkTempRoot();
+  const log = path.join(root, "openclaw-npm-telegram-codex-install.log");
+  const redactor = writeFixture(
+    root,
+    "redactor.mjs",
+    'export const redactSensitiveText = (text) => text.replaceAll("fixture-secret", "***");',
+  );
+  const diagnostics = script
+    .slice(
+      script.search(/\ndump_(?:hotpath_logs|debug_logs)\(\) \{/u),
+      script.indexOf('\ntest -x "$sut_command"'),
+    )
+    .replaceAll("/tmp/openclaw-npm-telegram-", `${root}/openclaw-npm-telegram-`);
+  const result = spawnSync(
+    "/bin/bash",
+    [
+      "-c",
+      `set -Eeuo pipefail
+source scripts/lib/openclaw-e2e-instance.sh
+${diagnostics}
+openclaw_e2e_run_command /bin/sh -c 'echo "actionable failure fixture-secret"; exit 42' >"$FAILURE_LOG" 2>&1`,
+    ],
+    {
+      cwd: repoRoot,
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        FAILURE_LOG: log,
+        OPENCLAW_E2E_COMMAND_TIMEOUT: "0",
+        OPENCLAW_E2E_REDACTOR_MODULE: redactor,
+      },
+    },
+  );
+  expect(result.status).toBe(42);
+  expect(result.stderr).toContain("hot path failed with exit code 42");
+  expect(result.stderr).toContain("actionable failure ***");
+  expect(result.stderr).not.toContain("fixture-secret");
+  expect(read(log)).toBe("actionable failure fixture-secret\n");
+});
+
 it("uses unique direct-run output dirs by default", () => {
   const root = mkTempRoot();
   const firstDir = testing.resolvePackageTelegramOutputDir({}, root);

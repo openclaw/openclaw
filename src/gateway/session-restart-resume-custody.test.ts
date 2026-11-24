@@ -30,6 +30,7 @@ import { captureQueuedOperatorRecoverySource } from "./operator-run-recovery-sou
 import {
   createOperatorRecoveryFixture,
   pairedOperator,
+  persistDevices,
 } from "./operator-run-recovery.test-support.js";
 import { ADMIN_SCOPE, READ_SCOPE, WRITE_SCOPE } from "./operator-scopes.js";
 import { continueSessionQueuedInputs } from "./queued-chat-inputs.js";
@@ -387,6 +388,76 @@ it.each([
       }
     }),
 );
+
+it("still refuses a requester whose device was revoked at every restart", () =>
+  withOpenClawTestState({ scenario: "minimal" }, async ({ stateDir }) => {
+    setRuntimeConfigSnapshot({});
+    const profile = ensureProfileForEmail("revoked-requester@example.test");
+    const device = pairedOperator();
+    const sessionKey = "agent:main:dashboard:revoked-requester";
+    const spawned = await createOperatorRecoveryFixture({
+      stateDir,
+      profileId: profile.id,
+      context: createContext(),
+      config: {},
+      scopes: [READ_SCOPE, WRITE_SCOPE],
+      device,
+      sessionKey,
+      sessionId: "revoked-requester",
+    });
+    const requesterOperatorSource = captureQueuedOperatorRecoverySource(spawned.sourceAuthority);
+    // Revocation after the spawn applies when the next recovery starts.
+    persistDevices(
+      stateDir,
+      [{ ...device, tokens: { operator: { ...device.tokens!.operator!, revokedAtMs: 2 } } }],
+      "both",
+    );
+    const target = {
+      agentId: "main",
+      physicalAgentId: "main",
+      storePath: resolveSessionStorePathCore(undefined, { agentId: "main" }),
+    };
+    const child = createSubagentRunRecord({
+      runId: "revoked-completion",
+      childSessionKey: "agent:main:subagent:revoked-child",
+      requesterSessionKey: sessionKey,
+      requesterAgentId: "main",
+      requesterStorePath: target.storePath,
+      completionRequesterSessionId: "revoked-requester",
+      expectsCompletionMessage: true,
+      spawnMode: "session",
+      completionTarget: "parent",
+      endedAt: Date.now(),
+      delivery: { status: "pending" },
+      ...(requesterOperatorSource ? { requesterOperatorSource } : {}),
+    });
+    subagentRuns.set(child.runId, child);
+    subagentRuns.retireCompletionAuthority(child);
+    saveSubagentRegistryChangesToSqlite(subagentRuns, [child.runId]);
+    try {
+      const restart = {
+        context: spawned.context,
+        signal: new AbortController().signal,
+        log: { warn: vi.fn() },
+      };
+      restart.context.resolveGatewayContext ??= () => restart.context;
+      for (const _ of [1, 2]) {
+        const stores = await prepareRestartStores(restart, [target]);
+        await prepareRestartCompletionCustody(restart, stores![0]!);
+      }
+      // The real admission refuses the revoked device; that refusal carries no ended-grant
+      // cause, so the result is not delivered and stays pending.
+      expect(subagentRuns.isCompletionAuthorityRetired(child)).toBe(true);
+      expect(subagentRuns.get(child.runId)?.delivery?.status).toBe("pending");
+      expect(
+        restart.log.warn.mock.calls.filter(([line]) =>
+          String(line).includes("Restart completion recovery failed for revoked-completion"),
+        ),
+      ).toHaveLength(2);
+    } finally {
+      subagentRuns.delete(child.runId);
+    }
+  }));
 
 it("recovers a sibling child when another child's saved requester is refused", () =>
   withOpenClawTestState({ scenario: "minimal" }, async () => {

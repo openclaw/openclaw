@@ -119,6 +119,7 @@ export function createChatSendMessageInjectionStarter(params: {
   userTurnTranscriptRecorder: NonNullable<
     ReplyBackendQueueMessageOptions["userTurnTranscriptRecorder"]
   >;
+  replaceQuestion?: (assertCurrent: () => void) => Promise<void>;
   logGateway: GatewayRequestContext["logGateway"];
   assertCurrent?: () => void;
   operatorAuthority?: AdmittedRunOperatorAuthority;
@@ -154,8 +155,10 @@ export function createChatSendMessageInjectionStarter(params: {
       assertCurrent,
     });
     let handedOff = false;
+    let questionReplacement: Promise<void> | undefined;
     let join: Awaited<ReturnType<typeof prepareReplyMessageContinuation>> | undefined;
-    const release = () => {
+    const release = async () => {
+      await questionReplacement;
       if (join?.kind === "prepared") {
         join.release();
       }
@@ -264,6 +267,10 @@ export function createChatSendMessageInjectionStarter(params: {
         return undefined;
       }
       const preparedJoin = join.kind === "prepared" ? join : undefined;
+      const replaceQuestion =
+        preparedJoin && preparedJoin.allowPendingUserInputAnswer !== false
+          ? params.replaceQuestion
+          : undefined;
       phase?.mark("detail.run_admission.steer_delivery");
       try {
         await delivery.prepareCurrent();
@@ -351,7 +358,27 @@ export function createChatSendMessageInjectionStarter(params: {
           ...(ctx.ApprovalReviewerDeviceId
             ? { inputRequesterDeviceId: ctx.ApprovalReviewerDeviceId }
             : {}),
-          allowPendingUserInputAnswer: preparedJoin?.allowPendingUserInputAnswer,
+          allowPendingUserInputAnswer: replaceQuestion
+            ? false
+            : preparedJoin?.allowPendingUserInputAnswer,
+          ...(replaceQuestion
+            ? {
+                onQueueAccepted: (accepted: boolean) => {
+                  if (accepted) {
+                    // Admit the actual message before waking the waiting tool.
+                    questionReplacement = replaceQuestion(() => {
+                      assertCurrent();
+                      preparedJoin?.read();
+                      delivery.assertCurrent();
+                    }).catch(() => {
+                      params.logGateway.warn(
+                        "Could not replace the pending question with chat input.",
+                      );
+                    });
+                  }
+                },
+              }
+            : {}),
           allowCollaborativeSteering:
             cfg.messages?.queue?.allowCollaborativeSteering === true &&
             (!ctx.InputProvenance || ctx.InputProvenance.kind === "external_user"),
@@ -388,7 +415,7 @@ export function createChatSendMessageInjectionStarter(params: {
       return admissionRefused ? undefined : attempt;
     } finally {
       if (!handedOff) {
-        release();
+        await release();
       }
     }
   };

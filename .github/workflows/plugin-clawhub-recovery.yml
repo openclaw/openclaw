@@ -3,6 +3,10 @@ name: Plugin ClawHub Recovery
 on:
   workflow_dispatch:
     inputs:
+      fast_track_approval:
+        description: Exact human-approved fast-track request and decision JSON; never an agent approval
+        required: false
+        type: string
       original_child_run_id:
         description: Original Plugin ClawHub Release run ID
         required: true
@@ -48,6 +52,7 @@ permissions:
   contents: read
 
 env:
+  FAST_TRACK_APPROVAL_JSON: ${{ inputs.fast_track_approval }}
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
   NODE_VERSION: "24.22.1"
 
