@@ -7,7 +7,10 @@ const retained = "d".repeat(40);
 const repository = "openclaw/openclaw";
 const authenticated = vi.hoisted(() => ({ qualificationSha: "" }));
 
-vi.mock("../../scripts/validate-full-release-validation-evidence.mjs", () => ({
+vi.mock("../../scripts/validate-full-release-validation-evidence.mjs", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("../../scripts/validate-full-release-validation-evidence.mjs")
+  >()),
   authenticateFullReleaseValidationEvidence: async ({ manifest }: { manifest: unknown }) => ({
     evidence: { current: { manifest } },
     qualification: { candidateSha: c, qualificationSha: authenticated.qualificationSha },
