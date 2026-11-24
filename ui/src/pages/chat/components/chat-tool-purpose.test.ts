@@ -36,6 +36,7 @@ it.each([
   ["mcp__openclaw__tool_search", { query: "session tools" }, "Searched tools"],
   ["mcp__openclaw__sessions_list", { limit: 200 }, "Listed chats"],
   ["sessions_list", { search: "00000000-0000-4000-8000-000000007ef3" }, "Listed chats"],
+  ["knowledge_verify", { records: [{ id: "launch-decision" }] }, "Verified knowledge publication"],
 ] as const)(
   "keeps %s factual while retaining its input for inspection",
   async (name, args, label) => {

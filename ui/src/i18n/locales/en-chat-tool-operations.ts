@@ -296,7 +296,7 @@ const enChatToolOperations = {
           default: {
             action: "Verify knowledge publication",
             running: "Verifying knowledge publication",
-            done: "Verifyed knowledge publication",
+            done: "Verified knowledge publication",
           },
         },
         knowledge_withdraw: {
