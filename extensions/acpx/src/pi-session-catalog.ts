@@ -50,10 +50,9 @@ export async function listLocalPiSessionPage(
     limit: params.limit,
     ...(params.searchTerm ? { searchTerm: params.searchTerm } : {}),
   });
-  const page = summaries.map(({ file, version: _version, ...session }) => ({
-    ...session,
-    ...(bindSource ? { sourceHomeId: sha256Hex(file) } : {}),
-  }));
+  const page = summaries.map(({ file, version: _version, ...session }) =>
+    bindSource ? Object.assign(session, { sourceHomeId: sha256Hex(file) }) : session,
+  );
   return {
     sessions: page,
     ...(hasMore ? { nextCursor: sessionCatalogPaging.encodeCursor(offset + page.length) } : {}),

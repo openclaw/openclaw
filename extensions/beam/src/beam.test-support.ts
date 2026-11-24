@@ -157,7 +157,7 @@ export function createBeamTestCatalog(
           ...(params.hostCursor ? { nextCursor: params.hostCursor } : {}),
           sessions: (sessions ?? [{ threadId: "t1", recencyAt: beamTestNow }]).map((session) => ({
             threadId: session.threadId,
-            ...(session.sourceHomeId ? { sourceHomeId: session.sourceHomeId } : {}),
+            sourceHomeId: session.sourceHomeId,
             exportPolicy:
               session.exportPolicy === null
                 ? undefined
