@@ -94,9 +94,8 @@ and ask that human. Changed contents require a new request and approval.
 Preserve the human decision's permalink, identity and timestamp with the exact
 request and original FRV results. Keep the normal `npm-release` environment
 approval and existing release receipt. Shared tokens make this a procedural
-rule, not a technical guarantee of human independence. There is no Google Chat
-app, Firebase service or alternate approval API. See
-[fast-track approval](../../../docs/reference/fast-track-release-approval.md).
+rule, not a technical guarantee of human independence. See
+[fast-track approval](references/fast-track.md).
 For an approved exception, pass `--fast-track-approval <packet.json>` to
 `pnpm release:publish-preflight`; it forwards `fast_track_approval` through the
 existing publication path. Keep the original FRV run/attempt and sealed bytes.

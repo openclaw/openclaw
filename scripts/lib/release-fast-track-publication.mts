@@ -134,7 +134,10 @@ export function fastTrackValidationSnapshot(manifest: unknown, jobs: FastTrackJo
   };
 }
 
+export type FastTrackPublication = { runId: string | number; runAttempt: string | number };
+
 export async function authenticateFastTrackPolicy(input: {
+  publication?: FastTrackPublication;
   packet: unknown;
   manifest: FastTrackManifest;
   jobs: FastTrackJob[];
@@ -150,7 +153,7 @@ export async function authenticateFastTrackPolicy(input: {
   const packet = bindFastTrackApproval(
     input.packet,
     input.manifest,
-    await fastTrackAdmissionTime(input.packet),
+    await fastTrackAdmissionTime(input.packet, input.publication),
   );
   const { request } = packet;
   if (request.policy === "approved-fast-track-v1") {
@@ -216,16 +219,28 @@ export async function authenticateFastTrackPolicy(input: {
 }
 
 /** Expiry gates new admission, not completion of an already approved exact publication. */
-export async function fastTrackAdmissionTime(value: unknown): Promise<number> {
+export async function fastTrackAdmissionTime(
+  value: unknown,
+  publication?: FastTrackPublication,
+): Promise<number> {
   const packet = parseFastTrackApproval(value);
   const now = Date.now();
   if (Date.parse(packet.request.expiresAt) > now) {
     return now;
   }
-  const parentRunId =
-    process.env.RELEASE_PUBLISH_RUN_ID ||
-    (process.env.GITHUB_JOB === "publish" ? process.env.GITHUB_RUN_ID : undefined);
-  if (!parentRunId || !/^[1-9][0-9]*$/u.test(parentRunId)) {
+  const parentRunId = publication
+    ? String(publication.runId)
+    : process.env.RELEASE_PUBLISH_RUN_ID ||
+      (process.env.GITHUB_JOB === "publish" ? process.env.GITHUB_RUN_ID : undefined);
+  const parentRunAttempt = publication
+    ? String(publication.runAttempt)
+    : process.env.RELEASE_PUBLISH_RUN_ATTEMPT ||
+      (process.env.GITHUB_JOB === "publish" ? process.env.GITHUB_RUN_ATTEMPT : undefined);
+  if (
+    !parentRunId ||
+    !parentRunAttempt ||
+    ![parentRunId, parentRunAttempt].every((part) => /^[1-9][0-9]*$/u.test(part))
+  ) {
     throw new Error("Fast-track request expired. Obtain fresh explicit approval.");
   }
   const { runReleaseToolingGh } = await import("../release-tooling-identity.mjs");
@@ -245,7 +260,7 @@ export async function fastTrackAdmissionTime(value: unknown): Promise<number> {
     expected: {
       repository: packet.request.repository,
       parentRunId,
-      parentRunAttempt: process.env.RELEASE_PUBLISH_RUN_ATTEMPT || String(run.run_attempt),
+      parentRunAttempt,
       toolingRef: run.head_branch,
       toolingFullRef: fullRef,
       toolingSha: run.head_sha,

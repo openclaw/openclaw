@@ -520,7 +520,13 @@ jobs:
             fi
             export FAST_TRACK_APPROVAL_JSON="$published_approval"
             export RELEASE_PUBLISH_RUN_ID
-            export RELEASE_PUBLISH_RUN_ATTEMPT="$(jq -r .attempt "$RUNNER_TEMP/release-publish-run.json")"
+            publication_job_id="$(jq -er '
+              [.jobs[] | select(.name == "Publish plugins, then OpenClaw") |
+                select(any(.steps[]?; .name == "Write release approval receipt" and .conclusion == "success"))] |
+              if length == 1 then .[0].databaseId else error("Expected one original publication admission job") end
+            ' "$RUNNER_TEMP/release-publish-run.json")"
+            export RELEASE_PUBLISH_RUN_ATTEMPT="$(gh_with_retry api \
+              "repos/${GITHUB_REPOSITORY}/actions/jobs/${publication_job_id}" --jq .run_attempt)"
             printf 'RELEASE_PUBLISH_RUN_ID=%s\nRELEASE_PUBLISH_RUN_ATTEMPT=%s\n' \
               "$RELEASE_PUBLISH_RUN_ID" "$RELEASE_PUBLISH_RUN_ATTEMPT" >> "$GITHUB_ENV"
             printf 'FAST_TRACK_APPROVAL_JSON=%s\n' "$FAST_TRACK_APPROVAL_JSON" >> "$GITHUB_ENV"

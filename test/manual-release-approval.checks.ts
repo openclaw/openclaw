@@ -1,8 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { isDeepStrictEqual } from "node:util";
-import { runInNewContext } from "node:vm";
 import { afterEach, expect, it, vi } from "vitest";
 import {
   collectFastTrackEligibility,
@@ -11,7 +9,6 @@ import {
   serializeFastTrackRequest,
   type FastTrackRequest,
 } from "../scripts/lib/release-fast-track-contract.mts";
-import { validateReleaseButtonInputs } from "../scripts/openclaw-release-ready.mjs";
 import { runReleasePublishPreflightCommand } from "../scripts/release-publish-preflight.mts";
 import { useAutoCleanupTempDirTracker } from "./helpers/temp-dir.js";
 
@@ -423,30 +420,4 @@ it("retains one string-attempt FRV record and its failed conclusion for stable c
       targetSha: "a".repeat(40),
     }),
   ]);
-});
-
-it("keeps the prepared approval and refuses substituting a different publication packet", () => {
-  const source = readFileSync("scripts/openclaw-release-ready.mjs", "utf8");
-  const start = source.indexOf("function publicationInputs(");
-  const end = source.indexOf("\nasync function ", start);
-  const publicationInputs = runInNewContext(`${source.slice(start, end)}; publicationInputs`, {
-    isDeepStrictEqual,
-    requireValue: (condition: boolean, message: string) => {
-      if (!condition) {
-        throw new Error(message);
-      }
-    },
-  });
-  const inputs = validateReleaseButtonInputs({
-    tag: "v2026.11.9-beta.1",
-    npm_dist_tag: "beta",
-    preflight_run_id: "1",
-    full_release_validation_run_id: "1",
-    full_release_validation_run_attempt: "1",
-    fast_track_approval: JSON.stringify({ digest: "synthetic" }, null, 2),
-  });
-  expect(inputs.fast_track_approval).toBe('{"digest":"synthetic"}');
-  const ready = { inputs, plugins: { npm: {}, clawhub: {} } };
-  expect(publicationInputs(ready, "").fast_track_approval).toBe(inputs.fast_track_approval);
-  expect(() => publicationInputs(ready, "", '{"digest":"changed"}')).toThrow("retain the approval");
 });

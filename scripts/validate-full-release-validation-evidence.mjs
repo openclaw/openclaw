@@ -309,6 +309,7 @@ function validatePublicationEvidence(options, evidence) {
  *   manifest?: FullReleaseValidationManifest,
  *   manifestPath?: string,
  *   fastTrackApproval?: unknown,
+ *   fastTrackPublication?: import("./lib/release-fast-track-publication.mts").FastTrackPublication,
  *   verifierSourceSha?: string,
  *   verifierSourceContent?: string | Uint8Array,
  *   npmPreflightLineage?: { qualificationSha: string, producerRunId: string, producerRunAttempt: string },
@@ -322,6 +323,7 @@ export async function authenticateFullReleaseValidationEvidence(options, client)
     {
       repository: options.expectedRepository,
       fastTrackApproval: options.fastTrackApproval ?? process.env.FAST_TRACK_APPROVAL_JSON,
+      fastTrackPublication: options.fastTrackPublication,
       runId: String(options.expectedRunId),
       manifestPath: options.manifestPath,
       trustedWorkflowFullRef: options.expectedTrustedWorkflowFullRef,

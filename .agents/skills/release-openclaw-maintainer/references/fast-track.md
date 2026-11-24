@@ -1,23 +1,13 @@
----
-summary: "Human-approved fast-track publication through the existing release publishers"
-title: "Fast-track release approval"
-read_when:
-  - Preparing a fast-track release request for the release-managers group
-  - Reviewing or publishing a fast-track release
----
-
 # Fast-track release approval
 
 Fast-track approval is an explicit validation exception in the existing release
 publication path, not a separate release pipeline. Parent, npm/plugin, Docker
 and stable closeout consumers retain source, artifact and publication-approval
-checks. The historical `authorized-beta-focused-v1` contract is unchanged.
+checks. The `authorized-beta-focused-v1` evidence mode remains supported.
 
 ## Approval model
 
 Use the normal release-managers group and existing release approval process.
-There is no separate Google Chat application, Firebase/Firestore database,
-Cloud Run deployment, ID token, callback, custom decision store or status API.
 
 **An agent must never approve a fast-track release, including through a token
 that happens to belong to a release manager.** Before taking any fast-track
@@ -152,12 +142,10 @@ publication receipt. The receipt binds the full packet digest and its verified
 approval-job start timestamp must precede request expiry. An expired packet
 cannot start an unrelated publication. Do not edit timestamps or substitute a
 new request for already published bytes. Missing original receipt or mismatched
-publication identity blocks replay.
-
-The former service source PR in `openclaw/releases` is superseded. Removing this
-dependency does not delete any previously provisioned cloud resources, stored
-records or setup credentials. Cloud decommissioning is a separate operational
-cleanup; no current cloud-state or deletion claim is made here.
+publication identity blocks replay. Docker retries and closeout must carry the
+original admission attempt, not the parent run's newest attempt. Prepared-button
+verification uses the recorded publisher run and attempt; fresh dispatch remains
+subject to current expiry.
 
 ## Manual checks (not CI)
 
@@ -166,7 +154,6 @@ node scripts/run-vitest.mjs run --config test/manual-release-approval.config.ts
 ```
 
 The suite stays outside normal CI discovery and refuses execution with `CI` set.
-No test-budget allocation or new CI lane. Existing release tests are unchanged.
 
 Approval packets are public release evidence. Include only public-safe risk descriptions
 and decision references. Never copy private release-managers messages, incident details,

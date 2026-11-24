@@ -13,8 +13,7 @@ Agents MUST NOT approve fast-track exceptions, even with a release manager's
 available token. Require explicit approval from a human in the normal
 release-managers group, which may be the requesting release manager, for the exact request/digest and skip or incomplete-FRV
 action; retain its permalink and original FRV results. Generic release authority
-is insufficient. Use the normal environment approval/receipt, not a separate
-Google/Firebase service. An approved packet is passed with
+is insufficient. Use the normal environment approval and release receipt. An approved packet is passed with
 `--fast-track-approval <packet.json>` to `pnpm release:publish-preflight` and
 forwarded as `fast_track_approval` through existing publishers. Preserve the
 original FRV and sealed artifact bytes. Bounded policy: 20 commits AND 15,000

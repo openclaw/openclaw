@@ -3186,6 +3186,8 @@ function qualificationReusePolicyIdentity(admission) {
 /**
  * @param {{
  *   manifestPath?: string,
+ *   fastTrackApproval?: unknown,
+ *   fastTrackPublication?: import("./lib/release-fast-track-publication.mts").FastTrackPublication,
  *   qualificationReuse?: { candidateSha: string, qualificationSha: string, workflowRef: string, descriptor: object, inputs: Record<string, string> },
  *   repository?: string,
  *   reuseRequest?: { releaseProfile: string, runReleaseSoak: string, targetSha: string, validationInputs: Record<string, unknown> },
@@ -3208,6 +3210,7 @@ export async function validateReleaseRunEvidence(
   {
     manifestPath,
     fastTrackApproval,
+    fastTrackPublication,
     qualificationReuse,
     repository = DEFAULT_REPO,
     reuseRequest,
@@ -3805,6 +3808,7 @@ export async function validateReleaseRunEvidence(
     }
     const fastTrack = await authenticateFastTrackPolicy({
       packet: fastTrackApproval,
+      publication: fastTrackPublication,
       manifest: currentEvidence.manifestJson,
       jobs,
       repositoryRoot,

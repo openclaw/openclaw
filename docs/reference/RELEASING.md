@@ -53,21 +53,11 @@ and live-authority gates.
 Normally publish beta, validate, then promote stable. Core and every published
 official npm plugin must have `beta` at least as new as `latest`; preserve a newer
 beta. Prereleases precede their same-base final. Final versions normally require stable
-validation even when first published to beta; explicit fast-track exceptions
-follow the approval policy below.
+validation even when first published to beta.
 
 ## Release validation
 
-These are the ordinary validation requirements. An explicit human-approved
-[fast-track exception](/reference/fast-track-release-approval) can accept
-validation gaps through the existing publishers, preserving original FRV
-results and exact sealed artifacts. The bounded policy allows at most
-20 commits AND 15,000 added/deleted lines, excluding the documented package
-manifests/lockfiles from LOC only. The separate partial-FRV policy has no delta
-ceiling and retains every outstanding check. Neither changes the fully
-validated baseline or waives source/provenance, artifact integrity, signing or
-publication approvals. A human release manager, including the requester, must
-explicitly approve; agents never approve, even with human tokens.
+Normal releases follow these validation requirements.
 
 - Stable/final publication requires stable or full validation, longer soak,
   and blocking performance checks; beta-profile evidence is insufficient.
@@ -87,9 +77,7 @@ explicitly approve; agents never approve, even with human tokens.
   cover every failed cause. Missing, skipped, or cancelled required coverage
   blocks. Exact failed live-provider/Telegram leaves and operator-accepted
   `2026.11.5-beta.3`/candidate-bound `2026.11.4` jobs may use that policy;
-  candidate, job, version, and attempt restrictions still apply. **Without an
-  exact human-approved fast-track packet, FRV must conclude success.**
-  Fast-track approval records a validation exception, not a passing FRV.
+  candidate, job, version, and attempt restrictions still apply. **FRV must conclude success.**
 - Coverage spans source CI, packages, plugins, Gateway installs/upgrades, and
   selected app, UI, Telegram, QA, and live-provider checks. Inspect recorded
   profile/OS coverage; skipped or deferred is not passed.

@@ -1,6 +1,10 @@
+import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
+import { readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import JSZip from "jszip";
 import { afterEach, expect, it, vi } from "vitest";
+import { parse } from "yaml";
 import { fastTrackRequestDigest } from "../scripts/lib/release-fast-track-contract.mts";
 import {
   fastTrackAdmissionTime,
@@ -14,7 +18,9 @@ import {
   verifyReleaseApprovalReceipt,
 } from "../scripts/release-approval-receipt.mjs";
 import * as toolingModule from "../scripts/release-tooling-identity.mjs";
+import { useAutoCleanupTempDirTracker } from "./helpers/temp-dir.js";
 
+const roots = useAutoCleanupTempDirTracker(afterEach);
 const sha = "a".repeat(40);
 const target = "b".repeat(40);
 const releaseTag = "v2026.11.9-beta.1";
@@ -252,7 +258,10 @@ it("returns the verified original approval-job timestamp for active and complete
   await expect(fastTrackAdmissionTime(f.packet)).rejects.toThrow("request expired");
   vi.stubEnv("RELEASE_PUBLISH_RUN_ID", "10");
   vi.stubEnv("RELEASE_PUBLISH_RUN_ATTEMPT", "2");
-  vi.spyOn(toolingModule, "runReleaseToolingGh").mockReturnValue(JSON.stringify(f.parentRun));
+  // Docker may be retried in attempt 3 while admission belongs to attempt 2.
+  vi.spyOn(toolingModule, "runReleaseToolingGh").mockReturnValue(
+    JSON.stringify({ ...f.parentRun, run_attempt: 3 }),
+  );
   const originalDownload = downloadReleaseApprovalReceipt;
   vi.spyOn(receiptModule, "downloadReleaseApprovalReceipt").mockImplementation((input) =>
     originalDownload({ ...params, expected: input.expected }),
@@ -260,10 +269,81 @@ it("returns the verified original approval-job timestamp for active and complete
   await expect(fastTrackAdmissionTime(f.packet)).resolves.toBe(
     Date.parse(f.parentJobs.jobs[0]!.started_at),
   );
+  vi.stubEnv("RELEASE_PUBLISH_RUN_ID", "");
+  vi.stubEnv("RELEASE_PUBLISH_RUN_ATTEMPT", "");
+  await expect(fastTrackAdmissionTime(f.packet, { runId: 10, runAttempt: 2 })).resolves.toBe(
+    Date.parse(f.parentJobs.jobs[0]!.started_at),
+  );
+  await expect(fastTrackAdmissionTime(f.packet, { runId: 10, runAttempt: 3 })).rejects.toThrow();
+  vi.stubEnv("RELEASE_PUBLISH_RUN_ID", "10");
+  await expect(fastTrackAdmissionTime(f.packet)).rejects.toThrow("request expired");
+  vi.stubEnv("RELEASE_PUBLISH_RUN_ATTEMPT", "2");
   f.parentJobs.jobs[0]!.started_at = f.packet.request.expiresAt;
   await expect(fastTrackAdmissionTime(f.packet)).rejects.toThrow(
     "did not admit this exact approval before expiry",
   );
   f.parentJobs.jobs[0]!.started_at = "invalid";
   await expect(download()).rejects.toThrow("no valid start timestamp");
+});
+
+it("carries the successful admission attempt into Docker and resolves closeout from the receipt-writing job", () => {
+  const publisher = parse(readFileSync(".github/workflows/openclaw-release-publish.yml", "utf8"));
+  const docker = parse(readFileSync(".github/workflows/docker-release.yml", "utf8"));
+  expect(publisher.jobs.publish_docker.with.release_publish_run_attempt).toBe(
+    "${{ needs.publish.outputs.publication_attempt }}",
+  );
+  expect(publisher.jobs.publish_docker.with.release_publish_run_id).toBe("${{ github.run_id }}");
+  expect(docker.env.RELEASE_PUBLISH_RUN_ATTEMPT).toBe("${{ inputs.release_publish_run_attempt }}");
+  const closeout = parse(
+    readFileSync(".github/workflows/openclaw-stable-main-closeout.yml", "utf8"),
+  );
+  const step =
+    closeout.jobs.closeout?.steps?.find(
+      (entry: { name: string }) => entry.name === "Verify release workflow evidence",
+    ) ??
+    Object.values(closeout.jobs)
+      .flatMap((job) => (job as { steps?: Array<{ name: string; run: string }> }).steps ?? [])
+      .find((entry) => entry.name === "Verify release workflow evidence");
+  const start = step.run.indexOf("publication_job_id=");
+  const end = step.run.indexOf("printf 'RELEASE_PUBLISH_RUN_ID", start);
+  expect(start).toBeGreaterThan(0);
+  const root = roots.make("fast-track-closeout-replay-");
+  writeFileSync(
+    join(root, "release-publish-run.json"),
+    JSON.stringify({
+      attempt: 3,
+      jobs: [
+        {
+          databaseId: 101,
+          name: "Publish plugins, then OpenClaw",
+          steps: [{ name: "Write release approval receipt", conclusion: "success" }],
+        },
+        {
+          databaseId: 102,
+          name: "Publish Docker images / Publish prepared Docker images",
+          steps: [],
+        },
+      ],
+    }),
+  );
+  const output = execFileSync(
+    "bash",
+    [
+      "-c",
+      `
+    set -euo pipefail
+    gh_with_retry() {
+      if [[ "$*" != "api repos/openclaw/openclaw/actions/jobs/101 --jq .run_attempt" ]]; then exit 3; fi
+      printf '2'
+    }
+    ${step.run.slice(start, end)}
+    printf '%s' "$RELEASE_PUBLISH_RUN_ATTEMPT"
+  `,
+    ],
+    {
+      encoding: "utf8",
+      env: { ...process.env, RUNNER_TEMP: root, GITHUB_REPOSITORY: "openclaw/openclaw" },
+    },
+  );
+  expect(output).toBe("2");
 });

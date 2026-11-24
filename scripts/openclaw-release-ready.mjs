@@ -390,6 +390,7 @@ function authenticateReadyNpm({
   toolingSha,
   toolingFullRef,
   evidenceClient,
+  fastTrackPublication,
 }) {
   return authenticatePreparedNpmArtifact({
     artifact,
@@ -402,6 +403,7 @@ function authenticateReadyNpm({
     plugins: "",
     npmDistTag: inputs.npm_dist_tag === "extended-stable" ? "extended-stable" : "default",
     fastTrackApproval: inputs.fast_track_approval,
+    fastTrackPublication,
     fullReleaseValidationRunId: inputs.full_release_validation_run_id,
     fullReleaseValidationRunAttempt: inputs.full_release_validation_run_attempt,
     publisherPolicySha256: createHash("sha256")
@@ -545,7 +547,7 @@ export async function prefetchPreparedPlugins(options) {
   return { ...manifests, inputs };
 }
 
-async function readReady(descriptor, directory, tooling, token) {
+async function readReady(descriptor, directory, tooling, token, fastTrackPublication) {
   requireValue(
     descriptor?.workflowPath === PREPARE_WORKFLOW &&
       descriptor.repository === REPOSITORY &&
@@ -574,6 +576,7 @@ async function readReady(descriptor, directory, tooling, token) {
   const sourceSha = api(`commits/${encodeURIComponent(value.inputs?.tag)}`, ["--jq", "{sha}"]).sha;
   const adoption = await authenticateReadyNpm({
     artifact: value.plugins?.npm,
+    fastTrackPublication,
     inputs: value.inputs,
     sourceSha,
     toolingSha: tooling.sha,
@@ -647,7 +650,10 @@ async function readPublicationRequest(path, directory, tooling, token) {
       }),
     "Publication request is unknown, unverified, malformed, or inconsistent; do not redispatch.",
   );
-  const { ready } = await readReady(request.preparedArtifact, directory, tooling, token);
+  const { ready } = await readReady(request.preparedArtifact, directory, tooling, token, {
+    runId: request.releaseRunId,
+    runAttempt: request.releaseRunAttempt,
+  });
   const inputs = publicationInputs(
     ready,
     request.openclawNpmResumeRunId ?? "",

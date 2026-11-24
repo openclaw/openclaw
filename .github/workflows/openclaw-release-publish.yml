@@ -2660,6 +2660,8 @@ jobs:
       prepared_artifact_name: ${{ needs.resolve_release_target.outputs.prepared_docker_artifact_name }}
       prepared_manifest_sha256: ${{ needs.resolve_release_target.outputs.prepared_docker_manifest_sha256 }}
       fast_track_approval: ${{ inputs.fast_track_approval }}
+      release_publish_run_id: ${{ github.run_id }}
+      release_publish_run_attempt: ${{ needs.publish.outputs.publication_attempt }}
       full_release_validation_run_id: ${{ inputs.full_release_validation_run_id }}
       full_release_validation_run_attempt: ${{ needs.resolve_release_target.outputs.full_release_validation_run_attempt }}
       focused_release_evidence_run_id: ${{ inputs.release_evidence_mode == 'authorized-beta-focused-v1' && inputs.focused_release_evidence_run_id || '' }}
