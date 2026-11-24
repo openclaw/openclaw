@@ -157,7 +157,14 @@ export function resolveToolOperationLabel(
       ...safeParseJsonRecord(unwrapToolResultTextForDisplay(card.outputText ?? "")),
     };
     let action = outcome === "running" ? "sending" : "send";
-    if (outcome === "succeeded") {
+    if (
+      (outcome === "failed" || outcome === "succeeded") &&
+      result.sentBeforeError === true &&
+      (result.status === "timeout" || result.status === "error")
+    ) {
+      action = result.status === "timeout" ? "replyTimedOut" : "replyFailed";
+    } else if (outcome === "succeeded") {
+      action = "unconfirmed";
       if (result.status === "ok" || result.status === "no_reply") {
         action = "sent";
       } else if (result.status === "accepted" || result.status === "queued") {

@@ -129,7 +129,12 @@ it("uses names already available to chat rows without exposing unresolved routin
   const session = { key, kind: "direct" as const, label: "Research", updatedAt: 1, activeRunIds };
   for (const [name, args, known, unresolved] of [
     ["sessions_history", { sessionKey: key }, "Read chat Research", "Read chat"],
-    ["sessions_send", { sessionKey: key }, "Send message to Research", "Send message"],
+    [
+      "sessions_send",
+      { sessionKey: key },
+      "Delivery unconfirmed · Research",
+      "Delivery unconfirmed",
+    ],
     ["agents_wait", { ids: ["run"] }, "Waited for Research", "Waited for agents"],
   ] as const) {
     for (const [subagentSessions, expected] of [
@@ -147,7 +152,8 @@ it("uses names already available to chat rows without exposing unresolved routin
 });
 
 it.each([
-  [undefined, "Send message to Release review"],
+  [undefined, "Delivery unconfirmed · Release review"],
+  [{ status: "other" }, "Delivery unconfirmed · Release review"],
   [{ status: "accepted", targetDisposition: "queued" }, "Message accepted for Release review"],
   [{ status: "queued", runStarted: false }, "Queued message to Release review"],
   [
@@ -179,6 +185,24 @@ it.each([
   [{ name: "sessions_list", args: { limit: 200 }, isError: true }, "List chats"],
   [{ name: "sessions_send", args: { sessionKey: "unknown" }, live: true }, "Sending message"],
   [{ name: "sessions_send", isError: true, details: { status: "ok" } }, "Send message"],
+  [
+    {
+      name: "sessions_send",
+      args: { label: "Review" },
+      isError: true,
+      details: { status: "timeout", error: "agent run timed out", sentBeforeError: true },
+    },
+    "Sent to Review · reply timed out",
+  ],
+  [
+    {
+      name: "sessions_send",
+      isError: true,
+      outputText: JSON.stringify({ status: "error", error: "agent error", sentBeforeError: true }),
+    },
+    "Sent · reply failed",
+  ],
+  [{ name: "sessions_send", isError: true, details: { status: "timeout" } }, "Send message"],
   [
     {
       name: "tool_call",
