@@ -394,13 +394,16 @@ export function registerGoalAutomaticContinuationCases(
   });
 
   // Two results wait behind a completion turn and share the next one, which is refused before
-  // it stages its input. The retry reads the stored row, so it still carries both results.
-  it("retries a refused shared exec turn with every result it carried", async () => {
+  // it stages its input. Each result retries from its own stored row, so neither is lost.
+  it("delivers every result of a refused shared exec turn", async () => {
     const restore = withOwnerPolicy();
     const enqueueEvent = vi.spyOn(sessionEventHandoff, "enqueueSessionEventForHost");
     const prompts: string[] = [];
-    // The shared turn starts from the batch lane's settle timer, after the active work drains.
-    const retried = createDeferred();
+    // Retries start from the batch lane's settle timer, after the active work drains, so wait for
+    // the results themselves.
+    const bothDelivered = createDeferred();
+    const delivered = () =>
+      prompts.slice(2).flatMap((prompt) => prompt.match(/Exec completed/g) ?? []);
     runEmbeddedAgent.mockImplementation(async (params) => {
       prompts.push(params.prompt);
       if (prompts.length === 1) {
@@ -419,21 +422,23 @@ export function registerGoalAutomaticContinuationCases(
             error: "destination refused",
           }),
         }));
-      } else if (prompts.length === 3) {
+      } else {
         await setGoalStatus("complete");
-        retried.resolve();
+      }
+      if (delivered().length >= 2) {
+        bothDelivered.resolve();
       }
       return result(params.sessionId);
     });
     try {
       await start("Finish after three transfers");
-      await retried.promise;
+      await bothDelivered.promise;
       await expectDrained();
     } finally {
       enqueueEvent.mockRestore();
       restore();
     }
-    expect(prompts[2]?.match(/Exec completed/g)).toHaveLength(2);
+    expect(delivered()).toHaveLength(2);
   });
 
   it("downgrades an owner's Goal successor once ownership is revoked", async () => {

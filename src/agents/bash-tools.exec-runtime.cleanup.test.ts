@@ -46,7 +46,7 @@ vi.mock("../auto-reply/reply/session-event-handoff.js", () => ({
 // mock-isolation: Owed-result storage has its own owner suite; these destinations have no store.
 vi.mock("../sessions/owed.js", () => ({
   owe: async () => {},
-  readPendingOwed: async () => undefined,
+  isOwedPending: async () => false,
   withhold: async () => {},
 }));
 vi.mock(import("../infra/system-events.js"), async (importOriginal) => ({

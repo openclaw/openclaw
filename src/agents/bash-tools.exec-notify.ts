@@ -259,7 +259,7 @@ export function wakeOwedExec(
   retries = 0,
 ): void {
   const wakeAgain =
-    retries > 0 ? (stored: Owed) => wakeOwedExec(stored, options, onWake, retries - 1) : undefined;
+    retries > 0 ? () => wakeOwedExec(owed, options, onWake, retries - 1) : undefined;
   let receipt: ReturnType<typeof enqueueSessionEvent>;
   try {
     receipt = enqueueSessionEvent(owed.text, {
@@ -284,27 +284,26 @@ export function wakeOwedExec(
  * Settles a wake by the stored row, not by its outcome; a row its turn appended needs nothing.
  * A completed wake that left the row pending answered it inside a shared turn's input, which
  * carries every result it answers; the row is hidden. A failed wake with a retry left wakes the
- * chat again from the stored row (a shared wake's row carries its folded text). A stop, or a
- * failure with no retry left, withholds the result with that cause. Restart drains leave the
+ * chat again from this row; each member of a failed shared turn retries its own row. A stop, or
+ * a failure with no retry left, withholds the result with that cause. Restart drains leave the
  * row owed for restart recovery.
  */
 async function settleOwedExecWake(
   owed: Owed,
   outcome: SessionEventOutcome,
-  wakeAgain?: (stored: Owed) => void,
+  wakeAgain?: () => void,
 ) {
   if (outcome.status === "failed") {
     logWarn(`exec: completion delivery failed (${outcome.error}); inspect the process result.`);
   }
   try {
-    const stored = isGatewayRestartDraining() ? undefined : await readPendingOwed(owed);
-    if (!stored) {
+    if (isGatewayRestartDraining() || !(await isOwedPending(owed))) {
       return;
     }
     if (outcome.status === "completed") {
       await withhold(owed, "failed", "interrupted");
     } else if (outcome.status === "failed" && wakeAgain) {
-      wakeAgain(stored);
+      wakeAgain();
     } else {
       await withhold(owed, outcome.status === "cancelled" ? "user-stop" : "failed");
     }

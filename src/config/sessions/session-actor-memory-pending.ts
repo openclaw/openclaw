@@ -261,7 +261,7 @@ export function createSessionActorMemoryPending(
           ? {
               ...row,
               state: "queued",
-              // Like the SQL kernel: an adopted or folded owed row takes the new bytes.
+              // Like the SQL kernel: an adopted owed row takes the new bytes.
               message_json: restagePendingInputMessageJson(row.message_json, input.messageJson),
               run_id: input.runId,
               lifecycle_generation: input.lifecycleGeneration,

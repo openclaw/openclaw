@@ -25,8 +25,9 @@ export function readOwedKind(messageJson: string): OwedKind | undefined {
 }
 
 /**
- * A restage keeps an ordinary row's canonical bytes. An owed row takes the adopting turn's or
- * fold's bytes and keeps its owed fields (kind, origin facts), so restart recovery still knows it.
+ * A restage keeps an ordinary row's canonical bytes. An owed row takes the adopting turn's bytes
+ * (a shared turn's joined text) and keeps its owed fields (kind, origin facts), so restart
+ * recovery still knows it.
  */
 export function restagePendingInputMessageJson(stored: string, next: string): string {
   const row = asOptionalRecord(JSON.parse(stored));
