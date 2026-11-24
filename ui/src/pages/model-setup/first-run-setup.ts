@@ -9,6 +9,11 @@ import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
 import { t } from "../../i18n/index.ts";
 import { registerUpdateActionsEnglish } from "../../i18n/locales/en-update-actions.ts";
 import { formatDateTimeMs } from "../../lib/format.ts";
+import { openPreferredApplicationSession } from "../../lib/sessions/route-navigation.ts";
+import {
+  resolveUiConfiguredMainKey,
+  resolveUiConversationIdentity,
+} from "../../lib/sessions/session-key.ts";
 import {
   clearFirstRunActivationReceipt,
   persistFirstRunActivationReceipt,
@@ -578,10 +583,28 @@ export class FirstRunSetup {
   }
 
   private completeNavigation(): void {
+    const activation = this.pending;
+    const context = this.host.context();
     this.pending = null;
     clearFirstRunActivationReceipt();
     this.host.setRefreshWarning(null);
-    this.host.context().navigate("custodian", { search: "?onboarding=1" });
+    if (activation?.modelTarget === "utility") {
+      // A utility-only model leaves choosing the primary model to the setup assistant.
+      context.navigate("custodian", { search: "?onboarding=1" });
+      return;
+    }
+    // Open the activated agent's main chat from the identity the Gateway advertises.
+    // The bare chat route would restore whichever conversation was open last.
+    const defaults = {
+      agentsList: context.agents.state.agentsList,
+      hello: context.gateway.snapshot.hello,
+    };
+    const { sessionKey, agentId } = resolveUiConversationIdentity(
+      defaults,
+      resolveUiConfiguredMainKey(defaults),
+      activation?.owner.agentId,
+    );
+    openPreferredApplicationSession(context, sessionKey, agentId);
   }
 
   private showUnresolved(): void {

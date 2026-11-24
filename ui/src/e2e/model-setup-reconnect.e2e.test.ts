@@ -2,7 +2,11 @@
 import { Compile } from "typebox/compile";
 import { expect, it } from "vitest";
 import { ConnectParamsSchema } from "../../../packages/gateway-protocol/src/schema.js";
-import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { controlUiSessionUrl } from "../test-helpers/control-ui-e2e-session-urls.ts";
+import {
+  defaultControlUiFeatureMethods,
+  installMockGateway,
+} from "../test-helpers/control-ui-e2e.ts";
 import {
   createControlUiE2eContextOptions,
   createControlUiE2eSuite,
@@ -91,7 +95,7 @@ suite.define(() => {
       await page.getByText("saved-model", { exact: true }).waitFor();
       expect(await gateway.getRequests(rpc.verify)).toHaveLength(0);
       await button(page, "Verify & use selected model").click();
-      await expect.poll(() => new URL(page.url()).pathname).toBe("/custodian");
+      await expect.poll(() => new URL(page.url()).pathname).toBe("/chat/main");
       await expectRequestCounts(gateway, { [rpc.auth]: 1, [rpc.activate]: 0, [rpc.verify]: 1 });
     });
   });
@@ -192,7 +196,7 @@ suite.define(() => {
           latencyMs: 31,
         });
         await destination.getByRole("button", { name: "Verify & use selected model" }).click();
-        await expect.poll(() => new URL(destination.url()).pathname).toBe("/custodian");
+        await expect.poll(() => new URL(destination.url()).pathname).toBe("/chat/main");
         if (restart === "reconnect") {
           expect(await gateway.getRequests(rpc.activate)).toHaveLength(2);
           const connections = await gateway.getRequests("connect");
@@ -202,11 +206,7 @@ suite.define(() => {
         } else {
           expect(await reconnectedGateway.getRequests(rpc.activate)).toHaveLength(0);
         }
-        await destination.getByText(onboardingWelcome.reply, { exact: true }).waitFor();
-        const welcomeRequest = await reconnectedGateway.waitForRequest("openclaw.chat");
-        expect(welcomeRequest.params).toMatchObject({ welcomeVariant: "onboarding" });
-        await destination.locator(".custodian__header--minimal").waitFor();
-        expect(new URL(destination.url()).searchParams.get("onboarding")).toBe("1");
+        expect(await reconnectedGateway.getRequests("openclaw.chat")).toHaveLength(0);
       });
     },
   );
@@ -286,15 +286,75 @@ suite.define(() => {
         await gateway.setMethodResponse(rpc.detect, detection(modelRef));
         await gateway.closeLatest(1012, "activation refresh restart");
         await gateway.waitForRequest(rpc.verify);
-        await expect.poll(() => new URL(page.url()).pathname).toBe("/custodian");
-        expect(new URL(page.url()).searchParams.get("onboarding")).toBe("1");
-        await page.getByText(onboardingWelcome.reply, { exact: true }).waitFor();
+        await expect.poll(() => new URL(page.url()).pathname).toBe("/chat/main");
+        expect(await gateway.getRequests("openclaw.chat")).toHaveLength(0);
         expect(await gateway.getRequests(rpc.activate)).toHaveLength(
           entry === "provider sign-in" ? 0 : 1,
         );
       });
     },
   );
+
+  it("opens the chosen agent's main chat after a web-entry activation reloads mid-handoff", async () => {
+    await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
+      const modelRef = "openai/gpt-5.6-luna";
+      // A non-default agent id and a previously visited conversation prove the
+      // destination comes from Gateway identity, not a literal or the last chat.
+      const mainSessionKey = "agent:atlas:main";
+      const earlierSessionKey = "agent:atlas:dashboard:5f0c1e2a-3b4d-4c6e-8f70-91a2b3c4d5e6";
+      const text = (value: string) => ({
+        messages: [{ role: "assistant", content: [{ type: "text", text: value }] }],
+      });
+      const gateway = await installMockGateway(page, {
+        agentModel: null,
+        defaultAgentId: "atlas",
+        sessions: [
+          { key: mainSessionKey, label: "Main", kind: "direct", updatedAt: 1 },
+          { key: earlierSessionKey, label: "Earlier", kind: "direct", updatedAt: 2 },
+        ],
+        sessionTranscripts: {
+          [mainSessionKey]: text("Atlas main chat."),
+          [earlierSessionKey]: text("Earlier conversation."),
+        },
+        featureMethods: [
+          ...defaultControlUiFeatureMethods,
+          rpc.detect,
+          rpc.activate,
+          rpc.next,
+          rpc.verify,
+        ],
+        methodResponses: {
+          [rpc.detect]: makeDetection({
+            candidates: [candidate("openai-api-key", "OpenAI", modelRef)],
+          }),
+          [rpc.activate]: runningWizard("activation-session"),
+          [rpc.next]: activated(modelRef, { gatewayRestartRequired: true }),
+          [rpc.verify]: { ok: true, modelRef, latencyMs: 31 },
+        },
+      });
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, earlierSessionKey));
+      await page.getByText("Earlier conversation.", { exact: true }).waitFor();
+
+      await page.goto(suite.server.baseUrl);
+      await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/model-setup");
+      await page.getByRole("button", { name: "Test & use" }).click();
+      await page.getByText("The Gateway is restarting", { exact: false }).waitFor();
+      expect(await gateway.getRequests(rpc.activate)).toHaveLength(1);
+
+      // Reload while the restart handoff is still unresolved.
+      await gateway.setMethodResponse(rpc.detect, detection(modelRef));
+      await page.reload();
+      await gateway.waitForRequest(rpc.verify);
+      await expect.poll(() => new URL(page.url()).pathname).toBe("/chat/atlas");
+      await page.getByText("Atlas main chat.", { exact: true }).waitFor();
+      await expectCount(page.getByText("Earlier conversation.", { exact: true }), 0);
+      // The reloaded document records its own requests: it verifies once and never reapplies.
+      await expectRequestCounts(gateway, { [rpc.activate]: 0, [rpc.next]: 0, [rpc.verify]: 1 });
+      expect(
+        await page.evaluate(() => localStorage.getItem("openclaw.modelSetup.pendingActivation.v1")),
+      ).toBeNull();
+    });
+  });
 
   it("re-detects once and replaces stale visible model state after reconnect", async () => {
     await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {

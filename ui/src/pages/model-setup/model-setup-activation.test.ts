@@ -12,7 +12,7 @@ import {
   missingWizardError,
   running,
   configuredDetection,
-  waitForOnboarding,
+  waitForAgentChat,
   waitForText,
   runningStep,
   authButton,
@@ -83,7 +83,7 @@ describe("ModelSetupPage first-run activation ownership", () => {
       expect(request).toHaveBeenCalledOnce();
       expect(pendingReceipt()).toBe(receipt);
       response.resolve(success);
-      await waitForOnboarding(context);
+      await waitForAgentChat(context);
       expect(request).toHaveBeenCalledOnce();
     } finally {
       response.resolve(success);
@@ -146,7 +146,7 @@ describe("ModelSetupPage first-run activation ownership", () => {
       expect(callsFor(request, "openclaw.setup.verify")).toHaveLength(0);
       expect(context.navigate).not.toHaveBeenCalled();
       pageButton(page, ".model-setup__recovery .btn.primary")!.click();
-      await waitForOnboarding(context);
+      await waitForAgentChat(context);
       releaseActivation?.(activated("provider/late-other"));
       await page.updateComplete;
       expect(callsFor(request, activatedMethod)).toHaveLength(entry === "provider sign-in" ? 2 : 1);
