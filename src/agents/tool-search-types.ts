@@ -79,6 +79,7 @@ export type ToolSearchConfig = AgentToolSurfacePresentation["toolSearch"];
 
 /** Per-run/session context used by Tool Search control tools. */
 export type ToolSearchToolContext = {
+  modelContextWindowTokens?: number;
   config?: OpenClawConfig;
   runtimeConfig?: OpenClawConfig;
   agentId?: string;

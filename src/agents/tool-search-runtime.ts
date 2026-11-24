@@ -10,6 +10,7 @@ import {
 import { runWithToolExecutionValidation } from "./agent-tools.execution-validation.js";
 import { getChannelAgentToolMeta } from "./channel-tool-metadata.js";
 import { collectTextContentBlocks } from "./content-blocks.js";
+import { TOOL_IMAGE_CHARS } from "./embedded-agent-runner/tool-result-char-estimator.js";
 import { setMcpCodeModeGuestResultFromAgentResult } from "./mcp-content.js";
 import { captureAgentPluginRuntimeRefresh } from "./plugin-runtime-refresh.js";
 import type { AgentToolResult } from "./runtime/index.js";
@@ -31,6 +32,7 @@ import {
   isTrustedToolExecutionPreflightError,
   protectNetworkToolExecutionError,
 } from "./tool-result-error.js";
+import { resolveToolResultBudget, type ToolResultBudget } from "./tool-result-limits.js";
 import {
   compactToolSearchCatalogEntry,
   prepareToolSearchCatalogExecutionTool,
@@ -214,6 +216,7 @@ function sanitizeToolCallIdPart(value: string): string {
 }
 
 export class ToolSearchRuntime {
+  readonly resultBudget: ToolResultBudget | undefined;
   private readonly pluginRuntimeRefresh = captureAgentPluginRuntimeRefresh();
   private callSequence = 0;
   private readonly terminalTargetBatchByParent = new Map<string, boolean>();
@@ -227,7 +230,9 @@ export class ToolSearchRuntime {
       validateInput?: boolean;
       callIdScope?: string;
     } = {},
-  ) {}
+  ) {
+    this.resultBudget = resolveToolResultBudget(ctx.modelContextWindowTokens);
+  }
 
   search = async (
     query: string,
@@ -569,12 +574,27 @@ export function formatToolSearchControlResult<T>(
     parentToolCallId?: string;
     terminalBatchStatus?: "waiting" | "completed" | "failed";
     compact?: boolean;
+    allowPartial?: boolean;
     images?: Extract<AgentToolResult<unknown>["content"][number], { type: "image" }>[];
   } = {},
 ): AgentToolResult<T> {
   const serialized = serializeToolSearchControlResult(payload, options.compact);
   const networkContent = runtime?.hasNetworkContent(options.parentToolCallId) ?? false;
-  const { text } = renderToolSearchControlText(serialized, networkContent);
+  const budget = runtime?.resultBudget;
+  const textBudget =
+    budget && options.images?.length
+      ? {
+          ...budget,
+          maxContextChars: Math.max(
+            0,
+            budget.maxContextChars - options.images.length * TOOL_IMAGE_CHARS,
+          ),
+        }
+      : budget;
+  const { text } = renderToolSearchControlText(serialized, networkContent, {
+    budget: textBudget,
+    allowPartial: options.allowPartial,
+  });
   const result = textResult(text, payload);
   if (networkContent) {
     // The control tool has no static source; finalization reads this per-call fact.

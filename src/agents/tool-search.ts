@@ -10,6 +10,7 @@ import {
   copyInternalToolResultState,
 } from "./runtime/internal-hooks.js";
 import { resolveToolResultFailureKind } from "./tool-result-error.js";
+import type { ToolResultBudget } from "./tool-result-limits.js";
 import {
   applyToolCatalogCompaction,
   isDirectVisibleCatalogTool,
@@ -145,6 +146,7 @@ function compactBatchCandidate(candidate: ToolSearchCandidate): ToolSearchCandid
 function formatToolSearchBatchResponse(
   results: ToolSearchBatchGroup[],
   networkContent: boolean,
+  budget?: ToolResultBudget,
 ): AgentToolResult<{
   results: ToolSearchBatchGroup[];
   truncated?: true;
@@ -163,8 +165,10 @@ function formatToolSearchBatchResponse(
   let truncated = bounded.some((result) => result.truncated);
   const render = () => ({ results: bounded, ...(truncated ? { truncated: true as const } : {}) });
   let payload = render();
-  let { text } = renderToolSearchControlText(JSON.stringify(payload, null, 2), networkContent);
-  while (text.length > MAX_TOOL_SEARCH_BATCH_RESPONSE_CHARS) {
+  let rendered = renderToolSearchControlText(JSON.stringify(payload, null, 2), networkContent, {
+    budget,
+  });
+  while (rendered.truncated || rendered.text.length > MAX_TOOL_SEARCH_BATCH_RESPONSE_CHARS) {
     let removable: ToolSearchBatchGroup | undefined;
     for (const group of bounded) {
       if (group.candidates.length === 0) {
@@ -188,9 +192,11 @@ function formatToolSearchBatchResponse(
     removable.truncated = true;
     truncated = true;
     payload = render();
-    ({ text } = renderToolSearchControlText(JSON.stringify(payload, null, 2), networkContent));
+    rendered = renderToolSearchControlText(JSON.stringify(payload, null, 2), networkContent, {
+      budget,
+    });
   }
-  const result = textResult(text, payload);
+  const result = textResult(rendered.text, payload);
   return networkContent ? attachInternalToolResultContentSource(result, "network") : result;
 }
 
@@ -279,7 +285,7 @@ export function createToolSearchTools(ctx: ToolSearchToolContext): AnyAgentTool[
               parentToolCallId: toolCallId,
             }),
             runtime,
-            { parentToolCallId: toolCallId },
+            { parentToolCallId: toolCallId, allowPartial: true },
           );
         }
         const results = await Promise.all(
@@ -291,7 +297,11 @@ export function createToolSearchTools(ctx: ToolSearchToolContext): AnyAgentTool[
             }),
           })),
         );
-        return formatToolSearchBatchResponse(results, runtime.hasNetworkContent(toolCallId));
+        return formatToolSearchBatchResponse(
+          results,
+          runtime.hasNetworkContent(toolCallId),
+          runtime.resultBudget,
+        );
       },
     },
     {
@@ -307,7 +317,7 @@ export function createToolSearchTools(ctx: ToolSearchToolContext): AnyAgentTool[
         formatToolSearchControlResult(
           await runtime.describe(readToolSearchId(args), { parentToolCallId: toolCallId }),
           runtime,
-          { parentToolCallId: toolCallId },
+          { parentToolCallId: toolCallId, allowPartial: true },
         ),
     },
     {
