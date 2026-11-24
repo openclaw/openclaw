@@ -299,7 +299,8 @@ export async function resolveAuthenticatedHttpUserProfile(params: {
       ...profileResult,
       ...(usesSharedSecretGatewayMethod(params.authResult.method)
         ? {}
-        : { personProfileId: profileId }),
+        : // Authentication can name an alias. The prepared profile owns its canonical ID.
+          { personProfileId: profileResult.authenticatedUserProfile.profileId }),
     };
     const delegation = params.authResult.delegation;
     if (delegation) {
