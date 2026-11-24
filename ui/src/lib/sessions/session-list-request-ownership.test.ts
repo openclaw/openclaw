@@ -20,6 +20,20 @@ const query = {
 } as const satisfies SessionListScope;
 const row = { key: "agent:main:example", sessionId: "example", kind: "direct" } as const;
 
+it("retains an explicit query result until its last subscriber leaves", async () => {
+  const result = sessionsResult([row]);
+  const request = vi.fn().mockResolvedValue(result);
+  const { sessions } = rosterFixture(request);
+  const scope = { ...query, ownerId: "viewer" };
+  await sessions.refreshList(scope);
+  expect(sessions.listSnapshot(scope).result).toEqual(result);
+  const unsubscribe = sessions.subscribeList(scope, () => {});
+  expect(sessions.listSnapshot(scope).result).toEqual(result);
+  expect(request).toHaveBeenCalledOnce();
+  unsubscribe();
+  expect(sessions.listSnapshot(scope).result).toBeNull();
+});
+
 it.each([
   { name: "primary first", observedFirst: false, scope: {}, reads: 1 },
   { name: "observed first", observedFirst: true, scope: {}, reads: 1 },

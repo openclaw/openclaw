@@ -64,6 +64,7 @@ export function getManagedSessionList(
     readRevision: 0,
     connectionEpoch: null,
     snapshot: { result: null, agentId: null, loading: false, error: null },
+    retainSnapshot: false,
     listeners: new Set(),
     coordinator: createSessionEventRefreshCoordinator({
       active: false,
@@ -557,6 +558,7 @@ export function createSessionManagedListRefresh(
       refresh: ManagedSessionListRefresh,
       isCurrent: () => boolean = () => true,
     ): Promise<void> {
+      entry.retainSnapshot = true;
       if (!refresh.background || entry.pending) {
         return refreshManaged(entry, refresh);
       }

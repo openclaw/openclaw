@@ -23,6 +23,7 @@ export function createSessionPrimaryWindows(
   let invalidationRevision = 0;
   const release = (entry: ManagedSessionList) => {
     if (
+      !entry.retainSnapshot &&
       !entry.warmPrimary &&
       entry.listeners.size === 0 &&
       !entry.pending &&
@@ -40,6 +41,7 @@ export function createSessionPrimaryWindows(
         continue;
       }
       entry.warmPrimary = false;
+      entry.retainSnapshot = false;
       if (entry.scope.agentId) {
         retiredAgents.add(normalizeAgentId(entry.scope.agentId));
       }
@@ -70,6 +72,7 @@ export function createSessionPrimaryWindows(
       // Keep invalidation dormant until observed again, without runnable queued work.
       entry.coordinator.setActive(false, entry.queued !== null);
       entry.queued = null;
+      entry.retainSnapshot = false;
       // Admitted requests release their entry through the same guarded owner on settlement.
       release(entry);
     };

@@ -497,6 +497,8 @@ export type ObservedSessionList = {
 };
 
 export type ManagedSessionList = ObservedSessionList & {
+  /** Managed refreshes retain their snapshot until a subscriber or warm lease retires it. */
+  retainSnapshot: boolean;
   /** A live primary window may be reused for selection until its next invalidation. */
   warmPrimary?: boolean;
   key: string;
