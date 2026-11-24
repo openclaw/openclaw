@@ -117,7 +117,10 @@ describe("buildOpenAISpeechProvider", () => {
   it("rejects a non-audio response before returning a stream", async () => {
     vi.stubGlobal(
       "fetch",
-      vi.fn(async () => new Response('{"error":"nope"}', { headers: { "content-type": "application/json" } })),
+      vi.fn(
+        async () =>
+          new Response('{"error":"nope"}', { headers: { "content-type": "application/json" } }),
+      ),
     );
     await expect(provider.streamSynthesize!(speechRequest())).rejects.toThrow(
       "OpenAI TTS API error: malformed audio response",
