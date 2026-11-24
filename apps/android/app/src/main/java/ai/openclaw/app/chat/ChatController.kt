@@ -854,6 +854,7 @@ class ChatController internal constructor(
   // Retained selection and event rows must not enlarge the next requested page.
   private var sessionsListLimit: Int? = null
   private var sessionRosterNextOffset: Int? = null
+  private var rosterNavigationOnlyKey: String? = null
   private var sessionRosterLoadedLimit: Int? = null
   private val sessionBrowserRevisionMutable = MutableStateFlow(0L)
   internal val sessionBrowserRevision = sessionBrowserRevisionMutable.asStateFlow()
@@ -902,6 +903,7 @@ class ChatController internal constructor(
   private fun clearSessionRosterPaging() {
     clearSessionWindowWake()
     sessionRosterNextOffset = null
+    rosterNavigationOnlyKey = null
     sessionRosterLoadedLimit = null
     sessionRosterHasMoreMutable.value = false
     sessionRosterLoadingMoreMutable.value = false
@@ -4999,15 +5001,16 @@ class ChatController internal constructor(
               null
             } else {
               val activeSessionKey = _sessionKey.value
-              // A filtered drawer page cannot evict the selected history row. Retain only
-              // the current owner's row; explicit deletion retires it before publication.
+              val page = if (append) mergeSessionRosterPages(_sessions.value, result, rosterNavigationOnlyKey) else result
+              // Keep an off-page selection for navigation, not as part of the Gateway-ranked prefix.
               val selected =
-                _sessions.value
-                  .firstOrNull {
-                    it.key == activeSessionKey && it.ownerAgentId == requestAgentId
-                  }?.takeIf { result.none { row -> row.key == activeSessionKey } }
-              val page = if (append) mergeSessionRosterPages(_sessions.value, result) else result
-              val sessions = if (selected == null || page.any { it.key == activeSessionKey }) page else page + selected
+                if (page.none { it.key == activeSessionKey }) {
+                  _sessions.value.firstOrNull { it.key == activeSessionKey && it.ownerAgentId == requestAgentId }
+                } else {
+                  null
+                }
+              rosterNavigationOnlyKey = selected?.key
+              val sessions = if (selected == null) page else page + selected
               // A wake refresh invalidates mounted queries at recovery; a cursor append never does.
               publishSessions(sessions, invalidateBrowser = false)
               if (wake != null) sessionBrowserRevisionMutable.update { it + 1 }

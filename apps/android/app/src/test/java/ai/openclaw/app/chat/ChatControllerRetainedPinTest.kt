@@ -93,13 +93,27 @@ class ChatControllerRetainedPinTest {
       runCurrent()
       assertEquals(listOf("ash", "elm", "cedar"), controller.sessions.value.map { it.key })
       assertEquals(selected, controller.sessions.value.last())
-      gateway.respondWith("sessions.list", """{"sessions":[{"key":"cedar","sessionId":"cedar-id","pinned":true},{"key":"birch"}],"hasMore":false}""")
+      gateway.respondWith("sessions.list", """{"sessions":[{"key":"birch","pinned":true},{"key":"cedar","sessionId":"cedar-id","pinned":true}],"hasMore":false}""")
       assertTrue(controller.loadMoreSessions())
       val cursor = chatControllerTestJson.parseToJsonElement(gateway.calls.last { it.method == "sessions.list" }.paramsJson!!).jsonObject
       assertEquals(JsonPrimitive(2), cursor["limit"])
       assertEquals(JsonPrimitive(2), cursor["offset"])
-      assertEquals(listOf("ash", "elm", "cedar", "birch"), controller.sessions.value.map { it.key })
+      assertEquals(listOf("ash", "elm", "birch", "cedar"), controller.sessions.value.map { it.key })
       assertEquals(2, gateway.callCount("sessions.describe"))
+    }
+
+  @Test
+  fun aSelectedMemberOfTheRankedPrefixKeepsItsSlotIfTheCursorOverlapsIt() =
+    runTest {
+      val controller = openPinnedThread()
+      gateway.respondWith("sessions.list", """{"sessions":[{"key":"cedar","sessionId":"cedar-id","pinned":true},{"key":"elm","pinned":true}],"nextOffset":2,"totalCount":3}""")
+      controller.preferenceChanged()
+      runCurrent()
+      gateway.respondWith("sessions.list", """{"sessions":[{"key":"ash","pinned":true},{"key":"cedar","sessionId":"cedar-id","pinned":true,"label":"New Cedar"}]}""")
+      assertTrue(controller.loadMoreSessions())
+      assertEquals(listOf("cedar", "elm", "ash"), controller.sessions.value.map { it.key })
+      assertEquals("New Cedar", controller.cedar().label)
+      assertEquals("cedar context", controller.openMessage())
     }
 
   @Test
@@ -174,7 +188,7 @@ class ChatControllerRetainedPinTest {
         val append = async { controller.loadMoreSessions() }
         runCurrent()
         assertTrue("pagination must finish while the optional reply is held", append.isCompleted && append.await())
-        val extended = page + "birch"
+        val extended = listOf("elm", "ash", "birch", "cedar")
         assertEquals(extended, controller.sessions.value.map { it.key })
         assertEquals(false, controller.sessionRosterHasMore.value)
         controller.handleGatewayEvent("sessions.changed", """{"agentId":"ops","session":{"key":"cedar","label":"Cedar renamed"}}""")
