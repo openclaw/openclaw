@@ -35,26 +35,57 @@ it("lets a raw worker's first snapshot retire a descriptor adopted after it star
   let exited: Promise<unknown[]> | undefined;
   let joined: Promise<PromiseSettledResult<unknown[]>[]> | undefined;
   let physical: DatabaseFileIdentity | undefined;
-  try {
-    await withinTest(
-      awaitGateBeforeSettlement(
-        acquisition.entered,
-        prepared,
-        "Read did not reach its real open callback",
-      ),
-      signal,
-    );
-    sibling = openNodeSqliteDatabase(location);
-    const record = state.registry.forLocation(location);
-    assert(record && acquisition.descriptor !== undefined);
-    physical = record.physicalIdentity;
-    const fact = { name: "raw-worker-custody-proof" };
-    publishSqliteDatabaseAdmission(sibling, fact, 42);
-    const read = prepareSqliteDatabaseAdmissionForPath(location, fact);
-    expect(read()).toBe(42);
-    expect(record.descriptor).not.toBe(acquisition.descriptor);
-    worker = new Worker(
-      `
+  await using _cleanup = {
+    async [Symbol.asyncDispose]() {
+      acquisition.release();
+      await outcome;
+      if (worker && worker.threadId !== -1) {
+        await worker.terminate();
+      }
+      await joined;
+      if (sibling?.isOpen) {
+        sibling.close();
+      }
+      retireSqliteDatabaseAdmissionForPath(location);
+      // A broken baseline can leave this exact acquired fd orphaned after all native users joined.
+      if (physical && acquisition.descriptor !== undefined) {
+        let live = false;
+        try {
+          assertDatabaseFileIdentity(
+            fs.fstatSync(acquisition.descriptor, { bigint: true }),
+            physical,
+          );
+          live = true;
+        } catch (error) {
+          if (!hasErrnoCode(error, "EBADF")) {
+            throw error;
+          }
+        }
+        if (live) {
+          fs.closeSync(acquisition.descriptor);
+        }
+      }
+    },
+  };
+  await withinTest(
+    awaitGateBeforeSettlement(
+      acquisition.entered,
+      prepared,
+      "Read did not reach its real open callback",
+    ),
+    signal,
+  );
+  sibling = openNodeSqliteDatabase(location);
+  const record = state.registry.forLocation(location);
+  assert(record && acquisition.descriptor !== undefined);
+  physical = record.physicalIdentity;
+  const fact = { name: "raw-worker-custody-proof" };
+  publishSqliteDatabaseAdmission(sibling, fact, 42);
+  const read = prepareSqliteDatabaseAdmissionForPath(location, fact);
+  expect(read()).toBe(42);
+  expect(record.descriptor).not.toBe(acquisition.descriptor);
+  worker = new Worker(
+    `
       const { parentPort, workerData } = require("node:worker_threads");
       (async () => {
         const { register } = await import(workerData.loader);
@@ -71,62 +102,36 @@ it("lets a raw worker's first snapshot retire a descriptor adopted after it star
         parentPort.postMessage({ descriptor: record.descriptor, custody: record.descriptorCustody.id });
       })().catch((error) => { throw error; });
     `,
-      {
-        eval: true,
-        execArgv: [],
-        workerData: {
-          location,
-          loader: import.meta.resolve("tsx/esm/api"),
-          admission: new URL("./sqlite-database-admission.ts", import.meta.url).href,
-          context: new URL("./sqlite-database-admission-context.ts", import.meta.url).href,
-        },
+    {
+      eval: true,
+      execArgv: [],
+      workerData: {
+        location,
+        loader: import.meta.resolve("tsx/esm/api"),
+        admission: new URL("./sqlite-database-admission.ts", import.meta.url).href,
+        context: new URL("./sqlite-database-admission-context.ts", import.meta.url).href,
       },
-    );
-    exited = once(worker, "exit");
-    joined = Promise.allSettled([exited]);
-    expect((await withinTest(once(worker, "message"), signal))[0]).toEqual({
-      descriptor: record.descriptor,
-      custody: record.descriptorCustody.id,
-    });
-    acquisition.release();
-    await withinTest(prepared, signal);
-    expect(state.registry.forLocation(location)).toBe(record);
-    expect(fs.fstatSync(record.descriptor).isFile()).toBe(true);
-    expect(fs.fstatSync(acquisition.descriptor).isFile()).toBe(true);
-    sibling.close();
-    worker.postMessage("retire");
-    expect(await withinTest(exited, signal)).toEqual([0]);
-    expect(isSqliteDescriptorCustodyClosed(record.descriptorCustody)).toBe(true);
-    expect(read()).toBeUndefined();
-    for (const descriptor of [record.descriptor, acquisition.descriptor]) {
-      expect(() => fs.fstatSync(descriptor)).toThrow(expect.objectContaining({ code: "EBADF" }));
-    }
-    state.registry.publish();
-    expect(state.registry.descriptors.has(record.identity)).toBe(false);
-  } finally {
-    acquisition.release();
-    await outcome;
-    if (worker && worker.threadId !== -1) {
-      await worker.terminate();
-    }
-    await joined;
-    if (sibling?.isOpen) {
-      sibling.close();
-    }
-    retireSqliteDatabaseAdmissionForPath(location);
-    // A broken baseline can leave this exact acquired fd orphaned after all native users joined.
-    if (physical && acquisition.descriptor !== undefined) {
-      let live = false;
-      try {
-        assertDatabaseFileIdentity(
-          fs.fstatSync(acquisition.descriptor, { bigint: true }),
-          physical,
-        );
-        live = true;
-      } catch (error) {
-        if (!hasErrnoCode(error, "EBADF")) throw error;
-      }
-      if (live) fs.closeSync(acquisition.descriptor);
-    }
+    },
+  );
+  exited = once(worker, "exit");
+  joined = Promise.allSettled([exited]);
+  expect((await withinTest(once(worker, "message"), signal))[0]).toEqual({
+    descriptor: record.descriptor,
+    custody: record.descriptorCustody.id,
+  });
+  acquisition.release();
+  await withinTest(prepared, signal);
+  expect(state.registry.forLocation(location)).toBe(record);
+  expect(fs.fstatSync(record.descriptor).isFile()).toBe(true);
+  expect(fs.fstatSync(acquisition.descriptor).isFile()).toBe(true);
+  sibling.close();
+  worker.postMessage("retire", []);
+  expect(await withinTest(exited, signal)).toEqual([0]);
+  expect(isSqliteDescriptorCustodyClosed(record.descriptorCustody)).toBe(true);
+  expect(read()).toBeUndefined();
+  for (const descriptor of [record.descriptor, acquisition.descriptor]) {
+    expect(() => fs.fstatSync(descriptor)).toThrow(expect.objectContaining({ code: "EBADF" }));
   }
+  state.registry.publish();
+  expect(state.registry.descriptors.has(record.identity)).toBe(false);
 });

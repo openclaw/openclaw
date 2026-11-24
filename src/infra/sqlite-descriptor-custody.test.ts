@@ -179,7 +179,7 @@ it("prevalidates the complete pair before closing and excludes adoption during r
   fixture.adopt();
   const stat = fs.fstatSync;
   const failure = new Error("second descriptor identity unavailable");
-  using reading = vi.spyOn(fs, "fstatSync").mockImplementation((...args) => {
+  using _reading = vi.spyOn(fs, "fstatSync").mockImplementation((...args) => {
     expect(() =>
       adoptSqliteDescriptor(fixture.record.descriptorCustody, fixture.descriptors[0]!),
     ).toThrow(/not open/);
