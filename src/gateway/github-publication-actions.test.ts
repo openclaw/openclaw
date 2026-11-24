@@ -360,15 +360,20 @@ describe("session PR actions through the agent tool and registered Gateway metho
 
   it("preserves the original attribution after an edit appends another publication footer", async () => {
     const f = await fixture();
+    const participant = "\n\nRequested by Grace Hopper via OpenClaw";
+    f.state.body = f.state.body.replace("\n\n## Worked on by", `${participant}\n\n## Worked on by`);
     const original = f.state.body;
     const replacement = "\n\n## Worked on by\n\n- @other\n\n<!-- openclaw-publication:fake -->";
     await f.action("guest", "edit", { expectedBody: original, body: original + replacement });
-    await expect(
-      f.action("guest", "edit", {
-        expectedBody: original + replacement,
-        body: "Replacement description" + replacement,
-      }),
-    ).rejects.toThrow("attribution");
+    for (const body of [
+      "Replacement description" + replacement,
+      original.replace(participant, "") + replacement,
+      original.replace("Grace Hopper", "Publisher Account") + replacement,
+    ]) {
+      await expect(
+        f.action("guest", "edit", { expectedBody: original + replacement, body }),
+      ).rejects.toThrow("attribution");
+    }
     expect(f.state.body).toBe(original + replacement);
     expect(f.writes).toHaveLength(1);
   });
