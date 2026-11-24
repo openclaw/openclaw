@@ -19,6 +19,8 @@ export type SplitTalkOptions = {
   maxTextLength?: number;
 };
 
+const sentenceSegmenter = new Intl.Segmenter(undefined, { granularity: "sentence" });
+
 /** Split Talk uses the same capture, chat, and speech owners as the composer. */
 export class SplitTalkTransport implements RealtimeTalkTransport {
   private capture: ComposerDictationSession | null = null;
@@ -92,19 +94,7 @@ export class SplitTalkTransport implements RealtimeTalkTransport {
       }
       this.capture = null;
       if (text) {
-        const answer = await this.send(text);
-        if (this.closed) {
-          return;
-        }
-        if (answer) {
-          await this.options.playback.speak(
-            this.client,
-            answer,
-            this.options.speechMethod,
-            () => !this.closed,
-            this.options.maxTextLength,
-          );
-        }
+        await this.speakReply(text);
       }
       await this.listen();
     } catch (error) {
@@ -112,17 +102,79 @@ export class SplitTalkTransport implements RealtimeTalkTransport {
     }
   }
 
-  private async send(message: string): Promise<string> {
+  private async speakReply(message: string): Promise<void> {
+    let output!: ReadableStreamDefaultController<string>;
+    const sentences = new ReadableStream<string>({
+      start(controller) {
+        output = controller;
+      },
+    });
+    let prefix = "";
+    const enqueue = (text: string, final: boolean) => {
+      if (this.closed) {
+        return;
+      }
+      if (!text.startsWith(prefix)) {
+        if (!final) {
+          return; // Wait for the authoritative reply after a rewrite.
+        }
+        // Keep only the complete sentences that still agree with the final reply.
+        let unchanged = 0;
+        for (const { index, segment } of sentenceSegmenter.segment(text)) {
+          if (prefix.slice(index, index + segment.length) !== segment) {
+            break;
+          }
+          unchanged = index + segment.length;
+        }
+        prefix = text.slice(0, unchanged);
+      }
+      const remainder = text.slice(prefix.length);
+      for (const { index, segment } of sentenceSegmenter.segment(remainder)) {
+        if (!final && index + segment.length === remainder.length) {
+          break; // The next snapshot can still extend the trailing segment.
+        }
+        prefix += segment;
+        if (segment.trim()) {
+          output.enqueue(segment.trim());
+        }
+      }
+    };
+    const reply = this.send(message, (text) => enqueue(text, false)).then((answer) => {
+      enqueue(answer, true);
+      output.close();
+    });
+    await Promise.all([
+      reply,
+      this.options.playback.speak(
+        this.client,
+        sentences,
+        this.options.speechMethod,
+        () => !this.closed,
+        this.options.maxTextLength,
+      ),
+    ]);
+  }
+
+  private async send(message: string, onDelta: (text: string) => void): Promise<string> {
     const runId: string = crypto.randomUUID();
     this.runId = runId;
     const controller = new AbortController();
     this.chatAbort = controller;
+    let admitted = false;
+    let earlyDelta = "";
     const waiting = {
       client: this.client,
       runId,
       timeoutMs: 120_000,
       timeoutMessage: t("chat.voice.replyTimedOut"),
       signal: controller.signal,
+      onDelta: (text: string) => {
+        if (admitted) {
+          onDelta(text);
+        } else {
+          earlyDelta = text;
+        }
+      },
     };
     // A terminal event can precede the admission ACK; subscribe before sending.
     const answer = waitForChatResult(waiting);
@@ -140,6 +192,10 @@ export class SplitTalkTransport implements RealtimeTalkTransport {
       }
       waiting.runId = ack.runId;
       this.runId = ack.runId;
+      admitted = true;
+      if (ack.runId === runId && earlyDelta) {
+        onDelta(earlyDelta);
+      }
       const result = await answer;
       this.runId = undefined;
       return result;

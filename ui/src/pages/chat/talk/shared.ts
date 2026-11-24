@@ -165,6 +165,7 @@ export function waitForChatResult(params: {
   timeoutMs: number;
   timeoutMessage?: string;
   signal?: AbortSignal;
+  onDelta?: (text: string) => void;
 }): Promise<string> {
   return new Promise((resolve, reject) => {
     if (params.signal?.aborted) {
@@ -237,7 +238,9 @@ export function waitForChatResult(params: {
       if (!payload || payload.runId !== params.runId) {
         return;
       }
-      if (payload.state === "final") {
+      if (payload.state === "delta") {
+        params.onDelta?.(extractTextFromMessage(payload.message));
+      } else if (payload.state === "final") {
         const finalText = extractTextFromMessage(payload.message);
         if (finalText) {
           settle(finalText);
