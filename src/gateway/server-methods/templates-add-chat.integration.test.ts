@@ -20,7 +20,6 @@ import { readPersistedInstalledPluginIndexInstallRecordsAsync } from "../../plug
 import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.js";
 import { ClawHubSourceError } from "../../templates/clawhub-source-artifact.js";
 import type { withResolvedClawHubSource } from "../../templates/clawhub-source.js";
-import { buildTemplateOpeningMessage } from "../../templates/setup-prompt.js";
 import {
   withOpenClawTestState,
   type OpenClawTestState,
@@ -322,6 +321,14 @@ it("keeps chat setup retryable when the opening lists zero jobs and replies succ
       initializationPending: true,
       error: { code: "template_automations_incomplete" },
     });
+    // The retried opening is handed the declared automation in the original Add's zone.
+    const retried = greeting.mock.calls.at(-1)![4] as string;
+    expect(retried).toContain(
+      '"schedule":{"kind":"cron","expr":"0 17 * * 5","tz":"America/New_York"}',
+    );
+    expect(retried).toContain("is kept exactly as it is");
+    expect(retried).not.toContain("Asia/Tokyo");
+    expect(retried).not.toContain('"action":"list","includeDisabled":true');
     expect((await readSessionEntryReadOnlyInWorker(scope))?.templateSetup).toMatchObject({
       requiredAutomationIds: ["weekly-digest"],
       deviceTimeZone: "America/New_York",
@@ -617,13 +624,15 @@ it("creates the Template's agent without a plan and reports dependencies after i
       "travel-copilot",
       sessionKey,
       "template",
-      buildTemplateOpeningMessage(
-        { report: { failures: [], mcpServers: [] }, dependenciesPending: true },
-        { agentId: "travel-copilot", sessionKey },
-      ),
+      expect.any(String),
       expect.any(Function),
       expect.any(Function),
     ]);
+    // The opening carries what the manifest declares, so the turn needs no manifest read.
+    const opening = greeting.mock.calls[0]![4] as string;
+    expect(opening).toContain("The Gateway is still installing declared skills");
+    expect(opening).toContain("@expediagroup/expedia-openclaw");
+    expect(opening).not.toContain('"action":"list","includeDisabled":true');
     expect(atGreeting.pending).toBeUndefined();
     // Dependencies wait for the opening turn's first model request, so the greeting
     // is not prepared while installers hold the Gateway's main thread.
@@ -712,7 +721,8 @@ it.each([false, true])(
         : JSON.stringify(dependencyReport.mock.calls.at(-1)![2]);
       expect(prompt).toContain("search");
       if (retry) {
-        expect(prompt).toContain('"tz":"<schedule.timezone>"');
+        // This release declares no automations, so the opening has nothing to schedule.
+        expect(prompt).not.toContain('"action":"add"');
         expect(prompt).not.toContain("Asia/Tokyo");
       }
       const report = (
@@ -914,11 +924,11 @@ it("retries only the hidden setup after a failed first turn, preserving files an
     expect(greeting).toHaveBeenCalledTimes(2);
     expect(firstPrompt).toContain("still installing declared");
     for (const prompt of [firstPrompt, greeting.mock.calls[1]![4]]) {
-      expect(prompt).toContain(
-        '"schedule":{"kind":"cron","expr":"<schedule.cron>","tz":"America/New_York"}',
-      );
+      // This release declares no automations: nothing to schedule, list, or skip.
+      expect(prompt).not.toContain('"action":"add"');
+      expect(prompt).not.toContain('"action":"list","includeDisabled":true');
       expect(prompt).not.toContain("Asia/Tokyo");
-      expect(prompt).toContain("do not add or update that one, including user-enabled jobs");
+      expect(prompt).toContain('"packageName":"@expediagroup/expedia-openclaw"');
     }
     expect(await fs.readFile(path.join(workspace, "CLAW.md"))).toEqual(
       await fs.readFile(path.join(gateway.root, "CLAW.md")),
