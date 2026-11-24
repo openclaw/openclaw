@@ -83,7 +83,6 @@ export function bindApprovalRequesterMetadata<TPayload>(params: {
   const authority = params.client?.internal?.operatorRunAuthority ?? caller?.operatorAuthority;
   if (authority) {
     assertAdmittedRunOperatorAuthority(authority);
-    authority.assertCurrent();
   }
   const runtime = params.client?.internal?.agentRuntimeIdentity;
   // Runtime routing and spawn identities are host-captured and authenticated, never wire params.

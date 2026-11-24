@@ -340,17 +340,13 @@ it.each([
   ["channel-owner", false],
   ["control-ui-admin", false],
 ] as const)("retains %s across yields with plugin owner=%s", async (source, hasOwner) => {
-  let current = true;
   const owner = {
-    isCurrent: () => current,
     senderId: "original-owner",
     channel: "discord",
     accountId: "original-account",
   };
-  const entitlement =
-    source === "channel-owner" ? { source, isCurrent: owner.isCurrent } : { source };
   const batch = await capture("owner-source", 1, {
-    managementEntitlement: entitlement,
+    managementEntitlement: { source },
     requesterOwner: hasOwner ? owner : undefined,
   });
   let retained: ReturnType<typeof cronContext.bindRequesterOwnerIdentity>;
@@ -369,10 +365,6 @@ it.each([
         channel: "discord",
         accountId: "original-account",
       });
-      expect(retained?.isCurrent()).toBe(true);
-      current = false;
-      expect(() => retained?.assertCurrent()).toThrow("owner identity");
-      current = true;
       expect(retained?.isCurrent()).toBe(true);
     } else {
       expect(retained).toBeUndefined();
@@ -395,20 +387,7 @@ it.each([
     const second = consume(next)!;
     expect(second.callerOrigin).toEqual({ kind: "unknown" });
     expect(second.isCurrent()).toBe(true);
-    if (source === "channel-owner") {
-      current = false;
-      expect(second.isCurrent()).toBe(false);
-    }
   });
-});
-
-it("rejects an owner revoked before dispatch", async () => {
-  let current = true;
-  const batch = await capture("owner-original", 1, {
-    managementEntitlement: { source: "channel-owner", isCurrent: () => current },
-  });
-  current = false;
-  await dispatch(batch, async () => expect(consume(batch)).toBeUndefined());
 });
 
 it.each([false, true])(

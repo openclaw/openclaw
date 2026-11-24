@@ -252,7 +252,6 @@ test.each<[string, string, string, SelectionOptions]>([
             ? createTestOperatorAuthority({
                 profileId: "limited-operator",
                 scopes: ["operator.write"],
-                assertCurrent: () => {},
                 modelPolicy: prepareOperatorModelPolicy({ cfg, policy: { sourceAgent: "main" } }),
               })
             : undefined,

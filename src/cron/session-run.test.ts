@@ -138,7 +138,6 @@ function restoredSource(): RestoredGatewayOperatorAuthority {
     authority: createTestOperatorAuthority({
       profileId: "requester",
       scopes: ["operator.read"],
-      assertCurrent() {},
     }),
     authenticatedUserProfile: {
       profileId: "requester",

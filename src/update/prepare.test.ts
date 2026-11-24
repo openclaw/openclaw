@@ -507,12 +507,15 @@ describe("package release conversion", () => {
   });
 
   it.each([
-    { releaseAware: true, runtime: "node" },
-    { releaseAware: false, runtime: "node" },
-    { releaseAware: true, runtime: "bun" },
-  ])(
-    "prepares a $runtime package with release support $releaseAware",
-    async ({ releaseAware, runtime }) => {
+    { releaseAware: true, runtime: "node", build: undefined },
+    { releaseAware: false, runtime: "node", build: undefined },
+    { releaseAware: true, runtime: "bun", build: undefined },
+    // An explicit artifact rebuilt at the installed version is still a new release.
+    { releaseAware: true, runtime: "node", build: "rebuilt" },
+    { releaseAware: true, runtime: "node", build: "installed" },
+  ] as const)(
+    "prepares a $runtime package with release support $releaseAware (build: $build)",
+    async ({ releaseAware, runtime, build }) => {
       vi.stubEnv("OPENCLAW_STATE_DIR", path.join(root, "state"));
       const runningRoot = path.join(root, "global", "node_modules", "openclaw");
       await fs.mkdir(path.join(runningRoot, "dist"), { recursive: true });
@@ -537,6 +540,16 @@ if (!(await forwardToReleaseLauncher(new URL('${relative}', import.meta.url)))) 
         for (const name of ["check-release", "gateway-trial"]) {
           await fs.writeFile(path.join(packedRoot, "dist", `${name}-fixture.mjs`), "");
         }
+      }
+      if (build) {
+        await fs.writeFile(
+          path.join(runningRoot, "dist", "build-info.json"),
+          '{"buildId":"2026.11.21-installed"}',
+        );
+        await fs.writeFile(
+          path.join(packedRoot, "dist", "build-info.json"),
+          JSON.stringify({ buildId: `2026.11.21-${build}` }),
+        );
       }
       await fs.writeFile(
         path.join(packedRoot, "package.json"),
@@ -638,6 +651,21 @@ if (process.argv[2] !== 'install') {
             {
               code: "ENOENT",
             },
+          );
+          expect(serviceConversion.stageReleaseService).not.toHaveBeenCalled();
+          return;
+        }
+        if (build === "installed") {
+          // The installed build again: nothing is published and the serving install is untouched.
+          expect(outcome).toMatchObject({ status: "current", version: "2026.11.21" });
+          expect(await getUpdateRunAsync(run.runId)).toMatchObject({
+            status: "skipped",
+            reason: "already-current",
+          });
+          expect(await readTrial(prefix)).toBeNull();
+          expect(await fs.readdir(path.join(prefix, "releases"))).toEqual([]);
+          await expect(fs.stat(path.join(runningRoot, ".openclaw-launcher"))).rejects.toMatchObject(
+            { code: "ENOENT" },
           );
           expect(serviceConversion.stageReleaseService).not.toHaveBeenCalled();
           return;

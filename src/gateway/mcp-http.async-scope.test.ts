@@ -467,7 +467,7 @@ it("keeps requester grant minting at execution when management needs a construct
     const redeemed = consumeCronCreatorAuthorityGrant(grant);
     expect(redeemed.authority).toBeUndefined();
     redeemed.assertCurrent();
-    expect(() => consumeCronCreatorAuthorityGrant(grant)).toThrow(/no longer active/);
+    expect(() => consumeCronCreatorAuthorityGrant(grant)).toThrow(/access has ended/);
     return completed;
   });
   await runWithCronCreatorAuthorityCapability(scope, async () => {

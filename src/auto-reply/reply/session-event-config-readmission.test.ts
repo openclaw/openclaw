@@ -298,7 +298,6 @@ it("finalizes a failed-before-reply event after its visitor policy scope closes"
         profileId: "visitor",
         scopes: ["operator.write"],
         signal: access.signal,
-        assertCurrent: access.assertCurrent,
       });
       runEmbeddedAgentMock.mockReset().mockImplementation(async (params) => {
         await startEmbeddedTurn(params, "reply admission");
@@ -461,11 +460,6 @@ it.for([
             ? createTestOperatorAuthority({
                 profileId: "original-guest",
                 scopes: ["operator.write"],
-                assertCurrent() {
-                  if (sourceReferences === 0) {
-                    throw new Error("original source released");
-                  }
-                },
                 retain() {
                   sourceReferences++;
                   return () => {

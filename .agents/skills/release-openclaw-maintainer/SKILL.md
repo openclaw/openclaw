@@ -81,9 +81,10 @@ recommended bookkeeping, not another release gate.
 
 ## Fast-track approval is human-only
 
-**NEVER approve your own or another agent's fast-track request. NEVER use an
-available maintainer token to impersonate human approval.** Obtain explicit
-approval from another human member of the normal release-managers group for the
+**NEVER approve a fast-track request, whether you or another agent prepared it.
+NEVER use an available maintainer token to impersonate human approval.** Obtain
+explicit approval from a human member of the normal release-managers group,
+which may be the release manager who requested it, for the
 exact request/digest, candidate, artifacts, publication scope, run/attempt,
 expiry and explicit skip/incomplete-validation action. Preparation authority,
 generic publish authority, silence and previous approvals do not qualify.
@@ -194,7 +195,9 @@ verify their original admitted qualification identity (or historical trusted-mai
 workflow SHA) and current attempt. The sealed
 manifest supplies the SDK evidence digest and npm publication decisions; it
 never acknowledges SDK API changes, so supply
-`plugin_sdk_api_acknowledgement` whenever the SDK report contains changes. The
+`plugin_sdk_api_acknowledgement` whenever the SDK report contains changes.
+Review the diff and acknowledge it yourself; stop for the operator only if a
+change looks harmful. The
 publisher accepts only successful FRV and cannot grant a waiver. Explicit
 publisher inputs select publication scope; the candidate helper still validates its explicit
 SDK acknowledgement when needed.

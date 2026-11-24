@@ -84,7 +84,6 @@ function operatorSource(
   return createTestOperatorAuthority({
     profileId: "compaction-source",
     scopes: ["operator.write"],
-    assertCurrent: () => {},
     modelPolicy: prepareOperatorModelPolicy({
       cfg: restrictedConfig,
       policy: {},

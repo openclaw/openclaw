@@ -230,6 +230,7 @@ export function prepareNodeTestVolumes(context: NodeTestVolumeContext) {
       { ...context.environment, ...group.env },
       context.runtimePolicy,
       targets ? { targets } : group,
+      owned,
     );
   };
   const environmentFor = (group: NodeTestShardGroup) =>
@@ -4646,6 +4647,7 @@ export function createSelectedNodeTestShardBundles(
         ...group,
         configs: selectedConfigs,
         includePatterns,
+        pretestBuildMode: resolveTestFilesBuildMode(includePatterns),
         timing_key: timingKeys[0]!,
       };
       groupSeconds.set(projectedGroup, selectedSeconds);
@@ -4663,17 +4665,26 @@ export function createSelectedNodeTestShardBundles(
     ) {
       delete env.OPENCLAW_VITEST_MAX_WORKERS;
     }
+    const pretestBuildMode = mergeVitestPretestBuildModes(
+      groups.map((group) => group.pretestBuildMode),
+    );
+    // The whole-config timeout belongs to an unselected whole group; exact files keep the default.
+    const { timeoutMinutes, ...job } = shard;
+    const keepsTimeout =
+      timeoutMinutes !== COMPACT_WHOLE_NODE_TEST_TIMEOUT_MINUTES ||
+      groups.some((group) => !group.includePatterns);
     return groups.length
       ? [
           {
-            ...shard,
+            ...job,
+            ...(keepsTimeout && timeoutMinutes !== undefined ? { timeoutMinutes } : {}),
             env: Object.keys(env).length > 0 ? env : undefined,
             checkName: `checks-node-changed-${shard.shardName}`,
             shardName: `changed-${shard.shardName}`,
             groups,
+            pretestBuildMode,
             predictedSeconds: Math.ceil(
-              retainedSeconds +
-                compactPreparationSeconds(shard.pretestBuildMode, options.runnerBackend),
+              retainedSeconds + compactPreparationSeconds(pretestBuildMode, options.runnerBackend),
             ),
           },
         ]
