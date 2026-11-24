@@ -108,7 +108,7 @@ it.each(["native", "worker"] as const)(
               database.db,
               getSessionKysely(database.db)
                 .selectFrom("session_pending_inputs")
-                .select(["input_id", "state", "end_cause"])
+                .select(["input_id", "state", "end_cause", "message_json"])
                 .orderBy("input_id"),
             ).rows,
           scope,
@@ -169,6 +169,9 @@ it.each(["native", "worker"] as const)(
             row.input_id.startsWith("own-") || /^child-(downgrade|remove)$/.test(row.input_id);
           expect(row.state).toBe(retired ? "cancelled" : "queued");
           expect(row.end_cause).toBe(retired ? "revoked" : null);
+          expect(JSON.parse(row.message_json)["__openclaw"]?.participationRevoked).toBe(
+            retired || undefined,
+          );
         }
       }
     });

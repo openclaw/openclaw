@@ -686,6 +686,7 @@ describe("saved message attachment response authority", () => {
         __openclaw: {
           media: [{ url: source, contentType: "text/plain" }],
           requesterOrigin: { sessionKey: scope.sessionKey, operatorProfileId },
+          participationRevoked: true,
         },
       },
     }))!;

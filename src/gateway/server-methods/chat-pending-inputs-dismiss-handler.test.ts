@@ -58,6 +58,7 @@ async function fixture() {
             ? {
                 __openclaw: {
                   requesterOrigin: { sessionKey: scope.sessionKey, operatorProfileId: authorId },
+                  participationRevoked: true,
                 },
               }
             : {}),

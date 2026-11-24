@@ -12,6 +12,7 @@ import {
   writableSessionActorMap,
 } from "./session-actor-transaction.js";
 import { matchesSessionParticipationRevocation } from "./session-participation-source.js";
+import { markParticipationRevokedMessageJson } from "./session-pending-input-audience.js";
 
 /** A committed reduction retires persisted input custody before a re-invitation can occur. */
 export function revokeSessionParticipationQueueInTransaction(
@@ -44,7 +45,12 @@ export function revokeSessionParticipationQueueInTransaction(
     if (ceiling?.kind !== "send" || !matchesSessionParticipationRevocation(ceiling, target)) {
       continue;
     }
-    const changes = { state: "cancelled", end_cause: "revoked", origin_source_json: null };
+    const changes = {
+      state: "cancelled",
+      end_cause: "revoked",
+      origin_source_json: null,
+      message_json: markParticipationRevokedMessageJson(row.message_json),
+    };
     withSqliteDatabaseWriteScope(
       database.db,
       [row.session_key, sqliteSessionIdWriteScope(row.session_id)],
