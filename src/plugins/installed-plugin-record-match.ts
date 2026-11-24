@@ -8,7 +8,7 @@ import {
 } from "./candidate-install-owner.js";
 import { isConversationAccessAccepted } from "./capability-summary.js";
 import type { PluginCandidate } from "./discovery.js";
-import { isImmutableGitCommitRef, parseGitPluginSpec } from "./install-source-spec.js";
+import { isImmutableGitCommitRef, parseGitPluginSpec } from "./git-source-spec.js";
 import {
   isThirdPartyNpmInstallRecord,
   isTrustedOfficialPluginInstallRecord,

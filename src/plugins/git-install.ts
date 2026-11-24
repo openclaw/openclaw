@@ -22,6 +22,7 @@ import {
 } from "../infra/safe-package-install.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { resolveUserPath } from "../utils.js";
+import { isImmutableGitCommitRef, parseGitPluginSpec } from "./git-source-spec.js";
 import { resolveDefaultPluginGitDir } from "./install-paths.js";
 import {
   preflightPluginGitInstallPolicy,
@@ -32,7 +33,6 @@ import {
   loadPluginInstallRuntime,
   reportBlockedPluginInstall,
 } from "./install-shared.js";
-import { isImmutableGitCommitRef, parseGitPluginSpec } from "./install-source-spec.js";
 import {
   attachPluginInstallTransaction,
   resolvePluginInstallTransactionRequest,

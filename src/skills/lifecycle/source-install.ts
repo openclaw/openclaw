@@ -10,8 +10,8 @@ import { acquireGitSource } from "../../infra/git-source.js";
 import { sanitizeHostExecEnv } from "../../infra/host-env-security.js";
 import { withInstallWorkspace } from "../../infra/install-source-utils.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { isImmutableGitCommitRef, parseGitPluginSpec } from "../../plugins/git-source-spec.js";
 import type { InstallSafetyOverrides } from "../../plugins/install-security-scan.types.js";
-import { isImmutableGitCommitRef, parseGitPluginSpec } from "../../plugins/install-source-spec.js";
 import { resolveUserPath } from "../../utils.js";
 import {
   loadSingleSkillDirectory,

@@ -49,7 +49,7 @@ vi.mock("./install-security-scan.js", async () => {
 vi.resetModules();
 
 const { installPluginFromGitSpec } = await import("./git-install.js");
-const { parseGitPluginSpec } = await import("./install-source-spec.js");
+const { parseGitPluginSpec } = await import("./git-source-spec.js");
 const { onInternalDiagnosticEvent } = await import("../infra/diagnostic-events.js");
 const install = (options: Partial<Parameters<typeof installPluginFromGitSpec>[0]> = {}) =>
   installPluginFromGitSpec({ spec: demoSpec, ...options });
