@@ -2,7 +2,7 @@
 
 import type { JSX } from "@solidjs/web";
 import { createSignal, flush } from "solid-js";
-import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { afterEach, assert, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { t } from "../../i18n/index.ts";
 import { installDialogPolyfill } from "../../test-helpers/modal-dialog.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
@@ -70,6 +70,7 @@ it.each([false, true])("collapses a replacement diagnostic (mobile=%s)", async (
   );
   await vi.dynamicImportSettled();
   const toggle = await waitForElement(container, ".chat-error__toggle", "first diagnostic");
+  assert(toggle instanceof HTMLButtonElement);
   toggle.click();
   await waitForSolid(() => expect(toggle.getAttribute("aria-expanded")).toBe("true"));
   publish({ messages: [], runError: { summary: "Second diagnostic" } });
@@ -366,6 +367,7 @@ describe("chat view notice integration", () => {
           source === "run" ? ".chat-error__details" : "details",
           "error disclosure",
         );
+        assert(details instanceof HTMLElement);
         expect(source === "run" ? details.hidden : !details.hasAttribute("open")).toBe(true);
         const fullDiagnostic = requireElement(
           details,
@@ -382,6 +384,7 @@ describe("chat view notice integration", () => {
           source === "run" ? ".chat-error__toggle" : "summary",
           "error header",
         );
+        assert(summary instanceof HTMLElement);
         expect(summary.textContent).toContain("Show details");
         expect(summary.textContent).not.toContain("Error details");
         expect(alert.querySelectorAll(".chat-copy-btn")).toHaveLength(1);
@@ -398,7 +401,7 @@ describe("chat view notice integration", () => {
           expect(writeText).toHaveBeenLastCalledWith(diagnostic);
           expect(source === "run" ? !details.hidden : details.hasAttribute("open")).toBe(open);
         }
-        (summary as HTMLElement).click();
+        summary.click();
         expect(onDismissError).not.toHaveBeenCalled();
         expect(onRetrySessionPlacementStartup).not.toHaveBeenCalled();
         expect(

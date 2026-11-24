@@ -332,8 +332,8 @@ suite.define(() => {
       .locator(".app-toast__description")
       .getByText("Check the conversation before trying again.", { exact: true })
       .waitFor();
-    expect(await failedAlert.locator("details").getAttribute("open")).toBeNull();
-    await failedAlert.locator("summary").click();
+    expect(await failedAlert.getByLabel("Error details", { exact: true }).isVisible()).toBe(false);
+    await failedAlert.getByRole("button", { name: "Show details", exact: true }).click();
     await failedAlert.getByLabel("Error details", { exact: true }).waitFor();
     expect(await failedAlert.getByLabel("Error details", { exact: true }).textContent()).toContain(
       renderedDiagnostic,

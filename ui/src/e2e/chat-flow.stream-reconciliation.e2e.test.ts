@@ -350,7 +350,7 @@ suite.define(() => {
         .locator(".app-toast__description")
         .getByText("Check the conversation before trying again.", { exact: true })
         .waitFor();
-      await failure.locator("summary").click();
+      await failure.getByRole("button", { name: "Show details", exact: true }).click();
       const details = failure.getByLabel("Error details", { exact: true });
       await details.waitFor();
       expect(await details.textContent()).toContain(errorMessage);

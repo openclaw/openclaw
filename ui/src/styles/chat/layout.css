@@ -29,52 +29,16 @@ openclaw-pending-session-create {
   grid-column: 1;
 }
 
-.chat-error .app-toast__body > .lazy-view-error__details {
+.chat-error .lazy-view-error__details {
   grid-column: 1 / -1;
 }
 
 .chat-error .chat-error__actions {
   grid-template-rows: subgrid;
   grid-row: 1 / span 2;
-  gap: 2px;
+  row-gap: 2px;
   grid-column: 2;
   margin-block-start: -4px;
-}
-
-.chat-error--reply .chat-error__actions {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.chat-error__toggle {
-  gap: 6px;
-}
-
-.chat-error__toggle svg {
-  width: 14px;
-  height: 14px;
-}
-
-.chat-error__details {
-  grid-column: 1 / -1;
-  margin-block-start: 10px;
-  padding: 12px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  background: var(--bg);
-}
-
-.chat-error__details-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-block-end: 8px;
-  color: var(--muted);
-}
-
-.chat-error__details > .report-issue-link {
-  margin-block-start: 12px;
 }
 
 /* Keep paired reply actions and long discard labels below the message on phones. */

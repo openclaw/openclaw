@@ -261,11 +261,14 @@ suite.define(() => {
           await alert.waitFor({ timeout: 10_000 });
           expect(await alert.textContent()).toContain("provider reported lease destroyed");
           expect(await alert.textContent()).not.toContain("stale terminal worker failure");
-          const summary = alert.locator("summary");
+          const toggle =
+            failedState === "request"
+              ? alert.locator("summary")
+              : alert.getByRole("button", { name: "Show details", exact: true });
           const copy = alert.getByRole("button", { name: "Copy error", exact: true });
           const diagnostic = alert.locator(".lazy-view-error__detail");
           const expected = `${failedState === "request" ? "" : "Couldn’t continue this session. Check its device and try again. "}${workerFailureDiagnostic}`;
-          expect(await summary.count()).toBe(1);
+          expect(await toggle.count()).toBe(1);
           expect(await diagnostic.isVisible()).toBe(false);
           for (const width of [1440, 320]) {
             await page.setViewportSize({ width, height: width === 320 ? 568 : 900 });
@@ -283,7 +286,7 @@ suite.define(() => {
                 )
                 .toBe(true);
             }
-            await summary.press("Enter");
+            await toggle.press("Enter");
             await diagnostic.waitFor({ state: "visible" });
             expect(await diagnostic.textContent()).toBe(expected);
             expect(await alert.locator("img").count()).toBe(0);
@@ -298,10 +301,19 @@ suite.define(() => {
             expect(Math.min(...bounds.edges)).toBeGreaterThanOrEqual(0);
             expect(bounds.overflowX).toBeLessThanOrEqual(1);
             expect(bounds.overflowY).toBeGreaterThan(0);
-            await page.keyboard.press("Tab");
-            expect(await diagnostic.evaluate((node) => node === document.activeElement)).toBe(true);
-            await page.keyboard.press("Tab");
-            expect(await copy.evaluate((node) => node === document.activeElement)).toBe(true);
+            const focusOrder =
+              failedState === "request"
+                ? [diagnostic, copy]
+                : [
+                    alert.getByRole("button", { name: "Refresh", exact: true }),
+                    copy,
+                    diagnostic,
+                    alert.getByRole("link", { name: "Report a bug", exact: true }),
+                  ];
+            for (const target of focusOrder) {
+              await page.keyboard.press("Tab");
+              expect(await target.evaluate((node) => node === document.activeElement)).toBe(true);
+            }
             await page.keyboard.press("Shift+Tab");
             await page.keyboard.press("PageDown");
             await expect
@@ -325,7 +337,7 @@ suite.define(() => {
               window.getSelection()?.removeAllRanges();
               node.scrollTop = node.scrollHeight;
             });
-            await summary.press("Space");
+            await toggle.press("Space");
             await expect.poll(() => diagnostic.isVisible()).toBe(false);
             await alert
               .getByRole("button", { name: "Copy error", exact: true, includeHidden: true })

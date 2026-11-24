@@ -239,7 +239,7 @@ export function ToastNotice(props: {
             {copy().description ? (
               <span class="app-toast__description">{formatUiExternalText(copy().description)}</span>
             ) : undefined}
-            {props.detailContent ?? (
+            {props.detailContent ? undefined : (
               <Show when={toast()} keyed>
                 {(options) => (
                   <ErrorDetails
@@ -291,6 +291,7 @@ export function ToastNotice(props: {
               </button>
             )
           ) : undefined}
+          {props.detailContent}
         </div>
         <Show when={props.onDismiss}>
           <button

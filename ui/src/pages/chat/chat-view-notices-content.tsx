@@ -347,17 +347,17 @@ function ChatErrorNotice(props: {
   const inlineDetails = () => props.replyActions && toast().detail !== undefined;
   // The toast reads its action for presence and rendering; retain one DOM slot.
   const actions = (
-    <div class="stack chat-error__actions">
+    <div class={["chat-error__actions", props.replyActions ? "row" : "stack"]}>
       <Show when={inlineDetails()}>
         <button
-          class="app-toast__action chat-error__toggle"
+          class="app-toast__action row chat-error__toggle"
           type="button"
           aria-expanded={expanded() ? "true" : "false"}
           aria-controls={detailsId}
           onClick={() => setExpanded((value) => !value)}
         >
           {t("common.showDetails")}
-          <Icon name={expanded() ? "chevronUp" : "chevronDown"} />
+          <Icon name={expanded() ? "chevronUp" : "chevronDown"} class="lazy-view-error__chevron" />
         </button>
       </Show>
       {props.action}
@@ -368,19 +368,25 @@ function ChatErrorNotice(props: {
   );
   const detailContent = (
     <Show when={inlineDetails()}>
-      <div class="chat-error__details" id={detailsId} hidden={!expanded()}>
-        <div class="chat-error__details-header">
-          <span>{t("chat.errorDetails")}</span>
-          <CopyButton
-            text={formatUiErrorDetails(props.detail ?? props.error)}
-            idleLabel={t("chat.copyError")}
-            iconFeedback
-          />
+      <div class="lazy-view-error__details chat-error__details" id={detailsId} hidden={!expanded()}>
+        <div class="callout lazy-view-error__well">
+          <div class="stack callout__content">
+            <div class="row chat-error__details-header">
+              <span class="callout__content">{t("chat.errorDetails")}</span>
+              <CopyButton
+                text={formatUiErrorDetails(props.detail ?? props.error)}
+                idleLabel={t("chat.copyError")}
+                iconFeedback
+              />
+            </div>
+            <code class="lazy-view-error__detail" tabindex={0} aria-label={t("chat.errorDetails")}>
+              {formatUiErrorDetails(toast().detail)}
+            </code>
+            <span>
+              <ReportIssueLink />
+            </span>
+          </div>
         </div>
-        <code class="lazy-view-error__detail" tabindex={0} aria-label={t("chat.errorDetails")}>
-          {formatUiErrorDetails(toast().detail)}
-        </code>
-        <ReportIssueLink />
       </div>
     </Show>
   );
