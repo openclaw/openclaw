@@ -230,6 +230,7 @@ export function prepareNodeTestVolumes(context: NodeTestVolumeContext) {
       { ...context.environment, ...group.env },
       context.runtimePolicy,
       targets ? { targets } : group,
+      owned,
     );
   };
   const environmentFor = (group: NodeTestShardGroup) =>
