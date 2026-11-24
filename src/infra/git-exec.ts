@@ -153,6 +153,7 @@ function gitExecutionArgv(
 export type GitCommandOptions = Pick<
   CommandOptions,
   | "timeoutMs"
+  | "noOutputTimeoutMs"
   | "baseEnv"
   | "env"
   | "input"

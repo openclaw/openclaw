@@ -54,3 +54,30 @@ it("clones into a genuinely missing target", async () => {
 
   await expect(fs.readFile(path.join(target, "README.md"), "utf8")).resolves.toBe("cloned project");
 });
+
+it.each(["timeout", "no-output-timeout"] as const)(
+  "separates an absolute clone deadline from a stalled transfer (%s)",
+  async (termination) => {
+    const target = path.join(dirs.make("openclaw-clone-deadline-"), "checkout");
+    const command = vi.spyOn(processExec, "runCommandWithTimeout").mockResolvedValue({
+      code: null,
+      stdout: "",
+      stderr: "",
+      termination,
+      signal: null,
+      killed: true,
+    });
+    await expect(
+      cloneProjectCheckout({ url: "https://github.com/example/project.git", target }),
+    ).rejects.toMatchObject({
+      failure: termination === "timeout" ? "clone_failed" : "network",
+      message: expect.stringContaining(
+        termination === "timeout" ? "did not finish within 30 minutes" : "could not reach GitHub",
+      ),
+    });
+    expect(command).toHaveBeenCalledWith(
+      expect.arrayContaining(["clone", "--progress"]),
+      expect.objectContaining({ timeoutMs: 30 * 60_000, noOutputTimeoutMs: 2 * 60_000 }),
+    );
+  },
+);

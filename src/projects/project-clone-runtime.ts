@@ -14,7 +14,8 @@ import { withGitRepositoryRepair } from "../infra/git-repository-repair.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { withGitProcessOperation } from "../process/spawn-diagnostics.js";
 
-const PROJECT_CLONE_TIMEOUT_MS = 10 * 60_000;
+const PROJECT_CLONE_TIMEOUT_MS = 30 * 60_000;
+const PROJECT_GIT_NO_OUTPUT_TIMEOUT_MS = 2 * 60_000;
 type ProjectCloneOptions = {
   assertCurrent?: () => void;
   startRun?: GitOperationStarter;
@@ -24,7 +25,7 @@ type ProjectCloneOptions = {
   timeoutMs?: number;
   token?: string;
 };
-const PROJECT_FETCH_TIMEOUT_MS = 60_000;
+const PROJECT_FETCH_TIMEOUT_MS = 10 * 60_000;
 
 export class ProjectCloneError extends Error {
   constructor(
@@ -77,10 +78,17 @@ function classifyProjectGitFailure(
   result: Awaited<ReturnType<typeof runCommandWithTimeout>>,
   operation: "clone" | "fetch",
   tokenConfigured: boolean,
+  timeoutMs: number,
 ): ProjectCloneError {
+  if (result.termination === "timeout") {
+    const limit = timeoutMs >= 60_000 ? `${timeoutMs / 60_000} minutes` : `${timeoutMs} ms`;
+    return new ProjectCloneError(
+      "clone_failed",
+      `Git ${operation === "fetch" ? "refresh" : operation} did not finish within ${limit}. The repository may be too large to clone here; retry, or ask the Gateway operator to check Git logs.`,
+    );
+  }
   const detail = `${result.stderr}\n${result.stdout}`.toLowerCase();
   if (
-    result.termination === "timeout" ||
     result.termination === "no-output-timeout" ||
     /could not resolve host|connection timed out|failed to connect/u.test(detail)
   ) {
@@ -142,10 +150,11 @@ export async function cloneProjectCheckout(
   }
   await fs.mkdir(path.dirname(input.target), { recursive: true });
   const commandEnv = cloneCommandEnv(input.url, options.token, env);
+  const cloneTimeoutMs = options.timeoutMs ?? PROJECT_CLONE_TIMEOUT_MS;
   const result = await withGitNetworkRetry(
     "clone",
     {
-      timeoutMs: options.timeoutMs ?? PROJECT_CLONE_TIMEOUT_MS,
+      timeoutMs: cloneTimeoutMs,
       signal: options.signal,
       beforeRun: options.assertCurrent,
       startRun: options.startRun,
@@ -153,10 +162,11 @@ export async function cloneProjectCheckout(
     async (timeoutMs) => {
       const attempt = await withGitProcessOperation("project.clone", () =>
         runCommandWithTimeout(
-          ["git", "clone", "--no-recurse-submodules", "--", input.url, input.target],
+          ["git", "clone", "--progress", "--no-recurse-submodules", "--", input.url, input.target],
           {
             env: commandEnv,
             timeoutMs,
+            noOutputTimeoutMs: PROJECT_GIT_NO_OUTPUT_TIMEOUT_MS,
             signal: options.signal,
             killProcessTree: true,
             maxOutputBytes: 256 * 1024,
@@ -180,7 +190,7 @@ export async function cloneProjectCheckout(
     }
     return;
   }
-  throw classifyProjectGitFailure(result, "clone", Boolean(options.token));
+  throw classifyProjectGitFailure(result, "clone", Boolean(options.token), cloneTimeoutMs);
 }
 
 /** Refreshes refs in an existing Gateway-managed project checkout. */
@@ -296,7 +306,7 @@ export async function refreshProjectCheckout(
       ],
     );
     if (result.code !== 0 || result.termination !== "exit") {
-      throw classifyProjectGitFailure(result, "fetch", Boolean(options.token));
+      throw classifyProjectGitFailure(result, "fetch", Boolean(options.token), result.timeoutMs);
     }
     const fetchedRefs = await readProjectRemoteRefs({ target: staging }, stagingOptions);
     const updates = [
@@ -375,12 +385,16 @@ function runProjectCheckoutGit(
   args: string[],
   commandOptions: GitCommandOptions = {},
 ) {
+  const transfer = args[0] === "fetch";
+  const gitArgs = transfer ? ["fetch", "--progress", ...args.slice(1)] : args;
   return executeGitCommand(
     input.target,
-    ["-c", `core.hooksPath=${os.devNull}`, "-c", "core.fsmonitor=false", ...args],
+    ["-c", `core.hooksPath=${os.devNull}`, "-c", "core.fsmonitor=false", ...gitArgs],
     {
       operation: "project.clone",
-      timeoutMs: options.timeoutMs ?? PROJECT_CLONE_TIMEOUT_MS,
+      timeoutMs:
+        options.timeoutMs ?? (transfer ? PROJECT_FETCH_TIMEOUT_MS : PROJECT_CLONE_TIMEOUT_MS),
+      noOutputTimeoutMs: transfer ? PROJECT_GIT_NO_OUTPUT_TIMEOUT_MS : undefined,
       signal: options.signal,
       killProcessTree: true,
       maxOutputBytes: 256 * 1024,
@@ -438,7 +452,7 @@ export async function ensureProjectCheckoutCommit(
     retry: fetch,
   });
   if (fetched.code !== 0 || fetched.termination !== "exit") {
-    throw classifyProjectGitFailure(fetched, "fetch", Boolean(options.token));
+    throw classifyProjectGitFailure(fetched, "fetch", Boolean(options.token), fetched.timeoutMs);
   }
 }
 
