@@ -118,6 +118,7 @@ describe("managed service root planning", () => {
         ...(rebind ? { serviceRoot: f.serviceRoot } : {}),
         nodeRunner,
         serviceUnitTarget: path.join(f.serviceRoot, "dist", "index.js"),
+        servesRoot: sameRoot,
       });
       expect(service.readDefinitionMutationCapability).toHaveBeenCalledOnce();
       if (platform === "win32" && !sameRoot) {

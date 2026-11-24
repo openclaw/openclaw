@@ -8,7 +8,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { applyPatch } from "diff";
 import { Type } from "typebox";
 import { Value } from "typebox/value";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { WriteToolOutputSchema } from "./tool-schemas.js";
 import { createWriteTool, type WriteToolOptions } from "./write.js";
 
@@ -100,16 +100,17 @@ describe("write tool", () => {
     const filePath = await createTempPath();
     await fs.writeFile(filePath, "finished\n", "utf-8");
     const controller = new AbortController();
-    controller.abort();
-    const tool = createWriteTool(tmpDir, {
-      operations: createRecoverableOperations(async () => {
-        throw new Error("Operation aborted");
-      }),
+    const reason = new DOMException("fixture abort reason", "AbortError");
+    controller.abort(reason);
+    const write = vi.fn(async () => {
+      throw new Error("Unexpected write after cancellation");
     });
+    const tool = createWriteTool(tmpDir, { operations: createRecoverableOperations(write) });
 
     await expect(
       tool.execute("call-1", { path: filePath, content: "finished\n" }, controller.signal),
-    ).rejects.toThrow("Operation aborted");
+    ).rejects.toBe(reason);
+    expect(write).not.toHaveBeenCalled();
   });
 
   it("recovers timeout-like post-write errors when readback matches requested content", async () => {
