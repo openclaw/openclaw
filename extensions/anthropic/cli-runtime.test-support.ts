@@ -30,6 +30,7 @@ let privateContext;
 let lateDecision;
 let pendingInputUuid;
 let firstInputUuid;
+let hookSegments = [];
 let injectedContext;
 let injectedRerunContext;
 const priorResponses = {};
@@ -279,6 +280,14 @@ for await (const line of createInterface({ input: process.stdin })) {
       result();
       continue;
     }
+    if (scenario === "hook-context-limit") {
+      hookSegments = [];
+      for (const [index, callback_id] of hooks.UserPromptSubmit[0].hookCallbackIds.entries()) {
+        request("limit-" + index, { subtype: "hook_callback", callback_id,
+          input: { hook_event_name: "UserPromptSubmit", prompt: user } });
+      }
+      continue;
+    }
     if (scenario === "large-split-record") {
       const record = JSON.stringify({ type: "assistant", message: { role: "assistant",
         content: [{ type: "text", text: "🦞" + "x".repeat(300_000) + "🦞" }] } });
@@ -298,7 +307,14 @@ for await (const line of createInterface({ input: process.stdin })) {
   } else if (message.type === "control_response") {
     assert.equal(message.response.subtype, "success");
     const { request_id: id, response } = message.response;
-    if (id === "admitted-context") {
+    if (id.startsWith("limit-")) {
+      const value = response.hookSpecificOutput?.additionalContext;
+      hookSegments[Number(id.slice(6))] = value?.length > 10000 ? value.slice(0, 2000) : value;
+      const count = hooks.UserPromptSubmit[0].hookCallbackIds.length;
+      if (Object.keys(hookSegments).length === count) {
+        result({ hookSegments: hookSegments.filter((segment) => segment !== undefined) });
+      }
+    } else if (id === "admitted-context") {
       privateContext = response.hookSpecificOutput?.additionalContext;
       if (scenario.startsWith("steer-hook-")) {
         request("admitted-rerun", { subtype: "hook_callback", callback_id: hooks.UserPromptSubmit[0].hookCallbackIds[0],

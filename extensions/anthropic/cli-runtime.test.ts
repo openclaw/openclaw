@@ -742,6 +742,28 @@ describe("Claude native stdio boundary", () => {
     await expect(access(path.join(context.cwd, "user.received"))).rejects.toThrow();
   });
 
+  it("keeps long private context within the native per-hook limit", async () => {
+    const liveSession = createLiveSession();
+    const privateContext = '<system-reminder>"🦞'.repeat(700) + "END";
+    const context = await createContext("hook-context-limit", {
+      liveSession,
+      promptContext: { prependContext: privateContext },
+    });
+    const { hookSegments } = resultDetail(await collect(context));
+    expect(Array.isArray(hookSegments) && hookSegments.length).toBeGreaterThan(1);
+    if (!Array.isArray(hookSegments)) {
+      throw new Error("Expected bounded private hook segments");
+    }
+    const decoded = hookSegments.map((segment: unknown) => {
+      if (typeof segment !== "string") {
+        throw new Error("Expected hook context text");
+      }
+      expect(segment.length).toBeLessThanOrEqual(10_000);
+      return JSON.parse(segment.slice(segment.indexOf("\n") + 1));
+    });
+    expect(decoded.join("")).toBe(privateContext);
+  });
+
   it("reuses one child while delivering private context and host permissions for each turn", async () => {
     const liveSession = createLiveSession();
     const context = await createContext("normal", {
