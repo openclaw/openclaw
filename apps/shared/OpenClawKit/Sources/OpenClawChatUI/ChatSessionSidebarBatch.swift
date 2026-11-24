@@ -145,14 +145,16 @@ final class ChatSessionSidebarBatch {
     }
 
     static func movingPin(_ entries: [AnyCodable], key: String, target: String?, after: Bool) throws -> [AnyCodable] {
-        guard key != target else { return entries }
         func pinKey(_ entry: AnyCodable) -> String? {
             Self.sessionPinKey(entry.value as? String)
         }
         // Move only existing pin slots. The original JSON, including unknown future values, is the CAS base.
         let slots = entries.indices.filter { pinKey(entries[$0]) != nil }
         var sessions = slots.map { entries[$0] }
-        guard let source = sessions.firstIndex(where: { pinKey($0) == key }) else { return entries }
+        guard let source = sessions.firstIndex(where: { pinKey($0) == key }) else {
+            throw OpenClawPersonalPinError.placementChanged
+        }
+        guard key != target else { return entries }
         let entry = sessions.remove(at: source)
         let destination = target.flatMap { target in sessions.firstIndex(where: { pinKey($0) == target }) }
         // Only a drop on the section itself means “at the end.” Do not reinterpret a stale row target.
@@ -190,7 +192,11 @@ final class ChatSessionSidebarBatch {
                         "entries": .init([Self.pinKey: next]), "expectedEntries": .init([Self.pinKey: previous]),
                     ])
                     guard self.scope == scope else { return }
-                    if result.status == "conflict", attempt == 0 { continue }
+                    if result.status == "conflict", attempt == 0 {
+                        // The optimistic order was rejected, even if the retry read never succeeds.
+                        self.sidebarEntries = previous.compactMap { $0.value as? String }
+                        continue
+                    }
                     guard result.status == "ok" else { throw CocoaError(.fileWriteUnknown) }
                 } catch {
                     guard connection.isCurrent(), self.scope == scope else { throw CancellationError() }

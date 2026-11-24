@@ -103,16 +103,14 @@ struct ChatSessionSidebarBatchTests {
         for index in [0, 2, 4, 6, 7] {
             #expect(Array(moved[index].utf8) == Array(entries[index].utf8))
         }
-        #expect(try ChatSessionSidebarBatch
-            .movingPin(entries.map(AnyCodable.init), key: "a", target: "a", after: true) == entries
-            .map(AnyCodable.init))
     }
 
-    @Test func `reordering cannot restore a pin removed on another client`() throws {
-        let entries = ["session:a", "route:usage", "future:reserved"]
-        #expect(try ChatSessionSidebarBatch
-            .movingPin(entries.map(AnyCodable.init), key: "b", target: "a", after: false) == entries
-            .map(AnyCodable.init))
+    @Test func `a self move is already satisfied only if its pin still exists`() throws {
+        let entries = ["session:a", "route:usage", "session-rail:b"].map(AnyCodable.init)
+        #expect(try ChatSessionSidebarBatch.movingPin(entries, key: "a", target: "a", after: true) == entries)
+        #expect(throws: OpenClawPersonalPinError.placementChanged) {
+            try ChatSessionSidebarBatch.movingPin(entries, key: "b", target: "b", after: true)
+        }
     }
 
     @Test func `reorder preserves heterogeneous layout values and compares their exact JSON`() async throws {
@@ -148,23 +146,31 @@ struct ChatSessionSidebarBatchTests {
         #expect(batch.pinPositions == ["b": 0, "a": 1])
     }
 
-    @Test func `failed preference write rolls optimistic pin ordering back to the server snapshot`() async throws {
+    @Test(arguments: [false, true])
+    func `a failed write or conflict reread restores the last confirmed pin order`(conflict: Bool) async throws {
         let entries = ["session:a", "future:reserved", "session:b"]
         let batch = ChatSessionSidebarBatch()
-        var writes = 0
+        let failure = URLError(.cannotConnectToHost)
+        var methods: [String] = []
         let connection = try self.connection { request in
-            if request.method == "users.prefs.get" { return try self.pinSnapshot(entries) }
-            writes += 1
+            methods.append(request.method)
+            if request.method == "users.prefs.get" {
+                if methods.count == 1 { return try self.pinSnapshot(entries) }
+                #expect(batch.sidebarEntries == entries)
+                throw failure
+            }
             #expect(batch.sidebarEntries == ["session:b", "future:reserved", "session:a"])
             #expect(try self.pinPatch(request) == batch.sidebarEntries)
             #expect(try self.params(request)["expectedEntries"] as? [String: [String]] == ["ui.railShortcuts": entries])
-            throw URLError(.cannotConnectToHost)
+            if conflict { return Data(#"{"status":"conflict"}"#.utf8) }
+            throw failure
         }
-        await #expect(throws: URLError.self) {
+        await #expect(throws: failure) {
             try await batch.movePin(key: "b", target: "a", after: false, connection: connection)
         }
-        #expect(writes == 1)
+        #expect(methods == ["users.prefs.get", "users.prefs.set"] + (conflict ? ["users.prefs.get"] : []))
         #expect(batch.sidebarEntries == entries)
+        #expect(batch.notices == [failure.localizedDescription])
     }
 
     @Test func `changing a roster filter cannot strand a failed optimistic preference write`() async throws {
@@ -181,35 +187,49 @@ struct ChatSessionSidebarBatchTests {
         #expect(batch.sidebarEntries == entries)
     }
 
-    @Test func `old pin completion cannot clear a new operation after a full reset`() async throws {
+    @Test(arguments: ["users.prefs.get", "users.prefs.set"])
+    func `a late read or conflict cannot replace a new scope's optimistic order`(lateMethod: String) async throws {
         let batch = ChatSessionSidebarBatch()
-        let reads = AsyncStream.makeStream(of: CheckedContinuation<Void, Never>.self)
-        var readCount = 0
-        let connection = try self.connection { request in
-            if request.method == "users.prefs.set" { return Data(#"{"status":"ok"}"#.utf8) }
-            readCount += 1
-            if readCount <= 2 {
-                await withCheckedContinuation { reads.continuation.yield($0) }
+        let paused = AsyncStream.makeStream(of: CheckedContinuation<Void, Never>.self)
+        var oldMethods: [String] = []
+        let old = try self.connection { request in
+            if request.method == lateMethod, !oldMethods.contains(lateMethod) {
+                await withCheckedContinuation { paused.continuation.yield($0) }
             }
+            oldMethods.append(request.method)
+            if request.method == "users.prefs.set" { return Data(#"{"status":"conflict"}"#.utf8) }
             return try self.pinSnapshot(["session:a", "session:b"])
         }
-        var iterator = reads.stream.makeAsyncIterator()
-        let first = Task {
-            try await batch.movePin(key: "b", target: "a", after: false, connection: connection)
+        var server = ["session:c", "session:d"]
+        let current = try self.connection { request in
+            if request.method == "users.prefs.set" {
+                await withCheckedContinuation { paused.continuation.yield($0) }
+                server = try self.pinPatch(request)
+                return Data(#"{"status":"ok"}"#.utf8)
+            }
+            return try self.pinSnapshot(server)
         }
-        let firstRead = try #require(await iterator.next())
+        var iterator = paused.stream.makeAsyncIterator()
+        let first = Task {
+            try await batch.movePin(key: "b", target: "a", after: false, connection: old)
+        }
+        let oldReply = try #require(await iterator.next())
         batch.reset()
         let second = Task {
-            try await batch.movePin(key: "a", target: "b", after: true, connection: connection)
+            try await batch.movePin(key: "d", target: "c", after: false, connection: current)
         }
-        let secondRead = try #require(await iterator.next())
-        firstRead.resume()
+        let currentWrite = try #require(await iterator.next())
+        oldReply.resume()
         try await first.value
+        #expect(oldMethods == (lateMethod == "users.prefs.get" ? [lateMethod] : ["users.prefs.get", lateMethod]))
         #expect(batch.busy)
-        secondRead.resume()
+        #expect(batch.sidebarEntries == ["session:d", "session:c"])
+        #expect(batch.notices.isEmpty)
+        currentWrite.resume()
         try await second.value
         #expect(!batch.busy)
-        reads.continuation.finish()
+        #expect(server == batch.sidebarEntries)
+        paused.continuation.finish()
     }
 
     @Test func `concurrent preference writers trigger a fresh guarded move preserving their entries`() async throws {
@@ -240,8 +260,8 @@ struct ChatSessionSidebarBatchTests {
         #expect(server == batch.sidebarEntries)
     }
 
-    @Test(arguments: [false, true])
-    func `a vanished target reports a failed reorder without moving to the section end`(conflict: Bool) async throws {
+    @Test(arguments: ["a", "b"], [false, true])
+    func `a vanished source or target refuses the reorder`(source: String, conflict: Bool) async throws {
         let remaining = ["session:a", "session-rail:b", "session:c", "session:d"]
         var server = conflict ? remaining + ["session:b"] : remaining
         var attempts = 0
@@ -262,8 +282,9 @@ struct ChatSessionSidebarBatchTests {
         #expect(attempts == 0)
         #expect(batch.notices.isEmpty)
 
-        await #expect(throws: (any Error).self) {
-            try await batch.movePin(key: "a", target: "b", after: false, connection: connection)
+        let target = source == "a" ? "b" : "a"
+        await #expect(throws: OpenClawPersonalPinError.placementChanged) {
+            try await batch.movePin(key: source, target: target, after: false, connection: connection)
         }
         #expect(batch.notices == [String(localized: "Pin placement changed. Refresh the list and retry.")])
         #expect(attempts == (conflict ? 1 : 0))
@@ -302,7 +323,7 @@ struct ChatSessionSidebarBatchTests {
             #expect(request.method == "users.prefs.get")
             return Data(#"{"status":"ok","entries":{}}"#.utf8)
         }
-        try await batch.movePin(key: "a", target: nil, after: false, connection: fresh)
+        try await batch.refreshPins(fresh)
         #expect(batch.sidebarEntries == ["route:cron", "route:plugins", "route:usage"])
         try await batch.refreshPins(empty)
         #expect(batch.sidebarEntries.isEmpty)
