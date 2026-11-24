@@ -31,6 +31,9 @@ import type {
 import { loadGatewaySessionEntryReadOnlyInWorker } from "./session-utils-store-worker.js";
 
 const MAX_NOTIFICATION_EVENT_TEXT_CHARS = 120;
+// Newest accepted occurrence per session and notification key. A posted update replaces the
+// pending occurrence of its key, so an older occurrence that settles as cancelled was superseded.
+const latestNotificationOccurrences = new Map<string, string | undefined>();
 
 export async function handleNodeNotificationEvent(
   ctx: NodeEventContext,
@@ -119,11 +122,22 @@ export async function handleNodeNotificationEvent(
       sessionKey,
       contextKey: `notification:${key}`,
       deliveryContext: expectedTarget.deliveryContext,
+      // A newer posted state of one notification supersedes its still-pending earlier state.
+      ...(change === "posted" ? { replace: true } : {}),
     },
     agentId,
   );
   const occurrence = enqueueSystemEventEntry(summary, eventOptions);
   if (occurrence) {
+    const latestKey = `${eventOptions.sessionKey}\u0000${eventOptions.contextKey}`;
+    latestNotificationOccurrences.set(latestKey, occurrence.id);
+    const settleLatest = () => {
+      const superseded = latestNotificationOccurrences.get(latestKey) !== occurrence.id;
+      if (!superseded) {
+        latestNotificationOccurrences.delete(latestKey);
+      }
+      return superseded;
+    };
     try {
       const receipt = enqueueSessionEventForHost(summary, {
         agentId,
@@ -143,11 +157,13 @@ export async function handleNodeNotificationEvent(
         throw new Error(accepted.error);
       }
       void receipt.settled.then((outcome) => {
-        if (outcome.status !== "completed") {
+        const superseded = settleLatest();
+        if (outcome.status !== "completed" && !(outcome.status === "cancelled" && superseded)) {
           ctx.logGateway.warn(`notification event not delivered node=${nodeId}: ${outcome.status}`);
         }
       });
     } catch (error) {
+      settleLatest();
       consumeSelectedSystemEventEntries(eventOptions.sessionKey, [occurrence]);
       throw error;
     }
