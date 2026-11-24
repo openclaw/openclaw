@@ -5,13 +5,18 @@ import { syncBuiltinESMExports } from "node:module";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
+import { safeRealpathSync } from "./path-safety.js";
 import {
+  auditOpenClawPeerDependencyLinkSync,
   auditOpenClawPeerDependenciesInManagedNpmRoot,
   linkOpenClawPeerDependencies,
   reconcileRegisteredOpenClawHostLinks,
   relinkOpenClawPeerDependenciesInManagedNpmRoot,
 } from "./plugin-peer-link.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
+
+vi.mock("./path-safety.js", { spy: true });
 
 const tempDirs: string[] = [];
 
@@ -465,4 +470,29 @@ describe("plugin peer links", () => {
       expect(warnings.join("\n")).toContain("is not a real directory");
     },
   );
+});
+
+it("accepts a host directory alias but rejects a physically different peer target", () => {
+  const host = resolveOpenClawPackageRootSync({ cwd: process.cwd() });
+  if (!host) {
+    throw new Error("OpenClaw test package root missing");
+  }
+  const peer = path.join(makeTempDir(), "node_modules", "openclaw");
+  fs.mkdirSync(path.dirname(peer));
+  const alias = path.join(makeTempDir(), "host-alias");
+  fs.symlinkSync(host, alias, "junction");
+  fs.symlinkSync(host, peer, "junction");
+  const actualRealpath = vi.mocked(safeRealpathSync).getMockImplementation();
+  // Windows junctions can preserve an alias spelling in the native realpath result.
+  let returnedPeer = alias;
+  vi.mocked(safeRealpathSync).mockImplementation((target) =>
+    target === peer ? returnedPeer : (actualRealpath?.(target) ?? fs.realpathSync(target)),
+  );
+  expect(
+    auditOpenClawPeerDependencyLinkSync({ packageDir: path.dirname(path.dirname(peer)) }),
+  ).toBeNull();
+  returnedPeer = makeTempDir();
+  expect(
+    auditOpenClawPeerDependencyLinkSync({ packageDir: path.dirname(path.dirname(peer)) })?.reason,
+  ).toContain("instead of");
 });

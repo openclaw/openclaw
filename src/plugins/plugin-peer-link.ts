@@ -1,4 +1,4 @@
-import { lstatSync, symlinkSync, unlinkSync, type Stats } from "node:fs";
+import { lstatSync, statSync, symlinkSync, unlinkSync, type Stats } from "node:fs";
 // Links plugin peer packages for local development installs.
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -8,6 +8,7 @@ import { hasErrnoCode } from "../infra/errors.js";
 import { resolveUserPath } from "../infra/home-dir.js";
 import { readRootJsonObjectSync } from "../infra/json-files.js";
 import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
+import { sameFsObject } from "../infra/path-case.js";
 import { isPathInside } from "../infra/path-guards.js";
 import { resolvePluginInstallDir } from "./install-paths.js";
 import { listNpmPackageDirs } from "./npm-package-dirs.js";
@@ -174,6 +175,19 @@ function auditOpenClawPeerDependency(params: {
   }
   const expectedTarget = safeRealpathSync(params.hostRoot) ?? params.hostRoot;
   if (currentTarget !== expectedTarget) {
+    // Native realpath can preserve the Windows junction's spelling. Compare the
+    // full filesystem identity, not a rounded inode or a case-folded string.
+    try {
+      const identity = statSync(currentTarget, { bigint: true });
+      if (
+        identity.ino !== 0n &&
+        sameFsObject(identity, statSync(expectedTarget, { bigint: true }))
+      ) {
+        return null;
+      }
+    } catch {
+      // Keep the mismatch visible if physical identity cannot be established.
+    }
     return issue(`${linkPath} points to ${currentTarget} instead of ${expectedTarget}`);
   }
   return null;
@@ -268,6 +282,15 @@ async function linkOpenClawPeerDependency(params: {
   const currentTarget = await safeRealpath(linkPath);
   if (currentTarget === expectedTarget) {
     return "unchanged";
+  }
+  if (currentTarget) {
+    const identity = await fs.stat(currentTarget, { bigint: true }).catch(() => null);
+    if (identity && identity.ino !== 0n) {
+      const hostIdentity = await fs.stat(expectedTarget, { bigint: true }).catch(() => null);
+      if (hostIdentity && sameFsObject(identity, hostIdentity)) {
+        return "unchanged";
+      }
+    }
   }
 
   const warn = (error: unknown): "skipped" => {
