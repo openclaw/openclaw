@@ -43,6 +43,7 @@ async function runVideo(
   provider: MediaUnderstandingProvider,
   cfg: OpenClawConfig,
   activeModel?: Parameters<typeof runCapability>[0]["activeModel"],
+  modelOverride?: { provider: string; model: string },
 ) {
   let result: Awaited<ReturnType<typeof runCapability>> | undefined;
   await withVideoFixture("openclaw-video", async ({ ctx, media, cache }) => {
@@ -54,6 +55,7 @@ async function runVideo(
       media,
       providerRegistry: new Map([[provider.id, provider]]),
       activeModel,
+      ...(modelOverride ? { request: { modelOverride } } : {}),
     });
   });
   return expectDefined(result, "video result");
@@ -76,6 +78,26 @@ describe("runCapability video", () => {
     const output = expectDefined(result.outputs[0], "media output 0");
     expect(output.text).toBe(prefix);
     expect(output.text).not.toContain(String.fromCharCode(0xd83d));
+  });
+
+  it("does not send the video to a configured fallback after the explicit model fails", async () => {
+    const describeVideo = vi.fn<NonNullable<MediaUnderstandingProvider["describeVideo"]>>(
+      async (req) => {
+        if (req.model === "pinned") {
+          throw new Error("fixture model failed");
+        }
+        return { text: "fallback result", model: req.model };
+      },
+    );
+    const result = await runVideo(
+      { id: "moonshot", capabilities: ["video"], describeVideo },
+      videoConfig([{ provider: "moonshot", model: "fallback" }]),
+      undefined,
+      { provider: "moonshot", model: "pinned" },
+    );
+    expect(describeVideo.mock.calls.map(([request]) => request.model)).toEqual(["pinned"]);
+    expect(result.outputs).toEqual([]);
+    expect(result.decision.outcome).toBe("failed");
   });
 
   it("resolves active video provider defaults", async () => {

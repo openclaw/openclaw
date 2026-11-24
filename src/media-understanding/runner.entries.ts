@@ -2,6 +2,7 @@
 // rotation, output extraction, and decision summaries.
 import fs from "node:fs/promises";
 import path from "node:path";
+import type { ProviderModelRef } from "@openclaw/model-catalog-core/model-catalog-refs";
 import { expectDefined } from "@openclaw/normalization-core";
 import { ok, type Result } from "@openclaw/normalization-core/result";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
@@ -341,7 +342,9 @@ export function buildModelDecision(params: {
   };
 }
 
-export type MediaRequestOverrides = Pick<AudioTranscriptionRequest, "prompt" | "language">;
+export type MediaRequestOverrides = Pick<AudioTranscriptionRequest, "prompt" | "language"> & {
+  modelOverride?: ProviderModelRef;
+};
 
 /** Formats a compact operator-facing summary of a media-understanding decision. */
 export function formatDecisionSummary(decision: MediaUnderstandingDecision): string {

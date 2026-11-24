@@ -343,7 +343,10 @@ export async function extractStructuredWithModel(params: ExtractStructuredWithMo
 export async function describeVideoFile(
   params: DescribeVideoFileParams,
 ): Promise<RunMediaUnderstandingFileResult> {
-  return await runMediaUnderstandingFile({ ...params, capability: "video" });
+  return await runFile(
+    { ...params, capability: "video" },
+    params.modelOverride ? { modelOverride: params.modelOverride } : {},
+  );
 }
 
 /** Prepares the largest input that any configured transcription fallback can accept. */
@@ -382,6 +385,7 @@ export async function transcribeAudioFile(
       {
         prompt: params.prompt?.trim() || params.prompt || undefined,
         language: params.language || undefined,
+        ...(params.modelOverride ? { modelOverride: params.modelOverride } : {}),
       },
       execution,
     );

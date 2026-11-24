@@ -800,6 +800,7 @@ export async function runCapability(params: {
     capability,
     config,
     providerRegistry,
+    modelOverride: params.request?.modelOverride,
   });
   const automaticAudio = capability === "audio" && entries.length === 0;
   let resolvedEntries: ResolvedMediaModelEntry[] = entries;

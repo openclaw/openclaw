@@ -1767,7 +1767,11 @@ describe("capability cli", () => {
     );
     expect(mocks.transcribeAudioFile).toHaveBeenNthCalledWith(
       1,
-      expect.objectContaining({ language: "en", prompt: "Focus on names" }),
+      expect.objectContaining({
+        language: "en",
+        prompt: "Focus on names",
+        modelOverride: { provider: "openai", model: "whisper-1" },
+      }),
     );
     const output = mocks.runtime.log.mock.calls.at(-1)?.[0];
     expect(output).toContain("provider: fixture-asr");

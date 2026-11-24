@@ -1,9 +1,11 @@
+import type { ProviderModelRef } from "@openclaw/model-catalog-core/model-catalog-refs";
 import {
   MAX_TIMER_TIMEOUT_MS,
   resolveTimerTimeoutMs,
 } from "@openclaw/normalization-core/number-coercion";
 import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { normalizeMediaExecutionProviderId } from "../../packages/media-understanding-common/src/provider-id.js";
 import type { MsgContext } from "../auto-reply/templating.js";
 import type { OpenClawConfig } from "../config/types.js";
 import type {
@@ -166,6 +168,7 @@ export function resolveModelEntries(params: {
   capability: MediaUnderstandingCapability;
   config?: MediaUnderstandingConfig;
   providerRegistry: Map<string, { capabilities?: MediaUnderstandingCapability[] }>;
+  modelOverride?: ProviderModelRef;
 }): ResolvedMediaModelEntry[] {
   const { cfg, capability, config } = params;
   const sharedModels = cfg.tools?.media?.models ?? [];
@@ -194,6 +197,18 @@ export function resolveModelEntries(params: {
         preferredMediaModelRank(right.entry, preferred) -
         preferredMediaModelRank(left.entry, preferred),
     );
+  }
+  if (params.modelOverride) {
+    // Preserve the descriptor and credential owner only for the exact explicit model.
+    const provider = normalizeMediaExecutionProviderId(params.modelOverride.provider);
+    const model = params.modelOverride.model.trim();
+    const exact = entries.find(
+      ({ entry }) =>
+        (entry.type ?? (entry.command ? "cli" : "provider")) === "provider" &&
+        normalizeMediaExecutionProviderId(entry.provider ?? "") === provider &&
+        entry.model?.trim() === model,
+    );
+    return [exact ?? { entry: { provider, model } }];
   }
   return entries;
 }
