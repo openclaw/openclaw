@@ -9,7 +9,8 @@ const log = createSubsystemLogger("llm/providers/stream-wrappers");
 
 type TierRecovery = { rejections: number; until: number; remaining: number };
 // A rejection describes the account/model route, not one run: later turns and rebuilt worker
-// wrappers share the cooldown instead of paying for the same rejection again.
+// wrappers share the cooldown instead of paying for the same rejection again. Profile ids are
+// per auth store, so the store scope is part of the account identity.
 const routeRecoveries = new Map<string, TierRecovery>();
 const MAX_ROUTE_RECOVERIES = 256;
 
@@ -20,13 +21,19 @@ export function createOpenAIServiceTierObservationWrapper(
     model: Parameters<StreamFn>[0],
     observation: Pick<ModelServiceTierObservation, "requestedTier" | "responseTier">,
   ) => boolean,
-  attribution: { runId: string; sessionId: string; accountRoute: string },
+  attribution: { runId: string; sessionId: string; authScope: string; accountRoute: string },
 ): StreamFn {
   return (model, context, options) => {
     if (model.api !== "openai-responses" || !supportsOpenAIResponsesFastMode(model)) {
       return underlying(model, context, options);
     }
-    const route = JSON.stringify([attribution.accountRoute, model.id, model.api, model.baseUrl]);
+    const route = JSON.stringify([
+      attribution.authScope,
+      attribution.accountRoute,
+      model.id,
+      model.api,
+      model.baseUrl,
+    ]);
     let recovery = routeRecoveries.get(route);
     if (!recovery) {
       // Forgotten cooldowns only mean those routes probe Ultrafast again.

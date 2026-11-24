@@ -66,6 +66,7 @@ afterEach(() => {
 const attribution = {
   runId: "run-fixture",
   sessionId: "session-fixture",
+  authScope: "/agents/fixture",
   accountRoute: "profile:openai:fixture",
 };
 const retry = ["ultrafast", "priority"];
@@ -182,5 +183,8 @@ it("probes after ten minutes, resets on success, and keeps the cooldown for late
   await providerTurn({ ...account, runId: "later-run" });
   expect(provider.tiers.at(-1)).toBe("priority");
   await providerTurn({ accountRoute: "profile:openai:other", runId: "later-run" });
+  expect(provider.tiers.slice(-2)).toEqual(retry);
+  // Another agent's auth store may hold a different key under the same profile id.
+  await providerTurn({ ...account, authScope: "/agents/other", runId: "later-run" });
   expect(provider.tiers.slice(-2)).toEqual(retry);
 });
