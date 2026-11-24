@@ -96,6 +96,7 @@ async function fixture() {
   await handoffs.register(row.beamId, row);
   let nativeId = "first-session";
   let resolveFailure: "FORBIDDEN" | "UNAVAILABLE" | undefined;
+  let onResolve: (() => void) | undefined;
   let replaceBeforeSend = false;
   let lostAck = false;
   let waitOnSend:
@@ -114,6 +115,7 @@ async function fixture() {
   }[] = [];
   const dispatch: typeof dispatchGatewayMethod = async (method, params) => {
     if (method.endsWith(".resolve")) {
+      onResolve?.();
       if (resolveFailure) return { ok: false, error: { code: resolveFailure, message: "failed" } };
       return { ok: true, payload: { sessionKey: binding.sessionKey, sessionId: nativeId } };
     }
@@ -161,6 +163,9 @@ async function fixture() {
     },
     deny() {
       resolveFailure = "FORBIDDEN";
+    },
+    onResolve(callback: () => void) {
+      onResolve = callback;
     },
     removeDestination() {
       resolveFailure = "UNAVAILABLE";
@@ -254,13 +259,15 @@ it("keeps request lookups private after the destination disappears", async () =>
   expect(f.sends).toBe(1);
 });
 
-it("requires the admitted Visitor grant for owned sends and disclosures", async () => {
+it("checks the Visitor grant for sends and the admitted request lifetime for status", async () => {
   await using f = await fixture();
   let active = true;
+  let connected = true;
   const checked: (string | undefined)[] = [];
   let guestRefreshes = 0;
   function guard(requiredGrant?: string) {
     checked.push(requiredGrant);
+    if (!connected) throw new Error("request closed");
     if (!active && requiredGrant === "visitor-access") throw new Error("Visitor grant revoked");
   }
   const guest: GatewayRequestAuthorityV1 = {
@@ -277,22 +284,29 @@ it("requires the admitted Visitor grant for owned sends and disclosures", async 
   active = false;
   gate.release.resolve();
   await expect(inFlight).rejects.toThrow("Visitor grant revoked");
+  active = true;
+  guest.assertCurrent("visitor-access"); // The HTTP route admits this GET before calling the service.
+  const beforeRead = checked.length;
   const refreshesBeforeRead = guestRefreshes;
-  await expect(f.service().status(source, request.requestId, guest)).rejects.toThrow(
-    "Visitor grant revoked",
-  );
+  f.onResolve(() => {
+    active = false;
+  });
+  expect(await f.service().status(source, request.requestId, guest)).toMatchObject({
+    requestId: request.requestId,
+  });
+  expect(checked.slice(beforeRead)).not.toContain("visitor-access");
   expect(guestRefreshes).toBe(refreshesBeforeRead);
   await expect(f.service().continue(source, request, guest)).rejects.toThrow(
     "Visitor grant revoked",
   );
-  const firstGuestChecks = checked.filter((g) => g === "visitor-access").length;
-  expect(firstGuestChecks).toBeGreaterThan(0);
-  // An individually verified staff reader has an independent ordinary read authorization.
-  const reader = { ...guest, scopes: ["operator.read"] };
-  expect(await f.service().status(source, request.requestId, reader)).toMatchObject({
-    requestId: request.requestId,
+  const withoutGrant = { ...guest, requiredGrantPluginId: undefined };
+  expect(await f.service().status(source, request.requestId, withoutGrant)).toBe("unavailable");
+  f.onResolve(() => {
+    connected = false;
   });
-  expect(checked.filter((g) => g === "visitor-access")).toHaveLength(firstGuestChecks);
+  await expect(f.service().status(source, request.requestId, guest)).rejects.toThrow(
+    "request closed",
+  );
   expect(f.sends).toBe(1);
 });
 

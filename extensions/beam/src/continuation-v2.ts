@@ -81,9 +81,10 @@ export function createBeamContinuation(
     const generation = initial.publicationId;
     const actor = sendActor(auth, initial, !input);
     if (!generation || !actor) return "unavailable";
-    // Owned Visitor access must keep the originally admitted grant at every commit and disclosure.
+    // HTTP already admitted a status read. It keeps that identity and request lifetime;
+    // a new owned Visitor effect must still hold its original grant at dispatch and commit.
     const guestProfileId = actor.guestProfileId;
-    const requiredGrant = guestProfileId ? "visitor-access" : undefined;
+    const requiredGrant = input && guestProfileId ? "visitor-access" : undefined;
     const assertCurrent = () => auth.assertCurrent(requiredGrant);
     async function revalidate() {
       // Read-only status uses the captured dispatch lease. Only effects refresh asynchronous guards.
