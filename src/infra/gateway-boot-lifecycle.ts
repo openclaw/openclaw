@@ -18,6 +18,7 @@ import {
   buildGatewayCrashLoopBreakerDecision,
   inspectGatewayCrashLoopBreakerInDatabase,
   maintenanceStartupReasons,
+  type GatewayBootLifecycleCompletion,
 } from "./gateway-boot-lifecycle.kernel.js";
 import {
   executeSqliteQuerySync,
@@ -66,19 +67,7 @@ const gatewayLifecycleLog = createSubsystemLogger("gateway/lifecycle");
 
 type GatewayBootLifecycleDatabase = Pick<OpenClawStateKyselyDatabase, "gateway_boot_lifecycle">;
 
-type GatewayBootLifecycleOutcome =
-  | "clean_stop"
-  | "planned_restart"
-  | "safe_mode_stable"
-  | "startup_failed"
-  | "startup_failure_repaired"
-  | "forced_stop";
-
-export type GatewayBootLifecycleCompletion = {
-  outcome: GatewayBootLifecycleOutcome;
-  reason?: string;
-  startupReason?: string;
-};
+export type { GatewayBootLifecycleCompletion } from "./gateway-boot-lifecycle.kernel.js";
 
 export type GatewayCrashLoopBreakerDecision = ReturnType<
   typeof buildGatewayCrashLoopBreakerDecision

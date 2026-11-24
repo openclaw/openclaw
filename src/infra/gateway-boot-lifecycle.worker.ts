@@ -2,11 +2,11 @@ import { randomUUID } from "node:crypto";
 import type { DB } from "../state/openclaw-state-db.generated.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import type { WorkerOperationHandlers } from "../state/worker-operation-registry.js";
-import type { GatewayBootLifecycleCompletion } from "./gateway-boot-lifecycle.js";
 import {
   GATEWAY_CRASH_LOOP_RECOVERED_REASON,
   GATEWAY_SIGNAL_REPEAT_WINDOW_MS,
   inspectGatewayCrashLoopBreakerInDatabase,
+  type GatewayBootLifecycleCompletion,
 } from "./gateway-boot-lifecycle.kernel.js";
 import {
   executeSqliteQuerySync,
