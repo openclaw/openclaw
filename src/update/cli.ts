@@ -29,7 +29,6 @@ import { runCommandWithTimeout } from "../process/exec.js";
 import { defaultRuntime } from "../runtime.js";
 import { VERSION } from "../version.js";
 import {
-  checkUpdateInstallationSlot,
   resolveInstalledPackageFrontend,
   resolveUpdateInstallationIdentity,
 } from "./installation-identity.js";
@@ -196,7 +195,6 @@ export async function runReleaseUpdateCli(opts: ReleaseUpdateOptions): Promise<v
   if (await delegateInstalledPackageUpdate(opts)) {
     return;
   }
-  await checkUpdateInstallationSlot(opts.runningRoot);
   const { channel } = opts;
   let timeoutMs = opts.timeoutMs;
   if (!opts.yes) {

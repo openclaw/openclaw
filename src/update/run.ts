@@ -36,7 +36,11 @@ import { runCommandWithTimeout } from "../process/exec.js";
 import { VERSION } from "../version.js";
 import { checkRelease } from "./check-release.js";
 import { stageReleaseService } from "./convert-service.js";
-import { resolveInstalledPackageFrontend } from "./installation-identity.js";
+import {
+  checkUpdateInstallationSlot,
+  isNodeOnlyUpdateInstallation,
+  resolveInstalledPackageFrontend,
+} from "./installation-identity.js";
 import { writeLauncher } from "./launcher.js";
 import { preflight } from "./preflight.js";
 import { prepareGit, type PrepareResult } from "./prepare-git.js";
@@ -164,6 +168,13 @@ export async function prepareUpdate(params: {
           lock.previous.runId,
           { status: "failed", reason: "interrupted" },
           { env },
+        );
+      }
+      await checkUpdateInstallationSlot(params.runningRoot, env);
+      if (await isNodeOnlyUpdateInstallation(env)) {
+        return await fail(
+          "package-installer-owned",
+          "No local Gateway can activate a release trial on this node-only installation. Nothing was staged. Rerun openclaw update to use its package installer.",
         );
       }
       await assertUpdateRecoveryAdmission({ env });

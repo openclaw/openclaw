@@ -606,7 +606,7 @@ async function resolveListenerBackedScheduledTaskRuntime(
   // A task lease proves control ownership, not that its process uses today's definition.
   const observed = await readBoundedScheduledTaskProcess(
     env,
-    deadlineMs ?? performance.now() + 5_000,
+    deadlineMs ?? performance.now() + WINDOWS_POWERSHELL_COLD_SPAWN_TIMEOUT_MS,
     installedCommand,
   );
   if (!observed) {
