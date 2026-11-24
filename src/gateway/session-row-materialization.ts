@@ -76,6 +76,7 @@ function sessionRowMaterializationMatches(
     equal(source.configuredAgentIds, input.configuredAgentIds) &&
     equal(source.selectedModel, input.selectedModel) &&
     equal(source.rowModelIdentity, input.rowModelIdentity) &&
+    row.modelDisplayName === thinking.catalogEntry?.name &&
     equal(source.thinkingProjection.acpMeta, thinking.acpMeta) &&
     equal(source.thinkingProjection.agentRuntime, thinking.agentRuntime) &&
     row.thinkingLevel === thinking.thinkingLevel &&

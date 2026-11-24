@@ -16,11 +16,13 @@ import type {
 import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { createOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { afterEach, assert, vi } from "vitest";
+import * as cleaner from "./cleaner.js";
 import { createBeamRequestHandler } from "./http.js";
 import { createBeamMirrorRunner } from "./mirror.js";
 import { createBeamStore, type BeamStore } from "./store.js";
 import {
   BEAM_MAX_SESSIONS,
+  BEAM_MAX_WRITE_RECEIPTS,
   BEAM_RETENTION_MS,
   type BeamStoredSession,
   type BeamUpload,
@@ -79,10 +81,25 @@ export async function persistentBeamTestStore() {
     { namespace: "handoffs", retention: "retained", env },
     { assertCurrent() {} },
   );
+  const writeStore = createPluginStateKeyedStoreV2ForTests(
+    "beam",
+    {
+      namespace: "publication-requests",
+      maxEntries: BEAM_MAX_WRITE_RECEIPTS,
+      overflowPolicy: "reject-new",
+      defaultTtlMs: BEAM_RETENTION_MS,
+      env,
+    },
+    { assertCurrent() {} },
+  );
   const store = createBeamStore({
     state: {
       openKeyedStoreV2: ({ namespace }: { namespace: string }) =>
-        namespace === "handoffs" ? handoffStore : keyedStore,
+        namespace === "handoffs"
+          ? handoffStore
+          : namespace === "publication-requests"
+            ? writeStore
+            : keyedStore,
     },
   } as unknown as PluginRuntime);
   const close = async () => {
@@ -90,7 +107,7 @@ export async function persistentBeamTestStore() {
     resetPluginStateStoreForTests();
     await state.cleanup();
   };
-  return { keyedStore, handoffStore, store, close };
+  return { keyedStore, handoffStore, writeStore, store, close };
 }
 
 export const beamTestNow = Date.parse("2026-07-27T12:00:00.000Z");
@@ -152,13 +169,25 @@ export function createBeamTestCatalog(
   } = {},
 ): PluginServiceExportCatalog {
   const id = params.id ?? "claude";
+  const catalogHistory = new Map<string, BeamTestSession>();
   return {
     id,
     processHomeFallbackAllowed: params.processHomeFallbackAllowed ?? true,
     assertCurrent: () => {},
-    list: async () => {
+    list: async ({ source }) => {
       await params.onList?.();
-      const sessions = typeof params.sessions === "function" ? params.sessions() : params.sessions;
+      const visible = typeof params.sessions === "function" ? params.sessions() : params.sessions;
+      for (const row of visible ?? []) {
+        catalogHistory.set(row.threadId, row);
+      }
+      const known = source && catalogHistory.get(source.threadId);
+      const sessions = source
+        ? known &&
+          source.hostId === (params.hostId ?? "gateway:local") &&
+          known.sourceHomeId === source.sourceHomeId
+          ? [known]
+          : []
+        : visible;
       return [
         {
           hostId: params.hostId ?? "gateway:local",
@@ -204,16 +233,44 @@ export function createBeamTestCatalog(
   };
 }
 
+// Existing network/retry cases exercise delivery against a deterministic cleaner fixture.
+// Native child failures, redaction, raw-byte validation and bounds have separate contract tests.
+const cleanBeamTestCandidate: typeof cleaner.cleanBeamCandidate = async (input) => {
+  const candidate = JSON.parse(input) as cleaner.BeamCleanCandidate;
+  const items = candidate.items.map(({ type, text }) => ({ type, text }));
+  const packet = {
+    version: 2 as const,
+    beamId: "a".repeat(32),
+    source: candidate.source,
+    title: candidate.title,
+    updatedAt: candidate.updatedAt,
+    completed: candidate.completed,
+    ...(candidate.sourceModel ? { sourceModel: candidate.sourceModel } : {}),
+    ...(candidate.completeness === "partial" ? { truncated: true } : {}),
+    items,
+  };
+  return { packet, raw: Buffer.from(JSON.stringify(packet)) };
+};
+
 type RunnerOptions = Parameters<typeof createBeamMirrorRunner>[0] & {
   listCatalogs?: () => PluginServiceExportCatalog[];
 };
 export function createBeamTestRunner({
   endpoint,
   listCatalogs = () => [createBeamTestCatalog()],
+  resolveExecutable,
   ...options
 }: Partial<RunnerOptions> & { endpoint?: string } = {}) {
+  if (!resolveExecutable) {
+    vi.spyOn(cleaner, "cleanBeamCandidate").mockImplementation(cleanBeamTestCandidate);
+  }
   return createBeamMirrorRunner({
     catalogExports: { listCatalogs },
+    resolveExecutable:
+      resolveExecutable ??
+      (async () => {
+        throw new Error("unexpected test process");
+      }),
     runtime: createBeamTestRuntime(beamTestMirrorConfig(endpoint ? { endpoint } : {})),
     logger: beamTestLogger,
     now: () => beamTestNow,
@@ -225,7 +282,7 @@ export function createBeamTestRunner({
 export function createScheduledBeamTestRunner(options: Parameters<typeof createBeamTestRunner>[0]) {
   const scheduler = createTestPluginServiceScheduler();
   const runner = createBeamTestRunner({ ...options, signal: scheduler.signal });
-  scheduler.schedule({ id: "mirror", delayMs: 0, everyMs: 30_000, run: runner.tick });
+  scheduler.schedule({ id: "mirror", delayMs: 0, everyMs: 30_000, run: () => runner.tick() });
   return { tick: () => vi.advanceTimersByTimeAsync(0), stop: scheduler.stop };
 }
 

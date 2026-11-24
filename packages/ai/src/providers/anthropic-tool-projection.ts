@@ -193,15 +193,25 @@ export function projectAnthropicTools(
   const originalNameByWireName = new Map<string, string>();
   const unavailableOriginalNames = new Set<string>();
   for (const tool of tools) {
-    const name = tool.name;
-    if (!name) {
+    let name: string | undefined;
+    let parameters: unknown;
+    let descriptionValue: unknown;
+    try {
+      name = tool.name;
+      if (!name) {
+        continue;
+      }
+      parameters = tool.parameters;
+      descriptionValue = tool.description;
+    } catch {
+      // Direct/custom descriptors can bypass runtime quarantine. Isolate them
+      // without dropping healthy siblings or allowing a forced unavailable tool.
+      if (name) {
+        unavailableOriginalNames.add(name);
+      }
       continue;
     }
-    const schemaProjection = projectRuntimeToolInputSchema(
-      tool.parameters,
-      `${name}.parameters`,
-      name,
-    );
+    const schemaProjection = projectRuntimeToolInputSchema(parameters, `${name}.parameters`, name);
     if (
       !isRecord(schemaProjection.schema) ||
       schemaProjection.violations.some((violation) => !isProviderSupportedViolation(violation))
@@ -214,7 +224,6 @@ export function projectAnthropicTools(
       unavailableOriginalNames.add(name);
       continue;
     }
-    const descriptionValue = tool.description;
     const description = typeof descriptionValue === "string" ? descriptionValue : undefined;
     const projectedTool: AnthropicProjectedTool = {
       originalName: name,

@@ -31,6 +31,7 @@ it.each([
   "released-requester",
   "other-requester-first",
   "without-display-run-id",
+  "reconnect-resume",
 ] as const)("keeps composer replacement at the question owner: %s", async (kind) => {
   const ordinary = requestParams.questions[0]!;
   const questions: Question[] =
@@ -105,7 +106,7 @@ it.each([
     stopCommand: false,
     turnKind: "main",
     normalizedAttachments: [],
-    reconnectResumeRequested: false,
+    reconnectResumeRequested: kind === "reconnect-resume",
   };
   const cfg = {};
   const replace = captureChatSendQuestionReplacement(
@@ -127,7 +128,8 @@ it.each([
     kind === "manual" ||
     kind === "secret" ||
     kind === "other-requester-first" ||
-    kind === "without-display-run-id";
+    kind === "without-display-run-id" ||
+    kind === "reconnect-resume";
   expect(Boolean(replace)).toBe(replaced);
   await replace?.(() => {});
   expect(manager.get(id)).toMatchObject(
