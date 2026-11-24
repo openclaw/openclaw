@@ -248,6 +248,10 @@ export async function settleRunFromTrial(
     case "trial":
     case "restoring":
       return;
+    case undefined:
+    case "committed":
+    case "rolled-back":
+      break;
   }
   const lock = await readUpdateLock(prefix);
   if (lock?.dead) {
