@@ -267,10 +267,13 @@ function SessionsTable(props: SessionsProps & { readRoster: () => RosterOutcome 
     const column = sortColumn();
     const sortDirection = direction();
     const ranks = pinRanks();
-    const now = Date.now();
     const roster = rawRows();
+    // The roster refreshes at the Gateway's snooze deadline. Use its clock, but keep
+    // membership and order live from navigation, even before a pin edit's list reply.
+    const gatewayTime = props.gatewayTimedPins ? props.result?.ts : undefined;
+    const now = gatewayTime ?? Date.now();
     wake(
-      roster.filter((row) => ranks.has(row.key) && !row.archived),
+      gatewayTime === undefined ? roster.filter((row) => ranks.has(row.key) && !row.archived) : [],
       now,
     );
     const rows = roster.map((row) => withTablePin(row, ranks, now));

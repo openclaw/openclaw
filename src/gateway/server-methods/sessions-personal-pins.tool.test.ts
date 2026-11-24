@@ -1,14 +1,13 @@
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import { createSessionsListTool } from "../../agents/tools/sessions-list-tool.js";
 import { createSessionsTool } from "../../agents/tools/sessions-tool.js";
-import {
-  getCanonicalUserPreferences,
-  setCanonicalUserPreferences,
-} from "../../state/user-preferences.js";
+import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
+import * as preferences from "../../state/user-preferences.js";
 import {
   PARTICIPANT_DRAFT,
   PARTICIPANT_SHARED,
   REQUESTER,
+  TARGET,
   withParticipantSessionToolsFixture,
 } from "../local-request-context.session-tools.test-support.js";
 
@@ -20,7 +19,9 @@ it("agent tools read and write the original signed-in person's ordered pins; sel
       `session:${PARTICIPANT_DRAFT}`,
       `session:${PARTICIPANT_SHARED}`,
     ];
-    expect((await setCanonicalUserPreferences(alice.profileId, { [pref]: layout }))?.ok).toBe(true);
+    expect(
+      (await preferences.setCanonicalUserPreferences(alice.profileId, { [pref]: layout }))?.ok,
+    ).toBe(true);
     const options = { config: cfg, agentSessionKey: REQUESTER };
     const list = createSessionsListTool(options);
     const edit = createSessionsTool(options);
@@ -39,12 +40,29 @@ it("agent tools read and write the original signed-in person's ordered pins; sel
         pinned: false,
       }),
     ).resolves.toMatchObject({ details: { status: "updated", succeeded: [0, 1] } });
-    await expect(getCanonicalUserPreferences(alice.profileId, [pref])).resolves.toMatchObject({
+    await expect(
+      preferences.getCanonicalUserPreferences(alice.profileId, [pref]),
+    ).resolves.toMatchObject({
       entries: { [pref]: [layout[0]] },
     });
+    // The original tool request can finish its personal write; a new list cannot disclose another person's draft.
+    const write = preferences.setCanonicalUserPreferences;
+    using intercept = vi
+      .spyOn(preferences, "setCanonicalUserPreferences")
+      .mockImplementationOnce(async (...args) => {
+        await upsertSessionEntryCore(
+          { agentId: "main", sessionKey: TARGET },
+          { visibility: "draft" },
+        );
+        return write(...args);
+      });
     await expect(
-      edit.execute("pin", { action: "patch", sessionKey: PARTICIPANT_SHARED, pinned: true }),
+      edit.execute("pin", { action: "patch", sessionKey: TARGET, pinned: true }),
     ).resolves.toMatchObject({ details: { status: "updated" } });
+    expect(intercept).toHaveBeenCalledOnce();
+    await expect(list.execute("fresh", { pinned: true })).resolves.toMatchObject({
+      details: { sessions: [] },
+    });
     expect(await turn.steer(bob)).toMatchObject({ status: "accepted" });
     await expect(
       edit.execute("wrong-person", {
@@ -54,11 +72,15 @@ it("agent tools read and write the original signed-in person's ordered pins; sel
         user: bob.profileId,
       }),
     ).rejects.toThrow(/profile|participant|personal|requester|user/i);
-    await expect(getCanonicalUserPreferences(bob.profileId, [pref])).resolves.toMatchObject({
+    await expect(
+      preferences.getCanonicalUserPreferences(bob.profileId, [pref]),
+    ).resolves.toMatchObject({
       entries: {},
     });
-    await expect(getCanonicalUserPreferences(alice.profileId, [pref])).resolves.toMatchObject({
-      entries: { [pref]: [layout[0], layout[2]] },
+    await expect(
+      preferences.getCanonicalUserPreferences(alice.profileId, [pref]),
+    ).resolves.toMatchObject({
+      entries: { [pref]: [layout[0], `session:${TARGET}`] },
     });
   });
 });

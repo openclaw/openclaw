@@ -10,6 +10,7 @@ import {
   setPersonalSessionPins,
   UI_RAIL_SHORTCUTS_PREFERENCE_KEY as preferenceKey,
 } from "../../../packages/gateway-protocol/src/schema/ui-navigation-preferences.js";
+import { retainPreparedSessionSharingFacts } from "../../config/sessions/session-accessor.sqlite-entry-cache.js";
 import { isPinnableSessionEntry } from "../../config/sessions/session-pin-policy.js";
 import { isIncognitoSessionKey } from "../../routing/session-key.js";
 import {
@@ -87,7 +88,7 @@ export async function patchPersonalSessionPins(
   const pinned = patch.pinned === true;
   const errors = new Map<number, ErrorShape>();
   const accepted = new Map<string, { target: SessionSharingTarget; assertCurrent: () => void }>();
-  const accesses: Array<NonNullable<Awaited<ReturnType<typeof prepareSessionSharingAccess>>>> = [];
+  const releases: Array<() => void> = [];
   try {
     for (const [index, input] of targets.entries()) {
       const sessionKey = input.key.trim();
@@ -122,58 +123,76 @@ export async function patchPersonalSessionPins(
             },
           );
       if (access) {
-        accesses.push(access);
+        releases.push(access[Symbol.dispose]);
       }
       if (!readTarget && !access) {
         continue;
       }
-      const current = () => {
-        if (!readTarget) {
-          return access!.readCurrent();
-        }
-        const facts = readTarget(resolved.value);
-        facts.assertCurrent();
-        return {
-          target: facts.target,
-          sharing: prepareProjectedSessionSharing({
-            cfg: context.getCommittedRuntimeConfig?.() ?? context.getRuntimeConfig(),
-            client: options.client,
-            profiles,
-            isMember: (_target, id) =>
-              facts.isMember?.(id) ?? facts.members.some((member) => member.identityId === id),
-          }),
-        };
-      };
-      let initial: SessionSharingTarget | null;
+      owner.assertCurrent();
+      let initial: SessionSharingTarget;
+      let current: () => SessionSharingTarget | null;
       try {
-        initial = current().target;
+        if (many) {
+          options.sessionMutationAuthorization?.assertTargetCurrent(address);
+        } else {
+          options.sessionMutationAuthorization?.assertCurrent();
+        }
+        const facts = readTarget?.(resolved.value);
+        facts?.assertCurrent();
+        const { target, sharing } = facts
+          ? {
+              target: facts.target,
+              sharing: prepareProjectedSessionSharing({
+                cfg: context.getCommittedRuntimeConfig?.() ?? context.getRuntimeConfig(),
+                client: options.client,
+                profiles,
+                isMember: (_target, id) =>
+                  facts.isMember?.(id) ?? facts.members.some((member) => member.identityId === id),
+              }),
+            }
+          : access!.readCurrent();
+        if (
+          !target ||
+          !sharing.canReadTarget(target) ||
+          target.entry.incognito ||
+          isIncognitoSessionKey(target.canonicalKey)
+        ) {
+          errors.set(index, reject("Session not found or not visible."));
+          continue;
+        }
+        initial = target;
+        if (facts) {
+          // readTargetSharing reauthorizes fresh input. Retain its selected physical row,
+          // not a new membership decision, across the profile preference transaction.
+          if (!target.readSource) {
+            errors.set(index, sessionChangedError(sessionKey));
+            continue;
+          }
+          const row = retainPreparedSessionSharingFacts({
+            databaseIdentity: `file:${target.readSource.databaseIdentity}`,
+            sessionKey: target.storeKey,
+            entry: target.entry,
+            membership: new Set(),
+          });
+          releases.push(row.release);
+          current = () => {
+            facts.assertCurrent();
+            const entry = row.readCurrent()?.entry;
+            return entry ? { ...target, entry } : null;
+          };
+        } else {
+          current = () => access!.readCurrent().target;
+        }
       } catch (error) {
-        // A stale target has no canonical sharing witness. It must not prevent a
-        // different, admitted target from succeeding; final mutation fences still throw.
+        // A stale target must not prevent another target in the batch from succeeding.
         if (!many || !(error instanceof SessionMutationAuthorizationChangedError)) {
           throw error;
         }
         errors.set(index, error.error);
         continue;
       }
-      const check = () => {
-        owner.assertCurrent();
-        if (many) {
-          options.sessionMutationAuthorization?.assertTargetCurrent({
-            sessionKey,
-            agentId: input.agentId,
-          });
-        } else {
-          options.sessionMutationAuthorization?.assertCurrent();
-        }
-        const { target, sharing } = current();
-        if (
-          !target ||
-          !initial ||
-          !sharing.canReadTarget(target) ||
-          target.entry.incognito ||
-          isIncognitoSessionKey(target.canonicalKey)
-        ) {
+      const check = (target: SessionSharingTarget | null) => {
+        if (!target || target.entry.incognito || isIncognitoSessionKey(target.canonicalKey)) {
           return reject("Session not found or not visible.");
         }
         if (!isSameSessionSharingTarget(target, initial)) {
@@ -213,9 +232,9 @@ export async function patchPersonalSessionPins(
         }
         return undefined;
       };
-      const error = check();
-      if (error || !initial) {
-        errors.set(index, error ?? reject("Session not found."));
+      const error = check(initial);
+      if (error) {
+        errors.set(index, error);
         continue;
       }
       if (accepted.has(initial.canonicalKey)) {
@@ -224,16 +243,18 @@ export async function patchPersonalSessionPins(
       accepted.set(initial.canonicalKey, {
         target: initial,
         assertCurrent: () => {
-          const failure = check();
-          if (failure) {
-            throw new SessionMutationAuthorizationChangedError(failure);
+          if (check(current())) {
+            // The requester may no longer see the row. Do not disclose its new state.
+            throw new SessionMutationAuthorizationChangedError(sessionChangedError(sessionKey));
           }
         },
       });
     }
     if (accepted.size) {
+      profiles.admit();
       const assertCurrent = () => {
         owner.assertCurrent();
+        profiles.readCurrent();
         for (const item of accepted.values()) {
           item.assertCurrent();
         }
@@ -326,8 +347,8 @@ export async function patchPersonalSessionPins(
       undefined,
     );
   } finally {
-    for (const access of accesses) {
-      access[Symbol.dispose]();
+    for (const release of releases) {
+      release();
     }
   }
 }

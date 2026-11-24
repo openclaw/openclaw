@@ -1,2 +1,3 @@
 # Covers distinct requester isolation, CAS conflict preservation, mixed-version writes, partial batches, visibility before pagination, serialized top-level/nested event privacy, scoped off-window preference and inclusive snooze-deadline invalidations, atomic named placement, and unsigned embedded tool behavior.
-449
+# Also covers admitted versus fresh sharing at routed, direct and agent boundaries, live Stop/identity/row fences, and the verified versus device-local table clock.
+772
