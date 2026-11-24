@@ -1,12 +1,71 @@
 import { existsSync, renameSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { expect, it } from "vitest";
-import { configureMerge, expectExit } from "./pr-merge-assertions.test-support.js";
+import { configureMerge, expectExit, observeMerged } from "./pr-merge-assertions.test-support.js";
 import { createMergeOutcomeFixtureHarness } from "./pr-merge-outcome.test-support.js";
 
 const { fixture, outcomeRef, describePosix } = createMergeOutcomeFixtureHarness();
 
 describePosix("native merge resource retention", () => {
+  it.each(["applied-merged", "applied-open"])(
+    "reconciles a lost merge response (%s) without redispatch",
+    (mode) => {
+      const f = fixture();
+      f.bindWorkflow();
+      configureMerge(f, { mode });
+      expectExit(f.retain(), mode === "applied-open" ? 1 : 0);
+      expect(
+        f
+          .captures()
+          .map(([, body]) => body)
+          .join("\n"),
+      ).toContain("502 Bad Gateway");
+      if (mode === "applied-open") {
+        expectExit(f.run(), 1);
+        expect(f.record().phase).toBe("intent");
+        expect(f.state()).toMatchObject({ mutations: 1, posts: 0 });
+        observeMerged(f, f.git(["--git-dir=" + f.remote, "rev-parse", "main"]));
+      }
+      expectExit(f.run());
+      expect(f.record().phase).toBe("retained");
+      expect(f.state()).toMatchObject({ mutations: 1, posts: 1 });
+      expect(existsSync(f.worktree)).toBe(true);
+      expect(f.git(["--git-dir=" + f.remote, "rev-parse", "topic"])).toBe(f.head);
+    },
+  );
+
+  it.each(["checkout", "local-ref", "binding"])(
+    "refuses retained completion after %s changes",
+    (resource) => {
+      const f = fixture();
+      f.bindWorkflow();
+      configureMerge(f, { mode: "applied-open" });
+      expectExit(f.retain(), 1);
+      const ref =
+        resource === "binding"
+          ? "refs/openclaw/pr-workflow-bindings/123"
+          : resource === "checkout"
+            ? "refs/heads/pr-123-prep"
+            : "refs/heads/pr-123";
+      const old = f.git(["rev-parse", ref]);
+      const changed = f.commit(
+        f.git(["rev-parse", `${old}^{tree}`]),
+        [resource === "binding" ? f.git(["rev-parse", `${old}^`]) : old],
+        "Changed retained resource\n",
+      );
+      f.git(["update-ref", ref, changed, old]);
+      observeMerged(f, f.git(["--git-dir=" + f.remote, "rev-parse", "main"]));
+      const result = f.run();
+      expectExit(result, 1);
+      expect(result.output).toContain("retained resources or deletion policy changed");
+      expect(f.record().phase).not.toBe("retained");
+      expect(f.git(["rev-parse", ref])).toBe(changed);
+      expect(f.state()).toMatchObject({ mutations: 1, posts: 0 });
+      expect(existsSync(f.worktree)).toBe(true);
+      expect(f.git(["--git-dir=" + f.remote, "rev-parse", "topic"])).toBe(f.head);
+    },
+  );
+
   it("merges once and retains the original branch, checkout and binding on completion", () => {
     const f = fixture();
     f.bindWorkflow();
