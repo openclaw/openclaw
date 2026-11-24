@@ -3,6 +3,7 @@ import { createServer } from "node:http";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, expect, it } from "vitest";
+import { isCompactionSummaryRequest } from "../../test/helpers/compaction-summary-request.js";
 import { writeOpenAiResponsesItem } from "../../test/helpers/openai-responses-item.test-support.js";
 import { writeOpenAiResponsesText } from "../../test/helpers/openai-responses-sse.js";
 import { SessionManager } from "../agents/sessions/session-manager.js";
@@ -44,8 +45,11 @@ it(
         let summaryRequests = 0;
         let toolRounds = 0;
         let overWindow = 0;
-        let largestPrompt = 0;
+        let largestRequestTokens = 0;
+        let largestPromptBeforeSummary = 0;
+        let firstSummaryPrompt = 0;
         let publishedBeforeSummary = 0;
+        let lastToolTokens = 0;
         let lastAnswerTokens = 0;
         let listRow: ((key: string) => Promise<GatewaySessionRow | undefined>) | undefined;
         const providerWork: Promise<void>[] = [];
@@ -72,8 +76,9 @@ it(
                     tools: wire.tools,
                   }).length / 4,
                 );
-                largestPrompt = Math.max(largestPrompt, tokens);
-                if (tokens + (wire.max_output_tokens ?? 4_096) > 1_000_000) {
+                const requestTokens = tokens + (wire.max_output_tokens ?? 4_096);
+                largestRequestTokens = Math.max(largestRequestTokens, requestTokens);
+                if (requestTokens > 1_000_000) {
                   overWindow += 1;
                   response.writeHead(400, { "content-type": "application/json" });
                   response.end(
@@ -83,9 +88,12 @@ it(
                 }
                 if (longTurn && summaryRequests === 0) {
                   const row = await expectDefined(listRow, "connected list reader")(longKey);
-                  publishedBeforeSummary = Math.max(publishedBeforeSummary, row?.totalTokens ?? 0);
+                  publishedBeforeSummary = row?.totalTokens ?? 0;
                 }
-                if (body.includes("context summarization assistant")) {
+                if (isCompactionSummaryRequest(body)) {
+                  if (summaryRequests === 0) {
+                    firstSummaryPrompt = tokens;
+                  }
                   summaryRequests += 1;
                   writeOpenAiResponsesText(response, {
                     text: "Earlier report evidence summarized; finish the scheduled task.",
@@ -100,6 +108,9 @@ it(
                   total_tokens: (longTurn ? tokens : 3_000) + 5,
                 };
                 if (longTurn && summaryRequests === 0 && toolRounds < 64) {
+                  expect.soft(publishedBeforeSummary).toBeGreaterThanOrEqual(lastToolTokens);
+                  largestPromptBeforeSummary = Math.max(largestPromptBeforeSummary, tokens);
+                  lastToolTokens = usage.total_tokens;
                   toolRounds += 1;
                   writeOpenAiResponsesItem(
                     response,
@@ -270,14 +281,19 @@ it(
               reported: lastAnswerTokens,
               toolRounds,
               summaryRequests,
-              largestPrompt,
+              largestRequestTokens,
+              largestPromptBeforeSummary,
+              firstSummaryPrompt,
               publishedBeforeSummary,
+              lastToolTokens,
             });
           }
           expect(overWindow).toBe(0);
           expect(toolRounds).toBeGreaterThan(1);
           expect(summaryRequests).toBeGreaterThan(0);
-          expect(largestPrompt).toBeLessThan(800_000);
+          expect(largestPromptBeforeSummary).toBeLessThan(850_000);
+          expect(firstSummaryPrompt).toBeGreaterThanOrEqual(850_000);
+          expect(largestRequestTokens).toBeLessThanOrEqual(1_000_000);
           expect(publishedBeforeSummary).toBeGreaterThan(700_000);
         } finally {
           if (gateway) {
