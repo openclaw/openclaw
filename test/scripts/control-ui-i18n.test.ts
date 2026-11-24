@@ -362,7 +362,6 @@ describe("control-ui-i18n generated ownership", () => {
         .filter((key) => key.startsWith("chat.sessionSharing."))
         .map((key) => key.slice(20)),
     ).toEqual([
-      "loweringAccessCancelsQueued",
       "sessionAccess",
       "sharedDescription",
       "readOnlyDescription",
@@ -371,7 +370,6 @@ describe("control-ui-i18n generated ownership", () => {
       "linkSharing",
       "anyoneWithLink",
       "publicLinkDescription",
-      "publicDraftDescription",
       "linkUnavailable",
       "permissions",
       "creator",
@@ -381,7 +379,6 @@ describe("control-ui-i18n generated ownership", () => {
       "searchPeople",
       "closeSearch",
       "noPeopleFound",
-      "tryAnotherName",
       "sharingOptions",
       "menu",
       "current",
