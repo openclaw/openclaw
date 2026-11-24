@@ -1,6 +1,10 @@
+import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import { unwrapToolCallForDisplay } from "../../../../../src/agents/tool-display-call.js";
+import {
+  unwrapToolCallForDisplay,
+  unwrapToolResultTextForDisplay,
+} from "../../../../../src/agents/tool-display-call.js";
 import { registerChatToolLabelsEnglish } from "../../../i18n/locales/en-chat-tool-labels.ts";
 import type { ToolCard, ToolCardOutcome } from "../../../lib/chat/chat-types.ts";
 import { PATCH_TOOL_NAMES, resolveToolCallInput } from "../../../lib/chat/tool-call-input.ts";
@@ -144,6 +148,46 @@ export function resolveToolOperationLabel(
   }
   const display = resolveToolDisplayIdentity(call.name);
   const name = call.name.trim().toLowerCase();
+  if (name === "get_goal") {
+    return t(`chat.toolCards.${byOutcome(outcome, "checkingGoal", "checkedGoal", "checkGoal")}`);
+  }
+  if (name === "toolsearch" || name === "tool_search") {
+    const selecting =
+      name === "toolsearch" &&
+      typeof args?.query === "string" &&
+      args.query.trim().startsWith("select:");
+    const action = selecting
+      ? byOutcome(outcome, "selectingTools", "selectedTools", "selectTools")
+      : byOutcome(outcome, "searchingTools", "searchedTools", "searchTools");
+    return t(`chat.toolCards.${action}`);
+  }
+  if (name === "sessions_list") {
+    return t(`chat.toolCards.${byOutcome(outcome, "listingChats", "listedChats", "listChats")}`);
+  }
+  if (name === "sessions_send") {
+    const result = {
+      ...asNullableRecord(card.details),
+      ...safeParseJsonRecord(unwrapToolResultTextForDisplay(card.outputText ?? "")),
+    };
+    let action = outcome === "running" ? "sending" : "send";
+    if (outcome === "succeeded") {
+      if (result.status === "ok" || result.status === "no_reply") {
+        action = "sent";
+      } else if (result.status === "accepted" || result.status === "queued") {
+        action = result.status;
+      } else if (
+        result.status === "started" &&
+        asNullableRecord(result.retained)?.acceptance === "not_accepted"
+      ) {
+        action = "deferred";
+      }
+    }
+    const targetName =
+      addressed?.name ?? (typeof args?.label === "string" ? args.label.trim() : undefined);
+    return t(`chat.toolCards.sessionSend.${action}${targetName ? "Named" : ""}`, {
+      name: targetName ?? "",
+    });
+  }
   if (PATCH_TOOL_NAMES.has(name)) {
     return t(
       `chat.toolCards.${byOutcome(outcome, "changingFiles", "changedFiles", "fileChanges")}`,
@@ -194,10 +238,49 @@ export function resolveToolOperationLabel(
       : name === "sessions_search"
         ? byOutcome(outcome, "searchingChats", "searchedChats", "chatSearch")
         : undefined;
+  if (!sessionLabel) {
+    const operation = resolveCatalogOperationLabel(name, args, outcome);
+    if (operation) {
+      return [operation, addressed?.name].filter(Boolean).join(" ");
+    }
+  }
   return [
     sessionLabel ? t(`chat.toolCards.${sessionLabel}`) : display.label,
     name === "sessions_history" ? addressed?.name : addressed ? addressed.name : detail,
   ]
     .filter(Boolean)
     .join(" ");
+}
+
+function resolveCatalogOperationLabel(
+  name: string,
+  args: Record<string, unknown> | null,
+  outcome: ToolCardOutcome,
+): string | undefined {
+  const catalog = registerChatToolLabelsEnglish.catalog.chat.toolCards.operationLabels;
+  if (!Object.hasOwn(catalog, name)) {
+    return undefined;
+  }
+  const labels = catalog[name as keyof typeof catalog];
+  const state = byOutcome(outcome, "running", "done", "action");
+  const action = typeof args?.action === "string" ? args.action : undefined;
+  const key =
+    name === "update_goal" && typeof args?.status === "string"
+      ? `status_${args.status}`
+      : action?.replaceAll(".", "_");
+  const operation = key && Object.hasOwn(labels, key) ? key : "default";
+  if (!Object.hasOwn(labels, operation)) {
+    return undefined;
+  }
+  const label = t(`chat.toolCards.operationLabels.${name}.${operation}.${state}`);
+  if (outcome === "unknown") {
+    return t("chat.toolCards.operationUnknown", { action: label });
+  }
+  if (outcome === "unrecorded") {
+    return t("chat.toolCards.operationNoResult", { action: label });
+  }
+  if (outcome === "blocked") {
+    return t("chat.toolCards.operationBlocked", { action: label });
+  }
+  return label;
 }
