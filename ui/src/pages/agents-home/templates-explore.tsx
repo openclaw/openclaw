@@ -265,13 +265,7 @@ export function TemplatesExplore(
     setView((draft) => {
       draft.query = query;
     });
-    const category = view.category === "featured" ? "" : view.category;
-    if (category !== view.category) {
-      setView((draft) => {
-        draft.category = category;
-      });
-    }
-    loadCatalog(category, query, { delay: 150 });
+    loadCatalog(view.category, query, { delay: 150 });
   }
 
   function selectCategory(category: string, expandedEntries?: TemplateCatalogEntry[]) {
@@ -376,11 +370,7 @@ export function TemplatesExplore(
                         current.query,
                         CATALOG_INITIAL_PAGE_SIZE,
                         {
-                          category:
-                            current.category && current.category !== "featured"
-                              ? current.category
-                              : undefined,
-                          featured: current.category === "featured" || undefined,
+                          category: current.category || undefined,
                           paged: !current.query.trim() || undefined,
                         },
                       );
@@ -461,11 +451,7 @@ export function TemplatesExplore(
                         "",
                         CATALOG_NEXT_PAGE_SIZE,
                         {
-                          category:
-                            current.category !== "featured"
-                              ? current.category || undefined
-                              : undefined,
-                          featured: current.category === "featured" || undefined,
+                          category: current.category || undefined,
                           paged: true,
                           cursor,
                         },
@@ -540,8 +526,6 @@ export function TemplatesExplore(
                               <CatalogDiscoverySection
                                 id="featured"
                                 title={t("templatesCatalog.featured")}
-                                viewAllLabel={t("templatesCatalog.viewAll")}
-                                onViewAll={() => selectCategory("featured")}
                               >
                                 <div class="plugin-catalog-grid" data-templates-featured>
                                   <For
@@ -614,15 +598,13 @@ export function TemplatesExplore(
                               <CatalogDiscoverySection
                                 id={current.category || "results"}
                                 title={
-                                  current.category === "featured"
-                                    ? t("templatesCatalog.featured")
-                                    : current.category
-                                      ? t(
-                                          templateCategories.find(
-                                            ([slug]) => slug === current.category,
-                                          )?.[1] ?? "templatesCatalog.categoryOther",
-                                        )
-                                      : t("templatesCatalog.results")
+                                  current.category
+                                    ? t(
+                                        templateCategories.find(
+                                          ([slug]) => slug === current.category,
+                                        )?.[1] ?? "templatesCatalog.categoryOther",
+                                      )
+                                    : t("templatesCatalog.results")
                                 }
                               >
                                 <div class="plugin-catalog-grid" data-templates-results>

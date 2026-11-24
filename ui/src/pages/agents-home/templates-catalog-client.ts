@@ -45,7 +45,7 @@ export async function searchTemplates(
       limit,
       ...options,
     },
-    { signal },
+    ...(signal ? [{ signal }] : []),
   );
   return { ...result, entries: result.entries.filter(isPublicEntry) };
 }

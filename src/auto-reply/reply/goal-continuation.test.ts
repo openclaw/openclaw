@@ -245,7 +245,6 @@ describe("Goal continuation eligibility", () => {
       f.params.base.operatorAuthority = createTestOperatorAuthority({
         profileId: "operator",
         scopes: ["operator.admin"],
-        assertCurrent: () => {},
       });
     }
     if (mode === "worker-required") {
@@ -690,11 +689,6 @@ describe("Goal return from committed child custody", () => {
     const source = createTestOperatorAuthority({
       profileId: "goal-owner",
       scopes: ["operator.write"],
-      assertCurrent() {
-        if (!holds) {
-          throw new Error("source released");
-        }
-      },
       retain() {
         holds++;
         return () => {
@@ -813,7 +807,6 @@ describe("Goal return from committed child custody", () => {
     const authority = createTestOperatorAuthority({
       profileId: "goal-owner",
       scopes: ["operator.write"],
-      assertCurrent() {},
       retain: () => release,
     });
     first.params.base.operatorAuthority = authority;
@@ -901,22 +894,10 @@ describe("Goal return from committed child custody", () => {
     expect(enqueueFollowupRun).not.toHaveBeenCalled();
   });
 
-  it.each(["Stop", "source retirement", "operator revocation"])(
+  it.each(["Stop", "source retirement"])(
     "checks %s again after asynchronous final enqueue preparation",
     async (boundary) => {
       const f = retainedGoal();
-      const revoked = new AbortController();
-      let current = true;
-      f.params.base.operatorAuthority = createTestOperatorAuthority({
-        profileId: "goal-owner",
-        scopes: ["operator.write"],
-        signal: revoked.signal,
-        assertCurrent() {
-          if (!current) {
-            throw new Error("revoked");
-          }
-        },
-      });
       f.retain();
       f.operation.complete();
       f.publish();
@@ -951,10 +932,6 @@ describe("Goal return from committed child custody", () => {
       }
       if (boundary === "source retirement") {
         revokeGoalContinuationReturn(f.child);
-      }
-      if (boundary === "operator revocation") {
-        current = false;
-        revoked.abort();
       }
       read.resolve(entry());
       await finishing;

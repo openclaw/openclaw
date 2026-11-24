@@ -5,11 +5,6 @@
   background: transparent;
 }
 
-.skill-discovery__skeleton-heading {
-  width: 96px;
-  height: 14px;
-}
-
 .skill-discovery-card__notice {
   font-size: var(--control-ui-text-xs);
 }
@@ -118,22 +113,8 @@
   font-size: 19px;
 }
 
-/* Earlier tiles paint above later ones without changing their display order. */
-.skill-installed-shelf__stack > .skill-tile:nth-child(1) {
-  z-index: 4;
+.skill-installed-shelf__stack > .skill-tile:first-child {
   margin-inline-start: 0;
-}
-
-.skill-installed-shelf__stack > .skill-tile:nth-child(2) {
-  z-index: 3;
-}
-
-.skill-installed-shelf__stack > .skill-tile:nth-child(3) {
-  z-index: 2;
-}
-
-.skill-installed-shelf__stack > .skill-tile:nth-child(4) {
-  z-index: 1;
 }
 
 .skill-installed-shelf__stack svg {

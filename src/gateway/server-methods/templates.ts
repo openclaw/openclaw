@@ -46,7 +46,10 @@ export const templatesHandlers: GatewayRequestHandlers = {
     validateTemplatesCatalogSearchParams,
     async ({ params, respond, context }) => {
       assertTemplatesEnabled(context.getRuntimeConfig());
-      if (params.cursor && (!params.paged || params.query?.trim() || params.overview)) {
+      if (
+        params.cursor &&
+        (!params.paged || params.query?.trim() || params.overview || params.featured)
+      ) {
         respond(
           false,
           undefined,
@@ -63,10 +66,9 @@ export const templatesHandlers: GatewayRequestHandlers = {
         respond(true, { entries: [], ...(overview ? { overview } : {}) });
         return;
       }
-      if (params.paged && !params.query?.trim()) {
+      if (params.paged && !params.query?.trim() && !params.featured) {
         const page = await browseClawHubTemplates({
           category: params.category,
-          featured: params.featured,
           limit: params.limit ?? 80,
           cursor: params.cursor,
         });

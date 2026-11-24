@@ -144,7 +144,9 @@ function InstalledShelf(props: { entries: SkillDiscoveryEntry[]; onOpen: () => v
     <button type="button" class="skill-installed-shelf" onClick={() => props.onOpen()}>
       <span class="skill-installed-shelf__stack" aria-hidden="true">
         <For each={marked().slice(0, 5)} keyed={(entry) => entry.id}>
-          {(entry) => <SkillTile emoji={entry().skill?.emoji} />}
+          {(entry, index) => (
+            <SkillTile emoji={entry().skill?.emoji} style={{ "z-index": 4 - index() }} />
+          )}
         </For>
       </span>
       <span class="skill-installed-shelf__text">
@@ -323,7 +325,9 @@ export function SkillDiscovery(props: SkillsProps) {
       <header class="plugin-catalog-section__header">
         <Show
           when={category()}
-          fallback={<span class="skeleton skill-discovery__skeleton-heading" aria-hidden="true" />}
+          fallback={
+            <span class="skeleton" style={{ width: "96px", height: "14px" }} aria-hidden="true" />
+          }
         >
           {(selection) => <h2>{selection().label}</h2>}
         </Show>

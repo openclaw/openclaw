@@ -208,7 +208,11 @@ describe("Templates discovery", () => {
     await waitForSolid(() =>
       expect(page.querySelector(shelf + " [data-templates-results] img")).not.toBeNull(),
     );
-    expect(request).toHaveBeenCalledWith("templates.catalog.search", { category: "productivity" });
+    expect(request).toHaveBeenCalledWith("templates.catalog.search", {
+      category: "productivity",
+      paged: true,
+      limit: 80,
+    });
     expect(decode).toHaveBeenCalledOnce();
   });
 
@@ -241,6 +245,7 @@ describe("Templates discovery", () => {
     expect(request).toHaveBeenCalledWith("templates.catalog.search", {
       query: "workflow",
       category: "productivity",
+      limit: 80,
     });
   });
 
@@ -279,6 +284,8 @@ describe("Templates discovery", () => {
       );
       expect(request).toHaveBeenCalledWith("templates.catalog.search", {
         category: "productivity",
+        paged: true,
+        limit: 80,
       });
       expect(page.querySelectorAll("[data-templates-entry]")).toHaveLength(1);
     },
@@ -307,7 +314,11 @@ describe("Templates discovery", () => {
 
     chips.find((chip) => chip.textContent === "Household")?.click();
     await vi.waitFor(() =>
-      expect(request).toHaveBeenCalledWith("templates.catalog.search", { category: "household" }),
+      expect(request).toHaveBeenCalledWith("templates.catalog.search", {
+        category: "household",
+        paged: true,
+        limit: 80,
+      }),
     );
   });
 
@@ -321,7 +332,10 @@ describe("Templates discovery", () => {
     search!.dispatchEvent(new Event("input", { bubbles: true }));
     await vi.waitFor(() => expect(page.querySelectorAll("[data-templates-entry]")).toHaveLength(0));
     await vi.waitFor(() =>
-      expect(request).toHaveBeenCalledWith("templates.catalog.search", { query: "missing" }),
+      expect(request).toHaveBeenCalledWith("templates.catalog.search", {
+        query: "missing",
+        limit: 80,
+      }),
     );
 
     search!.value = "workflow";
@@ -637,10 +651,16 @@ describe("Templates discovery", () => {
       Array.from(loading[0]!.children).every((card) => card.getAttribute("aria-hidden") === "true"),
     ).toBe(true);
     await vi.advanceTimersByTimeAsync(149);
-    expect(request).not.toHaveBeenCalledWith("templates.catalog.search", { query: "stale" });
+    expect(request).not.toHaveBeenCalledWith("templates.catalog.search", {
+      query: "stale",
+      limit: 80,
+    });
     await vi.advanceTimersByTimeAsync(1);
-    expect(request).toHaveBeenCalledWith("templates.catalog.search", { query: "stale" });
-    expect(request).not.toHaveBeenCalledWith("templates.catalog.search", { query: "cancelled" });
+    expect(request).toHaveBeenCalledWith("templates.catalog.search", { query: "stale", limit: 80 });
+    expect(request).not.toHaveBeenCalledWith("templates.catalog.search", {
+      query: "cancelled",
+      limit: 80,
+    });
 
     enter("fresh");
     await vi.advanceTimersByTimeAsync(150);

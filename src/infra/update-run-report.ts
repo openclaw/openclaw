@@ -21,7 +21,6 @@ import {
   LEGACY_UPDATE_RUN_ADVISORY,
   LEGACY_UPDATE_RUN_EXPIRED_REASON,
 } from "./update-run-legacy-expiry.js";
-import { UPDATE_RUN_TEXT_LIMIT } from "./update-run-limits.js";
 import { formatUpdateOwedStep, listUpdateOwedSteps } from "./update-run-owed-step.js";
 import {
   isAcknowledgedAbandonedUpdateRun,
@@ -184,18 +183,6 @@ export function formatUpdateRunRecovery(
 
 function bounded(text: string, limit: number): string {
   return text.length <= limit ? text : `${sliceUtf16Safe(text, 0, limit - 1)}…`;
-}
-
-export function formatRepairedUpdateRun(run: UpdateRunRecord): string {
-  const version = run.target.version ?? run.after.version;
-  const phase = run.steps.find((step) => PHASES.has(step.step) && step.status === "failed");
-  const failure = selectUpdateFailureReportSteps(
-    run.steps.filter((step) => step.status === "failed" && !PHASES.has(step.step)),
-  )[0];
-  return bounded(
-    `Update ${run.runId}${version ? ` to ${version}` : ""} failed${phase ? ` at ${phase.step}` : ""}: ${run.reason ?? "unknown reason"}.${failure?.detail ? ` ${failure.step}: ${failure.detail}` : ""}`,
-    UPDATE_RUN_TEXT_LIMIT,
-  );
 }
 
 function formatUpdateVersion(identity: UpdateRunRecord["after"]): string | undefined {
@@ -391,6 +378,8 @@ export function renderUpdateRunReport(
   const lines: string[] = run.status === "succeeded" ? [...warnings] : [];
   if (
     currentHealth &&
+    (currentHealth.kind === "responding" ||
+      run.verification.rollbackOutcome?.status !== "succeeded") &&
     (runtimeVerificationRecovered || (!run.origin.nextAction && !opts.nextAction))
   ) {
     lines.push(formatUpdateRunCurrentHealth(currentHealth));
@@ -482,7 +471,13 @@ export function renderUpdateRunReport(
     }
   }
   for (const step of selectUpdateFailureReportSteps(
-    run.steps.filter((item) => item.status === "failed"),
+    run.steps.filter(
+      (item) =>
+        item.status === "failed" &&
+        (!PHASES.has(item.step) ||
+          run.verification.rollbackOutcome?.status !== "succeeded" ||
+          !run.reason?.trim()),
+    ),
   )) {
     const failure = `Failed: ${step.step}${step.detail ? ` — ${step.detail}` : ""}`;
     lines.push(bounded(failure, 300));
@@ -560,7 +555,7 @@ export function renderUpdateRunReport(
     (runtimeVerificationRecovered ? undefined : run.origin.nextAction) ??
     skipGuidance;
   const nextAction =
-    savedAction && currentHealth
+    savedAction && currentHealth && run.verification.rollbackOutcome?.status !== "succeeded"
       ? `${formatUpdateRunCurrentHealth(currentHealth)} ${
           currentHealth.kind === "responding"
             ? "This observation supersedes saved claims that the Gateway is stopped; other recovery constraints still apply. The recorded update outcome is unchanged."
@@ -638,6 +633,14 @@ export function renderUpdateRunReport(
     };
   }
   lines.unshift(...repaired);
+  if (run.verification.rollbackOutcome?.status === "succeeded") {
+    lines.unshift(...(next ? [next] : []));
+    return {
+      headline,
+      lines,
+      markdown: bounded([headline, ...lines].join("\n"), markdownLimit),
+    };
+  }
   lines.push(...hints);
   const body = [headline, ...lines.filter((line) => line !== next)].join("\n");
   const suffix = next ? `\n${bounded(next, 1100)}` : "";

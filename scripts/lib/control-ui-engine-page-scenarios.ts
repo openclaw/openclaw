@@ -1521,9 +1521,9 @@ function createPageFixture(
         // Skills readiness needs the registry page even when another page is the origin.
         "skills.search": {
           cases: [
-            { match: { query: "Data skill 0999", limit: 20 }, response: { results: [] } },
+            { match: { query: "Data skill 0999", limit: 80 }, response: { results: [] } },
             {
-              match: { limit: 20 },
+              match: { limit: 80 },
               response: {
                 results: Array.from({ length: 20 }, (_, index) => ({
                   slug: `registry-skill-${index}`,

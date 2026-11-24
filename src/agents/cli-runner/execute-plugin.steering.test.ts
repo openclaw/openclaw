@@ -419,17 +419,11 @@ it("steers a spawned Claude child for its requester and refuses other sources", 
     const { context } = await createExecution({ config, timeoutMs: 30_000 });
     const { params } = context;
     const { sessionId } = params;
-    let revoked = false;
     // Spawn admits the child with the requester's operator source and origin.
     const operatorAuthority = createTestOperatorAuthority({
       profileId: "owner",
       scopes: ["operator.read", "operator.write"],
       gatewayAccessGrant: null,
-      assertCurrent: () => {
-        if (revoked) {
-          throw new Error("operator source revoked");
-        }
-      },
     });
     const admission = prepareSystemAgentRunAdmission(
       config,
@@ -550,8 +544,6 @@ it("steers a spawned Claude child for its requester and refuses other sources", 
           tools: { ...config.tools, deny: ["read"] },
         }),
       ).resolves.toMatchObject({ status: "rejected", reason: "tool_authority_mismatch" });
-      revoked = true;
-      await expect(steer("revoked source")).resolves.toMatchObject({ status: "rejected" });
       expect(await readInputs()).toEqual(["initial", "guidance"]);
     } finally {
       operation.abortByUser();

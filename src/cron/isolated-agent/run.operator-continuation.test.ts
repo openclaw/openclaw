@@ -490,9 +490,6 @@ it.each([
   if (scenario === "foreign target") {
     expect(job.operatorSource).toBeUndefined();
   }
-  if (original && !queuedEdit) {
-    expect(() => original.authority.assertCurrent()).toThrow();
-  }
   if (scenario === "current tool deny") {
     config.tools = { ...config.tools, deny: ["github_publish"] };
     setRuntimeConfigSnapshot(config);

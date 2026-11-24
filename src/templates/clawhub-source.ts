@@ -77,42 +77,19 @@ export type ClawHubTemplateTrust = {
   trustRecord: AcceptedTrust["trustInstallRecordFields"];
 };
 
+// Page the same globally ranked list that older category reads and certified shelves use.
+// ClawHub's downloads order cannot establish the Template install ranking across pages.
 export async function browseClawHubTemplates(
-  params: ClawHubFetchOptions & {
-    limit: number;
-    category?: string;
-    featured?: boolean;
-    cursor?: string;
-  },
+  params: ClawHubFetchOptions & { limit: number; category?: string; cursor?: string },
 ): Promise<{ entries: ClawHubTemplateCatalogEntry[]; nextCursor?: string }> {
-  const entries = new Map<string, ClawHubTemplateCatalogEntry>();
-  let cursor = params.cursor;
-  const seen = new Set([cursor]);
-  // Public Template projection can drop registry rows; continue to fill the requested page.
-  for (let page = 0; entries.size < params.limit && page < MAX_CATALOG_PAGES; page += 1) {
-    const result = await listClawHubPackages({
-      ...params,
-      family: "template",
-      ...(params.category && !params.featured ? { sort: "installs" } : {}),
-      limit: params.limit - entries.size,
-      cursor,
-    });
-    for (const entry of projectPublicEntries(result.items, params.baseUrl)) {
-      entries.set(entry.packageName, entry);
-    }
-    cursor = result.nextCursor ?? undefined;
-    if (!cursor) {
-      break;
-    }
-    if (seen.has(cursor)) {
-      throw new ClawHubSourceError(
-        "clawhub_catalog_cursor_invalid",
-        "ClawHub returned a repeating catalog cursor.",
-      );
-    }
-    seen.add(cursor);
-  }
-  return { entries: [...entries.values()], ...(cursor ? { nextCursor: cursor } : {}) };
+  const { cursor, limit, ...catalog } = params;
+  const offset = cursor === undefined ? 0 : Number(cursor);
+  const end = offset + limit;
+  const entries = await listClawHubTemplates(catalog);
+  return {
+    entries: entries.slice(offset, end),
+    ...(end < entries.length ? { nextCursor: String(end) } : {}),
+  };
 }
 
 export async function listClawHubTemplates(

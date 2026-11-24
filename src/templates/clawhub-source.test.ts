@@ -287,27 +287,32 @@ afterEach(async () => {
 });
 
 describe("public ClawHub Template catalog", () => {
-  it("fills a ranked page across short registry pages and returns the continuation cursor", async () => {
-    mocks.list
-      .mockResolvedValueOnce(
-        listPage([officialPackage(), { ...communityPackage(), channel: "private" }], "partial"),
-      )
-      .mockResolvedValueOnce(listPage([communityPackage()], "following"));
-    const page = await browseClawHubTemplates({ category: "research", limit: 2 });
-    expect(page.entries.map(({ packageName }) => packageName)).toEqual([
-      packageName,
-      personalPackageName,
-    ]);
-    expect(page.nextCursor).toBe("following");
-    expect(
-      mocks.list.mock.calls.map(([params]) => ({
-        limit: params.limit,
-        cursor: params.cursor,
-        sort: params.sort,
-      })),
-    ).toEqual([
-      { limit: 2, cursor: undefined, sort: "installs" },
-      { limit: 1, cursor: "partial", sort: "installs" },
+  it("pages the same install-ranked category across short ClawHub pages", async () => {
+    const mostDownloaded = { ...officialPackage(), stats: { downloads: 100, installs: 10 } };
+    const mostInstalled = { ...communityPackage(), stats: { downloads: 10, installs: 100 } };
+    for (let i = 0; i < 2; i += 1) {
+      mocks.list
+        .mockResolvedValueOnce(listPage([mostDownloaded], "empty"))
+        .mockResolvedValueOnce(listPage([], "following"))
+        .mockResolvedValueOnce(listPage([mostInstalled]));
+    }
+    const first = await browseClawHubTemplates({ category: "research", limit: 1 });
+    expect(first.entries.map(({ packageName }) => packageName)).toEqual([personalPackageName]);
+    expect(first.nextCursor).toBe("1");
+    const next = await browseClawHubTemplates({
+      category: "research",
+      limit: 1,
+      cursor: first.nextCursor,
+    });
+    expect(next.entries.map(({ packageName }) => packageName)).toEqual([packageName]);
+    expect(next.nextCursor).toBeUndefined();
+    expect(mocks.list.mock.calls.map(([params]) => params.cursor)).toEqual([
+      undefined,
+      "empty",
+      "following",
+      undefined,
+      "empty",
+      "following",
     ]);
   });
 
