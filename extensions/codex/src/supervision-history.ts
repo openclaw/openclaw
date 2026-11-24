@@ -218,7 +218,9 @@ export async function readCompletedFinalAnswer(params: {
   const text = item.text;
   const textSha256 = `sha256:${sha256Hex(text)}`;
   if (params.selector.textSha256 && params.selector.textSha256 !== textSha256) {
-    throw new Error(`Codex final answer changed before text_offset ${params.selector.textOffset}`);
+    throw new Error(
+      "Final-answer digest does not match text_sha256; restart recovery at text_offset 0.",
+    );
   }
   if (params.selector.textOffset > text.length) {
     throw new Error(`text_offset exceeds the ${text.length}-character final answer`);
