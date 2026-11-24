@@ -58,7 +58,7 @@ export function readStateSchemaContentVersion(
   }
   const schema = getAdmittedSqliteSchemaFacts(db);
   const version = schema?.userVersion ?? readSqliteUserVersion(db);
-  const contentVersion = parseContentVersion(
+  const contentVersion = parseStateSchemaContentVersion(
     tableExists(db, "config_machine_state") ? readRow(db)?.value_json : undefined,
   );
   rememberStateSchemaVersionAdmission(db, { userVersion: version, contentVersion });
@@ -69,7 +69,7 @@ export function readStateSchemaContentVersionRow(db: EngineConnection) {
   return contentVersionQuery(db)().rows[0];
 }
 
-function parseContentVersion(valueJson: string | null | undefined): number {
+export function parseStateSchemaContentVersion(valueJson: string | null | undefined): number {
   if (valueJson === undefined) {
     return 0;
   }

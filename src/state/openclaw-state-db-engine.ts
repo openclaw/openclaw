@@ -28,7 +28,10 @@ import {
 import { openClawStateDatabaseCache } from "./openclaw-state-db-cache.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "./openclaw-state-db-contract.js";
 import { openTrackedStateDatabase } from "./openclaw-state-db-handle.js";
-import { admitStateSchemaFacts } from "./openclaw-state-db-schema-version.js";
+import {
+  admitStateSchemaFacts,
+  parseStateSchemaContentVersion,
+} from "./openclaw-state-db-schema-version.js";
 import { writeStateSchemaContentVersion } from "./openclaw-state-schema-publication.js";
 import { statePostgresRuntime as runtime } from "./postgres-schema.generated/runtime.js";
 
@@ -103,17 +106,27 @@ export function admitStatePostgres(db: PostgresSqlConnection, fresh: boolean): v
       "SELECT value_json FROM config_machine_state WHERE state_key = 'state.schema.contentVersion'",
     )
     .get();
+  let contentVersion: number;
+  try {
+    const marker = content?.value_json;
+    if (marker !== undefined && typeof marker !== "string") {
+      throw new Error("Invalid PostgreSQL state content marker");
+    }
+    contentVersion = parseStateSchemaContentVersion(marker);
+  } catch (cause) {
+    throw new Error(`PostgreSQL state metadata mismatch. ${recovery}`, { cause });
+  }
   if (
     meta?.schema_version !== OPENCLAW_STATE_SCHEMA_VERSION ||
     meta.role !== "global" ||
     meta.agent_id !== null ||
-    content?.value_json !== String(OPENCLAW_STATE_SCHEMA_VERSION)
+    contentVersion > facts.version
   ) {
     throw new Error(`PostgreSQL state metadata mismatch. ${recovery}`);
   }
   publishStateSchemaVersionAdmission(db, {
     userVersion: facts.version,
-    contentVersion: facts.version,
+    contentVersion,
   });
   publishStateRuntimeSchemaAdmission(db, true);
 }

@@ -13,6 +13,7 @@ import {
   retireSqliteDatabaseAdmissionForPath,
 } from "../infra/sqlite-database-admission.js";
 import { admitSqliteSchema } from "../infra/sqlite-schema-facts.js";
+import { OPENCLAW_STATE_SCHEMA_VERSION } from "./openclaw-state-db-contract.js";
 
 const configured: unknown = getEnvironmentData("openclaw.test.state.conformance.connection");
 const connection = typeof configured === "string" ? configured : undefined;
@@ -22,7 +23,10 @@ type Result = { namespace: string; admissionId: string; catalogReads: number; th
 describe.skipIf(!connection)("PostgreSQL shared-state owner", () => {
   it("bootstraps, installs lazy fragments atomically, reuses admission, reads snapshots and closes paired handles", async () => {
     const pathname = path.join(tempDirs.make("state-postgres-"), "state.sqlite");
-    const run = async (mode: "bootstrap" | "restart") => {
+    const run = async (
+      mode: "bootstrap" | "restart",
+      contentVersion = OPENCLAW_STATE_SCHEMA_VERSION,
+    ) => {
       const anchor = openNodeSqliteDatabase(pathname);
       admitSqliteSchema(anchor);
       const url = resolveRuntimeWorkerUrl({
@@ -39,6 +43,7 @@ describe.skipIf(!connection)("PostgreSQL shared-state owner", () => {
           workerData: {
             path: pathname,
             mode,
+            contentVersion,
             admissions: captureSqliteDatabaseAdmissions(undefined, { location: pathname }),
           },
         });
@@ -78,6 +83,20 @@ describe.skipIf(!connection)("PostgreSQL shared-state owner", () => {
       const restart = await run("restart");
       expect(restart.namespace).toBe(cold.namespace);
       expect(restart.admissionId).not.toBe(cold.admissionId);
+      const contentMarker =
+        'UPDATE "' +
+        namespace +
+        '".config_machine_state ' +
+        "SET value_json = $1 WHERE state_key = 'state.schema.contentVersion'";
+      await client.query(contentMarker, [String(OPENCLAW_STATE_SCHEMA_VERSION - 1)]);
+      await expect(run("restart", OPENCLAW_STATE_SCHEMA_VERSION - 1)).resolves.toMatchObject({
+        namespace,
+      });
+      for (const invalid of [String(OPENCLAW_STATE_SCHEMA_VERSION + 1), '"invalid"']) {
+        await client.query(contentMarker, [invalid]);
+        await expect(run("restart")).rejects.toThrow("PostgreSQL state metadata mismatch");
+      }
+      await client.query(contentMarker, [String(OPENCLAW_STATE_SCHEMA_VERSION)]);
       await client.query(`UPDATE "${namespace}".schema_meta SET schema_version = 23`);
       await expect(run("restart")).rejects.toThrow("PostgreSQL state metadata mismatch");
       await client.query(`DROP TABLE "${namespace}".secret_store_entries`);

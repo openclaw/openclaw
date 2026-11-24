@@ -24,8 +24,12 @@ import {
 } from "./openclaw-state-db.js";
 import { ensureUserBackgroundSchema } from "./user-background.store.js";
 
-const input: { path: string; mode: "bootstrap" | "restart"; admissions: SqliteDatabaseAdmissions } =
-  workerData;
+const input: {
+  path: string;
+  mode: "bootstrap" | "restart";
+  contentVersion: number;
+  admissions: SqliteDatabaseAdmissions;
+} = workerData;
 if (parentPort) {
   const port = parentPort;
   let catalogReads = 0;
@@ -60,7 +64,7 @@ if (parentPort) {
           "SELECT value_json FROM config_machine_state WHERE state_key = 'state.schema.contentVersion'",
         )
         .get()?.value_json,
-      String(OPENCLAW_STATE_SCHEMA_VERSION),
+      String(input.contentVersion),
     );
     if (input.mode === "bootstrap") {
       assert.equal(tableExists(database.db, "user_background_images"), false);
