@@ -13,6 +13,7 @@ openclaw-pending-session-create {
   .app-toast__content {
     display: grid;
     grid-template-columns: minmax(0, 1fr) auto;
+    align-items: start;
     gap: 2px 12px;
   }
 
@@ -29,22 +30,6 @@ openclaw-pending-session-create {
     grid-column: 1 / -1;
   }
 
-  > .app-toast__dismiss {
-    position: static;
-    flex: none;
-    background: transparent;
-    box-shadow: none;
-    color: var(--muted);
-    opacity: 1;
-    scale: 1;
-  }
-}
-
-.chat-error:where(:not(.chat-error--reply)) {
-  .app-toast__content {
-    align-items: start;
-  }
-
   .chat-error__actions {
     grid-template-rows: subgrid;
     grid-row: 1 / span 2;
@@ -54,7 +39,14 @@ openclaw-pending-session-create {
   }
 
   > .app-toast__dismiss {
+    position: static;
+    flex: none;
     margin: -1px -6px 0 -4px;
+    background: transparent;
+    box-shadow: none;
+    color: var(--muted);
+    opacity: 1;
+    scale: 1;
   }
 }
 
@@ -63,16 +55,18 @@ openclaw-pending-session-create {
 
   .app-toast__content {
     grid-template-rows: minmax(var(--app-toast-row), auto);
+    align-items: center;
   }
 
   .chat-error__actions {
-    grid-area: 1 / 2;
-    gap: 2px 12px;
+    grid-row: 1;
+    gap: inherit;
+    margin: 0;
   }
 
   > .app-toast__dismiss {
     height: var(--app-toast-row);
-    margin: 0 -6px 0 -4px;
+    margin-block-start: 0;
   }
 
   .report-issue-link {
@@ -82,9 +76,6 @@ openclaw-pending-session-create {
 
 .chat-error__toggle {
   min-height: 28px;
-  padding: 0;
-  border: 0;
-  background: none;
   color: var(--text);
   outline: none;
 
@@ -2171,6 +2162,7 @@ openclaw-chat-video-player {
   font: 12px/1.4 var(--mono);
 }
 
+.chat-error__toggle,
 button.chat-pr__diff {
   padding: 0;
   border: 0;
