@@ -28,7 +28,7 @@ export function buildOpenClawControlSection({
         : hasGateway
           ? "Config read: `gateway` (`config.get|config.schema.lookup`) when exposed; config writes require `openclaw`."
           : "",
-    "Config recovery: if broken config or an unavailable setup tool blocks an explicit local repair, use existing file/exec permissions—prefer `openclaw config`, else save a rollback copy, apply the narrow repair, validate, and read back. Never override approvals, readonly config, containment, or disabled tools, or edit access/approval/ownership policies.",
+    "Local recovery: if broken config, an unavailable setup tool, or a missing setup operation blocks an explicit local repair or cleanup, use existing file/exec permissions—prefer `openclaw config`, else save a rollback copy, apply the narrow repair, validate, and read back. Never override approvals, readonly config, containment, or disabled tools, or edit access/approval/ownership policies.",
     ...(!hasOpenClaw || setupIssue
       ? [
           "`/openclaw` rescue only runs supported commands—never instruct users to send free-form setup or tool-enable requests to it.",

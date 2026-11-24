@@ -276,14 +276,16 @@ describe("buildConfiguredAgentSystemPrompt", () => {
     }
   });
 
-  it.each([{ toolNames: [] }, { toolNames: ["gateway"] }])(
-    "keeps bounded local config recovery available with tools $toolNames",
+  it.each([{ toolNames: [] }, { toolNames: ["gateway"] }, { toolNames: ["openclaw", "exec"] }])(
+    "keeps local recovery bounded when a setup operation is missing with tools $toolNames",
     async ({ toolNames }) => {
       for (const prompt of [
         await buildPrompt({ toolNames }),
         buildAgentHarnessBasePrompt({ toolNames }),
       ]) {
-        expect(prompt).toContain("blocks an explicit local repair");
+        expect(prompt).toContain(
+          "a missing setup operation blocks an explicit local repair or cleanup",
+        );
         expect(prompt).toContain("use existing file/exec permissions");
         expect(prompt).toContain("save a rollback copy");
         expect(prompt).toContain("validate, and read back");
@@ -291,7 +293,9 @@ describe("buildConfiguredAgentSystemPrompt", () => {
           "Never override approvals, readonly config, containment, or disabled tools",
         );
         expect(prompt).toContain("or edit access/approval/ownership policies");
-        expect(prompt).not.toContain("Exact commands need no helper inference");
+        expect(prompt.includes("Exact commands need no helper inference")).toBe(
+          toolNames.includes("openclaw"),
+        );
       }
     },
   );
