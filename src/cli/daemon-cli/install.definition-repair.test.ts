@@ -555,8 +555,8 @@ describe.skipIf(process.platform === "win32")("service definition repair", () =>
     expect(events.filter((event) => event.endsWith("at native boundary"))).toEqual([]);
     // The definition install, which here also restarts the Gateway, starts right
     // after both admissions are reread.
-    const install = events.indexOf("systemctl daemon-reload");
-    expect(events.slice(install - 2, install)).toEqual([
+    const definitionInstall = events.indexOf("systemctl daemon-reload");
+    expect(events.slice(definitionInstall - 2, definitionInstall)).toEqual([
       "restore admission",
       "installation admission",
     ]);
