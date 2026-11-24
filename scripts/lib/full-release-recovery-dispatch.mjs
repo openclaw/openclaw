@@ -29,12 +29,12 @@ import {
 import { restoreOriginalPublicationAdmission } from "../release-ci-summary.mjs";
 import { readBoundedRegularFile } from "./actions-artifact-archive.mjs";
 import { assertRequestPath } from "./full-release-dispatch-request.mts";
-import { isWaived, readReleaseValidationWaiversAsync } from "./release-validation-waivers.mjs";
 import {
   artifactJson,
   discoverPublicationArtifacts,
   witnessedRun,
 } from "./full-release-publication-artifacts.mjs";
+import { isWaived, readReleaseValidationWaiversAsync } from "./release-validation-waivers.mjs";
 
 const REPOSITORY = "openclaw/openclaw";
 const WORKFLOW = ".github/workflows/full-release-receipt-recovery.yml";
@@ -44,6 +44,10 @@ function requireValue(value, message) {
   if (!value) {
     throw new Error("Receipt recovery: " + message);
   }
+}
+function one(values, label) {
+  requireValue(values.length === 1, label + " is missing or ambiguous");
+  return values[0];
 }
 export function parseReceiptRecoveryArgs(args) {
   const options = { command: "recover", repository: REPOSITORY, runId: "", json: false };
