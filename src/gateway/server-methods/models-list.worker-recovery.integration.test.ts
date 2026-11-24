@@ -5,7 +5,7 @@ import { createServer, type ServerResponse } from "node:http";
 import { text as readText } from "node:stream/consumers";
 import { Worker } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import type { ModelsListResult } from "../../../packages/gateway-protocol/src/schema/agents-models-skills.js";
 import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
 import {
@@ -215,6 +215,8 @@ it("model reads recover a failed shared-worker publication and retain the failed
       const worker = workers.get(heldThread);
       expect(worker).toBeDefined();
       expect(heldThread).toBeGreaterThan(0);
+      // Hold the discovery retry deadline still without faking Gateway I/O or RPC timers.
+      vi.useFakeTimers({ toFake: ["Date"] });
       // Fail real preparation after worker exit, without synthesizing publication events.
       failedPreparations = 1;
       await worker!.terminate();
@@ -273,6 +275,7 @@ it("model reads recover a failed shared-worker publication and retain the failed
       expect(catalogModelIds(refreshed, provider)).toEqual(["original", "recovered"]);
       expect(refreshed.refreshFailed).not.toBe(true);
     } finally {
+      vi.useRealTimers();
       releasePublication?.();
       releaseResponses();
     }
