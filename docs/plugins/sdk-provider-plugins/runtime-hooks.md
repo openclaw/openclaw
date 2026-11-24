@@ -324,7 +324,7 @@ Cancelled preparation must reject after cleanup, not report a missing login.
 | `buildAuthDoctorHint`             | Auth repair guidance                                                                        |
 | `matchesContextOverflowError`     | Provider-owned overflow detection                                                           |
 | `classifyFailoverReason`          | Provider-owned rate-limit/overload classification                                           |
-| `formatBillingError`              | Optional provider-authored billing guidance and action link                                 |
+| `formatBillingError`              | Optional provider-authored, text-only billing guidance                                      |
 | `isCacheTtlEligible`              | Prompt cache TTL gating                                                                     |
 | `buildMissingAuthMessage`         | Custom missing-auth hint                                                                    |
 | `augmentModelCatalog`             | Synthetic forward-compat rows (deprecated - prefer `registerModelCatalogProvider`)          |
