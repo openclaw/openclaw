@@ -313,17 +313,14 @@ suite.define(() => {
           await composer.waitFor();
           await page.getByText(prompt, { exact: true }).waitFor();
           await expect.poll(() => approvalCard.count()).toBe(0);
-          const reloadedWorkSummary = page
-            .locator(".chat-work-group > .chat-activity-group__summary")
-            .first();
-          await reloadedWorkSummary.waitFor();
-          if ((await reloadedWorkSummary.getAttribute("aria-expanded")) !== "true") {
-            await reloadedWorkSummary.click();
-          }
+          // mock-openai is an OpenAI-compatible fixture, not recorded OpenAI work.
+          // Its persisted tool results are rendered inline, not under a Worked fold.
           const reloadedToolSummaries = page.locator(".chat-tool-msg-summary");
           await reloadedToolSummaries.first().waitFor();
           for (const summary of await reloadedToolSummaries.all()) {
-            await summary.click();
+            if ((await summary.getAttribute("aria-expanded")) !== "true") {
+              await summary.click();
+            }
           }
           await page
             .locator(".chat-tool-msg-body", { hasText: /Updated logging\.level/u })
@@ -526,15 +523,8 @@ fullAccessSuite.define(() => {
               if (typeof finalEntryId !== "string") {
                 throw new Error("chat.history returned no persisted assistant entry id");
               }
-              // History replaces the live final and its work-group key. Expand the persisted row.
+              // Wait for the persisted final before opening the inline tool results.
               await page.locator(`.chat-bubble[data-entry-id="${finalEntryId}"]`).waitFor();
-              const workSummary = page
-                .locator(".chat-work-group > .chat-activity-group__summary")
-                .first();
-              await workSummary.waitFor();
-              if ((await workSummary.getAttribute("aria-expanded")) !== "true") {
-                await workSummary.click();
-              }
               const toolSummaries = page.locator(".chat-tool-msg-summary");
               await toolSummaries.first().waitFor();
               for (const summary of await toolSummaries.all()) {
