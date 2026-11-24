@@ -5,6 +5,8 @@ import { hasErrnoCode } from "../infra/errno.js";
 import { sleep } from "../utils/sleep.js";
 import { getHostExecMemoryBudget } from "./child-memory.js";
 
+declare const WORKER_DEPLOY_BUILD: boolean;
+
 const cgroupMount = "/sys/fs/cgroup";
 const controllers = ["cpu", "io", "memory"];
 
@@ -28,6 +30,24 @@ function sessionExecCgroup(directory: string, scopeKey: string): string {
   return path.join(
     directory,
     `session-${createHash("sha256").update(scopeKey).digest("hex").slice(0, 32)}`,
+  );
+}
+
+/** A sealed provider Sandbox owns its worker tools; Gateway commands keep the host budget. */
+export function usesAgentExecHostMemoryBudget(input: {
+  executionIntent?: ProcessExecutionIntent;
+  cleanupOwnership?: "external";
+  workerMemoryBoundary?: "sandbox";
+}): boolean {
+  return (
+    process.platform === "linux" &&
+    input.executionIntent === "agent-tool" &&
+    input.cleanupOwnership !== "external" &&
+    !(
+      typeof WORKER_DEPLOY_BUILD === "boolean" &&
+      WORKER_DEPLOY_BUILD &&
+      input.workerMemoryBoundary === "sandbox"
+    )
   );
 }
 

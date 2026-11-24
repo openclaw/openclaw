@@ -23,7 +23,6 @@ const authority = (profileId: string, scopes = ["operator.write"], signal?: Abor
     profileId,
     scopes,
     signal,
-    assertCurrent: () => {},
   });
 const patchRequest = (key: string, params: Record<string, unknown>) => ({
   method: "sessions.patch",
@@ -73,7 +72,7 @@ async function createArchiveSession(name: string, sessionId = `session-${name}`)
 }
 
 describe("sessions tool self-archive", () => {
-  it.each(["current", "replaced", "revoked"])(
+  it.each(["current", "replaced"])(
     "reports an unconfirmed deferred archive only to its authorized original generation (%s)",
     async (scenario) => {
       const replaced = scenario === "replaced";
@@ -90,9 +89,6 @@ describe("sessions tool self-archive", () => {
       const callGateway = vi.fn(async () => {
         if (replaced) {
           await update({ sessionId: "replacement-session-id", updatedAt: 2 });
-        }
-        if (scenario === "revoked") {
-          controller.abort(new Error("archive source revoked"));
         }
         throw new Error("Transport failed: Bearer synthetic-private-token /private/session/path");
       });
@@ -382,7 +378,6 @@ describe("sessions tool ownership", () => {
         method: "sessions.assignOwner",
         params: { key: sessionKey, owner: { type: actor.type, id: actor.id } },
         agentToolCaller: { agentId: "main", sessionKey },
-        assertDispatchCurrent: expect.any(Function),
       });
       if (!controls) {
         expect(assigned).toMatchObject({
@@ -403,9 +398,6 @@ describe("sessions tool ownership", () => {
           /only permits archive, restore, and stop/,
         );
       }
-      expect(callGateway).toHaveBeenCalledOnce();
-      controller.abort(new Error("operator source revoked"));
-      await expect(tool.execute("retired-assign", args)).rejects.toThrow("operator source revoked");
       expect(callGateway).toHaveBeenCalledOnce();
     }, runAuthority);
   });

@@ -34,9 +34,11 @@ import {
   verifyReceiptRecoveryAuthority,
 } from "./lib/release-evidence-identity.mjs";
 import {
+  RELEASE_VALIDATION_WAIVERS_PATH,
   evaluateReleaseChildPolicy,
   readReleaseValidationWaiversAsync,
   releaseChildAdvisories,
+  isWaived,
 } from "./lib/release-validation-waivers.mjs";
 import {
   PREPARED_NPM_MANIFEST,
@@ -47,7 +49,10 @@ import {
   restoreOriginalPublicationAdmission,
   validatePerformanceArtifactOnlyJobs,
 } from "./release-ci-summary.mjs";
-import { revalidateQualificationAdmissionAuthority } from "./release-qualification-admission.mjs";
+import {
+  buildQualificationAdmissionRequest,
+  revalidateQualificationAdmissionAuthority,
+} from "./release-qualification-admission.mjs";
 import { validateQualificationJobs } from "./release-qualification-coverage.mjs";
 import { runReleaseToolingGh } from "./release-tooling-identity.mjs";
 export const RECEIPT_RECOVERY_SCHEMA = "openclaw.full-release-receipt-recovery/v1";
@@ -81,6 +86,7 @@ export function validateReceiptRecoveryRequest(request) {
       "children",
       "publicationArtifacts",
       ...(request?.workflowSha === undefined ? [] : ["workflowSha"]),
+      ...(request?.policyQualification === undefined ? [] : ["policyQualification"]),
     ].toSorted(),
     "unexpected request fields",
   );
@@ -117,18 +123,131 @@ export function validateReceiptRecoveryRequest(request) {
     request.children &&
       typeof request.children === "object" &&
       !Array.isArray(request.children) &&
-      Object.keys(request.children).length > 0 &&
       Object.keys(request.children).length <= 32,
     "recovery requires original child receipts",
   );
   if (request.workflowSha !== undefined) {
     requireValue(/^[a-f0-9]{40}$/u.test(request.workflowSha), "invalid pinned recovery P");
   }
+  if (request.policyQualification !== undefined) {
+    same(
+      Object.keys(request.policyQualification ?? {}).toSorted(),
+      ["admission", "sha"],
+      "invalid policy qualification",
+    );
+    requireValue(
+      request.workflowSha &&
+        /^[a-f0-9]{40}$/u.test(request.policyQualification.sha) &&
+        request.policyQualification.admission,
+      "policy qualification requires a pinned SHA, admission and recovery P",
+    );
+  }
   requireValue(
     Buffer.byteLength(JSON.stringify(request)) <= 128 * 1024,
     "request exceeds byte limit",
   );
   return request;
+}
+
+export async function verifyWaiverPolicyCommit(client, originalSha, policySha) {
+  const commit = await client.getCommit(policySha);
+  requireValue(
+    commit?.sha === policySha &&
+      commit.parents?.length === 1 &&
+      commit.parents[0]?.sha === originalSha &&
+      commit.commit?.verification?.verified === true &&
+      commit.files?.length === 1 &&
+      commit.files[0]?.status === "modified" &&
+      commit.files[0]?.filename === RELEASE_VALIDATION_WAIVERS_PATH,
+    "policy Q must be a verified signed direct child of original Q modifying only the waiver ledger",
+  );
+}
+
+export function receiptRecoveryPolicyRequest(original, policySha, requestId) {
+  const { repository, candidateSha, qualificationSha, inputs } = original.request;
+  const transportRef = original.request.transportRef.replace(
+    "release-ci/" + qualificationSha.slice(0, 12) + "-",
+    "release-ci/" + policySha.slice(0, 12) + "-",
+  );
+  const envelope = JSON.parse(inputs.trusted_workflow_json);
+  envelope.trustedWorkflow = {
+    ref: transportRef,
+    fullRef: "refs/heads/" + transportRef,
+    sha: policySha,
+  };
+  return buildQualificationAdmissionRequest({
+    repository,
+    candidateSha,
+    qualificationSha: policySha,
+    requestId,
+    transportRef,
+    reviewed: true,
+    inputs: { ...inputs, trusted_workflow_json: JSON.stringify(envelope) },
+  });
+}
+
+export async function verifyReceiptRecoveryPolicy(request, original, client) {
+  const policy = request.policyQualification;
+  if (!policy) {
+    return undefined;
+  }
+  const { candidateSha, qualificationSha, repository } = original.request;
+  await verifyWaiverPolicyCommit(client, qualificationSha, policy.sha);
+  const workflowRef = receiptRecoveryPolicyRequest(
+    original,
+    policy.sha,
+    request.requestId,
+  ).transportRef;
+  const admission = await client.verifyQualificationAdmission({
+    descriptor: policy.admission,
+    repository,
+    candidateSha,
+    qualificationSha: policy.sha,
+    workflowRef,
+  });
+  requireValue(
+    ![original.request.requestId, request.requestId].includes(admission.request.requestId),
+    "waiver policy requires a separate admission request",
+  );
+  same(
+    admission.request,
+    receiptRecoveryPolicyRequest(original, policy.sha, admission.request.requestId),
+    "waiver policy admission changed original qualification inputs",
+  );
+  for (const key of ["coverage", "baselinePolicy", "workflowSourceDigest", "policySourceDigest"]) {
+    same(admission[key], original[key], "waiver policy admission changed original " + key);
+  }
+  const read = (policySourceSha) =>
+    readReleaseValidationWaiversAsync((path) => client.getWorkflowSource(policySourceSha, path));
+  const oldLedger = await read(qualificationSha);
+  const waiverPolicy = await read(policy.sha);
+  const additions = waiverPolicy.slice(oldLedger.length);
+  same(waiverPolicy.slice(0, oldLedger.length), oldLedger, "waiver policy changed existing grants");
+  requireValue(
+    additions.length > 0 &&
+      additions.every(
+        (grant) =>
+          grant.targetSha === candidateSha &&
+          grant.targetVersion === original.baselinePolicy.candidateVersion &&
+          original.coverage.children.some(({ key }) => key === grant.childRole),
+      ),
+    "waiver policy must append grants scoped to original C, version and child role",
+  );
+  await revalidateReceiptRecoveryPolicy(request, admission, client);
+  return { admission, waiverPolicy };
+}
+
+async function revalidateReceiptRecoveryPolicy(request, admission, client) {
+  const descriptor = request.policyQualification.admission;
+  const run = await client.getRun(String(descriptor.runId));
+  requireValue(
+    run.id === descriptor.runId &&
+      run.run_attempt === descriptor.runAttempt &&
+      run.status === "completed" &&
+      run.conclusion === "success",
+    "waiver policy admission attempt changed",
+  );
+  client.revalidateQualificationAdmissionAuthority({ descriptor, admission });
 }
 
 export function receiptRecoverySourceRequest(admission, producer) {
@@ -254,10 +373,34 @@ export async function verifyOriginalReceiptQualification(requestValue, dependenc
       "candidate upgrade baseline changed",
     );
   }
+  const policyQualification = await verifyReceiptRecoveryPolicy(request, admission, client);
+  const waiverPolicy =
+    policyQualification?.waiverPolicy ??
+    (await readReleaseValidationWaiversAsync((path) =>
+      client.getWorkflowSource(qualificationSha, path),
+    ));
+  const omitted = new Map();
+  for (const { key } of admission.coverage.children) {
+    const waiverScope = {
+      childRole: key,
+      targetSha: target,
+      targetVersion: binding.package.version,
+    };
+    const grants = waiverPolicy.filter((grant) => isWaived(waiverScope, [grant]));
+    if (grants.length) {
+      omitted.set(key, grants);
+    }
+  }
+  const retainedRoles = Object.keys(request.children)
+    .filter((key) => !omitted.has(key))
+    .toSorted();
   same(
-    Object.keys(request.children).toSorted(),
-    admission.coverage.children.map((child) => child.key).toSorted(),
-    "recovery must include exactly the admitted child roles",
+    retainedRoles,
+    admission.coverage.children
+      .map((child) => child.key)
+      .filter((key) => !omitted.has(key))
+      .toSorted(),
+    "recovery must include exactly the admitted child roles that are not waived",
   );
   requireValue(
     parent.status === "completed" &&
@@ -305,13 +448,15 @@ export async function verifyOriginalReceiptQualification(requestValue, dependenc
     }
     same(
       plan.children
-        .filter((child) => child.selected)
+        .filter((child) => child.selected && !omitted.has(child.key))
         .map((child) => child.key)
         .toSorted(),
-      Object.keys(request.children).toSorted(),
+      retainedRoles,
       "original plan selected child inventory changed",
     );
-    for (const child of plan.children.filter((entry) => entry.selected)) {
+    for (const child of plan.children.filter(
+      (entry) => entry.selected && !omitted.has(entry.key),
+    )) {
       const selected = request.children[child.key];
       same(child.runId, selected.runId, "original plan child selection changed: " + child.key);
       if (plan.childReuse?.[child.key]) {
@@ -336,11 +481,18 @@ export async function verifyOriginalReceiptQualification(requestValue, dependenc
     },
     token: deps.token,
   });
-  const waiverPolicy = await readReleaseValidationWaiversAsync((path) =>
-    client.getWorkflowSource(qualificationSha, path),
-  );
   const children = [];
-  for (const { key: role } of admission.coverage.children) {
+  for (const coverage of admission.coverage.children) {
+    const role = coverage.key;
+    if (omitted.has(role)) {
+      children.push({
+        role,
+        conclusion: "not-collected",
+        waivers: omitted.get(role),
+        advisoryJobs: [],
+      });
+      continue;
+    }
     const selection = request.children[role];
     const fresh = selection.sourceParentRunId === request.originalParent.runId;
     if (fresh) {
@@ -362,21 +514,27 @@ export async function verifyOriginalReceiptQualification(requestValue, dependenc
         role,
         inputs,
         policyTargetVersion: binding.package.version,
+        requiredJobs: coverage.requiredJobs,
       },
       // Recovery must enumerate every historical attempt, including long rerun chains.
-      { deadlineMs: Date.now() + 10 * 60_000 },
+      { deadlineMs: Date.now() + 10 * 60_000, waiverPolicy },
     );
-    const coverage = admission.coverage.children.find((child) => child.key === role);
     const child = {
       key: role,
       runId: selection.runId,
       runAttempt: selection.runAttempt,
       status: verified.run.status,
       conclusion: verified.run.conclusion,
-      jobs: verified.receipt.jobs,
+      jobs: verified.compositeJobs,
     };
     requireValue(
-      terminalPolicyPass(child, binding.package.version, target, waiverPolicy),
+      terminalPolicyPass(
+        child,
+        binding.package.version,
+        target,
+        waiverPolicy,
+        coverage.requiredJobs,
+      ),
       "original child failed release policy",
     );
     const policy = evaluateReleaseChildPolicy({
@@ -384,18 +542,19 @@ export async function verifyOriginalReceiptQualification(requestValue, dependenc
       targetVersion: binding.package.version,
       targetSha: target,
       waiverPolicy,
+      requiredJobs: coverage.requiredJobs,
     });
     // Reuse the admitted workload inventory and authenticated composite; recovery
     // does not reconstruct a second matrix policy from historical source files.
     validateQualificationJobs(
-      verified.receipt.jobs,
+      verified.compositeJobs,
       coverage.requiredJobs,
       "Original " + role,
       policy.waivedJobNames,
     );
 
     if (role === "productPerformance") {
-      validatePerformanceArtifactOnlyJobs(verified.receipt.jobs);
+      validatePerformanceArtifactOnlyJobs(verified.compositeJobs);
     }
     const dispatchJobs = parentJobs.filter((job) => job.name === coverage.parentJobName);
     requireValue(
@@ -569,11 +728,21 @@ export async function verifyOriginalReceiptQualification(requestValue, dependenc
     );
   }
   await revalidateReceiptRecoveryRuns(request, client, children, parent);
+  if (policyQualification) {
+    await revalidateReceiptRecoveryPolicy(request, policyQualification.admission, client);
+  }
   client.revalidateQualificationAdmissionAuthority({
     descriptor: request.qualificationAdmission,
     admission,
   });
-  return { admission, children, originalRoot, publication, originalParent: parent };
+  return {
+    admission,
+    policyAdmission: policyQualification?.admission,
+    children,
+    originalRoot,
+    publication,
+    originalParent: parent,
+  };
 }
 
 export async function revalidateReceiptRecoveryRuns(
@@ -867,6 +1036,7 @@ export async function authenticateReceiptRecovery({
     runReleaseSoak: scope.runReleaseSoak,
     repository: request.repository,
     qualificationAdmission: verified.admission,
+    policyAdmission: verified.policyAdmission ?? null,
     producerOnTrustedMainLineage: true,
     verifier,
     validationInputs: manifest.validationInputs,
@@ -920,6 +1090,13 @@ async function main() {
       },
     );
     writeFileSync(join(directory, "source.json"), result);
+    if (verified.policyAdmission) {
+      await revalidateReceiptRecoveryPolicy(
+        request,
+        verified.policyAdmission,
+        createReleaseEvidenceClient(request.repository),
+      );
+    }
     revalidateQualificationAdmissionAuthority({
       descriptor: request.qualificationAdmission,
       admission: verified.admission,
@@ -994,13 +1171,14 @@ async function main() {
       verified.children,
       verified.originalParent,
     );
-    client.verifyQualificationAdmission({
+    const originalAdmission = client.verifyQualificationAdmission({
       descriptor: request.qualificationAdmission,
       repository: request.repository,
       candidateSha: manifest.targetSha,
       qualificationSha: request.candidateBinding.request.toolingSha,
       workflowRef: verified.originalParent.head_branch,
     });
+    await verifyReceiptRecoveryPolicy(request, originalAdmission, client);
     verifyReceiptRecoveryAuthority(request.repository, producer, false);
     writeFileSync(
       join(directory, "full-release-validation-manifest.json"),

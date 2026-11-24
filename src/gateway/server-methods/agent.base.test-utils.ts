@@ -23,7 +23,6 @@ import { createDeferredCore } from "../../shared/deferred.js";
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 import type { CronCreatorAuthorityCapability } from "../cron-creator-authority-grant.types.js";
-import { agentRunHandler } from "./agent-run-handler.js";
 import {
   getAgentTestMocks,
   makeContext,
@@ -520,9 +519,6 @@ describe("gateway agent handler", () => {
         code: ErrorCodes.INVALID_REQUEST,
         message: "runId does not match session incarnation",
       });
-      await expect(
-        handleChatAbortRequest({ ...abortOptions, hasCurrentClientAuthority: () => false }),
-      ).rejects.toThrow("Gateway requester authority changed");
       expect(source.abortSignal.aborted).toBe(false);
       expectRecordFields(context.dedupe.get(`agent:${runId}`)?.payload, { status: "accepted" });
 
@@ -548,54 +544,6 @@ describe("gateway agent handler", () => {
       expect(mocks.agentCommand).not.toHaveBeenCalled();
     } finally {
       finishRoute({ sessionKey });
-      await pending;
-    }
-  });
-
-  it("releases routing custody when the original caller authority is revoked", async () => {
-    const runId = "recipient-session-route-revoked";
-    const sessionKey = "agent:ops:whatsapp:work:direct:+15551234567";
-    const route = createDeferredCore<{ sessionKey: string }>();
-    let callerActive = true;
-    mocks.listAgentIds.mockReturnValue(["main", "ops"]);
-    mocks.resolveAgentExplicitRecipientSession.mockReturnValue(route.promise);
-    mocks.agentCommand.mockClear();
-    const context = makeContext();
-    const respond = vi.fn();
-    const pending = agentRunHandler({
-      params: {
-        message: "hi",
-        agentId: "ops",
-        channel: "whatsapp",
-        to: "+15551234567",
-        idempotencyKey: runId,
-      },
-      context,
-      respond,
-      req: { type: "req", id: runId, method: "agent" },
-      client: operatorWriteCliClient(),
-      isWebchatConnect: () => false,
-      hasCurrentClientAuthority: () => callerActive,
-    });
-    try {
-      await waitForAssertion(() => {
-        expectRecordFields(context.dedupe.get(`agent:${runId}`)?.payload, { status: "accepted" });
-      });
-      const source = requireValue(getReservedRpcSourceInput(runId), "expected routing source");
-      callerActive = false;
-      route.resolve({ sessionKey });
-      await pending;
-      await source.settlement.promise;
-      expectRespondError(respond, {
-        code: ErrorCodes.INVALID_REQUEST,
-        message: "Gateway caller authority is no longer active.",
-      });
-      expect(context.dedupe.has(`agent:${runId}`)).toBe(false);
-      expect(getReservedRpcSourceInput(runId)).toBeUndefined();
-      expect(source.target).toBeUndefined();
-      expect(mocks.agentCommand).not.toHaveBeenCalled();
-    } finally {
-      route.resolve({ sessionKey });
       await pending;
     }
   });

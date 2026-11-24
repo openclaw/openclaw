@@ -11,12 +11,10 @@ import { resolveSubagentSessionAttachmentRootDir } from "../subagent-attachment-
 import { updateSwarmCollectorCompletion } from "../swarm/swarm-collector.js";
 import {
   capFrozenResultText,
-  logAnnounceGiveUp,
   resolveAnnounceRetryDelayMs,
   safeRemoveAttachmentsDir,
   updateSubagentArchiveAtMs,
 } from "./subagent-registry-helpers.js";
-import { subagentRegistryLog } from "./subagent-registry-lifecycle-log.js";
 function createRunEntry(overrides: Omit<SubagentRunRecordOverrides, "runId"> = {}) {
   return createSubagentRunRecord({
     runId: "run-1",
@@ -155,24 +153,5 @@ describe("safeRemoveAttachmentsDir", () => {
     ).resolves.toBe(true);
     await expect(fs.readFile(externalSentinel, "utf8")).resolves.toBe("must-survive");
     await expect(fs.readdir(externalDir)).resolves.toEqual(["sentinel.txt"]);
-  });
-});
-
-describe("logAnnounceGiveUp", () => {
-  it("records the run, requester and full failure in the Gateway logger", () => {
-    using log = vi.spyOn(subagentRegistryLog, "warn").mockImplementation(() => {});
-    const lastError = `gateway timeout\n${"detail ".repeat(400)}🚀`;
-    const entry = createRunEntry({ delivery: { status: "failed", lastError } });
-    logAnnounceGiveUp(entry, "permanent_failure");
-    expect(log).toHaveBeenCalledWith(
-      "Subagent announce give up",
-      expect.objectContaining({
-        reason: "permanent_failure",
-        runId: entry.runId,
-        childSessionKey: entry.childSessionKey,
-        requesterSessionKey: entry.requesterSessionKey,
-        deliveryError: lastError,
-      }),
-    );
   });
 });

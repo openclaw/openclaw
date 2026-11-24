@@ -2,11 +2,24 @@ import { constants } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { satisfies } from "semver";
+import {
+  captureTargetDatabaseSchemaContext,
+  checkTargetDatabaseSchemasForContexts,
+  formatSchemaRefusalLines,
+  hasSchemaRefusal,
+} from "../cli/update-cli/schema-preflight.js";
+import { isBunRuntime } from "../daemon/runtime-binary.js";
+import { resolveBunRuntimeInfo } from "../daemon/runtime-paths.js";
 import { hasErrnoCode } from "../infra/errno.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { resolveNpmCommand } from "../infra/npm-command.js";
 import { resolveOpenClawPackageRoot } from "../infra/openclaw-root.js";
 import { gitCleanCheckArgs } from "../infra/update-runner-git-commands.js";
 import { runCommandWithTimeout } from "../process/exec.js";
+import {
+  parsePackageOpenClawSchemaVersions,
+  type OpenClawSchemaVersions,
+} from "../state/openclaw-schema-versions.js";
 import type { UpdateTarget } from "./target.js";
 
 export type PreflightResult = { ok: true } | { ok: false; reason: string; message: string };
@@ -83,21 +96,6 @@ export async function preflight(params: {
   });
   let reason = "unsupported-install";
   try {
-    const containerMarker = await fs.access("/.dockerenv").then(
-      () => true,
-      (error: unknown) => {
-        if (hasErrnoCode(error, "ENOENT")) {
-          return false;
-        }
-        throw error;
-      },
-    );
-    if (containerMarker || env.container || env.DOCKER_CONTAINER || env.OPENCLAW_CONTAINER) {
-      return refuse(
-        "container-install",
-        "This installation belongs to a container image. Update the image instead.",
-      );
-    }
     const ancestor = await existingAncestor(params.prefix);
     const installPath =
       params.target.kind === "git"
@@ -116,13 +114,13 @@ export async function preflight(params: {
     reason = "prefix-not-writable";
     await fs.access(ancestor, constants.W_OK);
     reason = "missing-tool";
-    const tools = params.kind === "git" ? ["git", "pnpm"] : ["npm"];
+    // Git releases provision the target's pinned pnpm during preparation.
+    const tools = params.kind === "git" ? ["git"] : ["npm"];
     for (const tool of tools) {
-      const result = await runCommandWithTimeout([tool, "--version"], {
-        env,
-        timeoutMs: 10_000,
-        killProcessTree: true,
-      });
+      const result = await runCommandWithTimeout(
+        tool === "npm" ? resolveNpmCommand(["--version"]) : [tool, "--version"],
+        { env, timeoutMs: 10_000, killProcessTree: true },
+      );
       if (result.code !== 0) {
         return refuse(
           reason,
@@ -145,37 +143,69 @@ export async function preflight(params: {
         );
       }
     }
-    reason = "target-metadata-unavailable";
-    const metadata = await runCommandWithTimeout(
-      params.target.kind === "git"
-        ? ["git", "-C", params.target.checkout, "show", `${params.target.sha}:package.json`]
-        : ["npm", "view", params.target.spec, "engines", "--json"],
-      { env, timeoutMs: 30_000, killProcessTree: true },
-    );
-    if (metadata.code !== 0) {
-      return refuse(
-        reason,
-        metadata.stderr.slice(-8192) || "Could not read the target's Node requirements.",
+    let engine: string | undefined;
+    let schemaVersions: OpenClawSchemaVersions | undefined =
+      params.target.kind === "package" ? params.target.schemaVersions : undefined;
+    if (params.target.kind === "package" && params.target.engines) {
+      engine = params.target.engines.node;
+    } else {
+      reason = "target-metadata-unavailable";
+      const metadata = await runCommandWithTimeout(
+        params.target.kind === "git"
+          ? ["git", "-C", params.target.checkout, "show", `${params.target.sha}:package.json`]
+          : resolveNpmCommand(["view", params.target.spec, "engines", "--json"]),
+        { env, timeoutMs: 30_000, killProcessTree: true },
       );
+      if (metadata.code !== 0) {
+        return refuse(
+          reason,
+          metadata.stderr.slice(-8192) || "Could not read the target's Node requirements.",
+        );
+      }
+      const parsed: { engines?: { node?: string }; node?: string } = JSON.parse(
+        metadata.stdout || "{}",
+      );
+      engine = params.target.kind === "git" ? parsed.engines?.node : parsed.node;
+      if (params.target.kind === "git") {
+        schemaVersions = parsePackageOpenClawSchemaVersions(parsed);
+      }
     }
-    const parsed: { engines?: { node?: string }; node?: string } = JSON.parse(
-      metadata.stdout || "{}",
-    );
-    const engine = params.target.kind === "git" ? parsed.engines?.node : parsed.node;
     const node = params.node ?? process.execPath;
-    const runtime = await runCommandWithTimeout([node, "--version"], {
-      env,
-      timeoutMs: 10_000,
-      killProcessTree: true,
-    });
-    if (
-      runtime.code !== 0 ||
-      (engine && !satisfies(runtime.stdout.trim(), engine, { includePrerelease: true }))
-    ) {
-      return refuse(
-        "node-engine-mismatch",
-        `The new release requires Node ${engine ?? "(unavailable)"}; the service uses ${runtime.stdout.trim() || node}. Upgrade the service's Node and retry.`,
-      );
+    if (isBunRuntime(node) || (node === process.execPath && process.versions.bun)) {
+      reason = "bun-runtime-unsupported";
+      const runtime = await resolveBunRuntimeInfo(node, env);
+      if (runtime.status === "probe-failed") {
+        throw runtime.error;
+      }
+      if (runtime.status !== "supported") {
+        return refuse(
+          reason,
+          runtime.sqliteSelectionError ?? "Bun 1.4.4+ with WAL-reset-safe node:sqlite is required.",
+        );
+      }
+    } else {
+      const runtime = await runCommandWithTimeout([node, "--version"], {
+        env,
+        timeoutMs: 10_000,
+        killProcessTree: true,
+      });
+      if (
+        runtime.code !== 0 ||
+        (engine && !satisfies(runtime.stdout.trim(), engine, { includePrerelease: true }))
+      ) {
+        return refuse(
+          "node-engine-mismatch",
+          `The new release requires Node ${engine ?? "(unavailable)"}; the service uses ${runtime.stdout.trim() || node}. Upgrade the service's Node and retry.`,
+        );
+      }
+    }
+    if (schemaVersions) {
+      reason = "database-schema-preflight";
+      const context = await captureTargetDatabaseSchemaContext(env);
+      const schemas = await checkTargetDatabaseSchemasForContexts(schemaVersions, [context]);
+      if (hasSchemaRefusal(schemas)) {
+        return refuse(reason, formatSchemaRefusalLines(schemas).join("\n"));
+      }
     }
     reason = "disk-space-unavailable";
     const statfs = params.statfs ?? fs.statfs;

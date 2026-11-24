@@ -159,7 +159,7 @@ export function UpdateRunView(props: {
             </Show>
             <details
               class="update-run-view__diagnostics"
-              open
+              open={!current().terminal}
               onToggle={(event) => event.currentTarget.open && logFollow.schedule(true)}
             >
               <summary>

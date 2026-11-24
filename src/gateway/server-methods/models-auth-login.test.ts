@@ -307,6 +307,32 @@ describe("models.authLogin ownership", () => {
     },
   );
 
+  it("reports a saved sign-in whose model check failed with the activation's one sentence", async () => {
+    const h = harness();
+    hooks.catalog.mockResolvedValue({
+      models: [{ provider: "fixture", id: "best", name: "Best", available: true }],
+    });
+    const error =
+      "Your sign-in is saved. The model check failed because the provider is busy or limiting requests. Wait a few minutes, then try again.";
+    hooks.activate.mockResolvedValue({
+      ok: false,
+      status: "rate_limit",
+      error,
+      disposition: "rejected-before-promotion",
+    });
+    await h.invoke("models.authLogin", {
+      sessionId: "login",
+      authChoice: "fixture/fixture-device",
+      selectModel: true,
+    });
+    expect(await h.next()).toEqual({
+      done: true,
+      status: "error",
+      error,
+      activationRejection: { disposition: "rejected-before-promotion", status: "rate_limit" },
+    });
+  });
+
   it("returns the recovery message without the error class name through wizard.next", async () => {
     hooks.login.mockRejectedValueOnce(
       Object.assign(new Error("Connection settings changed. Open Model Setup to try again."), {
@@ -476,28 +502,21 @@ describe("models.authLogin ownership", () => {
     expectReply(await h.start(), { sessionId: "login", status: "running" });
   });
 
-  it.each(["owner", "method"])(
-    "rejects the pre-write callback after %s authority changes",
-    async (changed) => {
-      const h = harness();
-      const release = gate();
-      let wrote = false;
-      void mockLogin(async (options) => {
-        await release.promise;
-        await options.beforePersistentEffect?.();
-        wrote = true;
-      }, false);
-      const session = await h.begin();
-      if (changed === "owner") {
-        h.client.invalidated = true;
-      } else {
-        hooks.choice.mockReturnValue({ ...choice, methodId: "other-method" });
-      }
-      release.resolve();
-      await whenAdmittedWizardSessionSettled(session);
-      expect(session.getStatus()).toBe("error");
-      expect(session.getError()).toMatch(/no longer/);
-      expect(wrote).toBe(false);
-    },
-  );
+  it("rejects the pre-write callback after the login method changes", async () => {
+    const h = harness();
+    const release = gate();
+    let wrote = false;
+    void mockLogin(async (options) => {
+      await release.promise;
+      await options.beforePersistentEffect?.();
+      wrote = true;
+    }, false);
+    const session = await h.begin();
+    hooks.choice.mockReturnValue({ ...choice, methodId: "other-method" });
+    release.resolve();
+    await whenAdmittedWizardSessionSettled(session);
+    expect(session.getStatus()).toBe("error");
+    expect(session.getError()).toMatch(/no longer/);
+    expect(wrote).toBe(false);
+  });
 });

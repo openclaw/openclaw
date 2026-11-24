@@ -640,18 +640,6 @@ describe("subagent announce formatting", () => {
     ).toEqual(["channel:thread-child-a", "channel:thread-child-b"]);
   });
 
-  it.each([
-    [{ status: "timeout" }, "timed out"],
-    [
-      { status: "timeout", error: "child run failed before completing" },
-      "timed out: child run failed before completing",
-    ],
-  ] as const)("includes completion status details: %s", async (outcome, expectedStatus) => {
-    setCompletionSessions();
-    await deliverCompletion({ roundOneReply: "child details", outcome });
-    expectText(getAgentCallContext(), [expectedStatus, "child details"], ["✅ Subagent"]);
-  });
-
   const telegramRoute = { channel: "telegram", to: "telegram:123" };
   const telegramSession = { lastChannel: "telegram", lastTo: "telegram:123", lastThreadId: 42 };
   const slackRoute = { channel: "slack", to: "channel:C123", accountId: "acct-1" };
@@ -775,7 +763,7 @@ describe("subagent announce formatting", () => {
       sessionStore = { [childKey]: session("child-session-1", minimalUsage) };
       expect(
         await announceWithDefaults({ timeoutMs: 1000, expectsCompletionMessage: !settled }),
-      ).toBe(settled ? "delivered" : "retryable");
+      ).toBe(settled ? "delivered" : "undelivered");
       if (settled) {
         expect(waitForEmbeddedAgentRunEndSpy).toHaveBeenCalledWith("child-session-1", 1000);
         expectText(getAgentCallContext(), ["raw subagent reply"], ["(no output)"]);
@@ -804,7 +792,7 @@ describe("subagent announce formatting", () => {
       agentSpy.mockResolvedValueOnce(visibleAgentResponse("run-parent-phase-2:wake"));
       const lifecycleGeneration = getAgentEventLifecycleGeneration();
       registry.countPendingDescendantRuns.mockReturnValueOnce(1).mockReturnValueOnce(1);
-      expect(await announceWake(parentKey, parentRunId)).toBe("retryable");
+      expect(await announceWake(parentKey, parentRunId)).toBe("undelivered");
       expect(agentSpy).not.toHaveBeenCalled();
       const didAnnounce = await announceWake(parentKey, parentRunId, {
         runTimeoutSeconds,
@@ -880,7 +868,7 @@ describe("subagent announce formatting", () => {
         requesterSessionKey: parentKey,
         cleanup: "delete",
       }),
-    ).toBe(mode === "missing fallback" ? "retryable" : "delivered");
+    ).toBe(mode === "missing fallback" ? "undelivered" : "delivered");
     expect(sessionsDeleteSpy).not.toHaveBeenCalled();
     if (destination) {
       expectAgentCallFields(getAgentCall(), { sessionKey: destination, deliver: false });

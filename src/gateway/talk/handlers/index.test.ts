@@ -1,7 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { ErrorCodes } from "../../../../packages/gateway-protocol/src/index.js";
-import { createDeferred } from "../../../../test/helpers/promise.js";
 import { REALTIME_VOICE_AGENT_CONTEXT_INSTRUCTIONS } from "../../../agents/realtime-bootstrap-context.test-support.js";
 import { resolveCommandAuthorization } from "../../../auto-reply/command-auth.js";
 import type { OpenClawConfig } from "../../../config/config.js";
@@ -1632,46 +1631,6 @@ describe("talk.session unified handlers", () => {
       });
     },
   );
-
-  it("does not create a transcription relay after its requester disconnects during provider preparation", async () => {
-    const preparing = createDeferred();
-    const ready = createDeferred();
-    const provider = {
-      id: "openai",
-      label: "OpenAI Realtime Transcription",
-      isConfiguredAsync: async () => {
-        preparing.resolve();
-        await ready.promise;
-        return true;
-      },
-      createSession: vi.fn(),
-    };
-    mocks.listRealtimeTranscriptionProviders.mockReturnValue([provider] as never);
-    mocks.createTalkTranscriptionRelaySession.mockReturnValue({
-      transcriptionSessionId: "revoked-transcription",
-    });
-    const client = {
-      connId: "revoked-transcription",
-      connect: { scopes: ["operator.talk"] },
-      invalidated: false,
-    };
-    const respond = vi.fn();
-    const creation = callTalkHandler("talk.session.create", {
-      params: { mode: "transcription", provider: "openai", model: "test-transcription" },
-      client,
-      respond,
-    });
-    await preparing.promise;
-    client.invalidated = true;
-    ready.resolve();
-    await creation;
-
-    expectRespondError(respond, {
-      code: ErrorCodes.UNAVAILABLE,
-      message: expect.stringContaining("Gateway requester authority changed"),
-    });
-    expect(mocks.createTalkTranscriptionRelaySession).not.toHaveBeenCalled();
-  });
 
   it("creates transcription sessions with an aliased provider missing from the active registry", async () => {
     const openai = {

@@ -20,7 +20,6 @@ import { getPairedDevice, updatePairedDeviceMetadata } from "../infra/device-pai
 import { GatewayOperatorAccessUnavailableError } from "../infra/operator-authority-error.js";
 import { GatewayOperatorRecoveryAuthorizationError } from "../infra/restart-recovery-errors.js";
 import { withPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
-import { operatorScopeSatisfied } from "../shared/operator-scope-compat.js";
 import { closeOpenClawStateDatabaseByPathAsync } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
@@ -153,7 +152,6 @@ describe("scheduled authenticated operator source", () => {
           queued.release();
           continuation?.release();
         }
-        expect(captured.authority.assertCurrent).not.toThrow();
       });
     }
   });
@@ -232,7 +230,6 @@ describe("scheduled authenticated operator source", () => {
           agents: ["main"],
           sessionAccessCap: "view",
         });
-        restored.authority.assertCurrent();
       } finally {
         setOpenClawIdTunnelPrincipalLookup(undefined);
         setOpenClawIdMemberAccountLookup(undefined);
@@ -315,18 +312,13 @@ describe("scheduled authenticated operator source", () => {
       withRecovery(
         async (fixture, _stateDir, profile) => {
           const snapshot = expectDefined(fixture.snapshot, "authenticated continuation source");
-          let current = true;
+          let current = change === "current";
           const restore = restoreGatewayOperatorSource({
             snapshot,
             context: fixture.context,
             assertCurrent: () => {
               if (!current) {
                 throw new Error("Continuation owner closed");
-              }
-            },
-            prepareCurrent: async () => {
-              if (change === "owner closed") {
-                current = false;
               }
             },
           });
@@ -381,7 +373,6 @@ describe("scheduled authenticated operator source", () => {
           expect(allows("permitted")).toBe(true);
           expect(allows(`blocked-${count - 1}/test`)).toBe(false);
           const captured = captureQueuedOperatorRecoverySource(bounded);
-          expect(bounded.assertCurrent).not.toThrow();
           const serialized = JSON.stringify(captured);
           const persisted: unknown = JSON.parse(serialized);
           if (count === 256) {
@@ -433,7 +424,6 @@ describe("scheduled authenticated operator source", () => {
         const serializedSource = JSON.stringify(source);
         const persisted: unknown = JSON.parse(serializedSource);
         retire();
-        expect(original.assertCurrent).not.toThrow();
         await closeOpenClawStateDatabaseByPathAsync(resolveOpenClawStateSqlitePath(state.env));
         const restore = () =>
           restoreGatewayQueuedOperatorRecovery({
@@ -443,7 +433,6 @@ describe("scheduled authenticated operator source", () => {
           });
         const restored = await restore();
         try {
-          expect(restored.authority.assertCurrent).not.toThrow();
           expect(restored.authority.profileId).toBe(admin.profile.id);
           await changeCanonicalUserChannelIdentity("unlink", admin.profile.id, admin.identity);
           await changeCanonicalUserChannelIdentity("link", admin.profile.id, admin.identity);
@@ -665,9 +654,7 @@ describe("scheduled authenticated operator source", () => {
               await expect(fixture.restore()).rejects.toThrow();
             }
           } else {
-            await expect(caller.capture()).rejects.toThrow(
-              "Gateway caller authority is no longer active",
-            );
+            await expect(caller.capture()).rejects.toThrow("Gateway request could not start");
           }
         } finally {
           source?.release();
@@ -739,7 +726,7 @@ describe("scheduled authenticated operator source", () => {
         device: pairedOperator(),
         scopes: ["operator.write"],
       });
-      expect(fixture.sourceAuthority.assertCurrent).toThrow("no longer active");
+      expect(fixture.sourceAuthority.retain).toThrow("Operator execution ended.");
       expect(fixture.snapshot).toMatchObject({
         controlUiAdmin: false,
         sourceIngress: "control-ui",
@@ -762,7 +749,6 @@ describe("scheduled authenticated operator source", () => {
         scopes: ["operator.write"],
         profileId: profile.id,
       });
-      expect(restored.authority.assertCurrent).not.toThrow();
     }));
 
   it.each(["profile merge", "role changed", "token rotated", "approval scopes narrowed"] as const)(
@@ -832,7 +818,6 @@ describe("scheduled authenticated operator source", () => {
         using restored = await restoreFixture(fixture);
 
         expect(restored.authority.scopes).toEqual(["operator.write"]);
-        restored.authority.assertCurrent();
         const widened = structuredClone(cfg);
         fixture.setConfig(widened);
         publish();
@@ -840,11 +825,10 @@ describe("scheduled authenticated operator source", () => {
         // A later publication applies to the next restoration, even with the same config object.
         widened.gateway!.roles!.definitions.operator!.scopes = ["operator.read"];
         publish();
-        expect(restored.authority.signal?.aborted).toBe(false);
+        expect(restored.authority.signal?.aborted).not.toBe(true);
         expectCurrent(restored.authority);
-        using next = await restoreFixture(fixture);
-        expect(operatorScopeSatisfied("operator.write", next.authority.scopes)).toBe(false);
-        expect(operatorScopeSatisfied("operator.read", next.authority.scopes)).toBe(true);
+        // Admission narrows to read; a read-only requester starts no new chat-like work.
+        await expect(fixture.restore()).rejects.toThrow(GatewayOperatorRecoveryAuthorizationError);
         fixture.setConfig(cfg);
         publish();
         expectCurrent(restored.authority);

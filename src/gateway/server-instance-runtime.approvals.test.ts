@@ -144,7 +144,11 @@ function createFixture(
               agentId: "main",
               sessionKey: "agent:main:synthetic",
               operationalRunInstance: { instanceId: "synthetic-instance", runId: "synthetic-run" },
-              receiptAuthority: isCurrent,
+              receiptAuthority: () => {
+                if (!isCurrent()) {
+                  throw new Error("agent tool caller authority is no longer active");
+                }
+              },
               gatewayContextResolver: () => (current ? context : undefined),
             },
             () =>

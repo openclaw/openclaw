@@ -56,6 +56,7 @@ describe("ModelProvidersPage usage convergence", () => {
     });
     const plan = () => page.querySelector(".provider-row__plan")?.textContent;
     await waitForSolid(() => expect(plan()).toBe("Original"));
+    await waitForProviders(page);
     expect(requestCount(harness.request, "usage.status")).toBe(0);
     harness.request.mockClear();
 
@@ -131,9 +132,11 @@ describe("ModelProvidersPage usage convergence", () => {
     const bars = openai.querySelector(".model-providers__usage-bars")!;
     const refresh = () =>
       page.querySelector<HTMLButtonElement>('button[aria-label="Refresh"]')!.click();
-    await vi.waitFor(() =>
-      expectContent(bars, ["Signed-in account: Offline", "Access token: Loading"]),
-    );
+    await vi.waitFor(() => expectContent(bars, ["Signed-in account: Offline", "Loading…"]));
+    expect([...bars.querySelectorAll('[role="status"]')].map((node) => node.textContent)).toEqual([
+      "Loading…",
+      "Signed-in account: Offline · Refresh to try again.",
+    ]);
     // Opening the pending account adds credential actions, not a second copy of the grid outcome.
     bars.querySelectorAll<HTMLButtonElement>(".model-providers__segment-name")[1]!.click();
     const expanded = () =>
@@ -155,7 +158,7 @@ describe("ModelProvidersPage usage convergence", () => {
     await vi.waitFor(() => expect(segments().map((el) => el.textContent)).toEqual(["90%", "—"]));
     slow.resolve();
     await vi.waitFor(() => expectLimits(90));
-    expectAbsent(bars, "small[role=status]");
+    expect(bars.textContent).not.toContain("Refresh to try again");
     expect(expanded()).not.toBeNull();
     expect(expanded()!.textContent).not.toMatch(/Timed out|Loading|90%/u);
     expect(accountRequests.slice(2)).toEqual([
@@ -311,6 +314,7 @@ describe("ModelProvidersPage usage convergence", () => {
     expectNoProviderReads();
     page.loaderPending = true;
     publishRouteData(page, createApiKeyProviderData());
+    page.routeData = { ...page.routeData!, provider: "openai" };
     await waitForSolid(() => expectPresent(page, '[data-provider-id="openai"]'));
     expect(usageReads).toBe(0);
     expect(requestCount(harness.request, "sessions.usage")).toBe(0);

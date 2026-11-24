@@ -546,6 +546,7 @@ export async function validatePublishPreflightNpm(
     fullReleaseValidationRunId: string;
     fullReleaseValidationRunAttempt: string;
     fullManifest?: PublishPreflightRecord;
+    fastTrackApproval?: string;
     pluginSdkApiAcknowledgement: string;
     currentSelectorRef: string;
     currentSelectorSha: string;
@@ -562,6 +563,7 @@ export async function validatePublishPreflightNpm(
     throw new Error("Npm preflight must use the selected Full Release Validation evidence.");
   }
   const qualified = resolveFullReleaseNpmPreflight({
+    fastTrackApproval: options.fastTrackApproval,
     manifest: options.fullManifest,
     repository: repo,
     runId: options.fullReleaseValidationRunId,
@@ -575,7 +577,8 @@ export async function validatePublishPreflightNpm(
   const workflowPath = String(run.path).split("@", 1)[0];
   if (
     run.status !== "completed" ||
-    run.conclusion !== "success" ||
+    (run.conclusion !== "success" &&
+      !(options.fastTrackApproval && producerRunId === options.fullReleaseValidationRunId)) ||
     run.event !== "workflow_dispatch"
   ) {
     throw new Error("Npm preflight producer must be a successful canonical workflow dispatch.");
@@ -594,6 +597,7 @@ export async function validatePublishPreflightNpm(
   }
   await verifyNpmPreflightPublicationLineage({
     manifest: options.fullManifest,
+    fastTrackApproval: options.fastTrackApproval,
     repository: repo,
     sourceSha: options.targetSha,
     toolingSha: sha,
@@ -677,6 +681,7 @@ export async function validatePublishPreflightNpm(
   }
   const corePackages = verifyPreflightCorePackages(manifest, files, options.targetSha);
   verifyNpmPreflightProducer({
+    fastTrackApproval: options.fastTrackApproval,
     manifest,
     manifestSha256,
     repository: repo,

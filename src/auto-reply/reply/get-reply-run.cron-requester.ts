@@ -34,7 +34,7 @@ export function resolveReplyCronChannelRequester(
   });
 }
 
-/** Capture the original source once; queued admission may refresh its live owner check. */
+/** Capture the original source once; a queued start checks its admitted owner once more. */
 export function createReplyCronAuthorityFactory(
   context: object,
   params: Parameters<typeof resolveReplyCronChannelRequester>[1] & {
@@ -52,14 +52,16 @@ export function createReplyCronAuthorityFactory(
     senderId: requester.senderId,
   };
   return (runId: string, isCurrentOwner = () => authority.isCurrent()) =>
-    createCronCreatorAuthorityCapability(
-      runId,
-      { kind: "external", channel: params.channel },
-      { source: "channel-owner", isCurrent: isCurrentOwner },
-      undefined,
-      requester,
-      { isCurrent: isCurrentOwner, ...owner },
-    );
+    isCurrentOwner()
+      ? createCronCreatorAuthorityCapability(
+          runId,
+          { kind: "external", channel: params.channel },
+          { source: "channel-owner" },
+          undefined,
+          requester,
+          owner,
+        )
+      : undefined;
 }
 
 /**

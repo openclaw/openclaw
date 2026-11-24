@@ -101,6 +101,7 @@ import {
   createChatDirectiveSender,
   createChatDirectiveSuiteResources,
   deniedChatCronAuthorityCases,
+  lazyChatCronAuthorityCases,
   handedOffDashboardSession,
   createChatDirectiveUserMessageReader,
   expectManagedAudioBlock,
@@ -4863,13 +4864,7 @@ describe("chat.send local operator client sender context", () => {
     },
   );
 
-  it.each([
-    [GATEWAY_CLIENT_NAMES.CONTROL_UI, GATEWAY_CLIENT_MODES.WEBCHAT, "web", "operator.admin", true],
-    [GATEWAY_CLIENT_NAMES.CLI, GATEWAY_CLIENT_MODES.CLI, "darwin", "operator.admin", true],
-    [GATEWAY_CLIENT_NAMES.CONTROL_UI, GATEWAY_CLIENT_MODES.WEBCHAT, "web", "operator.admin", false],
-    [GATEWAY_CLIENT_NAMES.CONTROL_UI, GATEWAY_CLIENT_MODES.WEBCHAT, "web", "operator.write", true],
-    [GATEWAY_CLIENT_NAMES.CONTROL_UI, GATEWAY_CLIENT_MODES.WEBCHAT, "web", "operator.cron", false],
-  ] as const)(
+  it.each(lazyChatCronAuthorityCases)(
     "binds lazy configured-MCP cron authority for %s/%s/%s with %s (local: %s)",
     async (clientId, mode, platform, scope, local) => {
       await createSqliteTranscriptFixture(`openclaw-chat-send-cron-authority-${clientId}-`);
@@ -4877,7 +4872,7 @@ describe("chat.send local operator client sender context", () => {
       let retainedResolver: ReturnType<typeof bindActiveCronCreatorAuthorityResolver>;
       let resolvedGrant: { runId: string; token: string } | undefined;
       mockState.cronAuthorityProbe = async (runId, capability) => {
-        const localOwner = local && scope === "operator.admin";
+        const localOwner = local === true && scope === "operator.admin";
         expect(capability?.callerOrigin).toEqual({ kind: localOwner ? "local" : "unknown" });
         expect(capability?.callerScopedCreation).toBe(localOwner ? undefined : true);
         expect(capability?.managementEntitlement).toBeUndefined();
@@ -4920,17 +4915,19 @@ describe("chat.send local operator client sender context", () => {
             client: { id: clientId, mode, version: "dev", platform },
             scopes: [scope],
           },
-          internal: local ? { isLocalClient: true } : {},
+          internal: local === true ? { isLocalClient: true } : {},
         },
+        requestParams:
+          local === "resumed"
+            ? { sessionId: mockState.sessionId, __controlUiReconnectResume: true }
+            : {},
         expectBroadcast: false,
       });
 
       expect(resolvedGrant).toMatchObject({ runId: `idem-cron-authority-${clientId}` });
-      await expect(retainedResolver!()).rejects.toThrow(
-        "Configured MCP cron authority is no longer active",
-      );
+      await expect(retainedResolver!()).rejects.toThrow("This run's MCP cron access has ended");
       expect(() => consumeCronCreatorAuthorityGrant(resolvedGrant!)).toThrow(
-        "Configured MCP cron authority is no longer active",
+        "This run's MCP cron access has ended",
       );
     },
   );

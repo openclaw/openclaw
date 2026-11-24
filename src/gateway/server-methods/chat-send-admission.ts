@@ -55,10 +55,11 @@ import {
   createChatSessionRoutingAssertion,
   respondChatSendAdmissionError,
   respondChatSessionRoutingChanged,
+  SESSION_INCARNATION_CHANGED,
 } from "./chat-send-admission-errors.js";
 import {
   isLocalChatInputAdmission,
-  resolveCodexGoalAdmission,
+  resolveRuntimeGoalAdmission,
   withGoalChatPlacement,
   type PreparedGoalChatPlacement,
 } from "./chat-send-goal-admission.js";
@@ -116,7 +117,10 @@ export async function admitChatSend(params: ChatSendAdmissionParams) {
     timeoutMs,
     expectedLeafEntryId,
   } = session;
-  const assertSessionTargetCurrent = createChatSessionRoutingAssertion(session, context);
+  const assertSessionTargetCurrent = createChatSessionRoutingAssertion(
+    session.sessionRoutingChanged,
+    context,
+  );
   const cachedMeta = { cached: true, runId: clientRunId };
   const { chatSendTraceAttributes, originatingRoute } = prepareChatSendAdmissionContext(params);
   const lifecycleGeneration = getAgentEventLifecycleGeneration();
@@ -194,7 +198,7 @@ export async function admitChatSend(params: ChatSendAdmissionParams) {
   let gatewayWorkAdmission: Awaited<ReturnType<typeof beginSessionEffect>> | undefined;
   let localGoalAdmission = false;
   let localInputAdmission = false;
-  let codexGoalAdmission: "local" | "worker" | undefined;
+  let runtimeGoal: "local" | "worker" | undefined;
   let initialSessionEntry: InternalSessionEntry | undefined;
   let admittedSessionEntry: InternalSessionEntry | undefined;
   let admittedSessionSettings: ReturnType<typeof captureAdmittedChatSendSessionSettings>;
@@ -316,6 +320,10 @@ export async function admitChatSend(params: ChatSendAdmissionParams) {
         }
         const latestEntry = latestSession.entry;
         const latestSessionId = latestEntry?.sessionId;
+        // A reset between preparation and write admission must leave the replacement untouched.
+        if (request.targetPrecondition?.matches(latestEntry) === false) {
+          throw new Error(SESSION_INCARNATION_CHANGED);
+        }
         admittedSessionEntry = latestEntry;
         const requestConflict = resolveChatSendRequestConflict(
           { ...params, session: { ...session, entry: latestEntry } },
@@ -390,9 +398,9 @@ export async function admitChatSend(params: ChatSendAdmissionParams) {
         }
         const placement = preparedPlacement?.facts.current();
         const acpMeta = acp?.meta ?? null;
-        codexGoalAdmission = resolveCodexGoalAdmission(params, latestSession, placement, acpMeta);
+        runtimeGoal = resolveRuntimeGoalAdmission(params, latestSession, placement, acpMeta);
         localInputAdmission =
-          !codexGoalAdmission &&
+          !runtimeGoal &&
           isLocalChatInputAdmission(
             params,
             latestSession,
@@ -407,10 +415,10 @@ export async function admitChatSend(params: ChatSendAdmissionParams) {
             sessionKeys: [sessionKey],
           }) === undefined;
         localGoalAdmission = Boolean(request.goalOperation && localInputAdmission);
-        if (request.goalOperation && !localGoalAdmission && !codexGoalAdmission) {
+        if (request.goalOperation && !localGoalAdmission && !runtimeGoal) {
           throw new SessionGoalOperationError(
             "invalid",
-            "Goal start or resume requires an idle built-in local session with recoverable history or a supported local or cloud-worker Codex session.",
+            "Goal start or resume requires an idle supported OpenClaw or Codex session with recoverable history and a matching execution placement.",
           );
         }
       }).catch((error: unknown) => {
@@ -474,7 +482,7 @@ export async function admitChatSend(params: ChatSendAdmissionParams) {
         admittedRunAbort.controller.abort(reason);
       },
     });
-    if ((codexGoalAdmission || request.activeSteer) && !capturedOperator.authority) {
+    if ((runtimeGoal || request.activeSteer) && !capturedOperator.authority) {
       throw new Error("This input requires a current authenticated operator request.");
     }
     admittedRunAbort.initializeTiming({ now: Date.now(), timeoutMs });
@@ -577,7 +585,6 @@ export async function admitChatSend(params: ChatSendAdmissionParams) {
     return { ok: false as const };
   }
   assertSourceAuthority = () => {
-    capturedOperator.authority?.assertCurrent();
     assertAcceptedInputAuthority?.();
     assertSessionTargetCurrent();
     if (!gatewayWorkAdmission?.isActive()) {
@@ -709,7 +716,7 @@ export async function admitChatSend(params: ChatSendAdmissionParams) {
         }),
       localGoalAdmission,
       localInputAdmission,
-      codexGoalAdmission,
+      runtimeGoal,
       setDiscardAbandonedPreparedMedia: setDiscardPreparedMedia,
     },
   };

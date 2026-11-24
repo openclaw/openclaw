@@ -70,8 +70,13 @@ it.each([false, undefined])(
       assert(source.ok, JSON.stringify(source.diagnostics));
       let config = baseConfig();
       setRuntimeConfigSnapshot(config);
-      const plan = await buildGatewayTemplateAddPlan(source, { config, sourceMcpServers: {} });
+      const plan = await buildGatewayTemplateAddPlan(source, {
+        config,
+        sourceMcpServers: {},
+        deviceTimeZone: "America/New_York",
+      });
       expect(projectTemplateAddScheduledJobs(plan).jobs[0]?.proposed).toMatchObject({
+        schedule: { cron: "0 9 * * 1", timezone: "America/New_York" },
         enabled: enabled ?? true,
       });
       const run = vi.fn(async () => ({ status: "ok" as const }));
@@ -107,6 +112,7 @@ it.each([false, undefined])(
           enabled: enabled ?? true,
           agentId: "watcher",
           declarationKey: "template:watcher:weekly",
+          schedule: { kind: "cron", expr: "0 9 * * 1", tz: "America/New_York" },
           sessionTarget: "isolated",
         });
         expect(onSetupEvent).toHaveBeenNthCalledWith(

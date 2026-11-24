@@ -59,6 +59,14 @@ export type ModelSetupVerifyState =
   | { phase: "ok"; modelRef: string; modelTarget?: "utility"; latencyMs?: number }
   | { phase: "failed"; status: ModelSetupVerifyFailure["status"]; error: string };
 
+export type ModelSetupWizardStartMethod =
+  | "mcp.authLogin"
+  | "models.authLogin"
+  | "openclaw.setup.auth.start"
+  | "openclaw.setup.prepare.start"
+  | "openclaw.setup.activate.start"
+  | "openclaw.setup.runtime.start";
+
 export type ModelSetupWizardResult =
   | WizardNextResult
   | { done: true; status: "not-admitted"; error: string };
@@ -67,6 +75,7 @@ export type ModelSetupWizardRecovery = {
   sessionId: string;
   authChoice: string;
   authKind?: ProviderLoginOption["kind"];
+  selectModel?: boolean;
 };
 
 type ModelSetupWizardPhase =
@@ -102,7 +111,6 @@ export type ModelSetupState = {
   manualApiKey: string;
   manualError: string | null;
   moreSignInOpen: boolean;
-  nativeSessionCatalogsEnabled: boolean;
   iconUrls: Record<string, string>;
   setupRefreshWarning: string | null;
   detectionRequest: object | null;
@@ -121,7 +129,6 @@ export function createModelSetupState(): ModelSetupState {
     manualApiKey: "",
     manualError: null,
     moreSignInOpen: false,
-    nativeSessionCatalogsEnabled: false,
     iconUrls: {},
     setupRefreshWarning: null,
     detectionRequest: null,

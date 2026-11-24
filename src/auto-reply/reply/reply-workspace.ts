@@ -1,5 +1,4 @@
 import fs from "node:fs/promises";
-import type { AdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
 import {
   WorkspaceAliasRepointedError,
   WorkspaceVanishedError,
@@ -21,18 +20,14 @@ export async function prepareReplyWorkspace(params: {
   useFastTestBootstrap: boolean;
   provisioningInput: ProvisioningInput;
   abortSignal?: AbortSignal;
-  operatorAuthority?: AdmittedRunOperatorAuthority;
 }): Promise<Awaited<ReturnType<typeof ensureAgentWorkspace>>> {
-  const { abortSignal, operatorAuthority } = params;
+  const { abortSignal } = params;
   const options = {
     dir: params.dir,
     ensureBootstrapFiles: params.ensureBootstrapFiles && !params.deferWorkspaceBootstrap,
     skipOptionalBootstrapFiles: params.skipOptionalBootstrapFiles,
   };
-  const assertCurrent = () => {
-    operatorAuthority?.assertCurrent();
-    assertReplyPreprocessingActive(abortSignal);
-  };
+  const assertCurrent = () => assertReplyPreprocessingActive(abortSignal);
   assertCurrent();
   if (params.useFastTestBootstrap) {
     await fs.mkdir(options.dir, { recursive: true });

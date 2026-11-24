@@ -207,7 +207,7 @@ it.each(["release", "revoke", "gateway-close"] as const)(
       const custody = (await capture())!;
       try {
         source.release();
-        expect(source.authority.assertCurrent).not.toThrow();
+        expect(source.authority.signal?.aborted).not.toBe(true);
         const observer = createOperatorClient({
           profileId: "other-owner",
           scopes: ["operator.admin"],
@@ -283,7 +283,11 @@ it.each(["retired-draining", "released", "requester-replaced", "uncaptured"] as 
             sessionKey: requesterSessionKey,
             operationalRunInstance:
               createTestAdmittedRunContext("parent-run").operationalRunInstance,
-            receiptAuthority: () => !retired,
+            receiptAuthority: () => {
+              if (retired) {
+                throw new Error("agent tool caller authority is no longer active");
+              }
+            },
             gatewayContextResolver: resolveGatewayContext,
           },
           async () => {

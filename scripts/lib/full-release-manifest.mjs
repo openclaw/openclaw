@@ -16,11 +16,21 @@ export function releaseManifestChildEvidence(child) {
     triggeringActor: child.triggeringActor,
     repository: child.repository,
     jobs: child.timing.jobs.map(
-      ({ name, status, conclusion, acceptedRunAttempt, startedAt, completedAt, url }) => ({
+      ({
         name,
         status,
         conclusion,
         acceptedRunAttempt,
+        startedAt,
+        completedAt,
+        url,
+        firstIncompleteStep,
+      }) => ({
+        name,
+        status,
+        conclusion,
+        acceptedRunAttempt,
+        ...(firstIncompleteStep ? { firstIncompleteStep } : {}),
         startedAt,
         completedAt,
         url,
@@ -47,6 +57,9 @@ export function buildReleaseValidationManifest({ plan, drain, context, reusedMan
     targetRef: context.targetRef,
     targetSha: plan.targetSha,
     candidateBinding: plan.candidate,
+    ...(plan.publicationArtifactSource === undefined
+      ? {}
+      : { publicationArtifactSource: plan.publicationArtifactSource }),
     publicationArtifacts: context.publicationArtifacts ?? { npmPreflight: null, docker: null },
     publishInputs: context.publishInputs,
     advisoryJobs: drain?.advisoryJobs ?? [],
@@ -209,6 +222,10 @@ export function manifestContextFromEnvironment(source, env = process.env) {
     env.QUALIFICATION_BASELINES_JSON ?? coverage.qualification_baselines_json;
   if (qualificationBaselines) {
     inputs.qualificationBaselinesJson = qualificationBaselines;
+  }
+  // Source admission binds this pin; the manifest must echo it for validation.
+  if (coverage.publication_artifact_source_json) {
+    inputs.publicationArtifactSourceJson = coverage.publication_artifact_source_json;
   }
   inputs.targetContextRef = env.TARGET_CONTEXT_REF ?? source?.targetContextRef ?? "";
   inputs.targetVersion = env.TARGET_VERSION ?? source?.projection?.version ?? "";

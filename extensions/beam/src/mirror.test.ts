@@ -2,7 +2,6 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { buffer as consumeBuffer } from "node:stream/consumers";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
-import * as sessionCatalogRuntime from "openclaw/plugin-sdk/session-catalog-runtime";
 import * as ssrfRuntime from "openclaw/plugin-sdk/ssrf-runtime";
 import { withServer } from "openclaw/plugin-sdk/test-env";
 import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
@@ -27,12 +26,6 @@ beforeEach(() => {
 });
 
 afterEach(() => vi.useRealTimers());
-
-vi.mock("openclaw/plugin-sdk/session-catalog-runtime", async (importOriginal) => {
-  const actual =
-    await importOriginal<typeof import("openclaw/plugin-sdk/session-catalog-runtime")>();
-  return { ...actual, listActiveSessionCatalogs: vi.fn(actual.listActiveSessionCatalogs) };
-});
 
 async function withMirrorServer(
   respond: (req: IncomingMessage, res: ServerResponse, body: string) => void,
@@ -301,6 +294,111 @@ describe("createBeamMirrorRunner", () => {
     }
   });
 
+  it("fences two homes that share an existing publication ID before either is read", async () => {
+    const read = vi.fn();
+    const runner = fixture.runner({
+      sessions: ["home-a", "home-b"].map((sourceHomeId) => ({
+        threadId: "shared",
+        sourceHomeId,
+        recencyAt: beamTestNow,
+      })),
+      onRead: read,
+    });
+    await runner.tick();
+    expect(read).not.toHaveBeenCalled();
+    expect(fixture.sent).toEqual([]);
+  });
+
+  it("addresses the original released v1 publication with the full source locator", async () => {
+    const read = vi.fn();
+    const prior = beamMirrorId("claude", "gateway:local", "shared");
+    const service = createBeamTestCatalog({
+      sessions: [{ threadId: "shared", sourceHomeId: "stable-home", recencyAt: beamTestNow }],
+      onRead: read,
+    });
+    const ids: string[] = [];
+    await withMirrorServer(
+      (_req, res, body) => {
+        const id = (JSON.parse(body) as { beamId: string }).beamId;
+        ids.push(id);
+        if (id === prior) {
+          res.writeHead(409);
+          res.end(
+            JSON.stringify({ beamId: id, handoff: { id: "1".repeat(32), owner: "gateway" } }),
+          );
+        } else {
+          res.end();
+        }
+      },
+      async (origin) => {
+        const runner = createBeamTestRunner({ endpoint: origin, listCatalogs: () => [service] });
+        await runTicks(runner);
+      },
+    );
+    expect(ids).toEqual([prior]);
+    expect(read.mock.calls).toEqual([["shared", "stable-home", "main"]]);
+  });
+
+  it("does not create a fresh v1 ID when a released primary Codex home becomes secondary", async () => {
+    const prior = beamMirrorId("codex", "gateway:local", "shared");
+    const secondary = "gateway:local:old-home";
+    expect(beamMirrorId("codex", secondary, "shared")).not.toBe(prior);
+    const read = vi.fn();
+    const source = createBeamTestCatalog({
+      id: "codex",
+      hostId: secondary,
+      onRead: read,
+      sessions: [
+        {
+          threadId: "shared",
+          sourceHomeId: "old-home",
+          recencyAt: beamTestNow,
+          exportPolicy: { origin: "native-local", automatic: true },
+        },
+      ],
+    });
+    const runner = createBeamTestRunner({
+      runtime: createBeamTestRuntime(beamTestMirrorConfig({ catalogs: ["codex"] })),
+      listCatalogs: () => [source],
+    });
+    await runner.tick();
+    expect(read).not.toHaveBeenCalled();
+    expect(fixture.sent).toEqual([]);
+  });
+
+  it("requires explicit selection for a qualified source without a stable old identity", async () => {
+    const read = vi.fn();
+    const runner = fixture.runner({
+      onRead: read,
+      sessions: [
+        {
+          threadId: "shared",
+          sourceHomeId: "new-home",
+          recencyAt: beamTestNow,
+          exportPolicy: { origin: "native-local", automatic: true },
+        },
+      ],
+    });
+    await runner.tick();
+    expect(read).not.toHaveBeenCalled();
+    expect(fixture.sent).toEqual([]);
+  });
+
+  it("does not upload a pending read after catalog consent changes", async () => {
+    const config = beamTestMirrorConfig();
+    const pause = beamTestBarrier();
+    const runner = fixture.runner(
+      { onRead: pause.run },
+      { runtime: createBeamTestRuntime(config) },
+    );
+    const tick = runner.tick();
+    await pause.started;
+    config.plugins.entries.beam.config.mirror.catalogs = ["codex"];
+    pause.release();
+    await tick;
+    expect(fixture.sent).toEqual([]);
+  });
+
   it("ignores idle sessions, node hosts, the beam catalog, and unlisted catalogs", async () => {
     const catalogs = [
       createBeamTestCatalog({ sessions: beamTestSessions(["old"], beamTestNow - 86_400_000) }),
@@ -370,13 +468,15 @@ describe("createBeamMirrorService", () => {
         pause = beamTestBarrier();
       const list = stage === "list" ? pause.run : vi.fn();
       const read = stage === "read" ? pause.run : vi.fn();
-      vi.spyOn(sessionCatalogRuntime, "listActiveSessionCatalogs").mockReturnValue([
-        createBeamTestCatalog({
-          sessions: beamTestSessions(["t1", "t2"], Date.now()),
-          onList: list,
-          onRead: read,
-        }),
-      ]);
+      context.catalogExports = {
+        listCatalogs: () => [
+          createBeamTestCatalog({
+            sessions: beamTestSessions(["t1", "t2"], Date.now()),
+            onList: list,
+            onRead: read,
+          }),
+        ],
+      };
       const upload = vi
         .spyOn(ssrfRuntime, "fetchWithSsrFGuard")
         .mockRejectedValue(new Error("unexpected upload after stop"));

@@ -91,9 +91,6 @@ export const modelsAuthLoginHandlers: GatewayRequestHandlers = {
       }
       const assertLoginCurrent = () => {
         assertOwner?.();
-        if (client.invalidated || !client.connect.scopes?.includes("operator.admin")) {
-          throw new Error("Provider login authority is no longer active.");
-        }
         const current = resolveChoice();
         if (
           !current ||
@@ -135,15 +132,12 @@ export const modelsAuthLoginHandlers: GatewayRequestHandlers = {
         }
         return model
           ? {
-              name: model.name,
-              activation: {
-                kind: toSavedAuthSetupKind(profileId),
-                ...(params.agentId ? { agentId: params.agentId } : {}),
-                modelRef: model.id.startsWith(`${model.provider}/`)
-                  ? model.id
-                  : `${model.provider}/${model.id}`,
-                selectModel: true,
-              },
+              kind: toSavedAuthSetupKind(profileId),
+              ...(params.agentId ? { agentId: params.agentId } : {}),
+              modelRef: model.id.startsWith(`${model.provider}/`)
+                ? model.id
+                : `${model.provider}/${model.id}`,
+              selectModel: true,
             }
           : undefined;
       };
@@ -251,14 +245,14 @@ export const modelsAuthLoginHandlers: GatewayRequestHandlers = {
                 );
               }
               const profileId = result.profiles[0]?.profileId;
-              const first =
+              const activation =
                 params.selectModel === true && profileId
                   ? await resolveFirstModel(profileId)
                   : undefined;
-              if (first) {
+              if (activation) {
                 try {
                   await runSetupActivation({
-                    activation: first.activation,
+                    activation,
                     isLocalClient: client.internal?.isLocalClient === true,
                     prompter,
                     signal,
@@ -268,10 +262,10 @@ export const modelsAuthLoginHandlers: GatewayRequestHandlers = {
                   });
                 } catch (error) {
                   signal.throwIfAborted();
-                  throw new ProviderCredentialsSavedError(
-                    `Your sign-in was saved, but ${first.name} could not be set up for this agent: ${formatErrorMessage(error)} Choose a model in Settings → Models.`,
-                    { cause: error },
-                  );
+                  // Activation's message already says the sign-in is saved and why the check failed.
+                  throw new ProviderCredentialsSavedError(formatErrorMessage(error), {
+                    cause: error,
+                  });
                 }
               }
             },

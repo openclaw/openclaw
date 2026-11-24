@@ -488,7 +488,10 @@ suite.define(() => {
             // The sidebar can fetch lineage concurrently; identify this query
             // by its metadata-search intent, not by arrival time alone.
             const listRequests = traffic.filter((entry) => entry.method === "sessions.list");
-            const metadata = listRequests.filter((entry) => entry.params.search === query);
+            const queryLists = listRequests.filter((entry) => entry.params.search === query);
+            const metadata = queryLists.filter((entry) => entry.params.archived === undefined);
+            // Archived titles are a separate best-effort lookup (#200301).
+            const archived = queryLists.filter((entry) => entry.params.archived === true);
             const visibleResults = await results.getByRole("option").count();
             queryCount++;
             // Capture the settled state before assertions too, retaining useful
@@ -503,9 +506,16 @@ suite.define(() => {
             expect(response.archivedTranscriptsExcluded).toBe(0);
             expect(response.sessionKeys?.length).toBeLessThanOrEqual(25);
             expect(new Set(response.sessionKeys)).toEqual(new Set(response.resultKeys));
-            // The query owns one bounded metadata lookup. The scoped transcript
-            // request above cannot be limited by any background roster window.
+            // The query owns one bounded live metadata lookup and one archived title lookup.
+            // The scoped transcript request above cannot be limited by any background roster window.
             expect(metadata).toHaveLength(1);
+            expect(archived).toHaveLength(1);
+            expect(archived[0]!.params).toMatchObject({
+              search: query,
+              source: "command-palette",
+              archived: true,
+              searchTitlesOnly: true,
+            });
             const metadataResponse = metadata[0]!;
             const previous = metadataReceipts.get(query);
             const { ifRowsRevision: requestedRevision, ...metadataParams } =

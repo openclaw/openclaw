@@ -3,6 +3,7 @@ import { beforeAll, describe, expect, test, vi } from "vitest";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { PluginHttpRouteRegistration } from "../plugins/registry.js";
 import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { authorizeOperatorScopesForMethod } from "./method-scopes.js";
 import { canonicalizePathVariant } from "./security-path.js";
 import {
@@ -292,6 +293,42 @@ describe("gateway plugin HTTP auth boundary", () => {
       },
       { handleHooksRequest: createHooksHandler("::") },
       AUTH_NONE,
+    );
+  });
+
+  test("finishes an admitted gateway-auth plugin request after its credential rotates", async () => {
+    let resolvedAuth = AUTH_TOKEN;
+    const entered = createDeferredCore();
+    const release = createDeferredCore();
+    const { handlePluginRequest } = pluginRoutes([
+      [
+        "/secure-hook",
+        async (_req, res) => {
+          entered.resolve();
+          await release.promise;
+          await getPluginRuntimeGatewayRequestScope()?.revalidate?.();
+          return respond(res, "finished");
+        },
+        { pluginId: "rotation", auth: "gateway" },
+      ],
+    ]);
+    await withServer(
+      async (request) => {
+        const pending = request("/secure-hook", { authorization: "Bearer test-token" });
+        await entered.promise;
+        resolvedAuth = { ...AUTH_TOKEN, token: "rotated-token" };
+        release.resolve();
+        expectResponse(await pending, 200, "finished");
+        // Rotation applies to the next request.
+        expectUnauthorizedResponse(
+          await request("/secure-hook", { authorization: "Bearer test-token" }),
+        );
+      },
+      {
+        handlePluginRequest,
+        shouldEnforcePluginGatewayAuth: () => true,
+        getResolvedAuth: () => resolvedAuth,
+      },
     );
   });
 });

@@ -132,20 +132,20 @@ it("keeps admitted lineage through policy changes and checks fresh work once", (
           profileId: profile.id,
         }),
       ).rejects.toBeInstanceOf(GatewayOperatorAccessUnavailableError);
-      expect(captured.authority.signal?.aborted).toBe(false);
+      expect(captured.authority.signal?.aborted).not.toBe(true);
       expect(grant.signal.aborted).toBe(false);
       expect(() => inScope(model.assertCurrent)).not.toThrow();
       expect(model.signal.aborted).toBe(false);
       unavailable = false;
       expect(active).not.toThrow();
       expect(model.assertCurrent).not.toThrow();
-      expect(captured.authority.signal?.aborted).toBe(false);
+      expect(captured.authority.signal?.aborted).not.toBe(true);
       for (const run of runs) {
         expect(getAdmittedRunDelegatedAuthority(run)).toBeDefined();
       }
       // Revocation applies to the next start, not to this admitted lineage.
       grant.abort(new Error("grant revoked"));
-      expect(captured.authority.signal?.aborted).toBe(false);
+      expect(captured.authority.signal?.aborted).not.toBe(true);
       expect(model.signal.aborted).toBe(false);
       expect(active).not.toThrow();
       for (const run of runs) {
