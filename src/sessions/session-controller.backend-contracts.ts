@@ -66,6 +66,8 @@ export type ReplyBackendQueueMessageOptions = {
   onQueueAccepted?: (accepted: boolean) => void;
   /** Releases per-input custody after commit, cancellation, or terminal rejection. */
   onQueueSettled?: () => void;
+  /** Native identity of this steered input, reported only after its transcript is committed. */
+  onNativeInputCommitted?: (identity: NativeSteerInputIdentity) => void;
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
   taskSuggestionDeliveryMode?: TaskSuggestionDeliveryMode;
   /** Prepared channel turn to merge only at transcript persistence. */
@@ -197,13 +199,11 @@ export type ReplyTurnParticipants = {
   close(): void;
 };
 
-export type ReplyBackendQueueMessageResult =
-  | { transcriptCommit: "confirmed"; nativeInputIdentity: NativeSteerInputIdentity }
-  | {
-      /** Input is non-replayable, but its delivery or commitment could not be confirmed. */
-      transcriptCommit: "unconfirmed";
-      errorMessage: string;
-    };
+export type ReplyBackendQueueMessageResult = {
+  /** Input is non-replayable, but its delivery or commitment could not be confirmed. */
+  transcriptCommit: "unconfirmed";
+  errorMessage: string;
+};
 
 export type ReplyBackendMessageInjection = {
   /** Runtime-owned admission state; independent from token streaming. */

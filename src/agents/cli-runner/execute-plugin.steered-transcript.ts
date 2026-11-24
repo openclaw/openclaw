@@ -118,14 +118,11 @@ export function createSteeredCliMessageInjection(params: {
         message &&
         readPersistedMediaFacts(message)?.some(isMeaningfulMediaFact)
       ) {
-        result = {
-          transcriptCommit: "confirmed",
-          nativeInputIdentity: {
-            importedFrom: params.context.backendResolved.id,
-            cliSessionId: nativeInput.cliSessionId,
-            externalId: nativeInput.externalId,
-          },
-        };
+        options?.onNativeInputCommitted?.({
+          importedFrom: params.context.backendResolved.id,
+          cliSessionId: nativeInput.cliSessionId,
+          externalId: nativeInput.externalId,
+        });
       }
     } catch (error) {
       failure = toErrorObject(error, "CLI steering failed.");
