@@ -669,15 +669,26 @@ describe("plugin-owned CLI same-turn input", () => {
   });
 
   it.each([
-    { acceptsImages: true, outcome: { status: "accepted" } },
+    { acceptsImages: true, inputGate: false, outcome: { status: "accepted" } },
     {
       acceptsImages: undefined,
+      inputGate: false,
+      outcome: { status: "rejected", reason: "image_input_unsupported" },
+    },
+    {
+      acceptsImages: true,
+      inputGate: true,
       outcome: { status: "rejected", reason: "image_input_unsupported" },
     },
   ])(
-    "steers an image into the running turn only when the sink accepts images ($acceptsImages)",
-    async ({ acceptsImages, outcome }) => {
+    "admits a steered image with sink support $acceptsImages and a before_agent_run gate $inputGate",
+    async ({ acceptsImages, inputGate, outcome }) => {
       const { context } = await createExecution();
+      if (inputGate) {
+        initializeGlobalHookRunner(
+          createMockPluginRegistry([{ hookName: "before_agent_run", handler: () => undefined }]),
+        );
+      }
       const operation = attachReplyOperation(context);
       operation.setPhase("running");
       const ready = createDeferred();
@@ -710,7 +721,9 @@ describe("plugin-owned CLI same-turn input", () => {
           images: [image],
         });
         await expect(steered.outcome).resolves.toEqual(outcome);
-        expect(received).toEqual(acceptsImages ? [{ text: "look at this", images: [image] }] : []);
+        expect(received).toEqual(
+          outcome.status === "accepted" ? [{ text: "look at this", images: [image] }] : [],
+        );
       } finally {
         finish.resolve();
         try {
