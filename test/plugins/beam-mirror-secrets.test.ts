@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import http from "node:http";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import * as processRuntime from "openclaw/plugin-sdk/process-runtime";
 import { afterEach, assert, expect, it, vi } from "vitest";
 import beamPlugin from "../../extensions/beam/index.js";
 import { getRuntimeConfig } from "../../src/config/io.js";
@@ -35,12 +36,16 @@ let input = "";
 process.stdin.setEncoding("utf8").on("data", (chunk) => input += chunk);
 process.stdin.on("end", () => {
   const { source, title, updatedAt, completed, items } = JSON.parse(input);
-  process.stdout.write(JSON.stringify({ version: 2, beamId: "a".repeat(32), source, title, updatedAt, completed, items }));
+  const messages = items.map(({ type, text, speakerId }) => ({
+    type, text, ...(speakerId ? { speaker: "p" + speakerId } : {}),
+  }));
+  process.stdout.write(JSON.stringify({ version: 2, beamId: "a".repeat(32), source, title, updatedAt, completed, items: messages }));
 });
 `,
 );
 vi.mock("../../extensions/beam/package.json", async (importOriginal) => {
   const current = await importOriginal<{ default: Record<string, unknown> }>();
+  if (process.env.BEAM_TEST_CLEANER_PLUGIN_ROOT) return current;
   const { createHash } = await import("node:crypto");
   return {
     ...current,
@@ -86,13 +91,16 @@ function prepare(config: OpenClawConfig, env: NodeJS.ProcessEnv) {
   });
 }
 
-async function startMirror(config: OpenClawConfig, catalog?: SessionCatalogProvider) {
+async function startMirror(config: OpenClawConfig, read?: SessionCatalogProvider["read"]) {
   const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() };
   const builder = createRuntimeTestRegistry(createPluginRuntime());
-  const rootDir = tempDirs.make("beam-credential-plugin-");
-  const platform = path.join(rootDir, "native", process.platform + "-" + process.arch);
-  await fs.mkdir(platform, { recursive: true });
-  await fs.writeFile(path.join(platform, "beam-clean"), cleaner, { mode: 0o700 });
+  const packaged = process.env.BEAM_TEST_CLEANER_PLUGIN_ROOT;
+  const rootDir = packaged ?? tempDirs.make("beam-credential-plugin-");
+  if (!packaged) {
+    const platform = path.join(rootDir, "native", process.platform + "-" + process.arch);
+    await fs.mkdir(platform, { recursive: true });
+    await fs.writeFile(path.join(platform, "beam-clean"), cleaner, { mode: 0o700 });
+  }
   const record = createPluginRecord({
     id: "beam",
     rootDir,
@@ -103,7 +111,7 @@ async function startMirror(config: OpenClawConfig, catalog?: SessionCatalogProvi
   });
   const api = builder.createApi(record, { config });
   beamPlugin.register(api);
-  if (catalog) {
+  if (read) {
     const producer = createPluginRecord({
       id: "native-catalog-fixture",
       source: "fixture",
@@ -111,7 +119,38 @@ async function startMirror(config: OpenClawConfig, catalog?: SessionCatalogProvi
       origin: "bundled",
       enabled: true,
     });
-    builder.createApi(producer, { config }).registerSessionCatalog(catalog);
+    builder.createApi(producer, { config }).registerSessionCatalog({
+      id: "claude",
+      label: "Synthetic catalog",
+      supportsProcessHomeIsolation: true,
+      automaticExportHosts: () => ["gateway:local"],
+      async list() {
+        const session = {
+          threadId: "t1",
+          sourceHomeId: "isolated-fixture-home",
+          exportPolicy: {
+            origin: "native-local" as const,
+            automatic: true,
+            stableHostThreadIdentity: true as const,
+          },
+          recencyAt: Date.now(),
+          status: "stored",
+          archived: false,
+          canContinue: false,
+          canArchive: false,
+        };
+        return [
+          {
+            hostId: "gateway:local",
+            label: "Local",
+            kind: "gateway",
+            connected: true,
+            sessions: [session],
+          },
+        ];
+      },
+      read,
+    });
   }
   setActivePluginRegistry(builder.registry);
   const service = builder.registry.services.find(({ id }) => id === "beam-mirror")?.service;
@@ -186,41 +225,13 @@ it.skipIf(process.platform === "win32")(
     activateSecretsRuntimeSnapshot(snapshot);
     let reads = 0;
     let reloadDuringRead: (() => void) | undefined;
-    const { clock, scheduler } = await startMirror(snapshot.config, {
-      id: "claude",
-      label: "Synthetic catalog",
-      supportsProcessHomeIsolation: true,
-      automaticExportHosts: () => ["gateway:local"],
-      async list() {
-        const session = {
-          threadId: "t1",
-          sourceHomeId: "isolated-fixture-home",
-          exportPolicy: {
-            origin: "native-local" as const,
-            automatic: true,
-            stableHostThreadIdentity: true as const,
-          },
-          recencyAt: Date.now(),
-          status: "stored",
-          archived: false,
-          canContinue: false,
-          canArchive: false,
-        };
-        return [
-          {
-            hostId: "gateway:local",
-            label: "Local",
-            kind: "gateway",
-            connected: true,
-            sessions: [session],
-          },
-        ];
-      },
-      async read({ hostId, threadId }) {
+    const { clock, scheduler } = await startMirror(
+      snapshot.config,
+      async ({ hostId, threadId }) => {
         reloadDuringRead?.();
         return { hostId, threadId, items: [{ type: "agentMessage", text: String(++reads) }] };
       },
-    });
+    );
     try {
       await clock.wake();
       await clock.advanceBy(30_000);
@@ -244,6 +255,71 @@ it.skipIf(process.platform === "win32")(
       expect(requests[2]?.[1]).toBe("Bearer synthetic-prepared-token");
       expect((await fs.readFile(calls, "utf8")).trim().split("\n")).toHaveLength(2);
     } finally {
+      await scheduler.stop();
+    }
+  },
+);
+
+it.skipIf(process.platform === "win32" && !process.env.BEAM_TEST_CLEANER_PLUGIN_ROOT)(
+  "exports an attributed assistant and two human speakers from a registered local catalog",
+  async () => {
+    let deliveries = 0;
+    const server = http.createServer((req, res) => {
+      req.resume();
+      deliveries++;
+      res.end("{}");
+    });
+    servers.push(server);
+    const config = configWithToken("fixture", (await listenLoopback(server)) + "/beam");
+    const snapshot = await prepare(config, {});
+    activateSecretsRuntimeSnapshot(snapshot);
+    const cleanerRun = vi.spyOn(processRuntime, "runCommandBuffered");
+    const { clock, scheduler } = await startMirror(
+      snapshot.config,
+      async ({ hostId, threadId }) => ({
+        hostId,
+        threadId,
+        items: [
+          {
+            type: "userMessage",
+            text: "Thanks.",
+            sender: { identity: { type: "profile", id: "private-first" }, label: "First person" },
+          },
+          {
+            type: "userMessage",
+            text: "One more detail.",
+            sender: { identity: { type: "profile", id: "private-second" }, label: "Second person" },
+          },
+          {
+            type: "agentMessage",
+            text: "Here is the result.",
+            sender: { identity: { type: "agent", id: "private-assistant" }, label: "Assistant" },
+          },
+          {
+            type: "userMessage",
+            text: "Please check.",
+            sender: { identity: { type: "profile", id: "private-first" }, label: "First person" },
+          },
+        ],
+      }),
+    );
+    try {
+      await clock.wake();
+      expect(cleanerRun).toHaveBeenCalledTimes(1);
+      const call = cleanerRun.mock.results[0];
+      assert(call?.type === "return");
+      const { stdout, code } = await call.value;
+      expect(code).toBe(0);
+      expect(JSON.parse(stdout.toString()).items).toEqual([
+        { type: "userMessage", text: "Please check.", speaker: "p1" },
+        { type: "agentMessage", text: "Here is the result." },
+        { type: "userMessage", text: "One more detail.", speaker: "p2" },
+        { type: "userMessage", text: "Thanks.", speaker: "p1" },
+      ]);
+      expect(stdout.toString()).not.toContain("private-");
+      expect(deliveries).toBe(1);
+    } finally {
+      cleanerRun.mockRestore();
       await scheduler.stop();
     }
   },

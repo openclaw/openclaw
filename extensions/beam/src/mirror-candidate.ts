@@ -40,7 +40,7 @@ export function buildBeamMirrorItems(items: readonly CatalogExportItem[]) {
       // Grants rotate private speaker tokens. The cleaner needs only their equality
       // within this selection, including when it trims an older part of the history.
       let speakerId: string | undefined;
-      if (item.speakerId) {
+      if (item.type === "userMessage" && item.speakerId) {
         speakerId = speakers.get(item.speakerId) ?? String(speakers.size + 1);
         speakers.set(item.speakerId, speakerId);
       }
