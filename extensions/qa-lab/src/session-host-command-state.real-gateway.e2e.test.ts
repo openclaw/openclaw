@@ -156,7 +156,15 @@ suite.define(() => {
             await confirmation.waitFor();
             await confirmation.getByRole("button", { name: /^Switch to /u }).click();
 
-            await page.locator("#new-session-where-trigger").click();
+            const openWherePicker = async () => {
+              // The first hello invalidates any picker opened on the offline draft.
+              // Wait for this browser's connection, not the separate operator client.
+              await page
+                .locator('.sidebar-identity-card[data-connection-status="connected"]')
+                .waitFor();
+              await page.locator("#new-session-where-trigger").click();
+            };
+            await openWherePicker();
             const place = page.locator(".oc-popover.new-session-page__where-popover");
             const row = (deviceId: string) => place.locator(`[data-value="device:${deviceId}"]`);
             const disabledReason = async (deviceId: string) => tooltipTitleText(row(deviceId));
@@ -188,7 +196,7 @@ suite.define(() => {
             expect(helloCounts.get(unauthorizedNode)).toBe(unauthorizedHelloCount);
 
             await page.reload();
-            await page.locator("#new-session-where-trigger").click();
+            await openWherePicker();
             await row(unauthorizedIdentity.deviceId).waitFor();
             await expect
               .poll(() => disabledReason(unauthorizedIdentity.deviceId))
@@ -207,7 +215,7 @@ suite.define(() => {
             );
             expect(helloCounts.get(unauthorizedNode)).toBe(unauthorizedHelloCount);
             await page.reload();
-            await page.locator("#new-session-where-trigger").click();
+            await openWherePicker();
             await row(unauthorizedIdentity.deviceId).waitFor();
             await expect.poll(() => row(unauthorizedIdentity.deviceId).isEnabled()).toBe(true);
             await capture("03-invocable-after-reallow.png");
