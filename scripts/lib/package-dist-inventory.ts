@@ -96,6 +96,9 @@ async function writePackageLifecyclePendingMarker(packageRoot: string): Promise<
 }
 
 export async function writePackageDistInventoryForPublish(packageRoot: string): Promise<string[]> {
+  // Release-only assets must be present before both the integrity inventory and npm packlist.
+  const { runBundledPluginAssetHooks } = await import("../bundled-plugin-assets.mts");
+  await runBundledPluginAssetHooks({ phase: "package", rootDir: packageRoot });
   const inventory = await writePackageDistInventory(packageRoot);
   await writePackageLifecyclePendingMarker(packageRoot);
   return inventory;

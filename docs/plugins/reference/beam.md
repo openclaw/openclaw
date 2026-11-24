@@ -19,7 +19,7 @@ Read-only coding-session Beam receiver.
 
 ## Surface
 
-This plugin declares no channels, providers, commands, or contracts.
+- CLI commands: `openclaw beam`
 
 ## Related docs
 

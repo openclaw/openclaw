@@ -8,6 +8,9 @@
     "@openclaw/plugin-sdk": "workspace:*"
   },
   "openclaw": {
+    "assetScripts": {
+      "package": "node scripts/package-cleaners.mjs"
+    },
     "extensions": [
       "./index.ts"
     ]

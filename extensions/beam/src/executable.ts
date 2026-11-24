@@ -1,78 +1,66 @@
 import { createHash } from "node:crypto";
 import { constants } from "node:fs";
 import { access } from "node:fs/promises";
-import { createRequire } from "node:module";
-import { dirname } from "node:path";
 import { root } from "openclaw/plugin-sdk/file-access-runtime";
 import packageManifest from "../package.json" with { type: "json" };
 
 export type BeamNativeRelease = {
   version: string;
-  platforms: Readonly<Record<string, { executableSha256: string }>>;
+  protocol: 1;
+  platforms: Readonly<Record<string, { executableBytes: number; executableSha256: string }>>;
 };
 
 const installed: typeof packageManifest & { beamNativeRelease?: BeamNativeRelease } =
   packageManifest;
-export const resolveBeamExecutable = createBeamExecutableResolver({
-  release: installed.beamNativeRelease,
-  resolvePackage: createRequire(import.meta.url).resolve,
-  platform: process.platform,
-  arch: process.arch,
-});
 
-/** Verify the packaged cleaner once per installation. Receive and catalog reads never call this. */
-export function createBeamExecutableResolver(params: {
-  release: BeamNativeRelease | undefined;
-  resolvePackage: (name: string) => string;
-  platform: NodeJS.Platform;
-  arch: string;
-}): () => Promise<string> {
-  let executable: Promise<string> | undefined;
+/** Verification belongs to this plugin instance; registration alone never opens a native asset. */
+export function createBeamExecutableResolver(
+  pluginRoot: string,
+  options: {
+    release?: BeamNativeRelease;
+    platform?: NodeJS.Platform;
+    arch?: string;
+  } = {},
+): () => Promise<string> {
+  let verified: Promise<string> | undefined;
   async function resolve() {
-    const { release } = params;
-    if (!release) {
+    const release = options.release ?? installed.beamNativeRelease;
+    const platform = options.platform ?? process.platform;
+    const target = `${platform}-${options.arch ?? process.arch}`;
+    if (!release || release.protocol !== 1) {
       throw new Error(
-        "This OpenClaw build does not include a pinned Beam cleaner. Install a distribution with native Beam support to mirror sessions.",
+        "This OpenClaw build does not include a compatible Beam cleaner. Install a distribution with native Beam support to mirror sessions.",
       );
     }
-    const target = `${params.platform}-${params.arch}`;
     const pin = release.platforms[target];
     if (!pin) {
       throw new Error(
         `Beam outbound cleaning is unavailable on ${target}. Use Beam on a supported sender.`,
       );
     }
-    const packageName = `@openclaw/beam-${target}`;
-    let packageDir: string;
     try {
-      packageDir = dirname(params.resolvePackage(`${packageName}/package.json`));
-    } catch (cause) {
-      throw new Error(
-        `Beam outbound cleaning requires ${packageName}@${release.version}. Reinstall OpenClaw with optional dependencies enabled.`,
-        { cause },
-      );
-    }
-
-    const filename = params.platform === "win32" ? "bin/beam.exe" : "bin/beam";
-    // pnpm can hardlink the installed bytes. The OpenClaw pin authenticates their content.
-    try {
-      const fsRoot = await root(packageDir);
-      const { buffer, realPath } = await fsRoot.read(filename, {
+      const packageRoot = await root(pluginRoot);
+      const filename = platform === "win32" ? "beam-clean.exe" : "beam-clean";
+      // Package managers can hardlink installed files. The release pin authenticates their bytes.
+      const { buffer, realPath } = await packageRoot.read(`native/${target}/${filename}`, {
         hardlinks: "allow",
         symlinks: "reject",
-        maxBytes: 64 * 1024 * 1024,
+        maxBytes: pin.executableBytes,
       });
-      if (createHash("sha256").update(buffer).digest("hex") !== pin.executableSha256) {
-        throw new Error("SHA-256 mismatch");
+      if (
+        buffer.length !== pin.executableBytes ||
+        createHash("sha256").update(buffer).digest("hex") !== pin.executableSha256
+      ) {
+        throw new Error("Native Beam cleaner checksum mismatch");
       }
       await access(realPath, constants.X_OK);
       return realPath;
     } catch (cause) {
       throw new Error(
-        `The Beam outbound cleaner in ${packageName}@${release.version} failed verification. Reinstall OpenClaw before mirroring.`,
+        `The packaged Beam ${release.version} cleaner for ${target} is missing or failed verification. Reinstall OpenClaw to restore outbound mirroring.`,
         { cause },
       );
     }
   }
-  return () => (executable ??= resolve());
+  return () => (verified ??= resolve());
 }
