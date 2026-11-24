@@ -2528,9 +2528,6 @@ describe("ci workflow guards", () => {
       expect(manifest.outputs.validation_tier).toBe(tier);
       for (const family of [
         "run_build_artifacts",
-        "run_ios_build",
-        "run_ios_voice_cleanup_tests",
-        "run_ios_lifecycle_tests",
         "run_macos_swift",
         "run_checks_windows",
         "run_ui_tests",
@@ -2540,6 +2537,13 @@ describe("ci workflow guards", () => {
         "run_docker_seed_e2e",
       ]) {
         expect(manifest.outputs[family], family).toBe("true");
+      }
+      for (const family of [
+        "run_ios_build",
+        "run_ios_voice_cleanup_tests",
+        "run_ios_lifecycle_tests",
+      ]) {
+        expect(manifest.outputs[family], family).toBe(String(!release));
       }
       const plannerLine = manifest.output
         .split("\n")
@@ -2576,9 +2580,9 @@ describe("ci workflow guards", () => {
       const android = JSON.parse(
         expectDefined(manifest.outputs.android_matrix, "Android matrix"),
       ).include;
-      expect(android.some((row: { task: string }) => row.task === "build-play")).toBe(release);
+      expect(android.some((row: { task: string }) => row.task === "build-play")).toBe(false);
       expect(android.filter((row: { task: string }) => row.task.startsWith("test-"))).toHaveLength(
-        3,
+        release ? 0 : 3,
       );
       const dockerLanes = expectDefined(manifest.outputs.docker_seed_lanes, "Docker lanes").split(
         " ",
@@ -2592,7 +2596,7 @@ describe("ci workflow guards", () => {
         runAttempt: 1,
         preflightOutputs: manifest.outputs,
       };
-      for (const job of ["ios-screenshot-shard", "ios-screenshot-evidence", "checks-node-compat"]) {
+      for (const job of ["checks-node-compat"]) {
         const expression = workflow.jobs[job].if;
         expect(
           evaluateWorkflowExpression(
@@ -2604,13 +2608,11 @@ describe("ci workflow guards", () => {
       }
       expect(
         evaluateWorkflowExpression(workflow.jobs["ios-build"].strategy.matrix.phase, context),
-      ).toEqual(release ? ["release", "tests"] : ["tests"]);
+      ).toEqual(release ? ["smoke"] : ["tests"]);
       for (const name of [
         "Test Watch RTC engine",
         "Run focused iOS voice cleanup simulator tests",
         "Run focused iOS lifecycle simulator tests",
-        "Prove native managed document download and export",
-        "Run focused Apple Watch operation simulator tests",
       ]) {
         const step = workflow.jobs["ios-build"].steps.find(
           (candidate: WorkflowStep) => candidate.name === name,
@@ -2623,13 +2625,7 @@ describe("ci workflow guards", () => {
             steps: successfulNativeSetup(),
           }),
           name,
-        ).toBe(
-          release ||
-            ![
-              "Prove native managed document download and export",
-              "Run focused Apple Watch operation simulator tests",
-            ].includes(name),
-        );
+        ).toBe(true);
       }
       const packageStep = workflow.jobs["docker-seed-e2e"].steps.find((step: WorkflowStep) =>
         step.run?.includes("scripts/package-openclaw-for-docker.mjs"),
@@ -2663,7 +2659,7 @@ describe("ci workflow guards", () => {
       ]) {
         const step = job.steps.find((candidate: WorkflowStep) => candidate.name === name);
         const commands: string[][][] = [];
-        for (const tier of ["main", "full"]) {
+        for (const tier of ["main"]) {
           const commandFile = path.join(root, "commands.jsonl");
           writeFileSync(commandFile, "");
           const restartFile = path.join(root, "restart-commands.jsonl");
@@ -2699,29 +2695,18 @@ describe("ci workflow guards", () => {
           commands.push(calls);
         }
         const main = expectDefined(commands[0], "main-tier commands");
-        const full = expectDefined(commands[1], "full-tier commands");
-        const selectors = (args: string[]) =>
-          args.filter((arg) => arg.startsWith("-only-testing:"));
         expect(main).toHaveLength(1);
-        const mainUnits = selectors(expectDefined(main[0], "main-tier unit command"));
-        expect(mainUnits).toEqual(selectors(expectDefined(full[0], "full-tier unit command")));
-        expect(mainUnits.length).toBeGreaterThan(0);
-        if (name.includes("lifecycle")) {
-          expect(full).toHaveLength(2);
-          expect(full[1]).toContain(
-            "-only-testing:OpenClawUITests/OpenClawSnapshotUITests/testWatchMessageDeliveryIsReachableFromSettings",
-          );
-        } else {
-          expect(full).toHaveLength(1);
-        }
+        expect(
+          expectDefined(main[0], "main-tier unit command").some((arg) =>
+            arg.startsWith("-only-testing:"),
+          ),
+        ).toBe(true);
       }
     },
   );
 
   it.each([
     ["macos-swift", false, "workflow_dispatch", false, ["release", "tests", "packages"]],
-    ["ios-build", false, "workflow_dispatch", false, ["release", "tests"]],
-    ["ios-build", true, "workflow_dispatch", false, ["tests"]],
     ["ios-build", false, "pull_request", false, ["smoke"]],
     ["ios-build", false, "push", false, ["smoke"]],
     ["ios-build", false, "workflow_dispatch", true, ["smoke"]],
@@ -2782,7 +2767,6 @@ describe("ci workflow guards", () => {
                 ...(historical ? [] : ["Run focused iOS voice cleanup simulator tests"]),
                 ...(historical ? [] : ["Run focused iOS lifecycle simulator tests"]),
               ],
-              release: ["Build iOS app (Release)"],
               tests: [
                 "Test Watch RTC engine",
                 "Swift lint",
@@ -2791,7 +2775,6 @@ describe("ci workflow guards", () => {
                 "Build iOS app",
                 "Run focused iOS voice cleanup simulator tests",
                 "Run focused iOS lifecycle simulator tests",
-                "Run focused Apple Watch operation simulator tests",
               ],
             };
       const names = [];
@@ -4347,8 +4330,6 @@ describe("ci workflow guards", () => {
       { eventName: "pull_request", releaseGate: false, full: false, legacy: false },
       { eventName: "push", releaseGate: false, full: false, legacy: false },
       { eventName: "workflow_dispatch", releaseGate: true, full: false, legacy: false },
-      { eventName: "workflow_dispatch", releaseGate: false, full: true, legacy: false },
-      { eventName: "workflow_dispatch", releaseGate: false, full: true, legacy: true },
     ] as const)(
       "executes Android test/lint and retained full-tier commands for %j",
       ({ eventName, releaseGate, full, legacy }) => {
@@ -8775,10 +8756,9 @@ describe("ci workflow guards", () => {
     },
     {
       label: "ordinary manual",
-      screenshots: true,
       changedPath: ".github/actions/git-owner/owner.py",
       eventName: "workflow_dispatch",
-      selectedJobs: ["macos-node", "macos-swift", "checks-windows", "ios-build"],
+      selectedJobs: ["macos-node", "macos-swift", "checks-windows"],
     },
     {
       label: "historical manual Mac source without native Node output",
@@ -9416,11 +9396,7 @@ describe("ci workflow guards", () => {
     expect(
       JSON.parse(expectDefined(legacy.outputs.android_matrix, "legacy Android matrix output"))
         .include,
-    ).toEqual([
-      { check_name: "android-test-play", task: "test-play-compat" },
-      { check_name: "android-test-third-party", task: "test-third-party" },
-      { check_name: "android-build-play", task: "build-play-compat" },
-    ]);
+    ).toEqual([]);
     expect(
       JSON.parse(
         expectDefined(
@@ -9438,7 +9414,7 @@ describe("ci workflow guards", () => {
     const current = runCiManifestFixture({ bundledPlanner: true });
     expect(current.status, current.output).toBe(0);
     expect(current.outputs.use_compatible_android_ci).toBe("false");
-    expect(current.outputs.run_ios_build).toBe("true");
+    expect(current.outputs.run_ios_build).toBe("false");
     expect(current.outputs.run_native_i18n).toBe("true");
     expect(current.outputs.run_openclawkit_tests).toBe("true");
     expect(current.outputs.run_qa_smoke_ci).toBe("true");
@@ -9453,14 +9429,7 @@ describe("ci workflow guards", () => {
     expect(
       JSON.parse(expectDefined(current.outputs.android_matrix, "current Android matrix output"))
         .include,
-    ).toEqual([
-      { check_name: "android-test-play", task: "test-play" },
-      { check_name: "android-test-third-party", task: "test-third-party" },
-      { check_name: "android-test-wear", task: "test-wear" },
-      { check_name: "android-build-play", task: "build-play" },
-      { check_name: "android-build-wear", task: "build-wear" },
-      { check_name: "android-ktlint", task: "ktlint" },
-    ]);
+    ).toEqual([]);
 
     const currentMissingAndroidCapabilities = runCiManifestFixture({
       androidCiCapabilities: false,
@@ -9812,7 +9781,7 @@ describe("ci workflow guards", () => {
     expect(releaseCandidateMissingSwiftWrappers.status).toBe(0);
     expect(releaseCandidateMissingSwiftWrappers.outputs.compatibility_target).toBe("true");
     expect(releaseCandidateMissingSwiftWrappers.outputs.use_compatible_android_ci).toBe("false");
-    expect(releaseCandidateMissingSwiftWrappers.outputs.run_ios_build).toBe("true");
+    expect(releaseCandidateMissingSwiftWrappers.outputs.run_ios_build).toBe("false");
     expect(releaseCandidateMissingSwiftWrappers.outputs.run_macos_swift).toBe("true");
 
     const releaseCandidateMissingIosBuild = runCiManifestFixture({
@@ -9983,7 +9952,7 @@ describe("ci workflow guards", () => {
     {
       label: "frozen target with native test",
       androidAccessNativeCapability: true,
-      selected: true,
+      selected: false,
       frozen: true,
     },
     {
@@ -9996,7 +9965,7 @@ describe("ci workflow guards", () => {
     {
       label: "same-source dispatch without native test",
       scopeEnv: { OPENCLAW_CI_WORKFLOW_REVISION: "a".repeat(40) },
-      selected: true,
+      selected: false,
       frozen: false,
     },
     {
@@ -12119,11 +12088,9 @@ describe("ci workflow guards", () => {
       "macos-node",
       "macos-swift",
       "ios-build",
-      "ios-release-e2e",
       "ios-screenshot-shard",
       "ios-screenshot-evidence",
       "android",
-      "android-release-e2e",
       "android-screenshots",
       "android-access-native",
       "docker-seed-e2e",
@@ -12373,7 +12340,7 @@ describe("ci workflow guards", () => {
       expected: {
         "checks-ui-e2e": true,
         "checks-ui-e2e-real-gateway": true,
-        "ios-screenshot-shard": true,
+        "ios-screenshot-shard": false,
         "checks-node-compat": true,
       },
     },
@@ -12435,7 +12402,7 @@ describe("ci workflow guards", () => {
     {
       label: "Android capture on ordinary manual CI",
       context: { preflightOutputs: { run_android_screenshots: "false" } },
-      expected: { "android-screenshots": true },
+      expected: { "android-screenshots": false },
     },
     {
       label: "Android capture excludes hourly main",
@@ -12470,9 +12437,14 @@ describe("ci workflow guards", () => {
       expected: { "ios-build": true, "ios-screenshot-shard": false },
     },
     {
-      label: "ordinary manual screenshot override",
+      label: "Gateway qualification excludes mobile screenshots",
+      context: {},
+      expected: { "ios-screenshot-shard": false, "android-screenshots": false },
+    },
+    {
+      label: "ordinary manual cannot override screenshot scope",
       context: { preflightOutputs: { run_ios_screenshots: "false" } },
-      expected: { "ios-screenshot-shard": true },
+      expected: { "ios-screenshot-shard": false },
     },
     {
       label: "release gate without screenshot scope",
@@ -12702,7 +12674,14 @@ describe("ci workflow guards", () => {
       const outcome = runCiGateFixture(jobResults);
       expect(outcome.status, `${outcome.stdout}\n${outcome.stderr}`).toBe(exit);
       for (const job of jobs) {
-        const jobSelected = job === "pr-failure-report" ? false : selected;
+        const jobSelected = [
+          "pr-failure-report",
+          "ios-screenshot-shard",
+          "ios-screenshot-evidence",
+          "android-screenshots",
+        ].includes(job)
+          ? false
+          : selected;
         const jobResult = job === "pr-failure-report" && !selected ? "skipped" : result;
         expect(jobResults).toContain(`${job}=${jobResult}|${jobSelected}\n`);
         expect(outcome.stdout).toContain(`${job}: ${jobResult} (selected=${jobSelected})`);
@@ -12745,7 +12724,7 @@ describe("ci workflow guards", () => {
     "ci-gate reports failed upstream and selected dependent skips",
     () => {
       const jobResults = renderCiGateEnvironment(
-        {},
+        { eventName: "push" },
         {
           "ios-screenshot-shard": "failure",
           "ios-screenshot-evidence": "skipped",

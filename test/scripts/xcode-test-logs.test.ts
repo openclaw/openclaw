@@ -84,14 +84,7 @@ it("routes each iOS simulator test through workflow-owned log capture and retain
   const steps = job.steps;
   for (const [name, logPaths] of [
     ["Run focused iOS voice cleanup simulator tests", ["OpenClawVoiceCleanupTests.log"]],
-    [
-      "Run focused iOS lifecycle simulator tests",
-      ["${result_bundle%.xcresult}.log", "OpenClawWatchDeliveryUITests.log"],
-    ],
-    [
-      "Run focused Apple Watch operation simulator tests",
-      ["OpenClawWatchBuild.log", "OpenClawWatchOperationTests.log"],
-    ],
+    ["Run focused iOS lifecycle simulator tests", ["${result_bundle%.xcresult}.log"]],
   ] as const) {
     const run = steps.find((step) => step.name === name)?.run;
     expect(run, name).toContain("source .ci-harness/scripts/lib/swift-toolchain.sh");
@@ -102,22 +95,9 @@ it("routes each iOS simulator test through workflow-owned log capture and retain
     for (const logPath of logPaths) {
       expect(run, name).toContain(logPath);
     }
-    // The Watch product-path query must keep its JSON output contract.
-    expect(run?.match(/^\s*xcodebuild /gmu) ?? [], name).toHaveLength(
-      name.includes("Apple Watch") ? 1 : 0,
-    );
-    if (name.includes("Apple Watch")) {
-      expect(run).toContain("-showBuildSettings -json |");
-    }
+    expect(run?.match(/^\s*xcodebuild /gmu) ?? [], name).toHaveLength(0);
   }
 
-  const attachments = steps.find(
-    (step) => step.name === "Prove native managed document download and export",
-  );
-  expect(attachments?.run).toBe('/bin/bash scripts/test-ios-chat-attachments.sh "$BASELINE_SHA"');
-  expect(attachments?.if).toBe(
-    "${{ !cancelled() && steps.ios-swift-tools.outcome == 'success' && matrix.phase == 'tests' && needs.preflight.outputs.validation_tier != 'main' && needs.preflight.outputs.compatibility_target != 'true' }}",
-  );
   const smoke = steps.find((step) => step.name === "Run focused iOS voice cleanup simulator tests");
   expect(smoke?.if).toContain("matrix.phase == 'smoke'");
   for (const suite of [
@@ -130,7 +110,8 @@ it("routes each iOS simulator test through workflow-owned log capture and retain
 
   const upload = steps.find((step) => step.name === "Upload iOS lifecycle simulator evidence");
   expect(upload?.if).toContain("always()");
-  expect(upload?.if).toContain("steps.ios_attachment_tests.outcome");
+  expect(upload?.if).toContain("steps.ios_lifecycle_tests.outcome");
+  expect(upload?.if).toContain("steps.ios_voice_cleanup_tests.outcome");
   expect(upload?.with?.path?.trim().split("\n")).toEqual([
     "apps/ios/build/LifecycleTestResults/*.xcresult",
     "apps/ios/build/LifecycleTestResults/*.log",

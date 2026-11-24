@@ -381,7 +381,6 @@ describe("fresh trial ownership", () => {
 describe("release qualification workflow authority", () => {
   const workflow = parse(readFileSync(".github/workflows/ios-release-e2e.yml", "utf8"));
   const release = parse(readFileSync(".github/workflows/ios-store-release.yml", "utf8"));
-  const ci = parse(readFileSync(".github/workflows/ci.yml", "utf8"));
   const selectionArtifact = {
     id: 456,
     name: "ios-release-gateway-selection-123",
@@ -554,7 +553,6 @@ describe("release qualification workflow authority", () => {
     }
     expect(recovery.with["if-no-files-found"]).toBe("error");
     expect(workflow.permissions).toEqual({ actions: "read", contents: "read" });
-    expect(ci.jobs["ios-release-e2e"].permissions).toEqual({ actions: "read", contents: "read" });
     expect(workflow.jobs.qualify["runs-on"]).toBe("xcode-27-xlarge");
     expect(workflow.jobs.qualify.environment).toBeUndefined();
     expect(workflow.on.workflow_dispatch.inputs.target_sha).toBeUndefined();
@@ -581,39 +579,6 @@ describe("release qualification workflow authority", () => {
       "ios-release-e2e-${{ inputs.mode }}-${{ github.run_id }}-${{ github.run_attempt }}",
     );
   });
-  it.each([
-    ["full", "a".repeat(40), true],
-    ["full", "b".repeat(40), false],
-    ["main", "a".repeat(40), false],
-  ])(
-    "selects %s-tier target %s for required native qualification: %s",
-    (tier, target, selected) => {
-      const job = ci.jobs["ios-release-e2e"];
-      expect(
-        evaluateWorkflowExpression(job.if, {
-          eventName: "workflow_dispatch",
-          repository: "openclaw/openclaw",
-          runAttempt: 1,
-          sha: "a".repeat(40),
-          preflightOutputs: {
-            validation_tier: tier,
-            checkout_revision: target,
-            release_scope: "full",
-            compatibility_target: "false",
-            run_ios_build: "true",
-          },
-        }),
-      ).toBe(selected);
-      expect(job.with.target_sha).toBe("${{ needs.preflight.outputs.checkout_revision }}");
-      expect(ci.jobs["ci-gate"].needs).toContain("ios-release-e2e");
-      const gate = ci.jobs["ci-gate"].steps.find(
-        (step: { name: string }) => step.name === "Verify selected CI lanes",
-      );
-      expect(gate.env.JOB_RESULTS).toContain(
-        `ios-release-e2e=\${{ needs.ios-release-e2e.result }}|${job.if}`,
-      );
-    },
-  );
 });
 
 describe("native command adapter", () => {

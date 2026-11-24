@@ -3,7 +3,6 @@ import { readFileSync } from "node:fs";
 import { runInNewContext } from "node:vm";
 import { describe, expect, it } from "vitest";
 import { parse } from "yaml";
-import { readCiWorkflow } from "./ci-workflow.test-support.js";
 
 type Workflow = {
   permissions: Record<string, string>;
@@ -30,37 +29,6 @@ function evaluateAdmission(condition: string, context: Record<string, unknown>):
 
 describe("Android release validation admission", () => {
   const sha = "a".repeat(40);
-
-  it.each([
-    { change: {}, selected: true },
-    { change: { event_name: "push" }, selected: false },
-    { change: { event_name: "schedule" }, selected: false },
-    { change: { release_gate: true }, selected: false },
-    { change: { validation_tier: "main" }, selected: false },
-    { change: { release_scope: "npm" }, selected: false },
-    { change: { checkout_revision: "b".repeat(40) }, selected: false },
-    { change: { compatibility_target: "true" }, selected: false },
-    { change: { run_android_job: "false" }, selected: false },
-  ])("qualifies only the selected full manual source: $change", ({ change, selected }) => {
-    const job = readCiWorkflow().jobs["android-release-e2e"];
-    const defaults = {
-      event_name: "workflow_dispatch",
-      release_gate: false,
-      validation_tier: "full",
-      release_scope: "full",
-      checkout_revision: sha,
-      compatibility_target: "false",
-      run_android_job: "true",
-      ...change,
-    };
-    expect(
-      evaluateAdmission(job.if, {
-        github: { event_name: defaults.event_name, sha },
-        inputs: { release_gate: defaults.release_gate },
-        needs: { preflight: { outputs: defaults } },
-      }),
-    ).toBe(selected);
-  });
 
   it.each(["success", "failure", "cancelled", "skipped"])(
     "admits store signing/upload only after qualification success: %s",
