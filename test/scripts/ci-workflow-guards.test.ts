@@ -223,12 +223,14 @@ function readRealBehaviorProofWorkflow() {
   return readWorkflow(".github/workflows/real-behavior-proof.yml");
 }
 
-function readAndroidCompileSdk(relativePath: string): number {
-  const match = readTrackedText(relativePath).match(/^\s*compileSdk\s*=\s*(\d+)\s*$/mu);
+function readAndroidCompileSdk(relativePath: string): string {
+  const match = readTrackedText(relativePath).match(
+    /compileSdk\s*\{\s*version\s*=\s*release\((\d+)\)\s*\{\s*minorApiLevel\s*=\s*(\d+)/u,
+  );
   if (!match) {
     throw new Error(`Missing compileSdk in ${relativePath}`);
   }
-  return Number(match[1]);
+  return `${match[1]}.${match[2]}`;
 }
 
 function findYamlFiles(directory: string): string[] {
@@ -2303,9 +2305,11 @@ require("node:fs").writeFileSync("scheduler-restart", process.env.OPENCLAW_UPGRA
     const action = readAndroidToolchainAction();
     const appCompileSdk = readAndroidCompileSdk("apps/android/app/build.gradle.kts");
     const benchmarkCompileSdk = readAndroidCompileSdk("apps/android/benchmark/build.gradle.kts");
-    const packageId = `platforms;android-${appCompileSdk}.0`;
+    const packageId = `platforms;android-${appCompileSdk}`;
 
     expect(appCompileSdk).toBe(benchmarkCompileSdk);
+    expect(readAndroidCompileSdk("apps/android/wear/build.gradle.kts")).toBe(appCompileSdk);
+    expect(readAndroidCompileSdk("apps/android/wear-shared/build.gradle.kts")).toBe(appCompileSdk);
     expect(
       workflow.jobs.android.steps.filter(
         (step: WorkflowStep) =>
@@ -2351,7 +2355,7 @@ require("node:fs").writeFileSync("scheduler-restart", process.env.OPENCLAW_UPGRA
     expect(action.inputs["cache-mode"].default).toBe("off");
     expect(sdkRestoreStep.if).toBe("inputs.cache-mode != 'off'");
     expect(sdkRestoreStep.uses).toBe(CACHE_V5);
-    expect(sdkRestoreStep.with?.key).toContain(`platform-${appCompileSdk}.0-`);
+    expect(sdkRestoreStep.with?.key).toContain(`platform-${appCompileSdk}-`);
     expectIncludes(sdkSaveStep.if, [
       "inputs.cache-mode == 'read-write'",
       "steps.android-sdk-cache.outputs.cache-hit != 'true'",
@@ -2382,10 +2386,10 @@ require("node:fs").writeFileSync("scheduler-restart", process.env.OPENCLAW_UPGRA
     );
 
     expect(sdkRestoreStep.with?.key).toBe(
-      "${{ runner.os }}-android-sdk-v2-cmdline-15859902-platform-37.0-build-tools-37.0.0-${{ inputs.install-screenshot-emulators == 'true' && 'screenshot-emulators' || 'base' }}",
+      "${{ runner.os }}-android-sdk-v2-cmdline-15859902-platform-37.1-build-tools-37.0.0-${{ inputs.install-screenshot-emulators == 'true' && 'screenshot-emulators' || 'base' }}",
     );
     expect(String(sdkRestoreStep.with?.["restore-keys"]).trim().split("\n")).toEqual([
-      "${{ inputs.install-screenshot-emulators == 'true' && format('{0}-android-sdk-v2-cmdline-15859902-platform-37.0-build-tools-37.0.0-base', runner.os) || '' }}",
+      "${{ inputs.install-screenshot-emulators == 'true' && format('{0}-android-sdk-v2-cmdline-15859902-platform-37.1-build-tools-37.0.0-base', runner.os) || '' }}",
     ]);
     expectIncludes(setupStep.run, [
       'CMDLINE_TOOLS_VERSION="15859902"',

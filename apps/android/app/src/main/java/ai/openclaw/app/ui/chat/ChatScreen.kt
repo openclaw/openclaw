@@ -3725,7 +3725,7 @@ internal fun ChatEffortSliderControl(
       SliderState(
         value = selectedPosition.optionIndex.coerceAtLeast(0).toFloat(),
         steps = (options.size - 2).coerceAtLeast(0),
-        valueRange = 0f..options.lastIndex.coerceAtLeast(0).toFloat(),
+        trackRange = 0f..options.lastIndex.coerceAtLeast(0).toFloat(),
       )
     }
   var active by remember(sliderState) { mutableStateOf(true) }
@@ -3758,21 +3758,6 @@ internal fun ChatEffortSliderControl(
       resetPreview()
     }
   }
-  sliderState.onValueChange = { value ->
-    if (active && enabled) {
-      sliderState.value = value
-      previewing = true
-      onPreviewChange(options.getOrNull(sliderState.value.roundToInt())?.id)
-    }
-  }
-  sliderState.onValueChangeFinished = {
-    if (active && enabled && previewing) {
-      options.getOrNull(sliderState.value.roundToInt())?.let { option ->
-        if (!option.id.equals(selectedId, ignoreCase = true)) onSelect(option.id)
-      }
-    }
-    resetPreview()
-  }
   val sliderIndex = sliderState.value.roundToInt()
   val previewOption = if (previewing) options.getOrNull(sliderIndex) else null
   val selectedLabel =
@@ -3795,6 +3780,21 @@ internal fun ChatEffortSliderControl(
     if (options.size > 2 && selectedPosition.anchored) {
       Slider(
         state = sliderState,
+        onValueChange = { value ->
+          if (active && enabled) {
+            sliderState.value = value
+            previewing = true
+            onPreviewChange(options.getOrNull(sliderState.value.roundToInt())?.id)
+          }
+        },
+        onValueChangeFinished = {
+          if (active && enabled && previewing) {
+            options.getOrNull(sliderState.value.roundToInt())?.let { option ->
+              if (!option.id.equals(selectedId, ignoreCase = true)) onSelect(option.id)
+            }
+          }
+          resetPreview()
+        },
         enabled = enabled,
         interactionSource = interactionSource,
         modifier =
