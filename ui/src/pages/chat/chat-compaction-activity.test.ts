@@ -113,9 +113,7 @@ it("does not reuse the live group key when a history prepend makes manual matchi
 });
 
 it("keeps six compactions count-free and puts compaction before generic tools", () => {
-  const messages = Array.from({ length: 6 }, (_, index) =>
-    marker(String(index), "run", String(index)),
-  );
+  const messages = Array.from({ length: 6 }, (_, i) => marker(String(i), "run", String(i)));
   const items = buildItems({ messages, runId: "run" });
   expect(items).toHaveLength(6);
   expect(
@@ -125,6 +123,7 @@ it("keeps six compactions count-free and puts compaction before generic tools", 
   const operation = (itemId: string, name: string, kind = "tool") => ({
     itemId,
     name,
+    title: name,
     kind,
     phase: "end" as const,
     status: "running" as const,

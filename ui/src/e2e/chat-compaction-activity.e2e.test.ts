@@ -36,7 +36,7 @@ suite.define(() => {
           },
           { id: "check", name: "exec", arguments: { command: "pnpm test release-notes" } },
         ];
-        const messages = [
+        const messages: (Record<string, unknown> & { __openclaw?: Record<string, unknown> })[] = [
           { role: "user", content: "Check the release notes." },
           {
             role: "assistant",
@@ -57,7 +57,8 @@ suite.define(() => {
             __openclaw: { kind: "compaction", itemId, tokensBefore: 80000, tokensAfter: 20000 },
           })),
           { role: "assistant", ...provider, content: final, stopReason: "stop" },
-        ].map((message, index) =>
+        ];
+        messages.forEach((message, index) =>
           Object.assign(message, {
             timestamp: now - 10000 + index * 1000,
             __openclaw: { ...message["__openclaw"], id: String(index), seq: index + 1, runId },
@@ -86,8 +87,7 @@ suite.define(() => {
           const keys = await rows.evaluateAll((list) =>
             list.map((row) => row.getAttribute("data-chat-row-key")),
           );
-          expect(keys).toHaveLength(2);
-          expect(new Set(keys).size).toBe(2);
+          expect([keys.length, new Set(keys).size]).toEqual([2, 2]);
           return keys;
         };
         const keys = await expand();
