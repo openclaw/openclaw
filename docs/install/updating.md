@@ -230,6 +230,14 @@ update runs, recorded with these rules. A missing run is written as "unproven"
 and blocks a stable release. The rules come from the 2026-11-23 audit, which
 found that earlier receipts did not prove what they claimed.
 
+The `release-update-survivor` CI lane covers the Linux npm/container cell on
+PRs that touch update, state, update CLI, or launcher owners. It installs the
+PR-head build, builds a distinct successor from the same source with a
+disposable schema migration, then runs `openclaw update`. Separate healthy and
+crash-after-migration cases check the serving version, trial outcome, schema,
+and seeded row counts and contents. The fixture changes scratch source only;
+it does not change the shipped schema or replace the other platform cells.
+
 - **Platforms:** a Linux systemd user service, a Linux container without a user
   bus, a macOS LaunchAgent and a Windows Scheduled Task. (#203497 merged with
   macOS-only package proof; #203735 and #203769 fixed Linux container failures

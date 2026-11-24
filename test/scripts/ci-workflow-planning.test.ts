@@ -4520,7 +4520,7 @@ describe("ci workflow guards", () => {
       expect(result.outputs.run_docker_seed_e2e).toBe(String(options.expected));
       expect(result.outputs.docker_seed_lanes).toBe(
         options.eventName === "workflow_dispatch" && !options.releaseGate && !options.legacyPlanner
-          ? "published-upgrade-survivor mcp-channels cron-mcp-cleanup mcp-code-mode-gateway mcp-docker-custody update-channel-switch"
+          ? "published-upgrade-survivor mcp-channels cron-mcp-cleanup mcp-code-mode-gateway mcp-docker-custody update-channel-switch release-update-survivor"
           : options.expected
             ? "published-upgrade-survivor"
             : "",
@@ -11125,7 +11125,7 @@ describe("ci workflow guards", () => {
     expect(current.outputs.run_qa_smoke_ci).toBe("true");
     expect(current.outputs.run_docker_seed_e2e).toBe("true");
     expect(current.outputs.docker_seed_lanes).toBe(
-      "published-upgrade-survivor mcp-channels cron-mcp-cleanup mcp-code-mode-gateway mcp-docker-custody update-channel-switch",
+      "published-upgrade-survivor mcp-channels cron-mcp-cleanup mcp-code-mode-gateway mcp-docker-custody update-channel-switch release-update-survivor",
     );
     expect(current.outputs.run_sqlite_session_lifecycle).toBe("true");
     expect(current.outputs.run_channel_contracts_shards).toBe("true");

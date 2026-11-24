@@ -6935,7 +6935,7 @@ jobs:
           if-no-files-found: ignore
 
       - name: Upload sanitized upgrade survivor proof
-        if: always() && contains(format(' {0} ', needs.preflight.outputs.docker_seed_lanes), ' published-upgrade-survivor ')
+        if: always() && (contains(format(' {0} ', needs.preflight.outputs.docker_seed_lanes), ' published-upgrade-survivor ') || contains(format(' {0} ', needs.preflight.outputs.docker_seed_lanes), ' release-update-survivor '))
         uses: *upload_artifact_v7
         with:
           name: docker-seed-upgrade-survivor-proof
@@ -6944,6 +6944,8 @@ jobs:
             .artifacts/docker-tests/????????T??????Z/failures.json
             .artifacts/docker-tests/upgrade-survivor-*/summary.json
             .artifacts/docker-tests/upgrade-survivor-*/failure.json
+            .artifacts/docker-tests/upgrade-survivor-*/healthy/*.json
+            .artifacts/docker-tests/upgrade-survivor-*/crash/*.json
           include-hidden-files: true
           if-no-files-found: warn
 

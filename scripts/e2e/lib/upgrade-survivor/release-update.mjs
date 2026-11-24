@@ -1,15 +1,14 @@
-// Self-contained Docker survivor: packed current checkout -> distinct release identity.
-// Migration and rollback with changed state are covered by the schema-bumped acceptance kit.
+// Packed PR head -> source-built schema successor, through the normal update CLI.
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { once } from "node:events";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { setTimeout as delay } from "node:timers/promises";
 import { readDatabase } from "./observations.mjs";
 import { mapRegistryHosts, prepareRegistryTls, startRegistryTlsRelay } from "./registry-tls.mjs";
-import { prepareReleaseFixture } from "./release-fixture.mjs";
 
 assert(
   fs.existsSync("/.dockerenv") || fs.existsSync("/run/.containerenv"),
@@ -19,6 +18,11 @@ const sourceTarball = process.env.OPENCLAW_CURRENT_PACKAGE_TGZ;
 assert(sourceTarball, "missing packed current checkout");
 const artifacts = process.env.OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_ROOT;
 assert(artifacts, "missing artifact directory");
+const crash = process.env.OPENCLAW_UPGRADE_SURVIVOR_RELEASE_CASE === "crash";
+const fixtureRoot = "/tmp/openclaw-release-fixtures";
+const fixture = JSON.parse(fs.readFileSync(path.join(fixtureRoot, "fixture.json"), "utf8"));
+fixture.next.tarball = path.join(fixtureRoot, "next.tgz");
+const expected = crash ? fixture.previous : fixture.next;
 fs.mkdirSync(artifacts, { recursive: true });
 // openclaw-temp-dir: allow standalone Docker lane owns its runtime until container removal.
 const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-release-survivor-"));
@@ -57,10 +61,10 @@ function start(program, args, logName, extra = {}) {
     fs.closeSync(fd);
   }
 }
-async function command(program, args, logName) {
+async function command(program, args, logName, expectedCode = 0) {
   const child = start(program, args, logName);
   const [code, signal] = await once(child, "exit");
-  assert.equal(code, 0, `${program} exited ${code ?? signal}; see ${logName}`);
+  assert.equal(code, expectedCode, `${program} exited ${code ?? signal}; see ${logName}`);
 }
 async function waitFor(read, message, budget = 300_000) {
   const deadline = Date.now() + budget;
@@ -95,8 +99,9 @@ try {
   for (const name of ["cert.pem", "hosts.before", "hosts.effective", "public-ip"]) {
     fs.copyFileSync(path.join(tlsRoot, name), path.join(artifacts, `tls-${name}`));
   }
-  const fixture = prepareReleaseFixture(sourceTarball, path.join(root, "fixture"));
   save("fixture.json", fixture);
+  assert.notEqual(fixture.previous.buildId, fixture.next.buildId);
+  assert.equal(fixture.next.schema, fixture.previous.schema + 1);
   const registry = start(
     process.execPath,
     [
@@ -149,6 +154,25 @@ try {
     "public-dist-tags.json",
   );
   save("cli-env.json", env);
+  await command("openclaw", ["config", "set", "gateway.mode", "local"], "config.log");
+  const seed = new DatabaseSync(database);
+  seed.exec(
+    "INSERT INTO mcp_oauth_stores VALUES ('release-survivor-a', 1, '{\"sentinel\":\"a\"}', 1), ('release-survivor-b', 1, '{\"sentinel\":\"b\"}', 2)",
+  );
+  seed.close();
+  const sentinels = () =>
+    readDatabase(database, (db) =>
+      db
+        .prepare(
+          "SELECT * FROM mcp_oauth_stores WHERE store_key LIKE 'release-survivor-%' ORDER BY store_key",
+        )
+        .all(),
+    );
+  const before = sentinels();
+  save("rows-before.json", before);
+  assert.equal(before.length, 2, "fixture seed is empty");
+  if (crash)
+    fs.writeFileSync(path.join(path.dirname(database), "crash-after-migration.json"), "{}");
   const gateway = start("openclaw", ["gateway", "run"], "gateway.log", { detached: true });
   await waitFor(ready, "T did not become ready");
   assert.equal(gateway.exitCode, null, "T exited before the API update");
@@ -166,32 +190,68 @@ try {
     ),
   );
   const startedAt = Date.now();
-  await command(
-    "openclaw",
-    ["gateway", "call", "update.run", "--params", "{}", "--json"],
-    "update-api.json",
-  );
+  await command("openclaw", ["update", "--yes", "--json"], "update-cli.json", crash ? 1 : 0);
   const row = await waitFor(
     () => {
       const current = readRun();
       return current && current.status !== "running" ? current : null;
     },
     "release update did not finish",
-    45 * 60_000,
+    12 * 60_000,
   );
   save("update-row.json", row);
   assert.equal(row.trigger, "api");
-  assert.equal(row.status, "succeeded", row.reason ?? "release update failed");
+  assert.equal(row.status, crash ? "failed" : "succeeded", row.reason ?? "release update failed");
   assert.equal(JSON.parse(row.before_json).version, fixture.previous.version);
   assert.equal(JSON.parse(row.target_json).version, fixture.next.version);
   const verification = JSON.parse(row.verification_json);
-  assert.equal(verification.runningBuildId, fixture.next.buildId, "wrong build is serving");
-  assert.equal(verification.runningVersion, fixture.next.version);
+  assert.equal(verification.runningBuildId, expected.buildId, "wrong build is serving");
+  assert.equal(verification.runningVersion, expected.version);
   assert.equal(verification.booted, true);
-  await waitFor(ready, "T+1 is not serving");
+  await waitFor(ready, "expected Gateway is not serving");
+  await command("openclaw", ["gateway", "status", "--json"], "serving.json");
+  assert.equal(
+    JSON.parse(fs.readFileSync(path.join(artifacts, "serving.json"), "utf8")).gateway.version,
+    expected.version,
+    "live Gateway has the wrong version",
+  );
+  assert.equal(
+    readDatabase(database, (db) => db.prepare("PRAGMA user_version").get().user_version),
+    expected.schema,
+    "live state has the wrong schema",
+  );
+  const after = sentinels();
+  assert.equal(after.length, before.length, "row counts changed");
+  assert.deepEqual(
+    after,
+    crash ? before : before.map((row) => ({ ...row, store_json: '{"migrated":true}' })),
+  );
+  save("rows-after.json", after);
+  assert.equal(
+    Boolean(
+      readDatabase(database, (db) =>
+        db.prepare("SELECT 1 FROM sqlite_master WHERE name = 'fixture_update_migration'").get(),
+      ),
+    ),
+    !crash,
+  );
+  if (crash) {
+    const evidence = JSON.parse(
+      fs.readFileSync(path.join(path.dirname(database), "crash-after-migration.json"), "utf8"),
+    );
+    assert.equal(
+      evidence.schema.user_version,
+      fixture.next.schema,
+      "candidate did not crash after migration",
+    );
+    assert.equal(evidence.rows[0].migrated_to, fixture.next.schema);
+    assert.notEqual(evidence.pid, gateway.pid, "the old Gateway crashed, not the candidate");
+    save("crash-after-migration.json", evidence);
+    assert.equal(verification.rollbackOutcome.status, "succeeded");
+  }
   const releasePrefix = path.join(state, "git-install");
   const trial = JSON.parse(fs.readFileSync(path.join(releasePrefix, "releases", ".trial"), "utf8"));
-  assert.equal(trial.phase, "committed");
+  assert.equal(trial.phase, crash ? "rolled-back" : "committed");
   assert.equal(trial.buildId, fixture.next.buildId);
   const previous = path.resolve(releasePrefix, trial.previous);
   assert(fs.existsSync(path.join(previous, "openclaw.mjs")), "previous release was not retained");
@@ -202,7 +262,7 @@ try {
   const selected = fs.realpathSync(path.join(releasePrefix, "openclaw"));
   assert.equal(
     JSON.parse(fs.readFileSync(path.join(selected, "dist", "build-info.json"), "utf8")).buildId,
-    fixture.next.buildId,
+    expected.buildId,
   );
   assert(
     fs
@@ -219,7 +279,7 @@ try {
     servingBuildId: verification.runningBuildId,
     previous,
     wallMs: Date.now() - startedAt,
-    migrationProof: false,
+    migrationProof: true,
   });
 } finally {
   tlsRelay?.closeAllConnections();
