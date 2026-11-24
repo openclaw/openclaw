@@ -839,16 +839,7 @@
   padding-left: 4px;
 }
 
-.widget-inspect-outline {
-  position: absolute;
-  z-index: 1;
-  pointer-events: none;
-  border: 2px solid var(--accent);
-  background: color-mix(in srgb, var(--accent) 8%, transparent);
-}
-
 .chat-tool-card__preview-panel {
-  position: relative;
   overflow: hidden;
   border-radius: inherit;
 }
@@ -861,10 +852,8 @@
 /* Keep outside actions reachable and avoid restoring stale row geometry when
    the active widget's top-layer menu closes. */
 .chat-virtual-row:has(
-  .chat-tool-card__preview:hover,
-  .chat-tool-card__preview:focus-within,
+  .chat-tool-card__preview:is(:hover, :focus-within, [data-widget-inspecting]),
   .chat-tool-card__preview[data-widget-actions-above],
-  .chat-tool-card__preview[data-widget-inspecting],
   .chat-tool-card__widget-actions [aria-expanded="true"]
 ) {
   content-visibility: visible;

@@ -47,7 +47,10 @@ import { ChatLazyBoundary } from "./chat-lazy-boundary.tsx";
 import { RawOutputToggle } from "./chat-tool-content.solid.tsx";
 import { TranscriptRowKeyContext } from "./chat-transcript-layout.ts";
 import { WidgetCardMenu, type WidgetRawDetailsLabel } from "./widget-card-menu.tsx";
-import { createWidgetCommentInteraction } from "./widget-comment-interaction.ts";
+import {
+  createWidgetCommentInteraction,
+  widgetInspectionOutlineStyle,
+} from "./widget-comment-interaction.ts";
 import { exportWidget } from "./widget-export.ts";
 import { WidgetPinButton, type WidgetPinTarget } from "./widget-pin-button.tsx";
 import {
@@ -628,7 +631,12 @@ function CanvasPreview(props: {
           </Show>
         </div>
       </Show>
-      <div class="chat-tool-card__preview-panel" data-side="canvas" ref={annotation.setPanel}>
+      <div
+        class="chat-tool-card__preview-panel"
+        data-side="canvas"
+        ref={annotation.setPanel}
+        style={{ position: "relative" }}
+      >
         <WidgetContent
           preview={props.preview}
           sandbox={sandbox()}
@@ -645,12 +653,7 @@ function CanvasPreview(props: {
             <div
               class="widget-inspect-outline"
               aria-hidden="true"
-              style={{
-                left: `${rect().left}px`,
-                top: `${rect().top}px`,
-                width: `${rect().width}px`,
-                height: `${rect().height}px`,
-              }}
+              style={widgetInspectionOutlineStyle(rect())}
             />
           )}
         </Show>

@@ -1,3 +1,4 @@
+import type { JSX } from "@solidjs/web";
 import { createSignal, onSettled } from "solid-js";
 import { widgetInspectionAnchor } from "../../../components/canvas-widget-inspection.ts";
 import type { OpenClawCanvasWidgetView } from "../../../components/canvas-widget-view.tsx";
@@ -5,6 +6,21 @@ import { t } from "../../../lib/reactive/i18n.ts";
 import { listen } from "../../../lib/reactive/listener.ts";
 import { showToast } from "../../../lib/toast.ts";
 import { WIDGET_COMMENT_INTENT, type WidgetCommentIntent } from "./widget-comment-intent.ts";
+
+// Only the deferred widget renderer needs this overlay; it does not ship with chat CSS.
+export function widgetInspectionOutlineStyle(rect: DOMRect): JSX.CSSProperties {
+  return {
+    position: "absolute",
+    "z-index": 1,
+    "pointer-events": "none",
+    border: "2px solid var(--accent)",
+    background: "color-mix(in srgb, var(--accent) 8%, transparent)",
+    left: `${rect.left}px`,
+    top: `${rect.top}px`,
+    width: `${rect.width}px`,
+    height: `${rect.height}px`,
+  };
+}
 
 export function createWidgetCommentInteraction(props: {
   source: () => OpenClawCanvasWidgetView | undefined;

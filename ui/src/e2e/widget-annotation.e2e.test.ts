@@ -63,6 +63,7 @@ suite.define(() => {
         await paragraph.dispatchEvent("pointerup", { button: 0, pointerType: "mouse" });
         await page.getByRole("button", { name: "Add to chat", exact: true }).click();
         await dialog.waitFor();
+        expect(await page.evaluate(() => CSS.highlights.has("openclaw-comment"))).toBe(true);
         const nativeClass = await dialog.getAttribute("class");
         const nativePlaceholder = await input.getAttribute("placeholder");
         await input.press("Escape");

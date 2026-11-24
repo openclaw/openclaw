@@ -36,7 +36,6 @@ import {
   createChatAttachmentDropHandlers,
   stagedAttachmentBytes,
 } from "./components/chat-attachments.ts";
-import { resolveChatCommentAnchor } from "./components/chat-comment-anchor.ts";
 import type { ChatComposerProps } from "./components/chat-composer-types.ts";
 import type { ChatDetailsProps } from "./components/chat-details-types.ts";
 import { createChatSelectionAttachment } from "./components/chat-selection-attachment.ts";
@@ -183,9 +182,7 @@ export function createChatViewFrame(
         ...pendingInputs.queuedInputs,
       ]
     : undefined;
-  const resolveCommentSource = (selection: ChatSelectionSource) =>
-    resolveChatCommentAnchor(props.transcript.messageElements?.elements.values() ?? [], selection)
-      ?.range;
+  const commentSourceBubbles = () => props.transcript.messageElements?.elements.values();
   const openSelectionComment = async (
     selection: ChatSelectionSource,
     anchorRect: DOMRect,
@@ -197,7 +194,6 @@ export function createChatViewFrame(
     const readSignal = props.readSignal;
     const sessionKey = props.sessionKey;
     const paneId = props.paneId;
-    const sourceRange = widget ? undefined : resolveCommentSource(selection);
     const editorSignal =
       widget && readSignal
         ? AbortSignal.any([readSignal, widget.signal])
@@ -212,7 +208,7 @@ export function createChatViewFrame(
         {
           paneId,
           anchorRect,
-          sourceRange,
+          selectionAnchor: widget ? undefined : { selection, bubbles: commentSourceBubbles() },
           comment: "",
           readSignal: editorSignal,
           onCancel,
@@ -393,7 +389,7 @@ export function createChatViewFrame(
     asyncQuestions,
     openImmediateImage,
     attachmentDropHandlers,
-    resolveCommentSource,
+    commentSourceBubbles,
     threadProps,
     displayQueue,
     historyLoadState,
