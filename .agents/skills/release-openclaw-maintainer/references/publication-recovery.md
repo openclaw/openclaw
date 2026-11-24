@@ -106,9 +106,12 @@ limits count admitted product attempts, not infrastructure retries.
 
 ## Published version, failed parent
 
-Registry propagation may briefly return E404 after a successful npm child.
-Use bounded `--prefer-online` reads and preserve the verified tarball/integrity
-metadata. For an already-published version, run:
+Registry propagation may return E404 after a successful npm child. For direct
+publication, use the failed parent's recovery command: it pins the original core
+child and only dispatches closeout after a read-only `--prefer-online` check
+can see the exact version. If it is still absent, repeat the read after propagation;
+do not dispatch a fresh publisher. Registry visibility does not replace verification
+of the tarball, original child provenance, or existing approvals.
 
 If `npm publish` returns E409 with `Cannot publish over previously staged
 version`, treat that exact package and version as staged or completed, not

@@ -2498,6 +2498,7 @@ jobs:
       - name: Record postpublish outcome
         if: ${{ always() && inputs.release_profile != 'clawhub-only' }}
         env:
+          ACCEPTED_OPENCLAW_NPM_RUN_ID: ${{ (steps.core_start.outcome == 'success' && steps.core_start.outputs.openclaw_npm_run_id) || steps.children.outputs.openclaw_npm_resume_run_id }}
           POSTPUBLISH_EVIDENCE_DIR: ${{ runner.temp }}/openclaw-release-postpublish-evidence
           CHILD_PLUGIN_NPM_RUN_ID: ${{ steps.core_start.outputs.plugin_npm_run_id || steps.children.outputs.plugin_npm_run_id }}
           CHILD_PLUGIN_CLAWHUB_RUN_ID: ${{ steps.children.outputs.plugin_clawhub_run_id }}
@@ -2511,7 +2512,7 @@ jobs:
           if [[ -f "${GITHUB_WORKSPACE}/.release-harness/scripts/lib/release-publish-children.sh" ]]; then
             source "${GITHUB_WORKSPACE}/.release-harness/scripts/lib/release-publish-children.sh"
             record_postpublish_diagnostics terminal
-            print_release_resume_command
+            print_release_resume_command "$ACCEPTED_OPENCLAW_NPM_RUN_ID"
           fi
 
       - name: Upload postpublish diagnostics

@@ -267,13 +267,13 @@ function publicationEvidence(invocationId = `${URL}/attempts/1`) {
   };
 }
 
-it("prints an executable resume command that preserves all inputs without shell expansion", () => {
+it.each(["", "45361787378"])("prints recovery for core run %j", (acceptedRun) => {
   const root = createTempDir("release-resume-command-");
   const inputs = {
     tag: "v2026.9.5",
     publish_openclaw_npm: "true",
     retired_line_publication_reason: "Owner's reason: `false` and $(touch injected)\nsecond line",
-    prepared_plugins: JSON.stringify({ receipt: "approved" }),
+    prepared_plugins: acceptedRun ? "" : JSON.stringify({ receipt: "approved" }),
     openclaw_npm_resume_run_id: "",
   };
   const event = join(root, "event.json");
@@ -291,9 +291,10 @@ it("prints an executable resume command that preserves all inputs without shell 
   const shell = (script: string, ...args: string[]) =>
     spawnSync("bash", ["-c", script, ...args], { cwd: root, env, encoding: "utf8" });
   const printed = shell(
-    'source "$1"; print_release_resume_command',
+    'source "$1"; print_release_resume_command "$2"',
     "fixture",
     resolve("scripts/lib/release-publish-children.sh"),
+    acceptedRun,
   );
   expect(printed.status, printed.stderr).toBe(0);
   expect(printed.stdout).toContain("Release recovery command:\n");
@@ -302,13 +303,47 @@ it("prints an executable resume command that preserves all inputs without shell 
     throw new Error("Release summary did not contain a resume command.");
   }
   expect(printed.stdout).toContain(command);
-  const resumed = shell(`gh() { printf '%s\\n' "$@" > args; cat > inputs.json; }; ${command}`);
+  const gh = `gh() { printf '%s\\n' "$@" > args; cat > inputs.json; }`;
+  if (acceptedRun) {
+    const pending = shell(`npm() { return 1; }; ${gh}; ${command}`);
+    expect(pending.status, pending.stderr).toBe(1);
+    expect(existsSync(join(root, "args"))).toBe(false);
+  }
+  const resumed = shell(`npm() { [[ "$*" == *"openclaw@2026.9.5 version" ]]; }; ${gh}; ${command}`);
   expect(resumed.status, resumed.stderr).toBe(0);
-  expect(JSON.parse(readFileSync(join(root, "inputs.json"), "utf8"))).toEqual(inputs);
+  expect(JSON.parse(readFileSync(join(root, "inputs.json"), "utf8"))).toEqual({
+    ...inputs,
+    openclaw_npm_resume_run_id: acceptedRun,
+  });
   expect(readFileSync(join(root, "args"), "utf8").trim().split("\n")).toEqual(
     `workflow run openclaw-release-publish.yml --repo ${REPOSITORY} --ref ${BRANCH} --json`.split(
       " ",
     ),
   );
   expect(existsSync(join(root, "injected"))).toBe(false);
+});
+
+it("refuses to fall back to a new core publisher while a pinned resume is not visible", () => {
+  const result = spawnSync(
+    "bash",
+    [
+      "-c",
+      'source "$1"; npm() { return 1; }; resolve_openclaw_npm_publish_state',
+      "fixture",
+      resolve("scripts/lib/release-publish-children.sh"),
+    ],
+    {
+      encoding: "utf8",
+      env: {
+        PATH: process.env.PATH,
+        GITHUB_REF: `refs/tags/${BRANCH}`,
+        PARENT_WORKFLOW_SHA: SHA,
+        RELEASE_TAG: "v2026.9.5",
+        PUBLISH_OPENCLAW_NPM: "true",
+        OPENCLAW_NPM_RESUME_RUN_ID: "45361787378",
+      },
+    },
+  );
+  expect(result.status).toBe(1);
+  expect(result.stderr).toContain("45361787378");
 });

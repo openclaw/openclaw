@@ -45,14 +45,27 @@ record_postpublish_diagnostics() {
 }
 
 print_release_resume_command() {
-  local inputs_json command
+  local accepted_run="${1:-}" inputs_json command release_version guidance
   inputs_json="$(jq -ce '.inputs | select(type == "object")' "$GITHUB_EVENT_PATH")" || return 1
+  guidance="Prepared button releases recover through a new Release Button run with the same prepared artifact. For direct publication, reconcile failed stages, then resume with these frozen inputs."
+  if [[ -z "$(jq -r '.prepared_plugins // empty' <<< "$inputs_json")" ]]; then
+    accepted_run="${accepted_run:-$(jq -r '.openclaw_npm_resume_run_id // empty' <<< "$inputs_json")}"
+    if [[ -n "$accepted_run" ]]; then
+      inputs_json="$(jq -c --arg run "$accepted_run" '.openclaw_npm_resume_run_id = $run' <<< "$inputs_json")" || return 1
+      release_version="$(jq -er '.tag | ltrimstr("v")' <<< "$inputs_json")" || return 1
+      guidance="Resume from original core npm run ${accepted_run}. Until the exact version is visible, the command only reads npm. Retry the read after propagation; do not start a new publish."
+    fi
+  fi
   printf -v command 'printf %%s %q | gh workflow run openclaw-release-publish.yml --repo %q --ref %q --json' \
     "$inputs_json" "$GITHUB_REPOSITORY" "$GITHUB_REF_NAME"
+  if [[ -n "${release_version:-}" ]]; then
+    printf -v command 'npm view --prefer-online --registry=https://registry.npmjs.org %q version && %s' \
+      "openclaw@${release_version}" "$command"
+  fi
   printf 'Release recovery command:\n%s\n' "$command"
   {
     printf '\n### Resume publication\n\n'
-    printf 'Prepared button releases recover through a new Release Button run with the same prepared artifact. For direct publication, reconcile failed stages, then resume with these frozen inputs; the original successful npm publisher is recovered automatically.\n\n'
+    printf '%s\n' "$guidance"
     printf '```bash\n%s\n```\n' "$command"
   } >> "$GITHUB_STEP_SUMMARY"
 }
@@ -679,7 +692,11 @@ resolve_openclaw_npm_publish_state() {
   fi
 
   release_version="${RELEASE_TAG#v}"
-  if ! npm view "openclaw@${release_version}" version >/dev/null 2>&1; then
+  if ! npm view --prefer-online "openclaw@${release_version}" version >/dev/null 2>&1; then
+    if [[ -n "${OPENCLAW_NPM_RESUME_RUN_ID:-}" ]]; then
+      echo "Cannot read openclaw@${release_version} from npm yet; original run ${OPENCLAW_NPM_RESUME_RUN_ID} is pinned. Wait for verified registry readback before resuming; do not start a new publish." >&2
+      return 1
+    fi
     return 0
   fi
 
