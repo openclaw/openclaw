@@ -25,6 +25,10 @@ import {
 import { inspectPostgresUpgrade, preflightPostgresUpgrade } from "../snapshot/database-backup.js";
 import { TRIAL_BUDGET_MS } from "../update/launcher.js";
 import { readRetainedAgentDeletionIds } from "./agent-deletion-journal.snapshot.worker.js";
+import {
+  isArtifactPreservingStateRead,
+  withArtifactPreservingStateReads,
+} from "./artifact-preserving-state-reads.js";
 import { readAgentDatabasePreflightTargets } from "./openclaw-agent-db-registry.read.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "./openclaw-schema-versions.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "./openclaw-state-db-contract.js";
@@ -34,13 +38,12 @@ import {
   APPLIED_UPGRADE_PREFIX as APPLIED_PREFIX,
   UPGRADE_WORK_PREFIX as WORK_PREFIX,
 } from "./state-upgrade-receipts.js";
-import { isSqliteFile, skipEntry } from "./state-upgrade-tree.js";
+import { isSqliteFile, skipEntry, withRecoveredSource } from "./state-upgrade-tree.js";
 
 const UNRESTORABLE_DIRECTORIES = ["git-install", "npm", "node_modules", "tmp", "logs"];
-// AWS real Doctor chain: 1,077,460,992 bytes / 78,100 ms; 42s fixed + 29 MB/s.
-// Slower than the small-fixture byte-work rate; see updating.md#large-store-updates.
-const SQLITE_UPGRADE_FIXED_MS = 42_000;
-const SQLITE_UPGRADE_BYTES_PER_MS = 29_000;
+// Real 1,077,460,992-byte Doctor chain: 78,100 ms; round its whole-chain rate down.
+// Qualification details: docs/install/updating.md#large-store-updates.
+const SQLITE_UPGRADE_BYTES_PER_MS = 13_000;
 
 export type DatabaseTarget = {
   kind: "state" | "agent";
@@ -80,6 +83,7 @@ export async function discoverDatabases(
   const retainedAgentDirectories: string[] = [];
   let retainedAgentIds = new Set<string>();
   let registeredAgents: Array<{ agentId: string; path: string }> = [];
+  let configuredAgents: Array<{ agentId: string; path: string }> = [];
   const add = async (kind: DatabaseTarget["kind"], pathname: string, agentId?: string) => {
     pathname = path.resolve(pathname);
     if (targets.some((target) => target.path === pathname)) {
@@ -87,7 +91,17 @@ export async function discoverDatabases(
     }
     const stat = fs.statSync(pathname, { throwIfNoEntry: false });
     if (!stat || stat.size === 0) {
-      if (kind === "agent") {
+      if (
+        ["-wal", "-journal"].some(
+          (suffix) =>
+            (fs.statSync(`${pathname}${suffix}`, { throwIfNoEntry: false })?.size ?? 0) > 0,
+        )
+      ) {
+        throw new Error(
+          `Database family ${pathname} is incomplete. Preserve its WAL/journal and restore the matching database backup before retrying the update.`,
+        );
+      }
+      if (kind === "agent" && configuredAgents.some((target) => target.path === pathname)) {
         targets.push({ kind, agentId, path: pathname, version: 0, engine: "sqlite" });
       }
       return;
@@ -97,44 +111,62 @@ export async function discoverDatabases(
         `Cannot inspect database ${pathname}. Run openclaw doctor with the current version before retrying the update.`,
       );
     }
-    const prepared = await prepareSqliteReadOnlyLocation(pathname, {
-      preserveSourceArtifacts: true,
-    });
-    try {
-      using db = openNodeSqliteDatabase(prepared.location, { readOnly: true });
+    const inspect = (readable: string) => {
+      using db = openNodeSqliteDatabase(readable, { readOnly: true });
+      return {
+        engine: readEngineAnchorIdentity(db, pathname).engine,
+        version: readVersion(db, kind),
+        state:
+          kind === "state"
+            ? {
+                metadataRows: readPluginMetadataStateRowsInDatabase(db, [
+                  "plugins.installedIndex",
+                  "plugins.bundledDiscovery",
+                ]),
+                retainedIds: new Set(readRetainedAgentDeletionIds(db)),
+                registered: readAgentDatabasePreflightTargets(db, pathname),
+              }
+            : undefined,
+      };
+    };
+    let image;
+    if (isArtifactPreservingStateRead()) {
+      const prepared = await prepareSqliteReadOnlyLocation(pathname, {
+        preserveSourceArtifacts: true,
+      });
+      try {
+        image = inspect(prepared.location);
+      } finally {
+        await prepared.cleanupAsync();
+      }
+    } else {
+      image = withRecoveredSource(pathname, inspect);
+    }
+    if (image.state) {
+      metadataRows = image.state.metadataRows;
+      retainedAgentIds = image.state.retainedIds;
+      registeredAgents = image.state.registered;
+    }
+    const { engine } = image;
+    if (engine === "postgres") {
+      const physical = await inspectPostgresUpgrade(pathname, config);
       if (kind === "state") {
-        metadataRows = readPluginMetadataStateRowsInDatabase(db, [
-          "plugins.installedIndex",
-          "plugins.bundledDiscovery",
-        ]);
+        retainedAgentIds = new Set(physical.retainedAgentIds);
+        registeredAgents = physical.registeredAgentDatabases.map((entry) => ({
+          ...entry,
+          path: resolveOpenClawRegisteredAgentDatabasePath(pathname, entry.path),
+        }));
       }
-      const { engine } = readEngineAnchorIdentity(db, pathname);
-      if (engine === "postgres") {
-        const physical = await inspectPostgresUpgrade(pathname, config);
-        if (kind === "state") {
-          retainedAgentIds = new Set(physical.retainedAgentIds);
-          registeredAgents = physical.registeredAgentDatabases.map((entry) => ({
-            ...entry,
-            path: resolveOpenClawRegisteredAgentDatabasePath(pathname, entry.path),
-          }));
-        }
-        targets.push({
-          kind,
-          agentId,
-          path: pathname,
-          version: physical.version,
-          engine,
-          postgres: { namespace: physical.namespace, physicalBytes: physical.physicalBytes },
-        });
-      } else {
-        if (kind === "state") {
-          retainedAgentIds = new Set(readRetainedAgentDeletionIds(db));
-          registeredAgents = readAgentDatabasePreflightTargets(db, pathname);
-        }
-        targets.push({ kind, agentId, path: pathname, version: readVersion(db, kind), engine });
-      }
-    } finally {
-      await prepared.cleanupAsync();
+      targets.push({
+        kind,
+        agentId,
+        path: pathname,
+        version: physical.version,
+        engine,
+        postgres: { namespace: physical.namespace, physicalBytes: physical.physicalBytes },
+      });
+    } else {
+      targets.push({ kind, agentId, path: pathname, version: image.version, engine });
     }
   };
   await add("state", path.join(stateDir, "state", "openclaw.sqlite"));
@@ -157,13 +189,11 @@ export async function discoverDatabases(
       agentId,
     );
   }
-  for (const target of [
-    ...registeredAgents,
-    ...resolveConfiguredAgentDatabaseTargets(config, {
-      env,
-      registeredDatabases: registeredAgents,
-    }),
-  ]) {
+  configuredAgents = resolveConfiguredAgentDatabaseTargets(config, {
+    env,
+    registeredDatabases: registeredAgents,
+  });
+  for (const target of [...registeredAgents, ...configuredAgents]) {
     if (retainedAgentIds.has(target.agentId)) {
       retainedAgentDirectories.push(path.dirname(target.path));
     } else {
@@ -307,8 +337,7 @@ export function stateUpgradeRefusal(
   }
   const gib = bytes / 1024 ** 3;
   const estimateMs =
-    gib * 90_000 +
-    (sqliteBytes > 0 ? SQLITE_UPGRADE_FIXED_MS + sqliteBytes / SQLITE_UPGRADE_BYTES_PER_MS : 0);
+    gib * 90_000 + (sqliteBytes > 0 ? sqliteBytes / SQLITE_UPGRADE_BYTES_PER_MS : 0);
   // The launcher retains ten minutes for post-migration startup.
   if (estimateMs > TRIAL_BUDGET_MS / 2) {
     return `The ${gib > 0 ? "PostgreSQL copy" : "SQLite upgrade"} estimate (${gib.toFixed(2)} GiB PostgreSQL, ${(sqliteBytes / 1024 ** 3).toFixed(2)} GiB SQLite; ${Math.ceil(estimateMs / 60_000)} minutes) exceeds the release-trial migration budget. Follow the manual migration steps at https://docs.openclaw.ai/install/updating#large-store-updates before retrying.`;
@@ -323,7 +352,7 @@ export async function preflightStateUpgrade(
 ): Promise<StateUpgradeInventory> {
   const stateDir = path.resolve(resolveStateDir(env));
   const inventory: StateUpgradeInventory = fs.existsSync(stateDir)
-    ? await discoverDatabases(stateDir, config, env)
+    ? await withArtifactPreservingStateReads(() => discoverDatabases(stateDir, config, env))
     : { targets: [], metadataRows: [], skip: () => false };
   for (const target of inventory.targets) {
     const supported = expectedVersion(target);

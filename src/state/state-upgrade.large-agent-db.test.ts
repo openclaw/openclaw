@@ -57,7 +57,11 @@ describe("startup copy ownership", () => {
     fs.writeFileSync(path.join(stateDir, "openclaw.json"), "{}");
     const readRegistry = () => {
       using state = new DatabaseSync(statePath, { readOnly: true });
-      return state.prepare("SELECT * FROM agent_databases ORDER BY agent_id, path").all();
+      return state
+        .prepare(
+          "SELECT agent_id, path, schema_version, size_bytes FROM agent_databases ORDER BY agent_id, path",
+        )
+        .all();
     };
     const registrations = readRegistry();
     const log = { info: vi.fn(), warn: vi.fn() };

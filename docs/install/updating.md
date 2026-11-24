@@ -203,14 +203,14 @@ A size refusal leaves the old Gateway serving. Freeing local disk space fixes a
 space refusal, not a migration-time estimate. For an external store, move it into
 the named recovery boundary and update its agent configuration and registration.
 
-SQLite preparation is estimated at 42 seconds of fixed work plus 29 MB/s of
-database and journal bytes. This uses the slower measured byte-work rate: a
+SQLite preparation is estimated at 13 MB/s of database and journal bytes,
+conservatively rounded down from the **whole-chain** measured rate. A
 1,077,460,992-byte SQLite fixture with 1,000 sessions and 107,520 transcript
 messages completed the real Doctor chain in 78.100 seconds on Linux x64,
-Node 24.22.1. Smaller 69,603,328-byte and 271,204,352-byte fixtures completed in
-43.073 and 47.062 seconds. The estimate reserves ten minutes of the twenty-minute
-trial for Gateway startup and adds PostgreSQL's copy estimate for mixed stores.
-It is an admission estimate, not a completion guarantee.
+Node 24.22.1. No startup-time subtraction or optimistic incremental extrapolation
+is used. The estimate reserves ten minutes of the twenty-minute trial for Gateway
+startup and adds PostgreSQL's copy estimate for mixed stores. It is an admission
+estimate, not a completion guarantee.
 
 If the stores cannot fit the trial budget, use an explicit maintenance window.
 For an npm install, keep a verified full backup and the previous package, then:
