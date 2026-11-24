@@ -10,6 +10,7 @@ import type {
   SessionCatalogProvider,
 } from "openclaw/plugin-sdk/session-catalog";
 import { readCodexPluginConfig } from "./app-server/config-parsing.js";
+import { isCodexAppServerProxyLaunch } from "./app-server/launch-args.js";
 import type { CodexAppServerBindingStore } from "./app-server/session-binding.js";
 import { resolveCodexCatalogCreateSession } from "./session-catalog-create.js";
 import {
@@ -159,6 +160,15 @@ function catalogHostMapper(
       const home = localHomes.find((candidate) => candidate.hostId === host.hostId);
       const localSourceAvailable =
         localTerminalAvailable && home?.appServer.start.transport === "stdio";
+      // A stdio proxy forwards to a daemon selected by its socket. An arbitrary
+      // command also cannot attest that it reads the selected native home.
+      const exportHomeId =
+        home?.localSessionsRoot &&
+        home.appServer.start.transport === "stdio" &&
+        home.appServer.start.commandSource === "managed" &&
+        !isCodexAppServerProxyLaunch(home.appServer.start.args)
+          ? home.sourceHomeId
+          : undefined;
       const local = isLocalCodexCatalogHost(host.hostId);
       return {
         hostId: host.hostId,
@@ -176,14 +186,11 @@ function catalogHostMapper(
           const name = session.name ?? session.fallbackName;
           return {
             threadId: session.threadId,
-            // A Gateway catalog may use a remote app server. Only a matching, locally
-            // started source can authorize a service to export this native thread.
-            exportPolicy:
-              home?.localSessionsRoot &&
-              home.appServer.start.transport === "stdio" &&
-              home.sourceHomeId === session.sourceHomeId
-                ? { origin: "native-local", automatic: true }
-                : { origin: "federated", automatic: false },
+            ...(exportHomeId && exportHomeId === session.sourceHomeId
+              ? { exportPolicy: { origin: "native-local" as const, automatic: true } }
+              : host.kind === "node" || home?.appServer.connectionClass === "remote"
+                ? { exportPolicy: { origin: "federated" as const, automatic: false } }
+                : {}),
             ...(session.sourceHomeId ? { sourceHomeId: session.sourceHomeId } : {}),
             ...(name ? { name } : {}),
             ...(session.cwd ? { cwd: session.cwd } : {}),
