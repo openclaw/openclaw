@@ -110,7 +110,7 @@ function createJsonStructureMatcher<T extends { opener: JsonOpeningDelimiter; st
   const remove = (start: number): T | undefined => {
     const entry = entries.get(start);
     if (!entry) {
-      return;
+      return undefined;
     }
     const previous = entries.get(entry.previous ?? -1);
     const next = entries.get(entry.next ?? -1);

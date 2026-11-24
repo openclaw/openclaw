@@ -1,6 +1,8 @@
 /** Counts native work only during a synchronous extraction, restoring every global on failure. */
 export function measureJsonWork<T>(run: () => T) {
+  // oxlint-disable-next-line typescript/unbound-method -- Reflect.apply supplies the original receiver.
   const get = Map.prototype.get;
+  // oxlint-disable-next-line typescript/unbound-method -- Reflect.apply supplies the original receiver.
   const remove = Map.prototype.delete;
   const push = Array.prototype.push;
   const parse = JSON.parse;
