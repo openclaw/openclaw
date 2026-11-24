@@ -247,6 +247,61 @@ export function registerCliReplyCompletionTests({
     },
   );
 
+  it("preserves the required WebChat final answer after source progress", async () => {
+    const text = "Build started.";
+    const answer = "Build installed.";
+    const final = false;
+    supervisorSpawnMock.mockImplementationOnce(async (input) => {
+      completeToolCall(
+        {
+          captureKey: input.env?.OPENCLAW_MCP_CLI_CAPTURE_KEY ?? "",
+          toolName: "message",
+          args: { action: "send", message: text, final },
+        },
+        {
+          content: [
+            {
+              type: "text",
+              text: "Sent visible reply to the current source conversation via internal-ui.",
+            },
+          ],
+          details: {
+            status: "ok",
+            deliveryStatus: "sent",
+            channel: "webchat",
+            target: "current-run",
+            sourceReplyTranscriptOwner: true,
+            sourceReplySink: "internal-ui",
+            sourceReply: { text },
+            message: text,
+            dryRun: false,
+            sourceReplyDeliveryMode: "message_tool_only",
+            messageDelivery: { status: "settled", partialDelivery: false, createdThreadIds: [] },
+          },
+        },
+      );
+      input.onStdout?.(
+        `${JSON.stringify({ type: "result", session_id: "claude-session", result: answer })}\n`,
+      );
+      return makeManagedRun();
+    });
+    const context = createContext({
+      sessionKey: "agent:main:dashboard:4d1d7313-43bf-4498-906b-4f6212e4a5b1",
+      runId: "run-webchat-internal-sink",
+      sourceReplyDeliveryMode: "message_tool_only",
+      messageChannel: "webchat",
+      messageProvider: "webchat",
+      terminalReplyExpectation: "required",
+    });
+    context.backendResolved.config.output = "jsonl";
+
+    const result = await run(context);
+
+    expect(result.payloads?.map((payload) => payload.text)).toContain(answer);
+    expect(result.meta.finalAssistantVisibleText).toBe(answer);
+    expect(supervisorSpawnMock).toHaveBeenCalledOnce();
+  });
+
   it.each([false, true])(
     "requires child continuation custody before accepting NO_REPLY (completion=%s)",
     async (expectsCompletionMessage) => {

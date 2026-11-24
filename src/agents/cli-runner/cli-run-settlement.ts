@@ -1,4 +1,4 @@
-import { setReplyPayloadMetadata, type ReplyPayload } from "../../auto-reply/reply-payload.js";
+import { setReplyPayloadMetadata } from "../../auto-reply/reply-payload.js";
 import { SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
 import type { CliSessionBinding } from "../../config/sessions.js";
 import { formatErrorMessage } from "../../infra/errors.js";
@@ -25,7 +25,6 @@ import {
   resolveExplicitFinalSourceReplyDeliveryEvidence,
 } from "../embedded-agent-runner/delivery-evidence.js";
 import { resolveAuthProfileFailureReason } from "../embedded-agent-runner/run/auth-profile-failure-policy.js";
-import { buildEmbeddedRunPayloads } from "../embedded-agent-runner/run/payloads.js";
 import { mergeAttemptToolMediaPayloads } from "../embedded-agent-runner/run/tool-media-payloads.js";
 import { isFailoverError } from "../failover-error.js";
 import { resolveRetryAfterMs } from "../failover/retry-evidence.js";
@@ -37,6 +36,7 @@ import { resolveCliSessionId } from "./cli-run-recovery.js";
 import { projectCliMessagingDeliveryEvidence } from "./delivery-evidence.js";
 import { hashCliReseedPrompt } from "./reseed-envelope.js";
 import type { ClaudeCliRunDiagnosticLifecycle } from "./run-diagnostics.js";
+import { resolveCliSourceReplyMirror } from "./source-reply-mirror.js";
 import type { PreparedCliRunContext, RunCliAgentParams } from "./types.js";
 
 const log = createSubsystemLogger("agents/cli-runner");
@@ -367,44 +367,6 @@ export async function settlePreparedCliRun(params: {
   return outcome.result;
 }
 
-export function resolveCliSourceReplyMirror(params: {
-  evidence: Pick<
-    CliOutput,
-    | "didSendViaMessagingTool"
-    | "didDeliverSourceReplyViaMessageTool"
-    | "messagingToolSentTargets"
-    | "messagingToolSourceReplyPayloads"
-  >;
-  runParams: RunCliAgentParams;
-  modelId: string;
-}): { payloads: ReplyPayload[]; delivered: boolean; visibleText?: string } {
-  const { evidence, modelId, runParams } = params;
-  const payloads = buildEmbeddedRunPayloads({
-    assistantTexts: [],
-    lastAssistant: undefined,
-    sessionKey: runParams.sessionKey ?? "",
-    provider: runParams.provider,
-    model: modelId,
-    didSendViaMessagingTool: evidence.didSendViaMessagingTool,
-    didDeliverSourceReplyViaMessageTool: evidence.didDeliverSourceReplyViaMessageTool,
-    messagingToolSentTargets: evidence.messagingToolSentTargets,
-    messagingToolSourceReplyPayloads: evidence.messagingToolSourceReplyPayloads,
-    sourceReplyDeliveryMode: runParams.sourceReplyDeliveryMode,
-    agentId: runParams.agentId,
-    runId: runParams.runId,
-  });
-  const delivered =
-    payloads.length > 0 ||
-    (runParams.sourceReplyDeliveryMode === "message_tool_only" &&
-      evidence.didDeliverSourceReplyViaMessageTool === true);
-  const visibleText =
-    payloads
-      .map((payload) => payload.text?.trim() ?? "")
-      .filter(Boolean)
-      .join("\n\n") || undefined;
-  return { payloads, delivered, visibleText };
-}
-
 function buildCliExecutionMetadata(
   context: PreparedCliRunContext,
   attempt: Pick<
@@ -561,6 +523,7 @@ export function buildCliRunResult(params: {
   const rawFinalText = output.rawFinalText?.trim();
   const sourceReplyMirror = resolveCliSourceReplyMirror({
     evidence: output,
+    terminalOutput: output,
     runParams,
     modelId: context.modelId,
   });

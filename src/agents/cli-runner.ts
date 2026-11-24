@@ -41,7 +41,6 @@ import {
   buildCliSessionBinding,
   formatCliTerminalInterruption,
   isClaudeCliBackend,
-  resolveCliSourceReplyMirror,
   settleCliPreparationError,
   settlePreparedCliRun,
 } from "./cli-runner/cli-run-settlement.js";
@@ -70,6 +69,7 @@ import {
   loadCliSessionContextEngineMessages,
   loadCliSessionHistoryMessages,
 } from "./cli-runner/session-history.js";
+import { resolveCliSourceReplyMirror } from "./cli-runner/source-reply-mirror.js";
 import type { PreparedCliRunContext, RunCliAgentParams } from "./cli-runner/types.js";
 import { claudeCliSessionTranscriptHasContent } from "./command/attempt-execution.helpers.js";
 import type { EmbeddedAgentRunResult } from "./embedded-agent-runner.js";
@@ -433,6 +433,7 @@ async function runPreparedCliAgentOwned(
     diagnosticLifecycle?.setPhase("resolve");
     const sourceReplyMirror = resolveCliSourceReplyMirror({
       evidence: output,
+      terminalOutput: output,
       runParams: params,
       modelId: context.modelId,
     });
