@@ -79,22 +79,34 @@ export function createBeamContinuation(
     input?: SendInput,
   ): Promise<BeamContinuationResult> {
     const generation = initial.publicationId;
-    if (!generation) return "unavailable";
+    const actor = sendActor(auth, initial, !input);
+    if (!generation || !actor) return "unavailable";
+    // Owned Visitor access must keep the originally admitted grant at every commit and disclosure.
+    const guestProfileId = actor.guestProfileId;
+    const requiredGrant = guestProfileId ? "visitor-access" : undefined;
+    const assertCurrent = () => auth.assertCurrent(requiredGrant);
+    async function revalidate() {
+      await auth.revalidate(requiredGrant);
+      assertCurrent();
+    }
     async function current() {
-      await auth.revalidate();
-      auth.assertCurrent();
+      await revalidate();
       const publication = await store.readPublication(initial.beamId);
       const row = publication.snapshot ?? publication.ownership;
-      if (!row || row.publicationId !== generation) return;
-      const actor = sendActor(auth, row, !input);
-      if (!actor) return;
+      if (
+        !row ||
+        row.publicationId !== generation ||
+        (guestProfileId && guestProfileId !== row.publisherProfileId)
+      )
+        return;
       const destination = await readBeamDestination(
         row,
         Boolean(publication.snapshot),
         auth,
         dispatch,
       );
-      return { row, actor, destination };
+      assertCurrent();
+      return { row, destination };
     }
     let view = await current();
     if (!view) return "unavailable";
@@ -102,8 +114,9 @@ export function createBeamContinuation(
     if (input && view.destination.state === "released_unbound") {
       // The host owns authorization, one destination binding and crash reconciliation.
       // An adoption ACK is never a message-send ACK.
+      await revalidate();
       const adopted = await dispatch(
-        view.actor.guestProfileId ? "beam.owned.continue" : "sessions.catalog.continue",
+        actor.guestProfileId ? "beam.owned.continue" : "sessions.catalog.continue",
         {
           catalogId: "beam",
           hostId: "gateway",
@@ -116,39 +129,38 @@ export function createBeamContinuation(
       if (!view) return "unavailable";
     }
     if (typeof view.destination === "string") return view.destination;
-    if (!input && view.destination.state === "released_unbound") return "unavailable";
-    if (view.destination.state !== "ready") return { requestId, state: "needs_reconciliation" };
-    const target = view.destination;
+    const target = view.destination.state === "ready" ? view.destination : undefined;
     const lookup = {
       beamId: initial.beamId,
       generation,
-      actor: view.actor,
+      actor,
       requestKey: digest("continue", initial.beamId, generation, requestId),
-      target,
+      ...(target ? { target } : {}),
     };
     const operation = handoffs.createOperation?.<BeamSendOperations>(
       [handoffs, identities, receipts],
       { moduleName: "continuation-operation-api.js", exportName: "executeBeamSend" },
-      { assertCurrent: auth.assertCurrent },
+      { assertCurrent },
     );
     if (!operation) throw new Error("Beam continuation requires worker-owned state operations");
     const act = async (action: BeamSendOperations["request"]["input"]) => {
-      const writes = action.op === "status" ? [] : action.op === "claim" ? [1, 2] : [2];
+      const writes = !target || action.op === "status" ? [] : action.op === "claim" ? [1, 2] : [2];
       try {
         const receipt = await operation.execute(
           { type: "request", input: action },
           { writeStores: writes },
         );
-        await auth.revalidate();
-        auth.assertCurrent();
+        await revalidate();
         return receipt.value;
       } catch (error) {
         if (
           error instanceof Error &&
           "code" in error &&
           error.code === "PLUGIN_STATE_LIMIT_EXCEEDED"
-        )
+        ) {
+          await revalidate();
           return "rate_limited" as const;
+        }
         throw error;
       }
     };
@@ -156,7 +168,11 @@ export function createBeamContinuation(
       state === "needs_reconciliation"
         ? { state, requestId }
         : state === "accepted" || state === "pending"
-          ? { state, requestId, destination: { state: "ready", reference: target.reference } }
+          ? {
+              state,
+              requestId,
+              destination: target && { state: "ready", reference: target.reference },
+            }
           : state;
     const claim = randomUUID();
     const decision = await act(
@@ -171,13 +187,13 @@ export function createBeamContinuation(
         : { op: "status", lookup },
     );
     if (decision !== "claimed") return expose(decision);
-    if (!input) throw new Error("read-only Beam status claimed a send");
+    if (!input || !target)
+      throw new Error("Beam claimed a send without an instruction or ready destination");
     // From here a crash, timeout, or missing host ACK must never trigger another native turn.
     let accepted = false;
     let denied = false;
     try {
-      await auth.revalidate();
-      auth.assertCurrent();
+      await revalidate();
       const reply = await dispatch("chat.send", {
         sessionKey: target.sessionKey,
         sessionId: target.sessionId,

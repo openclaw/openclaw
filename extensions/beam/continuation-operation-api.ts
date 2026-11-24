@@ -19,7 +19,7 @@ type Lookup = {
   generation: string;
   requestKey: string;
   actor: BeamSendActor;
-  target: BeamSendTarget;
+  target?: BeamSendTarget;
 };
 type Identity = { actor: string; fingerprint: string; sessionId: string };
 type Outcome = { state: BeamSendState; claim: string; startedAt: number };
@@ -44,19 +44,22 @@ export const executeBeamSend: PluginStateOperationHandler<BeamSendOperations> = 
   )
     return "unavailable";
   if (!row.handoffId) return "source_owned";
+  const [identity] = tx.lookupMany<Identity>([{ store: 1, key: requestKey }]);
+  // A missing or changing target must not reveal which request IDs another caller owns.
+  if (identity && identity.actor !== actor.key) return "unavailable";
+  if (!identity && input.op === "status") return "unavailable";
+  if (identity && input.op === "claim" && identity.fingerprint !== input.fingerprint)
+    return "request_identity_conflict";
   if (
+    !target ||
     row.handoffId !== generation ||
     row.continuation?.id !== target.reference ||
     row.continuation.sessionKey !== target.sessionKey ||
     !row.continuation.ready
   )
     return "needs_reconciliation";
-  const [identity] = tx.lookupMany<Identity>([{ store: 1, key: requestKey }]);
   const now = Date.now();
   if (identity) {
-    if (identity.actor !== actor.key) return "unavailable";
-    if (input.op === "claim" && identity.fingerprint !== input.fingerprint)
-      return "request_identity_conflict";
     if (identity.sessionId !== target.sessionId) return "needs_reconciliation";
     const [receipt] = tx.lookupMany<Outcome>([{ store: 2, key: requestKey }]);
     if (!receipt) return "needs_reconciliation";
@@ -75,7 +78,6 @@ export const executeBeamSend: PluginStateOperationHandler<BeamSendOperations> = 
       return "needs_reconciliation";
     return receipt.state;
   }
-  if (input.op === "status") return "unavailable";
   if (input.op !== "claim") return "needs_reconciliation";
   if (input.agent && input.agent !== row.continuation.agentId) return "request_identity_conflict";
   const countKey = "count:" + beamId + "." + generation;

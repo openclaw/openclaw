@@ -95,7 +95,7 @@ async function fixture() {
   let row = { ...source };
   await handoffs.register(row.beamId, row);
   let nativeId = "first-session";
-  let denyResolve = false;
+  let resolveFailure: "FORBIDDEN" | "UNAVAILABLE" | undefined;
   let replaceBeforeSend = false;
   let lostAck = false;
   let waitOnSend:
@@ -114,7 +114,7 @@ async function fixture() {
   }[] = [];
   const dispatch: typeof dispatchGatewayMethod = async (method, params) => {
     if (method.endsWith(".resolve")) {
-      if (denyResolve) return { ok: false, error: { code: "FORBIDDEN", message: "denied" } };
+      if (resolveFailure) return { ok: false, error: { code: resolveFailure, message: "failed" } };
       return { ok: true, payload: { sessionKey: binding.sessionKey, sessionId: nativeId } };
     }
     if (method.endsWith(".continue")) {
@@ -160,7 +160,10 @@ async function fixture() {
       return adopted;
     },
     deny() {
-      denyResolve = true;
+      resolveFailure = "FORBIDDEN";
+    },
+    removeDestination() {
+      resolveFailure = "UNAVAILABLE";
     },
     replace() {
       replaceBeforeSend = true;
@@ -228,6 +231,64 @@ it("adopts once and sends once under a durable identity, even across services an
   expect(await f.service().status(source, request.requestId, owner)).toBe("unavailable");
   expect(await f.service().status(source, request.requestId, reader)).toBe("unavailable");
   expect(await f.service().continue(source, request, owner)).toBe("unavailable");
+  expect(f.sends).toBe(1);
+});
+
+it("keeps request lookups private after the destination disappears", async () => {
+  await using f = await fixture();
+  expect(await f.service().status(source, request.requestId, owner)).toBe("unavailable");
+  expect(f.adopted).toBe(0);
+  expect(await f.service().continue(source, request, owner)).toMatchObject({ state: "accepted" });
+  f.removeDestination();
+  expect(await f.service().status(source, request.requestId, owner)).toEqual({
+    requestId: request.requestId,
+    state: "needs_reconciliation",
+  });
+  expect(await f.service().status(source, "never-submitted", owner)).toBe("unavailable");
+  expect(await f.service().status(source, request.requestId, staff)).toBe("unavailable");
+  expect(await f.service().continue(source, request, staff)).toBe("unavailable");
+  expect(await f.service().continue(source, request, owner)).toMatchObject({
+    state: "needs_reconciliation",
+  });
+  expect(f.adopted).toBe(1);
+  expect(f.sends).toBe(1);
+});
+
+it("requires the admitted Visitor grant for owned sends and disclosures", async () => {
+  await using f = await fixture();
+  let active = true;
+  const checked: (string | undefined)[] = [];
+  function guard(requiredGrant?: string) {
+    checked.push(requiredGrant);
+    if (!active && requiredGrant === "visitor-access") throw new Error("Visitor grant revoked");
+  }
+  const guest: GatewayRequestAuthorityV1 = {
+    ...owner,
+    assertCurrent: guard,
+    async revalidate(requiredGrant) {
+      guard(requiredGrant);
+    },
+  };
+  const gate = f.hold();
+  const inFlight = f.service().continue(source, request, guest);
+  await gate.entered.promise;
+  active = false;
+  gate.release.resolve();
+  await expect(inFlight).rejects.toThrow("Visitor grant revoked");
+  await expect(f.service().status(source, request.requestId, guest)).rejects.toThrow(
+    "Visitor grant revoked",
+  );
+  await expect(f.service().continue(source, request, guest)).rejects.toThrow(
+    "Visitor grant revoked",
+  );
+  const firstGuestChecks = checked.filter((g) => g === "visitor-access").length;
+  expect(firstGuestChecks).toBeGreaterThan(0);
+  // An individually verified staff reader has an independent ordinary read authorization.
+  const reader = { ...guest, scopes: ["operator.read"] };
+  expect(await f.service().status(source, request.requestId, reader)).toMatchObject({
+    requestId: request.requestId,
+  });
+  expect(checked.filter((g) => g === "visitor-access")).toHaveLength(firstGuestChecks);
   expect(f.sends).toBe(1);
 });
 
