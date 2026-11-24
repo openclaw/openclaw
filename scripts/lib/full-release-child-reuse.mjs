@@ -472,6 +472,7 @@ async function validateEvidence(selection, request, deps) {
         request.policyTargetVersion,
         request.targetSha,
         request.waiverPolicy,
+        request.requiredJobs,
       ),
       "workload does not pass recovery release policy",
     );
@@ -480,6 +481,7 @@ async function validateEvidence(selection, request, deps) {
       targetVersion: request.policyTargetVersion,
       targetSha: request.targetSha,
       waiverPolicy: request.waiverPolicy,
+      requiredJobs: request.requiredJobs,
     });
     await validateReleaseWaiverAggregates({
       policy,

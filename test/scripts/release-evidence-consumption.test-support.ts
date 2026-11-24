@@ -41,7 +41,11 @@ const childPublisher = "Seal full release child evidence / Seal child receipt";
 // Only external transport is replaced; validation runs through production owners.
 export function recoveryConsumptionFixture(
   admitted: boolean | ReturnType<typeof candidatePublicationFixture> = false,
-  fixtureOptions: { waivedFailure?: boolean; waiverPolicySha?: string } = {},
+  fixtureOptions: {
+    waivedFailure?: boolean;
+    omittedPluginJob?: boolean;
+    waiverPolicySha?: string;
+  } = {},
 ) {
   const direct =
     typeof admitted === "boolean"
@@ -129,6 +133,8 @@ export function recoveryConsumptionFixture(
     jobName: string;
     reason: string;
     aggregates: never[];
+    state?: "missing";
+    approvedBy?: string;
     evidence: { runId: number; runAttempt: number };
   }[] = [];
   const sourceFile = (sha: string, path = ".github/workflows/full-release-validation.yml") =>
@@ -233,6 +239,25 @@ export function recoveryConsumptionFixture(
         childRole: role,
         jobName: workload[0]!.name,
         reason: "Synthetic Q-only recovery grant",
+        aggregates: [],
+        evidence: { runId: Number(id), runAttempt: 1 },
+      });
+    }
+    if (fixtureOptions.omittedPluginJob && role === "pluginPrereleaseCandidate") {
+      const jobName = "plugin-prerelease-suite";
+      const offset = workload.findIndex((entry) => entry.name === jobName);
+      if (offset < 0) {
+        throw new Error("Expected the plugin suite in admitted coverage");
+      }
+      workload.splice(offset, 1);
+      waiverPolicy.push({
+        targetVersion: version,
+        targetSha: c,
+        childRole: role,
+        jobName,
+        state: "missing",
+        approvedBy: "operator",
+        reason: "Synthetic Q-only missing job grant",
         aggregates: [],
         evidence: { runId: Number(id), runAttempt: 1 },
       });

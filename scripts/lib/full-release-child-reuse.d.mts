@@ -6,6 +6,8 @@ export interface ReusableReleaseChildRequest {
   inputs: Record<string, string | boolean | number>;
   /** Candidate version verified by receipt recovery before applying release policy. */
   policyTargetVersion?: string;
+  /** Required job names from the authenticated qualification coverage, when available. */
+  requiredJobs?: readonly string[];
   /** Exclude children dispatched by this parent run. */
   excludeRunId?: string;
 }

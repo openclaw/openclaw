@@ -499,6 +499,9 @@ async function validateReuse(executionPlan, signal) {
           repository: executionPlan.repository,
           targetSha: executionPlan.targetSha,
           policyTargetVersion: executionPlan.targetVersion,
+          requiredJobs: executionPlan.qualificationCoverage?.children.find(
+            ({ key }) => key === role,
+          )?.requiredJobs,
           workflowSha: executionPlan.workflowSha,
           role,
           inputs: selection.inputs,

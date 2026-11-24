@@ -2435,6 +2435,7 @@ async function validateStrictChildRun({
         role: child.manifestKey,
         targetSha: parentEvidence.manifest.targetSha,
         policyTargetVersion: parentEvidence.manifest.validationInputs?.targetVersion,
+        requiredJobs: child.requiredJobs,
         workflowSha: parentEvidence.manifest.workflowSha,
       })
     : undefined;

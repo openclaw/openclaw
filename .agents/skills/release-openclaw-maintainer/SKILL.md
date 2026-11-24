@@ -120,7 +120,9 @@ observed state (`cancelled` or `missing`) and record `approvedBy` and the short 
 Use `jobName: "<workflow>"` only for a missing required child, with its exact role and
 no run/attempt binding. Preserve `waived-missing`/`waived-cancelled` separately from passes;
 never treat skipped jobs, incomplete dispatch identities, or missing receipts for
-known runs as absent work.
+known runs as absent work. See [#203832](https://github.com/openclaw/openclaw/pull/203832)
+for the earlier cancelled-step boundary and [FRV run 45303777043](https://github.com/openclaw/openclaw/actions/runs/45303777043)
+for the missing dispatch addressed in [#204382](https://github.com/openclaw/openclaw/pull/204382).
 For grant-only edits, reuse the policy tests; add cases only for new matching or
 validation behavior. Keep new reasons to one sentence and authorization details
 in the release handoff, not public Q data or published docs ([#199776](https://github.com/openclaw/openclaw/pull/199776)).

@@ -402,7 +402,7 @@ pnpm ci:full-release \
 
 - Publish with `release_profile=from-validation` (sealed profile). Selected FRV must **succeed**; stable needs stable/full evidence, soak, blocking performance.
 - Decide blocker/flake for every failed test. Same-Release-SHA flakes: at most two reruns plus main fix-in-parallel issue/PR, never flake-only re-cut.
-- An exact failed leaf, cancelled job, missing required job, or missing required child may receive a reviewed [release-tooling grant](../../../docs/reference/full-release-validation/evidence.md#release-tooling-waivers). Use admitted P and frozen Q, and record `waived-missing`/`waived-cancelled` as exceptions, never passes. Publishers cannot grant waivers or accept failed FRV. Unwaived failures and missing/cancelled required coverage block, as do skipped/unknown required coverage and evidence-integrity failures.
+- An exact failed leaf, cancelled job, missing required job, or missing required child may receive a reviewed [release-tooling grant](../../../docs/reference/full-release-validation/evidence.md#release-tooling-waivers). Use admitted P and frozen Q, and record `waived-missing`/`waived-cancelled` as exceptions, never passes. Publishers cannot grant waivers or accept failed FRV. Unwaived failures and missing/cancelled required coverage block, as do skipped/unknown required coverage and evidence-integrity failures. See [#203832](https://github.com/openclaw/openclaw/pull/203832) and the [missing-dispatch follow-up in #204382](https://github.com/openclaw/openclaw/pull/204382).
 
 ### Publish children
 

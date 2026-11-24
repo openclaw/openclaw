@@ -480,6 +480,7 @@ export async function verifyOriginalReceiptQualification(requestValue, dependenc
     const spec = releaseChildSpec(role);
     const source = client.getWorkflowSource(qualificationSha, ".github/workflows/" + spec.workflow);
     const inputs = qualificationChildDispatchInputs(role, admission, binding, source);
+    const coverage = admission.coverage.children.find((child) => child.key === role);
     const verified = await client.validateChildReuse(
       selection,
       {
@@ -489,11 +490,11 @@ export async function verifyOriginalReceiptQualification(requestValue, dependenc
         role,
         inputs,
         policyTargetVersion: binding.package.version,
+        requiredJobs: coverage.requiredJobs,
       },
       // Recovery must enumerate every historical attempt, including long rerun chains.
       { deadlineMs: Date.now() + 10 * 60_000, waiverPolicy },
     );
-    const coverage = admission.coverage.children.find((child) => child.key === role);
     const child = {
       key: role,
       runId: selection.runId,
@@ -503,7 +504,13 @@ export async function verifyOriginalReceiptQualification(requestValue, dependenc
       jobs: verified.receipt.jobs,
     };
     requireValue(
-      terminalPolicyPass(child, binding.package.version, target, waiverPolicy),
+      terminalPolicyPass(
+        child,
+        binding.package.version,
+        target,
+        waiverPolicy,
+        coverage.requiredJobs,
+      ),
       "original child failed release policy",
     );
     const policy = evaluateReleaseChildPolicy({
@@ -511,6 +518,7 @@ export async function verifyOriginalReceiptQualification(requestValue, dependenc
       targetVersion: binding.package.version,
       targetSha: target,
       waiverPolicy,
+      requiredJobs: coverage.requiredJobs,
     });
     // Reuse the admitted workload inventory and authenticated composite; recovery
     // does not reconstruct a second matrix policy from historical source files.
