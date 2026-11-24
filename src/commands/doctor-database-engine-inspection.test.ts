@@ -61,6 +61,22 @@ describe("Doctor physical engine inspection", () => {
     }
   });
 
+  it("does not ask for absent stores of inactive plugins to be initialized", async () => {
+    const stateDir = tempDirs.make("doctor-engine-inactive-plugins-");
+    const { stores } = await inspectDoctorDatabaseEngines({
+      config: { plugins: { allow: ["logbook"], entries: { logbook: { enabled: true } } } },
+      stateDir,
+      env: { OPENCLAW_STATE_DIR: stateDir, HOME: stateDir },
+    });
+    const nextSteps = (relativePath: string) =>
+      stores!.find((store) => store.path === path.join(stateDir, relativePath))?.nextSteps;
+    expect(nextSteps("plugins/workboard/workboard.sqlite")).toEqual([]);
+    expect(nextSteps("voice-calls/state/openclaw.sqlite")).toEqual([]);
+    for (const required of ["state/openclaw.sqlite", "logbook/logbook.sqlite"]) {
+      expect(nextSteps(required)?.join(" ")).toContain("Store is not present");
+    }
+  });
+
   it("reports all physical state engines despite incompatible configuration without changing artifacts", () => {
     expect(inspection.observed.state).toEqual(["sqlite", "postgres"]);
     expect(inspection.stateRoots.map(({ physical }) => physical.engine)).toEqual([

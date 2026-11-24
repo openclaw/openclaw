@@ -1335,7 +1335,7 @@ integrity. Readable state and agent schema versions remain visible when port
 validation refuses an older or newer schema. Unreadable files and directories
 remain in the inventory with unknown contents and a permission-repair step;
 they are not reported as absent. Missing resolved store files remain listed with
-initialization guidance. Unversioned local journals are identified separately. Installed server
+initialization guidance, unless the plugin that owns them is inactive. Unversioned local journals are identified separately. Installed server
 extensions and recorded admitted search extensions are separate facts;
 `degraded` identifies recorded keyword-only operation and missing vector support.
 Install a named missing extension as a database administrator, grant `USAGE` on
