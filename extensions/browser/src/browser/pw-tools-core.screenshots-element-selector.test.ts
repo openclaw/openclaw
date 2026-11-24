@@ -66,6 +66,26 @@ describe("pw-tools-core", () => {
     expect(sessionMocks.refLocator).toHaveBeenCalledWith(page, "76");
     expect(refScreenshot).toHaveBeenCalledWith({ type: "jpeg", timeout: 0 });
   });
+  it.each([
+    [undefined, ["bringToFront", "screenshot"]],
+    [false, ["screenshot"]],
+  ])(
+    "activates the tab before capture unless Chrome is headed (headless=%s)",
+    async (headless, calls) => {
+      const order: string[] = [];
+      setPwToolsCoreCurrentPage({
+        bringToFront: async () => void order.push("bringToFront"),
+        screenshot: async () => {
+          order.push("screenshot");
+          return Buffer.from("P");
+        },
+      });
+      const opts = { ...target, headless };
+      await mod.takeScreenshotViaPlaywright(opts);
+      expect(order).toEqual(calls);
+    },
+  );
+
   it("rejects fullPage for element or ref screenshots", async () => {
     setPwToolsCoreCurrentRefLocator({ screenshot: vi.fn(async () => Buffer.from("R")) });
     setPwToolsCoreCurrentPage({

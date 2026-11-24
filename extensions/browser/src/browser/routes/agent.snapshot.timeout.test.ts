@@ -188,6 +188,13 @@ describe("browser agent snapshot timeout routing", () => {
       expect(cdpMocks.captureScreenshot).toHaveBeenCalledWith(
         expect.objectContaining({ headless: expectedHeadless }),
       );
+      pwMocks.connected = true;
+      const playwright = createBrowserRouteResponse();
+      await handler?.({ params: {}, query: {}, body: { type: "png" } }, playwright.res);
+      expect(playwright.statusCode).toBe(200);
+      expect(pwMocks.takeScreenshotViaPlaywright).toHaveBeenCalledWith(
+        expect.objectContaining({ headless: expectedHeadless }),
+      );
     },
   );
 

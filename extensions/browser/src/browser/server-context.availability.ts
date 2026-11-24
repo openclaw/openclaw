@@ -130,6 +130,12 @@ function assertManagedLaunchNotCoolingDown(profileName: string, profileState: Pr
   );
 }
 
+/** Effective launch mode of the profile's browser process, when known. */
+export async function resolveProfileHeadless(state: BrowserServerState, profileName: string) {
+  const runtime = state.profiles.get(profileName);
+  return runtime?.running?.headless ?? (await runtime?.externalBrowserMode?.headless);
+}
+
 export function createProfileAvailability({
   opts,
   profile,
