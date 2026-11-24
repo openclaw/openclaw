@@ -731,7 +731,7 @@ it
             () => {
               const agentDir = instance.state.agentDir("main");
               const sessionId = readRestartSession(agentDir, rootKey)?.sessionId;
-              assert(sessionId);
+              assert(typeof sessionId === "string");
               const statuses = (
                 readTranscriptExportSnapshotReadOnlySync({
                   agentId: "main",
