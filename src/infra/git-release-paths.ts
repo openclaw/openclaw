@@ -111,21 +111,34 @@ export function resolveGitReleaseEntrypointForLauncher(entrypoint: string): stri
 }
 
 /**
- * The release entry that a converted tree's `openclaw.mjs` or `dist/index.js` forwards to.
- * Git conversions keep a service written for the checkout; the update's forwarding marker
- * (`markForwarding` in `src/update/run.ts`) sends it to the launcher, and
- * `release-launcher-forward.mjs` follows it with the same rules read here.
+ * The release entry that a converted Git checkout's `openclaw.mjs` or `dist/index.js` forwards
+ * to. Git conversions keep a service written for the checkout; the update's forwarding marker
+ * (`markForwarding` in `src/update/run.ts`) sends that entry to the launcher, and
+ * `release-launcher-forward.mjs` follows the marker with the rules read here. Package trees
+ * are left to their own service staging.
  */
 export function resolveGitReleaseEntrypointForForwardingTree(entrypoint: string): string | null {
   const resolved = path.resolve(entrypoint);
-  const root =
+  const tree =
     path.basename(resolved) === "openclaw.mjs"
       ? path.dirname(resolved)
       : path.basename(resolved) === "index.js" && path.basename(path.dirname(resolved)) === "dist"
         ? path.dirname(path.dirname(resolved))
         : null;
-  // Only a tree whose entries carry the forwarder runs the launcher instead of itself.
-  if (!root || !fs.existsSync(path.join(root, "release-launcher-forward.mjs"))) {
+  if (!tree) {
+    return null;
+  }
+  let root: string;
+  try {
+    root = fs.realpathSync(tree);
+  } catch {
+    return null;
+  }
+  // Only a checkout whose entries carry the forwarder runs the launcher instead of itself.
+  if (
+    !fs.existsSync(path.join(root, ".git")) ||
+    !fs.existsSync(path.join(root, "release-launcher-forward.mjs"))
+  ) {
     return null;
   }
   for (const marker of [
@@ -142,9 +155,11 @@ export function resolveGitReleaseEntrypointForForwardingTree(entrypoint: string)
       continue;
     }
     // A release never forwards: it is what the launcher starts.
-    return root.startsWith(path.join(path.dirname(launcher), "releases") + path.sep)
-      ? null
-      : resolveGitReleaseEntrypointForLauncher(launcher);
+    if (root.startsWith(path.join(path.dirname(launcher), "releases") + path.sep)) {
+      return null;
+    }
+    const release = resolveGitReleaseEntrypointForLauncher(launcher);
+    return release && fs.existsSync(release) ? release : null;
   }
   return null;
 }

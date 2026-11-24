@@ -17,6 +17,7 @@ import {
   gatewayServiceCommandMatchesRoot,
   resolveGatewayServiceInstallationRefreshRoot,
   resolveManagedServiceNodeRunner,
+  resolveServiceEntrypointIndex,
   summarizeGatewayServiceLayout,
 } from "../../daemon/service-layout.js";
 import { withGatewayServiceOperationLock } from "../../daemon/service-operation-lock.js";
@@ -328,11 +329,8 @@ export async function inspectManagedGatewayServiceBeforeUpdate(params: {
         // forwards to it, is written once; switches never change it.
         refreshDefinition:
           (state.definitionMutationCapability?.kind ?? "writable") === "writable" &&
-          !command.programArguments.some(
-            (arg) =>
-              path.basename(arg) === GIT_RELEASE_LAUNCHER ||
-              (path.isAbsolute(arg) && resolveGitReleaseEntrypointForForwardingTree(arg) !== null),
-          ),
+          !command.programArguments.some((arg) => path.basename(arg) === GIT_RELEASE_LAUNCHER) &&
+          !isForwardedServiceEntrypoint(command),
       }
     : { kind: "unresolved", root, fingerprint };
 }
@@ -546,6 +544,16 @@ export async function resolveManagedServicePackageUpdatePlan(params: {
     }
   }
   return plan;
+}
+
+function isForwardedServiceEntrypoint(command: GatewayServiceCommandConfig): boolean {
+  const index = resolveServiceEntrypointIndex(command.programArguments);
+  const entrypoint = index === undefined ? undefined : command.programArguments[index];
+  return (
+    entrypoint !== undefined &&
+    path.isAbsolute(entrypoint) &&
+    resolveGitReleaseEntrypointForForwardingTree(entrypoint) !== null
+  );
 }
 
 export async function gatewayServiceCommandUsesRoot(params: {

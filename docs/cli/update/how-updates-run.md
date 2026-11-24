@@ -117,7 +117,7 @@ OpenClaw restart or login; Windows runs the updated task script on its next star
 If staging fails, update history records the service-definition refresh as owed.
 A service definition that still names the checkout's `dist/index.js` or `openclaw.mjs`
 reaches the selected release through the forwarding marker the update leaves in the
-checkout (`.git/openclaw-launcher`). `openclaw gateway status`, `openclaw doctor --fix`
+checkout (`.git/openclaw-launcher`, or `.openclaw-launcher` in a linked worktree). `openclaw gateway status`, `openclaw doctor --fix`
 and `openclaw update repair` treat that service as this installation's, serving the
 release the launcher selects, and leave its definition unchanged.
 
