@@ -1,4 +1,5 @@
 import { readRootJsonObjectSync } from "@openclaw/fs-safe/json";
+import { valid as validSemver } from "semver";
 import { compareOpenClawReleaseVersions } from "./npm-registry-spec.js";
 import { compareValidSemver } from "./semver.js";
 
@@ -28,18 +29,9 @@ export function expectedIntegrityForUpdate(
     return undefined;
   }
   const value = spec.trim();
-  if (!value) {
-    return undefined;
-  }
   const at = value.lastIndexOf("@");
-  if (at <= 0 || at >= value.length - 1) {
-    return undefined;
-  }
-  const version = value.slice(at + 1).trim();
-  if (!/^v?\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/.test(version)) {
-    return undefined;
-  }
-  return integrity;
+  // npm's loose SemVer versions are pinned; a version-like dist tag can move.
+  return at > 0 && validSemver(value.slice(at + 1).trim(), true) !== null ? integrity : undefined;
 }
 
 export function readInstalledPackageManifest(dir: string): Record<string, unknown> | undefined {

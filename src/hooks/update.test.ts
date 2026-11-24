@@ -166,6 +166,21 @@ describe("updateNpmInstalledHookPacks", () => {
     ]);
   });
 
+  it("does not pin integrity for a version-like moving npm tag", async () => {
+    const spec = "@openclaw/demo-hooks@1.0.0-beta..1";
+    const config = createHookInstallConfig({ hookId: "demo-hooks", spec, integrity: "sha512-old" });
+    installHooksFromNpmSpecMock.mockResolvedValue({
+      ok: true,
+      hookPackId: "demo-hooks",
+      hooks: ["demo"],
+      targetDir: "/tmp/hooks/demo-hooks",
+      version: "1.0.0",
+    });
+    await runHookUpdate({ config, hookIds: ["demo-hooks"] });
+    expect(installHooksFromNpmSpecMock).toHaveBeenCalledOnce();
+    expect(installHooksFromNpmSpecMock.mock.calls[0]?.[0].expectedIntegrity).toBeUndefined();
+  });
+
   it("preserves hook pack update selector and records npm resolution metadata after update", async () => {
     installHooksFromNpmSpecMock.mockResolvedValue({
       ok: true,
