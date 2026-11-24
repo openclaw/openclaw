@@ -225,7 +225,9 @@ Set the mirror endpoint to the Team Gateway's final `/api/v2/beam` URL and add t
 openclaw gateway call beam.mirror.enroll --params '{"source":{"catalogId":"codex","hostId":"gateway:local","threadId":"NATIVE_THREAD","agentId":"main","sourceHomeId":"SOURCE_HOME"}}'
 ```
 
-A successful response contains the Beam ID and its receiver-issued generation and revision. Later service polls update only this generation. The source retains its enrollment, receipts and an unacknowledged update in plugin SQLite across restarts and disable/re-enable. Released publications and generation conflicts remain fenced. Restore the original publisher credential if it changes.
+A successful response contains the Beam ID and its receiver-issued generation and revision. Later service polls update only this generation. The source retains its enrollment, receipts and an unacknowledged update in plugin SQLite across restarts and disable/re-enable. Released publications and generation conflicts remain fenced.
+
+When the receiver bearer token rotates, configure the new token for the same publisher and reload secrets. Repeat `beam.mirror.enroll` with the original `source` and its stored `confirmGeneration`. The receiver must prove this credential owns the still-writable generation. Reauthorization reads its head and updates the local credential binding. Pending writes keep their original request and precondition. A teammate, released generation, or different receiver leaves the binding unchanged. Cloudflare Access credentials supplied separately by a gateway-side proxy can rotate at that proxy without changing the Beam bearer binding.
 
 If the first response was lost, repeat the command to see its unconfirmed Beam ID and expected digest. Inspect the publication and its generation on the intended Team Gateway. To adopt that existing publication, explicitly repeat enrollment with its exact `confirmGeneration` next to `source`. A missing row, mismatched digest or differing generation leaves the source unconfirmed. The service never retries an initial create.
 

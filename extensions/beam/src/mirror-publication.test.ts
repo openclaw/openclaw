@@ -35,9 +35,11 @@ const open = (
   token = "publisher-test",
   endpoint = "https://team.example/api/v2/beam",
   assertCurrent: () => void = () => {},
+  confirmGeneration?: string,
 ) =>
   openBeamMirrorEnrollment({
     source,
+    confirmGeneration,
     token,
     endpoint,
     signal: new AbortController().signal,
@@ -130,4 +132,30 @@ it("leaves an unacknowledged enrollment inactive when its operator loses authori
     state: "unconfirmed",
   });
   expect(transport.enrollBeamMirrorV2).toHaveBeenCalledOnce();
+});
+
+it("rotates a publisher credential only after read-only confirmation of the same source generation", async () => {
+  vi.mocked(transport.enrollBeamMirrorV2).mockResolvedValueOnce({ state: "published", head });
+  await (await open(true))!.enroll(id, raw);
+  const old = (await open())!;
+  const rotated = (endpoint?: string, generation = head.generation) =>
+    open(true, "new-credential", endpoint, undefined, generation);
+  await expect(open(false, "new-credential")).rejects.toThrow("credential");
+  await expect(rotated("https://other.example/api/v2/beam")).rejects.toThrow("No enrollment");
+  await expect(rotated(undefined, "other-generation")).rejects.toThrow("credential");
+  expect(transport.inspectBeamMirrorV2Enrollment).not.toHaveBeenCalled();
+  vi.mocked(transport.inspectBeamMirrorV2Enrollment).mockResolvedValueOnce({ state: "conflict" });
+  await expect(rotated()).rejects.toThrow("publisher authority");
+  vi.mocked(transport.inspectBeamMirrorV2Enrollment).mockResolvedValueOnce({ state: "released" });
+  await expect(rotated()).rejects.toThrow("publisher authority");
+  vi.mocked(transport.inspectBeamMirrorV2Enrollment).mockResolvedValueOnce({
+    state: "observed",
+    head,
+  });
+  expect((await rotated())!.describe()).toMatchObject({ state: "published", head });
+  expect((await open(false, "new-credential"))!.sourceSalt).toBe(old.sourceSalt);
+  await expect(old.publish(id, Buffer.from("stale caller"))).resolves.toBe(false);
+  await expect(open()).rejects.toThrow("credential");
+  expect(transport.enrollBeamMirrorV2).toHaveBeenCalledOnce();
+  expect(transport.publishBeamMirrorV2).not.toHaveBeenCalled();
 });

@@ -49,6 +49,7 @@ function receipt(h: BeamMirrorV2Head, state = "writable") {
     digest: h.sha256,
     state,
     disposition: "applied",
+    canRelease: true,
   };
 }
 
@@ -257,3 +258,21 @@ it.each([
     );
   },
 );
+
+it("rejects a teammate or receiver without publisher attestation despite matching the exact packet and generation", async () => {
+  const methods: string[] = [];
+  await serve(
+    (req, res) => {
+      methods.push(req.method ?? "");
+      const canRelease = req.headers.authorization === "Bearer rotated-owner";
+      res.end(JSON.stringify({ ...receipt(head), canRelease }));
+    },
+    async (endpoint) => {
+      const inspect = (token: string) =>
+        inspectBeamMirrorV2Enrollment({ ...scope, endpoint, token, sha256: head.sha256 });
+      expect(await inspect("teammate")).toEqual({ state: "conflict" });
+      expect(await inspect("rotated-owner")).toEqual({ state: "observed", head });
+      expect(methods).toEqual(["GET", "GET"]);
+    },
+  );
+});

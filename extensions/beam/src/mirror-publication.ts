@@ -44,6 +44,8 @@ export async function openBeamMirrorEnrollment(params: {
   signal: AbortSignal;
   assertCurrent(): void;
   explicit?: boolean;
+  confirmGeneration?: string;
+  revalidate?: () => Promise<void>;
 }) {
   const { store, source } = params;
   const endpoint = new URL(params.endpoint).href;
@@ -60,6 +62,8 @@ export async function openBeamMirrorEnrollment(params: {
     )
     .digest("hex");
   let row = await store.observe(key);
+  if (!row.value && params.confirmGeneration)
+    throw new Error("No enrollment exists for this receiver and native source");
   if (!row.value && params.explicit) {
     params.assertCurrent();
     const sourceSalt = randomUUID();
@@ -69,13 +73,7 @@ export async function openBeamMirrorEnrollment(params: {
     });
     row = await store.observe(key);
   }
-  const binding = row.value;
-  if (!binding) return;
-  if (binding.credential !== credentialScope(binding.sourceSalt, params.token)) {
-    throw new Error(
-      "Beam enrollment belongs to a different receiver credential; restore the original publisher profile",
-    );
-  }
+  if (!row.value) return;
   params.assertCurrent();
   const options = {
     endpoint,
@@ -83,6 +81,54 @@ export async function openBeamMirrorEnrollment(params: {
     signal: params.signal,
     assertCurrent: params.assertCurrent,
   };
+  const credential = credentialScope(row.value.sourceSalt, params.token);
+  if (row.value.credential !== credential) {
+    const previous = row.value;
+    const generation = params.confirmGeneration;
+    if (
+      !params.explicit ||
+      !generation ||
+      previous.fenced ||
+      !previous.initial ||
+      (previous.head && previous.head.generation !== generation)
+    ) {
+      throw new Error(
+        "Receiver credential changed. Select the original publication and confirm its exact generation to reauthorize.",
+      );
+    }
+    const seen = await inspectBeamMirrorV2Enrollment({
+      ...options,
+      beamId: previous.initial.beamId,
+      sha256: previous.head?.sha256 ?? previous.initial.sha256,
+      pendingSha256: previous.pending?.intent.sha256,
+    });
+    if (
+      seen.state !== "observed" ||
+      seen.head.generation !== generation ||
+      (previous.head &&
+        previous.head.revision !== seen.head.revision &&
+        previous.pending?.intent.sha256 !== seen.head.sha256)
+    )
+      throw new Error(
+        "The new credential could not verify publisher authority on the enrolled generation",
+      );
+    await params.revalidate?.();
+    params.assertCurrent();
+    // Reauthorization changes the local credential only. A previously uncertain
+    // update retains its original bytes, request ID and revision for normal replay.
+    const value = { ...previous, credential, head: previous.head ?? seen.head };
+    const saved = await store.compareAndApply(key, row.comparison, {
+      operation: "update",
+      action: "set",
+      value,
+    });
+    if (saved.status === "conflict")
+      throw new Error("Enrollment changed during credential verification");
+    row = await store.observe(key);
+    if (row.value?.credential !== credential)
+      throw new Error("Enrollment changed after credential verification");
+  }
+  const binding = row.value;
   const describe = () => ({
     state: binding.fenced ?? (binding.head ? "published" : "unconfirmed"),
     head: binding.head,
@@ -150,6 +196,7 @@ export async function openBeamMirrorEnrollment(params: {
           "The selected publication could not be confirmed. Inspect its original receiver and generation.",
         );
       }
+      await params.revalidate?.();
       params.assertCurrent();
       const saved = await store.compareAndApply(key, observed.comparison, {
         operation: "update",
@@ -167,6 +214,7 @@ export async function openBeamMirrorEnrollment(params: {
       let current = observed.value;
       if (
         !current?.head ||
+        current.credential !== credential ||
         current.sourceSalt !== binding.sourceSalt ||
         current.initial?.beamId !== beamId
       )
@@ -187,7 +235,13 @@ export async function openBeamMirrorEnrollment(params: {
         current = observed.value;
       }
       const pending = current?.pending;
-      if (!current || !pending || current.fenced || current.sourceSalt !== binding.sourceSalt)
+      if (
+        !current ||
+        !pending ||
+        current.fenced ||
+        current.credential !== credential ||
+        current.sourceSalt !== binding.sourceSalt
+      )
         return false;
       params.assertCurrent();
       const result = await publishBeamMirrorV2({

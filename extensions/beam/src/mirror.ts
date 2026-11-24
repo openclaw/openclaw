@@ -798,6 +798,8 @@ export function createBeamMirrorRunner(params: {
       signal,
       assertCurrent,
       explicit: true,
+      confirmGeneration,
+      revalidate: () => authority.revalidate(),
     });
     if (!binding) throw new Error("Beam enrollment unavailable");
     if (binding.active || binding.fenced) return binding.describe();
@@ -960,7 +962,7 @@ export function registerBeamMirror(
         respond(false, undefined, {
           code: "UNAVAILABLE",
           message:
-            "Beam enrollment did not complete. Verify the selected local source, original receiver, publisher credential and any pending generation before retrying.",
+            "Beam enrollment did not complete. Verify the local source and original receiver. After token rotation, connect as the same publisher and repeat enrollment with its exact confirmGeneration.",
         });
       }
     },

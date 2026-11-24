@@ -158,7 +158,7 @@ export async function enrollBeamMirrorV2(p: Source & { requestId: string }): Pro
 
 type HeadResult =
   | { state: "conflict" }
-  | { state: "writable" | "released"; head: BeamMirrorV2Head };
+  | { state: "writable" | "released"; head: BeamMirrorV2Head; canRelease: boolean };
 
 async function readHead(p: Destination, url: URL): Promise<HeadResult> {
   const seen = await request(p, url.href + "/head", { method: "GET" });
@@ -169,20 +169,30 @@ async function readHead(p: Destination, url: URL): Promise<HeadResult> {
   if (seen.body.state === "legacy_unbound") return { state: "conflict" };
   if (seen.body.state !== "writable" && seen.body.state !== "released")
     throw new Error("Beam mirror receiver returned an unknown publication state");
-  return { state: seen.body.state, head: receipt(seen.body, p.beamId) };
+  return {
+    state: seen.body.state,
+    head: receipt(seen.body, p.beamId),
+    canRelease: seen.body.canRelease === true,
+  };
 }
 
 // Matching bytes identify a candidate for an explicit rebind. They cannot establish
 // which receiver accepted a lost create or grant the scheduler an active enrollment.
 export async function inspectBeamMirrorV2Enrollment(
-  p: Destination & { sha256: string },
+  p: Destination & { sha256: string; pendingSha256?: string },
 ): Promise<{ state: "observed"; head: BeamMirrorV2Head } | { state: "conflict" | "released" }> {
   if (!validDigest.test(p.sha256))
     throw new Error("Beam mirror enrollment requires the saved packet digest");
   const seen = await readHead(p, snapshotUrl(p.endpoint, p.beamId));
-  if (seen.state === "conflict" || seen.head.sha256 !== p.sha256) return { state: "conflict" };
+  if (
+    seen.state === "conflict" ||
+    (seen.head.sha256 !== p.sha256 && seen.head.sha256 !== p.pendingSha256)
+  )
+    return { state: "conflict" };
   if (seen.state === "released") return { state: "released" };
-  return { state: "observed", head: seen.head };
+  // Read access may be shared with other people. Only the original publisher
+  // has release authority on a writable generation.
+  return seen.canRelease ? { state: "observed", head: seen.head } : { state: "conflict" };
 }
 
 export async function publishBeamMirrorV2(
