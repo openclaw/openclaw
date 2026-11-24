@@ -585,10 +585,11 @@ if [ "$SCENARIO" = "release-update" ]; then
   node "$HARNESS_ROOT_DIR/scripts/e2e/lib/upgrade-survivor/release-fixture.mjs" \
     "$ROOT_DIR" "$PACKAGE_TGZ" "$UPGRADE_SCENARIO_STAGE"
   docker_e2e_build_or_reuse "$IMAGE_NAME" upgrade-survivor "$ROOT_DIR/scripts/e2e/Dockerfile" "$ROOT_DIR" "bare" "$SKIP_BUILD"
-  release_cases=(healthy crash)
-  if [ -n "${OPENCLAW_UPGRADE_SURVIVOR_RELEASE_CASE:-}" ]; then
-    release_cases=("$OPENCLAW_UPGRADE_SURVIVOR_RELEASE_CASE")
-  fi
+  case "${OPENCLAW_UPGRADE_SURVIVOR_RELEASE_CASE:-}" in
+    "") release_cases=(healthy crash) ;;
+    healthy|crash) release_cases=("$OPENCLAW_UPGRADE_SURVIVOR_RELEASE_CASE") ;;
+    *) echo "Unknown release survivor case" >&2; exit 1 ;;
+  esac
   for release_case in "${release_cases[@]}"; do
     mkdir -p "$ARTIFACT_DIR/$release_case"
     docker_e2e_run_with_harness \
