@@ -47,6 +47,28 @@ describe("docs Markdown rendering", () => {
     expect(parseFrontmatter(source)).toEqual({ data, content });
   });
 
+  it.each([
+    {
+      name: "unterminated frontmatter",
+      source: "---\ntitle: Example\n# Body\n",
+      content: "---\ntitle: Example\n# Body\n",
+    },
+    {
+      name: "delimiter followed by non-comment text",
+      source: "---\ntitle: Example\n--- not a comment\n# Body\n",
+      content: "---\ntitle: Example\n--- not a comment\n# Body\n",
+    },
+  ])("rejects $name through the public frontmatter parser", ({ source, content }) => {
+    expect(parseFrontmatter(source)).toEqual({ data: {}, content });
+  });
+
+  it("keeps a body line that looks like a delimiter in the content", () => {
+    expect(parseFrontmatter("---\ntitle: Example\n--- # end\n# Body\n\n---\nliteral\n")).toEqual({
+      data: { title: "Example" },
+      content: "# Body\n\n---\nliteral\n",
+    });
+  });
+
   it("preserves nested fence indentation with CRLF", () => {
     const body = '{\n  "features": {\n    "example": "<Tab title=\\"literal\\">"\n  }\n}';
     const yaml = "app:\n  scopes:\n    - chat:write\n  description: |\n    Nested content";
