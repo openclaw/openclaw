@@ -69,9 +69,10 @@ export async function requireGitHubPublicationUpdateUrl(
       : undefined;
   const url =
     binding?.url ??
+    // The receipt reader qualifies session custody. Match the checkout here because
+    // observation can also return a receipt from a linked publication task.
     (receipt &&
     "worktree_id" in receipt &&
-    receipt.session_id === session.sessionId &&
     receipt.worktree_id === worktree?.id &&
     receipt.branch === worktree.branch
       ? receipt.pull_request_url
