@@ -518,7 +518,13 @@ enum OnboardingSystemAgentResumeStore {
 @MainActor
 final class OnboardingController: NSObject, NSWindowDelegate {
     static let shared = OnboardingController()
-    static let windowStyleMask: NSWindow.StyleMask = [.titled, .closable, .resizable, .fullSizeContentView]
+    static let windowStyleMask: NSWindow.StyleMask = [
+        .titled,
+        .closable,
+        .miniaturizable,
+        .resizable,
+        .fullSizeContentView,
+    ]
     private var window: NSWindow?
     private var closeConfirmationPending = false
     var sheetPresentationWindow: NSWindow? {
@@ -550,12 +556,15 @@ final class OnboardingController: NSObject, NSWindowDelegate {
 
     func present(_ content: some View, replaceContent: Bool = true) {
         if let window {
-            if replaceContent {
+            // Reopening setup while a sign-in or install is in flight brings that
+            // attempt forward. A new view would cancel it before its browser returns.
+            if replaceContent, self.busyReason == nil {
                 let frame = window.frame
                 window.contentViewController = NSHostingController(rootView: content)
                 window.setFrame(frame, display: false)
             }
             DockIconManager.shared.temporarilyShowDock()
+            if window.isMiniaturized { AppActivation.shared.deminiaturize(window: window) }
             AppActivation.shared.makeKeyAndOrderFront(window: window)
             AppActivation.shared.activate()
             return

@@ -48,7 +48,7 @@ Model Setup opens the same picker and connection flow. Choose **Test & use** whe
 you want to verify a model and select it. Plugins that only support full setup
 keep their separate setup action.
 
-OpenClaw's browser callback pages follow your system's light or dark appearance. If a page says **Authorization received**, return to the terminal while OpenClaw finishes the exchange and saves the account. The terminal or Control UI reports when sign-in is complete.
+OpenClaw's browser callback pages follow your system's light or dark appearance. If a page says **Authorization received**, return to the terminal while OpenClaw finishes the exchange and saves the account. The terminal, Control UI, or macOS app reports when sign-in is complete. Returning to the Control UI or macOS app continues that same sign-in, including after you minimize and reopen its window; focusing the window again never starts another login. If you cancel the sign-in or switch Gateways first, a late browser result is ignored.
 
 ## The token sink (why it exists)
 

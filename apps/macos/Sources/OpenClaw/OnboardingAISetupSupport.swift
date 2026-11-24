@@ -10,6 +10,9 @@ extension OnboardingAISetupModel {
     /// alive long enough for approval plus the post-login inference probe.
     static let providerAuthRequestTimeoutMs: Double = 1_200_000
 
+    /// Matches the Control UI and CLI: one browser-callback read per second.
+    static let providerAuthCallbackPollNanoseconds: UInt64 = 1_000_000_000
+
     enum SetupIntent {
         case inspectOnly
         case resumePending
@@ -430,6 +433,27 @@ extension OnboardingAISetupModel {
         default: nil
         }
         return self.advanceProviderAuth(stepID: step.id, value: value)
+    }
+
+    /// An OAuth step that also accepts a pasted redirect, which its browser callback can finish.
+    static func awaitsBrowserCallback(_ step: WizardStep, option: AuthOption) -> Bool {
+        option.kind == "oauth" && wizardStepType(step) == "text" && step.externalurl != nil
+    }
+
+    /// Reads the same wizard without an answer until its browser callback moves the step,
+    /// so returning from the browser continues this attempt instead of starting another login.
+    func watchProviderAuthCallback(stepID: String) {
+        let attempt = self.authAttemptID
+        Task {
+            while true {
+                try? await Task.sleep(nanoseconds: Self.providerAuthCallbackPollNanoseconds)
+                // Cancel, a Gateway change, and every settled step retire this attempt.
+                guard attempt == self.authAttemptID, self.authStep?.id == stepID else { return }
+                // A submitted redirect or a pending cancellation owns the wizard meanwhile.
+                guard self.authRequestID == nil, self.providerAuthCancellation == nil else { continue }
+                await self.advanceProviderAuth(stepID: nil, value: nil, callbackStepID: stepID)?.value
+            }
+        }
     }
 
     func startProviderPrepare(_ option: PrepareOption) {

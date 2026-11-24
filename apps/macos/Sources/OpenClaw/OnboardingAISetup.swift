@@ -78,8 +78,8 @@ final class OnboardingAISetupModel {
     @ObservationIgnored private var detectionID: UUID?
     @ObservationIgnored private var activationWizardCompletion: CheckedContinuation<ActivateResult, Error>?
     @ObservationIgnored private var authSessionID: String?
-    @ObservationIgnored private var authAttemptID = UUID()
-    @ObservationIgnored private var authRequestID: UUID?
+    @ObservationIgnored private(set) var authAttemptID = UUID()
+    @ObservationIgnored private(set) var authRequestID: UUID?
     /// Only a just-completed provider flow may trust setupComplete without re-probing.
     @ObservationIgnored private var providerAuthReconciliationPending: ProviderAuthReconciliation?
 
@@ -1404,10 +1404,12 @@ extension OnboardingAISetupModel {
     }
 
     @discardableResult
-    func advanceProviderAuth(stepID: String?, value: AnyCodable?) -> Task<Void, Never>? {
+    func advanceProviderAuth(stepID: String?, value: AnyCodable?, callbackStepID: String? = nil) -> Task<Void, Never>? {
         guard let sessionID = authSessionID, let serverLease else { return nil }
-        self.authBusy = true
-        self.authError = nil
+        if callbackStepID == nil {
+            self.authBusy = true
+            self.authError = nil
+        }
         var params: [String: AnyCodable] = ["sessionId": AnyCodable(sessionID)]
         if let stepID {
             var answer: [String: AnyCodable] = ["stepId": AnyCodable(stepID)]
@@ -1451,6 +1453,8 @@ extension OnboardingAISetupModel {
                 }
                 guard token == self.attemptToken, authAttemptID == self.authAttemptID else { return }
                 let result = try JSONDecoder().decode(WizardNextResult.self, from: data)
+                let stepUnchanged = !result.done && result.step?.id == callbackStepID
+                if callbackStepID != nil, self.authRequestID != requestID || stepUnchanged { return }
                 self.applyAuthWizardResult(
                     done: result.done,
                     step: result.step,
@@ -1460,6 +1464,8 @@ extension OnboardingAISetupModel {
                     modelActivation: result.modelactivation,
                     activationRejection: result.activationrejection)
             } catch {
+                // A callback read only observes; Submit and Cancel own failure reconciliation.
+                guard callbackStepID == nil else { return }
                 // Admission already succeeded. A later callback's non-dispatch,
                 // auth, or TLS error cannot prove the original activation never started.
                 let failure: Error = self.activationWizardCompletion == nil
@@ -1536,7 +1542,8 @@ extension OnboardingAISetupModel {
             return
         }
         let validationError = !done && status == "running" && error?.isEmpty == false
-        let preserveEnteredValue = validationError && self.authStep?.id == step?.id
+        let sameStep = self.authStep?.id == step?.id
+        let preserveEnteredValue = validationError && sameStep
         if status == "error" || (done && error != nil) {
             self.retireProviderAuthSession()
             self.authError = Self.failure(
@@ -1601,6 +1608,8 @@ extension OnboardingAISetupModel {
         // download reports live instead of freezing on its first frame.
         if let step, wizardStepExecutor(step) == "gateway" {
             self.advanceProviderAuth(stepID: nil, value: nil)
+        } else if !sameStep, let step, Self.awaitsBrowserCallback(step, option: option) {
+            self.watchProviderAuthCallback(stepID: step.id)
         }
     }
 

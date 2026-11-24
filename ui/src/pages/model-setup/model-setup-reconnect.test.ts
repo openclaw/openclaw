@@ -1,6 +1,8 @@
 /* @vitest-environment jsdom */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { WizardNextParams } from "../../../../packages/gateway-protocol/src/schema/wizard.ts";
+import { WizardSession } from "../../../../src/wizard/session.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { SystemAgentSetupDetectResult } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
@@ -9,7 +11,9 @@ import { createAgentCapability } from "../../lib/agents/index.ts";
 import { sourceConfigSnapshot } from "../../lib/config/config-snapshot.test-support.ts";
 import { createRuntimeConfigCapability } from "../../lib/config/runtime-config-capability.ts";
 import { createApplicationContextProvider } from "../../test-helpers/application-context.ts";
+import { waitForFast } from "../../test-helpers/wait-for.ts";
 import {
+  activated,
   running,
   callsFor,
   authButton,
@@ -57,6 +61,19 @@ function createFixture() {
   return {
     context,
     request,
+    switchGateway: () => {
+      // Another Gateway (or credential) is a new connection revision and owner.
+      Object.assign(context.gateway, {
+        connectionRevision: context.gateway.connectionRevision + 1,
+      });
+      publishGatewaySnapshot({
+        ...connectedSnapshot,
+        hello: {
+          ...connectedSnapshot.hello,
+          auth: { ...connectedSnapshot.hello.auth, recoveryScope: "replacement-setup-owner" },
+        },
+      });
+    },
     setGatewayPhase: (phase: "connected" | "reconnecting") =>
       publishGatewaySnapshot({
         ...connectedSnapshot,
@@ -238,4 +255,148 @@ describe("ModelSetupPage detection ownership", () => {
       sessionId: (start[1] as { sessionId: string }).sessionId,
     });
   });
+});
+
+describe("ModelSetupPage browser sign-in return", () => {
+  const url = "https://auth.example.com/authorize?state=fixture";
+  let fixture: ReturnType<typeof createFixture>;
+  beforeEach(async () => {
+    fixture = createFixture();
+    await i18n.setLocale("en");
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    fixture.context.runtimeConfig.dispose();
+    document.body.replaceChildren();
+    vi.restoreAllMocks();
+  });
+
+  const signInOpenCalls = (open: { mock: { calls: unknown[][] } }) =>
+    open.mock.calls.filter(([target]) => target === url);
+
+  async function startSignIn() {
+    const page = await mountPage(fixture.context);
+    await waitForElement(page, '[data-auth-choice="provider-auth"]');
+    authButton(page, "provider-auth")!.click();
+    await waitForElement(page, ".wizard-sign-in");
+    return page;
+  }
+
+  it("continues the same attempt after the window hides, refocuses, and reconnects", async () => {
+    const open = vi.spyOn(window, "open").mockReturnValue(null);
+    const callback = createDeferred<void>();
+    const manual = new AbortController();
+    let session: WizardSession | undefined;
+    fixture.request.mockImplementation(async (method, params) => {
+      if (method === "openclaw.setup.auth.start") {
+        session = new WizardSession(async (prompter, _signal, active) => {
+          await prompter.openUrl?.(url);
+          void prompter
+            .text({ message: "Paste the redirect URL", signal: manual.signal })
+            .catch(() => {});
+          await callback.promise;
+          manual.abort();
+          active.setModelActivation({ modelRef: "fixture/oauth" });
+        });
+        return running;
+      }
+      if (method === "wizard.next") {
+        const answer = (params as WizardNextParams).answer;
+        if (answer) {
+          await session!.answer(answer.stepId, answer.value);
+        }
+        return session!.next();
+      }
+      if (method === "config.get") {
+        return sourceConfigSnapshot();
+      }
+      return method === "openclaw.setup.detect" ? detection : {};
+    });
+    try {
+      const page = await startSignIn();
+      expect(signInOpenCalls(open)).toHaveLength(1);
+
+      Object.defineProperty(document, "visibilityState", { configurable: true, value: "hidden" });
+      document.dispatchEvent(new Event("visibilitychange"));
+      fixture.setGatewayPhase("reconnecting");
+      await vi.advanceTimersByTimeAsync(3_000);
+      Object.defineProperty(document, "visibilityState", { configurable: true, value: "visible" });
+      document.dispatchEvent(new Event("visibilitychange"));
+      window.dispatchEvent(new Event("focus"));
+      fixture.setGatewayPhase("connected");
+      await waitForElement(page, ".wizard-sign-in");
+
+      callback.resolve();
+      await vi.advanceTimersByTimeAsync(1_000);
+      await waitForText(page, "Model verified");
+      expect(callsFor(fixture.request, "openclaw.setup.auth.start")).toHaveLength(1);
+      expect(callsFor(fixture.request, "wizard.cancel")).toHaveLength(0);
+      expect(callsFor(fixture.request, "openclaw.setup.activate.start")).toHaveLength(0);
+      expect(signInOpenCalls(open)).toHaveLength(1);
+    } finally {
+      Reflect.deleteProperty(document, "visibilityState");
+      callback.resolve();
+      manual.abort();
+      session?.cancel();
+      await session?.whenSettled();
+    }
+  });
+
+  it.each(["cancel", "switch"] as const)(
+    "ignores a late browser return after %s",
+    async (change) => {
+      vi.spyOn(window, "open").mockReturnValue(null);
+      const late = createDeferred<unknown>();
+      let holdNext = false;
+      fixture.request.mockImplementation(async (method) => {
+        if (method === "openclaw.setup.auth.start") {
+          return running;
+        }
+        if (method === "wizard.next") {
+          return holdNext
+            ? late.promise
+            : runningStep({
+                id: "redirect",
+                type: "text",
+                executor: "client",
+                message: "Paste the redirect URL",
+                externalUrl: url,
+              });
+        }
+        if (method === "wizard.cancel") {
+          return { status: "cancelled" };
+        }
+        if (method === "config.get") {
+          return sourceConfigSnapshot();
+        }
+        return method === "openclaw.setup.detect" ? detection : {};
+      });
+      const page = await startSignIn();
+      holdNext = true;
+      await vi.advanceTimersByTimeAsync(1_000);
+      // The step read plus one callback poll that is still waiting for its reply.
+      const pollCount = callsFor(fixture.request, "wizard.next").length;
+      expect(pollCount).toBe(2);
+
+      if (change === "cancel") {
+        page.querySelector<HTMLButtonElement>(".model-setup-wizard__close")!.click();
+      } else {
+        fixture.switchGateway();
+      }
+      await waitForFast(() => expect(page.querySelector("openclaw-modal-dialog")).toBeNull());
+      late.resolve(activated("fixture/previous-account"));
+      await vi.advanceTimersByTimeAsync(2_000);
+      await page.updateComplete;
+
+      expect(page.textContent).not.toContain("Model verified");
+      expect(page.textContent).not.toContain("fixture/previous-account");
+      expect(page.querySelector("openclaw-modal-dialog")).toBeNull();
+      expect(fixture.context.navigate).not.toHaveBeenCalled();
+      expect(callsFor(fixture.request, "wizard.next")).toHaveLength(pollCount);
+      expect(callsFor(fixture.request, "openclaw.setup.auth.start")).toHaveLength(1);
+      expect(callsFor(fixture.request, "openclaw.setup.activate.start")).toHaveLength(0);
+    },
+  );
 });

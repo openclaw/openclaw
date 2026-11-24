@@ -329,6 +329,36 @@ describe("ModelSetupWizardRunner", () => {
     expect(onTerminal).toHaveBeenCalledOnce();
   });
 
+  it("offers a restored browser sign-in as a link instead of opening another provider tab", async () => {
+    const open = vi.spyOn(window, "open").mockReturnValue(null);
+    const url = "https://auth.example.com/authorize?state=fixture";
+    const request = vi.fn(async (_method: string, _params?: unknown, _options?: unknown) => ({
+      done: false,
+      status: "running",
+      step: { id: "redirect", type: "text", message: "Paste the redirect URL", externalUrl: url },
+    }));
+    const client = { request } as unknown as GatewayBrowserClient;
+    const runner = createRunner({ getClient: () => client });
+    try {
+      runner.restore({ sessionId: "restored", authChoice: "openai", authKind: "oauth" }, vi.fn());
+      await runner.resume();
+      expect(request).toHaveBeenCalledExactlyOnceWith(
+        "wizard.next",
+        { sessionId: "restored" },
+        expect.objectContaining({ signal: expect.any(AbortSignal) }),
+      );
+      expect(runner.state).toMatchObject({
+        phase: "step",
+        externalAuthInput: true,
+        step: { externalUrl: url },
+      });
+      expect(open).not.toHaveBeenCalled();
+    } finally {
+      runner.close();
+      open.mockRestore();
+    }
+  });
+
   it("starts, advances an unbounded note step, and guards duplicate answers", async () => {
     let resolveDone: ((value: unknown) => void) | null = null;
     const request = vi.fn((method: string, _params?: unknown, _options?: unknown) => {

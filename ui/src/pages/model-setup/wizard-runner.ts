@@ -67,7 +67,8 @@ type WizardSession = {
   authChoice: string;
   authKind?: ProviderLoginOption["kind"];
   reservedWindow?: WindowProxy | null;
-  openedUrl?: string;
+  // `true`: a restored page already opened this sign-in before it reloaded.
+  openedUrl?: string | true;
   externalInputTimer?: ReturnType<typeof setTimeout>;
   externalInputRequest?: Promise<ModelSetupWizardCompletion | null>;
   admitted?: boolean;
@@ -161,6 +162,7 @@ export class ModelSetupWizardRunner {
       ...recovery,
       client,
       admitted: true,
+      openedUrl: true,
       retirementGeneration: this.retirementGeneration,
       abortController: new AbortController(),
       startMethod,
@@ -488,14 +490,13 @@ export class ModelSetupWizardRunner {
       return null;
     }
     const { client, sessionId, abortController, authChoice } = session;
-    const signal = abortController.signal;
     let nextAnswer = answer;
     let acceptsFirstResult = acceptResult;
     while (true) {
       const result = await client.request<WizardNextResult>(
         "wizard.next",
         { sessionId, ...(nextAnswer ? { answer: nextAnswer } : {}) },
-        { timeoutMs: MODEL_SETUP_WIZARD_NEXT_TIMEOUT_MS, signal },
+        { timeoutMs: MODEL_SETUP_WIZARD_NEXT_TIMEOUT_MS, signal: abortController.signal },
       );
       if (acceptsFirstResult && !acceptsFirstResult() && !result.done) {
         return null;
@@ -612,7 +613,9 @@ export class ModelSetupWizardRunner {
   }
 
   private openSignInUrl(session: WizardSession, url: string | undefined): void {
-    if (!url || session.openedUrl === url) {
+    // Opening a restored sign-in again would start a second browser login; the step
+    // offers its link instead.
+    if (!url || session.openedUrl === url || session.openedUrl === true) {
       return;
     }
     const safeUrl = resolveSafeExternalUrl(url, window.location.href);

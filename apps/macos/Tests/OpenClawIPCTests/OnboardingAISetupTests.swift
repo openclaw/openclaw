@@ -407,6 +407,30 @@ private func waitForAISetupRequests(
     return await recorder.snapshot()
 }
 
+private func oauthCallbackDetectResponse(id: String) -> Data {
+    Data(
+        """
+        {"type":"res","id":"\(id)","ok":true,"payload":{
+          "candidates":[],"manualProviders":[],"authOptions":[{
+            "id":"test-provider-login","label":"Test provider","kind":"oauth","featured":false}],
+          "configuredModel":null,"setupComplete":false}}
+        """.utf8
+    )
+}
+
+/// OAuth step that waits for the browser callback and also accepts a pasted redirect.
+private func oauthCallbackStepResponse(id: String, sessionID: String) -> Data {
+    Data(
+        """
+        {"type":"res","id":"\(id)","ok":true,"payload":{
+          "sessionId":"\(sessionID)","done":false,"status":"running",
+          "step":{"id":"redirect","type":"text","executor":"client",
+            "externalUrl":"https://auth.example.com/authorize?client_id=fixture",
+            "message":"Paste the redirect URL"}}}
+        """.utf8
+    )
+}
+
 private func wizardStartResponse(id: String, sessionID: String) -> Data {
     Data(
         #"{"type":"res","id":"\#(id)","ok":true,"payload":{"sessionId":"\#(sessionID)","done":false,"status":"running"}}"#
@@ -2398,6 +2422,111 @@ struct OnboardingAISetupTests {
         model.continueProviderAuth()
         await settleQueuedAISetupTasks()
         #expect(await (harness.recorder.snapshot()).methods.count == requestCount)
+        await harness.gateway.shutdown()
+    }
+
+    @Test func `browser callback continues the original OAuth attempt without a pasted redirect`() async throws {
+        let defaults = try #require(isolatedAISetupDefaults(prefix: "OnboardingProviderAuthCallbackTests"))
+        let detections = AISetupSocketGeneration()
+        let callbackReads = LockIsolated(0)
+        let url = try #require(URL(string: "ws://example.invalid"))
+        let harness = AISetupHarness(url: url) { _, request, _ in
+            switch request.method {
+            case "openclaw.setup.detect":
+                guard detections.claim() == 0 else {
+                    return persistedDetectedSetupResponse(id: request.id)
+                }
+                return oauthCallbackDetectResponse(id: request.id)
+            case "openclaw.setup.auth.start":
+                let sessionID = try #require(request.params["sessionId"] as? String)
+                return oauthCallbackStepResponse(id: request.id, sessionID: sessionID)
+            case "wizard.next":
+                #expect(request.params["answer"] == nil)
+                let sessionID = try #require(request.params["sessionId"] as? String)
+                // The first read sees the browser still open; the next one sees its callback.
+                let read = callbackReads.withValue { reads in
+                    reads += 1
+                    return reads
+                }
+                return read == 1
+                    ? oauthCallbackStepResponse(id: request.id, sessionID: sessionID)
+                    : wizardDoneResponse(id: request.id, sessionID: sessionID)
+            default:
+                Issue.record("Unexpected setup request: \(request.method)")
+                return successfulEmptyResponse(id: request.id)
+            }
+        }
+        let model = harness.model(defaults: defaults)
+
+        await model.detectConnections()
+        let option = try #require(model.authOptions.first { $0.id == "test-provider-login" })
+        model.startProviderWizard(option, kind: .auth)
+        try await TestWait.observed("provider auth step") {
+            model.authStep?.externalurl != nil
+        }
+        try await TestWait.observed("browser callback result") {
+            model.connected || model.authError != nil
+        }
+
+        #expect(model.authError == nil)
+        #expect(model.connected)
+        #expect(callbackReads.value == 2)
+        let methods = await harness.recorder.snapshot().methods
+        #expect(methods.filter { $0 == "openclaw.setup.auth.start" }.count == 1)
+        #expect(!methods.contains("wizard.cancel"))
+        #expect(await harness.recorder.snapshot().authChoices == ["test-provider-login"])
+        await harness.gateway.shutdown()
+    }
+
+    @Test(arguments: ["cancel", "gateway-change"])
+    func `late browser callback cannot settle a cancelled or replaced attempt`(change: String) async throws {
+        let defaults = try #require(isolatedAISetupDefaults(prefix: "OnboardingProviderAuthLateCallbackTests"))
+        let heldRead = LockIsolated<(task: GatewayTestWebSocketTask, id: String, sessionID: String)?>(nil)
+        let url = try #require(URL(string: "ws://example.invalid"))
+        let harness = AISetupHarness(url: url) { task, request, _ in
+            switch request.method {
+            case "openclaw.setup.detect":
+                return oauthCallbackDetectResponse(id: request.id)
+            case "openclaw.setup.auth.start":
+                let sessionID = try #require(request.params["sessionId"] as? String)
+                return oauthCallbackStepResponse(id: request.id, sessionID: sessionID)
+            case "wizard.next":
+                // Hold the callback read until the attempt was cancelled or replaced.
+                let sessionID = try #require(request.params["sessionId"] as? String)
+                let requestID = request.id
+                heldRead.withValue { $0 = (task, requestID, sessionID) }
+                return nil
+            case "wizard.cancel":
+                return Data(
+                    #"{"type":"res","id":"\#(request.id)","ok":true,"payload":{"status":"cancelled"}}"#.utf8
+                )
+            default:
+                Issue.record("Unexpected setup request: \(request.method)")
+                return successfulEmptyResponse(id: request.id)
+            }
+        }
+        let model = harness.model(defaults: defaults)
+
+        await model.detectConnections()
+        let option = try #require(model.authOptions.first { $0.id == "test-provider-login" })
+        model.startProviderWizard(option, kind: .auth)
+        try await TestWait.state("held callback read") { heldRead.value != nil }
+        if change == "cancel" {
+            await model.cancelProviderAuth()?.value
+        } else {
+            model.resetForGatewayChange()
+        }
+        // Retiring the attempt may still be releasing its Gateway session.
+        let followUps = { (methods: [String]) in methods.filter { $0 != "wizard.cancel" } }
+        let settled = await followUps(harness.recorder.snapshot().methods)
+        let read = try #require(heldRead.value)
+        read.task.emitReceiveSuccess(.data(wizardDoneResponse(id: read.id, sessionID: read.sessionID)))
+        await settleQueuedAISetupTasks()
+
+        #expect(!model.connected)
+        #expect(model.activeAuthOption == nil)
+        #expect(model.authStep == nil)
+        #expect(await followUps(harness.recorder.snapshot().methods) == settled)
         await harness.gateway.shutdown()
     }
 
