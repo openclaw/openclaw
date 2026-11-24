@@ -2,11 +2,11 @@ import { isDeepStrictEqual } from "node:util";
 import type { Result } from "@openclaw/normalization-core/result";
 import type { ErrorShape } from "../../packages/gateway-protocol/src/index.js";
 import type { SessionMentionInvitation } from "../config/sessions/session-sharing-authority.types.js";
+import type { GatewayOperatorRoleDefinition } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { readResidentUserProfileAliases } from "../state/user-profile-list.js";
 import type { CurrentUserProfileDisplay } from "./current-user-profile-display.js";
 import type { MentionInbox } from "./mention-inbox.contracts.js";
-import { resolveOperatorRolePolicyForProfile } from "./operator-role-policy.js";
 import type { GatewayClient } from "./server-methods/client-types.js";
 import { resolveSessionInvitationAccess } from "./session-member-access.js";
 
@@ -19,6 +19,10 @@ type InvitationTarget = Parameters<MentionInbox["prepareInvitation"]>[1] & {
 export function prepareHumanMentionInvitation(
   context: {
     getRuntimeConfig: () => OpenClawConfig;
+    readRecipientPolicy: (
+      profileId: string,
+      cfg: OpenClawConfig,
+    ) => GatewayOperatorRoleDefinition | undefined;
     isActive: () => boolean;
     readProfile: (profileId: string) => MentionProfile | undefined;
     identify: (
@@ -51,7 +55,7 @@ export function prepareHumanMentionInvitation(
       if (!profile) {
         throw new Error("Mention recipient changed; select the recipients again");
       }
-      const policy = resolveOperatorRolePolicyForProfile(profile.profileId, cfg);
+      const policy = context.readRecipientPolicy(profile.profileId, cfg);
       const access = resolveSessionInvitationAccess(policy, mention.access);
       if (!access.ok) {
         throw new Error(access.error);

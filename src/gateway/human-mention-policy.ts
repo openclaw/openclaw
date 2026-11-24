@@ -1,4 +1,3 @@
-import { isDeepStrictEqual } from "node:util";
 import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import {
@@ -348,6 +347,7 @@ export function createHumanMentionPolicy(params: {
       return prepareHumanMentionInvitation(
         {
           getRuntimeConfig: params.getRuntimeConfig,
+          readRecipientPolicy: resolveOperatorRolePolicyForProfile,
           isActive: () => active,
           readProfile,
           identify,

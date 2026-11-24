@@ -461,7 +461,7 @@ export async function resolveSessionMutationAuthorizationAsync(
           participationRequired: undefined,
           assertInvocationCurrent: composeSessionSourceAssertion([
             params.assertInvocationCurrent,
-            participantRunAuthority.assertCurrent,
+            () => participantRunAuthority.signal?.throwIfAborted(),
           ]),
         };
       }

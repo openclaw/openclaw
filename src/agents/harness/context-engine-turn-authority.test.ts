@@ -310,7 +310,7 @@ it.each([
           }
           if (turnMaintenanceMode === "background") {
             await completion;
-            expect(() => authority?.assertCurrent()).not.toThrow();
+            expect(() => authority?.retain?.()?.()).not.toThrow();
           }
           finish.resolve();
           await completion;
@@ -318,7 +318,7 @@ it.each([
           await Promise.all(lease.deferDisposalUntil.mock.calls.map(([promise]) => promise));
           expect(settledCeiling?.permission).toBe("guarded");
           expect(participationAllowsTool(settledCeiling!, "exec")).toBe(false);
-          expect(() => authority?.assertCurrent()).toThrow(/closed|no longer active|released/);
+          expect(() => authority?.retain?.()).toThrow(/closed|no longer active|released/);
           const ordinary = maintain.mock.calls.find(
             ([call]) => call.sessionId === trigger.sessionId,
           )![0];
@@ -345,7 +345,6 @@ it.each(["admission", "recorder"] as const)(
       canonicalIdentity: null,
       profileId: "ordinary-owner",
       scopes: ["operator.admin"],
-      assertCurrent() {},
     });
     const preparation = prepareSystemAgentRunAdmission(
       {},

@@ -46,7 +46,6 @@ export async function prepareSessionPrincipalRunAuthority(
     return {
       authority: createAdmittedRunOperatorAuthority({
         ...original,
-        assertCurrent: source.assertCurrent,
         signal: source.signal,
       }),
       release: source.release,
@@ -82,7 +81,7 @@ export function resolveParticipantRunTarget(
   target: import("./session-sharing-policy.js").SessionSharingTarget | null,
 ): "source" | "child" | "publication" | undefined {
   const authority = params.participantRunAuthority;
-  authority?.assertCurrent();
+  authority?.signal?.throwIfAborted();
   const ceiling = authority?.participationCeiling;
   if (!ceiling?.source || !target || target.agentId !== ceiling.source.agentId) {
     return undefined;

@@ -54,7 +54,7 @@ export async function prepareSessionDelegatedOperatorAuthority(params: {
       { authority: params.authority, release: () => releaseOriginal?.() },
       {
         participationAuthority: restored.authority,
-        assertCurrent: restored.authority.assertCurrent,
+        assertCurrent: () => restored.authority.signal?.throwIfAborted(),
         signal: restored.authority.signal,
         release: restored.release,
       },

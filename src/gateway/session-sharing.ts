@@ -278,7 +278,9 @@ export function resolveSessionMutationAuthorization(request: SessionMutationAuth
   const ownSessionProfileId = ownProfile.profileId;
   const requestedCreateKey = readSessionSharingStringParam(params.requestParams, "key");
   const permitsGeneratedSession = params.method === "sessions.create" && !requestedCreateKey;
-  const targetResolution = resolveRequiredSessionMutationTargets(params, talkTargets);
+  const targetResolution = resolveRequiredSessionMutationTargets(params, talkTargets, () =>
+    preparedPolicy(getPolicyConfig()),
+  );
   if (targetResolution.error) {
     return { error: targetResolution.error };
   }

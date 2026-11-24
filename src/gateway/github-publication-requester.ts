@@ -35,7 +35,11 @@ import {
   OpenClawIdPrincipalChangedError,
   prepareOpenClawIdTunnelPrincipal,
 } from "./openclaw-id/tunnel-principal.js";
-import { resolveGatewayOperatorRoleActor } from "./operator-role-policy.js";
+import { operatorRoleSubject } from "./operator-role-enforcement.js";
+import {
+  resolveGatewayOperatorRoleActor,
+  resolveOperatorRolePolicyForAssignment,
+} from "./operator-role-policy.js";
 import { prepareGatewayOperatorRunAuthority } from "./operator-run-authority.js";
 import { repositoryDispatchCredentialReader } from "./repository-dispatch.js";
 import type { GatewayRequestHandlerOptions } from "./server-methods/types.js";
@@ -315,6 +319,14 @@ export async function prepareGitHubPublicationRequesterV2(
       session,
       options.context.getCommittedRuntimeConfig ?? options.context.getRuntimeConfig,
       identity,
+      (profile, config) =>
+        resolveOperatorRolePolicyForAssignment(
+          profile.profileId,
+          profile.assignedRole,
+          config,
+          profile.githubLogin ?? null,
+          operatorRoleSubject(profile),
+        ),
       sessionFacts,
       undefined,
       participationFacts,
@@ -582,6 +594,14 @@ export async function restoreGitHubPublicationRequester(
       session,
       getCommittedRuntimeConfig,
       identity,
+      (profile, config) =>
+        resolveOperatorRolePolicyForAssignment(
+          profile.profileId,
+          profile.assignedRole,
+          config,
+          profile.githubLogin ?? null,
+          operatorRoleSubject(profile),
+        ),
       sessionFacts,
       originFacts,
       participationFacts,

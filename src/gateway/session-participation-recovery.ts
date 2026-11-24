@@ -24,7 +24,7 @@ export async function prepareRecoveredParticipation(params: {
     sessionId: retained.source.sessionId,
     participationCeiling: retained,
     recoveredOperatorAuthority: authority,
-    assertCurrent: authority.assertCurrent,
+    assertCurrent: () => authority.signal?.throwIfAborted(),
   });
   const signal = access.signal;
   const onRevoked = () => revoke(signal?.reason);

@@ -274,7 +274,6 @@ describe("dispatchReplyFromConfig reply hook scope", () => {
                 canonicalIdentity: null,
                 profileId: "participant",
                 scopes: [],
-                assertCurrent() {},
                 participationCeiling: {
                   kind: "send",
                   profileId: "participant",

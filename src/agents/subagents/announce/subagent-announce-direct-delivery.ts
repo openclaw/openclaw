@@ -122,7 +122,7 @@ async function sendSubagentAnnounceDirectlyBound(
       getPluginRuntimeGatewayRequestScope()?.client?.internal?.operatorRunAuthority;
     const participating = operatorAuthority?.participationCeiling !== undefined;
     if (participating) {
-      operatorAuthority.assertCurrent();
+      operatorAuthority.signal?.throwIfAborted();
     }
     const requesterSessionId = requesterEntry?.sessionId;
     const requesterLifecycleRevision = requesterEntry?.lifecycleRevision;

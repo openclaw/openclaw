@@ -15,7 +15,6 @@ it("retains participant identity for delegated reads but refuses authority mutat
     canonicalIdentity: null,
     profileId,
     scopes: ["operator.admin"],
-    assertCurrent() {},
     participationCeiling: {
       kind: "send",
       profileId,
@@ -89,7 +88,6 @@ it("retains participant identity for delegated reads but refuses authority mutat
             canonicalIdentity: null,
             profileId: selected,
             scopes: ["operator.admin"],
-            assertCurrent() {},
           });
     await withGatewayToolCallerIdentity(
       {

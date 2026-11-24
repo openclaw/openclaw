@@ -365,7 +365,6 @@ it.each(["full", null] as const)(
         canonicalIdentity: null,
         profileId: "guest",
         scopes: [],
-        assertCurrent() {},
         participationCeiling,
       }),
     );

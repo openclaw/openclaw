@@ -21,7 +21,6 @@ it("keeps inherited invocation custody through retention and authorized incarnat
     canonicalIdentity: null,
     profileId: target.profileId,
     scopes: ["operator.sessions.read"],
-    assertCurrent() {},
   });
   const captured = await prepareGatewayOperatorRunAuthority({
     client: {
@@ -58,7 +57,7 @@ it("keeps inherited invocation custody through retention and authorized incarnat
     present: false,
   });
   expect(captured?.authority.signal?.aborted).toBe(true);
-  expect(() => captured?.authority.assertCurrent()).toThrow();
+  expect(() => captured?.authority.signal?.throwIfAborted()).toThrow();
   lifetime.followIncarnation("after", "reinvited");
   expect(lifetime.signal.aborted).toBe(true);
   releaseRetained?.();
@@ -71,7 +70,6 @@ it("participant Stop follows the original profile and exact target, never a matc
     canonicalIdentity: null,
     profileId: "participant",
     scopes: [],
-    assertCurrent() {},
   });
   const requester = {
     participationOnly: true,

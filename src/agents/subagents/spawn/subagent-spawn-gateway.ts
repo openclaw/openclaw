@@ -92,7 +92,7 @@ export function bindSubagentSpawnOperatorAuthority({
             operatorRunAuthority: operatorAuthority,
             scopes: operatorAuthority.scopes,
             signal: operatorAuthority.signal ?? AbortSignal.any([]),
-            assertCurrent: operatorAuthority.assertCurrent,
+            assertCurrent: () => operatorAuthority.signal?.throwIfAborted(),
           },
           () =>
             withGatewayToolOperatorContinuation(

@@ -136,7 +136,7 @@ it("restores every child turn from its original invitation and accepts reinvitat
       present: false,
     });
     expect(second.authority.signal?.aborted).toBe(true);
-    expect(() => second.authority.assertCurrent()).toThrow();
+    expect(() => second.authority.signal?.throwIfAborted()).toThrow();
     await expect(f.prepare()).rejects.toThrow();
     second.release();
     removeSessionMember(f.source, f.profileId);

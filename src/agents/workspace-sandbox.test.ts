@@ -140,7 +140,6 @@ it("uses only admitted participation authority for the original root and permiss
       canonicalIdentity: null,
       profileId: "guest",
       scopes: [],
-      assertCurrent() {},
       participationCeiling: {
         kind: "send",
         profileId: "guest",

@@ -27,7 +27,7 @@ export function resolveParticipationSpawnError(
   if (!ceiling) {
     return undefined;
   }
-  authority.assertCurrent();
+  authority.signal?.throwIfAborted();
   const placement = request.placement;
   const localPlacement =
     placement === undefined ||

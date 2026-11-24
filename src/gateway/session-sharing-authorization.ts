@@ -39,10 +39,11 @@ import {
   type SessionSharingTarget,
 } from "./session-sharing-policy.js";
 import { captureSessionMutationRouting } from "./session-sharing-preparation.js";
-import type {
-  createSessionSharingConsumption,
-  PreparedMutationSharing,
-  PreparedSessionSharingProfiles,
+import {
+  prepareSessionSharing,
+  type createSessionSharingConsumption,
+  type PreparedMutationSharing,
+  type PreparedSessionSharingProfiles,
 } from "./session-sharing-read.js";
 import {
   resolveChatSendAuthorizationParams,
@@ -503,11 +504,25 @@ export function resolveSessionMutationWriteRoute(
 export function resolveRequiredSessionMutationTargets(
   params: SessionMutationAuthorizationParams,
   talkTargets: SessionMutationTarget[] | undefined,
+  readPolicy: () => ReturnType<typeof prepareSessionSharing> | undefined,
 ): { targets?: SessionMutationTarget[]; error: ErrorShape | null } {
   const targetRefs =
     talkTargets ??
     resolveSessionMutationTargets({
       participationRequired: params.participationRequired,
+      hasInvitedAccessCeiling:
+        (params.method === "session.typing" || params.method === "session.suggestions.add") &&
+        params.sessionScope === "operator.sessions.write" &&
+        Boolean(
+          (
+            readPolicy() ??
+            prepareSessionSharing({
+              cfg:
+                params.context.getCommittedRuntimeConfig?.() ?? params.context.getRuntimeConfig(),
+              client: params.client,
+            })
+          ).invitedAccessCeiling,
+        ),
       sessionScope: params.sessionScope,
       client: params.client,
       method: params.method,

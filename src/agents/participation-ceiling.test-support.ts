@@ -27,7 +27,6 @@ export function createParticipationTestAuthority(
     canonicalIdentity: null,
     profileId: ceiling.profileId,
     scopes: [...scopes],
-    assertCurrent() {},
     participationCeiling: bound,
     recoverySnapshot: expectDefined(
       normalizeGatewayOperatorRecoverySnapshot({

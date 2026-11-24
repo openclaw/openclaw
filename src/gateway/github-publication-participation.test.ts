@@ -290,7 +290,7 @@ it("binds inherited participant callers and task handoffs to their exact target"
       operatorRoleActor: { kind: "system" },
       scopes: [...authority.scopes],
       operatorRunAuthority: authority,
-      agentToolCaller: { ...target, assertCurrent: authority.assertCurrent },
+      agentToolCaller: { ...target, assertCurrent: () => authority.signal?.throwIfAborted() },
     });
     const current = await prepareGitHubPublicationRequesterV2({ client, context }, target);
     onTestFinished(current.release);
@@ -374,7 +374,7 @@ it.each([false, true])(
       agentToolCaller: {
         agentId: f.session.agentId,
         sessionKey: f.session.sessionKey,
-        assertCurrent: operatorAuthority.assertCurrent,
+        assertCurrent: () => operatorAuthority.signal?.throwIfAborted(),
       },
     });
     const rpc = async (method: string, params: Record<string, unknown>) => {

@@ -11,6 +11,7 @@ import {
   matchesSessionParticipationSource,
   matchesSessionParticipationTarget,
 } from "../config/sessions/session-participation-source.js";
+import type { GatewayOperatorRoleDefinition } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { GatewayOperatorAccessUnavailableError } from "../infra/operator-authority-error.js";
 import { intersectOperatorScopes, roleScopesAllow } from "../shared/operator-scope-compat.js";
@@ -32,8 +33,6 @@ import {
   GatewayOperatorAccessDeniedError,
   resolveGatewayOperatorAccessAuthority,
 } from "./operator-access-policy.js";
-import { operatorRoleSubject } from "./operator-role-enforcement.js";
-import { resolveOperatorRolePolicyForAssignment } from "./operator-role-policy.js";
 import { createSyntheticPluginRuntimeClient } from "./server-plugin-runtime-client.js";
 import { prepareSessionCreatorProfile } from "./session-creator.js";
 import { resolveSessionMemberAccess } from "./session-member-access.js";
@@ -101,7 +100,7 @@ function assertPublicationParticipation(
   session: PublicationSession,
   config: OpenClawConfig,
   current: { profile: UserProfileAccessFacts; aliases: ReadonlySet<string> } | undefined,
-  role: ReturnType<typeof resolveOperatorRolePolicyForAssignment>,
+  role: GatewayOperatorRoleDefinition | undefined,
   participationFacts: PreparedPublicationSession | undefined,
 ) {
   const client = createSyntheticPluginRuntimeClient({
@@ -168,6 +167,10 @@ export function prepareRequesterPolicy(
   session: PublicationSession,
   getCommittedRuntimeConfig: () => OpenClawConfig,
   identity: PreparedProfileIdentity | undefined,
+  readRole: (
+    profile: UserProfileAccessFacts,
+    cfg: OpenClawConfig,
+  ) => GatewayOperatorRoleDefinition | undefined,
   sessionFacts: PreparedPublicationSession | undefined,
   originFacts?: PreparedPublicationSession,
   participationFacts?: PreparedPublicationSession,
@@ -203,15 +206,7 @@ export function prepareRequesterPolicy(
     throw new GitHubPublicationRequesterUnavailableError();
   }
   const role = openclawIdSubjectRolePolicy(principal, () =>
-    current
-      ? resolveOperatorRolePolicyForAssignment(
-          current.profile.profileId,
-          current.profile.assignedRole,
-          config,
-          current.profile.githubLogin ?? null,
-          operatorRoleSubject(current.profile),
-        )
-      : undefined,
+    current ? readRole(current.profile, config) : undefined,
   );
   const scopes = role ? intersectOperatorScopes(snapshot.scopes, role.scopes) : snapshot.scopes;
   if (

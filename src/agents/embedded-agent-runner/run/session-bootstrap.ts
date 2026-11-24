@@ -515,7 +515,7 @@ export async function assertAgentHarnessRunAdmission(
       if (!authority?.participationCeiling?.source) {
         throw new Error("Participant child requires current original-source admission.");
       }
-      authority.assertCurrent();
+      authority.signal?.throwIfAborted();
       intersectParticipationCeilings(childCeiling, authority.participationCeiling);
     }
     const admissionError = resolveAgentHarnessRunAdmissionError({

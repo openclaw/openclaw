@@ -95,7 +95,6 @@ export function registerCompletedFollowupAuthorityTests({
           participationCeiling: restriction,
           source,
           invocation,
-          assertCurrent() {},
         });
         const run = <T>(work: () => T): T => {
           retained(runId);
@@ -105,7 +104,7 @@ export function registerCompletedFollowupAuthorityTests({
           operatorAuthority: authority,
           scopes: ["operator.write"],
           signal: new AbortController().signal,
-          assertCurrent: authority.assertCurrent,
+          assertCurrent: () => authority.signal?.throwIfAborted(),
           release() {},
           run,
           runWithRequester: run,

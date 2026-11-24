@@ -142,7 +142,6 @@ describe("controller mailbox scheduling", () => {
       canonicalIdentity: null,
       profileId: "guest",
       scopes: [],
-      assertCurrent() {},
       participationCeiling: {
         ...ceiling,
         tools: ["read"],

@@ -595,7 +595,6 @@ it("refuses a participating CLI fallback before launching its backend", async ()
     canonicalIdentity: null,
     profileId: "guest",
     scopes: [],
-    assertCurrent() {},
     participationCeiling: {
       kind: "send",
       profileId: "guest",

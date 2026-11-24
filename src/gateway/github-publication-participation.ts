@@ -16,7 +16,7 @@ export function readParticipantPublicationAuthority(method: string, params: unkn
     return undefined;
   }
   assertAdmittedRunOperatorAuthority(authority);
-  authority.assertCurrent();
+  authority.signal?.throwIfAborted();
   const request = asOptionalRecord(params);
   const observation = [
     "sessions.github.readiness",

@@ -9,7 +9,6 @@ import { intersectParticipationCeilings } from "../agents/participation-ceiling.
 import { composeSessionSourceAssertion } from "../config/sessions/session-source-authority.js";
 import type { ExecPolicyCeiling } from "../infra/exec-policy.js";
 import { intersectOperatorScopes } from "../shared/operator-scope-compat.js";
-import { bindGatewayDeviceRevocation } from "./device-revocation.js";
 
 /** Retain a recovered source and its new exact invocation restriction as one producer. */
 export function retainGatewayOperatorInvocation(
@@ -37,7 +36,7 @@ export function retainGatewayOperatorInvocation(
     };
   };
   const assertCurrent = composeSessionSourceAssertion(
-    [captured.authority.assertCurrent, invocation.assertCurrent],
+    [() => captured.authority.signal?.throwIfAborted(), invocation.assertCurrent],
     (assertSources) => {
       if (!references) {
         throw new Error("Operator invocation was released");
@@ -47,6 +46,7 @@ export function retainGatewayOperatorInvocation(
     },
     { synchronousCheck: true },
   );
+  assertCurrent();
   const signals = [captured.authority.signal, invocation.signal].filter(
     (signal): signal is AbortSignal => signal !== undefined,
   );
@@ -66,7 +66,6 @@ export function retainGatewayOperatorInvocation(
     invocation,
     scopes,
     participationCeiling,
-    assertCurrent,
     signal: AbortSignal.any(signals),
     get modelPolicy() {
       return invocation.participationAuthority
@@ -82,7 +81,6 @@ export function retainGatewayOperatorInvocation(
       return releaseHold();
     },
   });
-  bindGatewayDeviceRevocation(authority.assertCurrent, captured.authority.assertCurrent);
   return { authority, release: releaseHold() };
 }
 
@@ -91,7 +89,7 @@ export function deriveGatewayOperatorAuthorityForDelegation(
   authority: AdmittedRunOperatorAuthority,
   restrictions: { permission?: SessionPermissionMode; execPolicy?: ExecPolicyCeiling },
 ): AdmittedRunOperatorAuthority {
-  authority.assertCurrent();
+  authority.signal?.throwIfAborted();
   const ceiling = authority.participationCeiling;
   if (!ceiling) {
     return authority;

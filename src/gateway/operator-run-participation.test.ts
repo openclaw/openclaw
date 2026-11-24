@@ -41,7 +41,6 @@ it("captures a principal-ingress participant with the same strict durable dialec
         profileId: profile.id,
         scopes: ["operator.sessions.read"],
         gatewayAccessGrant: null,
-        assertCurrent() {},
         participationCeiling: { ...bound, profileId: profile.id },
       });
       const snapshot = await captureGatewayOperatorRecoverySnapshot({
@@ -186,7 +185,6 @@ it("narrows same-role invitation fields on recovery without widening retained wo
             canonicalIdentity: null,
             profileId: "different-admin",
             scopes: ["operator.admin"],
-            assertCurrent() {},
           }),
         });
         expect(child?.authority.profileId).toBe(fixture.snapshot.profileId);
@@ -205,7 +203,6 @@ it("narrows same-role invitation fields on recovery without widening retained wo
         fixture.setConfig(narrow);
         publishOperatorRoleConfigChange(fixture.context);
         expect(original.authority.signal?.aborted).toBe(false);
-        expect(original.authority.assertCurrent).not.toThrow();
         const restricted = await restore();
         try {
           expect(restricted.authority.participationCeiling?.permission).toBe("read-only");
@@ -244,9 +241,7 @@ it("narrows same-role invitation fields on recovery without widening retained wo
           restricted.release();
         }
         await patchSessionEntryCore(target, () => ({ sessionRoot: "/different-invitation-root" }));
-        expect(original.authority.assertCurrent).toThrow(
-          "Session is unavailable for this principal.",
-        );
+        await expect(restore()).rejects.toThrow("Session is unavailable for this principal.");
       } finally {
         original.release();
       }

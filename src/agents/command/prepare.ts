@@ -266,7 +266,7 @@ export async function prepareAgentCommandExecution(
   });
   const assertPreparationCurrent = () => {
     assertInitialPreparationCurrent();
-    participation?.authority.assertCurrent();
+    participation?.authority.signal?.throwIfAborted();
   };
   try {
     if (participation) {
@@ -277,7 +277,7 @@ export async function prepareAgentCommandExecution(
         operatorAuthority: source,
         assertSourceCurrent: () => {
           previousAssertion?.();
-          source.assertCurrent();
+          source.signal?.throwIfAborted();
         },
         abortSignal: AbortSignal.any(
           [commandOpts.abortSignal, source.signal].filter((signal): signal is AbortSignal =>

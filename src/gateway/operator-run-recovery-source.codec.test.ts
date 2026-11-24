@@ -174,7 +174,6 @@ describe("shared operator recovery dialect", () => {
         canonicalIdentity: null,
         profileId: "operator",
         scopes: ["operator.admin"],
-        assertCurrent() {},
         recoverySnapshot,
         participationCeiling: { ...ceiling, tools: ["x".repeat(65_536)] },
       });
@@ -187,7 +186,6 @@ describe("shared operator recovery dialect", () => {
       canonicalIdentity: null,
       profileId: "operator",
       scopes: ["operator.admin"],
-      assertCurrent() {},
     });
     expect(
       captureScheduledOperatorSource({ authority, agentId: "main", sourceRunId: "run" }),

@@ -486,7 +486,6 @@ it("queues participant completion as a capped new turn instead of steering an ac
     profileId: ceiling.profileId,
     scopes: ["operator.write"],
     participationCeiling: { ...ceiling, permission: "guarded" },
-    assertCurrent() {},
   });
   await withPluginRuntimeGatewayRequestScope(
     {

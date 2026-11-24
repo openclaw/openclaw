@@ -75,7 +75,7 @@ it("admits main-written ordinary recovery, queued input, and cron state after up
     context.cron = service.cron;
     const expectOrdinaryOwner = (authority: AdmittedRunOperatorAuthority | undefined) => {
       expect(authority).toBeDefined();
-      authority!.assertCurrent();
+      authority!.signal?.throwIfAborted();
       expect(authority!.profileId).toBe(fixture.profileId);
       expect(authority!.scopes).toEqual(["operator.admin"]);
       expect(authority!.participationCeiling).toBeUndefined();
