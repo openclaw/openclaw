@@ -71,9 +71,10 @@ it("shares ordered sidebar pins with session RPCs, not rail-only shortcuts, lega
       },
     );
     const snoozed = key("asleep");
+    const wakeAt = Date.now() + 86_400_000;
     replaceSessionEntrySync(
       { agentId: "main", sessionKey: snoozed },
-      { sessionId: snoozed, updatedAt: 0, snoozedUntil: Date.now() + 86_400_000 },
+      { sessionId: snoozed, updatedAt: 0, snoozedUntil: wakeAt },
     );
     await initializeSessionReadContext(context);
     async function rpc(client: GatewayClient, method: string, params: Record<string, unknown>) {
@@ -105,10 +106,31 @@ it("shares ordered sidebar pins with session RPCs, not rail-only shortcuts, lega
       `session:${c}`,
       `session:${nested}`,
     ];
-    await rpc(alice, "users.prefs.set", { entries: { [PREF]: shortcuts } });
-    await rpc(bob, "users.prefs.set", { entries: { [PREF]: [`session:${a}`] } });
     const list = (client: GatewayClient, params: Record<string, unknown>) =>
       rpc(client, "sessions.list", { agentId: "main", ...params });
+    await rpc(alice, "users.prefs.set", { entries: { [PREF]: [`session:${snoozed}`] } });
+    {
+      // The first post-wake read has no future deadline. Rewinding the clock must still
+      // evict both the pinned filter and the independently warmed first ordinary page.
+      using clock = vi.spyOn(Date, "now");
+      for (const [now, awake] of [
+        [wakeAt + 1, true],
+        [wakeAt - 1, false],
+        [wakeAt, true],
+      ] as const) {
+        clock.mockReturnValue(now);
+        const pins = await list(alice, { pinned: true, limit: 1 });
+        const first = await list(alice, { limit: 1 });
+        expect([
+          pins.totalCount,
+          pins.sessions.map((row: { key: string }) => row.key),
+          first.sessions[0].key,
+          first.sessions[0].pinned,
+        ]).toEqual(awake ? [1, [snoozed], snoozed, true] : [0, [], nested, false]);
+      }
+    }
+    await rpc(alice, "users.prefs.set", { entries: { [PREF]: shortcuts } });
+    await rpc(bob, "users.prefs.set", { entries: { [PREF]: [`session:${a}`] } });
     // A restricted browser owns its layout locally. Select ordinary recency before
     // each cutoff, not a profile-ranked page that the renderer can no longer repair.
     const reader = { ...alice, connect: { ...alice.connect, scopes: ["operator.read"] } };
