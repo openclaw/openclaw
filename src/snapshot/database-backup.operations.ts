@@ -444,9 +444,9 @@ export async function clonePostgresUpgradeInWorker(params: {
       anchor,
       descriptor: {
         ...descriptor,
-        postgresPostData: (namespace) =>
-          `${descriptor.postgresPostData?.(namespace) ?? ""}\n;\n` +
-          postgresCopyAclSql(client, anchor.namespace, namespace),
+        postgresPostData: (destinationNamespace) =>
+          `${descriptor.postgresPostData?.(destinationNamespace) ?? ""}\n;\n` +
+          postgresCopyAclSql(client, anchor.namespace, destinationNamespace),
       },
     });
     try {
