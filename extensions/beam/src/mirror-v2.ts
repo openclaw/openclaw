@@ -10,7 +10,7 @@ import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { parseBeamPacket } from "../packet-contract/packet-v2.generated.js";
 import { BEAM_MAX_BODY_BYTES, BEAM_RETENTION_MS } from "./types.js";
 
-export type BeamMirrorV2Head = { generation: string; revision: string; sha256: string };
+export type BeamMirrorV2Head = { publicationId: string; revision: string; sha256: string };
 export type BeamMirrorV2Intent = {
   requestId: string;
   sha256: string;
@@ -33,7 +33,7 @@ type Outcome = { state: "published"; head: BeamMirrorV2Head } | { state: "releas
 const digest = (raw: Uint8Array) => "sha256:" + createHash("sha256").update(raw).digest("hex");
 const validDigest = /^sha256:[a-f0-9]{64}$/;
 const validRevision = /^"[^"\s]{1,128}"$/;
-const validGeneration = /^[A-Za-z0-9_-][A-Za-z0-9._~-]{0,255}$/;
+const validPublicationId = /^[A-Za-z0-9_-][A-Za-z0-9._~-]{0,255}$/;
 
 export function prepareBeamMirrorV2Intent(
   raw: Uint8Array,
@@ -71,7 +71,7 @@ function receipt(value: unknown, beamId: string): BeamMirrorV2Head {
     !isRecord(value) ||
     value.beamId !== beamId ||
     typeof value.publicationId !== "string" ||
-    !validGeneration.test(value.publicationId) ||
+    !validPublicationId.test(value.publicationId) ||
     typeof value.revision !== "string" ||
     !validRevision.test(value.revision) ||
     typeof value.digest !== "string" ||
@@ -79,7 +79,7 @@ function receipt(value: unknown, beamId: string): BeamMirrorV2Head {
   ) {
     throw new Error("Beam mirror receiver returned an invalid publication receipt");
   }
-  return { generation: value.publicationId, revision: value.revision, sha256: value.digest };
+  return { publicationId: value.publicationId, revision: value.revision, sha256: value.digest };
 }
 
 // Only the enrolled receiver origin can acknowledge an operation. Recheck live
@@ -205,7 +205,7 @@ export async function publishBeamMirrorV2(
     !validRequestId.test(intent.requestId) ||
     !Number.isSafeInteger(intent.createdAt) ||
     !intent.prior ||
-    !validGeneration.test(intent.prior.generation) ||
+    !validPublicationId.test(intent.prior.publicationId) ||
     !validRevision.test(intent.prior.revision) ||
     !validDigest.test(intent.prior.sha256)
   ) {
@@ -216,7 +216,7 @@ export async function publishBeamMirrorV2(
   if (age < 0 || age >= BEAM_RETENTION_MS) return { state: "conflict" };
   const url = snapshotUrl(p.endpoint, beamId);
   const seen = await readHead(p, url);
-  if (seen.state === "conflict" || seen.head.generation !== intent.prior.generation)
+  if (seen.state === "conflict" || seen.head.publicationId !== intent.prior.publicationId)
     return { state: "conflict" };
   if (seen.state === "released") return { state: "released" };
   const head = seen.head;
@@ -255,7 +255,7 @@ async function write(
       // A conflict response does not identify the publication that was released.
       // Retire this enrollment only when the subsequent head names its bound generation.
       const current = await readHead(p, url);
-      if (current.state === "released" && current.head.generation === prior.generation)
+      if (current.state === "released" && current.head.publicationId === prior.publicationId)
         return { state: "released" };
     }
     return { state: "conflict" };
@@ -271,7 +271,7 @@ async function write(
     );
   }
   const head = receipt(sent.body, p.beamId);
-  if (prior && head.generation !== prior.generation) return { state: "conflict" };
+  if (prior && head.publicationId !== prior.publicationId) return { state: "conflict" };
   if (head.sha256 !== sha256)
     throw new Error("Beam mirror receipt does not match the saved packet");
   return { state: "published", head };

@@ -28,7 +28,7 @@ const source = {
 const raw = Buffer.from("synthetic reviewed packet"),
   id = "a".repeat(32);
 const digest = (body: Buffer) => "sha256:" + createHash("sha256").update(body).digest("hex");
-const head = { generation: "publication-1", revision: '"revision-1"', sha256: digest(raw) };
+const head = { publicationId: "publication-1", revision: '"revision-1"', sha256: digest(raw) };
 let state: Awaited<ReturnType<typeof createOpenClawTestState>>;
 const open = (
   explicit = false,
@@ -91,7 +91,7 @@ it("keeps first-create uncertainty operator-owned and binds only a consciously s
     "could not be confirmed",
   );
   expect((await open())?.active).toBe(false);
-  await expect((await open(true))!.enroll(id, raw, head.generation)).resolves.toMatchObject({
+  await expect((await open(true))!.enroll(id, raw, head.publicationId)).resolves.toMatchObject({
     state: "published",
     head,
   });
@@ -138,7 +138,7 @@ it("rotates a publisher credential only after read-only confirmation of the same
   vi.mocked(transport.enrollBeamMirrorV2).mockResolvedValueOnce({ state: "published", head });
   await (await open(true))!.enroll(id, raw);
   const old = (await open())!;
-  const rotated = (endpoint?: string, generation = head.generation) =>
+  const rotated = (endpoint?: string, generation = head.publicationId) =>
     open(true, "new-credential", endpoint, undefined, generation);
   await expect(open(false, "new-credential")).rejects.toThrow("credential");
   await expect(rotated("https://other.example/api/v2/beam")).rejects.toThrow("No enrollment");

@@ -84,13 +84,13 @@ export async function openBeamMirrorEnrollment(params: {
   const credential = credentialScope(row.value.sourceSalt, params.token);
   if (row.value.credential !== credential) {
     const previous = row.value;
-    const generation = params.confirmGeneration;
+    const publicationId = params.confirmGeneration;
     if (
       !params.explicit ||
-      !generation ||
+      !publicationId ||
       previous.fenced ||
       !previous.initial ||
-      (previous.head && previous.head.generation !== generation)
+      (previous.head && previous.head.publicationId !== publicationId)
     ) {
       throw new Error(
         "Receiver credential changed. Select the original publication and confirm its exact generation to reauthorize.",
@@ -104,7 +104,7 @@ export async function openBeamMirrorEnrollment(params: {
     });
     if (
       seen.state !== "observed" ||
-      seen.head.generation !== generation ||
+      seen.head.publicationId !== publicationId ||
       (previous.head &&
         previous.head.revision !== seen.head.revision &&
         previous.pending?.intent.sha256 !== seen.head.sha256)
@@ -175,7 +175,9 @@ export async function openBeamMirrorEnrollment(params: {
           observed.value.head ||
           observed.value.fenced
         ) {
-          throw new Error("Beam enrollment changed before publication");
+          throw new Error(
+            "Another operation updated this enrollment. Inspect the existing publication.",
+          );
         }
       }
       params.assertCurrent();
@@ -190,7 +192,7 @@ export async function openBeamMirrorEnrollment(params: {
         : await enrollBeamMirrorV2({ ...options, beamId, raw, requestId: initial.requestId });
       if (
         (result.state !== "published" && result.state !== "observed") ||
-        (confirmGeneration && result.head.generation !== confirmGeneration)
+        (confirmGeneration && result.head.publicationId !== confirmGeneration)
       ) {
         throw new Error(
           "The selected publication could not be confirmed. Inspect its original receiver and generation.",
@@ -205,7 +207,7 @@ export async function openBeamMirrorEnrollment(params: {
       });
       if (saved.status === "conflict")
         throw new Error(
-          "Enrollment changed before acknowledgement; inspect the existing publication",
+          "Another operation updated this enrollment. Inspect the existing publication.",
         );
       return { state: "published", beamId: initial.beamId, head: result.head };
     },

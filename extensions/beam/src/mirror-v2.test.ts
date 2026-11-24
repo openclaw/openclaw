@@ -27,7 +27,7 @@ const raw = Buffer.from(
   ) + "\n",
 );
 const prior: BeamMirrorV2Head = {
-  generation: "opaque.generation",
+  publicationId: "opaque.generation",
   revision: '"prior"',
   sha256: "sha256:" + "b".repeat(64),
 };
@@ -44,7 +44,7 @@ const scope = {
 function receipt(h: BeamMirrorV2Head, state = "writable") {
   return {
     beamId,
-    publicationId: h.generation,
+    publicationId: h.publicationId,
     revision: h.revision,
     digest: h.sha256,
     state,
@@ -124,7 +124,7 @@ it("updates an enrolled generation only with its saved strong revision", async (
 
 it.each([
   [404, undefined, "conflict"],
-  [200, receipt({ ...prior, generation: "different" }), "conflict"],
+  [200, receipt({ ...prior, publicationId: "different" }), "conflict"],
   [200, receipt({ ...prior, sha256: head.sha256 }), "conflict"],
   [200, receipt(prior, "released"), "released"],
 ] as const)("fences missing, changed or retired heads before PUT", async (status, body, state) => {
@@ -194,9 +194,9 @@ it("rechecks source consent before transmitting conversation bytes", async () =>
 });
 
 it.each([
-  [prior.generation, "released"],
+  [prior.publicationId, "released"],
   ["replaced.generation", "conflict"],
-] as const)("ties a concurrent release to the stored generation", async (generation, state) => {
+] as const)("ties a concurrent release to the stored generation", async (publicationId, state) => {
   const methods: Array<string | undefined> = [];
   await serve(
     (req, res) => {
@@ -204,7 +204,7 @@ it.each([
       if (methods.length === 1) res.end(JSON.stringify(receipt(prior)));
       else if (req.method === "PUT") {
         res.writeHead(409).end(JSON.stringify({ error: { code: "released" } }));
-      } else res.end(JSON.stringify(receipt({ ...prior, generation }, "released")));
+      } else res.end(JSON.stringify(receipt({ ...prior, publicationId }, "released")));
     },
     async (endpoint) => {
       expect(
