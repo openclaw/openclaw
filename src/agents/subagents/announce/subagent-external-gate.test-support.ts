@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { createServer, type ServerResponse } from "node:http";
+import { redactSensitiveText } from "../../../logging/redact.js";
 
 export async function createExternalGates() {
   type Gate = {
@@ -78,4 +79,41 @@ export async function createExternalGates() {
       await closed;
     },
   };
+}
+
+export async function observeHeldExecutor(options: {
+  isHeldAndLive: () => boolean;
+  waitForRun: () => Promise<{
+    status: string;
+    endedAt?: number;
+    error?: string;
+    stopReason?: string;
+    timeoutPhase?: string;
+    providerStarted?: boolean;
+  }>;
+}): Promise<true | undefined> {
+  if (options.isHeldAndLive()) {
+    return true;
+  }
+  const outcome = await options.waitForRun();
+  // A wait deadline is not a terminal run timeout; only the latter has an end time.
+  if (outcome.endedAt !== undefined) {
+    const details = [`status=${outcome.status}`];
+    if (outcome.stopReason) {
+      details.push(`stopReason=${outcome.stopReason}`);
+    }
+    if (outcome.timeoutPhase) {
+      details.push(`timeoutPhase=${outcome.timeoutPhase}`);
+    }
+    if (outcome.providerStarted !== undefined) {
+      details.push(`providerStarted=${outcome.providerStarted}`);
+    }
+    const reason = outcome.error ? `: ${outcome.error}` : "";
+    throw new Error(
+      redactSensitiveText(
+        `Foreign child executor ended before reaching the held gate: ${details.join(", ")}${reason}`,
+      ),
+    );
+  }
+  return options.isHeldAndLive() ? true : undefined;
 }
