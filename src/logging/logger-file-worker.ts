@@ -1,29 +1,19 @@
-import { isMainThread } from "node:worker_threads";
 import { resolveRuntimeProcessEntrypointUrl } from "../infra/runtime-process-url.js";
 import { WorkerTaskPool } from "../infra/worker-task-pool.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
-import {
-  executeFileLogIO,
-  type FileLogIORequest,
-  type FileLogIOResults,
-} from "./logger-file-io.js";
-import { fileLogTransport } from "./logger-file-transport.js";
+import type { FileLogIORequest, FileLogIOResults } from "./logger-file-io.js";
 
 export async function runFileLogIOInWorker<Request extends FileLogIORequest>(
   request: Request,
+  flush: () => Promise<void>,
 ): Promise<FileLogIOResults[Request["type"]]> {
-  // Worker diagnostics use their own isolate; never recursively spawn logger workers.
-  if (!isMainThread) {
-    // SAFETY: The filesystem unit's switch returns the result for this request discriminant.
-    return (await executeFileLogIO(request)) as FileLogIOResults[Request["type"]];
-  }
   const state = resolveGlobalSingleton<{
     pool?: WorkerTaskPool<FileLogIORequest, FileLogIOResults[keyof FileLogIOResults]>;
   }>(
     Symbol.for("openclaw.fileLogWorker"),
     () => ({}),
     async (owned) => {
-      await fileLogTransport.flush();
+      await flush();
       await owned.pool?.close();
       owned.pool = undefined;
     },
