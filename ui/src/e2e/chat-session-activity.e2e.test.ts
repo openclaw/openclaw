@@ -219,13 +219,13 @@ suite.define(() => {
             [
               "Receipt 1 includes a description with multiple paragraphs.\n" +
                 "Verification notes.\n".repeat(9),
-              "Receipt 2 verified",
+              "Receipt 2 verified.\nKeep the original nearby.",
               Array.from({ length: 5 }, (_, index) => `Line ${index + 1}`).join("\n".repeat(60)),
             ].map((sourceSummary, index) => {
               const seq = index + 1;
               return delivery(
                 sourceKey,
-                "Receipt " + seq + ": Verification detail. End of receipt " + seq,
+                seq === 2 ? "Original receipt two." : "Verification detail. End of receipt " + seq,
                 seq,
                 {
                   kind: "inter_session",
@@ -325,6 +325,69 @@ suite.define(() => {
           await toggle.press("Space");
           await first.getByText(/End of receipt 1$/).waitFor({ state: "detached" });
           expect(await toggle.textContent()).toBe("Show more");
+          const compact = activity.nth(1);
+          const compactToggle = compact.getByRole("button", { name: "Show more" });
+          const widthGeometry = () =>
+            compact.evaluate((element) => {
+              const bubble = element.closest(".chat-bubble")!.getBoundingClientRect();
+              const column = element.closest(".chat-group-messages")!.getBoundingClientRect();
+              const description = element
+                .querySelector(".chat-message-disclosure__description")!
+                .getBoundingClientRect();
+              const original = element
+                .querySelector(".chat-message-disclosure__original")
+                ?.getBoundingClientRect();
+              return {
+                bubbleWidth: bubble.width,
+                bubbleLeft: bubble.left,
+                bubbleRight: bubble.right,
+                columnWidth: column.width,
+                columnRight: column.right,
+                descriptionWidth: description.width,
+                descriptionLeft: description.left,
+                originalWidth: original?.width,
+                originalLeft: original?.left,
+                pageOverflow: document.documentElement.scrollWidth > innerWidth,
+              };
+            });
+          const narrow = await widthGeometry();
+          const closedSiblingWidth = await sparse.evaluate((element) => element.clientWidth);
+          expect(narrow.bubbleWidth).toBeLessThan(narrow.columnWidth - 24);
+          await compactToggle.press("Enter");
+          await compact.getByText("Original receipt two.", { exact: true }).waitFor();
+          const wide = await widthGeometry();
+          expect(wide.bubbleRight).toBeCloseTo(wide.columnRight, 0);
+          expect(wide.bubbleLeft).toBeCloseTo(narrow.bubbleLeft, 0);
+          expect(wide.descriptionWidth).toBeCloseTo(wide.originalWidth!, 0);
+          expect(wide.descriptionLeft).toBeCloseTo(wide.originalLeft!, 0);
+          expect(wide.pageOverflow).toBe(false);
+          expect(await sparse.evaluate((element) => element.clientWidth)).toBe(closedSiblingWidth);
+          await compact.getByRole("button", { name: "Show less" }).press("Space");
+          await compact
+            .getByText("Original receipt two.", { exact: true })
+            .waitFor({ state: "detached" });
+          expect((await widthGeometry()).bubbleWidth).toBeCloseTo(narrow.bubbleWidth, 0);
+
+          const pane = page.locator(".chat-pane-cache__pane--active");
+          await pane.locator(".agent-chat__composer-combobox textarea").focus();
+          const findShortcut = await page.evaluate(() =>
+            /Mac|iPhone|iPad|iPod/.test(navigator.platform) ? "Meta+f" : "Control+f",
+          );
+          await page.keyboard.press(findShortcut);
+          await pane
+            .getByRole("textbox", { name: "Search loaded messages" })
+            .fill("Original receipt two.");
+          const searchEntry = activity.first();
+          await expect.poll(() => activity.count()).toBe(1);
+          await searchEntry.getByText("Original receipt two.", { exact: true }).waitFor();
+          expect(await searchEntry.locator(disclosure).count()).toBe(0);
+          const searchGap = await searchEntry.evaluate(
+            (entry) =>
+              entry.closest(".chat-group-messages")!.getBoundingClientRect().right -
+              entry.closest(".chat-bubble")!.getBoundingClientRect().right,
+          );
+          expect(searchGap).toBeCloseTo(0, 0);
+          await pane.getByRole("button", { name: "Close search", exact: true }).click();
           await link.click();
           await page.waitForURL((url) => url.pathname.includes("activity-source"));
         },

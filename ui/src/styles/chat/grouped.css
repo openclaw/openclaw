@@ -2065,6 +2065,22 @@ button.chat-reply-attribution__target:disabled {
   }
 }
 
+/* Only the open entry fills the incoming column, including on narrow screens.
+   Other entries in the same sender group keep their compact forwarded width. */
+.chat-inter-session-message:has(
+  > .chat-bubble > .chat-message-disclosure--description.is-expanded
+) {
+  align-self: stretch;
+}
+
+.chat-group--inter-session
+  > .chat-group-messages
+  > .chat-inter-session-message
+  > .chat-bubble:has(> .chat-message-disclosure--description.is-expanded) {
+  width: 100%;
+  max-width: 100%;
+}
+
 /* Optional two-sided conversation skin. Keep activity/tool surfaces and
    forwarded identities with their existing owners rather than nesting cards. */
 .chat--bubbles .chat-group:is(.user, .assistant) {
