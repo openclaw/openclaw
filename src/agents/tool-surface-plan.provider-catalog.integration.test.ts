@@ -120,14 +120,4 @@ describe("registered MiniMax Code Mode tool surface", () => {
     });
     expect(model.compat?.codeMode).toBe("preferred");
   });
-
-  it.each(["minimax", "minimax-portal"])(
-    "keeps %s M2.7 tools direct under auto",
-    async (providerId) => {
-      for (const route of ["static", "dynamic"] as const) {
-        const model = await resolveModel(providerId, route, "MiniMax-M2.7");
-        expect(assembleSurface(model).names, route).toEqual(["query_records"]);
-      }
-    },
-  );
 });

@@ -16,30 +16,6 @@ export const MINIMAX_API_COST = {
   cacheRead: 0.12,
   cacheWrite: 0,
 };
-const MINIMAX_M27_API_COST = {
-  input: 0.3,
-  output: 1.2,
-  cacheRead: 0.06,
-  cacheWrite: 0.375,
-};
-const MINIMAX_API_HIGHSPEED_COST = {
-  input: 0.6,
-  output: 2.4,
-  cacheRead: 0.06,
-  cacheWrite: 0.375,
-};
-const MINIMAX_M25_API_COST = {
-  input: 0.3,
-  output: 1.2,
-  cacheRead: 0.03,
-  cacheWrite: 0.375,
-};
-const MINIMAX_M25_API_HIGHSPEED_COST = {
-  input: 0.6,
-  output: 2.4,
-  cacheRead: 0.03,
-  cacheWrite: 0.375,
-};
 export const MINIMAX_HOSTED_COST = {
   input: 0,
   output: 0,
@@ -62,18 +38,6 @@ function resolveMinimaxApiCost(modelId: string): ModelDefinitionConfig["cost"] {
   if (modelId === MINIMAX_M31_MODEL_ID) {
     // This preview is Token Plan-only; MiniMax has not published per-token prices.
     return MINIMAX_HOSTED_COST;
-  }
-  if (modelId === "MiniMax-M2.7") {
-    return MINIMAX_M27_API_COST;
-  }
-  if (modelId === "MiniMax-M2.5-highspeed") {
-    return MINIMAX_M25_API_HIGHSPEED_COST;
-  }
-  if (modelId === "MiniMax-M2.5") {
-    return MINIMAX_M25_API_COST;
-  }
-  if (modelId === "MiniMax-M2.7-highspeed") {
-    return MINIMAX_API_HIGHSPEED_COST;
   }
   return MINIMAX_API_COST;
 }

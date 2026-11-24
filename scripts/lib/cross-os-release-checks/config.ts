@@ -162,7 +162,7 @@ const providerConfig = {
     extensionId: "minimax",
     secretEnv: "MINIMAX_API_KEY",
     authChoice: "minimax-global-api",
-    model: "minimax/MiniMax-M2.7",
+    model: "minimax/MiniMax-M3",
     requiredCompanionPackages: [],
   },
 } satisfies Record<ProviderId, ProviderConfig>;

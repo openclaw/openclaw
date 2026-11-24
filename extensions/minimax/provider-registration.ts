@@ -230,10 +230,6 @@ function createOAuthHandler(region: MiniMaxRegion) {
             defaults: {
               models: {
                 [`${PORTAL_PROVIDER_ID}/MiniMax-M3`]: { alias: "minimax-m3" },
-                [`${PORTAL_PROVIDER_ID}/MiniMax-M2.7`]: { alias: "minimax-m2.7" },
-                [`${PORTAL_PROVIDER_ID}/MiniMax-M2.7-highspeed`]: {
-                  alias: "minimax-m2.7-highspeed",
-                },
               },
             },
           },

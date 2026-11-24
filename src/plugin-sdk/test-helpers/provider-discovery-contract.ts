@@ -607,7 +607,13 @@ export function describeMinimaxProviderDiscoveryContract(
         "fetch",
         vi.fn(async () =>
           Response.json({
-            data: [{ id: "MiniMax-M3" }, { id: "MiniMax-M2.7" }, { id: "MiniMax-M2.7-highspeed" }],
+            data: [
+              { id: "MiniMax-M3" },
+              // MiniMax still lists the retired M2 generation; every request to it returns 404.
+              { id: "MiniMax-M2.7" },
+              { id: "MiniMax-M2.7-highspeed" },
+              { id: "MiniMax-M2" },
+            ],
           }),
         ),
       );
@@ -636,9 +642,7 @@ export function describeMinimaxProviderDiscoveryContract(
         apiKey: "minimax-key",
       });
       const ids = providerModelIds(provider);
-      expect(ids).toContain("MiniMax-M3");
-      expect(ids).toContain("MiniMax-M2.7");
-      expect(ids).toContain("MiniMax-M2.7-highspeed");
+      expect(ids).toEqual(["MiniMax-M3"]);
     });
 
     it("keeps portal oauth marker fallback provider-owned", async () => {
@@ -674,7 +678,7 @@ export function describeMinimaxProviderDiscoveryContract(
         authHeader: true,
         apiKey: "minimax-oauth",
       });
-      expect(providerModelIds(provider)).toContain("MiniMax-M2.7");
+      expect(providerModelIds(provider)).toEqual(["MiniMax-M3"]);
     });
 
     it("keeps portal explicit base URL override provider-owned", async () => {
