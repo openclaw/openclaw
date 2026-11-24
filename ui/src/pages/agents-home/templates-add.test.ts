@@ -420,7 +420,9 @@ describe("Template Add", () => {
     const { detail, request, setPackageName } = createDetail({ templatesEnabled: true });
 
     await vi.waitFor(() =>
-      expect(detail.querySelector(".plugin-capabilities")?.textContent).toContain("AGENTS.md"),
+      expect(detail.querySelector(".plugin-capabilities")?.textContent).toContain(
+        "@openclaw/research",
+      ),
     );
     const selected = detail.querySelector(".plugin-capabilities");
     const details = request.mock.calls.filter(([method]) => method === "templates.catalog.detail");

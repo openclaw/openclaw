@@ -2,10 +2,8 @@ import { definePage } from "@openclaw/uirouter";
 import { routePageSpec } from "../../app-route-paths.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { hasOperatorReadAccess } from "../../app/operator-access.ts";
-import { usesCronInventoryEvents } from "../../lib/cron/inventory-connection.ts";
 import { readCronInventory } from "../../lib/cron/inventory.ts";
-import { buildCronJobsListParams } from "../../lib/cron/jobs.ts";
-import { DEFAULT_CRON_JOBS_FILTERS } from "../../lib/cron/state.ts";
+import { buildCronJobsListParams, DEFAULT_CRON_JOBS_FILTERS } from "../../lib/cron/list-params.ts";
 import { isGatewayAvailable } from "../../lib/gateway-availability.ts";
 
 type CronRouteContext = Pick<ApplicationContext, "gateway"> & {
@@ -30,9 +28,9 @@ export const page = definePage({
         globalThis.document?.visibilityState !== "hidden"
       );
     };
-    // Full inventory is shared with the mounted page only on advertised Gateways.
+    // Full inventory is shared with the mounted page.
     // Filtered/deep-linked routes keep their existing page-owned admission.
-    if (cause === "navigation" && !deps && client && usesCronInventoryEvents(client) && canRead()) {
+    if (cause === "navigation" && !deps && client && canRead()) {
       const params = buildCronJobsListParams(
         { ...DEFAULT_CRON_JOBS_FILTERS, cronAgentId: scopeId },
         { tableFilters: true },

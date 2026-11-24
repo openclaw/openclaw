@@ -3,6 +3,7 @@ import { stopSessionExecProcesses } from "../../agents/bash-process-control.js";
 import { clearPromptCacheObservations } from "../../agents/embedded-agent-runner/prompt-cache-observability.js";
 import { clearEmbeddedSessionPromptStates } from "../../agents/embedded-agent-runner/session-prompt-state.js";
 import { killSessionSubagentRuns } from "../../agents/subagents/registry/subagent-control-kill.js";
+import { stopRetainedSessionSends } from "../../agents/tools/sessions-send-self-hold.js";
 import { retainPreparedSessionGenerationFacts } from "../../config/sessions/session-accessor.sqlite-entry-cache-publication-state.js";
 import { projectSessionSharingEntry } from "../../config/sessions/session-accessor.sqlite-entry-cache.types.js";
 import { withSessionEntriesFromStoreInWorker } from "../../config/sessions/session-entry-read-runtime.js";
@@ -177,6 +178,7 @@ export function clearCommittedSessionResetRuntimeState(params: {
   }
   try {
     clearSessionResetRuntimeState([params.sessionKey, params.previousSessionEntry.sessionId], {
+      cause: "reset",
       activeReplySessionId: params.previousSessionEntry.sessionId,
       controllerTarget: captureSessionTarget({
         storeScope: params.storePath,
@@ -193,10 +195,11 @@ export function clearCommittedSessionResetRuntimeState(params: {
   }
 }
 
-/** Clears queued follow-ups and pending system events visible to the resetting agent. */
+/** Clears queued follow-ups, retained sends and pending system events of the ended chat. */
 export function clearSessionResetRuntimeState(
   keys: Array<string | undefined>,
   opts: {
+    cause: "reset" | "deleted";
     agentId: string;
     controllerTarget?: SessionTarget;
     sessionKey: string;
@@ -211,6 +214,7 @@ export function clearSessionResetRuntimeState(
     clearPromptCacheObservations(opts.activeReplySessionId);
   }
   const cleared = clearSessionQueues(keys, opts.controllerTarget, undefined, opts.assertCurrent);
+  stopRetainedSessionSends({ agentId: opts.agentId, sessionKeys: cleared }, opts.cause);
   for (const key of cleared) {
     opts.assertCurrent();
     const owner = parseAgentSessionKey(key)?.agentId;

@@ -7,6 +7,7 @@ import * as preflightTransport from "../../scripts/lib/release-publish-preflight
 import { validateReleaseRunEvidence } from "../../scripts/release-ci-summary.mjs";
 import { runReleasePublishPreflight } from "../../scripts/release-publish-preflight.mts";
 import { authenticateFullReleaseValidationEvidence } from "../../scripts/validate-full-release-validation-evidence.mjs";
+import { candidatePublicationFixture } from "./candidate-publication.test-support.js";
 import {
   recoveryConsumptionFixture,
   consumptionOptions,
@@ -19,6 +20,39 @@ afterEach(() => {
 });
 
 describe("release evidence consumption", () => {
+  it.each(["beta", "stable", "full", "extended-stable"] as const)(
+    "recovers failed original %s qualification with independent C and Q through strict consumption",
+    async (releaseProfile) => {
+      const f = recoveryConsumptionFixture(
+        candidatePublicationFixture({ releaseProfile, qualificationSha: "d".repeat(40) }),
+      );
+      f.runs.get(f.direct.runId)!.conclusion = "failure";
+      const original = await verifyOriginalReceiptQualification(f.recovery, { client: f.client });
+      f.manifest.retainedPublicationPayloads = original.publication.payloads;
+      const options = {
+        ...consumptionOptions(f.direct),
+        run: f.run,
+        manifest: f.manifest,
+        expectedRunId: "900",
+      };
+      const consumed = await authenticateFullReleaseValidationEvidence(options, f.client);
+      expect(consumed.qualification).toMatchObject({
+        kind: "recovery",
+        candidateSha: "a".repeat(40),
+        qualificationSha: "d".repeat(40),
+      });
+      expect(consumed.forPublication(options).source).toBe("receipt-backed-recovery-v1");
+      expect(f.source.coverage).toEqual(f.direct.source.coverage);
+      expect(f.source.publicationSelection!.npmDistTag).toBe(
+        releaseProfile === "beta"
+          ? "beta"
+          : releaseProfile === "extended-stable"
+            ? "extended-stable"
+            : "latest",
+      );
+    },
+  );
+
   it("accepts authenticated recovery of frozen Q qualification for publication", async () => {
     const f = recoveryConsumptionFixture();
     const original = await verifyOriginalReceiptQualification(f.recovery, { client: f.client });
@@ -138,7 +172,7 @@ describe("recovery qualification integrity at consumption", () => {
     ["wrong aggregate attempt", "manifest artifact is not compatible"],
     ["missing recovery authentication", "authenticated operator"],
     ["artifact bytes", "artifact"],
-    ["missing child", "five complete beta roles"],
+    ["missing child", "aggregate changed original children"],
     ["uncovered failure", "live composite workload"],
   ])("rejects changed %s", async (fault, message) => {
     const f = recoveryConsumptionFixture();

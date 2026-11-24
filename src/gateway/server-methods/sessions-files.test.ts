@@ -952,6 +952,8 @@ describe("sessions.files touched-file folds", () => {
         "~/.openclaw-external.txt",
         pathToFileURL(outsidePath).href,
         `@${outsidePath}`,
+        // The read tool opens this from the attachment store; the workspace never has it.
+        "media://inbound/photo---4f2c.png",
         "..cache/missing.txt",
         "missing.txt",
         "src/readme.md",

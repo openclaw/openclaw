@@ -4,6 +4,10 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import {
+  gitPathShimShellPrelude,
+  resolveGitOutsideFixtures,
+} from "./git-path-shim.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const admissionArgs =
@@ -34,12 +38,10 @@ function fixture() {
   const trace = path.join(campaignRoot, "git-starts");
   writeFileSync(trace, "");
   // A denied command must never enter the traced real-Git executable.
-  const realGit = spawnSync("/bin/sh", ["-c", "command -v git"], {
-    encoding: "utf8",
-  }).stdout.trim();
+  const realGit = resolveGitOutsideFixtures(env);
   writeFileSync(
     path.join(bin, "git"),
-    `#!/bin/sh\nprintf 'spawn\\n' >> '${trace}'\nexec '${realGit}' "$@"\n`,
+    `#!/bin/sh\n${gitPathShimShellPrelude(env)}\nprintf 'spawn\\n' >> '${trace}'\nexec '${realGit}' "$@"\n`,
     { mode: 0o700 },
   );
   const launch = (overrides: Partial<typeof request> = {}) =>

@@ -246,14 +246,14 @@ async function cleanupRetainedLegacyNpmPackages(params: {
 }): Promise<number> {
   let removed = 0;
   for (const packageDir of listManagedNpmPackageDirs(params.npmRoot)) {
-    if (
-      !hasRetainedManagedNpmInstallMarker(packageDir) ||
-      markerPreservesPackageFiles(resolveRetainedManagedNpmInstallMarkerPath(packageDir)) ||
-      params.activeInstallPaths.some((installPath) => isPathInside(packageDir, installPath))
-    ) {
-      continue;
-    }
     try {
+      if (
+        !hasRetainedManagedNpmInstallMarker(packageDir) ||
+        markerPreservesPackageFiles(resolveRetainedManagedNpmInstallMarkerPath(packageDir)) ||
+        params.activeInstallPaths.some((installPath) => isPathInside(packageDir, installPath))
+      ) {
+        continue;
+      }
       await params.assertCurrent?.();
       await fs.promises.rm(packageDir, { recursive: true, force: true });
       await clearRetainedManagedNpmInstallMarker(packageDir, params.assertCurrent);
@@ -307,22 +307,22 @@ export async function cleanupRetainedManagedNpmInstallGenerations(
       params.onError?.(error, projectRoot);
       continue;
     }
-    if (
-      markerEntries.length === 0 ||
-      markerEntries.some((entry) =>
-        markerPreservesPackageFiles(path.join(markerDir, entry.name)),
-      ) ||
-      !isPathInside(projectsDir, projectRoot) ||
-      !isOwnedManagedNpmProject({
-        markerNames: new Set(markerEntries.map((entry) => entry.name)),
-        npmDir,
-        projectRoot,
-      }) ||
-      activeInstallPaths.some((installPath) => isPathInside(projectRoot, installPath))
-    ) {
-      continue;
-    }
     try {
+      if (
+        markerEntries.length === 0 ||
+        markerEntries.some((entry) =>
+          markerPreservesPackageFiles(path.join(markerDir, entry.name)),
+        ) ||
+        !isPathInside(projectsDir, projectRoot) ||
+        !isOwnedManagedNpmProject({
+          markerNames: new Set(markerEntries.map((entry) => entry.name)),
+          npmDir,
+          projectRoot,
+        }) ||
+        activeInstallPaths.some((installPath) => isPathInside(projectRoot, installPath))
+      ) {
+        continue;
+      }
       await params.assertCurrent?.();
       await fs.promises.rm(projectRoot, { recursive: true, force: true });
       removed += 1;

@@ -1,6 +1,24 @@
 import type { SessionsUsageResult } from "../../../../src/shared/usage-types.js";
 import type { SessionRequestClient } from "./session-capability.ts";
 
+type PromptCacheUsage = {
+  input: number;
+  cacheRead: number;
+  cacheWrite: number;
+  /** Input from calls that reported no cache split; their cache use is unknown. */
+  cacheUnmeasuredInput?: number;
+};
+
+/** Prompt tokens of calls that reported how much of their prompt the cache served. */
+export const measuredPromptTokens = (usage: PromptCacheUsage) =>
+  usage.input - (usage.cacheUnmeasuredInput ?? 0) + usage.cacheRead + usage.cacheWrite;
+
+/** Share of measured prompt tokens read from the provider cache; null when none were measured. */
+export function promptCacheHitRate(usage: PromptCacheUsage): number | null {
+  const prompt = measuredPromptTokens(usage);
+  return prompt > 0 ? usage.cacheRead / prompt : null;
+}
+
 export type SessionUsageTarget = { key: string; agentId?: string };
 
 export type SessionUsageQuery = {

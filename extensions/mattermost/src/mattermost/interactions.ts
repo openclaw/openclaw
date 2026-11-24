@@ -9,7 +9,6 @@ import {
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { safeParseJson } from "openclaw/plugin-sdk/text-utility-runtime";
 import { requestBodyErrorToText } from "openclaw/plugin-sdk/webhook-request-guards";
-import { getMattermostRuntime } from "../runtime.js";
 import { resolveCallbackHost } from "./callback-host.js";
 import { updateMattermostPost, type MattermostClient, type MattermostPost } from "./client.js";
 import {
@@ -293,11 +292,6 @@ export function createMattermostInteractionHandler(params: {
   allowedSourceIps?: string[];
   trustedProxies?: string[];
   allowRealIpFallback?: boolean;
-  resolveSessionKey?: (params: {
-    channelId: string;
-    userId: string;
-    post: MattermostPost;
-  }) => Promise<string>;
   handleInteraction?: (opts: {
     payload: MattermostInteractionPayload;
     userName: string;
@@ -317,13 +311,13 @@ export function createMattermostInteractionHandler(params: {
     userName: string;
     actionId: string;
     actionName: string;
+    callbackData?: unknown;
     postId: string;
     post: MattermostPost;
   }) => Promise<void>;
   log?: (message: string) => void;
 }): (req: IncomingMessage, res: ServerResponse) => Promise<void> {
   const { client, accountId, log } = params;
-  const core = getMattermostRuntime();
 
   function parseInteractionPayload(raw: string): MattermostInteractionPayload {
     const payload = safeParseJson<MattermostInteractionPayload>(raw);
@@ -512,30 +506,6 @@ export function createMattermostInteractionHandler(params: {
       }
     }
 
-    // Wrapped in try/catch — the post update below must still run even if
-    // system event dispatch fails (e.g. missing sessionKey or channel lookup).
-    try {
-      const eventLabel =
-        `Mattermost button click: action="${actionId}" ` +
-        `by ${payload.user_name ?? payload.user_id} ` +
-        `in channel ${payload.channel_id}`;
-
-      const sessionKey = params.resolveSessionKey
-        ? await params.resolveSessionKey({
-            channelId: payload.channel_id,
-            userId: payload.user_id,
-            post: originalPost,
-          })
-        : `agent:main:mattermost:${accountId}:${payload.channel_id}`;
-
-      core.system.enqueueSystemEvent(eventLabel, {
-        sessionKey,
-        contextKey: `mattermost:interaction:${payload.post_id}:${actionId}`,
-      });
-    } catch (err) {
-      log?.(`mattermost interaction: system event dispatch failed: ${String(err)}`);
-    }
-
     try {
       await updateMattermostPost(client, payload.post_id, {
         message: originalMessage,
@@ -561,6 +531,7 @@ export function createMattermostInteractionHandler(params: {
           userName,
           actionId,
           actionName: clickedButtonName,
+          callbackData: contextWithoutToken.callback_data,
           postId: payload.post_id,
           post: originalPost,
         });

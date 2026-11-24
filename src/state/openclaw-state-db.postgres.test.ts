@@ -43,7 +43,6 @@ import {
 } from "../infra/sqlite-database-admission.js";
 import * as readOnlyWorker from "../infra/sqlite-readonly-worker.js";
 import { admitSqliteSchema } from "../infra/sqlite-schema-facts.js";
-import { hasSqliteWorkerOutcomeUnknown } from "../infra/sqlite-worker-contract.js";
 import { migrateDaemonRuntimePins } from "../infra/state-migrations.daemon-runtime-pins.js";
 import { createUpdateDoctorDatabaseWriteCapture } from "../infra/update-doctor-result.js";
 import { createUpdateRunAsync, recordUpdateRunStepAsync } from "../infra/update-run-write.async.js";
@@ -129,8 +128,13 @@ async function restoreEmptyPredecessorTables(client: pg.Client, previousVersion:
   );
   const eager = expectDefined(source.postgres, "Historical PostgreSQL DDL");
   // DROP COLUMN retains an attnum hole, including at the tail. Recreate the empty
-  // receipt tables, retaining incoming foreign keys from installed optional fragments too.
-  for (const table of ["worker_environments", "worker_workspace_pending_results"]) {
+  // receipt, setup and approval tables, retaining incoming foreign keys from optional fragments too.
+  for (const table of [
+    "operator_approvals",
+    "worker_environments",
+    "worker_workspace_pending_results",
+    "workspace_setup_state",
+  ]) {
     expect((await client.query(`SELECT count(*)::int AS n FROM "${table}"`)).rows).toEqual([
       { n: 0 },
     ]);
@@ -189,7 +193,7 @@ const legacyPublicationInsert = `INSERT INTO github_publication_requests
 
 describe.skipIf(!connection)("PostgreSQL shared-state owner", () => {
   it.each(["shared-state", "update-bookkeeping"] as const)(
-    "reopens its worker after backend loss without replaying the failed write (%s)",
+    "reconnects its idle retained backend before the first resumed write (%s)",
     async (writer) => {
       const directory = tempDirs.make("state-worker-reconnect-postgres-");
       const pathname = path.join(directory, "state.sqlite");
@@ -259,7 +263,7 @@ describe.skipIf(!connection)("PostgreSQL shared-state owner", () => {
         expect(
           (await backends()).filter((row) => primary.some((kept) => kept.pid === row.pid)),
         ).toEqual(primary);
-        await expect(write("interrupted")).rejects.toSatisfy(hasSqliteWorkerOutcomeUnknown);
+        await write("resumed");
         const read = async () => {
           if (writer === "shared-state") {
             const result = await client.query(
@@ -277,7 +281,7 @@ describe.skipIf(!connection)("PostgreSQL shared-state owner", () => {
           );
           return steps.find((step) => step.step === "reconnect.fixture")?.detail;
         };
-        expect(await read()).toBe("before");
+        expect(await read()).toBe("resumed");
         await write("recovered");
         expect(await read()).toBe("recovered");
       } finally {

@@ -7,7 +7,7 @@ import { retainSessionEntryWorkerPublication } from "../config/sessions/session-
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import type { BoundWebPushSubscription } from "../infra/push-web.js";
-import { readImageMetadataFromHeader } from "../media/image-ops.js";
+import { readImageMetadataFromHeader } from "../media/image-header-metadata.js";
 import { encodePngRgba } from "../media/png-encode.js";
 import { closeOpenClawAgentDatabasesAsync } from "../state/openclaw-agent-db-lifecycle.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db-cache.js";

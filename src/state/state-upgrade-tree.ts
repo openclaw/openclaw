@@ -6,14 +6,19 @@ import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { copyFileDescriptorSync } from "@openclaw/fs-safe/advanced";
 import { decodeMountInfoPath } from "@openclaw/normalization-core/mountinfo-path";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { readBackupEngine } from "../infra/database-engine/physical-store.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { copyFileHandle } from "../infra/file-descriptor.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
+import { retireSqliteDatabaseAdmissionForPath } from "../infra/sqlite-database-admission.js";
 import {
   isSqlitePathOnBtrfs,
   setSqliteDirectoryNoCow,
   prepareSqliteDatabaseDirectory,
 } from "../infra/sqlite-wal-filesystem.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { retirePostgresUpgrade } from "../snapshot/database-backup.js";
 
 export type UpgradeOp = {
   /** Live path to replace, create or retire. */
@@ -23,6 +28,7 @@ export type UpgradeOp = {
   kind: "replace" | "add" | "remove";
 };
 
+/** `appVersion` names the generation: the writing build's ID, or its version before build IDs. */
 export type UpgradePlan = { appVersion: string; ops: UpgradeOp[] };
 
 const PLAN_FILE = "plan.json";
@@ -140,7 +146,7 @@ export function withRecoveredSource<T>(pathname: string, read: (readable: string
   }
 }
 
-function skipEntry(name: string): boolean {
+export function skipEntry(name: string): boolean {
   return GENERATION_NAME.test(name) || RETIRED_BACKUP_NAME.test(name) || COMPANION_NAME.test(name);
 }
 
@@ -150,9 +156,6 @@ function fileStamp(pathname: string): string | undefined {
   return stat && `${stat.ino}:${stat.size}:${stat.mtimeNs}:${stat.ctimeNs}`;
 }
 
-// Small ancillary stores remain migration inputs; large current stores and operator
-// images are not worth copying for a chain that does not own their schema.
-const ANCILLARY_SQLITE_MAX_BYTES = 64 * 1024 * 1024;
 const LARGE_COPY_BYTES = 256 * 1024 * 1024;
 
 function checkCopySpace(volumePath: string, bytes: number): void {
@@ -255,7 +258,7 @@ export async function copyTree(
   skip: (absolute: string) => boolean,
   baseline: Map<string, string | undefined>,
   options: {
-    requiredSqlite?: ReadonlySet<string>;
+    targets?: readonly { path: string }[];
     log?: { info: (message: string) => void };
     additionalCopyBytes?: number;
   } = {},
@@ -341,20 +344,13 @@ export async function copyTree(
               0,
             )
           : 0);
-      if (
-        sqlite &&
-        fileBytes > ANCILLARY_SQLITE_MAX_BYTES &&
-        !options.requiredSqlite?.has(source)
-      ) {
-        continue;
-      }
       files.push({ source, target, mode: stat.mode, sqlite });
       // Budget ordinary files too: FICLONE may fall back to a full byte copy.
       bytes += fileBytes;
     }
   };
   walk(live, new Set([fs.realpathSync(live)]));
-  for (const required of options.requiredSqlite ?? []) {
+  for (const { path: required } of options.targets ?? []) {
     if (fs.existsSync(required) && !files.some((file) => file.source === required)) {
       throw new Error(
         `State upgrade refused: database ${required} is outside the copy scope. Nothing live was changed. Run openclaw doctor --fix under offline maintenance, then start the Gateway again.`,
@@ -581,6 +577,12 @@ export function applyPlan(plan: UpgradePlan): void {
   ];
   for (const op of ordered) {
     directories.add(path.dirname(op.live));
+    if (op.next && isSqliteFile(op.next)) {
+      // Native close retains admission's identity descriptor. Windows cannot
+      // replace either file until the joined swap owner releases that custody.
+      retireSqliteDatabaseAdmissionForPath(op.live);
+      retireSqliteDatabaseAdmissionForPath(op.next);
+    }
     // Shared-memory and seal files are rebuilt on open; they carry no data.
     if (op.kind !== "add" && !/-shm$|\.seal$/u.test(op.live)) {
       preserve(op.live, `${op.live}.pre-${plan.appVersion}`);
@@ -598,33 +600,67 @@ export function applyPlan(plan: UpgradePlan): void {
 }
 
 /** Keep one prior generation of owned files only. Operator recovery is never pruned. */
-export function pruneGenerations(
+export async function pruneGenerations(
   root: string,
   keepVersion: string,
   pinnedVersions: ReadonlySet<string>,
   ownedFiles: ReadonlySet<string>,
-): string[] {
+  postgres: {
+    config: OpenClawConfig;
+    activeAnchors: string[];
+    warn: (message: string) => void;
+  },
+): Promise<string[]> {
   const removed: string[] = [];
   // No recursive walk: ownership comes from the copy or the durable swap plan.
   const directories = new Set([...ownedFiles].map((file) => path.dirname(file)));
+  const generations: Array<{ absolute: string; retained: boolean }> = [];
   for (const directory of directories) {
     for (const name of fs.readdirSync(directory)) {
-      const match = /^(.*)\.pre-(\d[^/]*)$/u.exec(name);
+      const match = /^(.*)\.pre-([^/]+)$/u.exec(name);
       if (!match || RETIRED_BACKUP_NAME.test(name)) {
         continue;
       }
       const [, original, generation] = match;
       const absolute = path.join(directory, name);
-      if (
-        ownedFiles.has(path.join(directory, original!)) &&
-        generation !== keepVersion &&
-        !pinnedVersions.has(generation!) &&
-        fs.lstatSync(absolute).isFile()
-      ) {
-        fs.rmSync(absolute);
-        removed.push(path.relative(root, absolute));
+      if (ownedFiles.has(path.join(directory, original!)) && fs.lstatSync(absolute).isFile()) {
+        generations.push({
+          absolute,
+          retained: generation === keepVersion || pinnedVersions.has(generation!),
+        });
       }
     }
+  }
+  const retainedAnchors = [
+    ...postgres.activeAnchors,
+    ...generations.filter((entry) => entry.retained).map((entry) => entry.absolute),
+  ].filter(isSqliteFile);
+  const protectedNamespaces = new Set(
+    retainedAnchors.flatMap((file) => {
+      const engine = readBackupEngine(file);
+      return engine.engine === "postgres" ? [engine.namespace] : [];
+    }),
+  );
+  for (const { absolute, retained } of generations) {
+    if (retained) {
+      continue;
+    }
+    if (isSqliteFile(absolute)) {
+      const engine = readBackupEngine(absolute);
+      if (engine.engine === "postgres" && !protectedNamespaces.has(engine.namespace)) {
+        try {
+          await retirePostgresUpgrade(absolute, postgres.config, retainedAnchors);
+        } catch (error) {
+          // Keep the anchor with its namespace when ownership or cleanup is uncertain.
+          postgres.warn(
+            `Previous PostgreSQL recovery data was kept because cleanup could not finish: ${formatErrorMessage(error)}. Run openclaw doctor to inspect retained recovery data.`,
+          );
+          continue;
+        }
+      }
+    }
+    fs.rmSync(absolute);
+    removed.push(path.relative(root, absolute));
   }
   return removed;
 }

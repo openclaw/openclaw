@@ -100,6 +100,12 @@
   color: var(--text);
 }
 
+/* Paste sign-in shows the badge beside its title (64px to 44px). */
+.wizard-sign-in__badge--compact {
+  margin: 0;
+  zoom: 0.69;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .wizard-sign-in__ring {
     animation: none;

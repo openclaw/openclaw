@@ -1,7 +1,6 @@
 import { createRuntimeConfigReader } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { isRecord, readStringValue as readString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { ClawdbotConfig, HistoryEntry, PluginRuntime, RuntimeEnv } from "../runtime-api.js";
-import { normalizeFeishuCommandProbeBody } from "./bot-content.js";
 import type { handleFeishuMessage } from "./bot.js";
 import {
   claimUnprocessedFeishuMessage,
@@ -16,6 +15,7 @@ import {
   type FeishuIngressLifecycle,
 } from "./feishu-ingress.js";
 import { isMentionForwardRequest } from "./mention.js";
+import { normalizeFeishuCommandProbeBody } from "./message-content.js";
 import { parsePostContent } from "./post.js";
 import type { getFeishuSequentialKey } from "./sequential-key.js";
 import { createSequentialQueue } from "./sequential-queue.js";

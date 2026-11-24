@@ -1,0 +1,10 @@
+# Stable 2026.11.5 main closeout: 629 net test lines against
+# 5fb231527f4f14d83bc27067879370debe4d2b7a; 229 beyond the default allowance.
+# Covers distinct real-owner failures: held CLI transcript identities, retained
+# cron rollover plus revoked sharing, binary64 memory rebuild pages on Bun,
+# same-root versus foreign-root retired pnpm service reconciliation, and
+# the extended-stable immutable updater's post-activation denial.
+# Also covers restart snapshot fencing, managed reload leases, canonical reply
+# targets, recorded widget capability, exact app matching, and cold CLI imports.
+# SQLite/worker and service-install fixtures prove boundaries helper mocks cannot.
+229

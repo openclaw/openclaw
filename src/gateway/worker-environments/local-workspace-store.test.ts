@@ -891,6 +891,7 @@ it("recovers an oversized committed row after reply loss without replaying or tr
   );
   const baseline = JSON.stringify({ synthetic: "x".repeat(SQLITE_WORKER_MAX_MESSAGE_BYTES / 4) });
   const journalPack = Buffer.alloc(1024, 7);
+  const publicationPack = new Uint8Array(journalPack);
   let writes = 0;
   let retainedGuard: (() => void) | undefined;
   const lostReply = probe.command(stateWorker, async (command, executeOptions, scope) => {
@@ -912,12 +913,16 @@ it("recovers an oversized committed row after reply loss without replaying or tr
         journal_pack: journalPack,
         paused_runtimes_json: undefined,
       },
+      undefined,
+      undefined,
+      publicationPack,
     );
     expect(store.get()).toEqual(row);
     return row;
   });
   lostReply.mockRestore();
   expect(writes).toBe(1);
+  expect(publicationPack.byteLength).toBe(0);
   assert(retainedGuard);
   expect(retainedGuard).toThrow();
   const committed = await readLocalWorkspaceProjection(worktreeId, env);

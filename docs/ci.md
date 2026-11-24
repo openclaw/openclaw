@@ -60,6 +60,12 @@ runtime policies, within the existing 150-second test budget.
 Other runners, preparation modes, parallel jobs, and full validation keep their
 standalone boundary ownership.
 
+Hosted compact Gateway-methods groups retain the existing 96-file ceiling and
+dedicated rows above 32 files even when a full dual-runtime dispatch uses the
+compact PR layout. File membership, worker limits, row caps, and deadlines are
+unchanged. Smaller tails and hourly main validation keep their existing packing;
+these bounds do not replace fresh whole-row timing qualification.
+
 Broad PRs retain their compact selected-owner Node plan when time-based splitting
 would exceed the 130-row matrix cap. See [Node test lanes](/ci/scope-and-routing/node-test-lanes).
 
@@ -87,7 +93,7 @@ import graph.
 This page is an index. CI is documented on nine pages, one per reader
 job. Open the page that matches your task.
 
-Storage-engine PRs, scheduled main runs, and manual CI validations include three hosted PostgreSQL 17
+Storage-engine PRs, scheduled main runs, and manual CI validations include four hosted PostgreSQL 17
 [conformance shards](/help/testing/suites#postgresql-conformance), required by the CI gate when selected.
 They run in parallel with separate databases and unchanged three-worker test limits,
 with a 30-minute job budget each. The conformance runner models sequential configuration processes, three parallel file
@@ -100,7 +106,7 @@ Shard 1 reserves 150 seconds for the PR-only PostgreSQL 16 Gateway cron smoke,
 including its second worker preparation and service lifecycle. All callers use
 the same deterministic assignment, including runs without that extra smoke.
 Unknown targets retain a default weight. Inspect any assignment with
-`--shard 1/3 --list` (or `2/3`, `3/3`). Refresh measurements from successful natural
+`--shard 1/4 --list` (or `2/4`, `3/4`, `4/4`). Refresh measurements from successful natural
 runs as the suite changes. The latest two file samples track recent workload
 changes; configuration and preparation costs use observed medians. These are
 estimates, including inferred import/hook costs from verbose logs, not exact
@@ -111,13 +117,12 @@ The combined inventory matches the local full suite; a failure in one shard leav
 the others running and fails the aggregate gate.
 
 The PostgreSQL Scheduled Qualification workflow (`postgres-conformance-weekly.yml`) runs
-the same three conformance shards on main with digest-pinned images: PostgreSQL 17 daily
+the same four conformance shards on main with digest-pinned images: PostgreSQL 17 daily
 at 07:17 UTC, and PostgreSQL 16 and 18 every Monday at 06:43 UTC. Manual dispatch accepts
 `versions=all` (the default), `pg16`, `pg17`, or `pg18`. PostgreSQL 17 uses the same image
-pin as PR CI. The daily run adds three hosted jobs at roughly 25 minutes each
-(75 runner-minutes per day); Monday's weekly run retains six jobs. All runs use the same
-measured shard allocator with a 50-minute job budget and at most three jobs running at once.
-PR CI keeps its existing path selection and three PostgreSQL 17 shards.
+pin as PR CI. The daily run adds four hosted jobs; Monday's weekly run retains eight jobs. All runs use the same
+measured shard allocator with a 50-minute job budget and at most four jobs running at once.
+PR CI keeps its existing path selection and four PostgreSQL 17 shards.
 All versions start with `max_locks_per_transaction=512` for the conformance workload.
 Scheduled failures are visible in Actions through the workflow's failed jobs, with no additional notifications;
 the PR failure classifier continues to compare against hourly main CI's matching PostgreSQL 17 jobs.
@@ -265,6 +270,23 @@ chunk allows 75 minutes; the remaining OpenAI package chunk allows 60 minutes. S
 For the published-upgrade regression gate, see [selection and routing](/ci/scope-and-routing#scope-and-routing), [runner budgets](/ci/capacity#runner-registration-budget), and [Package Acceptance baselines](/ci/release-validation#suite-profiles). Weekly validation is listed under [Update Migration](/ci/scheduled-workflows#update-migration).
 
 Main-tier and selected manual/release CI run the [published-driver update cell](/ci/scope-and-routing/selection#published-driver-update-cell). One GitHub-hosted Linux job runs the latest stable npm updater against the candidate package with two synthetic agents. The Docker cell retains its twenty-minute budget, followed by a fifteen-minute native systemd survivor step using the same candidate and published `2026.10.9`. Both results are included in `openclaw/ci-gate`; the broader main/release Docker survivor remains separate.
+
+Relevant update, state, update CLI, daemon/launcher, and survivor-harness PRs
+also select `release-update-survivor` in the existing Docker seed job.
+It adds one source-built successor and one Linux npm update that commits
+a schema migration. Crash-after-migration enforcement belongs to the
+store-custody change that makes its rollback assertions pass.
+The lane has a 40-minute total budget; each container keeps its 20-minute
+limit. No new job, matrix row, runner class, or concurrency slot is added.
+An update-only PR can newly select the existing Docker seed job (at most one
+additional runner registration per run). The 21-PR burst envelope adds at
+most 21 registrations to the existing 5,110 estimate: 5,131 remains below
+the 6,000 operating target for the current 10,000-registration bucket.
+Full Package Acceptance retains this lane separately; normal manual CI keeps
+its existing six-lane seed profile and 115-minute job budget.
+On failure, named artifacts retain the trial, latest 20 update rows, readiness
+and schema observations, and the last 64 KiB of the combined foreground
+Gateway/launcher journal. Environment dumps remain excluded.
 
 Full `main` CI and cache warming are [hourly by default](/ci/scheduled-workflows#hourly-main-ci); `OPENCLAW_CI_ON_PUSH=true` restores their existing per-push admission. CodeQL, Workflow Sanity, and CI's `security-fast` keep their existing main-push scopes. On every main push, `security-fast` also runs the direct-stop cleanup process contract and production lint-suppression inventory on both Node and pinned Bun, independently of changed paths. These two regressions reuse its dependency setup and collect all four results before failing; hourly main CI retains their existing owners. Docs-only `main` pushes still skip the CI workflow and push-triggered cache warming. The cache warmer publishes dependencies independently of long builds and maintains a bounded hosted seed in hybrid mode. Every admitted upstream `main` run exercises one published-driver × candidate Docker upgrade; ordinary manual/release validation adds the other five Docker seed lanes. QA Smoke, real-Gateway browser checks, and named process proofs retain their selected `main` coverage and manual/release validation. Pull requests and exact-head PR fallback dispatches run static correctness gates, owner-bounded tests, transitive import consumers, protected regressions, and a six-file runtime smoke set. Node rows target at most 150 estimated test seconds. Single files and indivisible standard groups can exceed that target; setup, builds, and queues are separate from test time. Node shards selecting sandbox container E2E cases prepare the Docker sandbox image when the runner does not already have it. Missing or unbounded runtime selection fails preflight instead of falling back to every test. Windows, browser, Docker, QA Smoke, packaging, contract, and extension families opt in through their existing owners; individual built-process proofs have independent owner flags. Full static fallback does not widen them. The [PR-exempt integration tier](/ci/scope-and-routing/node-test-lanes) retains measured slow tests in hourly `main` and Full Release Validation, with PR opt-in when their tests or subjects change. The existing Plugin Prerelease workflow owns complete extension runtime coverage hourly and in Full Release Validation; normal CI selects affected extension owners on PRs. Windows retains its complete inventory across five measured file shards on hourly main and ordinary manual/release validation; Windows-owner PRs retain that complete inventory.
 
@@ -444,8 +466,11 @@ Release-path migration matrices isolate channel switching and each published
 baseline on separate runners when multiple baselines are selected; per-host
 weighted resource limits and exact-candidate artifact checks remain unchanged.
 Package Acceptance admits its long standalone upgrade lanes before expanded
-scenario jobs and orders pinned baseline cohorts newest first, without changing
-its matrix cap or scenario coverage.
+scenario jobs and orders pinned baseline cohorts newest first. Its
+[expanded package-survivor matrix](/ci/release-validation/package-acceptance)
+admits up to 64 jobs on GitHub-hosted runners without a custom runner group;
+source-only, unexpanded, self-hosted/custom-group, and update-migration matrices
+retain 32. Scenario coverage and per-runner limits are unchanged.
 
 Android native resource preparation uses the Mermaid renderer's filtered dependency install, including optional build tooling. Pnpm retains root dependencies but omits unrelated plugin packages; Gradle still builds the assets and runs the selected native tests and lint. Historical targets keep their compatibility path.
 
@@ -480,6 +505,10 @@ The first `checks-ui` shard also runs a curated WebKit overlay and composer-focu
 Control UI E2E skips Vitest requirement discovery when its selected files cannot
 include a WebKit or Gateway-runtime suite. Matching or unspecified selections
 retain the existing shard discovery before installing WebKit or preparing runtime.
+
+WebKit system-package downloads retry without the first mirror after a timeout.
+Recovery uses APT's configured local text mirror list, then restores it on success
+or failure. Package installation itself runs without a download deadline.
 
 The WebKit project requires every selected assertion to pass, with no expected-failure exceptions. Shared fixtures wait for usable overlay content, inspect native adopted stylesheets, and establish keyboard traversal independently of Safari's pointer-focus behavior.
 
@@ -597,8 +626,11 @@ An indivisible over-budget test fails planning with its owner named; unmeasured
 rows still need native timing evidence before claiming the 20-minute objective.
 
 Full Release Validation's exact-target UI job retains the current three native
-shards for both runtimes. Historical compatibility targets keep their original
-unsharded package command; see [UI job budgets](/ci/scope-and-routing/job-budgets).
+shards for both runtimes. Default Node compatibility targets whose own CI workflow
+already advertises native UI sharding use three partitions of their original
+package command, retaining file isolation, test deadlines, worker defaults, and
+complete discovery. Unknown targets and explicit runtime overrides retain the
+unsharded compatibility route; see [UI job budgets](/ci/scope-and-routing/job-budgets).
 
 Set the repository variable `OPENCLAW_RELEASE_RUNNER_GROUP` to reserve a runner
 group for Full Release Validation and its artifact, validation, and reusable
@@ -732,6 +764,11 @@ Every section heading from the previous single-page version keeps its anchor her
 - [Release channels](/install/development-channels)
 
 Ordinary PR iOS smoke keeps app and test-bundle compilation while selecting its two simulator groups by source owner. With neither group selected, simulator preparation is skipped. `OPENCLAW_CI_IOS_SIMULATOR_FULL=true` restores full PR execution; [selection and routing](/ci/scope-and-routing/selection) documents the owners and full hourly/release coverage.
+
+Selected iOS lanes install and verify the pinned simulator helper before compiling
+the app. A failed download stops the job before compilation. Simulator boot and
+preparation still run alongside the build, with the same checks required before
+tests start.
 
 Android's existing `android-access-native` emulator rows retain their packaged
 Access-crypto proof and exercise Gateway WebSocket and widget HTTPS clients on

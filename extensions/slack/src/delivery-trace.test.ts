@@ -858,7 +858,9 @@ describe("slack delivery trace goldens", () => {
     );
     if (method === "append") {
       expect(wirePayloads(events, "chat.appendStream").at(-1)).toMatchObject({
-        chunks: expect.arrayContaining([{ type: "markdown_text", text: "Waiting for checks." }]),
+        chunks: expect.arrayContaining([
+          expect.objectContaining({ title: "🧠 Waiting for checks." }),
+        ]),
       });
     }
     const posts = wirePayloads(events, "chat.postMessage");

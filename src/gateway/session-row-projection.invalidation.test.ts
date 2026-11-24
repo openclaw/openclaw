@@ -325,6 +325,10 @@ it("reuses descendants after parent progress while keeping inherited models curr
           }).row!;
       const siblingSnapshot = snapshot(siblingKey);
       const parentSnapshot = snapshot(parentKey);
+      const childLinks = () =>
+        projection.describe({ agentId: "main", key: parentKey })?.materialized.source.childLinks;
+      const originalLinks = childLinks();
+      expect(originalLinks?.map((link) => link.key)).toEqual(children);
       expect(() => {
         siblingSnapshot.label = "Reader mutation";
       }).toThrow(TypeError);
@@ -343,6 +347,7 @@ it("reuses descendants after parent progress while keeping inherited models curr
           expect(snapshot(parentKey)).not.toBe(parentSnapshot);
           expect(snapshot(parentKey).label).toBe("Updated parent");
           expect(parentSnapshot.label).toBeUndefined();
+          expect(childLinks()).toBe(originalLinks);
         }
       }
       const cases: Array<[Partial<SessionEntry>, string, string]> = [

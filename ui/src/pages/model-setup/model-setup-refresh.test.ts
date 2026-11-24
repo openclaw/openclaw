@@ -297,20 +297,13 @@ describe("Model setup refresh continuity", () => {
     async (change) => {
       const { context, client, request, snapshot, publishGatewaySnapshot } =
         createFirstRunContext();
-      const nativeInput = ".model-setup__native-discovery input";
-      const fresh = {
-        ...inventory,
-        nativeSessionCatalogPreferenceRequired: true,
-        nativeSessionCatalogs: [{ pluginId: "codex", label: "Codex" }],
-      };
-      const { page } = await mountDetection(context, client, fresh, change === "revision");
-      page.querySelector<HTMLInputElement>(nativeInput)!.click();
+      const { page } = await mountDetection(context, client, inventory, change === "revision");
       await selectManualProvider(page, "fixture-key");
       setInput(page, manualInput, "old-owner-draft");
       const pending = createDeferred<SystemAgentSetupDetectResult>();
       request
         .mockImplementationOnce(async () => pending.promise)
-        .mockResolvedValue({ ...fresh, workspace: "/new-owner" });
+        .mockResolvedValue({ ...inventory, workspace: "/new-owner" });
       scanButton(page).click();
       await page.updateComplete;
       if (change === "revision") {
@@ -335,7 +328,6 @@ describe("Model setup refresh continuity", () => {
       await Promise.resolve();
       expect(page.textContent).not.toContain("stale-model");
       expect(page.querySelector<HTMLInputElement>(manualInput)?.value).toBe("");
-      expect(page.querySelector(nativeInput)).toMatchObject({ checked: false });
       expect(page.querySelector("[data-selected]")).toBeNull();
     },
   );

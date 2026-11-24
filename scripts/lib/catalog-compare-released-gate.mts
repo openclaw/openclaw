@@ -42,6 +42,16 @@ export function releasedSchemaVersions(chunkSources: Iterable<string>): Set<numb
   return versions;
 }
 
+/**
+ * Stable dist entries (tsdown.config.ts) that export a publish-gate reader under its
+ * source name. Releases that ship one are run through it; older releases are searched
+ * by declaration instead. test/scripts/tsdown-config.test.ts pins these entries.
+ */
+export const RELEASED_READER_ENTRIES = {
+  refreshRemoteModelCatalog: "model-catalog/remote-refresh",
+  captureRuntimeConfigAsyncReader: "config/config",
+} as const;
+
 type Refresh = { status?: unknown; models?: unknown; error?: unknown };
 export type ReleaseReading = { emitted: number; refresh: Refresh };
 export type ReleaseVerdict = { line: string; failure?: string; skipped?: true };

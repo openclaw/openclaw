@@ -9,6 +9,7 @@ export type FastAbortRequestParams = {
   ctx: FinalizedRuntimeMsgContext;
   cfg: OpenClawConfig;
   isCommandTargetCurrent?: SessionSourceCheck | AsyncSessionSourceCheck;
+  onAbortRequest?: () => void;
 };
 
 export type FastAbortResult = {

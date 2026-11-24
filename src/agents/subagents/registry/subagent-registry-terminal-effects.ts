@@ -13,7 +13,10 @@ import {
 import { persistSubagentSessionTiming } from "./subagent-registry-helpers.js";
 import type { SubagentLifecycleCompletionContext } from "./subagent-registry-lifecycle-context.js";
 import { buildSafeLifecycleErrorMeta } from "./subagent-registry-lifecycle-log.js";
-import { commitSubagentLifecycleMutation } from "./subagent-registry-lifecycle-persistence.js";
+import {
+  commitSubagentLifecycleMutation,
+  SubagentLifecycleOwnerChangedError,
+} from "./subagent-registry-lifecycle-persistence.js";
 import { getCurrentSubagentRunOwner } from "./subagent-registry-memory.js";
 import { SubagentRegistryWriteError } from "./subagent-registry-persistence.js";
 import type { SubagentCompletionRequest, SubagentRunRecord } from "./subagent-registry.types.js";
@@ -284,11 +287,13 @@ export async function completeTerminalEffects(
           // A newer terminal publication can retire this callback while its
           // cleanup claim waits for persistence. Only that pre-commit refusal
           // is harmless; persistence and unknown-outcome failures must propagate.
+          const rejection =
+            error instanceof SubagentRegistryWriteError && error.outcome === "not-committed"
+              ? error.cause
+              : error;
           if (
-            error === retiredOwner ||
-            (error instanceof SubagentRegistryWriteError &&
-              error.outcome === "not-committed" &&
-              error.cause === retiredOwner)
+            rejection === retiredOwner ||
+            rejection instanceof SubagentLifecycleOwnerChangedError
           ) {
             if (isCurrentTerminalCallback() && context.newerGenerationOwnsSession(entry)) {
               await retireSupersededSession(entry);

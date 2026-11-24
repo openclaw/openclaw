@@ -62,13 +62,14 @@ Symptom-first checks for a Telegram bot that is not behaving.
 
   </Accordion>
 
-  <Accordion title="A final reply fails during a network interruption">
+  <Accordion title="A final reply fails during a network interruption or restart">
 
-    OpenClaw retries an ordinary text or rich-text final reply once after an
-    ambiguous network failure. This covers replies to your messages and routed
-    replies such as background exec completions. Recovery sends the saved reply;
-    it does not run the model or repeat completed tools. A delivery notice
-    appears only if recovery also fails.
+    OpenClaw resends an ordinary text or rich-text final reply once after an
+    ambiguous network failure, or after the Gateway stopped while the send was
+    in flight. This covers replies to your messages and routed replies such as
+    background exec completions. Recovery sends the saved reply; it does not run
+    the model or repeat completed tools. A delivery notice appears only if the
+    resend also fails or is interrupted.
 
     Telegram does not provide an idempotency key or chat-history lookup for
     these sends. If the original reply arrived but its acknowledgment was lost,

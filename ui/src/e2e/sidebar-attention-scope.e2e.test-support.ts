@@ -82,6 +82,8 @@ export async function runSidebarAttentionScopeFlow(params: SidebarAttentionScope
       },
       "cron.list": scopedCronResponses(writerJob),
       "models.authStatus": { providers: [], ts: 1 },
+      // The gateway records the dismissed run; failures carry no run time, so they fail at 0.
+      "cron.acknowledgeFailure": { acknowledgedAtMs: 0 },
     },
   });
   const cronScopeRequestCount = async (agentId: string | null) =>
@@ -141,6 +143,12 @@ export async function runSidebarAttentionScopeFlow(params: SidebarAttentionScope
         }),
       )
       .toEqual({ opacity: "1", pointerEvents: "auto" });
+    const close = page
+      .getByRole("dialog", { name: "Inbox" })
+      .getByRole("button", { name: "Close", exact: true });
+    expect(await mainDismiss.evaluate((button) => button.getBoundingClientRect().right)).toBe(
+      await close.evaluate((button) => button.getBoundingClientRect().right),
+    );
     await captureProof("08-desktop-inbox-main-agent.png", true);
     await automationRows
       .filter({ hasText: "Main release digest" })
@@ -149,9 +157,8 @@ export async function runSidebarAttentionScopeFlow(params: SidebarAttentionScope
     await captureProof("08a-desktop-inbox-row-click-result.png");
     await waitForControlUiRoute(page, { pathname: "/automations", routeId: "cron" });
     await captureProof("08b-desktop-inbox-row-navigation.png");
-    await page.goBack();
-    await waitForControlUiRoute(page, { pathname: "/new", routeId: "new-session" });
-
+    // Sessions returns to the conversation with its list and agent switcher.
+    await sidebar.locator('.sidebar-rail [data-navigation-view="sessions"]').click();
     await sidebar.getByRole("button", { name: /Switch agent/ }).click();
     await sidebar.locator('.sidebar-agent-menu [data-value="agent:writer"]').click();
     await waitForCronScope("writer");
@@ -162,9 +169,11 @@ export async function runSidebarAttentionScopeFlow(params: SidebarAttentionScope
     await captureProof("09-desktop-inbox-writer-agent.png", true);
     await sidebar.locator(".sidebar-issues-button").click();
 
+    // The Automations page has no header beside its sidebar; Usage keeps the shared agent scope
+    // in its header.
     const pages = await openSidebarPages(page);
-    await pages.getByRole("link", { name: "Automations", exact: true }).click();
-    await waitForControlUiRoute(page, { pathname: "/automations", routeId: "cron" });
+    await pages.getByRole("link", { name: "Usage", exact: true }).click();
+    await waitForControlUiRoute(page, { pathname: "/usage", routeId: "usage" });
     const pageScope = page.locator(".agent-scope-control openclaw-agent-select");
     await pageScope.locator(".agent-select__trigger").click();
     await pageScope
@@ -189,15 +198,19 @@ export async function runSidebarAttentionScopeFlow(params: SidebarAttentionScope
     await sidebar.locator(".sidebar-issues-button").click();
 
     const selectPageScope = async (label: string, agentId: string | null) => {
-      const previousCount = await cronScopeRequestCount(agentId);
       await pageScope.locator(".agent-select__trigger").click();
       await pageScope
         .locator(".agent-select__option[data-agent-option]")
         .filter({ hasText: label })
         .click();
-      await expect.poll(() => cronScopeRequestCount(agentId)).toBeGreaterThan(previousCount);
+      await expect.poll(() => pageScope.locator(".agent-select__label").textContent()).toBe(label);
+      // Returning to a scope reuses its valid inventory; a new RPC is not selection proof.
+      await waitForCronScope(agentId);
     };
     await selectPageScope("Main", "main");
+    await openAutomations();
+    await expectAutomations(1, 0);
+    await sidebar.locator(".sidebar-issues-button").click();
     await selectPageScope("All agents", null);
     await openAutomations();
     await expectAutomations(1, 0);
@@ -206,7 +219,7 @@ export async function runSidebarAttentionScopeFlow(params: SidebarAttentionScope
     const writerJobNext = failedJob("writer", "writer-release-digest-next");
     await gateway.setMethodResponse("cron.list", scopedCronResponses(writerJobNext));
     const previousAllCount = await cronScopeRequestCount(null);
-    await gateway.emitGatewayEvent("cron", {});
+    await gateway.emitGatewayEvent("cron.inventory.changed", {});
     await expect.poll(() => cronScopeRequestCount(null)).toBeGreaterThan(previousAllCount);
     await selectPageScope("Writer", "writer");
     const upstream = {

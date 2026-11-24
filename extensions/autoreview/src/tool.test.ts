@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { setImmediate } from "node:timers/promises";
 import type { OpenClawPluginToolContext } from "openclaw/plugin-sdk/plugin-entry";
 import { runCommandWithTimeout } from "openclaw/plugin-sdk/process-runtime";
 import { assert, beforeEach, expect, it, vi } from "vitest";
@@ -46,6 +47,10 @@ let request: typeof baseRequest & Record<string, unknown>;
 let next: Record<string, unknown>;
 let result: ReturnType<typeof commandResult>;
 let helperFailure: string;
+let submissionFailure: "exit" | "throw" | undefined;
+let captureStall: boolean;
+let helperKillError: Error | undefined;
+let helperHang: boolean;
 type Response = { pass: number; status: string; output: string | null; model: string | null };
 let response: Response | undefined;
 let cwd: string | undefined;
@@ -68,6 +73,10 @@ beforeEach(() => {
   next = {};
   result = commandResult({ stdout: "complete", cleanup: "normal" });
   helperFailure = "";
+  submissionFailure = undefined;
+  captureStall = false;
+  helperKillError = undefined;
+  helperHang = false;
   response = undefined;
   cwd = undefined;
   helperArgv = undefined;
@@ -96,16 +105,35 @@ beforeEach(() => {
       async run({ argv, input, signal }) {
         if (argv.includes("--native-handoff")) {
           helperArgv = argv;
-          return Promise.race([helper.promise, rejectOnAbort(signal)]);
+          return Promise.race([
+            helperKillError ? rejectOnAbort(signal, helperKillError) : helper.promise,
+            rejectOnAbort(signal),
+          ]);
         }
         if (argv.includes("--native-submit")) {
           response = JSON.parse(input!);
           const done = response?.status === "done";
-          if (!done || response?.pass === request.passes) {
+          if (
+            !helperHang &&
+            (!done || response?.pass === request.passes) &&
+            (!submissionFailure || helperFailure)
+          ) {
             const details = helperFailure ? {} : reportDetails(request.model);
             helper.resolve(json({ code: 1, ...details }, done ? 1 : 2, helperFailure));
           }
+          if (submissionFailure) {
+            // Let an already-completed helper settle before submission returns.
+            await setImmediate();
+            if (submissionFailure === "throw") {
+              throw new Error("response exchange was removed");
+            }
+            return { code: 1, stdout: "", stderr: "FileNotFoundError: response exchange" };
+          }
           return { code: 0, stdout: "", stderr: "" };
+        }
+        if (captureStall) {
+          // A blocked sandbox Git read: the prepared pass never appears.
+          return rejectOnAbort(signal);
         }
         return json(
           argv.some((arg) => arg.endsWith("/1.request.json"))
@@ -179,7 +207,10 @@ it.each([
   result.stderr = `${"x".repeat(5000)}\nAuthorization: Bearer unrelated-fake-secret-token`;
   const failure = await execute().catch((error: unknown) => error);
   assert(failure instanceof Error, "Expected reviewer failure");
-  expect(failure.message).toContain(`Reviewer command failed (${diagnostic}`);
+  expect(failure.message).toContain(`(${diagnostic}`);
+  expect(failure.message).toContain(
+    change.termination === "timeout" ? "Reviewer process timed out" : "Reviewer command failed",
+  );
   expect(failure.message).not.toContain("unrelated-fake-secret-token");
   expect(failure.message.length).toBeLessThan(4300);
   expect(response).toMatchObject({ status: "failed", output: null, model: null });
@@ -187,6 +218,28 @@ it.each([
 it("preserves helper diagnostics without a report", async () => {
   helperFailure = "source changed; rerun autoreview against the updated tree";
   await expect(execute()).rejects.toThrow(helperFailure);
+});
+it.each(["exit", "throw"] as const)(
+  "preserves the helper failure when late submission fails by %s",
+  async (failure) => {
+    helperFailure = "OpenClaw execution result timed out";
+    submissionFailure = failure;
+    await expect(execute()).rejects.toThrow(helperFailure);
+  },
+);
+it("preserves submission failure while the helper is still running", async () => {
+  submissionFailure = "throw";
+  await expect(execute()).rejects.toThrow("response exchange was removed");
+});
+it("preserves the reviewer timeout when failed-response delivery also fails", async () => {
+  request.engine_timeout_seconds = 4;
+  result.code = null;
+  result.termination = "timeout";
+  submissionFailure = "throw";
+  const failure = await execute().catch((error: unknown) => error);
+  assert(failure instanceof Error);
+  expect(failure.message).toContain("Reviewer process timed out after 4 seconds");
+  expect(failure.message).toContain("Response submission failed: response exchange was removed");
 });
 it.each(["installation", "authority"])("requires protected %s", (requirement) => {
   if (requirement === "installation") {
@@ -196,9 +249,20 @@ it.each(["installation", "authority"])("requires protected %s", (requirement) =>
   }
   expect(createAutoReviewTool(context)).toBeNull();
 });
-it.each([null, 900.25])("forwards settings with per-pass timeout %s", async (seconds) => {
+it.each([
+  [null, undefined],
+  [900.25, undefined],
+  [null, "host"],
+  [900.25, "host"],
+] as const)("forwards per-pass timeout %s with owner %s", async (seconds, owner) => {
   const model = "fixture/new-default";
-  Object.assign(request, { model, thinking: "high", passes: 2, engine_timeout_seconds: seconds });
+  Object.assign(request, {
+    model,
+    thinking: "high",
+    passes: 2,
+    engine_timeout_seconds: seconds,
+    timeout_owner: owner,
+  });
   await execute({ ...params, maxPriority: "P2", passes: 12, timeoutSeconds: 900 });
   expect(admitted.mock.calls[0]![0]).toEqual({ model, explicit: false });
   expect(helperArgv).toEqual(expect.arrayContaining(["--max-priority", "P2"]));
@@ -208,7 +272,9 @@ it.each([null, 900.25])("forwards settings with per-pass timeout %s", async (sec
   for (const [argv, options] of command.mock.calls) {
     expect(argv).toEqual(expect.arrayContaining(["--thinking", "high"]));
     const timeoutArgs = argv.filter((arg, i) => arg === "--timeout" || argv[i - 1] === "--timeout");
-    expect(timeoutArgs).toEqual(seconds === null ? [] : ["--timeout", "901"]);
+    expect(timeoutArgs).toEqual(
+      seconds === null ? [] : ["--timeout", owner === "host" ? "0" : "901"],
+    );
     expect(options).toMatchObject({ timeoutMs: seconds === null ? undefined : 900_250 });
   }
   expect(response).toMatchObject({ pass: 2, status: "done" });
@@ -233,4 +299,52 @@ it.each(["caller", "model authority"])("cancels after %s revocation", async (own
   expect(options.signal?.aborted).toBe(true);
   expect(response).toBeUndefined();
   await expect(fs.stat(path.dirname(options.cwd!))).rejects.toMatchObject({ code: "ENOENT" });
+});
+it("ends a stalled helper capture at the timeoutSeconds budget with the phase", async () => {
+  captureStall = true;
+  const started = Date.now();
+  const failure = await execute({ ...params, timeoutSeconds: 1 }).catch((error: unknown) => error);
+  assert(failure instanceof Error, "Expected budget error");
+  expect(failure.message).toContain("exceeded its 1 second timeoutSeconds budget");
+  expect(failure.message).toContain("waiting for the helper to prepare pass 1");
+  const elapsed = Date.now() - started;
+  expect(elapsed).toBeGreaterThanOrEqual(900);
+  expect(elapsed).toBeLessThan(5000);
+});
+it("keeps a non-abort helper kill failure from replacing the budget error", async () => {
+  captureStall = true;
+  helperKillError = new Error("sandbox helper exited 143 during termination");
+  const failure = await execute({ ...params, timeoutSeconds: 1 }).catch((error: unknown) => error);
+  assert(failure instanceof Error, "Expected budget error");
+  expect(failure.message).toContain("exceeded its 1 second timeoutSeconds budget");
+  expect(failure.message).not.toContain("exited 143");
+});
+it("ends a stalled reviewer pass at the timeoutSeconds budget with the phase", async () => {
+  command.mockImplementation(async (_argv, options) => {
+    assert(typeof options !== "number");
+    return rejectOnAbort(options.signal);
+  });
+  const failure = await execute({ ...params, timeoutSeconds: 1 }).catch((error: unknown) => error);
+  assert(failure instanceof Error, "Expected budget error");
+  expect(failure.message).toContain("running reviewer pass 1");
+});
+it("ends a stalled final delivery at the timeoutSeconds budget with the phase", async () => {
+  helperHang = true;
+  const failure = await execute({ ...params, timeoutSeconds: 1 }).catch((error: unknown) => error);
+  assert(failure instanceof Error, "Expected budget error");
+  expect(failure.message).toContain("waiting for the helper to deliver the final report");
+});
+it("stays pending past its own pace without timeoutSeconds until the caller cancels", async () => {
+  captureStall = true;
+  const authority = new AbortController();
+  let settled = false;
+  const pending = execute(params, authority.signal).finally(() => {
+    settled = true;
+  });
+  await new Promise((resolve) => {
+    setTimeout(resolve, 100);
+  });
+  expect(settled).toBe(false);
+  authority.abort(abortError);
+  await expect(pending).rejects.toBe(abortError);
 });

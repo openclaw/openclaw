@@ -74,10 +74,12 @@ export type SessionEntryCanonicalReplacement = SessionEntryReplacement & {
 };
 
 type ReplacementProjectionOptions = {
+  memberSourceRoleImport?: SessionEntryReplacementCommit["memberSourceRoleImport"];
   creationOperation?: SessionEntryReplacementCommit["creationOperation"];
   fieldPatch?: SessionEntryReplacementCommit["fieldPatch"];
   onCommittedEntries?: SessionEntryWorkerLifecycle["onCommittedEntries"];
   retainedExecution?: OpenClawAgentDatabaseExecution;
+  followRegistration?: SessionEntryCreateWithTranscriptOptions["followRegistration"];
   assertCommitAllowed?: () => void;
   withCommit?: SessionEntryCreateWithTranscriptOptions["withCommit"];
   ownerAssignment?: SessionEntryReplacementCommit["ownerAssignment"];
@@ -346,6 +348,7 @@ async function applySqliteSessionEntryReplacementProjection<T, TReplacement>(
       };
       const useWorker =
         creation !== undefined ||
+        params.memberSourceRoleImport !== undefined ||
         (isMainThread && supportsOpenClawAgentDatabaseExecution(databaseOptions));
       const readNative = () =>
         withSqliteSessionDatabase(databaseOptions, (database) => ({
@@ -393,6 +396,7 @@ async function applySqliteSessionEntryReplacementProjection<T, TReplacement>(
                       params.assertCommitAllowed?.();
                     },
                     params.retainedExecution,
+                    params.followRegistration,
                   );
                   result = await read();
                 }
@@ -518,6 +522,7 @@ async function applySqliteSessionEntryReplacementProjection<T, TReplacement>(
               },
             );
             const input: SessionEntryReplacementCommit = {
+              memberSourceRoleImport: params.memberSourceRoleImport,
               creationOperation: params.creationOperation,
               fieldPatch: params.fieldPatch,
               expectedRows,
@@ -664,6 +669,7 @@ export async function applySessionEntryCreationReplacement(
 }
 
 export async function applySessionEntryExactReplacements<T>(params: {
+  memberSourceRoleImport?: SessionEntryReplacementCommit["memberSourceRoleImport"];
   consumePendingReset?: boolean;
   assertCommitAllowed?: () => void;
   activeSessionKey?: string;

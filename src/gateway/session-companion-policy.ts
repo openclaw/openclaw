@@ -4,6 +4,7 @@ import {
   type AdmittedRunOperatorAuthority,
 } from "../agents/admitted-run-context.js";
 import { resolveAgentDir, resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
+import { DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { resolveApiKeyForProviderCore } from "../agents/model-auth-provider.js";
 import { isProviderAuthError } from "../agents/model-auth-runtime-shared.js";
 import type { ModelCatalogEntry } from "../agents/model-catalog.types.js";
@@ -92,7 +93,7 @@ export async function resolveSessionCompanionAskSelection(params: {
       cfg: params.cfg,
       agentId: params.agentId,
       catalog: await params.loadModelCatalog(),
-      defaultProvider: fallback.provider,
+      defaultProvider: fallback?.provider ?? DEFAULT_PROVIDER,
       defaultModel: fallback,
       raw: model,
     });
@@ -162,12 +163,14 @@ export async function resolveSessionCompanionCliRuntime(params: {
     return undefined;
   }
   const primary = resolveDefaultModelForAgent({ cfg: params.cfg, agentId: params.agentId });
-  const runtime = resolveCliRuntimeExecutionProvider({
-    provider: primary.provider,
-    cfg: params.cfg,
-    agentId: params.agentId,
-    modelId: primary.model,
-  });
+  const runtime =
+    primary &&
+    resolveCliRuntimeExecutionProvider({
+      provider: primary.provider,
+      cfg: params.cfg,
+      agentId: params.agentId,
+      modelId: primary.model,
+    });
   const candidate =
     selected ??
     (runtime &&

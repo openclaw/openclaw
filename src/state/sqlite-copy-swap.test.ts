@@ -400,7 +400,7 @@ describe("SQLite byte-copy boundary", () => {
       });
     const transfer = vi.spyOn(fileTransfer, "copyFileHandle");
     const clone = vi.spyOn(fs, "copyFileSync");
-    await copyTree(live, shadow, () => false, new Map(), { requiredSqlite: new Set([source]) });
+    await copyTree(live, shadow, () => false, new Map());
     expect(policy).toHaveBeenCalledOnce();
     expect(transfer).toHaveBeenCalledOnce();
     expect(clone).not.toHaveBeenCalled();
@@ -422,7 +422,7 @@ describe("SQLite byte-copy boundary", () => {
     vi.spyOn(sqliteFilesystem, "setSqliteDirectoryNoCow").mockImplementation(() => {
       throw new Error("chattr: not found");
     });
-    await copyTree(live, shadow, () => false, new Map(), { requiredSqlite: new Set([source]) });
+    await copyTree(live, shadow, () => false, new Map());
     expect(hash(path.join(shadow, "target.sqlite"))).toBe(hash(source));
   });
 

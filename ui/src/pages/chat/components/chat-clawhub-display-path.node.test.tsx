@@ -15,7 +15,7 @@ import { createSolidApplicationContextProvider } from "../../../test-helpers/sol
 import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { createClient } from "../../plugins/plugins-page.test-support.ts";
 import { createInitializationContext } from "../chat-application-context.test-support.ts";
-import { attachHistoryActivity } from "../chat-history-request.ts";
+import { attachHistoryActivity } from "../chat-history-snapshot.ts";
 import { createSessionEventState, emitGatewayEvent } from "../chat-state.test-support.ts";
 import { buildItems } from "../chat-thread.test-support.ts";
 import { AgentRunFrame } from "./chat-agent-run-frame.tsx";

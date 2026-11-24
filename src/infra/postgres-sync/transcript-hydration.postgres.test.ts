@@ -1,8 +1,8 @@
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import type { SessionTranscriptHydrationChunk } from "../../config/sessions/session-transcript-hydration.types.js";
 import { streamSessionTranscriptHydration } from "../../config/sessions/session-transcript-hydration.worker.js";
 import { runWithSessionTranscriptReadFence } from "../../config/sessions/session-transcript-read-fence.js";
-import type { SessionTranscriptHydrationChunk } from "../../config/sessions/session-transcript-worker.types.js";
 import * as readonlyStore from "../../state/openclaw-agent-db-readonly.js";
 import { installDatabaseProcessRole } from "../database-engine/admission-scope.js";
 import { PostgresSyncConnection } from "./connection.js";

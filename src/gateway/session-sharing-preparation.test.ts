@@ -445,7 +445,7 @@ it("restores exact committed facts after rollback without reviving a refused adm
     expect(after.membership.has("requester")).toBe(true);
     expect(harness.authorize(after)).toBeNull();
     expect(() => admission.assertSourceCurrent()).toThrow(
-      "source execution authority is no longer active",
+      "This agent run is no longer active. Start a new turn to retry.",
     );
   } finally {
     admission.close();
@@ -578,6 +578,25 @@ it.for(["unknown", "rollback", "other", "ops", "main"] as const)(
     }
   },
 );
+
+it("retains missing-session facts through empty database creation, but not a new session", async ({
+  state,
+}) => {
+  const cfg = { agents: { entries: { main: {} } } };
+  await state.writeConfig(cfg);
+  setRuntimeConfigSnapshot(cfg);
+  const storePath = resolveOpenClawAgentSqlitePath({ agentId: "main", env: state.env });
+  const harness = sharingHarness(cfg, "agent:main:first-chat", storePath);
+  using prepared = releasing(await harness.prepareMissing());
+  expect(prepared.readCurrent(cfg).target).toBeNull();
+  await prepareOpenClawAgentDatabaseExecution(
+    { agentId: "main", path: storePath, env: state.env },
+    () => {},
+  );
+  expect(prepared.readCurrent(cfg).target).toBeNull();
+  harness.write(restrictedEntry("new-session", "new-generation"));
+  expect(() => prepared.readCurrent(cfg)).toThrow(unavailableMessage);
+});
 
 it("invalidates absent shared-store facts when another physical owner becomes available", async ({
   state,

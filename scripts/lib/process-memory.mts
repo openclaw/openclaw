@@ -179,7 +179,10 @@ function relativeCgroupPath(mountRoot: string, cgroupPath: string) {
 
 // Raw diagnostics share the budget owner's hierarchy mapping. Memory peaks are
 // absolute; callers must not add ancestor usage to the leaf or reset counters.
-export function readProcessCgroupV2Snapshot(params: MemoryLimitParams = {}) {
+export function readProcessCgroupV2Snapshot(
+  params: MemoryLimitParams = {},
+  options: { includeMemoryDetails?: boolean } = {},
+) {
   if ((params.platform ?? process.platform) !== "linux") {
     return null;
   }
@@ -199,6 +202,7 @@ export function readProcessCgroupV2Snapshot(params: MemoryLimitParams = {}) {
     "memory.events",
     "memory.pressure",
     "cpuset.cpus.effective",
+    ...(options.includeMemoryDetails ? ["memory.max", "memory.high", "memory.stat"] : []),
   ];
   return [...directories].map((directory) => ({
     directory,

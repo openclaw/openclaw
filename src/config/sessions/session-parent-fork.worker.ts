@@ -7,6 +7,7 @@ import {
 } from "../../sessions/model-overrides.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db-contract.js";
 import type { AgentWorkerOperationContext } from "../../state/openclaw-agent-operation-context.js";
+import { forkCliHistoryBoundary } from "./cli-history-boundary.js";
 import { forkCliSessionBindings } from "./cli-session-binding.js";
 import type {
   ForkSessionEntryFromParentTargetResult,
@@ -248,6 +249,7 @@ function forkSessionEntryInTransaction(
     totalTokensFresh: false,
     totalTokensVersion: undefined,
     cliSessionBindings,
+    cliHistoryBoundary: forkCliHistoryBoundary(freshParent, fork.transcript.sessionId),
     cliSessionIds: undefined,
     claudeCliSessionId: undefined,
   };

@@ -1,5 +1,44 @@
 # Paced transcript-facts backfill owner proof
 
+## Coverage-probe writer admission
+
+`transcript-facts-probe-measure.ts` measures the real background scheduler alongside
+foreground actor appends. Prepare an isolated, fragmented fixture with ordinary
+message facts already covered; custom dependency markers remain for real batches:
+
+```sh
+python3 scripts/perf/transcript-active-facts.py \
+  --output .local/facts-probe --schema src/state/openclaw-agent-schema.sql \
+  --name synthetic --rows 3200000 --mode full --schema-version 42 \
+  --longest-session-rows 49000 --finalize-long-sessions \
+  --file-bytes 37580963840 --cover-message-facts
+cp -c .local/facts-probe/synthetic.sqlite .local/facts-probe/active.sqlite
+node --import ./scripts/tsx.mjs scripts/perf/transcript-facts-probe-measure.ts \
+  --fixture .local/facts-probe/active.sqlite --output .local/facts-probe/a1.json
+```
+
+Use a new native filesystem clone (macOS `cp -c`) or copy for every arm, outside
+measurement. Run identical harness bytes in pinned baseline and candidate checkouts.
+Five serial A1/A2/B groups use 20 warmup appends, warmed backfill transports, and
+1,000 measured actor appends with 1-ms arrival spacing. The backfill obeys every
+returned delay. Repeat A/A/B separately with `--allocations` for sampled host
+allocation; process CPU includes workers. `node --cpu-prof --cpu-prof-dir=<directory>`
+provides host profiles, including unmeasured startup and teardown. The existing
+`GatewayBenchWorkerProfiler` can collect worker profiles through its private
+inspector channel; retain its worker completion manifest alongside the profiles.
+Always join each process before removing its owned clone and SQLite sidecars.
+
+Acceptance: no discovery/probe writer reservations, successful foreground appends,
+and lower tail queue wait without a material CPU/allocation regression against
+both controls. Reports include raw reservation records, median/p95/p99/max append
+and queue times, admitted probe time, backfill ticks, CPU, allocation and host load.
+Sparse contention can leave p99 at zero; also compare total queued time and maximum
+wait from the raw records. Keep all controls and adverse results. This partial-pass
+owner workload does not prove Gateway readiness, btrfs commit latency, or complete
+database backfill; the scheduler regression tests prove completion and resumability.
+
+## Native batch and hydration
+
 Run only against a synthetic fixture. The harness executes the production discovery,
 transaction batch, and non-resident actor-hydration owners. It does not measure Gateway
 worker admission, concurrent foreground traffic, drain, or shutdown; those require the

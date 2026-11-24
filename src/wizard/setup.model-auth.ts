@@ -223,6 +223,7 @@ export async function runSetupModelAuthStep(params: {
           config: nextConfig,
           prompter,
           allowKeep: true,
+          allowSkipUnconfigured: true,
           includeProviderPluginSetups: false,
           loadCatalog: false,
           agentId: target.agentId,

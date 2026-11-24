@@ -76,14 +76,19 @@ export function bumpAgentRunIndexVersion(
   getAgentRunRegistryState().version += 1;
   for (const target of previous &&
   (previous.sessionKey !== context?.sessionKey ||
-    (!previous.sessionKey && previous.sessionId !== context?.sessionId) ||
+    ((!previous.sessionKey || previous.sessionId) && previous.sessionId !== context?.sessionId) ||
     previous.agentId !== context?.agentId)
     ? [previous, context]
     : [context]) {
     const { sessionKey, sessionId, agentId } = target ?? {};
     sessionChanges.emit(
       sessionKey
-        ? { sessionKey, agentId, scope: "runtime" }
+        ? {
+            sessionKey,
+            agentId,
+            scope: "runtime",
+            ...(sessionId ? { runtimeSession: { sessionId, agentId } } : {}),
+          }
         : {
             all: true,
             scope: "agent-runs",

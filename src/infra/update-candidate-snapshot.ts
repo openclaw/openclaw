@@ -36,8 +36,7 @@ import {
   readUpdateStateResult,
 } from "./update-candidate-state.result.js";
 import { resolveUpdateCaptureRoot } from "./update-capture-paths.js";
-import { UpdateCaptureSpaceError } from "./update-capture-space.js";
-import { checkUpdateDatabaseBackupSpace } from "./update-database-backup-space.js";
+import { assessUpdateDatabaseSpace } from "./update-database-backup-space.js";
 import { UPDATE_RUN_DIAGNOSTIC_LIMIT, UPDATE_RUN_TEXT_LIMIT } from "./update-run-limits.js";
 import type { UpdateRunStep } from "./update-run-record.js";
 import {
@@ -150,10 +149,19 @@ export async function resolveUpdateCandidateAdmissionTimeoutMs(
   return Math.min(params.stepTimeoutMs, timeoutMs);
 }
 
-/** Before anything changes, refuse an update whose activation database backup cannot fit. */
+export type UpdateSnapshotSpaceAssessment = {
+  step: UpdateStepResult;
+  /** The migration has no room, or the pre-migration image will be skipped. */
+  shortfall: boolean;
+};
+
+/**
+ * Before anything changes. Refuses only when the migration itself has no room;
+ * an image that does not fit is skipped later, never a reason to refuse.
+ */
 export async function assessInitialUpdateSnapshotCapacity(
   params: InitialSnapshotParams & { backupDirectory: string },
-): Promise<UpdateStepResult> {
+): Promise<UpdateSnapshotSpaceAssessment> {
   const started = Date.now();
   const step = {
     name: "snapshot-space-preflight",
@@ -168,38 +176,41 @@ export async function assessInitialUpdateSnapshotCapacity(
         (family) =>
           `SQLite family ${family.path}: ${formatDiskSpaceBytes(family.bytes)} (database and supporting files).`,
       );
-    let warnings: string[];
-    try {
-      const backup = await checkUpdateDatabaseBackupSpace(params.backupDirectory, size, params);
-      diagnostics.push(...backup.diagnostics);
-      warnings = backup.warnings;
-    } catch (error) {
-      if (!(error instanceof UpdateCaptureSpaceError)) {
-        throw error;
-      }
+    const space = await assessUpdateDatabaseSpace(params.backupDirectory, size);
+    diagnostics.push(...space.diagnostics);
+    if (space.refusal) {
       return {
-        ...step,
-        durationMs: Date.now() - started,
-        exitCode: 1,
-        // The instruction line leads; the blank line keeps the diagnostics out of the terminal.
-        stderrTail: [`Update refused: ${error.message}`, "", ...diagnostics].join("\n"),
+        shortfall: true,
+        step: {
+          ...step,
+          durationMs: Date.now() - started,
+          exitCode: 1,
+          // The instruction line leads; the blank line keeps the diagnostics out of the terminal.
+          stderrTail: [`Update refused: ${space.refusal}`, "", ...diagnostics].join("\n"),
+        },
       };
     }
     return {
-      ...step,
-      durationMs: Date.now() - started,
-      exitCode: 0,
-      diagnostics,
-      ...(warnings.length ? { warnings } : {}),
+      shortfall: space.imageSkipped,
+      step: {
+        ...step,
+        durationMs: Date.now() - started,
+        exitCode: 0,
+        diagnostics,
+        ...(space.warnings.length ? { warnings: space.warnings } : {}),
+      },
     };
   } catch {
     return {
-      ...step,
-      durationMs: Date.now() - started,
-      exitCode: 0,
-      warnings: [
-        "Database backup space could not be measured before the update; activation checks it again.",
-      ],
+      shortfall: false,
+      step: {
+        ...step,
+        durationMs: Date.now() - started,
+        exitCode: 0,
+        warnings: [
+          "Database backup space could not be measured before the update; activation checks it again.",
+        ],
+      },
     };
   }
 }

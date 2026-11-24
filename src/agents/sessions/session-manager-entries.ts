@@ -13,6 +13,7 @@ import {
   sessionManagerAppendPromptContext,
   type PrepareModelPromptProjection,
 } from "./model-prompt-projection-append.js";
+import { createSessionCompactionEntry } from "./session-compaction-persistence.js";
 import { withSessionManagerAppend } from "./session-manager-append-admission.js";
 import { SessionManagerAppend } from "./session-manager-append.js";
 import { generateSessionEntryId } from "./session-manager-id.js";
@@ -62,16 +63,16 @@ export class SessionManagerEntries extends SessionManagerAppend {
     metadata?: CompactionEntry["__openclaw"],
     tokensAfter?: number,
   ): Promise<string> {
-    const entry: CompactionEntry = this.createEntry({
-      type: "compaction",
+    const entry = createSessionCompactionEntry(
+      this.appendParentId,
       summary,
       firstKeptEntryId,
       tokensBefore,
-      ...(tokensAfter !== undefined ? { tokensAfter } : {}),
       details,
       fromHook,
-      ...(metadata?.runId || metadata?.itemId ? { __openclaw: metadata } : {}),
-    });
+      metadata,
+      tokensAfter,
+    );
     await this.appendEntryAsync(entry, {
       invalidateSerializedPrefixCache: fromHook === true || details !== undefined,
     });
@@ -89,16 +90,16 @@ export class SessionManagerEntries extends SessionManagerAppend {
     tokensAfter?: number,
   ): string {
     prepareSessionManagerSync("appendCompaction", this.persistenceTarget, this);
-    const entry: CompactionEntry = this.createEntry({
-      type: "compaction",
+    const entry = createSessionCompactionEntry(
+      this.appendParentId,
       summary,
       firstKeptEntryId,
       tokensBefore,
-      ...(tokensAfter !== undefined ? { tokensAfter } : {}),
       details,
       fromHook,
-      ...(metadata?.runId || metadata?.itemId ? { __openclaw: metadata } : {}),
-    });
+      metadata,
+      tokensAfter,
+    );
     this.appendEntry(entry, {
       invalidateSerializedPrefixCache: fromHook === true || details !== undefined,
     });

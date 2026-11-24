@@ -29,7 +29,7 @@ import {
   requireGit,
   runGit,
 } from "./git.js";
-import { appendNameOrdinal, validateName } from "./name.js";
+import { appendWorktreeIdSuffix, validateName } from "./name.js";
 import { assertOwnerWorktreeReuse, worktreeOwnerMatches } from "./owner.js";
 import { readPendingWorktrees, releasePendingWorktree } from "./pending-slots.js";
 import {
@@ -97,9 +97,10 @@ export async function prepareWorktreeDestination(params: {
   configuredRoot?: string;
   repository: ResolvedRepository;
   gitInventory: Awaited<ReturnType<typeof readWorktreeGitInventory>>;
-  owner: Pick<CreateManagedWorktreeParams, "ownerKind" | "ownerId">;
   suppliedName?: string;
   suggestedName: string;
+  /** The new worktree's ID; generated names carry its prefix. */
+  worktreeId: string;
 }) {
   const { env, repository } = params;
   const configuredRoot = resolveManagedWorktreeRoot(env, params.configuredRoot);
@@ -111,8 +112,8 @@ export async function prepareWorktreeDestination(params: {
     params.gitInventory,
     repository.fingerprint,
     root,
-    params.owner,
     params.suggestedName,
+    params.worktreeId,
     params.suppliedName,
   );
   return { root, name, worktreePath: path.join(root, name), branch: `openclaw/${name}` };
@@ -181,7 +182,7 @@ export async function createWithWorktreeAllocation(
       const failures = [error];
       if (publication.pending) {
         try {
-          await withWorktreeAllocationLease(
+          await withWorktreeMutationLease(
             { env: params.env, id: publication.id },
             async (allocation) => {
               if (publication.pending && !(await worktreePathExists(publication.pending.path))) {
@@ -228,18 +229,18 @@ export async function createWithWorktreeAllocation(
       if (error instanceof WorktreePendingContentionError && !publication.record) {
         await withWorktreeMutationLease({ ...params, id: error.worktreeId }, async () => {});
         // The creator can die during the wait. Release checkout custody before allocation recovery.
-        await withWorktreeAllocationLease(params, async () => {
-          const pending = (await readPendingWorktrees(params.env)).find(
+        const pending = await withWorktreeAllocationLease(params, async () =>
+          (await readPendingWorktrees(params.env)).find(
             ({ record, state }) => record.id === error.worktreeId && state === "pending",
+          ),
+        );
+        if (pending) {
+          await requireNewWorktreeBranch(pending.record.repoRoot, pending.record.branch);
+          throw new Error(
+            "Worktree creation did not settle; run openclaw worktrees gc to recover its pending slot",
+            { cause: error },
           );
-          if (pending) {
-            await requireNewWorktreeBranch(pending.record.repoRoot, pending.record.branch);
-            throw new Error(
-              "Worktree creation did not settle; run openclaw worktrees gc to recover its pending slot",
-              { cause: error },
-            );
-          }
-        });
+        }
         continue;
       }
       if (error instanceof WorktreeCapacityContentionError && !publication.record) {
@@ -438,8 +439,8 @@ async function resolveWorktreeName(
   gitInventory: Awaited<ReturnType<typeof readWorktreeGitInventory>>,
   fingerprint: string,
   root: string,
-  owner: Pick<CreateManagedWorktreeParams, "ownerKind" | "ownerId">,
   suggestedName: string,
+  worktreeId: string,
   suppliedName?: string,
 ): Promise<string> {
   if (suppliedName !== undefined) {
@@ -449,19 +450,12 @@ async function resolveWorktreeName(
     return suppliedName;
   }
   validateName(suggestedName);
+  // Only this repository's local state is checked below; the ID keeps the branch unique remotely.
   for (let ordinal = 1; ordinal <= 1_000; ordinal += 1) {
-    const candidate = ordinal === 1 ? suggestedName : appendNameOrdinal(suggestedName, ordinal);
+    const candidate = appendWorktreeIdSuffix(suggestedName, worktreeId, ordinal);
     const worktreePath = path.join(root, candidate);
+    // A new ID never names the caller's existing checkout; owner reuse happens before naming.
     const registered = await findWorktreeByName(env, fingerprint, candidate);
-    // Reuse the caller's live checkout, but never resurrect a retired inferred name.
-    if (
-      owner.ownerId &&
-      registered &&
-      registered.removedAt === undefined &&
-      worktreeOwnerMatches(registered, owner)
-    ) {
-      return candidate;
-    }
     // External Git can change after discovery; native creation owns the final check.
     if (
       !registered &&
