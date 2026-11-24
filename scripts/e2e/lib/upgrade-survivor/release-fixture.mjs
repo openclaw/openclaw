@@ -61,7 +61,6 @@ export const fixtureUpdateMigration = {
     if (previousVersion >= ${schema}) return false;
     db.exec(${JSON.stringify(ddl)});
     db.prepare("INSERT OR IGNORE INTO fixture_update_migration VALUES (?, ?)").run("release", ${schema});
-    db.exec(\`UPDATE mcp_oauth_stores SET store_json = '{"migrated":true}' WHERE store_key LIKE 'release-survivor-%'\`);
     return true;
   }, applied: "Applied release survivor fixture migration",
 };
