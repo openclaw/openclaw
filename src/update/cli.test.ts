@@ -95,6 +95,7 @@ vi.mock("../infra/update-run-reader.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../infra/update-run-reader.js")>()),
   getUpdateRunAsync: async () => ({
     ...localRun,
+    before: { version: "2026.11.8" },
     runId: "run-cli",
     reason: "already-current",
     steps: [],
@@ -578,5 +579,19 @@ it("reports the recorded rollback and serving version after native activation", 
   }));
   expect(await waitForReleaseUpdateFailure("adopted-run")).toBe(
     "Update failed: 2026.11.10 failed to start. Restored 2026.11.8; Gateway ready.\nCandidate crashed after migration.",
+  );
+});
+
+it("leaves an unactivated trial pending and names the one activation command", async () => {
+  await createTrialPending({
+    runId: "pending-running-start",
+    target: "releases/new/openclaw",
+    previous: "releases/old/openclaw",
+    version: "2026.11.10",
+  });
+  const error = vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
+  expect(await waitForReleaseUpdateFailure("pending-running-start")).toBeUndefined();
+  expect(error).toHaveBeenCalledWith(
+    "Gateway 2026.11.8 is still running. OpenClaw 2026.11.10 is prepared. Run: openclaw gateway restart",
   );
 });

@@ -46,6 +46,9 @@ your next managed `openclaw gateway start` or `openclaw gateway restart`, to app
 that installed package through the same release checks and trial. The old
 Gateway keeps serving during preparation. The npm entry then follows the
 resident launcher's selected release, including automatic rollback.
+If the Gateway is already running, `gateway start` leaves it running and reports
+the old serving version and the prepared new version. Run
+`openclaw gateway restart` to apply the prepared release.
 
 `openclaw update status` shows the invoking CLI, selected release, pending
 trial, and observed Gateway separately. An unavailable or remote Gateway is
