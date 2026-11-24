@@ -4,7 +4,6 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
-import * as commandStdinFile from "../process/command-stdin-file.js";
 import type { PlaybackMediaProbeResult } from "./media-probe.js";
 import {
   observePlaybackSourceOpen,
@@ -433,6 +432,7 @@ describe("resolvePlaybackTranscode", () => {
       const closeError = new Error("output close failed");
       const probeError = new Error("output probe failed");
       const closeOutput = vi.fn<() => Promise<void>>();
+      const commandStdinFile = await import("../process/command-stdin-file.js");
       const openFile = commandStdinFile.openCommandStdinFile;
       let interceptedOutput = false;
       const openSpy = vi
