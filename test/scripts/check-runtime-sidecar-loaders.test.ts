@@ -74,11 +74,16 @@ describe("check-runtime-sidecar-loaders", () => {
       relative(resolve(dirname(sourcePath.pathname), "../.."), filePath),
     );
 
-    // Shared shadow identity helpers have no manager imports or startup effects.
-    const sharedShadowTask = "extensions/memory-core/src/memory/manager-shadow-task.ts";
+    // Shared shadow identity and the shutdown loader may be eager, but the manager
+    // itself must remain behind the loader’s dynamic import. Walk the whole static
+    // graph so any eager dependency introduced by those helpers is still checked.
+    const sharedBoundaries = new Set([
+      "extensions/memory-core/src/memory/manager-shadow-task.ts",
+      "extensions/memory-core/src/memory/manager-runtime-loader.ts",
+    ]);
     expect(
       runtimeGraph.filter(
-        (filePath) => filePath !== sharedShadowTask && /(^|\/)manager(?:-|\.)/.test(filePath),
+        (filePath) => !sharedBoundaries.has(filePath) && /(^|\/)manager(?:-|\.)/.test(filePath),
       ),
     ).toEqual([]);
   });
