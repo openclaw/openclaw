@@ -83,12 +83,13 @@ onboarding in the dashboard. **Set up manually** opens native setup instead.
 It does not automatically connect to a discovered Gateway. Existing local and
 remote setups keep their connection and native onboarding behavior.
 
-The dashboard shows **Connecting your AI…** while automatic setup runs, then a
-summary of the selected provider, model, and Gateway. You can select another
-available provider, use a different Gateway, or review device permissions. If
-sign-in is needed, choose **Sign in with ChatGPT** and follow the inline steps.
-If automatic setup is unavailable, the summary explains the failed attempts and
-offers native AI setup in the Mac app, or `openclaw onboard` in a browser.
+The dashboard welcomes you and shows where the assistant will run. Continue
+from that screen to let the selected Gateway connect your AI automatically.
+**You’re all set!** names the selected provider, model, and Gateway. You can
+choose an available alternative or review device permissions. If sign-in is
+needed, choose **Sign in with ChatGPT** and follow the inline steps. If setup
+cannot connect, open **Show details** for the failed attempts. The Mac app
+offers native AI setup, and a browser points to `openclaw onboard`.
 
 Automatic setup keeps an existing configured model. Otherwise it tries usable
 connections in this order:

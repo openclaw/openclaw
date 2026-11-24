@@ -3,7 +3,10 @@ import type {
   SystemAgentSetupAutoResult as SetupAutoResult,
 } from "../../../../packages/gateway-protocol/src/schema/setup-inference.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import type { SystemAgentSetupActivateResult } from "../../api/types.ts";
+import type {
+  SystemAgentSetupActivateResult,
+  SystemAgentSetupDetectResult,
+} from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { t } from "../../i18n/index.ts";
 import { formatUiError } from "../../lib/format-error.ts";
@@ -18,11 +21,13 @@ import {
 import type { CustodianConfiguredInferenceState } from "./custodian-session-variant.ts";
 
 export type { SetupAutoCandidate, SetupAutoResult };
+export type SetupStep = "welcome" | "where" | "ai";
 
 const DISMISSED_KEY = "openclaw.custodian.setup-dismissed.v1:";
 
 /** Connection-owned first-run setup. The Gateway owns selection and verification. */
 export class CustodianAutoSetup {
+  step: SetupStep = "welcome";
   result: SetupAutoResult | null = null;
   pending = false;
   error: string | null = null;
@@ -103,6 +108,15 @@ export class CustodianAutoSetup {
     return this.supported && (!this.ready || this.pending);
   }
 
+  setStep(step: SetupStep): void {
+    this.step = step;
+    if (step === "ai" && !this.result && this.client && !this.pending) {
+      void this.retry();
+    } else {
+      this.changed();
+    }
+  }
+
   synchronize(context: ApplicationContext, onboarding: boolean, ownerKey: string): void {
     const snapshot = context.gateway.snapshot;
     const supported =
@@ -117,6 +131,7 @@ export class CustodianAutoSetup {
       this.wizardStepId = null;
       this.synchronizing = false;
       if (ownerChanged) {
+        this.step = "welcome";
         this.result = null;
         this.error = null;
         this.started = false;
@@ -137,7 +152,25 @@ export class CustodianAutoSetup {
     this.supported = supported;
     if (client && !this.started) {
       this.started = true;
-      void this.retry();
+      if (this.step === "ai" || this.dismissed) {
+        this.step = "ai";
+        void this.retry();
+      } else if (isGatewayMethodAdvertised(snapshot, "openclaw.setup.options") === true) {
+        const epoch = this.epoch;
+        void client
+          .request<Pick<SystemAgentSetupDetectResult, "setupComplete">>(
+            "openclaw.setup.options",
+            {},
+          )
+          .then(
+            ({ setupComplete }) => {
+              if (setupComplete && epoch === this.epoch && client === this.client) {
+                this.setStep("ai");
+              }
+            },
+            () => undefined,
+          );
+      }
     }
   }
 

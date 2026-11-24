@@ -69,6 +69,7 @@ function install(page: Page, scenario: ControlUiMockGatewayScenario = {}) {
       ...defaultControlUiFeatureMethods,
       "openclaw.chat",
       "openclaw.setup.auto",
+      "openclaw.setup.options",
       "openclaw.setup.activate",
       "openclaw.setup.auth.start",
       "wizard.next",
@@ -76,6 +77,7 @@ function install(page: Page, scenario: ControlUiMockGatewayScenario = {}) {
     ],
     methodResponses: {
       "openclaw.setup.auto": configured,
+      "openclaw.setup.options": { setupComplete: true },
       "openclaw.chat": {
         sessionId: "setup-proof",
         reply: "Your AI is ready. Let’s get to know each other.",
@@ -137,27 +139,44 @@ suite.define(() => {
     });
   });
 
-  it("shows pending, preserves a failed choice, activates an alternative, and retains dismissal", async () => {
+  it("automatically connects after welcome, preserves failed-alternative recovery and retains dismissal", async () => {
     await suite.withPage(options, async ({ page }) => {
       await nativeSetup(page);
-      const gateway = await install(page, { deferredMethods: ["openclaw.setup.auto"] });
+      const gateway = await install(page, {
+        deferredMethods: ["openclaw.setup.auto"],
+        methodResponses: { "openclaw.setup.options": { setupComplete: false } },
+      });
       await page.goto(`${suite.server.baseUrl}custodian?onboarding=1`);
       const card = page.locator(".custodian-setup");
+      const welcome = card.getByRole("heading", { name: "Welcome to OpenClaw" });
+      await welcome.waitFor();
+      await capture(page, "automatic-setup-welcome", card, [welcome]);
+      const next = card.getByRole("button", { name: "Next" });
+      await next.click();
+      const location = card.getByRole("heading", { name: "Where should your assistant run?" });
+      await location.waitFor();
+      await capture(page, "automatic-setup-location", card, [location]);
+      await card.getByRole("button", { name: /^On another computer/ }).click();
+      expect(await gateway.getRequests("openclaw.setup.auto")).toHaveLength(0);
+      await next.click();
+      await gateway.waitForRequest("openclaw.setup.auto");
       const connecting = card.getByRole("heading", { name: "Connecting your AI…" });
       await connecting.waitFor();
       expect(await gateway.getRequests("openclaw.chat")).toHaveLength(0);
       await capture(page, "pending-automatic-setup", card, [connecting]);
-      await gateway.resolveDeferred("openclaw.setup.auto", configured);
-      const selected = card.getByRole("heading", {
-        name: "Using Codex (openai/default) on This Mac",
+      await gateway.resolveDeferred("openclaw.setup.auto", { ...configured, status: "activated" });
+      const done = card.getByRole("heading", { name: "You’re all set!" });
+      await done.waitFor();
+      const selected = card.getByText("Using Codex (openai/default) on this computer", {
+        exact: true,
       });
       await selected.waitFor();
       await page
         .getByText("Your AI is ready. Let’s get to know each other.", { exact: true })
         .waitFor();
       expect(await gateway.getRequests("openclaw.setup.auto")).toHaveLength(1);
-      await capture(page, "configured-automatic-setup", card, [selected]);
-      await card.getByRole("button", { name: "Use a different Gateway" }).click();
+      expect(await gateway.getRequests("openclaw.setup.activate")).toHaveLength(0);
+      await capture(page, "configured-automatic-setup", card, [done, selected]);
       await card.getByRole("button", { name: "Review permissions" }).click();
       expect(await page.evaluate(() => Reflect.get(window, "setupProofActions"))).toEqual([
         "gateways",
@@ -172,7 +191,11 @@ suite.define(() => {
       expect((await gateway.waitForRequest("openclaw.setup.activate")).params).toEqual({
         kind: "ollama",
       });
-      await card.getByText("The local model stopped.", { exact: true }).waitFor();
+      const failure = card.getByText("The local model stopped.", { exact: true });
+      await card.getByRole("alert").getByText("AI setup didn’t finish").waitFor();
+      expect(await failure.isVisible()).toBe(false);
+      await card.getByText("Show details", { exact: true }).click();
+      await failure.waitFor();
       await selected.waitFor();
       await capture(page, "failed-alternative-automatic-setup", card, [
         selected,
@@ -183,8 +206,8 @@ suite.define(() => {
         modelRef: local.modelRef,
       });
       await card.getByRole("button", { name: "Local model", exact: true }).click();
-      const activated = card.getByRole("heading", {
-        name: "Using Local model (ollama/local-model) on This Mac",
+      const activated = card.getByText("Using Local model (ollama/local-model) on this computer", {
+        exact: true,
       });
       await activated.waitFor();
       await capture(page, "activated-automatic-setup", card, [activated]);
@@ -256,7 +279,7 @@ suite.define(() => {
         ).params,
       ).toMatchObject({ answer: { stepId: "confirmation", value: "DEMO-CONFIRMATION" } });
       await gateway.waitForRequest("openclaw.setup.auto", { after: 1 });
-      const selected = card.getByRole("heading", { name: /Using Codex/ });
+      const selected = card.getByText(/Using Codex/);
       await selected.waitFor();
       await sharedNotice.waitFor({ state: "detached" });
       expect(await card.getByRole("button", { name: "Sign in separately" }).count()).toBe(0);
@@ -298,6 +321,8 @@ suite.define(() => {
         const card = page.locator(".custodian-setup");
         await card.getByRole("heading", { name: title }).waitFor();
         const failure = card.getByText(error, { exact: false });
+        expect(await failure.isVisible()).toBe(false);
+        await card.getByText("Show details", { exact: true }).click();
         await failure.waitFor();
         const signIn = card.getByRole("button", { name: "Sign in with ChatGPT" });
         await signIn.waitFor();
@@ -321,9 +346,12 @@ suite.define(() => {
         await install(page, { methodResponses: { "openclaw.setup.auto": unavailable } });
         await page.goto(`${suite.server.baseUrl}custodian?onboarding=1`);
         const card = page.locator(".custodian-setup");
-        const failure = card.getByText("The download could not be completed.", { exact: false });
+        await card.getByText("Show details", { exact: true }).click();
+        const failure = card
+          .locator("pre")
+          .filter({ hasText: "The download could not be completed." });
         await failure.waitFor();
-        await card.getByText("No running model was available.", { exact: false }).waitFor();
+        expect(await failure.textContent()).toContain("No running model was available.");
         await capture(
           page,
           native ? "unavailable-native-automatic-setup" : "unavailable-web-automatic-setup",

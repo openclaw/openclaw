@@ -21,7 +21,7 @@ const alternative = candidate("ollama", "Local model", "ollama/qwen3");
 function result(status: SetupAutoResult["status"] = "activated"): SetupAutoResult {
   return { status, selected, alternatives: [alternative], attempts: [], installedPlugins: [] };
 }
-const methods = ["chat", "setup.auto", "setup.activate", "setup.auth.start"].map(
+const methods = ["chat", "setup.auto", "setup.options", "setup.activate", "setup.auth.start"].map(
   (method) => "openclaw." + method,
 );
 const agentsList: AgentsListResult = makeBootRoster({ scope: "global" });
@@ -41,13 +41,22 @@ function setupRequest(
       ? (handlers[method]?.(params) ?? { turns: [] })
       : method === "openclaw.setup.auto"
         ? auto()
-        : (handlers[method]?.(params) ?? reply),
+        : (handlers[method]?.(params) ??
+          (method === "openclaw.setup.options" ? { setupComplete: true } : reply)),
   );
 }
 function unavailable(attempts: SetupAutoResult["attempts"] = []): SetupAutoResult {
   return { status: "unavailable", alternatives: [], attempts, installedPlugins: [] };
 }
-const setupContext = (request: Request) => createContext(request, methods, { agentsList });
+const setupContext = (request: Request) =>
+  createContext(
+    (...args) =>
+      args[0] === "openclaw.setup.options"
+        ? Promise.resolve({ setupComplete: true })
+        : request(...args),
+    methods,
+    { agentsList },
+  );
 async function mountSetup(request: Request) {
   const harness = setupContext(request);
   const mounted = await mountPage(harness.context);
