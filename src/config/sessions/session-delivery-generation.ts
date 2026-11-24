@@ -163,6 +163,15 @@ async function prepareSessionGenerationLease(
         // store, current permissions, and actual closure remain checked below.
         return;
       }
+      if (
+        change.scope === "sessions" &&
+        change.factsInvalidated === undefined &&
+        retained
+      ) {
+        // Committed writers publish row facts separately from the session-list notice.
+        // The next assertion still checks the retained source and current facts.
+        return;
+      }
       if (typeof change.scope === "object") {
         if (change.scope.agentId && change.scope.agentId !== generation.agentId) {
           return;

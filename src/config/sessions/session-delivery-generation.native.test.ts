@@ -1,4 +1,5 @@
 import { expect, it } from "vitest";
+import { sessionChanges } from "../../sessions/session-row-changes.js";
 import {
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
@@ -66,6 +67,32 @@ it.each([
     });
   },
 );
+
+it("keeps a retained delivery lease through a plain session catalog notification", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const database = openOpenClawAgentDatabase({ agentId: "main" });
+    const scope = {
+      agentId: "main",
+      storePath: database.path,
+      sessionKey: "agent:main:catalog-generation",
+    };
+    const original = {
+      sessionId: "e1234567-1234-1234-1234-123456789abc",
+      lifecycleRevision: "original-lifecycle",
+      updatedAt: 1,
+    };
+    replaceSessionEntrySync(scope, original);
+    const generation = await prepareSessionGenerationFacts({ ...scope, ...original });
+    try {
+      sessionChanges.emit({ all: true, scope: "sessions" });
+      expect(generation.assertCurrent).not.toThrow();
+      sessionChanges.emit({ all: true, scope: "sessions", factsInvalidated: true });
+      expect(generation.assertCurrent).toThrow();
+    } finally {
+      generation.release();
+    }
+  });
+});
 
 it("retains unchanged generation authority inside a native transaction and after rollback", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
