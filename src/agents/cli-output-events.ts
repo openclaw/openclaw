@@ -426,6 +426,23 @@ function resolveClaudeContentBlockIndex(tracker: ThinkingTracker, index: unknown
   return tracker.currentSyntheticBlockIndex ?? null;
 }
 
+// Claude Code re-emits each finished content block as its own `assistant` record whose
+// `message.content` holds only that one block, so its position inside the array is always 0
+// and cannot address the provider's content-block index. A single-block record therefore
+// cannot be keyed by local index; if its text already covers a streamed block, it is a replay
+// and must not open a second slot (which would duplicate the summary).
+function isPerBlockThinkingReplay(tracker: ThinkingTracker, thinking: string): boolean {
+  if (thinking.length === 0) {
+    return false;
+  }
+  for (const streamed of tracker.streamedByIndex.values()) {
+    if (streamed.startsWith(thinking)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 function assembleThinkingTextByIndex(streamedByIndex: Map<number, string>): string {
   return [...streamedByIndex.entries()]
     .toSorted(([left], [right]) => left - right)
@@ -522,12 +539,25 @@ export function dispatchClaudeCliThinking(params: {
     const content = Array.isArray(params.parsed.message.content)
       ? params.parsed.message.content
       : [];
+    // Claude Code emits one `assistant` record per finished content block, each carrying
+    // only that block. Its array position (always 0) does not name the provider's content
+    // block index, so a one-element record must not be keyed by local index — otherwise a
+    // summary already streamed at index 1 is re-stored at index 0 and displayed twice.
+    const perBlockRecord =
+      content.length === 1 &&
+      isRecord(content[0]) &&
+      content[0].type === "thinking" &&
+      typeof content[0].thinking === "string";
     for (const [index, block] of content.entries()) {
       // redacted_thinking blocks are opaque provider material with no text lane.
       if (!isRecord(block) || block.type !== "thinking" || typeof block.thinking !== "string") {
         continue;
       }
       if (!params.onThinkingDelta) {
+        continue;
+      }
+      if (perBlockRecord && isPerBlockThinkingReplay(tracker, block.thinking)) {
+        // Already covered by a streamed block: a replay, not new progress.
         continue;
       }
       const previous = tracker.streamedByIndex.get(index) ?? "";

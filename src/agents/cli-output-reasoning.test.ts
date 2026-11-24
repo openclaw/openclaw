@@ -359,6 +359,20 @@ describe("createCliJsonlStreamingParser reasoning", () => {
       expected: [reasoning("A"), reasoning("AB", "B")],
     },
     {
+      // Claude Code re-emits each finished block as its own one-element `assistant` record.
+      // A summary streamed at provider index 1 must not be re-stored at local index 0.
+      name: "keeps a per-block assistant replay from duplicating a summary streamed at index 1",
+      frames: [
+        claudeMessageStart("msg-1"),
+        claudeBlockStart({ type: "thinking" }, 0),
+        claudeAssistantSnapshot("msg-1", [thought("")]),
+        claudeBlockStart({ type: "thinking" }, 1),
+        claudeThinkingDelta("Summary of the reasoning.", 1),
+        claudeAssistantSnapshot("msg-1", [thought("Summary of the reasoning.")]),
+      ],
+      expected: [reasoning("Summary of the reasoning.")],
+    },
+    {
       name: "resets per-index thinking state on a new message within the same turn (tool round-trip)",
       frames: [
         claudeMessageStart("msg-A"),
