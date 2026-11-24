@@ -247,7 +247,13 @@ export function runPluginNpmCiWithRetry(
 
   let result: SpawnResult | undefined;
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
-    result = spawn(args, { ...options, timeout: timeoutMs });
+    // On Linux, npm can wait for a blocked fetch after SIGTERM and keep spawnSync stuck.
+    // Enforce the existing deadline; the timed-out attempt's staging tree is removed below.
+    result = spawn(args, {
+      ...options,
+      timeout: timeoutMs,
+      ...(process.platform === "linux" ? { killSignal: "SIGKILL" } : {}),
+    });
     if (!result) {
       throw new Error(`npm ci returned no result for ${pluginDir}`);
     }

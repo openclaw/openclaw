@@ -557,10 +557,12 @@ describe("plugin npm package manifest staging", () => {
         expect(spawnOptions).toHaveLength(1);
       } else if (!exhausted) {
         expect(cleanupCalls).toBe(1);
-        expect(spawnOptions).toEqual([
-          { cwd: "/tmp/plugin", timeout: 1234 },
-          { cwd: "/tmp/plugin", timeout: 1234 },
-        ]);
+        const timedInstall = {
+          cwd: "/tmp/plugin",
+          timeout: 1234,
+          ...(process.platform === "linux" ? { killSignal: "SIGKILL" } : {}),
+        };
+        expect(spawnOptions).toEqual([timedInstall, timedInstall]);
       } else {
         expect(result.error).toMatchObject({ code: "ETIMEDOUT" });
         expect(existsSync(nodeModulesPath)).toBe(false);
