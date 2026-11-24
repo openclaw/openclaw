@@ -7,7 +7,8 @@ import { sameFileIdentity } from "@openclaw/fs-safe/advanced";
 import { getChildLogger } from "../logging/logger.js";
 import { isMissingPathError } from "./errno.js";
 import { formatErrorMessage, hasErrnoCode } from "./errors.js";
-import { FsSafeError, root as createRoot, type Root } from "./fs-safe.js";
+import { FsSafeError, root as createRoot, walkDirectory, type Root } from "./fs-safe.js";
+import { retireSqliteDatabaseAdmissionForPath } from "./sqlite-database-admission.js";
 import { isSqliteLockError, isSqliteNativeOpenFailure } from "./sqlite-error-diagnostics.js";
 import { createPrivateSqliteTempDirectory } from "./sqlite-private-directory.js";
 import {
@@ -159,6 +160,22 @@ async function removeBackupScratchPayload(boundary: Root): Promise<void> {
   }
 }
 
+// Unlinking a database does not reclaim its bytes while SQLite admission pins it.
+// The staging token closes and retires its own root control database separately.
+async function retireBackupScratchPayloadAdmissions(directory: string): Promise<void> {
+  const { entries, failedDirs } = await walkDirectory(directory, {
+    include: (entry) => entry.kind === "file",
+  });
+  if (failedDirs[0]) {
+    throw failedDirs[0].error;
+  }
+  for (const entry of entries) {
+    if (!SQLITE_STAGING_TOKEN_FILES.some((name) => name === path.relative(directory, entry.path))) {
+      retireSqliteDatabaseAdmissionForPath(entry.path);
+    }
+  }
+}
+
 async function cleanupBackupScratchDirectory(
   initialDirectory: string,
   initialBoundary: Root | undefined,
@@ -236,6 +253,7 @@ export async function finishBackupScratch(
   let retirementFailure: unknown;
   try {
     scratch.release = scratch.release.beginRetirement();
+    await retireBackupScratchPayloadAdmissions(scratch.directory);
     // The exclusive token excludes readers while payload deletion makes space
     // for SQLite's retirement page/journal without a filesystem-specific reserve.
     await removeBackupScratchPayload(scratch.boundary);
