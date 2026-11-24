@@ -119,9 +119,8 @@ const planFiles = (
 ];
 
 it.each([
-  ["test/scripts/pr-worktree-provision.test.ts", undefined],
+  ["src/commands/doctor-auth-canonical-api-key-alias.test.ts", undefined],
   ["src/config/config-startup-corpus.test.ts", "runtime"],
-  ["src/config/sessions/session-transcript-reconcile.lifecycle-phases.test.ts", "runtime"],
 ] as const)("plans the build required by the selected suite %s", (target, mode) => {
   const jobs = expectDefined(
     createSelectedNodeTestShardBundles([target], {
