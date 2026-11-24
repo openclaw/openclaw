@@ -57,6 +57,7 @@ const RETAINED_STEP_NAMES = [
   "managed-service-install",
   "managed-service-restart",
   "managed-service update handoff",
+  "warning:managed-service-reconciliation",
   "service-stop",
   "service-start",
   "service-running",
@@ -205,6 +206,7 @@ function boundedJson(
           item.step !== "warning:database migration writes" &&
           item.step !== "warning:post-plugin doctor" &&
           item.step !== "warning:post-stop-checks" &&
+          item.step !== "warning:managed-service-reconciliation" &&
           item.step !== "warning:reconcile:driver-lost-after-verification" &&
           item.step !== "diagnostic:database rollback" &&
           item.step !== "finalize:data-at-risk" &&

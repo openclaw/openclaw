@@ -50,6 +50,7 @@ describe("update run ledger compaction", () => {
       "openclaw doctor",
       "managed-service-restart",
       "managed-service update handoff",
+      "warning:managed-service-reconciliation",
       "service-stop",
       "service-start",
       "service-running",
