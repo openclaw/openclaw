@@ -932,6 +932,7 @@ public enum OpenClawChatChildSessionPager {
 
 public struct OpenClawChatSessionsListResponse: Codable, Sendable {
     public let ts: Double?
+    public let activityExpiresAt: Double?
     public let path: String?
     public var count: Int?
     public var totalCount: Int?
@@ -950,6 +951,7 @@ public struct OpenClawChatSessionsListResponse: Codable, Sendable {
 
     public init(
         ts: Double?,
+        activityExpiresAt: Double? = nil,
         path: String?,
         count: Int?,
         totalCount: Int? = nil,
@@ -967,6 +969,7 @@ public struct OpenClawChatSessionsListResponse: Codable, Sendable {
         sessions: [OpenClawChatSessionEntry])
     {
         self.ts = ts
+        self.activityExpiresAt = activityExpiresAt
         self.path = path
         self.count = count
         self.totalCount = totalCount
@@ -985,7 +988,7 @@ public struct OpenClawChatSessionsListResponse: Codable, Sendable {
     }
 
     private enum CodingKeys: String, CodingKey {
-        case ts, path, count, totalCount, offset, nextOffset, hasMore, defaults, sessions
+        case ts, activityExpiresAt, path, count, totalCount, offset, nextOffset, hasMore, defaults, sessions
         case owners, ownerSessionCounts, people, peopleIncomplete, peopleSessionCount, involvingProfileId
     }
 
@@ -993,6 +996,7 @@ public struct OpenClawChatSessionsListResponse: Codable, Sendable {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         try self.init(
             ts: container.decodeIfPresent(Double.self, forKey: .ts),
+            activityExpiresAt: container.decodeIfPresent(Double.self, forKey: .activityExpiresAt),
             path: container.decodeIfPresent(String.self, forKey: .path),
             count: container.decodeIfPresent(Int.self, forKey: .count),
             totalCount: container.decodeIfPresent(Int.self, forKey: .totalCount),

@@ -103,6 +103,7 @@ it("scopes embedded session lists to the requested agent", async () => {
   expect(runtime.listProjectedSessions).toHaveBeenCalledWith({
     projection,
     opts: { agentId: "work", includeGlobal: true, search: "global" },
+    personalPins: null,
   });
 });
 

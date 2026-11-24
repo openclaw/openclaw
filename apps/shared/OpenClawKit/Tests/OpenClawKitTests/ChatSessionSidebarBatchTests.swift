@@ -672,26 +672,41 @@ struct ChatSessionSidebarBatchTests {
         #expect(try patch(pinned, "group:Ops") == ["category": "Ops", "pinned": false] as NSDictionary)
         #expect(try patch(pinned, "recent") == ["category": NSNull(), "pinned": false] as NSDictionary)
         #expect(try patch(pinned, "list") == ["pinned": false] as NSDictionary)
-        #expect(try patch(pinned, "pinned") == nil)
+        guard case .mutation(nil)? = ChatSessionSidebarBatch.drop(pinned, section: "pinned") else {
+            Issue.record("An existing pin must be reordered, not pinned again or rejected.")
+            return
+        }
         #expect(try patch(self.row(1), "pinned") == ["pinned": true] as NSDictionary)
         #expect(try patch(self.row(2, fields: ["archived": true]), "pinned") == nil)
         #expect(try patch(self.row(3, fields: ["spawnedBy": pinned.key]), "pinned") == nil)
         #expect(try patch(pinned, "person:someone") == nil)
     }
 
-    @Test func `pin drops distinguish same-key roots from different agents and consume actual self-drops`() throws {
+    @Test(arguments: [(false, "before"), (true, "after")])
+    func `named insert binds both agent and side while self-drops are consumed`(after: Bool, side: String) throws {
         let source = try self.row(0, fields: ["key": "shared", "agentId": "research"])
         let target = try self.row(1, fields: ["key": "shared", "agentId": "ops", "pinned": true])
-        let drop = ChatSessionSidebarBatch.drop(source, section: "pinned", target: target)
+        let drop = ChatSessionSidebarBatch.drop(source, section: "pinned", target: target, after: after)
         guard case let .mutation(fields)? = drop else {
             Issue.record("Dropping onto another agent's row must pin the source.")
             return
         }
-        #expect(fields?["pinned"]?.value as? Bool == true)
+        let request = try OpenClawChatGatewayRequests.sessionMenu(
+            "sessions.patch", session: source, fields: #require(fields))
+        let params = try self.params(request)
+        #expect(params["pinned"] as? Bool == true)
+        #expect(params["expectedSessionId"] as? String == "id-0")
+        #expect(params["pinPlacement"] as? [String: String] == ["relativeTo": "agent:ops:shared", "side": side])
         guard case .selfDrop? = ChatSessionSidebarBatch.drop(target, section: "pinned", target: target) else {
             Issue.record("A self-drop must be consumed before the broad list can unpin it.")
             return
         }
+    }
+
+    @Test func `named inserts cannot be submitted without a captured source incarnation`() throws {
+        let source = try self.row(0, fields: ["sessionId": NSNull()])
+        let target = try self.row(1, fields: ["pinned": true])
+        #expect(ChatSessionSidebarBatch.drop(source, section: "pinned", target: target) == nil)
     }
 }
 #endif

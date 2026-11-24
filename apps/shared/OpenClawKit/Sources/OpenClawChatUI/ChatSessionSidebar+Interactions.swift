@@ -308,7 +308,12 @@ extension ChatSessionSidebar {
               held.sessionId == item.sessionID else { return false }
         let row = self.batchTarget(held)
         let patch: [String: AnyCodable]?
-        switch ChatSessionSidebarBatch.drop(row, section: section, target: pinTarget.map(self.batchTarget)) {
+        switch ChatSessionSidebarBatch.drop(
+            row,
+            section: section,
+            target: pinTarget.map(self.batchTarget),
+            after: after)
+        {
         case .selfDrop?: return true
         case let .mutation(fields)?: patch = fields
         case nil: return false
@@ -317,7 +322,7 @@ extension ChatSessionSidebar {
             self.batch.notices = [OpenClawPersonalPinError.unsupportedGateway.localizedDescription]
             return false
         }
-        if section == "pinned", !connection.allows("users.prefs.set") { return false }
+        if section == "pinned", !connection.allows(patch == nil ? "users.prefs.set" : "sessions.patch") { return false }
         let owner = self.viewModel.sidebarData
         self.interact(refresh: patch != nil) { connection in
             self.batch.errors = [:]
@@ -343,12 +348,11 @@ extension ChatSessionSidebar {
                 }
                 var receipt = try JSONDecoder().decode(OpenClawChatSessionPatchReceipt.self, from: data)
                 receipt.agentID = OpenClawChatSessionKey.agentID(from: row.key) ?? row.agentId
-                // Pin state is already committed even if persisting its subsequent placement fails.
                 let fields = [OpenClawChatSessionSidebarData.Field.category, .pinned]
                     .filter { patch[$0.rawValue] != nil }
                 owner?.confirmFields(receipt, target: row, fields: fields)
             }
-            if section == "pinned" {
+            if section == "pinned", patch == nil {
                 try await self.batch.movePin(
                     key: row.key,
                     target: pinTarget?.key,

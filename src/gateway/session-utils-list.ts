@@ -304,7 +304,7 @@ export function prepareProjectedSessionList(params: {
   now: number;
   metadataPrepared?: boolean;
   searchIdentities?: Awaited<ReturnType<typeof prepareSessionSearchIdentityNames>>;
-  personalPins?: ReadonlyMap<string, number>;
+  personalPins?: ReadonlyMap<string, number> | null;
   /** Reused only within one admitted caller/configuration/profile authority epoch. */
   visibility?: WeakMap<object, boolean>;
 }) {
@@ -342,15 +342,14 @@ export function prepareProjectedSessionList(params: {
     ...prepared,
     identityNames: params.searchIdentities?.names,
     entriesSorted:
-      !params.personalPins ||
-      (opts.pinned !== true && (opts.sortBy ?? "updatedAt") !== "updatedAt"),
-    ...(params.personalPins
-      ? {
-          personalPinRank: ([key, entry]) =>
-            personalSessionPinRank(params.personalPins!, key, entry, now),
-          personalPins: params.personalPins,
-        }
-      : {}),
+      params.personalPins === undefined || (opts.sortBy ?? "updatedAt") !== "updatedAt",
+    // Undefined preserves historical ordering; null has neither a shared rank nor a personal fact.
+    personalPins: params.personalPins ?? undefined,
+    personalPinRank:
+      params.personalPins === undefined
+        ? undefined
+        : ([key, entry]) =>
+            params.personalPins ? personalSessionPinRank(params.personalPins, key, entry, now) : 0,
     involvingActorId: opts.involvingMe ? identity : undefined,
     ownerFirstActorId: opts.ownerFirst ? identity : undefined,
     restrictProfileReferences: client !== undefined,
@@ -409,7 +408,7 @@ export async function listProjectedSessions(params: {
   context?: GatewayRequestContext;
   client?: GatewayClient | null;
   acceptsSerializedJson?: boolean;
-  personalPins?: ReadonlyMap<string, number>;
+  personalPins?: ReadonlyMap<string, number> | null;
   diagnostics?: SessionListDiagnostics;
   onResult?: (result: SessionsListResult) => void;
 }): Promise<SessionsListResult> {

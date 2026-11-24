@@ -76,7 +76,7 @@ type PresentationOptions = Readonly<
     "now" | "active" | "subagentRuns" | "preparedFacts" | "preparedRunState"
   > & {
     includeActivitySummary?: boolean;
-    personalPins?: ReadonlyMap<string, number>;
+    personalPins?: ReadonlyMap<string, number> | null;
     rowMode?: SessionsListParams["rowMode"];
     omitSentinelChildren?: boolean;
     childArchiveFilter?: SessionsListParams["archived"];
@@ -282,7 +282,7 @@ export function prepareProjectedSessionPresentation(
   const listView = (
     opts: SessionsListParams,
     selection = false,
-    personalPins?: ReadonlyMap<string, number>,
+    personalPins?: ReadonlyMap<string, number> | null,
   ): SessionListView => {
     const { source: _source, ifRowsRevision: _ifRowsRevision, ...query } = opts;
     if (selection) {
@@ -294,7 +294,7 @@ export function prepareProjectedSessionPresentation(
     const key = JSON.stringify([
       client === undefined,
       sharing.getCacheKey(),
-      personalPins && [...personalPins.keys()],
+      personalPins === null ? false : personalPins && [...personalPins.keys()],
       presentFastMode("ultrafast"),
       // oxlint-disable-next-line unicorn/no-array-sort -- Object.entries creates a private array.
       Object.entries(query).sort(([left], [right]) => left.localeCompare(right)),
@@ -535,7 +535,7 @@ export function prepareProjectedSessionPresentation(
     recipientFacts[7] = recipientView?.workspaceReadDisabledReason;
     const personalPin = options.personalPins
       ? personalSessionPinRank(options.personalPins, record.key, record.entry, now) > 0
-      : recipient.omitSharedPins
+      : recipient.omitSharedPins || options.personalPins === null
         ? null
         : undefined;
     recipientFacts[8] = personalPin;
@@ -641,7 +641,7 @@ export function prepareProjectedSessionPresentation(
     select(
       opts: SessionsListParams,
       select: (retained?: Map<object, SessionListFilteredEntries>) => SessionEntrySelection,
-      personalPins?: ReadonlyMap<string, number>,
+      personalPins?: ReadonlyMap<string, number> | null,
     ) {
       // Membership, clocks, and transient runs are not owned by metadata partitions.
       const live = opts.activeOnly || opts.activityPulseBoundaries;
@@ -676,7 +676,7 @@ export function prepareProjectedSessionPresentation(
     list(
       rows: GatewaySessionRow[],
       opts: SessionsListParams,
-      personalPins?: ReadonlyMap<string, number>,
+      personalPins?: ReadonlyMap<string, number> | null,
     ) {
       // Current authorization and temporal presentation precede reuse. The retained vector
       // owns bytes only; it never retains a connection or grants permission to a later read.

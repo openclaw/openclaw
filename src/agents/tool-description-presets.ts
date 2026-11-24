@@ -74,9 +74,14 @@ export function describeSessionLinkRule(base: string): string {
 }
 
 /** Describes the sessions_list tool for model-facing instructions. */
-export function describeSessionsListTool(options?: SessionLinkDescriptionOptions): string {
+export function describeSessionsListTool(
+  options?: SessionLinkDescriptionOptions & { gatewayBacked?: boolean },
+): string {
   return [
-    "List visible session metadata and groups; filter ownerId/creatorId, projectId/workspaceDir, group/pinned, hasBoard, kind/agent/activity/archive. relationship=owned|created|involving selects the authenticated requesting user's sessions, not the agent's owner.",
+    "List visible session metadata and groups; filter ownerId/creatorId, projectId/workspaceDir, group, hasBoard, kind/agent/activity/archive. relationship=owned|created|involving selects the authenticated requesting user's sessions, not the agent's owner.",
+    options?.gatewayBacked === false
+      ? "Embedded inventory has no personal pin state. To list your pins, use a signed-in Gateway chat."
+      : "pinned selects the signed-in requester's sidebar; omitted pin state is unknown.",
     "Metadata-only by default. limit defaults to 100; larger requests stay valid but limitApplied never exceeds 200. count is this page, not an inventory total. Continue with nextOffset and identical filters while hasMore; truncationReason names a scan/byte budget. Pages are live: deduplicate by agentId/key/sessionId or restart for a fresh inventory. archived=all includes active and archived rows.",
     "Preview recent messages inline via includeLastMessage/messageLimit; includeDerivedTitles adds derived titles. enrichmentOmitted means previews exceeded the byte budget; read history separately.",
     "hasBoard reports saved dashboard presence without content; omitted means unknown, not empty. Use before history/send target selection.",

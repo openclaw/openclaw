@@ -183,8 +183,15 @@ it("shares ordered sidebar pins with session RPCs, not rail-only shortcuts, lega
       sessions: [{ key: b, pinned: true }],
     });
     await expect(
+      list(alice, { pinned: true, sortBy: "activity", limit: 1 }),
+    ).resolves.toMatchObject({
+      totalCount: 2,
+      nextOffset: 1,
+      sessions: [{ key: c, pinned: true }],
+    });
+    await expect(
       list(alice, { pinned: true, sortBy: "activity", offset: 1 }),
-    ).resolves.toMatchObject({ totalCount: 2, sessions: [{ key: c, pinned: true }] });
+    ).resolves.toMatchObject({ totalCount: 2, sessions: [{ key: b, pinned: true }] });
     for (const includeNativeSubagents of [false, true]) {
       const params = { key: a, agentId: "main", includeNativeSubagents };
       await expect(rpc(alice, "sessions.describe", params)).resolves.toMatchObject({
@@ -276,6 +283,36 @@ it("shares ordered sidebar pins with session RPCs, not rail-only shortcuts, lega
     await expect(rpc(alice, "sessions.patch", { key: hidden, pinned: true })).rejects.toThrow(
       /not found|visible|draft/i,
     );
+    const insert = (relativeTo: string, side: "before" | "after") => ({
+      key: a,
+      expectedSessionId: a,
+      pinned: true,
+      pinPlacement: { relativeTo, side },
+    });
+    const readLayout = async () =>
+      (await rpc(alice, "users.prefs.get", { keys: [PREF] })).entries[PREF];
+    await expect(rpc(alice, "sessions.patch", insert("agent:main:gone", "before"))).rejects.toThrow(
+      /placement changed/i,
+    );
+    await expect(rpc(oldMac, "sessions.patch", insert(b, "before"))).rejects.toThrow(/personal/i);
+    await expect(
+      rpc(alice, "sessions.patch", { ...insert(b, "before"), expectedSessionId: "replaced" }),
+    ).rejects.toThrow(/changed/i);
+    expect(await readLayout()).toEqual(shortcuts);
+    for (const side of ["before", "after"] as const) {
+      await rpc(alice, "sessions.patch", insert(b, side));
+      expect(await readLayout()).toEqual(
+        shortcuts.toSpliced(
+          shortcuts.indexOf(`session:${b}`) + (side === "after" ? 1 : 0),
+          0,
+          `session:${a}`,
+        ),
+      );
+      await expect(rpc(alice, "sessions.patch", insert(c, "before"))).rejects.toThrow(
+        /placement changed/i,
+      );
+      await rpc(alice, "sessions.patch", { key: a, pinned: false });
+    }
     await expect(rpc(alice, "sessions.patch", { key: a, pinned: true })).resolves.toMatchObject({
       entry: { sessionId: a, pinned: true },
     });
@@ -371,6 +408,10 @@ it("shares ordered sidebar pins with session RPCs, not rail-only shortcuts, lega
     ).resolves.toMatchObject({ entry: { pinned: false } });
     const anonymous: GatewayClient = { connect: alice.connect };
     await expect(list(anonymous, { pinned: false })).rejects.toThrow(/profile|requester/i);
+    const unsigned = await rpc(anonymous, "sessions.describe", { key: a });
+    expect(unsigned.session).toMatchObject({ key: a });
+    expect(unsigned.session).not.toHaveProperty("pinned");
+    expect(unsigned.session).not.toHaveProperty("pinnedAt");
     await expect(rpc(anonymous, "sessions.patch", { key: b, pinned: true })).rejects.toThrow(
       /profile|requester/i,
     );

@@ -1113,7 +1113,7 @@ extension OpenClawChatViewModel {
             }
             if let sidebarData, sidebarRead?.scope != sidebarData.scopeRevision { continue }
             self.latestAppliedSessionsFetchRequestID = sessionsFetchRequestID
-            self.rosterClock = .init(timestamp: res.ts)
+            self.rosterClock = .init(timestamp: res.ts, activityExpiresAt: res.activityExpiresAt)
             let organized = OpenClawChatSessionListOrganizer.organize(res.sessions)
             for session in organized {
                 self.unreadPatchGuard.observe(

@@ -244,6 +244,7 @@ export function createSessionManagedListRefresh(
           entry.receivedKeys = receivedKeys;
           entry.connectionEpoch = scope.epoch;
           entry.startupRetryAttempt = 0;
+          entry.coordinator.acceptWindowExpiry(response);
           const snapshot: SessionListSnapshot = {
             readSucceeded: true,
             pagination,

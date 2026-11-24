@@ -23,6 +23,7 @@ struct ChatSidebarQueryState {
     let transport: any OpenClawChatSidebarTransport
     var query: OpenClawChatSidebarQuery
     var page: OpenClawChatSessionsListResponse?
+    var rosterClock: OpenClawChatSessionSnooze.RosterClock?
     var owners: [OpenClawChatSessionEntry.CreatedActor]?
     var pageIDs: [String] = []
     var readRevision = 0
@@ -187,6 +188,7 @@ extension OpenClawChatSessionSidebarData {
         self.queryState?.indexing = false
         self.queryState?.excluded = 0
         self.queryState?.didLoad = false
+        self.queryState?.rosterClock = nil
         if clear {
             self.queryState?.searchIDs = nil
             self.queryState?.metadataIDs = []
@@ -237,6 +239,8 @@ extension OpenClawChatSessionSidebarData {
             let read = self.beginRead()
             async let transcript = Self.searchTranscripts(query: query, request: request)
             var page = append && offset > 0 ? state.page : nil
+            // The clock belongs to the first page's membership, not a later append or another agent's roster.
+            var rosterClock = page == nil ? nil : state.rosterClock
             var incoming: [OpenClawChatSessionEntry] = []
             var ids = page != nil ? state.pageIDs : []
             var seen = Set(ids)
@@ -251,6 +255,9 @@ extension OpenClawChatSessionSidebarData {
                     offset: offset))
                 let next = try OpenClawChatGatewayPayloadCodec.decodeSessionsList(payload, agentID: query.agentID)
                 guard generation == self.queryState?.generation, !Task.isCancelled else { return }
+                if rosterClock == nil { rosterClock = .init(
+                    timestamp: next.ts,
+                    activityExpiresAt: next.activityExpiresAt) }
                 // ui/src/lib/sessions/session-managed-list-refresh.ts:128 discards duplicate page facts.
                 incoming += next.sessions.filter { seen.insert(Self.identity($0)).inserted }
                 page = Self.appendPage(next, previous: page, count: seen.count)
@@ -259,6 +266,7 @@ extension OpenClawChatSessionSidebarData {
             }
             let search = await transcript
             guard generation == self.queryState?.generation, !Task.isCancelled, var page else { return }
+            self.queryState?.rosterClock = rosterClock
             // Search and browsing share the complete facet, independently of retained page membership.
             self.queryState?.owners = page.owners
             if !query.search.isEmpty {

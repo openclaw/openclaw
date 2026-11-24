@@ -12,6 +12,11 @@ import java.time.format.TextStyle
 import java.time.temporal.ChronoField
 import java.time.temporal.TemporalAdjusters
 
+internal data class SessionWakeDeadline(
+  val serverMs: Long,
+  val localMs: Long,
+)
+
 object SessionSnooze {
   data class Preset(
     val id: String,
@@ -84,13 +89,22 @@ object SessionSnooze {
     }
   }
 
+  internal fun nextWake(
+    entries: List<ChatSessionEntry>,
+    nowMs: Long,
+    window: SessionWakeDeadline?,
+  ): SessionWakeDeadline? {
+    val row =
+      entries
+        .asSequence()
+        .filter { it.isSnoozed(nowMs) && it.snoozedUntil != window?.serverMs }
+        .minByOrNull { requireNotNull(it.localSnoozeWakeMs) }
+        ?.let { SessionWakeDeadline(requireNotNull(it.snoozedUntil), requireNotNull(it.localSnoozeWakeMs)) }
+    return listOfNotNull(window, row).minByOrNull { it.localMs }
+  }
+
   fun nextWakeMs(
     entries: List<ChatSessionEntry>,
     nowMs: Long,
-  ): Long? =
-    entries
-      .asSequence()
-      .filter { it.isSnoozed(nowMs) }
-      .mapNotNull { it.localSnoozeWakeMs }
-      .minOrNull()
+  ): Long? = nextWake(entries, nowMs, window = null)?.localMs
 }

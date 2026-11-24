@@ -3,6 +3,8 @@ import {
   monotonicNow,
   remainingMonotonicMs,
 } from "../../../../src/shared/monotonic-time.ts";
+import { scheduleAbsoluteDeadline } from "../../../../src/utils/absolute-deadline.ts";
+import type { SessionsListResult } from "../../api/types.ts";
 
 const SESSION_EVENT_REFRESH_DEBOUNCE_MS = 5_000;
 
@@ -25,6 +27,8 @@ export function createSessionEventRefreshCoordinator({
   let queued = false;
   let retryAt: number | null = null;
   let fallback: ReturnType<typeof setTimeout> | undefined;
+  let windowExpiry: number | undefined;
+  let cancelWindowExpiry: (() => void) | undefined;
 
   const clearTimer = () => {
     clearTimeout(timer);
@@ -76,13 +80,45 @@ export function createSessionEventRefreshCoordinator({
     queued = false;
     retryAt = null;
   };
+  const acceptWindowExpiry = (
+    result: Pick<SessionsListResult, "ts" | "activityExpiresAt"> | null,
+  ) => {
+    const at = result?.activityExpiresAt;
+    // The Gateway's last valid millisecond covers even candidates outside this page.
+    const next =
+      result &&
+      at !== undefined &&
+      Number.isSafeInteger(at) &&
+      Number.isSafeInteger(result.ts) &&
+      at >= result.ts
+        ? at
+        : undefined;
+    if (next === windowExpiry) {
+      return; // A repeated receipt cannot postpone or replay the same wake.
+    }
+    cancelWindowExpiry?.();
+    cancelWindowExpiry = undefined;
+    windowExpiry = next;
+    if (next !== undefined && result) {
+      cancelWindowExpiry = scheduleAbsoluteDeadline(
+        monotonicDeadlineAfter(next - result.ts + 1),
+        () => {
+          queued = true;
+          arm(false);
+        },
+        monotonicNow,
+      );
+    }
+  };
   const reset = () => {
     absorb();
+    acceptWindowExpiry(null);
     pending = null;
     nextAllowed = 0;
   };
 
   return {
+    acceptWindowExpiry,
     scheduleFallback() {
       fallback ??= setTimeout(() => {
         fallback = undefined;

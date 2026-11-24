@@ -79,7 +79,7 @@ export const SessionListRowSchema = Type.Object(
     kind: stringEnum(SESSION_LIST_KINDS),
     channel: Type.String(),
     archived: Type.Boolean(),
-    pinned: Type.Boolean(),
+    pinned: Type.Optional(Type.Boolean()),
     createdActor: Type.Optional(SessionInventoryActorSchema),
     owner: Type.Optional(
       Type.Object({ actor: SessionInventoryActorSchema }, { additionalProperties: false }),

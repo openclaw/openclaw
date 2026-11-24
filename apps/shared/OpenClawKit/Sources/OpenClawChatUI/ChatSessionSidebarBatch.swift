@@ -384,14 +384,24 @@ final class ChatSessionSidebarBatch {
     static func drop(
         _ row: OpenClawChatSessionEntry,
         section: String,
-        target: OpenClawChatSessionEntry? = nil) -> Drop?
+        target: OpenClawChatSessionEntry? = nil,
+        after: Bool = false) -> Drop?
     {
         if section == "pinned" {
             // ui/src/components/session-organizer.ts handleSidebarZoneDrop consumes self-drops before bubbling.
             if let target, OpenClawChatSessionSidebarData.identity(row) ==
                 OpenClawChatSessionSidebarData.identity(target) { return .selfDrop }
             guard ChatSessionSidebarEligibility.canPin(row) else { return nil }
-            return .mutation(row.pinned == true ? nil : ["pinned": .init(true)])
+            if row.pinned == true { return .mutation(nil) }
+            var patch: [String: AnyCodable] = ["pinned": .init(true)]
+            if let target {
+                // A named insert is one guarded patch, never an append followed by a best-effort move.
+                guard ChatPayloadDecoding.trimmedNonEmptyString(row.sessionId) != nil else { return nil }
+                let anchor = OpenClawChatSessionTarget.resolve(
+                    target.key, selectedAgentID: target.agentId, policy: .scopeBareKeysToSelectedAgent)
+                patch["pinPlacement"] = .init(["relativeTo": anchor.sessionKey, "side": after ? "after" : "before"])
+            }
+            return .mutation(patch)
         }
         // Category patches: ui/src/components/session-organizer-operations.runtime.ts assignSessionCategory.
         // Web drop entry points: session-organizer.ts sectionDrop and handleSessionListDrop.

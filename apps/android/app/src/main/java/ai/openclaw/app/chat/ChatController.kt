@@ -632,13 +632,19 @@ class ChatController internal constructor(
     }
   }
 
-  private fun publishSessions(entries: List<ChatSessionEntry>) {
+  private fun publishSessions(
+    entries: List<ChatSessionEntry>,
+    invalidateBrowser: Boolean = true,
+  ) {
     synchronized(gatewayScopeApplyLock) {
       // Keep rejected device metadata out of raw entries/cache; all native title consumers
       // share a local fallback bound to this gateway and exact session key.
       _sessions.value = entries
       val binding = currentCacheScope()?.let { desiredMainSessions[it.gatewayId] }
-      presentedSessions.value = projectLocalSessionTitles(entries, binding)
+      val presented = projectLocalSessionTitles(entries, binding)
+      val changed = presented != presentedSessions.value
+      presentedSessions.value = presented
+      if (invalidateBrowser && changed) sessionBrowserRevisionMutable.update { it + 1 }
       publishReactionAccess()
     }
   }
@@ -857,8 +863,12 @@ class ChatController internal constructor(
   private val sessionRosterLoadFailedMutable = MutableStateFlow(false)
   internal val sessionRosterLoadFailed: StateFlow<Boolean> = sessionRosterLoadFailedMutable.asStateFlow()
   private val sessionRosterLoadMutex = Mutex()
+  private val sessionWindowWakeMutable = MutableStateFlow<SessionWakeDeadline?>(null)
+  internal val sessionWindowWake = sessionWindowWakeMutable.asStateFlow()
+  private var consumedWakeAt: Long? = null
 
   private fun clearSessionRosterPaging() {
+    clearSessionWindowWake()
     sessionRosterNextOffset = null
     sessionRosterLoadedLimit = null
     sessionRosterHasMoreMutable.value = false
@@ -964,6 +974,7 @@ class ChatController internal constructor(
     retireMainSessionReadiness()
     clearOutboxBranchReconciliation()
     synchronized(gatewayScopeApplyLock) {
+      clearSessionWindowWake()
       historyLoadGeneration.incrementAndGet()
       restoreRunStateOnReconnect = true
       progressCardNeedsRetry = true
@@ -2293,21 +2304,22 @@ class ChatController internal constructor(
    * One-shot session list for the search UI; does not touch the live list
    * state. Falls back to locally filtering the cached active list when the
    * gateway is unreachable; archived rows exist only server-side, so archived
-   * search is empty offline.
+   * reads return null on failure (not an authoritative empty page).
    */
   suspend fun fetchSessionList(
     search: String?,
     archived: Boolean,
-  ): List<ChatSessionEntry> {
+  ): List<ChatSessionEntry>? {
     val query = search?.trim()?.takeIf { it.isNotEmpty() }
     val requestCacheScope = currentCacheScope()
+    val requesterConnection = currentGatewayCatalogRevision()
     val requestSessionKey = _sessionKey.value
     val requestTracksDefaultAgent = activeSessionTracksDefaultAgent(requestSessionKey)
     val requestDefaultAgentRevision = currentDefaultAgentRevision()
 
-    fun cachedMatches(): List<ChatSessionEntry> =
+    fun cachedMatches(): List<ChatSessionEntry>? =
       when {
-        archived -> emptyList()
+        archived -> null
         query == null -> sessions.value
         else -> filterSessionEntries(sessions.value, query)
       }
@@ -2317,20 +2329,20 @@ class ChatController internal constructor(
     fun requestOwnerIsCurrent(): Boolean {
       val currentAgentId = resolveAgentIdForSessionKey(_sessionKey.value)
       return requestCacheScope == currentCacheScope() &&
-        currentAgentId == ownerAgentId &&
+        currentGatewayCatalogRevision() == requesterConnection && currentAgentId == ownerAgentId &&
         (!requestTracksDefaultAgent || currentDefaultAgentRevision() == requestDefaultAgentRevision)
     }
     val entries =
       runCatchingCancellable {
         val params = sessionListParams(ownerAgentId, SESSION_LIST_FETCH_LIMIT, archived, query)
-        val sessions = parseSessions(requestGateway("sessions.list", params.toString())).sessions
+        val sessions = parseSessions(requestGatewayBound(requestCacheScope?.gatewayId, "sessions.list", params.toString())).sessions
         sessions.map { session ->
           session.copy(ownerAgentId = ownerAgentId)
         }
       }.getOrElse { cachedMatches() }
     return synchronized(gatewayScopeApplyLock) {
-      if (!requestOwnerIsCurrent()) {
-        emptyList()
+      if (entries == null || !requestOwnerIsCurrent()) {
+        null
       } else {
         val binding = requestCacheScope?.let { desiredMainSessions[it.gatewayId] }
         projectLocalSessionTitles(entries, binding)
@@ -3090,8 +3102,10 @@ class ChatController internal constructor(
         val generation = historyLoadGeneration.incrementAndGet()
         val changed = _sessionKey.value != key || _sessionOwnerAgentId.value != owner
         if (changed) chatSelectionGeneration.update { it + 1 }
+        val previousAgent = resolveAgentIdForSessionKey(_sessionKey.value)
         _sessionKey.value = key
         _sessionOwnerAgentId.value = owner
+        if (previousAgent != resolveAgentIdForSessionKey(key)) clearSessionWindowWake()
         pendingHealthRefresh = if (refreshHealth) HealthRefresh(generation, force = true, refreshSessions = refreshSessions) else null
         retireSessionSettingsLanes { settingsKey, lane ->
           lane.reconciliation?.pending?.isCompleted == true &&
@@ -4874,7 +4888,9 @@ class ChatController internal constructor(
                   }?.takeIf { result.none { row -> row.key == activeSessionKey } }
               val page = if (append) mergeSessionRosterPages(_sessions.value, result) else result
               val sessions = if (selected == null || page.any { it.key == activeSessionKey }) page else page + selected
-              publishSessions(sessions)
+              // A full refresh already invalidated mounted queries; appending a cursor page
+              // expands the Drawer, not a search or archive result.
+              publishSessions(sessions, invalidateBrowser = false)
               result.forEach { observeSessionSettings(it) }
               sessionsListArchived = archived
               if (!append && !preserveWindow) sessionsListLimit = requestLimit
@@ -4884,6 +4900,13 @@ class ChatController internal constructor(
                 sessionRosterLoadedLimit = requestLimit?.plus(offset ?: 0)
                 sessionRosterNextOffset = parsed.nextOffset
                 sessionRosterHasMoreMutable.value = parsed.hasMore
+              }
+              // A cursor can introduce an earlier expiry but cannot retire the loaded prefix's.
+              if (!archived) {
+                val wake = parsed.wake?.takeUnless { it.serverMs == consumedWakeAt }
+                if (!append || (wake != null && wake.serverMs < (sessionWindowWakeMutable.value?.serverMs ?: Long.MAX_VALUE))) {
+                  sessionWindowWakeMutable.value = wake
+                }
               }
               val activeOutsideLocalWindow =
                 sessions
@@ -5240,6 +5263,22 @@ class ChatController internal constructor(
         preserveWindow = loadedLimit != null,
       )
     }
+
+  private fun clearSessionWindowWake() {
+    sessionWindowWakeMutable.value = null
+    consumedWakeAt = null
+  }
+
+  internal fun refreshSessionsAfterWake(wake: SessionWakeDeadline) {
+    synchronized(gatewayScopeApplyLock) {
+      // The Drawer and Threads can both be mounted. Their wall-clock offsets may differ,
+      // but the same server deadline invalidates both scoped queries and the shared page once.
+      if (consumedWakeAt == wake.serverMs) return
+      consumedWakeAt = wake.serverMs
+      if (sessionWindowWakeMutable.value?.serverMs == wake.serverMs) sessionWindowWakeMutable.value = null
+    }
+    refreshSessionsForCurrentWindow()
+  }
 
   internal fun refreshSessionsForCurrentWindow() {
     scope.launch { fetchSessionsForCurrentWindow() }
@@ -6429,8 +6468,6 @@ class ChatController internal constructor(
       return
     }
     if (reason == "delete") {
-      // An archived or off-window match can disappear without changing the active page.
-      sessionBrowserRevisionMutable.update { it + 1 }
       val sessionKey = payload["sessionKey"].asStringOrNull() ?: payload["key"].asStringOrNull()
       val ownerAgentId = payload["agentId"].asStringOrNull()
       if (
@@ -6442,6 +6479,9 @@ class ChatController internal constructor(
         // Legacy ownerless hints cannot authorize deleting an agent's local state:
         // absence from a filtered drawer page is not proof that its session was deleted.
         refreshSessionsForCurrentWindow()
+      } else {
+        // A delete can remove a scoped match without touching any active row.
+        sessionBrowserRevisionMutable.update { it + 1 }
       }
       return
     }
@@ -7667,6 +7707,7 @@ class ChatController internal constructor(
     val isTruncated: Boolean,
     val hasMore: Boolean = false,
     val nextOffset: Int? = null,
+    val wake: SessionWakeDeadline? = null,
   )
 
   private data class SessionSettingsPatchResolution(
@@ -7682,17 +7723,18 @@ class ChatController internal constructor(
     jsonString: String,
     requestedOffset: Int = 0,
   ): SessionListResult {
-    val root =
-      json.parseToJsonElement(jsonString).asObjectOrNull()
-        ?: return SessionListResult(emptyList(), isTruncated = false)
+    val root = requireNotNull(json.parseToJsonElement(jsonString).asObjectOrNull())
     // Selection and pinned:false used the Gateway's clock. Refresh only after that
     // same clock reaches the deadline, even on a handset whose wall clock is fast.
-    val snoozeClockOffset = root["ts"].asLongOrNull()?.let { System.currentTimeMillis() - it } ?: 0L
-    val sessions =
-      root["sessions"]
-        .asArrayOrNull()
-        ?.mapNotNull { item -> parseSessionEntry(item.asObjectOrNull(), snoozeClockOffset = snoozeClockOffset) }
-        .orEmpty()
+    val serverNow = root["ts"].asLongOrNull()
+    val snoozeClockOffset = serverNow?.let { System.currentTimeMillis() - it } ?: 0L
+    val sessions = requireNotNull(root["sessions"].asArrayOrNull()).mapNotNull { parseSessionEntry(it.asObjectOrNull(), snoozeClockOffset = snoozeClockOffset) }
+    // activityExpiresAt is the last valid server millisecond, not the first invalid one.
+    val wake =
+      root["activityExpiresAt"]
+        .asLongOrNull()
+        ?.takeIf { serverNow != null && it >= serverNow && it < Long.MAX_VALUE }
+        ?.let { SessionWakeDeadline(serverMs = it + 1, localMs = it + 1 + snoozeClockOffset) }
     val totalCount = root["totalCount"].asLongOrNull()
     val loadedEnd = requestedOffset + sessions.size
     val more = root["hasMore"].asBooleanOrNull() ?: (totalCount != null && totalCount > loadedEnd.toLong())
@@ -7700,7 +7742,7 @@ class ChatController internal constructor(
       (root["nextOffset"].asLongOrNull()?.toInt() ?: loadedEnd)
         .takeIf { more && sessions.isNotEmpty() && it > requestedOffset }
     val isTruncated = more || (totalCount != null && totalCount > loadedEnd.toLong())
-    return SessionListResult(sessions, isTruncated, nextOffset != null, nextOffset)
+    return SessionListResult(sessions, isTruncated, nextOffset != null, nextOffset, wake)
   }
 
   private fun parseSessionEntry(
@@ -8155,7 +8197,7 @@ class ChatController internal constructor(
           }
         val visibleOwner = resolveAgentIdForSessionKey(_sessionKey.value)
         val removesVisibleEntry = cacheScope == currentCacheScope() && owner != null && owner == visibleOwner
-        if (removesVisibleEntry) publishSessions(_sessions.value.filterNot { it.key == key })
+        if (removesVisibleEntry) publishSessions(_sessions.value.filterNot { it.key == key }, invalidateBrowser = false)
         removesVisibleEntry to retired
       }
     retiredSettings.forEach { it.complete(false) }

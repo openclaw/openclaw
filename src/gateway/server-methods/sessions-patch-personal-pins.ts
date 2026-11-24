@@ -6,6 +6,7 @@ import {
 } from "../../../packages/gateway-protocol/src/index.js";
 import {
   DEFAULT_RAIL_SHORTCUTS,
+  parseSidebarSessionReference,
   setPersonalSessionPins,
   UI_RAIL_SHORTCUTS_PREFERENCE_KEY as preferenceKey,
 } from "../../../packages/gateway-protocol/src/schema/ui-navigation-preferences.js";
@@ -16,6 +17,7 @@ import {
   setCanonicalUserPreferences,
 } from "../../state/user-preferences.js";
 import { SessionMutationAuthorizationChangedError } from "../session-mutation-authorization-error.js";
+import { usesLegacySessionPins } from "../session-pin-compatibility.js";
 import { resolvePluginSessionOwnershipError } from "../session-plugin-ownership.js";
 import type { SessionSharingTarget } from "../session-sharing-policy.js";
 import {
@@ -36,6 +38,7 @@ const pinFields = new Set([
   "key",
   "agentId",
   "pinned",
+  "pinPlacement",
   "expectedSessionId",
   "expectedLifecycleRevision",
   "expectedSidebarRoot",
@@ -52,6 +55,19 @@ export async function patchPersonalSessionPins(
   many: boolean,
 ) {
   const { respond, context } = options;
+  if (
+    patch.pinPlacement &&
+    (many ||
+      patch.pinned !== true ||
+      !patch.expectedSessionId ||
+      usesLegacySessionPins(options.client))
+  ) {
+    return respond(
+      false,
+      undefined,
+      reject("Pin placement requires a personal pinned:true patch with expectedSessionId."),
+    );
+  }
   const owner = sessionPinRequester(options);
   if (!owner) {
     return respond(
@@ -241,6 +257,26 @@ export async function patchPersonalSessionPins(
       }
       const entries: unknown[] = raw ?? DEFAULT_RAIL_SHORTCUTS;
       const next = setPersonalSessionPins(entries, [...accepted.keys()], pinned);
+      if (patch.pinPlacement) {
+        const { relativeTo, side } = patch.pinPlacement;
+        // Only a session: entry is a named destination. A rail-only shortcut cannot stand in for it.
+        const anchor = entries.findIndex(
+          (entry) =>
+            typeof entry === "string" &&
+            entry.startsWith("session:") &&
+            parseSidebarSessionReference(entry) === relativeTo,
+        );
+        if (anchor < 0 || next.length === entries.length) {
+          return respond(
+            false,
+            undefined,
+            reject("Pin placement changed. Refresh the list and retry."),
+          );
+        }
+        // A guarded placement is single-target and inserts only an initially unpinned row.
+        const added = next.pop();
+        next.splice(anchor + (side === "after" ? 1 : 0), 0, added);
+      }
       if (next.length !== entries.length) {
         const result = await setCanonicalUserPreferences(
           owner.profileId,

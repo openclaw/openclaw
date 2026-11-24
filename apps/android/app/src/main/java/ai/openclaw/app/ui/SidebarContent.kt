@@ -823,15 +823,16 @@ internal fun OpenClawSidebar(
       query = query,
       archived = false,
     )
-  val nextWakeMs =
+  val windowWake by viewModel.sessionWindowWake.collectAsState()
+  val nextWake =
     listOfNotNull(
-      SessionSnooze.nextWakeMs(sessions, sessionNowMs),
-      SessionSnooze.nextWakeMs(searchState.entries, sessionNowMs),
-    ).minOrNull()
-  LaunchedEffect(nextWakeMs, personalPins, gatewayStableId) {
-    nextWakeMs?.let {
-      sessionNowMs = awaitSessionStatusExpiry(it)
-      if (personalPins) viewModel.refreshCurrentChatSessionWindow()
+      SessionSnooze.nextWake(sessions, sessionNowMs, windowWake),
+      SessionSnooze.nextWake(searchState.entries, sessionNowMs, windowWake),
+    ).minByOrNull { it.localMs }
+  LaunchedEffect(nextWake, personalPins, gatewayStableId) {
+    nextWake?.let {
+      sessionNowMs = awaitSessionStatusExpiry(it.localMs)
+      if (personalPins) viewModel.refreshChatSessionsAfterWake(it)
     }
   }
   val searchResults =

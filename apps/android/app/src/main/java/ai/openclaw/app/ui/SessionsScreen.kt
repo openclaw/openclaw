@@ -147,8 +147,9 @@ internal fun SessionsScreen(
       nowMs = sessionStatusNowMs,
       personalPins = personalPins,
     )
-  val nextAttentionExpiry = nextSessionStatusExpiry(searchState.entries, sessionStatusNowMs)
-  val nextWakeMs = SessionSnooze.nextWakeMs(searchState.entries, sessionStatusNowMs)
+  val windowWake by viewModel.sessionWindowWake.collectAsState()
+  val nextWake = SessionSnooze.nextWake(searchState.entries, sessionStatusNowMs, windowWake)
+  val nextAttentionExpiry = listOfNotNull(nextSessionStatusExpiry(searchState.entries, sessionStatusNowMs), nextWake?.localMs).minOrNull()
   val storedGroups by viewModel.sessionCustomGroups.collectAsState()
   val sections =
     buildSessionTreeSections(
@@ -179,12 +180,10 @@ internal fun SessionsScreen(
     }
   }
 
-  LaunchedEffect(nextAttentionExpiry, nextWakeMs, personalPins, activeGatewayStableId, filter) {
+  LaunchedEffect(nextAttentionExpiry, nextWake, personalPins, activeGatewayStableId, filter) {
     nextAttentionExpiry?.let { expiry ->
       sessionStatusNowMs = awaitSessionStatusExpiry(expiry)
-      if (personalPins && nextWakeMs != null && nextWakeMs <= sessionStatusNowMs) {
-        viewModel.refreshCurrentChatSessionWindow()
-      }
+      if (personalPins && nextWake != null && nextWake.localMs <= sessionStatusNowMs) viewModel.refreshChatSessionsAfterWake(nextWake)
     }
   }
 
@@ -1058,32 +1057,22 @@ internal fun rememberSessionBrowserSearchState(
   val ownerAgentId by viewModel.chatSessionOwnerAgentId.collectAsState()
   val connected by viewModel.isConnected.collectAsState()
   val revision by viewModel.sessionBrowserRevision.collectAsState()
-  var searchResults by remember(gatewayId, ownerAgentId, connected, normalizedQuery, archived) { mutableStateOf<List<ChatSessionEntry>?>(null) }
-  var searchLoading by remember { mutableStateOf(false) }
-
-  // Retain the last answer for this exact scope while it refreshes; a different query,
-  // connection or owner starts empty. An off-window change need not alter the active page.
-  LaunchedEffect(gatewayId, ownerAgentId, connected, normalizedQuery, archived, sessions, revision) {
-    searchLoading = true
-    try {
-      // Key changes cancel superseded debounce/fetch work. The controller owns
-      // gateway search plus the offline local-filter fallback.
-      if (normalizedQuery.isNotEmpty() && searchResults == null) delay(250)
-      searchResults =
-        viewModel.fetchChatSessionList(
-          search = normalizedQuery,
-          archived = archived,
-        )
-    } finally {
-      searchLoading = false
+  val defaultAgentId by viewModel.gatewayDefaultAgentId.collectAsState()
+  // Each authenticated operator hello has its own epoch, even at the same Gateway URL.
+  val requesterConnection by viewModel.gatewayCatalogRevision.collectAsState()
+  return key(gatewayId, requesterConnection, ownerAgentId ?: defaultAgentId, connected, normalizedQuery, archived) {
+    var searchResults by remember { mutableStateOf<List<ChatSessionEntry>?>(null) }
+    var searchLoading by remember(revision) { mutableStateOf(true) }
+    LaunchedEffect(revision) {
+      try {
+        if (normalizedQuery.isNotEmpty() && searchResults == null) delay(250)
+        viewModel.fetchChatSessionList(search = normalizedQuery, archived = archived)?.let { searchResults = it }
+      } finally {
+        searchLoading = false
+      }
     }
+    SessionBrowserSearchState(normalizedQuery, searchResults.orEmpty(), searchLoading)
   }
-
-  return SessionBrowserSearchState(
-    query = normalizedQuery,
-    entries = searchResults.orEmpty(),
-    loading = searchLoading,
-  )
 }
 
 /** A capable Gateway has already ranked the visible pins in the requester's saved order. */

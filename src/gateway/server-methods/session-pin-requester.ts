@@ -101,7 +101,6 @@ export function prepareSessionPinRead(options: GatewayRequestHandlerOptions) {
     canFilter: legacy || Boolean(owner),
     shareable: !owner,
     assertCurrent: owner?.assertCurrent,
-    read: () =>
-      legacy ? undefined : owner ? readRequesterSessionPins(owner) : new Map<string, number>(),
+    read: () => (legacy ? undefined : owner ? readRequesterSessionPins(owner) : null),
   };
 }

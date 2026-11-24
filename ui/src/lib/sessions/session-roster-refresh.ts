@@ -165,16 +165,14 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
     const isCurrent = () =>
       host.connection.isCurrent(scope) && publicationGeneration === foregroundPublicationGeneration;
     const { append = false, force: _force, backgroundHydrate = false, ...requestOptions } = options;
-    const durableListOptions: SessionListOptions = { ...requestOptions };
     // Pagination is request-local; replacements retain filters but restart at page one.
-    delete durableListOptions.offset;
-    if (!backgroundHydrate) {
+    const { offset: _offset, ...durableListOptions } = requestOptions;
+    if (!backgroundHydrate || bootstrap || listOptionsSource === "none") {
+      if (!isSameSessionListQuery(lastListOptions, durableListOptions, append)) {
+        eventRefreshCoordinator.acceptWindowExpiry(null);
+      }
       lastListOptions = durableListOptions;
-      listOptionsSource = "foreground";
-    } else if (bootstrap || listOptionsSource === "none") {
-      // Reconnect may select a different agent; later event refreshes must use that query.
-      lastListOptions = durableListOptions;
-      listOptionsSource = "seeded";
+      listOptionsSource = backgroundHydrate ? "seeded" : "foreground";
     }
     if (!backgroundHydrate) {
       const error = host.observerError();
@@ -185,11 +183,12 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
     }
     try {
       const issuedRevision = ++requestRevision;
-      let result = await requestSessionList(scope.client, requestOptions, isCurrent);
+      const response = await requestSessionList(scope.client, requestOptions, isCurrent);
       if (!isCurrent()) {
         return null;
       }
-      result = host.reconcileList(result, issuedRevision, requestOptions.agentId);
+      const result = host.reconcileList(response, issuedRevision, requestOptions.agentId);
+      eventRefreshCoordinator.acceptWindowExpiry(response);
       const currentState = host.readState();
       const mergeWithCurrent =
         !currentState.resultCached && append && requestOptions.offset !== undefined;

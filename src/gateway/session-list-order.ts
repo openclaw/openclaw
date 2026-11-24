@@ -170,9 +170,7 @@ export function selectSessionEntries(
     !params.opts.includePeople &&
     !params.opts.involvingProfileId;
   const rank =
-    params.opts.pinned === true || (params.opts.sortBy ?? "updatedAt") === "updatedAt"
-      ? params.personalPinRank
-      : undefined;
+    (params.opts.sortBy ?? "updatedAt") === "updatedAt" ? params.personalPinRank : undefined;
   let filteredResult: SessionListFilteredEntries;
   if (incremental) {
     retainCurrentSessionListPartitions(params.retained!, params.partitions!);

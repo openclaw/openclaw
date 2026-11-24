@@ -22,7 +22,7 @@ export async function searchProjectedSessionTranscripts(params: {
   query: string;
   limit?: number;
   scope: NonNullable<SessionsSearchParams["scope"]>;
-  personalPins?: ReadonlyMap<string, number>;
+  personalPins?: ReadonlyMap<string, number> | null;
   context: GatewayRequestContext;
   client: GatewayClient | null;
   onResult: (result: SessionsSearchResult) => void;

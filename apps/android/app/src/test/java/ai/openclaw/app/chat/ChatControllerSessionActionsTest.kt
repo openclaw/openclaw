@@ -2,10 +2,12 @@ package ai.openclaw.app.chat
 
 import ai.openclaw.app.gateway.GatewayRequestNotEnqueued
 import ai.openclaw.app.gateway.GatewaySession
+import ai.openclaw.app.ui.awaitSessionStatusExpiry
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
@@ -181,7 +183,7 @@ class ChatControllerSessionActionsTest {
       runCurrent()
       val archived = controller.sessions.value
       assertEquals(listOf("archived"), archived.map { it.key })
-      assertFalse(controller.fetchSessionList("Cedar", archived = false).single().pinned == true)
+      assertFalse(requireNotNull(controller.fetchSessionList("Cedar", archived = false)).single().pinned == true)
       for (afterWake in listOf(true, false)) {
         val before = controller.sessionBrowserRevision.value
         val matchingRows =
@@ -200,7 +202,7 @@ class ChatControllerSessionActionsTest {
           controller.handleGatewayEvent("users.prefs.changed", """{"keys":["ui.railShortcuts"]}""")
         }
         runCurrent()
-        assertEquals(afterWake, matchingRows.await().single().pinned)
+        assertEquals(afterWake, requireNotNull(matchingRows.await()).single().pinned)
         assertEquals(archived, controller.sessions.value)
       }
       val windows = gateway.calls.map { json.parseToJsonElement(requireNotNull(it.paramsJson)).jsonObject }.filter { it["search"] == null }
@@ -224,7 +226,7 @@ class ChatControllerSessionActionsTest {
       val controller = controller(this, gateway)
       controller.refreshSessions(limit = 7)
       runCurrent()
-      assertEquals(listOf("retired"), controller.fetchSessionList(null, archived = true).map { it.key })
+      assertEquals(listOf("retired"), requireNotNull(controller.fetchSessionList(null, archived = true)).map { it.key })
       val before = controller.sessionBrowserRevision.value
       val refreshed =
         async {
@@ -233,7 +235,7 @@ class ChatControllerSessionActionsTest {
         }
       archived = false
       controller.handleGatewayEvent("sessions.changed", """{"reason":"delete","sessionKey":"retired","agentId":"main"}""")
-      assertTrue(refreshed.await().isEmpty())
+      assertTrue(requireNotNull(refreshed.await()).isEmpty())
       val active = controller.sessions.value
       assertEquals(listOf("saved", "recent"), active.map { it.key })
       assertEquals(true, active.first().pinned)
@@ -285,6 +287,57 @@ class ChatControllerSessionActionsTest {
         assertTrue(row.isSnoozed(wake - 1L))
         assertFalse(row.isSnoozed(wake))
         assertNull(SessionSnooze.nextWakeMs(listOf(row), wake))
+      }
+    }
+
+  @Test
+  fun wholeWindowExpiryRestoresAnOffPagePinOnceAfterTheServerCutoff() =
+    runTest {
+      for (skew in listOf(-300_000L, 300_000L)) {
+        val gateway = ScriptedGateway(json)
+        val rows = (1..200).map { """{"key":"recent-$it"}""" }
+        val before = System.currentTimeMillis()
+        val ts = before + skew
+        val cutoff = ts + 999
+        gateway.respondWith("sessions.list", """{"ts":$ts,"activityExpiresAt":$cutoff,"sessions":[${rows.joinToString(",")}],"totalCount":201}""")
+        val controller = controller(this, gateway)
+        controller.refreshSessions(limit = 200)
+        runCurrent()
+        val after = System.currentTimeMillis()
+        assertEquals(200, controller.sessions.value.size)
+        assertNull(SessionSnooze.nextWakeMs(controller.sessions.value, before))
+        val wake = requireNotNull(SessionSnooze.nextWake(controller.sessions.value, before, controller.sessionWindowWake.value))
+        assertEquals(cutoff + 1, wake.serverMs)
+        assertTrue(wake.localMs in (before + 1_000)..(after + 1_000))
+
+        gateway.respondWith("sessions.list", """{"ts":${cutoff + 1},"sessions":[{"key":"old-pin","pinned":true},${rows.take(199).joinToString(",")}],"totalCount":201}""")
+        val localAtStart = wake.localMs - 1000
+        val start = testScheduler.currentTime
+        repeat(2) {
+          launch {
+            awaitSessionStatusExpiry(wake.localMs, nowMs = { localAtStart + testScheduler.currentTime - start })
+            controller.refreshSessionsAfterWake(wake)
+          }
+        }
+        testScheduler.advanceTimeBy(999)
+        runCurrent()
+        assertEquals(1, gateway.callCount("sessions.list"))
+        testScheduler.advanceTimeBy(1)
+        runCurrent()
+        assertEquals(2, gateway.callCount("sessions.list"))
+        assertEquals(
+          "old-pin",
+          controller.sessions.value
+            .first()
+            .key,
+        )
+        assertEquals(
+          true,
+          controller.sessions.value
+            .first()
+            .pinned,
+        )
+        assertNull(controller.sessionWindowWake.value)
       }
     }
 
