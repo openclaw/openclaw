@@ -172,7 +172,10 @@ describe("venice provider plugin", () => {
       model: GEMINI_MODEL,
       messages: [
         { role: "user", content: "echo" },
-        wireAssistant(wireCall("call_1", "echo_value", '{"value":"repro"}')),
+        wireAssistant({
+          ...wireCall("call_1", "echo_value", '{"value":"repro"}'),
+          provider_specific_fields: { thought_signature: "SIG-GENERIC-COPY" },
+        }),
         wireResult("call_1", "ok"),
       ],
     };
@@ -197,6 +200,7 @@ describe("venice provider plugin", () => {
       wireResult("call_1", "ok"),
     ]);
     expect(signed.messages[1]).not.toHaveProperty("tool_calls.0.extra_content");
+    expect(signed.messages[1]).not.toHaveProperty("tool_calls.0.provider_specific_fields");
 
     const foreign = await patchPayload(structuredClone(payload), [
       assistant([toolCall("call_1", "echo_value", "SIG-CROSS-ROUTE")], {

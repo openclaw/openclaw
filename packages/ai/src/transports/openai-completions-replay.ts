@@ -33,13 +33,13 @@ function injectToolCallThoughtSignatures(
   context: Context,
   model: OpenAIModeModel,
 ): void {
-  if (!isGoogleOpenAICompatModel(model)) {
-    return;
-  }
+  const google = isGoogleOpenAICompatModel(model);
   const sigById = new Map<string, string>();
-  const fallbackSig = isGoogleGemini3ThinkingLevelModel(model.id)
-    ? GEMINI_THOUGHT_SIGNATURE_VALIDATOR_SKIP
-    : undefined;
+  const idsSeen = new Set<string>();
+  const fallbackSig =
+    google && isGoogleGemini3ThinkingLevelModel(model.id)
+      ? GEMINI_THOUGHT_SIGNATURE_VALIDATOR_SKIP
+      : undefined;
   for (const msg of context.messages ?? []) {
     if (msg.role !== "assistant") {
       continue;
@@ -53,10 +53,23 @@ function injectToolCallThoughtSignatures(
       }
       const id = block.id;
       const sig = block.thoughtSignature;
+      // Generic signatures cannot be safely matched by id when another turn reuses it.
+      if (!google && idsSeen.has(id)) {
+        sigById.delete(id);
+        continue;
+      }
+      if (!google) {
+        idsSeen.add(id);
+      }
       if (typeof id === "string" && typeof sig === "string" && sig.length > 0) {
         const isSameRoute =
           msg.api === model.api && msg.provider === model.provider && msg.model === model.id;
-        if (!isSameRoute && !fallbackSig) {
+        if (
+          (!isSameRoute && !fallbackSig) ||
+          (!google &&
+            (sig.trimStart().startsWith("{") ||
+              sig.trim() === GEMINI_THOUGHT_SIGNATURE_VALIDATOR_SKIP))
+        ) {
           continue;
         }
         sigById.set(id, isSameRoute ? sig : (fallbackSig ?? sig));
@@ -82,7 +95,12 @@ function injectToolCallThoughtSignatures(
       if (!sig) {
         continue;
       }
-      Object.assign(toolCall, { extra_content: { google: { thought_signature: sig } } });
+      Object.assign(
+        toolCall,
+        google
+          ? { extra_content: { google: { thought_signature: sig } } }
+          : { provider_specific_fields: { thought_signature: sig } },
+      );
     }
   }
 }

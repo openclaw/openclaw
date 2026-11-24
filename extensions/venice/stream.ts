@@ -150,6 +150,8 @@ function applyVeniceGeminiToolHistoryCompatibility(
       if (!toolCallRecord) {
         continue;
       }
+      // Venice owns its per-occurrence, top-level signature field.
+      delete toolCallRecord.provider_specific_fields;
       const historicalCall = historicalBatch?.[toolCallIndex];
       const describedCall = describeHistoricalToolCall(toolCallRecord);
       const signature =

@@ -1,3 +1,4 @@
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { describe, expect, it } from "vitest";
 import type { Model } from "../types.js";
 import { createZeroUsage } from "../usage.test-support.js";
@@ -57,6 +58,67 @@ function geminiToolReplayContext(
 }
 
 describe("openai completions params", () => {
+  describe("LiteLLM tool signatures", () => {
+    const signature = "SIG-LITELLM-OPAQUE==";
+    const model = makeCompletionsModel({
+      id: "gemini-3-flash-preview",
+      provider: "custom-litellm",
+      baseUrl: "https://proxy.example.test/v1",
+    });
+
+    it("captures LiteLLM provider-specific signature fields from the stream", async () => {
+      const output = createAssistantOutput(model);
+      const chunks = [
+        makeCompletionsChunk({
+          tool_calls: [
+            {
+              index: 0,
+              id: "call_abc",
+              type: "function",
+              function: { name: "echo_value", arguments: "{}" },
+              provider_specific_fields: { thought_signature: signature },
+            },
+          ],
+        }),
+        makeCompletionsChunk({}, "tool_calls"),
+      ];
+      await processCompletionsStream(streamChunks(chunks), output, model, { push() {} });
+      expectRecordFields(output.content[0], { type: "toolCall", thoughtSignature: signature });
+    });
+
+    it.each([
+      { scenario: "same route", thoughtSignature: signature, replay: true },
+      { scenario: "different API", thoughtSignature: signature, sourceApi: "openai-responses" },
+      { scenario: "reasoning details", thoughtSignature: '{"type":"reasoning.encrypted"}' },
+      { scenario: "skip validator", thoughtSignature: "skip_thought_signature_validator" },
+      { scenario: "truncation", thoughtSignature: "SIG..." },
+    ])(
+      "replays only complete same-route signatures: $scenario",
+      ({ thoughtSignature, sourceApi, replay }) => {
+        const params = buildOpenAICompletionsParams(
+          model,
+          geminiToolReplayContext(model, {
+            thoughtSignature,
+            sourceApi,
+            includeUserAndResult: true,
+          }),
+          undefined,
+        );
+        const assistant = params.messages
+          .map(asOptionalRecord)
+          .find((message) => message?.role === "assistant");
+        const calls = assistant?.tool_calls;
+        const call = Array.isArray(calls) ? calls[0] : undefined;
+        expect(call).toBeDefined();
+        if (replay) {
+          expect(call).toHaveProperty("provider_specific_fields.thought_signature", signature);
+        } else {
+          expect(call).not.toHaveProperty("provider_specific_fields");
+        }
+      },
+    );
+  });
+
   describe("Gemini thought_signature round-trip on OpenAI-compatible completions", () => {
     const geminiModel = makeCompletionsModel({
       id: "gemini-3-flash-preview",
