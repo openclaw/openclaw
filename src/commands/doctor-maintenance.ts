@@ -80,6 +80,7 @@ export async function beginDoctorMaintenance(params: DoctorMaintenanceParams) {
   let stopped: PreManagedServiceStop | undefined;
   let serviceVerdict: PreManagedServiceStop["serviceUpdateVerdict"];
   let stopDeadline: number | undefined;
+  let stoppedAtMs: number | undefined;
   const warnings: string[] = [];
   const warn = (message: string) => {
     warnings.push(message);
@@ -296,8 +297,8 @@ export async function beginDoctorMaintenance(params: DoctorMaintenanceParams) {
       });
     }
     params.runtime.log("Gateway restarted and verified after Doctor maintenance.");
-    if (before.stopped && before.stoppedAtMs !== undefined) {
-      const seconds = (Date.now() - before.stoppedAtMs) / 1000;
+    if (before.stopped && stoppedAtMs !== undefined) {
+      const seconds = (Date.now() - stoppedAtMs) / 1000;
       params.runtime.log(`The Gateway was stopped for ${seconds.toFixed(1)} s.`);
     }
     if (staleReplacement) {
@@ -555,6 +556,8 @@ export async function beginDoctorMaintenance(params: DoctorMaintenanceParams) {
                           warn,
                           onStopped: (before) => {
                             stopped = before;
+                            // Reported when the native stop completes; preparation kept serving.
+                            stoppedAtMs ??= Date.now();
                           },
                         });
                       // The drain's auth probe borrows state custody acquired before stopping.
@@ -589,6 +592,7 @@ export async function beginDoctorMaintenance(params: DoctorMaintenanceParams) {
                       });
                     }
                     if (stopped?.stopped) {
+                      stoppedAtMs ??= Date.now();
                       params.runtime.log("Stopped the managed Gateway for Doctor repair.");
                       // Forced termination cannot run our restoration finalizer.
                       params.runtime.log(
