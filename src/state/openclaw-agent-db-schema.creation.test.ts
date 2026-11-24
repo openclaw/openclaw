@@ -3,12 +3,14 @@ import {
   observeHostDataSql,
   observeSqliteReadSql,
 } from "../../test/helpers/sqlite-statement-execution-counter.js";
+import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import { openNodeSqliteDatabase, requireNodeSqlite } from "../infra/node-sqlite.js";
 import { admitSqliteSchema, getAdmittedSqliteSchemaFacts } from "../infra/sqlite-schema-facts.js";
 import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
 import { assertCanonicalSessionValidationSchema } from "./openclaw-agent-canonical-validation-schema.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "./openclaw-agent-db-contract.js";
 import { ensureOpenClawAgentSchema } from "./openclaw-agent-db-schema.js";
+import type { DB } from "./openclaw-agent-db.generated.js";
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "./openclaw-agent-schema.js";
 import { hashSqliteSchema } from "./sqlite-schema-shape.test-support.js";
 
@@ -89,4 +91,34 @@ describe("fresh agent schema admission", () => {
     expect(getAdmittedSqliteSchemaFacts(database)?.userVersion).toBe(OPENCLAW_AGENT_SCHEMA_VERSION);
     expect(() => assertCanonicalSessionValidationSchema(database)).not.toThrow();
   });
+});
+
+it("creates a nullable marker on fresh nodes without changing their entry JSON", () => {
+  using db = openNodeSqliteDatabase(":memory:");
+  ensureOpenClawAgentSchema(db, "main", ":memory:");
+  db.exec(`INSERT INTO session_nodes (session_key, current_session_id, updated_at, entry_json, archived_at)
+    VALUES ('archived', 'two', 2, '{ "sessionId": "two", "archivedAt": 2 }', 2)`);
+  expect(
+    db
+      .prepare(
+        "SELECT type, [notnull], dflt_value FROM pragma_table_info('session_nodes') WHERE name='archive_undo_marker'",
+      )
+      .get(),
+  ).toEqual({ type: "TEXT", notnull: 0, dflt_value: null });
+  const sql = getNodeSqliteKysely<DB>(db);
+  const node = sql
+    .selectFrom("session_nodes")
+    .select(["entry_json", "archive_undo_marker"])
+    .where("session_key", "=", "archived");
+  const read = () => executeSqliteQuerySync(db, node).rows;
+  const entry = '{ "sessionId": "two", "archivedAt": 2 }';
+  expect(read()).toEqual([{ entry_json: entry, archive_undo_marker: null }]);
+  executeSqliteQuerySync(
+    db,
+    sql
+      .updateTable("session_nodes")
+      .set({ archive_undo_marker: "occurrence" })
+      .where("session_key", "=", "archived"),
+  );
+  expect(read()).toEqual([{ entry_json: entry, archive_undo_marker: "occurrence" }]);
 });

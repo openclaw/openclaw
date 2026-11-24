@@ -85,7 +85,7 @@ suite.define(() => {
             await page
               .locator('[data-chat-model-auth-state] [data-chat-model-setup="true"]')
               .click();
-            await page.waitForURL("**/settings/model-providers?connect=1");
+            await page.waitForURL("**/settings/model-providers?provider=openai&connect=1");
           } else {
             expect(await option.isDisabled()).toBe(true);
             expect(await page.locator(".chat-controls__model-menu").textContent()).not.toContain(

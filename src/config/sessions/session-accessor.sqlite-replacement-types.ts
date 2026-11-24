@@ -1,5 +1,6 @@
 import type { LegacyOpenClawIdMemberRoleImport } from "../../gateway/openclaw-id/member-source-role-import.js";
 import type { RetainedWorkerTransactionAdmission } from "../../infra/sqlite-worker-operation-settlement.js";
+import type { OpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution-contract.js";
 import type { SessionEntryReplacementPublication } from "./session-accessor.sqlite-entry-cache.types.js";
 import type { ResolvedSessionEntryRow } from "./session-accessor.sqlite-entry-read.js";
 import type {
@@ -8,7 +9,9 @@ import type {
 } from "./session-accessor.sqlite-lifecycle-types.js";
 import type {
   SessionEntryCommitContext,
+  SessionEntryCreateWithTranscriptOptions,
   SessionEntryReplacement,
+  SessionEntryReplacementSnapshot,
   TranscriptEvent,
 } from "./session-accessor.types.js";
 import type { SessionCreationOperation } from "./session-creation-operation.js";
@@ -20,6 +23,7 @@ import type { SessionEntry } from "./types.js";
 
 export type SqliteSessionEntryReplacement = SessionEntryReplacement & {
   previousSessionKeys?: readonly string[];
+  archiveUndo?: import("./session-archive-undo.js").SessionArchiveUndoIntent;
 };
 
 export type SessionEntryReplacementCommit = {
@@ -77,4 +81,40 @@ export type SessionEntryWorkerLifecycle<T = unknown> = {
     entries: ReadonlyMap<string, SessionEntry>,
     patchDiffBaselines?: SessionEntryReplacementPublication["patchDiffBaselines"],
   ) => void;
+};
+
+export type ReplacementProjectionOptions = {
+  includeArchiveUndoMarkers?: boolean;
+  memberSourceRoleImport?: SessionEntryReplacementCommit["memberSourceRoleImport"];
+  creationOperation?: SessionEntryReplacementCommit["creationOperation"];
+  fieldPatch?: SessionEntryReplacementCommit["fieldPatch"];
+  onCommittedEntries?: SessionEntryWorkerLifecycle["onCommittedEntries"];
+  retainedExecution?: OpenClawAgentDatabaseExecution;
+  followRegistration?: SessionEntryCreateWithTranscriptOptions["followRegistration"];
+  assertCommitAllowed?: () => void;
+  withCommit?: SessionEntryCreateWithTranscriptOptions["withCommit"];
+  ownerAssignment?: SessionEntryReplacementCommit["ownerAssignment"];
+  labelClaim?: SessionEntryReplacementCommit["labelClaim"];
+  preparedTranscript?: SessionEntryReplacementCommit["preparedTranscript"];
+  checkPendingArchiveRecovery?: boolean;
+  onLifecycleCommitted?: (pendingArchiveRecovery: boolean) => void;
+  env?: NodeJS.ProcessEnv;
+  activeSessionKey?: string;
+  agentId?: string;
+  consumePendingReset?: boolean;
+  requireWriteSuccess?: boolean;
+  sessionKeys?: readonly string[];
+  includeSessionWindowOwner?: string;
+  includeLabelOwners?: string;
+  skipMaintenance?: boolean;
+  storePath: string;
+};
+
+export type ReplacementProjectionParams<T, TReplacement> = ReplacementProjectionOptions & {
+  afterCommitted?: (result: T, context: SessionEntryCommitContext) => Promise<void>;
+  update: (
+    entries: SessionEntryReplacementSnapshot[],
+  ) =>
+    | Promise<{ result: T; replacements?: Iterable<TReplacement> }>
+    | { result: T; replacements?: Iterable<TReplacement> };
 };

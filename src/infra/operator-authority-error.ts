@@ -1,5 +1,27 @@
 import { collectNestedErrorCandidates } from "@openclaw/normalization-core/error-coercion";
+import {
+  gatewayOperatorAccessError,
+  type GatewayOperatorAccessCause,
+} from "../../packages/gateway-protocol/src/connect-error-details.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+
+export class GatewayOperatorAccessDeniedError extends Error {
+  constructor(readonly accessCause: GatewayOperatorAccessCause = "policy-check-failed") {
+    super(gatewayOperatorAccessError(accessCause).message);
+    this.name = "GatewayOperatorAccessDeniedError";
+  }
+}
+
+/** The admitting request ended before a retained plugin operation could finish. */
+export const GatewayRequestAuthorityExpiredError = resolveGlobalSingleton(
+  Symbol.for("openclaw.gatewayRequestAuthorityExpiredError"),
+  () =>
+    class extends Error {
+      constructor() {
+        super("Gateway request authority expired");
+      }
+    },
+);
 
 /** A failed policy evaluation refuses this operation without revoking its source. */
 export const GatewayOperatorAccessUnavailableError = resolveGlobalSingleton(

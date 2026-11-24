@@ -343,7 +343,7 @@ type GatewayTransportContext = {
   nodeUnsubscribe: (nodeId: string, sessionKey: string, connId?: string) => void;
   nodeUnsubscribeAll: (nodeId: string) => void;
   hasConnectedTalkNode: () => Promise<boolean>;
-  isConnectionActive?: (connId: string) => boolean;
+  isConnectionActive?: (connId: string, expectedClient?: GatewayClient) => boolean;
   /** Server-stamped activity from an accepted request on the exact live person connection. */
   recordClientActivity?: (client: GatewayClient | null) => void;
   hasExecApprovalClients?: (excludeConnId?: string) => boolean;

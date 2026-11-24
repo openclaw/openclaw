@@ -528,7 +528,7 @@ it.each(["cold", "warm", "policy", "receipt"] as const)(
         if (admission === "policy") {
           setCanonicalSqliteSessionMainKey(database, "custom");
         } else if (admission === "receipt") {
-          invalidateOpenClawAgentDatabaseValidation(database.path);
+          invalidateOpenClawAgentDatabaseValidation(database.path, "a maintenance write");
         }
         clearNodeSqliteKyselyCacheForDatabase(connection);
         // oxlint-disable-next-line typescript/unbound-method -- Forward with the actual native reader.

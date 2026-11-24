@@ -6,4 +6,7 @@
 # +24: actual embedded tool rejects an oversized pin layout without changing it; removing an old pin lets the same request succeed.
 # +10: compare real serialized rename receipts for personal and legacy clients without modifying the historical timestamp.
 # +5: keep the original authorized shared-pin and timestamp assertions alongside the negotiated personal-pin assertions.
-1335
+# +789: one signed Archive occurrence across legacy and personal profiles, SDK/Doctor same-value and replacement writes, retired checkout fences, v43 migration and rollback, and Mac multi-chunk partial receipts; no duplicate synthetic UI transport suites.
+# +6: an exact live transport, not a lookalike or a retained old request sharing the replacement connection ID, owns its Archive Undo.
+# +94: an admitted Archive drain settles on ordinary disconnect; queued work, Stop, changed profile, invalidation and revoked grants remain fenced.
+2224

@@ -22,9 +22,10 @@ public struct OpenClawChatSessionPatchReceipt: Decodable, Sendable {
 
     let key: String
     let entry: Entry
+    let archiveUndoToken: String?
     var agentID: String?
 
-    private enum CodingKeys: String, CodingKey { case key, entry }
+    private enum CodingKeys: String, CodingKey { case key, entry, archiveUndoToken }
 
     func matches(_ row: OpenClawChatSessionEntry) -> Bool {
         self.key == row.key && self.entry.sessionId == row.sessionId &&

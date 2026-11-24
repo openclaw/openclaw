@@ -148,6 +148,7 @@ export function mergeSessionEntryPages(
 export function selectSessionEntries(
   params: SessionListFilterParams & {
     defaultLimit?: number;
+    invited?: boolean;
     partitions?: ReturnType<ReturnType<typeof createSessionRowSelection>["read"]>["partitions"];
     retained?: Map<object, SessionListFilteredEntries>;
   },
@@ -173,7 +174,7 @@ export function selectSessionEntries(
     (params.opts.sortBy ?? "updatedAt") === "updatedAt" ? params.personalPinRank : undefined;
   let filteredResult: SessionListFilteredEntries;
   if (incremental) {
-    retainCurrentSessionListPartitions(params.retained!, params.partitions!);
+    retainCurrentSessionListPartitions(params.retained!, params.partitions!, params.invited);
     const pages: SessionEntryPair[][] = [];
     const ownerPages: SessionEntryPair[][] = [];
     const owners = new Map<string, SessionListFilteredEntries["ownerFacet"][number]>();
@@ -190,7 +191,8 @@ export function selectSessionEntries(
       if (!partition.entries.size || (archived !== "all" && partition.archived !== archived)) {
         continue;
       }
-      let part = params.retained!.get(partition.revision);
+      const revision = (params.invited && partition.invitedRevision) || partition.revision;
+      let part = params.retained!.get(revision);
       if (!part) {
         misses++;
         part = filterSessionEntries({
@@ -204,7 +206,7 @@ export function selectSessionEntries(
           params.opts.sortBy,
           rank,
         );
-        params.retained!.set(partition.revision, part);
+        params.retained!.set(revision, part);
       } else {
         hits++;
       }

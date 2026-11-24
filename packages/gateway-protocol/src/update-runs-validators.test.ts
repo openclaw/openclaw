@@ -45,10 +45,12 @@ describe("update run wire contract", () => {
         selection: { kind: "state-volume", directory: "/synthetic/state.update-captures" },
       },
     };
-    const record = LedgerRecordSchema.parse({
-      ...run,
-      steps: [{ step: "snapshot", status: "completed", ...evidence }],
-    });
+    const record = toPublicUpdateRun(
+      LedgerRecordSchema.parse({
+        ...run,
+        steps: [{ step: "snapshot", status: "completed", ...evidence }],
+      }),
+    );
     expect(record.steps[0]).toMatchObject(evidence);
     expectWireRecord(record);
   });

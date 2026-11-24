@@ -656,6 +656,8 @@ describe("gateway connection state", () => {
         reads.count,
       ]).toEqual([undefined, active, 0]);
     expectConnection(true);
+    expect(state.isConnectionActive("target", target.client)).toBe(true);
+    expect(state.isConnectionActive("target", makeClient("target").client)).toBe(false);
 
     const firstRequest = state.clients.retainRequest(target.client);
     const secondRequest = state.clients.retainRequest(target.client);
@@ -672,6 +674,10 @@ describe("gateway connection state", () => {
     expect(target.send).toHaveBeenCalledTimes(1);
     expectConnection(false);
 
+    const replacement = makeClient("target").client;
+    state.clients.add(replacement);
+    expect(state.isConnectionActive("target", target.client)).toBe(false);
+    expect(state.isConnectionActive("target", replacement)).toBe(true);
     secondRequest();
     expect([...state.clients.authorityClients]).not.toContain(target.client);
     state.clients.add(target.client);

@@ -9,6 +9,7 @@ import { WORKER_LOCAL_MCP_PROTOCOL_FEATURE } from "../../../../packages/gateway-
 import { SYSTEM_RUN_EXECUTION_CONTEXT_CAPABILITY } from "../../../../packages/gateway-protocol/src/system-run-execution-context.js";
 import { resolveControlUiLinkLocation } from "../../../config/control-ui-link-base.js";
 import { sha256Base64Url } from "../../../infra/crypto-digest.js";
+import { resolveDatabaseFamilyEngines } from "../../../infra/database-engine/registry.js";
 import {
   redeemDeviceBootstrapTokenProfile,
   restoreGenericDeviceBootstrapToken,
@@ -285,6 +286,12 @@ export async function sendGatewayHello(
         GATEWAY_SERVER_CAPS.SESSION_SCOPED_CHAT_METADATA,
         GATEWAY_SERVER_CAPS.SESSION_SCOPED_MODEL_CATALOG,
         GATEWAY_SERVER_CAPS.PERSONAL_SESSION_PINS,
+        ...(role === "operator" &&
+        authenticatedUserProfileId &&
+        connectParams.caps?.includes(GATEWAY_CLIENT_CAPS.PERSONAL_SESSION_PINS) &&
+        resolveDatabaseFamilyEngines(context.configSnapshot).agent === "sqlite"
+          ? [GATEWAY_SERVER_CAPS.SESSION_ARCHIVE_UNDO]
+          : []),
         GATEWAY_SERVER_CAPS.SESSION_UNREAD_ACK_CONTRACT,
         GATEWAY_SERVER_CAPS.SESSION_GOAL_START,
         GATEWAY_SERVER_CAPS.SESSION_SETTINGS_CONTRACT,

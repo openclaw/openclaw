@@ -6,6 +6,7 @@ import type { InternalSessionEntry, SessionEntry } from "./types.js";
 
 export type SqliteLifecycleTargetSnapshot = Array<{
   entry: InternalSessionEntry;
+  archiveUndoMarker?: string;
   sessionKey: string;
   window?: SessionEntryWindowFacts;
   sideTables?: { memberIdsJson: string; hasBoard: boolean };

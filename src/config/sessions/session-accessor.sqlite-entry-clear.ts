@@ -36,6 +36,7 @@ export function clearSqliteSessionEntryPreservingWindows(
     display_name: null,
     category: null,
     icon: null,
+    archive_undo_marker: null,
     pinned_at: null,
     archived_at: null,
     last_read_at: null,

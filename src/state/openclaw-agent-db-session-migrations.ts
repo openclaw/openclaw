@@ -5,6 +5,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { normalizeChatType, type ChatType } from "../channels/chat-type.js";
 import { parseSqliteSessionEntryRecord } from "../config/sessions/session-entry-json.js";
 import type { SessionEntry } from "../config/sessions/types.js";
+import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import { getAdmittedSqliteSchemaFacts } from "../infra/sqlite-schema-facts.js";
 import { SqliteSchemaMismatchError } from "../infra/sqlite-schema-issues.js";
 import { normalizeAccountId } from "../routing/account-id.js";
@@ -12,7 +13,26 @@ import { buildConversationRef, normalizeConversationPeerId } from "../routing/co
 import { deriveSessionChatTypeFromKey } from "../sessions/session-chat-type-shared.js";
 import { migrateLegacySessionCreator } from "./creator-namespace-migration.js";
 import { STARTUP_ADDITIVE_AGENT_COLUMN_DEFINITIONS } from "./openclaw-agent-db-additive-columns.js";
+import type { DB } from "./openclaw-agent-db.generated.js";
 import { ensureColumn, tableExists } from "./openclaw-state-db-schema-helpers.js";
+
+export function migrateSessionArchiveUndoMarker(db: DatabaseSync): void {
+  if (ensureColumn(db, "session_nodes", "archive_undo_marker TEXT")) {
+    return; // The canonical predecessor has no marker; no node reads or writes are needed.
+  }
+  // Older rebuilds may already have installed the nullable column. Never adopt a
+  // pre-v44 value as an issued archive occurrence.
+  const existing = getNodeSqliteKysely<DB>(db)
+    .selectFrom("session_nodes")
+    .select("session_key")
+    .where("archive_undo_marker", "is not", null)
+    .limit(1);
+  if (executeSqliteQueryTakeFirstSync(db, existing)) {
+    throw new SqliteSchemaMismatchError(
+      "Cannot migrate an agent database with an archive undo marker predating schema 44.",
+    );
+  }
+}
 
 export function assertSupportedAgentMigrationSchemas(
   db: DatabaseSync,

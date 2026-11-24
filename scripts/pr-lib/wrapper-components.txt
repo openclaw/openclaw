@@ -327,6 +327,7 @@ src/agents/glob-pattern.ts
 src/agents/github-host-runtime.ts
 src/agents/github-host.ts
 src/agents/internal-runtime-context.ts
+src/agents/mcp-connect-action.ts
 src/agents/mcp-oauth-store-error.ts
 src/agents/model-auth-policy.ts
 src/agents/model-catalog-entry.ts
@@ -1125,6 +1126,7 @@ src/infra/gateway-owner-lease.worker.ts
 src/infra/gateway-owner-lease.ts
 src/infra/gateway-lock-payload.ts
 src/infra/gateway-service-installation-context.ts
+src/infra/gateway-state-owner-cold-admission.ts
 src/infra/gateway-state-owner-directory.ts
 src/infra/gateway-state-owner-errors.ts
 src/infra/gateway-state-owner-heartbeat.runtime.ts
@@ -1696,6 +1698,7 @@ src/plugins/doctor-contract-relevance.ts
 src/plugins/loader-channel-setup.ts
 src/plugins/doctor-session-route-state-owner-types.ts
 src/plugins/enable.ts
+src/plugins/git-source-spec.ts
 src/plugins/hardlink-policy.ts
 src/plugins/hook-policy-decisions.ts
 src/plugins/host-hook-cleanup-result.ts

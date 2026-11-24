@@ -1,5 +1,6 @@
 package ai.openclaw.app.gateway
 
+import ai.openclaw.app.asJsonStringOrNull
 import ai.openclaw.app.node.asArrayOrNull
 import ai.openclaw.app.node.asObjectOrNull
 import ai.openclaw.app.node.asStringOrNull
@@ -252,6 +253,7 @@ data class GatewayHelloSummary(
   val authSessionCap: String? = null,
   val methods: Set<String>? = null,
   val capabilities: Set<String>? = null,
+  val profileActivityViewerId: String? = null,
 )
 
 internal data class GatewaySessionRouting(
@@ -1982,6 +1984,7 @@ class GatewaySession(
             authSessionCap = authSessionCap,
             methods = featureSet("methods"),
             capabilities = featureSet("capabilities"),
+            profileActivityViewerId = authObj?.get("profileActivityViewerId").asJsonStringOrNull(),
           ),
       )
     }

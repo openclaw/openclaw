@@ -29,6 +29,7 @@ import ai.openclaw.app.gateway.GatewayConnectOptions
 import ai.openclaw.app.gateway.GatewayDiscovery
 import ai.openclaw.app.gateway.GatewayEndpoint
 import ai.openclaw.app.gateway.GatewayEvent
+import ai.openclaw.app.gateway.GatewayHelloSummary
 import ai.openclaw.app.gateway.GatewayMethod
 import ai.openclaw.app.gateway.GatewayRegistryEntry
 import ai.openclaw.app.gateway.GatewayRegistryEntryKind
@@ -348,6 +349,16 @@ internal fun operatorScopesAllowRead(scopes: Collection<String>): Boolean =
 internal fun operatorScopesAllowWrite(scopes: Collection<String>): Boolean = scopes.any { scope -> scope == OperatorWriteScope || scope == OperatorAdminScope }
 
 internal fun operatorScopesAllowAdmin(scopes: Collection<String>): Boolean = OperatorAdminScope in scopes
+
+internal enum class PersonalSessionPinAccess {
+  Unsupported,
+  ReadOnly,
+  OwnSessions,
+  Writable,
+  ;
+
+  fun canEdit(sharingRole: String?): Boolean = this == Writable || (this == OwnSessions && sharingRole == "owner")
+}
 
 internal fun sessionCatalogAvailableFor(
   methods: Set<String>,
@@ -1246,8 +1257,8 @@ class NodeRuntime internal constructor(
   val skillsState: StateFlow<GatewaySummaryState<GatewaySkillsSummary>> = skillsSummary.state
   private val _sessionCatalogAvailable = MutableStateFlow(false)
   val sessionCatalogAvailable: StateFlow<Boolean> = _sessionCatalogAvailable.asStateFlow()
-  private val personalSessionPinsAvailableState = MutableStateFlow(false)
-  internal val personalSessionPinsAvailable = personalSessionPinsAvailableState.asStateFlow()
+  private val personalSessionPinAccessState = MutableStateFlow(PersonalSessionPinAccess.Unsupported)
+  internal val personalSessionPinAccess = personalSessionPinAccessState.asStateFlow()
   private val _sessionDiffAvailable = MutableStateFlow(false)
   val sessionDiffAvailable: StateFlow<Boolean> = _sessionDiffAvailable.asStateFlow()
   private val chatPermissionSettingsAvailableState = MutableStateFlow(false)
@@ -1420,6 +1431,7 @@ class NodeRuntime internal constructor(
         synchronized(gatewayDataScopeLock) { appearancePreferenceScopeOwner = null }
         replaceGatewayMethods(hello.methods)
         replaceGatewayCapabilities(hello.capabilities)
+        preparePersonalSessionPinAccess(hello, operatorScopes)
         // Pairing capabilities require positive hello advertisement; an unknown catalog grants none.
         _devicePairingCapabilities.value =
           selectGatewayDevicePairingCapabilities(hello.methods.orEmpty(), operatorScopes)
@@ -6365,6 +6377,42 @@ class NodeRuntime internal constructor(
     }
   }
 
+  private fun preparePersonalSessionPinAccess(
+    hello: GatewayHelloSummary,
+    scopes: List<String>,
+  ) {
+    if (hello.authRole != "operator") return
+    val gatewayScope = captureGatewayDataScope() ?: return
+    val lease = operatorSession.captureRequestLease(gatewayScope.stableId) ?: return
+    if (!lease.supportsCapability(PERSONAL_SESSION_PINS_CAPABILITY) || !lease.supportsMethod(GatewayMethod.SessionsPatch.rawValue)) return
+    // Solo/system sockets can see owner rows but cannot use own-session writes. A named role
+    // or a restricted, non-shared activity viewer distinguishes a person; neither grants a write.
+    val namedOperator = hello.authSessionCap != null || hello.profileActivityViewerId?.let { it.isNotBlank() && it != "gateway-owner" } == true
+    val editAccess =
+      when {
+        operatorScopesAllowWrite(scopes) -> PersonalSessionPinAccess.Writable
+        "operator.sessions.write" in scopes && namedOperator -> PersonalSessionPinAccess.OwnSessions
+        else -> return
+      }
+    // users.self can resolve a legacy email without a durable profile on this connection.
+    // An empty-key read confirms the current preference owner without retrieving any values.
+    val method = GatewayMethod.UsersPrefsGet.rawValue
+    if (!lease.supportsMethod(method)) return
+    scope.launch {
+      try {
+        val response = requestAppearancePreference(gatewayScope, lease, method, """{"keys":[]}""")
+        val prefs = json.parseToJsonElement(response).asObjectOrNull() ?: return@launch
+        if (prefs["status"].asJsonStringOrNull() == "ok" && prefs["entries"] is JsonObject) {
+          publishAppearancePreferences(gatewayScope, lease) { personalSessionPinAccessState.value = editAccess }
+        }
+      } catch (cancelled: CancellationException) {
+        throw cancelled
+      } catch (_: Throwable) {
+        // The hello remains read-only without a positive current-socket profile result.
+      }
+    }
+  }
+
   private suspend fun refreshCurrentProfileId(
     gatewayScope: GatewayDataScope,
     lease: GatewaySession.RequestLease,
@@ -8148,7 +8196,9 @@ class NodeRuntime internal constructor(
   private fun replaceGatewayCapabilities(capabilities: Set<String>?) {
     synchronized(gatewayMethodsLock) {
       gatewayAdvertisedCapabilities = capabilities
-      personalSessionPinsAvailableState.value = PERSONAL_SESSION_PINS_CAPABILITY in capabilities.orEmpty()
+      // A new hello advertises the row contract, not a verified profile on this socket.
+      personalSessionPinAccessState.value =
+        if (PERSONAL_SESSION_PINS_CAPABILITY in capabilities.orEmpty()) PersonalSessionPinAccess.ReadOnly else PersonalSessionPinAccess.Unsupported
       chatPermissionSettingsAvailableState.value = chat.canSetSessionPermissionMode()
     }
   }

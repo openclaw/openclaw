@@ -3,6 +3,7 @@ package ai.openclaw.app.ui
 import ai.openclaw.app.GatewayAgentSummary
 import ai.openclaw.app.GatewayConnectionDisplay
 import ai.openclaw.app.MainViewModel
+import ai.openclaw.app.PersonalSessionPinAccess
 import ai.openclaw.app.R
 import ai.openclaw.app.SessionCatalog
 import ai.openclaw.app.SessionCatalogEntry
@@ -644,7 +645,9 @@ internal fun OpenClawSidebar(
     )
   val catalogErrorText = catalogState.errorText
   val catalogSessionKeys = sidebarVisibleCatalogSessionKeys(catalogState.catalogs)
-  val personalPins by viewModel.personalSessionPinsAvailable.collectAsState()
+  val gatewayPinAccess by viewModel.personalSessionPinAccess.collectAsState()
+  val personalPins = gatewayPinAccess != PersonalSessionPinAccess.Unsupported
+  val pinAccess = if (connection.isConnected) gatewayPinAccess else PersonalSessionPinAccess.ReadOnly
   val recentPresentation =
     sidebarSessionPresentation(
       sessions = sessions,
@@ -716,7 +719,7 @@ internal fun OpenClawSidebar(
       palette = palette,
       onClick = { onSelectSession(session) },
       onDragCommit =
-        if (canMutateSessions && personalPins && dragSource != null) {
+        if (pinAccess.canEdit(session.sharingRole) && dragSource != null) {
           { direction ->
             sidebarSessionPinnedAfterDrag(dragSource, direction)?.let { pinned ->
               setSessionPinned(session.key, session.ownerAgentId, pinned)
@@ -1012,6 +1015,8 @@ internal fun OpenClawSidebar(
           if (pinnedExpanded) {
             if (connection.isConnected && !personalPins) {
               SidebarCatalogStatus(nativeString("Update the Gateway to change personal session pins."), palette)
+            } else if (connection.isConnected && pinAccess == PersonalSessionPinAccess.ReadOnly) {
+              SidebarCatalogStatus(nativeString("Personal pins are read-only here."), palette)
             }
             if (pinnedSessions.isEmpty()) {
               Text(
@@ -1085,7 +1090,8 @@ internal fun OpenClawSidebar(
                         onSelectSession = onSelectCatalogSession,
                         onLoadMore = viewModel::loadMoreSessionCatalog,
                         canMutateSessions = canMutateSessions,
-                        onPinSession = setSessionPinned.takeIf { personalPins },
+                        pinAccess = pinAccess,
+                        onPinSession = setSessionPinned,
                         onDragActiveChange = onDragActiveChange,
                       )
                     }
@@ -1352,7 +1358,8 @@ private fun SidebarSessionCatalog(
   onSelectSession: (SessionCatalogEntry) -> Unit,
   onLoadMore: (String) -> Unit,
   canMutateSessions: Boolean,
-  onPinSession: ((String, String?, Boolean) -> Unit)?,
+  pinAccess: PersonalSessionPinAccess,
+  onPinSession: (String, String?, Boolean) -> Unit,
   onDragActiveChange: (Boolean) -> Unit,
 ) {
   val hosts = sidebarCatalogHosts(listOf(catalog))
@@ -1456,17 +1463,18 @@ private fun SidebarSessionCatalog(
             }
             if (expanded) {
               workspace.sessions.forEach { session ->
+                val liveSession = session.sessionKey?.let(liveSessionsByKey::get)
                 SidebarCatalogSessionRow(
                   session = session,
                   attention = session.sessionKey?.let { attentionFor(listOf(sidebarAttentionSessionKey(it, session.agentId ?: state.agentId))) },
-                  liveSession = session.sessionKey?.let(liveSessionsByKey::get),
+                  liveSession = liveSession,
                   selected = session.sessionKey == activeSessionKey,
                   continuing = state.continuingEntryId == session.locatorId,
                   selectionEnabled = state.continuingEntryId == null,
                   palette = palette,
                   onClick = { onSelectSession(session) },
                   canMutateSessions = canMutateSessions,
-                  onPinSession = onPinSession,
+                  onPinSession = onPinSession.takeIf { pinAccess.canEdit(liveSession?.sharingRole) },
                   onDragActiveChange = onDragActiveChange,
                 )
               }
@@ -1512,7 +1520,7 @@ private fun SidebarCatalogSessionRow(
   val enabled = sidebarCatalogSessionSelectionEnabled(session, canMutateSessions)
   val nativeTitle = session.name?.takeIf(String::isNotBlank) ?: session.threadId
   val pinned = liveSession?.pinned == true
-  val draggableSession = liveSession?.takeIf { canMutateSessions && onPinSession != null }
+  val draggableSession = liveSession?.takeIf { onPinSession != null }
   val activity =
     sidebarSessionActivity(
       // Adopted rows use Gateway state; unadopted catalogs also call their running state "active".

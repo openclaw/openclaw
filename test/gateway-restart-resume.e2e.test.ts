@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { once } from "node:events";
-import { readFile } from "node:fs/promises";
+import { readFile, stat } from "node:fs/promises";
 import type { ServerResponse } from "node:http";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -14,6 +14,7 @@ import { readSessionQueuedInputPage } from "../src/config/sessions/session-pendi
 import type { GatewayClient } from "../src/gateway/client.js";
 import { buildMockOpenAiResponsesProvider } from "../src/gateway/test-openai-responses-model.js";
 import { writeGatewayRestartIntentSync } from "../src/infra/restart-intent.js";
+import { readSqliteCleanCloseSeal } from "../src/infra/sqlite-clean-close-seal.js";
 import { closeOpenClawAgentDatabasesAsync } from "../src/state/openclaw-agent-db.js";
 import { resolveOpenClawAgentSqlitePath } from "../src/state/openclaw-agent-db.paths.js";
 import { closeOpenClawStateDatabaseAsync } from "../src/state/openclaw-state-db.js";
@@ -101,6 +102,7 @@ async function providerFixture(signal: AbortSignal) {
   const summaries: Array<{ cycle: number; name: Case; ordinal: number }> = [];
   const issued = new Set<string>();
   const heldResumes = new Map<number, { response: ServerResponse; ordinal: number }>();
+  const releasedResumes = new Set<number>();
   let finalizer: ServerResponse | undefined;
   let finalizerAdmission: unknown;
   let ordinal = 0;
@@ -209,15 +211,20 @@ async function providerFixture(signal: AbortSignal) {
           };
           if (restarting) {
             if (hasNewResumeInput(body)) {
-              gate(`resume:${cycle}:${name}`).resolve();
               if (name === "stream") {
-                heldResumes.set(cycle, { response, ordinal: requestOrdinal });
-                return;
-              }
-              if (name === "compact" || name === "tool") {
-                issued.add(`gateway:${cycle}:${name}`);
-                tool("sessions_list", { limit: 20, search: `restart-resume-${cycle}-${name}` });
-                return;
+                // Compaction can replay this turn after the test releases its first request.
+                if (!releasedResumes.has(cycle)) {
+                  heldResumes.set(cycle, { response, ordinal: requestOrdinal });
+                  gate(`resume:${cycle}:${name}`).resolve();
+                  return;
+                }
+              } else {
+                gate(`resume:${cycle}:${name}`).resolve();
+                if (name === "compact" || name === "tool") {
+                  issued.add(`gateway:${cycle}:${name}`);
+                  tool("sessions_list", { limit: 20, search: `restart-resume-${cycle}-${name}` });
+                  return;
+                }
               }
               text(`RESUMED_${cycle}_${name}`);
             } else if (issued.delete(`gateway:${cycle}:${name}`)) {
@@ -321,6 +328,7 @@ async function providerFixture(signal: AbortSignal) {
     failed: failed.promise,
     wait: (name: string) => withinTest(Promise.race([gate(name).promise, failed.promise]), signal),
     restart: () => {
+      releasedResumes.clear();
       restarting = true;
     },
     prepare: () => {
@@ -329,6 +337,7 @@ async function providerFixture(signal: AbortSignal) {
     release: (cycle: number) => {
       const held = heldResumes.get(cycle);
       assert(held, "The resumed stream was never admitted");
+      releasedResumes.add(cycle);
       writeOpenAiResponsesText(held.response, {
         text: `RESUMED_${cycle}_stream`,
         messageId: `msg_${held.ordinal}`,
@@ -1336,7 +1345,20 @@ it.skipIf(process.platform === "win32").for([true, false])(
             cleanCloseLine === undefined ? -1 : shutdownLogs.indexOf(cleanCloseLine);
           expect(markerSummary, shutdownLogs).toBeGreaterThan(-1);
           expect(cleanClose, shutdownLogs).toBeGreaterThan(markerSummary);
-          expect(shutdownLogs.slice(cleanClose).includes("[close-backfill-proof]")).toBe(false);
+          expect(
+            readSqliteCleanCloseSeal(sessionStore, await stat(sessionStore, { bigint: true })),
+          ).toBeDefined();
+          // Reservation observations cover every store and arrive after settlement.
+          const allDatabasesClosed = shutdownLogs.indexOf(
+            "restart trace: restart.close.agent-databases ",
+          );
+          expect(allDatabasesClosed, shutdownLogs).toBeGreaterThan(cleanClose);
+          expect(shutdownLogs).not.toMatch(
+            /shutdown failed in|agent-databases resources remain after grace/,
+          );
+          expect(shutdownLogs.slice(allDatabasesClosed).includes("[close-backfill-proof]")).toBe(
+            false,
+          );
           const markerAndAbortMs = shutdownLogs.match(
             /restart trace: restart.close.session-abort ([\d.]+)ms/,
           )?.[1];
@@ -1538,8 +1560,11 @@ it.skipIf(process.platform === "win32").for([true, false])(
         await waitProvider("resume:2:stream");
         provider.release(2);
         await waitFinal(crashKey, `HANDLED_${queued(2, 1)}`);
+        // A replayed resume can carry the earlier queued input as compacted history.
         expect(
-          provider.calls.filter((call) => call.cycle === 2 && call.current.includes(CRASH_QUEUED)),
+          provider.calls.filter(
+            (call) => call.cycle === 2 && !call.resumeInput && call.current.includes(CRASH_QUEUED),
+          ),
         ).toHaveLength(1);
       },
       () => client?.stopAndWait(),

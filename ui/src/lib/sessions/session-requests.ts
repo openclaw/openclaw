@@ -157,9 +157,15 @@ export function normalizeManagedSessionListQuery(
   });
 }
 
-export function sessionListQueryKey(options: SessionListOptions): string {
-  const { source: _source, ...query } = normalizeManagedSessionListQuery(options);
+export function sessionListRequestKey(
+  params: Readonly<SessionsListParams & { pageSize?: number }>,
+): string {
+  const { source: _source, ...query } = params;
   return JSON.stringify(query);
+}
+
+export function sessionListQueryKey(options: SessionListOptions): string {
+  return sessionListRequestKey(normalizeManagedSessionListQuery(options));
 }
 
 export async function requestSessionList(
@@ -177,16 +183,31 @@ const sessionWireRows = new WeakMap<
   Map<string, { revision: string; sessions: SessionsListResult["sessions"] }>
 >();
 
+/** Earliest valid cutoff of any page, measured against the latest actual Gateway sample. */
+export type SessionWindowExpiry = { at: number; sampledAt: number };
+
 export async function requestSessionListParams(
+  ...args: Parameters<typeof requestSessionListWindow>
+): Promise<SessionsListResult | null> {
+  return (await requestSessionListWindow(...args))?.result ?? null;
+}
+
+export async function requestSessionListWindow(
   client: SessionRequestClient,
   query: Readonly<SessionsListParams & { pageSize?: number }>,
   isCurrent: () => boolean,
   options?: GatewayProtocolRequestOptions,
-): Promise<SessionsListResult | null> {
+): Promise<{ result: SessionsListResult; expiry?: SessionWindowExpiry } | null> {
   const { pageSize, ...params } = query;
+  let earliestExpiry = Infinity;
+  let sampledAt = -Infinity;
+  const window = (result: SessionsListResult | null) =>
+    result && {
+      result,
+      ...(earliestExpiry !== Infinity ? { expiry: { at: earliestExpiry, sampledAt } } : {}),
+    };
   const read = async (request: SessionsListParams) => {
-    const { source: _source, ...membership } = request;
-    const key = JSON.stringify(membership);
+    const key = sessionListRequestKey(request);
     const cache = sessionWireRows.get(client);
     const conditional = request.rowMode !== undefined;
     const previous = conditional ? cache?.get(key) : undefined;
@@ -234,10 +255,17 @@ export async function requestSessionListParams(
       }
       sessionWireRows.set(client, retained);
     }
+    if (Number.isSafeInteger(list.ts)) {
+      sampledAt = Math.max(sampledAt, list.ts);
+      const at = list.activityExpiresAt;
+      if (at !== undefined && Number.isSafeInteger(at) && at >= list.ts) {
+        earliestExpiry = Math.min(earliestExpiry, at);
+      }
+    }
     return { ...list, sessions };
   };
   if (!pageSize || !params.limit || params.limit <= pageSize) {
-    return read(params);
+    return window(await read(params));
   }
   // The Gateway enriches only a bounded prefix per response. Page the requested
   // window here so initial loads and retained-window refreshes keep the same fields.
@@ -265,7 +293,16 @@ export async function requestSessionListParams(
     }
     offset = nextOffset;
   }
-  return result;
+  if (result && earliestExpiry !== Infinity) {
+    // A crossed cutoff is evidence for one prefix repair, not a valid deadline
+    // on the last page. Never stamp an earlier page's time onto newer rows.
+    result = {
+      ...result,
+      ts: sampledAt,
+      activityExpiresAt: earliestExpiry >= sampledAt ? earliestExpiry : undefined,
+    };
+  }
+  return window(result);
 }
 
 export function requestSessionPatch(

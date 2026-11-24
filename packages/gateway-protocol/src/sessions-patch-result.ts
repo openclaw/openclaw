@@ -4,6 +4,7 @@ export type SessionsPatchResult = {
   path: string;
   key: string;
   entry: Record<string, unknown>;
+  archiveUndoToken?: string;
   resolved?: {
     modelProvider?: string;
     model?: string;

@@ -26,6 +26,13 @@ final class ChatSessionSidebarActions {
     }
 
     let connection: OpenClawSessionMenuConnection?
+    var canEditPins: Bool {
+        guard let connection, connection.supportsPersonalPins else { return false }
+        return connection.allows("sessions.patch") || connection.allows(
+            "sessions.patch",
+            scope: "operator.sessions.write")
+    }
+
     private var profiles: [Profile]?
     private var selfID: String?
     private var worktrees: [WorktreeRecord] = []

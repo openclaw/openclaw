@@ -1,6 +1,7 @@
 package ai.openclaw.app.ui
 
 import ai.openclaw.app.MainViewModel
+import ai.openclaw.app.PersonalSessionPinAccess
 import ai.openclaw.app.chat.ChatSessionEntry
 import ai.openclaw.app.chat.ChatSessionPatch
 import ai.openclaw.app.chat.SessionSnooze
@@ -140,7 +141,8 @@ internal fun SessionsScreen(
       query = searchText,
       archived = filter == SessionFilter.Archived,
     )
-  val personalPins by viewModel.personalSessionPinsAvailable.collectAsState()
+  val pinAccess by viewModel.personalSessionPinAccess.collectAsState()
+  val personalPins = pinAccess != PersonalSessionPinAccess.Unsupported
   val visibleSessions =
     resolveSessionBrowserEntries(
       entries = searchState.entries,
@@ -402,7 +404,7 @@ internal fun SessionsScreen(
               filter = filter,
               nowMs = sessionStatusNowMs,
               compact = compactLayout,
-              personalPins = personalPins,
+              pinAccess = if (isConnected) pinAccess else PersonalSessionPinAccess.ReadOnly,
               categories = categories,
               expanded = session.key !in collapsedSessionKeys,
               onToggleExpanded = {
@@ -598,7 +600,7 @@ private fun SessionRow(
   filter: SessionFilter,
   nowMs: Long,
   compact: Boolean,
-  personalPins: Boolean,
+  pinAccess: PersonalSessionPinAccess,
   categories: List<String>,
   expanded: Boolean,
   onToggleExpanded: () -> Unit,
@@ -855,13 +857,15 @@ private fun SessionRow(
             }
           }
         } else {
+          val canEditPin = pinAccess.canEdit(session.sharingRole)
           val pinLabel =
             when {
-              !personalPins -> nativeString("Update the Gateway to change personal session pins.")
+              pinAccess == PersonalSessionPinAccess.Unsupported -> nativeString("Update the Gateway to change personal session pins.")
+              !canEditPin -> nativeString("Personal pins are read-only here.")
               session.pinned == true -> nativeString("Unpin")
               else -> nativeString("Pin")
             }
-          SessionMenuItem(pinLabel, enabled = personalPins) {
+          SessionMenuItem(pinLabel, enabled = canEditPin) {
             menuExpanded = false
             coroutineScope.launch {
               viewModel.patchChatSession(ChatSessionPatch(key = session.key, ownerAgentId = session.ownerAgentId, pinned = session.pinned != true))
