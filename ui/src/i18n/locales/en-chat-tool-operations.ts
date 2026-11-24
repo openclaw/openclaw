@@ -7,6 +7,8 @@ const enChatToolOperations = {
       operationUnknown: "{action} · outcome unknown",
       operationNoResult: "{action} · no result recorded",
       operationBlocked: "{action} · blocked",
+      operationPendingPublication: "{action} · pending publication",
+      operationNotApplied: "{action} · not applied",
       namedOperation: "{action} · {name}",
       listingChats: "Listing chats",
       listedChats: "Listed chats",
@@ -211,7 +213,6 @@ const enChatToolOperations = {
             action: "Reconcile knowledge evidence",
             running: "Reconciling knowledge evidence",
             done: "Reconciled knowledge evidence",
-            requested: "Requested knowledge evidence changes",
           },
           preview: {
             action: "Preview knowledge evidence changes",
@@ -293,13 +294,11 @@ const enChatToolOperations = {
             action: "Supersede claims",
             running: "Superseding claims",
             done: "Superseded claims",
-            requested: "Requested claim supersession",
           },
           restore: {
             action: "Restore superseded claims",
             running: "Restoring superseded claims",
             done: "Restored superseded claims",
-            requested: "Requested restoration of superseded claims",
           },
         },
         knowledge_timeline: {

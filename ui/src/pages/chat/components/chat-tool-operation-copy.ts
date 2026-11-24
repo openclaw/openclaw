@@ -144,6 +144,32 @@ function browserOperation(args: Record<string, unknown> | null, labels: object):
   return Object.hasOwn(labels, key) ? key : "act";
 }
 
+function knowledgePublicationQualifier(receipt: Record<string, unknown> | null | undefined) {
+  switch (receipt?.state) {
+    case "published":
+      return undefined;
+    case "accepted":
+      return "operationPendingPublication";
+    case "conflict":
+    case "rejected":
+      return "operationNotApplied";
+    case undefined:
+      // Only a published agent receipt omits state and carries the new revision and full hash.
+      if (
+        typeof receipt?.id === "string" &&
+        /^\S{1,96}$/u.test(receipt.id) &&
+        typeof receipt.revision === "number" &&
+        Number.isSafeInteger(receipt.revision) &&
+        receipt.revision > 0 &&
+        typeof receipt.hash === "string" &&
+        /^[a-f0-9]{64}$/u.test(receipt.hash)
+      ) {
+        return undefined;
+      }
+  }
+  return "operationUnknown";
+}
+
 export function catalogToolLabel(
   card: ToolCard,
   outcome: ToolCardOutcome,
@@ -202,6 +228,7 @@ export function catalogToolLabel(
   if (!Object.hasOwn(labels, operation)) {
     return undefined;
   }
+  let qualifier: ReturnType<typeof knowledgePublicationQualifier>;
   let phase =
     outcome === "running"
       ? "running"
@@ -210,11 +237,25 @@ export function catalogToolLabel(
         : "action";
   if (
     phase === "done" &&
-    (name === "knowledge_relink" ||
-      name === "knowledge_verify" ||
-      name === "knowledge_supersede" ||
-      name === "knowledge_reconcile_evidence")
+    (name === "knowledge_supersede" || name === "knowledge_reconcile_evidence")
   ) {
+    // The dispatcher retains the called tool's structured result even when history omits its text.
+    const details = asNullableRecord(card.details);
+    const structured = asNullableRecord(asNullableRecord(details?.result)?.details) ?? details;
+    const receipt =
+      structured && ("state" in structured || "revision" in structured)
+        ? structured
+        : safeParseJsonRecord(unwrapToolResultTextForDisplay(card.outputText ?? ""));
+    if (name === "knowledge_reconcile_evidence" && receipt?.state === "preview") {
+      operation = "preview";
+    } else {
+      qualifier =
+        operation === "preview" ? "operationUnknown" : knowledgePublicationQualifier(receipt);
+      if (qualifier) {
+        phase = "action";
+      }
+    }
+  } else if (phase === "done" && (name === "knowledge_relink" || name === "knowledge_verify")) {
     const result = {
       ...asNullableRecord(card.details),
       ...safeParseJsonRecord(unwrapToolResultTextForDisplay(card.outputText ?? "")),
@@ -229,25 +270,11 @@ export function catalogToolLabel(
       ) {
         phase = "linked";
       }
-    } else if (name === "knowledge_verify") {
+    } else {
       phase =
         result.failed === 0 && typeof result.passed === "number" && result.passed > 0
           ? "done"
           : "checked";
-    } else if (
-      name === "knowledge_reconcile_evidence" &&
-      (operation === "preview" || result.state === "preview")
-    ) {
-      operation = "preview";
-    } else {
-      // Knowledge omits state from lean published receipts, not from pending or rejected writes.
-      const published =
-        result.state === "published" ||
-        (result.state === undefined &&
-          typeof result.id === "string" &&
-          typeof result.revision === "number" &&
-          typeof result.hash === "string");
-      phase = published ? "done" : "requested";
     }
   }
   const label = t(`chat.toolCards.operationLabels.${name}.${operation}.${phase}`);
@@ -262,6 +289,6 @@ export function catalogToolLabel(
     case "blocked":
       return t("chat.toolCards.operationBlocked", { action: actionLabel });
     default:
-      return actionLabel;
+      return qualifier ? t(`chat.toolCards.${qualifier}`, { action: actionLabel }) : actionLabel;
   }
 }

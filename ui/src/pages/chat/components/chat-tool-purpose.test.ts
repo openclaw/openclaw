@@ -1,6 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { expect, it } from "vitest";
+import { extractToolCardsCached } from "../../../lib/chat/tool-cards.ts";
 import { mountCard } from "./chat-tool-cards.test-support.tsx";
 
 const text = (container: ParentNode, selector: string) =>
@@ -88,37 +89,6 @@ it.each([
   ["knowledge_relink", {}, { dryRun: false, linked: 2 }, "Relinked remembered claims"],
   ["knowledge_relink", {}, { dryRun: true, linked: 2 }, "Previewed links for remembered claims"],
   [
-    "knowledge_reconcile_evidence",
-    { dryRun: true },
-    { state: "preview" },
-    "Previewed knowledge evidence changes",
-  ],
-  [
-    "knowledge_reconcile_evidence",
-    { dryRun: false },
-    { state: "accepted" },
-    "Requested knowledge evidence changes",
-  ],
-  [
-    "knowledge_reconcile_evidence",
-    { dryRun: false },
-    { state: "published" },
-    "Reconciled knowledge evidence",
-  ],
-  [
-    "knowledge_supersede",
-    { undo: true },
-    { id: "decision", revision: 2, hash: "a".repeat(64) },
-    "Restored superseded claims",
-  ],
-  [
-    "knowledge_supersede",
-    { undo: true },
-    { state: "conflict" },
-    "Requested restoration of superseded claims",
-  ],
-  ["knowledge_supersede", {}, { state: "published" }, "Superseded claims"],
-  [
     "knowledge_verify",
     { records: [{ id: "decision" }] },
     { checked: 1, passed: 1, failed: 0 },
@@ -150,6 +120,177 @@ it.each([
     expect(text(container, ".chat-tool-disclosure__content")).toBe(label);
   },
 );
+
+const recordFence = { id: "claim-earlier", expectedRevision: 1, expectedHash: "1".repeat(64) };
+const request = {
+  requestId: "00000000-0000-4000-8000-000000000123",
+  reason: "The final report replaces the earlier finding.",
+};
+const supersede = {
+  ...request,
+  by: { ...recordFence, id: "claim-latest" },
+  superseded: [recordFence],
+};
+const reconcile = {
+  ...request,
+  ...recordFence,
+  expectedVaultId: "00000000-0000-4000-8000-000000000456",
+  expectedOntologyFingerprint: "2".repeat(64),
+  representation: "compact",
+  dryRun: false,
+};
+const saved = { id: recordFence.id, revision: 2, hash: "3".repeat(64) };
+const conflictMessage =
+  "Concurrent filesystem change preserved. Publication is blocked; retained before/after material requires recovery review. No automatic overwrite or rollback.";
+
+function recordedCard(name: string, args: unknown, output?: string, details?: unknown) {
+  return extractToolCardsCached({
+    role: "assistant",
+    content: [
+      { type: "toolCall", id: "knowledge-call", name, arguments: args },
+      {
+        type: "toolResult",
+        toolCallId: "knowledge-call",
+        name,
+        content: output ? [{ type: "text", text: output }] : [],
+        details,
+      },
+    ],
+  })[0]!;
+}
+
+it.each([
+  ["knowledge_supersede", supersede, "Supersede claims", "Superseded claims"],
+  [
+    "knowledge_supersede",
+    {
+      ...supersede,
+      undo: true,
+      superseded: [{ id: saved.id, expectedRevision: saved.revision, expectedHash: saved.hash }],
+    },
+    "Restore superseded claims",
+    "Restored superseded claims",
+  ],
+  [
+    "knowledge_reconcile_evidence",
+    reconcile,
+    "Reconcile knowledge evidence",
+    "Reconciled knowledge evidence",
+  ],
+] as const)("reports the publication receipt for %s: %s", async (name, args, action, done) => {
+  const tool = { id: `openclaw:knowledge:${name}`, name, source: "openclaw" };
+  const path = "claims/earlier.md";
+  const prior = "undo" in args ? args.superseded[0] : recordFence;
+  const next = "undo" in args ? { ...saved, revision: 3, hash: "4".repeat(64) } : saved;
+  const item = { key: "undo" in args ? "restored" : "superseded", ...next };
+  const receipt = name === "knowledge_supersede" ? { ...next, items: [item] } : next;
+  const published = {
+    ...next,
+    ...(name === "knowledge_supersede"
+      ? {
+          items: [{ ...item, path }],
+          targetId: saved.id,
+          replacementId: supersede.by.id,
+          operation: "undo" in args ? "unsupersede" : "supersede",
+          reason: request.reason,
+        }
+      : {}),
+    requestId: request.requestId,
+    state: "published",
+    path,
+    at: "2026-11-24T12:00:00Z",
+    message: "Published and available to exact reads.",
+    indexed: false,
+  };
+  // Accepted and rejected are receipt-contract cases, not normal returns of these metadata-only writes.
+  const pending = `${action} · pending publication`;
+  const notApplied = `${action} · not applied`;
+  const unknown = `${action} · outcome unknown`;
+  const cases = [
+    [receipt, done],
+    [published, done],
+    [
+      { ...receipt, state: "accepted", message: "Accepted for publication; not yet saved." },
+      pending,
+    ],
+    [{ ...receipt, state: "conflict", message: conflictMessage }, notApplied],
+    [
+      {
+        id: prior.id,
+        revision: prior.expectedRevision,
+        hash: prior.expectedHash,
+        state: "rejected",
+        message: "Publication rejected.",
+      },
+      notApplied,
+    ],
+    [undefined, unknown],
+    ["{", unknown],
+    [{ ...saved, hash: saved.hash.slice(0, 16) }, unknown],
+    [{ ...saved, id: "", revision: 0 }, unknown],
+    [{ ...saved, state: "unrecognized" }, unknown],
+  ] as const;
+  for (const [result, label] of cases) {
+    const output = typeof result === "string" ? result : JSON.stringify(result);
+    const content = output ? [{ type: "text", text: output }] : [];
+    const wrapped = JSON.stringify({ tool, result: { content } });
+    for (const card of [
+      recordedCard(name, args, output),
+      recordedCard("dispatch_action", { id: tool.id, args }, wrapped),
+    ]) {
+      const inspect = typeof result === "object" && "message" in result;
+      const container = await mountCard(card, { expanded: inspect });
+      expect.soft(text(container, ".chat-tool-disclosure__content"), output).toBe(label);
+      if (inspect) {
+        expect(text(container, ".chat-tool-msg-body")).toContain(request.reason);
+        expect(text(container, ".chat-tool-msg-body")).toContain(result.message);
+      }
+    }
+  }
+});
+
+it("uses the retained dispatcher receipt when the text is omitted, without treating a preview as publication", async () => {
+  const name = "knowledge_reconcile_evidence";
+  const tool = { id: `openclaw:knowledge:${name}`, name, source: "openclaw" };
+  for (const [args, receipt, label] of [
+    [reconcile, saved, "Reconciled knowledge evidence"],
+    [
+      reconcile,
+      { ...saved, state: "conflict", message: conflictMessage },
+      "Reconcile knowledge evidence · not applied",
+    ],
+    [
+      { ...reconcile, dryRun: true },
+      {
+        state: "preview",
+        id: reconcile.id,
+        revision: reconcile.expectedRevision,
+        hash: reconcile.expectedHash,
+        beforeBytes: 213,
+        afterBytes: 187,
+        beforeEvidence: 1,
+        afterEvidence: 1,
+        descriptors: 1,
+        representation: "compact",
+      },
+      "Previewed knowledge evidence changes",
+    ],
+  ] as const) {
+    const inner = { content: [{ type: "text", text: JSON.stringify(receipt) }], details: receipt };
+    for (const card of [
+      recordedCard(name, args, undefined, receipt),
+      recordedCard("dispatch_action", { id: tool.id, args }, undefined, { tool, result: inner }),
+    ]) {
+      expect
+        .soft(text(await mountCard(card, { expanded: false }), ".chat-tool-disclosure__content"))
+        .toBe(label);
+    }
+  }
+  const missing = recordedCard(name, { ...reconcile, dryRun: true });
+  expect
+    .soft(text(await mountCard(missing, { expanded: false }), ".chat-tool-disclosure__content"))
+    .toBe("Preview knowledge evidence changes · outcome unknown");
+});
 
 it.each([
   { code: "await tools.read({ path: 'README.md' })" },
