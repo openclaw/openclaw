@@ -220,6 +220,12 @@ export class A2aTaskStore {
       } catch (error) {
         if (isDefiniteStorageRefusal(error)) {
           this.#deleteTask(task.id);
+          if (error.code === "PLUGIN_STATE_LIMIT_EXCEEDED") {
+            throw new A2aProtocolError(
+              -32000,
+              "Pending task capacity reached. No task was admitted. Wait for pending tasks to settle, then retry with the same message ID.",
+            );
+          }
         }
         throw error;
       }
