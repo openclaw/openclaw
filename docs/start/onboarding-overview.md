@@ -83,8 +83,9 @@ onboarding in the dashboard. **Set up manually** opens native setup instead.
 It does not automatically connect to a discovered Gateway. Existing local and
 remote setups keep their connection and native onboarding behavior.
 
-The dashboard welcomes you and shows where the assistant will run. Continue
-from that screen to let the selected Gateway connect your AI automatically.
+Choose **Next** on Welcome to let the connected Gateway set up your AI
+automatically. **Use a different Gateway** opens connection settings before
+setup starts.
 **You’re all set!** names the selected provider, model, and Gateway. You can
 choose an available alternative or review device permissions. If sign-in is
 needed, choose **Sign in with ChatGPT** and follow the inline steps. If setup

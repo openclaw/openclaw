@@ -31,37 +31,10 @@ openclaw-custodian-setup-card {
   text-align: left;
 }
 
-.custodian-setup .option-card__choice {
-  min-height: 0;
-  align-items: center;
-}
-
-.custodian-setup .option-card__choice-copy {
-  flex: 1;
-}
-
-.custodian-setup :is(.row, .option-card__choice) > svg {
+.custodian-setup .row > svg {
   flex: none;
   width: 20px;
   height: 20px;
-}
-
-.custodian-setup__dots {
-  display: flex;
-  gap: 8px;
-  padding: 0;
-  list-style: none;
-}
-
-.custodian-setup__dots li {
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: var(--border-strong);
-}
-
-.custodian-setup__dots .is-current {
-  background: var(--accent);
 }
 
 .custodian-setup__heading {

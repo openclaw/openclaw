@@ -21,7 +21,7 @@ import {
 import type { CustodianConfiguredInferenceState } from "./custodian-session-variant.ts";
 
 export type { SetupAutoCandidate, SetupAutoResult };
-export type SetupStep = "welcome" | "where" | "ai";
+type SetupStep = "welcome" | "ai";
 
 const DISMISSED_KEY = "openclaw.custodian.setup-dismissed.v1:";
 
@@ -157,12 +157,8 @@ export class CustodianAutoSetup {
         void this.retry();
       } else {
         const epoch = this.epoch;
-        const showStep = (step: "ai" | "welcome") => {
-          if (
-            epoch === this.epoch &&
-            client === this.client &&
-            (step === "ai" || this.step === null)
-          ) {
+        const showStep = (step: SetupStep) => {
+          if (epoch === this.epoch && client === this.client) {
             this.setStep(step);
           }
         };

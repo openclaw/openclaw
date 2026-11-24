@@ -1,5 +1,6 @@
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
+import type { SystemAgentChatResult } from "@openclaw/gateway-protocol";
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import type { NativeSetupCapability } from "../app/native-setup.ts";
@@ -144,22 +145,34 @@ suite.define(() => {
       await nativeSetup(page);
       const gateway = await install(page, {
         deferredMethods: ["openclaw.setup.auto"],
-        methodResponses: { "openclaw.setup.options": { setupComplete: false } },
+        methodResponses: {
+          "openclaw.setup.options": { setupComplete: false },
+          "openclaw.chat": {
+            sessionId: "setup-proof",
+            reply: "Your AI is ready. Let’s get to know each other.",
+            action: "none",
+            question: {
+              id: "onboarding-next-step",
+              header: "Next step",
+              question: "What would you like to do first?",
+              options: [
+                { label: "Talk to my agent", reply: "talk to agent" },
+                { label: "Connect WhatsApp", reply: "connect whatsapp" },
+                { label: "Connect Telegram", reply: "connect telegram" },
+                { label: "See all channels", reply: "channels" },
+              ],
+            },
+          } satisfies SystemAgentChatResult,
+        },
       });
       await page.goto(`${suite.server.baseUrl}custodian?onboarding=1`);
       const card = page.locator(".custodian-setup");
       const welcome = card.getByRole("heading", { name: "Welcome to OpenClaw" });
       await welcome.waitFor();
       await capture(page, "automatic-setup-welcome", card, [welcome]);
-      const next = card.getByRole("button", { name: "Next" });
-      await next.click();
-      const location = card.getByRole("heading", { name: "Where should your assistant run?" });
-      await location.waitFor();
-      await capture(page, "automatic-setup-location", card, [location]);
-      await card.getByRole("button", { name: /^On another computer/ }).click();
+      await card.getByRole("button", { name: "Use a different Gateway" }).click();
       expect(await gateway.getRequests("openclaw.setup.auto")).toHaveLength(0);
-      await next.click();
-      await gateway.waitForRequest("openclaw.setup.auto");
+      await card.getByRole("button", { name: "Next" }).click();
       const connecting = card.getByRole("heading", { name: "Connecting your AI…" });
       await connecting.waitFor();
       expect(await gateway.getRequests("openclaw.chat")).toHaveLength(0);
@@ -171,9 +184,8 @@ suite.define(() => {
         exact: true,
       });
       await selected.waitFor();
-      await page
-        .getByText("Your AI is ready. Let’s get to know each other.", { exact: true })
-        .waitFor();
+      await page.getByText("What would you like to do first?", { exact: true }).waitFor();
+      await page.getByRole("radio", { name: "Connect WhatsApp" }).waitFor();
       expect(await gateway.getRequests("openclaw.setup.auto")).toHaveLength(1);
       expect(await gateway.getRequests("openclaw.setup.activate")).toHaveLength(0);
       await capture(page, "configured-automatic-setup", card, [done, selected]);

@@ -91,9 +91,6 @@ const enPluginManagement = {
     adminAccessRequired: "You need admin access to set up OpenClaw.",
     autoSetup: {
       title: "AI setup",
-      next: "Next",
-      back: "Back",
-      stepLabel: "Step {current} of {total}",
       welcomeTitle: "Welcome to OpenClaw",
       welcomeSubtitle: "Your personal AI assistant, living on your own computer.",
       welcomeBody:
@@ -104,13 +101,6 @@ const enPluginManagement = {
       featureChatBody: "This app, WhatsApp, Telegram, Discord, Slack: your choice.",
       featureControlTitle: "Stay in control",
       featureControlBody: "Everything runs where you decide, with permissions you grant.",
-      whereTitle: "Where should your assistant run?",
-      whereBody: "Most people pick this computer. You can change this anytime.",
-      whereLocal: "On this computer",
-      whereLocalBody: "Private to this computer.",
-      whereRemote: "On another computer",
-      whereRemoteBody: "Connect to an OpenClaw that is already running somewhere else.",
-      recommended: "Recommended",
       doneTitle: "You’re all set!",
       usingHere: "Using {label} ({modelRef}) on this computer",
       failedTitle: "AI setup didn’t finish",

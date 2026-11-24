@@ -9,11 +9,9 @@ import { useApplication } from "../../lib/reactive/context.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { projectOwner } from "../../lib/reactive/projection.ts";
 import type { CustodianSetupActions } from "./custodian-actions.ts";
-import type { CustodianAutoSetup, SetupStep } from "./custodian-auto-setup.ts";
+import type { CustodianAutoSetup } from "./custodian-auto-setup.ts";
 import type { CustodianSessionStore } from "./custodian-session-store.ts";
 import "../../styles/custodian-setup-card.css";
-
-const STEPS: SetupStep[] = ["welcome", "where", "ai"];
 
 function ErrorDetails(props: { text: string }) {
   return (
@@ -174,86 +172,56 @@ export function CustodianSetupCard(props: {
           ?.attempts.map(({ label, error }) => `${label}: ${error}`)
           .join("\n")
       : undefined;
-  const stepIndex = () => STEPS.findIndex((step) => step === setup().step);
-  const go = (step: SetupStep) => setup().setStep(step);
   function Welcome() {
     return (
       <div class="stack custodian-setup__page">
-        <Show when={setup().step === "welcome"}>
-          <h2>{t("custodian.autoSetup.welcomeTitle")}</h2>
-          <p class="muted">{t("custodian.autoSetup.welcomeSubtitle")}</p>
-          <p class="muted">{t("custodian.autoSetup.welcomeBody")}</p>
-          <div class="callout stack">
-            <For
-              each={
-                [
-                  ["wandSparkles", "featureAskTitle", "featureAskBody"],
-                  ["messageSquare", "featureChatTitle", "featureChatBody"],
-                  ["hand", "featureControlTitle", "featureControlBody"],
-                ] as const satisfies readonly (readonly [IconName, string, string])[]
-              }
-            >
-              {(feature) => (
-                <div class="row">
-                  <Icon name={feature[0]} />
-                  <div class="option-card__choice-copy">
-                    <strong>{t(`custodian.autoSetup.${feature[1]}`)}</strong>
-                    <span class="option-card__description">
-                      {t(`custodian.autoSetup.${feature[2]}`)}
-                    </span>
-                  </div>
-                </div>
-              )}
-            </For>
-          </div>
-          <p class="muted row">
-            <Icon name="info" />
-            <span>{t("custodian.autoSetup.safety")}</span>
-          </p>
-        </Show>
-        <Show when={setup().step === "where"}>
-          <h2>{t("custodian.autoSetup.whereTitle")}</h2>
-          <p class="muted">{t("custodian.autoSetup.whereBody")}</p>
-          <div class="callout stack">
-            <For each={[true, false]}>
-              {(here) => (
-                <button
-                  class={[
-                    "option-card__choice",
-                    { "option-card__choice--selected": here === local() },
-                  ]}
-                  type="button"
-                  aria-pressed={here === local() ? "true" : "false"}
-                  onClick={() => here !== local() && changeGateway()}
-                >
-                  <Icon name={here ? "monitor" : "server"} />
-                  <span class="option-card__choice-copy">
-                    <strong>
-                      {t(
-                        here ? "custodian.autoSetup.whereLocal" : "custodian.autoSetup.whereRemote",
-                      )}
-                      <Show when={here}>
-                        {" "}
-                        <span class="chip">{t("custodian.autoSetup.recommended")}</span>
-                      </Show>
-                    </strong>
-                    <span class="option-card__description">
-                      {(here === local() && gatewayLabel()) ||
-                        t(
-                          here
-                            ? "custodian.autoSetup.whereLocalBody"
-                            : "custodian.autoSetup.whereRemoteBody",
-                        )}
-                    </span>
+        <h2>{t("custodian.autoSetup.welcomeTitle")}</h2>
+        <p class="muted">{t("custodian.autoSetup.welcomeSubtitle")}</p>
+        <p class="muted">{t("custodian.autoSetup.welcomeBody")}</p>
+        <div class="callout stack">
+          <For
+            each={
+              [
+                ["wandSparkles", "featureAskTitle", "featureAskBody"],
+                ["messageSquare", "featureChatTitle", "featureChatBody"],
+                ["hand", "featureControlTitle", "featureControlBody"],
+              ] as const satisfies readonly (readonly [IconName, string, string])[]
+            }
+          >
+            {(feature) => (
+              <div class="row">
+                <Icon name={feature[0]} />
+                <div class="option-card__choice-copy">
+                  <strong>{t(`custodian.autoSetup.${feature[1]}`)}</strong>
+                  <span class="option-card__description">
+                    {t(`custodian.autoSetup.${feature[2]}`)}
                   </span>
-                  <Show when={here === local()}>
-                    <Icon name="circleCheck" />
-                  </Show>
+                </div>
+              </div>
+            )}
+          </For>
+        </div>
+        <p class="muted row">
+          <Icon name="info" />
+          <span>{t("custodian.autoSetup.safety")}</span>
+        </p>
+        <footer class="filters custodian-setup__heading">
+          <div class="filters">
+            <button class="btn btn--ghost" type="button" onClick={changeGateway}>
+              {t("custodian.autoSetup.differentGateway")}
+            </button>
+            <Show when={native()?.reviewPermissions}>
+              {(review) => (
+                <button class="btn btn--ghost" type="button" onClick={() => review()()}>
+                  {t("custodian.autoSetup.reviewPermissions")}
                 </button>
               )}
-            </For>
+            </Show>
           </div>
-        </Show>
+          <button class="btn primary" type="button" onClick={() => setup().setStep("ai")}>
+            {t("common.next")}
+          </button>
+        </footer>
       </div>
     );
   }
@@ -378,56 +346,6 @@ export function CustodianSetupCard(props: {
             <Show when={!setup().ready}>
               <p class="muted">{t("custodian.autoSetup.safety")}</p>
             </Show>
-          </Show>
-          <Show when={setup().step !== "ai"}>
-            <footer style={{ display: "grid", "grid-template-columns": "1fr auto 1fr" }}>
-              <div class="row">
-                <Show when={stepIndex() > 0}>
-                  <button
-                    class="btn btn--ghost"
-                    type="button"
-                    disabled={busy()}
-                    onClick={() => go(STEPS[stepIndex() - 1]!)}
-                  >
-                    {t("custodian.autoSetup.back")}
-                  </button>
-                </Show>
-                <Show when={native()?.reviewPermissions}>
-                  {(review) => (
-                    <button class="btn btn--ghost" type="button" onClick={() => review()()}>
-                      {t("custodian.autoSetup.reviewPermissions")}
-                    </button>
-                  )}
-                </Show>
-              </div>
-              <ol
-                class="custodian-setup__dots"
-                aria-label={t("custodian.autoSetup.stepLabel", {
-                  current: String(stepIndex() + 1),
-                  total: String(STEPS.length),
-                })}
-              >
-                <For each={STEPS}>
-                  {(_step, index) => (
-                    <li
-                      class={{ "is-current": index() === stepIndex() }}
-                      aria-current={index() === stepIndex() ? "step" : undefined}
-                    />
-                  )}
-                </For>
-              </ol>
-              <div style={{ "justify-self": "end" }}>
-                <Show when={stepIndex() < STEPS.length - 1}>
-                  <button
-                    class="btn primary"
-                    type="button"
-                    onClick={() => go(STEPS[stepIndex() + 1]!)}
-                  >
-                    {t("custodian.autoSetup.next")}
-                  </button>
-                </Show>
-              </div>
-            </footer>
           </Show>
         </section>
       </Show>

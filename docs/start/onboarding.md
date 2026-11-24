@@ -23,8 +23,8 @@ For terminal-based setup, see [Onboarding overview](/start/onboarding-overview).
 On a fresh install, open the app and follow **Setting up OpenClaw on this Mac**:
 
 1. The app prepares its runtime and starts a local Gateway.
-2. The dashboard welcomes you and shows where the assistant will run.
-3. Continue to let that Gateway verify and save the first connection that works.
+2. The dashboard opens Welcome. Choose **Next** to let the connected Gateway
+   verify and save the first AI connection that works.
 
 An already configured model is kept. You can then set up optional features
 and start chatting. To choose the connection yourself, select **Set up manually**.
