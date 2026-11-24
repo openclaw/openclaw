@@ -374,4 +374,26 @@ describe("root memory repair", () => {
       await expect(fs.readFile(legacyPath, "utf8")).resolves.toBe(legacy);
     },
   );
+
+  it("skips the memory-system suggestion when an alternate memory plugin slot is active", async () => {
+    const { collectWorkspaceSuggestionNotes } = await import("./doctor-workspace-suggestions.js");
+    const collect = async (cfg?: Record<string, unknown>) => {
+      const notes: string[] = [];
+      for await (const note of collectWorkspaceSuggestionNotes(tmpDir, { cfg: cfg as never })) {
+        notes.push(note);
+      }
+      return notes;
+    };
+
+    const withoutPlugin = await collect({});
+    expect(withoutPlugin.some((n) => n.includes("Memory system not found"))).toBe(true);
+
+    const withPlugin = await collect({
+      plugins: {
+        slots: { memory: "basic-memory" },
+        entries: { "basic-memory": { enabled: true } },
+      },
+    });
+    expect(withPlugin.some((n) => n.includes("Memory system not found"))).toBe(false);
+  });
 });

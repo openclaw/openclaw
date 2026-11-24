@@ -102,7 +102,7 @@ function isOpenAICompatibleMemoryProvider(providerId: string, cfg: OpenClawConfi
   return !api && Boolean(normalizeOptionalString(providerConfig.baseUrl));
 }
 
-function hasActiveAlternateMemoryPluginSlot(cfg: OpenClawConfig): boolean {
+export function hasActiveAlternateMemoryPluginSlot(cfg: OpenClawConfig): boolean {
   const plugins = normalizePluginsConfig(cfg.plugins);
   const memorySlot = plugins.slots.memory;
   if (
