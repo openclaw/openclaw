@@ -7,7 +7,8 @@ import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 
 registerEnglishCatalog(registerChatToolOperationsEnglish);
 
-const catalog = registerChatToolOperationsEnglish.catalog.chat.toolCards.operationLabels;
+const catalog: Readonly<Record<string, object>> =
+  registerChatToolOperationsEnglish.catalog.chat.toolCards.operationLabels;
 
 const operationIcons = new Map<string, IconName>([
   ["decision_evaluate", "scale"],
@@ -65,11 +66,11 @@ export function catalogToolLabel(
       `chat.toolCards.${outcome === "running" ? "listingChats" : outcome === "succeeded" ? "listedChats" : "listChats"}`,
     );
   }
-  if (!Object.hasOwn(catalog, name)) {
+  const labels = Object.hasOwn(catalog, name) ? catalog[name] : undefined;
+  if (!labels) {
     return undefined;
   }
   const action = typeof args?.action === "string" ? args.action : undefined;
-  const labels = catalog[name as keyof typeof catalog];
   const key =
     name === "update_goal" && typeof args?.status === "string"
       ? `status_${args.status}`
