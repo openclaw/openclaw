@@ -1063,7 +1063,10 @@ describe("CI test timing refit", () => {
       "ubuntu-24.04",
       3,
     );
-    expectCompact(runs, { retained: 90 }, compactBaseline({}, { retained: 90 }), "github");
+    const result = refitTestTimings(runs, compactBaseline({}, { retained: 90 }));
+    expect(result.timings.compactGroupSeconds.github).toEqual({ retained: 90 });
+    // Hosted-only main cohorts still count, so the scheduled refit keeps collecting.
+    expect(result.contributingRunIds.github).toEqual([1, 2, 3]);
   });
 
   it.each(["bun-all", "dual-all"])(

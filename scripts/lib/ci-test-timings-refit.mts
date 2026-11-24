@@ -1291,13 +1291,7 @@ export function refitTestTimings(
             boat: new Map(),
           };
           const descriptors = new Map<string, RuntimePlacementTiming>();
-          // GitHub-runner compact plans stay on Node prices until the Bun lane has its own
-          // sizing: real bun-all spans would pack them past the job cap (#204374). Tooling
-          // samples from the same log still count.
-          if (
-            log.kind === "compact" &&
-            !(profile === "github" && runtimeLog.prefix.startsWith("bun-all:"))
-          ) {
+          if (log.kind === "compact") {
             readCompactLog(
               runtimeLog.text,
               log.labels,
@@ -1427,6 +1421,19 @@ export function refitTestTimings(
       }
     }
     rejectedWorkerKeys[profile].sort();
+  }
+  // GitHub-runner compact plans stay on Node prices until the Bun lane has its own sizing:
+  // real bun-all spans would pack them past the job cap (#204374). The runs still count as
+  // contributors, and their tooling samples still price tooling.
+  for (const key of samples.github.keys()) {
+    if (key.startsWith("bun-all:")) {
+      samples.github.delete(key);
+    }
+  }
+  for (const key of runtimeSamples.github.keys()) {
+    if (runtimeDescriptors.get(key)?.env.OPENCLAW_CI_TEST_RUNTIME_POLICY === "bun-all") {
+      runtimeSamples.github.delete(key);
+    }
   }
 
   for (const [key, ceilings] of toolingBoatWorkers) {
