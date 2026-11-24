@@ -55,6 +55,7 @@ describe("release preparation", () => {
     expect(await fs.readFile(path.join(staging, "openclaw", "dist", "ui-built"), "utf8")).toBe(
       "ready",
     );
+    expect(await fs.readFile(path.join(staging, "openclaw", "ui-builds.txt"), "utf8")).toBe("ui\n");
     expect(await fs.readFile(path.join(staging, "openclaw", "steps.txt"), "utf8")).toBe(
       "install --frozen-lockfile\nbuild\nui:build\n",
     );
