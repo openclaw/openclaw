@@ -48,6 +48,7 @@ it.each([
   const env = {
     OPENCLAW_STATE_DIR: stateDir,
     OPENCLAW_CONFIG_PATH: path.join(stateDir, "openclaw.json"),
+    OPENCLAW_LAUNCHER_IPC: trial ? "1" : undefined,
   };
   fs.writeFileSync(
     env.OPENCLAW_CONFIG_PATH,
@@ -72,12 +73,14 @@ it.each([
       1,
     );
   }
-  const manifestFile = path.join(resolvePrefix(env), "releases", ".restore");
+  const target = path.join("releases", "startup-release", "openclaw");
+  const manifestFile = path.join(resolvePrefix(env), "releases", "startup-release", ".restore");
   if (trial) {
+    fs.mkdirSync(path.join(resolvePrefix(env), target), { recursive: true });
     const pending = await createTrialPending(
       {
         runId: "startup-trial",
-        target: stateDir,
+        target,
         previous: stateDir,
         version: VERSION,
         buildId: resolveRuntimeServiceBuildId() ?? undefined,
@@ -120,6 +123,7 @@ it.each([true, false])(
     const env = {
       OPENCLAW_STATE_DIR: stateDir,
       OPENCLAW_CONFIG_PATH: path.join(stateDir, "openclaw.json"),
+      OPENCLAW_LAUNCHER_IPC: "1",
     };
     fs.writeFileSync(env.OPENCLAW_CONFIG_PATH, '{"gateway":{"mode":"local"}}');
     fs.mkdirSync(path.join(stateDir, "state"));
@@ -130,10 +134,12 @@ it.each([true, false])(
       db.exec(`PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION}`);
     }
     const original = fs.readFileSync(file);
+    const target = path.join("releases", "empty-release", "openclaw");
+    fs.mkdirSync(path.join(resolvePrefix(env), target), { recursive: true });
     const pending = await createTrialPending(
       {
         runId: "empty-trial",
-        target: stateDir,
+        target,
         previous: stateDir,
         version: VERSION,
         buildId: resolveRuntimeServiceBuildId() ?? undefined,
@@ -142,7 +148,7 @@ it.each([true, false])(
     );
     await writeTrial({ ...pending, phase: "trial" }, resolvePrefix(env));
     await upgradeStateOnGatewayStart(env, () => admits);
-    const manifest = path.join(resolvePrefix(env), "releases", ".restore");
+    const manifest = path.join(resolvePrefix(env), "releases", "empty-release", ".restore");
     if (admits) {
       expect(JSON.parse(fs.readFileSync(manifest, "utf8"))).toEqual({
         v: 1,

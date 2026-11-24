@@ -83,10 +83,12 @@ it("publishes immutable restore intent before the replayable swap plan, and reus
     db.exec(`PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION - 1}`);
   }
   const env = { OPENCLAW_STATE_DIR: stateDir, OPENCLAW_CONFIG_PATH: configPath };
+  const target = path.join("releases", "plan-release", "openclaw");
+  fs.mkdirSync(path.join(resolvePrefix(env), target), { recursive: true });
   const trial = await createTrialPending(
     {
       runId: "before-plan",
-      target: stateDir,
+      target,
       previous: stateDir,
       version: VERSION,
       buildId: resolveRuntimeServiceBuildId() ?? undefined,
@@ -94,7 +96,7 @@ it("publishes immutable restore intent before the replayable swap plan, and reus
     resolvePrefix(env),
   );
   await writeTrial({ ...trial, phase: "trial" }, resolvePrefix(env));
-  const manifest = path.join(resolvePrefix(env), "releases", ".restore");
+  const manifest = path.join(resolvePrefix(env), "releases", "plan-release", ".restore");
   const rename = fs.renameSync;
   const interrupted = vi.spyOn(fs, "renameSync").mockImplementation((source, destination) => {
     if (path.basename(String(destination)) === "plan.json") {

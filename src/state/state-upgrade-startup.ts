@@ -11,7 +11,6 @@ import {
   closeOpenClawStateDatabaseByPathAsync,
 } from "./openclaw-state-db-cache.js";
 import { isStateUpgradePending } from "./state-upgrade-databases.js";
-import { beginStateUpgradeRestore, publishStateUpgradeRestore } from "./state-upgrade-restore.js";
 import { explainMachineFailure, upgradeStateDirectory } from "./state-upgrade.js";
 
 const log = createSubsystemLogger("state/upgrade");
@@ -41,9 +40,9 @@ export async function upgradeStateOnGatewayStart(
   let lock: Awaited<ReturnType<typeof acquireGatewayLock>>;
   try {
     // A read-only open on a full disk fails too (it cannot create the shared-memory file).
-    if (!(await isStateUpgradePending(env))) {
-      const restore = await beginStateUpgradeRestore(env);
-      publishStateUpgradeRestore(restore, { ops: [] });
+    // Current-schema launcher trials still need an empty restore plan. Publish
+    // it through the same exclusive owner as a schema-changing swap.
+    if (!(await isStateUpgradePending(env)) && env.OPENCLAW_LAUNCHER_IPC !== "1") {
       return;
     }
     // File-only ownership: the old databases are not opened for writing.

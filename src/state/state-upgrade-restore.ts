@@ -6,12 +6,16 @@ import { formatErrorMessage } from "../infra/errors.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { retireSqliteDatabaseAdmissionForPath } from "../infra/sqlite-database-admission.js";
 import { truncateSqliteWal } from "../infra/sqlite-wal-checkpoint.js";
+import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { readTrial, resolvePrefix, type Trial } from "../update/store.js";
-import { resolveRuntimeServiceBuildId, VERSION } from "../version.js";
 import { fsyncPath, isSqliteFile, type UpgradePlan } from "./state-upgrade-tree.js";
 
-type RestoreFile = { live: string; preimage: string | null };
-type RestoreManifest = { v: 1; runId: string; files: RestoreFile[] };
+type RestoreFile = { readonly live: string; readonly preimage: string | null };
+type RestoreManifest = {
+  readonly v: 1;
+  readonly runId: string;
+  readonly files: readonly RestoreFile[];
+};
 type RestoreImageReport = { linked: number; copied: string[]; symlinks: number };
 export type StateUpgradeRestore = {
   file: string;
@@ -21,6 +25,9 @@ export type StateUpgradeRestore = {
 };
 const COMPANIONS = ["-wal", "-shm", "-journal", ".seal"] as const;
 const LINK_UNAVAILABLE = new Set(["EXDEV", "EPERM", "ENOSYS", "ENOTSUP", "EOPNOTSUPP", "EMLINK"]);
+const restoreCapture = resolveGlobalSingleton<{
+  value: { file: string; manifest: RestoreManifest } | undefined;
+}>(Symbol.for("openclaw.stateUpgradeRestoreCapture"), () => ({ value: undefined }));
 
 function invalid(file: string, cause?: unknown): Error {
   return new Error(
@@ -47,9 +54,6 @@ function readManifest(file: string): RestoreManifest | undefined {
     !("runId" in value) ||
     typeof value.runId !== "string" ||
     !value.runId ||
-    /[\\/\0]/u.test(value.runId) ||
-    value.runId === "." ||
-    value.runId === ".." ||
     !("files" in value) ||
     !Array.isArray(value.files)
   ) {
@@ -68,8 +72,7 @@ function readManifest(file: string): RestoreManifest | undefined {
       seen.has(entry.live) ||
       !("preimage" in entry) ||
       (entry.preimage !== null &&
-        (typeof entry.preimage !== "string" ||
-          entry.preimage !== `${entry.live}.pre-restore-${value.runId}`))
+        (typeof entry.preimage !== "string" || !path.isAbsolute(entry.preimage)))
     ) {
       throw invalid(file);
     }
@@ -95,25 +98,21 @@ export async function beginStateUpgradeRestore(
 ): Promise<StateUpgradeRestore | undefined> {
   const prefix = resolvePrefix(env);
   const trial = knownTrial === undefined ? await readTrial(prefix) : knownTrial;
-  if (
-    trial?.phase !== "trial" ||
-    (trial.buildId ? trial.buildId !== resolveRuntimeServiceBuildId() : trial.version !== VERSION)
-  ) {
+  if (trial?.phase !== "trial") {
     return undefined;
   }
-  const file = path.join(prefix, "releases", ".restore");
-  if (!trial.runId || /[\\/\0]/u.test(trial.runId) || trial.runId === "." || trial.runId === "..") {
+  // The launcher selected this target before fork. Its prepared release owns the
+  // journal, including retries initiated by preparers that know no manifest.
+  const file = path.join(path.dirname(path.resolve(prefix, trial.target)), ".restore");
+  if (!trial.runId || /[\\/\0]/u.test(trial.runId)) {
     throw invalid(file);
   }
   const existing = readManifest(file);
-  if (existing && existing.runId !== trial.runId) {
-    removeImages(existing);
-  }
   return {
     file,
     runId: trial.runId,
     generation: `restore-${trial.runId}`,
-    existing: existing?.runId === trial.runId ? existing : undefined,
+    existing,
   };
 }
 
@@ -183,6 +182,7 @@ export function publishStateUpgradeRestore(
         "The update's immutable restore manifest does not cover this migration plan. Run openclaw triage before retrying.",
       );
     }
+    restoreCapture.value = { file: restore.file, manifest: restore.existing };
     return report;
   }
   if (resuming) {
@@ -267,6 +267,7 @@ export function publishStateUpgradeRestore(
     published = true;
     fsyncPath(path.dirname(restore.file), true);
     restore.existing = manifest;
+    restoreCapture.value = { file: restore.file, manifest };
     return report;
   } finally {
     if (!published) {
@@ -277,20 +278,21 @@ export function publishStateUpgradeRestore(
   }
 }
 
-/** Only the caller that received committed IPC may retire that run's images. */
-export function cleanupStateUpgradeRestore(runId: string, env: NodeJS.ProcessEnv): string[] {
-  const file = path.join(resolvePrefix(env), "releases", ".restore");
-  try {
-    const manifest = readManifest(file);
-    if (manifest?.runId === runId) {
-      removeImages(manifest);
-    }
-    // Leave the bounded receipt: unlinking this fixed path could remove a newer
-    // run's manifest after our read. The next admitted writer replaces it.
-    return [];
-  } catch (error) {
-    return [
-      `Update recovery images were retained: ${formatErrorMessage(error)}. Run openclaw triage to inspect ${file}.`,
-    ];
+/** Consume this process's published receipt only after confirmed committed IPC. */
+export function takeStateUpgradeRestoreCleanup(): (() => string[]) | undefined {
+  const captured = restoreCapture.value;
+  restoreCapture.value = undefined;
+  if (!captured) {
+    return undefined;
   }
+  return () => {
+    try {
+      removeImages(captured.manifest);
+      return [];
+    } catch (error) {
+      return [
+        `Update recovery images were retained: ${formatErrorMessage(error)}. Run openclaw triage to inspect ${captured.file}.`,
+      ];
+    }
+  };
 }
