@@ -864,6 +864,7 @@ class ChatController internal constructor(
   private val sessionRosterLoadFailedMutable = MutableStateFlow(false)
   internal val sessionRosterLoadFailed: StateFlow<Boolean> = sessionRosterLoadFailedMutable.asStateFlow()
   private val sessionRosterLoadMutex = Mutex()
+  private var retainedPinRead: Job? = null
   private val sessionWindowWakeMutable = MutableStateFlow<SessionWakeDeadline?>(null)
   internal val sessionWindowWake = sessionWindowWakeMutable.asStateFlow()
   private var loadedWindowWake: SessionWakeDeadline? = null
@@ -1066,7 +1067,7 @@ class ChatController internal constructor(
           adoptionLock.withLock {
             if (desiredMainSessions[requestScope.gatewayId] != mainSession) return@withLock
             try {
-              val existingSession = fetchSessionDescription(requestScope.gatewayId, mainSession.key)
+              val existingSession = fetchSessionDescription(mainSession.key) { method, params -> requestGatewayForGateway(requestScope.gatewayId, method, params) }
               if (desiredMainSessions[requestScope.gatewayId] != mainSession) return@withLock
               val existingAutoLabel = existingSession.nonBlankString("autoLabel")
               if (existingAutoLabel != mainSession.autoLabel) {
@@ -4895,6 +4896,46 @@ class ChatController internal constructor(
     }
   }
 
+  // A missing selected row could be unpinned or just below earlier pins. Its optional exact
+  // read owns only that live pin, never the roster mutex, window, browser invalidation or cache.
+  private fun reconcileRetainedPin(
+    selected: ChatSessionEntry,
+    lease: GatewaySession.RequestLease,
+    rosterIsCurrent: () -> Boolean,
+  ): Job? {
+    val id = selected.sessionId ?: return null
+    val selection = currentSessionActionSnapshot(selected.key) ?: return null
+    return scope.launch {
+      fun ownsRead() = isActive && rosterIsCurrent() && isCurrentSessionAction(selection)
+      val row =
+        runCatchingCancellable {
+          fetchSessionDescription(selection.sessionKey, selection.ownerAgentId) { method, params ->
+            lease.request(method, params) { enqueue ->
+              synchronized(gatewayScopeApplyLock) {
+                if (!ownsRead()) throw GatewayRequestNotEnqueued("retained pin owner changed")
+                enqueue()
+              }
+            }
+          }
+        }.getOrNull() ?: return@launch
+      if (row.nonBlankString("key") != selected.key || row.nonBlankString("sessionId") != id ||
+        (row.nonBlankString("agentId") ?: selection.ownerAgentId) != selection.ownerAgentId
+      ) {
+        return@launch
+      }
+      val pin = row["pinned"].asBooleanOrNull() ?: return@launch
+      publishGatewayState(lease, ::ownsRead) {
+        val current = currentSelectedSession() ?: return@publishGatewayState
+        if (current.ownerAgentId != selection.ownerAgentId || current.sessionId != id ||
+          (_sessionId.value != null && _sessionId.value != id) || current.pinned == pin
+        ) {
+          return@publishGatewayState
+        }
+        publishSessions(_sessions.value.map { if (it === current) current.copy(pinned = pin) else it }, invalidateBrowser = false)
+      }
+    }
+  }
+
   private suspend fun fetchSessions(
     limit: Int?,
     archived: Boolean = false,
@@ -4912,7 +4953,10 @@ class ChatController internal constructor(
     fun requestOwnerIsCurrent(): Boolean = owner == currentRosterOwner() && (wake == null || wakeOwner == owner)
     val requestSequence = sessionsRequestSequence.incrementAndGet()
     val refresh = SessionSettingsRead(requestCacheScope, requestAgentId)
-    synchronized(gatewayScopeApplyLock) { activeSessionReads.add(refresh) }
+    synchronized(gatewayScopeApplyLock) {
+      if (!append) retainedPinRead?.cancel()
+      activeSessionReads.add(refresh)
+    }
     try {
       retryFailedSessionSettingsReconciliations(requestCacheScope, requestAgentId)
       while (true) {
@@ -4926,6 +4970,8 @@ class ChatController internal constructor(
             settingsMutationRevision(requestCacheScope)
           }
         val params = sessionListParams(requestAgentId, requestLimit, archived, offset = offset)
+        val pinLease =
+          if (!append && gatewayAdvertisesCapability(PERSONAL_SESSION_PINS_CAPABILITY) == true) wakeLease ?: captureRequestLease(requestCacheScope) else null
         val res =
           if (wakeLease == null) {
             requestGateway("sessions.list", params.toString())
@@ -4940,32 +4986,6 @@ class ChatController internal constructor(
         val parsed = parseSessions(res, offset ?: 0)
         val entries = parsed.sessions
         val result = entries.map { session -> session.copy(ownerAgentId = requestAgentId) }
-        // A retained history row can fall below the page whether it was unpinned or
-        // merely moved behind other pins. Only its exact requester projection can tell.
-        val pinTarget =
-          if (append || gatewayAdvertisesCapability(PERSONAL_SESSION_PINS_CAPABILITY) != true) {
-            null
-          } else {
-            synchronized(gatewayScopeApplyLock) {
-              val selected = currentSelectedSession()
-              val id = selected?.sessionId
-              if (id == null || selected.ownerAgentId != requestAgentId || result.any { it.key == selected.key } || !requestOwnerIsCurrent()) {
-                null
-              } else {
-                currentSessionActionSnapshot(selected.key)?.let { it to id }
-              }
-            }
-          }
-        val exactPin =
-          pinTarget?.let { (selection, id) ->
-            runCatchingCancellable { fetchSessionDescription(requestCacheScope?.gatewayId, selection.sessionKey, requestAgentId) }
-              .getOrNull()
-              ?.takeIf { row ->
-                row.nonBlankString("key") == selection.sessionKey && row.nonBlankString("sessionId") == id &&
-                  (row.nonBlankString("agentId") ?: requestAgentId) == requestAgentId
-              }?.get("pinned")
-              .asBooleanOrNull()
-          }
         var retainedSessionKey: String? = null
         var settingsChanged = false
         val appliedSessions =
@@ -4987,17 +5007,7 @@ class ChatController internal constructor(
                     it.key == activeSessionKey && it.ownerAgentId == requestAgentId
                   }?.takeIf { result.none { row -> row.key == activeSessionKey } }
               val page = if (append) mergeSessionRosterPages(_sessions.value, result) else result
-              val sessions =
-                if (selected == null || page.any { it.key == activeSessionKey }) {
-                  page
-                } else if (
-                  exactPin != null && isCurrentSessionAction(pinTarget.first) && selected.sessionId == pinTarget.second &&
-                  (_sessionId.value == null || _sessionId.value == selected.sessionId)
-                ) {
-                  page + selected.copy(pinned = exactPin)
-                } else {
-                  page + selected
-                }
+              val sessions = if (selected == null || page.any { it.key == activeSessionKey }) page else page + selected
               // A wake refresh invalidates mounted queries at recovery; a cursor append never does.
               publishSessions(sessions, invalidateBrowser = false)
               if (wake != null) sessionBrowserRevisionMutable.update { it + 1 }
@@ -5027,6 +5037,8 @@ class ChatController internal constructor(
               retainedSessionKey = activeSessionKey.takeIf { selected != null || parsed.isTruncated || activeOutsideLocalWindow }
               pruneRunTelemetryToAuthoritativeOwnership()
               publishRunPresentation()
+              if (append && result.any { it.key == activeSessionKey }) retainedPinRead?.cancel()
+              if (pinLease != null && selected != null) retainedPinRead = reconcileRetainedPin(selected, pinLease, ::requestOwnerIsCurrent)
               sessions
             }
           }
@@ -8245,6 +8257,8 @@ class ChatController internal constructor(
     replace: Boolean = false,
     preserveSessionSettings: Boolean = false,
   ): ChatSessionEntry {
+    // Settings-only replacements carry forward the existing pin; a fresh wire pin wins.
+    if (!replace && entry.key == _sessionKey.value && entry.pinned != null) retainedPinRead?.cancel()
     val current = _sessions.value
     val index = current.indexOfFirst { it.key == entry.key }
     val existing = current.getOrNull(index)
@@ -8395,16 +8409,16 @@ class ChatController internal constructor(
   }
 
   private suspend fun fetchSessionDescription(
-    gatewayId: String?,
     sessionKey: String,
     agentId: String? = null,
+    request: suspend (String, String) -> String,
   ): JsonObject? {
     val params =
       buildJsonObject {
         put("key", JsonPrimitive(sessionKey))
         agentId?.let { put("agentId", JsonPrimitive(it)) }
       }
-    val root = requestGatewayJson(gatewayId, "sessions.describe", params).asObjectOrNull() ?: error("invalid sessions.describe response")
+    val root = json.parseToJsonElement(request("sessions.describe", params.toString())).asObjectOrNull() ?: error("invalid sessions.describe response")
     return when (val session = root["session"]) {
       is JsonObject -> session
       JsonNull -> null
