@@ -2557,6 +2557,11 @@ export function isTemplatesDraftsSaveParams(
 ): value is import("typebox").Static<
   typeof import("../../schema-modules.js").TemplatesDraftsSaveParamsSchema
 >;
+export function isTemplatesDraftsSignInParams(
+  value: unknown,
+): value is import("typebox").Static<
+  typeof import("../../schema-modules.js").TemplatesDraftsSignInParamsSchema
+>;
 export function isTemplatesDraftsReviewParams(
   value: unknown,
 ): value is import("typebox").Static<

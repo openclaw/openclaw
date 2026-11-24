@@ -1,5 +1,5 @@
 import { isInternalSessionEffectsKey } from "../config/sessions/internal-session-key.js";
-import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
+import { classifySessionKeyShape, resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 import {
   isAcpSessionKey,
   isCronRunSessionKey,
@@ -67,6 +67,11 @@ export function notePromptCacheKeepWarmChange(
   }
   const { sessionKey, storePath } = change;
   if (!isPromptCacheKeepWarmSessionKey(sessionKey)) {
+    return undefined;
+  }
+  // This runs inside committed-fact installation, where a throw fences every reader of the
+  // commit. Transcript receipts for `global` and legacy keys name no agent; they get no ping.
+  if (!change.agentId && classifySessionKeyShape(sessionKey) !== "agent") {
     return undefined;
   }
   const agentId = change.agentId ?? resolveAgentIdFromSessionKey(sessionKey);

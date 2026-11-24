@@ -175,9 +175,6 @@ export async function captureGatewayOperatorRecoverySnapshot(params: {
   if (sourceDevice && tokenDevice === undefined && !tokenlessIdentity) {
     return { device, authPolicy, sharedGeneration, unavailableReason: "device-no-token" };
   }
-  if (sourceDevice && tokenlessIdentity && !device) {
-    return { authPolicy, sharedGeneration, unavailableReason: "device-no-token" };
-  }
   if (client.usesSharedGatewayAuth && sharedGeneration === undefined) {
     return { device, authPolicy, sharedGeneration, unavailableReason: "shared-auth-no-generation" };
   }

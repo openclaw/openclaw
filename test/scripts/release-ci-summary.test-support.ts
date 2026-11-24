@@ -218,7 +218,10 @@ export function trustedMainPackageFixture({
     throw new Error("Historical fixture does not contain candidate or reused artifacts");
   };
   const client = {
+    readWorkloadIdentity: unsupported,
     validateChildReuse: unsupported,
+    selectPublicationArtifactSource: unsupported,
+    verifyReleaseRecoveryProducer: unsupported,
     getRunAttempt: unsupported,
     getRunAttemptJobs: unsupported,
     loadExecutionPlan: unsupported,
@@ -226,6 +229,8 @@ export function trustedMainPackageFixture({
     downloadArtifactArchive: unsupported,
     getRunArtifacts: unsupported,
     getArtifact: unsupported,
+    getCommit: unsupported,
+    resolveQualificationAdmissionDescriptor: unsupported,
     loadExecutionPlanEvidence: unsupported,
     verifyQualificationAdmission: () => {
       throw new Error("historical fixture must not request candidate qualification admission");

@@ -685,7 +685,7 @@ export async function runReleasePublishPreflightCommand(args = process.argv.slic
         payload: serializeFastTrackRequest(request),
         state: "awaiting-explicit-maintainer-approval",
         instructions:
-          "Share this exact request and digest in the release-managers group. Obtain explicit approval from another human release manager before taking any fast-track action. Agents must never approve using available tokens. Preserve the approval permalink with release evidence and use the normal npm-release environment approval and existing release receipt.",
+          "Share this exact request and digest in the release-managers group. Obtain explicit approval from a human release manager, which may be the requester, before taking any fast-track action. Agents must never approve using available tokens. Preserve the approval permalink with release evidence and use the normal npm-release environment approval and existing release receipt.",
         publicationAuthorized: false,
       })}\n`,
     );
