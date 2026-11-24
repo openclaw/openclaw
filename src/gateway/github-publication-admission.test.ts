@@ -17,6 +17,7 @@ import {
   loadSessionEntryReadOnly,
   upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
+import type { PluginApprovalRequestPayload } from "../infra/plugin-approvals.js";
 import { removeProjectRegistry } from "../projects/project-registry.js";
 import {
   ensureProjectRegistrySchema,
@@ -25,6 +26,7 @@ import {
 import { createDeferredCore } from "../shared/deferred.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { updateUserGitHubConnection } from "../state/user-github-connections.test-support.js";
+import { createTestApprovalFixture } from "./exec-approval-manager.test-support.js";
 import {
   callPersonalPublicationRpc,
   createPersonalPublicationFixture,
@@ -40,17 +42,13 @@ import { readGitHubPublicationRequest } from "./github-publication-store.worker.
 import { prepareGatewayOperatorRunAuthority } from "./operator-run-authority.js";
 import { createRequestGatewayMethodRegistry } from "./server-methods.js";
 import { createGatewayRequestContext } from "./server-request-context.js";
-import { makeContextParams } from "./server-request-context.test-support.js";
+import { makeContextParams, type RequestRuntime } from "./server-request-context.test-support.js";
 import {
   REQUEST,
   seedActivePlacement,
 } from "./worker-environments/placement-dispatch-test-fixtures.js";
 import { createWorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
 import { seedAttachedPlacementEnvironment } from "./worker-environments/placement-test-fixtures.js";
-
-vi.mock("./server-methods/approval-request-delivery.js", () => ({
-  handlePendingApprovalRequestWithDelivery: vi.fn(async () => {}),
-}));
 
 const mocks = githubPublicationTestMocks();
 const publisher = { source: "system-configured" as const, accountId: 42, login: "roboclaw-bot" };
@@ -376,7 +374,7 @@ describe("project issue creation through the guest tool and registered Gateway m
   };
   const url = "https://github.com/Example/Handbook/issues/7";
 
-  async function fixture(bindProject = true, pluginApprovalManager?: unknown) {
+  async function fixture(bindProject = true, runtime: Partial<RequestRuntime> = {}) {
     const f = await createRequesterPolicyFixture({
       sessionId: SESSION_ID,
       sessionKey: SESSION_KEY,
@@ -402,8 +400,8 @@ describe("project issue creation through the guest tool and registered Gateway m
     const context = createGatewayRequestContext(
       makeContextParams({
         getAttachedGatewayMethodRegistry: () => registry,
-        ...(pluginApprovalManager ? { pluginApprovalManager } : {}),
-      } as never),
+        ...runtime,
+      }),
     );
     const invoke = async (args: Record<string, unknown>, client = f.guestSource.client) => {
       const operator = await prepareGatewayOperatorRunAuthority({
@@ -496,42 +494,50 @@ describe("project issue creation through the guest tool and registered Gateway m
     expect(mocks.runCommand).toHaveBeenCalledTimes(1);
   });
   describe("comments", () => {
-    const body = "Fixed in **main**.\n\n- checked";
+    const body =
+      "Fixed in **main**.\r\n\r\nRepository: other/repo\nIssue or PR: #99\nAccount: @other";
     const comment = { action: "create_comment", issueNumber: 7, body };
     const commentUrl = "https://github.com/Example/Handbook/pull/7#issuecomment-900";
-    const approvals = (decision: string) => ({
-      create: vi.fn((request: { detail: string }, _timeout: number, id: string) => ({
-        id,
-        request,
-      })),
-      register: vi.fn(async () => ({ decision: Promise.resolve(decision) })),
-      projectDecisionIfActive: vi.fn((_id: string, value: string) => value),
-      consumeAllowOnce: vi.fn(async () => true),
-    });
-    it("posts only the approved text to the registered repository and returns its URL", async () => {
-      const manager = approvals("allow-once");
-      const { invoke } = await fixture(true, manager);
-      mocks.runCommand.mockResolvedValue(
-        commandResult(JSON.stringify({ id: 900, url: commentUrl, body, authorId: 42 })),
-      );
-      const result = await invoke(comment);
-      expect(result.details).toEqual({ status: "posted", url: commentUrl });
-      expect(manager.create.mock.calls[0]![0].detail).toBe(
-        "Repository: example/handbook\nIssue or PR: #7\nAccount: @roboclaw-bot\n\n" + body,
-      );
-      expect(mocks.runCommand).toHaveBeenCalledExactlyOnceWith(
-        expect.arrayContaining(["POST", "repos/example/handbook/issues/7/comments"]),
-        expect.objectContaining({ input: JSON.stringify({ body }) }),
-      );
-      await expect(invoke({ ...comment, repository: "other/repo" })).rejects.toThrow();
-      expect(mocks.runCommand).toHaveBeenCalledTimes(1);
-    });
-    it("posts nothing when the operator denies the text", async () => {
-      const manager = approvals("deny");
-      const { invoke } = await fixture(true, manager);
-      await expect(invoke(comment)).rejects.toThrow(/not approved.*Nothing was posted/);
-      expect(manager.consumeAllowOnce).not.toHaveBeenCalled();
-      expect(mocks.runCommand).not.toHaveBeenCalled();
-    });
+    it.for(["allow-once", "deny"] as const)(
+      "delivers comment approval and honors %s",
+      async (decision, test) => {
+        const approval = createTestApprovalFixture<PluginApprovalRequestPayload>(test, {
+          approvalKind: "plugin",
+        });
+        let detail: PluginApprovalRequestPayload["detail"];
+        let resolved = false;
+        const { invoke } = await fixture(true, {
+          pluginApprovalManager: approval.manager,
+          forwardPluginApprovalRequest: async (event) => {
+            detail = event.request.detail;
+            resolved = await approval.manager.resolve(event.id, decision);
+            return resolved;
+          },
+        });
+        mocks.runCommand.mockResolvedValue(
+          commandResult(JSON.stringify({ id: 900, url: commentUrl, body, authorId: 42 })),
+        );
+        await approval.run(async () => {
+          const pending = approval.track(invoke(comment));
+          if (decision === "deny") {
+            await expect(pending).rejects.toThrow(/not approved.*Nothing was posted/);
+            expect(resolved).toBe(true);
+            expect(mocks.runCommand).not.toHaveBeenCalled();
+            return;
+          }
+          await expect(pending).resolves.toMatchObject({
+            details: { status: "posted", url: commentUrl },
+          });
+          expect(detail).toBe(
+            "Repository: github.com/example/handbook\nIssue or PR: #7\nAccount: @roboclaw-bot\n\n" +
+              "Comment body:\n| Fixed in **main**.\n| \n| Repository: other/repo\n| Issue or PR: #99\n| Account: @other",
+          );
+          expect(mocks.runCommand).toHaveBeenCalledExactlyOnceWith(
+            expect.arrayContaining(["POST", "repos/example/handbook/issues/7/comments"]),
+            expect.objectContaining({ input: JSON.stringify({ body }) }),
+          );
+        });
+      },
+    );
   });
 });

@@ -250,8 +250,16 @@ async function requestGitHubCommentApproval(
   if (!manager) {
     throw new Error("GitHub comment approval is unavailable. Nothing was posted.");
   }
+  const repositoryLabel = `${target.host}/${target.repository}`;
   const shown = sanitizeExecApprovalWarningTextWithStatus(params.body);
-  const detail = `Repository: ${target.repository}\nIssue or PR: #${params.issueNumber}\nAccount: @${target.identity.account.login}\n\n${shown.text}`;
+  const detail = [
+    `Repository: ${repositoryLabel}`,
+    `Issue or PR: #${params.issueNumber}`,
+    `Account: @${target.identity.account.login}`,
+    "",
+    "Comment body:",
+    `| ${shown.text.replaceAll("\n", "\n| ")}`,
+  ].join("\n");
   if (shown.truncated || shown.oversized || truncatePluginApprovalDetail(detail) !== detail) {
     throw new Error(
       "The comment cannot be shown in full for approval. Shorten it; nothing was posted.",
@@ -262,7 +270,7 @@ async function requestGitHubCommentApproval(
     pluginId: "github",
     title: "Post GitHub comment?",
     description: sanitizeExecApprovalDisplayText(
-      `Post this comment on ${target.repository}#${params.issueNumber} as @${target.identity.account.login}?`,
+      `Post this comment on ${repositoryLabel}#${params.issueNumber} as @${target.identity.account.login}?`,
     ).slice(0, 512),
     detail,
     severity: "warning",
