@@ -42,29 +42,6 @@ Gateway. A browser-rendered HTTP error, such as `403 Forbidden`, is evidence tha
 the website denied access; it does not establish whether a profile or resource
 exists.
 
-## HTTPS hangs on macOS while Chrome responds locally
-
-If Chrome can display a local page such as `chrome://version` but times out
-loading public HTTPS pages, check the Mac running Chrome. In the logged-in
-desktop session, look for a pending Keychain prompt. If the login keychain is
-locked, unlock it in Keychain Access. A Chrome process sample waiting in
-`copy_certificates_from_keychain` is another clue that certificate lookup is
-stalled. A navigation timeout alone has several possible causes.
-
-Retry a public HTTPS page in the affected browser profile. Read the returned
-tab to confirm the document actually loaded.
-
-```bash
-openclaw browser --browser-profile openclaw open https://example.com
-openclaw browser --browser-profile openclaw snapshot --target-id TAB_ID
-```
-
-Substitute your workflow's profile name in both commands and replace `TAB_ID`
-with the ID returned by `open`. Once the example page renders, reopen the saved work in
-that same profile and check for the expected signed-in workspace. Each managed
-profile has its own site session. If the site already accepted a job before
-navigation stalled, check its status before submitting it again.
-
 ## Output directory errors
 
 If an output fails with `Invalid path: must stay within output directory`, set
@@ -91,20 +68,29 @@ Common examples:
   - `open`, `navigate`, snapshot, or tab-opening flows fail with a browser/network policy error while `start` and `tabs` still work
   - An address typed into a tab the agent has used shows the browser's "is blocked" page with `ERR_BLOCKED_BY_CLIENT`: the [SSRF policy](/tools/browser/configuration#ssrf-policy) denies that address. Open it in a new tab, or allow the host with `browser.ssrfPolicy.allowedHostnames`.
 
-Use this minimal sequence to separate the two:
+Run these checks with the browser profile used by the affected workflow. Replace
+`TAB_ID` with the ID returned by `open`.
 
 ```bash
 openclaw browser --browser-profile openclaw start
 openclaw browser --browser-profile openclaw tabs
 openclaw browser --browser-profile openclaw open https://example.com
+openclaw browser --browser-profile openclaw snapshot --target-id TAB_ID
 ```
 
 How to read the results:
 
 - If `start` fails with `not reachable after start`, troubleshoot CDP readiness first.
 - If `start` succeeds but `tabs` fails, the control plane is still unhealthy. Treat this as a CDP reachability problem, not a page-navigation problem.
-- If `start` and `tabs` succeed but `open` or `navigate` fails, inspect the navigation error. For a public HTTPS page that times out on macOS, see [HTTPS hangs on macOS while Chrome responds locally](#https-hangs-on-macos-while-chrome-responds-locally).
-- If `start`, `tabs`, and `open` all succeed, the basic managed-browser control path is healthy.
+- If navigation reports a policy denial, inspect the rejected destination and the [SSRF policy](/tools/browser/configuration#ssrf-policy).
+- If the snapshot contains the example page's text, HTTPS navigation and page inspection worked in this profile. For a signed-in workflow, reopen the saved page in that profile and confirm the expected workspace is visible.
+
+On macOS, if Chrome displays `chrome://version` but public HTTPS pages time out,
+check the login keychain in the desktop session on the Mac running Chrome. If
+it is locked, unlock it in Keychain Access and repeat the public-page check.
+While HTTPS is stalled, you can [sample the Chrome process in Activity Monitor](https://support.apple.com/guide/activity-monitor/run-system-diagnostics-actmntr2225/mac).
+A sample repeatedly waiting in `copy_certificates_from_keychain` is evidence
+that Chrome is waiting for macOS to load certificates.
 
 A cold Playwright connection must initialize every existing page in the profile.
 If a renderer is unresponsive, even a snapshot of a healthy tab can time out.
