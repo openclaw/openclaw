@@ -581,14 +581,32 @@ describe("durable pre-reply run failure", () => {
         provider: "openai",
         failoverReason: "format",
         providerRuntimeFailureKind: "schema",
+        errorKind: "timeout",
+        stopReason: "aborted-partial-persistence-failed",
       };
       await persistGatewaySessionLifecycleEvent({
         ...target,
-        event: { ...event, data: { ...event.data, error: providerError, errorObservation: cause } },
+        event: {
+          ...event,
+          data: {
+            ...event.data,
+            error: providerError,
+            errorKind: cause.errorKind,
+            stopReason: cause.stopReason,
+            errorObservation: {
+              provider: cause.provider,
+              failoverReason: cause.failoverReason,
+              providerRuntimeFailureKind: cause.providerRuntimeFailureKind,
+              rawErrorPreview: "PRIVATE_PROVIDER_BODY",
+            },
+          },
+        },
       });
-      expect(await reports()).toMatchObject([
-        { details: { error: expect.stringContaining("Unsupported parameter") } },
+      const recorded = await reports();
+      expect(recorded).toMatchObject([
+        { details: { error: expect.stringContaining("Unsupported parameter"), cause } },
       ]);
+      expect(JSON.stringify(recorded)).not.toContain("PRIVATE_PROVIDER_BODY");
       const visible = projectChatDisplayMessages(
         await readSessionMessagesAsync(target, { mode: "full", reason: "failure presentation" }),
       );
@@ -923,6 +941,19 @@ async function createCliHistoryFixture() {
 }
 
 describe("CLI history through Gateway terminal persistence", () => {
+  const timeoutReceipt = {
+    customType: "run-failed-before-reply",
+    content:
+      "⚠️ The request took too long. Check the conversation for any completed work before trying again.",
+    display: true,
+    excludeFromContext: true,
+    details: {
+      runId: "cli-timeout-run",
+      error: "Run timed out",
+      errorKind: "timeout",
+      cause: { errorKind: "timeout", stopReason: "timeout" },
+    },
+  };
   it.each(["end", "error"] as const)(
     "retains same-account context after %s outside the CLI stack",
     async (phase) => {
@@ -941,21 +972,7 @@ describe("CLI history through Gateway terminal persistence", () => {
         const transcript = await loadTranscriptEvents(f.cliTarget);
         expect(
           transcript.filter((entry) => isRecord(entry) && entry.type === "custom_message"),
-        ).toEqual([
-          expect.objectContaining({
-            customType: "run-failed-before-reply",
-            content:
-              "⚠️ The request took too long. Check the conversation for any completed work before trying again.",
-            display: true,
-            excludeFromContext: true,
-            details: {
-              runId: "cli-timeout-run",
-              error: "Run timed out",
-              errorKind: "timeout",
-              cause: { errorKind: "timeout", stopReason: "timeout" },
-            },
-          }),
-        ]);
+        ).toEqual([expect.objectContaining(timeoutReceipt)]);
         const otherAccount = await f.laterContext("account-b");
         expect(otherAccount.reseedMessages).toEqual([]);
         expect(otherAccount.durableContext).toBeUndefined();
@@ -980,20 +997,7 @@ describe("CLI history through Gateway terminal persistence", () => {
       release.resolve();
       await finish;
       expect(await loadTranscriptEvents(f.cliTarget)).toContainEqual(
-        expect.objectContaining({
-          type: "custom_message",
-          customType: "run-failed-before-reply",
-          content:
-            "⚠️ The request took too long. Check the conversation for any completed work before trying again.",
-          display: true,
-          excludeFromContext: true,
-          details: {
-            runId: "cli-timeout-run",
-            error: "Run timed out",
-            errorKind: "timeout",
-            cause: { errorKind: "timeout", stopReason: "timeout" },
-          },
-        }),
+        expect.objectContaining({ type: "custom_message", ...timeoutReceipt }),
       );
     });
   });

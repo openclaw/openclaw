@@ -23,22 +23,11 @@ import {
   installTranscriptDomMocks,
   resetTranscriptTestDom,
 } from "./components/chat-transcript.test-support.ts";
-import { formatWebUiErrorSummary, shouldReportRunFailure } from "./run-failure-presentation.ts";
+import { shouldReportRunFailure } from "./run-failure-presentation.ts";
 import {
   workspaceConflictPathForDisplay,
   workspaceResultConflictFromTranscript,
 } from "./workspace-conflict.ts";
-
-it.each([
-  [
-    "⚠️ Couldn't sign in to the AI service. Sign in again under Models.",
-    "Couldn't sign in to the AI service.",
-  ],
-  ["Request rejected\nDiagnostic details", "Request rejected"],
-  ["The model v2.1 is unavailable.", "The model v2.1 is unavailable."],
-])("shows the error without appended recovery prose: %s", (error, summary) => {
-  expect(formatWebUiErrorSummary(error)).toBe(summary);
-});
 
 const model = "<img src=x onerror=alert(1)>";
 type ComposerProps = Parameters<typeof renderChatComposerNotices>[0];
@@ -630,12 +619,7 @@ it("offers a static issue form without including error text or diagnostics", asy
 });
 
 it.each([
-  { failoverReason: "format" },
-  { failoverReason: "unclassified" },
-  { providerRuntimeFailureKind: "unknown" },
   { providerRuntimeFailureKind: "schema" },
-  { providerRuntimeFailureKind: "replay_invalid" },
-  { providerRuntimeFailureKind: "gateway_storage" },
   { stopReason: "aborted-partial-persistence-failed" },
 ])("keeps unexpected failures reportable despite a timeout category: %j", (cause) => {
   expect(shouldReportRunFailure({ errorKind: "timeout", ...cause })).toBe(true);

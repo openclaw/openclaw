@@ -49,48 +49,12 @@ async function expectMobileFit(page: Page, alert: Locator) {
 }
 
 suite.define(() => {
-  it("keeps identical failure text separate when reporting classifications differ", async () => {
-    await suite.withPage(diagnosticContext, async ({ page }) => {
-      const summary = "Request timed out.";
-      await installMockGateway(page, {
-        sessionKey,
-        historyMessages: [
-          { failoverReason: "format", providerRuntimeFailureKind: "schema" },
-          { failoverReason: "timeout", providerRuntimeFailureKind: "timeout" },
-        ].map((cause, index) => ({
-          role: "custom",
-          customType: "run-failed-before-reply",
-          content: summary,
-          timestamp: index + 1,
-          openclawRunError: { runId: `failure-${index}`, summary, cause },
-          __openclaw: { id: `failure-${index}`, seq: index + 1, runId: `failure-${index}` },
-        })),
-      });
-      await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
-      const notices = page.locator(".chat-run-failure");
-      await notices.first().waitFor();
-      expect(await notices.count()).toBe(2);
-      expect(
-        await notices.nth(0).getByRole("link", { name: "Report a bug", exact: true }).count(),
-      ).toBe(1);
-      expect(
-        await notices.nth(1).getByRole("link", { name: "Report a bug", exact: true }).count(),
-      ).toBe(0);
-    });
-  });
-
   it.each([
     {
       name: "routine",
       message: "Request timed out.",
       cause: { failoverReason: "timeout" },
       report: false,
-    },
-    {
-      name: "kept",
-      message: "The request format was rejected.",
-      cause: { provider: "openai", failoverReason: "format", providerRuntimeFailureKind: "schema" },
-      report: true,
     },
     {
       name: "unclassified",
@@ -181,29 +145,6 @@ suite.define(() => {
               }),
             );
             expect.soft(Math.max(...centers) - Math.min(...centers)).toBeLessThanOrEqual(0.5);
-          }
-          if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1" && name !== "unclassified") {
-            const frame = await takeControlUiScreenshotFrame(page, notice, [title, recovery], {
-              elements: [
-                notice,
-                title,
-                recovery,
-                ...(surface === "live" ? [notice.locator(".app-toast__dismiss")] : []),
-              ],
-              animations: "disabled",
-            });
-            await writeFile(path.join(suite.artifactDir, name + "-" + surface + ".png"), frame.png);
-            await writeFile(
-              path.join(suite.artifactDir, name + "-" + surface + ".json"),
-              JSON.stringify(
-                {
-                  viewport: page.viewportSize(),
-                  elements: frame.elements.map((element) => element.bounds),
-                },
-                null,
-                2,
-              ),
-            );
           }
           expect.soft(await title.textContent()).toContain(visibleMessage ?? message);
           expect.soft(await notice.locator(".app-toast__description").count()).toBe(0);

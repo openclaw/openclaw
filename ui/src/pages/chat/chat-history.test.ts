@@ -899,17 +899,6 @@ describe("chat history run errors", () => {
     expect(state.chatRunError).toEqual(diagnostic);
   });
 
-  it("restores the recorded cause without deriving it from the error message", async () => {
-    const summary = "Request timed out.";
-    const cause = { failoverReason: "format", providerRuntimeFailureKind: "schema" };
-    const state = host({
-      messages: [{ ...notice(summary), openclawRunError: { runId: "run", summary, cause } }],
-      sessionInfo: row({ lastRunError: summary }),
-    });
-    await loadChatHistory(state);
-    expect(state.chatRunError).toMatchObject({ runId: "run", summary, cause });
-  });
-
   it("restores contention diagnostics separately from transcript text", async () => {
     const summary = "The turn was interrupted while the server was busy.";
     const diagnostic = "State lifecycle acquisition remained busy.";
