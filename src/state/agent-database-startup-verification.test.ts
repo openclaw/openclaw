@@ -343,7 +343,7 @@ process.once("message", ({ pathname }) => {
           );
           // Without the ordinary-reply relay, the real native snapshot is still alive here.
           expect(scan.killed).toBe(true);
-          await withinTest(admission.pendingPreparation, signal);
+          await withinTest(Promise.resolve(admission.pendingPreparation), signal);
           await withinTest(closed.promise, signal);
           expect(scan.signalCode).toBe("SIGKILL");
           expect(readSqliteDatabaseIntegrityVerification(pathname)).toBeUndefined();
