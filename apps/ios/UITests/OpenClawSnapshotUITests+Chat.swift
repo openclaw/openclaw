@@ -494,6 +494,60 @@ extension OpenClawSnapshotUITests {
         self.assertElementHasRenderedContent(reply, named: "latest reply after Jump")
     }
 
+    func testLiveToolActivityIsCompact() throws {
+        self.launchApp(
+            for: Self.chatScreenshotTarget,
+            additionalArguments: [
+                "--openclaw-empty-chat-fixture", "--openclaw-no-reactions-fixture",
+                "--openclaw-live-tool-compact-fixture",
+            ])
+        let app = try XCTUnwrap(self.app)
+        let input = app.descendants(matching: .any)["chat-message-input"].firstMatch
+        XCTAssertTrue(input.waitForExistence(timeout: 8))
+        input.tap()
+        input.typeText("Check the files")
+        let send = app.buttons["chat-send-message"]
+        self.waitForEnabled(send)
+        send.tap()
+
+        let compact = app.buttons["chat-live-tool-activity-compact-exec"]
+        let exec = app.descendants(matching: .any).matching(NSPredicate(
+            format: "value CONTAINS %@", "printf ready")).firstMatch
+        let process = app.descendants(matching: .any)["chat-tool-activity-compact-process"].firstMatch
+        let read = app.descendants(matching: .any).matching(NSPredicate(
+            format: "value CONTAINS %@", "README.md")).firstMatch
+        let first = XCTNSPredicateExpectation(
+            predicate: NSPredicate { _, _ in exec.exists || compact.exists }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [first], timeout: 8), .completed)
+        self.attachScreenshot(named: "live-one-call")
+        let multiple = XCTNSPredicateExpectation(
+            predicate: NSPredicate { _, _ in
+                read.exists || (compact.exists && compact.label == "Read README.md")
+            },
+            object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [multiple], timeout: 10), .completed)
+        self.attachScreenshot(named: "live-mixed-collapsed")
+
+        XCTAssertTrue(compact.exists, "LIVE_TOOLS_NOT_GROUPED")
+        if compact.exists {
+            XCTAssertEqual(compact.label, "Read README.md")
+            XCTAssertFalse(process.exists)
+            compact.tap()
+            XCTAssertTrue(read.waitForExistence(timeout: 4))
+            XCTAssertTrue((read.value as? String)?.contains("Working") == true)
+            XCTAssertTrue(process.exists)
+            XCTAssertEqual(read.label, "Read")
+            XCTAssertEqual(process.label, "Process")
+            if read.exists, process.exists {
+                XCTAssertLessThan(read.frame.midY - process.frame.midY, 44)
+            }
+            self.attachScreenshot(named: "live-mixed-expanded")
+        }
+
+        XCTAssertTrue(app.staticTexts["The checks are complete."].waitForExistence(timeout: 26))
+        self.attachScreenshot(named: "live-finished")
+    }
+
     func testAnthropicWorkChunksKeepNarrationVisibleInOrder() throws {
         self.launchApp(
             for: Self.chatScreenshotTarget,

@@ -54,7 +54,7 @@ struct ChatToolActivityItem: Identifiable, Equatable {
         case "failed": return .failed
         case "blocked": return .blocked
         case "skipped": return .skipped
-        default: return .unavailable
+        default: return self.isLive && self.state == .running ? .running : .unavailable
         }
     }
 
@@ -90,7 +90,7 @@ extension ChatToolActivityItem {
             arguments: call.args,
             details: nil,
             resultText: nil,
-            state: call.activity == nil && !call.isComplete || call.activity?.status == "running" ? .running :
+            state: !call.isComplete && call.activity?.phase != "end" || call.activity?.status == "running" ? .running :
                 call.activity?.status == "completed" ? .finished :
                 call.activity?.status == "failed" || call.activity?.status == "blocked" ? .failed : .unavailable,
             liveDiffStat: call.diffStat,
@@ -385,9 +385,13 @@ extension OpenClawChatMessage {
 enum ChatToolActivity {
     static func items(
         message: OpenClawChatMessage,
-        liveTools: [OpenClawChatPendingToolCall] = []) -> [ChatToolActivityItem]
+        liveTools: [OpenClawChatPendingToolCall] = [],
+        assumesPendingInActiveRun: Bool = false) -> [ChatToolActivityItem]
     {
-        self.recordedItems(message: message, liveTools: liveTools).filter { !$0.isYieldContext }
+        self.recordedItems(
+            message: message,
+            liveTools: liveTools,
+            assumesPendingInActiveRun: assumesPendingInActiveRun).filter { !$0.isYieldContext }
     }
 
     /// A yield receipt's details when they carry its status, else the leading JSON object of its
@@ -430,7 +434,8 @@ enum ChatToolActivity {
 
     static func recordedItems(
         message: OpenClawChatMessage,
-        liveTools: [OpenClawChatPendingToolCall] = []) -> [ChatToolActivityItem]
+        liveTools: [OpenClawChatPendingToolCall] = [],
+        assumesPendingInActiveRun: Bool = false) -> [ChatToolActivityItem]
     {
         // Results normally merge into their calling assistant message. Keep
         // orphan results visible when the calling message is outside history.
@@ -454,7 +459,8 @@ enum ChatToolActivity {
             results: message.content.filter(\.isToolResult),
             recordedResults: message.presentationRecordedToolResults,
             activity: message.activity,
-            liveTools: liveTools)
+            liveTools: liveTools,
+            assumesPendingInActiveRun: assumesPendingInActiveRun)
     }
 
     static func resultIsError(_ flag: Bool?, text: String?) -> Bool {
@@ -477,7 +483,8 @@ enum ChatToolActivity {
         results: [OpenClawChatMessageContent],
         recordedResults: [OpenClawChatMessageContent] = [],
         activity: [OpenClawAgentActivityItem]? = nil,
-        liveTools: [OpenClawChatPendingToolCall] = []) -> [ChatToolActivityItem]
+        liveTools: [OpenClawChatPendingToolCall] = [],
+        assumesPendingInActiveRun: Bool = false) -> [ChatToolActivityItem]
     {
         var remainingResults = Array(results.enumerated())
         var items = calls.enumerated().map { index, call in
@@ -502,7 +509,7 @@ enum ChatToolActivity {
                 resultText: result?.text,
                 state: outcome
                     .map { Self.resultIsError($0.isError, text: $0.text) ? .failed : .finished } ??
-                    live?.state ?? .unavailable,
+                    live?.state ?? (assumesPendingInActiveRun ? .running : .unavailable),
                 liveDiffStat: live?.liveDiffStat,
                 activity: live?.activity ?? activity?.first { $0.toolCallId == id },
                 activityPrepared: live == nil && activity != nil,
@@ -536,11 +543,12 @@ enum ChatToolActivity {
 
 struct ChatToolActivityRow: View, Equatable {
     let item: ChatToolActivityItem
+    var compactLive = false
 
     var body: some View {
         // Compare the item before constructing the content: its initializer prepares
         // the diff, which unchanged siblings must not repeat on every tool update.
-        ChatToolActivityRowContent(item: self.item)
+        ChatToolActivityRowContent(item: self.item, compactLive: self.compactLive)
     }
 }
 
@@ -551,6 +559,7 @@ private struct ChatToolActivityRowContent: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.openClawOpenChatSession) private var openChatSession
     let item: ChatToolActivityItem
+    private let compactLive: Bool
     private let displayCall: (name: String?, args: AnyCodable?)
     private let resolvedDiff: (lines: [ChatToolDiffLine], stat: ChatToolDiffStat?)?
     @State private var expanded = false
@@ -622,8 +631,9 @@ private struct ChatToolActivityRowContent: View {
         self.item.isPending ? self.item.liveDiffStat ?? self.resolvedDiff?.stat : self.resolvedDiff?.stat
     }
 
-    init(item: ChatToolActivityItem) {
+    init(item: ChatToolActivityItem, compactLive: Bool = false) {
         self.item = item
+        self.compactLive = compactLive
         let displayCall = ToolDisplayRegistry.displayCall(name: item.name, args: item.arguments)
         self.displayCall = displayCall
         self.resolvedDiff = ChatToolDiff.resolveDiff(
@@ -670,6 +680,7 @@ private struct ChatToolActivityRowContent: View {
                     .accessibilityElement(children: .ignore)
                     .accessibilityLabel(self.item.rowTitle)
                     .accessibilityValue(self.accessibilityValue)
+                    .accessibilityIdentifier("chat-tool-activity-\(self.item.id)")
             }
 
             if self.expanded, self.expandable {
@@ -735,13 +746,23 @@ private struct ChatToolActivityRowContent: View {
         .modifier(ChatWorkCardStyle())
     }
 
+    var disclosureLabel: some View {
+        self.rowLabel(showsResultChevron: false)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(Text([self.item.rowTitle, self.detailLine].compactMap(\.self).joined(separator: " ")))
+    }
+
     private var collapsedRow: some View {
-        HStack(alignment: .firstTextBaseline, spacing: 7) {
+        self.rowLabel(showsResultChevron: true)
+    }
+
+    private func rowLabel(showsResultChevron: Bool) -> some View {
+        HStack(alignment: self.compactLive ? .center : .firstTextBaseline, spacing: 7) {
             Group {
                 if self.item.isPending {
                     ProgressView()
                         .controlSize(.mini)
-                } else if self.expandable {
+                } else if showsResultChevron, self.expandable {
                     Image(systemName: "chevron.right")
                         .font(.system(size: 9, weight: .semibold))
                         .foregroundStyle(.secondary)
@@ -938,14 +959,40 @@ struct ChatDiffStatChips: View {
     }
 }
 
+struct ChatLiveToolActivityDisclosure: View {
+    let anchor: String
+    let items: [ChatToolActivityItem]
+
+    @State private var expanded = false
+
+    var body: some View {
+        if let headline = self.items.last(where: \.isPending) ?? self.items.last {
+            let disclosure = DisclosureGroup(isExpanded: self.$expanded) {
+                ChatToolActivityList(items: self.items, compactLive: true)
+            } label: {
+                ChatToolActivityRowContent(item: headline, compactLive: true).disclosureLabel
+            }
+            #if os(iOS)
+            disclosure
+                .disclosureGroupStyle(ChatInlineDisclosureStyle(
+                    chevron: .secondary, accessibilityID: "chat-live-tool-activity-\(self.anchor)"))
+            #else
+            disclosure
+            #endif
+        }
+    }
+}
+
 struct ChatToolActivityList: View {
     @Environment(\.openClawChatDesktopLayout) private var isDesktopLayout
     let items: [ChatToolActivityItem]
     private let isNestedToolActivity: Bool
+    private let compactLive: Bool
 
-    init(items: [ChatToolActivityItem], isNestedToolActivity: Bool = false) {
+    init(items: [ChatToolActivityItem], isNestedToolActivity: Bool = false, compactLive: Bool = false) {
         self.items = items
         self.isNestedToolActivity = isNestedToolActivity
+        self.compactLive = compactLive
     }
 
     var body: some View {
@@ -954,7 +1001,7 @@ struct ChatToolActivityList: View {
                 if run.count > 1 {
                     ChatSessionLaunchGroupRow(launches: run.compactMap { self.items[$0].sessionLaunch })
                 } else {
-                    ChatToolActivityRow(item: self.items[run[0]])
+                    ChatToolActivityRow(item: self.items[run[0]], compactLive: self.compactLive)
                         .equatable()
                 }
             }

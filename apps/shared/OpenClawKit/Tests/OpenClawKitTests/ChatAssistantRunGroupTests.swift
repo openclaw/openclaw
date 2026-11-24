@@ -165,6 +165,70 @@ struct ChatAssistantRunGroupTests {
     }
 
     @Test
+    func `live tool stretch skips quiet rows and keeps narration in place`() {
+        let narration = Self.message("assistant", at: 5, phase: "commentary")
+        let read = Self.tool("read", at: 2)
+        var hidden = Self.tool("wrapper", at: 3)
+        hidden.activity = .init(
+            itemId: "wrapper", toolCallId: "wrapper", kind: "tool", phase: "start",
+            title: "", name: "exec", status: nil, hideFromChannelProgress: true, suppressChannelProgress: nil)
+        let process = Self.tool("process", at: 4)
+        let next = Self.tool("next", at: 6)
+        let groups = ChatAssistantRunGroup.build(
+            [.message(narration)], tools: [next, process, hidden, read], liveRunID: "run",
+            hasLiveContent: true, searchActive: false, compactLiveRunIDs: ["run"])
+        let parts = groups.flatMap(\.parts)
+        #expect(parts.map(\.id) == ["read", "row:\(narration.id)", "next"])
+        if case let .liveTools(_, _, items) = parts.first {
+            #expect(items.map(\.id) == ["read", "process"])
+        } else {
+            Issue.record("Adjacent visible tools must share a live disclosure")
+        }
+    }
+
+    @Test
+    func `refreshed active history keeps pending calls and inline results in one stretch`() {
+        let exec = OpenClawChatMessage(
+            role: "assistant", content: [.init(type: "toolcall", id: "exec", name: "exec")],
+            timestamp: 2, transcriptRunID: "run")
+        let thinking = OpenClawChatMessage(
+            role: "assistant", content: [.init(type: "thinking", thinking: "")],
+            timestamp: 3, transcriptRunID: "run")
+        let process = OpenClawChatMessage(
+            role: "assistant",
+            content: [
+                .init(type: "toolcall", id: "process", name: "process"),
+                .init(type: "tool_result", text: "ready", id: "process"),
+            ],
+            timestamp: 4, transcriptRunID: "run")
+        let rows = ChatTranscriptRow.build(from: [exec, thinking, process])
+        let groups = ChatAssistantRunGroup.build(
+            rows, tools: [], liveRunID: "run", hasLiveContent: true, searchActive: false,
+            compactLiveRunIDs: ["run"])
+        let parts = groups.flatMap(\.parts)
+        #expect(parts.count == 1)
+        if case let .liveTools(_, _, items) = parts.first {
+            #expect(items.map(\.id) == ["exec", "process"])
+            #expect(items.map(\.displayState) == [.running, .finished])
+        } else {
+            Issue.record("Refreshed live history should stay in a single disclosure")
+        }
+        #expect(ChatToolActivity.items(message: exec).first?.displayState == .unavailable)
+    }
+
+    @Test
+    func `unsettled live activity without a canonical outcome is running`() {
+        var call = Self.tool("read", at: 2)
+        call.activity = .init(
+            itemId: "read", toolCallId: "read", kind: "tool", phase: "start",
+            title: "Read", name: "read", status: nil, hideFromChannelProgress: nil,
+            suppressChannelProgress: nil)
+        #expect(ChatToolActivityItem(live: call).displayState == .running)
+        call.isComplete = true
+        #expect(ChatToolActivityItem(live: call).displayState == .unavailable)
+    }
+
+    @Test
     func `recorded call keeps live status until its result takes over`() {
         let call = OpenClawChatMessageContent(
             type: "toolCall", text: nil, mimeType: nil, fileName: nil,

@@ -545,9 +545,9 @@ struct LocalFixtureChatTransport: OpenClawChatTransport {
     }
 }
 
-private actor LocalFixtureChatStore {
+actor LocalFixtureChatStore {
     private let fixture: LocalChatFixture
-    private var messages: [OpenClawChatMessage]
+    var messages: [OpenClawChatMessage]
     private var modelID: String
     private var thinkingLevel: String?
     private var fastMode: OpenClawChatFastMode?
@@ -567,7 +567,13 @@ private actor LocalFixtureChatStore {
         OpenClawChatCreateSessionResponse(ok: true, key: key, sessionId: "\(self.fixture.sessionIDPrefix)-\(key)")
     }
 
+    var liveReplayAwaitingHistory = false
+    var liveReplayReadHistory = false
+
     func history(sessionKey: String) throws -> OpenClawChatHistoryPayload {
+        if self.liveReplayAwaitingHistory {
+            self.liveReplayReadHistory = true
+        }
         let owner = ScreenshotFixtureMode.progressCardEnabled || ScreenshotFixtureMode.progressBarEnabled
             ? self.fixture.defaultAgentID : nil
         let normalizedSessionKey = Self.normalizedSessionKey(sessionKey, fallback: self.fixture.sessionKey)
@@ -685,7 +691,9 @@ private actor LocalFixtureChatStore {
                 agentId: owner),
             inFlightRun: startupSnapshot ?? self.duplicateReplaySessionKey.flatMap { _ in
                 self.activeRunID.map { OpenClawChatInFlightRun(runId: $0, text: "") }
-            } ?? (ProcessInfo.processInfo.arguments.contains("--openclaw-streaming-layout-fixture")
+            } ?? (ProcessInfo.processInfo.arguments.contains("--openclaw-live-tool-compact-fixture")
+                ? self.activeRunID.map { OpenClawChatInFlightRun(runId: $0, text: "") }
+                : nil) ?? (ProcessInfo.processInfo.arguments.contains("--openclaw-streaming-layout-fixture")
                 ? self.activeRunID.map {
                     OpenClawChatInFlightRun(
                         runId: $0,
@@ -725,6 +733,13 @@ private actor LocalFixtureChatStore {
             self.activeRunID = runId
             self.duplicateReplaySessionKey = sessionKey
             self.duplicateReplayStarted = false
+            return OpenClawChatSendResponse(runId: runId, status: "pending")
+        }
+        if self.fixture.sessionIDPrefix == "screenshot-fixture",
+           ProcessInfo.processInfo.arguments.contains("--openclaw-live-tool-compact-fixture")
+        {
+            self.activeRunID = runId
+            Task { await self.replayLiveToolActivity(sessionKey: sessionKey, runId: runId) }
             return OpenClawChatSendResponse(runId: runId, status: "pending")
         }
         let trimmed = message.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -826,7 +841,7 @@ private actor LocalFixtureChatStore {
     }
 
     private var heldInitialRun = false
-    private var activeRunID: String?
+    var activeRunID: String?
     private var eventContinuations: [UUID: AsyncStream<OpenClawChatTransportEvent>.Continuation] = [:]
 
     func setEventContinuation(_ continuation: AsyncStream<OpenClawChatTransportEvent>.Continuation) {
@@ -886,7 +901,7 @@ private actor LocalFixtureChatStore {
         self.eventContinuations[id] = nil
     }
 
-    private func publish(_ event: OpenClawChatTransportEvent) {
+    func publish(_ event: OpenClawChatTransportEvent) {
         for continuation in self.eventContinuations.values {
             continuation.yield(event)
         }
