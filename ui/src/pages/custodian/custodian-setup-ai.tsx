@@ -273,14 +273,15 @@ export function ConnectAi(props: {
   const [showMore, setShowMore] = createSignal(false);
   // The attempt that was current when the user last acted; only later results belong here.
   const [openedWith, setOpenedWith] = createSignal<unknown>(null);
-  // The owner notifies on every change; rows are rebuilt only for a new detection, so an
-  // open card keeps its form state.
   const detection = createMemo(() => props.setup().detection);
   const picker = createMemo(() => {
     const current = detection();
     return current ? setupPicker(current) : null;
   });
-  const openRow = () => picker()?.rows.find((row) => row.id === openId());
+  const openRows = () => {
+    const row = picker()?.rows.find((row) => row.id === openId());
+    return row ? [row] : [];
+  };
   const mark = () => {
     if (props.setup().testing === null) {
       setOpenedWith(() => props.setup().attempt);
@@ -449,15 +450,18 @@ export function ConnectAi(props: {
       </>
     );
   };
-  const card = (row: Row) => {
-    const action = row.action;
-    const chatgptSignIn = () => picker()?.chatgptSignIn;
+  function ProviderCard(card: { row: Row }) {
+    const action = () => card.row.action;
+    const apiKeyAction = () => {
+      const current = action();
+      return current.type === "api-key" ? current : undefined;
+    };
     return (
       <div class="callout custodian-setup__stack">
         <div class="custodian-setup__row">
-          {icon(row)}
+          {icon(card.row)}
           <span class="option-card__choice-copy">
-            <strong>{heading(row)}</strong>
+            <strong>{heading(card.row)}</strong>
             <span
               class="option-card__description"
               style={{ color: failure() ? "var(--warn)" : undefined }}
@@ -466,7 +470,7 @@ export function ConnectAi(props: {
                 ? t("custodian.autoSetup.notConnected")
                 : working()
                   ? t("custodian.autoSetup.connecting")
-                  : subtitle(row, true)}
+                  : subtitle(card.row, true)}
             </span>
           </span>
         </div>
@@ -475,13 +479,13 @@ export function ConnectAi(props: {
             setup={props.setup}
             actions={props.actions}
             retry={
-              action.type === "candidate" || action.type === "sign-in"
-                ? () => start(row)
+              action().type === "candidate" || action().type === "sign-in"
+                ? () => start(card.row)
                 : undefined
             }
           />
         </Show>
-        <Show when={action.type === "api-key" ? action : undefined}>
+        <Show when={apiKeyAction()}>
           {(keyAction) => (
             <KeyForm
               providers={picker()?.manualProviders ?? []}
@@ -495,10 +499,13 @@ export function ConnectAi(props: {
           )}
         </Show>
         <Show when={!working()}>
-          <Show when={action.type === "local"}>{localCard()}</Show>
+          <Show when={action().type === "local"}>{localCard()}</Show>
           <Show
             when={
-              row.id === "chatgpt" && action.type === "candidate" && failure() && chatgptSignIn()
+              card.row.id === "chatgpt" &&
+              action().type === "candidate" &&
+              failure() &&
+              picker()?.chatgptSignIn
             }
           >
             {(option) => (
@@ -509,7 +516,7 @@ export function ConnectAi(props: {
                 disabled={props.busy()}
                 onClick={() => {
                   mark();
-                  props.actions.signIn(option(), title(row));
+                  props.actions.signIn(option(), title(card.row));
                 }}
               >
                 {t("custodian.autoSetup.signInChatgpt")}
@@ -519,7 +526,7 @@ export function ConnectAi(props: {
         </Show>
       </div>
     );
-  };
+  }
   const moreProviders = () => {
     const current = picker()!;
     return (
@@ -587,8 +594,9 @@ export function ConnectAi(props: {
             </>
           )}
         </Show>
-        <Show
-          when={openRow()}
+        <For
+          each={openRows()}
+          keyed={(row) => row.id}
           fallback={
             <Show
               when={!unplaced()}
@@ -662,10 +670,10 @@ export function ConnectAi(props: {
           {(row) => (
             <>
               {backLink()}
-              {card(row())}
+              <ProviderCard row={row()} />
             </>
           )}
-        </Show>
+        </For>
       </div>
     </>
   );

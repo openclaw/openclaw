@@ -318,35 +318,10 @@ suite.define(() => {
     });
   });
 
-  it("connects an Anthropic API key from the API key card", async () => {
+  it("keeps the API-key draft when discovery finishes and can retry a rejected key", async () => {
     await suite.withPage(options, async ({ page }) => {
       const gateway = await installGateway(page, {
-        methodResponses: { "openclaw.setup.activate.start": activated("anthropic/claude-sonnet") },
-      });
-      await page.goto(`${suite.server.baseUrl}custodian?onboarding=1`);
-      const card = page.locator(".custodian-setup");
-      await nextStep(card, "Where should your assistant run?");
-      await nextStep(card, "Connect your AI");
-      await row(card, "API key").click();
-      await card.getByLabel("Provider and access method").selectOption({
-        label: "Anthropic: API key",
-      });
-      const key = card.getByLabel("API key", { exact: true });
-      await key.fill("sk-test-not-real");
-      await capture(page, "setup-9-key-card", card, [key]);
-      await card.getByRole("button", { name: "Connect", exact: true }).click();
-      expect((await gateway.waitForRequest("openclaw.setup.activate.start")).params).toMatchObject({
-        kind: "api-key",
-        authChoice: "anthropic-api-key",
-        apiKey: "sk-test-not-real",
-      });
-      await card.getByRole("heading", { name: "You’re all set!" }).waitFor();
-    });
-  });
-
-  it("keeps the chosen provider after a failed API-key activation", async () => {
-    await suite.withPage(options, async ({ page }) => {
-      const gateway = await installGateway(page, {
+        deferredMethods: ["openclaw.setup.detect"],
         methodResponses: {
           "openclaw.setup.activate.start": {
             sequence: [
@@ -360,13 +335,36 @@ suite.define(() => {
       const card = page.locator(".custodian-setup");
       await nextStep(card, "Where should your assistant run?");
       await nextStep(card, "Connect your AI");
+      await gateway.waitForRequest("openclaw.setup.detect");
       await row(card, "API key").click();
       const provider = card.getByLabel("Provider and access method");
       const key = card.getByLabel("API key", { exact: true });
-      const connect = card.getByRole("button", { name: "Connect", exact: true });
       await provider.selectOption({ label: "Anthropic: API key" });
-      await key.fill("sk-test-rejected");
+      await key.fill("sk-test-draft");
+
+      await gateway.resolveDeferred("openclaw.setup.detect", {
+        ...detected,
+        manualProviders: [
+          ...detected.manualProviders,
+          {
+            id: "openrouter-api-key",
+            brandId: "openrouter",
+            groupLabel: "OpenRouter",
+            label: "OpenRouter API key",
+          },
+        ],
+      } satisfies Detection);
+      await provider.getByRole("option", { name: /OpenRouter/ }).waitFor({ state: "attached" });
+      expect.soft(await provider.inputValue()).toBe("anthropic-api-key");
+      expect(await key.inputValue()).toBe("sk-test-draft");
+      const connect = card.getByRole("button", { name: "Connect", exact: true });
+      await capture(page, "setup-9-key-card", card, [key]);
       await connect.click();
+      expect((await gateway.waitForRequest("openclaw.setup.activate.start")).params).toMatchObject({
+        kind: "api-key",
+        authChoice: "anthropic-api-key",
+        apiKey: "sk-test-draft",
+      });
       await card.getByRole("alert").getByText("That key didn’t work").waitFor();
       expect
         .soft(await provider.locator("option:checked").textContent())
