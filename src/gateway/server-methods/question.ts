@@ -24,6 +24,7 @@ import {
   listSecretStoreEntries,
   SecretStoreValidationError,
 } from "../../secrets/store/secret-store.js";
+import { QUESTION_COMPOSER_REPLACEMENT } from "../../shared/question-composer-replacement.js";
 import { isNamedOperatorRoleEnforcementEnabled } from "../operator-role-enforcement.js";
 import { authorizeGatewaySessionCreation, hasOperatorBoundary } from "../operator-role-policy.js";
 import { canSelectQuestion, usesOwnRunQuestionAccess } from "../question-access.js";
@@ -494,7 +495,10 @@ export function createQuestionHandlers(
         await selected.withCurrent(() => {
           if ("cancel" in request) {
             authorize.assertCurrent();
-            respond(true, manager.cancel(request.id, request.resolvedBy), undefined);
+            // Only an accepted chat.send can label a cancellation as replacement input.
+            const resolvedBy =
+              request.resolvedBy === QUESTION_COMPOSER_REPLACEMENT ? undefined : request.resolvedBy;
+            respond(true, manager.cancel(request.id, resolvedBy), undefined);
             return;
           }
           const secretQuestion = question.questions[0];

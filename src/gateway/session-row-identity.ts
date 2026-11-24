@@ -65,13 +65,22 @@ export function freezeSessionRowPatch(
   previous: Readonly<GatewaySessionRow>,
   patch: Partial<GatewaySessionRow>,
 ): Readonly<GatewaySessionRow> {
-  const fields = Object.keys(patch);
-  const row = fields.some(
-    (field) => Reflect.get(patch, field) === undefined && Object.hasOwn(previous, field),
-  )
-    ? definedSessionRowFields({ ...previous, ...patch })
-    : { ...previous, ...definedSessionRowFields(patch) };
-  return freezeSessionRow(row, previous, fields);
+  let row: GatewaySessionRow | undefined;
+  let cleared = false;
+  for (const field of Object.keys(patch)) {
+    const value: unknown = Reflect.get(patch, field);
+    if (
+      value === undefined
+        ? !Object.hasOwn(previous, field)
+        : sameRowField(value, Reflect.get(previous, field))
+    ) {
+      continue;
+    }
+    row ??= { ...previous };
+    Reflect.set(row, field, freezeTrustedJsonSnapshot(value));
+    cleared ||= value === undefined;
+  }
+  return row ? Object.freeze(cleared ? definedSessionRowFields(row) : row) : previous;
 }
 
 /** Previous rows are deeply frozen publications; only new facts need freezing. */

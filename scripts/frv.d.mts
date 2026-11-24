@@ -9,7 +9,7 @@ export interface FrvChildStatus extends Record<string, unknown> {
   key: string;
   plannedRunAttempt: number | null;
   runId: string;
-  status: "active" | "failed" | "missing" | "passed";
+  status: "active" | "failed" | "missing" | "passed" | "waived";
 }
 
 export interface FrvContinuationStatus {

@@ -439,9 +439,31 @@ function isIndependentMarkdownCompanion(file: string, cwd: string): boolean {
 }
 
 // Agent, compaction, prompt and transport behavior tests sit 3-10 imports from these owners
-// (#204252), past the two-import walk. Their importer closure reaches most runtime suites.
+// (#204252), past the two-import walk; their full importer closure is nearly the whole suite.
+// A change here selects every importer in its own directory plus this declared behavior set.
 const TRANSITIVE_IMPORTER_OWNERS =
   /^(?:src\/agents\/|src\/auto-reply\/reply\/agent-runner|packages\/agent-core\/src\/harness\/compaction\/|packages\/ai\/src\/transports\/)/u;
+// Globs name test inventories; a `.test.ts` suffix would make them literal test targets.
+const DECLARED_BEHAVIOR_TESTS = [
+  "src/**/*prompt-cache*",
+  "src/**/*compaction*",
+  "packages/**/*prompt-cache*",
+  "packages/**/*compaction*",
+  "src/auto-reply/reply/agent-runner-required-maintenance.pending-input.test.ts",
+  "src/cron/session-context-accounting.gateway.integration.test.ts",
+];
+// Owed results are delivered by background exec completion in src/agents, past the two-import
+// walk: #204265 changed src/sessions/owed.ts with green PR CI while these tests went red on main.
+// A change here selects only this declared set, not its directory's importers.
+const OWED_RESULT_OWNERS = /^src\/sessions\/owed\.ts$/u;
+const OWED_RESULT_BEHAVIOR_TESTS = [
+  "src/agents/bash-process-durable.test.ts",
+  "src/agents/bash-tools.exec-notify.store-failure.test.ts",
+  "src/agents/bash-tools.exec-runtime.test.ts",
+  "src/agents/bash-tools.exec.egress-lifecycle.test.ts",
+  "src/agents/bash-tools.notify-on-exit-ack.test.ts",
+  "src/agents/bash-tools.test.ts",
+];
 
 /** Resolve owner areas and transitive consumers once, before projecting platform jobs. */
 export function resolveChangedNodeTestTargets(
@@ -507,6 +529,21 @@ export function resolveChangedNodeTestTargets(
     targets: policyTargets,
   });
   recordSelection({ rule: "fixed-smoke", input: "PR", targets: smoke });
+  // A test-only edit runs itself; only owner source selects the declared behavior set.
+  const sourcePaths = paths.filter((file) => !isTestFileTarget(file));
+  const behaviorOwners = sourcePaths.filter((file) => TRANSITIVE_IMPORTER_OWNERS.test(file));
+  const owedOwners = sourcePaths.filter((file) => OWED_RESULT_OWNERS.test(file));
+  const declaredBehavior = aggressive
+    ? [
+        ...(behaviorOwners.length > 0 ? DECLARED_BEHAVIOR_TESTS : []),
+        ...(owedOwners.length > 0 ? OWED_RESULT_BEHAVIOR_TESTS : []),
+      ]
+    : [];
+  recordSelection({
+    rule: "declared-behavior",
+    input: [...behaviorOwners, ...owedOwners].join(", "),
+    targets: declaredBehavior,
+  });
   const owners = [
     ...new Set([
       ...targetPlan.targets,
@@ -524,6 +561,7 @@ export function resolveChangedNodeTestTargets(
         ? ["test/vitest-projects-config.test.ts"]
         : []),
       ...policyTargets,
+      ...declaredBehavior,
     ]),
   ];
   let inventory: string[] | undefined;
@@ -563,6 +601,12 @@ export function resolveChangedNodeTestTargets(
     return target.includes("*") ? allFiles().filter((file) => path.matchesGlob(file, target)) : [];
   };
   const expanded = new Map(owners.map((target) => [target, expandTarget(target)]));
+  // The declared behavior set is an explicit owner opt-in, including PR-exempt files.
+  for (const target of declaredBehavior) {
+    for (const file of expanded.get(target) ?? []) {
+      optInTargets.add(file);
+    }
+  }
   const files = [...expanded.values()].flat();
   const selected = [...new Set([...files, ...smoke])]
     .filter(

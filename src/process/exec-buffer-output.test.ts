@@ -28,6 +28,20 @@ describe("owned command output bytes", () => {
     }
   });
 
+  it("keeps the raw multibyte prefix when the byte cap stops the command", async () => {
+    const result = await runCommandBuffered(
+      [process.execPath, "-e", "process.stdout.write(Buffer.from('A\\u{1F600}'));"],
+      { timeoutMs: 10_000, maxOutputBytes: { stdout: 3 } },
+    );
+    expect(result).toMatchObject({
+      stdout: Buffer.from([0x41, 0xf0, 0x9f]),
+      stderr: Buffer.alloc(0),
+      code: null,
+      termination: "output-limit",
+      outputLimitStream: "stdout",
+    });
+  });
+
   it("keeps incomplete UTF-8 at EOF as the exact observed bytes", async () => {
     const observed: Buffer[] = [];
     const result = await runUtf8CommandBuffersWithTimeout(

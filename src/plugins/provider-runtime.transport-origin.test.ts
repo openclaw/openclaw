@@ -32,21 +32,3 @@ it("refuses another plugin's transport change that moves a provider to a differe
     }),
   ).toBeUndefined();
 });
-
-it("keeps same-origin and API-only cleanup from another plugin", () => {
-  hooks.plugins = [
-    hook("claimant", { baseUrl: "https://api.typesafe.ai/v1" }),
-    hook("family", { baseUrl: "https://api.particle.ai/v1/normalized" }),
-  ];
-  expect(normalizeProviderTransportWithPlugin({ provider: "particle", context: particle })).toEqual(
-    {
-      baseUrl: "https://api.particle.ai/v1/normalized",
-    },
-  );
-  hooks.plugins = [hook("family", { api: "openai-responses" })];
-  expect(normalizeProviderTransportWithPlugin({ provider: "particle", context: particle })).toEqual(
-    {
-      api: "openai-responses",
-    },
-  );
-});

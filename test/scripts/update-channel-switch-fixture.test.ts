@@ -15,6 +15,25 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const testNodeExecPath = resolveTestNodeExecPath();
 const assertionScript = "scripts/e2e/lib/update-channel-switch/assertions.mjs";
 
+it.each([
+  { name: "already-current", version: "2026.11.15-beta.1", status: 0 },
+  { name: "different version", version: "2026.11.10-beta.3", status: 1 },
+])("checks the beta channel switch receipt: $name", ({ version, status }) => {
+  const receipt = {
+    phase: "finished",
+    status: "skipped",
+    reason: "already-current",
+    target: { kind: "package", version },
+    steps: [{ step: "requested", status: "completed" }],
+  };
+  const result = spawnSync(
+    testNodeExecPath,
+    [assertionScript, "assert-update", "beta", "2026.11.15-beta.1"],
+    { encoding: "utf8", env: { ...process.env, UPDATE_JSON: JSON.stringify(receipt) } },
+  );
+  expect(result.status, result.stderr).toBe(status);
+});
+
 it("preserves the package-derived Git fixture identity through build and lifecycle completion", async () => {
   const root = tempDirs.make("update-channel-git-fixture-");
   const { file, write, json } = fixtureFiles(root);
@@ -126,4 +145,44 @@ it("rejects retained runtime staging at the channel update success boundary", ()
   expect(result.status).toBe(1);
   expect(result.stderr).toContain("successful update retained runtime staging entries");
   expect(readFileSync(join(staging, "previous"), "utf8")).toBe("recoverable original");
+});
+
+it("checks that a detached release uses the selected commit, not local checkout input", () => {
+  const { file, write } = fixtureFiles(tempDirs.make("update-channel-detached-"));
+  const source = file("source");
+  const release = file("release");
+  mkdirSync(source);
+  const git = (...args: string[]) =>
+    execFileSync("git", ["-C", source, ...args], { encoding: "utf8" }).trim();
+  git("init", "-q");
+  write("source/operator-update-tracked.txt", "committed content\n");
+  git("add", ".");
+  git(
+    "-c",
+    "user.name=F",
+    "-c",
+    "user.email=f@example.invalid",
+    "-c",
+    "commit.gpgsign=false",
+    "commit",
+    "-qm",
+    "fixture",
+  );
+  const sha = git("rev-parse", "HEAD");
+  git("worktree", "add", "-q", "--detach", release, sha);
+  write("source/operator-update-tracked.txt", "retain tracked edit\n");
+  write("source/operator-update-notes.tmp", "retain user notes\n");
+  const check = () =>
+    spawnSync(testNodeExecPath, [assertionScript, "assert-detached-switch", source, release, sha], {
+      encoding: "utf8",
+    });
+  expect(check().status, check().stderr).toBe(0);
+  write("source/operator-update-notes.tmp", "");
+  expect(check().stderr).toContain("source operator-update-notes.tmp changed");
+  write("source/operator-update-notes.tmp", "retain user notes\n");
+  write("source/operator-update-tracked.txt", "corrupted\n");
+  expect(check().stderr).toContain("source operator-update-tracked.txt changed");
+  write("source/operator-update-tracked.txt", "retain tracked edit\n");
+  write("release/operator-update-tracked.txt", "retain tracked edit\n");
+  expect(check().stderr).toContain("local input leaked into the release");
 });
