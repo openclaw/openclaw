@@ -83,20 +83,28 @@ it("keeps redacted diagnostics readable, stable across refreshes, and reset for 
   await waitForSolid(() => expect(view.container.querySelector("details")?.open).toBe(false));
 });
 
-it("keeps the recovery action and dismiss beside a multi-line error", async () => {
+const longError =
+  "Restore failed because the provider reported that the lease was destroyed before the reply finished.\n" +
+  "diagnostic ".repeat(40).trim();
+
+async function atWidth(width: number, run: () => Promise<void>) {
   const previous = { width: window.innerWidth, height: window.innerHeight };
-  await page.viewport(820, previous.height);
+  await page.viewport(width, previous.height);
   try {
+    await run();
+  } finally {
+    await page.viewport(previous.width, previous.height);
+  }
+}
+
+it("shows a short reply error whole, with no control to open it", async () => {
+  await atWidth(820, async () => {
     const dismiss = vi.fn();
     const view = mountSolid(() => (
       <ChatComposerNoticesContent
-        sessionKey="agent:main:main"
         connected
         messages={[]}
-        runError={{
-          runId: "run-1",
-          summary: "Error: Restore failed.\nprovider reported lease destroyed",
-        }}
+        runError={{ runId: "run-1", summary: "Error: Restore failed." }}
         onRefresh={() => {}}
         onDismissRunError={dismiss}
       />
@@ -104,40 +112,60 @@ it("keeps the recovery action and dismiss beside a multi-line error", async () =
     await waitForSolid(() =>
       expect(view.container.querySelector(".chat-error__refresh")).not.toBeNull(),
     );
+    const message = view.getByRole("alert");
+    const chevron = view.container.querySelector<HTMLButtonElement>(".chat-reply-notice__chevron")!;
+    expect(message.scrollWidth).toBeLessThanOrEqual(message.clientWidth);
+    expect(chevron).toMatchObject({ disabled: true });
+    expect(getComputedStyle(chevron).visibility).toBe("hidden");
+    const height = message.getBoundingClientRect().height;
+    message.click();
+    await waitForSolid(() => expect(message.getBoundingClientRect().height).toBe(height));
     const recovery = box(view.container, ".chat-error__refresh");
-    const message = box(view.container, ".chat-reply-notice__message");
-    expect(recovery.left).toBeGreaterThanOrEqual(message.right);
-    expect(recovery.top).toBeLessThan(message.bottom);
-    const close = view.getByRole("button", { name: "Dismiss error", exact: true });
-    expect(getComputedStyle(close).opacity).toBe("1");
-    close.click();
+    expect(recovery.left).toBeGreaterThanOrEqual(message.getBoundingClientRect().right);
+    view.getByRole("button", { name: "Dismiss error", exact: true }).click();
     expect(dismiss).toHaveBeenCalledOnce();
-  } finally {
-    await page.viewport(previous.width, previous.height);
-  }
+  });
 });
 
-it.each([300, 500])(
-  "wraps long error text without pushing recovery offscreen at %ipx",
+it.each([820, 400, 300])(
+  "keeps a long reply error on one line and opens it in place at %ipx",
   async (width) => {
-    const previous = { width: window.innerWidth, height: window.innerHeight };
-    await page.viewport(width, previous.height);
-    try {
+    await atWidth(width, async () => {
       const onRefresh = vi.fn();
+      const [summary, setSummary] = createSignal(longError);
       const view = mountSolid(() => (
         <ChatComposerNoticesContent
           connected
           messages={[]}
-          runError={{ summary: "Restore failed.\n" + "diagnostic".repeat(35) }}
+          runError={{ runId: "run-1", summary: summary() }}
           onRefresh={onRefresh}
         />
       ));
-      await waitForSolid(() =>
-        expect(view.container.querySelector(".chat-error__refresh")).not.toBeNull(),
-      );
+      const chevron = () =>
+        view.container.querySelector<HTMLButtonElement>(".chat-reply-notice__chevron")!;
+      await waitForSolid(() => expect(chevron()).toMatchObject({ disabled: false }));
       const notice = view.container.querySelector<HTMLElement>(".chat-reply-notice")!;
-      expect(notice.scrollWidth).toBeLessThanOrEqual(notice.clientWidth);
+      const message = view.getByRole("alert");
       const recovery = view.getByRole("button", { name: "Refresh", exact: true });
+      const closed = message.getBoundingClientRect().height;
+      const actionsTop = recovery.getBoundingClientRect().top;
+      expect(closed).toBeLessThanOrEqual(32);
+      expect(message.scrollWidth).toBeGreaterThan(message.clientWidth);
+      expect(message.textContent).toBe(longError);
+      expect(recovery.getBoundingClientRect().left).toBeGreaterThanOrEqual(
+        message.getBoundingClientRect().right,
+      );
+
+      message.click();
+      await waitForSolid(() => expect(chevron().getAttribute("aria-expanded")).toBe("true"));
+      expect(message.getBoundingClientRect().height).toBeGreaterThan(closed * 2);
+      expect(message.scrollWidth).toBeLessThanOrEqual(message.clientWidth);
+      expect(notice.scrollWidth).toBeLessThanOrEqual(notice.clientWidth);
+      // Opened text uses the width under the actions instead of a narrow column.
+      expect(message.getBoundingClientRect().right).toBeGreaterThan(
+        recovery.getBoundingClientRect().left,
+      );
+      expect(recovery.getBoundingClientRect().top).toBe(actionsTop);
       const bounds = recovery.getBoundingClientRect();
       expect(
         recovery.contains(
@@ -146,9 +174,25 @@ it.each([300, 500])(
       ).toBe(true);
       recovery.click();
       expect(onRefresh).toHaveBeenCalledOnce();
-    } finally {
-      await page.viewport(previous.width, previous.height);
-    }
+
+      // Selecting the error to copy it leaves it open.
+      getSelection()!.selectAllChildren(message);
+      message.click();
+      await waitForSolid(() => expect(chevron().getAttribute("aria-expanded")).toBe("true"));
+      getSelection()!.removeAllRanges();
+      chevron().click();
+      await waitForSolid(() => expect(message.getBoundingClientRect().height).toBe(closed));
+
+      message.click();
+      await waitForSolid(() => expect(chevron().getAttribute("aria-expanded")).toBe("true"));
+      setSummary("A different failure. " + longError);
+      await waitForSolid(() => {
+        expect(chevron().getAttribute("aria-expanded")).toBe("false");
+        expect(message.getBoundingClientRect().height).toBe(closed);
+      });
+      setSummary("Short failure.");
+      await waitForSolid(() => expect(chevron()).toMatchObject({ disabled: true }));
+    });
   },
 );
 

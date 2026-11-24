@@ -230,7 +230,7 @@ suite.define(() => {
       await message.waitFor();
       expect(await message.textContent()).toBe(safeError);
       expect(await message.innerText()).not.toContain("synthetic-password");
-      expect(await alert.locator("details, [aria-expanded]").count()).toBe(0);
+      expect(await alert.locator("details").count()).toBe(0);
       expect(await page.locator(".chat-thread").textContent()).toContain(prompt);
       await expectMobileFit(page, alert);
       const input = page.locator(".agent-chat__input textarea");

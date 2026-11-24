@@ -15,14 +15,22 @@ const suite = createControlUiE2eSuite({
 });
 
 suite.define(() => {
-  it.each([1280, 400])(
-    "shows the complete error and refreshes without resending at %ipx",
-    async (width) => {
+  it.each([
+    [1280, false],
+    [400, true],
+  ] as const)(
+    "keeps a long reply error on one line until it is opened at %ipx",
+    async (width, touch) => {
       await suite.withPage(
-        { viewport: { width, height: 800 }, colorScheme: "light" },
+        {
+          viewport: { width, height: 800 },
+          colorScheme: "light",
+          ...(touch ? { hasTouch: true, isMobile: true } : {}),
+        },
         async ({ page }) => {
           const sessionKey = "agent:main:main";
-          const error = "The model provider interrupted the connection.\nRequest ID: example-7942.";
+          const error =
+            "The model provider interrupted the connection before the reply finished. The example gateway returned upstream status 502.\nRequest ID: example-7942.";
           const draft = "Can you also pull out the action items?";
           const gateway = await installMockGateway(page, {
             sessionKey,
@@ -42,32 +50,58 @@ suite.define(() => {
           await page.goto(new URL("/chat/main", suite.server.baseUrl).href);
           const notice = page.locator(".chat-error");
           const message = notice.getByRole("alert");
+          const chevron = notice.getByRole("button", { name: "Error details", exact: true });
           const refresh = notice.getByRole("button", { name: "Refresh", exact: true });
           const input = page.locator(".agent-chat__input textarea");
           await message.waitFor();
           expect(await message.textContent()).toBe(error);
-          expect(await notice.locator("details, [aria-expanded]").count()).toBe(0);
           await input.fill(draft);
-          if (process.env.OPENCLAW_REPLY_PROOF_DIR) {
-            const frame = await takeControlUiScreenshotFrame(
-              page,
-              notice,
-              [message, refresh, input],
-              {
-                elements: [notice, message, refresh, input],
+          await expect.poll(() => chevron.isEnabled()).toBe(true);
+          const capture = async (name: string) => {
+            const directory = process.env.OPENCLAW_REPLY_PROOF_DIR;
+            if (directory) {
+              const frame = await takeControlUiScreenshotFrame(page, notice, [message, refresh], {
+                elements: [notice, message, refresh],
                 animations: "disabled",
-              },
-            );
-            await writeFile(
-              path.join(process.env.OPENCLAW_REPLY_PROOF_DIR, "direct-" + width + ".png"),
-              frame.png,
-            );
+              });
+              await writeFile(path.join(directory, name + "-" + width + ".png"), frame.png);
+            }
+          };
+          const opacity = () => chevron.evaluate((element) => getComputedStyle(element).opacity);
+          const closed = (await message.boundingBox())!;
+          // The card is anchored above the composer, so it grows upward when opened.
+          const actionsOffset = async () =>
+            (await refresh.boundingBox())!.y - (await notice.boundingBox())!.y;
+          const actionsTop = await actionsOffset();
+          expect(closed.height).toBeLessThanOrEqual(32);
+          if (touch) {
+            // Touch has no hover, so the control is visible from the start.
+            expect(await opacity()).toBe("1");
+            await capture("closed");
+            await message.tap();
+          } else {
+            await page.mouse.move(0, 0);
+            await expect.poll(opacity).toBe("0");
+            await capture("closed");
+            await message.hover();
+            await expect.poll(opacity).toBe("1");
+            await capture("hover");
+            await message.click();
           }
+          await expect.poll(() => chevron.getAttribute("aria-expanded")).toBe("true");
+          expect((await message.boundingBox())!.height).toBeGreaterThan(closed.height);
+          expect(await actionsOffset()).toBe(actionsTop);
+          expect(await notice.evaluate((node) => node.scrollWidth <= node.clientWidth)).toBe(true);
+          await capture("open");
           const reads = (await gateway.getRequests("chat.history")).length;
           await refresh.click();
           await gateway.waitForRequest("chat.history", { after: reads });
           expect(await gateway.getRequests("chat.send")).toHaveLength(0);
           expect(await input.inputValue()).toBe(draft);
+          expect(await chevron.getAttribute("aria-expanded")).toBe("true");
+          await chevron.press("Enter");
+          await expect.poll(() => chevron.getAttribute("aria-expanded")).toBe("false");
+          expect((await message.boundingBox())!.height).toBe(closed.height);
           await notice.getByRole("button", { name: "Dismiss error", exact: true }).click();
           await notice.waitFor({ state: "hidden" });
         },

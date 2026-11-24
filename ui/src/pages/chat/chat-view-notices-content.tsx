@@ -1,5 +1,5 @@
 import type { JSX } from "@solidjs/web";
-import { For, Show, createMemo } from "solid-js";
+import { For, Show, createMemo, createSignal, createUniqueId } from "solid-js";
 import type {
   SessionPlacementDiskSpace,
   SessionPlacementWorkerRuntimeInstall,
@@ -21,6 +21,7 @@ import { findChatSubmissionMessage } from "../../lib/chat/history-message-identi
 import { formatUiErrorDetails } from "../../lib/format-error.ts";
 import { useOptionalApplication } from "../../lib/reactive/context.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
+import { createResizeObserver } from "../../lib/reactive/observers.ts";
 import { ToastNotice } from "../../lib/toast-notice.tsx";
 import { isChatSendReconnecting } from "./chat-send-presentation.ts";
 import type { ChatComposerNoticesProps, ChatViewNoticesProps } from "./chat-view-notices.tsx";
@@ -388,15 +389,41 @@ function ChatReplyErrorNotice(props: {
   onDismiss?: () => void;
 }) {
   const app = useOptionalApplication();
+  const messageId = createUniqueId();
   const busy = () => props.error.kind === "state_contention";
   const signIn = () => props.error.kind === "auth_refresh";
-  const message = () => formatUiErrorDetails(formatWebUiIconErrorText(props.error.summary)).trim();
+  const message = createMemo(() =>
+    formatUiErrorDetails(formatWebUiIconErrorText(props.error.summary)).trim(),
+  );
+  const [line, setLine] = createSignal<HTMLElement>();
+  const [truncated, setTruncated] = createSignal(false);
+  // A different error starts on one line; history refreshes keep it open.
+  const [expanded, setExpanded] = createSignal(() => {
+    message();
+    return false;
+  });
+  const expandable = () => expanded() || truncated();
+  createResizeObserver(
+    () => {
+      // Replacement text can keep the same box, so it needs its own measurement.
+      message();
+      const element = line();
+      return element ? [element] : [];
+    },
+    ([entry]) => {
+      // Open text always fits; it keeps its control until the closed line is measured.
+      if (entry && !expanded()) {
+        setTruncated(entry.target.scrollWidth > entry.target.clientWidth);
+      }
+    },
+  );
 
   return (
     <div
       class={[
         "chat-error chat-composer-neighbor-card chat-reply-notice",
         busy() ? "chat-composer-neighbor-card--warn" : "chat-composer-neighbor-card--danger",
+        { "chat-reply-notice--expanded": expanded() },
       ]}
       onKeyDown={(event) => {
         if (event.key === "Escape" && props.onDismiss) {
@@ -408,36 +435,64 @@ function ChatReplyErrorNotice(props: {
       <span class="chat-composer-neighbor-card__icon" aria-hidden="true">
         <Icon name={busy() ? "alertTriangle" : "circleAlert"} />
       </span>
-      <span class="chat-reply-notice__message" role={busy() ? "status" : "alert"}>
-        {message()}
-      </span>
-      <div class="row chat-reply-notice__actions">
-        <Show when={signIn() ? app : props.onRefresh}>
+      <div class="chat-reply-notice__body">
+        {/* Actions come first so the opened text wraps beside them, then below. */}
+        <div class="row chat-reply-notice__actions">
           <button
             type="button"
-            class="btn btn--sm chat-error__refresh"
-            disabled={!signIn() && !props.connected}
-            onClick={() => (signIn() ? app?.navigate("model-providers") : props.onRefresh?.())}
+            class="chat-reply-notice__chevron"
+            disabled={!expandable()}
+            aria-label={t("chat.errorDetails")}
+            aria-expanded={expanded() ? "true" : "false"}
+            aria-controls={messageId}
+            onClick={() => setExpanded((value) => !value)}
           >
-            {t(
-              signIn()
-                ? "chat.recovery.openModels"
-                : busy()
-                  ? "chat.checkStatus"
-                  : "common.refresh",
-            )}
+            <Icon name={expanded() ? "chevronUp" : "chevronDown"} />
           </button>
-        </Show>
-        <Show when={props.onDismiss}>
-          <button
-            type="button"
-            class="chat-error__dismiss"
-            aria-label={t("chat.actions.dismissError")}
-            onClick={() => props.onDismiss?.()}
-          >
-            <Icon name="x" />
-          </button>
-        </Show>
+          <Show when={signIn() ? app : props.onRefresh}>
+            <button
+              type="button"
+              class="btn btn--sm chat-error__refresh"
+              disabled={!signIn() && !props.connected}
+              onClick={() => (signIn() ? app?.navigate("model-providers") : props.onRefresh?.())}
+            >
+              {t(
+                signIn()
+                  ? "chat.recovery.openModels"
+                  : busy()
+                    ? "chat.checkStatus"
+                    : "common.refresh",
+              )}
+            </button>
+          </Show>
+          <Show when={props.onDismiss}>
+            <button
+              type="button"
+              class="chat-error__dismiss"
+              aria-label={t("chat.actions.dismissError")}
+              onClick={() => props.onDismiss?.()}
+            >
+              <Icon name="x" />
+            </button>
+          </Show>
+        </div>
+        <div
+          id={messageId}
+          ref={setLine}
+          class={[
+            "chat-reply-notice__message",
+            { "chat-reply-notice__message--expandable": expandable() },
+          ]}
+          role={busy() ? "status" : "alert"}
+          onClick={() => {
+            // Selecting the text to copy it must not close the line.
+            if (expandable() && !getSelection()?.toString()) {
+              setExpanded((value) => !value);
+            }
+          }}
+        >
+          {message()}
+        </div>
       </div>
     </div>
   );

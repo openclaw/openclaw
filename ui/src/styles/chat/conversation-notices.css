@@ -1,30 +1,93 @@
+/* A failed reply's error stays on one line until the reader opens it. Its
+   actions float so the opened text wraps beside them, then spans the card. */
 .chat-reply-notice.chat-composer-neighbor-card {
-  min-height: 44px;
-  padding-block: 6px;
+  grid-template-columns: 18px minmax(0, 1fr);
+  align-items: start;
   column-gap: 8px;
-  row-gap: 6px;
+  min-height: 0;
+  padding-block: 7px;
+}
+
+.chat-reply-notice .chat-composer-neighbor-card__icon {
+  height: 30px;
+}
+
+.chat-reply-notice__actions {
+  float: inline-end;
+  gap: 4px;
+  height: 30px;
+  margin-inline-start: 8px;
 }
 
 .chat-reply-notice__message {
+  overflow: hidden;
+  padding-block: max(2px, calc((30px - 18px * var(--control-ui-text-scale)) / 2));
   font-size: calc(13px * var(--control-ui-text-scale));
-  line-height: 1.4;
+  line-height: calc(18px * var(--control-ui-text-scale));
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-reply-notice__message--expandable {
+  cursor: var(--cursor-action);
+}
+
+.chat-reply-notice--expanded .chat-reply-notice__message {
+  overflow: visible;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
 
-.chat-reply-notice__actions {
-  gap: 6px;
-  flex-wrap: wrap;
+/* The chevron keeps its slot so revealing it never moves the line or actions. */
+.chat-reply-notice__chevron {
+  display: inline-grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--muted);
+  opacity: 0;
+  transition: opacity var(--duration-fast) var(--ease-out);
 }
 
-@media (max-width: 560px) {
-  .chat-reply-notice__message {
-    grid-column: 2 / -1;
-  }
+.chat-reply-notice__chevron:disabled {
+  visibility: hidden;
+}
 
-  .chat-reply-notice__actions {
-    grid-column: 2 / -1;
-    justify-content: flex-end;
+.chat-reply-notice:hover .chat-reply-notice__chevron,
+.chat-reply-notice__chevron:focus-visible,
+.chat-reply-notice--expanded .chat-reply-notice__chevron {
+  opacity: 1;
+}
+
+.chat-reply-notice__chevron:hover {
+  background: color-mix(in srgb, currentColor 12%, transparent);
+  color: var(--text-strong);
+}
+
+.chat-reply-notice__chevron:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+.chat-reply-notice__chevron svg {
+  width: 14px;
+  height: 14px;
+}
+
+/* Touch has no hover to reveal the control. */
+@media (hover: none) {
+  .chat-reply-notice__chevron {
+    opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .chat-reply-notice__chevron {
+    transition: none;
   }
 }
 

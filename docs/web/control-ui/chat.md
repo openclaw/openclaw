@@ -1027,7 +1027,7 @@ Other chat error banners, such as cloud runner startup failures, show short mess
 
 When an active run compacts the conversation while your next message is being prepared, OpenClaw follows the verified continuation automatically, even if the earlier run finishes before preparation does. This keeps the original message and send identity without displaying a retry error.
 
-When a reply fails and its thread notice isn’t available, the composer shows the redacted error directly. **Refresh** reloads the conversation without resending a message or replacing your draft. If the AI service needs you to sign in again, **Open Models** takes you to Models instead. If the conversation changed before the message could run, OpenClaw does not redirect it into a replacement conversation automatically.
+When a reply fails and its thread notice isn’t available, the composer shows the redacted error on one line. If the error is longer than the line, select it, or the chevron beside it, to read all of it; select again to close it. The chevron appears on hover or keyboard focus, and stays visible on touch screens. **Refresh** reloads the conversation without resending a message or replacing your draft. If the AI service needs you to sign in again, **Open Models** takes you to Models instead. If the conversation changed before the message could run, OpenClaw does not redirect it into a replacement conversation automatically.
 
 <AccordionGroup>
   <Accordion title="Send and history semantics">
