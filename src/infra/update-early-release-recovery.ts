@@ -3,11 +3,12 @@ import fs from "node:fs";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
+import { isDeepStrictEqual } from "node:util";
 import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
 import { VERSION } from "../version.js";
 import { runtimeProcessEntrypoints } from "./runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
-import { readPendingSchemaChange } from "./update-candidate-check-early-release.js";
+import { readSchemaVersions, type SchemaVersions } from "./update-candidate-check-early-release.js";
 
 /**
  * Automatic recovery for Git checkouts whose installed updater has the early release layout
@@ -28,6 +29,8 @@ const COMMAND_TIMEOUT_MS = 60 * 60_000;
 /** A boot migration of a large agent database runs before the Gateway reports ready. */
 const READY_TIMEOUT_MS = 20 * 60_000;
 const MAX_RESTARTS = 2;
+/** Automatic restarts of the Gateway unit, while waiting, that mean it fails before serving. */
+const CRASH_RESTARTS = 3;
 
 export type RecoveryPlan = {
   unit: string;
@@ -38,6 +41,10 @@ export type RecoveryPlan = {
   release: string;
   prefix: string;
   serviceFile: string;
+  /** `systemctl --user is-enabled` of the Gateway service when the recovery was planned. */
+  enabled: string;
+  /** Every store's schema version when the recovery was planned. */
+  schema: SchemaVersions;
   fromVersion: string;
   driver: { pid: number; start: string };
   /** When `--check` planned this recovery (epoch milliseconds). */
@@ -137,12 +144,14 @@ export type RunnerDeps = {
   driverAlive: (driver: RecoveryPlan["driver"]) => boolean;
   /** Restarts systemd made of this unit after an abnormal exit. */
   restarts: (unit: string) => Promise<number>;
-  migrated: () => boolean;
+  /** Every store's schema version now; null when unreadable. */
+  schema: () => SchemaVersions | null;
   /** Opens this recovery's update run and takes the release updater's lock, so an update the
    * new release's Gateway accepts waits; null while another update holds it. */
   hold: (plan: RecoveryPlan) => Promise<string | null>;
-  /** Waits for the Gateway on this port to answer `/readyz`, without opening state. */
-  ready: (port: number | null) => Promise<boolean>;
+  /** Waits for the Gateway on this port to answer `/readyz`, without opening state; gives up
+   * early when the service unit keeps failing. */
+  ready: (port: number | null, unit: string) => Promise<boolean>;
   record: (outcome: RecoveryOutcome) => Promise<void>;
   /** Runs the finishing step from the rebuilt checkout, whose code is this release's. */
   finish: (plan: RecoveryPlan, facts: FinishFacts) => Promise<CommandResult>;
@@ -150,7 +159,8 @@ export type RunnerDeps = {
   sleep: (ms: number) => Promise<void>;
 };
 
-export type FinishFacts = { downtimeMs: number; runId?: string };
+/** `downtimeMs` is left out when a restart of the runner lost the first switch's timing. */
+export type FinishFacts = { downtimeMs?: number; runId?: string };
 type RecoveryOutcome = {
   plan: RecoveryPlan;
   runId?: string;
@@ -162,6 +172,9 @@ type RecoveryOutcome = {
 };
 
 const REBUILD = "pnpm install --frozen-lockfile && pnpm build";
+/** The Gateway service's own definition before the recovery changed it, kept beside it. */
+export const originalUnitPath = (plan: RecoveryPlan) =>
+  `${plan.serviceFile}.before-update-recovery`;
 
 /**
  * The runner, started from the kept release. Every exit leaves a Gateway serving. Returns true
@@ -172,6 +185,15 @@ export async function runEarlyGitReleaseRecovery(
   deps: RunnerDeps = defaultRunnerDeps(),
 ): Promise<boolean> {
   const { run, log } = deps;
+  const original = originalUnitPath(plan);
+  const gateway = path.basename(plan.serviceFile);
+  const systemctl = (...args: string[]) => run(["systemctl", "--user", ...args]);
+  const servesRelease = () => fs.readFileSync(plan.serviceFile, "utf8").includes(plan.release);
+  // Any difference from the versions `--check` read, or an unreadable store, counts as moved:
+  // the previous build is only put back on databases exactly as it left them.
+  const moved = () => !isDeepStrictEqual(deps.schema(), plan.schema);
+  const unitPort = () =>
+    Number(/--port\s+(\d+)/u.exec(fs.readFileSync(plan.serviceFile, "utf8"))?.[1]) || null;
   const cli = (root: string, ...args: string[]) =>
     run([process.execPath, path.join(root, "openclaw.mjs"), ...args], {
       cwd: root,
@@ -182,155 +204,244 @@ export async function runEarlyGitReleaseRecovery(
   // so readiness is read over HTTP. `switched` is false when the definition never changed.
   const serve = async (root: string) => {
     // Keep the port the service runs on, which `--port` may have set outside the config.
-    const current = /--port\s+(\d+)/u.exec(fs.readFileSync(plan.serviceFile, "utf8"))?.[1];
-    const port = current ? ["--port", current] : [];
+    const current = unitPort();
+    const port = current ? ["--port", String(current)] : [];
     const installed = await cli(root, "gateway", "install", "--force", ...port, "--json");
-    const unit = fs.readFileSync(plan.serviceFile, "utf8");
-    if (!unit.includes(path.join(root, "dist"))) {
+    if (!fs.readFileSync(plan.serviceFile, "utf8").includes(path.join(root, "dist"))) {
       return { switched: false, ready: false, detail: commandTail(installed) };
     }
-    const ready = await deps.ready(Number(/--port\s+(\d+)/u.exec(unit)?.[1]) || null);
-    return { switched: true, ready, detail: commandTail(installed) };
+    return {
+      switched: true,
+      ready: await deps.ready(unitPort(), gateway),
+      detail: commandTail(installed),
+    };
   };
-  const abandon = async (why: string) => {
-    log(`stopped before changing the Gateway: ${why}. The next \`openclaw update\` tries again.`);
+  // `gateway install --force` enables the service; a disabled autostart stays disabled.
+  const keepEnablement = async () => {
+    if (plan.enabled === "disabled" && !ok(await systemctl("disable", gateway))) {
+      log(
+        `the Gateway service could not be disabled again; run \`systemctl --user disable ${gateway}\``,
+      );
+    }
+  };
+  const removeRelease = async () => {
     if (fs.existsSync(path.dirname(plan.release))) {
       removeTree(path.dirname(plan.release));
       await git(run, plan.checkout, "worktree", "prune");
     }
+  };
+  let fastForwarded = false;
+  const abandon = async (why: string) => {
+    const moves = fastForwarded
+      ? ` The checkout's branch was fast-forwarded to ${plan.target.slice(0, 11)} but not rebuilt; the Gateway still serves the previous build.`
+      : "";
+    log(
+      `stopped before changing the Gateway: ${why}.${moves} The next \`openclaw update\` tries again.`,
+    );
+    if (
+      fs.existsSync(original) &&
+      fs.readFileSync(original).equals(fs.readFileSync(plan.serviceFile))
+    ) {
+      fs.rmSync(original);
+    }
+    await removeRelease();
     return false;
   };
   let runId: string | undefined;
   const fail = async (reason: string, detail: string, nextAction: string) => {
     log(`${detail} Next step: ${nextAction}`);
-    await deps.record({ plan, runId, status: "failed", reason, detail, nextAction });
+    await keepEnablement();
+    // Recording opens state through this release, which migrates it: only once it moved.
+    if (moved()) {
+      await deps.record({ plan, runId, status: "failed", reason, detail, nextAction });
+    }
     return false;
   };
-
-  const servesRelease = () => fs.readFileSync(plan.serviceFile, "utf8").includes(plan.release);
-  const restarts = await deps.restarts(plan.unit);
-  const restarted = restarts > 0;
-  if (restarts > MAX_RESTARTS) {
-    return servesRelease() || deps.migrated()
-      ? fail(
-          "early-release-recovery-interrupted",
-          `The recovery was interrupted ${MAX_RESTARTS + 1} times; the Gateway serves the new release.`,
-          `from the checkout, run \`${REBUILD} && openclaw gateway install --force\``,
-        )
-      : abandon("it was interrupted repeatedly");
-  }
-  // The updater still records its own outcome in the state database; migrating under it races.
-  log("waiting for the update that started this recovery to exit");
-  const until = deps.now() + DRIVER_EXIT_TIMEOUT_MS;
-  while (deps.driverAlive(plan.driver)) {
-    if (deps.now() > until) {
-      return abandon("the update that started it did not exit");
+  const kept = () => `The service definition from before the recovery is kept at ${original}.`;
+  /** The release does not serve. Unmigrated databases get the previous build back. */
+  const notReady = async (why: string) => {
+    if (!moved() && fs.existsSync(original)) {
+      // Stopped first, so nothing can start migrating between the comparison and the switch.
+      await systemctl("stop", gateway);
+      if (!moved()) {
+        const temporary = `${plan.serviceFile}.${process.pid}.tmp`;
+        fs.writeFileSync(temporary, fs.readFileSync(original), {
+          mode: fs.statSync(original).mode & 0o777,
+        });
+        fs.renameSync(temporary, plan.serviceFile);
+        await systemctl("daemon-reload");
+        await systemctl("reset-failed", gateway);
+        await systemctl("start", gateway);
+        await keepEnablement();
+        const back = await deps.ready(unitPort(), gateway);
+        fs.rmSync(original);
+        await removeRelease();
+        log(
+          `${why}. Nothing was migrated, so the Gateway service starts the previous build again${back ? " and it serves" : ", which did not report ready either"}. This is not recorded for \`openclaw update status\`, because recording through the new release would migrate the databases the previous build uses. Next step: see \`journalctl --user -u ${gateway}\` for why the new release did not start, fix that, then run \`openclaw update\` again.`,
+        );
+        return false;
+      }
+      await systemctl("start", gateway);
     }
-    await deps.sleep(1000);
-  }
-  const head = (await git(run, plan.checkout, "rev-parse", "HEAD")).output.trim();
-  if (head !== plan.target) {
-    const branch = (await git(run, plan.checkout, "symbolic-ref", "-q", "--short", "HEAD")).output;
-    const dirty = await git(run, plan.checkout, "status", "--porcelain", "--untracked-files=no");
-    if (branch.trim() !== plan.branch || !ok(dirty) || dirty.output.trim()) {
-      return abandon("the checkout changed since the update checked it");
-    }
-    log(`fast-forwarding ${plan.branch} to ${plan.target}`);
-    const merged = await git(run, plan.checkout, "merge", "--ff-only", "--quiet", plan.target);
-    if (!ok(merged)) {
-      return abandon(`the fast-forward failed (${commandTail(merged)})`);
-    }
-  }
-  // Killed after the final switch: only the finishing step is left.
-  const unitPort = () =>
-    Number(/--port\s+(\d+)/u.exec(fs.readFileSync(plan.serviceFile, "utf8"))?.[1]) || null;
-  if (
-    !servesRelease() &&
-    buildCommit(plan.checkout) === plan.target &&
-    deps.migrated() &&
-    (await deps.ready(unitPort()))
-  ) {
-    runId = (await deps.hold(plan)) ?? undefined;
-    await deps.finish(plan, { downtimeMs: 0, ...(runId ? { runId } : {}) });
-    return !fs.existsSync(plan.release);
-  }
-  let downtimeMs = 0;
-  const switched = async (root: string) => {
-    const started = deps.now();
-    const result = await serve(root);
-    downtimeMs += deps.now() - started;
-    return result;
+    return fail(
+      "early-release-recovery-start-failed",
+      `${why}, and ${moved() ? "your databases are no longer as the previous build left them" : "its definition from before the recovery is missing"}, so the previous build was not put back; the Gateway service keeps starting the new release. ${kept()}`,
+      `see \`journalctl --user -u ${gateway}\` for why the new release does not start, fix that, then from the checkout run \`${REBUILD} && openclaw gateway install --force\``,
+    );
   };
-  // A resumed run finds the service already on the release and continues from the build.
-  if (!servesRelease()) {
-    log("restarting the Gateway on the new release; it migrates state at startup");
-    const served = await switched(plan.release);
-    if (!served.switched) {
-      return abandon(
-        `the Gateway service could not be moved to the new release (${served.detail})`,
-      );
-    }
-    // Never put the previous build back: the release may have started migrating state.
-    if (!served.ready) {
+
+  const recover = async (): Promise<boolean> => {
+    const restarts = await deps.restarts(plan.unit);
+    if (restarts > MAX_RESTARTS) {
+      const why = `The recovery was interrupted ${MAX_RESTARTS + 1} times`;
+      if (!moved()) {
+        return servesRelease() ? notReady(why) : abandon("it was interrupted repeatedly");
+      }
       return fail(
-        "early-release-recovery-start-failed",
-        "The Gateway service now starts the new release, which did not report ready.",
+        "early-release-recovery-interrupted",
+        `${why}; the Gateway service starts ${servesRelease() ? "the new release" : "the checkout"}.`,
         `from the checkout, run \`${REBUILD} && openclaw gateway install --force\``,
       );
     }
-  }
-  runId = (await deps.hold(plan)) ?? undefined;
-  if (!runId) {
-    return fail(
-      "early-release-recovery-update-running",
-      "The Gateway serves the new release, but another update is running, so the checkout was not rebuilt.",
-      `once it finishes, from the checkout run \`${REBUILD} && openclaw gateway install --force\``,
-    );
-  }
-  // A build this unit ran before systemd restarted it leaves its artifact lock. The restart
-  // killed that run's whole cgroup, which is what the lock asks to verify before release.
-  const buildLock = path.join(plan.checkout, ".artifacts", "dist-artifacts.lock");
-  const owner = safeParseJsonRecord(readText(path.join(buildLock, "owner.json")));
-  const ownerStarted = Date.parse(String(owner?.startedAt));
-  if (restarted && ownerStarted >= plan.plannedAt && !processStart(Number(owner?.pid))) {
-    log(
-      `releasing the build lock left by this recovery's interrupted build (PID ${String(owner?.pid)})`,
-    );
-    fs.rmSync(buildLock, { recursive: true, force: true });
-  }
-  log("rebuilding the checkout while the Gateway serves the new release");
-  for (const argv of [
-    ["pnpm", "install", "--frozen-lockfile", "--config.confirmModulesPurge=false"],
-    ["pnpm", "build"],
-  ]) {
-    const built = await run(argv, {
-      cwd: plan.checkout,
-      stream: true,
-      timeoutMs: COMMAND_TIMEOUT_MS,
-    });
-    if (!ok(built)) {
+    // The updater still records its own outcome in the state database; migrating under it races.
+    log("waiting for the update that started this recovery to exit");
+    const until = deps.now() + DRIVER_EXIT_TIMEOUT_MS;
+    while (deps.driverAlive(plan.driver)) {
+      if (deps.now() > until) {
+        return abandon("the update that started it did not exit");
+      }
+      await deps.sleep(1000);
+    }
+    const head = (await git(run, plan.checkout, "rev-parse", "HEAD")).output.trim();
+    if (head !== plan.target) {
+      const branch = (await git(run, plan.checkout, "symbolic-ref", "-q", "--short", "HEAD"))
+        .output;
+      const dirty = await git(run, plan.checkout, "status", "--porcelain", "--untracked-files=no");
+      if (branch.trim() !== plan.branch || !ok(dirty) || dirty.output.trim()) {
+        return abandon("the checkout changed since the update checked it");
+      }
+      log(`fast-forwarding ${plan.branch} to ${plan.target}`);
+      const merged = await git(run, plan.checkout, "merge", "--ff-only", "--quiet", plan.target);
+      if (!ok(merged)) {
+        return abandon(`the fast-forward failed (${commandTail(merged)})`);
+      }
+      fastForwarded = true;
+    }
+    // Killed after the final switch: only the finishing step is left.
+    if (
+      !servesRelease() &&
+      buildCommit(plan.checkout) === plan.target &&
+      moved() &&
+      (await deps.ready(unitPort(), gateway))
+    ) {
+      runId = (await deps.hold(plan)) ?? undefined;
+      await keepEnablement();
+      await deps.finish(plan, runId ? { runId } : {});
+      return !fs.existsSync(plan.release);
+    }
+    let downtimeMs = 0;
+    const switched = async (root: string) => {
+      const started = deps.now();
+      const result = await serve(root);
+      downtimeMs += deps.now() - started;
+      return result;
+    };
+    if (!servesRelease()) {
+      // One copy of the definition as the user left it; a resumed run keeps the first copy.
+      if (restarts === 0 || !fs.existsSync(original)) {
+        fs.copyFileSync(plan.serviceFile, original);
+      }
+      log("restarting the Gateway on the new release; it migrates state at startup");
+      const served = await switched(plan.release);
+      if (!served.switched) {
+        return abandon(
+          `the Gateway service could not be moved to the new release (${served.detail})`,
+        );
+      }
+      if (!served.ready) {
+        return notReady("The new release did not report ready");
+      }
+    } else if (!(await deps.ready(unitPort(), gateway))) {
+      // Resumed while the release migrates at boot: it holds state until it reports ready.
+      return notReady("The new release did not report ready");
+    }
+    runId = (await deps.hold(plan)) ?? undefined;
+    if (!runId) {
       return fail(
-        "early-release-recovery-build-failed",
-        `The Gateway serves OpenClaw ${VERSION} from the release the update built. \`${argv.join(" ")}\` failed in the checkout (${commandTail(built)}).`,
-        `fix the cause, then from the checkout run \`${REBUILD} && openclaw gateway install --force\``,
+        "early-release-recovery-update-running",
+        "The Gateway serves the new release, but another update is running, so the checkout was not rebuilt.",
+        `once it finishes, from the checkout run \`${REBUILD} && openclaw gateway install --force\``,
       );
     }
+    // A build this unit ran before systemd restarted it leaves its artifact lock. The restart
+    // killed that run's whole cgroup, which is what the lock asks to verify before release.
+    const buildLock = path.join(plan.checkout, ".artifacts", "dist-artifacts.lock");
+    const owner = safeParseJsonRecord(readText(path.join(buildLock, "owner.json")));
+    const ownerStarted = Date.parse(String(owner?.startedAt));
+    if (restarts > 0 && ownerStarted >= plan.plannedAt && !processStart(Number(owner?.pid))) {
+      log(
+        `releasing the build lock left by this recovery's interrupted build (PID ${String(owner?.pid)})`,
+      );
+      fs.rmSync(buildLock, { recursive: true, force: true });
+    }
+    const leftovers = `The kept release (${path.dirname(plan.release)}) and the older layout's link and releases under ${plan.prefix} stay on disk; after the rebuild nothing uses them.`;
+    log("rebuilding the checkout while the Gateway serves the new release");
+    for (const argv of [
+      ["pnpm", "install", "--frozen-lockfile", "--config.confirmModulesPurge=false"],
+      ["pnpm", "build"],
+    ]) {
+      const built = await run(argv, {
+        cwd: plan.checkout,
+        stream: true,
+        timeoutMs: COMMAND_TIMEOUT_MS,
+      });
+      if (!ok(built)) {
+        return fail(
+          "early-release-recovery-build-failed",
+          `The Gateway serves OpenClaw ${VERSION} from the release the update built. \`${argv.join(" ")}\` failed in the checkout (${commandTail(built)}). ${kept()} ${leftovers}`,
+          `fix the cause, then from the checkout run \`${REBUILD} && openclaw gateway install --force\``,
+        );
+      }
+    }
+    log("restarting the Gateway on the rebuilt checkout");
+    const final = await switched(plan.checkout);
+    if (!final.ready) {
+      const back = await serve(plan.release);
+      return fail(
+        "early-release-recovery-switch-failed",
+        `The rebuilt checkout did not become ready (${final.detail}); the Gateway ${back.ready ? "serves the new release again" : "could not be put back on the new release"}. ${kept()} ${leftovers}`,
+        `see \`journalctl --user -u ${plan.unit}\`, then from the checkout run \`${REBUILD} && openclaw gateway install --force\``,
+      );
+    }
+    await keepEnablement();
+    // A resumed runner lost the first switch's timing; leave it out rather than understate it.
+    const finished = await deps.finish(plan, { ...(restarts > 0 ? {} : { downtimeMs }), runId });
+    if (!ok(finished)) {
+      log(`the rebuilt checkout serves, but cleanup did not finish (${commandTail(finished)})`);
+    }
+    return !fs.existsSync(plan.release);
+  };
+
+  try {
+    return await recover();
+  } catch (error) {
+    const why = `The recovery stopped on an unexpected error (${String(error)})`;
+    if (moved()) {
+      return fail(
+        "early-release-recovery-error",
+        `${why}; the Gateway service starts ${servesRelease() ? "the new release" : "the checkout"}.`,
+        `see \`journalctl --user -u ${plan.unit}\`, then from the checkout run \`${REBUILD} && openclaw gateway install --force\``,
+      );
+    }
+    try {
+      return await (servesRelease() ? notReady(why) : abandon(why));
+    } catch (again) {
+      log(
+        `${why}, and putting the previous state back failed (${String(again)}). Next step: see \`journalctl --user -u ${plan.unit}\`.`,
+      );
+      return false;
+    }
   }
-  log("restarting the Gateway on the rebuilt checkout");
-  const final = await switched(plan.checkout);
-  if (!final.ready) {
-    const back = await serve(plan.release);
-    return fail(
-      "early-release-recovery-switch-failed",
-      `The rebuilt checkout did not become ready (${final.detail}); the Gateway ${back.ready ? "serves the new release again" : "could not be put back on the new release"}.`,
-      `see \`journalctl --user -u ${plan.unit}\`, then from the checkout run \`${REBUILD} && openclaw gateway install --force\``,
-    );
-  }
-  const finished = await deps.finish(plan, { downtimeMs, runId });
-  if (!ok(finished)) {
-    log(`the rebuilt checkout serves, but cleanup did not finish (${commandTail(finished)})`);
-  }
-  return !fs.existsSync(plan.release);
 }
 
 /**
@@ -399,6 +510,14 @@ export async function finishEarlyGitReleaseRecovery(
     removed.push(path.relative(plan.prefix, dir));
   }
   await git(deps.run, plan.checkout, "worktree", "prune");
+  // Removals a killed process renamed away but did not finish.
+  for (const dir of [plan.prefix, releases]) {
+    for (const name of fs.existsSync(dir) ? fs.readdirSync(dir) : []) {
+      if (name.startsWith(".removing-")) {
+        fs.rmSync(path.join(dir, name), { recursive: true, force: true });
+      }
+    }
+  }
   const runners = live
     .filter(
       ({ pid, argv }) =>
@@ -409,6 +528,9 @@ export async function finishEarlyGitReleaseRecovery(
     .map(({ pid }) => pid);
   const detail = [
     `Rebuilt the checkout at ${plan.target.slice(0, 11)} and moved the Gateway onto it.`,
+    fs.existsSync(originalUnitPath(plan))
+      ? `The service definition from before the recovery is kept at ${originalUnitPath(plan)}.`
+      : "",
     removed.length ? `Removed ${removed.join(", ")}.` : "",
     kept.length ? `Kept ${kept.join(", ")}, still in use.` : "",
     runners.length
@@ -424,7 +546,7 @@ export async function finishEarlyGitReleaseRecovery(
     status: "succeeded",
     reason: "early-release-recovered",
     detail,
-    downtimeMs: facts.downtimeMs,
+    ...(facts.downtimeMs === undefined ? {} : { downtimeMs: facts.downtimeMs }),
     ...(runners.length
       ? { nextAction: "restart the node runner that runs from this checkout" }
       : {}),
@@ -474,7 +596,7 @@ async function openRun(plan: RecoveryPlan): Promise<string> {
 }
 
 /** The release updater's lock, held by this runner's update run until its outcome is recorded. */
-async function holdUpdateLock(plan: RecoveryPlan): Promise<string | null> {
+export async function holdUpdateLock(plan: RecoveryPlan): Promise<string | null> {
   const [{ finishUpdateRunAsync }, store] = await Promise.all([
     import("./update-run-write.async.js"),
     import("../update/store.js"),
@@ -496,15 +618,30 @@ async function holdUpdateLock(plan: RecoveryPlan): Promise<string | null> {
   return runId;
 }
 
+/** The finishing step's arguments to `update-migrated-finalize.worker`. */
+export const earlyReleaseFinishArgs = (plan: RecoveryPlan, facts: FinishFacts) => [
+  EARLY_RELEASE_RECOVERY_FLAG,
+  JSON.stringify(plan),
+  "finish",
+  JSON.stringify(facts),
+];
+
 /** `update-migrated-finalize.worker --early-release-recovery <plan> [finish <facts>]`. */
-export function readEarlyGitReleaseRecoveryArgs(argv: readonly string[]) {
+export async function runEarlyGitReleaseRecoveryMode(argv: readonly string[]): Promise<number> {
   // SAFETY: the plan is written by this same build (`--check` or the runner).
-  const plan = JSON.parse(argv[0] ?? "") as RecoveryPlan;
-  const facts = safeParseJsonRecord(argv[2] ?? "");
-  return {
-    plan,
-    finish: argv[1] === "finish" ? { downtimeMs: Number(facts?.downtimeMs) || 0 } : null,
-  };
+  const plan = JSON.parse(argv[1] ?? "") as RecoveryPlan;
+  if (argv[2] !== "finish") {
+    // On success the finishing step removed the release this process runs from; nothing more
+    // loads from it. A recovery that did not finish shows as failed in `systemctl --user status`.
+    return (await runEarlyGitReleaseRecovery(plan)) ? 0 : 1;
+  }
+  const facts = safeParseJsonRecord(argv[3] ?? "");
+  const [runId, downtimeMs] = [facts?.runId, facts?.downtimeMs];
+  await finishEarlyGitReleaseRecovery(plan, {
+    ...(typeof runId === "string" ? { runId } : {}),
+    ...(typeof downtimeMs === "number" ? { downtimeMs } : {}),
+  });
+  return 0;
 }
 
 const log = (line: string) => process.stdout.write(`[openclaw update recovery] ${line}\n`);
@@ -534,10 +671,9 @@ function defaultRunnerDeps(): RunnerDeps {
           ])
         ).output.trim(),
       ) || 0,
-    // Unreadable state counts as migrated: the old build is never put back on data it may not open.
-    migrated: () => readPendingSchemaChange() === null,
+    schema: () => readSchemaVersions(),
     // The same loopback probe `openclaw gateway start` waits on, including TLS pinning.
-    ready: async (port) => {
+    ready: async (port, unit) => {
       if (!port) {
         return false;
       }
@@ -545,14 +681,42 @@ function defaultRunnerDeps(): RunnerDeps {
         import("../config/io.runtime.js"),
         import("../cli/daemon-cli/restart-health-probe.js"),
       ]);
-      const readiness = await waitForGatewayHttpReadiness({
-        config: await readSourceConfigBestEffort().catch(() => ({})),
-        port,
-        attempts: READY_TIMEOUT_MS / 1000,
-        deadlineAt: performance.now() + READY_TIMEOUT_MS,
-        delayMs: 1000,
-      });
-      return readiness.readyz === 200;
+      const config = await readSourceConfigBestEffort().catch(() => ({}));
+      const service = async () => {
+        const shown = await runRecoveryCommand([
+          "systemctl",
+          "--user",
+          "show",
+          "--property=NRestarts,ActiveState",
+          unit,
+        ]);
+        return {
+          restarts: Number(/NRestarts=(\d+)/u.exec(shown.output)?.[1]) || 0,
+          failed: /ActiveState=failed/u.test(shown.output),
+        };
+      };
+      const first = await service();
+      const until = Date.now() + READY_TIMEOUT_MS;
+      while (Date.now() < until) {
+        const readiness = await waitForGatewayHttpReadiness({
+          config,
+          port,
+          attempts: 5,
+          deadlineAt: performance.now() + 5000,
+          delayMs: 1000,
+        });
+        if (readiness.readyz === 200) {
+          return true;
+        }
+        // A migrating Gateway stays up while it works; one that exits before serving is
+        // restarted by systemd, which counts it, and fails the unit at its start limit.
+        const now = await service();
+        if (now.failed || now.restarts - first.restarts >= CRASH_RESTARTS) {
+          log(`${unit} keeps failing before it serves (${now.restarts - first.restarts} restarts)`);
+          return false;
+        }
+      }
+      return false;
     },
     record,
     hold: holdUpdateLock,
@@ -562,14 +726,7 @@ function defaultRunnerDeps(): RunnerDeps {
         root: current.checkout,
       });
       return runRecoveryCommand(
-        [
-          process.execPath,
-          fileURLToPath(worker),
-          EARLY_RELEASE_RECOVERY_FLAG,
-          JSON.stringify(current),
-          "finish",
-          JSON.stringify(facts),
-        ],
+        [process.execPath, fileURLToPath(worker), ...earlyReleaseFinishArgs(current, facts)],
         { cwd: current.checkout, stream: true, timeoutMs: 10 * 60_000 },
       );
     },

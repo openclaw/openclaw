@@ -2173,19 +2173,39 @@ itself, in a transient user unit that outlives the updater:
 4. It removes the older layout's link, its releases and their Git worktree records, and records
    the outcome for `openclaw update status`.
 
-It takes about 5 to 10 minutes. The Gateway restarts twice for a few seconds each and serves in
-between; until the rebuild finishes, the checkout's `openclaw` command refuses the migrated data.
-Follow it with `systemctl --user status openclaw-update-recovery` or
-`journalctl --user -u openclaw-update-recovery`. A paired node runner started from the
-checkout keeps its old code until you restart it; the recorded outcome names it.
+It takes about 5 to 10 minutes. The Gateway restarts twice and serves in between: the first
+restart lasts as long as the database migration, the second a few seconds. Until the rebuild
+finishes, the checkout's `openclaw` command refuses the migrated data, so follow the recovery
+with `systemctl --user status openclaw-update-recovery` or
+`journalctl --user -u openclaw-update-recovery`; the journal prints every failure with its next
+step, and `openclaw update status` shows the outcome once the checkout is rebuilt. A paired node
+runner started from the checkout keeps its old code until you restart it; the recorded outcome
+names it.
+
+Each `openclaw gateway install --force` rewrites the service unit file, so edits made inside
+`openclaw-gateway.service` (for example `Nice=` or `MemoryMax=`) do not carry over. The recovery
+keeps the unit file as it was before it started at `openclaw-gateway.service.before-update-recovery`
+beside it and names that path in its outcome. Drop-ins under `openclaw-gateway.service.d/` are
+separate files and are not touched; environment files the unit names are not copied. A service
+whose autostart you disabled stays disabled.
+
+If the new release fails before it migrates anything, the recovery stops it, puts that unit file
+back, restarts the previous build and checks that it serves; the journal says why and what to
+fix before the next `openclaw update`. That outcome is not recorded for `openclaw update status`,
+because recording through the new release would migrate the databases the previous build uses.
+Once the release has migrated anything, the previous build is never put back.
 
 It never resets, stashes, cleans or rebases the checkout. It starts nothing, and the update
 prints the rebuild below with the reason, when the checkout has uncommitted changes to tracked
-files, is not on a branch, cannot fast-forward to the release's commit, or has commits its
-upstream lacks; when the service or the `openclaw` command on PATH runs another installation or
-state directory; when less than 4 GiB is free; and on macOS, Windows and hosts without a systemd
-user manager. If the build fails, the Gateway keeps serving the new release and the recorded
-outcome names the command to finish with. When it does not start, run this from the checkout:
+files, is not on a branch, cannot fast-forward to the release's commit, has commits its upstream
+lacks, or has an upstream that does not contain the release's commit; when the Gateway service is
+not running; when the service or the `openclaw` command on PATH runs another installation (a
+linked or nested worktree counts as another installation) or state directory, or the
+installation cannot be identified; when less than 4 GiB is free; and on macOS, Windows and hosts
+without a systemd user manager. If the build fails, the Gateway keeps serving the new release
+and the journal and the recorded outcome name the command to finish with; the kept release under
+`git-install/recovery` and the older layout's releases stay on disk until you remove them. When
+it does not start, run this from the checkout:
 
 ```sh
 git pull --ff-only && openclaw gateway stop --force && pnpm install --frozen-lockfile && pnpm build && openclaw gateway install --force || { openclaw gateway start; false; }

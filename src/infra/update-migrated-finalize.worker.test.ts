@@ -449,55 +449,44 @@ it.each(["json", "human", "check"] as const)(
   },
 );
 
-it.each([
-  [
-    { started: false, reason: "synthetic reason" },
-    "Automatic recovery did not start: synthetic reason.",
-  ],
-  [{ started: true, unit: "openclaw-update-recovery", target: "a".repeat(40) }, "background"],
-])(
-  "refuses an early Git release updater's schema change from --check and reports its recovery",
-  async (recovery, message) => {
-    const stateDir = makeTempDir(tempRoots, "openclaw-worker-early-release-");
-    const prefix = path.join(stateDir, "git-install");
-    const root = path.join(prefix, "releases", "git-b", "build");
-    fs.mkdirSync(root, { recursive: true });
-    fs.mkdirSync(path.join(prefix, "lib", "node_modules"), { recursive: true });
-    fs.symlinkSync(
-      "../../releases/git-a/lib/node_modules/openclaw",
-      path.join(prefix, "lib", "node_modules", "openclaw"),
-    );
-    fs.mkdirSync(path.join(stateDir, "state"));
-    const db = new DatabaseSync(path.join(stateDir, "state", "openclaw.sqlite"));
-    db.exec(`PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION - 1};`);
-    db.close();
-    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
-    // mock-isolation: The worker resolves its own package root; place it in the early release layout.
-    vi.doMock("./openclaw-root.js", async (importOriginal) => ({
-      ...(await importOriginal<typeof import("./openclaw-root.js")>()),
-      resolveOpenClawPackageRootSync: () => root,
-    }));
-    const start = vi.fn(async () => recovery);
-    // mock-isolation: Starting the recovery needs Git, systemd and a service; its tests own that.
-    vi.doMock("./update-early-release-recovery-start.js", () => ({
-      startEarlyGitReleaseRecovery: start,
-    }));
-    try {
-      await runWorker({}, "--check");
-    } finally {
-      vi.doUnmock("./openclaw-root.js");
-      vi.doUnmock("./update-early-release-recovery-start.js");
-      vi.unstubAllEnvs();
-    }
+it("refuses an early Git release updater's schema change from --check and starts its recovery", async () => {
+  const stateDir = makeTempDir(tempRoots, "openclaw-worker-early-release-");
+  const prefix = path.join(stateDir, "git-install");
+  const root = path.join(prefix, "releases", "git-b", "build");
+  fs.mkdirSync(root, { recursive: true });
+  fs.mkdirSync(path.join(prefix, "lib", "node_modules"), { recursive: true });
+  fs.symlinkSync(
+    "../../releases/git-a/lib/node_modules/openclaw",
+    path.join(prefix, "lib", "node_modules", "openclaw"),
+  );
+  fs.mkdirSync(path.join(stateDir, "state"));
+  const db = new DatabaseSync(path.join(stateDir, "state", "openclaw.sqlite"));
+  db.exec(`PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION - 1};`);
+  db.close();
+  vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+  // mock-isolation: The worker resolves its own package root; place it in the early release layout.
+  vi.doMock("./openclaw-root.js", async (importOriginal) => ({
+    ...(await importOriginal<typeof import("./openclaw-root.js")>()),
+    resolveOpenClawPackageRootSync: () => root,
+  }));
+  const start = vi.fn(async () => ({ started: true, unit: "u", target: "a".repeat(40) }));
+  // mock-isolation: Starting the recovery needs Git, systemd and a service; its tests own that.
+  vi.doMock("./update-early-release-recovery-start.js", () => ({
+    startEarlyGitReleaseRecovery: start,
+  }));
+  try {
+    await runWorker({}, "--check");
+  } finally {
+    vi.doUnmock("./openclaw-root.js");
+    vi.doUnmock("./update-early-release-recovery-start.js");
+    vi.unstubAllEnvs();
+  }
 
-    expect(start).toHaveBeenCalledWith(
-      expect.objectContaining({ root, pending: expect.anything() }),
-    );
-    expect(stdout.join("")).toBe("");
-    expect(process.exitCode).toBe(1);
-    expect(stderr.join("")).toContain(message);
-  },
-);
+  expect(start).toHaveBeenCalledWith(expect.objectContaining({ root, pending: expect.anything() }));
+  expect(stdout.join("")).toBe("");
+  expect(process.exitCode).toBe(1);
+  expect(stderr.join("")).toContain("the new release finishes the update in the background");
+});
 
 it.each([false, true])(
   "binds migrated worker finalization to its local candidate runtime (restart pending=%s)",

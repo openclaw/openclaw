@@ -26,13 +26,32 @@ export type EarlyGitReleaseSchemaChange = {
   pending: { state: number; agent: number | null } | null;
 };
 
+/** Every SQLite store's schema version, by path; null when unreadable or PostgreSQL-backed. */
+export type SchemaVersions = { state: number; agents: Record<string, number> };
+
 /** On-disk schema versions when this build would migrate them; null when current or unreadable. */
 export function readPendingSchemaChange(
   env: NodeJS.ProcessEnv = process.env,
 ): { state: number; agent: number | null } | null {
+  const versions = readSchemaVersions(env);
+  if (!versions) {
+    return null;
+  }
+  const agents = Object.values(versions.agents);
+  const agent = agents.length > 0 ? Math.min(...agents) : null;
+  if (
+    versions.state >= OPENCLAW_STATE_SCHEMA_VERSION &&
+    !(agent !== null && agent < OPENCLAW_AGENT_SCHEMA_VERSION)
+  ) {
+    return null;
+  }
+  return { state: versions.state, agent };
+}
+
+export function readSchemaVersions(env: NodeJS.ProcessEnv = process.env): SchemaVersions | null {
   const stateDir = resolveStateDir(env);
   let state: number;
-  const agents: number[] = [];
+  const agents: Record<string, number> = {};
   try {
     const shared = resolveOpenClawStateSqlitePath(env);
     const agentPaths = new Set<string>(
@@ -68,7 +87,7 @@ export function readPendingSchemaChange(
         if (version === 0) {
           return null;
         }
-        agents.push(version);
+        agents[file] = version;
       } finally {
         agent.close();
       }
@@ -76,14 +95,7 @@ export function readPendingSchemaChange(
   } catch {
     return null;
   }
-  const agent = agents.length > 0 ? Math.min(...agents) : null;
-  if (
-    state >= OPENCLAW_STATE_SCHEMA_VERSION &&
-    !(agent !== null && agent < OPENCLAW_AGENT_SCHEMA_VERSION)
-  ) {
-    return null;
-  }
-  return { state, agent };
+  return { state, agents };
 }
 
 /**
@@ -160,7 +172,7 @@ export function formatEarlyGitReleaseRefusal(
     return [
       ...lines,
       recovery.started
-        ? `So it stops here and reports this update as failed, and the new release finishes the update in the background. In about 5 to 10 minutes it moves the checkout to ${recovery.target.slice(0, 11)}, restarts the Gateway on the new release (which migrates your databases at startup), rebuilds the checkout, and restarts the Gateway on the rebuilt checkout. The first restart lasts as long as the migration; the second takes a few seconds. If it cannot finish, its log and \`openclaw update status\` say why and name the next step.`
+        ? `So it stops here and reports this update as failed, and the new release finishes the update in the background. In about 5 to 10 minutes it moves the checkout to ${recovery.target.slice(0, 11)}, restarts the Gateway on the new release (which migrates your databases at startup), rebuilds the checkout, and restarts the Gateway on the rebuilt checkout. The first restart lasts as long as the migration; the second takes a few seconds. If the new release does not start before migrating, it puts the previous build back. If it cannot finish, its log (journalctl --user -u ${unit}) says why and prints the next step; \`openclaw update status\` shows the outcome once the checkout is rebuilt.`
         : "So it stops here. That recovery is still running and finishes the update; nothing else was changed.",
       "Until the rebuild finishes, the checkout's `openclaw` command refuses the migrated data; that is expected.",
       `Follow progress: systemctl --user status ${unit} (log: journalctl --user -u ${unit})`,

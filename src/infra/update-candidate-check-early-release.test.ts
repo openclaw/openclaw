@@ -66,43 +66,38 @@ function install(params: {
   return { root, stateDir, env: { OPENCLAW_STATE_DIR: stateDir } as NodeJS.ProcessEnv };
 }
 
-const REBUILD =
-  "git pull --ff-only && openclaw gateway stop --force && pnpm install --frozen-lockfile && pnpm build && openclaw gateway install --force || { openclaw gateway start; false; }";
-
 it("refuses a schema change for the early release updater and names the rebuild", () => {
   const { root, env } = install({});
   const change = inspect(root, env)!;
-  const refusal = formatEarlyGitReleaseRefusal(change, { started: false });
+  const refusal = formatEarlyGitReleaseRefusal(change, { started: false, reason: "no upstream" });
 
   expect(refusal).toContain(
     `state schema ${OPENCLAW_STATE_SCHEMA_VERSION - 1} to ${OPENCLAW_STATE_SCHEMA_VERSION}, agent schema ${OPENCLAW_AGENT_SCHEMA_VERSION - 1} to ${OPENCLAW_AGENT_SCHEMA_VERSION}`,
   );
-  expect(refusal).toContain("the Gateway was not touched");
+  expect(refusal).toContain(
+    "the Gateway was not touched.\nAutomatic recovery did not start: no upstream.",
+  );
   // The early updater redacts state and home paths out of this output; the step names none.
   const rebuild = refusal.split("\n").at(-1);
-  expect(rebuild).toBe(REBUILD);
+  expect(rebuild).toBe(
+    "git pull --ff-only && openclaw gateway stop --force && pnpm install --frozen-lockfile && pnpm build && openclaw gateway install --force || { openclaw gateway start; false; }",
+  );
   expect(rebuild).not.toMatch(/[\s~]\//u);
 
-  const fallback = formatEarlyGitReleaseRefusal(change, { started: false, reason: "no upstream" });
-  expect(fallback).toContain("Automatic recovery did not start: no upstream.");
-  expect(fallback.split("\n").at(-1)).toBe(REBUILD);
-});
-
-it("says the new release finishes in the background, with a path-free progress command", () => {
-  const { root, env } = install({});
-  const change = inspect(root, env)!;
-  const automatic = formatEarlyGitReleaseRefusal(change, {
-    started: true,
-    unit: "openclaw-update-recovery",
-    target: "0123456789abcdef0123456789abcdef01234567",
-  });
-  expect(automatic).toContain("the new release finishes the update in the background");
-  expect(automatic).toContain("moves the checkout to 0123456789a");
+  // Started: failures go to the journal, because the checkout's CLI refuses migrated data.
+  const target = "0123456789abcdef0123456789abcdef01234567";
+  const started = { started: true, unit: "openclaw-update-recovery", target } as const;
+  const automatic = formatEarlyGitReleaseRefusal(change, started);
   expect(automatic).toContain(
-    "Follow progress: systemctl --user status openclaw-update-recovery (log: journalctl --user -u openclaw-update-recovery)",
+    "finishes the update in the background. In about 5 to 10 minutes it moves the checkout to 0123456789a",
   );
-  expect(automatic).not.toContain("the Gateway was not touched");
-  expect(automatic).not.toMatch(/[\s~]\//u);
+  expect(automatic).toContain(
+    "its log (journalctl --user -u openclaw-update-recovery) says why and prints the next step",
+  );
+  expect(automatic).toContain(
+    "`openclaw update status` shows the outcome once the checkout is rebuilt",
+  );
+  expect(automatic).not.toMatch(/[\s~]\/|not touched/u);
 });
 
 it("refuses when one agent store is older, registered or not", () => {
@@ -141,12 +136,10 @@ it("lets the early release updater through when nothing migrates or state is unr
 it("stops a concurrent early updater while an automatic recovery's release exists", () => {
   const { root, env, stateDir } = install({ state: OPENCLAW_STATE_SCHEMA_VERSION, agents: [] });
   fs.mkdirSync(path.join(stateDir, "git-install", "recovery", "openclaw"), { recursive: true });
-  const change = inspect(root, env);
-  expect(change?.pending).toBeNull();
-  const running = { started: false, running: "openclaw-update-recovery" } as const;
-  expect(formatEarlyGitReleaseRefusal(change!, running)).toContain(
-    "That recovery is still running and finishes the update",
-  );
+  const change = inspect(root, env)!;
+  expect(change.pending).toBeNull();
+  const refusal = formatEarlyGitReleaseRefusal(change, { started: false, running: "u" });
+  expect(refusal).toContain("That recovery is still running and finishes the update");
 });
 
 it("never refuses another updater, which can finish a schema change", () => {
