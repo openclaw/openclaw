@@ -453,6 +453,15 @@ else console.log(JSON.stringify({id:202,workflow_id:88,head_branch:'main',event:
     expect(reader).not.toContain("blacksmith");
   });
 
+  it("seals with the same independently admitted state evaluator as selection", () => {
+    const seal = step("release_execution_plan", "Seal immutable release execution plan");
+    const env = seal.env as Record<string, unknown>;
+    const select = workflow.jobs.release_decision?.env?.RELEASE_STATE_SCRIPT;
+    expect(select).toContain("qualification-verifier/scripts/full-release-validation-state.mjs");
+    expect(env.RELEASE_STATE_SCRIPT).toBe(select);
+    expect(seal.run).toContain('node "$RELEASE_STATE_SCRIPT" plan');
+  });
+
   it("restores the immutable attempt-one plan instead of rebuilding child identity", () => {
     const cache = step("release_execution_plan", "Cache immutable release execution plan");
     const restore = step(
