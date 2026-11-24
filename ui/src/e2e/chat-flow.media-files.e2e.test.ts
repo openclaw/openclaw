@@ -107,7 +107,9 @@ suite.define(() => {
       ...createControlUiE2eContextOptions(),
       hasTouch: true,
     });
-    const filename = "测试 market report.pdf";
+    // Each wrapped line must fit the 320 px title with or without CJK fonts installed;
+    // hosts differ in how wide they render these ideographs.
+    const filename = "测试 Q3 notes.pdf";
     const source = `/tmp/openclaw/${filename}`;
     const mediaUrl = `/__openclaw__/assistant-media?source=${encodeURIComponent(source)}&mediaTicket=ticket-download`;
     await installMockGateway(page, {

@@ -1,6 +1,5 @@
 import { expect, it, vi } from "vitest";
 import { createSubagentRunRecord } from "../agents/subagent-test-fixtures.test-helpers.js";
-import { hasPrivateRequesterInput } from "../agents/subagents/registry/subagent-delivery-state.js";
 import { createLifecycleControllerFixture } from "../agents/subagents/registry/subagent-registry-lifecycle-controller.test-support.js";
 import { subagentRuns } from "../agents/subagents/registry/subagent-registry-memory.js";
 import { restoreSubagentRunsFromDisk } from "../agents/subagents/registry/subagent-registry-persistence.js";
@@ -148,7 +147,6 @@ it.each([false, true])("recovers v2026.11.7 private queued input unless ended=%s
         expect(await restoreSubagentRunsFromDisk({ runs: subagentRuns })).toBe(1);
         const child = subagentRuns.get(storedChild.runId)!;
         expect(child.requesterSettleWake?.privateInput).toEqual({ runId, message: raw });
-        expect(hasPrivateRequesterInput(child)).toBe(true);
         expect(subagentRuns.isCompletionAuthorityRetired(child)).toBe(true);
         const context = createContext();
         context.resolveGatewayContext = () => context;

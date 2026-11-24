@@ -288,10 +288,7 @@ export function createGatewayChatUserTurnController(params: {
       ? { sessionLifecyclePatch: { lastInteractionAt: params.startedAt } }
       : {}),
     errorContext: "gateway chat user turn transcript",
-    assertOriginalInputCommit: composeSessionSourceAssertion([
-      params.assertOriginalInputCommit,
-      admission.operatorAuthority?.assertCurrent,
-    ]),
+    assertOriginalInputCommit: params.assertOriginalInputCommit,
     beforeMessageWrite: (event) => {
       if (recoveredInput) {
         return event.message;

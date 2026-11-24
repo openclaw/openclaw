@@ -33,6 +33,7 @@ import {
   autoReplyCoreTestInclude,
   autoReplyCoreTestExclude,
   autoReplyTopLevelReplyTestInclude,
+  infraTestOwner,
   runtimeConfigTestOwner,
   tuiPtyTestFiles,
 } from "../../test/vitest/vitest.test-shards.mjs";
@@ -45,6 +46,7 @@ import {
 import {
   getUnitFastTestFiles,
   getUnitFastIsolatedTestFiles,
+  getUnitFastTimerTestFiles,
 } from "../../test/vitest/vitest.unit-fast-paths.mjs";
 import {
   boundaryTestFiles,
@@ -222,8 +224,28 @@ export function listNodeTestConfigFiles(config: string): string[] | undefined {
 
 /** Measurement-only ownership; adding it must not change runtime partitioning. */
 export function listNodeTestVolumeConfigFiles(config: string): string[] | undefined {
+  if (config === "test/vitest/vitest.unit-fast.config.ts") {
+    const excluded = new Set([...getUnitFastTimerTestFiles(), ...getUnitFastIsolatedTestFiles()]);
+    return getUnitFastTestFiles().filter(
+      (file) => !excluded.has(file) && !isSharedVitestExcludedPath(file),
+    );
+  }
+  if (config === "test/vitest/vitest.unit-fast-fake-timers.config.ts") {
+    return getUnitFastTimerTestFiles().filter((file) => !isSharedVitestExcludedPath(file));
+  }
   if (config === "test/vitest/vitest.unit-fast-isolated.config.ts") {
     return getUnitFastIsolatedTestFiles().filter((file) => !isSharedVitestExcludedPath(file));
+  }
+  const scopedOwner =
+    config === "test/vitest/vitest.infra.config.ts"
+      ? infraTestOwner
+      : [agentVitestProjectOwners.core, agentVitestProjectOwners.support].find(
+          (owner) => owner.config === config,
+        );
+  if (scopedOwner) {
+    return listScopedOwnerTestFiles(scopedOwner).filter(
+      (file) => !isSharedVitestExcludedPath(file, scopedOwner.root === "." ? "" : scopedOwner.root),
+    );
   }
   if (config === "test/vitest/vitest.runtime-config.config.ts") {
     return listScopedOwnerTestFiles(runtimeConfigTestOwner).filter(

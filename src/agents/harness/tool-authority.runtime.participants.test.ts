@@ -58,7 +58,6 @@ function authority(profileId: string, retain?: AdmittedRunOperatorAuthority["ret
     scopes: ["operator.read", "operator.write"],
     gatewayAccessGrant: null,
     modelPolicy: prepareOperatorModelPolicy({ cfg: {}, policy: {} }),
-    assertCurrent() {},
   });
 }
 
@@ -154,7 +153,7 @@ it("isolates overlapping participant sessions", async ({ onTestFinished }) => {
     expect(messageCapture?.participants?.resolve()?.profileId).toBe("alice");
     const wrongExecutionIdentity = await resolveMessageIdentity("agent:main:another-run");
     expect(() => captureParticipants(wrongExecutionIdentity)).toThrow(
-      "Personal-tool turn authority is no longer active",
+      "This agent run is no longer active. Start a new turn to retry.",
     );
     await withParticipants("bob", async (bob) => {
       const second = captureParticipants(bob.identity);
@@ -167,7 +166,7 @@ it("isolates overlapping participant sessions", async ({ onTestFinished }) => {
 
       for (const capture of [first, messageCapture]) {
         expect(() => capture?.assertCurrent()).toThrow(
-          "embedded reply authority is no longer active",
+          "The reply target changed. Start a new turn to retry.",
         );
       }
       expect(() => second?.assertCurrent()).not.toThrow();

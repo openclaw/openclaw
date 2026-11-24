@@ -176,7 +176,7 @@ export async function bindWorkerTurnOwner(
   const runAuthority = getActiveAgentRunDelegatedAuthority(operationalRunInstance);
   if (!path || !runAuthority) {
     scope?.release();
-    throw new Error(`Session ${claim.sessionId} worker turn authority changed`);
+    throw new Error(`Session ${claim.sessionId} run ended. Start a new turn.`);
   }
   let claimAuthority: PlacementTurnClaimAuthority | undefined;
   const approvalLifetime = new AbortController();
@@ -192,11 +192,10 @@ export async function bindWorkerTurnOwner(
         prepared.identity.agentId !== sessionTarget.agentId ||
         prepared.identity.sessionKey !== sessionTarget.sessionKey
       ) {
-        throw new Error(`Session ${claim.sessionId} worker turn authority changed`);
+        throw new Error(`Session ${claim.sessionId} worker turn ended. Start a new turn.`);
       }
     };
     assertRunActive();
-    operatorAuthority?.assertCurrent();
     assertPreparedCurrent();
     delegatedAuthority = claimAgentRunApprovalAuthority(runAuthority, [approvalLifetime.signal]);
   } catch (error) {
@@ -209,7 +208,7 @@ export async function bindWorkerTurnOwner(
   claim = authority.claim;
   const owners = workerTurnOwners.get(path) ?? new Map();
   const refuseOwner: () => never = () => {
-    throw new Error(`Session ${claim.sessionId} worker turn authority changed`);
+    throw new Error(`Session ${claim.sessionId} worker turn ended. Start a new turn.`);
   };
   const delegatedSource = captureAgentRunDelegatedSourceAssertion(delegatedAuthority, refuseOwner);
   if (!delegatedSource) {
@@ -229,7 +228,7 @@ export async function bindWorkerTurnOwner(
     delegatedSource.assertBinding();
   };
   const assertActive = composeSessionSourceAssertion(
-    [delegatedSource.assertCurrent, assertRunActive, operatorAuthority?.assertCurrent],
+    [delegatedSource.assertCurrent, assertRunActive],
     (assertSources) => {
       assertSources();
       assertOwnerCurrent();
@@ -519,7 +518,7 @@ export async function admitWorkerTurnInput(
   }
   const assertCurrent = () => {
     if (!validate()) {
-      throw new Error("Worker turn admission authority changed");
+      throw new Error("Worker turn placement changed during admission. Start a new turn.");
     }
     runtime.assertActive();
   };

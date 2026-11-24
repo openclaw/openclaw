@@ -49,7 +49,6 @@ function hasOutstandingCompletion(entry: SubagentRunRecord): boolean {
   }
   return (
     entry.completion?.required === true &&
-    entry.delivery?.disposition !== "intentional_non_delivery" &&
     ["pending", "in_progress", "failed", "suspended"].includes(entry.delivery?.status ?? "pending")
   );
 }

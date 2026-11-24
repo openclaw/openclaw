@@ -21,7 +21,7 @@ afterEach(resetCommandQueueStateForTest);
 
 it("does not report a session authority refusal as a model fallback candidate", async () => {
   const error = new Error("Session target preparation outlived its attempt", {
-    cause: new Error("admitted run authority is no longer active", {
+    cause: new Error("This agent run is no longer active. Start a new turn to retry.", {
       cause: new SessionWorkStartChangedError("Session event configuration changed"),
     }),
   });
@@ -62,7 +62,7 @@ it.each([
   [
     "wrapped source authority revocation",
     () =>
-      new Error("admitted run authority is no longer active", {
+      new Error("This agent run is no longer active. Start a new turn to retry.", {
         cause: new SessionTranscriptReadFenceError(
           "Session transcript changed during context read",
         ),

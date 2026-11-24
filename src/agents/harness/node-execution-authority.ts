@@ -84,9 +84,7 @@ export async function createSessionNodeAuthorities(
   };
   const projected = source ? undefined : readProjected();
   let retained: ReturnType<typeof retainPreparedSessionEntryPredicate> | undefined;
-  let retainedFullPermission: ReturnType<typeof retainPreparedSessionEntryPredicate> | undefined;
   let sessionAllowed = false;
-  let fullPermissionAllowed = false;
   if (!source && !projected) {
     try {
       await withSessionEntryReadOnlyInWorker(session, assertActive, async (read, owner) => {
@@ -95,7 +93,6 @@ export async function createSessionNodeAuthorities(
         }
         const entry = read.value;
         sessionAllowed = entry?.sessionId === attempt.sessionId;
-        fullPermissionAllowed = entry?.permissionMode === "full";
         if (owner.source) {
           const predicate = {
             databaseIdentity: `file:${owner.source.databaseIdentity}`,
@@ -106,23 +103,16 @@ export async function createSessionNodeAuthorities(
             ...predicate,
             matches: (before, after) => before?.sessionId === after?.sessionId,
           });
-          if (admittedFull) {
-            retainedFullPermission = retainPreparedSessionEntryPredicate({
-              ...predicate,
-              matches: (before, after) => before?.permissionMode === after?.permissionMode,
-            });
-          }
         }
       });
     } catch (error) {
       retained?.release();
-      retainedFullPermission?.release();
       throw error;
     }
   }
   const assertRequestCurrent = (request: SessionNodeRequest) => {
     assertActive();
-    // Live facts can revoke the admitted permission, never create Full authority.
+    // Full is the attempt's admitted mode; only the session occurrence is re-read here.
     const entry = source
       ? readCapturedSessionActorEntry(source, session.sessionKey)
       : projected
@@ -130,13 +120,8 @@ export async function createSessionNodeAuthorities(
         : undefined;
     const currentSessionAllowed =
       source || projected
-        ? entry !== undefined &&
-          entry.sessionId === attempt.sessionId &&
-          (request.source !== "session-full" || entry.permissionMode === "full")
-        : sessionAllowed &&
-          retained?.isCurrent() &&
-          (request.source !== "session-full" ||
-            (fullPermissionAllowed && retainedFullPermission?.isCurrent()));
+        ? entry !== undefined && entry.sessionId === attempt.sessionId
+        : sessionAllowed && retained?.isCurrent();
     if (
       signal.aborted ||
       getActivePluginRegistry() !== gatewayRegistry ||
@@ -149,7 +134,7 @@ export async function createSessionNodeAuthorities(
       request.workspace.sessionKey !== attempt.sessionKey ||
       request.workspace.sessionId !== attempt.sessionId
     ) {
-      throw new Error("admitted node execution authority is no longer current");
+      throw new Error("The run or its session ended. Start a new turn to retry.");
     }
     assertPlacementCurrent({ ...request, runId: attempt.runId, agentId: session.agentId });
   };
@@ -169,7 +154,6 @@ export async function createSessionNodeAuthorities(
   return {
     release: () => {
       retained?.release();
-      retainedFullPermission?.release();
     },
     invokeWithSessionNodeAuthority,
     nodePlacementGrantAuthority: {

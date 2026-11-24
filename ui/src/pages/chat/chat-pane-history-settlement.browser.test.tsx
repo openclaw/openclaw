@@ -16,7 +16,29 @@ import {
   type TestChatPane,
   nativeHistoryMessage,
 } from "./chat-pane.test-support.ts";
+import { renderChatView, waitForElement } from "./chat-view.test-helpers.ts";
 import { render, renderChatThread } from "./test-helpers/chat-transcript-native.tsx";
+
+it("keeps the older-history sentinel at the scroll boundary during a held row correction", async () => {
+  const host = renderChatView({
+    messages: [nativeHistoryMessage(2)],
+    historyPagination: { hasMore: true, loading: false, onShowEarlier: vi.fn() },
+  });
+  const sentinel = await waitForElement(host, ".chat-history-sentinel");
+  const inner = expectDefined(
+    sentinel.closest(".chat-thread-inner--virtual"),
+    "virtual transcript",
+  );
+  const column = expectDefined(inner.querySelector<HTMLElement>(".chat-virtual-sizer"), "rows");
+  const offset = (element: Element) =>
+    element.getBoundingClientRect().top - inner.getBoundingClientRect().top;
+  const before = offset(column);
+  expect(offset(sentinel)).toBe(before);
+  // Hold the same margin the reader anchor uses while native scrolling owns the offset.
+  column.style.marginTop = "-1600px";
+  expect(offset(column)).toBe(before - 1600);
+  expect(offset(sentinel)).toBe(before);
+});
 
 it("fills an initially short transcript when its first geometry settles without an unrelated pane update", async () => {
   const messages = [1, 2, 3, 4].map((seq) => nativeHistoryMessage(seq));

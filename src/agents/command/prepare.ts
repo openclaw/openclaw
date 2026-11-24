@@ -80,7 +80,6 @@ export async function prepareAgentCommandExecution(
   const {
     abortSignal,
     assertSourceCurrent,
-    operatorAuthority,
     lifecycleGeneration: preparationLifecycleGeneration,
   } = opts;
   const isRawModelRun = opts.modelRun === true || opts.promptMode === "none";
@@ -231,7 +230,6 @@ export async function prepareAgentCommandExecution(
       throw createAbortError("Operation aborted", { cause: abortSignal.reason });
     }
     assertSourceCurrent?.();
-    operatorAuthority?.assertCurrent();
     if (preparationLifecycleGeneration !== undefined) {
       assertAgentRunLifecycleGenerationCurrent(preparationLifecycleGeneration);
     }

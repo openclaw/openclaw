@@ -638,7 +638,8 @@ export type SessionControllerSourceAdapter = {
   /** Original personal ingress, bound at admission; identity evidence, not an execution grant. */
   initiatingPersonalOperator?: AdmittedRunOperatorAuthority;
   readonly scope?: string;
-  readonly authority?: { assertCurrent(): void; signal?: AbortSignal };
+  /** Stop signal and the producer's own data fence; an operator authority carries only Stop. */
+  readonly authority?: { assertCurrent?(): void; signal?: AbortSignal };
   readonly signal?: AbortSignal;
   readonly requester?: Readonly<{ deviceId?: string; connectionId?: string; clientId?: string }>;
   /** Known routing identity before a physical target exists; never execution authority. */

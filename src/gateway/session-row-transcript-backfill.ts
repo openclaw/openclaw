@@ -106,3 +106,13 @@ export async function backfillSessionRowTranscriptFields(
     }
   }
 }
+
+/**
+ * Unread follows the chat: a run end advances activity to its transcript's newest visible
+ * assistant row. Silent, heartbeat and hidden replies are not visible rows. The read is
+ * optional; on failure the run end leaves unread unchanged.
+ */
+export async function readVisibleSessionActivityAt(params: BackfillParams) {
+  const fields = await backfillSessionRowTranscriptFields(params).catch(() => undefined);
+  return fields?.lastAssistantMessage?.timestamp;
+}

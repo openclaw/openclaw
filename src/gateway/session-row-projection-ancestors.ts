@@ -19,6 +19,7 @@ import {
   resolveStoredSessionKeyForAgentStore,
   selectStoredSessionLineage,
 } from "./session-store-key.js";
+import type { SessionChildLink } from "./session-utils-core.js";
 import { projectGatewaySessionRunState } from "./session-utils-display.js";
 import { reuseSessionRowChildLinks } from "./session-utils-projection.js";
 
@@ -96,7 +97,14 @@ export function createSessionRowRelationReads(owner: {
       );
     },
     readChildLinks(this: void, row: records.Row, residentOnly = false) {
-      const links = [...records.dependents(row, owner.byParent)].flatMap((child) => {
+      // For resident reads, resolve each indexed parent once for all its children.
+      const children = records.dependents(
+        row,
+        owner.byParent,
+        residentOnly ? owner.referenced : undefined,
+      );
+      const links: SessionChildLink[] = [];
+      for (const child of residentOnly ? children : [...children]) {
         let value = owner.rows.get(child);
         if (
           value &&
@@ -107,17 +115,18 @@ export function createSessionRowRelationReads(owner: {
         ) {
           value = owner.acquireEntry(value, owner.readEntry(value));
         }
-        return value?.entry && [...value.parents].some((ref) => owner.referenced(ref) === row)
-          ? [
-              {
-                key: value.key,
-                entry: value.entry,
-                agentId: value.agentId,
-                storePath: value.storeTarget.storePath,
-              },
-            ]
-          : [];
-      });
+        if (
+          value?.entry &&
+          (residentOnly || [...value.parents].some((ref) => owner.referenced(ref) === row))
+        ) {
+          links.push({
+            key: value.key,
+            entry: value.entry,
+            agentId: value.agentId,
+            storePath: value.storeTarget.storePath,
+          });
+        }
+      }
       // Keyed child refreshes reorder the parent index; presentation must stay stable.
       links.sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));
       return reuseSessionRowChildLinks(links, row.materialized?.source.childLinks);

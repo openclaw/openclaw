@@ -84,9 +84,9 @@ commit without a generated summary; see [Auto-compaction](#auto-compaction).
 
 Auto-compaction is on by default. It runs when the session nears the context limit, or when the model returns a context-overflow error (in which case OpenClaw compacts and retries).
 
-Built-in client maintenance starts at the smaller of 75% of the active window
+Built-in client maintenance starts at the smaller of 85% of the active window
 and the window minus its compaction reserve. A 1,000,000-token window therefore
-starts maintenance at 750,000 tokens, while the summary reserve stays 20,000.
+starts maintenance at 850,000 tokens, while the summary reserve stays 20,000.
 During tool loops, completed provider usage triggers this maintenance before the
 next request. The request boundary also checks projected occupancy, including
 new tool results, against the full window even when proactive compaction is
@@ -108,16 +108,19 @@ Preflight uses published context totals, falling back to a bounded recent usage
 tail or the same bounded context view used by the runtime. Missing usage does not
 trigger a second accounting pass over the entire conversation history.
 
-In the built-in runtime, native ChatGPT sign-in uses V2 compaction at normal
-request boundaries, including between completed tool rounds. It starts when the
-known or projected request occupancy reaches the smaller of the reserve-based
-prompt budget and 90% of the context window (rounded down). For a 500,000-token
-window with a 20,000-token reserve, that means 450,000 tokens, not 480,000.
-The complete outgoing request must still fit the model window: a single large
-pending message or tool result can consume the remaining headroom before a safe
-boundary, in which case OpenClaw keeps the existing client-side fallback rather
-than dropping pending content. Other providers, manual `/compact`, and
-overflow recovery keep their existing thresholds and behavior.
+In the built-in runtime, automatic compaction runs at normal request boundaries,
+including between completed tool rounds. It starts when the known or projected
+request occupancy reaches the smaller of the reserve-based prompt budget and 85%
+of the context window (rounded down), the same trigger as client maintenance.
+For a 500,000-token window with a 20,000-token reserve, that means 425,000
+tokens, not 480,000. The remaining headroom holds new tool results and the
+summary request itself. Native ChatGPT
+sign-in uses V2 compaction there; every other route sends a
+[warm request](#warm-request-compaction). The complete outgoing request must
+still fit the model window: a single large pending message or tool result can
+consume the remaining headroom before a safe boundary, in which case OpenClaw
+keeps the existing client-side fallback rather than dropping pending content.
+Manual `/compact` and overflow recovery keep their existing behavior.
 
 If the provider rejects a request after tool calls have completed, the built-in runtime can compact and continue from their recorded results. It keeps the current model and account, preserves the original request, and does not replay completed actions. This recovery requires settled tool results; pending tools, approvals, cancellation, and a tool that intentionally ended the turn retain their normal handling. If a Gateway restart later interrupts that continuing run, recovery preserves the accepted input even when compaction has summarized it.
 
@@ -173,6 +176,26 @@ Before compacting, OpenClaw automatically reminds the agent to save important no
 
   </Accordion>
 </AccordionGroup>
+
+### Warm request compaction
+
+On routes other than native ChatGPT sign-in, the boundary sends the summary
+request as the session's next normal request: the same system prompt, tools,
+request parameters, cache markers and every earlier message, plus one appended
+user item with the summary instructions. The provider reads its warm prompt
+cache, so compaction costs about as much as one cached turn instead of a
+separate summarizer request, and the model summarizes the full history rather
+than a bounded sample. In safeguard mode this summary is the first attempt; the
+quality audit still applies and its corrective attempts use the bounded
+summarizer. The summary is saved with the usual cut point and retained recent
+messages, then the turn continues from the compacted history. A split turn is
+summarized in the same single request.
+
+If the reply calls a tool, stops at the output limit, or has no text, nothing is
+saved and the client compactor runs once instead. Sessions whose compaction
+belongs to a context engine, a registered compaction provider, or a separate
+`agents.defaults.compaction.model`, and memory-flush turns, do not use the
+warm request.
 
 ## Manual compaction
 
@@ -406,6 +429,11 @@ prompt. When a retry reloads history in the middle of a turn whose tool results
 exceed the guard, the loader keeps the request that opened the turn in front of
 those frames, so the retry still sees its task.
 
+The summary request that recovers a cut-off tool turn is the one exception. It answers
+for that turn alone under its own cache key, so it stays within eight bytes per context
+token. When screenshots fill that bound, it replaces the largest tool-result bodies with
+short notices before it drops the turn's request.
+
 This selection does not delete saved history, create a summary, run a memory
 flush, or trigger compaction notifications. Use `/compact` when you want semantic
 summarization. The normal compaction triggers and the opt-in active-transcript byte
@@ -451,9 +479,9 @@ After a successful continuation, OpenClaw uses the provider's measured context u
 
 The native ChatGPT sign-in route uses streamed Codex V2 compaction at the next normal model-request boundary, including between settled tool rounds. It preserves the normal request surface and saves retained user messages plus an opaque checkpoint through the existing session owner. Failed or cancelled streams do not install a checkpoint. On this route, manual `/compact` (with or without focus instructions) and provider-confirmed overflow use client-side compaction, not V2. See [OpenAI advanced configuration](/providers/openai/advanced#server-side-compaction-responses-api) for controls and fallback behavior.
 
-For V2-eligible requests, reply-level token maintenance and the optional mid-turn precheck defer local recovery to this boundary so they cannot preempt provider compaction. Memory flushing and transcript-byte maintenance still run. Other requests keep the provider-bound precheck, including saved checkpoint pressure when no matching current-run usage is available.
+Reply-level token maintenance and the optional mid-turn precheck defer local recovery to the request boundary (the V2 checkpoint above, or a [warm request](#warm-request-compaction) on other routes) so they cannot preempt it. Memory flushing and transcript-byte maintenance still run. Sessions whose compaction belongs to a configured context engine keep the provider-bound precheck, including saved checkpoint pressure when no matching current-run usage is available.
 
-Predicted context pressure uses budget compaction before the next request. The public OpenAI Responses API and native xAI use their compact endpoint by default for budget compaction and for `/compact` without focus instructions. `params.responsesCompactEndpoint: false` disables that endpoint for a model. `/compact <focus>` keeps client-side summarization so the instructions apply. A provider-confirmed overflow keeps the client recovery path because compact endpoints also require their input to fit. Endpoint failures fall back to client-side summarization.
+When the warm request cannot produce a summary, the client compactor runs. The public OpenAI Responses API and native xAI use their compact endpoint by default for that fallback and for `/compact` without focus instructions. `params.responsesCompactEndpoint: false` disables that endpoint for a model. `/compact <focus>` keeps client-side summarization so the instructions apply. A provider-confirmed overflow keeps the client recovery path because compact endpoints also require their input to fit. Endpoint failures fall back to client-side summarization.
 
 Once the foreground request budget is prepared, a returned endpoint window must
 also fit beside its fixed instructions, tools, pending input, and reserve before

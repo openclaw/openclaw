@@ -43,20 +43,38 @@ function step(job: string, name: string) {
   return match;
 }
 
-it("pins both hosted callers to the Q-ledger-aware watcher definition", () => {
-  const revision = "b720fcdb58b62c90eaae10c2d1ba99ba813adb36";
+it("runs both release callers independently of Boat with the pinned Blacksmith watcher", () => {
+  const revision = "b5e0ed2fdd00553915067a258603606515236c58";
+  expect(workflow.jobs).not.toHaveProperty("boat_release_runners");
+  expect(workflow.jobs).not.toHaveProperty("cleanup_boat_release_runners");
   for (const name of ["release_decision", "diagnostic_drain"]) {
+    const caller = workflowJob(name);
+    expect(caller.needs).toEqual([
+      "resolve_target",
+      "prepare_npm_package",
+      "qualify_npm_package",
+      "prepare_plugin_npm",
+      "prepare_docker_release",
+      "release_execution_plan",
+    ]);
+    expect(caller.if).toBe("always()");
+    expect(caller.with?.runner_label).toBe("blacksmith-2vcpu-ubuntu-2404");
     expect((workflowJob(name) as { uses?: string }).uses).toBe(
       "openclaw/openclaw/.github/workflows/full-release-state-watcher.yml@" + revision,
     );
   }
-  // Independently verified against the immutable selected revision; no Git-history
-  // dependency in shallow CI checkouts. A changed watcher needs a new verified pin.
-  const selectedSource = readFileSync(".github/workflows/full-release-state-watcher.yml", "utf8");
+  // Retain the exact pinned definition independently of current watcher edits.
+  // This fixture is the git blob at revision above, so shallow CI needs no history.
+  const selectedSource = readFileSync(
+    "test/scripts/fixtures/full-release-state-watcher-b5e0ed.yml",
+    "utf8",
+  );
   expect(createHash("sha256").update(selectedSource).digest("hex")).toBe(
-    "4ee76e74a50fa5d0939b67010e0b334bf0a7bda604c0e81de079f05291ce561f",
+    "532e32b7cdcc38587774a7f24853b113596fb51998f6cfb6f87819ce69c953ef",
   );
   const selected = parse(selectedSource);
+  expect(selected.jobs.watch["runs-on"]).toBe("blacksmith-2vcpu-ubuntu-2404");
+  expect(selected.jobs.watch["timeout-minutes"]).toBe(720);
   expect(selected.jobs.watch.env.OPENCLAW_RELEASE_WAIVERS_PATH).toBe(
     "${{ github.workspace }}/scripts/lib/release-validation-waivers.json",
   );

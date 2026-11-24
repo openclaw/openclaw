@@ -2066,16 +2066,11 @@
     gap: 2px;
   }
 
+  /* Row previews show six cards on tablets; the base grid already hides later cards. */
   .plugin-catalog-results--rows
     .plugin-catalog-section--expandable
-    .plugin-catalog-card:nth-child(n + 5) {
+    .plugin-catalog-card:nth-child(-n + 6) {
     display: grid;
-  }
-
-  .plugin-catalog-results--rows
-    .plugin-catalog-section--expandable
-    .plugin-catalog-card:nth-child(n + 7) {
-    display: none;
   }
 }
 
@@ -2083,12 +2078,6 @@
 @media (max-width: 640px) {
   .plugin-catalog-results--rows .plugin-catalog-results__body {
     gap: 26px;
-  }
-
-  .plugin-catalog-results--rows
-    .plugin-catalog-section--expandable
-    .plugin-catalog-card:nth-child(n + 3) {
-    display: grid;
   }
 
   .plugin-catalog-results--rows
@@ -2109,6 +2098,11 @@
   .plugin-catalog-results--rows .plugin-catalog-row__main {
     align-items: flex-start;
     gap: 12px;
+  }
+
+  /* Refillable phone rows reserve the title, its gap and both allowed summary lines. */
+  .plugin-catalog-grid--continuable .plugin-catalog-row__main {
+    min-height: calc(20px + 1px + 2.8 * var(--control-ui-text-md));
   }
 
   .plugin-catalog-results--rows .plugin-catalog-card__art {

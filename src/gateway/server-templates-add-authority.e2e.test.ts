@@ -231,7 +231,7 @@ function setRemoteFixtures(fixtures: Fixture[]) {
 }
 
 it.for(["skill", "plugin", "clawhub-plugin"] as const)(
-  "fences %s publication for read-only and revoked operators through native Add",
+  "fences %s publication for read-only operators and finishes an Add admitted before revocation",
   async (kind, { signal }) => {
     const state = await createOpenClawTestState({
       label: `bundled-${kind}-authority`,
@@ -754,8 +754,9 @@ it.for(["skill", "plugin", "clawhub-plugin"] as const)(
       release.resolve();
       await withinTest(policyReturned.promise, signal);
       await reply;
-      // Join the actual allocation owner after native cleanup, so absence cannot
-      // pass while the disconnected request still has installation work in flight.
+      // Authority is checked once, when Add starts: revoking the device while installation is in
+      // flight applies to the next request, so the admitted Add finishes its publication. Join the
+      // allocation owner so the check sees the finished installation, not work still in flight.
       await withOpenClawStateLeaseAsync(
         {
           scope: "core:template-add-allocation",
@@ -765,8 +766,10 @@ it.for(["skill", "plugin", "clawhub-plugin"] as const)(
         },
         captureOpenClawStateWorkerContext({ env: state.env }),
         async () => {
-          await noEffects(revoked, revokedWorkspace, true);
-          expect(await fs.stat(finalSource).catch(() => null)).toBeNull();
+          expect(await effects(revoked, revokedWorkspace)).toMatchObject({
+            agent: expect.objectContaining({}),
+            published: true,
+          });
         },
       );
       expect(finalPolicySources).toHaveLength(1);

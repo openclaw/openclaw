@@ -67,7 +67,6 @@ it.each(
         scopes: ["operator.admin"],
         gatewayAccessGrant: null,
         modelPolicy: prepareOperatorModelPolicy({ cfg: {}, policy: {} }),
-        assertCurrent: () => operation.abortSignal.throwIfAborted(),
       });
       const incomingAuthority =
         caller === "different profile"

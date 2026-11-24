@@ -206,8 +206,9 @@ export function createGatewayAuthenticatedRequestDispatcher(params: {
       invalidateGatewayPolicyClient(client, {
         reason: "publication-transport-authority-changed",
         code: 4001,
-        message: "publication transport authority changed",
-        close: () => close(4001, "publication transport authority changed"),
+        message: "Publication transport credentials changed. Reconnect and try again.",
+        close: () =>
+          close(4001, "Publication transport credentials changed. Reconnect and try again."),
       });
       return false;
     };
@@ -362,11 +363,7 @@ export function createGatewayAuthenticatedRequestDispatcher(params: {
       const expectedProfileBinding =
         req.expectedProfileId === undefined
           ? undefined
-          : await createExpectedProfileBinding(req.expectedProfileId, client, () => {
-              if (!hasCurrentClientAuthority()) {
-                throw new Error("Gateway requester authority changed");
-              }
-            });
+          : await createExpectedProfileBinding(req.expectedProfileId, client);
       const publishResponse = (
         initialOk: boolean,
         initialPayload?: unknown,
