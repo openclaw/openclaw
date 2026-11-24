@@ -36,6 +36,7 @@ const metadataSchema = `CREATE TABLE schema_meta (
   meta_key TEXT PRIMARY KEY, role TEXT, schema_version INTEGER,
   agent_id TEXT, app_version TEXT, created_at INTEGER, updated_at INTEGER
 )`;
+const agentOwner = { agentId: "main", role: "agent" };
 
 const it = baseIt.extend<{ state: OpenClawTestState }>({
   state: async ({ task: _task }, use) => withOpenClawTestState({ scenario: "minimal" }, use),
@@ -56,11 +57,7 @@ function observeReads() {
 
 function expectCachedMetadata(database: Parameters<typeof readMetadata>[0], schemaVersion: number) {
   using observed = observeReads();
-  expect(readMetadata(database)).toEqual({
-    agentId: "main",
-    role: "agent",
-    schemaVersion,
-  });
+  expect(readMetadata(database)).toEqual({ ...agentOwner, schemaVersion });
   expect(observed.queries).toEqual([]);
 }
 
@@ -92,11 +89,7 @@ it.for(["transaction", "implicit snapshot"] as const)(
       });
       {
         using observed = observeReads();
-        expect(readMetadata(reader)).toEqual({
-          agentId: "main",
-          role: "agent",
-          schemaVersion: 1,
-        });
+        expect(readMetadata(reader)).toEqual({ ...agentOwner, schemaVersion: 1 });
         // Only the explicit schema cursor proves its catalog before the sibling DDL.
         expect(observed.queries).toHaveLength(snapshot === "transaction" ? 4 : 0);
       }
@@ -122,11 +115,7 @@ it.for(["drop", "recreate"] as const)(
     writer.exec(`PRAGMA user_version=1; ${metadataSchema}`);
     admitSqliteSchema(writer);
     persistMetadata(writer, "main", 1);
-    expect(readMetadata(writer)).toEqual({
-      agentId: "main",
-      role: "agent",
-      schemaVersion: 1,
-    });
+    expect(readMetadata(writer)).toEqual({ ...agentOwner, schemaVersion: 1 });
     writer.exec(
       change === "drop" ? "DROP TABLE schema_meta" : `DROP TABLE schema_meta; ${metadataSchema}`,
     );
@@ -337,7 +326,7 @@ it("publishes agent writer version and reader floor in the same rollback boundar
   expect(database.prepare("PRAGMA table_info(schema_meta)").all()).not.toContainEqual(
     expect.objectContaining({ name: "min_reader" }),
   );
-  expect(readMetadata(database)).toEqual({ agentId: "main", role: "agent", schemaVersion: 1 });
+  expect(readMetadata(database)).toEqual({ ...agentOwner, schemaVersion: 1 });
   expect(() =>
     runSqliteImmediateTransactionSync(database, () => {
       persistMetadata(database, "main", 2, 1);
@@ -348,30 +337,17 @@ it("publishes agent writer version and reader floor in the same rollback boundar
     schema_version: 1,
   });
   runSqliteImmediateTransactionSync(database, () => persistMetadata(database, "main", 2, 1));
-  expect(database.prepare("SELECT schema_version, min_reader FROM schema_meta").get()).toEqual({
-    schema_version: 2,
-    min_reader: 1,
-  });
-  expect(readMetadata(database)).toEqual({
-    agentId: "main",
-    role: "agent",
-    schemaVersion: 2,
-    minReader: 1,
-  });
+  const stamp = database.prepare("SELECT schema_version, min_reader FROM schema_meta");
+  expect(stamp.get()).toEqual({ schema_version: 2, min_reader: 1 });
+  expect(readMetadata(database)).toEqual({ ...agentOwner, schemaVersion: 2, minReader: 1 });
   expect(() =>
     runSqliteImmediateTransactionSync(database, () => {
       persistMetadata(database, "main", 3);
       throw new Error("cancel strict publication");
     }),
   ).toThrow("cancel strict publication");
-  expect(database.prepare("SELECT schema_version, min_reader FROM schema_meta").get()).toEqual({
-    schema_version: 2,
-    min_reader: 1,
-  });
+  expect(stamp.get()).toEqual({ schema_version: 2, min_reader: 1 });
   runSqliteImmediateTransactionSync(database, () => persistMetadata(database, "main", 3));
-  expect(database.prepare("SELECT schema_version, min_reader FROM schema_meta").get()).toEqual({
-    schema_version: 3,
-    min_reader: null,
-  });
-  expect(readMetadata(database)).toEqual({ agentId: "main", role: "agent", schemaVersion: 3 });
+  expect(stamp.get()).toEqual({ schema_version: 3, min_reader: null });
+  expect(readMetadata(database)).toEqual({ ...agentOwner, schemaVersion: 3 });
 });
