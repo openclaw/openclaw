@@ -49,35 +49,6 @@ describe("terminal ansi helpers", () => {
     }
   });
 
-  it("bounds failed OSC search work while preserving CSI and OSC at the failure frontier", () => {
-    const repeated = "\u009d".repeat(32_768);
-    const csi = '\u001b[1"q';
-    const osc = '\u009d0;"title\u0007';
-    for (const expected of [[], [csi, osc], ["\u001b]next\u0007"]]) {
-      const input = repeated + expected.join("") + (expected.length ? repeated : "");
-      let failedUntil = 0;
-      let failedWork = 0;
-      let failedCalls = 0;
-      const sequences: string[] = [];
-      for (let index = 0; index < input.length; index++) {
-        const scan = index < failedUntil ? undefined : scanAnsiOscAt(input, index);
-        if (scan && scan.value === undefined) {
-          failedUntil = scan.bodyEnd;
-          failedWork += scan.bodyEnd - index;
-          failedCalls++;
-        }
-        const value = scan?.value ?? scanAnsiCsiAt(input, index)?.value;
-        if (value) {
-          sequences.push(value);
-          index += value.length - 1;
-        }
-      }
-      expect(failedWork).toBeLessThanOrEqual(input.length);
-      expect(failedCalls).toBe(expected.length ? 2 : 1);
-      expect(sequences).toEqual(expected);
-    }
-  });
-
   it("does not share failed OSC frontiers between inputs or consume the blocking escape", () => {
     const unfinished = "\u009d\u009d\u001b[31m";
     const complete = "\u009dtitle\u0007";
@@ -93,47 +64,75 @@ describe("terminal ansi helpers", () => {
 
   it("bounds OSC search work in the real strip and segment consumers", () => {
     const repeated = "\u009d".repeat(16_384);
-    const input = repeated + "\u001b[31mtail";
-    const plain = repeated + "tail";
-    const consumers = [
-      () => stripAnsi(input),
-      () => stripAnsiSequences(input),
-      () => stripAnsiForStreamChunk(input, { compatibilityGrammar: true }),
-      () =>
-        [...iterateAnsiSegments(input)]
-          .filter((part) => part.kind === "text")
-          .map((part) => part.value)
-          .join(""),
-    ];
-    for (const consume of consumers) {
-      // oxlint-disable-next-line typescript/unbound-method -- Reflect.apply below supplies the original receiver.
-      const exec = RegExp.prototype.exec;
-      let work = 0;
-      const spy = vi.spyOn(RegExp.prototype, "exec").mockImplementation(function (
-        this: RegExp,
-        text: string,
-      ) {
-        const start = this.lastIndex;
-        const match = Reflect.apply(exec, this, [text]);
-        if (this.sticky && this.source.startsWith(ANSI_OSC_INTRODUCER_PATTERN)) {
-          // Complete/body matches expose their scanned extent. A failed
-          // compatibility search at a real opener examines the remaining input.
-          work +=
-            match?.[0].length ??
-            (text[start] === "\u009d" || text.startsWith("\u001b]", start)
-              ? text.length - start
-              : 0);
+    const csi = '\u001b[1"q';
+    const osc = '\u009d0;"title\u0007';
+    // Compatibility OSC can consume the leading failed run through a later terminator.
+    const cases = [
+      [repeated + "\u001b[31mtail", repeated + "tail", repeated + "tail", ["\u001b[31m"]],
+      [repeated, repeated, repeated, []],
+      [repeated + csi + osc + repeated, repeated + repeated, repeated, [csi, osc]],
+      [
+        repeated + "\u001b]next\u0007" + repeated,
+        repeated + repeated,
+        repeated,
+        ["\u001b]next\u0007"],
+      ],
+    ] as const;
+    for (const [input, strict, compatibility, sequences] of cases) {
+      const consumers = [
+        [() => ({ text: stripAnsi(input) }), strict],
+        [() => ({ text: stripAnsiSequences(input) }), compatibility],
+        [
+          () => ({ text: stripAnsiForStreamChunk(input, { compatibilityGrammar: true }) }),
+          compatibility,
+        ],
+        [
+          () => {
+            const parts = [...iterateAnsiSegments(input)];
+            return {
+              text: parts
+                .filter((part) => part.kind === "text")
+                .map((part) => part.value)
+                .join(""),
+              sequences: parts.filter((part) => part.kind === "ansi").map((part) => part.value),
+            };
+          },
+          strict,
+        ],
+      ] as const;
+      for (const [consume, expected] of consumers) {
+        // oxlint-disable-next-line typescript/unbound-method -- Reflect.apply below supplies the original receiver.
+        const exec = RegExp.prototype.exec;
+        let work = 0;
+        const spy = vi.spyOn(RegExp.prototype, "exec").mockImplementation(function (
+          this: RegExp,
+          text: string,
+        ) {
+          const start = this.lastIndex;
+          const match = Reflect.apply(exec, this, [text]);
+          if (this.sticky && this.source.startsWith(ANSI_OSC_INTRODUCER_PATTERN)) {
+            // Complete/body matches expose their scanned extent. A failed
+            // compatibility search at a real opener examines the remaining input.
+            work +=
+              match?.[0].length ??
+              (text[start] === "\u009d" || text.startsWith("\u001b]", start)
+                ? text.length - start
+                : 0);
+          }
+          return match;
+        });
+        let result: { text: string; sequences?: string[] };
+        try {
+          result = consume();
+        } finally {
+          spy.mockRestore();
         }
-        return match;
-      });
-      let result: string;
-      try {
-        result = consume();
-      } finally {
-        spy.mockRestore();
+        expect(result.text).toBe(expected);
+        if (result.sequences) {
+          expect(result.sequences).toEqual(sequences);
+        }
+        expect(work).toBeLessThanOrEqual(input.length * 2);
       }
-      expect(result).toBe(plain);
-      expect(work).toBeLessThanOrEqual(input.length * 2);
     }
   });
 
