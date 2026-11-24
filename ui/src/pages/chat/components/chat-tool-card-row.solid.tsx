@@ -377,7 +377,6 @@ export function ToolCardRow(props: ToolCardProps) {
 export function ToolMessageSummary(props: {
   state: GroupedMessagePresentation;
   options: GroupedMessageOptions;
-  imageCount?: number;
 }) {
   let disclosureContent: HTMLSpanElement | undefined;
   const syncOverflow = (event: Event) => syncToolDisclosureOverflow(event, disclosureContent);
@@ -394,12 +393,11 @@ export function ToolMessageSummary(props: {
       : null;
     if (singleToolCard && unwrapToolCallForDisplay(singleToolCard).name === "view_image") {
       const outcome = resolveToolCardOutcome(singleToolCard, props.options.runActive);
-      const count = props.imageCount ?? images.length;
       return {
         singleToolDisplay,
         toolMessageLabel:
-          outcome === "succeeded" && count > 1
-            ? t("chat.toolCards.viewedImages", { count: String(count) })
+          outcome === "succeeded" && images.length > 1
+            ? t("chat.toolCards.viewedImages", { count: String(images.length) })
             : resolveToolOperationLabel(singleToolCard, outcome),
         toolSummaryLabel: undefined,
         toolPreview: "",
