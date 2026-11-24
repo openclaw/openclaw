@@ -63,9 +63,10 @@ android {
 
   namespace = "ai.openclaw.wear"
   compileSdk {
-    version = release(37) {
-      minorApiLevel = 1
-    }
+    version =
+      release(37) {
+        minorApiLevel = 1
+      }
   }
 
   defaultConfig {

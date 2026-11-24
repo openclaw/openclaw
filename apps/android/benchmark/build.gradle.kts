@@ -7,9 +7,10 @@ android {
   namespace = "ai.openclaw.app.benchmark"
   // Match the target app while targetSdk remains an independent behavior opt-in.
   compileSdk {
-    version = release(37) {
-      minorApiLevel = 1
-    }
+    version =
+      release(37) {
+        minorApiLevel = 1
+      }
   }
 
   defaultConfig {

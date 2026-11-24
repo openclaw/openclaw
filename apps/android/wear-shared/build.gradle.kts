@@ -7,9 +7,10 @@ plugins {
 android {
   namespace = "ai.openclaw.wear.shared"
   compileSdk {
-    version = release(37) {
-      minorApiLevel = 1
-    }
+    version =
+      release(37) {
+        minorApiLevel = 1
+      }
   }
 
   defaultConfig {

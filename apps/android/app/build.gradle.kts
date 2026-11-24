@@ -344,9 +344,10 @@ android {
   // Compose 1.13 requires API 37.1 compilation.
   // targetSdk stays separate so runtime behavior changes remain an explicit migration.
   compileSdk {
-    version = release(37) {
-      minorApiLevel = 1
-    }
+    version =
+      release(37) {
+        minorApiLevel = 1
+      }
   }
 
   // Release signing is local-only; keep the keystore path and passwords out of the repo.
