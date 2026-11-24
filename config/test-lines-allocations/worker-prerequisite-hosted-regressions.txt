@@ -2,5 +2,6 @@
 # Retains coverage across historical worker placement upgrades and rollback,
 # publication outcome recovery, and delayed App renewal with an installed grant.
 # Also covers independent wire/requester settlement and checking persisted child
-# completion before a fresh requester turn. These prove distinct boundaries.
-173
+# completion before a fresh requester turn. Includes synthetic exec notification
+# storage so cleanup and timeout assertions still exercise the real handoff.
+179

@@ -86,7 +86,10 @@ const controlUiPerformanceBudgets = {
   // Voice API-key guidance (#204128): measured 1,335,688 B (+1,221 B over paired
   // base 1,334,467 B at e2973f93), with no added headroom.
   // Combined with b36ba3fed2: measured 1,335,757 B, retaining main's 64 B headroom.
-  chatBootJsGzipBytes: 1_335_821,
+  // Peter requested the single Daybreak toggle (#204302, 2026-11-23): model-switch remap and
+  // stale-program repair measured +451 B over paired base 1,334,559 B at 34c8570c; on top of
+  // main's 1,335,821 B limit (which keeps its 64 B headroom) that is 1,336,272 B.
+  chatBootJsGzipBytes: 1_336_272,
   // The same shared lazy signer adds the coordinator-accepted +235 B here.
   // Same #198491 approval: measured 815,742 B (+1,122 B over main) plus 64 B headroom.
   // Continuation wakes (#200056): measured 816,096 B (+390 B over main) plus 64 B.

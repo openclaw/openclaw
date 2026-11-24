@@ -759,7 +759,8 @@ it.for(["skill", "plugin", "clawhub-plugin"] as const)(
       await expect(connect(deviceOptions)).rejects.toThrow("device token mismatch");
       release.resolve();
       await withinTest(policyReturned.promise, signal);
-      // Close ends delivery, not an admitted Add. Join its owner before reading durable effects.
+      // Add checks authority at admission. Revocation ends delivery and blocks new work,
+      // but the admitted Add finishes. Join its allocation owner before reading durable effects.
       await withOpenClawStateLeaseAsync(
         {
           scope: "core:template-add-allocation",

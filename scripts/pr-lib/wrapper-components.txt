@@ -1696,6 +1696,7 @@ src/plugins/doctor-contract-relevance.ts
 src/plugins/loader-channel-setup.ts
 src/plugins/doctor-session-route-state-owner-types.ts
 src/plugins/enable.ts
+src/plugins/git-source-spec.ts
 src/plugins/hardlink-policy.ts
 src/plugins/hook-policy-decisions.ts
 src/plugins/host-hook-cleanup-result.ts
@@ -1936,6 +1937,7 @@ src/process/child-process.ts
 src/process/command-error.ts
 src/process/command-process-identity.ts
 src/process/command-reservation-census.ts
+src/process/command-stdin-file.ts
 src/process/darwin-process-inspection.ts
 src/process/exec-output.ts
 src/process/exec-result.ts

@@ -16,10 +16,11 @@ import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { runBestEffortCleanup } from "../infra/non-fatal-cleanup.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { bindCommandStdinFile, openCommandStdinFile } from "../process/command-stdin-file.js";
 import { createPermitPool } from "../shared/permit-pool.js";
 import { runFfmpeg } from "./ffmpeg-exec.js";
 import {
-  probePlaybackMediaFileDescriptor,
+  probePlaybackMediaFile,
   toMediaProbeResult,
   type MediaProbeResult,
   type PlaybackMediaProbeResult,
@@ -302,7 +303,7 @@ async function probePlaybackSource(
     return null;
   }
   assertCurrent();
-  return await probePlaybackMediaFileDescriptor(opened.handle.fd, kind);
+  return await probePlaybackMediaFile(bindCommandStdinFile(opened), kind);
 }
 
 function assertPlaybackInspectionAuthority(waiters: Set<PlaybackInspectionWaiter>): void {
@@ -686,17 +687,16 @@ export async function resolvePlaybackTranscode(
         ];
         const renderPlayback = async (codecArgs: string[]) => {
           await runFfmpeg([...inputArgs, ...codecArgs, ...outputArgs]);
-          const outputStat = await fs.stat(outputPath);
-          if (!outputStat.isFile() || outputStat.size === 0 || outputStat.size > maxBytes) {
-            throw new Error("Playback transcode output exceeds its media limit");
-          }
-          const outputHandle = await fs.open(outputPath, "r");
+          const output = await openCommandStdinFile(outputPath);
           let outputProbe: PlaybackMediaProbeResult | null;
           try {
-            outputProbe = await probePlaybackMediaFileDescriptor(outputHandle.fd, params.kind);
+            if (output.size === 0n || output.size > maxBytes) {
+              throw new Error("Playback transcode output exceeds its media limit");
+            }
+            outputProbe = await probePlaybackMediaFile(output.stdinFile, params.kind);
           } finally {
             await runBestEffortCleanup({
-              cleanup: () => outputHandle.close(),
+              cleanup: () => output[Symbol.asyncDispose](),
               onError: (error) => log.warn("Failed to close playback probe output", { error }),
             });
           }

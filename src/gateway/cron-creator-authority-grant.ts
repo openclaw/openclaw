@@ -142,9 +142,7 @@ export function mintCronCreatorAuthorityGrant(
     scope.signal.aborted ||
     operationSignal?.aborted ||
     scope.isCurrent?.() === false ||
-    isCurrent?.() === false ||
-    (scope.managementEntitlement?.source === "channel-owner" &&
-      !scope.managementEntitlement.isCurrent())
+    isCurrent?.() === false
   ) {
     throw management ? expiredManagementError() : expiredAuthorityError();
   }
@@ -226,8 +224,6 @@ export function resolveCronCreatorAuthorityGrantProvenance(
     entry.operationSignal?.aborted ||
     entry.isCurrent?.() === false ||
     scope.isCurrent?.() === false ||
-    (scope.managementEntitlement?.source === "channel-owner" &&
-      !scope.managementEntitlement.isCurrent()) ||
     scope.runId !== grant.runId ||
     scope.runId !== runId
   ) {
@@ -303,8 +299,6 @@ function assertCronGrantCurrent(entry: CronCreatorAuthorityGrantEntry, runId: st
     entry.isCurrent?.() === false ||
     scope.isCurrent?.() === false ||
     scope.runId !== runId ||
-    (scope.managementEntitlement?.source === "channel-owner" &&
-      !scope.managementEntitlement.isCurrent()) ||
     (management &&
       (Date.now() >= management.expiresAtMs ||
         !validateAgentRunDelegatedAuthority(management.authority)))

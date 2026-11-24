@@ -2407,7 +2407,7 @@ describe("FRV publication source admission", () => {
 
 describe("publication source intent and durable binding", () => {
   publicationIt(
-    "verifies empty candidate artifact-source coverage without enabling artifact reuse",
+    "preserves empty source coverage and binds explicit selection to the manifest",
     () => {
       const request = publicationSourceRequest(publicationSourceEnv());
       const source = createPublicationSourceFact(
@@ -2436,18 +2436,28 @@ describe("publication source intent and durable binding", () => {
       const missingField = structuredClone(source);
       delete missingField.coverage.publication_artifact_source_json;
       expect(() => bindSource(missingField)).toThrow("source admission digest mismatch");
-      for (const value of ["{}", '{"runId":"123","runAttempt":1}', " "]) {
-        const selected = structuredClone(source);
-        selected.coverage.publication_artifact_source_json = value;
-        refreshDigest(selected);
-        expect(() => bindSource(selected)).toThrow(
-          "publication_artifact_source_json must be empty",
-        );
-        expect(() =>
-          bindSource(source, {
-            validationInputs: { ...validationInputs, publicationArtifactSourceJson: value },
-          }),
-        ).toThrow("coverage publicationArtifactSourceJson differs from manifest");
+      const pin = '{"runId":"123","runAttempt":1}';
+      const selected = structuredClone(source);
+      selected.coverage.publication_artifact_source_json = pin;
+      refreshDigest(selected);
+      expect(
+        bindSource(selected, {
+          validationInputs: { ...validationInputs, publicationArtifactSourceJson: pin },
+        }),
+      ).toBe(selected);
+      expect(() => bindSource(selected, { validationInputs })).toThrow(
+        "coverage publicationArtifactSourceJson differs from manifest",
+      );
+      expect(() =>
+        bindSource(source, {
+          validationInputs: { ...validationInputs, publicationArtifactSourceJson: pin },
+        }),
+      ).toThrow("coverage publicationArtifactSourceJson differs from manifest");
+      for (const value of ["{}", " ", '{"runAttempt":1,"runId":"123"}']) {
+        const malformed = structuredClone(source);
+        malformed.coverage.publication_artifact_source_json = value;
+        refreshDigest(malformed);
+        expect(() => bindSource(malformed)).toThrow();
       }
       const unknown = structuredClone(source);
       unknown.coverage.unknown_artifact_source_json = "";
