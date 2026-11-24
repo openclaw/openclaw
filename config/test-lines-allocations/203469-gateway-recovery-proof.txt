@@ -1,0 +1,7 @@
+# Test-line budget for PR #203469 (Gateway worker recovery proof).
+# 126 = the remaining net test lines above 400 after removing the duplicate mock-only
+# local-worker retry and post-dispatch coordination cases. The retained excess covers one
+# Gateway agent/agent.wait proof over the NodeRegistry WebSocket transport and loopback HTTP,
+# its no-extra-request control, and the distinct preflight, provider-error, concurrency, and
+# reservation-identity contracts.
+126

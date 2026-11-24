@@ -93,6 +93,45 @@ describe("personal account fallback cooldown summaries", () => {
 });
 
 describe("fallback probe and deferred suspension guards", () => {
+  const withCooldownedProbe = async (
+    label: string,
+    run: ReturnType<typeof vi.fn>,
+    verify: (invoke: () => ReturnType<typeof runWithModelFallback>) => Promise<void>,
+  ) => {
+    await withOpenClawTestState({ label }, async (state) => {
+      const profileId = `openai:${label}`;
+      await state.writeAuthProfiles({
+        version: 1,
+        profiles: {
+          [profileId]: { type: "api_key", provider: "openai", key: "synthetic-openai-key" },
+        },
+        usageStats: {
+          [profileId]: {
+            cooldownUntil: Date.now() + 120_000,
+            cooldownReason: "rate_limit",
+            cooldownModel: "gpt-4.1-mini",
+          },
+        },
+      });
+      await verify(() =>
+        runWithModelFallback({
+          cfg: {
+            plugins: { enabled: false },
+            auth: { order: { openai: [profileId] } },
+            agents: { defaults: { model: { primary: "openai/gpt-4.1-mini", fallbacks: [] } } },
+          },
+          agentDir: state.agentDir(),
+          provider: "openai",
+          model: "gpt-4.1-mini",
+          fallbacksOverride: [],
+          manifestPlugins: [],
+          skipAuthProfileRuntime: false,
+          run,
+        }),
+      );
+    });
+  };
+
   const deferred = {
     cfg: {},
     sessionId: "test-session",
@@ -192,91 +231,10 @@ describe("fallback probe and deferred suspension guards", () => {
       markProbe: true,
     });
   });
-  it("lets a cooldowned primary retry after a local worker failure", async () => {
-    await withOpenClawTestState({ label: "fallback-local-probe-failure" }, async (state) => {
-      const profileId = "openai:recovery-probe";
-      await state.writeAuthProfiles({
-        version: 1,
-        profiles: {
-          [profileId]: { type: "api_key", provider: "openai", key: "synthetic-openai-key" },
-        },
-        usageStats: {
-          [profileId]: {
-            cooldownUntil: Date.now() + 120_000,
-            cooldownReason: "rate_limit",
-            cooldownModel: "gpt-4.1-mini",
-          },
-        },
-      });
-      const workerError = Object.assign(new Error("worker runner is unavailable"), {
-        name: "WorkerRunnerUnavailableError",
-        providerDispatchStarted: false,
-      });
-      const run = vi.fn(async () => {
-        if (run.mock.calls.length === 1) {
-          throw workerError;
-        }
-        return "primary recovered";
-      });
-      const invoke = () =>
-        runWithModelFallback({
-          cfg: {
-            plugins: { enabled: false },
-            auth: { order: { openai: [profileId] } },
-            agents: { defaults: { model: { primary: "openai/gpt-4.1-mini", fallbacks: [] } } },
-          },
-          agentDir: state.agentDir(),
-          provider: "openai",
-          model: "gpt-4.1-mini",
-          fallbacksOverride: [],
-          manifestPlugins: [],
-          skipAuthProfileRuntime: false,
-          run,
-        });
-
-      await expect(invoke()).rejects.toMatchObject({ name: "WorkerRunnerUnavailableError" });
-      expect(run).toHaveBeenCalledOnce();
-      await expect(invoke()).resolves.toMatchObject({
-        outcome: "completed",
-        result: "primary recovered",
-      });
-      expect(run).toHaveBeenCalledTimes(2);
-    });
-  });
   it("releases a probe reservation returned by harness preflight", async () => {
-    await withOpenClawTestState({ label: "fallback-preflight-probe-failure" }, async (state) => {
-      const profileId = "openai:preflight-probe";
-      await state.writeAuthProfiles({
-        version: 1,
-        profiles: {
-          [profileId]: { type: "api_key", provider: "openai", key: "synthetic-openai-key" },
-        },
-        usageStats: {
-          [profileId]: {
-            cooldownUntil: Date.now() + 120_000,
-            cooldownReason: "rate_limit",
-            cooldownModel: "gpt-4.1-mini",
-          },
-        },
-      });
-      const preflightError = new AgentHarnessPreflightError("local harness preflight failed");
-      const run = vi.fn(async () => "primary recovered").mockRejectedValueOnce(preflightError);
-      const invoke = () =>
-        runWithModelFallback({
-          cfg: {
-            plugins: { enabled: false },
-            auth: { order: { openai: [profileId] } },
-            agents: { defaults: { model: { primary: "openai/gpt-4.1-mini", fallbacks: [] } } },
-          },
-          agentDir: state.agentDir(),
-          provider: "openai",
-          model: "gpt-4.1-mini",
-          fallbacksOverride: [],
-          manifestPlugins: [],
-          skipAuthProfileRuntime: false,
-          run,
-        });
-
+    const preflightError = new AgentHarnessPreflightError("local harness preflight failed");
+    const run = vi.fn(async () => "primary recovered").mockRejectedValueOnce(preflightError);
+    await withCooldownedProbe("fallback-preflight-probe-failure", run, async (invoke) => {
       await expect(invoke()).rejects.toBe(preflightError);
       await expect(invoke()).resolves.toMatchObject({
         outcome: "completed",
@@ -285,131 +243,24 @@ describe("fallback probe and deferred suspension guards", () => {
       expect(run).toHaveBeenCalledTimes(2);
     });
   });
-  it("does not release the probe after post-dispatch transcript coordination failure", async () => {
-    await withOpenClawTestState({ label: "fallback-post-dispatch-coordination" }, async (state) => {
-      const profileId = "openai:post-dispatch-probe";
-      await state.writeAuthProfiles({
-        version: 1,
-        profiles: {
-          [profileId]: { type: "api_key", provider: "openai", key: "synthetic-openai-key" },
-        },
-        usageStats: {
-          [profileId]: {
-            cooldownUntil: Date.now() + 120_000,
-            cooldownReason: "rate_limit",
-            cooldownModel: "gpt-4.1-mini",
-          },
-        },
-      });
-      const postDispatchError = Object.assign(
-        new Error("transcript writer claim changed after the provider completed"),
-        { name: "SessionTranscriptWriterClaimReboundError" },
-      );
-      const run = vi.fn(async () => {
-        throw postDispatchError;
-      });
-      const invoke = () =>
-        runWithModelFallback({
-          cfg: {
-            plugins: { enabled: false },
-            auth: { order: { openai: [profileId] } },
-            agents: { defaults: { model: { primary: "openai/gpt-4.1-mini", fallbacks: [] } } },
-          },
-          agentDir: state.agentDir(),
-          provider: "openai",
-          model: "gpt-4.1-mini",
-          fallbacksOverride: [],
-          manifestPlugins: [],
-          skipAuthProfileRuntime: false,
-          run,
-        });
-
-      await expect(invoke()).rejects.toBe(postDispatchError);
-      await expect(invoke()).rejects.toThrow(/cooldown/);
+  it("reserves a probe before another turn can pass the cooldown decision", async () => {
+    const run = vi.fn(async () => "primary probe completed");
+    await withCooldownedProbe("fallback-concurrent-probe-reservation", run, async (invoke) => {
+      const outcomes = await Promise.allSettled([invoke(), invoke()]);
+      expect(outcomes.filter((outcome) => outcome.status === "fulfilled")).toHaveLength(1);
       expect(run).toHaveBeenCalledOnce();
     });
   });
-  it("reserves a probe before another turn can pass the cooldown decision", async () => {
-    await withOpenClawTestState(
-      { label: "fallback-concurrent-probe-reservation" },
-      async (state) => {
-        const profileId = "openai:concurrent-probe";
-        await state.writeAuthProfiles({
-          version: 1,
-          profiles: {
-            [profileId]: { type: "api_key", provider: "openai", key: "synthetic-openai-key" },
-          },
-          usageStats: {
-            [profileId]: {
-              cooldownUntil: Date.now() + 120_000,
-              cooldownReason: "rate_limit",
-              cooldownModel: "gpt-4.1-mini",
-            },
-          },
-        });
-        const run = vi.fn(async () => "primary probe completed");
-        const invoke = () =>
-          runWithModelFallback({
-            cfg: {
-              plugins: { enabled: false },
-              auth: { order: { openai: [profileId] } },
-              agents: { defaults: { model: { primary: "openai/gpt-4.1-mini", fallbacks: [] } } },
-            },
-            agentDir: state.agentDir(),
-            provider: "openai",
-            model: "gpt-4.1-mini",
-            fallbacksOverride: [],
-            manifestPlugins: [],
-            skipAuthProfileRuntime: false,
-            run,
-          });
-
-        const outcomes = await Promise.allSettled([invoke(), invoke()]);
-        expect(outcomes.filter((outcome) => outcome.status === "fulfilled")).toHaveLength(1);
-        expect(run).toHaveBeenCalledOnce();
-      },
-    );
-  });
   it("keeps a cooldowned primary throttled after a provider failure", async () => {
-    await withOpenClawTestState({ label: "fallback-provider-probe-failure" }, async (state) => {
-      const profileId = "openai:provider-probe";
-      await state.writeAuthProfiles({
-        version: 1,
-        profiles: {
-          [profileId]: { type: "api_key", provider: "openai", key: "synthetic-openai-key" },
-        },
-        usageStats: {
-          [profileId]: {
-            cooldownUntil: Date.now() + 120_000,
-            cooldownReason: "rate_limit",
-            cooldownModel: "gpt-4.1-mini",
-          },
-        },
+    const run = vi.fn(async () => {
+      throw new FailoverError("synthetic provider rate limit", {
+        reason: "rate_limit",
+        provider: "openai",
+        model: "gpt-4.1-mini",
+        status: 429,
       });
-      const run = vi.fn(async () => {
-        throw new FailoverError("synthetic provider rate limit", {
-          reason: "rate_limit",
-          provider: "openai",
-          model: "gpt-4.1-mini",
-          status: 429,
-        });
-      });
-      const invoke = () =>
-        runWithModelFallback({
-          cfg: {
-            plugins: { enabled: false },
-            auth: { order: { openai: [profileId] } },
-            agents: { defaults: { model: { primary: "openai/gpt-4.1-mini", fallbacks: [] } } },
-          },
-          agentDir: state.agentDir(),
-          provider: "openai",
-          model: "gpt-4.1-mini",
-          fallbacksOverride: [],
-          manifestPlugins: [],
-          skipAuthProfileRuntime: false,
-          run,
-        });
-
+    });
+    await withCooldownedProbe("fallback-provider-probe-failure", run, async (invoke) => {
       await expect(invoke()).rejects.toThrow("synthetic provider rate limit");
       expect(run).toHaveBeenCalledOnce();
       await expect(invoke()).rejects.toThrow(/cooldown/);
