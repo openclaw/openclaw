@@ -122,8 +122,10 @@ it.each(["pinned", "ambient", "snapshot", "override"] as const)(
             expect(output.usage, name).toMatchObject({ input: 1000, output: 500, total: 1500 });
             if (expected === undefined) {
               expect.soft(output, name).not.toHaveProperty("costUsd");
+              expect.soft(output.usage, name).not.toHaveProperty("cost");
             } else {
               expect.soft(output.costUsd, name).toBe(expected);
+              expect.soft(output.usage.cost?.total, name).toBe(expected);
             }
           });
         }
