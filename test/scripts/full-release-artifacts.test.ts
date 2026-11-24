@@ -1345,7 +1345,7 @@ function selectionFixture(
     releaseProfile: "stable",
     publicationArtifactSource: { runId: "51", runAttempt: 1 },
   });
-  const request = f.plan.candidateRequest!;
+  const request = f.plan.candidateRequest;
   const candidate = fullReleaseCandidateManifestFixture({
     ...request,
     upgradeSurvivorBaseline: request.upgradeBaseline,
@@ -1385,9 +1385,9 @@ function selectionFixture(
   const runs = new Map<string, Record<string, unknown>>();
   const logs = new Map<number, string>();
   const jobs: Array<Record<string, unknown>> = [];
-  for (const [stage, id, name] of [
-    ["npm", "81", "Prepare release npm artifacts"],
-    ["docker", "91", "Prepare release Docker artifacts"],
+  for (const { stage, id, name } of [
+    { stage: "npm", id: "81", name: "Prepare release npm artifacts" },
+    { stage: "docker", id: "91", name: "Prepare release Docker artifacts" },
   ]) {
     const run = {
       ...f.parent,
@@ -1550,7 +1550,7 @@ function selectionFixture(
           }))
         : [...(await f.client.getRunAttemptJobs(id)), ...jobs],
     getJobLog: async (id: number) => logs.get(id) ?? f.client.getJobLog(id),
-    getRunArtifacts: async (id: string) => artifacts.get(id) ?? [],
+    getRunArtifacts: (id: string) => artifacts.get(id) ?? [],
     getArtifact: async (id: string) => {
       const receipt = [...artifacts.values()].flat().find((entry) => String(entry.id) === id);
       if (receipt) {
@@ -1723,7 +1723,7 @@ async function retainedRecoveryFixture(legacy = false) {
   const client = {
     repository: current.repository,
     getReleaseEvidenceClient: () => finalClient,
-    getRunAttempt: (id: string, attempt: number) =>
+    getRunAttempt: async (id: string, attempt: number) =>
       id === current.runId
         ? { ...current.parent, display_title: "Full Release Validation" }
         : finalClient.getRunAttempt(id, attempt),
@@ -1796,8 +1796,7 @@ describe("explicit publication artifact selection", () => {
       const { current, recoveryClient, finalClient } = await retainedRecoveryFixture();
       if (fault === "missing") {
         const getRunArtifacts = finalClient.getRunArtifacts;
-        finalClient.getRunArtifacts = async (id: string) =>
-          id === "81" ? [] : getRunArtifacts(id);
+        finalClient.getRunArtifacts = (id: string) => (id === "81" ? [] : getRunArtifacts(id));
       } else {
         const getJobLog = finalClient.getJobLog;
         finalClient.getJobLog = async (id: number) => {

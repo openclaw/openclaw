@@ -1456,14 +1456,15 @@ describe("release decision policy", () => {
       drain: artifact,
       context: { releaseProfile: "stable", rerunGroup: "all", validationInputs: {} },
     });
-    expect(validateReleaseManifestAdvisoryJobs(manifest)).toEqual(decision.advisoryJobs);
+    const advisoryJobs = validateReleaseManifestAdvisoryJobs(manifest);
+    expect(advisoryJobs).toEqual(decision.advisoryJobs);
     expect(validateReleaseManifestAdvisoryJobs(sortJsonValueKeys(manifest))).toEqual(
       decision.advisoryJobs,
     );
     expect(() =>
       validateReleaseManifestAdvisoryJobs({
         ...manifest,
-        advisoryJobs: decision.advisoryJobs.map((job) => ({ ...job, conclusion: "success" })),
+        advisoryJobs: advisoryJobs.map((job) => ({ ...job, conclusion: "success" })),
       }),
     ).toThrow("advisory jobs differ");
     expect(() => validateReleaseManifestAdvisoryJobs({ ...manifest, advisoryJobs: [] })).toThrow(
