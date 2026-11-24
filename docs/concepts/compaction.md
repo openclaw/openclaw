@@ -84,9 +84,9 @@ commit without a generated summary; see [Auto-compaction](#auto-compaction).
 
 Auto-compaction is on by default. It runs when the session nears the context limit, or when the model returns a context-overflow error (in which case OpenClaw compacts and retries).
 
-Built-in client maintenance starts at the smaller of 75% of the active window
+Built-in client maintenance starts at the smaller of 80% of the active window
 and the window minus its compaction reserve. A 1,000,000-token window therefore
-starts maintenance at 750,000 tokens, while the summary reserve stays 20,000.
+starts maintenance at 800,000 tokens, while the summary reserve stays 20,000.
 During tool loops, completed provider usage triggers this maintenance before the
 next request. The request boundary also checks projected occupancy, including
 new tool results, against the full window even when proactive compaction is
@@ -110,9 +110,11 @@ trigger a second accounting pass over the entire conversation history.
 
 In the built-in runtime, automatic compaction runs at normal request boundaries,
 including between completed tool rounds. It starts when the known or projected
-request occupancy reaches the smaller of the reserve-based prompt budget and 90%
-of the context window (rounded down). For a 500,000-token window with a
-20,000-token reserve, that means 450,000 tokens, not 480,000. Native ChatGPT
+request occupancy reaches the smaller of the reserve-based prompt budget and 80%
+of the context window (rounded down), the same trigger as client maintenance.
+For a 500,000-token window with a 20,000-token reserve, that means 400,000
+tokens, not 480,000. The remaining headroom holds new tool results and the
+summary request itself. Native ChatGPT
 sign-in uses V2 compaction there; every other route sends a
 [warm request](#warm-request-compaction). The complete outgoing request must
 still fit the model window: a single large pending message or tool result can

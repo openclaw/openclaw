@@ -1,6 +1,7 @@
 import http from "node:http";
 import type { Context, Model, SimpleStreamOptions } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it } from "vitest";
+import { resolveCompactionThreshold } from "../../../packages/agent-core/src/harness/compaction/compaction-threshold.js";
 import { streamAnthropic } from "../../../packages/ai/src/providers/anthropic.js";
 import type { AssistantHistoryMessage } from "../../llm/types.js";
 import {
@@ -132,7 +133,12 @@ describe("AgentSession refusal compaction", () => {
           "Earlier answer.",
           "stop",
           // The current prompt crosses maintenance after refusal, not during preflight.
-          threshold ? model.contextWindow * 0.75 - 15 : 10,
+          threshold
+            ? resolveCompactionThreshold({
+                contextWindowTokens: model.contextWindow,
+                reserveTokensFloor: 0,
+              }) - 15
+            : 10,
         ),
       );
       streamMocks.streamSimple.mockImplementation(
