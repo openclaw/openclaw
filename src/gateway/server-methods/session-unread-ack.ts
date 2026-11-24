@@ -8,7 +8,6 @@ export type SessionPatchTargetIdentity = Pick<
   | "expectedSidebarRoot"
   | "expectedCategory"
   | "expectedArchived"
-  | "expectedArchivedAt"
   | "expectedSidebarAncestors"
   | "expectedMarkedUnreadAt"
   | "expectedPermissionMode"

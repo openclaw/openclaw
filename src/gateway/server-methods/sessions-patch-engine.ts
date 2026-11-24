@@ -26,7 +26,6 @@ import {
 import { gatewayClientSessionCreator } from "./gateway-client-identity.js";
 import { createSessionModelCatalogWait } from "./session-model-catalog-wait.js";
 import * as sessionUnreadAck from "./session-unread-ack.js";
-import type { prepareArchivePins } from "./sessions-archive-personal-pins.js";
 import {
   prepareSessionPatchArchive,
   prepareSessionPatchArchiveTransition,
@@ -67,6 +66,7 @@ import type {
 } from "./types.js";
 import { preparePersonalModelSelection } from "./users-model-account-access.js";
 
+type PatchTargetIdentity = sessionUnreadAck.SessionPatchTargetIdentity;
 const { resolveSessionUnreadAck, validateSessionUnreadAck } = sessionUnreadAck;
 
 type ArchiveTransition = Awaited<ReturnType<typeof prepareSessionPatchArchiveTransition>>;
@@ -76,12 +76,11 @@ export async function executeSessionPatchMutations(params: {
   context: GatewayRequestContext;
   signal?: AbortSignal;
   diagnostics?: SessionPatchDiagnostics;
-  archivePins?: Awaited<ReturnType<typeof prepareArchivePins>>;
   operatorAuthority?: Promise<{ authority: AdmittedRunOperatorAuthority } | undefined>;
   followSharingRegistration?: SessionMutationAuthorization["followRegistration"];
   readSessionSharing?: SessionMutationAuthorization["readTargetSharing"];
   onCreatedSessionCommitted?: SessionMutationAuthorization["recordCreatedSession"];
-  patch: Omit<SessionsPatchParams, keyof sessionUnreadAck.SessionPatchTargetIdentity>;
+  patch: Omit<SessionsPatchParams, keyof PatchTargetIdentity>;
   targets: readonly MutationTarget[];
 }) {
   const { client } = params;
@@ -636,8 +635,9 @@ export async function executeSessionPatchMutations(params: {
                 if (result.kind !== "complete") {
                   throw new Error("Session patch catalog preparation did not complete");
                 }
+                const groupOutcomes = result.outcomes;
                 for (const [groupIndex, target] of group.entries()) {
-                  const outcome = result.outcomes[groupIndex]!;
+                  const outcome = groupOutcomes[groupIndex]!;
                   outcomes[target.index] = outcome;
                   if (outcome.ok) {
                     recordSessionStatusModelPatchOutcome(outcome.applied);
@@ -665,7 +665,6 @@ export async function executeSessionPatchMutations(params: {
                 groupTiming?.finish();
               }
             });
-            await params.archivePins?.retire(activePrepared, outcomes);
             // Keep runtime acknowledgement in the mutation lane. A second browser
             // must not persist a newer mode and then have this older update win.
             timing?.mark("permissions");

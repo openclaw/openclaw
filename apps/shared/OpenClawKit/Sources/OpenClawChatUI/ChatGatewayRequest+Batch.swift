@@ -4,14 +4,11 @@ import OpenClawProtocol
 
 extension OpenClawChatGatewayRequests {
     static func sidebarBatchPatch(
-        _ rows: [OpenClawChatSessionEntry],
-        patch: [String: AnyCodable],
-        expectedArchived: Bool? = nil) -> OpenClawChatGatewayRequest
+        _ rows: [OpenClawChatSessionEntry], patch: [String: AnyCodable]) -> OpenClawChatGatewayRequest
     {
         let targets = rows.map { row in
             var target = self.sessionMenuTarget(row)
             if let id = row.sessionId { target["expectedSessionId"] = .init(id) }
-            if let expectedArchived { target["expectedArchived"] = .init(expectedArchived) }
             return target
         }
         // ui/src/lib/sessions/session-requests.ts:189: archive waits for workspace reconciliation.

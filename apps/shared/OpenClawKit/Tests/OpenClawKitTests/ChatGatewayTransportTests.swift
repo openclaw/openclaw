@@ -4,93 +4,6 @@ import Testing
 @testable import OpenClawChatUI
 
 struct ChatGatewayTransportTests {
-    @MainActor @Test(arguments: [true, false])
-    func `archive updates the current thread despite malformed pin metadata and ordinary restore stays neutral`(
-        negotiated: Bool) async throws
-    {
-        let recorder = RequestRecorder()
-        let transport = Transport(request: { request in
-            guard request.method == "sessions.patch" else { throw Failure.unexpectedRequest }
-            await recorder.append(request)
-            if request.params["archived"]?.value as? Bool == false {
-                return Data(#"{"ok":true,"key":"topic","entry":{"sessionId":"original","updatedAt":21}}"#.utf8)
-            }
-            return Data(#"""
-            {"ok":true,"key":"topic","entry":{"sessionId":"original","archivedAt":20,"updatedAt":20},
-             "archivePin":{},"archivedAt":"invalid","archivePinUndo":17}
-            """#.utf8)
-        }, supportsArchivePins: negotiated)
-        let suite = "ChatArchiveTests.\(UUID().uuidString)"
-        let defaults = try #require(UserDefaults(suiteName: suite))
-        let model = OpenClawChatViewModel(
-            sessionKey: "topic", transport: transport, modelPickerStore: .init(defaults: defaults))
-        defer { model.detachTransport()
-            defaults.removePersistentDomain(forName: suite)
-        }
-        var row = OpenClawChatSessionEntry(key: "topic")
-        row.sessionId = "original"
-        model.enableSidebarData()
-        model.sessions = [row]
-
-        var notices: [String?] = []
-        model.setSessionArchived(row, archived: true) { notices.append($0) }
-        await waitForObservedState { model.sessionKey == "main" || model.errorText != nil }
-        #expect(model.sessionKey == "main")
-        #expect(model.sessions.isEmpty)
-        #expect(notices == [negotiated ? "Thread archived. Could not confirm the personal pin update." : nil])
-        let archived = try #require(model.sidebarData?.row(key: "topic", agentID: nil))
-        #expect(archived.isArchived)
-        #expect(await model.restoreSession(archived))
-        #expect(model.sessions.map(\.key) == ["topic"])
-        let requests = await recorder.requests
-        #expect(requests.map { $0.params["archived"]?.value as? Bool } == [true, false])
-        #expect(requests.allSatisfy { $0.params["expectedSessionId"]?.value as? String == "original" })
-        #expect(requests.map { $0.params["retirePersonalPin"]?.value as? Bool } == [negotiated ? true : nil, nil])
-        #expect(requests.allSatisfy { $0.params["archivePinUndo"] == nil && $0.params["pinned"] == nil })
-    }
-
-    @MainActor @Test func `manager archive separates pin conflicts from rejected threads`() async throws {
-        let recorder = RequestRecorder()
-        let transport = Transport(request: { request in
-            guard request.method == "sessions.patch" else { throw Failure.unexpectedRequest }
-            await recorder.append(request)
-            switch request.params["key"]?.value as? String {
-            case "a": return Data(#"""
-                {"ok":true,"key":"a","entry":{"sessionId":"a-id","archivedAt":12},
-                 "archivedAt":12,"archivePin":"conflict"}
-                """#.utf8)
-            case "b": return Data(#"""
-                {"ok":true,"key":"b","entry":{"sessionId":"b-id","archivedAt":13},
-                 "archivedAt":13,"archivePin":"removed"}
-                """#.utf8)
-            default: throw Failure.unexpectedRequest
-            }
-        }, supportsArchivePins: true)
-        let suite = "ChatManagerArchiveTests.\(UUID().uuidString)"
-        let defaults = try #require(UserDefaults(suiteName: suite))
-        let model = OpenClawChatViewModel(
-            sessionKey: "a", transport: transport, modelPickerStore: .init(defaults: defaults))
-        defer { model.detachTransport()
-            defaults.removePersistentDomain(forName: suite)
-        }
-        let rows = ["a", "b", "c"].map { key in
-            var row = OpenClawChatSessionEntry(key: key)
-            row.sessionId = "\(key)-id"
-            return row
-        }
-        model.enableSidebarData()
-        model.sessions = rows
-        let result = await model.performSessionBatch(sessions: rows, action: .archive)
-        #expect(result.succeededKeys == ["a", "b"])
-        #expect(Set(result.errorsByKey.keys) == ["c"])
-        #expect(result.warningsByKey == ["a": "Thread archived. Your sidebar changed; the pin was not removed."])
-        #expect(model.sessions.map(\.key) == ["c"])
-        #expect(model.sessionKey == "main")
-        let requests = await recorder.requests
-        #expect(requests.map { $0.params["expectedSessionId"]?.value as? String } == ["a-id", "b-id", "c-id"])
-        #expect(requests.allSatisfy { $0.params["retirePersonalPin"]?.value as? Bool == true })
-    }
-
     @Test func `mutation receipt binds canonical fields to the captured owner and session incarnation`() async throws {
         let recorder = RequestRecorder()
         let lease = OpenClawChatSessionMutationRouteLease(
@@ -105,10 +18,8 @@ struct ChatGatewayTransportTests {
                 """#.utf8)
             })
         let receipt = try #require(await lease.patchSession(
-            key: "global",
-            expectedSessionID: "session-a",
-            expectedMarkedUnreadAt: .some(5),
-            unread: false))
+            key: "global", expectedSessionID: "session-a", expectedMarkedUnreadAt: .some(5),
+            label: nil, category: nil, pinned: nil, archived: nil, unread: false))
         let row = try JSONDecoder().decode(OpenClawChatSessionEntry.self, from: Data(#"""
         {"key":"global","agentId":"research","sessionId":"session-a","updatedAt":10,"unread":true}
         """#.utf8))
@@ -225,23 +136,11 @@ struct ChatGatewayTransportTests {
         var policy: OpenClawChatSessionTargetPolicy = .preserveBareKeys
         var request: @Sendable (OpenClawChatGatewayRequest) async throws -> Data
         var actionRequest: (@Sendable (OpenClawChatGatewayRequest) async throws -> Data)?
-        var supportsArchivePins = false
         let chatGatewayAgentID: String? = "reviewer"
-
-        func acquireSessionMutationRouteLease() async -> OpenClawChatSessionMutationRouteLease? {
-            OpenClawChatSessionMutationRouteLease(
-                sessionTarget: { self.sessionTarget(for: $0, overrideAgentID: nil) },
-                unreadAckContract: nil,
-                supportsArchivePins: self.supportsArchivePins,
-                receivesPatchReceipts: true,
-                request: self.request)
-        }
 
         func sessionTarget(for sessionKey: String, overrideAgentID: String?) -> OpenClawChatSessionTarget {
             OpenClawChatSessionTarget.resolve(
-                sessionKey,
-                selectedAgentID: self.chatGatewayAgentID,
-                overrideAgentID: overrideAgentID,
+                sessionKey, selectedAgentID: self.chatGatewayAgentID, overrideAgentID: overrideAgentID,
                 policy: self.policy)
         }
 
@@ -258,10 +157,7 @@ struct ChatGatewayTransportTests {
         }
 
         func sendMessage(
-            sessionKey: String,
-            message: String,
-            thinking: String,
-            idempotencyKey: String,
+            sessionKey: String, message: String, thinking: String, idempotencyKey: String,
             attachments: [OpenClawChatAttachmentPayload]) async throws -> OpenClawChatSendResponse
         {
             throw Failure.unexpectedRequest

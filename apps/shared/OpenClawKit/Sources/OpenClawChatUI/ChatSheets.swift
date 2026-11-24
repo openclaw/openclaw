@@ -34,7 +34,6 @@ public struct ChatSessionsSheet: View {
     @State private var isSelecting = false
     @State private var selectedSessionKeys: Set<String> = []
     @State private var batchErrors: [String: String] = [:]
-    @State private var archivePinWarning: String?
     @State private var isRunningBatch = false
     @State private var pendingBatchAction: ChatSessionBatchAction?
     @State private var inspectedSession: OpenClawChatSessionEntry?
@@ -114,7 +113,6 @@ public struct ChatSessionsSheet: View {
                     format: String(localized: "Threads for %@"),
                     self.viewModel.agentChoices.first { $0.id == id }?.displayName ?? id))
             } ?? Text("Threads"))
-            .archivePinNotice(self.$archivePinWarning)
             .safeAreaInset(edge: .bottom, spacing: 0) {
                 if self.isSelecting, self.scope == .active {
                     self.batchActionBar
@@ -389,10 +387,8 @@ public struct ChatSessionsSheet: View {
 
     private func archiveButton(_ session: OpenClawChatSessionEntry, title: LocalizedStringKey) -> some View {
         Button {
-            self.viewModel.setSessionArchived(session, archived: !session.isArchived) { warning in
-                if let warning { self.archivePinWarning = warning }
-                Task { await self.refreshScopedSessionsIfNeeded(debounce: false) }
-            }
+            self.viewModel.setSessionArchived(session, archived: !session.isArchived)
+            self.refreshScopedSessionsSoon()
         } label: {
             chatActionLabel(title, systemImage: session.isArchived ? "tray.and.arrow.up" : "archivebox")
         }
@@ -461,14 +457,7 @@ public struct ChatSessionsSheet: View {
             action: action)
         self.batchErrors = result.errorsByKey
         self.selectedSessionKeys = Set(result.errorsByKey.keys)
-        guard action == .archive else { self.refreshScopedSessionsSoon()
-            return
-        }
-        let warnings = selectedSessions.compactMap { row in
-            result.warningsByKey[row.key].map { "\(row.displayName ?? row.key): \($0)" }
-        }
-        if !warnings.isEmpty { self.archivePinWarning = warnings.joined(separator: "\n") }
-        await self.refreshScopedSessionsIfNeeded(debounce: false)
+        self.refreshScopedSessionsSoon()
     }
 
     private func refreshScopedSessionsIfNeeded(debounce: Bool) async {

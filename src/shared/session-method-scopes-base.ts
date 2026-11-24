@@ -164,8 +164,6 @@ const SESSIONS_PATCH_WRITE_SCOPE_MUTATIONS: ReadonlySet<string> = new Set([
   "boardFace",
   "boardPresentation",
   "pinned",
-  "retirePersonalPin",
-  "archivePinUndo",
   "sidebarRoot",
   "archived",
   "snoozedUntil",
@@ -190,7 +188,6 @@ const SESSIONS_PATCH_WRITE_SCOPE_ENVELOPE_FIELDS: ReadonlySet<string> = new Set(
   "expectedSidebarRoot",
   "expectedCategory",
   "expectedArchived",
-  "expectedArchivedAt",
   "expectedSidebarAncestors",
 ]);
 

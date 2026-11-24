@@ -44,9 +44,6 @@ final class ChatSessionSidebarBatch {
         let key: String
         let ok: Bool
         let error: Failure?
-        let agentId: String?
-        let archivePin: AnyCodable?
-        let archivedAt: AnyCodable?
         struct Failure: Decodable { let message: String }
     }
 
@@ -306,17 +303,11 @@ final class ChatSessionSidebarBatch {
         defer { for (row, token) in pending {
             self.finishArchive(row, token: token)
         } }
-        var fields = action.patch
-        var captures: [String: OpenClawChatArchivePinOutcome] = [:]
-        if action == .archived(true), connection.supportsArchivePins { fields["retirePersonalPin"] = .init(true) }
         let successful = await self.patch(
             action == .archived(true) ? pending.map(\.0) : rows,
-            fields: fields,
+            fields: action.patch,
             connection: connection)
-        { row, capture in
-            captures[OpenClawChatSessionSidebarData.identity(row)] = capture
-        }
-        if action == .archived(true) { self.offerArchiveUndo(successful, connection: connection, captures: captures) }
+        if action == .archived(true) { self.offerArchiveUndo(successful, connection: connection) }
         return successful
     }
 
@@ -350,61 +341,37 @@ final class ChatSessionSidebarBatch {
     func patch(
         _ rows: [OpenClawChatSessionEntry],
         fields: [String: AnyCodable],
-        connection: OpenClawSessionMenuConnection,
-        capture: ((OpenClawChatSessionEntry, OpenClawChatArchivePinOutcome) -> Void)? = nil) async
-        -> [OpenClawChatSessionEntry]
+        connection: OpenClawSessionMenuConnection) async -> [OpenClawChatSessionEntry]
     {
-        struct Response: Decodable {
-            let outcomes: [Outcome]
-            let archivePinUndo: AnyCodable?
-        }
-        let scope = self.scope
-        let restoringPins = fields["archivePinUndo"] != nil
+        struct Response: Decodable { let outcomes: [Outcome] }
         var successful: [OpenClawChatSessionEntry] = []
         var errors: [String: String] = [:]
         // ui/src/components/session-organizer-batch-mutations.ts:129 and sessions-patch.ts:9:
         // sequential chunks retain earlier successes when a later request fails.
         for offset in stride(from: 0, to: rows.count, by: 100) {
-            guard self.scope == scope, connection.isCurrent(), !Task.isCancelled else { return [] }
+            guard connection.isCurrent(), !Task.isCancelled else { return [] }
             let chunk = Array(rows[offset..<min(offset + 100, rows.count)])
             do {
                 let data = try await connection.request(OpenClawChatGatewayRequests.sidebarBatchPatch(
                     chunk,
-                    patch: fields,
-                    expectedArchived: restoringPins ? false : nil))
-                guard self.scope == scope else { return [] }
+                    patch: fields))
                 let response = try JSONDecoder().decode(Response.self, from: data)
-                guard response.outcomes.count == chunk.count, zip(chunk, response.outcomes).allSatisfy({ row, outcome in
-                    let agent = OpenClawChatSessionKey.agentID(from: row.key) ?? row.agentId
-                    return outcome.key == row.key && (outcome.agentId == nil || outcome.agentId == agent)
-                }) else {
+                guard response.outcomes.map(\.key) == chunk.map(\.key) else {
                     throw CocoaError(.coderReadCorrupt)
                 }
                 for (row, outcome) in zip(chunk, response.outcomes) {
-                    if outcome.ok {
-                        successful.append(row)
-                        if fields["retirePersonalPin"] != nil {
-                            capture?(row, .init(
-                                archivePin: outcome.archivePin?.value as? String,
-                                archivedAt: outcome.archivedAt?.value as? Int,
-                                undo: response.archivePinUndo?.value as? String))
-                        }
-                    } else {
+                    if outcome.ok { successful.append(row) } else {
                         errors[OpenClawChatSessionSidebarData.identity(row)] = outcome.error?
                             .message ?? String(localized: "The thread operation failed.")
                     }
                 }
             } catch {
-                guard self.scope == scope, connection.isCurrent(), !Task.isCancelled else { return [] }
+                guard connection.isCurrent(), !Task.isCancelled else { return [] }
                 for row in rows[offset...] {
                     errors[OpenClawChatSessionSidebarData.identity(row)] = error.localizedDescription
                 }
                 break
             }
-        }
-        if restoringPins, !errors.isEmpty {
-            self.notices
-                .append(String(localized: "Threads restored. Could not confirm restoration of every personal pin."))
         }
         // Preserve failures published by other operations after this one began.
         self.errors.merge(errors) { _, latest in latest }

@@ -5,7 +5,6 @@ public enum GatewayServerCapability: String, CaseIterable, Sendable {
     case sessionScopedChatMetadata = "session-scoped-chat-metadata"
     case publishedModelCatalog = "published-model-catalog"
     case personalSessionPins = "personal-session-pins"
-    case personalArchivePins = "personal-archive-pins"
     case sessionUnreadAckContract = "session-unread-ack-contract"
     case sessionSettingsContract = "session-settings-contract"
     case sessionSettingsCAS = "session-settings-cas-v1"

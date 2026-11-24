@@ -131,60 +131,6 @@ class ChatControllerSessionActionsTest {
     }
 
   @Test
-  fun archiveRetiresOnlyOnANegotiatedLeaseAndReportsPinFailuresWithoutReplaying() =
-    runTest {
-      val gateway = ScriptedGateway(json)
-      var caps = setOf("personal-session-pins")
-      var current = true
-      val controller =
-        ChatController(
-          scope = this,
-          commandOutbox = createChatCommandOutbox(),
-          json = json,
-          cacheScope = { ChatCacheScope("fixture", 1L) },
-          requestGateway = gateway::request,
-          captureRequestLease = {
-            GatewaySession.RequestLease("fixture", isCurrentImpl = { current }, advertisedCapabilities = caps) { method, params, _, enqueue ->
-              enqueue {}
-              gateway.request(method, params)
-            }
-          },
-        )
-      controller.outboxPresentationRestored.first { it }
-      val row = ChatSessionPatch("thread", ownerAgentId = "main", expectedSessionId = "thread-id", archived = true)
-      val notices = mutableListOf<String>()
-      gateway.respondWith("sessions.patch", "{}")
-      assertTrue(controller.patchSession(row, notices::add)) // Legacy Archive.
-      caps += "personal-archive-pins"
-      assertTrue(controller.patchSession(row.copy(archived = false), notices::add)) // Ordinary Unarchive.
-      val archived = """"ok":true,"archivedAt":100,"entry":{"sessionId":"thread-id","archivedAt":100}"""
-      for (state in listOf("removed", "unchanged", "conflict", "unknown", null)) {
-        val cleanup = state?.let { ""","archivePin":"$it"""" }.orEmpty()
-        gateway.respondWith("sessions.patch", "{$archived$cleanup}")
-        assertTrue(controller.patchSession(row, notices::add))
-      }
-      assertEquals(
-        listOf("Thread archived. Your newer sidebar layout was kept.", "Thread archived. Your pin change could not be confirmed. Check your sidebar.", "Thread archived. Your pin change could not be confirmed. Check your sidebar."),
-        notices,
-      )
-      gateway.respondWith("sessions.patch", "{}")
-      assertFalse(controller.patchSession(row, notices::add))
-      assertEquals("The thread update could not be confirmed. Check the thread list before trying again.", notices.last())
-      val pending = CompletableDeferred<String>()
-      gateway.respond("sessions.patch") { pending.await() }
-      val late = async { controller.patchSession(row, notices::add) }
-      runCurrent()
-      current = false
-      pending.complete("{$archived}")
-      assertTrue(late.await())
-      assertEquals(4, notices.size) // No late warning on the replacement socket.
-      val patches = gateway.calls.filter { it.method == "sessions.patch" }.map { json.parseToJsonElement(it.paramsJson!!).jsonObject }
-      assertEquals(listOf(null, null) + List(7) { JsonPrimitive(true) }, patches.map { it["retirePersonalPin"] })
-      assertTrue(patches.all { it["expectedSessionId"] == JsonPrimitive("thread-id") && "pinned" !in it })
-      assertEquals(8, gateway.callCount("sessions.list")) // Reconcile unknown by reading; never replay the write.
-    }
-
-  @Test
   fun personalPinChangesRefreshTheOpenRosterButUnrelatedPreferencesDoNot() =
     runTest {
       val gateway = ScriptedGateway(json)

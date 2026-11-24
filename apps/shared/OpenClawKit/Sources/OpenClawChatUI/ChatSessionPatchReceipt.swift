@@ -1,36 +1,3 @@
-import Foundation
-
-/// Private outcome accompanying a successful shared archive. Bad or absent metadata cannot undo that commit.
-public struct OpenClawChatArchivePinOutcome: Sendable {
-    let archivePin: String?
-    let archivedAt: Int?
-    let undo: String?
-
-    public init(archivePin: String?, archivedAt: Int?, undo: String? = nil) {
-        self.archivePin = archivePin
-        self.archivedAt = archivedAt.flatMap { $0 >= 0 ? $0 : nil }
-        self.undo = archivePin == "removed" && self.archivedAt != nil && undo?.isEmpty == false ? undo : nil
-    }
-
-    public var warning: String? {
-        switch self.archivePin {
-        case "conflict": String(localized: "Thread archived. Your sidebar changed; the pin was not removed.")
-        case "removed" where self.archivedAt != nil, "unchanged" where self.archivedAt != nil: nil
-        default: String(localized: "Thread archived. Could not confirm the personal pin update.")
-        }
-    }
-
-    var undoWarning: String? {
-        if self.archivedAt == nil {
-            return String(localized: "Thread archived. Archive Undo is unavailable; refresh to check your sidebar.")
-        }
-        if self.archivePin == "removed", self.undo == nil {
-            return String(localized: "Thread archived and pin removed. Undo can restore only the thread.")
-        }
-        return self.warning
-    }
-}
-
 public struct OpenClawChatSessionPatchReceipt: Decodable, Sendable {
     public struct Entry: Decodable, Sendable {
         let sessionId: String
@@ -57,21 +24,7 @@ public struct OpenClawChatSessionPatchReceipt: Decodable, Sendable {
     let entry: Entry
     var agentID: String?
 
-    public let archivePin: String?
-    public let archivedAt: Int?
-    public let archivePinUndo: String?
-
-    private enum CodingKeys: String, CodingKey { case key, entry, archivePin, archivedAt, archivePinUndo }
-
-    public init(from decoder: Decoder) throws {
-        let fields = try decoder.container(keyedBy: CodingKeys.self)
-        self.key = try fields.decode(String.self, forKey: .key)
-        self.entry = try fields.decode(Entry.self, forKey: .entry)
-        // Malformed optional personal metadata is not a shared lifecycle failure.
-        self.archivePin = try? fields.decode(String.self, forKey: .archivePin)
-        self.archivedAt = try? fields.decode(Int.self, forKey: .archivedAt)
-        self.archivePinUndo = try? fields.decode(String.self, forKey: .archivePinUndo)
-    }
+    private enum CodingKeys: String, CodingKey { case key, entry }
 
     func matches(_ row: OpenClawChatSessionEntry) -> Bool {
         self.key == row.key && self.entry.sessionId == row.sessionId &&

@@ -93,6 +93,11 @@ test.each(["sessions.patch", "sessions.patchMany"] as const)(
       expectNoSessionQueueCleanup();
     }
 
+    expect((await request(method, member, context, [foreignKey], { pinned: true }))?.[0]).toBe(
+      true,
+    );
+    const sharedPin = read(foreignKey)?.pinnedAt;
+    expect(sharedPin).toEqual(expect.any(Number));
     member.connect.caps = ["personal-session-pins"];
     const pin = await request(method, member, context, [foreignKey], { pinned: true });
     expect(pin).toMatchObject(
@@ -100,7 +105,7 @@ test.each(["sessions.patch", "sessions.patchMany"] as const)(
         ? [true, { outcomes: [{ key: foreignKey, ok: true }] }, undefined]
         : [true, { entry: { pinned: true } }, undefined],
     );
-    expect(read(foreignKey)?.pinnedAt).toBeUndefined();
+    expect(read(foreignKey)?.pinnedAt).toBe(sharedPin);
     expect(
       (await getCanonicalUserPreferences(memberId, ["ui.railShortcuts"]))?.entries[
         "ui.railShortcuts"
