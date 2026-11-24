@@ -76,8 +76,9 @@ public final class OpenClawChatSessionSidebarData {
 
     func conversationRows(agentID: String?) -> [OpenClawChatSessionEntry] {
         self.cachedProjection(.conversation(agentID ?? "")) {
-            OpenClawChatSessionListOrganizer
-                .organize(self.project(self.rosters[agentID ?? ""] ?? []).filter { !$0.isArchived })
+            OpenClawChatSessionListOrganizer.organize(
+                self.project(self.rosters[agentID ?? ""] ?? []).filter { !$0.isArchived },
+                preservingPersonalPinOrder: true)
         }
     }
 

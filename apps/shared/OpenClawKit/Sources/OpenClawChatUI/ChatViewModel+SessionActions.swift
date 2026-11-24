@@ -449,7 +449,8 @@ extension OpenClawChatViewModel {
     public func fetchSessionList(
         search: String?,
         archived: Bool,
-        agentID: String? = nil) async -> [OpenClawChatSessionEntry]
+        agentID: String? = nil,
+        preservingPersonalPinOrder: Bool = false) async -> [OpenClawChatSessionEntry]
     {
         let session = self.currentSessionSnapshot()
         let query = ChatPayloadDecoding.trimmedNonEmptyString(search)
@@ -460,7 +461,9 @@ extension OpenClawChatViewModel {
                 archived: archived,
                 agentID: agentID ?? session.deliveryAgentID)
             guard self.isCurrentSession(session) else { return [] }
-            return OpenClawChatSessionListOrganizer.organize(res.sessions)
+            return OpenClawChatSessionListOrganizer.organize(
+                res.sessions,
+                preservingPersonalPinOrder: preservingPersonalPinOrder)
         } catch {
             // A superseded (cancelled) fetch must not produce fallback rows;
             // the newer task owns the scoped list. Callers also guard on

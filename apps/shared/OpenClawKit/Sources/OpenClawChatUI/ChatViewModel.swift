@@ -1124,7 +1124,8 @@ extension OpenClawChatViewModel {
                     unread: session.unread)
             }
             if let sidebarData, let sidebarRead {
-                sidebarData.receive(organized, read: sidebarRead, replacingAgent: session.deliveryAgentID ?? "")
+                // Keep wire order in live Mac membership, not in the offline cache.
+                sidebarData.receive(res.sessions, read: sidebarRead, replacingAgent: session.deliveryAgentID ?? "")
             } else {
                 self.sessions = self.applyingLocalUnreadOverrides(to: organized)
             }

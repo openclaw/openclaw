@@ -490,7 +490,8 @@ public struct ChatSessionsSheet: View {
         let rows = await self.viewModel.fetchSessionList(
             search: query.isEmpty ? nil : query,
             archived: self.scope == .archived,
-            agentID: self.agentID)
+            agentID: self.agentID,
+            preservingPersonalPinOrder: owner != nil)
         // A superseded task must not repaint stale rows over the newer query.
         guard !Task.isCancelled else { return }
         if let owner, let read {

@@ -848,12 +848,18 @@ public struct OpenClawChatSessionEntry: Codable, Identifiable, Sendable, Hashabl
     }
 }
 
-/// Client-side session list policy shared by every session list surface.
-/// Ordering mirrors the gateway (`pinnedAt` desc, `updatedAt` desc, key) so
-/// cached/offline lists render in the same order as server responses.
+/// Legacy pins use their timestamp; personal pins carry their order in the list itself.
 public enum OpenClawChatSessionListOrganizer {
-    public static func organize(_ sessions: [OpenClawChatSessionEntry]) -> [OpenClawChatSessionEntry] {
+    public static func organize(
+        _ sessions: [OpenClawChatSessionEntry], preservingPersonalPinOrder: Bool = false) -> [OpenClawChatSessionEntry]
+    {
         sessions.sorted { lhs, rhs in
+            if preservingPersonalPinOrder {
+                let left = lhs.isPinned && lhs.pinnedAt == nil
+                let right = rhs.isPinned && rhs.pinnedAt == nil
+                // Swift's stable sort retains the Gateway's relative order within this group.
+                if left || right { return left && !right }
+            }
             let lhsPinnedAt = lhs.pinnedAt ?? (lhs.isPinned ? .greatestFiniteMagnitude : 0)
             let rhsPinnedAt = rhs.pinnedAt ?? (rhs.isPinned ? .greatestFiniteMagnitude : 0)
             if lhsPinnedAt != rhsPinnedAt {

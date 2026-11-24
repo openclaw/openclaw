@@ -348,9 +348,14 @@ extension OpenClawChatViewModel {
         }
         var updated = self.sessions
         updated[index] = merged
-        self.sessions = OpenClawChatSessionListOrganizer.organize(updated)
+        if self.sidebarData != nil {
+            self.sessions = updated // Preserve live membership order across this field-only write.
+            updated = self.sessions // Only cache rows accepted by the roster owner.
+        }
+        let organized = OpenClawChatSessionListOrganizer.organize(updated)
+        if self.sidebarData == nil { self.sessions = organized }
         self.persistSessionsToCache(
-            self.sessions,
+            organized,
             agentID: self.currentSessionSnapshot().deliveryAgentID)
         return true
     }
