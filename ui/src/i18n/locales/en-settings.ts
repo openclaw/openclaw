@@ -1097,7 +1097,7 @@ const enSettings = {
         "Sign in and enable this provider for this agent without changing the active model.",
       nativeDone: "Provider enabled. The active model has not changed.",
       setupDescription:
-        "Choose how to connect. Verifying an API key or token can also set this agent's active model.",
+        "Choose how to connect. Setup can also verify and select a model for this agent.",
       done: "Provider credentials saved.",
       statusRefreshFailed: "Sign-in saved, but refreshing status failed. Retry",
       startChat: "Start a new chat with {model}",
