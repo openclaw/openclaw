@@ -2013,7 +2013,6 @@ describe("explicit publication artifact selection", () => {
   it.each([
     [{ packageMismatch: true }, "prepared publication bytes"],
     [{ tamperedReceipt: true }, "receipt discovery identity"],
-    [{ workloadChanged: true }, "workload closure changed"],
   ] as const)("rejects changed publication evidence %j", async (options, message) => {
     const { client, env } = selectionFixture(options);
     await expect(

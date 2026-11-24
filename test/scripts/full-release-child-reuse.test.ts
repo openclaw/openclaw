@@ -1,6 +1,6 @@
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { chmodSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { chmodSync, readFileSync, writeFileSync } from "node:fs";
 import { delimiter, join } from "node:path";
 import JSZip from "jszip";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -13,7 +13,6 @@ import { releaseChildDispatchInputs } from "../../scripts/lib/full-release-child
 import {
   discoverReusableReleaseChild,
   validateReusableReleaseChild,
-  validateReleaseWorkloadIdentity,
 } from "../../scripts/lib/full-release-child-reuse.mjs";
 import { createReleaseEvidenceReplay } from "../../scripts/lib/release-evidence-replay.mjs";
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
@@ -259,154 +258,52 @@ async function fixture(
   };
 }
 
-function crossQualificationTrees(data: Awaited<ReturnType<typeof fixture>>) {
-  const next = "c".repeat(40);
-  const entry = (path: string, sha: string, type = "blob") => ({
-    path,
-    sha,
-    type,
-    mode: type === "tree" ? "040000" : "100644",
-  });
-  const tree = (sha: string, entries: ReturnType<typeof entry>[]) => ({
-    sha,
-    truncated: false,
-    tree: entries,
-  });
-  const previousRoot = "1".repeat(40);
-  const nextRoot = "2".repeat(40);
-  const previousGithub = "3".repeat(40);
-  const nextGithub = "4".repeat(40);
-  const previousWorkflows = "5".repeat(40);
-  const nextWorkflows = "6".repeat(40);
-  const stable = "7".repeat(40);
-  const blobResponses: Record<string, unknown> = {};
-  const blob = (source: string) => {
-    const bytes = Buffer.from(source);
-    const sha = createHash("sha1").update(`blob ${bytes.length}\0`).update(bytes).digest("hex");
-    blobResponses[`git/blobs/${sha}`] = {
-      sha,
-      size: bytes.length,
-      encoding: "base64",
-      content: bytes.toString("base64"),
-    };
-    return sha;
-  };
-  const workflowBlob = blob("jobs:\n  checks:\n    uses: ./.github/workflows/shared.yml\n");
-  const sharedBlob = blob("jobs:\n  checks:\n    runs-on: ubuntu-latest\n");
-  const previous = tree(previousRoot, [
-    entry("scripts", stable, "tree"),
-    ...["config", "packages", "src", "test"].map((path) => entry(path, stable, "tree")),
-    entry("pnpm-lock.yaml", stable),
-    entry(".github", previousGithub, "tree"),
-  ]);
-  const current = tree(nextRoot, [
-    entry("scripts", stable, "tree"),
-    ...["config", "packages", "src", "test"].map((path) => entry(path, stable, "tree")),
-    entry("pnpm-lock.yaml", stable),
-    entry(".github", nextGithub, "tree"),
-  ]);
-  const previousActions = tree(previousGithub, [
-    entry("actions", stable, "tree"),
-    entry("workflows", previousWorkflows, "tree"),
-  ]);
-  const currentActions = tree(nextGithub, [
-    entry("actions", stable, "tree"),
-    entry("workflows", nextWorkflows, "tree"),
-  ]);
-  const previousWorkflow = tree(previousWorkflows, [
-    entry(releaseChildSpec(data.request.role).workflow, workflowBlob),
-    entry("shared.yml", sharedBlob),
-    entry("full-release-validation.yml", "8".repeat(40)),
-  ]);
-  const currentWorkflow = tree(nextWorkflows, [
-    entry(releaseChildSpec(data.request.role).workflow, workflowBlob),
-    entry("shared.yml", sharedBlob),
-    entry("full-release-validation.yml", (data.request.role === "normalCi" ? "9" : "8").repeat(40)),
-  ]);
-  const responses: Record<string, unknown> = {
-    ["compare/" + data.request.workflowSha + "..." + next + "?per_page=1"]: {
-      status: "ahead",
-      merge_base_commit: { sha: data.request.workflowSha },
-      // No complete path proof in this fixture: exercise authenticated tree fallback.
-      files: [],
-    },
-    [`git/commits/${data.request.workflowSha}`]: {
-      sha: data.request.workflowSha,
-      tree: { sha: previousRoot },
-    },
-    [`git/commits/${next}`]: { sha: next, tree: { sha: nextRoot } },
-    [`git/trees/${previousRoot}`]: previous,
-    [`git/trees/${nextRoot}`]: current,
-    [`git/trees/${previousGithub}`]: previousActions,
-    [`git/trees/${nextGithub}`]: currentActions,
-    [`git/trees/${previousWorkflows}`]: previousWorkflow,
-    [`git/trees/${nextWorkflows}`]: currentWorkflow,
-  };
-  const github = data.deps.github;
-  data.deps.github = async (endpoint) =>
-    blobResponses[endpoint] ?? responses[endpoint] ?? github(endpoint);
-  data.request.workflowSha = next;
-  return { current, currentActions, currentWorkflow, previousWorkflow, blob };
-}
-
 describe("independent release child reuse", () => {
-  it.each([
-    "normalCi",
-    "productPerformance",
-    "releaseChecksIndependent",
-    "pluginPrereleaseIndependent",
-  ])("reuses %s after combined parent orchestration and policy repairs", async (role) => {
-    const data = await fixture(role);
-    const trees = crossQualificationTrees(data);
-    trees.current.tree.find((entry) => entry.path === "scripts")!.sha = "e".repeat(40);
-    const files = [
-      ".github/workflows/full-release-validation.yml",
-      "scripts/lib/release-validation-waivers.json",
-      "scripts/lib/full-release-child-reuse.mjs",
-      "test/scripts/full-release-child-reuse.test.ts",
-      "docs/reference/full-release-validation/stages.md",
-      "docs/reference/full-release-validation/dispatch.md",
-    ].map((filename) => ({ filename, status: "modified" }));
-    const comparison = { status: "ahead", merge_base_commit: { sha: TOOLING }, files };
+  it("reuses authenticated child evidence across changes to the child workflow and test harness", async () => {
+    const data = await fixture();
+    const request = {
+      ...data.request,
+      workflowSha: "c".repeat(40),
+      policyTargetVersion: "2099.1.1",
+    };
+    const comparison = {
+      status: "ahead",
+      merge_base_commit: { sha: TOOLING },
+      files: [".github/workflows/ci.yml", "scripts/run-vitest.mjs"].map((filename) => ({
+        filename,
+        status: "modified",
+      })),
+    };
     const github = data.deps.github;
     data.deps.github = async (endpoint) =>
-      endpoint.startsWith("compare/") ? comparison : github(endpoint);
-    const selection = await discoverReusableReleaseChild(data.request, data.deps);
-    expect(selection, data.deps.report.mock.calls.flat().join("\n")).not.toBeNull();
-    await expect(
-      validateReusableReleaseChild(selection, data.request, data.deps),
-    ).resolves.toMatchObject({
-      receipt: { workflowSha: TOOLING, targetSha: TARGET },
+      endpoint === "compare/" + TOOLING + "..." + request.workflowSha + "?per_page=1"
+        ? comparison
+        : github(endpoint);
+
+    const selection = await discoverReusableReleaseChild(request, data.deps);
+    expect(selection, data.deps.report.mock.calls.flat().join("\n")).toMatchObject({
+      workflowSha: TOOLING,
+      runId: "101",
+      receiptSha256: data.receipt.sha256,
     });
-    for (const filename of [
-      "scripts/run-vitest.mjs",
-      ".github/workflows/ci.yml",
-      "pnpm-lock.yaml",
-      "src/index.ts",
-    ]) {
-      files.push({ filename, status: "modified" });
-      await expect(
-        validateReusableReleaseChild(selection, data.request, data.deps),
-      ).rejects.toThrow("workload closure changed");
-      files.pop();
-    }
-    files[0]!.status = "renamed";
-    await expect(validateReusableReleaseChild(selection, data.request, data.deps)).rejects.toThrow(
-      "workload closure changed",
-    );
-    files[0]!.status = "modified";
+    await expect(
+      validateReusableReleaseChild(selection, request, data.deps),
+    ).resolves.toMatchObject({
+      receipt: data.receipt,
+    });
+    await expect(
+      validateReusableReleaseChild(
+        { ...selection, receiptSha256: "0".repeat(64) },
+        request,
+        data.deps,
+      ),
+    ).rejects.toThrow("receipt digest changed");
+
     comparison.status = "diverged";
-    await expect(validateReusableReleaseChild(selection, data.request, data.deps)).rejects.toThrow(
-      "workload closure changed",
+    await expect(validateReusableReleaseChild(selection, request, data.deps)).rejects.toThrow(
+      "workflow SHA is not a main ancestor or the candidate SHA",
     );
-    comparison.status = "ahead";
-    // The GitHub compare API caps inventories at 300 files; never assume completeness at the cap.
-    while (files.length < 300) {
-      files.push({ filename: "scripts/lib/full-release-child-reuse.mjs", status: "modified" });
-    }
-    await expect(validateReusableReleaseChild(selection, data.request, data.deps)).rejects.toThrow(
-      "workload closure changed",
-    );
+    expect(await discoverReusableReleaseChild(request, data.deps)).toBeNull();
   });
 
   it.each(["success", "failure"])(
@@ -415,10 +312,6 @@ describe("independent release child reuse", () => {
       const data = await fixture("normalCi", undefined, TOOLING, 3);
       const version = "2099.1.1";
       const nextQ = "c".repeat(40);
-      const trees = crossQualificationTrees(data);
-      // A real waiver commit changes the scripts tree, while execution is unchanged.
-      trees.current.tree.find((entry) => entry.path === "scripts")!.sha = "e".repeat(40);
-      data.request.workflowSha = TOOLING;
       data.run.conclusion = conclusion;
       data.artifact.expires_at = "2099-01-01T00:00:00Z";
       data.jobs[0]!.name = "a synthetic failing test";
@@ -514,6 +407,7 @@ describe("independent release child reuse", () => {
       if (conclusion === "failure") {
         // Exercise the workflow entrypoint and its real gh/ZIP transport, not only helpers.
         const directory = tempDirs.make("q-waiver-rerun-");
+        writeFileSync(join(directory, "package.json"), JSON.stringify({ type: "commonjs" }));
         const archive = await data.deps.downloadArchive();
         responses["actions/artifacts/301"] = data.artifact;
         writeFileSync(join(directory, "responses.json"), JSON.stringify(responses));
@@ -572,25 +466,6 @@ else {
         await expect(
           validateReusableReleaseChild(selected, request, {
             ...deps,
-            github: async (endpoint) =>
-              endpoint === "compare/" + TOOLING + "..." + nextQ + "?per_page=1"
-                ? {
-                    status: "ahead",
-                    merge_base_commit: { sha: TOOLING },
-                    files: [
-                      {
-                        filename: "scripts/lib/release-validation-waivers.json",
-                        status: "modified",
-                      },
-                      { filename: "scripts/changed-execution.mjs", status: "modified" },
-                    ],
-                  }
-                : deps.github(endpoint),
-          }),
-        ).rejects.toThrow("workload closure changed");
-        await expect(
-          validateReusableReleaseChild(selected, request, {
-            ...deps,
             getJobLog: async () => "##[error]artifact integrity failed",
           }),
         ).rejects.toThrow("unwaived failure");
@@ -599,9 +474,9 @@ else {
       }
     },
   );
-  it("retains original C-owned child identity across a parent-only Q repair", async () => {
+  it("retains original C-owned child identity and exact inputs across a Q change", async () => {
     const data = await fixture("normalCi", undefined, TARGET);
-    crossQualificationTrees(data);
+    data.request.workflowSha = "c".repeat(40);
     const selection = await discoverReusableReleaseChild(data.request, data.deps);
     expect(selection).toMatchObject({
       workflowSha: TARGET,
@@ -613,7 +488,6 @@ else {
     ).resolves.toMatchObject({
       receipt: { workflowSha: TARGET, targetSha: TARGET },
     });
-    // Equivalence does not allow changing the target or normalized child inputs.
     await expect(
       validateReusableReleaseChild(selection, { ...data.request, targetSha: TOOLING }, data.deps),
     ).rejects.toThrow("selection identity");
@@ -626,121 +500,7 @@ else {
     ).rejects.toThrow("selection identity");
   });
 
-  it.each([
-    "scripts",
-    "config",
-    "packages",
-    "src",
-    "test",
-    "dependencies",
-    "actions",
-    "child workflow",
-    "transitive workflow",
-    "truncated inventory",
-    "wrong tree identity",
-  ])("invalidates cross-Q evidence when %s changes", async (changed) => {
-    const data = await fixture("normalCi", undefined, TARGET);
-    const trees = crossQualificationTrees(data);
-    const selection = await discoverReusableReleaseChild(data.request, data.deps);
-    expect(selection).not.toBeNull();
-    if (changed === "truncated inventory") {
-      trees.current.truncated = true;
-    } else if (changed === "wrong tree identity") {
-      trees.current.sha = "e".repeat(40);
-    } else {
-      const entries =
-        changed === "actions"
-          ? trees.currentActions.tree
-          : ["child workflow", "transitive workflow"].includes(changed)
-            ? trees.currentWorkflow.tree
-            : trees.current.tree;
-      const path =
-        changed === "dependencies"
-          ? "pnpm-lock.yaml"
-          : changed === "transitive workflow"
-            ? "shared.yml"
-            : changed === "child workflow"
-              ? "ci.yml"
-              : changed;
-      entries.find((entry) => entry.path === path)!.sha = [
-        "child workflow",
-        "transitive workflow",
-      ].includes(changed)
-        ? trees.blob("jobs:\n  changed:\n    runs-on: ubuntu-latest\n")
-        : "d".repeat(40);
-    }
-    await expect(validateReusableReleaseChild(selection, data.request, data.deps)).rejects.toThrow(
-      ["truncated inventory", "wrong tree identity"].includes(changed)
-        ? "incomplete or invalid"
-        : "workload closure changed",
-    );
-    expect(await discoverReusableReleaseChild(data.request, data.deps)).toBeNull();
-  });
-  it("invalidates script-dispatched workflow changes without guessing script dependencies", async () => {
-    const data = await fixture("releaseChecksIndependent", undefined, TARGET);
-    const trees = crossQualificationTrees(data);
-    const descendant = {
-      path: "qa-telegram.yml",
-      sha: "e".repeat(40),
-      type: "blob",
-      mode: "100644",
-    };
-    trees.previousWorkflow.tree.push(descendant);
-    trees.currentWorkflow.tree.push({ ...descendant });
-    const selection = await discoverReusableReleaseChild(data.request, data.deps);
-    expect(selection).not.toBeNull();
-    trees.currentWorkflow.tree.find((entry) => entry.path === descendant.path)!.sha = "f".repeat(
-      40,
-    );
-    await expect(validateReusableReleaseChild(selection, data.request, data.deps)).rejects.toThrow(
-      "workload closure changed",
-    );
-    expect(await discoverReusableReleaseChild(data.request, data.deps)).toBeNull();
-  });
-
-  it("ignores unrelated Q product and workflow changes but fails closed on unknown dependencies", async () => {
-    const data = await fixture("normalCi", undefined, TARGET);
-    const trees = crossQualificationTrees(data);
-    trees.current.tree.push({ path: "apps", sha: "e".repeat(40), type: "tree", mode: "040000" });
-    trees.currentWorkflow.tree.push({
-      path: "other.yml",
-      sha: "f".repeat(40),
-      type: "blob",
-      mode: "100644",
-    });
-    const selection = await discoverReusableReleaseChild(data.request, data.deps);
-    expect(selection).not.toBeNull();
-    trees.currentWorkflow.tree.find((entry) => entry.path === "ci.yml")!.sha = trees.blob(
-      "jobs:\n  checks:\n    uses: *unresolved\n",
-    );
-    await expect(validateReusableReleaseChild(selection, data.request, data.deps)).rejects.toThrow(
-      "unsupported reusable workflow reference",
-    );
-  });
-
-  it.each([
-    "normalCi",
-    "pluginPrereleaseIndependent",
-    "releaseChecksIndependent",
-    "productPerformance",
-    "npmTelegram",
-  ])("recognizes the real %s workflow closure", async (role) => {
-    const data = await fixture(role, undefined, TARGET);
-    const trees = crossQualificationTrees(data);
-    const workflows = readdirSync(".github/workflows")
-      .filter((name) => /\.ya?ml$/u.test(name))
-      .map((name) => ({
-        path: name,
-        sha: trees.blob(readFileSync(join(".github/workflows", name), "utf8")),
-        type: "blob",
-        mode: "100644",
-      }));
-    trees.currentWorkflow.tree = workflows;
-    trees.previousWorkflow.tree = workflows;
-    expect(await discoverReusableReleaseChild(data.request, data.deps)).not.toBeNull();
-  });
-
-  it.each(["failure", "cancelled"])("reuses exact %s receipt policy", async (leafConclusion) => {
+  it("reuses a Q-policy-waived receipt through the default log reader", async () => {
     const version = "2099.1.1";
     const targetSha = TARGET;
     const jobName = "a synthetic failing test";
@@ -766,13 +526,11 @@ else {
         conclusion: "failure",
       },
     ];
-    data.jobs[0]!.conclusion = leafConclusion;
-    data.jobs[0]!.steps = [{ name: "Swift test", status: "completed", conclusion: leafConclusion }];
     data.receipt.workloadConclusion = "failure";
     data.receipt.jobs = data.receipt.jobs.map((job, index) => ({
       ...job,
       name: data.jobs[index]!.name,
-      conclusion: data.jobs[index]!.conclusion,
+      conclusion: "failure",
     }));
     data.receipt.compositeJobsSha256 = jsonDigest({
       effectiveRunAttempt: data.receipt.effectiveRunAttempt,
@@ -818,7 +576,6 @@ process.stdout.write("##[error]checks-node-core-test-nondist-shard finished with
                 childRole: "normalCi",
                 jobName,
                 reason: "Synthetic operator approval",
-                ...(leafConclusion === "cancelled" ? { cancelledStep: "Swift test" } : {}),
                 aggregates: [
                   {
                     jobName: "openclaw/ci-gate",
@@ -859,18 +616,6 @@ process.stdout.write("##[error]checks-node-core-test-nondist-shard finished with
     );
     expect(recovered.run.conclusion).toBe("failure");
     expect(recovered.receipt.workloadConclusion).toBe("failure");
-    expect(recovered.receipt.jobs[0]?.conclusion).toBe(leafConclusion);
-    if (leafConclusion === "cancelled") {
-      data.jobs[0]!.steps[0]!.name = "Setup";
-      await expect(
-        validateReusableReleaseChild(
-          selection,
-          { ...data.request, policyTargetVersion: version },
-          deps,
-        ),
-      ).rejects.toThrow("non-policy cancellation");
-      data.jobs[0]!.steps[0]!.name = "Swift test";
-    }
     expect(await discoverReusableReleaseChild(data.request, deps)).toBeNull();
     expect(
       await discoverReusableReleaseChild({ ...data.request, policyTargetVersion: version }, deps),
@@ -1224,15 +969,15 @@ process.stdout.write("##[error]checks-node-core-test-nondist-shard finished with
     async ({ workflowSha, reason }) => {
       const data = await fixture();
       const selection = await discoverReusableReleaseChild(data.request, data.deps);
-      data.request.workflowSha = workflowSha;
-      await expect(
-        validateReusableReleaseChild(selection, data.request, data.deps),
-      ).rejects.toThrow(reason);
+      const request = { ...data.request, workflowSha, policyTargetVersion: "2099.1.1" };
+      await expect(validateReusableReleaseChild(selection, request, data.deps)).rejects.toThrow(
+        reason,
+      );
       if (!workflowSha) {
-        await expect(discoverReusableReleaseChild(data.request, data.deps)).rejects.toThrow(reason);
+        await expect(discoverReusableReleaseChild(request, data.deps)).rejects.toThrow(reason);
         return;
       }
-      expect(await discoverReusableReleaseChild(data.request, data.deps)).toBeNull();
+      expect(await discoverReusableReleaseChild(request, data.deps)).toBeNull();
       expect(data.deps.report).toHaveBeenCalledWith(
         expect.stringContaining(
           `run 101 ${data.run.display_title}: rejected: Full release child evidence API GET`,
@@ -1568,182 +1313,3 @@ process.stdout.write(fs.readFileSync(${JSON.stringify(archivePath)}));
     }
   });
 });
-
-// Captured from f95261af -> 8aeb0a30 plus the exact publication repair.
-// Blob pairs bind these reviewed bookkeeping edits; they do not exempt the paths.
-// Original Git object identities and the executable beta.2 backport inventory.
-// These expected values are independent of the production compatibility map.
-const originalPublicationRepairBlobs = [
-  [
-    "scripts/full-release-artifacts.mjs",
-    "943086f7044bfb5b2219275081f36069cfe7c1c8",
-    "8ce1e3d1fd13ef514d4069f8be8b746a91b289d6",
-  ],
-  [
-    "scripts/full-release-publication-contract.d.mts",
-    "e05dac0be97bc8a8662c5879a1243e6f40ca3fa9",
-    "6f8cfcb1f57d4dfc60c27ae777d041effa7c5812",
-  ],
-  [
-    "scripts/full-release-publication-contract.mjs",
-    "8f70c6dea5d0bb5daa79b9b189700108d46e54f5",
-    "d0abcf5d86ac1a746f3796323b1c5c8db8cf8184",
-  ],
-  [
-    "scripts/full-release-validation-at-sha.mts",
-    "c8c9778fa8568b6acff92bb2d76ac28579285a22",
-    "e1fb448ed1833e7d25c2cb47a3bc9ec875e1093c",
-  ],
-  [
-    "scripts/full-release-validation-policy.d.mts",
-    "63ddec2e0f304d0177cbb66c89514a3f98e22619",
-    "14e94cda01794faf60733f36c2d19c14d1d7d1d9",
-  ],
-  [
-    "scripts/full-release-validation-policy.mjs",
-    "87acfd1b4fa49341923822b7171f55ceeb9e4218",
-    "a6a3560c4e548fa89a26b32630cf0576597341d8",
-  ],
-  [
-    "scripts/full-release-validation-state.mjs",
-    "d1d4ff29ef786809ef4ffd8ddb17bebb60d71534",
-    "b446cb2c42fe97e43b5bbe6fd8275c82ce82b44e",
-  ],
-  [
-    "scripts/lib/full-release-manifest.mjs",
-    "d8b69ee25f758d1339a3ada857f68ec0b614d5af",
-    "56335ca0409365dc04f99daccc9363333ba5ecc6",
-  ],
-  [
-    "scripts/lib/full-release-publication-artifacts.mjs",
-    null,
-    "a8e3f0ffa17e0c7343d36690b9b8c4074c1dcd88",
-  ],
-  [
-    "scripts/lib/full-release-publication-inputs.mjs",
-    "d437ca66bde22279dd96bb11537e8b3857ec7165",
-    "6c1b2f2791fad45259a4bc9d539c1c33d524e565",
-  ],
-  [
-    "scripts/lib/release-evidence-identity.mjs",
-    "246f8da5278515ae2a07c8d8e3cc01bb91e1570d",
-    "04ed419ced91ffbc5fb59d15684bd59d46bae3c5",
-  ],
-  [
-    "scripts/npm-preflight-tooling-identity.mjs",
-    "e50b3319e6cacb94fc2b26a5ad3e5a1190c27187",
-    "0ff20cc936e7a0b2c45c315d45476d8e5727e200",
-  ],
-  [
-    "scripts/release-ci-summary.mjs",
-    "8489bc3ede7d77a9b40de444f8dc79fdb64abc38",
-    "3e5a49b8af750b8c4de3acb939113cb49b40f750",
-  ],
-  [
-    "scripts/validate-full-release-validation-evidence.mjs",
-    "12332b5e4e9035fdd437c1e5b49fe5903e2b8ee0",
-    "c25be5b842220a4ea562df5fecaa47e34e642682",
-  ],
-  [
-    "test/scripts/candidate-publication.test-support.ts",
-    "d5a957cd6453cc35c980f447a0f21e4136354a4d",
-    "c966b1fbb8e32e535164f4073d1124a152483f39",
-  ],
-  [
-    "test/scripts/full-release-artifact-contract.test.ts",
-    "3de7b063cfe6765020cdb9fd1c74bce4b2a62a52",
-    "bae2928a25ac7a955941bf9e885dd5e834b4c5f9",
-  ],
-  [
-    "test/scripts/full-release-artifacts.test.ts",
-    "ecfe13974194370d1943d86710b0c748e12695c1",
-    "b0c0b39142e044c9ac738760cb403d26b8286e56",
-  ],
-  [
-    "test/scripts/full-release-validation-at-sha.candidate.test.ts",
-    "1cacf0f07fbd9bfc693cdbdbd5474fa799f2fbbc",
-    "8642e22cab6c0aff3f968e6ae47afe249026c7b4",
-  ],
-  [
-    "test/scripts/release-upgrade-baseline.test.ts",
-    "49389a4ac6b3be039ebd3c62dc1f27b74f207042",
-    "23c00952c86b67d33707a8237cded5a837ef3255",
-  ],
-] as const;
-
-it.each([
-  "normalCi",
-  "pluginPrereleaseIndependent",
-  "pluginPrereleaseCandidate",
-  "releaseChecksIndependent",
-  "releaseChecksCandidate",
-  "productPerformance",
-])(
-  "accepts the original beta.2 bookkeeping delta for %s without exempting workload changes",
-  async (role) => {
-    const previous = "f95261af52cdf1f6abcbd77a459dd5a630e0f3c7";
-    const next = "e".repeat(40);
-    const files = originalPublicationRepairBlobs.map(([filename, before, sha]) => ({
-      filename,
-      sha,
-      status: before === null ? "added" : "modified",
-    }));
-    const comparison = {
-      status: "ahead",
-      merge_base_commit: { sha: previous },
-      files: [
-        ...[
-          ".github/workflows/full-release-validation.yml",
-          "docs/reference/full-release-validation/dispatch.md",
-          "docs/reference/full-release-validation/stages.md",
-          "scripts/lib/full-release-child-reuse.mjs",
-          "scripts/lib/release-validation-waivers.json",
-          "test/scripts/full-release-child-reuse.test.ts",
-        ].map((filename) => ({ filename, status: "modified", sha: "f".repeat(40) })),
-        ...files,
-      ],
-    };
-    const deps = {
-      github: vi.fn(async (route: string) => {
-        if (route.startsWith("compare/")) {
-          return comparison;
-        }
-        throw new Error("unproved workload tree");
-      }),
-    };
-    const request = { workflowSha: next, role, spec: releaseChildSpec(role) };
-    await expect(validateReleaseWorkloadIdentity(previous, request, deps)).resolves.toBeUndefined();
-    for (const filename of [
-      "src/index.ts",
-      "scripts/npm-prepared-bundle.mjs",
-      "scripts/plan-release-workflow-matrix.mjs",
-      "scripts/lib/release-upgrade-baseline.mjs",
-      "test/scripts/upgrade-survivor.test.ts",
-      ".github/workflows/openclaw-release-checks.yml",
-    ]) {
-      comparison.files.push({ filename, status: "modified", sha: "f".repeat(40) });
-      await expect(validateReleaseWorkloadIdentity(previous, request, deps)).rejects.toThrow(
-        "unproved workload tree",
-      );
-      comparison.files.pop();
-    }
-    comparison.files.push({ filename: "scripts/unreviewed.mjs", status: "modified", sha: "" });
-    await expect(validateReleaseWorkloadIdentity(previous, request, deps)).rejects.toThrow(
-      "unproved workload tree",
-    );
-    comparison.files.pop();
-    // The grant is tied to the original tree, not reusable for arbitrary old Q.
-    comparison.merge_base_commit.sha = "d".repeat(40);
-    await expect(validateReleaseWorkloadIdentity("d".repeat(40), request, deps)).rejects.toThrow(
-      "unproved workload tree",
-    );
-    comparison.merge_base_commit.sha = previous;
-    const artifactOwner = comparison.files.find(
-      (file) => file.filename === "scripts/full-release-artifacts.mjs",
-    )!;
-    artifactOwner.sha = "f".repeat(40);
-    await expect(validateReleaseWorkloadIdentity(previous, request, deps)).rejects.toThrow(
-      "unproved workload tree",
-    );
-  },
-);

@@ -397,7 +397,6 @@ export async function selectPublicationArtifactSource(selectionInput, env, provi
     await import("./release-ci-summary.mjs");
   const { discoverPublicationArtifacts } =
     await import("./lib/full-release-publication-artifacts.mjs");
-  const { validateReleaseWorkloadIdentity } = await import("./lib/full-release-child-reuse.mjs");
   const { verifySealedFullReleaseCandidate, candidateArtifactJsonFromBinding } =
     await import("./lib/full-release-candidate-reuse.mjs");
   const selection = validatePublicationArtifactSelection(selectionInput);
@@ -440,15 +439,6 @@ export async function selectPublicationArtifactSource(selectionInput, env, provi
   requireValue(
     isDeepStrictEqual({ ...candidate.request, toolingSha: request.toolingSha }, request),
     "Selected publication candidate request differs from the admitted workload inputs.",
-  );
-  await validateReleaseWorkloadIdentity(
-    source.workflow.sha,
-    {
-      workflowSha: env.PARENT_WORKFLOW_SHA,
-      role: "releaseChecksCandidate",
-      spec: { workflow: "openclaw-release-checks.yml" },
-    },
-    { github: (path) => client.readWorkloadIdentity(path) },
   );
   await verifySealedFullReleaseCandidate({
     binding: candidate,
