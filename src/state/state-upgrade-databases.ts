@@ -8,10 +8,12 @@ import { resolveConfigPath, resolveStateDir } from "../config/paths.js";
 import { resolveConfiguredAgentDatabaseTargets } from "../config/sessions/targets.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { readBackupEngine } from "../infra/database-engine/physical-store.js";
+import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { readSqliteUserVersion } from "../infra/sqlite-user-version.js";
 import { inspectPostgresUpgrade, preflightPostgresUpgrade } from "../snapshot/database-backup.js";
 import { readRetainedAgentDeletionIds } from "./agent-deletion-journal.snapshot.worker.js";
+import type { ConfigMachineStateDatabase } from "./config-machine-state-row.js";
 import { readOpenClawAgentDatabaseRegistryRows } from "./openclaw-agent-db-registry.read.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "./openclaw-schema-versions.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "./openclaw-state-db-contract.js";
@@ -26,6 +28,7 @@ export type DatabaseTarget = {
   path: string;
   version: number;
   engine: "sqlite" | "postgres";
+  postgres?: { namespace: string; physicalBytes: number };
 };
 
 export function readVersion(db: DatabaseSync, kind: DatabaseTarget["kind"]): number {
@@ -34,10 +37,13 @@ export function readVersion(db: DatabaseSync, kind: DatabaseTarget["kind"]): num
     return user;
   }
   try {
-    const row = db
-      .prepare("SELECT value_json FROM config_machine_state WHERE state_key = ?")
-      // SAFETY: the statement fixes the column names and types of each row.
-      .get(CONTENT_VERSION_KEY) as { value_json?: string } | undefined;
+    const row = executeSqliteQueryTakeFirstSync(
+      db,
+      getNodeSqliteKysely<ConfigMachineStateDatabase>(db)
+        .selectFrom("config_machine_state")
+        .select("value_json")
+        .where("state_key", "=", CONTENT_VERSION_KEY),
+    );
     return Math.max(user, Number(row?.value_json ?? 0) || 0);
   } catch {
     return user;
@@ -89,7 +95,14 @@ export async function discoverDatabases(
           path: resolveOpenClawRegisteredAgentDatabasePath(pathname, entry.path),
         }));
       }
-      targets.push({ kind, agentId, path: pathname, version: physical.version, engine });
+      targets.push({
+        kind,
+        agentId,
+        path: pathname,
+        version: physical.version,
+        engine,
+        postgres: { namespace: physical.namespace, physicalBytes: physical.physicalBytes },
+      });
       return;
     }
     const version = withRecoveredSource(pathname, (readable) => {
@@ -181,11 +194,32 @@ export function readUpgradeConfig(configPath: string): OpenClawConfig {
   }
 }
 
+/** Use the measured 90 seconds/GiB copy rate within the ten-minute update window. */
+export function postgresInPlaceUpgradeNotice(
+  targets: readonly DatabaseTarget[],
+): string | undefined {
+  const namespaces = new Map<string, number>();
+  for (const target of targets) {
+    if (target.postgres) {
+      namespaces.set(target.postgres.namespace, target.postgres.physicalBytes);
+    }
+  }
+  let bytes = 0;
+  for (const size of namespaces.values()) {
+    bytes += size;
+  }
+  const gib = bytes / 1024 ** 3;
+  if (gib * 90 <= 600) {
+    return undefined;
+  }
+  return `This PostgreSQL store (${gib.toFixed(2)} GiB) is too large to copy within the update window. It is migrated in place, without automatic data rollback. Back it up first: https://docs.openclaw.ai/install/updating#rollback`;
+}
+
 /** Candidate preparation runs this read-only check while the previous Gateway serves. */
 export async function preflightStateUpgrade(
   env: NodeJS.ProcessEnv,
   config: OpenClawConfig,
-): Promise<void> {
+): Promise<string | undefined> {
   const stateDir = path.resolve(resolveStateDir(env));
   if (!fs.existsSync(stateDir)) {
     return;
@@ -193,6 +227,10 @@ export async function preflightStateUpgrade(
   const { targets } = await discoverDatabases(stateDir, config, env);
   const postgres = targets.filter((target) => target.engine === "postgres");
   if (postgres.length > 0 && outdatedDatabases(targets).length > 0) {
+    const notice = postgresInPlaceUpgradeNotice(targets);
+    if (notice) {
+      return notice;
+    }
     await preflightPostgresUpgrade(
       postgres.map((target) => target.path),
       config,

@@ -1,13 +1,10 @@
 // Copy-and-swap state upgrade. Gateway startup is the only owner.
 //
-// When a shared or agent database is older than this build, the migration-owned state
-// inputs are copied into a private shadow. The shipped migration chain (this
-// build's Doctor) runs on the shadow only. The result is validated, written to a
-// durable plan, and renamed into place; every replaced or retired live file stays
-// as `<name>.pre-<generation>`. The live files are never written before the plan is
-// durable. SQLite-only chain failures can rebuild and pin the originals. PostgreSQL
-// and mixed-engine failures refuse the candidate: the originals remain selected.
-// A crash before the plan leaves live selections and application data untouched.
+// Migration inputs are copied into a private shadow, migrated by this build's
+// Doctor, validated, and published by a durable rename plan. PostgreSQL copies
+// retain the original namespace for rollback. Stores whose measured copy estimate
+// exceeds the update window keep the existing in-place migration owner instead;
+// SQLite state still receives its normal private-copy protection.
 import fs from "node:fs";
 import path from "node:path";
 import { resolveDefaultAgentWorkspaceDir } from "../agents/workspace-default-path.js";
@@ -40,6 +37,7 @@ import {
   discoverDatabases,
   expectedVersion,
   outdatedDatabases,
+  postgresInPlaceUpgradeNotice,
   readUpgradeConfig,
   readVersion,
   type DatabaseTarget,
@@ -384,10 +382,19 @@ export async function upgradeStateDirectory(params: {
     }
     return resumed ? { status: "resumed" } : { status: "current" };
   }
-  const postgres = targets.filter((target) => target.engine === "postgres");
+  const inPlaceNotice = postgresInPlaceUpgradeNotice(targets);
+  if (inPlaceNotice) {
+    params.log.warn(inPlaceNotice);
+    // Shared PostgreSQL previously bypassed copy-and-swap (its anchor was v0).
+    // Normal boot/Doctor still owns that in-place path, including SQLite agents.
+    if (targets.some((target) => target.kind === "state" && target.engine === "postgres")) {
+      return resumed ? { status: "resumed" } : { status: "current" };
+    }
+  }
+  const postgres = inPlaceNotice ? [] : targets.filter((target) => target.engine === "postgres");
   const sqliteOutdated = outdated.filter((target) => target.engine === "sqlite");
   try {
-    // Check every carrier before starting any copy. There is no portable or in-place fallback.
+    // The size decision precedes these copy-only prerequisites.
     if (postgres.length > 0) {
       await preflightPostgresUpgrade(
         postgres.map((target) => target.path),
@@ -462,7 +469,7 @@ export async function upgradeStateDirectory(params: {
     }
     let mode: "chain" | "fallback" = "chain";
     let failedStep: string | undefined;
-    const warnings: string[] = [];
+    const warnings: string[] = inPlaceNotice ? [inPlaceNotice] : [];
     const setAside: Array<{ report: SqliteSwapReport; rows: readonly SetAsideRow[] }> = [];
     let mismatches: string[] = [];
     const fallbackAdds: UpgradeOp[] = [];
@@ -511,7 +518,7 @@ export async function upgradeStateDirectory(params: {
           });
         }
       }
-      const fallback = buildFallback(outdated, toShadow, workDir);
+      const fallback = buildFallback(sqliteOutdated, toShadow, workDir);
       // The upgrade report, set-aside rows and pin live in the shared database, so a
       // current one is copied too and swapped with them.
       if (
@@ -566,7 +573,7 @@ export async function upgradeStateDirectory(params: {
       mode === "chain"
         ? diffTree(stateDir, shadowRoot, baseline, warn)
         : [
-            ...outdated.map((t) => ({
+            ...sqliteOutdated.map((t) => ({
               kind: "replace" as const,
               live: t.path,
               next: toShadow(t.path),
@@ -693,7 +700,7 @@ export async function upgradeStateDirectory(params: {
     };
   } catch (error) {
     if (!planWritten) {
-      // Nothing live changed; the next start retries from scratch.
+      // Private preparation can retry without migrating the protected originals.
       if (postgres.length > 0) {
         return {
           status: "refused",

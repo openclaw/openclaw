@@ -624,7 +624,7 @@ export async function pruneGenerations(
   const removed: string[] = [];
   // No recursive walk: ownership comes from the copy or the durable swap plan.
   const directories = new Set([...ownedFiles].map((file) => path.dirname(file)));
-  const generations: Array<{ absolute: string; generation: string }> = [];
+  const generations: Array<{ absolute: string; retained: boolean }> = [];
   for (const directory of directories) {
     for (const name of fs.readdirSync(directory)) {
       const match = /^(.*)\.pre-([^/]+)$/u.exec(name);
@@ -634,15 +634,16 @@ export async function pruneGenerations(
       const [, original, generation] = match;
       const absolute = path.join(directory, name);
       if (ownedFiles.has(path.join(directory, original!)) && fs.lstatSync(absolute).isFile()) {
-        generations.push({ absolute, generation: generation! });
+        generations.push({
+          absolute,
+          retained: generation === keepVersion || pinnedVersions.has(generation!),
+        });
       }
     }
   }
   const retainedAnchors = [
     ...postgres.activeAnchors,
-    ...generations
-      .filter((entry) => entry.generation === keepVersion || pinnedVersions.has(entry.generation))
-      .map((entry) => entry.absolute),
+    ...generations.filter((entry) => entry.retained).map((entry) => entry.absolute),
   ];
   const protectedNamespaces = new Set(
     retainedAnchors.flatMap((file) => {
@@ -653,8 +654,8 @@ export async function pruneGenerations(
       return engine.engine === "postgres" ? [engine.namespace] : [];
     }),
   );
-  for (const { absolute, generation } of generations) {
-    if (generation === keepVersion || pinnedVersions.has(generation)) {
+  for (const { absolute, retained } of generations) {
+    if (retained) {
       continue;
     }
     if (isSqliteFile(absolute)) {

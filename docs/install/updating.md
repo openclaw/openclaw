@@ -30,12 +30,15 @@ existing schema compatibility check before release preparation.
 
 A resident launcher selects the pending release when the Gateway next starts.
 The Gateway migrates private state copies at boot and confirms that it is ready.
-For a PostgreSQL schema upgrade, it makes and migrates a private server-side copy
-before switching the local anchor; the original schema and application rows stay
-unchanged. If the new Gateway cannot start, the launcher restores the previous
-release, SQLite migration originals, and PostgreSQL anchors. PostgreSQL fallback
-selects the original namespace; it does not run a database restore.
-Writes made only during a failed trial are discarded.
+For PostgreSQL, preparation estimates copying time from the combined physical
+size of the namespaces to copy, using a measured rate of 90 seconds/GiB. Estimates
+of at most 600 seconds use private server-side copies; their original schemas and
+rows remain unchanged. If the new Gateway cannot start, the launcher restores
+the previous release, SQLite migration originals, and protected PostgreSQL anchors.
+Writes made only during a failed protected trial are discarded. Larger stores
+still update, using the existing in-place migration path without automatic
+PostgreSQL data rollback; update output and the saved update report warn you to
+back up first.
 See [PostgreSQL update recovery](/gateway/postgresql#updates-and-schema-migrations)
 for storage, permissions, and namespace changes.
 
@@ -137,24 +140,33 @@ The Gateway's `update.run` and `openclaw update` both use one path:
    in the same update details and warning count; they never fail the core update
    or trigger rollback.
 
-Startup prepares all state and agent migration inputs privately, including mixed
-SQLite/PostgreSQL installations. PostgreSQL uses only a server-side copy in a
-fresh namespace. The candidate migrates and validates that copy before writing
-the durable file-swap plan or publishing its anchor. Original PostgreSQL
-application schema and rows remain unchanged.
+Startup prepares state and agent migration inputs privately, including mixed
+SQLite/PostgreSQL installations, when the PostgreSQL copy estimate is at most
+600 seconds. Preparation reads the total physical size of the namespaces that
+would be cloned while the previous Gateway is serving, counting table storage,
+indexes, and TOAST once, and estimates 90 seconds/GiB. The candidate migrates and
+validates protected copies before writing the durable file-swap plan or publishing
+their anchors. Original protected PostgreSQL schema and rows remain unchanged.
 Source access grants and schema-specific default privileges are copied and
 verified in the same transaction, so existing reporting and backup roles keep
 their permissions in the new namespace.
 
-If protection cannot be prepared, the candidate uses the existing configuration
-refusal (exit 78), with the obstruction in its diagnostics. It never falls back
-to a portable export or an unprotected in-place migration. A missing `CREATE`
-grant must be repaired, not bypassed. `--no-restart` delays this work until the
-next actual Gateway start; a same-schema release does not need a PostgreSQL copy.
+An estimate above 600 seconds selects the existing in-place PostgreSQL migration
+path, not a size refusal. Copy-only `CREATE` and grant-copy prerequisites do not
+apply to this selection. Existing SQLite-state private-copy protection is retained
+when agent stores use PostgreSQL. Update output and the saved update report show:
 
-Each PostgreSQL schema-changing update changes the affected store's namespace
-name and lengthens the restart. Plan for the original and private server copies,
-indexes, WAL, temporary work, and retained recovery generations. Keep namespace
+> This PostgreSQL store (X GiB) is too large to copy within the update window. It is migrated in place, without automatic data rollback. Back it up first: <https://docs.openclaw.ai/install/updating#rollback>
+
+For stores selected for protection, a preparation failure uses the existing
+configuration refusal (exit 78), with the obstruction in its diagnostics. There is
+no portable-export fallback; missing copy privileges must be repaired.
+`--no-restart` delays copying and migration until the next actual Gateway start;
+a same-schema release does not need a PostgreSQL copy.
+
+Each protected PostgreSQL schema-changing update changes the affected store's
+namespace name and lengthens the restart. Plan for the original and private server
+copies, indexes, WAL, temporary work, and retained recovery generations. Keep namespace
 and anchor generations together. Pruning may drop only update-created or
 verified-owned namespaces; a failed drop retains the recovery pair and reports
 a warning without failing a serving release. These recovery copies are not an

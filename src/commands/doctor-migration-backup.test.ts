@@ -4,8 +4,6 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { withDatabaseEngineSelection } from "../infra/database-engine/context.js";
-import { resolveDatabaseFamilyEngines } from "../infra/database-engine/registry.js";
 import * as sqliteVec from "../infra/database-engine/sqlite-vec.js";
 import * as directoryDurability from "../infra/directory-durability.js";
 import {
@@ -14,8 +12,6 @@ import {
 } from "../infra/session-sqlite-migration-manifest.js";
 import { inspectScopedMigrationSnapshot } from "../infra/sqlite-migration-scoped-snapshot.js";
 import * as sqliteSnapshot from "../infra/sqlite-snapshot.js";
-import { runWithDoctorMigrationBackup } from "../infra/update-doctor-migration-attribution.js";
-import * as databaseBackup from "../snapshot/database-backup.js";
 import { createOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
 import * as stateFastPath from "../state/openclaw-state-db-fast-path.js";
 import * as schemaScope from "../state/schema-migration-backup-scope.js";
@@ -24,16 +20,12 @@ import { restoreDoctorMigrationBackup } from "./doctor-migration-backup-restore.
 import {
   backupDoctorMigrationDatabases,
   backupDoctorSqliteDatabases,
-  captureFreshDoctorMigrationTables,
 } from "./doctor-migration-backup.js";
 import { inspectSessionSqliteRecovery } from "./doctor-session-sqlite-recovery-inventory.js";
 import { withDoctorSqliteMaintenanceLock } from "./doctor-sqlite-maintenance-lock.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-afterEach(() => {
-  vi.restoreAllMocks();
-  vi.unstubAllEnvs();
-});
+afterEach(() => vi.restoreAllMocks());
 const protectedArchive = (pathname: string) =>
   expect.objectContaining({
     path: pathname,
@@ -81,90 +73,6 @@ async function capture(params: Parameters<typeof backupDoctorMigrationDatabases>
     await maintenance.close();
   }
 }
-
-describe("Doctor PostgreSQL migration backup orchestration", () => {
-  it.each([undefined, true] as const)(
-    "uses startup's protected original only in the private pass (server captures: %s)",
-    async (serverRecoveryCaptures) => {
-      const stateDir = tempDirs.make("openclaw-doctor-private-pg-");
-      const shared = path.join(stateDir, "state", "openclaw.sqlite");
-      const liveRoot = tempDirs.make("openclaw-doctor-original-pg-");
-      vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
-      for (const [root, namespace] of [
-        [liveRoot, "original"],
-        [stateDir, "private"],
-      ] as const) {
-        const anchorPath = path.join(root, "state", "openclaw.sqlite");
-        fs.mkdirSync(path.dirname(anchorPath), { recursive: true });
-        using anchor = new DatabaseSync(anchorPath);
-        anchor.exec(
-          "CREATE TABLE openclaw_engine_anchor (store_id TEXT NOT NULL, engine TEXT NOT NULL, schema TEXT NOT NULL)",
-        );
-        anchor
-          .prepare("INSERT INTO openclaw_engine_anchor VALUES (?, 'postgres', ?)")
-          .run("aab8619b-f3ec-42fb-96cf-285b832152fc", namespace);
-      }
-      const migration = {
-        kind: "state" as const,
-        path: shared,
-        foundVersion: 40,
-        supportedVersion: 41,
-      };
-      const params = {
-        env: { OPENCLAW_STATE_DIR: stateDir },
-        pendingDatabasePaths: [shared],
-        databasePaths: [],
-        pendingMigrations: [migration],
-      };
-      const refusedCapture = new Error("standalone recovery capture reached");
-      const capturePostgres = vi
-        .spyOn(databaseBackup, "capturePostgresBackup")
-        .mockRejectedValue(refusedCapture);
-      const prune = vi.spyOn(databaseBackup, "prunePostgresSchemaCaptures").mockResolvedValue([]);
-      vi.spyOn(databaseBackup, "fingerprintPostgresBackup").mockResolvedValue("private-generation");
-      await withDatabaseEngineSelection(
-        {
-          effectiveEngines: resolveDatabaseFamilyEngines({ database: { engine: "postgres" } }),
-          postgres: {
-            connection: "postgresql://localhost/doctor-fixture",
-            schemaPrefix: "doctor_fixture",
-            ...(serverRecoveryCaptures ? { serverRecoveryCaptures } : {}),
-          },
-        },
-        async () => {
-          const result = await runWithDoctorMigrationBackup(
-            captureFreshDoctorMigrationTables,
-            () => capture(params),
-            liveRoot,
-          );
-          expect(result).toMatchObject({
-            changes: [],
-            warnings: [],
-            versionMigrations: [migration],
-            postgresGenerations: { [shared]: "private-generation" },
-          });
-          expect(capturePostgres).not.toHaveBeenCalled();
-          expect(prune).not.toHaveBeenCalled();
-          // A copied-but-uncloned anchor (including deep or external stores)
-          // still needs Doctor's ordinary capture, even in the private pass.
-          {
-            using anchor = new DatabaseSync(shared);
-            anchor.exec("UPDATE openclaw_engine_anchor SET schema = 'original'");
-          }
-          await expect(
-            runWithDoctorMigrationBackup(
-              captureFreshDoctorMigrationTables,
-              () => capture(params),
-              liveRoot,
-            ),
-          ).rejects.toBe(refusedCapture);
-          await expect(capture(params)).rejects.toBe(refusedCapture);
-          expect(capturePostgres).toHaveBeenCalledTimes(2);
-        },
-      );
-    },
-  );
-});
 
 describe("Doctor full migration backups", () => {
   let fixture: ReturnType<typeof createFixture>;

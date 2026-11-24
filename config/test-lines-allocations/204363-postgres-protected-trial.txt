@@ -1,0 +1,5 @@
+# PostgreSQL protected updates: real server ACL/non-superuser preservation;
+# mixed-engine failure, rollback and owned-namespace pruning; pre-stop copy refusal;
+# generic recorded boot-refusal cause; and measured under/over-window mode selection.
+# Main approved the remaining behavior-focused tests after removing 136 wiring lines.
+426

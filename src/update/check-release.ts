@@ -115,9 +115,8 @@ export async function checkRelease(
       );
     }
     const config = validated.config;
-    // Candidate code runs here while the old Gateway still serves. Refuse a
-    // PostgreSQL update that cannot protect its data before requesting a stop.
-    await preflightStateUpgrade(env, config);
+    // Decide copy versus in-place before checking copy-only privileges.
+    const reason = await preflightStateUpgrade(env, config);
     return await withPluginCache(createPluginCache(), async () => {
       // Feed the production inventory owner its existing metadata, read directly above.
       // Its normal state reader enforces today's schema and would reject an upgrade
@@ -152,7 +151,9 @@ export async function checkRelease(
           }
         }
         const coreError = surfaces.find((surface) => surface.plugin === "core" && surface.error);
-        return coreError ? refuse(coreError.error!) : { ok: true, surfaces };
+        return coreError
+          ? refuse(coreError.error!)
+          : { ok: true, ...(reason ? { reason } : {}), surfaces };
       });
     });
   } catch (error) {

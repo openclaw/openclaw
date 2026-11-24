@@ -351,6 +351,13 @@ export async function inspectPostgresUpgradeInWorker(params: {
   const anchor = requirePostgresUpgradeAnchor(params.sourcePath);
   return withDatabasePortConnection(params.config, async (client) => {
     const { store: family, version } = await readPostgresStoreMetadata(client, anchor);
+    // Total relation size already includes indexes and TOAST. Partition parents
+    // have no storage; their ordinary-table partitions are counted individually.
+    const size = await client.query<{ physical_bytes: string }>(
+      "SELECT COALESCE(SUM(pg_total_relation_size(c.oid)), 0)::text AS physical_bytes FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = $1 AND c.relkind IN ('r', 'm')",
+      [anchor.namespace],
+    );
+    const physicalBytes = Number(size.rows[0]!.physical_bytes);
     const retainedAgentIds: string[] = [];
     const registeredAgentDatabases: { agentId: string; path: string }[] = [];
     if (family === "state") {
@@ -376,7 +383,14 @@ export async function inspectPostgresUpgradeInWorker(params: {
         );
       }
     }
-    return { ...anchor, family, version, retainedAgentIds, registeredAgentDatabases };
+    return {
+      ...anchor,
+      family,
+      version,
+      physicalBytes,
+      retainedAgentIds,
+      registeredAgentDatabases,
+    };
   });
 }
 
@@ -525,6 +539,7 @@ export type PostgresUpgradeInspection = {
   namespace: string;
   family: string;
   version: number;
+  physicalBytes: number;
   retainedAgentIds: string[];
   registeredAgentDatabases: { agentId: string; path: string }[];
 };

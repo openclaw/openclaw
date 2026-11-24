@@ -339,6 +339,19 @@ export async function prepareUpdate(params: {
         verdict.detail,
       );
     }
+    if (verdict.reason) {
+      // Existing database diagnostic details are persisted and shown by every
+      // shared update report consumer, including while preparation continues.
+      await recordUpdateRunStepAsync(
+        params.runId,
+        {
+          step: "diagnostic:database migration writes (preflight)",
+          status: "completed",
+          detail: verdict.reason,
+        },
+        { env },
+      );
+    }
     const releaseRoot = await publishStaging(staging);
     staging = undefined;
     if (target.kind === "git") {
