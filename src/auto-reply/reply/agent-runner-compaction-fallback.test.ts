@@ -44,6 +44,7 @@ it.each([false, true])(
       let summariesBeforeAnswer = 0;
       let largestPrompt = 0;
       let publishedBeforeSummary = 0;
+      let rateLimitedAfterSummary = false;
       const requests: Array<{ body: string; input: unknown[] }> = [];
       const contextWindow = midTurn ? 1_000_000 : 32_768;
       const reportPath = path.join(state.workspaceDir, "report.txt");
@@ -98,6 +99,16 @@ it.each([false, true])(
             }
             response.writeHead(408, { "content-type": "application/json" });
             response.end(JSON.stringify({ error: { message: "upstream request timed out" } }));
+            return;
+          }
+          if (midTurn && summaryRequests > 0 && !rateLimitedAfterSummary) {
+            rateLimitedAfterSummary = true;
+            response.writeHead(429, { "content-type": "application/json", "retry-after-ms": "10" });
+            response.end(
+              JSON.stringify({
+                error: { message: "Rate limit reached", code: "rate_limit_exceeded" },
+              }),
+            );
             return;
           }
           const toolCall = midTurn && summaryRequests === 0 && toolRounds < 64;
@@ -269,7 +280,10 @@ it.each([false, true])(
           ]);
           expect(added.at(-1)).toMatchObject({ role: "user" });
           // The retry after compaction resends the keyed turn once, with no hidden prompt.
-          const retry = requests[summaryIndex + 1]!;
+          // The first one is rate limited; the second retry after the same compaction
+          // sends the identical request.
+          const [limited, retry] = [requests[summaryIndex + 1]!, requests[summaryIndex + 2]!];
+          expect(JSON.stringify(retry.input)).toBe(JSON.stringify(limited.input));
           const userTurns = (retry.input as Array<Record<string, unknown>>).filter((item) =>
             JSON.stringify(item.content ?? "").includes(
               '] First question after the long history."',

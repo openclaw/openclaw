@@ -553,11 +553,14 @@ export function reconcilePrePersistedCurrentUserTurn(params: {
   );
 }
 
+const compactedTurnReplayKeyPrefix = (turnKey: string) => `${turnKey}:replay:`;
+
 /**
  * Compaction can summarize the keyed turn away. The retry then resends it after the kept
  * tail, so that copy is written there too: the next turn's history keeps the question and
  * the request this retry sends. The turn key stays on the summarized original row (it is
  * unique per session); the copy is keyed per compaction, so repeated retries write it once.
+ * Submission replays the copy in place through {@link resolveCurrentUserTurnContextKey}.
  */
 export async function persistCompactedCurrentUserTurnReplay(params: {
   activeSession: { agent: { state: { messages: AgentMessage[] } } };
@@ -575,7 +578,7 @@ export async function persistCompactedCurrentUserTurnReplay(params: {
   if (!turnKey || !compaction) {
     return;
   }
-  const replayKey = `${turnKey}:replay:${compaction.id}`;
+  const replayKey = `${compactedTurnReplayKeyPrefix(turnKey)}${compaction.id}`;
   const context = sessionManager.buildSessionContext().messages;
   if (
     sessionMessagesContainIdempotencyKey(context, turnKey) ||
@@ -583,10 +586,10 @@ export async function persistCompactedCurrentUserTurnReplay(params: {
   ) {
     return;
   }
-  const replayed = {
+  const replayed: PersistedUserTurnMessage = {
     ...currentUserTurnMessage,
     idempotencyKey: replayKey,
-    display: false as const,
+    display: false,
   };
   sessionManager.setNextUserMessagePersistence?.("normal");
   await sessionManager.appendMessageAsync(replayed);
@@ -594,13 +597,27 @@ export async function persistCompactedCurrentUserTurnReplay(params: {
   activeSession.agent.state.messages = sanitizeCompactionReplayMessages(
     sessionManager.buildSessionContext().messages,
   );
-  // Prompt submission resends the turn; keep the copy out of the live history.
-  reconcilePrePersistedCurrentUserTurn({
-    activeSession,
-    currentUserTurnMessage: replayed,
-    durableUserTurnMessage: replayed,
-    userTurnAlreadyPersisted: true,
-  });
+}
+
+/** The key under which the current turn sits in live context: its own row or its replay copy. */
+export function resolveCurrentUserTurnContextKey(
+  messages: readonly AgentMessage[],
+  turnKey: string | undefined,
+): string | undefined {
+  if (!turnKey) {
+    return undefined;
+  }
+  const prefix = compactedTurnReplayKeyPrefix(turnKey);
+  const match = messages.findLast(
+    (message) =>
+      message.role === "user" &&
+      "idempotencyKey" in message &&
+      typeof message.idempotencyKey === "string" &&
+      (message.idempotencyKey === turnKey || message.idempotencyKey.startsWith(prefix)),
+  );
+  return match && "idempotencyKey" in match && typeof match.idempotencyKey === "string"
+    ? match.idempotencyKey
+    : turnKey;
 }
 
 type ForeignPendingUserTurns = {

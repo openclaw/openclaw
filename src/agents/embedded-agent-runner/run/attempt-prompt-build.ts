@@ -368,7 +368,6 @@ type PromptContextAttempt = Pick<
   | "internalEvents"
   | "fallbackActive"
   | "runtimeContextFragments"
-  | "replayCurrentTranscript"
   | "sessionId"
   | "sessionKey"
   | "sessionTarget"
@@ -415,12 +414,8 @@ export async function prepareEmbeddedAttemptPromptContext(input: {
     attempt.userTurnTranscriptRecorder !== undefined &&
     getUserTurnTranscriptAdmissionOwner(attempt.userTurnTranscriptRecorder)?.sentToProvider() ===
       true;
-  // A replayed turn keeps the timestamp of its persisted row, so its bytes match history.
   const preparedUserTurnTimestamp = (
-    (input.preparedUserTurnMessage ??
-      (attempt.replayCurrentTranscript
-        ? attempt.userTurnTranscriptRecorder?.getPersistedMessage?.()
-        : undefined)) as { timestamp?: unknown } | undefined
+    input.preparedUserTurnMessage as { timestamp?: unknown } | undefined
   )?.timestamp;
   const heartbeatFiltered = filterHeartbeatTranscriptArtifacts(input.messages);
   let sessionMessages = normalizeAssistantReplayContent(heartbeatFiltered);
