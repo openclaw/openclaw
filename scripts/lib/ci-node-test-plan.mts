@@ -2457,7 +2457,7 @@ const canonicalTargetInventories = new Map<
   CanonicalTargetInventory
 >();
 
-function resolveCanonicalTargetInventory(requestedConfig?: string) {
+export function resolveCanonicalTargetInventory(requestedConfig?: string) {
   const complete = canonicalTargetInventories.get(undefined);
   if (complete) {
     return complete;

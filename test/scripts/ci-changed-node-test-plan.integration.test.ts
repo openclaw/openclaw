@@ -301,3 +301,25 @@ it.each([
   );
   expect(importers.filter((file) => !selected.has(file))).toEqual([]);
 });
+
+// #204265 changed src/sessions/owed.ts with green PR CI; the exec completion tests in src/agents
+// that deliver its rows first failed on scheduled main.
+it("selects the exec completion tests when the owed-result owner changes", () => {
+  const selected = new Set(
+    resolveChangedNodeTestTargets(["src/sessions/owed.ts"], {
+      selectionMode: "aggressive",
+      includePrExemptRuntimeTests: false,
+      includeReleaseOnlyRuntimeTests: false,
+    }),
+  );
+  for (const test of [
+    "src/agents/bash-process-durable.test.ts",
+    "src/agents/bash-tools.exec-notify.store-failure.test.ts",
+    "src/agents/bash-tools.exec-runtime.test.ts",
+    "src/agents/bash-tools.exec.egress-lifecycle.test.ts",
+    "src/agents/bash-tools.notify-on-exit-ack.test.ts",
+    "src/agents/bash-tools.test.ts",
+  ]) {
+    expect(selected.has(test), test).toBe(true);
+  }
+});
