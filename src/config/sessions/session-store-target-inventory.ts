@@ -492,7 +492,10 @@ export function readSessionStoreTargetInventory(
         });
       } else {
         dedupeSessionStoreTargetsBySqliteTarget(
-          resolveConfiguredSessionStoreTargets(config, env, request.paths),
+          // Discovery can use only the agents whose physical candidates were captured.
+          resolveConfiguredSessionStoreTargets(config, env, request.paths).filter((target) =>
+            request.agentIds.includes(target.agentId),
+          ),
           options,
         );
       }

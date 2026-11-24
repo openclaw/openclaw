@@ -46,6 +46,24 @@ test("shares published config while recapturing candidates and following config 
   expect(original.config.session?.store).toBe(path.join(root, "custom.json"));
 });
 
+test.each([{ agentIds: ["main"] }, { agentIds: ["helper"] }, { agentIds: [] }])(
+  "limits configured discovery to the captured agent scope: $agentIds",
+  ({ agentIds }) => {
+    const root = tempDirs.make("session-inventory-captured-scope-");
+    const env = { OPENCLAW_STATE_DIR: root };
+    const cfg: OpenClawConfig = { agents: { entries: { main: {}, helper: {} } } };
+    const request = prepareSessionStoreTargetInventory(cfg, agentIds, env, "configured");
+    const inventory = readSessionStoreTargetInventory({
+      ...request,
+      registeredDatabases: [],
+    });
+    expect(inventory).toMatchObject({
+      kind: "session-target-inventory",
+      agents: agentIds.map((agentId) => ({ agentId })),
+    });
+  },
+);
+
 test("isolates detached inventory configs across caller edits", () => {
   const root = tempDirs.make("session-inventory-detached-");
   const env = { OPENCLAW_STATE_DIR: root };
