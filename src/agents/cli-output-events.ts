@@ -522,12 +522,25 @@ export function dispatchClaudeCliThinking(params: {
     const content = Array.isArray(params.parsed.message.content)
       ? params.parsed.message.content
       : [];
-    for (const [index, block] of content.entries()) {
+    // Claude Code replays each finished block as a one-block record before that
+    // block's content_block_stop, so the open stream block identifies it; its
+    // position in the record is always 0. Text already held at that position is
+    // a late replay or a one-block full snapshot and stays matched by position.
+    const openBlockIndex = content.length === 1 ? tracker.currentSyntheticBlockIndex : undefined;
+    for (const [position, block] of content.entries()) {
+      const index = openBlockIndex ?? position;
       // redacted_thinking blocks are opaque provider material with no text lane.
       if (!isRecord(block) || block.type !== "thinking" || typeof block.thinking !== "string") {
         continue;
       }
       if (!params.onThinkingDelta) {
+        continue;
+      }
+      if (
+        index !== position &&
+        block.thinking &&
+        tracker.streamedByIndex.get(position)?.startsWith(block.thinking)
+      ) {
         continue;
       }
       const previous = tracker.streamedByIndex.get(index) ?? "";
