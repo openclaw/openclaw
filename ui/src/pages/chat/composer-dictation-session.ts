@@ -308,6 +308,10 @@ export class ComposerDictationSession {
     this.callbacks.onReady();
   }
 
+  hasEchoCancellation(): boolean {
+    return this.input.hasEchoCancellation();
+  }
+
   transcriptSnapshot(): string {
     return [...this.finalTranscripts, this.currentPartial].filter(Boolean).join(" ").trim();
   }

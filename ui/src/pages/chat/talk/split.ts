@@ -57,6 +57,10 @@ export class SplitTalkTransport implements RealtimeTalkTransport {
     this.callbacks.onInputLevel?.(0);
   }
 
+  hasEchoCancellation(): boolean {
+    return this.capture?.hasEchoCancellation() === true;
+  }
+
   private async listen(): Promise<void> {
     if (this.closed) {
       return;

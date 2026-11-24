@@ -11,6 +11,7 @@ import type { GatewayBrowserClient } from "../../../api/gateway.ts";
 import { t } from "../../../i18n/index.ts";
 import { formatUiError } from "../../../lib/format-error.ts";
 import type { GatewaySpeechPlayback } from "../../../lib/speech-playback.ts";
+import { TalkChimes } from "./chimes.ts";
 import { RealtimeTalkInputOwner } from "./input.ts";
 import type {
   RealtimeTalkCallbacks,
@@ -39,6 +40,7 @@ type RealtimeTalkLocalOptions = {
   videoDeviceId?: string;
   split?: SplitTalkOptions;
   playback?: GatewaySpeechPlayback;
+  talkChimes?: boolean;
 };
 
 const activeRealtimeTalkSessions = new Set<RealtimeTalkSession>();
@@ -76,6 +78,8 @@ export class RealtimeTalkSession {
   private transcriptItems: ClientVoiceTranscriptQueue | undefined;
   private transcriptQueue = VOICE_TRANSCRIPT_QUEUE_POLICY.createQueue();
   private clientVoiceSessionOwner: ClientVoiceSessionOwner | undefined;
+  private canPlayWake: (() => boolean) | undefined;
+  private chimes: TalkChimes | undefined;
   private readonly callbacks: RealtimeTalkCallbacks;
 
   constructor(
@@ -91,6 +95,9 @@ export class RealtimeTalkSession {
         if (status === "idle" || status === "error") {
           this.localOptions.playback?.stop();
         }
+        if (!this.closed) {
+          this.chimes?.status(status, this.canPlayWake?.() === true);
+        }
         callbacks.onStatus?.(status, detail);
       },
     };
@@ -105,6 +112,11 @@ export class RealtimeTalkSession {
       // transport, so a failed start cannot restore that transport locally.
       void this.retireTransport();
       const lifecycleGeneration = this.lifecycleGeneration;
+      this.chimes?.end(false);
+      this.chimes = this.localOptions.talkChimes
+        ? new TalkChimes(Boolean(this.options.voiceChangeId))
+        : undefined;
+      this.canPlayWake = undefined;
       this.closed = false;
       this.callbacks.onStatus?.("connecting", t("chat.voice.preparing"));
       if (this.localOptions.split) {
@@ -119,6 +131,7 @@ export class RealtimeTalkSession {
           this.localOptions.split,
           this.localOptions.inputDeviceId,
         );
+        this.canPlayWake = () => transport.hasEchoCancellation();
         this.pendingStartup = transport;
         try {
           const result = await transport.start();
@@ -152,6 +165,7 @@ export class RealtimeTalkSession {
         () => undefined,
         (detail) => this.callbacks.onStatus?.("connecting", detail),
       );
+      this.canPlayWake = () => input?.hasEchoCancellation() === true;
       this.pendingStartup = input;
       try {
         // Browser permission can wait indefinitely; do not spend a provider's
@@ -387,10 +401,11 @@ export class RealtimeTalkSession {
     );
   }
 
-  stop(options: RealtimeVoiceCloseOptions = {}): Promise<void> {
+  stop(options: RealtimeVoiceCloseOptions = {}, playBye = false): Promise<void> {
     try {
       return this.retireTransport(options);
     } finally {
+      this.chimes?.end(playBye);
       this.callbacks.onStatus?.("idle");
     }
   }

@@ -6,6 +6,7 @@ import { loadSettings, type UiSettings } from "../../app/settings.ts";
 import { t } from "../../i18n/index.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { GatewaySpeechPlayback } from "../../lib/speech-playback.ts";
+import { prepareTalkChimes } from "./talk/chimes.ts";
 import {
   createRealtimeTalkConversationState,
   continueRealtimeTalkConversation,
@@ -122,7 +123,10 @@ export function stopChatRealtimeTalk(
       : createRealtimeTalkConversationState(),
   });
   playback?.stop();
-  void session?.stop({ disposition: options.disposition ?? "detach" });
+  void session?.stop(
+    { disposition: options.disposition ?? "detach" },
+    options.disposition === "abort",
+  );
 }
 
 export function dismissRealtimeTalkError(state: ChatRealtimeState) {
@@ -210,6 +214,10 @@ export function attachChatRealtimeActions(
       : 0;
     const videoDeviceId = talkSettings.realtimeTalkVideoDeviceId?.trim() || undefined;
     const autoEnableCamera = talkSettings.talkCameraAutoEnable === true;
+    const talkChimes = talkSettings.talkChimes === true;
+    if (talkChimes && !voiceChange) {
+      prepareTalkChimes();
+    }
     state.realtimeTalk.update({
       // The prepared playback owns this attempt before the lazy voice controller exists.
       realtimeTalkPlayback: playback,
@@ -300,6 +308,7 @@ export function attachChatRealtimeActions(
       split,
       playback,
       autoEnableCamera,
+      talkChimes,
       itemPrefix,
       orderOffset,
       startRealtimeTalk,

@@ -143,6 +143,7 @@ type RealtimeTalkStart = {
   split?: SplitTalkOptions;
   playback: GatewaySpeechPlayback;
   autoEnableCamera: boolean;
+  talkChimes?: boolean;
   itemPrefix: string;
   orderOffset: number;
   stopRealtimeTalk: typeof stopChatRealtimeTalk;
@@ -166,6 +167,7 @@ export async function startChatRealtimeSession(
     split,
     playback,
     autoEnableCamera,
+    talkChimes,
     itemPrefix,
     orderOffset,
     startRealtimeTalk,
@@ -318,7 +320,7 @@ export async function startChatRealtimeSession(
           transport: replacementTransport,
         }
       : {},
-    { inputDeviceId, videoDeviceId, split, playback },
+    { inputDeviceId, videoDeviceId, split, playback, talkChimes },
   );
   state.realtimeTalk.update({
     realtimeTalkSession: session,

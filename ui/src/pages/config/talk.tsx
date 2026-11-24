@@ -5,11 +5,12 @@ import type { TalkCatalogResult } from "@openclaw/gateway-protocol";
 // same config draft, so both stay in sync without narrowing the schema.
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import type { JSX } from "@solidjs/web";
-import { createMemo, Errored, Loading, Show } from "solid-js";
+import { createMemo, createSignal, Errored, Loading, Show } from "solid-js";
 import type {
   NativeDeviceSettingsSnapshot,
   NativeDeviceSettingsCapability,
 } from "../../app/native-device-settings.ts";
+import { loadSettings, patchSettings } from "../../app/settings.ts";
 import { ModelPicker } from "../../components/solid/model-picker.tsx";
 import {
   SettingsPage,
@@ -17,6 +18,7 @@ import {
   SettingsSection,
   SettingsSegmented,
   SettingsStatus,
+  SettingsToggleRow,
   SettingsValue,
 } from "../../components/solid/settings-ui.tsx";
 import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
@@ -368,6 +370,7 @@ function TalkCatalogRows(props: TalkViewProps) {
 }
 
 export function Talk(props: TalkViewProps) {
+  const [chimes, setChimes] = createSignal(loadSettings().talkChimes === true);
   return (
     <section class="talk-page">
       <SettingsPage>
@@ -390,6 +393,15 @@ export function Talk(props: TalkViewProps) {
           title={t("talkPage.voiceSection.title")}
           description={t("talkPage.voiceSection.description")}
         >
+          <SettingsToggleRow
+            title={t("talkPage.chimes")}
+            description={t("talkPage.chimesHint")}
+            checked={chimes()}
+            onChange={(enabled) => {
+              patchSettings({ talkChimes: enabled });
+              setChimes(enabled);
+            }}
+          />
           <Errored
             fallback={(error) => (
               <TalkCatalogRows {...props} catalog={{ kind: "failed", error: error() }} />

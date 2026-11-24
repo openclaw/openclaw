@@ -405,6 +405,8 @@ const enSettings = {
     },
   },
   talkPage: {
+    chimes: "Talk chimes",
+    chimesHint: "Play a sound when a Talk call is ready or ends normally.",
     voiceSection: {
       title: "Realtime voice",
       description: "Continuous speech conversations with your agent.",
