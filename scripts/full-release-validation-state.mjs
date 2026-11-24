@@ -56,11 +56,7 @@ import {
   releaseManifestChildEvidence,
 } from "./lib/full-release-manifest.mjs";
 import { createReleasePublishInputs } from "./lib/release-publish-inputs.mjs";
-import {
-  evaluateReleaseChildPolicy,
-  ReleaseAggregateValidationError,
-  validateReleaseWaiverAggregates,
-} from "./lib/release-validation-waivers.mjs";
+import { isWaived } from "./lib/release-validation-waivers.mjs";
 import { downloadFullReleaseNpmPreflight } from "./npm-preflight-tooling-identity.mjs";
 import { verifyQualificationAdmission } from "./release-qualification-admission.mjs";
 
@@ -159,20 +155,6 @@ async function runGh(args, options = {}) {
   throw lastError;
 }
 
-// gh 2.97+ refuses raw job logs containing terminal escapes, even off a TTY;
-// older gh rejects the flag before issuing the request.
-async function readJobLog(id, signal) {
-  const args = ["api", `repos/${process.env.GITHUB_REPOSITORY}/actions/jobs/${id}/logs`];
-  try {
-    return await runGh([...args, "--allow-escape-sequences"], { signal });
-  } catch (error) {
-    if (!String(error?.stderr).includes("unknown flag: --allow-escape-sequences")) {
-      throw error;
-    }
-    return runGh(args, { signal });
-  }
-}
-
 async function githubJson(path, signal) {
   return JSON.parse(
     await runGh(["api", `repos/${process.env.GITHUB_REPOSITORY}/${path}`], { signal }),
@@ -269,6 +251,15 @@ export async function readChild(child, previous, signal, options = {}) {
   if (!child.selected) {
     return { ...child, errors: [], jobs: [], status: "skipped" };
   }
+  if (
+    isWaived({
+      childRole: child.key,
+      targetVersion: options.targetVersion,
+      targetSha: options.targetSha,
+    })
+  ) {
+    return { ...child, errors: [], jobs: [], status: "missing" };
+  }
   if (!child.runId || !child.runAttempt) {
     const error = issue("dispatch_missing", child, `${child.key} omitted its exact run identity`);
     return { ...child, errors: [error], jobs: [], status: "missing" };
@@ -318,14 +309,8 @@ export async function readChild(child, previous, signal, options = {}) {
           }
         : partial;
     }
-    const { workflowWaived } = evaluateReleaseChildPolicy({
-      child: { ...child, jobs: [], runAttempt: currentAttempt },
-      targetVersion: options.targetVersion,
-      targetSha: options.targetSha,
-    });
     const evidence = composeReleaseChildAttemptEvidence({
       attempts,
-      workflowWaived,
       expected: {
         ...child,
         plannedRunAttempt: plannedAttempt,
@@ -333,37 +318,11 @@ export async function readChild(child, previous, signal, options = {}) {
       },
       run,
     });
-    const snapshot = validateChildBinding(child, run, {
+    return validateChildBinding(child, run, {
       jobs: evidence.jobs,
       observedRunAttempts: evidence.observedRunAttempts,
       sha256: evidence.compositeJobsSha256,
     });
-    if (snapshot.status === "completed") {
-      const policy = evaluateReleaseChildPolicy({
-        child: snapshot,
-        targetVersion: options.targetVersion,
-        targetSha: options.targetSha,
-        requiredJobs: options.requiredJobs,
-      });
-      const jobs = evidence.jobs.map((job) =>
-        attempts
-          .find((attempt) => attempt.runAttempt === job.acceptedRunAttempt)
-          .jobs.find((raw) => raw.name === job.name),
-      );
-      try {
-        await validateReleaseWaiverAggregates({
-          policy,
-          jobs,
-          getJobLog: options.readJobLog ?? ((id) => readJobLog(id, signal)),
-        });
-      } catch (error) {
-        if (!(error instanceof ReleaseAggregateValidationError)) {
-          throw error;
-        }
-        snapshot.errors.push(issue("aggregate_validation", child, error.message));
-      }
-    }
-    return snapshot;
   } catch (error) {
     const degraded = classifyReleaseGhTransportError(error) === "transient";
     const provenanceMismatch =
@@ -1538,8 +1497,6 @@ async function collectMode(mode) {
       plan.map((child, index) =>
         readChild(child, snapshots[index], abortController.signal, {
           reuseSelection: executionPlan.childReuse?.[child.key],
-          requiredJobs: qualificationCoverage?.children.find(({ key }) => key === child.key)
-            ?.requiredJobs,
           targetVersion: executionPlan.targetVersion,
           targetSha: executionPlan.targetSha,
         }),
@@ -1590,21 +1547,18 @@ async function collectMode(mode) {
       }
     }
     // The displayed errors are capped; drain admission uses every fatal input.
-    const hasNonAggregateError =
-      extraErrors.some((error) => error.kind !== "aggregate_validation") ||
+    const hasFatalError =
+      extraErrors.length > 0 ||
       snapshots.some(
         (child) =>
-          child.selected &&
-          child.errors.some(
-            (error) => !["dispatch_missing", "aggregate_validation"].includes(error.kind),
-          ),
+          child.selected && child.errors.some((error) => error.kind !== "dispatch_missing"),
       );
     const done =
       mode === "decision"
         ? decision.state !== "qualifying" &&
           !(decision.state === "passed" && transport.status === "uncertain")
         : transport.status !== "uncertain" &&
-          ((decision.state === "orchestration_error" && hasNonAggregateError) ||
+          ((decision.state === "orchestration_error" && hasFatalError) ||
             (decision.state !== "qualifying" && decision.activeRunIds.length === 0));
     if (done) {
       const payload = writePayload(decision, { cancelledRunIds, requested: false });

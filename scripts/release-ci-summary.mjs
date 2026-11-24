@@ -81,10 +81,10 @@ import {
 import { resolveReleasePublishInputs } from "./lib/release-publish-inputs.mjs";
 import {
   evaluateReleaseChildPolicy,
+  isWaived,
   readReleaseValidationWaivers,
   readReleaseValidationWaiversAsync,
   RELEASE_VALIDATION_WAIVERS_PATH,
-  validateReleaseWaiverAggregates,
 } from "./lib/release-validation-waivers.mjs";
 import {
   resolveQualificationAdmissionDescriptor,
@@ -1101,11 +1101,17 @@ function normalizeManifestChildEvidence(value) {
             throw new Error(`release validation child job attempt is invalid: ${key}`);
           }
           const name = String(job.name ?? "");
-          if (!name) {
+          const firstIncompleteStep = job.firstIncompleteStep;
+          if (
+            !name ||
+            (firstIncompleteStep !== undefined &&
+              (typeof firstIncompleteStep !== "string" || !firstIncompleteStep))
+          ) {
             throw new Error(`release validation child job identity is invalid: ${key}`);
           }
           return {
             acceptedRunAttempt,
+            ...(firstIncompleteStep === undefined ? {} : { firstIncompleteStep }),
             completedAt: String(job.completedAt ?? ""),
             conclusion: String(job.conclusion ?? ""),
             name,
@@ -2175,7 +2181,6 @@ export function createReleaseEvidenceClient(repository = DEFAULT_REPO, { immutab
         immutableReads,
         deadlineMs,
         waiverPolicy,
-        getJobLog: (id) => parentJobLog(id, normalizedRepository, immutableReads),
       });
     },
     getWorkflowSource(sha, sourceWorkflowPath = ".github/workflows/full-release-validation.yml") {
@@ -2495,7 +2500,6 @@ async function validateStrictChildRun({
   }
   let jobs;
   let composite;
-  let rawJobs;
   const targetVersion = parentEvidence.manifest.validationInputs?.targetVersion;
   const targetSha = parentEvidence.manifest.targetSha;
   if (plannedChild && childEvidence) {
@@ -2511,20 +2515,8 @@ async function validateStrictChildRun({
       const currentAttemptJobs = await client.getRunAttemptJobs(runId, runAttempt);
       attempts.push({ jobs: currentAttemptJobs, runAttempt });
     }
-    const { workflowWaived } = evaluateReleaseChildPolicy({
-      child: {
-        key: child.manifestKey,
-        jobs: [],
-        runId,
-        runAttempt: childEvidence.effectiveRunAttempt,
-      },
-      targetVersion,
-      targetSha,
-      waiverPolicy,
-    });
     const evidence = composeReleaseChildAttemptEvidence({
       attempts,
-      workflowWaived,
       expected: {
         ...plannedChild,
         plannedRunAttempt: plannedChild.runAttempt,
@@ -2539,11 +2531,6 @@ async function validateStrictChildRun({
               triggering_actor: { login: childEvidence.triggeringActor },
             },
     });
-    rawJobs = evidence.jobs.map((job) =>
-      attempts
-        .find((attempt) => attempt.runAttempt === job.acceptedRunAttempt)
-        .jobs.find((raw) => raw.name === job.name),
-    );
     if (
       JSON.stringify(sortReleaseJsonValueKeys(childEvidence)) !==
       JSON.stringify(sortReleaseJsonValueKeys(evidence))
@@ -2585,20 +2572,19 @@ async function validateStrictChildRun({
   });
   if (
     run.repository?.full_name !== repository ||
-    run.head_sha !== (plannedChild?.workflowSha ?? parentEvidence.manifest.workflowSha) ||
+    run.head_sha !== (plannedChild?.workflowSha ?? parentEvidence.manifest.workflowSha)
+  ) {
+    throw new Error(`manifest child run does not pass release policy: ${child.name}`);
+  }
+  if (child.requiredJobs) {
+    validateQualificationJobs(jobs, child.requiredJobs, child.name, policy.waivedJobNames);
+  }
+  if (
     !terminalPolicyPass(policyChild, targetVersion, targetSha, waiverPolicy, child.requiredJobs)
   ) {
     throw new Error(`manifest child run does not pass release policy: ${child.name}`);
   }
-  await validateReleaseWaiverAggregates({
-    policy,
-    jobs: rawJobs ?? jobs,
-    getJobLog: (id) => client.getJobLog(id),
-  });
-  if (child.requiredJobs) {
-    validateQualificationJobs(jobs, child.requiredJobs, child.name, policy.waivedJobNames);
-  }
-  if (child.manifestKey === "productPerformance" && !policy.workflowWaived) {
+  if (child.manifestKey === "productPerformance") {
     // The authenticated composite selects the newest executed attempt per job,
     // including a carried guard or a newer failure that supersedes its success.
     validatePerformanceArtifactOnlyJobs(
@@ -2632,9 +2618,7 @@ async function validateStrictChildRun({
     status: run.status,
     url: run.html_url,
     workflowSha: run.head_sha,
-    ...(child.manifestKey === "productPerformance" && !policy.workflowWaived
-      ? { reportPublication: "artifact-only" }
-      : {}),
+    ...(child.manifestKey === "productPerformance" ? { reportPublication: "artifact-only" } : {}),
   };
 }
 
@@ -3245,30 +3229,31 @@ export async function validateReleaseRunEvidence(
   );
   const missingChildren = new Map();
   for (const { child, runId: childRunId } of childEntries) {
-    if (childRunId && child.plannedChild.runAttempt) {
-      continue;
-    }
-    const { waivers, workflowWaived } = evaluateReleaseChildPolicy({
-      child: { key: child.manifestKey, jobs: [] },
+    const scope = {
+      childRole: child.manifestKey,
       targetVersion: executionPlan.targetVersion,
       targetSha: executionPlan.targetSha,
-      waiverPolicy,
-    });
+    };
+    if (!isWaived(scope, waiverPolicy)) {
+      if (childRunId && child.plannedChild.runAttempt) {
+        continue;
+      }
+      throw new Error("execution plan omits required child: " + child.name);
+    }
     if (
-      !workflowWaived ||
       childRunId ||
       child.plannedChild.runAttempt ||
       executionPlan.childReuse?.[child.manifestKey] ||
       rootEvidence.manifest.childEvidence?.[child.manifestKey] !== undefined
     ) {
-      throw new Error("execution plan omits required child: " + child.name);
+      throw new Error("execution plan includes evidence for waived child: " + child.name);
     }
     missingChildren.set(child.manifestKey, {
       conclusion: "missing",
       role: child.manifestKey,
       runId: "",
       runAttempt: null,
-      waivers,
+      waivers: waiverPolicy.filter((grant) => isWaived(scope, [grant])),
     });
   }
   if (

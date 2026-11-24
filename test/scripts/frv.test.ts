@@ -1464,10 +1464,8 @@ describe("FRV continuation preflight", () => {
 
     await expect(
       continueFailed(plan([first, second]), "77", {
-        getReleaseEvidenceClient: () => {
-          downstreamReads += 1;
-          throw new Error("unexpected evidence client");
-        },
+        getWorkflowSource: async () =>
+          JSON.stringify({ schema: "openclaw.release-validation-waivers/v1", waivers: [] }),
         getAttemptJobs: downstreamRead,
         getJobLog: downstreamRead,
         getParentJobs: async () => [
@@ -1525,8 +1523,8 @@ describe("FRV same-parent recovery", () => {
     ["matching current Q grant", true, false, 1, 1, true],
     ["removed current Q grant", false, false, 1, 1, false],
     ["unrelated failure", true, true, 1, 1, false],
-    ["different original attempt", true, false, 2, 2, false],
-    ["later failed attempt", true, false, 1, 2, false],
+    ["different original attempt", true, false, 2, 2, true],
+    ["later failed attempt", true, false, 1, 2, true],
   ])(
     "classifies raw failures with %s only",
     async (_label, granted, unrelated, originalAttempt, effectiveAttempt, passed) => {
@@ -1546,8 +1544,6 @@ describe("FRV same-parent recovery", () => {
         childRole: "normalCi",
         jobName: "synthetic known failure",
         reason: "Synthetic current-Q regression fixture",
-        aggregates: [],
-        evidence: { runId: "101", runAttempt: 1 },
       };
       const result = await inspectContinuation(currentPlan, {
         getReleaseEvidenceClient: () => ({
@@ -3267,7 +3263,7 @@ describe("FRV watch", () => {
     "rerun",
     "recovered",
     "waived",
-    "expired waiver",
+    "wrong-version waiver",
     "removed waiver",
   ])(
     "labels carried-forward blockers once per effective attempt across restarts (%s)",
@@ -3291,15 +3287,14 @@ describe("FRV watch", () => {
             expect(sourcePath).toBe("scripts/lib/release-validation-waivers.json");
             return JSON.stringify({
               schema: "openclaw.release-validation-waivers/v1",
-              waivers: ["waived", "expired waiver"].includes(kind)
+              waivers: ["waived", "wrong-version waiver"].includes(kind)
                 ? [
                     {
                       targetVersion: "2099.1.1",
                       childRole: "normalCi",
                       jobName: "carried failure",
                       reason: "Synthetic Q watcher grant",
-                      aggregates: [],
-                      evidence: { runId: "101", runAttempt: kind === "waived" ? 2 : 1 },
+                      ...(kind === "wrong-version waiver" ? { targetVersion: "2099.1.2" } : {}),
                     },
                   ]
                 : [],
@@ -3309,7 +3304,7 @@ describe("FRV watch", () => {
         getRun: async (runId: string) =>
           runId === "77" ? rootRun(1, null) : runFor(ci, attempt, "failure"),
         getParentJobs: async () => [
-          ...(["waived", "expired waiver", "removed waiver"].includes(kind)
+          ...(["waived", "wrong-version waiver", "removed waiver"].includes(kind)
             ? [{ ...job("Seal release execution plan"), run_attempt: 1 }]
             : []),
           { ...job("Run normal full CI"), id: 5, run_attempt: 1, status: "completed" },

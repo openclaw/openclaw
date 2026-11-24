@@ -132,10 +132,6 @@ export function recoveryConsumptionFixture(
     childRole: string;
     jobName: string;
     reason: string;
-    aggregates: never[];
-    state?: "missing";
-    approvedBy?: string;
-    evidence: { runId: number; runAttempt: number };
   }[] = [];
   const sourceFile = (sha: string, path = ".github/workflows/full-release-validation.yml") =>
     path === "scripts/lib/release-validation-waivers.json"
@@ -239,8 +235,6 @@ export function recoveryConsumptionFixture(
         childRole: role,
         jobName: workload[0]!.name,
         reason: "Synthetic Q-only recovery grant",
-        aggregates: [],
-        evidence: { runId: Number(id), runAttempt: 1 },
       });
     }
     if (fixtureOptions.omittedPluginJob && role === "pluginPrereleaseCandidate") {
@@ -255,11 +249,7 @@ export function recoveryConsumptionFixture(
         targetSha: c,
         childRole: role,
         jobName,
-        state: "missing",
-        approvedBy: "operator",
         reason: "Synthetic Q-only missing job grant",
-        aggregates: [],
-        evidence: { runId: Number(id), runAttempt: 1 },
       });
     }
     const publisher = job(10099 + index * 100, childPublisher, id);
@@ -770,7 +760,6 @@ export function recoveryConsumptionFixture(
       validateReusableReleaseChild(selection, request, {
         ...options,
         github: async (path: string) => github(path),
-        getJobLog: async (id: number) => required(logs.get(id), String(id)),
         downloadArchive: download,
       }),
     verifyRetainedPublicationArtifacts,

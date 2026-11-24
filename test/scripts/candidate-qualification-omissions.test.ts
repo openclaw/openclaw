@@ -82,6 +82,12 @@ function writeChildWaiverFixture(root: string, waivers: unknown[] = []) {
     resolve("scripts/find-reusable-release-child.mjs"),
     join(scripts, "find-reusable-release-child.mjs"),
   );
+  const verifier = join(root, "qualification-verifier/scripts");
+  mkdirSync(verifier, { recursive: true });
+  symlinkSync(
+    resolve("scripts/find-reusable-release-child.mjs"),
+    join(verifier, "find-reusable-release-child.mjs"),
+  );
   writeFileSync(
     join(scripts, "lib/release-validation-waivers.json"),
     JSON.stringify({ schema: "openclaw.release-validation-waivers/v1", waivers }),
@@ -187,10 +193,12 @@ else console.log(JSON.stringify({id:202,workflow_id:88,head_branch:process.env.C
       "${{ needs.resolve_target.outputs.candidate_request_json }}",
     );
     writeChildWaiverFixture(root);
-    const run = String(dispatchStep.run).replaceAll(
-      "${{ needs.resolve_target.outputs.target_version }}",
-      "2026.9.23",
-    );
+    const run = String(dispatchStep.run)
+      .replaceAll(
+        "${{ fromJSON(needs.resolve_target.outputs.source_admission_json || '{}').qualificationAdmission != null }}",
+        String(admitted),
+      )
+      .replaceAll("${{ needs.resolve_target.outputs.target_version }}", "2026.9.23");
     execFileSync("bash", ["-c", run], {
       cwd: root,
       timeout: 10_000,
@@ -234,43 +242,44 @@ else console.log(JSON.stringify({id:202,workflow_id:88,head_branch:process.env.C
   },
 );
 
-it("does not look up or dispatch a child whose parent is waived", () => {
-  const root = tempDirs.make("release-waived-parent-");
-  const bin = join(root, "bin");
-  mkdirSync(bin);
-  writeFileSync(join(bin, "gh"), "#!/bin/sh\nexit 91\n", { mode: 0o755 });
-  writeChildWaiverFixture(root, [
-    {
-      targetVersion: "2026.9.23",
-      targetSha,
-      childRole: "normalCi",
-      jobName: "Run normal full CI",
-      reason: "Synthetic parent waiver",
-      aggregates: [],
-    },
-  ]);
-  const run = String(step("normal_ci", "Dispatch CI").run)
-    .replaceAll(
-      "${{ fromJSON(needs.resolve_target.outputs.source_admission_json || '{}').qualificationAdmission != null }}",
-      "false",
-    )
-    .replaceAll("${{ needs.resolve_target.outputs.target_version }}", "2026.9.23");
-  const output = execFileSync("bash", ["-c", run], {
-    cwd: root,
-    timeout: 10_000,
-    encoding: "utf8",
-    env: {
-      ...workflowEnv(),
-      PATH: bin + delimiter + dirname(process.execPath) + delimiter + process.env.PATH,
-      GITHUB_WORKSPACE: root,
-      GITHUB_STEP_SUMMARY: join(root, "summary"),
-      CHILD_EVIDENCE_REUSE: "false",
-      CHILD_WORKFLOW_KIND: "ci",
-      TARGET_REF: targetSha,
-    },
-  });
-  expect(output).toContain("Waived ci.yml; no child run is required.");
-});
+it.each([false, true])(
+  "does not look up or dispatch a waived child (admitted P=%s)",
+  (admitted) => {
+    const root = tempDirs.make("release-waived-parent-");
+    const bin = join(root, "bin");
+    mkdirSync(bin);
+    writeFileSync(join(bin, "gh"), "#!/bin/sh\nexit 91\n", { mode: 0o755 });
+    writeChildWaiverFixture(root, [
+      {
+        targetVersion: "2026.9.23",
+        targetSha,
+        childRole: "normalCi",
+        reason: "Synthetic whole-child waiver",
+      },
+    ]);
+    const run = String(step("normal_ci", "Dispatch CI").run)
+      .replaceAll(
+        "${{ fromJSON(needs.resolve_target.outputs.source_admission_json || '{}').qualificationAdmission != null }}",
+        String(admitted),
+      )
+      .replaceAll("${{ needs.resolve_target.outputs.target_version }}", "2026.9.23");
+    const output = execFileSync("bash", ["-c", run], {
+      cwd: root,
+      timeout: 10_000,
+      encoding: "utf8",
+      env: {
+        ...workflowEnv(),
+        PATH: bin + delimiter + dirname(process.execPath) + delimiter + process.env.PATH,
+        GITHUB_WORKSPACE: root,
+        GITHUB_STEP_SUMMARY: join(root, "summary"),
+        CHILD_EVIDENCE_REUSE: "false",
+        CHILD_WORKFLOW_KIND: "ci",
+        TARGET_REF: targetSha,
+      },
+    });
+    expect(output).toContain("Waived ci.yml; no child run is required.");
+  },
+);
 
 it.each([false, true])(
   "adopts child evidence with current policy without dispatch (admitted P=%s)",

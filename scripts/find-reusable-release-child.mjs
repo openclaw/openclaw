@@ -7,7 +7,7 @@ import {
   releaseChildReuseSha256,
 } from "./lib/full-release-child-request.mjs";
 import { discoverReusableReleaseChild } from "./lib/full-release-child-reuse.mjs";
-import { evaluateReleaseChildPolicy } from "./lib/release-validation-waivers.mjs";
+import { isWaived } from "./lib/release-validation-waivers.mjs";
 
 const [workflow, ...args] = process.argv.slice(2);
 const kind = process.env.CHILD_WORKFLOW_KIND;
@@ -25,15 +25,15 @@ if (args[0] === "--waiver-only") {
   if (releaseChildSpec(role).workflow !== workflow) {
     throw new Error("Child workflow differs from its release role");
   }
-  const policy = evaluateReleaseChildPolicy({
-    child: { key: role, jobs: [] },
+  const waived = isWaived({
+    childRole: role,
     targetSha: process.env.TARGET_SHA,
     targetVersion: process.env.TARGET_VERSION,
   });
-  if (policy.workflowWaived) {
+  if (waived) {
     console.log(`Waived ${workflow}; no child run is required.`);
   }
-  process.exit(policy.workflowWaived ? 0 : 3);
+  process.exit(waived ? 0 : 3);
 }
 
 let selection;

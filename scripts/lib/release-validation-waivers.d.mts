@@ -29,22 +29,12 @@ export function validateQualificationExemptions(
   waivers?: ReleaseValidationWaiver[],
 ): void;
 export interface ReleaseValidationWaiver {
-  aggregates?: ReleaseChildPolicy["aggregates"];
-  targetSha?: string;
   targetVersion: string;
+  targetSha?: string;
   childRole: string;
-  jobName: string;
+  jobName?: string;
   reason: string;
-  state?: "cancelled" | "missing";
-  approvedBy?: string;
-  disposition?: "waived-cancelled" | "waived-missing";
-  cancelledStep?: string;
-  testFailures?: {
-    stepName: string;
-    signatures: { kind: "vitest"; file: string; test: string }[];
-    alternativeSignatures?: { kind: "vitest"; file: string; test: string }[][];
-  };
-  evidence?: { runId: string | number; runAttempt: number };
+  step?: string;
   qualificationExemption?: QualificationExemptionEvidence;
 }
 export interface ReleasePolicyJob {
@@ -53,18 +43,13 @@ export interface ReleasePolicyJob {
   conclusion: string | null;
   url?: string;
   html_url?: string;
+  firstIncompleteStep?: string;
+  steps?: { name: string; conclusion: string | null; status?: string }[];
 }
 export interface ReleaseChildPolicy {
   waivers: ReleaseValidationWaiver[];
   workflowWaived: boolean;
   waivedWorkDidNotPass: boolean;
-  aggregates: {
-    jobName: string;
-    stepName: string;
-    causes: string[];
-    exactCauses?: boolean;
-    logSha256?: string;
-  }[];
   waivedJobNames: Set<string>;
   missingRequiredJobs: string[];
   blockingJobs: ReleasePolicyJob[];
@@ -78,10 +63,6 @@ export function evaluateReleaseChildPolicy(input: {
     jobs: ReleasePolicyJob[];
     runId?: string;
     runAttempt?: number | null;
-    required?: boolean;
-    selected?: boolean;
-    source?: string;
-    result?: string;
     status?: string;
   };
   requiredJobs?: string[];
@@ -91,10 +72,16 @@ export function evaluateReleaseChildPolicy(input: {
 }): ReleaseChildPolicy;
 export const RELEASE_VALIDATION_WAIVERS_PATH: string;
 export function parseReleaseValidationWaivers(source: string): ReleaseValidationWaiver[];
-export function releaseWaiverEvidenceMatches(
-  evidence: ReleaseValidationWaiver["evidence"],
-  runId: string | undefined,
-  runAttempt: number | undefined,
+export function firstIncompleteReleaseStep(steps?: ReleasePolicyJob["steps"]): string | undefined;
+export function isWaived(
+  scope: {
+    targetVersion?: string;
+    targetSha?: string;
+    childRole: string;
+    jobName?: string;
+    job?: ReleasePolicyJob;
+  },
+  waivers?: ReleaseValidationWaiver[],
 ): boolean;
 export function decodeReleaseValidationSource(payload: unknown, sourcePath: string): string;
 export function readReleaseValidationWaivers(
@@ -103,15 +90,6 @@ export function readReleaseValidationWaivers(
 export function readReleaseValidationWaiversAsync(
   readSource: (path: string) => string | Promise<string>,
 ): Promise<ReleaseValidationWaiver[]>;
-export class ReleaseAggregateValidationError extends Error {}
-export function validateReleaseWaiverAggregates(input: {
-  policy: ReleaseChildPolicy;
-  jobs: (ReleasePolicyJob & {
-    id: number;
-    steps?: { name: string; conclusion: string | null }[];
-  })[];
-  getJobLog: (jobId: number) => unknown;
-}): Promise<void>;
 
 export function releaseChildAdvisories(child: {
   key: string;

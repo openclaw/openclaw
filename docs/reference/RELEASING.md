@@ -71,13 +71,11 @@ validation even when first published to beta.
   package integrity, and all Linux/Windows/macOS Gateway checks, including
   Windows packaged install/upgrade in Release Checks. All-group qualification
   includes all nine Gateway install/upgrade combinations.
-- Selected `openclaw/ci-gate` must succeed unless checked-in exact-job grants
-  cover every failed cause. A matching job waiver applies regardless of outcome;
-  the job does not have to run. A parent waiver covers every descendant without
-  requiring a child run or receipt. Unwaived gaps still block. Waived is not passed.
-  Exact failed live-provider/Telegram leaves and operator-accepted
-  `2026.11.5-beta.3`/candidate-bound `2026.11.4` jobs may use that policy;
-  candidate, job, version, and attempt restrictions still apply. **FRV must
+- Selected `openclaw/ci-gate` must succeed unless it is itself waived. A matching
+  job waiver does not require a run; omit `jobName` to waive the entire child
+  role and all descendants without a run or receipt. Optional `step` limits a
+  job waiver to the first incomplete or failed step. Unwaived gaps block, and
+  waived is not passed. **FRV must
   conclude success; publishers cannot waive it.**
 - Coverage spans source CI, packages, plugins, Gateway installs/upgrades, and
   selected app, UI, Telegram, QA, and live-provider checks. Inspect recorded
@@ -231,8 +229,7 @@ Only authenticated direct admission qualifies evidence for publication.
 Unadmitted historical manifests, including v3, require new admitted
 qualification; ancestry alone is not admission. Use [receipt-only recovery](/reference/full-release-validation/evidence#receipt-backed-aggregate-recovery)
 to reseal existing qualification without rerunning any wave. A separately admitted,
-signed ledger can add waivers for exact retained attempts or explicitly waive a
-child with no receipt. Recovery cannot replace unwaived receipts or qualify unwaived
+signed ledger can add candidate-scoped job or whole-child waivers. Recovery cannot replace unwaived receipts or qualify unwaived
 failures. C, Q, and P may remain independent.
 
 ### Frozen qualification identity

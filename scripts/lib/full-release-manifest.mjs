@@ -16,11 +16,21 @@ export function releaseManifestChildEvidence(child) {
     triggeringActor: child.triggeringActor,
     repository: child.repository,
     jobs: child.timing.jobs.map(
-      ({ name, status, conclusion, acceptedRunAttempt, startedAt, completedAt, url }) => ({
+      ({
         name,
         status,
         conclusion,
         acceptedRunAttempt,
+        startedAt,
+        completedAt,
+        url,
+        firstIncompleteStep,
+      }) => ({
+        name,
+        status,
+        conclusion,
+        acceptedRunAttempt,
+        ...(firstIncompleteStep ? { firstIncompleteStep } : {}),
         startedAt,
         completedAt,
         url,

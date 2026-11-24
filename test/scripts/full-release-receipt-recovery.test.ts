@@ -100,7 +100,7 @@ describe("receipt-backed aggregate recovery", () => {
       verified.children.find(({ role }) => role === "pluginPrereleaseCandidate"),
     ).toMatchObject({
       conclusion: "success",
-      waivers: [{ jobName: "plugin-prerelease-suite", disposition: "waived-missing" }],
+      waivers: [{ jobName: "plugin-prerelease-suite" }],
     });
     const source = test.client.getWorkflowSource;
     vi.spyOn(test.client, "getWorkflowSource").mockImplementation((sha, path) =>
@@ -110,7 +110,7 @@ describe("receipt-backed aggregate recovery", () => {
     );
     await expect(
       verifyOriginalReceiptQualification(test.recovery, { client: test.client }),
-    ).rejects.toThrow("plugin-prerelease-suite");
+    ).rejects.toThrow("workload does not pass recovery release policy");
   });
 
   it("requires no child receipt when its admitted parent is waived", async () => {
@@ -123,9 +123,7 @@ describe("receipt-backed aggregate recovery", () => {
       targetVersion: f.direct.admission.receipt.baselinePolicy.candidateVersion,
       targetSha: f.direct.c,
       childRole: "normalCi",
-      jobName: "Run normal full CI",
       reason: "Synthetic parent waiver",
-      aggregates: [],
     };
     const reuse = vi.spyOn(f.client, "validateChildReuse");
     const verified = verifyOriginalReceiptQualification;
@@ -140,7 +138,7 @@ describe("receipt-backed aggregate recovery", () => {
     const result = await verified(request, { client: f.client });
     expect(result.children.find(({ role }) => role === "normalCi")).toMatchObject({
       conclusion: "not-collected",
-      waivers: [{ jobName: grant.jobName }],
+      waivers: [grant],
     });
     expect(reuse.mock.calls.map(([, input]) => input.role)).not.toContain("normalCi");
   });

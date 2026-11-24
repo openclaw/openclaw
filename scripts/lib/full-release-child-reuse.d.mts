@@ -40,7 +40,7 @@ export interface ReusableReleaseChildDependencies {
     typeof import("./release-evidence-replay.mjs").createReleaseEvidenceReplay
   >;
   report?: (message: string) => void;
-  getJobLog?: (jobId: number) => unknown;
+
   github?: (endpoint: string) => Promise<unknown>;
   downloadArchive?: (input: Record<string, unknown>) => Promise<{
     artifactMetadata: unknown;

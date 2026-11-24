@@ -32,6 +32,7 @@ import { resolveReleaseContextIdentity } from "./lib/release-context.mjs";
 import { validateQualificationBaselines } from "./lib/release-upgrade-baseline.mjs";
 import {
   evaluateReleaseChildPolicy,
+  firstIncompleteReleaseStep,
   isFailedReleaseJob as isFailedJob,
   releaseChildAdvisories,
 } from "./lib/release-validation-waivers.mjs";
@@ -661,8 +662,10 @@ function normalizedAttemptJob(job, runAttempt) {
   if (!name) {
     throw new Error(`release child attempt ${runAttempt} contains an unnamed job`);
   }
+  const step = isFailedJob(job) && firstIncompleteReleaseStep(job.steps);
   return {
     acceptedRunAttempt: runAttempt,
+    ...(step ? { firstIncompleteStep: step } : {}),
     completedAt: stringValue(job?.completed_at ?? job?.completedAt),
     conclusion: boundedString(job?.conclusion, MAX_LABEL_LENGTH),
     name,
@@ -745,10 +748,7 @@ export function composeReleaseAttemptJobs(attempts, expected = {}) {
   for (let index = 0; index < normalizedAttempts.length; index += 1) {
     const attempt = normalizedAttempts[index];
     const expectedAttempt = plannedRunAttempt + index;
-    if (
-      attempt.runAttempt !== expectedAttempt ||
-      (!expected.allowEmptyAttempts && attempt.jobs.length === 0)
-    ) {
+    if (attempt.runAttempt !== expectedAttempt || attempt.jobs.length === 0) {
       throw new Error("release child attempt evidence is gapped");
     }
     const identityNames = new Set();
@@ -808,10 +808,9 @@ export function composeReleaseAttemptJobs(attempts, expected = {}) {
   return { ...composite, sha256: releaseCompositeJobsSha256(composite) };
 }
 
-export function composeReleaseChildAttemptEvidence({ attempts, expected, run, workflowWaived }) {
+export function composeReleaseChildAttemptEvidence({ attempts, expected, run }) {
   const provenance = validateReleaseChildRunProvenance(run, expected);
   const composite = composeReleaseAttemptJobs(attempts, {
-    allowEmptyAttempts: workflowWaived && run.status === "completed",
     effectiveRunAttempt: provenance.effectiveRunAttempt,
     effectiveRunStatus: run.status,
     plannedRunAttempt: expected.plannedRunAttempt,
@@ -1678,21 +1677,22 @@ export function terminalPolicyPass(child, targetVersion, targetSha, waiverPolicy
 }
 
 function terminalChildPass(child, policy) {
-  if (child.status !== "completed") {
-    return false;
-  }
   if (policy.workflowWaived) {
     return true;
+  }
+  if (child.status !== "completed") {
+    return false;
   }
   const permittedConclusion =
     child.conclusion === "success" ||
     (child.conclusion === "failure" && policy.advisoryJobs.some(isFailedJob)) ||
-    (["failure", "cancelled", "skipped"].includes(child.conclusion) && policy.waivedWorkDidNotPass);
+    policy.waivedWorkDidNotPass;
   return (
     permittedConclusion &&
     child.jobs.every((job) => job.status === "completed" || policy.waivedJobNames.has(job.name)) &&
     policy.advisoryFailureAllowed &&
-    policy.blockingJobs.length === 0
+    policy.blockingJobs.length === 0 &&
+    policy.missingRequiredJobs.length === 0
   );
 }
 
@@ -1780,43 +1780,49 @@ function releaseState(cancelled, activeRunIds, blockers, errors) {
 }
 
 function releaseChildBlockers(selected, policies) {
-  const childJobBlockers = selected.flatMap((child) =>
-    policies.get(child.key).blockingJobs.map((job) => ({
-      child: child.key,
-      conclusion: job.conclusion,
-      job: job.name,
-      kind: "job_failure",
-      message: `${child.key} job failed policy`,
-      primaryAt: stringValue(
-        job.completed_at ?? job.completedAt ?? job.started_at ?? job.startedAt,
-      ),
-      runId: child.runId,
-      url: job.html_url ?? job.url ?? child.url,
-    })),
-  );
-  const childJobBlockerKeys = new Set(
-    childJobBlockers.map((blocker) => `${blocker.child}:${blocker.runId}`),
-  );
-  const terminalBlockers = selected
-    .filter(
-      (child) =>
-        child.runId &&
-        child.runAttempt &&
-        child.status === "completed" &&
-        !terminalChildPass(child, policies.get(child.key)) &&
-        !childJobBlockerKeys.has(`${child.key}:${child.runId}`),
-    )
-    .map((child) => ({
-      child: child.key,
-      conclusion: child.conclusion,
-      job: "<workflow>",
-      kind: "workflow_failure",
-      message: `${child.key} workflow failed release policy`,
-      primaryAt: stringValue(child.updatedAt ?? child.createdAt),
-      runId: child.runId,
-      url: child.url,
-    }));
-  return [...childJobBlockers, ...terminalBlockers];
+  return selected.flatMap((child) => {
+    const policy = policies.get(child.key);
+    const binding = { child: child.key, runId: child.runId, url: child.url };
+    const blockers = policy.blockingJobs.map((job) =>
+      Object.assign({}, binding, {
+        conclusion: job.conclusion,
+        job: job.name,
+        kind: "job_failure",
+        message: `${child.key} job failed policy`,
+        primaryAt: stringValue(
+          job.completed_at ?? job.completedAt ?? job.started_at ?? job.startedAt,
+        ),
+        url: job.html_url ?? job.url ?? child.url,
+      }),
+    );
+    for (const job of policy.missingRequiredJobs) {
+      blockers.push({
+        ...binding,
+        conclusion: "missing",
+        job,
+        kind: "job_missing",
+        message: "Required release job is missing: " + job,
+        primaryAt: "",
+      });
+    }
+    if (
+      !blockers.length &&
+      child.runId &&
+      child.runAttempt &&
+      child.status === "completed" &&
+      !terminalChildPass(child, policy)
+    ) {
+      blockers.push({
+        ...binding,
+        conclusion: child.conclusion,
+        job: "<workflow>",
+        kind: "workflow_failure",
+        message: `${child.key} workflow failed release policy`,
+        primaryAt: stringValue(child.updatedAt ?? child.createdAt),
+      });
+    }
+    return blockers;
+  });
 }
 
 function releaseSnapshotPolicies(children, { targetVersion, targetSha, qualificationCoverage }) {
@@ -1853,7 +1859,11 @@ export function classifyReleaseSnapshot({
     qualificationCoverage,
   });
   const active = selected.filter(
-    (child) => child.runId && child.runAttempt && child.status !== "completed",
+    (child) =>
+      !policies.get(child.key).workflowWaived &&
+      child.runId &&
+      child.runAttempt &&
+      child.status !== "completed",
   );
   const childErrors = selected.flatMap((child) =>
     (child.errors ?? []).filter((error) => error.kind !== "dispatch_missing"),
@@ -1863,17 +1873,6 @@ export function classifyReleaseSnapshot({
     ...localFailures,
     ...extraBlockers,
     ...dispatchBlockers(selected).filter((issue) => !policies.get(issue.child).workflowWaived),
-    ...selected.flatMap((child) =>
-      policies.get(child.key).missingRequiredJobs.map((name) => ({
-        child: child.key,
-        conclusion: "missing",
-        job: name,
-        kind: "job_missing",
-        message: "Required release job is missing: " + name,
-        runId: child.runId,
-        url: child.url,
-      })),
-    ),
     ...childBlockers,
   ];
   const blockers = normalizeIssues(rawBlockers, "release_blocker");
@@ -1918,6 +1917,7 @@ function childTiming(child) {
       return {
         acceptedRunAttempt: positiveInteger(job.acceptedRunAttempt),
         completedAt,
+        ...(job.firstIncompleteStep ? { firstIncompleteStep: job.firstIncompleteStep } : {}),
         conclusion: stringValue(job.conclusion),
         durationMinutes:
           Number.isFinite(jobStarted) && Number.isFinite(jobCompleted)
@@ -2398,6 +2398,9 @@ export function validateReleaseStateArtifact(payload, expected, expectedMode) {
             const timingJobs = child.timing.jobs.map((job) => ({
               acceptedRunAttempt: positiveInteger(job?.acceptedRunAttempt),
               completedAt: stringValue(job?.completedAt),
+              ...(typeof job?.firstIncompleteStep === "string" && job.firstIncompleteStep
+                ? { firstIncompleteStep: job.firstIncompleteStep }
+                : {}),
               conclusion: stringValue(job?.conclusion),
               durationMinutes:
                 typeof job?.durationMinutes === "number" ? job.durationMinutes : null,
@@ -2577,6 +2580,7 @@ function verifyStateStructure(state, executionPlan, label, effectiveGates) {
           return {
             acceptedRunAttempt,
             completedAt: job.completedAt,
+            ...(job.firstIncompleteStep ? { firstIncompleteStep: job.firstIncompleteStep } : {}),
             conclusion: job.conclusion,
             name: job.name,
             startedAt: job.startedAt,
@@ -2597,6 +2601,7 @@ function verifyStateStructure(state, executionPlan, label, effectiveGates) {
       jobs: snapshot.timing.jobs.map((job) => ({
         acceptedRunAttempt: job.acceptedRunAttempt,
         conclusion: job.conclusion,
+        firstIncompleteStep: job.firstIncompleteStep,
         html_url: job.url,
         name: job.name,
         status: job.status,
@@ -2867,7 +2872,7 @@ function releaseStateDetailLines(payload, maxItems = MAX_SUMMARY_ISSUES) {
   }
   for (const waiver of payload.waivers ?? []) {
     lines.push(
-      `- ${waiver.disposition ?? "Waived"} (not a test pass): ${waiver.childRole} / ${waiver.jobName}; ${waiver.reason}`,
+      `- Waived (not a test pass): ${waiver.childRole} / ${waiver.jobName ?? "whole child"}; ${waiver.reason}`,
     );
   }
   const omitted =

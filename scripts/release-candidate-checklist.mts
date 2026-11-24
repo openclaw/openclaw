@@ -1837,8 +1837,10 @@ async function runTelegramIfNeeded(
   if (coversPackageTelegram && options.telegramProviderMode === "mock-openai") {
     const waived = qualificationManifest.waivers?.some(
       (waiver: JsonRecord) =>
-        waiver.jobName ===
-        "Run package acceptance / Telegram package acceptance / Run package Telegram E2E",
+        waiver.childRole === "releaseChecksCandidate" &&
+        (waiver.jobName === undefined ||
+          waiver.jobName ===
+            "Run package acceptance / Telegram package acceptance / Run package Telegram E2E"),
     );
     if (waived) {
       return { status: "waived", providerMode: "mock-openai" };

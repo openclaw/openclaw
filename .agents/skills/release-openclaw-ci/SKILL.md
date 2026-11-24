@@ -320,7 +320,7 @@ With `reuse_evidence=true`:
 - Empty-string inputs equal absent inputs (GitHub omits them from `github.event.inputs`); nonempty defaults and candidate descriptor bytes match exactly.
 - Raw successful children, or failed children accepted by current Q grants, may come from failed, cancelled, or active parents at the same Q or across Q. Independent Q requires authenticated tooling lineage; the original producer Q is not relabeled.
 - Logs identify reuse, evaluated rejections, skipped runs, and fresh dispatches. Current-parent adoption witness/immutable plan bind each selection.
-- Admitted P evaluates retained failures against pinned Q grants using the current candidate version; a matching waiver avoids redispatch after the required initial run. Frozen Q still supplies dispatch-input defaults.
+- Admitted P evaluates retained evidence using the candidate and pinned Q grants. A whole-child waiver does not require any run. Frozen Q still supplies dispatch inputs.
 - Collectors/final verification recheck live attempt/conclusion, tooling lineage, inputs, artifact identity/digest/expiry, and successful trusted seal/upload. A newer attempt invalidates reuse; never rerun an adopted child to repair collection.
 - Current-parent source/publication admission, successful-parent changelog reuse, and artifact producers' sealed receipts are unchanged.
 - Cross-Q reuse retains original producer Q, exact C/role/effective inputs/defaults/candidate descriptor/receipt/artifact/live attempt. Green jobs alone do not establish eligibility. Set `reuse_evidence=false` when fresh execution under the new Q is required. Whole-parent authenticated reuse has a separate exact-Q contract with independently authenticated P. Never relabel failed FRV; eligible P-only repairs may use a separate [receipt-backed aggregate](#receipt-backed-aggregate-recovery), otherwise qualify through a new successful parent.
@@ -344,7 +344,7 @@ gh workflow run openclaw-performance.yml \
 ```
 
 - No separate mandatory prepublish wait for this beta signal. Compare available Kova, gateway-startup, and CLI-startup metrics with earlier release evidence/clawgrit before publish/closeout; record regressions and investigate product impact.
-- Stable/full needs blocking performance, subject only to checked-in policy's exact Kova grants. Retain failed reports; failed-job grants do not exempt not-run jobs.
+- Stable/full needs blocking performance, subject only to checked-in policy's exact Kova grants. Retain failed reports; record waived work separately from passing tests.
 - `npm-beta-v1` defers performance. Every selected child still needs terminal evidence and proof of artifact-only publication.
 
 ### Admit and dispatch the exact tuple
@@ -402,7 +402,7 @@ pnpm ci:full-release \
 
 - Publish with `release_profile=from-validation` (sealed profile). Selected FRV must **succeed**; stable needs stable/full evidence, soak, blocking performance.
 - Decide blocker/flake for every failed test. Same-Release-SHA flakes: at most two reruns plus main fix-in-parallel issue/PR, never flake-only re-cut.
-- A reviewed [release-tooling waiver](../../../docs/reference/full-release-validation/evidence.md#release-tooling-waivers) removes the obligation to run the named job. A child parent-job or `<workflow>` waiver removes the obligation for every descendant: do not dispatch or require a reusable receipt. Use admitted P and frozen Q. Record exceptions, never passes; preserve raw outcomes and fail closed for unwaived coverage and invalid required evidence. See the [missing and cancelled child incidents in #204382](https://github.com/openclaw/openclaw/pull/204382).
+- A reviewed [release-tooling waiver](../../../docs/reference/full-release-validation/evidence.md#release-tooling-waivers) removes the obligation to run the named job. A `step` selector only matches the first incomplete or failed step of that job. Omit `jobName` to waive the whole child role and its descendants: do not dispatch, look up, or reuse that child. Keep raw outcomes, and fail closed for unwaived coverage and invalid required evidence. See [#204382](https://github.com/openclaw/openclaw/pull/204382) and [the Performance cancellation](https://github.com/openclaw/openclaw/actions/runs/45327586533) that blocked [FRV 45326913251](https://github.com/openclaw/openclaw/actions/runs/45326913251).
 
 ### Publish children
 

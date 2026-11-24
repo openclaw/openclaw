@@ -2,8 +2,6 @@ import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { isDeepStrictEqual } from "node:util";
 import { compareAscii } from "./canonical-json.mjs";
-import { parseNodeFailureReport } from "./ci-node-test-evidence.mjs";
-import qualificationPolicy from "./release-qualification-coverage.json" with { type: "json" };
 import defaultWaiverPolicy from "./release-validation-waivers.json" with { type: "json" };
 
 export const RELEASE_VALIDATION_WAIVERS_PATH = "scripts/lib/release-validation-waivers.json";
@@ -13,25 +11,6 @@ export function readReleaseValidationWaivers(readSource) {
 
 export async function readReleaseValidationWaiversAsync(readSource) {
   return parseReleaseValidationWaivers(await readSource(RELEASE_VALIDATION_WAIVERS_PATH));
-}
-
-function waiverEvidenceRunId(value) {
-  return typeof value === "string" && /^[1-9][0-9]*$/u.test(value)
-    ? value
-    : Number.isSafeInteger(value) && value > 0
-      ? String(value)
-      : undefined;
-}
-
-export function releaseWaiverEvidenceMatches(evidence, runId, runAttempt) {
-  const id = waiverEvidenceRunId(evidence?.runId);
-  return (
-    id !== undefined &&
-    id === runId &&
-    Number.isSafeInteger(evidence.runAttempt) &&
-    evidence.runAttempt > 0 &&
-    evidence.runAttempt === runAttempt
-  );
 }
 
 export function parseReleaseValidationWaivers(source) {
@@ -46,41 +25,27 @@ export function parseReleaseValidationWaivers(source) {
   for (const waiver of policy.waivers) {
     if (
       !waiver ||
-      !["targetVersion", "childRole", "jobName", "reason"].every(
-        (key) => typeof waiver[key] === "string" && waiver[key].length > 0,
+      Object.keys(waiver).some(
+        (key) =>
+          ![
+            "targetVersion",
+            "targetSha",
+            "childRole",
+            "jobName",
+            "reason",
+            "step",
+            "qualificationExemption",
+          ].includes(key),
       ) ||
-      (waiver.targetSha !== undefined && !/^[a-f0-9]{40}$/u.test(waiver.targetSha)) ||
-      (waiver.evidence !== undefined &&
-        (waiverEvidenceRunId(waiver.evidence?.runId) === undefined ||
-          !Number.isSafeInteger(waiver.evidence.runAttempt) ||
-          waiver.evidence.runAttempt <= 0)) ||
-      (waiver.cancelledStep !== undefined &&
-        (typeof waiver.cancelledStep !== "string" ||
-          waiver.cancelledStep.length === 0 ||
-          waiver.testFailures !== undefined)) ||
-      !Array.isArray(waiver.aggregates) ||
-      (waiver.state !== undefined &&
-        (!["cancelled", "missing"].includes(waiver.state) ||
-          typeof waiver.approvedBy !== "string" ||
-          !waiver.approvedBy.trim() ||
-          !waiver.reason.trim() ||
-          waiver.cancelledStep !== undefined ||
-          waiver.testFailures !== undefined ||
-          waiver.qualificationExemption !== undefined ||
-          (waiver.jobName === "<workflow>" &&
-            (waiver.state !== "missing" ||
-              waiver.evidence !== undefined ||
-              waiver.aggregates.length !== 0)))) ||
-      waiver.aggregates.some(
-        (aggregate) =>
-          !aggregate ||
-          typeof aggregate.jobName !== "string" ||
-          typeof aggregate.stepName !== "string" ||
-          !Array.isArray(aggregate.causes) ||
-          !aggregate.causes.every((cause) => typeof cause === "string") ||
-          (aggregate.exactCauses !== undefined && typeof aggregate.exactCauses !== "boolean") ||
-          (aggregate.logSha256 !== undefined && !/^[a-f0-9]{64}$/u.test(aggregate.logSha256)),
-      )
+      !["targetVersion", "childRole", "reason"].every(
+        (key) => typeof waiver[key] === "string" && waiver[key].trim(),
+      ) ||
+      (waiver.jobName !== undefined &&
+        (typeof waiver.jobName !== "string" || !waiver.jobName.trim())) ||
+      (waiver.step !== undefined &&
+        (waiver.jobName === undefined || typeof waiver.step !== "string" || !waiver.step.trim())) ||
+      (waiver.targetSha !== undefined &&
+        (typeof waiver.targetSha !== "string" || !/^[a-f0-9]{40}$/u.test(waiver.targetSha)))
     ) {
       throw new Error("Invalid release waiver entry");
     }
@@ -152,12 +117,30 @@ export function validateQualificationExemptions(
   }
 }
 
-const PARENT_JOB_BY_ROLE = new Map(
-  qualificationPolicy.children.map(({ key, parentJobName }) => [key, parentJobName]),
-);
+export function firstIncompleteReleaseStep(steps) {
+  const step = steps?.find(({ conclusion }) => !["success", "skipped"].includes(conclusion));
+  return step?.conclusion || step?.status === "in_progress" || step?.status === "queued"
+    ? step.name
+    : undefined;
+}
 
-function isWorkflowWaiver({ childRole, jobName }) {
-  return jobName === "<workflow>" || jobName === PARENT_JOB_BY_ROLE.get(childRole);
+// Omitting the queried job asks whether the whole child is waived.
+export function isWaived(
+  { targetVersion, targetSha, childRole, jobName, job },
+  waivers = RELEASE_VALIDATION_WAIVERS,
+) {
+  return waivers.some(
+    (waiver) =>
+      !waiver.qualificationExemption &&
+      waiver.targetVersion === targetVersion &&
+      (waiver.targetSha === undefined || waiver.targetSha === targetSha) &&
+      waiver.childRole === childRole &&
+      (waiver.jobName === undefined || waiver.jobName === jobName) &&
+      (waiver.step === undefined ||
+        (job?.status === "completed" &&
+          job.conclusion !== "success" &&
+          waiver.step === (job.firstIncompleteStep ?? firstIncompleteReleaseStep(job.steps)))),
+  );
 }
 
 const SUCCESSFUL_CONCLUSIONS = new Set(["success", "skipped", "neutral"]);
@@ -208,8 +191,7 @@ export function releaseChildAdvisories(child) {
     .toSorted((left, right) => compareAscii(left.job, right.job));
 }
 
-// Raw leaf and workflow conclusions are never rewritten. The caller owns the
-// aggregate validation verdict and must also authenticate failed aggregate logs.
+// Evaluate the blocking inventory without rewriting raw job results.
 export function evaluateReleaseChildPolicy({
   child,
   targetVersion,
@@ -217,85 +199,36 @@ export function evaluateReleaseChildPolicy({
   waiverPolicy = RELEASE_VALIDATION_WAIVERS,
   requiredJobs = [],
 }) {
-  const matches = waiverPolicy.filter(
-    (waiver) =>
-      waiver.targetVersion === targetVersion &&
-      (waiver.targetSha === undefined || waiver.targetSha === targetSha) &&
-      waiver.childRole === child.key &&
-      // A reviewed historical failure never grants leniency to a new execution.
-      (!waiver.evidence ||
-        releaseWaiverEvidenceMatches(waiver.evidence, child.runId, child.runAttempt)) &&
-      !waiver.qualificationExemption &&
-      (!waiver.testFailures ||
-        child.jobs.some(
-          (job) =>
-            job.name === waiver.jobName &&
-            job.status === "completed" &&
-            job.conclusion === "failure",
-        )),
+  const scope = { targetVersion, targetSha, childRole: child.key };
+  const workflowWaived = isWaived(scope, waiverPolicy);
+  const jobs = new Map(child.jobs.map((job) => [job.name, job]));
+  const jobScope = (jobName) => ({ ...scope, jobName, job: jobs.get(jobName) });
+  const waivers = waiverPolicy.filter((waiver) => isWaived(jobScope(waiver.jobName), [waiver]));
+  const waivedJobNames = new Set(
+    [...requiredJobs, ...jobs.keys()].filter((jobName) => isWaived(jobScope(jobName), waivers)),
   );
-  const workflowWaived = matches.some(isWorkflowWaiver);
-  const aggregates = new Map();
-  for (const waiver of workflowWaived ? [] : matches) {
-    // Aggregate exceptions authenticate fallout from a job that actually failed.
-    if (
-      !waiver.aggregates?.length ||
-      !child.jobs.some(
-        (job) =>
-          job.name === waiver.jobName && job.status === "completed" && job.conclusion === "failure",
-      )
-    ) {
-      continue;
-    }
-    for (const aggregate of waiver.aggregates ?? []) {
-      const existing = aggregates.get(aggregate.jobName);
-      if (existing) {
-        existing.causes = [...new Set([...existing.causes, ...aggregate.causes])];
-      } else {
-        // Union only this evaluation; the immutable Q policy is reused by siblings.
-        aggregates.set(aggregate.jobName, { ...aggregate, causes: [...aggregate.causes] });
-      }
-    }
-  }
-  // Preserve the established manifest shape; aggregate declarations are Q policy,
-  // not a replacement for authenticated original aggregate logs.
-  const waivers = matches.map(({ aggregates: _aggregates, ...waiver }) =>
-    waiver.state ? Object.assign(waiver, { disposition: "waived-" + waiver.state }) : waiver,
-  );
-  const waivedJobNames = new Set([
-    ...waivers.map((row) => row.jobName),
-    ...(workflowWaived ? [...requiredJobs, ...child.jobs.map(({ name }) => name)] : []),
-    ...child.jobs
-      .filter(
-        (job) =>
-          aggregates.has(job.name) && job.status === "completed" && job.conclusion === "failure",
-      )
-      .map((job) => job.name),
-  ]);
   const advisoryJobs = child.jobs.filter((job) => isReleaseAdvisoryJob(child.key, job));
   // Preview failures retain their raw conclusions. Stable compatibility and the
-  // verifier must still pass; an existing tooling waiver keeps its own log checks.
+  // verifier must still pass unless explicitly waived.
   const advisoryFailureAllowed =
     workflowWaived ||
     !advisoryJobs.some(isFailedReleaseJob) ||
-    [WINDOWS_NODE_STABLE_JOB, "Verify release checks"].every((name) =>
-      child.jobs.some(
-        (job) =>
-          job.name === name &&
-          job.status === "completed" &&
-          (job.conclusion === "success" || waivedJobNames.has(name)),
-      ),
+    [WINDOWS_NODE_STABLE_JOB, "Verify release checks"].every(
+      (name) =>
+        isWaived(jobScope(name), waivers) ||
+        (jobs.get(name)?.status === "completed" && jobs.get(name)?.conclusion === "success"),
     );
   return {
     waivers,
     workflowWaived,
-    waivedWorkDidNotPass: matches.some(({ jobName }) => {
-      const job = child.jobs.find((entry) => entry.name === jobName);
+    waivedWorkDidNotPass: [...waivedJobNames].some((jobName) => {
+      const job = jobs.get(jobName);
       return job
-        ? job.status !== "completed" || job.conclusion !== "success"
+        ? job.status !== "completed" ||
+            isFailedReleaseJob(job) ||
+            (job.conclusion === "skipped" && requiredJobs.includes(jobName))
         : requiredJobs.includes(jobName);
     }),
-    aggregates: [...aggregates.values()],
     waivedJobNames,
     missingRequiredJobs:
       child.status === "completed"
@@ -314,119 +247,4 @@ export function evaluateReleaseChildPolicy({
         !isReleaseAdvisoryJob(child.key, job),
     ),
   };
-}
-
-// Aggregates also enforce integrity and dispatch identity. A waived test must
-// not excuse a second failure in that same aggregate job.
-export class ReleaseAggregateValidationError extends Error {}
-
-// Ignore echoed shell source, not error records: only line-leading runner
-// annotations (after a timestamp and optional color) are observed causes.
-function exactAggregateCauses(log) {
-  return log.split(/\r?\n/u).flatMap((line) => {
-    const record = line
-      // eslint-disable-next-line no-control-regex -- Only SGR color is removed; other controls fail closed.
-      .replace(/\u001b\[[0-9;]*m/gu, "")
-      .replace(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z /u, "");
-    const match = /^(?:##\[error\]|::error(?: title=CI job did not succeed)?::)(.*)$/u.exec(record);
-    if (match) {
-      return match[1] === "Process completed with exit code 1." ? [] : [match[1]];
-    }
-    // Malformed error records and remaining control characters fail closed.
-    return /^(?:##\[error|::error)/u.test(record) ||
-      // eslint-disable-next-line no-control-regex -- Reject controls that could conceal an error record.
-      /[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/u.test(record)
-      ? [record]
-      : [];
-  });
-}
-
-export async function validateReleaseWaiverAggregates({ policy, jobs, getJobLog }) {
-  if (policy.workflowWaived) {
-    return;
-  }
-  for (const waiver of policy.waivers) {
-    if (!waiver.testFailures) {
-      continue;
-    }
-    const matches = jobs.filter((job) => job.name === waiver.jobName);
-    const job = matches[0];
-    const failedSteps = job?.steps?.filter(
-      (step) => !["success", "skipped"].includes(step.conclusion),
-    );
-    if (
-      matches.length !== 1 ||
-      job.status !== "completed" ||
-      job.conclusion !== "failure" ||
-      failedSteps?.length !== 1 ||
-      failedSteps[0].conclusion !== "failure" ||
-      failedSteps[0].name !== waiver.testFailures.stepName
-    ) {
-      throw new ReleaseAggregateValidationError(
-        `Release test job has a non-policy failure: ${waiver.jobName}`,
-      );
-    }
-    const signatures = parseNodeFailureReport(String(await getJobLog(job.id)), true);
-    if (
-      ![waiver.testFailures.signatures, ...(waiver.testFailures.alternativeSignatures ?? [])].some(
-        (accepted) => isDeepStrictEqual(signatures, accepted),
-      )
-    ) {
-      throw new ReleaseAggregateValidationError(
-        `Release test job has an unwaived or incomplete failure: ${waiver.jobName}`,
-      );
-    }
-  }
-  for (const aggregate of policy.aggregates) {
-    const matches = jobs.filter((job) => job.name === aggregate.jobName);
-    if (matches.length !== 1 || matches[0].status !== "completed") {
-      throw new ReleaseAggregateValidationError(
-        `Required release aggregate is missing or incomplete: ${aggregate.jobName}`,
-      );
-    }
-    const job = matches[0];
-    if (job.conclusion === "success") {
-      continue;
-    }
-    const failedSteps = job.steps?.filter(
-      (step) => !["success", "skipped"].includes(step.conclusion),
-    );
-    if (
-      job.conclusion !== "failure" ||
-      failedSteps?.length !== 1 ||
-      failedSteps[0].name !== aggregate.stepName
-    ) {
-      throw new ReleaseAggregateValidationError(
-        `Release aggregate has a non-policy failure: ${aggregate.jobName}`,
-      );
-    }
-    const log = String(await getJobLog(job.id));
-    if (aggregate.logSha256) {
-      if (createHash("sha256").update(log).digest("hex") !== aggregate.logSha256) {
-        throw new ReleaseAggregateValidationError(
-          "Release aggregate differs from reviewed evidence: " + aggregate.jobName,
-        );
-      }
-      continue;
-    }
-    const causes = aggregate.exactCauses
-      ? exactAggregateCauses(log)
-      : log
-          .split(/\r?\n/u)
-          .filter((line) => !line.includes("\u001b"))
-          .flatMap((line) => {
-            const match = /(?:##\[error\]|::error::)(.*)$/u.exec(line);
-            return match && match[1] !== "Process completed with exit code 1." ? [match[1]] : [];
-          });
-    if (
-      causes.length === 0 ||
-      causes.some((cause) => !aggregate.causes.includes(cause)) ||
-      (aggregate.exactCauses &&
-        (causes.length !== aggregate.causes.length || new Set(causes).size !== causes.length))
-    ) {
-      throw new ReleaseAggregateValidationError(
-        `Release aggregate has an unwaived failure: ${aggregate.jobName}`,
-      );
-    }
-  }
 }

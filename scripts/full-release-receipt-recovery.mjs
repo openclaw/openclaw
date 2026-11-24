@@ -38,7 +38,7 @@ import {
   evaluateReleaseChildPolicy,
   readReleaseValidationWaiversAsync,
   releaseChildAdvisories,
-  releaseWaiverEvidenceMatches,
+  isWaived,
 } from "./lib/release-validation-waivers.mjs";
 import {
   PREPARED_NPM_MANIFEST,
@@ -225,24 +225,13 @@ export async function verifyReceiptRecoveryPolicy(request, original, client) {
   same(waiverPolicy.slice(0, oldLedger.length), oldLedger, "waiver policy changed existing grants");
   requireValue(
     additions.length > 0 &&
-      additions.every((grant) => {
-        const child = request.children[grant.childRole];
-        return (
+      additions.every(
+        (grant) =>
           grant.targetSha === candidateSha &&
           grant.targetVersion === original.baselinePolicy.candidateVersion &&
-          original.coverage.children.some(({ key }) => key === grant.childRole) &&
-          (releaseWaiverEvidenceMatches(grant.evidence, child?.runId, child?.runAttempt) ||
-            (!child &&
-              evaluateReleaseChildPolicy({
-                child: { key: grant.childRole, jobs: [] },
-                targetSha: candidateSha,
-                targetVersion: original.baselinePolicy.candidateVersion,
-                waiverPolicy: [grant],
-              }).workflowWaived)) &&
-          grant.qualificationExemption === undefined
-        );
-      }),
-    "waiver policy must append grants scoped to original C, version and selected receipt attempts",
+          original.coverage.children.some(({ key }) => key === grant.childRole),
+      ),
+    "waiver policy must append grants scoped to original C, version and child role",
   );
   await revalidateReceiptRecoveryPolicy(request, admission, client);
   return { admission, waiverPolicy };
@@ -392,20 +381,21 @@ export async function verifyOriginalReceiptQualification(requestValue, dependenc
     ));
   const omitted = new Map();
   for (const { key } of admission.coverage.children) {
-    if (!request.children[key]) {
-      const policy = evaluateReleaseChildPolicy({
-        child: { key, jobs: [] },
-        targetSha: target,
-        targetVersion: binding.package.version,
-        waiverPolicy,
-      });
-      if (policy.workflowWaived) {
-        omitted.set(key, policy.waivers);
-      }
+    const waiverScope = {
+      childRole: key,
+      targetSha: target,
+      targetVersion: binding.package.version,
+    };
+    const grants = waiverPolicy.filter((grant) => isWaived(waiverScope, [grant]));
+    if (grants.length) {
+      omitted.set(key, grants);
     }
   }
+  const retainedRoles = Object.keys(request.children)
+    .filter((key) => !omitted.has(key))
+    .toSorted();
   same(
-    Object.keys(request.children).toSorted(),
+    retainedRoles,
     admission.coverage.children
       .map((child) => child.key)
       .filter((key) => !omitted.has(key))
@@ -461,7 +451,7 @@ export async function verifyOriginalReceiptQualification(requestValue, dependenc
         .filter((child) => child.selected && !omitted.has(child.key))
         .map((child) => child.key)
         .toSorted(),
-      Object.keys(request.children).toSorted(),
+      retainedRoles,
       "original plan selected child inventory changed",
     );
     for (const child of plan.children.filter(
@@ -563,7 +553,7 @@ export async function verifyOriginalReceiptQualification(requestValue, dependenc
       policy.waivedJobNames,
     );
 
-    if (role === "productPerformance" && !policy.workflowWaived) {
+    if (role === "productPerformance") {
       validatePerformanceArtifactOnlyJobs(verified.receipt.jobs);
     }
     const dispatchJobs = parentJobs.filter((job) => job.name === coverage.parentJobName);

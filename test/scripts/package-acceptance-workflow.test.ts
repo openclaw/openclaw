@@ -3741,7 +3741,12 @@ exit 2
   );
   writeExecutable(sleepPath, "#!/bin/sh\nexit 0\n");
   const result = runBash(
-    script.replaceAll("${{ needs.resolve_target.outputs.target_version }}", "2026.8.1"),
+    script
+      .replaceAll(
+        "${{ fromJSON(needs.resolve_target.outputs.source_admission_json || '{}').qualificationAdmission != null }}",
+        "false",
+      )
+      .replaceAll("${{ needs.resolve_target.outputs.target_version }}", "2026.8.1"),
     {
       cwd: workdir,
       env,
