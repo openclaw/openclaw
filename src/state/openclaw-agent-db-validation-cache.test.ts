@@ -50,6 +50,11 @@ import {
   setOpenClawAgentDatabaseValidation as setValidation,
 } from "./openclaw-agent-db-validation-cache.js";
 import {
+  agentDatabaseValidationKey,
+  describeAgentDatabaseValidationMismatch,
+  revokeAgentDatabaseValidation,
+} from "./openclaw-agent-db-validation-facts.js";
+import {
   closeOpenClawAgentDatabaseByPath as closePath,
   closeOpenClawAgentDatabasesAsync as closeDatabases,
   openOpenClawAgentDatabase as openDatabase,
@@ -1022,4 +1027,25 @@ describe("canonical proof on physical database validation", () => {
       expect(fresh(received.identity, received)).toBe(true);
     },
   );
+});
+
+baseIt("revokes and reports a receipt sealed before revoker cells existed", () => {
+  const valid = new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT);
+  Atomics.store(new Int32Array(valid), 0, 1);
+  // The shape an older release seals at clean close and restores on restart.
+  const sealed = {
+    agentId: "main",
+    identity: "1:2",
+    birthtime: "3",
+    receiptId: "sealed",
+    valid,
+    canonicalReady: new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT),
+  };
+  const restored = agentDatabaseValidationKey.read(sealed);
+  assert(restored);
+  revokeAgentDatabaseValidation(restored, "a maintenance write");
+  expect(Atomics.load(new Int32Array(restored.valid), 0)).toBe(0);
+  expect(
+    describeAgentDatabaseValidationMismatch({ db: undefined as never, agentId: "main" }, restored),
+  ).toBe("the receipt was revoked by a maintenance write");
 });

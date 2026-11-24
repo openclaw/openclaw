@@ -39,8 +39,15 @@ export const agentDatabaseValidationKey: SqliteDatabaseAdmissionKey<OpenClawAgen
     name: "agent.completed-validation",
     lifetime: "process",
     read(value) {
+      if (!isRecord(value)) {
+        return undefined;
+      }
       // SAFETY: Only the admitted agent schema owner publishes this private fact key.
-      return isRecord(value) ? (value as OpenClawAgentDatabaseValidation) : undefined;
+      const validation = value as OpenClawAgentDatabaseValidation;
+      // A receipt sealed by an older release at clean close has no revoker cell; give the
+      // restored record one so revocation and refusal reports work after upgrade.
+      validation.revokedBy ??= new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT);
+      return validation;
     },
   };
 
