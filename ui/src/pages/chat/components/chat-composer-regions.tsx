@@ -1,4 +1,5 @@
 import { createMemo, lazy, Show, untrack } from "solid-js";
+import { focusComposerInput } from "../../../lib/composer-input.ts";
 import { projectPresentation } from "../../../lib/reactive/presentation.ts";
 import { isChatRunWorking } from "../chat-run-working.ts";
 import { projectProgressCardRuntime } from "../chat-subagent-wait.ts";
@@ -129,9 +130,10 @@ export function ComposerInviteAccess(view: {
           text={view.context.visibleDraft}
           mentions={view.composer.mentions ?? []}
           options={view.context.state.mentionMenu.selectedInviteOptions}
-          onChange={(mentions) =>
-            view.context.mentionMenuHost.commitDraft(view.context.visibleDraft, mentions)
-          }
+          onChange={(mentions) => {
+            view.context.mentionMenuHost.commitDraft(view.context.visibleDraft, mentions);
+            focusComposerInput(view.context.mentionMenuHost.getTextarea(), { preventScroll: true });
+          }}
         />
       </ChatLazyBoundary>
     </Show>

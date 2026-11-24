@@ -1,6 +1,6 @@
 import type { SessionMemberPermissionLevel } from "@openclaw/gateway-protocol";
 import { createMemo, createUniqueId, For, Show } from "solid-js";
-import { Menu } from "../../../components/solid/menu.tsx";
+import { Menu, type MenuHandle } from "../../../components/solid/menu.tsx";
 import { registerChatSessionSharingEnglish } from "../../../i18n/locales/en-chat-session-sharing.ts";
 import type { HumanMention } from "../../../lib/chat/chat-types.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
@@ -30,6 +30,7 @@ export function ChatInviteAccess(props: {
   return (
     <For each={people()} keyed={(mention) => mention.profileId}>
       {(mention) => {
+        let menu: MenuHandle | undefined;
         const name = () => props.text.slice(mention().start + 1, mention().end);
         const options = () =>
           props.options.get(mention().profileId) ??
@@ -41,6 +42,9 @@ export function ChatInviteAccess(props: {
                 {t("chat.composer.inviteAs", { name: name() })}
               </span>
               <Menu
+                ref={(handle) => {
+                  menu = handle;
+                }}
                 id={`${id}-${mention().profileId}`}
                 label={t("chat.composer.inviteLevel", { name: name() })}
                 trigger={t(labels[mention().access ?? "read"])}
@@ -49,12 +53,13 @@ export function ChatInviteAccess(props: {
                   id: level,
                   label: t(labels[level]),
                   type: "radio",
-                  closeOnSelect: true,
+                  closeOnSelect: false,
                   checked: level === mention().access,
                 }))}
                 onSelect={(item) => {
                   const level = options().find((option) => option === item.id);
-                  if (level) {
+                  // The composer resumes editing after a selection, not the menu trigger.
+                  if (level && menu?.overlay.request(false)) {
                     props.onChange(
                       props.mentions.map((entry) =>
                         entry.profileId === mention().profileId

@@ -610,9 +610,10 @@ export function NewSessionComposer(props: {
               text={frame().visibleMessage}
               mentions={frame().mentionMenuHost.getMentions()}
               options={textarea.mentionMenu.selectedInviteOptions}
-              onChange={(mentions) =>
-                frame().mentionMenuHost.commitDraft(frame().visibleMessage, mentions)
-              }
+              onChange={(mentions) => {
+                frame().mentionMenuHost.commitDraft(frame().visibleMessage, mentions);
+                focusComposerInput(textarea.getTextarea(), { preventScroll: true });
+              }}
             />
           </ChatLazyBoundary>
         </Show>
