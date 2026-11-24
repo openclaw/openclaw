@@ -93,10 +93,19 @@ export function registerPiSessionCatalog(api: OpenClawPluginApi): void {
     label: "Pi",
     supportsProcessHomeIsolation: true,
     automaticExportHosts: () => [PI_LOCAL_SESSION_HOST_ID],
-    list: async ({ exportSource, ...query }) =>
-      await (
-        await loadCatalogRuntime()
-      ).list(exportSource ? { ...query, search: exportSource.threadId } : query),
+    list: async (query) => {
+      if (query.exportSource) {
+        const hostId = query.exportSource.hostId;
+        if (
+          hostId !== PI_LOCAL_SESSION_HOST_ID ||
+          (query.hostIds && !query.hostIds.includes(hostId))
+        ) {
+          return [];
+        }
+        query = { ...query, hostIds: [hostId] };
+      }
+      return await (await loadCatalogRuntime()).list(query);
+    },
     read: async (request) => await (await loadCatalogRuntime()).read(request),
     continueSession: async (request) => await (await loadCatalogRuntime()).continueSession(request),
     checkUpstreamActivity: async (probes, policy) =>
