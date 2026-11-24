@@ -21,6 +21,7 @@ import type { ParticipationCeiling } from "../../agents/participation-ceiling.js
 import { createParticipationTestAuthority } from "../../agents/participation-ceiling.test-support.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
+import { buildApprovalResolutionRef } from "../../infra/approval-resolution-ref.js";
 import type { ExecApprovalRequestPayload } from "../../infra/exec-approvals.js";
 import type { PluginApprovalRequestPayload } from "../../infra/plugin-approvals.js";
 import { testing as replyTesting } from "../../sessions/session-controller.test-support.js";
@@ -142,6 +143,12 @@ it.for(methods)(
           }),
         ).toBe(false);
         expect((await invoke(who)).ok, name).toBe(false);
+        // The compact transport reference reaches the same creator-only binding.
+        const resolutionRef = buildApprovalResolutionRef({
+          approvalId: record.id,
+          approvalKind: "exec",
+        });
+        expect((await invoke(who, resolutionRef)).ok, `${name} by reference`).toBe(false);
         expect(record.resolvedAtMs).toBeUndefined();
       }
       const creator = client("creator", ["operator.read", "operator.write"]);

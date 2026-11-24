@@ -47,10 +47,12 @@ export async function loadVisibleApproval(params: {
 } | null> {
   // Reconciliation can settle a live waiter, so authorization must precede
   // every durable read and no unauthorized lookup may reach the bridge.
+  // A transport reference names its canonical approval only after the durable lookup.
+  let participationId = params.id;
   const participationAccess = () =>
     params.allowApprovalRuntime
       ? canResolveParticipationExecApproval(
-          params.execApprovalManager.getLiveSnapshot(params.id),
+          params.execApprovalManager.getLiveSnapshot(participationId),
           params.client,
         )
       : undefined;
@@ -179,6 +181,9 @@ export async function loadVisibleApproval(params: {
     await reconcile(params.pluginApprovalManager, corrupt);
     await reconcile(params.systemAgentApprovalManager, corrupt);
     throw error;
+  }
+  if (lookup.outcome === "found") {
+    participationId = lookup.record.id;
   }
   if (
     !isLookupCurrent() ||
