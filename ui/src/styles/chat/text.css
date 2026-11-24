@@ -68,7 +68,6 @@
 }
 
 .chat-message-disclosure__description {
-  white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
 
@@ -92,6 +91,10 @@
   font-size: var(--control-ui-text-sm);
   line-height: 1;
   cursor: var(--cursor-action);
+}
+
+.chat-message-disclosure--description > .chat-message-disclosure__toggle {
+  scroll-margin-block: var(--space-3);
 }
 
 .chat-bubble--with-images .chat-message-disclosure__toggle {

@@ -234,6 +234,7 @@ export function ForwardedDescriptionDisclosure(props: {
     (props.onToggle ? props.expanded : (props.expanded ?? localExpanded())) ||
     false;
   const originalId = createUniqueId();
+  let original: HTMLDivElement | undefined;
   const presented = useContext(ContentPresentation);
   let text: HTMLDivElement | undefined;
   let toggle: HTMLButtonElement | undefined;
@@ -263,8 +264,20 @@ export function ForwardedDescriptionDisclosure(props: {
             text = element;
           }}
         >
-          {props.description}
+          {props.description.replace(/[\u2028\u2029]/gu, " ")}
         </div>
+      </div>
+      <div
+        id={originalId}
+        hidden={!expanded()}
+        tabindex={-1}
+        ref={(element) => {
+          original = element;
+        }}
+      >
+        <Show when={expanded()}>
+          <div class="chat-message-disclosure__original">{props.children}</div>
+        </Show>
       </div>
       <Show when={!props.searchResult}>
         <DisclosureToggle
@@ -274,19 +287,26 @@ export function ForwardedDescriptionDisclosure(props: {
             toggle = element;
           }}
           onToggle={() => {
+            const wasExpanded = expanded();
             if (props.onToggle) {
-              props.onToggle(expanded());
+              props.onToggle(wasExpanded);
             } else {
               setLocalExpanded((open) => !open);
+            }
+            if (wasExpanded || document.activeElement === toggle) {
+              requestAnimationFrame(() => {
+                if (wasExpanded && !expanded()) {
+                  // The row anchor is above the viewport when a long body shrinks.
+                  toggle?.scrollIntoView({ block: "nearest" });
+                } else if (!wasExpanded && document.activeElement === toggle) {
+                  // The revealed content precedes the toggle. Begin Tab order there.
+                  original?.focus({ preventScroll: true });
+                }
+              });
             }
           }}
         />
       </Show>
-      <div id={originalId} hidden={!expanded()}>
-        <Show when={expanded()}>
-          <div class="chat-message-disclosure__original">{props.children}</div>
-        </Show>
-      </div>
     </div>
   );
 }

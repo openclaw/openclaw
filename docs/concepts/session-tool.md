@@ -286,8 +286,10 @@ Supply the message body in the required `message` argument. Hidden aliases such 
 `sessions_send` runs another session on the same Gateway and optionally waits for the response. Its `sessionKey`, `label`, or `agentId` selects local model context, not an external destination. A peer's reply reaches the requester once, either inline or as a later inter-session input. Continue the conversation with another `sessions_send`. To post to a channel, use `message` with an explicit channel and target.
 
 Pass an optional `description` for a sender-written preview up to 280 characters.
-It can include line breaks and cannot be blank. Control UI shows the linked source
-above the message and uses **Show more** to reveal the original `message` inline.
+Write one short paragraph without line breaks; any line breaks are replaced by
+spaces. The description cannot be blank. Control UI shows the linked source above
+the message. **Show more** reveals the original `message` inline, and **Show less**
+appears at the bottom of the open message.
 Without a description, it shows the original directly. Adjacent messages keep
 their own descriptions, original content, order, and actions. Passive
 `mode: "notify"` keeps preview metadata in its ephemeral queued event; it does not

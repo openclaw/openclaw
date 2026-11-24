@@ -16,7 +16,7 @@ export const SessionsSendToolSchema = Type.Object({
       maxLength: SESSIONS_SEND_DESCRIPTION_MAX_LENGTH,
       pattern: "\\S",
       description:
-        "Optional sender-written preview (up to 280 characters, may include line breaks). The full message remains expandable.",
+        "Optional sender-written preview, up to 280 characters. Write one short paragraph without line breaks. The full message remains expandable.",
     }),
   ),
   timeoutSeconds: Type.Optional(Type.Integer({ minimum: 0 })),

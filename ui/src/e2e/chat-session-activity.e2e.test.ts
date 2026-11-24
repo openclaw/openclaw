@@ -212,30 +212,55 @@ suite.define(() => {
           serviceWorkers: "block",
         },
         async ({ page }) => {
-          await openActivity(
+          const { thread } = await openActivity(
             page,
             key,
             [row(key, "Reader"), row(sourceKey, label)],
             [
-              "Receipt 1 includes a description with multiple paragraphs.\n" +
-                "Verification notes.\n".repeat(9),
-              "Receipt 2 verified.\nKeep the original nearby.",
-              Array.from({ length: 5 }, (_, index) => `Line ${index + 1}`).join("\n".repeat(60)),
-            ].map((sourceSummary, index) => {
-              const seq = index + 1;
-              return delivery(
-                sourceKey,
-                seq === 2 ? "Original receipt two." : "Verification detail. End of receipt " + seq,
-                seq,
-                {
-                  kind: "inter_session",
-                  sourceTool: "sessions_send",
-                  sourceSummary,
-                },
-                label,
-              );
-            }),
+              ...[
+                "The verification receipt covers the original install and the saved-session replay. " +
+                  "The team confirmed that all three migration checks completed without retrying any step. " +
+                  "The original receipt contains the notes and final outcome.",
+                "Receipt 2.\nSee notes.",
+                Array.from({ length: 5 }, (_, index) => `Line ${index + 1}`).join(
+                  "\r\n\u2028\u2029" + "\n".repeat(56),
+                ),
+              ].map((sourceSummary, index) => {
+                const seq = index + 1;
+                return delivery(
+                  sourceKey,
+                  seq === 1
+                    ? "A longer original was sent. [Open verification notes](https://example.test/migration-notes)\n\n" +
+                        Array.from(
+                          { length: 32 },
+                          (_, line) => `Verification detail ${line + 1}.`,
+                        ).join("\n\n") +
+                        "\n\nEnd of receipt 1"
+                    : seq === 2
+                      ? "Original receipt two.\n\n[Read the short receipt](https://example.test/short-receipt)"
+                      : "End of receipt 3",
+                  seq,
+                  {
+                    kind: "inter_session",
+                    sourceTool: "sessions_send",
+                    sourceSummary,
+                  },
+                  label,
+                );
+              }),
+              turn(
+                "assistant",
+                Array.from(
+                  { length: 36 },
+                  (_, line) => `Later transcript paragraph ${line + 1}.`,
+                ).join("\n\n"),
+                2000,
+              ),
+            ],
           );
+          await thread.getByText("Later transcript paragraph 36.", { exact: true }).waitFor();
+          await thread.hover();
+          await page.mouse.wheel(0, -3000);
           const group = page.locator(".chat-group--inter-session");
           const source = group.locator(".chat-group-messages > .chat-reply-attribution");
           const link = source.locator("a[data-session-key]");
@@ -271,10 +296,14 @@ suite.define(() => {
           const preview = first.locator(".chat-message-disclosure__content");
           const shortPreview = activity.nth(1).locator(".chat-message-disclosure__content");
           const toggle = first.locator(".chat-message-disclosure__toggle");
-          await preview.and(first.locator("[data-preview-overflow]")).waitFor();
-          expect(await preview.evaluate((node) => getComputedStyle(node).maskImage)).toContain(
-            "linear-gradient",
-          );
+          if (width === 390) {
+            await preview.and(first.locator("[data-preview-overflow]")).waitFor();
+            expect(await preview.evaluate((node) => getComputedStyle(node).maskImage)).toContain(
+              "linear-gradient",
+            );
+          } else {
+            expect(await preview.evaluate((node) => getComputedStyle(node).maskImage)).toBe("none");
+          }
           expect(await shortPreview.evaluate((node) => getComputedStyle(node).maskImage)).toBe(
             "none",
           );
@@ -283,10 +312,17 @@ suite.define(() => {
           );
           expect(await first.locator("summary, .chat-session-activity__chevron").count()).toBe(0);
           const sparse = activity.nth(2).locator(".chat-message-disclosure__content");
-          await sparse.and(activity.nth(2).locator("[data-preview-overflow]")).waitFor();
-          expect(await sparse.evaluate((node) => node.clientHeight)).toBeLessThanOrEqual(
-            (await preview.evaluate((node) => node.clientHeight)) + 1,
-          );
+          expect(await sparse.evaluate((node) => getComputedStyle(node).maskImage)).toBe("none");
+          const legacyLines = await sparse
+            .locator(".chat-message-disclosure__description")
+            .evaluate((node) => {
+              const text = document.createRange();
+              text.selectNodeContents(node);
+              return new Set(
+                [...text.getClientRects()].filter((rect) => rect.width > 0).map((rect) => rect.top),
+              ).size;
+            });
+          expect(legacyLines).toBeLessThan(3);
           expect(await toggle.textContent()).toBe("Show more");
           expect(await toggle.getAttribute("aria-expanded")).toBe("false");
           const placement = await first.evaluate((node) => {
@@ -300,11 +336,40 @@ suite.define(() => {
             };
           });
           expect(placement).toEqual({ underneath: true, alignedLeft: true });
+          const toggleElement = await toggle.elementHandle();
           await toggle.focus();
           await toggle.press("Enter");
           await first.getByText(/End of receipt 1$/).waitFor();
           expect(await toggle.textContent()).toBe("Show less");
           expect(await toggle.getAttribute("aria-expanded")).toBe("true");
+          expect(
+            await toggle.evaluate((button) => {
+              const original = document.getElementById(button.getAttribute("aria-controls")!);
+              return (
+                original?.nextElementSibling === button &&
+                original.getBoundingClientRect().bottom <= button.getBoundingClientRect().top &&
+                original.querySelectorAll("p").length > 1
+              );
+            }),
+          ).toBe(true);
+          expect(
+            await toggle.evaluate((button, original) => button === original, toggleElement),
+          ).toBe(true);
+          await expect
+            .poll(
+              () =>
+                toggle.evaluate(
+                  (button) => document.activeElement?.id === button.getAttribute("aria-controls"),
+                ),
+              { message: "keyboard expansion focuses the original before its first link" },
+            )
+            .toBe(true);
+          await page.keyboard.press("Tab");
+          expect(
+            await first
+              .getByRole("link", { name: "Open verification notes" })
+              .evaluate((originalLink) => document.activeElement === originalLink),
+          ).toBe(true);
           expect(await activity.nth(1).locator("button").getAttribute("aria-expanded")).toBe(
             "false",
           );
@@ -322,9 +387,22 @@ suite.define(() => {
             }),
           ).toEqual(["0px", "0px"]);
           expect(await first.locator(".chat-reply-attribution, .chat-bubble").count()).toBe(0);
+          await toggle.scrollIntoViewIfNeeded();
           await toggle.press("Space");
           await first.getByText(/End of receipt 1$/).waitFor({ state: "detached" });
           expect(await toggle.textContent()).toBe("Show more");
+          await expect
+            .poll(() =>
+              toggle.evaluate((button) => {
+                const box = button.getBoundingClientRect();
+                const threadBounds = button.closest(".chat-thread")!.getBoundingClientRect();
+                return {
+                  focused: document.activeElement === button,
+                  visible: box.top >= threadBounds.top && box.bottom <= threadBounds.bottom,
+                };
+              }),
+            )
+            .toEqual({ focused: true, visible: true });
           const compact = activity.nth(1);
           const compactToggle = compact.getByRole("button", { name: "Show more" });
           const widthGeometry = () =>
@@ -353,8 +431,24 @@ suite.define(() => {
           const narrow = await widthGeometry();
           const closedSiblingWidth = await sparse.evaluate((element) => element.clientWidth);
           expect(narrow.bubbleWidth).toBeLessThan(narrow.columnWidth - 24);
-          await compactToggle.press("Enter");
+          await compactToggle.click();
           await compact.getByText("Original receipt two.", { exact: true }).waitFor();
+          await expect
+            .poll(() =>
+              compact.evaluate(
+                (entry) =>
+                  entry.contains(document.activeElement) &&
+                  document.activeElement?.id ===
+                    entry.querySelector("button")?.getAttribute("aria-controls"),
+              ),
+            )
+            .toBe(true);
+          await page.keyboard.press("Tab");
+          expect(
+            await compact
+              .getByRole("link", { name: "Read the short receipt" })
+              .evaluate((originalLink) => document.activeElement === originalLink),
+          ).toBe(true);
           const wide = await widthGeometry();
           expect(wide.bubbleRight).toBeCloseTo(wide.columnRight, 0);
           expect(wide.bubbleLeft).toBeCloseTo(narrow.bubbleLeft, 0);

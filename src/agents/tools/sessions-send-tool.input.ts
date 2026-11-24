@@ -47,7 +47,7 @@ export function readSessionsSendDescription(params: Record<string, unknown>): st
       `description must be non-blank and at most ${SESSIONS_SEND_DESCRIPTION_MAX_LENGTH} characters`,
     );
   }
-  return trimmed;
+  return trimmed.replace(/[\r\n\u2028\u2029]+/gu, " ");
 }
 
 export function readSessionsSendTimeout(

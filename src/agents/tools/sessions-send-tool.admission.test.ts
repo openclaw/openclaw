@@ -260,8 +260,8 @@ describe("sessions_send dispatch admission", () => {
     await state.cleanup();
   });
 
-  it("delivers a multiline 280-character sender description separately from the original peer message", async () => {
-    const description = "Verification is ready.\n🦞" + "x".repeat(256);
+  it("flattens a 280-character description without reformatting the original peer message", async () => {
+    const description = "Verification\r\nis\nready.\u2028🦞\u2029" + "x".repeat(254);
     const message = "  Full original receipt, not a replacement.\n\nSecond paragraph.  ";
     expect(Value.Check(SessionsSendToolSchema, { message, description })).toBe(true);
     const callGateway = mockAgentGateway(async (request) => {
@@ -273,7 +273,7 @@ describe("sessions_send dispatch admission", () => {
         kind: "inter_session",
         sourceSessionKey: requesterSessionKey,
         sourceTool: "sessions_send",
-        sourceSummary: description,
+        sourceSummary: "Verification is ready. 🦞 " + "x".repeat(254),
       });
       const dispatched = request.params.message;
       expect(typeof dispatched).toBe("string");
@@ -289,7 +289,7 @@ describe("sessions_send dispatch admission", () => {
     expect(result.details, JSON.stringify(result.details)).toMatchObject({ status: "accepted" });
   });
 
-  it.each(["x".repeat(281), "   ", 42])(
+  it.each(["x".repeat(281), "x".repeat(279) + "\r\n", " \r\n\u2028", 42])(
     "rejects invalid descriptions before sending: %j",
     async (description) => {
       const callGateway = vi.fn();
