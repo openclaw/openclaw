@@ -2,7 +2,7 @@ import type { RealtimeVoiceCloseOptions } from "../../../../../src/talk/provider
 import type { GatewayBrowserClient } from "../../../api/gateway.ts";
 import { t } from "../../../i18n/index.ts";
 import { formatUiError } from "../../../lib/format-error.ts";
-import type { GatewaySpeechPlayback } from "../../../lib/speech-playback.ts";
+import type { GatewaySpeechPlayback, SpeechSegment } from "../../../lib/speech-playback.ts";
 import { isTerminalFailureChatSendAck, type ChatSendAck } from "../chat-send-ack.ts";
 import { ComposerDictationSession } from "../composer-dictation-session.ts";
 import {
@@ -132,12 +132,13 @@ export class SplitTalkTransport implements RealtimeTalkTransport {
 
   private async speakReply(message: string): Promise<void> {
     let output!: ReadableStreamDefaultController<string>;
-    const sentences = new ReadableStream<string>({
+    const sentences = new ReadableStream<SpeechSegment>({
       start(controller) {
         output = controller;
       },
     });
     let prefix = "";
+    const queued: Array<{ end: number; withdraw: AbortController }> = [];
     const enqueue = (text: string, final: boolean) => {
       if (this.closed) {
         return;
@@ -154,6 +155,12 @@ export class SplitTalkTransport implements RealtimeTalkTransport {
           }
           unchanged = index + segment.length;
         }
+        // Withdraw queued or prefetched speech the final reply no longer contains.
+        for (const item of queued) {
+          if (item.end > unchanged) {
+            item.withdraw.abort();
+          }
+        }
         prefix = text.slice(0, unchanged);
       }
       const remainder = text.slice(prefix.length);
@@ -163,7 +170,9 @@ export class SplitTalkTransport implements RealtimeTalkTransport {
         }
         prefix += segment;
         if (segment.trim()) {
-          output.enqueue(segment.trim());
+          const withdraw = new AbortController();
+          queued.push({ end: prefix.length, withdraw });
+          output.enqueue({ text: segment.trim(), signal: withdraw.signal });
         }
       }
     };

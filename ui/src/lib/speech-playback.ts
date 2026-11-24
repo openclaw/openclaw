@@ -13,6 +13,9 @@ export function resolveSpeechTextLimit(config: unknown): number {
 }
 
 /** Browser playback only; the Gateway owns provider selection and synthesis. */
+/** A streamed speech segment; aborting its signal withdraws it if it has not started playing. */
+export type SpeechSegment = string | { text: string; signal?: AbortSignal };
+
 export class GatewaySpeechPlayback {
   private generation = 0;
   private finish: (() => void) | undefined;
@@ -66,7 +69,7 @@ export class GatewaySpeechPlayback {
 
   async speak(
     client: GatewayBrowserClient,
-    text: string | ReadableStream<string>,
+    text: string | ReadableStream<SpeechSegment>,
     method: "tts.speak" | "talk.speak" = "tts.speak",
     isCurrent: () => boolean = () => true,
     maxTextLength = DEFAULT_MAX_TEXT_LENGTH,
@@ -84,23 +87,42 @@ export class GatewaySpeechPlayback {
     const reader = typeof text === "string" ? undefined : text.getReader();
     try {
       const { chunkText } = await import("../../../packages/markdown-core/src/chunk-text.js");
-      const chunks = typeof text === "string" ? chunkText(text, maxTextLength) : [];
+      const chunks: Array<{ text: string; signal?: AbortSignal }> =
+        typeof text === "string"
+          ? chunkText(text, maxTextLength).map((chunk) => ({ text: chunk }))
+          : [];
       const current = () => generation === this.generation && isCurrent();
       const synthesizeNext = async () => {
         while (current()) {
-          const textChunk = chunks.shift();
-          if (textChunk !== undefined) {
-            const params = { text: textChunk };
-            const result = await (reader
-              ? client.request<TtsSpeakResult>(method, params, { signal: controller.signal })
-              : client.request<TtsSpeakResult>(method, params));
-            return { result };
+          const chunk = chunks.shift();
+          if (chunk !== undefined) {
+            if (chunk.signal?.aborted) {
+              continue; // The producer withdrew this segment.
+            }
+            const params = { text: chunk.text };
+            const signal = chunk.signal
+              ? AbortSignal.any([controller.signal, chunk.signal])
+              : controller.signal;
+            try {
+              const result = await (reader
+                ? client.request<TtsSpeakResult>(method, params, { signal })
+                : client.request<TtsSpeakResult>(method, params));
+              return { result, signal: chunk.signal };
+            } catch (error) {
+              if (chunk.signal?.aborted && !controller.signal.aborted) {
+                continue;
+              }
+              throw error;
+            }
           }
           const next = reader && (await Promise.race([reader.read(), cancelled]));
           if (!next || next.done) {
             return undefined;
           }
-          chunks.push(...chunkText(next.value, maxTextLength));
+          const segment = typeof next.value === "string" ? { text: next.value } : next.value;
+          for (const part of chunkText(segment.text, maxTextLength)) {
+            chunks.push({ text: part, signal: segment.signal });
+          }
         }
         return undefined;
       };
@@ -113,6 +135,12 @@ export class GatewaySpeechPlayback {
         await Promise.race([this.ready, cancelled]);
         if (!current()) {
           return;
+        }
+        if (response.signal?.aborted) {
+          // The producer withdrew this clip while it waited behind the one playing.
+          pending = synthesizeNext();
+          void pending.catch(() => undefined);
+          continue;
         }
         const playing = this.play(audio, response.result);
         if (reader) {

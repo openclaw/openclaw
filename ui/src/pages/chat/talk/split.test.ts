@@ -298,7 +298,7 @@ it.each([
   },
 );
 
-it("speaks a corrected final reply without repeating its unchanged opening", async () => {
+it("withdraws prefetched speech the final reply corrects", async () => {
   const h = harness();
   await h.state.toggleRealtimeTalk();
   const sent = observeSend(h);
@@ -316,7 +316,7 @@ it("speaks a corrected final reply without repeating its unchanged opening", asy
   h.answer("Opening sentence. The answer is 42. Here is why.");
   await vi.advanceTimersByTimeAsync(0);
   const audio = expectDefined(audios[0], "speech playback");
-  for (let i = 0; i < 4; i++) {
+  for (let i = 0; i < 3; i++) {
     audio.dispatchEvent(new Event("ended"));
     await vi.advanceTimersByTimeAsync(0);
   }
@@ -328,6 +328,8 @@ it("speaks a corrected final reply without repeating its unchanged opening", asy
     { text: "The answer is 42." },
     { text: "Here is why." },
   ]);
+  // The prefetched "41" clip was requested but never played: three clips, not four.
+  expect(audio.play).toHaveBeenCalledTimes(4); // unlock clip + three spoken clips
   await h.nextCapture.promise;
 });
 
