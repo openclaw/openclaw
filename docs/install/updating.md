@@ -160,29 +160,34 @@ The Gateway's `update.run` and `openclaw update` both use one path:
    in the same update details and warning count; they never fail the core update
    or trigger rollback.
 
-Startup prepares state and agent migration inputs privately, including mixed
-SQLite/PostgreSQL installations, when the PostgreSQL copy estimate is at most
-600 seconds. Preparation reads the total physical size of the namespaces that
-would be cloned while the previous Gateway is serving, counting table storage,
-indexes, and TOAST once, and estimates 90 seconds/GiB. The candidate migrates and
-validates protected copies before writing the durable file-swap plan or publishing
-their anchors. Original protected PostgreSQL schema and rows remain unchanged.
+`discoverDatabases` is the state transaction inventory. Before the old Gateway
+stops, `check-release` refuses a schema-changing update if any registered or
+configured database is outside the private copy and launcher recovery boundary.
+This includes external paths, symlinked or separately mounted stores, paths more
+than four directories deep, and stores below `git-install`, `npm`, `node_modules`,
+`tmp` or `logs`. The refusal names the database and where to move it. Updates
+without a pending schema migration do not add these restrictions.
+
+Startup migrates and validates private copies before publishing their durable
+file-swap plan or PostgreSQL anchors. Every inventoried SQLite store is a required
+copy, including a current-schema agent store that Doctor may access while another
+store upgrades. PostgreSQL preparation counts each namespace's table storage,
+indexes and TOAST once, and estimates 90 seconds/GiB, with at most 600 seconds for
+the protected copy. Original PostgreSQL schema and rows remain unchanged.
 Source access grants and schema-specific default privileges are copied and
 verified in the same transaction, so existing reporting and backup roles keep
 their permissions in the new namespace.
 
-An estimate above 600 seconds selects the existing in-place PostgreSQL migration
-path, not a size refusal. Copy-only `CREATE` and grant-copy prerequisites do not
-apply to this selection. Existing SQLite-state private-copy protection is retained
-when agent stores use PostgreSQL. Update output and the saved update report show:
+An over-budget estimate refuses before the old Gateway stops; it never selects
+in-place migration inside a release trial. The refusal names the reason and the
+[manual migration procedure](#large-store-updates). A failed private preparation
+uses the existing configuration refusal (exit 78). There is no portable-export
+fallback; restore missing copy privileges or namespace ownership before retrying.
 
-> This PostgreSQL store (X GiB) is too large to copy within the update window. It is migrated in place, without automatic data rollback. Back it up first: <https://docs.openclaw.ai/install/updating#rollback>
-
-For stores selected for protection, a preparation failure uses the existing
-configuration refusal (exit 78), with the obstruction in its diagnostics. There is
-no portable-export fallback; missing copy privileges must be repaired.
-`--no-restart` delays copying and migration until the next actual Gateway start;
-a same-schema release does not need a PostgreSQL copy.
+A trial started by an older preparer repeats admission before migration. A refused
+trial exits 78 and the launcher restores the previous release. Ordinary non-trial
+starts, including manual package upgrades, keep their existing migration-on-open
+behavior: a store's size alone never prevents that Gateway from starting.
 
 Each protected PostgreSQL schema-changing update changes the affected store's
 namespace name and lengthens the restart. Plan for the original and private server
@@ -191,6 +196,43 @@ and anchor generations together. Pruning may drop only update-created or
 verified-owned namespaces; a failed drop retains the recovery pair and reports
 a warning without failing a serving release. These recovery copies are not an
 off-server backup.
+
+### Large-store updates
+
+A size refusal leaves the old Gateway serving. Freeing local disk space fixes a
+space refusal, not a migration-time estimate. For an external store, move it into
+the named recovery boundary and update its agent configuration and registration.
+
+SQLite preparation is estimated at 42 seconds of fixed work plus 29 MB/s of
+database and journal bytes. This uses the slower measured byte-work rate: a
+1,077,460,992-byte SQLite fixture with 1,000 sessions and 107,520 transcript
+messages completed the real Doctor chain in 78.100 seconds on Linux x64,
+Node 24.22.1. Smaller 69,603,328-byte and 271,204,352-byte fixtures completed in
+43.073 and 47.062 seconds. The estimate reserves ten minutes of the twenty-minute
+trial for Gateway startup and adds PostgreSQL's copy estimate for mixed stores.
+It is an admission estimate, not a completion guarantee.
+
+If the stores cannot fit the trial budget, use an explicit maintenance window.
+For an npm install, keep a verified full backup and the previous package, then:
+
+```bash
+openclaw backup create
+openclaw backup verify <backup-archive>
+openclaw gateway stop
+npm install -g openclaw@<target-version>
+openclaw doctor --fix
+openclaw gateway restart
+```
+
+Replace `<target-version>` with the exact release you intended to install. Run
+Doctor from the newly installed package while the Gateway is stopped; do not
+restart if Doctor fails. A package reinstall replaces the forwarding marker, so
+this Doctor uses the new package, not the old selected release. The subsequent
+restart can adopt it without a pending schema migration. This is an operator-led
+migration, not an automatically reversible release trial. If it fails, retain the
+stopped state and use [backup recovery](/install/updating/rollback-and-recovery)
+with the matching previous package. Other install methods use their documented
+manual package replacement instead of `npm install`.
 
 Before a startup migration replaces a SQLite database, the swap owner drains its
 readers and retires the retained admission descriptors for both the live database

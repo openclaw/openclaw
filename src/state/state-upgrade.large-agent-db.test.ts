@@ -22,7 +22,7 @@ afterEach(async () => {
 });
 
 describe("startup copy ownership", () => {
-  it("preserves registrations for large current agent databases omitted from the shadow", async () => {
+  it("copies large current registered agent databases into the Doctor shadow", async () => {
     const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-upgrade-registry-"));
     dirs.push(stateDir);
     const agentPath = path.join(stateDir, "agents/main/agent/openclaw-agent.sqlite");
@@ -69,7 +69,7 @@ describe("startup copy ownership", () => {
       log,
       runChain: async ({ stateDir: shadow }) => {
         expect(fs.existsSync(path.join(shadow, "agents/main/agent/openclaw-agent.sqlite"))).toBe(
-          false,
+          true,
         );
         {
           using state = new DatabaseSync(path.join(shadow, "state/openclaw.sqlite"));
@@ -83,7 +83,7 @@ describe("startup copy ownership", () => {
         });
         // The real Doctor subprocess releases its handles before the shadow is checkpointed.
         await closeOpenClawStateDatabaseAsync();
-        expect(migration.warnings, JSON.stringify(migration)).toContain(
+        expect(migration.warnings, JSON.stringify(migration)).not.toContain(
           `Skipped missing registered agent database ${path.join(shadow, "agents/main/agent/openclaw-agent.sqlite")}.`,
         );
         return migration;
