@@ -408,10 +408,7 @@ function MobileHostContent(
           sharing,
           labels: {
             people: t("chat.sessionHeader.people"),
-            viewingNow: t("presence.card.viewingNow"),
-            creator: t("chat.sessionSharing.creator"),
             owner: t("chat.sessionSharing.owner"),
-            participants: t("chat.sessionHeader.peopleParticipants"),
             mention: t("chat.sessionHeader.mention"),
             mentionPerson: (name) => t("chat.sessionHeader.mentionPerson", { name }),
             morePeople: (count) => t("chat.sessionHeader.morePeople", { count: String(count) }),

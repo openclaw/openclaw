@@ -92,6 +92,7 @@ export type ChatDetailsProps = ChatSessionProgressProps &
     | "personActivity"
     | "onScrollPortRef"
   > & {
+    sharing?: import("../../../api/types.ts").SessionMembersListEvidenceResult;
     cachedDetails?: ChatDetailsSnapshot;
     /** The session observation has accepted current facts; cached rows are display only. */
     sessionFactsReady?: boolean;

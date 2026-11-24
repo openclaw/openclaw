@@ -95,7 +95,6 @@ const enChatSession = {
     },
     sessionHeader: {
       people: "People",
-      peopleParticipants: "Participants",
       mentionRejected: "Couldn’t insert the mention. Return to the message box and try again.",
       mentionsTruncated: "Some people are not included. Type @ in the composer to search.",
       mention: "Mention",

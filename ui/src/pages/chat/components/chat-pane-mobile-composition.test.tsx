@@ -112,7 +112,6 @@ it("retains the People page and lookup across native host replacement and deskto
       viewers: [],
       participants: [],
       unlistedParticipantCount: 0,
-      participantsComplete: false,
     },
     mobilePeopleMentions: mentions,
   });

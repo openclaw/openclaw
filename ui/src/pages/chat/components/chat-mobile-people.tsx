@@ -1,5 +1,5 @@
 import type { JSX } from "@solidjs/web";
-import { For, Show } from "solid-js";
+import { For, Show, createMemo } from "solid-js";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { PanelLoadingSkeleton } from "../../../components/solid/panel-loading-skeleton.tsx";
 import { createTextOverflow } from "../../../components/solid/text-overflow.ts";
@@ -21,10 +21,7 @@ registerEnglishCatalog(registerChatSessionEnglish);
 
 type ChatMobilePeopleLabels = {
   people: string;
-  viewingNow: string;
-  creator: string;
   owner: string;
-  participants: string;
   mention: string;
   mentionPerson: (fullName: string) => string;
   morePeople: (count: number) => string;
@@ -42,38 +39,39 @@ export type ChatMobilePeopleBodyProps = {
 function PersonName(props: { person: ChatMobilePerson }) {
   return (
     <span
-      ref={createTextOverflow(() => props.person.firstName)}
+      ref={createTextOverflow(() => props.person.label)}
       class="chat-mobile-people__name"
       aria-label={props.person.label}
       title={props.person.label}
     >
-      {props.person.firstName}
+      {props.person.label}
     </span>
   );
 }
 
-function PeopleSection(props: {
-  title: string;
-  people: readonly ChatMobilePerson[];
-  labels: ChatMobilePeopleLabels;
-  showCount?: boolean;
-  partial?: boolean;
-  onMention?: ChatMobilePeopleBodyProps["onMention"];
-}) {
+/** Body only: The mobile host owns route, expansion, scroll, close and focus restoration. */
+export function ChatMobilePeopleBody(props: ChatMobilePeopleBodyProps) {
+  const people = createMemo(() => {
+    const unique = new Map<string, ChatMobilePerson>();
+    for (const person of [props.people.owner, props.people.creator, ...props.people.participants]) {
+      if (person && !unique.has(person.key)) {
+        unique.set(person.key, person);
+      }
+    }
+    return [...unique.values()];
+  });
   return (
-    <section class="chat-mobile-people__section" aria-label={props.title}>
-      <h3>
-        {props.title}
-        <Show when={props.showCount && !props.partial}>
-          <span>{props.people.length}</span>
-        </Show>
-      </h3>
+    <div class="chat-mobile-people" role="group" aria-label={props.labels.people}>
+      {props.sharingOptions}
       <ul class="chat-mobile-people__list">
-        <For each={props.people} keyed={(person) => person.key}>
+        <For each={people()} keyed={(person) => person.key}>
           {(person) => (
             <li class="chat-mobile-people__row">
               <ChatAuthorAvatar sender={person().sender} hideTooltip />
               <PersonName person={person()} />
+              <Show when={person().key === props.people.owner?.key}>
+                <span class="chat-mobile-people__role">{props.labels.owner}</span>
+              </Show>
               <Show when={props.onMention && person().mention}>
                 {(mention) => (
                   <button
@@ -92,79 +90,6 @@ function PeopleSection(props: {
           )}
         </For>
       </ul>
-    </section>
-  );
-}
-
-/** Body only: The mobile host owns route, expansion, scroll, close and focus restoration. */
-export function ChatMobilePeopleBody(props: ChatMobilePeopleBodyProps) {
-  return (
-    <div class="chat-mobile-people" role="group" aria-label={props.labels.people}>
-      <Show when={props.people.viewers.length > 0}>
-        <section class="chat-mobile-people__section" aria-label={props.labels.viewingNow}>
-          <h3>{props.labels.viewingNow}</h3>
-          <ul class="chat-mobile-people__viewers">
-            <For each={props.people.viewers} keyed={(person) => person.key}>
-              {(person) => (
-                <li>
-                  <Show
-                    when={props.onMention && person().mention}
-                    fallback={
-                      <div class="chat-mobile-people__viewer">
-                        <ChatAuthorAvatar sender={person().sender} hideTooltip />
-                        <PersonName person={person()} />
-                      </div>
-                    }
-                  >
-                    {(mention) => (
-                      <button
-                        type="button"
-                        class="chat-mobile-people__viewer"
-                        aria-label={props.labels.mentionPerson(person().label)}
-                        onClick={() => props.onMention?.(mention())}
-                      >
-                        <ChatAuthorAvatar sender={person().sender} hideTooltip />
-                        <PersonName person={person()} />
-                      </button>
-                    )}
-                  </Show>
-                </li>
-              )}
-            </For>
-          </ul>
-        </section>
-      </Show>
-      {props.sharingOptions}
-      <Show when={props.people.creator}>
-        {(creator) => (
-          <PeopleSection
-            title={props.labels.creator}
-            people={[creator()]}
-            labels={props.labels}
-            onMention={props.onMention}
-          />
-        )}
-      </Show>
-      <Show when={props.people.owner}>
-        {(owner) => (
-          <PeopleSection
-            title={props.labels.owner}
-            people={[owner()]}
-            labels={props.labels}
-            onMention={props.onMention}
-          />
-        )}
-      </Show>
-      <Show when={props.people.participants.length > 0}>
-        <PeopleSection
-          title={props.labels.participants}
-          people={props.people.participants}
-          labels={props.labels}
-          showCount
-          partial={!props.people.participantsComplete}
-          onMention={props.onMention}
-        />
-      </Show>
       <Show when={props.people.unlistedParticipantCount > 0}>
         <p class="chat-mobile-people__unlisted">
           {props.labels.morePeople(props.people.unlistedParticipantCount)}
@@ -189,17 +114,8 @@ export function ChatPaneMobilePeople(props: {
     get people() {
       return t("chat.sessionHeader.people");
     },
-    get viewingNow() {
-      return t("activityFeed.viewingNow");
-    },
-    get creator() {
-      return t("chat.sessionSharing.creator");
-    },
     get owner() {
       return t("chat.sessionSharing.owner");
-    },
-    get participants() {
-      return t("chat.sessionHeader.peopleParticipants");
     },
     get mention() {
       return t("chat.sessionHeader.mention");
