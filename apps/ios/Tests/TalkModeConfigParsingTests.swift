@@ -423,6 +423,7 @@ struct TalkModeManagerTests {
         await manager.start(afterNativeReply: true)
         trace.append("listening=\(manager.isListening) (microphone recovered after reply)")
         manager.stop()
+        for _ in 0..<200 where trace.last != "cue bye" { await Task.yield() }
 
         print("TALK_CUE_TRACE " + trace.joined(separator: " | "))
         #expect(trace == [
