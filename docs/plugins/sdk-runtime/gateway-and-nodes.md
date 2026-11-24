@@ -141,6 +141,15 @@ for chat cancellation, `sessions.abort` with `{ key, runId?, clearQueued? }` for
 session cancellation, and `agent.wait` to await a run. There is no public
 controller mutation API.
 
+After `sessions.catalog.resolve` returns a destination, use
+`sendToResolvedSession({ target, message, idempotencyKey })` from the same SDK
+subpath. Pass the returned `{ sessionKey, sessionId }` as `target`. The Gateway
+checks that the same session still owns the key. The helper returns `accepted`
+when the Gateway acknowledges that request as started or already in flight,
+`forbidden` when the caller lacks permission, and `unconfirmed` when it cannot
+establish admission. Keep the original request key when reconciling an
+unconfirmed send.
+
 For status displays, use `sessions.list` to observe aggregate activity. Bundled
 or trusted official plugins can also use `api.runtime.gateway.request(...)`,
 `readSessionFacts(...)`, and `subscribeSessionChanges(...)` as described below.

@@ -163,7 +163,10 @@ it("keeps an all-cold catalog disabled with provider setup", async () => {
     "Sign-in needed",
   );
   find("model-setup", "true")!.click();
-  expect(navigate).toHaveBeenCalledWith("model-setup");
+  expect(context.settingsAgentSelection.state.selectedId).toBe("main");
+  expect(navigate).toHaveBeenCalledWith("model-providers", {
+    search: "?provider=openai&connect=1",
+  });
 });
 
 it("does not restore a stale preference when picker-open recovery succeeds", async () => {

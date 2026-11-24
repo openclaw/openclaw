@@ -1,6 +1,7 @@
 import { withServer } from "openclaw/plugin-sdk/test-env";
 import { beforeEach, describe, expect, it } from "vitest";
 import {
+  beamTestAuthority,
   beamTestNow,
   beamTestSessions as sessions,
   beamMirrorTestFixture,
@@ -92,7 +93,7 @@ describe("Beam terminal retry policy", () => {
     const handler = beamTestHandler(
       store,
       {
-        resolveClient: () => ({ clientIp: `test-${++requestNumber}`, scopes: ["operator.write"] }),
+        resolveAuthority: () => beamTestAuthority({ clientIp: `test-${++requestNumber}` }),
       },
       503,
     );

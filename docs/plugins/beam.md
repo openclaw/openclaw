@@ -126,6 +126,33 @@ Uploading the same `beamId` updates the existing catalog row when its `updatedAt
 
 `sourceModel` is optional. Automatic mirrors include the latest model reported by the source catalog. Older clients and snapshots remain valid without it.
 
+## Read a portable snapshot
+
+Authenticated clients can discover the receiver with `GET /api/v2/beam/capabilities`.
+Use the advertised operations for the current caller. An operator can read the
+shared snapshots. A verified Visitor with a current invitation can read their
+own publications. The Gateway checks access when each read starts. A read already
+in progress can finish after an invitation changes. The next read uses the new
+access decision.
+
+For a known full Beam ID, request `GET /api/v2/beam/snapshots/{beamId}/head`.
+It returns a strong ETag in `revision`, a SHA-256 `digest`, and, for a publication
+with an assigned generation, an opaque `publicationId` and relative `apiUrl`.
+Append `/snapshot` to that machine link to read the chronological v2 packet.
+Resolve links against the exact request URL so a reverse proxy can mount the
+Gateway under a path. For example, `../../publications/{id}` returned by
+`/team/api/v2/beam/snapshots/{beamId}/head` resolves under `/team/api/v2/beam/`.
+An independently configured Control UI base such as `/console` appears in
+the view link under `/team/console/`.
+
+Rows from receivers that predate publication generations return `legacy_unbound`
+and a `snapshotUrl`. Read it with `If-Match` set to the advertised revision.
+Receiver reads never assign a generation or claim an ownerless row.
+
+The `Beam-Digest` response header covers the exact JSON bytes. Opening a link
+performs a read only. A link to a deleted generation cannot read a later
+publication with the same Beam ID.
+
 ## Continue on the Team Gateway
 
 Publishing alone shares a read-only snapshot. To move the logical conversation, use the updated Beam skill's `handoff` command with the exact source session. The sender durably retires that Beam identity before network dispatch, obtains the receiver's `publicationId`, and explicitly releases that generation with `handoffId`. Release requires the original verified publisher; shared-token and older ownerless snapshots cannot be claimed through this route. A lost acknowledgment can retry the same generation but cannot recreate an expired publication.

@@ -9,7 +9,7 @@ import {
 } from "./src/types.js";
 
 export type BeamPublisher =
-  | { kind: "staff"; profileId?: string }
+  | { kind: "staff"; profileId?: string; attributionProfileId?: string }
   | { kind: "guest"; profileId: string };
 
 export type BeamUploadResult =
@@ -179,15 +179,20 @@ export const executeBeamUpload: PluginStateOperationHandler<BeamUploadOperations
         : { kind: "published", id: existing.publicationId, applied: false };
     }
   }
+  const uploaderProfileId =
+    publisher.kind === "staff"
+      ? (publisher.attributionProfileId ?? publisher.profileId)
+      : publisher.profileId;
   const publisherProfileId = existing ? existing.publisherProfileId : publisher.profileId;
   const publicationId = existing?.publicationId ?? randomUUID().replaceAll("-", "");
   const session = {
     ...upload,
     publicationId,
+    revision: randomUUID(),
     ...(existing?.continuation ? { continuation: existing.continuation } : {}),
     ...(publisherProfileId ? { publisherProfileId } : {}),
     // Attribution describes this accepted upload, independently of the immutable initial owner.
-    ...(publisher.profileId ? { uploaderProfileId: publisher.profileId } : {}),
+    ...(uploaderProfileId ? { uploaderProfileId } : {}),
     createdAt: existing?.createdAt ?? receivedAt,
     receivedAt,
   } satisfies BeamStoredSession;

@@ -188,6 +188,7 @@ export const databaseWorkerExtensionTestFiles = [
   "extensions/beam/src/beam.test.ts",
   "extensions/beam/src/guest-upload.test.ts",
   "extensions/beam/src/handoff.test.ts",
+  "extensions/beam/src/http-v2.test.ts",
   "extensions/beam/src/mirror-publication.test.ts",
   "extensions/beam/src/mirror-retry.test.ts",
   "extensions/beam/src/store.test.ts",
