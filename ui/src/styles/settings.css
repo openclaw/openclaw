@@ -1109,34 +1109,12 @@ openclaw-appearance-background .settings-background-preview .session-background_
 /* Saving and Saved keep the buttons' footprint, so the field changes width only when the edit
    starts and when it ends. */
 .cfg-secret-actions {
-  display: grid;
   flex: none;
-}
-
-.cfg-secret-actions > * {
-  grid-area: 1 / 1;
 }
 
 .cfg-secret-actions__buttons {
   display: flex;
   gap: var(--space-2);
-}
-
-.cfg-secret-actions[data-saved] > .cfg-secret-actions__buttons {
-  visibility: hidden;
-}
-
-.cfg-secret-actions .btn {
-  display: inline-grid;
-  place-items: center;
-}
-
-.cfg-secret-actions__label {
-  grid-area: 1 / 1;
-}
-
-.cfg-secret-actions__label:not([data-shown]) {
-  visibility: hidden;
 }
 
 .cfg-secret-actions__saved {

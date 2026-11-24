@@ -19,6 +19,7 @@ import {
 } from "./child-process-tree.js";
 import type { CommandProcessCustody } from "./command-process-custody.types.js";
 import { readCommandProcessStartTime } from "./command-process-identity.js";
+import type { CommandStdinFile } from "./command-stdin-file.js";
 import {
   CommandProcessCleanupError,
   hasCommandProcessCleanupError,
@@ -31,7 +32,7 @@ import { scheduleAdoptedChildZombieReapAfterExit } from "./scoped-child-reaper.j
 import { BrokerChild } from "./spawn-broker/child.js";
 import { getSpawnBroker } from "./spawn-broker/context.js";
 import {
-  isBrokerOutputOption,
+  brokerExecaOptions,
   restoreExecaResult,
   type BrokerExecaOptions,
 } from "./spawn-broker/execa-protocol.js";
@@ -39,61 +40,6 @@ import type { CommandSpawnOptions, CommandSubprocess } from "./spawn-broker/exec
 import type { SpawnBrokerHost } from "./spawn-broker/host.js";
 import { recordChildProcessSpawn } from "./spawn-diagnostics.js";
 import { resolveSafeChildProcessInvocation } from "./windows-command.js";
-
-/** Unsupported native descriptors and independent-lifetime commands remain explicit local paths. */
-function brokerExecaOptions(
-  options: CommandSpawnOptions,
-): BrokerExecaOptions | "ipc" | "independent" | "descriptor" | "inherit" {
-  if (options.ipc || options.cleanup === false || typeof options.stdin === "number") {
-    return options.ipc ? "ipc" : options.cleanup === false ? "independent" : "descriptor";
-  }
-  if (
-    options.stdout === "inherit" ||
-    options.stderr === "inherit" ||
-    options.stdio === "inherit" ||
-    typeof options.stdout === "number" ||
-    typeof options.stderr === "number"
-  ) {
-    return typeof options.stdout === "number" || typeof options.stderr === "number"
-      ? "descriptor"
-      : "inherit";
-  }
-  const nativeStdio = Array.isArray(options.stdio)
-    ? options.stdio.find(
-        (entry, fd) => typeof entry === "number" || (fd > 0 && entry === "inherit"),
-      )
-    : undefined;
-  if (nativeStdio !== undefined) {
-    return typeof nativeStdio === "number" ? "descriptor" : "inherit";
-  }
-  if (
-    (options.cwd !== undefined && typeof options.cwd !== "string") ||
-    (options.input !== undefined &&
-      typeof options.input !== "string" &&
-      !(options.input instanceof Uint8Array)) ||
-    (options.stdin !== undefined &&
-      options.stdin !== "pipe" &&
-      options.stdin !== "ignore" &&
-      options.stdin !== "inherit") ||
-    !isBrokerOutputOption(options.stdout) ||
-    !isBrokerOutputOption(options.stderr) ||
-    (options.shell !== undefined && options.shell !== false)
-  ) {
-    throw new TypeError("Unsupported spawn broker execa stream or invocation options");
-  }
-  if (
-    Array.isArray(options.stdio) &&
-    (options.stdio.length !== 3 ||
-      !["pipe", "ignore", "inherit"].includes(String(options.stdio[0])) ||
-      !isBrokerOutputOption(options.stdio[1]) ||
-      !isBrokerOutputOption(options.stdio[2]))
-  ) {
-    throw new TypeError("Unsupported spawn broker execa stdio");
-  }
-  const { cancelSignal: _cancelSignal, ...serializable } = options;
-  // SAFETY: The allowed options were checked above, excluding streams, URLs, IPC and native descriptors.
-  return serializable as BrokerExecaOptions;
-}
 
 function spawnBrokerCommand(
   host: SpawnBrokerHost,
@@ -577,6 +523,7 @@ export function shouldSpawnWithShell(params: {
 }
 
 type SpawnCommandOptions = CommandSpawnOptions & {
+  stdinFile?: CommandStdinFile;
   executionIntent?: ProcessExecutionIntent;
   executionScopeKey?: string;
   baseEnv?: NodeJS.ProcessEnv;
@@ -634,7 +581,16 @@ export function spawnCommandWithInvocation<
   child: CommandSubprocess<OptionsType>;
   invocation: ReturnType<typeof resolveSafeChildProcessInvocation>;
 } {
-  if (process.platform === "win32" && commandCreatesChildPipes(options)) {
+  if (
+    options.stdinFile &&
+    (options.input !== undefined || options.stdin !== undefined || options.stdio !== undefined)
+  ) {
+    throw new TypeError("Command stdin file cannot be combined with input, stdin, or stdio");
+  }
+  if (
+    process.platform === "win32" &&
+    commandCreatesChildPipes(options.stdinFile ? { ...options, stdin: 0 } : options)
+  ) {
     assertAppContainerSpawnSupported();
   }
   const scope = commandProcessScope.getStore();
@@ -651,6 +607,7 @@ export function spawnCommandWithInvocation<
     inheritScopeCancellation = true,
     executionIntent = "gateway-internal",
     executionScopeKey,
+    stdinFile,
     ...execaOptions
   }: SpawnCommandOptions = options;
   const commandEnv = preparedEnv ?? resolveCommandEnv({ argv, baseEnv, env });
@@ -677,6 +634,12 @@ export function spawnCommandWithInvocation<
   // native descriptors retain their explicitly selected in-process transport.
   const prepared = broker ? brokerExecaOptions(commandOptions) : "no-broker";
   const remoteOptions = typeof prepared === "string" ? undefined : prepared;
+  if (stdinFile && broker) {
+    if (!remoteOptions) {
+      throw new TypeError("Command stdin file requires broker-compatible process options");
+    }
+    remoteOptions.stdinFile = stdinFile.source;
+  }
   if (remoteOptions && executionTimeoutMs !== undefined) {
     // The 1s margin absorbs broker scheduling lag; the execution-only check cannot relabel an exited root.
     remoteOptions.executionDeadlineMs = executionTimeoutMs + 1_000;
@@ -695,7 +658,13 @@ export function spawnCommandWithInvocation<
         )
       : runWithMainThreadTask(
           "process:spawn",
-          () => execa(limited.command, limited.args, commandOptions),
+          () =>
+            execa(
+              limited.command,
+              limited.args,
+              // SAFETY: Execa passes numeric descriptors through to Node despite its fd-0 type.
+              stdinFile ? { ...commandOptions, stdin: stdinFile.fd as 0 } : commandOptions,
+            ),
           "command",
         );
   recordChildProcessSpawn(

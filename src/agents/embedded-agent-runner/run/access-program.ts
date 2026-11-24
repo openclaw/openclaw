@@ -19,6 +19,12 @@ import type { AgentRuntimeAuthPlan } from "../../runtime-plan/types.js";
 import type { PreparedEmbeddedAttemptDispatchInput } from "./execution-context.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
+const accessProgramLabels = {
+  standard: "Standard",
+  daybreak_blue: "Daybreak Blue",
+  daybreak_red: "Daybreak Red",
+} as const;
+
 // OAuth refresh rotates tokens without changing the account that discovery observed.
 // The provider owns account-and-user identity; workspace ids or optional emails are not enough.
 function isSameDiscoveredAccount(
@@ -187,8 +193,15 @@ export async function prepareEmbeddedAccessProgramGuard(
     assertRole();
     const programs = readPrograms();
     if (!programs?.includes(program)) {
+      const supported = programs?.map((value) => accessProgramLabels[value]);
+      const daybreak = programs?.find((value) => value !== "standard");
+      const guidance = !daybreak
+        ? "Turn Daybreak off for this chat."
+        : `Turn on Daybreak for this chat to use ${accessProgramLabels[daybreak]}.`;
       throw new FailoverError(
-        "This Daybreak program is not advertised for the current account, model, and runtime. Select Standard or refresh account capabilities.",
+        supported?.length
+          ? `${attempt.modelId} supports ${supported.join(" and ")}${supported.length === 1 ? " only" : ""}. This chat requested ${accessProgramLabels[program]}. ${guidance}`
+          : "This Daybreak program is not advertised for the current account, model, and runtime. Turn Daybreak off for this chat or refresh account capabilities.",
         {
           // A stale session choice says nothing about shared credential health.
           reason: "format",
