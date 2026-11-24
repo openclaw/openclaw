@@ -176,6 +176,17 @@ A node-only installation with an installed node service, no Gateway service
 definition, and no live local Gateway stays with its package installer.
 `openclaw update` uses the existing package update flow for that installation;
 it does not create a Gateway launcher, forwarding entry, or pending Gateway trial.
+Its package result names the updated installation's `node install --force` and
+`node restart` commands. Wait for node work to become idle before using them;
+the package update does not claim to have replaced or restarted a retained node
+runtime.
+
+Before first conversion, a live foreground Gateway can lose its installation
+path from OS process inspection. With operator access, let that Gateway handle
+the update through Control UI or `openclaw update`. If it cannot accept the
+requested update over RPC, local preparation refuses visibly rather than
+claiming an unidentified installation. Stop the Gateway through its existing
+owner, then rerun the update. A stopped Gateway remains updatable.
 
 Early Git source-updater recovery is a compatibility exception. Its separate CLI
 worker never enters Gateway startup. It opens a repair run after the first
