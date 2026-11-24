@@ -114,4 +114,6 @@ export type ManagedServicePackageUpdatePlan = {
   serviceRoot?: string;
   nodeRunner?: string;
   serviceUnitTarget?: string;
+  /** The inspected managed Gateway service runs from this same installation root. */
+  servesRoot?: boolean;
 };

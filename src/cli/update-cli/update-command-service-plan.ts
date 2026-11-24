@@ -437,6 +437,7 @@ export async function resolveManagedServicePackageUpdatePlan(params: {
   const serviceRoot = layout?.packageRoot;
   await pkgOwnership.assertUnowned(serviceRoot);
   const differentRoot = (await tryRealpathOrResolve(params.root)) !== layout.packageRootReal;
+  plan.servesRoot = !differentRoot;
   if (layout.entrypointSourceCheckout && differentRoot) {
     return plan;
   }

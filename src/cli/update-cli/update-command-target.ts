@@ -554,7 +554,7 @@ export async function resolveUpdateCommandTarget(
             checkoutRoot: discoveredRoot,
             installTarget: packageInstallTarget,
             // The plan records a service only when it runs this same installation.
-            serviceRunsCheckout: Boolean(prepared.servicePlan?.service) && !managedServiceRoot,
+            serviceRunsCheckout: prepared.servicePlan?.servesRoot === true && !managedServiceRoot,
             targetSpec: packageInstallSpec,
             storedChannel,
             requestedChannel: channel,
