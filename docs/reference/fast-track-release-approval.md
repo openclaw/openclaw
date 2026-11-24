@@ -20,8 +20,9 @@ Cloud Run deployment, ID token, callback, custom decision store or status API.
 
 **An agent must never approve a fast-track release, including through a token
 that happens to belong to a release manager.** Before taking any fast-track
-action, obtain explicit approval from **another human in the release-managers
-group**, not the requester acting as their own approver. Generic release
+action, obtain explicit approval from **a human in the release-managers
+group**. That human may be the release manager who requested the fast-track;
+an agent may prepare the request but never decide it. Generic release
 ownership, permission to prepare/publish, silence, a previous approval or an
 agent's interpretation of intent is not explicit fast-track approval.
 
