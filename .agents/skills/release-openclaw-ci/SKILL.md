@@ -544,6 +544,11 @@ sealed receipts. Candidate admission does not widen this per-child receipt
 reuse contract: a divergent Q runs fresh children; whole-parent authenticated
 evidence reuse retains its separate original-Q contract.
 
+Child evidence may cross Q when the sealed producer is authenticated and exact
+C, inputs, artifacts, and current attempts still match. Reevaluate under current
+Q policy. Set `reuse_evidence=false` to execute a changed harness; do not treat
+retained child evidence as a substitute for a new parent verdict.
+
 An early standalone product-performance run is optional beta confidence. If
 useful, start it against the frozen Code SHA in parallel with release work:
 

@@ -65,6 +65,11 @@ select new tests or resolve replacement baselines from the current registry.
 A qualification harness change requires a new admission and request; it must not
 rewrite the original evidence.
 
+A new parent may authenticate a sealed child from another qualification SHA and
+reevaluate its raw results under current policy. Retain the original producer SHA,
+run and attempt, effective inputs, and artifact digests; a prior accepted verdict
+is not a substitute for the current verdict.
+
 ## ClawHub recovery custody
 
 Recovery records a validated successor attempt in its existing result artifact

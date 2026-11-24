@@ -98,6 +98,11 @@ a new C/Q. Explicit trusted-main or protected-tooling routes remain available
 for diagnostics, main qualification, and postpublish confidence, not fresh
 candidate-owned publication evidence.
 
+For the same candidate and exact effective inputs, a new parent can reuse
+[authenticated sealed child evidence](/reference/full-release-validation/stages)
+from another qualification SHA. To qualify execution of a new harness itself,
+set `reuse_evidence=false`. This does not change publish-admission requirements.
+
 ## Exact frozen-target test omissions
 
 Candidate-owned Q=C qualification rejects test omissions. The following inputs

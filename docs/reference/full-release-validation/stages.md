@@ -40,14 +40,15 @@ Child dispatch can also reuse an individual green child's sealed receipt even
 when its source parent failed, was cancelled, or is still active. It scans at
 most 100 recent dispatch runs, checks at most 40 target receipt inventories, and
 fully validates at most five matching receipts per role within two minutes.
-Other-target and other-tooling runs do not consume the five-validation budget. Target, role,
+Other-target runs do not consume the five-validation budget. Target, role,
 non-empty dispatch inputs/defaults, and candidate descriptor bytes must match;
 empty-string inputs equal absent inputs because GitHub omits them from
-`github.event.inputs`. The child's Tooling SHA must equal the current parent's
-Tooling SHA and remain a main ancestor. Missing or different tooling blocks dispatch;
-there is no inert-path exception. Dispatch logs explain each evaluated rejection,
-identify reused children, and summarize skipped runs and fresh dispatches. Plan
-sealing, collectors, and final verification repeat the tooling and receipt checks.
+`github.event.inputs`. The child's producer Q must be authenticated and remain a
+main ancestor or the exact candidate. The producer Q may differ from the current
+parent's Q; current parent policy reevaluates the sealed results. Set
+`reuse_evidence=false` when new workflows or harnesses must execute. Dispatch logs
+explain evaluated rejections, reused children, and fresh dispatches. Plan sealing,
+collectors, and final verification repeat tooling, receipt, and attempt checks.
 
 Full validation starts independent npm and Docker producer runs through
 `full-release-artifacts.yml`. The read-only `openclaw-npm-preflight.yml` starts
