@@ -56,13 +56,28 @@ function normalizeAbortedAssistantMessage(message: unknown): Record<string, unkn
   return candidate?.role === "assistant" && Array.isArray(candidate.content) ? candidate : null;
 }
 
+function formatGatewayErrorDetail(payload: ChatEventPayload): string | null {
+  const detail = payload.errorDetail;
+  if (!detail || detail.providerRuntimeFailureKind !== "auth_refresh") {
+    return null;
+  }
+  const lines = [
+    detail.provider ? `Provider: ${detail.provider}` : undefined,
+    detail.httpStatus ? `HTTP status: ${detail.httpStatus}` : undefined,
+    detail.failoverReason ? `Reason: ${detail.failoverReason}` : undefined,
+    detail.providerErrorType ? `Type: ${detail.providerErrorType}` : undefined,
+  ].filter((line): line is string => Boolean(line));
+  return lines.length > 0 ? lines.join("\n") : null;
+}
+
 function resolveGatewayErrorText(
   payload: ChatEventPayload,
   message: Record<string, unknown> | null,
 ): string {
   const errorText = payload.errorMessage?.trim();
   if (errorText) {
-    return errorText;
+    const detail = formatGatewayErrorDetail(payload);
+    return detail ? `${errorText}\n\n${detail}` : errorText;
   }
   const messageText = message ? extractText(message)?.trim() : null;
   return messageText || "chat error";

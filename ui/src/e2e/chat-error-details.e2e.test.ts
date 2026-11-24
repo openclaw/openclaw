@@ -163,6 +163,47 @@ suite.define(() => {
     },
   );
 
+  it("preserves bounded OAuth facts in the disclosure and copied diagnostic", async () => {
+    await suite.withPage(diagnosticContext, async ({ page }) => {
+      const gateway = await installMockGateway(page, { sessionKey, historyMessages: [] });
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
+      const { runId } = await sendPrompt(page, gateway, "Check the example connection.");
+      const message =
+        "Your refresh token has already been used to generate a new access token. Please try signing in again.";
+      const diagnostic =
+        message +
+        "\n\nProvider: openai\nHTTP status: 401\nReason: refresh_token_reused\nType: invalid_request_error";
+      await gateway.emitGatewayEvent("chat", {
+        sessionKey,
+        runId,
+        seq: 1,
+        state: "error",
+        errorMessage: message,
+        errorDetail: {
+          provider: "openai",
+          httpStatus: 401,
+          failoverReason: "refresh_token_reused",
+          providerRuntimeFailureKind: "auth_refresh",
+          providerErrorType: "invalid_request_error",
+          providerErrorMessagePreview: '{"access_token":"synthetic-oauth-response"}',
+        },
+      });
+      const notice = page.locator(".chat-error--reply");
+      await notice.getByRole("button", { name: "Show details", exact: true }).click();
+      const detail = notice.getByLabel("Error details", { exact: true });
+      await detail.waitFor();
+      expect(await notice.locator(".app-toast__message").textContent()).toBe(
+        "Your refresh token has already been used to generate a new access token.",
+      );
+      expect(await detail.textContent()).toBe(diagnostic);
+      expect(await notice.textContent()).not.toContain("synthetic-oauth-response");
+      await notice.getByRole("button", { name: "Copy error", exact: true }).click();
+      await polledClipboard(page).toBe(diagnostic);
+      await expectMobileFit(page, notice);
+      expect(await detail.textContent()).toBe(diagnostic);
+    });
+  });
+
   it("keeps startup failure guidance visible without inventing recovery activity", async () => {
     await suite.withPage(diagnosticContext, async ({ page }) => {
       const runId = "workspace-startup-failure";

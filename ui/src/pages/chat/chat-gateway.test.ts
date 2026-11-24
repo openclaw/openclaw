@@ -898,29 +898,39 @@ describe("handleChatGatewayEvent", () => {
     },
   );
 
-  it("keeps OAuth classification separate from the visible error text", () => {
-    const summary =
-      "⚠️ Your refresh token has already been used to generate a new access token. Please try signing in again.";
-    const state = createState({ chatRunId: "run-1" });
-    receive(state, "error", {
-      errorMessage: summary,
-      errorDetail: {
-        provider: "openai",
-        failoverReason: "refresh_token_reused",
-        providerRuntimeFailureKind: "auth_refresh",
-        providerErrorType: "invalid_request_error",
-        httpStatus: 401,
-      },
-    });
-    expect(state.chatRunError).toEqual({
-      runId: "run-1",
-      summary,
-      cause: {
-        failoverReason: "refresh_token_reused",
-        providerRuntimeFailureKind: "auth_refresh",
-      },
-    });
-  });
+  it.each([
+    ["invalid_request_error", "invalid_request_error"],
+    [
+      "invalid_request_error password=synthetic-secret",
+      "invalid_request_error password=[redacted]",
+    ],
+  ])(
+    "preserves redacted OAuth facts alongside classification: %s",
+    (providerErrorType, expectedType) => {
+      const summary =
+        "⚠️ Your refresh token has already been used to generate a new access token. Please try signing in again.";
+      const state = createState({ chatRunId: "run-1" });
+      receive(state, "error", {
+        errorMessage: summary,
+        errorDetail: {
+          provider: "openai",
+          failoverReason: "refresh_token_reused",
+          providerRuntimeFailureKind: "auth_refresh",
+          providerErrorType,
+          httpStatus: 401,
+          providerErrorMessagePreview: '{"access_token":"synthetic-oauth-response"}',
+        },
+      });
+      expect(state.chatRunError).toEqual({
+        runId: "run-1",
+        summary: `${summary}\n\nProvider: openai\nHTTP status: 401\nReason: refresh_token_reused\nType: ${expectedType}`,
+        cause: {
+          failoverReason: "refresh_token_reused",
+          providerRuntimeFailureKind: "auth_refresh",
+        },
+      });
+    },
+  );
 
   it("does not label a newer response with a completed run's late error", () => {
     const state = createState({ chatRunId: "run-completed" });
