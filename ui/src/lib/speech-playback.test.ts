@@ -97,7 +97,7 @@ it.each([false, true])(
   "plays speech after a stalled primer (late settlement: %s)",
   async (settleLate) => {
     vi.useFakeTimers();
-    const pendingPrimer = createDeferred<void>();
+    const pendingPrimer = createDeferred();
     primer = pendingPrimer;
     const requested = createDeferred();
     const request = createGatewayRequestMock(async () => {
