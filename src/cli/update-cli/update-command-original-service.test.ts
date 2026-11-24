@@ -627,6 +627,28 @@ it.for([
   },
 );
 
+it.skipIf(process.platform === "win32")(
+  "certifies and restores a checkout service when the npm destination is absent",
+  async () => {
+    await fs.mkdir(path.join(rootA, ".git"));
+    await fs.rm(rootB, { recursive: true });
+    await withOriginalRun(updateRun(state.env), async (opts) => {
+      const original = await observeOriginalManagedServiceRuntime({ root: rootB, opts }, before);
+      expect(original).toMatchObject({ root: rootA, verified: true });
+      before.stopped = true;
+      mocks.running = false;
+      await expect(rollbackOriginal(opts, original, true)).resolves.toMatchObject({
+        rolledBack: false,
+        originalServiceRecovery: "healthy",
+      });
+      expect(mocks.nativeRestart).toHaveBeenCalledOnce();
+      expect(mocks.nativeInstall).not.toHaveBeenCalled();
+      expect(mocks.restart).not.toHaveBeenCalled();
+      await expect(fs.lstat(rootB)).rejects.toMatchObject({ code: "ENOENT" });
+    });
+  },
+);
+
 it("refuses B ledger admission independently from compatible service A state", async () => {
   const parentDir = state.path("parent-state");
   await fs.mkdir(parentDir);

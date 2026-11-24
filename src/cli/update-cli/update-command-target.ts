@@ -60,11 +60,11 @@ import {
 import { reportPreMutationUpdateResult } from "./update-command-admission-report.js";
 import { createUpdateConfigFailure } from "./update-command-config-failure.js";
 import { readUpdateChannelConfig } from "./update-command-config.js";
+import type { UpdateCommandExecutor } from "./update-command-executor.js";
 import {
-  captureUpdateCommandExecutorAuthority,
-  type UpdateCommandExecutor,
-} from "./update-command-executor.js";
-import { assertUpdatePackageActivationAdmission } from "./update-command-package-activation.js";
+  admitUpdatePackageRoot,
+  assertUpdatePackageActivationAdmission,
+} from "./update-command-package-activation.js";
 import {
   inspectCheckoutLinkPackageSwitch,
   inspectNpmGlobalDestination,
@@ -366,19 +366,11 @@ export async function resolveUpdateCommandTarget(
       // Read-only native/root admission is complete. Own interruption settlement
       // before metadata can block, but defer mutable housekeeping until target admission.
       if (updateInstallKind === "package" && !opts.dryRun) {
-        assertUpdatePackageActivationAdmission(root, { serviceRoot: managedServiceRoot });
-        const fence = await executor.enter(root, {
-          preflight: true,
-          serviceRoot: managedServiceRoot,
-        });
-        if (opts.run) {
-          opts.run.executorFence = fence;
+        if (switchToPackage) {
+          assertUpdatePackageActivationAdmission(root, { serviceRoot: managedServiceRoot });
+        } else {
+          await admitUpdatePackageRoot(executor, root, managedServiceRoot, opts.run);
         }
-        fence.assertCurrent();
-        assertUpdatePackageActivationAdmission(
-          captureUpdateCommandExecutorAuthority(fence).installKey,
-          { serviceRoot: managedServiceRoot },
-        );
       }
 
       const currentVersion = await readPackageVersion(root);
@@ -435,7 +427,22 @@ export async function resolveUpdateCommandTarget(
             packageInstallEnv = withNodeRuntimePath(packageInstallEnv, packageUpdateNodeRunner);
           }
           if (packageInstallTarget.manager === "npm") {
-            const destination = await inspectNpmGlobalDestination(root, packageInstallTarget, opts);
+            // A checkout link interrupted between renames must only be restored
+            // under the checkout lease, which still owns linked swaps.
+            let destination = await inspectNpmGlobalDestination(
+              root,
+              packageInstallTarget,
+              switchToPackage ? { dryRun: true } : opts,
+            );
+            if (
+              switchToPackage &&
+              !opts.dryRun &&
+              destination.kind === "owned" &&
+              destination.interruptedLink
+            ) {
+              await admitUpdatePackageRoot(executor, root, managedServiceRoot, opts.run);
+              destination = await inspectNpmGlobalDestination(root, packageInstallTarget, opts);
+            }
             if (destination.kind !== "owned" && destination.kind !== "empty") {
               await refuseUpdate(destination.reason, destination.message, destination.failureFacts);
               return undefined;
@@ -449,6 +456,27 @@ export async function resolveUpdateCommandTarget(
               warn(destination.releaseBoundService.warning);
               packageInstallTarget = destination.releaseBoundService.installTarget;
             }
+            if (
+              switchToPackage &&
+              destination.kind === "empty" &&
+              packageInstallTarget.packageRoot
+            ) {
+              // The empty npm slot, not the distinct checkout, owns package publication.
+              const verdict = managedServicePlan?.service?.serviceUpdateVerdict;
+              if (
+                verdict?.kind === "owned" &&
+                verdict.refreshDefinition &&
+                !managedServiceRootRedirect &&
+                prepared.shouldRestart &&
+                process.platform !== "win32"
+              ) {
+                managedServiceRoot ??= discoveredRoot;
+              }
+              root = packageInstallTarget.packageRoot;
+            }
+          }
+          if (switchToPackage && !opts.dryRun) {
+            await admitUpdatePackageRoot(executor, root, managedServiceRoot, opts.run);
           }
           const npmLifecycleGate = resolveNpmLifecyclePolicyGate(packageInstallTarget);
           if (npmLifecycleGate.error) {
