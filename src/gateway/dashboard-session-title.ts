@@ -164,7 +164,7 @@ function resolveDashboardTitleAuthProfile(params: {
 // "Concise title for this session:" or "Sitzungstitel:"; topics such as
 // "Fix button label:" stay part of the title.
 const TITLE_LEAD_IN =
-  /^(?:(?:concise|short|suggested|proposed|final|correct|session|chat|conversation|kurzer|kürzester|passender|richtiger|vorgeschlagener)\s+)?(?:(?:sitzungs|session-?|chat-?)?(?:title|titel)|label)(?:\s+(?:for|für)\s[^:]*)?\s*:\s*/iu;
+  /^(?:(?:concise|short|suggested|proposed|final|correct|session|chat|conversation|kurzer|kürzester|passender|richtiger|vorgeschlagener)\s+)?(?:(?:sitzungs|session-?|chat-?)?(?:title|titel)|label|título)(?:\s+(?:for|für)\s[^:]*)?\s*:\s*/iu;
 
 function stripTitleLeadIn(line: string): { text: string; introduced: boolean } {
   const collapsed = line.replace(/\s+/g, " ").trim();

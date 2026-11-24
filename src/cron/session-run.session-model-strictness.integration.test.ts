@@ -1,8 +1,10 @@
 import fs from "node:fs/promises";
 import { getAiTransportHost } from "@openclaw/ai";
 import { cleanupSessionResources } from "@openclaw/ai/internal/runtime";
+import { resolveCompactionThreshold } from "@openclaw/ai/internal/shared";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { isCompactionSummaryRequest } from "../../test/helpers/compaction-summary-request.js";
 import { installPrivateUpdateHandoffStore } from "../../test/helpers/private-update-handoff-store.js";
 import { awaitGateBeforeSettlement } from "../../test/helpers/promise.js";
 import { disposeAllSessionMcpRuntimes } from "../agents/agent-bundle-mcp-manager-api.js";
@@ -341,7 +343,7 @@ describe("stored session model selections in scheduled session turns", () => {
         }
         const raw = await request.text();
         const body = JSON.parse(raw) as { model?: string };
-        if (params.preflightCompactionWatchdog && raw.includes("context summarization assistant")) {
+        if (params.preflightCompactionWatchdog && isCompactionSummaryRequest(raw)) {
           summaryRequests++;
           await vi.advanceTimersByTimeAsync(60_001);
         }
@@ -551,10 +553,18 @@ describe("stored session model selections in scheduled session turns", () => {
           },
           state.workspaceDir,
         );
+        // The seeded history alone crosses the shared 85% compaction trigger of the 128k
+        // window, so the first scheduled request compacts; the summary request stays below it.
+        const triggerTokens = resolveCompactionThreshold({
+          contextWindowTokens: 128_000,
+          reserveTokensFloor: 0,
+        });
+        const detail = "Background detail. ";
+        const detailRepeat = Math.ceil(((triggerTokens + 4_000) * 4) / 12 / detail.length);
         for (let turn = 0; turn < 12; turn++) {
           await seed.appendMessageAsync({
             role: "user",
-            content: `Earlier question ${turn}. ${"Background detail. ".repeat(250)}`,
+            content: `Earlier question ${turn}. ${detail.repeat(detailRepeat)}`,
             timestamp: turn + 1,
           });
           await seed.appendMessageAsync(

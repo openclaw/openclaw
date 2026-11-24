@@ -65,6 +65,7 @@ import { installMessageToolTerminalHook } from "./message-tool-terminal.js";
 import {
   type InitialUserTurnReplayPreparation,
   prepareInitialPersistedUserTurnCohort,
+  persistCompactedCurrentUserTurnReplay,
   prepareForeignPendingUserTurns,
   preparePersistedCurrentUserTurn,
   reconcilePrePersistedCurrentUserTurn,
@@ -285,6 +286,11 @@ export async function prepareEmbeddedAttemptSessionBoundary(
         // A recovery resumes its admitted history, including accepted steering.
         // Its newer user tail is not an orphan to replace with the original input.
         if (attempt.replayCurrentTranscript) {
+          await persistCompactedCurrentUserTurnReplay({
+            activeSession,
+            sessionManager,
+            currentUserTurnMessage,
+          });
           return undefined;
         }
         // An adopted current user needs no orphan repair. Replay still refreshes at core entry.

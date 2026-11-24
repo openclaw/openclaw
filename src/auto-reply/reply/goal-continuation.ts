@@ -6,8 +6,10 @@ import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-
 import type { SessionEntryCohortReader } from "../../config/sessions/session-entry-read-runtime.types.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import { getInProcessGatewayRequestContext } from "../../plugins/runtime/gateway-request-scope.js";
+import { chatRef } from "../../sessions/chat-ref.js";
+import { shouldWake } from "../../sessions/owed.js";
 import {
-  hasSessionControllerQueuedWork,
+  hasSessionControllerQueuedTurn,
   withSessionControllerSource,
 } from "../../sessions/session-controller.context.js";
 import {
@@ -164,7 +166,8 @@ export async function enqueueGoalContinuation(params: GoalContinuationParams): P
     params.operation.result?.kind !== "failed" &&
     params.operation.result?.kind !== "aborted" &&
     !isFollowupRunAborted(params.base) &&
-    !hasSessionControllerQueuedWork(
+    // A queued reply turn continues the Goal at its own end; post-turn upkeep does not.
+    !hasSessionControllerQueuedTurn(
       params.storePath,
       [params.sessionKey, params.expectedSession.sessionId],
       params.base.run.agentId,
@@ -179,6 +182,15 @@ export async function enqueueGoalContinuation(params: GoalContinuationParams): P
     requesterAgentId: params.base.run.agentId,
   });
   if (children.length > 0 || !eligible()) {
+    return false;
+  }
+  // An owed result (for example an exec completion) wakes its own turn, which continues the Goal.
+  const chat = chatRef({
+    agentId: params.base.run.agentId,
+    storePath: params.storePath,
+    sessionKey: params.sessionKey,
+  });
+  if ((await shouldWake(chat)) || !eligible()) {
     return false;
   }
   const entry = await readSessionEntryReadOnlyInWorker(

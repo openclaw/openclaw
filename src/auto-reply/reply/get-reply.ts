@@ -52,7 +52,6 @@ import {
   applyLinkUnderstandingIfNeeded,
   canReadReplyAttachmentPaths,
   applyMediaUnderstandingIfNeeded,
-  hasExplicitAudioUnderstandingConfig,
   hasLinkCandidate,
   resolveReplyAgentScope,
 } from "./get-reply-preprocessing.js";
@@ -64,11 +63,7 @@ import {
   type InternalGetReplyOptions,
 } from "./get-reply.types.js";
 import { finalizeInboundContext } from "./inbound-context.js";
-import {
-  hasInboundAudio,
-  hasInboundMedia,
-  hasInboundMediaForUnderstanding,
-} from "./inbound-media.js";
+import { hasInboundMedia, hasInboundMediaForUnderstanding } from "./inbound-media.js";
 import { emitPreAgentMessageHooks } from "./message-preprocess-hooks.js";
 import { createModelSelectionState, resolveTurnModelSelection } from "./model-selection.js";
 import { getPreparedReplyDispatchRuntime } from "./prepared-reply-dispatch-context.js";
@@ -420,19 +415,14 @@ async function resolveReplyFromConfig(
       const mediaResult = await traceGetReplyPhase("reply.apply_media_understanding", () =>
         applyMediaUnderstandingIfNeeded({
           ctx: finalized,
+          recordAudioApiKeyFailures:
+            optsWithSkillFilter?.userTurnTranscriptRecorder?.recordAudioApiKeyFailures,
           ...workspaceContext,
           activeModel: resolveActiveMediaModel(provider, model, preparedModelCatalog?.entries),
           // Cache and classify now; the final provider and owner policy are
           // resolved later, immediately before the embedded turn starts.
           selfServeLocalPaths: false,
-          ...(utilityModelSelectionLocked
-            ? {
-                processingMode:
-                  hasInboundAudio(finalized) && hasExplicitAudioUnderstandingConfig(cfg)
-                    ? ("audio-and-files" as const)
-                    : ("files-only" as const),
-              }
-            : {}),
+          restrictToConfiguredAudio: utilityModelSelectionLocked,
         }),
       );
       extractedFileImages = mediaResult?.extractedFileImages;

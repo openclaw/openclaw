@@ -67,6 +67,7 @@ import type { SessionPendingInputOwner } from "./session-pending-input-owner.typ
 import type { SessionPendingInputReceipt } from "./session-pending-input-receipt.types.js";
 import { preparePendingInputStore, type PendingInputScope } from "./session-pending-input-store.js";
 import {
+  consumedPendingInputReceipt,
   isFinalInputCompletion,
   isRetryableSessionPendingInputEndCause,
   parseSessionPendingInputMessage,
@@ -365,24 +366,18 @@ async function stagePreparedPendingInput(
       return undefined;
     }
     const replayRequest = resolvePendingInputReplayRequest(preparedRequest, previous ?? existing);
-    const { message, stableMessage } = replayRequest;
+    const { message, stableMessage, owed } = replayRequest;
     let requestHash = replayRequest.requestHash;
     if (previous && (previous.request_hash !== requestHash || previous.run_id !== options.runId)) {
       throw new Error("Input completion idempotency key conflicts with the accepted input");
     }
     if (previous && isFinalInputCompletion(previous.outcome)) {
-      return {
-        state: "consumed",
-        inputId: identity.idempotencyKey,
+      return consumedPendingInputReceipt(
+        identity.idempotencyKey,
         message,
-        completion: previous.outcome,
-        run: () => {
-          throw new Error("Input processing has already completed");
-        },
-        finish: () => {},
-        release: () => {},
-        relinquish: () => {},
-      };
+        "Input processing has already completed",
+        previous.outcome,
+      );
     }
     const assertUnowned = (row = existing) => {
       if (row && hasRegisteredSessionPendingInputOwner(store.workerDatabasePath, row)) {
@@ -406,28 +401,23 @@ async function stagePreparedPendingInput(
     if (existing) {
       if (
         !matchesSessionPendingInputRequest(existing, stableMessage, requestHash) ||
-        (existing.run_id !== options.runId && !reclaimsCancelledSourceTurn)
+        (existing.run_id !== options.runId && !reclaimsCancelledSourceTurn && !owed)
       ) {
         throw new Error("Pending input idempotency key conflicts with the accepted input");
       }
       if (existing.consumed_event_id != null) {
-        return {
-          state: "consumed",
-          inputId: existing.input_id,
-          message: parseSessionPendingInputMessage(existing.message_json),
-          run: () => {
-            throw new Error("Pending input has already been consumed");
-          },
-          finish: () => {},
-          release: () => {},
-          relinquish: () => {},
-        };
+        return consumedPendingInputReceipt(
+          existing.input_id,
+          parseSessionPendingInputMessage(existing.message_json),
+          "Pending input has already been consumed",
+        );
       }
       assertUnowned();
       // A queued row alone does not authorize retry after failed terminal settlement.
       // The original recorder or startup replay must retain this exact input ID.
       const canRetry =
         options.trackCompletion ||
+        owed ||
         (existing.state === "queued" && options.reattachInputId === existing.input_id);
       if (
         (!options.requestFingerprint && !canRetry && !reclaimsCancelledSourceTurn) ||
@@ -622,7 +612,7 @@ async function stagePreparedPendingInput(
     }
     phase.mark("persist.stage.sourceAuthority");
     return await runWithSessionSourceScope(
-      existing ? undefined : options.assertFreshInputCurrent,
+      existing && !owed ? undefined : options.assertFreshInputCurrent,
       async () => {
         phase.mark("persist.stage.message");
         const prepareMessage = () => {
@@ -630,18 +620,21 @@ async function stagePreparedPendingInput(
           options.assertFreshInputCurrent?.();
           return options.prepareMessageAfterIdempotencyCheck!(message);
         };
-        const prepared = existing
-          ? parseSessionPendingInputMessage(existing.message_json)
-          : options.prepareMessageAfterIdempotencyCheck
-            ? options.authority
-              ? await options.authority.withCurrent(prepareMessage)
-              : prepareMessage()
-            : message;
+        // An adopted owed row takes the turn's bytes: a shared turn carries every result it answers.
+        const prepared =
+          existing && !owed
+            ? parseSessionPendingInputMessage(existing.message_json)
+            : options.prepareMessageAfterIdempotencyCheck
+              ? options.authority
+                ? await options.authority.withCurrent(prepareMessage)
+                : prepareMessage()
+              : message;
         if (!prepared) {
           return undefined;
         }
         const messageJson =
-          existing?.message_json ?? JSON.stringify(sanitizeTranscriptMessageForStorage(prepared));
+          (owed ? undefined : existing?.message_json) ??
+          JSON.stringify(sanitizeTranscriptMessageForStorage(prepared));
         if (Buffer.byteLength(messageJson, "utf8") > MAX_PAYLOAD_BYTES) {
           throw new Error("Approved pending input exceeds the Gateway payload limit");
         }

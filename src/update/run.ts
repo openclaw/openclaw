@@ -20,6 +20,7 @@ import { gitCommitPrefixesMatch, resolveLoadedCommitHash } from "../infra/git-co
 import { resolveNpmCommand } from "../infra/npm-command.js";
 import { compareSemverStrings } from "../infra/npm-registry-spec.js";
 import type { UpdateChannel } from "../infra/update-channels.js";
+import { readBuiltGatewayBuildId } from "../infra/update-git-runtime.js";
 import { isPackageTargetAlreadyCurrent } from "../infra/update-global.js";
 import { describeUnavailableMacosSystemGit } from "../infra/update-macos-git.js";
 import { UPDATE_RUN_TEXT_LIMIT } from "../infra/update-run-limits.js";
@@ -35,6 +36,7 @@ import { runCommandWithTimeout } from "../process/exec.js";
 import { VERSION } from "../version.js";
 import { checkRelease } from "./check-release.js";
 import { stageReleaseService } from "./convert-service.js";
+import { resolveInstalledPackageFrontend } from "./installation-identity.js";
 import { writeLauncher } from "./launcher.js";
 import { preflight } from "./preflight.js";
 import { prepareGit, type PrepareResult } from "./prepare-git.js";
@@ -53,7 +55,7 @@ import {
 } from "./store.js";
 import { gitTargetSupportsReleaseUpdates, resolveTarget } from "./target.js";
 
-/** Covers fetch, dependencies and both builds; a run past it is "interrupted". */
+/** Covers fetch, dependencies and the release build; a run past it is "interrupted". */
 export const PREPARE_DEADLINE_MS = 45 * 60_000;
 const CHECK_RELEASE_TIMEOUT_MS = 3 * 60_000;
 
@@ -188,6 +190,7 @@ export async function prepareUpdate(params: {
     }
     // Releases left by an earlier update; never on the critical path.
     void collectReleases(prefix).catch(() => undefined);
+    staging = await allocateStaging({ kind: install.kind }, prefix);
     let target;
     try {
       target = await resolveTarget({
@@ -197,10 +200,14 @@ export async function prepareUpdate(params: {
         tag: params.tag,
         sha: params.sha,
         timeoutMs: Math.max(1, deadline - Date.now()),
+        archiveWorkspace: staging.path,
       });
     } catch (error) {
       return await fail("no-target", `No update target: ${formatErrorMessage(error)}`);
     }
+    const frontend = params.tag?.startsWith("file:")
+      ? await resolveInstalledPackageFrontend(path.resolve(params.tag.slice(5)))
+      : undefined;
     await recordUpdateRunPhaseAsync(
       params.runId,
       "staging",
@@ -275,7 +282,6 @@ export async function prepareUpdate(params: {
         `This commit predates release updates. In your OpenClaw Git checkout, run: git checkout ${target.sha} && pnpm install --frozen-lockfile && pnpm build && pnpm ui:build. The current version is still running.`,
       );
     }
-    staging = await allocateStaging({ kind: install.kind }, prefix);
     const onStep = async (name: string, status: "in_progress" | "completed") => {
       await recordUpdateRunStepAsync(
         params.runId,
@@ -299,6 +305,7 @@ export async function prepareUpdate(params: {
           })
         : await preparePackage({
             spec: target.spec,
+            archivePath: target.archivePath,
             staging: staging.path,
             npm:
               isBunRuntime(node) || (node === process.execPath && process.versions.bun)
@@ -315,6 +322,16 @@ export async function prepareUpdate(params: {
         "The new version could not be built. The current version is still running.",
         prepared.stderrTail,
       );
+    }
+    // An explicit artifact can be rebuilt at the same version: only the same known build
+    // identity is current. Missing identity is not equality.
+    if (
+      target.kind === "package" &&
+      prepared.buildId &&
+      prepared.version === params.runningVersion &&
+      prepared.buildId === (await readBuiltGatewayBuildId(params.runningRoot))
+    ) {
+      return await current(prepared.version);
     }
     await recordUpdateRunPhaseAsync(params.runId, "validating", {}, { env });
     // Missing modules identify an unsupported old target; command failures never bypass checks.
@@ -337,6 +354,19 @@ export async function prepareUpdate(params: {
         "release-check-failed",
         `The new version failed its checks: ${verdict.reason ?? "unknown"}. The current version is still running.`,
         verdict.detail,
+      );
+    }
+    if (verdict.reason) {
+      // Existing database diagnostic details are persisted and shown by every
+      // shared update report consumer, including while preparation continues.
+      await recordUpdateRunStepAsync(
+        params.runId,
+        {
+          step: "diagnostic:database migration writes (preflight)",
+          status: "completed",
+          detail: verdict.reason,
+        },
+        { env },
       );
     }
     const releaseRoot = await publishStaging(staging);
@@ -410,6 +440,22 @@ export async function prepareUpdate(params: {
       },
       prefix,
     );
+    // Only an admitted global frontend is attached; arbitrary local artifacts stay independent.
+    if (frontend) {
+      try {
+        await markForwarding(frontend.root, launcher, prefix);
+      } catch (error) {
+        await recordUpdateRunStepAsync(
+          params.runId,
+          {
+            step: "forwarding",
+            status: "failed",
+            detail: `The npm entry could not be attached to the resident launcher: ${formatErrorMessage(error)}. It remains a separate CLI.`,
+          },
+          { env },
+        );
+      }
+    }
     await recordUpdateRunPhaseAsync(
       params.runId,
       "activating",
@@ -440,7 +486,7 @@ export async function prepareUpdate(params: {
  * Leaves the marker `release-launcher-forward.mjs` reads, so entry points written for the
  * running tree (service definitions, PATH shims) start the launcher. Never inside a release.
  */
-async function markForwarding(runningRoot: string, launcher: string, prefix: string) {
+export async function markForwarding(runningRoot: string, launcher: string, prefix: string) {
   if (runningRoot.startsWith(path.join(prefix, "releases") + path.sep)) {
     return;
   }
