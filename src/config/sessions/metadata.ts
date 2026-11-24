@@ -111,6 +111,8 @@ export function prepareSessionMetaPatch(params: {
       (params.ctx.InputProvenance === undefined ||
         params.ctx.InputProvenance.kind === "external_user") &&
       clientChannel !== undefined &&
+      // Synthetic Gateway callers, such as restart replay, have no client declaration to record.
+      (sourceChannel !== INTERNAL_MESSAGE_CHANNEL || params.ctx.GatewayClientCaps !== undefined) &&
       !isInternalNonDeliveryChannel(clientChannel)
         ? [
             ...new Set([

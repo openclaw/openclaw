@@ -60,6 +60,7 @@ const derivedMigrationColumns = new Map<string, ReadonlySet<string>>(
     session_windows: ["row_transcript_json", "row_transcript_updated_at"],
     trajectory_runtime_events: ["event_utf8_bytes", "event_payload", "event_codec"],
     session_pending_inputs: ["end_cause", "origin_source_json"],
+    session_members: ["access"],
   }).map(([table, columns]) => [table, new Set<string>(columns)]),
 );
 
@@ -131,7 +132,7 @@ function parseOpenClawMigrationWitness(value: unknown): OpenClawMigrationWitness
   return witness;
 }
 
-// Versioned projections and new pending-input facts may change across migration.
+// Versioned projections and new additive facts may change across migration.
 // Metadata also publishes the target app version/time; accepted payload bytes stay exact.
 function migrationColumn(role: OpenClawMigrationWitness["role"], table: string, column: string) {
   return !(
@@ -224,10 +225,16 @@ function captureTable(
       !(role === "agent" && table === "memory_entry_origins" && !withoutRowid && index === 0) &&
       migrationColumn(role, table, name),
   );
-  // A missing pre-v44 marker equals SQL NULL, never an issued occurrence. Keep any
-  // non-null value in the crossing digest so migration cannot create or replace it.
-  const markerIndex =
-    role === "agent" && table === "session_nodes" ? names.indexOf("archive_undo_marker") : -1;
+  // Added nullable authority fields carry no historical intent. Missing and NULL are
+  // equivalent across the migration, but a stored grant or verifier must match.
+  const authorityIndex =
+    role !== "agent"
+      ? -1
+      : table === "session_nodes"
+        ? names.indexOf("archive_undo_marker")
+        : table === "session_members"
+          ? names.indexOf("access")
+          : -1;
   const sha256 = createHash("sha256").update(JSON.stringify(names));
   const migrationSha256 =
     retained.every(Boolean) && !registry
@@ -328,7 +335,7 @@ function captureTable(
       }
       if (
         migrationSha256 &&
-        (retained[index] || (index === markerIndex && row[`value_${index}`] !== null))
+        (retained[index] || (index === authorityIndex && row[`value_${index}`] !== null))
       ) {
         if (
           migratingRegistration &&

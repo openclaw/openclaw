@@ -9,7 +9,7 @@ export type SqliteLifecycleTargetSnapshot = Array<{
   archiveUndoMarker?: string;
   sessionKey: string;
   window?: SessionEntryWindowFacts;
-  sideTables?: { memberIdsJson: string; hasBoard: boolean };
+  sideTables?: { memberIdsJson: string; memberAccessJson?: string; hasBoard: boolean };
   row?: ResolvedSessionEntryRow["row"];
 }>;
 

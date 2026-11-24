@@ -6,10 +6,15 @@ import {
   createAdmittedRunOperatorAuthority,
   type AdmittedRunOperatorAuthority,
 } from "../agents/admitted-run-context.js";
-import type { AdmittedRunOperatorRoleFacts } from "../agents/admitted-run-operator-authority.types.js";
+import type {
+  AdmittedRunOperatorRoleFacts,
+  TurnGrant,
+} from "../agents/admitted-run-operator-authority.types.js";
 import {
   prepareOperatorModelPolicy,
+  readOperatorModelPolicyMembership,
   restoreOperatorModelPolicySnapshot,
+  type PreparedOperatorModelPolicy,
 } from "../agents/operator-model-policy.js";
 import { isConfiguredCommandOwner } from "../auto-reply/command-auth.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -62,7 +67,6 @@ import {
 } from "./operator-access-policy.js";
 import { operatorRoleSubject } from "./operator-role-enforcement.js";
 import { resolveOperatorRolePolicyForAssignment } from "./operator-role-policy.js";
-import { intersectOperatorRunModelPolicy } from "./operator-run-authority.js";
 import {
   hasAutomationAdminDelegation,
   type QueuedOperatorRecoverySource,
@@ -221,6 +225,33 @@ export async function prepareOperatorAdmission(
     identity?.release();
     return admissionError(error, facts);
   }
+}
+
+/** The only producer of what a turn may do; every entry kind reaches it through admission. */
+export function decideTurnGrant(scopes: readonly string[]): TurnGrant {
+  const owner = operatorScopeSatisfied("operator.admin", scopes);
+  const sessionsWrite = operatorScopeSatisfied("operator.sessions.write", scopes);
+  return Object.freeze({
+    owner,
+    skillAuthoring: sessionsWrite,
+    questionReplace: sessionsWrite,
+    commands: owner ? "all" : "none",
+  });
+}
+
+export function intersectOperatorRunModelPolicy(
+  original: PreparedOperatorModelPolicy | undefined,
+  current: PreparedOperatorModelPolicy | undefined,
+): PreparedOperatorModelPolicy | undefined {
+  return original &&
+    current &&
+    readOperatorModelPolicyMembership(original) !== readOperatorModelPolicyMembership(current)
+    ? Object.freeze({
+        models: Object.freeze(current.models.filter(original.allows)),
+        allows: (ref: Parameters<typeof original.allows>[0]) =>
+          original.allows(ref) && current.allows(ref),
+      })
+    : (current ?? original);
 }
 
 type OperatorAdmissionDecision = {
@@ -526,6 +557,7 @@ export function decideOperatorAdmission(facts: Facts, prepared: PreparedOperator
           ? { reference: facts.snapshot.reference, modelPolicy: originalModels }
           : undefined,
       requesterOwner,
+      grant: decideTurnGrant(scopes),
       modelPolicy,
       rolePolicy: role
         ? {

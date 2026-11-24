@@ -51,7 +51,7 @@ The `commands.*` block: which chat command surfaces are registered, and who may 
 - For multi-account channels, `channels.<provider>.accounts.<id>.configWrites` also gates writes that target that account (for example `/allowlist --config --account <id>` or `/config set channels.<provider>.accounts.<id>...`).
 - `restart: false` disables `/restart` and external `SIGUSR2` restart requests. Default: `true`.
 - `ownerAllowFrom` is the explicit owner allowlist for owner-only commands and owner-gated channel actions. It is separate from `allowFrom`.
-- `allowFrom` is per-provider. When set, it is the **only** authorization source for commands and directives.
+- `allowFrom` is per-provider. When set, it is the **only** authorization source for commands and directives. Exception: Gateway clients admitted with `operator.admin` pass it, because they can edit `allowFrom` themselves.
 - When `allowFrom` is unset, command authorization follows channel allowlists and pairing state. Access-group entries in channel allowlists are resolved automatically.
 - Command docs map:
   - built-in + bundled catalog: [Slash Commands](/tools/slash-commands)

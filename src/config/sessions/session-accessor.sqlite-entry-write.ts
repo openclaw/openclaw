@@ -5,7 +5,6 @@ import {
 import { communicationEntryBinding } from "../../sessions/communication-admission.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { readSessionActivitySummary } from "./activity-summary.js";
-import type { ConversationRouteContext } from "./conversation-route-context.js";
 import { prepareLegacyAcpMigrationSourcesForEntryWrite } from "./session-accessor.sqlite-acp-provenance.js";
 import { prepareSessionArchiveUndoWrite } from "./session-accessor.sqlite-archive-undo.js";
 import { conversationPublication } from "./session-accessor.sqlite-conversation-publication.js";
@@ -30,9 +29,11 @@ import { captureSessionEntrySnapshot } from "./session-accessor.sqlite-entry-sna
 import {
   getSessionEntryWriteQueries,
   writeSessionEntryBatchRows,
-  type SessionNodeWriteRow,
-  type SessionWindowWriteRow,
 } from "./session-accessor.sqlite-entry-write-queries.js";
+import type {
+  SessionEntryWriteOptions,
+  PreparedSessionEntryWrite,
+} from "./session-accessor.sqlite-entry-write.types.js";
 import { advanceSessionEntryMaintenanceAgeFact } from "./session-accessor.sqlite-maintenance-age.js";
 import { clearSessionCollaborationForKey } from "./session-accessor.sqlite-node-artifacts.js";
 import { prepareSessionEntryWindowRow } from "./session-accessor.sqlite-provenance.js";
@@ -44,7 +45,6 @@ import {
   readSessionActorTransactionState,
   replaceSessionActorStoredEntry,
 } from "./session-actor-transaction.js";
-import type { SessionArchiveUndoIntent } from "./session-archive-undo.js";
 import { markCanonicalSessionValidationPending } from "./session-canonical-key.js";
 import {
   assertCanonicalSessionEntryLineageWrite,
@@ -57,16 +57,10 @@ import {
   splitSessionEntrySnapshots,
   writeSessionEntrySnapshots,
 } from "./session-entry-snapshots.js";
-import type {
-  SessionEntryWindowFacts,
-  SessionEntryWindowRow,
-} from "./session-entry-window.types.js";
 import { applySessionEntryWritePolicy } from "./session-entry-write-policy.js";
-import {
-  createSessionEntryWriteRow,
-  type SessionEntryWritePostimage,
-  type SessionEntryWritePostimages,
-} from "./session-entry-write-postimage.js";
+import type { SessionEntryWritePostimages } from "./session-entry-write-postimage.js";
+import { createSessionEntryWriteRow } from "./session-entry-write-postimage.js";
+import { sessionMemberSideTableFacts } from "./session-member-access-facts.js";
 import { resolveSessionPublicShare } from "./session-public-share.js";
 import {
   readStagedSessionTranscriptUpdatedAt,
@@ -78,42 +72,6 @@ import {
 } from "./store-entry-shape.js";
 import { resolveDeliveryProvenCanonicalSessionKey } from "./store-entry.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
-
-type SessionEntryWriteOptions = {
-  archiveUndo?: SessionArchiveUndoIntent;
-  allowStoredAliases?: boolean;
-  /** Only the personal involvement owner may replace this logical-node state. */
-  profileInvolvement?: SessionEntry["profileInvolvement"];
-  /** Only the provider review owner may replace a generation-bound pause. */
-  providerReviewMutation?: boolean;
-  /** Canonical row revalidated in this write transaction; null proves absence. */
-  canonicalPreviousEntry?: SessionEntry | null;
-  /** Raw canonical columns from the same transaction, for exact no-op comparison. */
-  canonicalPreviousRow?: ResolvedSessionEntryRow["row"];
-  canonicalPreviousWindow?: SessionEntryWindowFacts;
-  canonicalPreviousSideTables?: SessionEntryWritePostimage["sideTables"];
-  postimages?: SessionEntryWritePostimages;
-  consumePendingReset?: boolean;
-  /** Initial child fork keeps this logical node's current audience across transcript installation. */
-  preserveVisibility?: boolean;
-  /** A rehome can bind historical windows to an otherwise unchanged target. */
-  publishConversationBinding?: boolean;
-  preserveNodeSuggestions?: boolean;
-  previousEntry?: SessionEntry | null;
-  observeConversation?: boolean;
-  routeContext?: ConversationRouteContext | null;
-};
-
-type PreparedSessionEntryWrite = {
-  sessionKey: string;
-  node: SessionNodeWriteRow | undefined;
-  window: SessionWindowWriteRow | undefined;
-  windowPostimage: SessionEntryWindowRow;
-  setWindowPostimage(postimage: SessionEntryWindowRow): void;
-  batchable: boolean;
-  write(): ReturnType<typeof trackSessionEntryCacheWrite>;
-  publish(writeGeneration: ReturnType<typeof trackSessionEntryCacheWrite>): SessionEntry;
-};
 
 function prepareSessionEntryWrite(
   database: OpenClawAgentDatabase,
@@ -180,7 +138,7 @@ function prepareSessionEntryWrite(
     canonicalFacts?.sideTables ??
     (actor
       ? {
-          memberIdsJson: JSON.stringify(actor.hot.members.map((member) => member.identityId)),
+          ...sessionMemberSideTableFacts(actor.hot.members),
           hasBoard: actor.hasBoard,
         }
       : canonicalPreviousEntry === undefined
@@ -541,7 +499,12 @@ function prepareSessionEntryWrite(
               ...canonicalPreviousSideTables,
               ...(canonicalPreviousEntry &&
               canonicalPreviousEntry.sessionId !== normalizedEntry.sessionId
-                ? { memberIdsJson: "[]" }
+                ? {
+                    memberIdsJson: "[]",
+                    ...(canonicalPreviousSideTables.memberAccessJson
+                      ? { memberAccessJson: undefined }
+                      : {}),
+                  }
                 : {}),
             },
           });

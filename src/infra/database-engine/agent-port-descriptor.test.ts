@@ -64,11 +64,27 @@ it.each([37, 38])(
   },
 );
 
-it.each([39, 40, 41, 42, 43])(
+it.each([39, 40, 41, 42, 43, 44, 45])(
   "keeps companion tables and deletion indexes at schema %s",
   async (version) => {
     const descriptor = await loadAgentPortDescriptor(version);
     const usage = "agent_tool_usage";
+    expect(
+      descriptor.tables
+        .find(({ name }) => name === "session_nodes")
+        ?.columns.some(({ name }) => name === "archive_undo_marker"),
+    ).toBe(version >= 45);
+    expect(
+      descriptor.tables
+        .find(({ name }) => name === "session_members")
+        ?.columns.some(({ name }) => name === "access"),
+    ).toBe(version >= 44);
+    expect(descriptor.preData.includes('"access" text COLLATE "C",')).toBe(version >= 44);
+    expect(
+      descriptor.expectedCatalog.find(
+        (fact) => fact.table === "session_members" && fact.kind === "checks",
+      )?.value,
+    ).toBe(version >= 44 ? 1 : 0);
     for (const column of ["end_cause", "origin_source_json"]) {
       expect(descriptor.preData.includes(`"${column}"`)).toBe(version >= 43);
       expect(descriptor.sqlite.includes(`${column} TEXT`)).toBe(version >= 43);

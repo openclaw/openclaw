@@ -24,6 +24,10 @@ import {
   SESSION_PARTICIPANTS_TABLE,
 } from "./openclaw-agent-db-contract.js";
 import { withLegacyAgentIndexes } from "./openclaw-agent-index-retirement-migration.js";
+import {
+  AGENT_MEMBER_ACCESS_SCHEMA_VERSION,
+  withoutAgentMemberAccess,
+} from "./openclaw-agent-member-access-schema.js";
 import { withLegacyAgentMemoryRevisionTriggers } from "./openclaw-agent-memory-revision-migration.js";
 import {
   AGENT_PENDING_INPUT_ENDINGS_SCHEMA_VERSION,
@@ -328,8 +332,11 @@ const AGENT_SCHEMA_BEFORE_ARCHIVE_UNDO = OPENCLAW_AGENT_SCHEMA_SQL.replace(
   ",\n  archive_undo_marker TEXT\n",
   "\n",
 );
-const AGENT_SCHEMA_BEFORE_PENDING_INPUT_ENDINGS = withoutAgentPendingInputEndings(
+const AGENT_SCHEMA_BEFORE_MEMBER_ACCESS = withoutAgentMemberAccess(
   AGENT_SCHEMA_BEFORE_ARCHIVE_UNDO,
+);
+const AGENT_SCHEMA_BEFORE_PENDING_INPUT_ENDINGS = withoutAgentPendingInputEndings(
+  AGENT_SCHEMA_BEFORE_MEMBER_ACCESS,
 );
 const AGENT_SCHEMA_BEFORE_TOOL_USAGE = withoutAgentToolUsage(
   AGENT_SCHEMA_BEFORE_PENDING_INPUT_ENDINGS,
@@ -361,9 +368,11 @@ export function getOpenClawAgentMigrationSchema(targetVersion: number): string {
             ? AGENT_SCHEMA_BEFORE_TOOL_USAGE
             : targetVersion < AGENT_PENDING_INPUT_ENDINGS_SCHEMA_VERSION
               ? AGENT_SCHEMA_BEFORE_PENDING_INPUT_ENDINGS
-              : targetVersion < AGENT_ARCHIVE_UNDO_SCHEMA_VERSION
-                ? AGENT_SCHEMA_BEFORE_ARCHIVE_UNDO
-                : OPENCLAW_AGENT_SCHEMA_SQL;
+              : targetVersion < AGENT_MEMBER_ACCESS_SCHEMA_VERSION
+                ? AGENT_SCHEMA_BEFORE_MEMBER_ACCESS
+                : targetVersion < AGENT_ARCHIVE_UNDO_SCHEMA_VERSION
+                  ? AGENT_SCHEMA_BEFORE_ARCHIVE_UNDO
+                  : OPENCLAW_AGENT_SCHEMA_SQL;
   const navigationSchemaSql =
     targetVersion < AGENT_COLD_NAVIGATION_SCHEMA_VERSION
       ? withoutAgentColdNavigation(schemaSql)

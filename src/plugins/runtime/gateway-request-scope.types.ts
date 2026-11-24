@@ -29,6 +29,14 @@ export type PluginRuntimeGatewayRequestScope = {
   parentHttpRequestAuthority?: () => GatewayRequestAuthorityV1 | undefined;
   /** Request-owned reader headroom expires when the interactive handler settles. */
   canUseInteractiveStateReadCapacity?: () => boolean;
+  /**
+   * The existing session a `sessionAccess` method admitted for writing; a fork may run only there.
+   * Inline type import: a top-level one closes a madge import cycle through the Gateway.
+   */
+  sessionResourceForFork?: Pick<
+    import("../../gateway/session-access-authority.js").GatewaySessionAccessAuthority,
+    "target" | "retainSession"
+  >;
   /** Exact registration and Gateway owner retained across awaited system operations. */
   assertSystemOwnerCurrent?: () => void;
   /** Recheck the admitted HTTP device or cookie grant before effects/disclosure; rejection sends HTTP 401 and throws. */

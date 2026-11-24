@@ -12,4 +12,5 @@
 # +22: observe filtered count and ordinary first-page rank on a warm cache, rewind across wake, and read at the inclusive deadline.
 # +70: negotiated remote Archive without receipts, explicit named Mac Restore after checkout retirement, and real snapshot recovery versus stale archive time, incarnation and reconnect.
 # +62: a real sessions tool renames a shared-pinned thread; two simultaneous sockets must receive different top-level and nested pin fields, independent of the publisher.
-2378
+# +85: a populated canonical v44 keeps the invitation grant and byte-identical nodes; divergent preview v44 is rejected with unchanged content and seal on SQLite and PostgreSQL. Reopening v45 and historical backup catalogs exercise both sides of the collision.
+2463

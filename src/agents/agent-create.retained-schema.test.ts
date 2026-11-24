@@ -129,7 +129,7 @@ it.each(["recovery-hold", "retained-deletion"] as const)(
     {
       using database = openNodeSqliteDatabase(pathname);
       database.exec(
-        "DROP TABLE agent_tool_usage; DROP TABLE session_pending_inputs; ALTER TABLE session_nodes DROP COLUMN archive_undo_marker; PRAGMA user_version=41; UPDATE schema_meta SET schema_version=41",
+        "DROP TABLE agent_tool_usage; DROP TABLE session_pending_inputs; ALTER TABLE session_nodes DROP COLUMN archive_undo_marker; ALTER TABLE session_members DROP COLUMN access; PRAGMA user_version=41; UPDATE schema_meta SET schema_version=41",
       );
     }
     const original = await fs.readFile(pathname);
