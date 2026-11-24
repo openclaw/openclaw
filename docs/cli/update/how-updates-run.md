@@ -161,6 +161,8 @@ the owned service PID. Listener ownership, the lock, and native service identity
 are rechecked before stopping. Missing listener attribution or an unrelated
 connection error keeps the normal drain path.
 
+If the service's Node fails runtime admission and OpenClaw reruns under a compatible Node, the launcher remains the service's main process. Maintenance drain accepts its direct child as the serving Gateway only when every listener on the Gateway port belongs to that child and identifies the service process as its parent.
+
 Maintenance drain uses the service's local credentials, including an existing
 paired operator identity when no shared token or password is configured. It does
 not create an identity or request new pairing. Older installed updaters that omit
