@@ -353,7 +353,13 @@ extension OpenClawChatViewModel {
                     ($0, String(localized: "Gateway changed before the thread operation started."))
                 }))
         }
-        let result = await ChatSessionBatchMutationRunner.run(keys: orderedKeys) { @MainActor key in
+        // This sheet uses per-row patches. Serialize negotiated archives so two rows in our own
+        // selection never compete to remove their pins from the same saved layout.
+        var warningsByKey: [String: String] = [:]
+        var result = await ChatSessionBatchMutationRunner.run(
+            keys: orderedKeys,
+            maxConcurrent: action == .archive && routeLease.supportsArchivePins ? 1 : 4)
+        { @MainActor key in
             if let entry = entries[key], let mainSessionKey = mainSessionKeys[key] {
                 switch action {
                 case .archive where !ChatSessionSidebarModel.canArchiveSession(
@@ -392,11 +398,13 @@ extension OpenClawChatViewModel {
                     agentID: targets[key]?.agentID,
                     expectedSessionID: expectedSessionID,
                     archived: true)
+                warningsByKey[key] = routeLease.archivePinWarning(receipt)
             case .delete:
                 try await routeLease.deleteSession(key: key, agentID: targets[key]?.agentID)
                 if owner?.scopeRevision == epoch, let row = entries[key] { owner?.remove(row) }
             }
         }
+        result.warningsByKey = warningsByKey
         let succeeded = Set(result.succeededKeys)
         guard self.isCurrentSession(presentation) else {
             self.refreshSessions(limit: Self.sessionListFetchLimit)
@@ -963,11 +971,15 @@ extension OpenClawChatViewModel {
             })
     }
 
-    public func setSessionArchived(_ session: OpenClawChatSessionEntry, archived: Bool) {
+    public func setSessionArchived(
+        _ session: OpenClawChatSessionEntry,
+        archived: Bool,
+        onSuccess: (@MainActor (_ pinWarning: String?) -> Void)? = nil)
+    {
         let key = session.key
         let target = self.sessionMutationTarget(key: key, agentID: session.agentId)
         guard archived else {
-            Task { await self.restoreSession(session) }
+            Task { if await self.restoreSession(session) { onSuccess?(nil) } }
             return
         }
         guard let expectedSessionID = ChatPayloadDecoding.trimmedNonEmptyString(session.sessionId) else {
@@ -994,6 +1006,8 @@ extension OpenClawChatViewModel {
                     // The archived session rejects new sends; return to the main session.
                     self.switchSession(to: self.resolvedMainSessionKey)
                 }
+                let warning = routeLease.archivePinWarning(receipt)
+                if let onSuccess { onSuccess(warning) } else if let warning { self.errorText = warning }
                 return receipt
             })
     }

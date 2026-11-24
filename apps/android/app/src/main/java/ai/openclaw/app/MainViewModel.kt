@@ -1549,8 +1549,11 @@ class MainViewModel internal constructor(
     archived: Boolean = false,
   ): Unit = ensureRuntime().chat.refreshSessions(limit = limit, archived = archived)
 
-  internal suspend fun patchChatSession(patch: ChatSessionPatch) {
-    ensureRuntime().chat.patchSession(patch)
+  internal suspend fun patchChatSession(
+    patch: ChatSessionPatch,
+    onArchiveNotice: ((String) -> Unit)? = null,
+  ) {
+    ensureRuntime().chat.patchSession(patch, onArchiveNotice)
   }
 
   suspend fun deleteChatSession(

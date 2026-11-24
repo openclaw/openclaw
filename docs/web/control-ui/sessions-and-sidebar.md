@@ -201,6 +201,14 @@ shows the saved pin order in both the sidebar and the Sessions screen, independe
 of how you sort recent sessions. A Mac undoing an archive on an older Gateway can
 restore the legacy pin that the same archive just cleared.
 
+On a Gateway that supports personal archive pins, choosing **Archive** on Mac or
+Android removes that thread from your saved pins. Other people's saved positions
+and rail-only shortcuts stay in place. A later **Restore** (Android: **Unarchive**)
+doesn't pin the thread again. On Mac, **Undo** in the archive notification can
+put back the pin in its original slot, provided the thread and your sidebar still
+match the receipt. If a newer layout wins or the pin change can't be confirmed,
+the app reports that separately; it doesn't repeat the archive or overwrite your edits.
+
 The Control UI ships with its Gateway. For a writable signed-in profile, the
 Sessions table and sidebar use each list response's Gateway time to decide when
 a snoozed pin returns. Editing pin order takes effect immediately. On read-only

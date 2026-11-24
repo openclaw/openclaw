@@ -118,6 +118,7 @@ internal fun SessionsScreen(
     rememberSaveable(activeGatewayStableId, stateSaver = CollapsedSessionKeysSaver) {
       mutableStateOf<Set<String>>(emptySet())
     }
+  var archiveNotice by remember(activeGatewayStableId, isConnected) { mutableStateOf<String?>(null) }
   var sortMenuExpanded by remember { mutableStateOf(false) }
   var renameSessionTarget by
     rememberSaveable(stateSaver = SessionActionTargetSaver) { mutableStateOf<SessionActionTarget?>(null) }
@@ -415,6 +416,7 @@ internal fun SessionsScreen(
               },
               viewModel = viewModel,
               coroutineScope = coroutineScope,
+              onArchiveNotice = { archiveNotice = it },
               onOpenChat = onOpenChat,
               onRename = { renameSessionTarget = session.toActionTarget(activeGatewayStableId) },
               onNewGroup = { groupSessionTarget = session.toActionTarget(activeGatewayStableId) },
@@ -424,6 +426,14 @@ internal fun SessionsScreen(
         }
       }
     }
+  }
+
+  archiveNotice?.let { message ->
+    AppAlertDialog(
+      onDismissRequest = { archiveNotice = null },
+      text = { Text(message) },
+      confirmButton = { TextButton(onClick = { archiveNotice = null }) { Text(nativeString("OK")) } },
+    )
   }
 
   renameSessionTarget?.let { session ->
@@ -604,6 +614,7 @@ private fun SessionRow(
   onToggleExpanded: () -> Unit,
   viewModel: MainViewModel,
   coroutineScope: CoroutineScope,
+  onArchiveNotice: (String) -> Unit,
   onOpenChat: () -> Unit,
   onRename: () -> Unit,
   onNewGroup: () -> Unit,
@@ -661,6 +672,7 @@ private fun SessionRow(
           expectedSessionId = session.sessionId,
           archived = archived,
         ),
+        onArchiveNotice,
       )
     }
   }

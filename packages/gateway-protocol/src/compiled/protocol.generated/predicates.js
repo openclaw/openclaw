@@ -1433,7 +1433,7 @@ var External = [
     /(^key$|^agentId$|^subscriptionId$)/u,
     /(^agentId$|^sessionKeys$)/u,
     /(^key$|^runId$|^agentId$|^clearQueued$|^userInitiated$)/u,
-    /(^key$|^agentId$|^pinPlacement$|^expectedSessionId$|^expectedLifecycleRevision$|^expectedPermissionMode$|^expectedSandboxMode$|^expectedNativeRuntimeConsent$|^expectedToolOverrides$|^expectedMarkedUnreadAt$|^expectedSidebarRoot$|^expectedCategory$|^expectedArchived$|^expectedSidebarAncestors$|^label$|^autoLabel$|^icon$|^color$|^category$|^boardFace$|^boardPresentation$|^statusNote$|^attention$|^ttlMinutes$|^archived$|^pinned$|^sidebarRoot$|^snoozedUntil$|^unread$|^contextWindow$|^thinkingLevel$|^cyberAccessProgram$|^fastMode$|^toolOverrides$|^verboseLevel$|^traceLevel$|^reasoningLevel$|^responseUsage$|^elevatedLevel$|^execHost$|^execSecurity$|^execAsk$|^execNode$|^permissionMode$|^communication$|^sandboxMode$|^nativeRuntimeConsent$|^model$|^agentRuntime$|^completionOwnerSessionKey$|^inheritedToolPolicyVersion$|^inheritedToolAllow$|^inheritedToolDeny$|^sendPolicy$|^groupActivation$)/u,
+    /(^key$|^agentId$|^pinPlacement$|^expectedSessionId$|^expectedLifecycleRevision$|^expectedPermissionMode$|^expectedSandboxMode$|^expectedNativeRuntimeConsent$|^expectedToolOverrides$|^expectedMarkedUnreadAt$|^expectedSidebarRoot$|^expectedCategory$|^expectedArchived$|^expectedArchivedAt$|^expectedSidebarAncestors$|^label$|^autoLabel$|^icon$|^color$|^category$|^boardFace$|^boardPresentation$|^statusNote$|^attention$|^ttlMinutes$|^archived$|^retirePersonalPin$|^archivePinUndo$|^pinned$|^sidebarRoot$|^snoozedUntil$|^unread$|^contextWindow$|^thinkingLevel$|^cyberAccessProgram$|^fastMode$|^toolOverrides$|^verboseLevel$|^traceLevel$|^reasoningLevel$|^responseUsage$|^elevatedLevel$|^execHost$|^execSecurity$|^execAsk$|^execNode$|^permissionMode$|^communication$|^sandboxMode$|^nativeRuntimeConsent$|^model$|^agentRuntime$|^completionOwnerSessionKey$|^inheritedToolPolicyVersion$|^inheritedToolAllow$|^inheritedToolDeny$|^sendPolicy$|^groupActivation$)/u,
     /(^relativeTo$|^side$)/u,
     /(^key$|^agentId$|^expectedSessionId$|^expectedSidebarRoot$|^expectedCategory$)/u,
     /(^send$|^receive$)/u,
@@ -1443,8 +1443,8 @@ var External = [
     /(^sessionKey$|^agentId$|^sessionId$|^goalId$|^operationId$|^issuedAtMs$)/u,
     /(^sessionKey$|^agentId$|^sessionId$|^reviewId$|^idempotencyKey$)/u,
     /(^targets$|^patch$)/u,
-    /(^key$|^expectedMarkedUnreadAt$|^expectedSidebarRoot$|^expectedCategory$|^expectedArchived$|^expectedSidebarAncestors$|^agentId$|^expectedSessionId$|^expectedLifecycleRevision$|^expectedSandboxMode$|^expectedPermissionMode$|^expectedNativeRuntimeConsent$)/u,
-    /(^label$|^autoLabel$|^icon$|^color$|^category$|^boardFace$|^boardPresentation$|^statusNote$|^attention$|^ttlMinutes$|^archived$|^pinned$|^sidebarRoot$|^snoozedUntil$|^unread$|^contextWindow$|^thinkingLevel$|^cyberAccessProgram$|^fastMode$|^toolOverrides$|^verboseLevel$|^traceLevel$|^reasoningLevel$|^responseUsage$|^elevatedLevel$|^execHost$|^execSecurity$|^execAsk$|^execNode$|^permissionMode$|^communication$|^sandboxMode$|^nativeRuntimeConsent$|^model$|^agentRuntime$|^completionOwnerSessionKey$|^inheritedToolPolicyVersion$|^inheritedToolAllow$|^inheritedToolDeny$|^sendPolicy$|^groupActivation$)/u,
+    /(^key$|^expectedMarkedUnreadAt$|^expectedSidebarRoot$|^expectedCategory$|^expectedArchived$|^expectedArchivedAt$|^expectedSidebarAncestors$|^agentId$|^expectedSessionId$|^expectedLifecycleRevision$|^expectedSandboxMode$|^expectedPermissionMode$|^expectedNativeRuntimeConsent$)/u,
+    /(^label$|^autoLabel$|^icon$|^color$|^category$|^boardFace$|^boardPresentation$|^statusNote$|^attention$|^ttlMinutes$|^archived$|^retirePersonalPin$|^archivePinUndo$|^pinned$|^sidebarRoot$|^snoozedUntil$|^unread$|^contextWindow$|^thinkingLevel$|^cyberAccessProgram$|^fastMode$|^toolOverrides$|^verboseLevel$|^traceLevel$|^reasoningLevel$|^responseUsage$|^elevatedLevel$|^execHost$|^execSecurity$|^execAsk$|^execNode$|^permissionMode$|^communication$|^sandboxMode$|^nativeRuntimeConsent$|^model$|^agentRuntime$|^completionOwnerSessionKey$|^inheritedToolPolicyVersion$|^inheritedToolAllow$|^inheritedToolDeny$|^sendPolicy$|^groupActivation$)/u,
     /(^key$|^agentId$|^pluginId$|^namespace$|^value$|^unset$)/u,
     /(^key$|^agentId$|^reason$|^expectedSessionId$)/u,
     /(^key$|^agentId$|^deleteTranscript$|^expectedSessionId$|^expectedLifecycleRevision$|^expectedSessionUpdatedAt$|^emitLifecycleHooks$|^archivedOnly$)/u,
@@ -16188,6 +16188,9 @@ var External = [
     (value.expectedArchived === void 0 ||
       !("expectedArchived" in value) ||
       check_181(value.expectedArchived)) &&
+    (value.expectedArchivedAt === void 0 ||
+      !("expectedArchivedAt" in value) ||
+      check_430(value.expectedArchivedAt)) &&
     (value.expectedSidebarAncestors === void 0 ||
       !("expectedSidebarAncestors" in value) ||
       check_2423(value.expectedSidebarAncestors)) &&
@@ -16204,6 +16207,12 @@ var External = [
     (value.attention === void 0 || !("attention" in value) || check_2428(value.attention)) &&
     (value.ttlMinutes === void 0 || !("ttlMinutes" in value) || check_2430(value.ttlMinutes)) &&
     (value.archived === void 0 || !("archived" in value) || check_181(value.archived)) &&
+    (value.retirePersonalPin === void 0 ||
+      !("retirePersonalPin" in value) ||
+      check_330(value.retirePersonalPin)) &&
+    (value.archivePinUndo === void 0 ||
+      !("archivePinUndo" in value) ||
+      check_1698(value.archivePinUndo)) &&
     (value.pinned === void 0 || !("pinned" in value) || check_181(value.pinned)) &&
     (value.sidebarRoot === void 0 || !("sidebarRoot" in value) || check_181(value.sidebarRoot)) &&
     (value.snoozedUntil === void 0 ||
@@ -16499,6 +16508,9 @@ var External = [
     (value.expectedArchived === void 0 ||
       !("expectedArchived" in value) ||
       check_181(value.expectedArchived)) &&
+    (value.expectedArchivedAt === void 0 ||
+      !("expectedArchivedAt" in value) ||
+      check_430(value.expectedArchivedAt)) &&
     (value.expectedSidebarAncestors === void 0 ||
       !("expectedSidebarAncestors" in value) ||
       check_2423(value.expectedSidebarAncestors)) &&
@@ -16538,6 +16550,12 @@ var External = [
     (value.attention === void 0 || !("attention" in value) || check_2428(value.attention)) &&
     (value.ttlMinutes === void 0 || !("ttlMinutes" in value) || check_2430(value.ttlMinutes)) &&
     (value.archived === void 0 || !("archived" in value) || check_181(value.archived)) &&
+    (value.retirePersonalPin === void 0 ||
+      !("retirePersonalPin" in value) ||
+      check_330(value.retirePersonalPin)) &&
+    (value.archivePinUndo === void 0 ||
+      !("archivePinUndo" in value) ||
+      check_1698(value.archivePinUndo)) &&
     (value.pinned === void 0 || !("pinned" in value) || check_181(value.pinned)) &&
     (value.sidebarRoot === void 0 || !("sidebarRoot" in value) || check_181(value.sidebarRoot)) &&
     (value.snoozedUntil === void 0 ||

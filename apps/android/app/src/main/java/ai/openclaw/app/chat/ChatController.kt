@@ -29,6 +29,7 @@ import ai.openclaw.app.gateway.SessionReactionsSetResult
 import ai.openclaw.app.gateway.isInboundMediaSource
 import ai.openclaw.app.gateway.parseChatSendAck
 import ai.openclaw.app.i18n.NativeText
+import ai.openclaw.app.i18n.nativeString
 import ai.openclaw.app.i18n.nativeText
 import ai.openclaw.app.i18n.resolveOptionalNativeText
 import ai.openclaw.app.i18n.verbatimText
@@ -1370,7 +1371,10 @@ class ChatController internal constructor(
       }
     }
 
-  internal suspend fun patchSession(request: ChatSessionPatch): Boolean =
+  internal suspend fun patchSession(
+    request: ChatSessionPatch,
+    onArchiveNotice: ((String) -> Unit)? = null,
+  ): Boolean =
     with(request) {
       val sessionKey = key.trim().takeIf { it.isNotEmpty() } ?: return@with false
       val requestCacheScope = currentCacheScope()
@@ -1401,12 +1405,22 @@ class ChatController internal constructor(
         updateErrorText("Session lifecycle action requires a durable session identity.")
         return@with false
       }
+      val lifecycleLease = if (archived != null) captureRequestLease(requestCacheScope) else null
+      val noticeAgent = resolveAgentIdForSessionKey(_sessionKey.value)
+
+      fun archiveNotice(message: String) {
+        publishGatewayState(lifecycleLease, { requestCacheScope == currentCacheScope() && noticeAgent == resolveAgentIdForSessionKey(_sessionKey.value) }) {
+          if (onArchiveNotice == null) updateErrorText(message) else onArchiveNotice(message)
+        }
+      }
+      val retirePin = archived == true && patch.size == 1 && lifecycleLease?.supportsCapability("personal-archive-pins") == true
       try {
         val params =
           buildJsonObject {
             put("key", JsonPrimitive(sessionKey))
             capturedOwnerAgentId?.let { put("agentId", JsonPrimitive(it)) }
             lifecycleSessionId?.let { put("expectedSessionId", JsonPrimitive(it)) }
+            if (retirePin) put("retirePersonalPin", JsonPrimitive(true))
             patch.forEach { (key, value) -> put(key, value) }
             if (unreadExpectation != null) {
               val marker = unreadExpectation.markedUnreadAt
@@ -1430,8 +1444,19 @@ class ChatController internal constructor(
                   ?.takeIf { it.key == sessionKey && (it.observedSessionId == null || it.observedSessionId == lifecycleSessionId) }
               active to remembered
             }
-          val lease = captureRequestLease(requestCacheScope) ?: throw GatewayRequestNotEnqueued("not connected")
-          lease.request("sessions.patch", params.toString(), 10 * 60_000L)
+          val lease = lifecycleLease ?: throw GatewayRequestNotEnqueued("not connected")
+          val reply = lease.request("sessions.patch", params.toString(), 10 * 60_000L)
+          if (retirePin) {
+            val receipt = runCatching { json.parseToJsonElement(reply).asObjectOrNull() }.getOrNull()
+            if (receipt?.get("ok") != JsonPrimitive(true) || receipt["entry"].asObjectOrNull()?.get("sessionId").asJsonStringOrNull() != lifecycleSessionId) {
+              throw GatewayRequestOutcomeUnknown("Unconfirmed archive receipt")
+            }
+            when (receipt["archivePin"].asStringOrNull()) {
+              "removed", "unchanged" -> Unit
+              "conflict" -> archiveNotice(nativeString("Thread archived. Your newer sidebar layout was kept."))
+              else -> archiveNotice(nativeString("Thread archived. Your pin change could not be confirmed. Check your sidebar."))
+            }
+          }
           publishGatewayState(lease) {
             // ACK retirement belongs to the captured choice, even after an agent switch.
             // A newer explicit choice or a history-observed successor keeps its intent.
@@ -1460,13 +1485,26 @@ class ChatController internal constructor(
             return@with false
           }
           lease.request("sessions.patch", params.toString())
+        } else if (archived == false) {
+          (lifecycleLease ?: throw GatewayRequestNotEnqueued("not connected")).request("sessions.patch", params.toString())
         } else {
           requestGateway("sessions.patch", params.toString())
         }
-        fetchSessionsForCurrentWindow()
+        if (lifecycleLease == null || (lifecycleLease.isCurrent() && requestCacheScope == currentCacheScope())) fetchSessionsForCurrentWindow()
         true
+      } catch (err: CancellationException) {
+        throw err
       } catch (err: Throwable) {
-        updateErrorText(err.message)
+        if (archived != null) {
+          if (err is GatewayRequestOutcomeUnknown) {
+            archiveNotice(nativeString("The thread update could not be confirmed. Check the thread list before trying again."))
+            if (lifecycleLease?.isCurrent() == true && requestCacheScope == currentCacheScope()) fetchSessionsForCurrentWindow()
+          } else {
+            archiveNotice(err.message ?: nativeString("Could not update thread."))
+          }
+        } else {
+          updateErrorText(err.message)
+        }
         false
       }
     }

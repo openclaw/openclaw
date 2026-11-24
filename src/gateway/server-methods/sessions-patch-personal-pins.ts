@@ -29,6 +29,7 @@ import { isSameSessionSharingTarget } from "../session-sharing-target-read.js";
 import { resolveRequestedSessionStoreTarget } from "../session-store-key.js";
 import { PERSONAL_PIN_PROFILE_REQUIRED, sessionPinRequester } from "./session-pin-requester.js";
 import type { SessionPatchTargetIdentity } from "./session-unread-ack.js";
+import { archivePinRequester, restoreArchivePinSlots } from "./sessions-archive-personal-pins.js";
 import { sessionChangedError } from "./sessions-patch-errors.js";
 import { resolveSessionPatchTargetError } from "./sessions-patch-expectations.js";
 import { prepareSessionSharingAccess } from "./sessions-sharing-authority.js";
@@ -40,6 +41,7 @@ const pinFields = new Set([
   "agentId",
   "pinned",
   "pinPlacement",
+  "archivePinUndo",
   "expectedSessionId",
   "expectedLifecycleRevision",
   "expectedSidebarRoot",
@@ -69,7 +71,23 @@ export async function patchPersonalSessionPins(
       reject("Pin placement requires a personal pinned:true patch with expectedSessionId."),
     );
   }
-  const owner = sessionPinRequester(options);
+  const archiveOwner = patch.archivePinUndo ? archivePinRequester(options) : undefined;
+  if (
+    patch.archivePinUndo &&
+    (!archiveOwner ||
+      patch.pinPlacement ||
+      patch.pinned !== true ||
+      targets.some((target) => !target.expectedSessionId || target.expectedArchived !== false))
+  ) {
+    return respond(
+      false,
+      undefined,
+      reject(
+        "Archive pin Undo requires the original personal connection and restored session identities.",
+      ),
+    );
+  }
+  const owner = archiveOwner ?? sessionPinRequester(options);
   if (!owner) {
     return respond(
       false,
@@ -277,7 +295,19 @@ export async function patchPersonalSessionPins(
         );
       }
       const entries: unknown[] = raw ?? DEFAULT_RAIL_SHORTCUTS;
-      const next = setPersonalSessionPins(entries, [...accepted.keys()], pinned);
+      const next =
+        patch.archivePinUndo && archiveOwner
+          ? restoreArchivePinSlots(patch.archivePinUndo, archiveOwner, raw, accepted.values())
+          : setPersonalSessionPins(entries, [...accepted.keys()], pinned);
+      if (!next) {
+        return respond(
+          false,
+          undefined,
+          reject(
+            "Archive pin Undo no longer matches the sidebar, connection or thread. Personal pins were not changed.",
+          ),
+        );
+      }
       if (patch.pinPlacement) {
         const { relativeTo, side } = patch.pinPlacement;
         // Only a session: entry is a named destination. A rail-only shortcut cannot stand in for it.

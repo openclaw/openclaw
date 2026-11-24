@@ -14,6 +14,10 @@ import { stringLiteralUnion } from "./string-literal-union.js";
 
 export const SESSIONS_PATCH_MANY_MAX_TARGETS = 100;
 
+const ArchivePinUndo = Type.Optional(Type.String({ minLength: 1, maxLength: 65536 }));
+const ArchivePin = stringLiteralUnion(["removed", "unchanged", "conflict", "unknown"]);
+export type ArchivePinStatus = Static<typeof ArchivePin>;
+
 const ExpectedMarkedUnreadAt = Type.Optional(
   Type.Union([Type.Number({ minimum: 0 }), Type.Null()], {
     description:
@@ -45,6 +49,10 @@ const SessionsPatchMutationProperties = {
   ),
   ttlMinutes: Type.Optional(Type.Integer({ minimum: 1, maximum: 120 })),
   archived: Type.Optional(Type.Boolean()),
+  /** Explicit personal navigation intent on an otherwise archive-only request. */
+  retirePersonalPin: Type.Optional(Type.Literal(true)),
+  /** Restore only slots retired by this receipt; valid on a separate pinned:true request. */
+  archivePinUndo: ArchivePinUndo,
   pinned: Type.Optional(Type.Boolean()),
   /** Independent sidebar placement without changing origin or execution ownership. */
   sidebarRoot: Type.Optional(Type.Boolean()),
@@ -117,6 +125,7 @@ const SessionOrganizationExpectations = {
   expectedCategory: Type.Optional(Type.Union([SessionLabelString, Type.Null()])),
   /** Compare archive state before any cancellation or mutation. */
   expectedArchived: Type.Optional(Type.Boolean()),
+  expectedArchivedAt: Type.Optional(Type.Integer({ minimum: 0 })),
   /** Nearest persistent parent first through the tree root; all intervening ancestors must remain unarchived. */
   expectedSidebarAncestors: Type.Optional(
     Type.Array(SessionSidebarAncestorExpectationSchema, { maxItems: 128 }),
@@ -182,11 +191,14 @@ const SessionsPatchManyOutcomeIdentitySchema = {
 };
 
 export const SessionsPatchManyResultSchema = closedObject({
+  archivePinUndo: ArchivePinUndo,
   outcomes: Type.Array(
     Type.Union([
       closedObject({
         ok: Type.Literal(true),
         ...SessionsPatchManyOutcomeIdentitySchema,
+        archivePin: Type.Optional(ArchivePin),
+        archivedAt: Type.Optional(Type.Integer({ minimum: 0 })),
       }),
       closedObject({
         ok: Type.Literal(false),

@@ -416,11 +416,13 @@ public struct OpenClawChatSessionMutationRouteLease: Sendable {
 
     private let patchSessionImpl: SnoozePatchTarget
     private let deleteSessionImpl: DeleteTarget?
+    let supportsArchivePins: Bool
 
     public init(
         patchSession: @escaping PatchSession,
         deleteSession: DeleteSession? = nil)
     {
+        self.supportsArchivePins = false
         self
             .patchSessionImpl =
             { target, expectedID, expectedUnreadAt, label, category, color, pinned, archived, snoozedUntil, unread in
@@ -447,9 +449,12 @@ public struct OpenClawChatSessionMutationRouteLease: Sendable {
         sessionTarget: @escaping @Sendable (String) -> OpenClawChatSessionTarget,
         unreadAckContract: Bool?,
         allowPinWrites: Bool = true,
+        supportsArchivePins: Bool = false,
         receivesPatchReceipts: Bool = false,
         request: @escaping @Sendable (OpenClawChatGatewayRequest) async throws -> Data)
     {
+        let supportsArchivePins = allowPinWrites && supportsArchivePins
+        self.supportsArchivePins = supportsArchivePins
         self.patchSessionImpl = { requested, id, unreadAt, label, category, color, pinned, archived, snooze, unread in
             guard pinned == nil || allowPinWrites else { throw OpenClawPersonalPinError.unsupportedGateway }
             guard unread != false || unreadAckContract != nil else {
@@ -465,6 +470,7 @@ public struct OpenClawChatSessionMutationRouteLease: Sendable {
                 color: color,
                 pinned: pinned,
                 archived: archived,
+                supportsArchivePins: supportsArchivePins,
                 snoozedUntil: snooze,
                 unreadPatch: .routed(
                     unread: unread,
@@ -508,6 +514,11 @@ public struct OpenClawChatSessionMutationRouteLease: Sendable {
             archived,
             snoozedUntil,
             unread)
+    }
+
+    func archivePinWarning(_ receipt: OpenClawChatSessionPatchReceipt?) -> String? {
+        guard self.supportsArchivePins else { return nil }
+        return OpenClawChatArchivePinOutcome(archivePin: receipt?.archivePin, archivedAt: receipt?.archivedAt).warning
     }
 
     public func deleteSession(key: String, agentID: String? = nil) async throws {

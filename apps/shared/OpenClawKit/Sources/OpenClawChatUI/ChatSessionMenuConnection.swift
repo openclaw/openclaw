@@ -11,6 +11,10 @@ public struct OpenClawSessionMenuConnection {
         self.hello.supportsServerCapability(.personalSessionPins)
     }
 
+    var supportsArchivePins: Bool {
+        self.supportsPersonalPins && self.hello.supportsServerCapability(.personalArchivePins)
+    }
+
     public let local: Bool
     public var groupDefaultsBrowser: OpenClawGroupDefaultsBrowser?
     public let selfProfileID: String?

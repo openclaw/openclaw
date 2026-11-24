@@ -99,6 +99,9 @@ extension MacGatewayChatTransport {
             allowPinWrites: self.connection.supportsServerCapability(
                 .personalSessionPins,
                 ifCurrentServerLease: serverLease) == true,
+            supportsArchivePins: self.connection.supportsServerCapability(
+                .personalArchivePins,
+                ifCurrentServerLease: serverLease) == true,
             receivesPatchReceipts: true,
             request: self.leasedRequest(serverLease))
     }

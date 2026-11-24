@@ -1,7 +1,10 @@
 import { expect, it, vi } from "vitest";
 import { UI_RAIL_SHORTCUTS_PREFERENCE_KEY as PREF } from "../../../packages/gateway-protocol/src/schema/ui-navigation-preferences.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
-import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
+import {
+  loadSessionEntry,
+  upsertSessionEntryCore,
+} from "../../config/sessions/session-accessor.js";
 import {
   addSessionMember,
   removeSessionMember,
@@ -12,6 +15,7 @@ import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { handleGatewayRequest } from "../server-methods.js";
+import * as lifecycle from "./sessions-lifecycle-drain.js";
 import { sessionMutationHandlers } from "./sessions-mutations.js";
 import {
   identifiedClient,
@@ -63,6 +67,8 @@ async function fixture() {
     (await preferences.setCanonicalUserPreferences(viewer, { [PREF]: ["route:usage"] }))?.ok,
   ).toBe(true);
   return {
+    client,
+    viewer,
     invite,
     switchViewer: () => {
       client.authenticatedUserProfile = identifiedClient(other).authenticatedUserProfile;
@@ -193,3 +199,93 @@ it.each(["Stop", "requester change", "snooze", "replacement"] as const)(
       expect(await f.layout()).toEqual(["route:usage"]);
     }),
 );
+
+const archive = { key: own, expectedSessionId: own, archived: true, retirePersonalPin: true };
+const pin = `session:${own}`;
+const tail = [{ future: true }, `session-rail:${own}`];
+
+it("undoes only a retired personal pin, in its original slot, without rebasing a newer layout", () =>
+  withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
+    const f = await fixture();
+    f.client.connect.client = { ...f.client.connect.client, id: "openclaw-macos", mode: "ui" };
+    f.client.connId = "mac";
+    for (const changed of [false, true]) {
+      expect(
+        (await preferences.setCanonicalUserPreferences(f.viewer, { [PREF]: [pin, ...tail] }))?.ok,
+      ).toBe(true);
+      const receipt = await f.patch("sessions.patch", archive);
+      expect(receipt).toMatchObject({
+        archivePin: "removed",
+        archivePinUndo: expect.any(String),
+        archivedAt: expect.any(Number),
+      });
+      const { archivePinUndo, archivedAt } = receipt as {
+        archivePinUndo: string;
+        archivedAt: number;
+      };
+      expect(await f.layout()).toEqual(tail);
+      if (changed) {
+        expect(
+          (await preferences.setCanonicalUserPreferences(f.viewer, { [PREF]: tail.toReversed() }))
+            ?.ok,
+        ).toBe(true);
+      }
+      await f.patch("sessions.patch", {
+        key: own,
+        expectedSessionId: own,
+        archived: false,
+        expectedArchived: true,
+        expectedArchivedAt: archivedAt,
+      });
+      expect(await f.pins()).not.toContain(own);
+      const undo = f.patch("sessions.patch", {
+        key: own,
+        expectedSessionId: own,
+        expectedArchived: false,
+        pinned: true,
+        archivePinUndo,
+      });
+      if (changed) {
+        await expect(undo).rejects.toThrow();
+        expect(await f.layout()).toEqual(tail.toReversed());
+      } else {
+        await expect(undo).resolves.toMatchObject({ entry: { sessionId: own, pinned: true } });
+        expect(await f.layout()).toEqual([pin, ...tail]);
+      }
+    }
+  }));
+
+it("reports an archive that committed before its pin cleanup conflicted or lost acknowledgement", () =>
+  withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
+    const f = await fixture();
+    f.client.connect.client = { ...f.client.connect.client, id: "openclaw-android", mode: "ui" };
+    f.client.connId = "tablet";
+    const write = preferences.setCanonicalUserPreferences;
+    const start = lifecycle.prepareSessionLifecycleDrain;
+    for (const result of ["conflict", "unknown"]) {
+      expect((await write(f.viewer, { [PREF]: [pin, ...tail] }))?.ok).toBe(true);
+      using drain = vi.spyOn(lifecycle, "prepareSessionLifecycleDrain");
+      using cleanup = vi.spyOn(preferences, "setCanonicalUserPreferences");
+      if (result === "conflict") {
+        drain.mockImplementationOnce(async (params) => {
+          // A newer edit lands after admission and before this archive can commit.
+          expect((await write(f.viewer, { [PREF]: [...tail, pin] }))?.ok).toBe(true);
+          return start(params);
+        });
+      } else {
+        cleanup.mockImplementationOnce(async (...args) => {
+          // Both SQLite commits succeeded, but the preference owner's ACK was lost.
+          expect((await write(...args))?.ok).toBe(true);
+          throw new Error("acknowledgement unavailable");
+        });
+      }
+      const receipt = await f.patch("sessions.patch", archive);
+      const persisted = loadSessionEntry(scope(own));
+      expect(persisted).toMatchObject({ sessionId: own, archivedAt: expect.any(Number) });
+      expect(receipt).toMatchObject({ archivePin: result, archivedAt: persisted?.archivedAt });
+      expect(receipt).not.toHaveProperty("archivePinUndo");
+      expect(cleanup).toHaveBeenCalledOnce();
+      expect(await f.layout()).toEqual(result === "conflict" ? [...tail, pin] : tail);
+      await f.patch("sessions.patch", { key: own, expectedSessionId: own, archived: false });
+    }
+  }));

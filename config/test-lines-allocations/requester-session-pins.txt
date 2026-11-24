@@ -3,4 +3,5 @@
 # Mounted signed sidebar coverage: independent primary/all-agent roster deadlines, immediate saved-layout edits, menu/selection parity and three device-local compatibility branches.
 # +264: both finite browser rows and cursor continuation versus native/tool controls; signed/device-local clocks without version sniffing; transient expiry, permanent refusal, at-most-once pacing, appended pages, supersession and independent mounted owners.
 # +72: both bounded owners replace a stale prefix after pagination, even when a delayed tail appears first; an earlier tail cutoff advances the one timer without delaying it.
-1296
+# +96: native Archive/Undo through routed SQLite owners, including newer layout conflicts and lost cleanup acknowledgements after a committed archive.
+1392

@@ -405,6 +405,7 @@ public enum OpenClawChatGatewayRequests {
         color: String?? = nil,
         pinned: Bool?,
         archived: Bool?,
+        supportsArchivePins: Bool = false,
         snoozedUntil: OpenClawChatSnoozePatch? = nil,
         unreadPatch: OpenClawChatSessionUnreadPatch?) -> OpenClawChatGatewayRequest
     {
@@ -415,6 +416,11 @@ public enum OpenClawChatGatewayRequests {
         params["color"] = self.patchValue(color)
         params["pinned"] = pinned.map(AnyCodable.init)
         params["archived"] = archived.map(AnyCodable.init)
+        if supportsArchivePins, archived == true, params["expectedSessionId"] != nil,
+           label == nil, category == nil, color == nil, pinned == nil, snoozedUntil == nil, unreadPatch == nil
+        {
+            params["retirePersonalPin"] = AnyCodable(true)
+        }
         if let snoozedUntil {
             switch snoozedUntil {
             case let .until(wakeAt):

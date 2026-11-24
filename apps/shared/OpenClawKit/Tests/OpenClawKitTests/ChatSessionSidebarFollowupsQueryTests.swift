@@ -216,9 +216,9 @@ extension ChatSessionSidebarQueryTests {
             let archived = request.params["archived"]?.value as? Bool == true
             if !archived { restored.append(key) }
             defer { if !archived { completion?.resume() } }
-            return try JSONSerialization.data(withJSONObject: [
-                "ok": true, "key": key, "entry": ["sessionId": row.sessionId!, "updatedAt": 20],
-            ])
+            var entry: [String: Any] = ["sessionId": row.sessionId!, "updatedAt": 20]
+            if archived { entry["archivedAt"] = 20 }
+            return try JSONSerialization.data(withJSONObject: ["ok": true, "key": key, "entry": entry])
         }
         let clicked = try #require(await batch.archive(first, mainKey: "main", connection: connection, owner: nil))
         let sidebar = ChatSessionSidebar(

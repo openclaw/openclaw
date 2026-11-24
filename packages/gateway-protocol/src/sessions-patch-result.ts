@@ -3,6 +3,9 @@ export type SessionsPatchResult = {
   ok: true;
   path: string;
   key: string;
+  archivePin?: import("./schema/sessions-patch.js").ArchivePinStatus;
+  archivedAt?: number;
+  archivePinUndo?: string;
   entry: Record<string, unknown>;
   resolved?: {
     modelProvider?: string;

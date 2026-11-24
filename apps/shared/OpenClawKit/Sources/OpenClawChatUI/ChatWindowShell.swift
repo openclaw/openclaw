@@ -58,6 +58,7 @@ public struct OpenClawChatWindowShell: View {
     @State private var isPresentingNewSessionOptions = false
     @State private var renameSessionTarget: OpenClawChatSessionTarget?
     @State private var renameText = ""
+    @State private var archivePinWarning: String?
     private let detailHost: AnyView?
     private let focusWebComposer: (() -> Void)?
     private let attentionRequests: [OpenClawChatAttentionRequest]
@@ -154,6 +155,7 @@ public struct OpenClawChatWindowShell: View {
         .task {
             if case .none = self.detailHost { await self.viewModel.refreshAgents() }
         }
+        .archivePinNotice(self.$archivePinWarning)
         .sheet(
             isPresented: self.$windowCommands.isCommandPalettePresented,
             onDismiss: {
@@ -449,6 +451,9 @@ public struct OpenClawChatWindowShell: View {
                         self.viewModel.setSessionArchived(
                             activeSessionEntry,
                             archived: !activeSessionEntry.isArchived)
+                        { warning in
+                            if let warning { self.archivePinWarning = warning }
+                        }
                     }
                 } label: {
                     chatWindowActionLabel(

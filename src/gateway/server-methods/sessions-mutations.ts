@@ -51,6 +51,7 @@ import { respondError } from "./response.js";
 import { emitSessionsChanged } from "./session-change-event.js";
 import { readGatewayRequestMutationAuthority } from "./session-mutation-guards.js";
 import type { SessionPatchTargetIdentity } from "./session-unread-ack.js";
+import { prepareArchivePins } from "./sessions-archive-personal-pins.js";
 import { startSessionPatchDiagnostics } from "./sessions-patch-diagnostics.js";
 import { executeSessionPatchMutations } from "./sessions-patch-engine.js";
 import { createCommitGuard } from "./sessions-patch-errors.js";
@@ -123,7 +124,19 @@ function createSessionPatchHandler(
         patch = singlePatch;
         targets = [singlePatch];
       }
+      const archivePins = patch.retirePersonalPin
+        ? await prepareArchivePins(options, patch, targets)
+        : undefined;
+      if (patch.retirePersonalPin) {
+        if (!archivePins) {
+          return;
+        }
+        // Keep the requester's navigation intent out of shared hooks and events.
+        delete patch.retirePersonalPin;
+        targets = targets.map((target) => ({ ...target, expectedArchived: false }));
+      }
       if (
+        patch.archivePinUndo ||
         (!request.many && request.params.pinPlacement) ||
         (patch.pinned !== undefined && !usesLegacySessionPins(client))
       ) {
@@ -154,6 +167,7 @@ function createSessionPatchHandler(
         signal,
         diagnostics,
         operatorAuthority: preparingOperator,
+        archivePins,
         followSharingRegistration: sessionMutationAuthorization?.followRegistration,
         readSessionSharing: sessionMutationAuthorization?.readTargetSharing,
         onCreatedSessionCommitted: request.many
@@ -188,11 +202,11 @@ function createSessionPatchHandler(
               ...(target.agentId ? { agentId: target.agentId } : {}),
             };
             return outcome.ok
-              ? { ok: true, ...identity }
+              ? { ok: true, ...identity, ...archivePins?.receipt(index, outcome.entry.archivedAt) }
               : { ok: false, ...identity, error: outcome.error };
           },
         );
-        respond(true, { outcomes }, undefined);
+        respond(true, { outcomes, ...archivePins?.undo }, undefined);
         return;
       }
       const outcome = executed.outcomes[0]!;
@@ -214,21 +228,19 @@ function createSessionPatchHandler(
         ],
       });
       assertCurrent();
-      respond(
-        true,
-        projectSessionPatchResult({
-          ...prepared,
-          cfg: executed.cfg,
-          preparedAcpMeta: acpMeta ?? null,
-          entry: {
-            ...outcome.entry,
-            fastMode: prepareSessionFastModePresentation(client)(outcome.entry.fastMode),
-          },
-          modelCatalog: catalog?.entries,
-          modelCatalogRouteVariants: catalog?.routeVariants,
-        }),
-        undefined,
-      );
+      const result = projectSessionPatchResult({
+        ...prepared,
+        cfg: executed.cfg,
+        preparedAcpMeta: acpMeta ?? null,
+        entry: {
+          ...outcome.entry,
+          fastMode: prepareSessionFastModePresentation(client)(outcome.entry.fastMode),
+        },
+        modelCatalog: catalog?.entries,
+        modelCatalogRouteVariants: catalog?.routeVariants,
+      });
+      const receipt = archivePins?.receipt(0, outcome.entry.archivedAt);
+      respond(true, { ...result, ...receipt, ...archivePins?.undo }, undefined);
     } finally {
       try {
         if (preparingOperator) {
