@@ -116,7 +116,11 @@ manual allowlist rules unchanged. Rerun affected workflows and choose
 Explicit repair stops the matching managed Gateway and checks Gateway, state,
 and agent-database ownership before taking read-only schema snapshots. It
 excludes other processes during repair, then restarts the same service once
-and verifies readiness. Policy refresh preserves the installed launcher and
+and verifies readiness. Doctor prints why it stopped the Gateway and, after the
+verified restart, how long it was stopped. While restoring the service, Doctor
+rechecks update admission at each restoration step and immediately before each
+service-manager change (definition install, start or restart), not at every
+read-only service-manager query. Policy refresh preserves the installed launcher and
 environment. Separately, [eligible installation drift](/cli/doctor/recovery#gateway-service-recovery)
 in a previously running service is reconciled through the native installer.
 Automatic installation refresh covers installation-only drift; other operator
