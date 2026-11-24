@@ -126,12 +126,14 @@ export async function prepareArchivePins(
       for (const { canonicalKey, index, storePath, targetAgentId } of targets) {
         const outcome = outcomes[index];
         if (outcome?.ok && outcome.applied && outcome.entry.archivedAt !== undefined) {
-          status.set(index, "unchanged");
           committed.set(canonicalKey, {
             index,
             id: targetId(storePath, targetAgentId, canonicalKey, outcome.entry.sessionId),
           });
         }
+      }
+      if (!committed.size) {
+        return;
       }
       const slots: Slot[] = [];
       const removed = new Set<number>();
@@ -148,24 +150,29 @@ export async function prepareArchivePins(
         removed.add(target.index);
         return false;
       });
-      if (!slots.length) {
-        return;
-      }
+      // A second connection may have added a pin during the lifecycle drain. Even a no-op
+      // compares the original value (null means absent), but writes no row or timestamp.
       const result = await setCanonicalUserPreferences(
         owner.profileId,
-        { [preferenceKey]: next },
+        slots.length ? { [preferenceKey]: next } : {},
         {
           assertCurrent: owner.assertCurrent,
-          expectedEntries: { [preferenceKey]: layout },
+          expectedEntries: { [preferenceKey]: prefs?.entries[preferenceKey] ?? null },
         },
       ).catch(() => undefined);
-      for (const index of removed) {
+      for (const { index } of committed.values()) {
         status.set(
           index,
-          result?.ok ? "removed" : result?.error.code === "conflict" ? "conflict" : "unknown",
+          result?.ok
+            ? removed.has(index)
+              ? "removed"
+              : "unchanged"
+            : result?.error.code === "conflict"
+              ? "conflict"
+              : "unknown",
         );
       }
-      if (result?.ok) {
+      if (result?.ok && slots.length) {
         const payload = JSON.stringify(slots);
         undo = `${signature(owner, next, payload)}.${payload}`;
         publishUserPreferencesChanged(options.context, result.value.profileId, [preferenceKey]);

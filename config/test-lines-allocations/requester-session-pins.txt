@@ -5,4 +5,5 @@
 # +72: both bounded owners replace a stale prefix after pagination, even when a delayed tail appears first; an earlier tail cutoff advances the one timer without delaying it.
 # +96: native Archive/Undo through routed SQLite owners, including newer layout conflicts and lost cleanup acknowledgements after a committed archive.
 # +71: signed native Archive with failed profile acquisition, unchanged saved layout, no false Undo and a stale incarnation control.
-1463
+# +70: signed compare-only Archive, new pin during lifecycle drain, untouched absence and mixed-batch conflict receipts.
+1533
