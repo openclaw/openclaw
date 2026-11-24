@@ -53,9 +53,12 @@ export function classifySchemaDowngrade({
   }
   for (const role of ["shared", "agent"]) {
     const target = schemaVersions[role === "shared" ? "state" : "agent"];
-    if (!positiveVersion(target)) fail(null, `Invalid candidate ${role} schema target`);
-    if (!before.some((store) => store.role === role))
+    if (!positiveVersion(target)) {
+      fail(null, `Invalid candidate ${role} schema target`);
+    }
+    if (!before.some((store) => store.role === role)) {
       fail(null, `T fixture did not seed a ${role} store`);
+    }
   }
   for (const store of [...before, ...after]) {
     if (!["shared", "agent"].includes(store.role) || !positiveVersion(store.version)) {
@@ -74,15 +77,21 @@ export function classifySchemaDowngrade({
       prior.role !== store.role ||
       prior.minReader !== store.minReader ||
       prior.hasMinReader !== store.hasMinReader;
-    if (!prior) fail(store.relativePath, "Candidate created a store without a T preimage");
-    if (prior && prior.role !== store.role)
+    if (!prior) {
+      fail(store.relativePath, "Candidate created a store without a T preimage");
+    }
+    if (prior && prior.role !== store.role) {
       fail(store.relativePath, "Candidate changed the store owner");
-    if (prior && store.version < prior.version)
+    }
+    if (prior && store.version < prior.version) {
       fail(store.relativePath, "Candidate regressed the committed schema");
-    if (advanced && store.version !== target)
+    }
+    if (advanced && store.version !== target) {
       fail(store.relativePath, `Advanced store did not reach candidate target ${target}`);
-    if (store.integrity !== "ok")
+    }
+    if (store.integrity !== "ok") {
       fail(store.relativePath, "Post-candidate integrity check did not pass");
+    }
     return {
       relativePath: store.relativePath,
       role: store.role,
@@ -99,8 +108,9 @@ export function classifySchemaDowngrade({
     };
   });
   for (const store of before) {
-    if (!current.has(store.relativePath))
+    if (!current.has(store.relativePath)) {
       fail(store.relativePath, "Candidate removed a seeded store");
+    }
   }
   if (projection && projection.unrestoredRaised.length) {
     fail(null, "Default rollback projection left raised-floor stores unrestored");
@@ -166,9 +176,13 @@ async function waitForBarrier(candidate, sentinel, port) {
       return mark;
     } catch (error) {
       // writeFileSync creates the sentinel before writing its small JSON payload.
-      if (error.code !== "ENOENT" && !(error instanceof SyntaxError)) throw error;
+      if (error.code !== "ENOENT" && !(error instanceof SyntaxError)) {
+        throw error;
+      }
     }
-    if (candidate.error()) throw candidate.error();
+    if (candidate.error()) {
+      throw candidate.error();
+    }
     if (candidate.child.exitCode !== null || candidate.child.signalCode !== null) {
       const exit = await candidate.done;
       throw new Error(
@@ -215,6 +229,7 @@ export async function runSchemaDowngrade({
     },
   };
   let candidate;
+  /** @type {Error | undefined} */
   let failure;
   const save = () => {
     const log = [
@@ -367,7 +382,9 @@ export async function runSchemaDowngrade({
     try {
       receipt.smoke = await smokeReaderFixture(fixture, previousRoot);
     } catch (error) {
-      if (!error.receipt) throw error;
+      if (!error.receipt) {
+        throw error;
+      }
       receipt.smoke = error.receipt;
     }
     Object.assign(
@@ -381,13 +398,18 @@ export async function runSchemaDowngrade({
         smoke: receipt.smoke,
       }),
     );
-    if (!receipt.gate.passed)
+    if (!receipt.gate.passed) {
       failure = new Error("Schema downgrade gate failed; see schema-downgrade.json");
+    }
   } catch (error) {
-    failure = error;
+    failure = error instanceof Error ? error : new Error(errorText(error), { cause: error });
     receipt.error = errorText(error);
-    if (error.receipt) receipt.setupFailure = error.receipt;
-    if (receipt.result !== "failed") receipt.result = "setup-failed";
+    if (error?.receipt) {
+      receipt.setupFailure = error.receipt;
+    }
+    if (receipt.result !== "failed") {
+      receipt.result = "setup-failed";
+    }
     receipt.gate = {
       ...receipt.gate,
       passed: false,
@@ -401,7 +423,7 @@ export async function runSchemaDowngrade({
         receipt.candidate.outputTail = candidate.output();
       }
     } catch (error) {
-      failure = error;
+      failure = error instanceof Error ? error : new Error(errorText(error), { cause: error });
       receipt.result = "setup-failed";
       receipt.error = errorText(error);
       receipt.gate = {
@@ -413,6 +435,8 @@ export async function runSchemaDowngrade({
     }
     save();
   }
-  if (failure) throw Object.assign(failure, { receipt });
+  if (failure) {
+    throw Object.assign(failure, { receipt });
+  }
   return receipt;
 }

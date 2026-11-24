@@ -24,7 +24,10 @@ const barrier = resolve("scripts/e2e/lib/upgrade-survivor/schema-downgrade-barri
 const targets = { state: 5, agent: 7 };
 
 async function sentinelAt(directory: string, filename: string) {
-  for await (const _event of watch(directory, { signal: AbortSignal.timeout(5000) })) {
+  for await (const event of watch(directory, { signal: AbortSignal.timeout(5000) })) {
+    if (event.filename && join(directory, event.filename) !== filename) {
+      continue;
+    }
     try {
       return JSON.parse(readFileSync(filename, "utf8"));
     } catch (error) {
@@ -37,15 +40,15 @@ async function sentinelAt(directory: string, filename: string) {
 }
 
 function connect(port: number): Promise<string> {
-  const { promise, resolve } = Promise.withResolvers<string>();
+  const { promise, resolve: complete } = Promise.withResolvers<string>();
   const socket = createConnection({ port, host: "127.0.0.1", signal: AbortSignal.timeout(2000) });
   socket.once("connect", () => {
     socket.destroy();
-    resolve("connected");
+    complete("connected");
   });
   socket.once("error", (error: NodeJS.ErrnoException) => {
     socket.destroy();
-    resolve(error.code ?? error.message);
+    complete(error.code ?? error.message);
   });
   return promise;
 }

@@ -10,8 +10,9 @@ export function needsSchemaDowngrade(before, after, changedPaths) {
     ["state", "agent"].some(
       (store) => before.openclaw.schemaVersions[store] !== after.openclaw.schemaVersions[store],
     )
-  )
+  ) {
     return true;
+  }
   return changedPaths.some(
     (file) =>
       /^(?:src\/state\/|src\/infra\/database-engine\/|packages\/memory-host-sdk\/)/u.test(file) &&

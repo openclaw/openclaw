@@ -26,6 +26,7 @@ async function releaseIdentity(codeRoot) {
 async function command(fixture, codeRoot, args, timeout = 30_000) {
   const process = startNodeFixture([path.resolve(codeRoot, "openclaw.mjs"), ...args], fixture.env);
   let timer;
+  /** @type {Error | undefined} */
   let failure;
   try {
     const exit = await Promise.race([
@@ -47,8 +48,8 @@ async function command(fixture, codeRoot, args, timeout = 30_000) {
     assert.equal(values.length, 1, "Release CLI did not return exactly one JSON value");
     return values[0];
   } catch (error) {
-    failure = error;
-    throw error;
+    failure = error instanceof Error ? error : new Error(String(error), { cause: error });
+    throw failure;
   } finally {
     clearTimeout(timer);
     const exit = await process.stop();
@@ -113,6 +114,7 @@ async function withGateway(fixture, codeRoot, run) {
     [path.resolve(codeRoot, "openclaw.mjs"), "gateway", "run", "--port", String(fixture.port)],
     fixture.env,
   );
+  /** @type {Error | undefined} */
   let failure;
   try {
     await waitReady(fixture, gateway);
@@ -148,22 +150,22 @@ async function withGateway(fixture, codeRoot, run) {
     );
     receipt.status = "passed";
   } catch (error) {
-    failure = error;
-    receipt.failureKind = error.failureKind ?? "compatibility";
-    receipt.failure = { message: error.message, command: error.command };
+    failure = error instanceof Error ? error : new Error(String(error), { cause: error });
+    receipt.failureKind = error?.failureKind ?? "compatibility";
+    receipt.failure = { message: failure.message, command: error?.command };
   } finally {
     const exit = await gateway.stop();
     receipt.gateway = { exit, output: gateway.output(), error: gateway.error()?.message };
   }
   if (failure) {
-    failure.receipt = receipt;
-    throw failure;
+    throw Object.assign(failure, { receipt });
   }
   return receipt;
 }
 
 function historyMessages(history) {
   return history.messages.map((message) => {
+    // eslint-disable-next-line no-underscore-dangle -- Public Gateway transcript metadata field.
     const id = message.__openclaw?.id ?? message.id;
     assert.equal(typeof id, "string", "History message lacks a public stable ID");
     return { id, role: message.role, content: message.content };

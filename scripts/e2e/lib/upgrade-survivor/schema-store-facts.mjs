@@ -24,7 +24,9 @@ function storePaths(stateDir) {
 function filesAt(filename) {
   return suffixes.flatMap((suffix) => {
     const file = `${filename}${suffix}`;
-    if (!fs.existsSync(file)) return [];
+    if (!fs.existsSync(file)) {
+      return [];
+    }
     const bytes = fs.readFileSync(file);
     return [
       { suffix, bytes: bytes.length, sha256: createHash("sha256").update(bytes).digest("hex") },
@@ -36,8 +38,9 @@ function copyStore(source, destination) {
   fs.mkdirSync(path.dirname(destination), { recursive: true });
   for (const suffix of suffixes) {
     fs.rmSync(`${destination}${suffix}`, { force: true });
-    if (fs.existsSync(`${source}${suffix}`))
+    if (fs.existsSync(`${source}${suffix}`)) {
       fs.copyFileSync(`${source}${suffix}`, `${destination}${suffix}`);
+    }
   }
 }
 export function readSqliteStoreFacts(filename) {
@@ -47,7 +50,7 @@ export function readSqliteStoreFacts(filename) {
     assert(metadata, `Missing primary schema metadata: ${filename}`);
     assert(
       ["global", "agent"].includes(metadata.role),
-      `Unknown schema owner ${metadata.role}: ${filename}`,
+      `Unknown schema owner ${String(metadata.role)}: ${filename}`,
     );
     const role = metadata.role === "global" ? "shared" : "agent";
     const headerVersion = db.prepare("PRAGMA user_version").get().user_version;
@@ -118,13 +121,12 @@ export function inspectFixtureStores(stateDir, inspectionRoot) {
     const inspectionPath = path.join(inspectionRoot, relativePath);
     const files = filesAt(filename);
     copyStore(filename, inspectionPath);
-    return {
+    return Object.assign(readSqliteStoreFacts(inspectionPath), {
       relativePath,
       path: filename,
       inspectionPath,
       files,
-      ...readSqliteStoreFacts(inspectionPath),
-    };
+    });
   });
 }
 export function snapshotFixtureStores(stateDir, destination) {
@@ -168,10 +170,11 @@ export function restoreRaisedFloorStores(stateDir, baselineRoot, before, after) 
       afterFloor: current.minReader,
     });
   }
-  for (const previous of before)
+  for (const previous of before) {
     assert(
       after.some(({ relativePath }) => relativePath === previous.relativePath),
       `Candidate removed store ${previous.relativePath}`,
     );
+  }
   return receipt;
 }
