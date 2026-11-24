@@ -12,7 +12,6 @@ import {
   resolveReplySourceTurnId,
   setChannelSourceTurnId,
 } from "../../auto-reply/reply/source-turn-id.js";
-import { composeSessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
 import { isAbortError } from "../../infra/abort-signal.js";
 import { assertAgentRunLifecycleGenerationCurrent } from "../../infra/agent-events.js";
 import { adoptExecRequestSession } from "../../infra/exec-request-context.js";
@@ -152,8 +151,6 @@ async function executeAgentRun(
     const assertDispatchCurrent = () => {
       params.assertGatewayLifetimeCurrent?.();
       params.executionSource?.();
-      prepared.operatorAuthority?.assertCurrent();
-      prepared.userTurn.assertRequesterCurrent?.();
       abortController.signal.throwIfAborted();
       assertAgentRunLifecycleGenerationCurrent(params.lifecycleGeneration);
       if (
@@ -413,14 +410,7 @@ async function executeAgentRun(
               },
               cronCreatorAuthority: prepared.cronCreatorAuthority,
               ingressOpts: {
-                // An owner fact taken from the requester, such as a spawning channel owner,
-                // fences the run like a channel owner's own turn, not only its admission.
-                assertSourceCurrent: prepared.userTurn.assertRequesterCurrent
-                  ? composeSessionSourceAssertion([
-                      params.executionSource,
-                      prepared.userTurn.assertRequesterCurrent,
-                    ])
-                  : params.executionSource,
+                assertSourceCurrent: params.executionSource,
                 skillLibraryAuthoring,
                 message,
                 images: params.images,

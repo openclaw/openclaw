@@ -137,24 +137,28 @@ export function reuseSessionRowChildLinks(
   links: readonly SessionChildLink[],
   previous: Readonly<ReturnType<typeof projectSessionRowChildLinks>>,
 ) {
-  return previous &&
-    previous.length === links.length &&
-    links.every(({ key, entry, agentId, storePath }, index) => {
-      const before = previous[index]!;
-      return (
-        key === before.key &&
-        agentId === before.agentId &&
-        storePath === before.storePath &&
-        // SAFETY: projectSessionRowChildLinks creates this compact entry with only SessionEntry keys.
-        (Object.keys(before.entry) as (keyof typeof before.entry)[]).every(
-          (field) =>
-            entry[field] === before.entry[field] ||
-            isDeepStrictEqual(entry[field], before.entry[field]),
-        )
-      );
-    })
-    ? previous
-    : links;
+  if (!previous || previous.length !== links.length) {
+    return links;
+  }
+  // SAFETY: The producer gives every compact entry the same set of SessionEntry keys.
+  const fields = Object.keys(previous[0]?.entry ?? {}) as (keyof NonNullable<
+    typeof previous
+  >[number]["entry"])[];
+  for (const [index, { key, entry, agentId, storePath }] of links.entries()) {
+    const before = previous[index]!;
+    if (key !== before.key || agentId !== before.agentId || storePath !== before.storePath) {
+      return links;
+    }
+    for (const field of fields) {
+      if (
+        entry[field] !== before.entry[field] &&
+        !isDeepStrictEqual(entry[field], before.entry[field])
+      ) {
+        return links;
+      }
+    }
+  }
+  return previous;
 }
 
 export function resolveTranscriptUsageFallbacks(params: {

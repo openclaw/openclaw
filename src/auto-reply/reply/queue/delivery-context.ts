@@ -180,7 +180,6 @@ export async function prepareNextDeliveryGroup(
   const assertCurrent = () => {
     assertDrainCurrent();
     for (const item of items) {
-      item.operatorAuthority?.assertCurrent();
       if (isFollowupRunAborted(item)) {
         throw new FollowupRunDeferredError("Queued delivery source changed during preparation");
       }

@@ -1,4 +1,4 @@
-import { createMemo, For, onSettled, Show } from "solid-js";
+import { createMemo, For, lazy, onSettled, Show } from "solid-js";
 import { presenceUserKey } from "../../../src/shared/presence-user.ts";
 import { pathForRoute } from "../app-route-paths.ts";
 import { handleNavigationClick } from "../lib/navigation-click.ts";
@@ -15,7 +15,6 @@ import { renderSidebarSessionSectionHeader as SessionSectionHeader } from "./app
 import {
   rowDemandsVisibility,
   RowVisibilityReason,
-  SIDEBAR_SESSION_PAGE_SIZE,
   type SidebarRecentSession,
 } from "./app-sidebar-session-types.ts";
 import {
@@ -24,8 +23,12 @@ import {
   orderWhileRenaming,
 } from "./sidebar-rename-order.ts";
 import { createSidebarSessionWindow } from "./sidebar-session-window.tsx";
+import { SidebarViewBoundary } from "./sidebar-view-boundary.tsx";
 import { Icon } from "./solid/icon.tsx";
 import { renderNewSessionLink as NewSessionLink } from "./solid/new-session-link.tsx";
+
+// Most sections fit their first page, so Show more/Collapse load on first need.
+const SessionPagination = lazy(() => import("./app-sidebar-session-pagination.tsx"));
 export function renderSessionSection(params: {
   host: SidebarSessionListHost;
   section: RenderableSessionSection;
@@ -434,58 +437,18 @@ export function renderSessionSection(params: {
               </div>
             </div>
           ) : undefined}
-          <SessionPagination host={host()} section={section()} />
+          <Show
+            when={
+              section().visibleRowCount < section().totalRowCount ||
+              section().visibleRowCount > section().collapsedVisibleRowCount
+            }
+          >
+            <SidebarViewBoundary fallback={false}>
+              <SessionPagination host={host()} section={section()} />
+            </SidebarViewBoundary>
+          </Show>
         </>
       )}
     </div>
-  );
-}
-
-/** Section paging only reveals rows the roster already holds. Fetching the next
- *  roster page is a list-level action because it feeds every section at once --
- *  bolting it to one section left the others unable to recover missing rows. */
-function SessionPagination(params: {
-  host: SidebarSessionListHost;
-  section: RenderableSessionSection;
-}) {
-  const host = createMemo(() => params.host),
-    section = createMemo(() => params.section);
-  const canShowMore = createMemo(() => section().visibleRowCount < section().totalRowCount);
-  const canShowLess = createMemo(
-    () => section().visibleRowCount > section().collapsedVisibleRowCount,
-  );
-  return (
-    <Show when={canShowMore() || canShowLess()}>
-      <div class="sidebar-session-pagination">
-        {canShowMore() ? (
-          <button
-            type="button"
-            class="sidebar-session-pagination__button"
-            aria-label={t("chat.selectors.loadMoreSessions")}
-            onClick={() => {
-              host().setVisibleSessionLimit(
-                section().id,
-                section().visibleLimit + SIDEBAR_SESSION_PAGE_SIZE,
-              );
-            }}
-          >
-            {t("chat.selectors.loadMoreSessions")}
-          </button>
-        ) : undefined}
-        {canShowLess() ? (
-          <button
-            type="button"
-            class="sidebar-session-pagination__button"
-            aria-label={t("usage.details.collapse")}
-            onClick={() => {
-              host().clearSessionSelection();
-              host().resetVisibleSessionLimit(section().id);
-            }}
-          >
-            {t("usage.details.collapse")}
-          </button>
-        ) : undefined}
-      </div>
-    </Show>
   );
 }

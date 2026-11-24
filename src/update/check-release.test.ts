@@ -48,6 +48,15 @@ it("checks the repository config fixture on old-schema state without migrating o
   expect(listDirectoryTreeStrictSync(root)).toEqual(filesBefore);
 });
 
+it("accepts a config whose agents section has no entries, like every other config reader", async () => {
+  // `openclaw models set` on a fresh profile writes this shape; loading adds the implicit `main`.
+  await fs.writeFile(
+    configPath,
+    JSON.stringify({ agents: { defaults: { model: { primary: "openai/gpt-5.5" } } } }),
+  );
+  expect(await checkRelease({ env, configPath })).toMatchObject({ ok: true });
+});
+
 it.each(["state", "agent"] as const)(
   "refuses a newer %s schema by reading its file directly",
   async (kind) => {

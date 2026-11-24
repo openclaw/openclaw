@@ -1,4 +1,5 @@
 import process from "node:process";
+import { sha256Hex } from "openclaw/plugin-sdk/node-crypto-runtime";
 import {
   parseDateFirstTimestampMs,
   timestampMsToIsoString,
@@ -35,7 +36,10 @@ const PI_PARAMETER_MESSAGES = {
   invalidThreadId: "threadId is invalid",
 };
 
-export async function listLocalPiSessionPage(value?: unknown): Promise<PiSessionPage> {
+export async function listLocalPiSessionPage(
+  value?: unknown,
+  bindSource = false,
+): Promise<PiSessionPage> {
   const params = sessionCatalogPaging.parseListParams(value, {
     searchMaxLength: MAX_SEARCH_LENGTH,
     messages: PI_PARAMETER_MESSAGES,
@@ -46,7 +50,9 @@ export async function listLocalPiSessionPage(value?: unknown): Promise<PiSession
     limit: params.limit,
     ...(params.searchTerm ? { searchTerm: params.searchTerm } : {}),
   });
-  const page = summaries.map(({ file: _file, version: _version, ...session }) => session);
+  const page = summaries.map(({ file, version: _version, ...session }) =>
+    bindSource ? Object.assign(session, { sourceHomeId: sha256Hex(file) }) : session,
+  );
   return {
     sessions: page,
     ...(hasMore ? { nextCursor: sessionCatalogPaging.encodeCursor(offset + page.length) } : {}),
@@ -192,6 +198,7 @@ function piTranscriptItems(entries: Record<string, unknown>[]): SessionCatalogTr
 
 export async function readLocalPiTranscriptPage(
   value: unknown,
+  sourceHomeId?: string,
 ): Promise<SessionsCatalogReadResult> {
   const params = sessionCatalogPaging.parseReadParams(value, {
     threadIdMaxLength: 256,
@@ -199,7 +206,9 @@ export async function readLocalPiTranscriptPage(
     messages: PI_PARAMETER_MESSAGES,
   });
   const offset = sessionCatalogPaging.decodeCursor(params.cursor);
-  const items = piTranscriptItems(await readPiSessionById(params.threadId, process.env));
+  const items = piTranscriptItems(
+    await readPiSessionById(params.threadId, process.env, sourceHomeId),
+  );
   const page = sessionCatalogPaging.boundTranscriptPage(items, params.limit, offset);
   return {
     hostId: LOCAL_HOST_ID,

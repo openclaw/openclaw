@@ -5,7 +5,7 @@ import type { ReplyMediaAttachment } from "../auto-reply/reply-payload.js";
 import type { ReplyDirectiveParseResult } from "../auto-reply/reply/reply-directives.js";
 import type { ReasoningLevel } from "../auto-reply/thinking.js";
 import type { AgentItemEventData } from "../infra/agent-activity-events.js";
-import type { AssistantMessage } from "../llm/types.js";
+import type { AssistantHistoryMessage } from "../llm/types.js";
 import type { AcceptedSessionSpawn } from "./accepted-session-spawn.js";
 import type { LiveEditDiffProgressState } from "./embedded-agent-live-edit-diff.js";
 import type {
@@ -81,7 +81,7 @@ export type StreamBlockState = {
 };
 
 /** A response-ending answer and the message index its reply payload belongs to. */
-export type CompletedAssistantAnswer = { assistant: AssistantMessage; messageIndex: number };
+export type CompletedAssistantAnswer = { assistant: AssistantHistoryMessage; messageIndex: number };
 
 /** Mutable subscription state shared by embedded-agent event handlers. */
 export class EmbeddedAgentSubscribeState {
@@ -90,7 +90,7 @@ export class EmbeddedAgentSubscribeState {
     textEnd: number;
     messageEnd: number;
     finalMessageStart: number;
-    lastAssistant: AssistantMessage;
+    lastAssistant: AssistantHistoryMessage;
     keptAnswer?: CompletedAssistantAnswer;
     sourceReplyDeliveryState?: ReplyDeliveryState;
   }> = [];
@@ -239,7 +239,7 @@ export class EmbeddedAgentSubscribeState {
   > & { audioDirectiveStart?: number } = undefined;
   deterministicApprovalPromptPending = false;
   deterministicApprovalPromptSent = false;
-  declare lastAssistant?: AssistantMessage;
+  declare lastAssistant?: AssistantHistoryMessage;
 
   // Terminal results outlive the subscription; retain only its recorded facts.
   setTerminalLifecycleMeta(meta: {

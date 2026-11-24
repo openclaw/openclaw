@@ -14,6 +14,8 @@ import { isSqliteWorkerError } from "../../infra/sqlite-worker-contract.js";
 import * as admission from "../../infra/sqlite-worker-operation-admission.js";
 import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
 import { PluginInstance } from "../../plugins/plugin-instance.js";
+import { chatRef } from "../../sessions/chat-ref.js";
+import { fold, owe } from "../../sessions/owed.js";
 import { readWithdrawnUserTurnInputId } from "../../sessions/user-turn-transcript-admission.js";
 import { completeUserTurnProcessing } from "../../sessions/user-turn-transcript-processing.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
@@ -24,6 +26,7 @@ import {
 import { ensureSessionPendingInputsSchema } from "../../state/openclaw-agent-pending-inputs-schema.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../runtime-snapshot.js";
+import { resolveSessionStorePathCore } from "./paths.js";
 import {
   listSessionPendingInputs,
   stageSessionPendingInput,
@@ -33,6 +36,7 @@ import { writeSessionEntry } from "./session-accessor.sqlite-entry-store.js";
 import { SessionPendingInputCustodyError } from "./session-pending-input-custody-error.js";
 import { mutatePendingInput, readPendingInput } from "./session-pending-input-operations.kernel.js";
 import type { PendingInputMutation } from "./session-pending-input-operations.types.js";
+import { readOwedKind } from "./session-pending-input-value.js";
 import { interceptPendingInputWorker } from "./session-pending-input.test-support.js";
 
 afterEach(() => resetConfigRuntimeState());
@@ -160,6 +164,70 @@ it("supports synchronous recorder completion during compatibility", () =>
     expect(pending()).toEqual([]);
     expect(await recorder.completeProcessingAsync?.(outcome)).toEqual(outcome);
     await recorder.waitForPendingInputSettlement!();
+  }));
+
+// A restart reads the owed kind from the stored row; an adopted row must keep it.
+it("lets the exec wake turn adopt its owed row and keeps the row's owed kind", () =>
+  withFixture(async ({ rows }) => {
+    const storePath = resolveSessionStorePathCore(undefined, { agentId: scope.agentId });
+    const owed = {
+      id: "exec:owed-wake",
+      to: chatRef({ ...scope, storePath }),
+      kind: "exec" as const,
+      text: "Exec completed (owed-wake, code 0, 1s)",
+    };
+    await owe(owed);
+    await owe(owed);
+    const adopted = expectDefined(
+      await stageSessionPendingInput(scope, {
+        runId: "exec-wake-turn",
+        message: {
+          role: "user",
+          content: owed.text,
+          timestamp: 2,
+          idempotencyKey: owed.id,
+          provenance: { kind: "internal_system", sourceTool: "exec" },
+        },
+        assertCurrent() {},
+      }),
+      "Expected the wake turn to adopt the owed row",
+    );
+    expect(adopted.state).toBe("queued");
+    const stored = rows("session_pending_inputs", "run_id, message_json") as Array<{
+      run_id: string;
+      message_json: string;
+    }>;
+    expect(stored.map((row) => row.run_id)).toEqual(["exec-wake-turn"]);
+    expect(readOwedKind(stored[0]!.message_json)).toBe("exec");
+    adopted.finish("cancelled", "failed");
+    await adopted.settled?.();
+  }));
+
+// A shared completion turn answers several owed results. Restart recovery replays every queued
+// owed row, so the fold must leave exactly one row that carries all of them.
+it("folds a shared turn's owed results into one stored row in one write", () =>
+  withFixture(async ({ rows }) => {
+    const storePath = resolveSessionStorePathCore(undefined, { agentId: scope.agentId });
+    const to = chatRef({ ...scope, storePath });
+    const first = { id: "exec:first", to, kind: "exec" as const, text: "Exec completed (first)" };
+    const second = {
+      id: "exec:second",
+      to,
+      kind: "exec" as const,
+      text: "Exec completed (second)",
+    };
+    await owe(first);
+    await owe(second);
+    await fold({ ...first, text: `${first.text}\n${second.text}` }, [second]);
+    const stored = rows("session_pending_inputs", "idempotency_key, message_json") as Array<{
+      idempotency_key: string;
+      message_json: string;
+    }>;
+    expect(stored.map((row) => row.idempotency_key)).toEqual(["exec:first"]);
+    expect(JSON.parse(stored[0]!.message_json)).toMatchObject({
+      content: "Exec completed (first)\nExec completed (second)",
+      kind: "exec",
+    });
   }));
 
 it("reads current membership at staging admission and rejects a replaced session", () =>

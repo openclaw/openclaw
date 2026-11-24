@@ -87,7 +87,14 @@ function activationOwner(
       deviceToken ?? "",
       ...(receipt.modelTarget ? [receipt.modelTarget] : []),
       ...(receipt.wizard
-        ? [receipt.wizard.sessionId, receipt.wizard.authChoice, receipt.wizard.authKind ?? ""]
+        ? [
+            receipt.wizard.sessionId,
+            receipt.wizard.authChoice,
+            receipt.wizard.authKind ?? "",
+            ...(receipt.wizard.selectModel === undefined
+              ? []
+              : [String(receipt.wizard.selectModel)]),
+          ]
         : []),
     ];
     const encoder = new TextEncoder();
@@ -145,6 +152,8 @@ export function readFirstRunActivationReceipt(
           !receipt.wizard.sessionId ||
           typeof receipt.wizard.authChoice !== "string" ||
           !receipt.wizard.authChoice ||
+          (receipt.wizard.selectModel !== undefined &&
+            typeof receipt.wizard.selectModel !== "boolean") ||
           (receipt.wizard.authKind !== undefined &&
             receipt.wizard.authKind !== "secret" &&
             receipt.wizard.authKind !== "oauth" &&

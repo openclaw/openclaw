@@ -389,7 +389,10 @@ export async function resolveUpdateCommandTarget(
             ...reportOptions,
             controlPlaneUpdateSentinelMeta,
           };
-          throw new UnreportedUpdateAdmissionOutcome(report, { exitCode: 0 });
+          throw new UnreportedUpdateAdmissionOutcome(
+            report,
+            error.reason === "git-version-unsupported" ? undefined : { exitCode: 0 },
+          );
         });
         if (manager) {
           packageManager = manager;

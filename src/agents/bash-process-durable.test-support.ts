@@ -43,6 +43,7 @@ import {
   getActiveBackgroundExecSessionCount,
   createProcessSession,
   markBackgrounded,
+  processSessionInstanceId,
   type ProcessSession,
   setExitWakeRecorder,
   waitForExecSession,
@@ -509,10 +510,14 @@ void it("reports each wake-armed ordinary command a restart lost, once, with wha
           }),
         );
         const notice = async (session: ProcessSession) => {
-          const matching = () =>
-            peekSystemEventEntries(sessionKey).filter(
-              (event) => event.contextKey === `exec:${session.id}`,
+          // The notice is keyed by the adopted process instance (its owed result id).
+          const matching = () => {
+            const adopted = getFinishedSession(session.id) ?? getSession(session.id);
+            const contextKey = adopted && `exec:${processSessionInstanceId(adopted)}`;
+            return peekSystemEventEntries(sessionKey).filter(
+              (event) => contextKey !== undefined && event.contextKey === contextKey,
             );
+          };
           // Reporting runs after startup without holding durable adoption.
           for (let turn = 0; turn < 500 && matching().length === 0; turn++) {
             await delay(10);

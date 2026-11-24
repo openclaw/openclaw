@@ -121,6 +121,9 @@ export function createControlUiDefaultResponses(scenario: {
     "beam.owned.resolve": null,
     "approval.history": { items: [] } satisfies ApprovalHistoryResult,
     "exec.approval.grants.list": { grants: [] } satisfies ExecApprovalGrantsListResult,
+    "openclaw.setup.options": {
+      __mockError: { code: "UNAVAILABLE", message: "setup options not mocked" },
+    },
     "openclaw.chat.history": { turns: [] } satisfies SystemAgentChatHistoryResult,
     "sessions.usage": {
       updatedAt: now.getTime(),

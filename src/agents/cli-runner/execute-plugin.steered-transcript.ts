@@ -4,6 +4,8 @@ import {
 } from "../../auto-reply/reply/message-injection-authority.js";
 import { formatErrorMessage, toErrorObject } from "../../infra/errors.js";
 import { labelRuntimeContextText } from "../../llm/types.js";
+import { getAgentScopedMediaLocalRoots } from "../../media/local-roots.js";
+import { hasPromptImageInput } from "../../media/prompt-image-input.js";
 import type {
   CliBackendMessageInjection,
   CliBackendPromptContext,
@@ -15,6 +17,7 @@ import type {
   ReplyBackendQueueMessageResult,
 } from "../../sessions/session-controller.contracts.js";
 import { projectRuntimeContextFragments } from "../internal-runtime-context.js";
+import { loadCliPromptImages } from "./helpers.js";
 import { cliBackendLog } from "./log.js";
 import { readCliPromptContext, toCliModelRequestPayload } from "./model-request-hook.js";
 import type { PreparedCliRunContext } from "./types.js";
@@ -23,9 +26,9 @@ import type { PreparedCliRunContext } from "./types.js";
 export function createSteeredCliMessageInjection(params: {
   getInjection: () => CliBackendMessageInjection | undefined;
   signal: AbortSignal;
-  /** Owning run: its working directory and before_model_request gate. */
+  /** Owning run: its working directory, media roots, and before_model_request gate. */
   context: {
-    params: Pick<PreparedCliRunContext["params"], "cwd" | "workspaceDir">;
+    params: Pick<PreparedCliRunContext["params"], "cwd" | "workspaceDir" | "config" | "agentId">;
     beforeModelRequest?: PreparedCliRunContext["beforeModelRequest"];
   };
   /** Native owns the steered input; tool tracking starts a new input's reply state. */
@@ -49,6 +52,21 @@ export function createSteeredCliMessageInjection(params: {
     const recorder = options?.userTurnTranscriptRecorder;
     try {
       const message = await recorder?.resolveMessage();
+      // Same hydration as the turn's first prompt; admission already required acceptsImages.
+      const images = hasPromptImageInput(options)
+        ? await loadCliPromptImages({
+            prompt: text,
+            workspaceDir: params.context.params.workspaceDir,
+            localRoots: getAgentScopedMediaLocalRoots(
+              params.context.params.config ?? {},
+              params.context.params.agentId,
+            ),
+            images: options?.images,
+            imageOrder: options?.imageOrder,
+            media: options?.media,
+            userTurnTranscriptRecorder: recorder,
+          })
+        : [];
       const context = options?.currentInboundContext;
       let steeredText = text;
       let promptContext: CliBackendPromptContext | undefined = context
@@ -94,6 +112,7 @@ export function createSteeredCliMessageInjection(params: {
             ? { promptOrigin: "host" as const }
             : {}),
           ...(promptContext ? { promptContext } : {}),
+          ...(images.length > 0 ? { images } : {}),
         },
       );
       accepted = true;

@@ -1,11 +1,11 @@
 import { coerceErrorMessage } from "@openclaw/normalization-core";
 import { action, createMemo, createOptimistic, createSignal, Errored, Show } from "solid-js";
 import type { NodePermissionRequest } from "../../../../../packages/gateway-protocol/src/node-permissions.js";
-import { Icon } from "../../../components/solid/icon.tsx";
 import { registerChatPermissionsEnglish } from "../../../i18n/locales/en-chat-permissions.ts";
 import { projectNativeDeviceSettings } from "../../../lib/reactive/application-native.ts";
 import { useOptionalApplication } from "../../../lib/reactive/context.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
+import { ChatActionCard } from "./chat-action-card.tsx";
 
 registerEnglishCatalog(registerChatPermissionsEnglish);
 
@@ -104,14 +104,10 @@ export function ChatPermissionCard(props: {
   });
   return (
     <openclaw-chat-permission-card>
-      <section
-        class="chat-permission-card"
-        aria-label={t("chat.permissions.title", { permissions: names() })}
+      <ChatActionCard
+        icon="shieldCheck"
+        title={t("chat.permissions.title", { permissions: names() })}
       >
-        <div class="chat-permission-card__heading">
-          <Icon name="shieldCheck" />
-          <strong>{t("chat.permissions.title", { permissions: names() })}</strong>
-        </div>
         <p>
           {t("chat.permissions.neededOn", { node: props.request.nodeName ?? props.request.nodeId })}
         </p>
@@ -169,7 +165,7 @@ export function ChatPermissionCard(props: {
             );
           }}
         </Show>
-      </section>
+      </ChatActionCard>
     </openclaw-chat-permission-card>
   );
 }

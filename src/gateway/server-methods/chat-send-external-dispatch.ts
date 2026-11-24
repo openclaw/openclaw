@@ -20,10 +20,11 @@ export function runChatSendExternalDispatch<T>(
   // Resume is an explicit authenticated Goal operation, though its transcript input
   // is hidden/internal. It carries operator authority, not cron-creation authority.
   const assertRepositoryCurrent =
-    params.admission.codexGoalAdmission &&
+    params.admission.runtimeGoal &&
     isDirectGatewayUserClient(params.client) &&
     params.request.goalOperation
-      ? params.admission.operatorAuthority?.assertCurrent
+      ? params.admission.operatorAuthority &&
+        (() => params.admission.activeRunAbort.controller.signal.throwIfAborted())
       : externalAuthorityAdmission && assertDashboardReadCurrent;
   return assertRepositoryCurrent
     ? withRepositoryChatDispatch(
