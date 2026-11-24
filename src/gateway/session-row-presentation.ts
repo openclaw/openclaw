@@ -151,12 +151,13 @@ export function prepareSessionRowPublication(
   projection: SessionRowProjection,
   now: number,
   read: SessionRowReadView = projection,
+  legacyPins = usesLegacySessionPins,
 ) {
   const view = prepareSessionRowPublicationView(projection);
   let activeRuns: Map<VisibleActiveSessionRunProjector, ActiveRunStates> | undefined;
   let subagentRuns: SessionRowReadView["state"]["rowContext"]["subagentRuns"] | undefined;
   return (client?: GatewayClient | null, projectRun?: VisibleActiveSessionRunProjector) => {
-    const recipient = prepareSessionRowRecipient(read, client, view);
+    const recipient = prepareSessionRowRecipient(read, client, view, legacyPins);
     let presentation: ReturnType<typeof prepareProjectedSessionPresentation> | undefined;
     return {
       getAudienceKey() {
@@ -191,10 +192,9 @@ function prepareSessionRowRecipient(
   projection: SessionRowReadView,
   client?: GatewayClient | null,
   publication?: PublicationView,
+  legacyPins = usesLegacySessionPins,
 ) {
   const { cfg, policyConfig, rowContext } = projection.state;
-  const presentFastMode = prepareSessionFastModePresentation(client);
-  const publicationState = publication?.();
   const sharing = prepareProjectedSessionSharing({
     cfg: policyConfig,
     client: client ?? null,
@@ -211,10 +211,10 @@ function prepareSessionRowRecipient(
     cfg,
     policyConfig,
     rowContext,
-    presentFastMode,
-    publicationState,
+    presentFastMode: prepareSessionFastModePresentation(client),
+    publicationState: publication?.(),
     sharing,
-    omitSharedPins: client !== undefined && !usesLegacySessionPins(client),
+    omitSharedPins: client !== undefined && !legacyPins(client),
   };
 }
 

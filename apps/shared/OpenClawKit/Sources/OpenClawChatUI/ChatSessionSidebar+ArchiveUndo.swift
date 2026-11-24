@@ -184,7 +184,12 @@ extension ChatSessionSidebarBatch {
             return confirmed
         } catch {
             if connection.isCurrent() {
-                errors[OpenClawChatSessionSidebarData.identity(row)] = error.localizedDescription
+                var message = error.localizedDescription
+                if recovery != nil {
+                    // A lost acknowledgement is not proof of failure. The caller refreshes both rosters.
+                    message += " " + String(localized: "Check Threads… → Archived after refreshing. If the thread is Active, it was restored.")
+                }
+                errors[OpenClawChatSessionSidebarData.identity(row)] = message
                 if archiveUndoToken != nil, let response = error as? GatewayResponseError,
                    response.method == "sessions.patch", response.code == "INVALID_REQUEST",
                    response.detailsReason == "ARCHIVE_UNDO_REQUIRES_RESTORE",

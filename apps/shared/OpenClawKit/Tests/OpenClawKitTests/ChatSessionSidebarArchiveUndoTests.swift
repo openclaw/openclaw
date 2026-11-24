@@ -289,8 +289,10 @@ struct ChatSessionSidebarArchiveUndoTests {
         #expect(batch.archiveUndo == nil)
     }
 
-    @Test(arguments: [false, true])
-    func `retired checkout offers a separate ordinary Restore on the original connection`(reconnect: Bool) async throws {
+    enum RestoreOutcome: CaseIterable { case restored, reconnect, unavailable, timedOut }
+
+    @Test(arguments: RestoreOutcome.allCases)
+    func `retired checkout offers a separate ordinary Restore on the original connection`(_ outcome: RestoreOutcome) async throws {
         let batch = ChatSessionSidebarBatch(), row = try self.row()
         var calls: [OpenClawChatGatewayRequest] = []
         var current = true
@@ -303,17 +305,22 @@ struct ChatSessionSidebarArchiveUndoTests {
                 throw GatewayResponseError(method: "sessions.patch", code: "INVALID_REQUEST", message: "Retired",
                                            details: ["reason": .init("ARCHIVE_UNDO_REQUIRES_RESTORE"), "archivedAt": .init(20), "lifecycleRevision": .init("generation")])
             }
+            if outcome == .unavailable {
+                throw GatewayResponseError(method: "sessions.patch", code: "UNAVAILABLE", message: "Not ready",
+                                           details: nil, retryable: true)
+            }
+            if outcome == .timedOut { throw URLError(.timedOut) }
             return try self.acknowledgement(row, archived: false)
         }
         _ = await batch.archive(row, mainKey: "main", connection: connection, owner: nil)
         await undo(batch, owner: nil)
         #expect(calls.count == 2) // Refusing Undo never creates a checkout or sends a shared write.
         let action = try #require(batch.archiveRecoveries.values.first)
-        current = !reconnect
+        current = outcome != .reconnect
         await batch.restoreArchivedSnapshot(action, owner: nil)
         await batch.restoreArchivedSnapshot(action, owner: nil)
         #expect(batch.archiveRecoveries.isEmpty)
-        if reconnect {
+        if outcome == .reconnect {
             #expect(calls.count == 2); return
         }
         #expect(calls.count == 3)
@@ -323,7 +330,10 @@ struct ChatSessionSidebarArchiveUndoTests {
         #expect(params["expectedLifecycleRevision"]?.value as? String == "generation")
         #expect(params["expectedArchivedAt"]?.value as? Int == 20)
         #expect(params["archived"]?.value as? Bool == false)
-        #expect(batch.errors.isEmpty)
+        if outcome == .restored { #expect(batch.errors.isEmpty) } else {
+            let message = try #require(batch.errors[OpenClawChatSessionSidebarData.identity(row)])
+            #expect(message.contains("Threads… → Archived"))
+        }
     }
 
     @Test func `failed archives offer no undo and reconnect fences captured receipts`() async throws {
