@@ -20,6 +20,7 @@ import {
   prepareSqliteReadOnlyLocationSyncInProcess,
   SqliteSourceChangedError,
 } from "./sqlite-readonly-location.js";
+import type { PreparedSqliteReadOnlyLocation } from "./sqlite-readonly-location.types.js";
 import { withSqliteReadOnlyWorkerScope } from "./sqlite-readonly-worker.js";
 import { MAX_SNAPSHOT_ATTEMPTS } from "./sqlite-snapshot-policy.js";
 import {
@@ -336,7 +337,7 @@ it("identifies filesystem failures whose path belongs to the staging destination
   expect(fs.readdirSync(stagingRoot)).toEqual([]);
 });
 
-it("preserves source corruption for consumer validation without staging quota errors", async () => {
+it("preserves source corruption across acquisition and validation without staging quota errors", async () => {
   const cacheRoot = tempDirs.make("openclaw-sqlite-snapshot-corrupt-source-");
   const databasePath = createTempDatabasePath(
     "CREATE TABLE probe (value TEXT); INSERT INTO probe VALUES ('corrupt');",
@@ -348,6 +349,11 @@ it("preserves source corruption for consumer validation without staging quota er
   } finally {
     fs.closeSync(descriptor);
   }
+  const sourceBefore = fs.readFileSync(databasePath);
+  const stagingRoot = resolvePrivateSqliteSnapshotStagingRoot({
+    ...process.env,
+    XDG_CACHE_HOME: cacheRoot,
+  });
 
   withDatabase(
     databasePath,
@@ -361,28 +367,35 @@ it("preserves source corruption for consumer validation without staging quota er
 
   await withEnvAsync({ XDG_CACHE_HOME: cacheRoot }, async () => {
     for (const prepare of [prepareSqliteReadOnlyLocationInProcess, prepareSqliteReadOnlyLocation]) {
-      const prepared = await prepare(databasePath);
+      let prepared: PreparedSqliteReadOnlyLocation | undefined;
+      let failure: unknown;
       try {
-        // Acquisition owns raw pages, not integrity admission. Validate the
-        // acquired image without normalizing or repairing its malformed catalog.
-        let failure: unknown;
-        try {
-          withDatabase(
-            prepared.location,
-            (snapshot) => snapshot.prepare("PRAGMA quick_check;").get(),
-            true,
-          );
-        } catch (error) {
-          failure = error;
-        }
-        expect(failure).toMatchObject({
-          code: "ERR_SQLITE_ERROR",
-          errcode: 11,
-          message: "database disk image is malformed",
-        });
+        prepared = await prepare(databasePath);
+        // Acquisition may reject malformed pages while reading their footprint.
+        // Otherwise the raw image must retain the damage for consumer validation.
+        withDatabase(
+          prepared.location,
+          (snapshot) => snapshot.prepare("PRAGMA quick_check;").get(),
+          true,
+        );
+      } catch (error) {
+        failure = error;
       } finally {
-        expect(await prepared.cleanupAsync()).toBe(true);
+        if (prepared) {
+          expect(await prepared.cleanupAsync()).toBe(true);
+        }
       }
+      expect(failure).toBeInstanceOf(Error);
+      const message = (failure as Error).message;
+      expect(message).toContain("database disk image is malformed");
+      expect(message).not.toMatch(/staging|quota|XDG_CACHE_HOME/u);
+      if (prepared || prepare === prepareSqliteReadOnlyLocationInProcess) {
+        expect(failure).toMatchObject({ code: "ERR_SQLITE_ERROR", errcode: 11 });
+      } else {
+        expect(message).toContain("(code=ERR_SQLITE_ERROR, errcode=11)");
+      }
+      expect(fs.readFileSync(databasePath)).toEqual(sourceBefore);
+      expect(fs.readdirSync(stagingRoot)).toEqual([]);
     }
   });
 });

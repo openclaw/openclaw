@@ -503,7 +503,6 @@ export async function createOnlineReadOnlyBackup(
       : await createSqliteSnapshotStagingDirectory(stagingRoot, false, signal);
   const snapshotPath = path.join(tempDir, "database.sqlite.partial");
   try {
-    assertSqliteSnapshotSpace(pathname, tempDir);
     if (process.platform !== "win32") {
       fs.chmodSync(tempDir, 0o700);
     }
@@ -516,6 +515,8 @@ export async function createOnlineReadOnlyBackup(
       );
       // Keep only the native copy pinned: concurrent writes otherwise restart stepped backups.
       source.prepare("PRAGMA schema_version;").get();
+      // This pinned image includes growth in WAL, but not overwritten historical frames.
+      assertSqliteSnapshotSpace(source, tempDir);
       await retainSnapshotWork(backupNodeSqliteDatabase(source, snapshotPath, onProgress));
       source.exec("ROLLBACK;");
     } finally {
@@ -748,7 +749,7 @@ export async function prepareSqliteReadOnlyLocationFromOwnedDatabase(
   );
   try {
     assertReady();
-    assertSqliteSnapshotSpace(database.location(), directory);
+    assertSqliteSnapshotSpace(database, directory);
     const location = path.join(directory, "database.sqlite.partial");
     await retainSnapshotWork(backupNodeSqliteDatabase(database, location));
     signal?.throwIfAborted();

@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import type { DatabaseSync } from "node:sqlite";
 import { formatDiskSpaceBytes, tryReadDiskSpace } from "./disk-space.js";
 import { hasErrnoCode } from "./errno.js";
 
@@ -20,17 +21,20 @@ export function sqliteSnapshotSourceFileSize(pathname: string): number {
   }
 }
 
-export function assertSqliteSnapshotSpace(pathname: string | null, destination: string): void {
-  if (pathname === null) {
-    return;
-  }
-  const requiredBytes = ["", "-wal", "-journal"].reduce(
-    (bytes, suffix) => bytes + sqliteSnapshotSourceFileSize(pathname + suffix),
-    0,
-  );
+/** Native backups copy logical pages; raw copies retain the complete recovery family. */
+export function assertSqliteSnapshotSpace(
+  source: string | DatabaseSync,
+  destination: string,
+): void {
+  const requiredBytes =
+    typeof source === "string"
+      ? ["", "-wal", "-journal"].reduce(
+          (bytes, suffix) => bytes + sqliteSnapshotSourceFileSize(source + suffix),
+          0,
+        )
+      : Number(source.prepare("PRAGMA page_count;").get()?.page_count) *
+        Number(source.prepare("PRAGMA page_size;").get()?.page_size);
   const space = tryReadDiskSpace(destination);
-  // Private recovery may write cloned pages. Admit the whole family conservatively,
-  // even when the filesystem could initially satisfy the copy with a cheap clone.
   if (space && space.availableBytes < requiredBytes) {
     throw Object.assign(
       new Error(
