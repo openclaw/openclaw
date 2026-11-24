@@ -98,7 +98,7 @@ describe("session roster presentation", () => {
     expect(h.sessions.state.result).toBe(result);
     expect(observed.at(-1)).toBe(++revision);
     release?.();
-    expect(observed.at(-1)).toBe(++revision);
+    expect(observed.at(-1)).toBe(revision + 1);
   });
 
   it("presents accepted history while the first canonical roster is pending", async () => {

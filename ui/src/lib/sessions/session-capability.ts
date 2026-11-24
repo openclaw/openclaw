@@ -54,7 +54,7 @@ export function createSessionPublication(readState: () => SessionState) {
     get rowPresentationRevision() {
       return rowPresentationRevision;
     },
-    notify(rowPresentationChanged = true) {
+    notify(this: void, rowPresentationChanged = true) {
       revision += 1;
       // Pending intents and other side facts can change without a new state object.
       // Only an explicit readiness-only producer may skip row invalidation.
