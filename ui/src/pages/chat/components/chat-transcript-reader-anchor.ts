@@ -135,11 +135,16 @@ export class TranscriptReaderAnchor {
     this.observer?.unobserve(row);
   }
 
-  /** Native writes can stop a gesture; hold the correction in the column until it ends. */
+  /**
+   * Native writes can stop a gesture; hold the correction in the column until it ends. Once the
+   * input has produced its own scrolling, only its own idle ends the hold, not virtual-core's
+   * debounced `isScrolling`, which can lapse between frames of a slow native smooth scroll.
+   */
   private holdsNativeOffset(): boolean {
+    const { nativeInputActive, inputAwaitingScroll, touchActive } = this.host.offsetState;
     return (
-      (this.host.virtualizer.isScrolling && this.host.offsetState.nativeInputActive) ||
-      this.host.offsetState.touchActive
+      (nativeInputActive && (this.host.virtualizer.isScrolling || !inputAwaitingScroll)) ||
+      touchActive
     );
   }
 

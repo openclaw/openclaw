@@ -369,7 +369,6 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
       transcript: this.transcript,
       // Ends with cachedSessionStatePending(); live overflow keeps its entrance fade.
       restoring: Boolean(cachedSession),
-      onHistorySentinelRef: this.registerHistorySentinel,
       onTranscriptAnnouncementRef: this.registerTranscriptAnnouncement,
       onComposerShellRef: this.registerComposerShell,
       onComposerFloatRef: this.registerComposerFloat,
