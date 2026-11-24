@@ -7,11 +7,19 @@ import { Icon, type IconName } from "./solid/icon.tsx";
 type ReaderChecks = NonNullable<ControlUiLinkReaderDocument["checks"]>;
 type ReaderCheck = ReaderChecks["items"][number];
 const checkIcons: Record<ReaderChecks["state"], IconName> = {
-  success: "check",
+  success: "circleCheck",
   failure: "circleX",
   pending: "clock",
   unavailable: "circleQuestionMark",
-  neutral: "circle",
+  neutral: "circleDashed",
+};
+// The ring already draws the circle; its center carries only the mark.
+const ringIcons: Record<ReaderChecks["state"], IconName> = {
+  success: "check",
+  failure: "x",
+  pending: "clock",
+  unavailable: "moreHorizontal",
+  neutral: "moreHorizontal",
 };
 const checkLabels = {
   success: "linkReader.checkSuccess",
@@ -28,13 +36,38 @@ const checksLabels = {
 } as const;
 // Actionable groups stay open; passed and skipped runs are counted, not listed.
 const checkGroups = [
-  { state: "failure", label: checkLabels.failure, open: true },
-  { state: "pending", label: checkLabels.pending, open: true },
-  { state: "success", label: checkLabels.success, open: false },
-  { state: "neutral", label: "linkReader.checksGroupNeutral", open: false },
+  {
+    state: "failure",
+    label: checkLabels.failure,
+    count: "linkReader.checksCountFailure",
+    open: true,
+  },
+  {
+    state: "pending",
+    label: checkLabels.pending,
+    count: "linkReader.checksCountPending",
+    open: true,
+  },
+  {
+    state: "success",
+    label: checkLabels.success,
+    count: "linkReader.checksCountSuccess",
+    open: false,
+  },
+  {
+    state: "neutral",
+    label: "linkReader.checksGroupNeutral",
+    count: "linkReader.checksCountNeutral",
+    open: false,
+  },
 ] as const;
-// Failures stay visible while the full list is collapsed, up to this many rows.
-const CHECK_ATTENTION_LIMIT = 3;
+// The collapsed summary names this many failed runs; the open list shows them all.
+const CHECK_FAILING_NAMES = 2;
+// Ring geometry in percent of the circumference: one failure among many must stay visible,
+// and an incomplete list never closes the ring, even when its missing count is unknown.
+const RING_MIN_SHARE = 5;
+const RING_GAP = 2;
+const RING_INCOMPLETE_MAX = 85;
 
 function CheckRow(props: { item: ReaderCheck; base: string }) {
   const url = () => (props.item.url ? documentUrl(props.item.url, props.base)?.href : undefined);
@@ -81,17 +114,43 @@ export function ChecksContent(props: {
   const source = () =>
     props.checks.url ? documentUrl(props.checks.url, props.base)?.href : undefined;
   const groups = createMemo(() =>
-    checkGroups.flatMap(({ state, label, open }) => {
-      const items = props.checks.items.filter((item) => item.state === state);
-      return items.length ? [{ state, label, open, items }] : [];
+    checkGroups.flatMap((group) => {
+      const items = props.checks.items.filter((item) => item.state === group.state);
+      return items.length ? [{ ...group, items }] : [];
     }),
   );
-  const failures = createMemo(() => groups().find((group) => group.state === "failure")?.items);
-  const complete = () =>
-    !props.checks.truncated &&
-    props.checks.state !== "unavailable" &&
-    props.checks.items.length === props.checks.total &&
-    props.checks.total > 0;
+  const failing = () => {
+    const names = groups()
+      .find((group) => group.state === "failure")
+      ?.items.map((item) => item.name);
+    return names && names.length > CHECK_FAILING_NAMES
+      ? names.slice(0, CHECK_FAILING_NAMES).join(", ") + " +" + (names.length - CHECK_FAILING_NAMES)
+      : names?.join(", ");
+  };
+  const total = () => Math.max(props.checks.total, props.checks.items.length);
+  const missing = () => total() - props.checks.items.length;
+  // Known runs share the ring; runs the source did not return stay as empty track.
+  const ring = createMemo(() => {
+    const listed = (props.checks.items.length / total()) * 100;
+    const known = props.checks.truncated ? Math.min(listed, RING_INCOMPLETE_MAX) : listed;
+    const shares = groups().map((group) =>
+      Math.max((group.items.length / total()) * 100, RING_MIN_SHARE),
+    );
+    const scale = known / shares.reduce((sum, share) => sum + share, 0);
+    const gap = shares.length > 1 || known < 100 ? RING_GAP : 0;
+    let start = 0;
+    return groups().map((group, index) => {
+      const share = shares[index]! * scale;
+      const segment = { state: group.state, start, length: Math.max(share - gap, 1) };
+      start += share;
+      return segment;
+    });
+  });
+  // Known runs with an incomplete list are not "unavailable".
+  const title = () =>
+    props.checks.state === "unavailable" && props.checks.items.length
+      ? t("linkReader.checksIncomplete")
+      : t(checksLabels[props.checks.state]);
   return (
     <section
       ref={(element) => props.sectionRef(element)}
@@ -111,62 +170,80 @@ export function ChecksContent(props: {
         aria-controls={listId}
         onClick={() => props.onExpandedChange(!props.expanded)}
       >
-        <span class="lr-checks-icon" aria-hidden="true">
-          <Icon name={checkIcons[props.checks.state]} />
+        <span class="lr-checks-emblem" aria-hidden="true">
+          <Show when={props.checks.items.length}>
+            <svg class="lr-checks-meter" viewBox="0 0 32 32">
+              <circle class="lr-checks-track" cx="16" cy="16" r="13.5" />
+              <For each={ring()}>
+                {(segment) => (
+                  <circle
+                    class={["lr-check-segment", `lr-check-segment--${segment.state}`]}
+                    cx="16"
+                    cy="16"
+                    r="13.5"
+                    pathLength="100"
+                    stroke-dasharray={`${segment.length} ${100 - segment.length}`}
+                    stroke-dashoffset={-segment.start}
+                  />
+                )}
+              </For>
+            </svg>
+          </Show>
+          <span class="lr-checks-icon">
+            <Icon name={ringIcons[props.checks.state]} />
+          </span>
         </span>
         <span class="lr-checks-heading">
-          <strong>
-            {props.refreshState
-              ? t(
-                  props.refreshState === "error"
-                    ? "linkReader.sectionRefreshFailed"
-                    : "linkReader.sectionRefreshing",
-                  { section: t("linkReader.checks") },
-                )
-              : t(checksLabels[props.checks.state])}
-          </strong>
-          <Show when={props.checks.summary !== t(checksLabels[props.checks.state])}>
-            <span class="lr-meta">{props.checks.summary}</span>
+          <span class="lr-checks-title">
+            <strong>{title()}</strong>
+            <Show when={failing()}>{(names) => <span>{names()}</span>}</Show>
+          </span>
+          <Show
+            when={!props.refreshState && props.checks.items.length}
+            fallback={
+              <Show
+                when={props.refreshState}
+                fallback={
+                  <Show when={props.checks.summary !== t(checksLabels[props.checks.state])}>
+                    <span class="lr-checks-legend">{props.checks.summary}</span>
+                  </Show>
+                }
+              >
+                {(state) => (
+                  // These are the previous results: say so where their counts would be.
+                  <span class="lr-checks-refresh" role="status">
+                    {t(
+                      state() === "error"
+                        ? "linkReader.sectionRefreshFailed"
+                        : "linkReader.sectionRefreshing",
+                      { section: t("linkReader.checks") },
+                    )}
+                  </span>
+                )}
+              </Show>
+            }
+          >
+            {/* The source's own wording stays reachable beside the counted states. */}
+            <span class="lr-checks-legend" title={props.checks.summary}>
+              <For each={groups()}>
+                {(group) => (
+                  <span class={["lr-checks-count", `lr-checks-count--${group.state}`]}>
+                    {t(group.count, { count: String(group.items.length) })}
+                  </span>
+                )}
+              </For>
+              <Show when={missing() > 0}>
+                <span class="lr-checks-count lr-checks-count--missing">
+                  {t("linkReader.checksCountMissing", { count: String(missing()) })}
+                </span>
+              </Show>
+            </span>
           </Show>
         </span>
-        <Show when={complete()}>
-          <span class="lr-checks-meter" aria-hidden="true">
-            <For each={groups()}>
-              {(group) => (
-                <span
-                  class={["lr-check-segment", `lr-check-segment--${group.state}`]}
-                  style={{ "flex-grow": group.items.length }}
-                />
-              )}
-            </For>
-          </span>
-        </Show>
         <span class="lr-checks-chevron" aria-hidden="true">
           <Icon name="chevronDown" />
         </span>
       </button>
-      <Show when={!props.expanded && failures()}>
-        {(items) => (
-          <ul class="lr-check-list lr-check-list--attention">
-            <For each={items().slice(0, CHECK_ATTENTION_LIMIT)}>
-              {(item) => <CheckRow item={item} base={props.base} />}
-            </For>
-            <Show when={items().length > CHECK_ATTENTION_LIMIT}>
-              <li class="lr-check lr-check--more">
-                <button
-                  type="button"
-                  class="lr-check-row"
-                  onClick={() => props.onExpandedChange(true)}
-                >
-                  {t("linkReader.checksMoreFailed", {
-                    count: String(items().length - CHECK_ATTENTION_LIMIT),
-                  })}
-                </button>
-              </li>
-            </Show>
-          </ul>
-        )}
-      </Show>
       <div id={listId} class="lr-check-groups" hidden={!props.expanded}>
         <Show when={props.expanded}>
           <For each={groups()} keyed={(group) => group.state}>

@@ -53,16 +53,20 @@ The reader shows the title and description first, while checks and discussion
 load independently. A quiet skeleton keeps the layout recognizable on a cold
 open. File diffs load when you select **Files** or scroll near that section.
 The reader includes discussion comments, published inline PR review comments
-with file and diff context, commit comments, and expandable file diffs. PR discussion
-and inline review comments load concurrently. The
+with file and diff context, commit comments, and expandable file diffs with line
+numbers. PR discussion and inline review comments load concurrently. The
 header separates the item state, author, change counts, and PR branches. **Overview**, **Checks**, **Files**, and **Discussion** shortcuts jump
-to the relevant section without leaving the reader.
+to the relevant section without leaving the reader, and the section bar marks
+the section you are reading. Content that arrives later, such as checks, does
+not move the description.
 
 Pull requests show check runs and commit statuses for the exact head commit.
-Expand the checks summary to inspect individual results and open their source
-logs. Failed checks expand by default. Pending, failed, passed, skipped, empty,
-and unavailable results remain distinct; a partial response never implies that
-all checks passed. These results describe CI, not approval or merge readiness.
+The checks summary stays collapsed: it counts failed, in-progress, passed, and
+skipped or neutral runs and names the failed ones. Expand it, or select **Checks**, to
+inspect individual results grouped by state and open their source logs.
+Pending, failed, passed, skipped, empty, and unavailable results remain distinct;
+a partial response never implies that all checks passed, and reports how many
+runs were not shown when the total is known. These results describe CI, not approval or merge readiness.
 Use **Refresh** to fetch the current PR and its checks again. The previous
 document stays readable while refreshing, with previous results labeled until
 replaced. A changed head never inherits checks or diffs from the old head.

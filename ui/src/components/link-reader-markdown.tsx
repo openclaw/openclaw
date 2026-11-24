@@ -20,8 +20,11 @@ const documentOptions = normalizeMarkdownRenderOptions({
 const markdown = createMarkdownParser();
 // Reader documents support named emoji without changing chat or emoticon text.
 markdown.use(installMarkdownEmoji);
-// Remote attachments commonly use a standalone HTML img. Only that passive
-// element is admitted; all other authored HTML keeps the shared parser's rules.
+// Remote attachments commonly use a standalone HTML img, and authors emphasize
+// with bare inline tags such as <strong> inside a summary. Only those passive
+// elements are admitted, without attributes; the sanitizer below still decides
+// what reaches the page. All other authored HTML keeps the shared parser's rules.
+const PASSIVE_HTML = /^(?:<img\s[^<>]*>\s*|<\/?(?:b|strong|em|i|code|del|s)>|<br\s*\/?>)$/iu;
 for (const kind of ["html_inline", "html_block"] as const) {
   const original = markdown.renderer.rules[kind]!;
   markdown.renderer.rules[kind] = (tokens, index, options, env, renderer) => {
@@ -30,9 +33,7 @@ for (const kind of ["html_inline", "html_block"] as const) {
     if (source.trimStart().startsWith("<!--")) {
       return escapeHtml(source.replace(/<!--[\s\S]*?(?:-->|$)/gu, ""));
     }
-    return /^<img\s[^<>]*>\s*$/iu.test(source)
-      ? source
-      : original(tokens, index, options, env, renderer);
+    return PASSIVE_HTML.test(source) ? source : original(tokens, index, options, env, renderer);
   };
 }
 

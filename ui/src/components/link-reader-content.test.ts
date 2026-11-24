@@ -161,7 +161,10 @@ describe("link reader document content", () => {
     const toggle = checks.querySelector<HTMLButtonElement>(".lr-checks-summary")!;
     expect(toggle.querySelector("strong")?.textContent).toBe("Checks passed");
     expect(toggle.getAttribute("aria-expanded")).toBe("false");
-    expect(checks.textContent).toContain("Provider-owned result");
+    // Counted states come from the passive items; the source's own summary stays reachable.
+    const legend = checks.querySelector<HTMLElement>(".lr-checks-legend")!;
+    expect(legend.textContent).toBe("1 in progress");
+    expect(legend.title).toBe("Provider-owned result");
     expect(checks.querySelector(".lr-check")).toBeNull();
     toggle.click();
     flush();
@@ -188,16 +191,20 @@ describe("link reader document content", () => {
         url: "https://user:password@github.com/private",
       },
     });
-    expect(container.querySelector(".lr-checks-meter")).toBeNull();
+    // One known run of four: the ring leaves the rest open, and the legend counts it.
+    const segments = [...container.querySelectorAll(".lr-checks-meter .lr-check-segment")];
+    expect(segments).toHaveLength(1);
+    expect(Number.parseFloat(segments[0]!.getAttribute("stroke-dasharray")!)).toBeLessThan(30);
     expect(container.querySelector(".lr-checks-summary strong")?.textContent).toBe(
-      "Checks unavailable",
+      "Checks incomplete",
     );
-    // A failed run stays visible while the full list is collapsed.
+    expect(container.querySelector(".lr-checks-legend")?.textContent).toBe("1 failed3 not shown");
+    // A failed run is named while the full list is collapsed.
     expect(container.querySelector(".lr-checks-summary")?.getAttribute("aria-expanded")).toBe(
       "false",
     );
     expect(container.querySelector(".lr-checks a, .lr-checks script")).toBeNull();
-    expect(container.querySelector(".lr-check-list--attention .lr-check-name")?.textContent).toBe(
+    expect(container.querySelector(".lr-checks-title span")?.textContent).toBe(
       "<script>unsafe</script>",
     );
     container.querySelector<HTMLButtonElement>(".lr-checks-summary")!.click();
@@ -217,12 +224,87 @@ describe("link reader document content", () => {
         url: url + "/checks",
       },
     });
+    // Without items there is nothing to count: the source's summary speaks, and no ring is drawn.
+    expect(container.querySelector(".lr-checks-legend")?.textContent).toBe("Partial checks");
+    expect(container.querySelector(".lr-checks-meter")).toBeNull();
     const source = container.querySelector<HTMLAnchorElement>(".lr-checks .lr-note a")!;
     expect(source).not.toBeNull();
     expect(source.textContent).toBe("View all checks on GitHub");
     expect(source.href).toBe(url + "/checks");
     expect(source.target).toBe("_blank");
     expect(source.hasAttribute("data-link-reader-external")).toBe(true);
+  });
+
+  it("numbers diff rows from their hunk headers and leaves the patch text intact", () => {
+    const patch = [
+      "@@ -10,3 +10,4 @@ export function run() {",
+      " context",
+      "-old",
+      "+new",
+      "+more",
+      "\\ No newline at end of file",
+    ].join("\n");
+    const container = mount({
+      ...detail("Description"),
+      files: [
+        { path: "src/reader/run.ts", status: "added", additions: 2, deletions: 1, patch },
+        { path: "README.md", status: "modified", additions: 0, deletions: 0, patch: "+unnumbered" },
+      ],
+      filesExpanded: true,
+    });
+    const [file, root] = [...container.querySelectorAll(".lr-file")];
+    // Numbers render from the attribute, so selecting the diff copies the patch itself.
+    expect(
+      [...file!.querySelectorAll(".lr-diff-line")].map((row) => [
+        row.className.replace("lr-diff-line lr-diff-line--", ""),
+        row.getAttribute("data-line"),
+      ]),
+    ).toEqual([
+      ["hunk", null],
+      ["context", "10"],
+      ["delete", "11"],
+      ["add", "11"],
+      ["add", "12"],
+      ["context", null],
+    ]);
+    expect(file!.querySelector(".lr-diff")?.textContent).toBe(patch.replaceAll("\n", ""));
+    expect(file!.querySelector(".lr-file-name")?.textContent).toBe("run.ts");
+    expect(file!.querySelector(".lr-file-directory")?.textContent).toBe("src/reader");
+    expect(file!.querySelector(".lr-file-status")?.textContent).toBe("added");
+    // A root file has no directory, an ordinary change no status, a bare patch no numbers.
+    expect(root!.querySelector(".lr-file-directory, .lr-file-status")).toBeNull();
+    expect(root!.querySelector(".lr-diff-line")?.hasAttribute("data-line")).toBe(false);
+  });
+
+  it("shows the author's picture only from a safe source and falls back to an initial", () => {
+    const picture = "data:image/png;base64,AAAA";
+    const container = mount({ ...detail("Description"), imageUrl: picture });
+    expect(container.querySelector<HTMLImageElement>(".lr-author img")?.src).toBe(picture);
+    update(container, { ...detail("Description"), imageUrl: "javascript:alert(1)" });
+    expect(container.querySelector(".lr-author img")).toBeNull();
+    expect(container.querySelector(".lr-author .lr-avatar")?.textContent).toBe("A");
+  });
+
+  it("admits bare emphasis tags in authored Markdown and keeps other HTML literal", () => {
+    const container = mount(
+      detail(
+        [
+          "<details><summary><strong>Agent review details</strong></summary>",
+          "Inside",
+          "</details>",
+          'First<br>second <b class="x">attributed</b> <span onclick="x()">span</span>',
+        ].join("\n\n"),
+      ),
+    );
+    expect(container.querySelector(".lr-markdown summary strong")?.textContent).toBe(
+      "Agent review details",
+    );
+    expect(container.querySelector(".lr-markdown br")).not.toBeNull();
+    // A tag with attributes, or any other element, is authored text and nothing more.
+    expect(container.querySelector(".lr-markdown span[onclick], .lr-markdown b")).toBeNull();
+    const text = container.querySelector(".lr-markdown")?.textContent;
+    expect(text).toContain('<b class="x">attributed');
+    expect(text).toContain('<span onclick="x()">span</span>');
   });
 
   it("hides HTML comment metadata while preserving visible prose and literal code examples", () => {
@@ -489,7 +571,9 @@ describe("link reader document content", () => {
     expect(container.querySelector(".lr-byline a")?.getAttribute("href")).toBe(
       "https://forge.example/users/alex",
     );
-    expect(container.querySelector(".lr-coauthors")?.textContent).toBe("Co-authors: Sam, Noor +1");
+    const coAuthors = container.querySelector(".lr-coauthors")!;
+    expect(coAuthors.getAttribute("aria-label")).toBe("Co-authors: Sam, Noor +1");
+    expect(coAuthors.textContent).toBe("SN+1");
     expect(container.querySelector(".lr-fact--positive dd")?.textContent).toBe("Passed");
     expect(container.querySelector(".lr-state--attention")?.textContent).toBe("Needs review");
     expect(container.querySelector('a[href="https://forge.example/changes/C43"]')).not.toBeNull();
