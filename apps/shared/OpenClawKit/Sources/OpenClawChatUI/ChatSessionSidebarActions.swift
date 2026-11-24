@@ -33,6 +33,11 @@ final class ChatSessionSidebarActions {
             scope: "operator.sessions.write")
     }
 
+    /// Pages starts root drags only with group-write authority; do not advertise an unusable drop zone.
+    var canDropPins: Bool {
+        self.canEditPins && self.connection?.allows("sessions.groups.put") == true
+    }
+
     private var profiles: [Profile]?
     private var selfID: String?
     private var worktrees: [WorktreeRecord] = []

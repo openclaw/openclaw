@@ -41,7 +41,7 @@ export type ArchiveUndoCaller = {
   profileId: string;
   connId: string;
   token?: string;
-  assertCurrent: (boundary?: "session-mutation") => void;
+  assertCurrent: () => void;
 };
 
 export function admitArchiveUndo(
@@ -70,7 +70,7 @@ export function admitArchiveUndo(
   }
   const profileId = client?.authenticatedUserProfile?.profileId;
   const connId = client?.connId;
-  const isCurrent = (boundary?: "session-mutation") =>
+  const isCurrent = () =>
     Boolean(
       client &&
       connId &&
@@ -78,14 +78,10 @@ export function admitArchiveUndo(
       profileId &&
       client.authenticatedUserProfile?.profileId === profileId &&
       isSessionArchiveUndoIssuer(client) &&
-      (context.isConnectionActive?.(connId, client) ||
-        // Only the Archive mutation can outlive an ordinary socket close. Each drain
-        // checks the live issuer before cancellation; Undo and delivery never detach.
-        (issue &&
-          boundary === "session-mutation" &&
-          client.connectionSignal?.aborted &&
-          !client.invalidated &&
-          options.hasCurrentClientAuthority?.() === true)),
+      !client.invalidated &&
+      !client.connectionSignal?.aborted &&
+      options.hasCurrentClientAuthority?.() !== false &&
+      context.isConnectionActive?.(connId, client),
     );
   if (
     !profileId ||
@@ -107,8 +103,8 @@ export function admitArchiveUndo(
       profileId,
       connId,
       token,
-      assertCurrent: (boundary) => {
-        if (!isCurrent(boundary)) {
+      assertCurrent: () => {
+        if (!isCurrent()) {
           throw new SessionMutationAuthorizationChangedError(
             errorShape(ErrorCodes.FORBIDDEN, "The Archive Undo connection changed."),
           );

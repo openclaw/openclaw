@@ -352,6 +352,7 @@ test.for(["disconnect", "Stop", "profile change", "invalidation", "grant revocat
       const client = identifiedClient("receipt-owner");
       const connection = new AbortController();
       const stop = new AbortController();
+      let grantCurrent = true;
       client.connect.caps = ["personal-session-pins"];
       client.connectionSignal = connection.signal;
       const starts: string[] = [];
@@ -380,8 +381,7 @@ test.for(["disconnect", "Stop", "profile change", "invalidation", "grant revocat
             client,
             context,
             signal: stop.signal,
-            hasCurrentClientAuthority: () =>
-              !connection.signal.aborted || change !== "grant revocation",
+            hasCurrentClientAuthority: () => grantCurrent,
             isWebchatConnect: () => false,
           }),
         ).catch((error: unknown) => error),
@@ -389,8 +389,11 @@ test.for(["disconnect", "Stop", "profile change", "invalidation", "grant revocat
       await waitForArchivePhase(active.terminalStarted, archive, signal);
       expect(active.controller.signal.aborted).toBe(true);
       expect(session.read()?.archivedAt).toBeUndefined();
-      connection.abort();
-      if (change === "Stop") {
+      if (change === "disconnect") {
+        connection.abort();
+      } else if (change === "grant revocation") {
+        grantCurrent = false;
+      } else if (change === "Stop") {
         stop.abort();
       } else if (change === "profile change") {
         client.authenticatedUserProfile!.profileId = "other";
@@ -404,15 +407,12 @@ test.for(["disconnect", "Stop", "profile change", "invalidation", "grant revocat
       );
       expect(starts).toEqual([sessionId]);
       expect(respond).not.toHaveBeenCalled();
-      expect(loadSessionEntry({ storePath, sessionKey: queuedKey })).toMatchObject({
-        sessionId: "queued",
-      });
-      expect(loadSessionEntry({ storePath, sessionKey: queuedKey })?.archivedAt).toBeUndefined();
-      if (change === "disconnect") {
-        expectArchived(storePath, sessionKey);
-      } else {
-        expect(session.read()?.archivedAt).toBeUndefined();
-      }
+      const queued = loadSessionEntry({ storePath, sessionKey: queuedKey });
+      expect(queued?.sessionId).toBe("queued");
+      expect(queued?.archivedAt).toBeUndefined();
+      expect(session.read()?.archivedAt).toEqual(
+        change === "Stop" ? undefined : expect.any(Number),
+      );
     }),
 );
 

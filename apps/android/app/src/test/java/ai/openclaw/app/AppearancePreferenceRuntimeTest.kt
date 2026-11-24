@@ -101,6 +101,31 @@ class AppearancePreferenceRuntimeTest {
     }
 
   @Test
+  fun profileRefreshRecoversPinEditingOnTheSameSocketWithoutAWrite() =
+    runBlocking {
+      withAppearanceGateway {
+        respond = { request ->
+          if (request.method == "users.prefs.get") throw GatewayRequestRejected(GatewaySession.ErrorShape("UNAVAILABLE", "Profile pending"))
+          null
+        }
+        connect(methods = setOf("sessions.patch", "users.prefs.get", "users.self"), capabilities = setOf("personal-session-pins"))
+        assertEquals(PersonalSessionPinAccess.ReadOnly, runtime.personalSessionPinAccess.value)
+        val connection = requests.last { it.method == "users.prefs.get" }.connection
+        respond = { request ->
+          if (request.method == "config.get") throw GatewayRequestRejected(GatewaySession.ErrorShape("FORBIDDEN", "No config access"))
+          null
+        }
+        emitOperatorEvent("users.prefs.changed", "{}")
+        withTimeout(APPEARANCE_CONNECTION_TIMEOUT_MS) { runtime.personalSessionPinAccess.first { it.canEdit("member") } }
+        respond = { request -> if (request.method == "users.prefs.get") """{"status":"no_durable_identity"}""" else null }
+        emitOperatorEvent("users.prefs.changed", "{}")
+        withTimeout(APPEARANCE_CONNECTION_TIMEOUT_MS) { runtime.personalSessionPinAccess.first { it == PersonalSessionPinAccess.ReadOnly } }
+        assertEquals(setOf(connection), requests.filter { it.method == "users.prefs.get" }.map { it.connection }.toSet())
+        assertTrue(writes.isEmpty())
+      }
+    }
+
+  @Test
   fun replacementHelloRetiresPinEditingBeforeItsProfileResolves() =
     runBlocking {
       withAppearanceGateway {
@@ -112,7 +137,7 @@ class AppearancePreferenceRuntimeTest {
         val release = CompletableDeferred<Unit>()
         val oldAnswer = CompletableDeferred<Unit>()
         respond = { request ->
-          if (request.method == "users.prefs.get" && request.params["keys"] == JsonArray(emptyList()) && request.profileId == "old-socket") {
+          if (request.method == "users.prefs.get" && request.profileId == "old-socket") {
             pending.complete(Unit)
             release.await()
             oldAnswer.complete(Unit)

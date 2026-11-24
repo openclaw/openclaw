@@ -30,7 +30,7 @@ extension ChatSessionSidebar {
             return .init(id: section.id, title: section.title, nodes: nodes)
         }
         // Preserve the roster owner's grouping and empty-group filters; only Pages needs an empty drop target.
-        if self.menuActions.canEditPins, self.query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+        if self.menuActions.canDropPins, self.query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
            !sections.contains(where: { $0.id == "pinned" })
         {
             sections.insert(.init(id: "pinned", title: String(localized: "Pinned"), nodes: []), at: 0)
@@ -374,7 +374,7 @@ struct ChatSidebarSectionInteraction: ViewModifier {
     @State private var height: CGFloat = 0
 
     func body(content: Content) -> some View {
-        if self.section.isEmpty || (self.section == "pinned" && !self.sidebar.menuActions.canEditPins) {
+        if self.section.isEmpty || (self.section == "pinned" && !self.sidebar.menuActions.canDropPins) {
             content
         } else {
             Group {
