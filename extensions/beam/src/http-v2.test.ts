@@ -155,7 +155,7 @@ it("reads one publication generation and protects a visitor's snapshot across re
 });
 
 it("conditionally publishes exact bytes, replays the original receipt and fences a competing v1 writer", async () => {
-  const { store, close } = await persistentBeamTestStore();
+  const { store, keyedStore, close } = await persistentBeamTestStore();
   const authority = () => ({
     personProfileId: "publisher",
     scopes: ["operator.write"],
@@ -226,6 +226,20 @@ it("conditionally publishes exact bytes, replays the original receipt and fences
     });
     const duplicate = raw.replace('"version": 2', '"version": 2, "version": 2');
     expect((await put(duplicate, fresh, { "if-match": next.revision })).status).toBe(400);
+
+    // Model two receiver incarnations that retained the exact same content and write token.
+    // The first receiver's enrolled conditional mirror must fail against the second one.
+    const row = await keyedStore.lookup(v1.beamId);
+    expect(row).toBeDefined();
+    await keyedStore.register(v1.beamId, { ...row!, publicationId: "e".repeat(32) });
+    const other = await (await fetch(target + "/head")).json();
+    expect(other.digest).toBe(next.digest);
+    expect(other.publicationId).not.toBe(next.publicationId);
+    expect(other.revision).not.toBe(next.revision);
+    expect(
+      (await put(raw, "12345678-1234-4123-abcd-000000000004", { "if-match": next.revision }))
+        .status,
+    ).toBe(412);
   } finally {
     await close();
   }
