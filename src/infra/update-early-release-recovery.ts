@@ -295,9 +295,10 @@ export async function runEarlyGitReleaseRecovery(
         );
         return false;
       }
-      await systemctl("reset-failed", gateway);
-      await systemctl("start", gateway);
     }
+    // The release keeps being started, also once its unit hit the start limit.
+    await systemctl("reset-failed", gateway);
+    await systemctl("start", gateway);
     return fail(
       "early-release-recovery-start-failed",
       `${why}, and ${moved() ? "your databases are no longer as the previous build left them" : "its definition from before the recovery is missing"}, so the previous build was not put back; the Gateway service keeps starting the new release. ${kept()}`,
