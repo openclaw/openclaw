@@ -88,6 +88,23 @@ Collaborative steering defaults to `true` at runtime without writing a separate 
 
 Use `messages.inbound.debounceMs` for the global pre-queue debounce window.
 
+### Agent coordination delivery
+
+Set `messages.agentCoordination: "steer"` to try compatible implicit
+inter-session messages in the recipient's active turn before queueing a new
+turn. This is independent of `messages.queue.mode`, which controls human
+messages. Set `"queue"` or omit the setting to keep existing agent routing,
+including the existing steering paths for supervised children.
+
+Eligible updates that reach the runtime before the same execution boundary
+are processed in arrival order. An idle recipient or a definite steering
+refusal uses the existing delivery path. Accepted or unconfirmed steering is
+not sent again as a separate turn. Native completions keep their existing
+routing: compatible results can already join the active parent, while private
+completions and wakeups for yielded parents retain their own delivery paths.
+The setting also leaves explicit `sessions_send` modes unchanged.
+See [Sending cross-session messages](/concepts/session-tool#sending-cross-session-messages).
+
 ### Inbound debounce
 
 Batches rapid text-only messages from the same sender into a single agent turn after a quiet window. Media/attachments flush immediately. Control commands bypass debouncing.

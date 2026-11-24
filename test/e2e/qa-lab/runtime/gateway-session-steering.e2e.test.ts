@@ -11,6 +11,7 @@ import {
   replyText,
   roleTexts,
   startSteeringGateway,
+  userTexts,
   workUntilSeen,
   writeContextOverflow,
   writeToolCall,
@@ -249,6 +250,58 @@ describe("session input lifecycle", () => {
         await work!.seen;
         expect(peer.executedRuns()).toEqual([peerRun.runId]);
         expect(deliveries(peer, note).filter((count) => count > 0)).toEqual([1]);
+      }
+      expect((await peer.history()).pendingInputs).toMatchObject({ total: 0 });
+    },
+  );
+
+  it(
+    "delivers three implicit peer updates together in the active turn",
+    { timeout: TEST_TIMEOUT_MS },
+    async () => {
+      const peer = gateway.session();
+      const requester = gateway.session();
+      const peerTask = "Start the peer coordination burst proof.";
+      const sendTask = "Send the peer all three coordination revisions.";
+      const notes = ["Use revision one.", "Revision two is ready.", "Use revision three."];
+      const held = gateway.held("Peer had been working on its original instructions.");
+      const receipts: unknown[] = [];
+      gateway.model.route(peerTask, held.turn, async (request, response) => {
+        expect(
+          userTexts(request).flatMap((text) => notes.filter((note) => text.includes(note))),
+        ).toEqual(notes);
+        replyText(response, "Peer used revision three.");
+      });
+      gateway.model.route(
+        sendTask,
+        ...notes.map<ReturnType<typeof reply>>((message, index) => async (request, response) => {
+          if (index > 0) {
+            receipts.push(toolResults(request).at(-1));
+          }
+          writeToolCall(response, "sessions_send", { sessionKey: peer.sessionKey, message });
+        }),
+        async (request, response) => {
+          receipts.push(toolResults(request).at(-1));
+          replyText(response, "Requester sent the revisions.");
+        },
+      );
+      const active = await peer.send(peerTask);
+      await held.entered;
+      const sending = await requester.send(sendTask);
+      expect(await requester.wait(sending.runId)).toMatchObject({ status: "ok" });
+      expect(receipts).toEqual(
+        notes.map(() =>
+          expect.objectContaining({ status: "accepted", targetDisposition: "steered" }),
+        ),
+      );
+      held.release();
+      expect(await peer.wait(active.runId)).toMatchObject({
+        status: "ok",
+        terminalReply: { text: "Peer used revision three." },
+      });
+      expect(peer.executedRuns()).toEqual([active.runId]);
+      for (const note of notes) {
+        expect(deliveries(peer, note)).toEqual([0, 1]);
       }
       expect((await peer.history()).pendingInputs).toMatchObject({ total: 0 });
     },

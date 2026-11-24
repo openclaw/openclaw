@@ -159,6 +159,7 @@ type SessionsSendDeliveryParams = {
   };
   sessionKey: string;
   sessionStoreTarget: Pick<GatewaySessionStoreTarget, "agentId" | "canonicalKey" | "storePath">;
+  allowAgentCoordinationSteer?: boolean;
   allowActiveRunQueueDelivery?: boolean;
   expectedSessionId?: string;
   /** Communication binds an incarnation without claiming result ownership or forbidding Cron fallback. */
@@ -211,8 +212,14 @@ export async function trySessionsSendActiveRunDelivery(
     const selection = resolveGatewayToolOperatorSelection({ requireRequesterOrigin: true });
     selection.assertCurrent();
     let fallbackSessionKey: string | undefined;
+    const steerFirst =
+      params.mode === undefined &&
+      params.allowAgentCoordinationSteer &&
+      params.cfg.messages?.agentCoordination === "steer" &&
+      !isCronRunSessionKey(params.sessionKey);
     const activeOperation =
       params.mode === "steer" ||
+      steerFirst ||
       (params.mode !== "followup" &&
         params.allowActiveRunQueueDelivery &&
         (ownChild || isRunScopedAgentSessionKey(params.sessionKey)))
@@ -331,6 +338,13 @@ export async function trySessionsSendActiveRunDelivery(
       }
       if (steer.status === "indeterminate") {
         // Consumed without a confirmed commit: never replay it as a new turn.
+        if (steerFirst) {
+          const failure = deliveryFailure(params, steer.errorMessage);
+          return {
+            ...failure,
+            result: jsonResult({ ...failure.result.details, sentBeforeError: true }),
+          };
+        }
         throw new Error(steer.errorMessage);
       }
       if (
@@ -348,6 +362,13 @@ export async function trySessionsSendActiveRunDelivery(
       }
       // A definite capability refusal leaves ordinary input on its captured
       // conversation. Revocation and uncertain native commitment never retry.
+      if (
+        steerFirst &&
+        (FALLBACK_STEER_REJECTIONS.has(steer.reason) ||
+          steer.reason === "guarded_injection_unsupported")
+      ) {
+        return {};
+      }
       if (
         params.mode !== "steer" &&
         params.allowActiveRunQueueDelivery &&

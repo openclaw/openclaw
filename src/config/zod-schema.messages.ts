@@ -80,6 +80,7 @@ export const MessagesSchema = z
       .optional(),
     groupChat: GroupChatSchema,
     queue: QueueSchema,
+    agentCoordination: z.enum(["queue", "steer"]).optional(),
     inbound: InboundDebounceSchema,
     ackReaction: z.string().optional(),
     ackReactionScope: z

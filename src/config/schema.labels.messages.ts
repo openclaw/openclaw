@@ -17,6 +17,7 @@ export const MESSAGE_FIELD_LABELS: Record<string, string> = {
   "messages.queue.debounceMsByChannel": "Queue Fallback Debounce by Channel (ms)",
   "messages.queue.cap": "Queue Capacity",
   "messages.queue.drop": "Queue Drop Strategy",
+  "messages.agentCoordination": "Agent Coordination Delivery",
   "messages.inbound": "Inbound Debounce",
   "messages.ackReaction": "Ack Reaction Emoji",
   "messages.ackReactionScope": "Ack Reaction Scope",

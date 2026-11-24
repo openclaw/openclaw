@@ -537,6 +537,7 @@ export async function startSteeringGateway() {
         const steering = applySteeringConfig(config, model);
         return {
           ...steering,
+          messages: { ...steering.messages, agentCoordination: "steer" },
           gateway: {
             ...steering.gateway,
             controlUi: { ...steering.gateway?.controlUi, allowedOrigins: [LOOPBACK_ORIGIN] },
