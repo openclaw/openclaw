@@ -10,10 +10,10 @@ import { readPackageReleaseIdentity } from "../../infra/package-release-slot.js"
 import { readPackageActivationReceipt } from "../../infra/package-update-activation.js";
 import type { UpdateCheckResult } from "../../infra/update-check.js";
 import { resolveUpdateInstallRoot } from "../../infra/update-install-root.js";
-import { readUpdateRunReportHealth } from "../../infra/update-run-report-health.js";
 import { readTrial, resolvePrefix } from "../../update/store.js";
 import { VERSION } from "../../version.js";
 import { formatCliCommand } from "../command-format.js";
+import { confirmGatewayReachable } from "../daemon-cli/restart-health-probe.js";
 
 /** Read-only projection of resident and legacy package-release facts for update status. */
 export async function inspectUpdateReleaseStatus({
@@ -68,9 +68,13 @@ export async function inspectUpdateReleaseStatus({
             inspect("release trial", readTrial, null),
             !localGateway
               ? Promise.resolve({ kind: "unavailable" as const })
-              : readUpdateRunReportHealth(
-                  { port: resolveGatewayPort(config) },
-                  { timeoutMs: remainingMs() },
+              : confirmGatewayReachable({
+                  port: resolveGatewayPort(config),
+                  timeoutMs: remainingMs(),
+                }).then(({ gatewayVersion: version, gatewayBuildId: buildId }) =>
+                  version
+                    ? { kind: "responding" as const, version, ...(buildId ? { buildId } : {}) }
+                    : { kind: "unavailable" as const },
                 ),
           ]);
           const cli = {
@@ -94,7 +98,7 @@ export async function inspectUpdateReleaseStatus({
           );
           const notice = split
             ? comparison !== null && comparison < 0
-              ? `The selected resident release is newer than this npm package. It was not downgraded. To use ${cli.version}, run: ${command}`
+              ? `The selected resident release is newer than this CLI. It was not downgraded. To use ${cli.version}, run: ${command}`
               : comparison !== null && comparison > 0
                 ? `${cli.version} is installed but is not selected by the resident launcher. Run: ${command}`
                 : `CLI and selected release builds differ or could not be verified. Run: ${command}`

@@ -37,6 +37,7 @@ import {
 import { resolveOpenClawStateSqlitePath as statePathFor } from "../../state/openclaw-state-db.paths.js";
 import { claimOpenClawStateOwnership } from "../../state/openclaw-state-ownership-operations.js";
 import { VERSION } from "../../version.js";
+import * as restartHealthProbe from "../daemon-cli/restart-health-probe.js";
 import * as shared from "./shared.js";
 import { updateStatusCommand as updateStatus } from "./status.js";
 import { registerUpdateStatusWarningTests } from "./status.warnings.test-support.js";
@@ -184,11 +185,15 @@ it.each([
     await fs.writeFile(path.join(prefix, "releases", ".trial"), JSON.stringify(trial));
   }
   vi.spyOn(shared, "resolveUpdateRoot").mockResolvedValue(cli);
-  vi.spyOn(reportHealth, "readUpdateRunReportHealth").mockResolvedValue(
-    fixture.phase || fixture.name === "unknown build"
-      ? { kind: "unavailable" }
-      : { kind: "responding", version: "0.0.1", buildId: "resident-build" },
-  );
+  vi.spyOn(restartHealthProbe, "confirmGatewayReachable").mockResolvedValue({
+    // The handshake identifies the serving build even without health-RPC scope.
+    reachable: false,
+    gatewayVersion: fixture.phase || fixture.name === "unknown build" ? null : "0.0.1",
+    gatewayBuildId: "resident-build",
+    activatedPluginErrors: [],
+    unavailablePlugins: [],
+    channelProbeErrors: [],
+  });
   if (fixture.remote) {
     vi.spyOn(configModule, "readSourceConfigBestEffort").mockResolvedValue({
       gateway: { mode: "remote" },
@@ -226,7 +231,7 @@ it.each([
     );
   }
   if (fixture.remote) {
-    expect(reportHealth.readUpdateRunReportHealth).not.toHaveBeenCalled();
+    expect(restartHealthProbe.confirmGatewayReachable).not.toHaveBeenCalled();
     expectOutput("not verified (remote)");
   }
 });

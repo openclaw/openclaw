@@ -10,9 +10,6 @@ import {
   requestUpdateDowngradeConfirmation,
 } from "../cli/update-cli/shared.js";
 import { mutateConfigFileWithRetry } from "../config/mutate.js";
-import { resolveServiceEntrypointIndex } from "../daemon/service-layout.js";
-import { hasGatewayServiceLauncherOverride } from "../daemon/service-types.js";
-import { resolveGatewayService } from "../daemon/service.js";
 import {
   callGateway,
   isGatewayCredentialsRequiredError,
@@ -37,7 +34,7 @@ import {
   resolveUpdateInstallationIdentity,
 } from "./installation-identity.js";
 import { PREPARE_DEADLINE_MS, markForwarding, prepareUpdate } from "./run.js";
-import { resolvePrefix } from "./store.js";
+import { readTrial, resolvePrefix } from "./store.js";
 import { resolveTarget } from "./target.js";
 
 const POLL_MS = 2_000;
@@ -67,21 +64,36 @@ export type ReleaseUpdateOptions = {
   yes?: boolean;
 };
 
-/** Managed adapters call this only after service ownership and native authority admission. */
+/** Prepare for an admitted managed action; its native owner still activates the release. */
 export async function tryAdoptInstalledPackageForGateway(opts: {
   json: boolean;
   action: "start" | "restart";
-}): Promise<boolean | undefined> {
+}): Promise<string | false | undefined> {
+  const pending = await readTrial();
+  if (pending?.phase === "pending") {
+    return pending.runId;
+  }
   const runningRoot = await resolveOpenClawPackageRoot({ moduleUrl: import.meta.url });
   if (!runningRoot) {
     return undefined;
   }
-  return (await delegateInstalledPackageUpdate(
-    { json: opts.json, runningRoot, restart: true },
+  const delegated = await delegateInstalledPackageUpdate(
+    { json: opts.json, runningRoot, restart: false },
     opts.action,
-  ))
-    ? process.exitCode === 0
-    : undefined;
+  );
+  if (!delegated) {
+    return undefined;
+  }
+  if (process.exitCode !== 0) {
+    return false;
+  }
+  const prepared = await readTrial();
+  return prepared?.phase === "pending" ? prepared.runId : undefined;
+}
+
+/** Native readiness can also mean rollback; only the update owner knows the trial outcome. */
+export async function waitForReleaseUpdateFailure(runId: string): Promise<string | undefined> {
+  return updateFailure(await followRun(runId, true, RUN_DEADLINE_MS));
 }
 
 async function delegateInstalledPackageUpdate(
@@ -154,16 +166,20 @@ async function delegateInstalledPackageUpdate(
     ...(opts.acceptCapabilities ? ["--accept-capabilities"] : []),
     ...(opts.timeoutMs ? ["--timeout", String(Math.ceil(opts.timeoutMs / 1000))] : []),
   ];
+  const preparationJson = Boolean(action && opts.json);
   const result = await runCommandWithTimeout(argv, {
     timeoutMs: opts.timeoutMs ?? RUN_DEADLINE_MS,
     stdinFileDescriptor: process.stdin.fd,
-    outputCapture: "discard",
+    outputCapture: preparationJson ? { stdout: "head", stderr: "discard" } : "discard",
     onOutputChunk: (chunk, stream) => {
-      process[stream].write(chunk);
+      process[preparationJson ? "stderr" : stream].write(chunk);
     },
     killProcessTree: true,
   });
   process.exitCode = result.code ?? 1;
+  if (preparationJson && process.exitCode !== 0) {
+    process.stdout.write(result.stdout);
+  }
   return true;
 }
 
@@ -352,35 +368,6 @@ async function requestLocalGatewayRestart(timeoutMs = 30_000): Promise<boolean> 
     return true;
   } catch (error) {
     if (isGatewayTransportError(error) || isGatewayCredentialsRequiredError(error)) {
-      const service = resolveGatewayService();
-      const command = await service.readCommand(process.env, { requireEffective: true });
-      const entry = command ? resolveServiceEntrypointIndex(command.programArguments) : undefined;
-      if (
-        command &&
-        !hasGatewayServiceLauncherOverride(command) &&
-        entry !== undefined &&
-        command.programArguments[entry] === path.join(resolvePrefix(), "openclaw-launcher.mjs")
-      ) {
-        const runtime = await service.readRuntime(process.env);
-        const action = runtime.status === "running" ? "restart" : "start";
-        const started = await runCommandWithTimeout(
-          [
-            process.execPath,
-            path.join(resolvePrefix(), "openclaw-launcher.mjs"),
-            "gateway",
-            action,
-            "--json",
-          ],
-          { timeoutMs, killProcessTree: true },
-        );
-        if (started.code !== 0) {
-          throw new Error(
-            started.stderr || started.stdout || "The managed Gateway could not start.",
-            { cause: error },
-          );
-        }
-        return true;
-      }
       return false;
     }
     throw error;
@@ -539,6 +526,18 @@ function isPendingActivation(record: UpdateRunRecord | undefined) {
   return record?.status === "running" && record.phase === "activating";
 }
 
+function updateFailure(record: UpdateRunRecord | undefined): string | undefined {
+  if (!record || record.status === "running") {
+    return "The update did not finish in time. Run `openclaw update status` to see it.";
+  }
+  if (record.status === "succeeded" || record.status === "skipped") {
+    return undefined;
+  }
+  const detail = record.steps.find(({ step }) => step === "outcome")?.detail;
+  const message = record.origin.nextAction ?? record.reason ?? "unknown reason";
+  return `Update failed: ${detail ? `${detail}\n${message}` : message}`;
+}
+
 function report(record: UpdateRunRecord | undefined, json: boolean) {
   if (json) {
     defaultRuntime.writeJson(record ?? { status: "unknown" });
@@ -546,9 +545,7 @@ function report(record: UpdateRunRecord | undefined, json: boolean) {
   }
   // The CLI stopped following before the run finished (its --timeout budget); the run goes on.
   if (!record || (record.status === "running" && !isPendingActivation(record))) {
-    defaultRuntime.error(
-      "The update did not finish in time. Run `openclaw update status` to see it.",
-    );
+    defaultRuntime.error(updateFailure(record));
     return;
   }
   const plugins = record.steps.find(({ step }) => step === "plugins");
@@ -571,8 +568,6 @@ function report(record: UpdateRunRecord | undefined, json: boolean) {
       record.reason === "already-current" ? "Already up to date." : `Skipped: ${record.reason}`,
     );
   } else {
-    const detail = record.steps.find(({ step }) => step === "outcome")?.detail;
-    const message = record.origin.nextAction ?? record.reason ?? "unknown reason";
-    defaultRuntime.error(`Update failed: ${detail ? `${detail}\n${message}` : message}`);
+    defaultRuntime.error(updateFailure(record));
   }
 }

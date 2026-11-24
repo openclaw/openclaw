@@ -44,7 +44,10 @@ import { withCommandProcessScope } from "../../process/exec-spawn.js";
 import { defaultRuntime } from "../../runtime.js";
 import { getAsyncWorkSignal } from "../../shared/async-work-scope.js";
 import { createNullWriter } from "../../shared/null-writer.js";
-import { tryAdoptInstalledPackageForGateway } from "../../update/cli.js";
+import {
+  tryAdoptInstalledPackageForGateway,
+  waitForReleaseUpdateFailure,
+} from "../../update/cli.js";
 import { resolvePrefix } from "../../update/store.js";
 import { formatCliCommand } from "../command-format.js";
 import {
@@ -229,7 +232,7 @@ async function tryAdoptManagedGatewayPackage(
   service: GatewayService,
   action: "start" | "restart",
   json: boolean,
-): Promise<boolean | undefined> {
+) {
   const command = await service
     .readCommand(process.env, { requireEffective: true })
     .catch(ignoreNonCleanupCommandError);
@@ -254,9 +257,9 @@ async function tryAdoptManagedGatewayPackage(
 export async function runDaemonStart(opts: DaemonLifecycleOptions = {}) {
   assertGatewayServiceActionAllowed("start", "start the gateway");
   const service = resolveGatewayService();
-  const adopted = await tryAdoptManagedGatewayPackage(service, "start", Boolean(opts.json));
-  if (adopted !== undefined) {
-    return adopted;
+  const preparedRunId = await tryAdoptManagedGatewayPackage(service, "start", Boolean(opts.json));
+  if (preparedRunId === false) {
+    return false;
   }
   const expectedPort = (await resolveGatewayConfigPorts()).explicit;
   return await runServiceStart({
@@ -323,6 +326,12 @@ export async function runDaemonStart(opts: DaemonLifecycleOptions = {}) {
         }),
       ]);
       if (health.healthy && readiness.healthz === 200 && readiness.readyz === 200) {
+        const failure = preparedRunId
+          ? await waitForReleaseUpdateFailure(preparedRunId)
+          : undefined;
+        if (failure) {
+          fail(failure);
+        }
         return;
       }
       warnings.push(...renderRestartDiagnostics(health));
@@ -435,9 +444,9 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
       return { port: fallbackPort, env: process.env, command: undefined, config: undefined };
     },
   );
-  const adopted = await tryAdoptManagedGatewayPackage(service, "restart", jsonOutput);
-  if (adopted !== undefined) {
-    return adopted;
+  const preparedRunId = await tryAdoptManagedGatewayPackage(service, "restart", jsonOutput);
+  if (preparedRunId === false) {
+    return false;
   }
   let managedRestartPort = preserveDefinition
     ? restartContext.port
@@ -666,6 +675,12 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
       }
 
       if (health.healthy) {
+        const failure = preparedRunId
+          ? await waitForReleaseUpdateFailure(preparedRunId)
+          : undefined;
+        if (failure) {
+          fail(failure);
+        }
         return { outcome: "completed", readiness: health };
       }
 

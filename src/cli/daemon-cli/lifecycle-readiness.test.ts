@@ -23,11 +23,13 @@ const renderRestartDiagnostics = vi.hoisted(() => vi.fn(() => ["runtime diagnost
 const readServiceConfig = vi.hoisted(() => vi.fn());
 const readCliConfig = vi.hoisted(() => vi.fn(async () => ({})));
 const tryAdoptInstalledPackageForGateway = vi.hoisted(() => vi.fn());
+const waitForReleaseUpdateFailure = vi.hoisted(() => vi.fn());
 const isImplicitLocalGatewayTarget = vi.hoisted(() => vi.fn(async () => true));
 
 vi.mock("../../update/cli.js", async (importOriginal) => ({
   ...(await importOriginal<typeof UpdateCli>()),
   tryAdoptInstalledPackageForGateway,
+  waitForReleaseUpdateFailure,
 }));
 vi.mock("../../gateway/call.js", async (importOriginal) => ({
   ...(await importOriginal<typeof GatewayCall>()),
@@ -77,6 +79,7 @@ describe("Gateway service readiness", () => {
     vi.stubEnv("OPENCLAW_UPDATE_IN_PROGRESS", undefined);
     mockSystemAccountHome();
     tryAdoptInstalledPackageForGateway.mockReset().mockResolvedValue(undefined);
+    waitForReleaseUpdateFailure.mockReset().mockResolvedValue(undefined);
     isImplicitLocalGatewayTarget.mockReset().mockResolvedValue(true);
     service.readCommand.mockReset().mockResolvedValue({
       programArguments: ["openclaw", "gateway", "--port", "18789"],
@@ -109,9 +112,13 @@ describe("Gateway service readiness", () => {
     vi.unstubAllEnvs();
   });
 
-  it.each(["start", "restart"] as const)(
-    "returns the resident adoption result without a second managed %s",
-    async (action) => {
+  it.each([
+    ["start", {}, undefined],
+    ["restart", { force: true }, { force: true }],
+    ["restart", { wait: "10s" }, { waitMs: 10_000 }],
+  ] as const)(
+    "prepares the installed package before one managed %s with %j",
+    async (action, flags, intent) => {
       service.readCommand.mockResolvedValue({
         programArguments: [
           process.execPath,
@@ -121,15 +128,22 @@ describe("Gateway service readiness", () => {
         ],
       });
       const run = action === "start" ? runDaemonStart : runDaemonRestart;
-      for (const result of [true, false]) {
-        tryAdoptInstalledPackageForGateway.mockResolvedValue(result);
-        expect(await run({ json: true })).toBe(result);
-      }
-      expect(tryAdoptInstalledPackageForGateway).toHaveBeenCalledTimes(2);
-      expect(tryAdoptInstalledPackageForGateway).toHaveBeenLastCalledWith({ json: true, action });
-      expect(runServiceStart).not.toHaveBeenCalled();
-      expect(runServiceRestart).not.toHaveBeenCalled();
-      expect(service.restart).not.toHaveBeenCalled();
+      const native = action === "start" ? runServiceStart : runServiceRestart;
+      const opts = { ...flags, json: true };
+      runServiceStart.mockResolvedValue(true);
+      tryAdoptInstalledPackageForGateway.mockResolvedValue(false);
+      expect(await run(opts)).toBe(false);
+      expect(native).not.toHaveBeenCalled();
+      tryAdoptInstalledPackageForGateway.mockResolvedValue(undefined);
+      expect(await run(opts)).toBe(true);
+      expect(native).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({
+          opts: expect.objectContaining({
+            ...opts,
+            ...(intent ? { restartIntent: expect.objectContaining(intent) } : {}),
+          }),
+        }),
+      );
     },
   );
 
@@ -157,6 +171,50 @@ describe("Gateway service readiness", () => {
       expect(tryAdoptInstalledPackageForGateway).toHaveBeenCalledTimes(
         scenario === "no-candidate" ? 1 : 0,
       );
+    },
+  );
+
+  it.each(["start", "restart"] as const)(
+    "reports trial rollback instead of successful native %s",
+    async (action) => {
+      service.readCommand.mockResolvedValue({
+        programArguments: [
+          process.execPath,
+          path.join(resolvePrefix(), "openclaw-launcher.mjs"),
+          "gateway",
+          "run",
+        ],
+      });
+      tryAdoptInstalledPackageForGateway.mockResolvedValue("adopted-run");
+      waitForReleaseUpdateFailure.mockResolvedValue(
+        "Update failed: Candidate crashed. Restored 2026.11.8; Gateway ready.",
+      );
+      const writeJson = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
+      vi.spyOn(defaultRuntime, "exit").mockImplementation((code) => {
+        throw new Error(`exit ${code}`);
+      });
+      runServiceStart.mockImplementation(async ({ postStartCheck }) => {
+        await postStartCheck({
+          ...createDaemonActionContext({ action, json: true }),
+          warnings: [],
+        });
+      });
+      runServiceRestart.mockImplementation(async ({ postRestartCheck }) => {
+        await postRestartCheck({
+          ...createDaemonActionContext({ action, json: true }),
+          warnings: [],
+          activationAccepted: true,
+        });
+      });
+      const run = action === "start" ? runDaemonStart : runDaemonRestart;
+      await expect(run({ json: true })).rejects.toThrow("exit 1");
+      expect(writeJson).toHaveBeenCalledWith(
+        expect.objectContaining({
+          ok: false,
+          error: expect.stringContaining("Restored 2026.11.8; Gateway ready."),
+        }),
+      );
+      expect(waitForReleaseUpdateFailure).toHaveBeenCalledWith("adopted-run");
     },
   );
 

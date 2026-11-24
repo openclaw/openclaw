@@ -309,9 +309,11 @@ on its next start. The installed updater must contain this repair.
 Local npm frontends can offer their installed package to a managed package
 release. The resident release runs the update, with an explicit local package
 source, and publishes forwarding with the validated pending trial. Managed
-start/restart returns that operation's result without a second restart. The
-installed resident updater must contain forwarding publication support. Git
-installation identity checks and Gateway RPC admission remain unchanged.
+start/restart then uses its existing native activation once, preserving restart
+options such as `--force` and `--wait`. An already pending trial goes straight
+to activation, even when the npm entry could not be attached to the launcher.
+The installed resident updater must contain forwarding publication support.
+Git installation identity checks and Gateway RPC admission remain unchanged.
 
 Service reconciliation recognizes a deleted pnpm store generation only when it
 belongs to the same global root as a verified active pnpm install. This repairs
