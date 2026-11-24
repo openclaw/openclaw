@@ -17,6 +17,7 @@ import {
   createScheduledBeamTestRunner,
   createBeamTestRuntime,
 } from "./beam.test-support.js";
+import * as cleaner from "./cleaner.js";
 import { beamMirrorId } from "./mirror-candidate.js";
 import { parseBeamMirrorConfig } from "./mirror-config.js";
 import { createBeamMirrorService } from "./mirror-service.js";
@@ -179,18 +180,17 @@ describe("createBeamMirrorRunner", () => {
   });
 
   it.each([false, true])(
-    "uploads the newest suffix once when cancellation rejects: %s",
+    "uploads once when response cancellation rejects: %s",
     async (rejectCancel) => {
-      const count = 300;
       const { sent, warnings } = fixture;
       const cancel = vi.fn(async () => {
         if (rejectCancel) {
           throw new Error("cancel failed");
         }
       });
-      const chronological = Array.from({ length: count }, (_, index) => ({
+      const chronological = Array.from({ length: 3 }, (_, index) => ({
         type: index % 2 === 0 ? ("userMessage" as const) : ("agentMessage" as const),
-        text: `Message ${index}: ${"🙂\n\u0000".repeat(200)}end`,
+        text: `Message ${index}`,
       }));
       const runner = fixture.runner(
         {
@@ -211,12 +211,36 @@ describe("createBeamMirrorRunner", () => {
         completed: false,
       });
       expect(parseBeamUpload(structuredClone(sent[0]?.payload)).ok).toBe(true);
-      const payload = sent[0]!.payload;
-      expect(payload.items).toEqual(chronological.slice(-payload.items.length));
-      expect(payload.truncated).toBe(true);
-      expect(payload.items.length).toBeLessThanOrEqual(BEAM_MAX_ITEMS);
-      expect(Buffer.byteLength(JSON.stringify(payload), "utf8")).toBeLessThanOrEqual(56 * 1024);
+      expect(sent[0]?.payload.items).toEqual(chronological);
       expect(warnings).toEqual([]);
+    },
+  );
+
+  it.runIf(process.env.BEAM_TEST_CLEANER_PLUGIN_ROOT)(
+    "publishes the latest chronological suffix within the real native cleaner byte limit",
+    async () => {
+      const { createBeamExecutableResolver } = await import("./executable.js");
+      const chronological = Array.from({ length: 300 }, (_, index) => ({
+        type: index % 2 === 0 ? ("userMessage" as const) : ("agentMessage" as const),
+        text: `Message ${index}: ${"🙂 text ".repeat(200)}end`,
+      }));
+      const runner = fixture.runner(
+        { sessions: beamTestSessions(["native-300"]), items: chronological.toReversed() },
+        {
+          resolveExecutable: createBeamExecutableResolver(
+            process.env.BEAM_TEST_CLEANER_PLUGIN_ROOT!,
+          ),
+        },
+      );
+      await runner.tick();
+      expect(fixture.sent).toHaveLength(1);
+      const payload = fixture.sent[0]!.payload;
+      expect(parseBeamUpload(structuredClone(payload)).ok).toBe(true);
+      expect(payload.truncated).toBe(true);
+      expect(payload.items.length).toBeGreaterThan(1);
+      expect(payload.items.length).toBeLessThan(BEAM_MAX_ITEMS);
+      expect(payload.items).toEqual(chronological.slice(-payload.items.length));
+      expect(Buffer.byteLength(JSON.stringify(payload))).toBeLessThanOrEqual(56 * 1024);
     },
   );
 
@@ -256,20 +280,19 @@ describe("createBeamMirrorRunner", () => {
       sessions: [session],
       items: [{ type: "userMessage" as const, text: "unfiltered text" }],
     };
-    const runner = fixture.runner(catalog, {
-      cleanCandidate: async (candidate) => {
-        expect(candidate).toMatchObject({ title: session.name, items: catalog.items });
-        const packet = {
-          version: 2 as const,
-          beamId: "a".repeat(32),
-          source: candidate.source,
-          title: "clean title",
-          updatedAt: candidate.updatedAt,
-          completed: candidate.completed,
-          items: [{ type: "userMessage" as const, text: "clean message", speaker: "p1" }],
-        };
-        return { packet, raw: Buffer.from(JSON.stringify(packet)) };
-      },
+    const runner = fixture.runner(catalog);
+    vi.spyOn(cleaner, "cleanBeamCandidate").mockImplementation(async (candidate) => {
+      expect(candidate).toMatchObject({ title: session.name, items: catalog.items });
+      const packet = {
+        version: 2 as const,
+        beamId: "a".repeat(32),
+        source: candidate.source,
+        title: "clean title",
+        updatedAt: candidate.updatedAt,
+        completed: candidate.completed,
+        items: [{ type: "userMessage" as const, text: "clean message", speaker: "p1" }],
+      };
+      return { packet, raw: Buffer.from(JSON.stringify(packet)) };
     });
     await runner.tick();
     expect(fixture.sent).toHaveLength(1);
@@ -281,11 +304,8 @@ describe("createBeamMirrorRunner", () => {
     expect(fixture.sent[0]?.payload.items).toEqual([
       { type: "userMessage", text: "clean message" },
     ]);
-    const failing = fixture.runner(catalog, {
-      cleanCandidate: async () => {
-        throw new Error("cleaner unavailable");
-      },
-    });
+    const failing = fixture.runner(catalog);
+    vi.spyOn(cleaner, "cleanBeamCandidate").mockRejectedValue(new Error("cleaner unavailable"));
     await failing.tick();
     expect(fixture.sent).toHaveLength(1);
   });

@@ -39,10 +39,11 @@ process.stdin.on("end", () => {
 });
 `,
 );
-vi.mock("../../extensions/beam/package.json", async (original) => {
-  const current = await original<{ default: Record<string, unknown> }>();
+vi.mock("../../extensions/beam/package.json", async (importOriginal) => {
+  const current = await importOriginal<{ default: Record<string, unknown> }>();
   const { createHash } = await import("node:crypto");
   return {
+    ...current,
     default: {
       ...current.default,
       beamNativeRelease: {

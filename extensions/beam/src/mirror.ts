@@ -65,7 +65,6 @@ type TrackedMirrorSession = {
 export function createBeamMirrorRunner(params: {
   catalogExports: PluginServiceCatalogExports;
   resolveExecutable: () => Promise<string>;
-  cleanCandidate?: typeof cleanBeamCandidate;
   getPublicationStore?: (
     authority: PluginStateActionAuthority,
   ) => Pick<
@@ -261,7 +260,7 @@ export function createBeamMirrorRunner(params: {
     }
     const reduced = buildBeamMirrorItems(items);
     const sourceModel = sourceModelForMirror(candidate.modelProvider, items);
-    const cleaned = await (params.cleanCandidate ?? cleanBeamCandidate)(
+    const cleaned = await cleanBeamCandidate(
       {
         source: candidate.catalogId,
         origin: {
