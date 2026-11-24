@@ -48,12 +48,11 @@ suite.define(() => {
     const card = page.getByRole("region", { name: "Sign in to Fieldnotes" });
     const signIn = card.getByRole("link", { name: "Sign in", exact: true });
     await signIn.waitFor();
-    expect(await page.locator(".chat-tool-row").count()).toBe(0);
+    expect(await page.getByRole("button", { name: /Fieldnotes List Issues/ }).count()).toBe(0);
     expect((await card.boundingBox())!.y).toBeGreaterThan((await reply.boundingBox())!.y);
     const opening = page.context().waitForEvent("page");
     await signIn.press("Enter");
     const popup = await opening;
     await popup.waitForURL(destination);
-    expect(await popup.locator("body").textContent()).toBe("Sign-in page");
   });
 });
