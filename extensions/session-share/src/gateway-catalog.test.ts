@@ -399,7 +399,7 @@ it("discovers peer filter support and never turns transport errors into identity
   };
   client.request.mockResolvedValue({ sessions: [row] });
   expect((await catalog.list({ profileRelation }))[0]).toMatchObject({
-    sessions: [row],
+    sessions: [{ ...row, exportPolicy: { origin: "federated", automatic: false } }],
     error: { code: "FILTER_PARTIAL" },
   });
   expect(client.request).toHaveBeenLastCalledWith("session-share.list", { limit: 20 });
@@ -439,7 +439,9 @@ it("uses the advertised Gateway catalog pair without a filter and rejects origin
     canArchive: false,
   };
   client.request.mockResolvedValue({ sessions: [row] });
-  expect((await catalog.list({}))[0]?.sessions).toEqual([row]);
+  expect((await catalog.list({}))[0]?.sessions).toEqual([
+    { ...row, exportPolicy: { origin: "federated", automatic: false } },
+  ]);
   expect(client.request).toHaveBeenLastCalledWith("session-share.catalog.list", { limit: 20 });
   client.request.mockResolvedValue({ threadId: "one", items: [] });
   await catalog.read({ hostId: "gateway:team", threadId: "one" });

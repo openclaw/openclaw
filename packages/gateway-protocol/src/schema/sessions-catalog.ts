@@ -69,6 +69,13 @@ export const SessionCatalogSessionSchema = closedObject({
   originalUrl: Type.Optional(Type.String({ maxLength: 4096 })),
   threadId: NonEmptyString,
   sourceHomeId: Type.Optional(NonEmptyString),
+  /** Producer-owned source provenance. An unclassified row permits explicit selection only. */
+  exportPolicy: Type.Optional(
+    closedObject({
+      origin: stringLiteralUnion(["native-local", "imported", "federated"]),
+      automatic: Type.Boolean(),
+    }),
+  ),
   name: Type.Optional(Type.String()),
   /** Named tint imported from the source CLI session (SESSION_COLOR_IDS). */
   color: Type.Optional(Type.String()),
