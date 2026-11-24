@@ -53,11 +53,15 @@ const enChatToolOperations = {
             running: "Pasting into process",
             done: "Pasted into process",
           },
-          kill: { action: "Stop process", running: "Stopping process", done: "Stopped process" },
+          kill: {
+            action: "Request process stop",
+            running: "Requesting process stop",
+            done: "Requested process stop",
+          },
           clear: {
-            action: "Clear process output",
-            running: "Clearing process output",
-            done: "Cleared process output",
+            action: "Remove finished process record",
+            running: "Removing finished process record",
+            done: "Removed finished process record",
           },
           remove: {
             action: "Remove process record",
