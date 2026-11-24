@@ -32,6 +32,7 @@ import { runReleaseUpdateCli } from "./cli.js";
 import * as serviceConversion from "./convert-service.js";
 import { settleRunFromTrial } from "./gateway-trial.js";
 import { preflight } from "./preflight.js";
+import { registerAlreadyCurrentUpdateTests } from "./prepare-current.test-support.js";
 import { prepareGit } from "./prepare-git.js";
 import { preparePackage } from "./prepare-package.js";
 import { bin, executable, node, repository, root } from "./prepare.test-support.js";
@@ -521,10 +522,14 @@ describe("package release conversion", () => {
     { releaseAware: true, runtime: "node", adopt: true, readOnly: false },
     { releaseAware: true, runtime: "node", adopt: true, readOnly: true },
     { releaseAware: false, runtime: "node", adopt: true, readOnly: false },
+    // An explicit artifact rebuilt at the installed version is still a new release.
+    { releaseAware: true, runtime: "node", build: "rebuilt" },
+    { releaseAware: true, runtime: "node", build: "installed" },
   ])(
-    "prepares a $runtime package with release support $releaseAware (npm adoption=$adopt, readOnly=$readOnly)",
-    async ({ releaseAware, runtime, adopt, readOnly }) => {
+    "prepares a $runtime package with release support $releaseAware (npm adoption=$adopt, readOnly=$readOnly, build=$build)",
+    async ({ releaseAware, runtime, adopt = false, readOnly = false, build }) => {
       vi.stubEnv("OPENCLAW_STATE_DIR", path.join(root, "state"));
+      const runningVersion = adopt ? "2026.11.20" : "2026.11.21";
       const runningRoot = adopt
         ? path.join(resolvePrefix(), "releases", "resident", "openclaw")
         : path.join(root, "global", "node_modules", "openclaw");
@@ -540,7 +545,7 @@ describe("package release conversion", () => {
       await fs.mkdir(path.join(runningRoot, "dist"), { recursive: true });
       await fs.writeFile(
         path.join(runningRoot, "package.json"),
-        '{"type":"module","version":"2026.11.20"}',
+        JSON.stringify({ type: "module", version: runningVersion }),
       );
       if (adopt) {
         await fs.mkdir(path.join(frontend, "dist"), { recursive: true });
@@ -664,12 +669,12 @@ if (process.argv[2] !== 'install') {
         openOpenClawStateDatabase({ env: process.env });
         const run = await createUpdateRunAsync({
           trigger: "cli",
-          before: { version: "2026.11.21" },
+          before: { version: runningVersion },
         });
         const outcome = await prepareUpdate({
           runId: run.runId,
           runningRoot,
-          runningVersion: "2026.11.21",
+          runningVersion,
           channel: "stable",
           node: runner,
           ...(adopt ? { tag: `file:${frontend}` } : {}),
@@ -770,113 +775,7 @@ if (process.argv[2] !== 'install') {
   );
 });
 
-describe("already-current update", () => {
-  const pluginResult = (overrides: object) => ({
-    status: "ok",
-    changed: false,
-    warnings: [],
-    sync: { changed: false, switchedToBundled: [], switchedToNpm: [], warnings: [], errors: [] },
-    npm: { changed: false, outcomes: [] },
-    integrityDrifts: [],
-    ...overrides,
-  });
-  const linked =
-    'Retained linked plugin "irc" at extensions/irc; update this plugin at its source.';
-
-  it.each([
-    {
-      name: "a change despite a runtime security warning",
-      result: pluginResult({ changed: true }),
-      changed: true,
-      detail: undefined,
-      exitCode: 0,
-    },
-    {
-      // The existing updater's warning result is a note, not a failed step.
-      name: "a warning note",
-      result: pluginResult({
-        status: "warning",
-        sync: {
-          changed: false,
-          switchedToBundled: [],
-          switchedToNpm: [],
-          warnings: [linked],
-          errors: [],
-        },
-      }),
-      changed: false,
-      detail: linked,
-      exitCode: 0,
-    },
-    {
-      name: "a plugin failure without failing the core update",
-      result: pluginResult({ status: "error", reason: "fixture plugin update failed" }),
-      changed: false,
-      detail: "fixture plugin update failed\nRun `openclaw plugins update --all` to retry.",
-      exitCode: 0,
-    },
-    {
-      name: "the CLI refusal after a runtime security warning",
-      result: pluginResult({ status: "error" }),
-      changed: false,
-      detail:
-        "OpenClaw refused shared state schema mutation because another Gateway owns that state directory.\nRun `openclaw plugins update --all` to retry.",
-      exitCode: 1,
-    },
-  ])("still maintains plugins with the serving code and records $name", async (expected) => {
-    const { checkout, sha } = await repository();
-    vi.stubEnv("OPENCLAW_STATE_DIR", path.join(root, "state"));
-    // The serving build was made from the target commit.
-    vi.stubEnv("GIT_COMMIT", sha);
-    // The serving release's own `update plugins`: records its argv and prints its result.
-    await fs.writeFile(
-      path.join(checkout, "openclaw.mjs"),
-      [
-        "import fs from 'node:fs';",
-        "fs.writeFileSync('plugins-argv.json', JSON.stringify(process.argv.slice(2)));",
-        "process.stderr.write('openclaw: SECURITY WARNING: upgrade Node to the recommended security patch level.\\n');",
-        expected.exitCode === 0
-          ? `console.log(${JSON.stringify(JSON.stringify(expected.result))});`
-          : "process.stderr.write('[openclaw] The CLI command failed.\\n[openclaw] Reason: OpenClaw refused shared state schema mutation because another Gateway owns that state directory.\\n[openclaw] Another OpenClaw process is using your data. Wait for it to finish before trying again.\\n');",
-        `process.exitCode = ${expected.exitCode};`,
-      ].join("\n"),
-    );
-    try {
-      openOpenClawStateDatabase({ env: process.env });
-      const run = await createUpdateRunAsync({ trigger: "cli", before: { version: "2026.11.21" } });
-      const outcome = await prepareUpdate({
-        runId: run.runId,
-        runningRoot: checkout,
-        runningVersion: "2026.11.21",
-        channel: "dev",
-        sha,
-        node,
-        acceptCapabilities: expected.changed,
-      });
-      expect(outcome).toMatchObject({ status: "current", pluginsChanged: expected.changed });
-      expect(
-        JSON.parse(await fs.readFile(path.join(checkout, "plugins-argv.json"), "utf8")),
-      ).toEqual([
-        "update",
-        "plugins",
-        "--json",
-        "--channel",
-        "dev",
-        "--timeout",
-        expect.stringMatching(/^\d+$/),
-        ...(expected.changed ? ["--accept-capabilities"] : []),
-      ]);
-      const record = await getUpdateRunAsync(run.runId);
-      expect(record).toMatchObject({ status: "skipped", reason: "already-current" });
-      const plugins = record?.steps.find(({ step }) => step === "plugins");
-      expect(plugins?.status).toBe(expected.result.status === "error" ? "failed" : "completed");
-      expect(plugins?.detail).toBe(expected.detail);
-    } finally {
-      await closeOpenClawStateDatabaseAsync();
-      closeOpenClawStateDatabaseForTest();
-    }
-  });
-});
+registerAlreadyCurrentUpdateTests();
 
 describe("retained updater runtimes", () => {
   // Updaters before owner records projected the package they replaced into the temp dir.
