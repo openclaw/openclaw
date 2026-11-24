@@ -131,7 +131,11 @@ function adaptPluginGatewayMethodHandler(
     try {
       const result = scope
         ? await withPluginRuntimeGatewayRequestScope(
-            { ...scope, gatewayMethodDispatchAllowed: mayDispatch && scope.client != null },
+            {
+              ...scope,
+              gatewayMethodDispatchAllowed: mayDispatch && scope.client != null,
+              sessionResourceForFork: opts.sessionAccessAuthority,
+            },
             invoke,
           )
         : await invoke();
