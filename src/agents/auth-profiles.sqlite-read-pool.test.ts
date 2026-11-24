@@ -11,9 +11,11 @@ import { captureSqliteAuthSchema as captureSchema } from "../infra/sqlite-readon
 import { admitSqliteSchema } from "../infra/sqlite-schema-facts.js";
 import { openSqliteReadOnlyDatabase as openReadonly } from "../infra/sqlite-snapshot-source.js";
 import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
+import { writeSqliteUserVersion } from "../infra/sqlite-user-version.js";
 import { readDatabasePathIdentitySync } from "../infra/sqlite-worker-identity.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db-contract.js";
 import { registerOpenClawAgentDatabaseIdentity } from "../state/openclaw-agent-db-identity.js";
+import { persistAgentSchemaMetadata } from "../state/openclaw-agent-db-metadata-write.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { loadPersistedAuthProfileStore as loadStore } from "./auth-profiles/persisted.js";
 import {
@@ -235,9 +237,15 @@ it.each([
       const version = OPENCLAW_AGENT_SCHEMA_VERSION + 1;
       {
         using writer = new DatabaseSync(pathname);
-        writer.exec(`ALTER TABLE schema_meta ADD COLUMN min_reader INTEGER;
-        UPDATE schema_meta SET schema_version = ${version}, min_reader = ${raised ? version : OPENCLAW_AGENT_SCHEMA_VERSION};
-        PRAGMA user_version = ${version}`);
+        runSqliteImmediateTransactionSync(writer, () => {
+          writeSqliteUserVersion(writer, version);
+          persistAgentSchemaMetadata(
+            writer,
+            "main",
+            version,
+            raised ? version : OPENCLAW_AGENT_SCHEMA_VERSION,
+          );
+        });
       }
       const schema = projected
         ? { userVersion: version, store: "table" as const, state: "table" as const }
