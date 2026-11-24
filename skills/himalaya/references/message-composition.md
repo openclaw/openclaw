@@ -175,12 +175,13 @@ himalaya message compose \
 
 ```bash
 himalaya message reply 42 --body "Thanks, will look." --send
-himalaya message reply 42 --to team@example.com --body "Adding the team." --send
+himalaya message reply 42 --cc team@example.com --body "Adding the team." --send
 himalaya message forward 42 --to recipient@example.com --body "See below." --send
 ```
 
-2.2.1 has no `--all` flag: pass the extra recipients with `--to` or `--cc`. The source message is
-fetched to fill `In-Reply-To`, `References` and the `Re:` subject, and its text body is quoted.
+2.2.1 has no `--all` flag. `--to` replaces the recipients derived from the source, so add an extra
+recipient with `--cc` to keep the original one. The source message is fetched to fill `In-Reply-To`,
+`References` and the `Re:` subject, and its text body is quoted.
 
 ### Send a prepared message
 
