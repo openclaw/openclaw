@@ -112,7 +112,12 @@ it("accepts build-only at the shell and dispatch boundaries without selecting re
     );
   expect(invoke("controller").status).toBe(0);
   expect(invoke("release-checks").status).not.toBe(0);
-  expect(parseArgs(["-f", "rerun_group=build-only"]).inputs.rerun_group).toBe("build-only");
+  const buildOnly = parseArgs(["-f", "rerun_group=build-only"]).inputs;
+  expect(buildOnly.rerun_group).toBe("build-only");
+  expect(buildOnly.reuse_evidence).toBe("false");
+  expect(() => parseArgs(["-f", "rerun_group=build-only", "-f", "reuse_evidence=true"])).toThrow(
+    "requires fresh qualification",
+  );
   const args = releaseEvidenceVerificationArgs(
     "77",
     "a".repeat(40),
