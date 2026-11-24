@@ -183,7 +183,7 @@ it.each([
       latest,
     );
     const body =
-      "This is a gateway-only `extended-stable` release, published from a retired maintenance line by explicit maintainer decision. This release is OpenClaw from the end of September 2026, plus critical security updates, reliability and performance fixes, and features like new model support. The latest version of OpenClaw at the time of this release is [2026.11.5](https://github.com/openclaw/openclaw/releases#release-v2026.11.5)\n\n## 2026.9.37\n\n### Fixes\n\n- Correct release behavior.";
+      "This is a gateway-only `extended-stable` release, published from a retired maintenance line by explicit maintainer decision. This release is OpenClaw from the end of September 2026, plus critical security updates, reliability and performance fixes, and features like new model support. The latest version of OpenClaw at the time of this release is [2026.10.9](https://github.com/openclaw/openclaw/releases#release-v2026.10.9)\n\n## 2026.9.37\n\n### Fixes\n\n- Correct release behavior.";
     const result = evaluate(
       fixture,
       [
@@ -192,6 +192,9 @@ it.each([
         "return admit({tag:'v2026.9.37', retiredLineReason:" +
           JSON.stringify(reason) +
           ", runGh(args) {",
+        "if (args[1].endsWith('/releases/latest')) { if (" +
+          publicPage +
+          ") throw new Error('Public readback must not follow moving Latest'); return JSON.stringify({tag_name:'v2026.10.9'}); }",
         "if (args[1].includes('/releases/tags/')) {",
         "if (!" + publicPage + ") throw new Error('HTTP 404: Not Found');",
         "return JSON.stringify({id:1, tag_name:'v2026.9.37', draft:false, prerelease:false, html_url:'https://github.com/openclaw/openclaw/releases/tag/v2026.9.37', target_commitish:input.sourceSha, body:" +

@@ -6,8 +6,8 @@ import {
   resolveAgentWorkspaceDir,
   resolveAgentSkillsFilter,
 } from "../../agents/agent-scope.js";
-import { findModelInCatalog } from "../../agents/model-catalog-lookup.js";
 import type { ModelCatalogSnapshot } from "../../agents/model-catalog.types.js";
+import { NO_MODEL_CONFIGURED_MESSAGE } from "../../agents/model-selection-config.js";
 import { resolveModelRefFromString } from "../../agents/model-selection.js";
 import { publishedModelCatalogOwnerMatchesAgent } from "../../agents/prepared-model-catalog-owner.js";
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
@@ -52,22 +52,18 @@ import {
   applyLinkUnderstandingIfNeeded,
   canReadReplyAttachmentPaths,
   applyMediaUnderstandingIfNeeded,
-  hasExplicitAudioUnderstandingConfig,
   hasLinkCandidate,
   resolveReplyAgentScope,
 } from "./get-reply-preprocessing.js";
 import { runPreparedReply } from "./get-reply-run.js";
+import { resolveActiveMediaModel } from "./get-reply-turn-model.js";
 import {
   prepareInternalGetReplyOptions,
   withExtractedFileImages,
   type InternalGetReplyOptions,
 } from "./get-reply.types.js";
 import { finalizeInboundContext } from "./inbound-context.js";
-import {
-  hasInboundAudio,
-  hasInboundMedia,
-  hasInboundMediaForUnderstanding,
-} from "./inbound-media.js";
+import { hasInboundMedia, hasInboundMediaForUnderstanding } from "./inbound-media.js";
 import { emitPreAgentMessageHooks } from "./message-preprocess-hooks.js";
 import { createModelSelectionState, resolveTurnModelSelection } from "./model-selection.js";
 import { getPreparedReplyDispatchRuntime } from "./prepared-reply-dispatch-context.js";
@@ -159,7 +155,6 @@ async function resolveReplyFromConfig(
       resolveReplyAgentScope({ cfg, ctx: finalized, signal: opts?.abortSignal }),
     );
     assertReplyPreprocessingActive(opts?.abortSignal);
-    opts?.operatorAuthority?.assertCurrent();
     opts?.internalEventExecution?.assertCurrent?.();
     const refusal = readAgentDatabaseAdmissionRefusal(initialAgentScope.agentId);
     if (refusal) {
@@ -343,7 +338,6 @@ async function resolveReplyFromConfig(
           useFastTestBootstrap,
           provisioningInput: acpWorkspaceProvisioningInput,
           abortSignal: optsWithSkillFilter?.abortSignal,
-          operatorAuthority: optsWithSkillFilter?.operatorAuthority,
         }),
       );
     } catch (error) {
@@ -421,23 +415,14 @@ async function resolveReplyFromConfig(
       const mediaResult = await traceGetReplyPhase("reply.apply_media_understanding", () =>
         applyMediaUnderstandingIfNeeded({
           ctx: finalized,
+          recordAudioApiKeyFailures:
+            optsWithSkillFilter?.userTurnTranscriptRecorder?.recordAudioApiKeyFailures,
           ...workspaceContext,
-          activeModel: {
-            provider,
-            model,
-            api: findModelInCatalog(preparedModelCatalog?.entries ?? [], provider, model)?.api,
-          },
+          activeModel: resolveActiveMediaModel(provider, model, preparedModelCatalog?.entries),
           // Cache and classify now; the final provider and owner policy are
           // resolved later, immediately before the embedded turn starts.
           selfServeLocalPaths: false,
-          ...(utilityModelSelectionLocked
-            ? {
-                processingMode:
-                  hasInboundAudio(finalized) && hasExplicitAudioUnderstandingConfig(cfg)
-                    ? ("audio-and-files" as const)
-                    : ("files-only" as const),
-              }
-            : {}),
+          restrictToConfiguredAudio: utilityModelSelectionLocked,
         }),
       );
       extractedFileImages = mediaResult?.extractedFileImages;
@@ -738,8 +723,6 @@ async function resolveReplyFromConfig(
       const action = resetMatch[1]?.toLowerCase() === "reset" ? "reset" : "new";
       await resolvedOpts?.awaitSessionDiffBaseline?.();
       assertReplyPreprocessingActive(resolvedOpts?.abortSignal);
-      resolvedOpts?.operatorAuthority?.assertCurrent();
-      command.assertOwnerCurrent?.();
       await emitResetCommandHooks({
         action,
         agentId,
@@ -808,6 +791,10 @@ async function resolveReplyFromConfig(
     const queueModeOverride = inlineActionResult.queueModeOverride;
     const preparedReplyOpts = withExtractedFileImages(resolvedOpts, extractedFileImages);
     abortedLastRun = inlineActionResult.abortedLastRun ?? abortedLastRun;
+    // Commands and directives ran above without a model; an agent turn is the first step that needs one.
+    if (!model) {
+      return rejectSessionPreparation(new Error(NO_MODEL_CONFIGURED_MESSAGE));
+    }
     const runAutoFallbackPrimaryProbe =
       directives.hasModelDirective ||
       (autoFallbackPrimaryProbe &&
@@ -851,7 +838,7 @@ async function resolveReplyFromConfig(
         }
         throw error;
       }
-      if (runModelState.operatorModelOverride) {
+      if (runModelState.operatorModelOverride && runModelState.model) {
         runProvider = runModelState.provider;
         runModel = runModelState.model;
       }
@@ -955,7 +942,8 @@ async function resolveReplyFromConfig(
           : requestedRouteResolution,
         typing,
         opts: queueModeOverride ? { ...preparedReplyOpts, queueModeOverride } : preparedReplyOpts,
-        defaultModel,
+        // The runner falls back to this model id; without a configured model the run's own applies.
+        defaultModel: defaultModel ?? runModel,
         timeoutMs,
         isNewSession,
         resetTriggered,

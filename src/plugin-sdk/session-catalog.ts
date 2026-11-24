@@ -27,9 +27,12 @@ export { importSessionCatalogHistory } from "../plugins/session-catalog-history-
 export type {
   SessionCatalog,
   SessionCatalogCapabilities,
+  SessionCatalogProfileRelation,
+  SessionCatalogSourceProfileRelation,
   SessionCatalogDescriptor,
   SessionCatalogHost,
   SessionCatalogLocator,
+  SessionCatalogRouteMethods,
   SessionCatalogPullRequestSummary,
   SessionCatalogSession,
   SessionCatalogTranscriptItem,
@@ -41,6 +44,9 @@ export type {
   SessionsCatalogListResult,
   SessionsCatalogReadParams,
   SessionsCatalogReadResult,
+  SessionsCatalogResolveResult,
+  SessionsCatalogRouteParams,
+  SessionsCatalogRouteResult,
   SessionsCatalogStartTerminalParams,
   SessionsCatalogStartTerminalResult,
 } from "../../packages/gateway-protocol/src/schema/sessions-catalog.js";

@@ -1,6 +1,9 @@
 import { getPreparedModelRuntimeStartupStatus } from "../../agents/prepared-model-runtime.startup-status.js";
 import type { ChannelAccountSnapshot } from "../../channels/plugins/types.public.js";
-import { readChildRuntimeViability } from "../../infra/child-runtime-viability.js";
+import {
+  prepareChildRuntimeViability,
+  type ChildRuntimeViability,
+} from "../../infra/child-runtime-viability.js";
 import { formatErrorMessage as formatError } from "../../infra/errors.js";
 import { readGatewayMaintenanceWork } from "../../infra/gateway-active-work.js";
 import { getGatewayRecentCrashes } from "../../infra/gateway-crash.js";
@@ -15,14 +18,14 @@ import { HEALTH_REFRESH_INTERVAL_MS } from "../server-constants.js";
 import type { GatewayShutdownStatus } from "../server-public.js";
 import { shouldScheduleBackgroundHealthRefresh } from "../server/health-refresh-admission.js";
 import { readGatewayProcessVitals, readGatewayWorkerPoolFacts } from "../server/process-vitals.js";
+import { readGatewayResourceDiagnostics } from "../server/resource-diagnostics.js";
 import { getSessionRowProjection } from "../session-row-projection-access.js";
 import { respondUnavailableOnThrow } from "./response.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
 const ADMIN_SCOPE = "operator.admin";
 
-function readPublishedChildRuntime(includeSensitive: boolean) {
-  const viability = readChildRuntimeViability();
+function formatPublishedChildRuntime(viability: ChildRuntimeViability, includeSensitive: boolean) {
   return includeSensitive ? viability : { execPath: "[redacted]", available: viability.available };
 }
 
@@ -95,6 +98,8 @@ export const healthHandlers: GatewayRequestHandlers = {
         buildDeliveryQueueHealthSummary(),
         buildContextEngineHealthSummary(),
       ] as const);
+      const childRuntime = await prepareChildRuntimeViability();
+      const viability = childRuntime.publish();
       // A reset sampler has no current window; never revive the cached reading.
       const eventLoop = getEventLoopHealth?.();
       respond(
@@ -102,7 +107,7 @@ export const healthHandlers: GatewayRequestHandlers = {
         {
           ...cachedState,
           // Readiness follows live admission, never the health snapshot's refresh cadence.
-          coreReady: context.getReadiness?.().coreReady,
+          coreReady: context.getReadiness?.(viability).coreReady,
           modelRuntime: getPreparedModelRuntimeStartupStatus(),
           ...(eventLoop ? { eventLoop } : {}),
           ...(contextEngines ? { contextEngines } : {}),
@@ -111,7 +116,10 @@ export const healthHandlers: GatewayRequestHandlers = {
             ? { configReload: { hotReloadStatus: configReloadHotReloadStatus } }
             : {}),
           // Live check. The cache must not keep a path that disappeared after it was stored.
-          childRuntime: readPublishedChildRuntime(includeSensitive),
+          childRuntime: formatPublishedChildRuntime(
+            viability,
+            client?.connect.scopes?.includes(ADMIN_SCOPE) ?? false,
+          ),
           recentCrashes: getGatewayRecentCrashes(),
         },
         undefined,
@@ -126,13 +134,18 @@ export const healthHandlers: GatewayRequestHandlers = {
     }
     await respondUnavailableOnThrow(respond, async () => {
       const snap = await refreshHealthSnapshot({ probe: wantsProbe, includeSensitive });
+      const childRuntime = await prepareChildRuntimeViability();
+      const viability = childRuntime.publish();
       respond(
         true,
         {
           ...snap,
-          coreReady: context.getReadiness?.().coreReady,
+          coreReady: context.getReadiness?.(viability).coreReady,
           modelRuntime: getPreparedModelRuntimeStartupStatus(),
-          childRuntime: readPublishedChildRuntime(includeSensitive),
+          childRuntime: formatPublishedChildRuntime(
+            viability,
+            client?.connect.scopes?.includes(ADMIN_SCOPE) ?? false,
+          ),
           recentCrashes: getGatewayRecentCrashes(),
         },
         undefined,
@@ -151,6 +164,7 @@ export const healthHandlers: GatewayRequestHandlers = {
       ...(hostDesktopStatus ? { hostDesktopStatus } : {}),
     });
     const workerPools = await readGatewayWorkerPoolFacts();
+    const childRuntime = await prepareChildRuntimeViability();
     const status = prepared.publish().summary;
     const shutdownBudget = context.hostLifecycle?.getShutdownBudget?.();
     const activeWork = shutdownBudget
@@ -171,9 +185,13 @@ export const healthHandlers: GatewayRequestHandlers = {
         modelRuntime: getPreparedModelRuntimeStartupStatus(),
         ...readGatewayProcessVitals(context.getEventLoopHealth),
         workerPools,
+        resources: readGatewayResourceDiagnostics(),
         pid: process.pid,
         shutdownBudget: shutdownStatus,
-        childRuntime: readPublishedChildRuntime(includeSensitive),
+        childRuntime: formatPublishedChildRuntime(
+          childRuntime.publish(),
+          client?.connect.scopes?.includes(ADMIN_SCOPE) ?? false,
+        ),
         recentCrashes: getGatewayRecentCrashes(),
         pluginReload: context.getPluginReloadStatus?.(),
       },

@@ -11,6 +11,7 @@ import * as oauthCoordinator from "../agents/mcp-oauth.js";
 import { resolveMcpTransportConfig } from "../agents/mcp-transport-config.js";
 import type { McpServerConfig } from "../config/types.mcp.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import type { GatewayMethodRegistry } from "./methods/registry.js";
 import { whenAdmittedWizardSessionSettled } from "./server-methods/setup-admission.js";
 import type { GatewayRequestHandlerOptions } from "./server-methods/types.js";
 
@@ -54,7 +55,7 @@ export function registerMcpAuthForcedEffects(fixture: McpAuthForcedEffectFixture
     });
     const restoreEffects: Array<() => void> = [];
     const releaseEffects: Array<() => void> = [];
-    let restoreScopes: (() => void) | undefined;
+    let restoreRegistry: (() => void) | undefined;
 
     const stored = () => oauthStore.readMcpOAuthStore(identity().storeKey);
     const pending = (state: string) => oauthStore.readMcpOAuthPendingAuthorization(state);
@@ -73,15 +74,19 @@ export function registerMcpAuthForcedEffects(fixture: McpAuthForcedEffectFixture
         invocation().context.wizardSessions.get(String(invocation().params.sessionId)),
         "registered wizard",
       );
-    const revoke = () => {
-      const client = expectDefined(invocation().client, "registered client");
-      if (!restoreScopes) {
-        const scopes = client.connect.scopes;
-        restoreScopes = () => {
-          client.connect.scopes = scopes;
+    // Replacing the method registry ends the admitted sign-in through its server fence.
+    const replaceRegistry = () => {
+      const context = invocation().context;
+      if (!restoreRegistry) {
+        const getRegistry = context.getGatewayMethodRegistry;
+        const replacement: GatewayMethodRegistry = Object.create(
+          expectDefined(getRegistry, "method registry")(),
+        );
+        restoreRegistry = () => {
+          context.getGatewayMethodRegistry = getRegistry;
         };
+        context.getGatewayMethodRegistry = () => replacement;
       }
-      client.connect.scopes = ["operator.read"];
     };
     const respond = (response: ServerResponse, value: unknown, status = 200) => {
       response.writeHead(status).end(JSON.stringify(value));
@@ -132,8 +137,8 @@ export function registerMcpAuthForcedEffects(fixture: McpAuthForcedEffectFixture
     };
     const finishError = async (sessionId: string) => {
       await whenAdmittedWizardSessionSettled(session());
-      restoreScopes?.();
-      restoreScopes = undefined;
+      restoreRegistry?.();
+      restoreRegistry = undefined;
       const result = await terminal(sessionId);
       expect(result.status).toBe("error");
       expect(JSON.stringify(result)).not.toContain("private exchange detail");
@@ -168,8 +173,8 @@ export function registerMcpAuthForcedEffects(fixture: McpAuthForcedEffectFixture
           request.context.purgeWizardSession(String(request.params.sessionId));
         }
       } finally {
-        restoreScopes?.();
-        restoreScopes = undefined;
+        restoreRegistry?.();
+        restoreRegistry = undefined;
         for (const restore of restoreEffects.splice(0).toReversed()) {
           restore();
         }
@@ -179,7 +184,7 @@ export function registerMcpAuthForcedEffects(fixture: McpAuthForcedEffectFixture
       }
     });
 
-    it("rejects OIDC suffix fallback after revocation", async () => {
+    it("rejects OIDC suffix fallback after the server registry is replaced", async () => {
       const failures = [
         "/.well-known/oauth-authorization-server/tenant",
         "/.well-known/openid-configuration/tenant",
@@ -203,7 +208,7 @@ export function registerMcpAuthForcedEffects(fixture: McpAuthForcedEffectFixture
       observeFetch({
         response: (pathname, response) => {
           if (pathname === stopPath && response.status === 404) {
-            revoke();
+            replaceRegistry();
           }
         },
       });
@@ -215,7 +220,7 @@ export function registerMcpAuthForcedEffects(fixture: McpAuthForcedEffectFixture
       expect(requests.at(-1)).toBe(stopPath);
     });
 
-    it("surfaces a real discovery TypeError without a headerless retry after revocation", async () => {
+    it("surfaces a real discovery TypeError without a headerless retry after registry replacement", async () => {
       const target = "/.well-known/oauth-protected-resource/mcp";
       let wireRequests = 0;
       let transportFailures = 0;
@@ -234,7 +239,7 @@ export function registerMcpAuthForcedEffects(fixture: McpAuthForcedEffectFixture
         failure: (pathname, error) => {
           if (pathname === target && error instanceof TypeError) {
             transportFailures++;
-            revoke();
+            replaceRegistry();
           }
         },
       });
@@ -251,7 +256,7 @@ export function registerMcpAuthForcedEffects(fixture: McpAuthForcedEffectFixture
       { lifetime: 30, withdraw: false },
       { lifetime: 0, withdraw: false },
       { lifetime: 0, withdraw: true },
-    ])("refresh failure: $lifetime seconds, revoke=$withdraw", async ({ lifetime, withdraw }) => {
+    ])("refresh failure: $lifetime seconds, replace=$withdraw", async ({ lifetime, withdraw }) => {
       await seed(lifetime);
       const before = await stored();
       expect(before.pendingAuthorizationChallenge).toBeUndefined();
@@ -273,7 +278,7 @@ export function registerMcpAuthForcedEffects(fixture: McpAuthForcedEffectFixture
           if (pathname === "/token") {
             responseBoundary++;
             if (withdraw) {
-              revoke();
+              replaceRegistry();
             }
           }
         },
@@ -336,21 +341,21 @@ export function registerMcpAuthForcedEffects(fixture: McpAuthForcedEffectFixture
       expect(await pending(state)).toBeUndefined();
       return after;
     };
-    const revokeAfterMutation = (kind: "tokens" | "authorizationRedirect") => {
+    const replaceAfterMutation = (kind: "tokens" | "authorizationRedirect") => {
       const mutate = oauthStore.mutateMcpOAuthStore;
       const spy = vi
         .spyOn(oauthStore, "mutateMcpOAuthStore")
         .mockImplementation(async (...args) => {
           const result = await mutate(...args);
           if (args[1].kind === kind) {
-            revoke();
+            replaceRegistry();
           }
           return result;
         });
       restoreEffects.push(() => spy.mockRestore());
     };
 
-    it("rolls back the token write when authority is withdrawn at its commit hook", async () => {
+    it("rolls back the token write when the sign-in ends at its commit hook", async () => {
       await seed();
       const before = await stored();
       expect(
@@ -365,7 +370,7 @@ export function registerMcpAuthForcedEffects(fixture: McpAuthForcedEffectFixture
         const beforeTokensSaved = login.beforeTokensSaved;
         vi.spyOn(login, "beforeTokensSaved").mockImplementation(() => {
           beforeTokensSaved();
-          revoke();
+          replaceRegistry();
         });
       });
       expect((await callback(started.state)).status).toBe(200);
@@ -380,9 +385,9 @@ export function registerMcpAuthForcedEffects(fixture: McpAuthForcedEffectFixture
       expect(after.pendingAuthorizationChallenge).toMatchObject({ requiresAuthorization: true });
     });
 
-    it("reports saved authentication when authority ends before provider bookkeeping", async () => {
+    it("reports saved authentication when the sign-in ends before provider bookkeeping", async () => {
       const started = await begin();
-      revokeAfterMutation("tokens");
+      replaceAfterMutation("tokens");
       expect((await callback(started.state)).status).toBe(200);
       const result = await finishError(started.sessionId);
       expect(result.error).toContain("Authentication saved, but sign-in cleanup did not finish");
@@ -392,8 +397,8 @@ export function registerMcpAuthForcedEffects(fixture: McpAuthForcedEffectFixture
       expect((await callback(started.state)).status).toBe(410);
     });
 
-    it("cleans up a durable redirect when authority ends before provider bookkeeping", async () => {
-      revokeAfterMutation("authorizationRedirect");
+    it("cleans up a durable redirect when the sign-in ends before provider bookkeeping", async () => {
+      replaceAfterMutation("authorizationRedirect");
       let published: oauthProvider.McpOAuthLoginLifecycle["onAuthorizationPublished"] | undefined;
       observeProvider((_provider, login) => {
         published = vi.spyOn(login, "onAuthorizationPublished");
@@ -410,7 +415,7 @@ export function registerMcpAuthForcedEffects(fixture: McpAuthForcedEffectFixture
       expect((await callback(state)).status).toBe(410);
     });
 
-    it("rejects verifier publication after the real PKCE digest resolves under revoked authority", async () => {
+    it("rejects verifier publication after the real PKCE digest resolves once the sign-in ended", async () => {
       const { entered, release } = holdEffect();
       const digest = globalThis.crypto.subtle.digest.bind(globalThis.crypto.subtle);
       const verifier = vi.fn((value: string, save: OAuthProvider["saveCodeVerifier"]) =>
@@ -438,7 +443,7 @@ export function registerMcpAuthForcedEffects(fixture: McpAuthForcedEffectFixture
       await waitForEffect(entered.promise, "digest");
       const before = await stored();
       const beforeRequests = requests.length;
-      revoke();
+      replaceRegistry();
       release.resolve();
       await finishError(sessionId);
       expect(
@@ -494,7 +499,7 @@ export function registerMcpAuthForcedEffects(fixture: McpAuthForcedEffectFixture
       expect(published.codeVerifier).toHaveLength(43);
       expect(await pending(rejectedState)).toBeUndefined();
       const beforeRequests = requests.length;
-      revoke();
+      replaceRegistry();
       release.resolve();
       let replacement: Awaited<ReturnType<typeof stored>> | undefined;
       let replacementState: string | undefined;

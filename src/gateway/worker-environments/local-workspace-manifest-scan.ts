@@ -13,12 +13,16 @@ import {
   localWorkspaceDigestBytes,
   localWorkspaceDigestReference,
   prepareLocalWorkspaceTreePacks,
+  prepareLocalWorkspaceTreeUpdate,
 } from "./local-workspace-cas.js";
 import {
   readLocalWorkspaceSourcePaths,
   readLocalWorkspaceTree,
 } from "./local-workspace-cas.kernel.js";
-import { prepareLocalWorkspaceFingerprints } from "./local-workspace-fingerprints.js";
+import {
+  prepareLocalWorkspaceFingerprints,
+  rebindClonedWorkspaceFingerprints,
+} from "./local-workspace-fingerprints.js";
 import {
   prepareLocalWorkspaceArchive,
   localWorkspaceManifestDocument as manifestDocument,
@@ -28,6 +32,7 @@ import {
 } from "./local-workspace-inventory.js";
 import {
   createLocalWorkspaceManifestTree,
+  createLocalWorkspaceBaselineTree,
   localWorkspaceManifestRootReference,
   updateLocalWorkspaceManifestTree,
   type LocalWorkspaceManifestChange,
@@ -37,59 +42,24 @@ import {
 import { prepareLocalWorkspaceUpdate } from "./local-workspace-publication.js";
 import type {
   LocalWorkspaceCheckpointReceipt,
-  LocalWorkspaceManifestMutation,
+  LocalWorkspaceManifestAction,
+  LocalWorkspaceManifestCheckpoint,
+  LocalWorkspaceManifestInput,
   LocalWorkspaceManifestScan,
   LocalWorkspaceManifestValue,
   LocalWorkspaceMutation,
+  LocalWorkspacePreparedEntry,
 } from "./local-workspace-store.types.js";
-import type { LocalWorkspaceCapture } from "./local-workspace-types.js";
 import { scanActualWorkspaceManifest } from "./workspace-actual-manifest.js";
+import { workspaceCtimeIsReusable, workspaceStatIdentity } from "./workspace-hash-memo.js";
 import { sameEntry } from "./workspace-manifest-comparison.js";
 import { parseWorkerWorkspaceManifest } from "./workspace-manifest.js";
 import { workspacePathAncestors } from "./workspace-path-ancestors.js";
 import {
   buildCacheInputPaths,
   isIgnoredWorkspaceBuildOutput,
+  LEGACY_DERIVED_ELIGIBILITY_SUBSETS,
 } from "./workspace-path-exclusions.js";
-
-export type LocalWorkspaceBaselineDocument = {
-  rawManifest: string;
-  manifestRef: string;
-  buildCacheInputs: string[];
-};
-
-export type LocalWorkspaceManifestAction =
-  | {
-      kind: "scan" | "probe";
-      target: "canonical" | "projection";
-      canonicalRoot: string;
-      capture?: LocalWorkspaceCapture;
-    }
-  | { kind: "archive"; canonicalRoot: string; archiveRoot: string; snapshotCommit: string }
-  | { kind: "materialize" }
-  | { kind: "convert" }
-  | { kind: "repair"; canonicalRoot: string }
-  | {
-      kind: "prepare";
-      manifest: LocalWorkspaceManifestMutation;
-      patch: Extract<LocalWorkspaceMutation, { kind: "update" }>["patch"];
-    }
-  | (LocalWorkspaceBaselineDocument & {
-      kind: "replace";
-      patch: Extract<LocalWorkspaceMutation, { kind: "update" }>["patch"];
-    });
-
-export type LocalWorkspaceManifestCheckpoint = Omit<
-  LocalWorkspaceManifestScan,
-  "observation" | "preparations"
->;
-
-export type LocalWorkspaceManifestInput = {
-  id: string;
-  revision: number;
-  action: LocalWorkspaceManifestAction;
-  knownTreeRoot?: string;
-};
 
 /** Capture owner rows synchronously; filesystem discovery runs after this read scope closes. */
 export function readLocalWorkspaceManifestRows(
@@ -151,7 +121,7 @@ function readManifestRowsInSnapshot(db: EngineConnection, input: LocalWorkspaceM
     input.knownTreeRoot === localWorkspaceDigestReference(row.tree_root_digest) &&
     ["scan", "probe", "materialize", "archive"].includes(input.action.kind)
   ) {
-    return { row, records: undefined };
+    return { row, records: undefined, knownPacks: undefined };
   }
   let records: string[] = [];
   const replacing =
@@ -173,7 +143,15 @@ function readManifestRowsInSnapshot(db: EngineConnection, input: LocalWorkspaceM
       records.push(node_json);
     }
   }
-  return { row, records };
+  // A replacement can reuse live packs without reading their record payloads.
+  const knownPacks =
+    row.tree_root_digest && input.action.kind === "replace"
+      ? readLocalWorkspaceTree(db, row.tree_root_digest, {
+          referencesOnly: true,
+          allowMissing: true,
+        })
+      : undefined;
+  return { row, records, ...(knownPacks ? { knownPacks } : {}) };
 }
 
 export async function executeLocalWorkspaceManifestRead(
@@ -250,9 +228,9 @@ export async function executeLocalWorkspaceManifestRead(
     }
     let canonicalPaths: Set<string> | undefined;
     let scanFailure: unknown;
-    // Older accepted roots can contain the pnpm fallback store. Try current
-    // membership first, then restore only that historical eligibility for repair.
-    for (const includeLegacyPnpmStore of [false, true]) {
+    // Try legacy derived eligibility subsets independently, starting with current membership.
+    // Every candidate must reconstruct the exact saved root before replacement.
+    for (const legacyDerivedEligibilitySubset of LEGACY_DERIVED_ELIGIBILITY_SUBSETS) {
       let projectionPaths: Set<string> | undefined;
       let projectionDirectories: Set<string> | undefined;
       for (const candidate of [
@@ -299,7 +277,7 @@ export async function executeLocalWorkspaceManifestRead(
             includePaths,
             preserveDirectories,
             buildCacheInputs: retained,
-            includeLegacyPnpmStore,
+            legacyDerivedEligibilitySubset,
             onEntry: (node) => nodes.push(node),
           });
         } catch (error) {
@@ -374,13 +352,15 @@ export async function executeLocalWorkspaceManifestRead(
       action.manifestRef,
       action.buildCacheInputs,
     );
-    const records = createLocalWorkspaceManifestTree([
-      ...manifest.entries,
-      ...(manifest.directories ?? []).map((entryPath) => ({
-        path: entryPath,
-        type: "directory" as const,
-      })),
-    ]);
+    const records = createLocalWorkspaceBaselineTree(manifest, action.preparedDirectories);
+    if (action.clonedDevice !== undefined) {
+      action.patch.projection_fingerprints = rebindClonedWorkspaceFingerprints(
+        action.patch.projection_fingerprints,
+        action.manifestRef,
+        records.get("")!.treeRef,
+        action.clonedDevice,
+      );
+    }
     const resultingRoot = localWorkspaceManifestRootReference(records, manifest.baseCommit);
     const mutation: LocalWorkspaceMutation = {
       kind: "update",
@@ -401,7 +381,10 @@ export async function executeLocalWorkspaceManifestRead(
     // Keep the full tree between workers; the host publishes only the accepted root.
     return {
       kind: "replace",
-      update: prepareLocalWorkspaceUpdate(mutation, prepareLocalWorkspaceTreePacks(records)),
+      update: prepareLocalWorkspaceUpdate(
+        mutation,
+        prepareLocalWorkspaceTreePacks(records, undefined, new Set(snapshot.knownPacks)),
+      ),
     };
   }
   if (action.kind === "materialize" && row.baseline_json && row.baseline_ref) {
@@ -420,13 +403,7 @@ export async function executeLocalWorkspaceManifestRead(
       undefined,
       "stored",
     );
-    records = createLocalWorkspaceManifestTree([
-      ...baseline.entries,
-      ...(baseline.directories ?? []).map((entryPath) => ({
-        path: entryPath,
-        type: "directory" as const,
-      })),
-    ]);
+    records = createLocalWorkspaceBaselineTree(baseline);
   } else if (records.size === 0) {
     if (row.baseline_ref) {
       throw new Error("Local workspace baseline nodes are missing");
@@ -561,6 +538,11 @@ export async function executeLocalWorkspaceManifestRead(
     capture,
   );
   const changedDuringProbe = new Error("Workspace changed during reuse probe");
+  const prepared = new Map(
+    action.kind === "scan" ? action.preparedEntries?.map((file) => [file.entry.path, file]) : [],
+  );
+  const preparedEntries: LocalWorkspacePreparedEntry[] = [];
+  const existingObjects: Array<[string, string]> = [];
   try {
     await scanActualWorkspaceManifest({
       root,
@@ -569,10 +551,21 @@ export async function executeLocalWorkspaceManifestRead(
       gitIgnore,
       preserveDirectories,
       buildCacheInputs: new Set(retained),
-      reuseFile: fingerprintScan.reuseFile,
+      reuseFile: (entryPath, stats) => {
+        const file = prepared.get(entryPath);
+        if (
+          file?.entry.type === "file" &&
+          file.identity === workspaceStatIdentity("gateway", stats) &&
+          workspaceCtimeIsReusable(stats.ctimeNs, scanStartedAtMs)
+        ) {
+          fingerprintScan.observe(entryPath, file.identity);
+          return file.entry;
+        }
+        return fingerprintScan.reuseFile(entryPath, stats);
+      },
       unchangedProbe: action.kind === "probe",
       btrfsSnapshot: capture !== undefined,
-      onEntry(node, identity) {
+      onEntry(node, identity, reusable) {
         seen.add(node.path);
         const previous = records.get(node.path);
         if (!sameEntry(previous?.node, node)) {
@@ -580,6 +573,16 @@ export async function executeLocalWorkspaceManifestRead(
             throw changedDuringProbe;
           }
           changes.push({ path: node.path, node });
+          if (node.type !== "directory") {
+            if (action.kind === "scan" && action.prehash) {
+              // A recent observation cannot become trustworthy just by aging during preparation.
+              preparedEntries.push({ entry: node, identity: reusable ? identity : undefined });
+            }
+            const preparedEntry = prepared.get(node.path);
+            if (preparedEntry?.objectId && sameEntry(preparedEntry.entry, node)) {
+              existingObjects.push([node.path, preparedEntry.objectId]);
+            }
+          }
         }
         if (identity !== undefined) {
           fingerprintScan.observe(node.path, identity);
@@ -652,7 +655,12 @@ export async function executeLocalWorkspaceManifestRead(
           scanStartedAtMs,
         )
       : undefined;
-  const delta = updateLocalWorkspaceManifestTree(records, changes);
+  const preparations = prepareLocalWorkspaceTreeUpdate(
+    records,
+    changes,
+    inspected,
+    previousTreeRoot,
+  );
   const currentNodes: LocalWorkspaceManifestNode[] = [];
   for (const entryPath of inspected) {
     const current = records.get(entryPath);
@@ -708,18 +716,14 @@ export async function executeLocalWorkspaceManifestRead(
   return {
     version: 1,
     kind: "scan",
+    ...(action.kind === "scan" && action.prehash ? { preparedEntries } : {}),
+    ...(existingObjects.length ? { existingObjects } : {}),
     previousRoot: row.baseline_ref,
     resultingRoot,
     treeRoot,
     previousTreeRoot,
     ...(fingerprints ? { fingerprints } : {}),
-    preparations:
-      treeRoot === previousTreeRoot
-        ? []
-        : prepareLocalWorkspaceTreePacks(
-            records,
-            replace ? undefined : [...delta.records.map(({ node }) => node.path), ...delta.removed],
-          ),
+    preparations,
     records: [],
     observation,
     removed: [],

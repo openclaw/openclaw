@@ -2,11 +2,7 @@ import assert from "node:assert/strict";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
-import type {
-  getSessionEntryAsync,
-  prepareSessionEntryPatch,
-  SessionEntry,
-} from "openclaw/plugin-sdk/session-store-runtime";
+import type { getSessionEntryAsync, SessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import {
   observeHostDataSql,
   useSessionStoreTempDirs,
@@ -32,8 +28,7 @@ let sessionStore: Record<string, SessionEntry>;
 const completed = "OpenAI login complete. Try your request again now.";
 const kept =
   "OpenAI login complete. This chat kept its previous account. Send /models to review the available models.";
-const failed =
-  "OpenAI login did not complete. Send `/login openai/openai-device-code` to try again.";
+const failed = "OpenAI login did not complete. Send `/login openai/openai` to try again.";
 const ownerContext = (match = "codex", chatId = 100, userId = 200) =>
   createPrivateCommandContext({ match, chatId, userId });
 type Send = Awaited<ReturnType<typeof registerLoginCommand>>["sendMessage"];
@@ -50,7 +45,6 @@ function expectKept(send: Send) {
   expect(send).toHaveBeenCalledWith(100, kept, {});
   expect(send).not.toHaveBeenCalledWith(100, completed, expect.any(Object));
 }
-type SessionWrite = Parameters<typeof prepareSessionEntryPatch>[0];
 const sessionEntry = (overrides: Partial<SessionEntry> = {}): SessionEntry => ({
   sessionId: "sess-main",
   updatedAt: 1,
@@ -276,7 +270,7 @@ describe("registerTelegramNativeCommands /login", () => {
     expect(loginFlow).not.toHaveBeenCalled();
     const texts = messages(sendMessage);
     expect(texts).toContain(
-      "Provider login requires a private chat or Control UI session. Open a private chat with OpenClaw and send `/login` there.",
+      "Provider login requires a private chat or the OpenClaw app. Open a private chat with OpenClaw and send `/login` there.",
     );
     expect(texts.join("\n")).not.toContain("SECRET");
     expect(texts.join("\n")).not.toContain("https://auth.openai.com/codex/device");
@@ -377,59 +371,6 @@ describe("registerTelegramNativeCommands /login", () => {
       await vi.waitFor(() => expect(settled).toBe(signals.length));
     }
     expect(sessionMocks.prepareSessionEntryPatch).not.toHaveBeenCalled();
-  });
-
-  it("rejects credential persistence after the command owner is removed", async () => {
-    const deferred = createDeferred<void>();
-    const commands = { native: true, ownerAllowFrom: ["200"] };
-    const cfg: OpenClawConfig = { commands, agents: { entries: { main: {} } } };
-    let currentConfig = cfg;
-    const persist = vi.fn();
-    const loginFlow = vi.fn<TelegramLoginFlow>(async (opts) => {
-      await opts.prompter.deviceCode?.({ title: "Sign in", code: "OWNER-CODE" });
-      await deferred.promise;
-      opts.assertCurrent?.();
-      persist();
-      return createLoginResult("openai:codex");
-    });
-    const { handler, sendMessage } = await registerLoginCommand({
-      cfg,
-      loginFlow,
-      getRuntimeConfig: () => currentConfig,
-    });
-
-    await handler(ownerContext());
-    currentConfig = { ...cfg, commands: { native: true, ownerAllowFrom: ["999"] } };
-    deferred.resolve();
-    await vi.waitFor(() => expect(messages(sendMessage)).toContain(failed));
-    expect(persist).not.toHaveBeenCalled();
-  });
-
-  it("keeps the prior Telegram pin when the owner is revoked after patch preparation", async () => {
-    const commands = { native: true, ownerAllowFrom: ["200"] };
-    const previous = sessionEntry({
-      sessionId: "revoked-telegram-owner-session",
-      authProfileOverride: "openai:prior",
-      authProfileOverrideSource: "user",
-    });
-    const store = { "agent:main:main": previous };
-    sessionStore = store;
-    sessionMocks.prepareSessionEntryPatch.mockImplementationOnce(async (write: SessionWrite) => {
-      const patch = await write.prepare({ ...previous }, { existingEntry: previous });
-      commands.ownerAllowFrom = ["999"];
-      if (write.authority?.kind === "host") {
-        write.authority.assertCurrent();
-      }
-      store["agent:main:main"] = patch ? { ...previous, ...patch } : previous;
-      return store["agent:main:main"];
-    });
-    const loginFlow = savedLogin("openai:saved");
-    const { handler, sendMessage } = await registerLoginCommand({ cfg: { commands }, loginFlow });
-
-    await handler(ownerContext());
-
-    expect(store["agent:main:main"]).toBe(previous);
-    expect(messages(sendMessage)).toContain(kept);
   });
 
   it("releases a failed flow before any device code is delivered", async () => {

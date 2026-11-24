@@ -4,10 +4,8 @@ import type { GatewaySessionRow } from "../../api/types.ts";
 import type { ChatItem, MessageGroup, SystemEventGroup } from "../../lib/chat/chat-types.ts";
 import {
   assistantMessageCanOwnTurnActions,
-  assistantMessageIsInterrupted,
   groupEndsRunInFailure,
-  isProviderVoiceTranscript,
-  resolveAssistantReplyPhase,
+  hasTerminalRunOutcome,
 } from "./chat-assistant-reply.ts";
 import { transcriptRunId } from "./chat-thread-run-identity.ts";
 import {
@@ -15,6 +13,7 @@ import {
   chatItemStartsUserTurn,
   hasForwardedSource,
   assistantGroupIsIndependentBoundary,
+  readProjectedContinuation,
 } from "./chat-turn-boundary.ts";
 import {
   joinActivityRuns,
@@ -23,7 +22,6 @@ import {
   type StreamRunRenderItem,
   type WorkGroupRenderItem,
 } from "./chat-turn-presentation.ts";
-import { isLiveTerminalForRun } from "./terminal-message-identity.ts";
 
 type AgentRunFramePart =
   | MessageGroup
@@ -71,6 +69,11 @@ export function chatItemGroups(
     return item.groups;
   }
   return [];
+}
+
+/** What woke the work a part resumes, which opens it with a Resumed rule. */
+function partContinuation(item: AgentRunFrameInput | ChatItem) {
+  return readProjectedContinuation(chatItemGroups(item)[0]?.messages[0]?.message);
 }
 
 function itemRunId(item: AgentRunFramePart): string | undefined {
@@ -152,27 +155,6 @@ export function agentRunFrameActiveStatusParts(
     : undefined;
 }
 
-function hasTerminalRunOutcome(message: unknown, runId: string): boolean {
-  const record = asRecord(message);
-  const metadata = asRecord(record?.["__openclaw"]);
-  if (
-    isLiveTerminalForRun(message, runId) ||
-    metadata?.runTerminal === true ||
-    assistantMessageIsInterrupted(message) ||
-    record?.stopReason === "error"
-  ) {
-    return true;
-  }
-  // Provider speech, commentary and reasoning mirrors can stop a message without ending its run.
-  const phase = resolveAssistantReplyPhase(message);
-  return (
-    !isProviderVoiceTranscript(message) &&
-    phase !== "commentary" &&
-    metadata?.mirrorOrigin !== "codex-app-server" &&
-    (phase === "final_answer" || record?.stopReason === "stop")
-  );
-}
-
 /** Wrap semantic work/activity rows in one run-owned presentation frame. */
 export function coalesceAgentRunFrames(
   items: AgentRunFrameInput[],
@@ -216,11 +198,12 @@ export function coalesceAgentRunFrames(
   // row; `resuming` lets exactly the next run in.
   let opened: { runId: string; boundaryId: string | undefined } | undefined;
   let resuming = false;
-  // No row marks a handoff, so operations on either side of one are one log.
+  // Without a Resumed rule marking the handoff, operations on either side of it are one log.
   let afterHandoff = false;
   const addPart = (item: AgentRunFramePart) => {
     const last = parts.at(-1);
-    const joined = afterHandoff && last ? joinActivityRuns(last, item) : undefined;
+    const joined =
+      afterHandoff && last && !partContinuation(item) ? joinActivityRuns(last, item) : undefined;
     afterHandoff = false;
     if (joined) {
       parts[parts.length - 1] = joined;

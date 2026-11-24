@@ -218,6 +218,9 @@ export async function updateMigrateCommand(
           config: source.config,
           env,
           stopped: true,
+          // Parity with the native update path: server recovery captures keep
+          // non-state PostgreSQL stores on the database instead of local exports.
+          postgresSchemaCaptures: source.config.database?.postgres?.recoveryCaptures === "server",
         }),
       );
       lock.assertCurrent();
@@ -301,8 +304,14 @@ export async function updateMigrateCommand(
       receipt.deferredInspectionCheckIds = capture.deferredInspectionCheckIds;
       receipt.warnings = capture.warnings;
     });
-    const migrated = await measure("schema-verification", () => prepareDoctorDatabasePreflight());
-    if (hasSchemaRefusal(migrated) || migrated.pendingMigrations?.length) {
+    const migrated = await measure("schema-verification", () =>
+      prepareDoctorDatabasePreflight({ verifyCurrentSchemaShape: true }),
+    );
+    if (
+      hasSchemaRefusal(migrated) ||
+      migrated.pendingMigrations?.length ||
+      migrated.agentRefusals?.length
+    ) {
       throw new Error(
         "Doctor did not complete the candidate database migrations; the recovery backup was retained.",
       );
@@ -346,6 +355,15 @@ export async function updateRestoreCommand(backupRoot: string): Promise<void> {
         runId: receipt.runId,
         env: process.env,
         assertCurrent: () => {},
+        onJournalReconciliationFailures: (failures) => {
+          // Recoverable: databases are restored either way. Report separately from
+          // state restoration on stderr so the supervised updater log keeps it.
+          for (const failure of failures) {
+            console.error(
+              `[update] journal policy re-establishment failed (recoverable; while no process holds the files run PRAGMA journal_mode=WAL): ${failure}`,
+            );
+          }
+        },
       });
       receipt.status = "restoring-config";
       receipt.databaseIdentities = toReceiptIdentities(await readIdentities(receipt.databases));
@@ -472,13 +490,30 @@ export async function updateFinishCommand(backupRoot: string): Promise<void> {
   receipt.status = "finished";
   receipt.configFiles = [];
   await saveReceipt(file, receipt);
-  const removed = await removePackageUpdatePath(receipt.backup.directory);
-  const warnings = [
-    ...(receipt.warnings ?? []),
-    ...(removed
-      ? []
-      : [`Backup cleanup remains pending at ${receipt.backup.directory}; retry update finish.`]),
-  ];
+  const warnings = [...(receipt.warnings ?? [])];
+  try {
+    const exportDirectories = receipt.backup.databases.flatMap((entry) =>
+      entry.exportDirectory ? [entry.exportDirectory] : [],
+    );
+    // A finished receipt can be retried after its backup was already removed.
+    if (
+      exportDirectories.length > 0 &&
+      (await fs.stat(receipt.backup.directory).catch(ignoreMissingPath))
+    ) {
+      const { config } = await captureTargetDatabaseSchemaContext(process.env);
+      const { discardPostgresSchemaCaptures } = await import("../../snapshot/database-backup.js");
+      await discardPostgresSchemaCaptures(config, exportDirectories);
+    }
+    if (!(await removePackageUpdatePath(receipt.backup.directory))) {
+      warnings.push(
+        `Backup cleanup remains pending at ${receipt.backup.directory}; retry update finish.`,
+      );
+    }
+  } catch (error) {
+    warnings.push(
+      `Backup cleanup remains pending at ${receipt.backup.directory} (${formatErrorMessage(error)}); retry update finish.`,
+    );
+  }
   const cleanupDiagnostics: string[] = [];
   // Cleanup retires rollback originals only after a later update succeeds. Starting the
   // run at migration keeps originals from this update's own Doctor run protected; a

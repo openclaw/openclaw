@@ -9,12 +9,11 @@ import {
   isOpenAICodexBaseUrl,
   isOpenAIApiBaseUrl,
   resolveOpenAIDefaultBaseUrl,
-  type OpenAICodexModelsEndpointContext,
 } from "./base-url.js";
 import { OPENAI_CHAT_LATEST_MODEL_ID } from "./model-route-contract.js";
 import type { OpenAILiveProviderCatalog } from "./model-service-tiers.js";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
-import { discoverOpenAIPlatformAccessPrograms } from "./platform-access-programs.js";
+import { discoverOpenAIPlatformModelCapabilities } from "./platform-access-programs.js";
 
 const PROVIDER_ID = "openai";
 const OPENAI_MODELS_ENDPOINT = "https://api.openai.com/v1/models";
@@ -36,7 +35,6 @@ type BuildOpenAILiveProviderConfigParams = {
   apiKey: string;
   baseUrl: string;
   discoveryApiKey?: string;
-  catalogContext?: OpenAICodexModelsEndpointContext;
 };
 
 function buildOpenAIManifestModelsForBaseUrl(baseUrl: string): ModelDefinitionConfig[] {
@@ -106,12 +104,15 @@ export async function buildOpenAILiveProviderConfig(
       auditContext: "openai-model-discovery",
     });
     const listedModels = new Set(provider.models.map((model) => model.id));
-    const modelAccessPrograms = (
-      await discoverOpenAIPlatformAccessPrograms({
-        apiKey: params.discoveryApiKey ?? params.apiKey,
-        catalogContext: params.catalogContext,
-      })
-    )?.filter((observation) => listedModels.has(observation.modelId));
+    const capabilities = await discoverOpenAIPlatformModelCapabilities({
+      apiKey: params.discoveryApiKey ?? params.apiKey,
+    });
+    const modelAccessPrograms = capabilities?.modelAccessPrograms?.filter((observation) =>
+      listedModels.has(observation.modelId),
+    );
+    const modelServiceTiers = capabilities?.modelServiceTiers?.filter((observation) =>
+      listedModels.has(observation.modelId),
+    );
     return {
       provider: {
         ...provider,
@@ -125,6 +126,8 @@ export async function buildOpenAILiveProviderConfig(
         provider: PROVIDER_ID,
         status: "ready",
         ...(modelAccessPrograms?.length ? { modelAccessPrograms } : {}),
+        ...(modelServiceTiers?.length ? { modelServiceTiers } : {}),
+        modelIdCatalog: { baseUrl, modelIds: [...listedModels] },
       },
     };
   } catch (error) {

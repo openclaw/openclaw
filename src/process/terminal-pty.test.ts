@@ -167,7 +167,7 @@ describe("terminal PTY spawn diagnostics", () => {
     vi.spyOn(execCgroup, "getAgentExecCgroup").mockReturnValue(
       isolation ? "/synthetic/agent-exec" : undefined,
     );
-    vi.spyOn(nodeRuntime, "resolveNodeRuntimeExecutable").mockReturnValue(
+    vi.spyOn(nodeRuntime, "resolveNodeRuntimeExecutableAsync").mockResolvedValue(
       backend === "bun-native-no-node" ? undefined : "/synthetic/node",
     );
     const warning = vi.spyOn(process, "emitWarning").mockImplementation(() => {});

@@ -112,16 +112,26 @@ type SerializedConfigResolutionFacts = Readonly<{
 }> | null;
 
 /** Captures loader provenance as deterministic data for a prepared worker generation. */
-export function serializeConfigResolutionFacts(target: unknown): SerializedConfigResolutionFacts {
+export function serializeConfigResolutionFacts(
+  target: unknown,
+  includesPath?: (path: string) => boolean,
+): SerializedConfigResolutionFacts {
   const facts = getConfigResolutionFacts(target);
-  return facts === null
-    ? null
-    : {
-        unresolvedPaths: [...facts].toSorted(),
-        envSecretRefs: [...(envSecretRefsByFacts.get(facts) ?? [])].toSorted(([left], [right]) =>
-          left.localeCompare(right),
-        ),
-      };
+  if (facts === null) {
+    return null;
+  }
+  const unresolvedPaths = [...facts];
+  const envSecretRefs = [...(envSecretRefsByFacts.get(facts) ?? [])];
+  return {
+    unresolvedPaths: (includesPath
+      ? unresolvedPaths.filter(includesPath)
+      : unresolvedPaths
+    ).toSorted(),
+    envSecretRefs: (includesPath
+      ? envSecretRefs.filter(([path]) => includesPath(path))
+      : envSecretRefs
+    ).toSorted(([left], [right]) => left.localeCompare(right)),
+  };
 }
 
 /** Restores known-empty facts too: absence would reparse decoded literals as references. */

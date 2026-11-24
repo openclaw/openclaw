@@ -1,9 +1,15 @@
-import type { DatabaseSync } from "node:sqlite";
 import { setTimeout as sleep } from "node:timers/promises";
 import { isMainThread } from "node:worker_threads";
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { getPostgresPhysicalFacts } from "./database-engine/physical-facts.js";
+import { tryReservePostgresTransactionSync } from "./postgres-sync/transaction.js";
+import {
+  isPostgresSqlConnection,
+  sqlPublicationAnchor,
+  type EngineConnection,
+} from "./sql-connection.js";
 import { runWithSqliteBusyTimeout } from "./sqlite-busy-timeout.js";
 import { isSqliteLockError } from "./sqlite-error-diagnostics.js";
 import { withSqlitePostCommitPublications } from "./sqlite-post-commit.js";
@@ -18,7 +24,7 @@ import {
 } from "./sqlite-source-fence-contract.js";
 import type { SynchronousSqliteCallback } from "./sqlite-transaction-types.js";
 import { assertTransactionUsable, runSqliteReservedTransactionSync } from "./sqlite-transaction.js";
-import { SqliteWorkerError } from "./sqlite-worker-contract.js";
+import { readSqliteWorkerMonotonicNs, SqliteWorkerError } from "./sqlite-worker-contract.js";
 import { assertDatabasePathIdentity } from "./sqlite-worker-identity.js";
 import {
   assertSqliteWorkerCommitReceiptPending,
@@ -29,7 +35,7 @@ import { currentSqliteWorkerOperationAdmission } from "./sqlite-worker-operation
 
 const bindings = resolveGlobalSingleton(
   Symbol.for("openclaw.sqliteSourceFenceBindings"),
-  () => new WeakMap<DatabaseSync, SqliteSourceFenceIdentity>(),
+  () => new WeakMap<EngineConnection, SqliteSourceFenceIdentity>(),
 );
 
 /** Bind once after native admission; later uses carry the captured physical facts. */
@@ -41,7 +47,17 @@ function bindSqliteSourceFenceDatabase({ database, identity }: SqliteSourceFence
     }
     return;
   }
-  const location = database.location();
+  const location = sqlPublicationAnchor(database).location();
+  const postgres = isPostgresSqlConnection(database)
+    ? getPostgresPhysicalFacts(database)
+    : undefined;
+  if (
+    isPostgresSqlConnection(database) !== Boolean(identity.postgres) ||
+    postgres?.namespace !== identity.postgres?.namespace ||
+    postgres?.storeId !== identity.postgres?.storeId
+  ) {
+    throw new SqliteWorkerError("Source fence engine identity changed", "closed");
+  }
   if (
     isMainThread ||
     !location ||
@@ -63,7 +79,9 @@ function sameIdentity(
     left.incarnation === right.incarnation &&
     left.physical.key === right.physical.key &&
     left.physical.birthtime === right.physical.birthtime &&
-    left.physical.canonicalPath === right.physical.canonicalPath
+    left.physical.canonicalPath === right.physical.canonicalPath &&
+    left.postgres?.namespace === right.postgres?.namespace &&
+    left.postgres?.storeId === right.postgres?.storeId
   );
 }
 
@@ -77,7 +95,8 @@ function readGrant(): SqliteSourceFenceGrant {
     value.decision.byteLength !== 4 ||
     !isRecord(value.destination) ||
     !Array.isArray(value.sources) ||
-    typeof value.deadlineNs !== "bigint"
+    !(value.remainingNs instanceof SharedArrayBuffer) ||
+    value.remainingNs.byteLength !== BigInt64Array.BYTES_PER_ELEMENT
   ) {
     throw new SqliteWorkerError("SQLite source fence grant is unavailable", "closed");
   }
@@ -123,6 +142,15 @@ function withSqliteWorkerSourceReservations<T>(operation: () => T): T {
   }
 }
 
+function reservationKey({ identity }: SqliteSourceFenceDatabase): string {
+  // The operation retains one engine configuration; aliases of a PG store share one lock.
+  return identity.postgres
+    ? JSON.stringify([identity.postgres.namespace, identity.postgres.storeId])
+    : identity.physical.key;
+}
+
+const reservationBusy = new Error("Source reservation is busy");
+
 /**
  * Only empty acquisition attempts retry. All reservations live in this worker;
  * source rollback follows the destination's definitive COMMIT or rollback.
@@ -133,6 +161,7 @@ export async function runSqliteSourceFence<T>(
   execute: SynchronousSqliteCallback<T>,
 ): Promise<T> {
   const grant = inOperation(readGrant);
+  const destinationAnchor = sqlPublicationAnchor(fence.destination.database);
   if (
     isMainThread ||
     fence.sources.length === 0 ||
@@ -146,27 +175,31 @@ export async function runSqliteSourceFence<T>(
   const physical = new Map<string, SqliteSourceFenceDatabase>();
   for (const source of [fence.destination, ...fence.sources]) {
     bindSqliteSourceFenceDatabase(source);
-    const previous = physical.get(source.identity.physical.key);
-    if (previous && previous.identity.physical.birthtime !== source.identity.physical.birthtime) {
+    const previous = physical.get(reservationKey(source));
+    if (
+      previous &&
+      previous.identity.physical.key === source.identity.physical.key &&
+      previous.identity.physical.birthtime !== source.identity.physical.birthtime
+    ) {
       throw new SqliteWorkerError("SQLite source fence aliases changed incarnation", "closed");
     }
-    physical.set(source.identity.physical.key, previous ?? source);
+    physical.set(reservationKey(source), previous ?? source);
   }
   const ordered = [...physical.values()].toSorted((a, b) =>
-    a.identity.physical.key < b.identity.physical.key ? -1 : 1,
+    reservationKey(a) < reservationKey(b) ? -1 : 1,
   );
   const captured = new Set([fence.destination, ...fence.sources]);
   const resolve = (source: SqliteSourceFenceDatabase) => {
     if (!captured.has(source)) {
       throw new SqliteWorkerError("SQLite source is outside this fence", "closed");
     }
-    return physical.get(source.identity.physical.key)!.database;
+    return physical.get(reservationKey(source))!.database;
   };
   const decision = new Int32Array(grant.decision);
   const assertReady = () => {
     if (
       Atomics.load(decision, 0) !== SOURCE_FENCE_READY ||
-      process.hrtime.bigint() >= grant.deadlineNs
+      readSqliteWorkerMonotonicNs() >= deadlineNs
     ) {
       throw new SqliteWorkerError("SQLite source fence authority expired", "closed");
     }
@@ -181,6 +214,11 @@ export async function runSqliteSourceFence<T>(
   inOperation(() =>
     requestSqliteWorkerOperationAdmission({ stage: "prepare", facts: "sqlite-source-fence" }),
   );
+  // The host refreshes the remaining budget at its final preparation grant.
+  // Message delivery is outside this local monotonic interval; owner revocation
+  // remains shared through the decision word.
+  const deadlineNs =
+    readSqliteWorkerMonotonicNs() + Atomics.load(new BigInt64Array(grant.remainingNs), 0);
   for (;;) {
     let entered = false;
     try {
@@ -189,7 +227,7 @@ export async function runSqliteSourceFence<T>(
         let committedResult: T;
         try {
           // Publication follows source release, so reentrant observers own ordinary writes.
-          committedResult = withSqlitePostCommitPublications(fence.destination.database, () =>
+          committedResult = withSqlitePostCommitPublications(destinationAnchor, () =>
             withSqliteWorkerSourceReservations(() => {
               assertReady();
               if ([...captured].some(({ database }) => database.isTransaction)) {
@@ -201,14 +239,21 @@ export async function runSqliteSourceFence<T>(
               const reservations: SqliteSourceFenceDatabase[] = [];
               try {
                 for (const source of ordered) {
-                  runWithSqliteBusyTimeout(source.database, 0, () => {
-                    source.database.exec("BEGIN IMMEDIATE");
+                  // A failed PostgreSQL lock attempt still opens a transaction to release.
+                  reservations.push(source);
+                  if (isPostgresSqlConnection(source.database)) {
+                    if (!tryReservePostgresTransactionSync(source.database)) {
+                      throw reservationBusy;
+                    }
+                  } else {
+                    runWithSqliteBusyTimeout(source.database, 0, () =>
+                      source.database.exec("BEGIN IMMEDIATE"),
+                    );
                     const timing = currentSqliteOperationTiming();
                     if (timing) {
                       timing.transactions.count += 1;
                     }
-                    reservations.push(source);
-                  });
+                  }
                 }
                 entered = true;
                 return runSqliteReservedTransactionSync(
@@ -221,7 +266,7 @@ export async function runSqliteSourceFence<T>(
                     }
                     assertReady();
                     const result = execute();
-                    assertSqliteWorkerCommitReceiptPending(fence.destination.database);
+                    assertSqliteWorkerCommitReceiptPending(destinationAnchor);
                     return result;
                   },
                   {
@@ -273,11 +318,11 @@ export async function runSqliteSourceFence<T>(
         return committedResult;
       });
     } catch (error) {
-      if (entered || !isSqliteLockError(error)) {
+      if (entered || (error !== reservationBusy && !isSqliteLockError(error))) {
         throw error;
       }
       assertReady();
-      const remainingMs = Number(grant.deadlineNs - process.hrtime.bigint()) / 1_000_000;
+      const remainingMs = Number(deadlineNs - readSqliteWorkerMonotonicNs()) / 1_000_000;
       await sleep(Math.min(25, Math.max(0, remainingMs)));
     }
   }

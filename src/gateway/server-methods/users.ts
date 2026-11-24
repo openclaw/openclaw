@@ -41,7 +41,6 @@ import {
 } from "../../../packages/gateway-protocol/src/schema/git-coauthor-identity.js";
 import { resolveConfiguredGitHubHost } from "../../agents/github-host.js";
 import { resolveSystemGitHubIdentityStatus } from "../../agents/github-tool-identity.js";
-import { resolveGatewayPersonalToolParticipant } from "../../agents/tools/gateway-caller-context.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { getActiveSecretsRuntimeConfigSnapshot } from "../../secrets/runtime-state.js";
 import { UserChannelIdentityConflictError } from "../../state/user-channel-identities.js";
@@ -58,27 +57,22 @@ import { profileCatalogPath } from "../../state/user-profile-identity.read.js";
 import {
   projectUserProfileDisplay,
   readResidentUserProfileRevision,
-  readUserProfileSnapshot,
 } from "../../state/user-profile-list.js";
 import {
   linkCanonicalUserProfileEmail,
   mergeCanonicalUserProfiles,
   setCanonicalUserProfileAvatar,
   setCanonicalUserProfileDisplayName,
-  setCanonicalUserProfileRole,
 } from "../../state/user-profile-writes.js";
 import { UserProfileMergeError, UserProfileOwnerError } from "../../state/user-profiles-schema.js";
-import { listProfiles, UserProfileNotFoundError } from "../../state/user-profiles.js";
+import { UserProfileNotFoundError } from "../../state/user-profiles.js";
 import type { PersonalGitHubAction } from "../github-personal-oauth.js";
 import type { ModelAccountConnectAction } from "../model-account-authority.js";
 import {
   ModelAccountConnectAuthorityError,
   ModelAccountConnectInputError,
 } from "../model-account-connect-errors.js";
-import {
-  invalidateOperatorRolePolicy,
-  resolveOperatorRoleSelection,
-} from "../operator-role-policy.js";
+import { invalidateOperatorRolePolicy } from "../operator-role-policy.js";
 import { broadcastChatMetadataChanged } from "../server-chat-metadata-lifecycle.js";
 import { holdGatewayPolicyResponse } from "../server/ws-policy-close.js";
 import { SessionMutationAuthorizationChangedError } from "../session-mutation-authorization-error.js";
@@ -101,9 +95,11 @@ import { prepareUserModelAccountAction } from "./users-model-account-access.js";
 import { usersPersonalFileHandlers } from "./users-personal-file.js";
 import {
   prepareAuthenticatedProfile,
+  preparePersonalPreferences,
   prepareProfileMutationAccess,
   prepareUserProfileAdministration,
 } from "./users-profile-access.js";
+import { handleUsersSetRole, listUserProfiles } from "./users-role.js";
 import {
   assertValidParams,
   defineValidatedGatewayHandler,
@@ -133,26 +129,6 @@ function profileError(error: unknown) {
     return errorShape(ErrorCodes.INVALID_REQUEST, error.message);
   }
   return errorShape(ErrorCodes.UNAVAILABLE, formatErrorMessage(error));
-}
-
-function preparePersonalPreferences(client: GatewayRequestHandlerOptions["client"]) {
-  const unavailable =
-    "Personal settings are unavailable in this turn. Ask in your own Control UI turn with a new message.";
-  try {
-    const participant = resolveGatewayPersonalToolParticipant(
-      client?.internal?.agentRuntimeIdentity,
-      { requireSingleParticipant: true },
-    );
-    return () => {
-      try {
-        participant?.assertCurrent();
-      } catch {
-        throw new Error(unavailable);
-      }
-    };
-  } catch {
-    throw new Error(unavailable);
-  }
 }
 
 function connectHandler<P extends { profileId?: string }>(
@@ -385,33 +361,11 @@ export const usersHandlers: GatewayRequestHandlers = {
   ...usersPersonalFileHandlers,
   ...usersChannelIdentityHandlers,
   ...usersBackgroundHandlers,
-  "users.list": async ({ params, respond, context }) => {
-    if (!assertValidParams(params, validateUsersListParams, "users.list", respond)) {
-      return;
-    }
-    const { githubAccountIds } = params;
-    const result =
-      githubAccountIds === undefined
-        ? { profiles: await listProfiles() }
-        : await readUserProfileSnapshot(githubAccountIds);
-    const cfg = context.getRuntimeConfig();
-    const profilesById = new Map(result.profiles.map((profile) => [profile.id, profile]));
-    respond(true, {
-      ...result,
-      profiles: result.profiles.map((profile) => {
-        const canonical = profilesById.get(profile.mergedInto ?? profile.id) ?? profile;
-        return Object.assign(
-          profile,
-          resolveOperatorRoleSelection(
-            canonical.id,
-            canonical.role ?? null,
-            cfg,
-            canonical.githubIdentity?.host ? null : (canonical.githubIdentity?.login ?? null),
-          ),
-        );
-      }),
-    });
-  },
+  "users.list": defineValidatedGatewayHandler(
+    "users.list",
+    validateUsersListParams,
+    listUserProfiles,
+  ),
   "users.self": async (options) => {
     const { client, params, respond } = options;
     if (!assertValidParams(params, validateUsersSelfParams, "users.self", respond)) {
@@ -683,41 +637,12 @@ export const usersHandlers: GatewayRequestHandlers = {
     },
     profileError,
   ),
-  "users.setRole": async (options) => {
-    const { context, params, respond } = options;
-    if (!assertValidParams(params, validateUsersSetRoleParams, "users.setRole", respond)) {
-      return;
-    }
-    const { profileId, role } = params;
-    const isConfiguredRole = () => {
-      const definitions = context.getRuntimeConfig().gateway?.roles?.definitions;
-      return role === null || (definitions !== undefined && Object.hasOwn(definitions, role));
-    };
-    const unknownRoleMessage = `unknown operator role "${role}"; define it under gateway.roles.definitions before assigning it`;
-    if (!isConfiguredRole()) {
-      respondError(respond, ErrorCodes.INVALID_REQUEST, unknownRoleMessage);
-      return;
-    }
-    try {
-      const assertCurrent = await prepareUserProfileAdministration(options);
-      holdGatewayPolicyResponse(respond);
-      const profile = await setCanonicalUserProfileRole(profileId, role, {
-        assertCurrent: () => {
-          assertCurrent();
-          if (!isConfiguredRole()) {
-            throw new Error(unknownRoleMessage);
-          }
-        },
-        onCommitted: (canonicalProfileId) => {
-          invalidateOperatorRolePolicy(canonicalProfileId, { roleOnly: true });
-          context.disconnectClientsForUserProfile?.(canonicalProfileId, { roleOnly: true });
-        },
-      });
-      respond(true, { profile });
-    } catch (error) {
-      respond(false, undefined, profileError(error));
-    }
-  },
+  "users.setRole": defineValidatedGatewayHandler(
+    "users.setRole",
+    validateUsersSetRoleParams,
+    handleUsersSetRole,
+    profileError,
+  ),
   "users.setAvatar": async (options) => {
     const { context, params, respond } = options;
     if (!assertValidParams(params, validateUsersSetAvatarParams, "users.setAvatar", respond)) {

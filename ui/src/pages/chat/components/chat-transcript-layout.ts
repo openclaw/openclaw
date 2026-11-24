@@ -28,8 +28,8 @@ export type TranscriptLayoutProps = {
   activeRowKeys: ReadonlySet<string>;
   preparingRowKey?: string;
   forecastRowKeys?: ReadonlySet<string>;
+  unsettledRowKeys?: ReadonlySet<string>;
   virtualizer: Virtualizer<HTMLDivElement, HTMLElement>;
-  overlay: JSX.Element;
   header: JSX.Element;
   scrollElementRef: (element?: Element) => void;
   captureInteractionResize: (event: Event) => void;

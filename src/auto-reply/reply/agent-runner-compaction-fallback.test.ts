@@ -3,8 +3,10 @@ import { writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import path from "node:path";
+import { resolveCompactionThreshold } from "@openclaw/ai/internal/shared";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it } from "vitest";
+import { isCompactionSummaryRequest } from "../../../test/helpers/compaction-summary-request.js";
 import { writeOpenAiResponsesItem } from "../../../test/helpers/openai-responses-item.test-support.js";
 import { writeOpenAiResponsesText } from "../../../test/helpers/openai-responses-sse.js";
 import { setSessionMcpRuntimeScheduler } from "../../agents/agent-bundle-mcp-manager-api.js";
@@ -21,6 +23,7 @@ import {
   replaceSessionEntry,
 } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { runReplyAgent } from "./agent-runner-run.js";
@@ -42,6 +45,8 @@ it.each([false, true])(
       let summariesBeforeAnswer = 0;
       let largestPrompt = 0;
       let publishedBeforeSummary = 0;
+      let rateLimitedAfterSummary = false;
+      const requests: Array<{ body: string; input: unknown[]; tokens: number }> = [];
       const contextWindow = midTurn ? 1_000_000 : 32_768;
       const reportPath = path.join(state.workspaceDir, "report.txt");
       await writeFile(reportPath, "Project evidence row.\n".repeat(1_800));
@@ -82,8 +87,8 @@ it.each([false, true])(
             );
             return;
           }
-          // Built-in summarization requests carry SUMMARIZATION_SYSTEM_PROMPT.
-          if (body.includes("context summarization assistant")) {
+          requests.push({ body, input: wire.input, tokens });
+          if (isCompactionSummaryRequest(body)) {
             summaryRequests += 1;
             if (midTurn) {
               writeOpenAiResponsesText(response, {
@@ -95,6 +100,16 @@ it.each([false, true])(
             }
             response.writeHead(408, { "content-type": "application/json" });
             response.end(JSON.stringify({ error: { message: "upstream request timed out" } }));
+            return;
+          }
+          if (midTurn && summaryRequests > 0 && !rateLimitedAfterSummary) {
+            rateLimitedAfterSummary = true;
+            response.writeHead(429, { "content-type": "application/json", "retry-after-ms": "10" });
+            response.end(
+              JSON.stringify({
+                error: { message: "Rate limit reached", code: "rate_limit_exceeded" },
+              }),
+            );
             return;
           }
           const toolCall = midTurn && summaryRequests === 0 && toolRounds < 64;
@@ -224,6 +239,11 @@ it.each([false, true])(
             senderIsOwner: true,
           });
           followupRun.prompt = prompt;
+          // Channel ingress keys each user turn, so a retry can resend it in place.
+          followupRun.userTurnTranscriptRecorder = createUserTurnTranscriptRecorder({
+            target: { ...scope, sessionEntry: undefined },
+            input: { text: prompt, timestamp: Date.now(), idempotencyKey: `${runId}:user` },
+          });
           const entry = loadSessionEntry(scope)!;
           return await runReplyAgent(
             createReplyParams(followupRun, {
@@ -242,7 +262,40 @@ it.each([false, true])(
           );
         };
 
-        expect(await turn("First question after the long history.", "turn-1")).toMatchObject({
+        const turnOneResult = await turn("First question after the long history.", "turn-1");
+        if (midTurn) {
+          // #204111: the warm summary request is the previous request plus one instruction.
+          const summaryIndex = requests.findIndex((request) =>
+            isCompactionSummaryRequest(request.body),
+          );
+          const [previous, summary] = [requests[summaryIndex - 1]!, requests[summaryIndex]!];
+          const previousItems = JSON.stringify(previous.input).slice(0, -1);
+          expect(JSON.stringify(summary.input).startsWith(previousItems)).toBe(true);
+          const added = summary.input.slice(previous.input.length) as Array<
+            Record<string, unknown>
+          >;
+          expect(added.map((item) => item.type ?? item.role)).toEqual([
+            "function_call",
+            "function_call_output",
+            "message",
+          ]);
+          expect(added.at(-1)).toMatchObject({ role: "user" });
+          // The retry after compaction resends the keyed turn once, with no hidden prompt.
+          // The first one is rate limited; the second retry after the same compaction
+          // sends the identical request.
+          const [limited, retry] = [requests[summaryIndex + 1]!, requests[summaryIndex + 2]!];
+          expect(JSON.stringify(retry.input)).toBe(JSON.stringify(limited.input));
+          const userTurns = (retry.input as Array<Record<string, unknown>>).filter((item) =>
+            JSON.stringify(item.content ?? "").includes(
+              '] First question after the long history."',
+            ),
+          );
+          expect(userTurns).toHaveLength(1);
+          expect(retry.body).not.toContain(
+            "Continue the current task from the existing transcript",
+          );
+        }
+        expect(turnOneResult).toMatchObject({
           text: "ANSWER-1",
         });
         expect(overWindow, "the provider received an over-window request").toBe(0);
@@ -250,7 +303,6 @@ it.each([false, true])(
         if (midTurn) {
           expect(toolRounds).toBeGreaterThan(1);
           expect(summariesBeforeAnswer).toBeGreaterThan(0);
-          expect(largestPrompt).toBeLessThan(800_000);
           expect(publishedBeforeSummary).toBeGreaterThan(700_000);
         }
         const compactions = (await loadTranscriptEvents(scope))
@@ -261,9 +313,48 @@ it.each([false, true])(
           midTurn ? "Earlier report evidence summarized" : "removed without a summary",
         );
         const summariesAfterFirstTurn = summaryRequests;
+        const turnTwoStart = requests.length;
         expect(await turn("Second question.", "turn-2")).toMatchObject({ text: "ANSWER-2" });
+        if (midTurn) {
+          // The next turn extends the retry request: the question stays in its history.
+          const retry = requests[turnTwoStart - 1]!;
+          const next = requests[turnTwoStart]!;
+          expect(
+            JSON.stringify(next.input).startsWith(JSON.stringify(retry.input).slice(0, -1)),
+          ).toBe(true);
+          expect(
+            (next.input as Array<Record<string, unknown>>).filter((item) =>
+              JSON.stringify(item.content ?? "").includes(
+                '] First question after the long history."',
+              ),
+            ),
+          ).toHaveLength(1);
+        }
         expect(summaryRequests).toBe(summariesAfterFirstTurn);
         expect(loadSessionEntry(scope)?.compactionCount).toBe(1);
+        if (midTurn) {
+          // The warm summary request is the request that crossed the shared trigger plus one
+          // instruction: it exceeds the trigger by at most one tool round and that instruction.
+          const trigger = resolveCompactionThreshold({
+            contextWindowTokens: contextWindow,
+            reserveTokensFloor: 0,
+          });
+          const summaryAt = requests.findIndex((request) =>
+            isCompactionSummaryRequest(request.body),
+          );
+          const beforeSummary = requests.slice(0, summaryAt);
+          const toolRound = Math.max(
+            ...beforeSummary
+              .slice(1)
+              .map((request, index) => request.tokens - beforeSummary[index]!.tokens),
+          );
+          const instruction = Math.ceil(
+            JSON.stringify(requests[summaryAt]!.input.at(-1)).length / 4,
+          );
+          expect(largestPrompt).toBeLessThan(
+            Math.min(contextWindow, trigger + toolRound + instruction),
+          );
+        }
       } finally {
         await waitForSessionMaintenance(sessionKey);
         const mcpManager = getSessionMcpRuntimeTestManager();

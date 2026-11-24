@@ -8,6 +8,7 @@ import { getPluginToolMeta } from "../../../plugins/tool-metadata.js";
 import {
   finalizeAgentToolAvailability,
   gateAgentToolExecution,
+  isAgentToolRunPolicyDenied,
 } from "../../agent-tool-availability.js";
 import { wrapToolWithAbortSignal } from "../../agent-tools.abort.js";
 import { isCodeModeControlTool } from "../../code-mode-control-tools.js";
@@ -252,16 +253,24 @@ export async function prepareEmbeddedAttemptToolCatalog(input: {
     const explicitlyAllowedClientTool = (clientTools ?? []).some(({ function: fn }) =>
       Boolean(fn?.name?.trim() && clientToolMatchers.some((matches) => matches(fn.name))),
     );
+    // Run-policy refusals (absent on main) and auto-added controls cannot hide an empty allowlist.
+    const runPolicyDenied = collectAllowedToolNames({
+      tools: uncompactedEffectiveTools.filter(isAgentToolRunPolicyDenied),
+    });
     const emptyAllowlistVisibleToolNames = deferredDirectoryToolsCallable
       ? collectAllowedToolNames({ tools: effectiveTools })
       : visibleAllowedToolNames;
-    // Auto-added controls cannot conceal an explicit allowlist that matched nothing.
     const hasCallableTools =
       preparedToolBase.hasNativeWebSearch ||
-      toolSearch.catalogToolCount > 0 ||
+      toolSearch.catalogToolCount >
+        (preparedToolBase.toolSurfaceRuntime.toolSearchCatalogRef?.current?.entries ?? []).filter(
+          (entry) => runPolicyDenied.has(normalizeToolPolicyName(entry.name)),
+        ).length ||
       ((catalogedClientToolNames.size > 0 || deferredDirectoryToolsCallable) &&
         explicitlyAllowedClientTool) ||
-      [...emptyAllowlistVisibleToolNames].some((toolName) => !nonTaskControlNames.has(toolName));
+      [...emptyAllowlistVisibleToolNames].some(
+        (toolName) => !nonTaskControlNames.has(toolName) && !runPolicyDenied.has(toolName),
+      );
     const toolSearchRunPlan = {
       visibleAllowedToolNames,
       replayAllowedToolNames,

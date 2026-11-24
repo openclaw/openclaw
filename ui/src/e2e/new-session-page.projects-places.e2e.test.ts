@@ -1,4 +1,5 @@
 import { expect, it } from "vitest";
+import { observeLayoutShifts } from "../test-helpers/control-ui-layout-shift.ts";
 import { tooltipTitleText } from "./control-ui-e2e-suite.test-support.ts";
 import {
   createPageOpener,
@@ -8,6 +9,7 @@ import {
   SESSION_LIST_DEFAULTS,
   LOCAL_GIT_WORKSPACE_RESPONSES,
   WORKSPACE,
+  captureUiProof,
   createNewSessionPageE2eSuite,
   installMockGateway,
   pollLocatorText,
@@ -31,6 +33,102 @@ const startupFeatures = (...methods: string[]) => [
   ...methods,
 ];
 suite.define(() => {
+  it.each([400, 820, 1280])(
+    "keeps the composer steady as placement loads at %s px",
+    async (width) => {
+      const page = await openPage({ viewport: { width, height: 900 }, reducedMotion: "reduce" });
+      const systemInfo = { machineName: "Atlas", hostname: "atlas.local", platform: "darwin" };
+      const agents = LOCAL_GIT_WORKSPACE_RESPONSES["agents.list"];
+      const gateway = await installMockGateway(page, {
+        featureMethods: startupFeatures("system.info", "worktrees.branches"),
+        heldMethods: ["agents.list", "system.info"],
+        methodResponses: {
+          "agents.list": {
+            ...agents,
+            agents: [...agents.agents, { id: "review", name: "Review" }],
+          },
+          "system.info": systemInfo,
+          "worktrees.branches": LOCAL_GIT_WORKSPACE_RESPONSES["worktrees.branches"],
+        },
+      });
+      await page.goto(`${suite.server.baseUrl}new`);
+      await gateway.waitForRequest("agents.list");
+      await gateway.waitForRequest("system.info");
+      const editor = page.locator(".new-session-page__message");
+      const where = page.locator("#new-session-where-trigger .new-session-page__trigger-label");
+      const folder = page.locator("#new-session-project-trigger .new-session-page__trigger-label");
+      const checkout = page.locator("#new-session-checkout-trigger");
+      const skeleton = page.locator(".new-session-page__checkout-skeleton");
+      const placementRows = (checkoutRow: typeof checkout) =>
+        Promise.all(
+          [
+            page.locator("#new-session-where-trigger"),
+            page.locator("#new-session-project-trigger"),
+            checkoutRow,
+          ].map(async (row) => (await row.boundingBox())?.y),
+        );
+      await editor.waitFor();
+      await page.evaluate(() => document.fonts.ready);
+      await captureUiProof(suite, page, `placement-${width}-loading.png`);
+      const initial = await editor.boundingBox();
+      const pendingLabels = await Promise.all([where.textContent(), folder.textContent()]);
+      const pendingRows = width === 400 ? await placementRows(skeleton) : undefined;
+      if (pendingRows) {
+        expect(await checkout.count()).toBe(0);
+      }
+      const shifts = await observeLayoutShifts(page);
+
+      await gateway.resolveDeferred("agents.list");
+      await page.locator(".agent-chat__welcome-name button").waitFor();
+      await gateway.resolveDeferred("system.info", systemInfo);
+      await pollLocatorText(where).toBe("Atlas");
+      await pollLocatorText(folder).toBe("openclaw");
+      await pollLocatorText(checkout.locator(".new-session-page__trigger-label")).toBe(
+        "Current checkout",
+      );
+      await captureUiProof(suite, page, `placement-${width}-ready.png`);
+      const report = await shifts.evaluate((probe) => probe.read());
+      await shifts.evaluate((probe) => probe.stop());
+      await shifts.dispose();
+      expect(await editor.boundingBox()).toEqual(initial);
+      if (pendingRows) {
+        expect(await placementRows(checkout)).toEqual(pendingRows);
+        await pollDisabled(checkout).toBe(false);
+      }
+      expect(
+        report.entries
+          .flatMap((entry) => entry.sources)
+          .filter(({ node }) => node?.includes("new-session-page__message")),
+      ).toEqual([]);
+      expect(pendingLabels).toEqual(["", ""]);
+    },
+  );
+
+  it("removes the loading checkout row for a plain workspace on mobile", async () => {
+    const page = await openPage({ viewport: { width: 400, height: 844 } });
+    const agents = LOCAL_GIT_WORKSPACE_RESPONSES["agents.list"];
+    const gateway = await installMockGateway(page, {
+      heldMethods: ["agents.list"],
+      methodResponses: {
+        "agents.list": {
+          ...agents,
+          agents: [{ ...agents.agents[0], workspaceGit: false }],
+        },
+      },
+    });
+    await page.goto(suite.server.baseUrl + "new");
+    await gateway.waitForRequest("agents.list");
+    const checkout = page.locator("#new-session-checkout-trigger");
+    const skeleton = page.locator(".new-session-page__checkout-skeleton");
+    await skeleton.waitFor();
+    await gateway.resolveDeferred("agents.list");
+    await pollLocatorText(
+      page.locator("#new-session-project-trigger .new-session-page__trigger-label"),
+    ).toBe("openclaw");
+    await skeleton.waitFor({ state: "detached" });
+    expect(await checkout.count()).toBe(0);
+  });
+
   it("registers a Git checkout from Browse and selects the refreshed project", async () => {
     const page = await openPage();
     const repoRoot = "/recorded/openclaw";
@@ -145,7 +243,7 @@ suite.define(() => {
       await gateway.waitForRequest("system.info");
       const trigger = page.locator("#new-session-where-trigger");
       await pollLocatorText(trigger.locator(".new-session-page__trigger-label")).toBe(
-        late === "system info" ? "This computer" : "QA-Gateway",
+        late === "system info" ? "" : "QA-Gateway",
       );
       const place = page.locator(".oc-popover.new-session-page__where-popover");
       const local = place.locator('[data-value="gateway"]');
@@ -181,6 +279,35 @@ suite.define(() => {
       await expect.poll(() => tooltipTitleText(local)).toBe("QA-Gateway Runs on this computer");
     },
   );
+
+  it("keeps the known Gateway label while refreshing after returning to the tab", async () => {
+    const page = await openPage();
+    const now = Date.now();
+    await page.clock.setFixedTime(now);
+    const gateway = await installMockGateway(page, {
+      featureMethods: startupFeatures("system.info"),
+      methodResponses: { "system.info": { machineName: "Atlas" } },
+    });
+    await page.goto(suite.server.baseUrl + "new");
+    const label = page.locator("#new-session-where-trigger .new-session-page__trigger-label");
+    await pollLocatorText(label).toBe("Atlas");
+    await gateway.deferNext("system.info");
+    const requestCount = (await gateway.getRequests("system.info")).length;
+    await page.clock.setFixedTime(now + 11_000);
+    await page.evaluate(() => {
+      Object.defineProperty(document, "visibilityState", { configurable: true, value: "hidden" });
+      document.dispatchEvent(new Event("visibilitychange"));
+      Reflect.deleteProperty(document, "visibilityState");
+      document.dispatchEvent(new Event("visibilitychange"));
+    });
+    await expect
+      .poll(async () => (await gateway.getRequests("system.info")).length)
+      .toBe(requestCount + 1);
+    const pendingLabel = await label.textContent();
+    await gateway.resolveDeferred("system.info", { machineName: "Atlas renamed" });
+    await pollLocatorText(label).toBe("Atlas renamed");
+    expect(pendingLabel).toBe("Atlas");
+  });
 
   it("keeps and disambiguates recent locations with the same basename", async () => {
     const page = await openPage();

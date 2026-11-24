@@ -2,6 +2,8 @@
 export type {
   SessionCatalog,
   SessionCatalogCapabilities,
+  SessionCatalogProfileRelation,
+  SessionCatalogSourceProfileRelation,
   SessionCatalogDescriptor,
   SessionCatalogHost,
   SessionCatalogLocator,
@@ -18,8 +20,12 @@ export type {
   SessionsCatalogListParams,
   SessionsCatalogListResult,
   SessionsCatalogHostEvent,
+  SessionCatalogRouteMethods,
+  SessionsCatalogRouteParams,
+  SessionsCatalogRouteResult,
   SessionsCatalogReadParams,
   SessionsCatalogReadResult,
+  SessionsCatalogResolveResult,
   SessionsCatalogStartTerminalParams,
   SessionsCatalogStartTerminalResult,
 } from "./schema/sessions-catalog.js";

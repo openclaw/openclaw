@@ -24,7 +24,7 @@ agent tools, but nothing listens on the loopback control port.
 - Profiles: `GET /profiles`, `POST /profiles/create`, `DELETE /profiles/:name`
 - Tabs: `GET /tabs`, `POST /tabs/open`, `POST /tabs/focus`, `DELETE /tabs/:targetId`, `POST /tabs/action`
 - Snapshot/screenshot/stream: `GET /snapshot`, `POST /screenshot`, `POST /screencast`
-- Actions: `POST /navigate`, `POST /act`
+- Actions: `POST /navigate`, `POST /act`, `POST /operator/input`
 - Hooks: `POST /hooks/file-chooser`, `POST /hooks/dialog`
 - Downloads: `POST /download`, `POST /wait/download`
 - Permissions: `POST /permissions/grant`
@@ -128,6 +128,24 @@ Notes:
 - If `gateway.auth.mode` is `none` or `trusted-proxy`, these loopback browser
   routes do not inherit those identity-bearing modes. Keep them loopback-only.
 
+### Operator input
+
+`POST /operator/input` delivers human input from the Control UI browser panel.
+The JSON body has an optional `targetId` and `inputs`, an ordered list of up to
+100 entries: `{"kind":"press","key":...}`, `{"kind":"insertText","text":...}`,
+or `{"kind":"clickCoords","x":...,"y":...}`, validated like the same `POST /act`
+kinds. Agent tools keep using `POST /act`.
+
+Each request runs its inputs under one navigation guard, instead of one guard
+per action, so a burst waits for the guard's 250 ms post-action window once.
+Every document request is policy-checked while the guard is active, as with
+`POST /act`. A main-frame navigation request or commit stops the burst before
+any further input is sent; subframe navigations do not stop it and are still
+checked. The response contains `sent` (inputs delivered, in order) and
+`navigated: true` when a navigation withheld later inputs. A policy denial or
+an open dialog is reported on the request whose input caused it.
+Existing-session profiles answer `501` with code `OPERATOR_INPUT_UNSUPPORTED`.
+
 ### Screencast stream
 
 `POST /screencast` mints a single-use token for a live view of the selected tab.
@@ -150,8 +168,10 @@ viewers receive no further frames or metadata. The loopback HTTP control API
 has no Gateway connection to bind, so its tickets remain TTL-only.
 
 The plugin shares one CDP screencast per profile and tab. Chrome sends JPEG
-frames on repaint, paced to approximately 20 frames per second. Slow viewers
-skip frames instead of building a queue. Navigation immediately retires the
+frames on repaint. Each frame is acknowledged once the first viewer socket has
+taken it, so the frame rate follows the fastest delivery; when every viewer is
+congested the next frame waits 50 ms. Slow viewers skip frames instead of
+building a queue. Navigation immediately retires the
 capture session. A new CDP session starts only after the address is allowed,
 so delayed frames from the previous document cannot enter the new stream.
 A rejected navigation stops the stream.

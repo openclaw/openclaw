@@ -512,6 +512,7 @@ export type SessionControllerSourceCustody = {
   cancellationRetired?: boolean;
   stopHeartbeat?: () => void;
   releaseAuthority?: () => void;
+  releaseCallbacks?: () => void;
   failure?: unknown;
   disposeSource?: () => void;
   /** One in-process Gateway registration may adopt a pre-reserved source. */
@@ -527,6 +528,8 @@ export type SessionControllerInput = {
   sequence: number;
   readonly sourceTurnId?: string;
   protocolRunId?: string;
+  /** Producer records transcript custody after the input owner commits it. */
+  onTranscriptCommitted?: (runId: string) => void | Promise<void>;
   policy: Readonly<QueueSettings>;
   mailbox: SessionControllerMailbox;
   readonly custody: SessionControllerSourceCustody;
@@ -635,7 +638,8 @@ export type SessionControllerSourceAdapter = {
   /** Original personal ingress, bound at admission; identity evidence, not an execution grant. */
   initiatingPersonalOperator?: AdmittedRunOperatorAuthority;
   readonly scope?: string;
-  readonly authority?: { assertCurrent(): void; signal?: AbortSignal };
+  /** Stop signal and the producer's own data fence; an operator authority carries only Stop. */
+  readonly authority?: { assertCurrent?(): void; signal?: AbortSignal };
   readonly signal?: AbortSignal;
   readonly requester?: Readonly<{ deviceId?: string; connectionId?: string; clientId?: string }>;
   /** Known routing identity before a physical target exists; never execution authority. */

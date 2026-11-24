@@ -141,7 +141,6 @@ extensions/workboard/src/store.test.ts
 extensions/zalo/src/monitor.ts
 extensions/zalouser/src/monitor.ts
 extensions/zalouser/src/zalo-js.ts
-packages/agent-core/src/agent-loop.test.ts
 packages/agent-core/src/agent-loop.ts
 packages/ai/src/providers/openai-chatgpt-responses.ts
 packages/ai/src/providers/openai-responses-shared.test.ts
@@ -151,7 +150,6 @@ packages/markdown-core/src/ir.ts
 packages/tool-call-repair/src/stream-normalizer.ts
 src/agents/agent-bundle-mcp-runtime.test.ts
 src/agents/agent-bundle-mcp-runtime.ts
-src/agents/agent-hooks/compaction-safeguard.ts
 src/agents/agent-tools.before-tool-call.e2e.test.ts
 src/agents/agent-tools.before-tool-call.integration.e2e.test.ts
 src/agents/agent-tools.create-openclaw-coding-tools.test.ts
@@ -265,7 +263,6 @@ src/gateway/client.test.ts
 src/gateway/config-reload.test.ts
 src/gateway/config-reload.ts
 src/gateway/control-ui.http.test.ts
-src/gateway/control-ui.ts
 src/gateway/gateway-acp-bind.live.test.ts
 src/gateway/gateway-codex-harness.live.test.ts
 src/gateway/gateway-models.profiles.live.test.ts
@@ -295,7 +292,6 @@ src/gateway/server-methods/cron.validation.test.ts
 src/gateway/server-methods/models.test.ts
 src/gateway/server-methods/nodes.invoke-wake.test.ts
 src/gateway/server-methods/send.test.ts
-src/gateway/server-methods/send.ts
 src/gateway/server-methods/server-methods.test.ts
 src/gateway/server-node-events.ts
 src/gateway/server-plugins.test.ts
@@ -332,7 +328,6 @@ src/logging/diagnostic-stability-bundle.ts
 src/logging/diagnostic-stability.ts
 src/logging/diagnostic.ts
 src/logging/redact.ts
-src/media-understanding/runner.ts
 src/media/web-media.ts
 src/node-host/invoke-system-run.test.ts
 src/node-host/invoke-system-run.ts
@@ -383,7 +378,6 @@ src/tui/tui-session-actions.test.ts
 src/tui/tui.ts
 src/wizard/setup.finalize.test.ts
 src/wizard/setup.finalize.ts
-src/wizard/setup.test.ts
 src/worker/worker.runtime.test.ts
 ui/src/api/gateway.node.test.ts
 ui/src/pages/chat/chat-gateway.test.ts

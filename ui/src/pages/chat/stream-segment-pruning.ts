@@ -5,21 +5,13 @@ import {
   streamSegmentUsesAccumulatedText,
   type ChatStreamSegment,
 } from "../../lib/chat/chat-types.ts";
-import { streamCausalInterval } from "./stream-causal-boundary.ts";
-import {
-  hasAssistantStreamPartReplacement,
-  visibleAssistantStreamParts,
-  type ToolStreamReconciliationState,
-} from "./stream-reconciliation.ts";
+import type { ToolStreamReconciliationState } from "./stream-reconciliation.ts";
 import type { ToolStreamState } from "./tool-stream-contract.ts";
 import {
   extractToolMessageRefs,
   resolveLiveToolStreamRefs,
   resolveMatchingLiveToolIdentity,
 } from "./tool-stream-identity.ts";
-
-type AssistantMessageVisibility = (message: unknown) => boolean;
-type StreamVisibility = (stream: string) => boolean;
 
 function pruneAccumulatedStreamSegments(
   segments: readonly ChatStreamSegment[],
@@ -60,46 +52,6 @@ export function prunePersistedAssistantStreamSegments(
   if (segments.length !== state.chatStreamSegments.length) {
     state.chatStreamSegments = segments;
   }
-}
-
-export function pruneHistoryReplacedStreamSegments(
-  messages: unknown[],
-  state: ToolStreamReconciliationState,
-  opts: {
-    isHiddenAssistantMessage: AssistantMessageVisibility;
-    isHiddenStreamText: StreamVisibility;
-  },
-): boolean {
-  const replacedIndexes = new Set<number>();
-  for (const part of visibleAssistantStreamParts(state, {
-    includeCurrent: false,
-    isHiddenStreamText: opts.isHiddenStreamText,
-  })) {
-    if (part.segmentIndex === undefined || part.itemId) {
-      continue;
-    }
-    const interval = streamCausalInterval(messages, part);
-    if (
-      hasAssistantStreamPartReplacement(
-        messages,
-        part,
-        opts.isHiddenAssistantMessage,
-        interval.start,
-        interval.end,
-      )
-    ) {
-      replacedIndexes.add(part.segmentIndex);
-    }
-  }
-  if (replacedIndexes.size === 0) {
-    return false;
-  }
-  state.chatStreamSegments = pruneAccumulatedStreamSegments(
-    state.chatStreamSegments,
-    state.chatRunId,
-    (_segment, index) => replacedIndexes.has(index),
-  );
-  return true;
 }
 
 export function prunePersistedToolStreamMessages(

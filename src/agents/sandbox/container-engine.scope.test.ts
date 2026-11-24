@@ -1,8 +1,11 @@
+import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement, withinTest } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { resolveGatewayServiceCgroupDirectory } from "../../process/linux-exec-cgroup.js";
 import { mockProcessPlatform } from "../../test-utils/vitest-spies.js";
+import { createEnteredGate } from "../entered-gate.test-support.js";
 import {
   DOCKER_SANDBOX_ENGINE,
   execContainerRaw,
@@ -13,6 +16,9 @@ import {
   writeFakeSystemdScope,
 } from "./container-engine.scope.test-support.js";
 import { bindPodmanSandboxEngine } from "./podman-runtime.js";
+import { acquireSandboxGatewayOwner } from "./registry.test-support.js";
+import { runSshSandboxCommand } from "./ssh.js";
+import { captureSandboxStateOwner } from "./state-owner.js";
 
 vi.mock("../../process/linux-exec-cgroup.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../process/linux-exec-cgroup.js")>()),
@@ -23,6 +29,58 @@ afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
 });
+
+it.skipIf(process.platform === "win32")(
+  "refuses SSH command launch when custody retires during path preparation",
+  async ({ signal }) => {
+    const directory = tempDirs.make("openclaw-container-custody-");
+    const marker = path.join(directory, "effect");
+    writeFakeContainerExecutable(
+      directory,
+      "docker",
+      'require("node:fs").writeFileSync(process.argv.at(-1), "created");',
+    );
+    vi.stubEnv("PATH", `${directory}${path.delimiter}${process.env.PATH ?? ""}`);
+    vi.stubEnv("OPENCLAW_STATE_DIR", directory);
+    using lease = acquireSandboxGatewayOwner(directory);
+    const owner = await captureSandboxStateOwner();
+    const run = (current: typeof owner) =>
+      runSshSandboxCommand({
+        session: {
+          command: path.join(directory, "docker"),
+          configPath: "synthetic",
+          host: "synthetic",
+          assertCurrent: current.assertCurrent,
+          prepareCurrent: current.prepareCurrent,
+        },
+        remoteCommand: marker,
+        signal,
+      });
+    const gate = createEnteredGate();
+    const realpath = fs.realpath;
+    const lookup = vi.spyOn(fs, "realpath").mockImplementation(async (...args) => {
+      await gate.wait();
+      return realpath(...args);
+    });
+    const command = run(owner);
+    try {
+      await withinTest(
+        awaitGateBeforeSettlement(gate.entered, command, "physical path preparation"),
+        signal,
+      );
+      lease.release();
+    } finally {
+      lookup.mockRestore();
+      gate.release();
+    }
+    await expect(command).rejects.toMatchObject({ code: "GATEWAY_STATE_OWNER_REQUIRED" });
+    await expect(fs.readFile(marker)).rejects.toMatchObject({ code: "ENOENT" });
+    using _ = acquireSandboxGatewayOwner(directory);
+    const next = await captureSandboxStateOwner();
+    await run(next);
+    expect(await fs.readFile(marker, "utf8")).toBe("created");
+  },
+);
 
 it.skipIf(process.platform === "win32").for([
   {

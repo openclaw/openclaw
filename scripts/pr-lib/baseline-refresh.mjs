@@ -33,39 +33,40 @@ function git(args, options = {}) {
   return execFileSync(executable, args, { maxBuffer: Infinity, ...options });
 }
 const text = (...args) => decoder.decode(git(args)).trim();
+// This invocation keeps one Git executable and repository. Reuse only captured
+// bytes, never authority or signature validation; new payloads still pass Git's
+// collision checks and large evidence remains uncached.
+const capturedHashes = new Map();
+const capturedHashEntries = 1024;
+const capturedHashBudget = 8 * 1024 * 1024;
+let capturedHashBytes = 0;
+
 function hash(bytes, write = false) {
-  const directory = fs.mkdtempSync(join(tmpdir(), "openclaw-pr-hash-"));
-  const path = join(directory, "snapshot");
-  let fd;
-  let directoryRemoved = false;
-  try {
-    // Finish and close the exclusive writer before opening a fresh read-only
-    // descriptor. Hash captured bytes, never a later read of the authority path.
-    fs.writeFileSync(path, bytes, { flag: "wx", mode: 0o600 });
-    fd = fs.openSync(path, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
-    // PR supervision requires POSIX. Unlink before dispatch so interruption
-    // cannot leave authority bytes behind while Git owns the descriptor.
-    fs.unlinkSync(path);
-    fs.rmdirSync(directory);
-    directoryRemoved = true;
-    return decoder
-      .decode(
-        git(["hash-object", "--no-filters", ...(write ? ["-w"] : []), "--stdin"], {
-          stdio: [fd, "pipe", "pipe"],
-        }),
-      )
-      .trim();
-  } finally {
-    try {
-      if (fd !== undefined) {
-        fs.closeSync(fd);
-      }
-    } finally {
-      if (!directoryRemoved) {
-        fs.rmSync(directory, { recursive: true, force: true });
-      }
-    }
+  const key =
+    !write && bytes.length <= capturedHashBudget ? `${bytes.length}:${digest(bytes)}` : undefined;
+  const cached = key && capturedHashes.get(key);
+  if (cached && cached.bytes.equals(bytes)) {
+    return cached.oid;
   }
+  // Hash the captured bytes through stdin, never re-read the authority pathname.
+  // Object writes must run even when these bytes were previously checked.
+  const oid = decoder
+    .decode(
+      git(["hash-object", "--no-filters", ...(write ? ["-w"] : []), "--stdin"], {
+        input: bytes,
+      }),
+    )
+    .trim();
+  if (
+    key &&
+    !cached &&
+    capturedHashes.size < capturedHashEntries &&
+    capturedHashBytes + bytes.length <= capturedHashBudget
+  ) {
+    capturedHashes.set(key, { bytes: Buffer.from(bytes), oid });
+    capturedHashBytes += bytes.length;
+  }
+  return oid;
 }
 
 function exactKeys(value, keys) {
@@ -443,6 +444,7 @@ const retiredNames = [
   "correction-review.md",
   "correction-incoming-review.json",
   "correction-incoming-review.md",
+  "pending-proof-acceptance.json",
 ];
 const publicationNames = ["prepare-push-result.env", "prepare-sync-result.env"];
 

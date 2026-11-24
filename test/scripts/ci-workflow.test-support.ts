@@ -148,6 +148,8 @@ type WorkflowContext = Strings<"action" | "actor" | "authorAssociation" | "maint
     ciShape?: "default" | "main";
     inputs?: Record<string, unknown>;
     runnerEnvironment?: "" | "github-hosted" | "self-hosted";
+    runnerOs?: "" | "Linux" | "macOS" | "Windows";
+    runnerArch?: "X64" | "ARM64";
     runnerProfile?: "blacksmith" | "github" | "hybrid";
     runAttempt: number;
     runId?: number;
@@ -258,7 +260,12 @@ export function evaluateWorkflowExpression(
     env: context.env ?? {},
     secrets: context.secrets ?? {},
     matrix: context.matrix ?? {},
-    runner: { environment: context.runnerEnvironment ?? "", temp: context.runnerTemp ?? "" },
+    runner: {
+      os: context.runnerOs ?? "",
+      arch: context.runnerArch ?? "",
+      environment: context.runnerEnvironment ?? "",
+      temp: context.runnerTemp ?? "",
+    },
     steps: {
       runner_profile: { outputs: { node_runner_backend: "" } },
       qualification_dispatch: { outputs: { eligible: "false" } },
@@ -519,6 +526,23 @@ export function readWorkflowOutputs(outputPath: string): Record<string, string> 
     : {};
 }
 
+/** Resolve only the shared WebKit installer; this is not a general Actions runner. */
+export function readPlaywrightWebkitInstall(step: WorkflowStep, cwd: string): string {
+  const uses = expectDefined(step.uses, "WebKit installer action");
+  expect([
+    "./.ci-harness/.github/actions/setup-playwright-webkit",
+    "./.release-harness/.github/actions/setup-playwright-webkit",
+  ]).toContain(uses);
+  const action = readWorkflow(path.resolve(cwd, uses, "action.yml"));
+  expect(action.runs.using).toBe("composite");
+  expect(action.runs.steps).toHaveLength(1);
+  const install = action.runs.steps[0];
+  expect(Object.keys(install).toSorted()).toEqual(["name", "run", "shell"]);
+  expect(install.shell).toBe("bash");
+  expect(typeof install.run).toBe("string");
+  return install.run;
+}
+
 /** Execute the UI phases with Actions' output/env handoff and stop-on-failure behavior. */
 export function runControlUiE2eWorkflow(options: { cwd: string; env: NodeJS.ProcessEnv }) {
   const steps = readCiWorkflow().jobs["checks-ui-e2e"].steps as WorkflowStep[];
@@ -543,7 +567,8 @@ export function runControlUiE2eWorkflow(options: { cwd: string; env: NodeJS.Proc
       continue;
     }
     writeFileSync(outputFile, "");
-    result = runWorkflowShellScript(`set -e\n${step.run}`, { cwd: options.cwd, env });
+    const script = step.uses ? readPlaywrightWebkitInstall(step, options.cwd) : step.run;
+    result = runWorkflowShellScript(`set -e\n${script}`, { cwd: options.cwd, env });
     stdout += result.stdout;
     stderr += result.stderr;
     if (result.status !== 0) {

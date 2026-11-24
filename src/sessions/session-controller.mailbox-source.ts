@@ -33,7 +33,7 @@ export function bindSessionControllerSource(
   ) {
     throw new Error("Source binding no longer current");
   }
-  input.sourceAdapter?.authority?.assertCurrent();
+  input.sourceAdapter?.authority?.assertCurrent?.();
   input.sourceAdapter?.signal?.throwIfAborted();
   input.source = source;
   source.controllerInput = input;
@@ -173,7 +173,7 @@ export function beginSessionControllerSourceInjection(
           }
           return false;
         }
-        input.sourceAdapter?.authority?.assertCurrent();
+        input.sourceAdapter?.authority?.assertCurrent?.();
         input.abortSignal.throwIfAborted();
         started = true;
         pending.admitted = true;
@@ -184,10 +184,6 @@ export function beginSessionControllerSourceInjection(
         });
         return true;
       } catch (error) {
-        // A failed live-authority assertion cannot return a queued-ready source
-        // to selection. Retire before releasing the injection receipt: finish
-        // can synchronously wake the mailbox and enter a backend.
-        retireSessionControllerInput(input);
         finish(false);
         if (input.abortSignal.aborted) {
           return false;
@@ -231,7 +227,7 @@ export function updateSessionControllerSourcePolicy(
     input.abortSignal.throwIfAborted();
   };
   assertConfigurable();
-  input.sourceAdapter?.authority?.assertCurrent();
+  input.sourceAdapter?.authority?.assertCurrent?.();
   assertConfigurable();
   const wasInterrupt = input.policy.mode === "interrupt";
   input.policy = Object.freeze({ ...policy });
@@ -613,6 +609,8 @@ export function completeSessionControllerSourceLifecycle(
       state.failure = error;
     }
     state.releaseAuthority = undefined;
+    state.releaseCallbacks?.();
+    state.releaseCallbacks = undefined;
     state.settling = undefined;
     const input = run.controllerInput;
     if (!run.controllerClaim && input && (!synchronous || !input.retirementRequested)) {

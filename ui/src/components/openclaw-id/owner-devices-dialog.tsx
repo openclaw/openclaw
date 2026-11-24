@@ -81,9 +81,12 @@ function DeviceRow(props: {
       ...new Intl.Segmenter(getLocale(), { granularity: "sentence" }).segment(message),
     ];
     const recoveryStart = sentences.at(-1)?.index ?? 0;
+    const node = props.device.nodePeerKey
+      ? [t("openclawId.revokeNode", { device: props.device.label })]
+      : [];
     return recoveryStart
-      ? [message.slice(0, recoveryStart), message.slice(recoveryStart)]
-      : [message];
+      ? [message.slice(0, recoveryStart), ...node, message.slice(recoveryStart)]
+      : [message, ...node];
   });
   return (
     <div
@@ -115,6 +118,9 @@ function DeviceRow(props: {
               : t("openclawId.approvedByRemoved")}
         </div>
       </div>
+      <Show when={props.device.nodePeerKey}>
+        <span class="chip">{t("openclawId.runsTools")}</span>
+      </Show>
       <Show when={props.isThisBrowser}>
         <span class="chip">{t("openclawId.thisBrowser")}</span>
       </Show>
@@ -174,6 +180,7 @@ export function showOwnerDevicesDialog(params: { client: GatewayBrowserClient })
       const [ownPub, setOwnPub] = createSignal<string | null>(null);
       const [ownerFp, setOwnerFp] = createSignal<string | null>(null);
       const [localOperator, setLocalOperator] = createSignal(false);
+      const [remoteOwner, setRemoteOwner] = createSignal(false);
       const [busy, setBusy] = createSignal(false);
       const [confirming, setConfirming] = createSignal<string | null>(null);
       const [securityOpen, setSecurityOpen] = createSignal(false);
@@ -189,6 +196,7 @@ export function showOwnerDevicesDialog(params: { client: GatewayBrowserClient })
             params.client.request<OpenClawIdStatusResult>("openclawId.status", {}),
           ]);
           setLocalOperator(status.channel === "local_operator" && next.linked);
+          setRemoteOwner(status.channel === "tunnel" && status.owner === true && next.linked);
           setOwnPub((await thisOwnerDevice(next).catch(() => undefined))?.devicePub ?? null);
           setOwnerFp(await ownerFingerprint(next));
           // Only a fresh Gateway listing can start removal, including cascade removals.
@@ -328,6 +336,13 @@ export function showOwnerDevicesDialog(params: { client: GatewayBrowserClient })
                   {t("openclawId.securityDetails")}
                   <Icon name="chevronDown" />
                 </button>
+              </Show>
+              <Show when={remoteOwner()}>
+                <openclaw-modal-actions>
+                  <a class="btn primary" href="/_loader/?stay=1&view=approve">
+                    {t("openclawId.approveNewDevice")}
+                  </a>
+                </openclaw-modal-actions>
               </Show>
               <Show when={localOperator() && ownPub()}>
                 <openclaw-modal-actions>

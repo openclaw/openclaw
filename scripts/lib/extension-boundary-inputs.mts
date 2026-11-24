@@ -102,6 +102,8 @@ const GENERATOR_INPUTS = [
 export class BoundaryInputSnapshot extends CompilerInputSnapshot {
   private readonly boundary: ReturnType<typeof createDeclarationInputBoundary>;
   private readonly lookupFacts = new Map<string, DeclarationLookup>();
+  // Canonical spellings are lexical facts; replay still admits each new filesystem lookup.
+  private readonly receiptPaths = new Set<string>();
 
   constructor(rootDir: string, generatorInputs: string[] = []) {
     const boundary = createDeclarationInputBoundary(rootDir);
@@ -139,10 +141,15 @@ export class BoundaryInputSnapshot extends CompilerInputSnapshot {
       if (typeof file !== "string" || !file || path.isAbsolute(file)) {
         throw new Error(`Invalid bounded compiler lookup path: ${receipt}`);
       }
-      const normalized = portableRelativePath(this.rootDir, this.boundary.assert(file)) || ".";
-      if (normalized !== file) {
+      if (this.receiptPaths.has(file)) {
+        return file;
+      }
+      // Replay admits filesystem operations; parsing only validates their recorded paths.
+      const normalized = portableRelativePath(this.rootDir, this.boundary.resolve(file)) || ".";
+      if (normalized !== file || normalized === ".." || normalized.startsWith("../")) {
         throw new Error(`Invalid bounded compiler lookup path: ${receipt}`);
       }
+      this.receiptPaths.add(file);
       return file;
     };
     const names = (value: unknown): value is string[] =>
@@ -198,7 +205,6 @@ export class BoundaryInputSnapshot extends CompilerInputSnapshot {
       }
       throw new Error(`Invalid bounded compiler lookup result: ${receipt}`);
     });
-    const inputs = info.inputs.map(normalizedPath);
     const keys = lookups.map(({ kind, path: file }) => `${kind}\0${file}`);
     const reads = lookups
       .filter((lookup) => lookup.kind === "readFile" && lookup.result)
@@ -207,14 +213,17 @@ export class BoundaryInputSnapshot extends CompilerInputSnapshot {
     if (
       new Set(keys).size !== keys.length ||
       JSON.stringify(keys) !== JSON.stringify(keys.toSorted()) ||
-      JSON.stringify(inputs) !== JSON.stringify(reads)
+      JSON.stringify(info.inputs) !== JSON.stringify(reads)
     ) {
       throw new Error(`Incomplete or ambiguous bounded compiler input receipt: ${receipt}`);
     }
-    return { inputs, lookups };
+    return { inputs: reads, lookups };
   }
 
-  private resolutionFingerprint(lookups: DeclarationLookup[]) {
+  private resolutionFingerprint(
+    lookups: DeclarationLookup[],
+    onMismatch?: (reason: string) => void,
+  ) {
     const expected = JSON.stringify(lookups);
     const pending = lookups.filter(
       (lookup) => !this.lookupFacts.has(`${lookup.kind}\0${lookup.path}`),
@@ -233,6 +242,16 @@ export class BoundaryInputSnapshot extends CompilerInputSnapshot {
     }
     const current = lookups.map((lookup) => this.lookupFacts.get(`${lookup.kind}\0${lookup.path}`));
     if (JSON.stringify(current) !== expected) {
+      if (onMismatch) {
+        const changed = lookups.find(
+          (lookup, index) => JSON.stringify(lookup) !== JSON.stringify(current[index]),
+        );
+        onMismatch(
+          changed
+            ? `compiler resolution lookup changed: ${changed.kind} ${JSON.stringify(changed.path)}`
+            : "compiler resolution lookups changed",
+        );
+      }
       throw new Error("Bounded compiler resolution lookups changed");
     }
     return createHash("sha256").update(expected).digest("hex");
@@ -245,19 +264,24 @@ export class BoundaryInputSnapshot extends CompilerInputSnapshot {
     required: string[],
     inputReceipt: string,
     outputRoot?: string,
+    onMismatch?: (reason: string) => void,
   ) {
+    let lookupMismatch: string | undefined;
+    const mismatch = (reason: string) => {
+      onMismatch?.(reason);
+      return false;
+    };
     try {
       const receiptPath = portableRelativePath(this.rootDir, this.boundary.assert(inputReceipt));
-      if (
-        !record ||
-        !required.includes(receiptPath) ||
-        record.outputs[receiptPath] !== this.hash(receiptPath)
-      ) {
-        return false;
+      if (!record || !required.includes(receiptPath)) {
+        return mismatch("compiler receipt is missing from the required output inventory");
+      }
+      if (record.outputs[receiptPath] !== this.hash(receiptPath)) {
+        return mismatch("compiler receipt bytes changed");
       }
       const receipt = this.readReceipt(inputReceipt);
       if (JSON.stringify(receipt.inputs) !== JSON.stringify(record.inputs)) {
-        return false;
+        return mismatch("compiler receipt input inventory changed");
       }
       return this.matches(
         record,
@@ -265,10 +289,18 @@ export class BoundaryInputSnapshot extends CompilerInputSnapshot {
         args,
         required,
         outputRoot,
-        this.resolutionFingerprint(receipt.lookups),
+        this.resolutionFingerprint(
+          receipt.lookups,
+          onMismatch
+            ? (reason) => {
+                lookupMismatch = reason;
+              }
+            : undefined,
+        ),
+        onMismatch,
       );
     } catch {
-      return false;
+      return mismatch(lookupMismatch ?? "compiler receipt or resolution inputs could not be read");
     }
   }
 

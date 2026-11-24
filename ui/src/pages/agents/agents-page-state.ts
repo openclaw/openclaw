@@ -11,10 +11,7 @@ import { resolveAgentSettingsAccess } from "../../lib/agents/settings-access.ts"
 import { createChannelCapability } from "../../lib/channels/index.ts";
 import { currentConfigObject } from "../../lib/config/config-state-model.ts";
 import { createInitialCronState } from "../../lib/cron/index.ts";
-import {
-  hasCronInventoryEvents,
-  isCronInventoryInvalidation,
-} from "../../lib/cron/inventory-connection.ts";
+import { isCronInventoryInvalidation } from "../../lib/cron/inventory-connection.ts";
 import {
   canCallGatewayMethod,
   canPresentGatewayMethod,
@@ -159,10 +156,7 @@ export function createAgentsPageState(
     getReport: () => state.agentSkillsReport,
     onPrimaryChanged: () => effectiveTools.ensure(true),
   });
-  const githubIdentity = createGitHubIdentityView({
-    runExternalMutation: (task, options) =>
-      context.runtimeConfig.runExternalMutation(task, options),
-  });
+  const githubIdentity = createGitHubIdentityView();
   let readAccessKey = "";
   const gateway = new GatewayPageBinding(() => publish(), {
     getGateway: () => context.gateway,
@@ -443,12 +437,9 @@ export function createAgentsPageState(
           }
         : null,
       statusReadable: hasScope("tools.github.status", "operator.read"),
-      configurable: hasScope("tools.github.configure", "operator.admin"),
-      authorizable: [
-        "tools.github.authorize.start",
-        "tools.github.authorize.poll",
-        "tools.github.authorize.cancel",
-      ].every((method) => hasScope(method, "operator.admin")),
+      // This panel only reads the account; Profile → GitHub accounts changes it.
+      configurable: false,
+      authorizable: false,
       clientRevision: state.requestGeneration,
     });
   }
@@ -644,12 +635,10 @@ export function createAgentsPageState(
     let intentRevision = selection.intentRevision;
     const stops = [
       context.gateway.subscribeEvents((event) => {
-        if (hasCronInventoryEvents(context.gateway.snapshot)) {
-          if (isCronInventoryInvalidation(event, context.gateway.snapshot)) {
-            cron.onRefresh(false);
-          } else if (event.event === "cron") {
-            cron.onRuntime(event.payload);
-          }
+        if (isCronInventoryInvalidation(event)) {
+          cron.onRefresh(false);
+        } else if (event.event === "cron") {
+          cron.onRuntime(event.payload);
         }
       }),
       listen(document, "visibilitychange", () => {

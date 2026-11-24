@@ -105,6 +105,13 @@ export interface StreamOptions {
   /** Request-level cache lifetime for GPT-5.6+ Responses APIs; unset preserves provider defaults. */
   promptCacheTtl?: "30m" | "12h";
   /**
+   * Read the prompt into the provider's prompt cache without generating output:
+   * Anthropic Messages `max_tokens: 0`, OpenAI Responses `prompt_cache_options.prewarm`.
+   * The rest of the request is unchanged, so it reads and refreshes the cached prefix.
+   * Only those two transports honor it; callers send it only on such a route.
+   */
+  cachePrewarm?: true;
+  /**
    * Optional session identifier for providers that support session-based caching.
    * Providers can use this to enable prompt caching, request routing, or other
    * session-aware features. Ignored by providers that don't support it.
@@ -309,6 +316,8 @@ export interface ToolCall {
    * `toolcall_end` or terminal cleanup; it never appears in final messages or transcripts.
    */
   partialJson?: string;
+  /** Provider argument bytes paired with their normalized value for exact replay. */
+  argumentsSignature?: { value: string; raw: string };
   thoughtSignature?: string; // Google-specific: opaque signature for reusing thought context
   executionMode?: "sequential" | "parallel";
 }
@@ -397,6 +406,8 @@ export interface UserMessage {
   runtimeContextCarrierRetained?: boolean;
   /** Operator-authored text projected to system authority on capable routes. */
   operatorMessage?: { turnScoped: boolean };
+  /** `false`: sent once and never replayed, so transports place no prompt-cache checkpoint on it. */
+  cacheCheckpoint?: false;
 }
 
 export const RUNTIME_CONTEXT_CUSTOM_TYPE = "openclaw.runtime-context";
@@ -531,6 +542,8 @@ export interface AssistantMessage {
     mediaUrls?: string[];
     replyToCurrent?: true;
     replyToId?: string;
+    /** Consumed transport input; implicit reply policy still applies. */
+    sourceMessageId?: string;
     /** @deprecated Ignored; omit this field. Retained until the next Plugin SDK major. */
     textPhaseRequiresTerminal?: true;
     /** Parsed once at the assistant write boundary; delivery resolves policy from these facts. */
@@ -552,6 +565,8 @@ export interface AssistantMessage {
   endTurn?: boolean;
   errorMessage?: string;
   errorCode?: string;
+  /** Transport-owned repair outcome; execution owns whether a deferred request can replay. */
+  itemConflictRecovery?: "deferred" | "recovered" | "failed";
   errorType?: string;
   errorBody?: string;
   /** Provider retry floor before diagnostic clipping; null means too large to represent. */
@@ -569,7 +584,13 @@ export interface ToolResultMessage<TDetails = unknown> {
   timestamp: number; // Unix timestamp in milliseconds
 }
 
-export type Message = UserMessage | AssistantMessage | ToolResultMessage;
+/** Historical token counts can survive without a recorded price; absence is not zero cost. */
+export type HistoryUsage = Omit<Usage, "cost"> & { cost?: Usage["cost"] };
+
+/** Replay input is weaker than a live provider result, which always supplies Usage. */
+export type AssistantHistoryMessage = Omit<AssistantMessage, "usage"> & { usage: HistoryUsage };
+
+export type Message = UserMessage | AssistantHistoryMessage | ToolResultMessage;
 
 export type ImagesInputContent = TextContent | ImageContent;
 export type ImagesOutputContent = TextContent | ImageContent;
@@ -732,6 +753,8 @@ export interface OpenAIResponsesCompat {
   supportsLongCacheRetention?: boolean;
   /** Whether the provider honors top-level `instructions`. Defaults to true only for verified native routes (OpenAI, xAI); every other route defaults to false and embeds the system prompt in `input` unless set true here after verifying against that endpoint. */
   supportsInstructions?: boolean;
+  /** Whether the model caches top-level `instructions`. False sends the system prompt as a cacheable input item placed after the last compaction item. Default: true. */
+  cachesInstructions?: boolean;
   /**
    * Explicit opt-in for HTTP continuation (client-side delta + `previous_response_id`)
    * on a custom/proxy OpenAI-Responses-compatible endpoint. A native `api.openai.com`

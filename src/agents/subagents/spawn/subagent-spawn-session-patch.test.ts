@@ -63,6 +63,7 @@ it.each([
   { source: "an explicit private projectId", refusal: "unknown project id: org-private" },
   { source: "an inherited private project checkout", refusal: INHERIT_REFUSAL },
   { source: "an inherited agent-workspace worktree", refusal: undefined },
+  { source: "an inherited role-granted private project checkout", refusal: undefined },
 ] as const)("bounds a guest background spawn of $source", async ({ source, refusal }) => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const repo = await initializeRepository(
@@ -97,7 +98,11 @@ it.each([
     vi.stubGlobal("fetch", fetchImpl);
     try {
       const result = await spawn({
-        projectRequester: { kind: "operator", scopes: ["operator.sessions.write"] },
+        projectRequester: {
+          kind: "operator",
+          scopes: ["operator.sessions.write"],
+          ...(source.includes("role-granted") ? { projects: [project.id] } : {}),
+        },
         worktree: {
           task: "Read README.md",
           ...(source.includes("explicit") ? { projectId: project.id } : {}),

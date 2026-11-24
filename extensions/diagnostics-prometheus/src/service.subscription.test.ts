@@ -523,6 +523,11 @@ it("exports production-shaped worker, WebSocket, and late RPC populations withou
       heapSizeLimitBytes: 1000,
       externalBytes: 20,
       arrayBuffersBytes: 10,
+      sqliteReaderMetrics: Array.from({ length: 257 }, (_, index) => ({
+        operation: index === 256 ? "other" : `synthetic.operation.${index}`,
+        count: 1,
+        readBytes: 4096,
+      })),
       workerCount: 39,
       workerHeaps: Array.from({ length: 39 }, (_, index) => ({
         script: `worker-${index}.js`,
@@ -538,7 +543,7 @@ it("exports production-shaped worker, WebSocket, and late RPC populations withou
     },
   };
   metrics.record(sample);
-  // Rebuilding gauges must not donate their reserved slots to cumulative worker counters.
+  // Rebuilding gauges releases only their entries; cumulative reader snapshots do not add twice.
   metrics.record(sample);
   for (const kind of [
     "scavenge",
@@ -588,6 +593,8 @@ openclaw_gc_duration_seconds_bucket{kind="${kind}",le="0.025",reason="other",thr
     ["gateway_rpc_handler_seconds_count", 170],
     ["worker_heap_space_used_bytes", 390],
     ["gc_duration_seconds_count", 250],
+    ["sqlite_reader_operations_total", 257],
+    ["sqlite_reader_read_bytes_total", 257],
   ] as const) {
     expect(core.split("\n").filter((line) => line.startsWith(`openclaw_${name}{`))).toHaveLength(
       count,
@@ -602,6 +609,8 @@ openclaw_tool_catalog_total{mode="code-mode",source="client"} 2
 openclaw_tool_catalog_tools_total{mode="code-mode",source="client"} 22
 openclaw_gateway_http_cancelled_total{source="client"} 2
 openclaw_gateway_http_cancelled_total{source="shutdown"} 1`);
+  expectMetrics(core)(`openclaw_sqlite_reader_operations_total{reader_operation="other"} 1
+openclaw_sqlite_reader_read_bytes_total{reader_operation="other"} 4096`);
 });
 
 it("exports bounded family drop counts and warns once per process across exporter restarts", () => {

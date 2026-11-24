@@ -85,7 +85,7 @@ type AgentHarnessHostTestAttempt = Omit<
 
 type PluginHarnessTestOperatorSource = Pick<
   AdmittedRunOperatorAuthority,
-  "profileId" | "scopes" | "assertCurrent" | "modelPolicy" | "onModelPolicyChanged"
+  "profileId" | "scopes" | "modelPolicy"
 >;
 
 async function admitPluginHarnessRunForTest(params: {
@@ -101,7 +101,7 @@ async function admitPluginHarnessRunForTest(params: {
   const admission = prepareAgentRunAdmission({
     cfg: params.attempt.config ?? {},
     operatorAuthority: params.operatorSource
-      ? createAdmittedRunOperatorAuthority(params.operatorSource)
+      ? createAdmittedRunOperatorAuthority({ ...params.operatorSource, canonicalIdentity: null })
       : undefined,
     facts: {
       runId: params.attempt.runId,

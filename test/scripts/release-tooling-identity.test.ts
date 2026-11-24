@@ -187,6 +187,7 @@ describe("release tooling identity", () => {
         `--verify-publication-${mode}`,
         ...Object.entries({
           "full-release-manifest": manifestPath,
+          "publisher-full-ref": "invalid",
           "source-sha": SHA,
           "workflow-sha": SHA,
         }).flatMap(([key, value]) => [`--${key}`, value]),
@@ -196,6 +197,9 @@ describe("release tooling identity", () => {
         encoding: "utf8",
         env: {
           ...process.env,
+          GH_TOKEN: "",
+          GITHUB_TOKEN: "",
+          WORKFLOW_FULL_REF: "invalid",
           FULL_RELEASE_VALIDATION_RUN_ID: RUN_ID,
           FULL_RELEASE_VALIDATION_RUN_ATTEMPT: "1",
           EXPECTED_RELEASE_SHA: SHA,
@@ -205,9 +209,61 @@ describe("release tooling identity", () => {
     );
 
     expect(result.status).toBe(1);
-    expect(result.stderr).toContain("Candidate-owned artifact source and qualification SHA differ");
+    expect(result.stderr).toContain("trusted workflow full ref does not match its ref");
     expect(result.stderr).not.toContain("unsettled top-level await");
   });
+
+  it.skipIf(process.platform === "win32")(
+    "retains GitHub failure diagnostics in the identity CLI",
+    () => {
+      const bin = tempDirs.make("release-tooling-gh-failure-");
+      const requests = join(bin, "requests");
+      writeFileSync(
+        join(bin, "gh"),
+        `#!/bin/sh
+printf '%s\n' "$@" > "$REQUESTS"
+printf 'sensitive-response-body\n'
+printf 'gh: API rate limit exceeded (HTTP 403)\nX-GitHub-Request-Id: RRI451-SYNTHETIC\nX-RateLimit-Reset: 1794910200\n' >&2
+exit 1
+`,
+        { mode: 0o755 },
+      );
+      const result = spawnSync(
+        process.execPath,
+        [
+          join(process.cwd(), "scripts/release-tooling-identity.mjs"),
+          "verify",
+          "--repository",
+          "openclaw/openclaw",
+          "--workflow-ref",
+          "release/2026.10.4",
+          "--workflow-full-ref",
+          "refs/heads/release/2026.10.4",
+          "--workflow-sha",
+          SHA,
+          "--allow-prevalidated-ref",
+        ],
+        { encoding: "utf8", env: { PATH: bin, REQUESTS: requests, GH_TOKEN: "synthetic-token" } },
+      );
+
+      expect(readFileSync(requests, "utf8").trim().split("\n")).toEqual([
+        "api",
+        "repos/openclaw/openclaw/git/ref/heads/release/2026.10.4",
+        "--method",
+        "GET",
+      ]);
+      expect(result.status).toBe(1);
+      expect(result.stdout).toBe("");
+      expect(result.stderr).toContain(
+        "prevalidated release tooling branch is missing or unreadable",
+      );
+      expect(result.stderr).toContain("HTTP 403");
+      expect(result.stderr).toContain("X-GitHub-Request-Id: RRI451-SYNTHETIC");
+      expect(result.stderr).toContain("X-RateLimit-Reset: 1794910200");
+      expect(result.stderr).not.toContain("sensitive-response-body");
+      expect(result.stderr).not.toContain("synthetic-token");
+    },
+  );
 
   it("rejects a deleted tag", () => {
     expect(() =>

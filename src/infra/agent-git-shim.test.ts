@@ -8,7 +8,7 @@ import { quoteCliArg } from "../cli/quote-cli-arg.js";
 import { prepareLocalWorkspaceCheckout } from "../gateway/worker-environments/local-workspace-checkout.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { withTempDir } from "../test-utils/temp-dir.js";
-import { AGENT_GIT_SHIM } from "./agent-git-shim.js";
+import { buildAgentGitShimInstallCommand } from "./agent-git-shim-install.js";
 import {
   createSourceCliFixture,
   withSourceCliParent,
@@ -82,7 +82,11 @@ it.skipIf(process.platform === "win32")(
       const tree = git(origin, "rev-parse", "HEAD^{tree}");
       const tool = await createGitExecTool(root, root);
       const shim = path.join(root, "git");
-      await fs.writeFile(shim, AGENT_GIT_SHIM, { mode: 0o755 });
+      const installed = spawnSync("/bin/sh", ["-c", buildAgentGitShimInstallCommand(root)], {
+        env,
+        encoding: "utf8",
+      });
+      expect(installed.status, installed.stderr).toBe(0);
       const packedObjects = (cwd: string) =>
         Number(git(cwd, "count-objects", "-v").match(/in-pack: (\d+)/)?.[1]);
       const pythonCommands: [string, string, ...string[]][] = [
@@ -296,7 +300,7 @@ it.skipIf(process.platform === "win32")(
       }
       expect(await fs.readdir(path.join(clone, ".git/objects/pack"))).toEqual(packs);
       expect(await fs.readFile(trace, "utf8")).not.toContain("fetch origin");
-      expect((await command(["cat-file", "-t", "HEAD"])).aggregated).toBe("commit");
+      expect((await command(["cat-file", "-t", "HEAD"])).aggregated).toBe("commit\n");
       const negative = await command(["merge-base", "--is-ancestor", "HEAD", old]);
       expect(negative.exitCode).toBe(1);
       expect(negative.aggregated).not.toContain("OpenClaw:");
@@ -320,7 +324,7 @@ it.skipIf(process.platform === "win32")(
       expect(
         (await command(["fetch", "origin", missing, "--negotiation-tip=origin/main"])).exitCode,
       ).toBe(0);
-      expect((await command(["cat-file", "-t", missing])).aggregated).toBe("commit");
+      expect((await command(["cat-file", "-t", missing])).aggregated).toBe("commit\n");
       expect(await fs.readFile(path.join(clone, ".git/config"), "utf8")).toBe(config);
       // A fork can contain blobs that the projection's origin cannot hydrate.
       const fork = path.join(root, "fork");

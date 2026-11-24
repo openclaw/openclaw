@@ -377,10 +377,6 @@ export function attachGatewayUpgradeHandler(opts: {
             authCheck.requestAuth,
           );
         }
-        if (pluginGatewayRequestAuth?.hasCurrentClientAuthority?.() === false) {
-          rejectUpgradeAuth(socket, { ok: false, reason: "unauthorized" });
-          return;
-        }
         assertRemoteControlUiIngressCurrent(remoteIngress);
         if (
           await handlePluginUpgrade(req, socket, head, pathContext, {

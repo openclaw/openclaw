@@ -8,264 +8,226 @@ read_when:
 
 ## Evidence to keep
 
-Keep the `Full Release Validation` summary as the release-level index. It links
-child run ids and includes slowest-job tables. Classify failures as product,
-harness/tooling/provenance, infrastructure/credential, or wrapper. Only a
-confirmed product failure changes the Code SHA. Use one diagnosis, one fix when
-needed, and one narrow retry, then reassess; do not automatically rerun `all`.
-Narrow evidence is not publish authorization by itself.
+Keep the `Full Release Validation` summary: release index, child IDs, slowest-job
+tables. Classify failures as product, harness/tooling/provenance,
+infrastructure/credential, or wrapper; only confirmed product failures change
+Code SHA. Diagnose once, fix if needed, retry narrowly, then reassess—not automatic
+`all`. Decide blocker/flake for each failed test. Every selected failure blocks
+unless granted below; narrow evidence never authorizes publication. FRV must succeed.
 
-Decide blocker or flake for every failed test. Every selected failure blocks
-validation unless it matches the checked-in release-tooling policy below.
-Publication always requires a successful Full Release Validation run.
+Linux/Windows/macOS Gateway install and upgrade lanes are required for beta, stable,
+and full validation. Record actual conclusions and retain diagnostics; failures
+block. Never label failed, omitted, or deferred lanes passed.
 
-Linux, Windows, and macOS Gateway cross-OS install and upgrade lanes are
-required for beta, stable, and full validation. The manifest records their
-actual conclusions, and failures block the release decision. Keep diagnostic
-artifacts; never report a failed, omitted, or deferred lane as passed.
+| Release         | Record                                                                                                                                                                                                                          |
+| --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Regular         | Code SHA and Release SHA, even if identical; retain successful full parent and exact prepared artifacts for both roles. Later changelog-only reuse: also policy, complete changed paths, green Code parent, and Release parent. |
+| Extended-stable | Branch, exact release SHA, accepted producer, parent ID/attempt, workflow ref, every child, frozen-target compatibility repairs/intentional omissions.                                                                          |
 
-For a regular release, record Code SHA and Release SHA even when they are the
-same commit. In that case, retain the successful full validation parent and
-its exact prepared publication artifacts for both roles. For a later
-changelog-only Release SHA using evidence reuse, also record the reuse policy,
-complete changed-path set, green Code SHA parent run, and Release SHA parent
-run. For extended-stable, record the release branch, exact release SHA,
-accepted producer identity, parent run id and attempt, workflow ref, every child run, and any
-frozen-target compatibility repair or intentional omission.
+Retain:
 
-Useful artifacts:
+- Attempt-one `full-release-execution-plan-<parent-run-id>` and current
+  `full-release-validation-<parent-run-id>-<attempt>`: source facts, registry
+  observations/exact selection, immutable upload identity, admission-time freshness.
+  Reuse preserves distinct original/current records without restamping. Authenticate
+  original successful admission and guarded upload—not overall sealer success;
+  interrupted sealers may upload complete plans. Later attempts never replace originals.
+- `release-package-under-test` from `OpenClaw Release Checks`.
+- Docker release-path `.artifacts/docker-tests/`.
+- Package Acceptance `package-under-test` and Docker acceptance artifacts.
+- Cross-OS artifacts per OS/suite.
+- QA/runtime parity and selected Matrix, Buzz, Telegram, Discord, WhatsApp, Slack artifacts.
 
-- The attempt-one `full-release-execution-plan-<parent-run-id>` and current
-  `full-release-validation-<parent-run-id>-<attempt>` manifest retain source
-  facts and registry admission, including observations, exact selection,
-  immutable upload identity, and admission-time freshness. Reuse retains distinct
-  original and current records without restamping either. Authentication requires
-  the original successful admission and guarded upload, not an overall successful
-  sealer job: an interrupted sealer can still write and upload a complete plan.
-  Later attempts never replace that original artifact.
-- `release-package-under-test` from `OpenClaw Release Checks`
-- Docker release-path artifacts under `.artifacts/docker-tests/`
-- Package Acceptance `package-under-test` and Docker acceptance artifacts
-- Cross-OS release-check artifacts for each OS and suite
-- QA parity, runtime parity, and selected Matrix, Buzz, Telegram, Discord,
-  WhatsApp, or Slack artifacts
-
-Readers authenticate retained evidence; they do not refresh registry observations
-or expire it by the current clock. Registry admission is not publication authority
-or a promise that registry state is unchanged. Final writers keep their own trust,
-approval, content, and readback checks. Known enclosing evidence is budgeted before
-fanout, but later job/attempt growth can still exceed the unchanged final artifact
-limit and fail sealing; evidence is not truncated to fit.
+Readers authenticate retained evidence without refreshing observations or expiring
+it against today's clock. Admission neither authorizes publication nor promises
+unchanged registry state; final writers retain trust, approval, content, and readback
+checks. Pre-fanout budgeting cannot prevent later job/attempt growth exceeding final
+artifact limits: fail sealing, never truncate evidence.
 
 ## Bounded publication recovery
 
-A publisher may consume a nonempty selected plugin subset of an authenticated
-all-publishable admission without changing the original qualification. The
-operation retains the original release, channel, route, Windows operands, and
-sealed artifact identities. It does not create a replacement admission or make
-selected evidence sufficient for a broader publication. Each batch uses a new
-parent authorization and retains current authority checks at the final effect.
+A nonempty plugin subset may consume authenticated all-publishable admission, retaining
+original release/channel/route, Windows operands, and sealed artifact identities. No
+replacement admission, qualification change, or broader authorization results. Each
+batch needs publication authorization and final-effect current authority checks:
+parent-backed npm uses its parent receipt; direct human npm recovery keeps its own
+`npm-release` approval and protected `npm-publish` tooling tag.
 
-Prepared npm consumers authenticate the complete original manifest before
-selecting that batch's entries. Already-published npm packages are excluded from
-publication fanout only after exact registry-byte verification. Before core npm
-publication, the parent verifies the complete original npm roster after the
-plugin child finishes; missing packages or mismatched bytes block core publication.
+| Path         | Required evidence and completion                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| ------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Prepared npm | Authenticate complete original manifest before selecting entries. Exclude published packages only after exact registry-byte verification. Before core publication, after plugin child completion, verify complete original npm roster; missing/mismatched packages block.                                                                                                                                                                                                                                                                            |
+| ClawHub      | Use original authenticated recovery seal/transaction roster, not replacement prepared manifest. Parent names original run/attempt and dispatches existing recovery workflow. Sealed payload binds original child, selected plugins, current parent, FRV run. Keep environment/credential; verify current parent authorization before every request and exact public bytes. Subsets claim no excluded completion; full-scope parent waits for entire original roster before core. Manual recovery without parent inputs retains full-roster behavior. |
 
-ClawHub recovery uses the original child's authenticated recovery seal and
-transaction roster, not a replacement prepared manifest. A publication parent
-can name the original ClawHub run and attempt and dispatch the existing recovery
-workflow. Its sealed dispatch payload binds the exact original child, selected
-plugins, current parent, and full validation run. Recovery keeps the existing
-ClawHub environment and credential, verifies current parent authorization before
-every recovery request, and verifies exact public bytes. A selected batch does not
-claim completion of excluded packages. Before core publication, a full-scope
-parent waits for recovery of the complete original roster. Manual recovery without
-parent inputs retains the existing full-roster behavior.
+Recovery records validated successor attempt in its existing result artifact before
+waiting; parent-requested recovery also updates postpublish attempt roster. Timeout or
+failed observation retains last status as incomplete—not vanished attempt or permission
+for replacement publication. Original sealed manifest stays unchanged.
 
-Recovery records a validated successor attempt in its existing result artifact
-before waiting for publication. Parent-requested recovery also updates the
-postpublish evidence attempt roster. A timeout or failed observation preserves
-the last observed status with incomplete evidence; it does not mean the accepted
-attempt disappeared or permit replacement publication. The original sealed
-manifest remains unchanged.
+**Original publisher never ran:** authenticated job evidence permits the existing
+prepared-artifact consumer to restore original bytes. Successful pack jobs authenticate
+source despite enclosing child failure. Authenticate complete admission/seals before
+selection; keep original source separate from new child/current parent authorization.
+Do not invent successful preparation, prior publication, or historical authorization.
+Fresh authoritative registry checks must find every selected package absent; pending,
+failed, unknown, or ambiguous states stop for original-attempt reconciliation. Never
+repack. Parent keeps child active through authorization/exact public readback even with
+optional ClawHub waiting/core publication disabled. Core waits for verified batch.
+Ordinary releases retain authorization after core startup; both use the same transaction
+authorization owner.
 
-When authenticated job evidence proves that the original publisher never ran,
-the parent can instead restore the original sealed package bytes through the
-existing prepared-artifact consumer. Successful original pack jobs authenticate
-the source even if the enclosing child failed before publication. Original
-source identity remains separate from the new publishing child and its current
-parent authorization; this path does not invent a successful preparation run,
-previous publication attempt, or historical authorization. The complete original
-admission and seals are authenticated before selecting packages. A fresh
-authoritative registry check must report each selected package absent before
-initial publication; pending, failed, unknown, or ambiguous state stops the path
-for original-attempt reconciliation. No package is repacked. The parent keeps
-this child active through authorization and exact public readback, even when
-optional ClawHub waiting or core publication is disabled. Core publication cannot
-start before this original-byte batch is verified. Ordinary releases retain their
-existing authorization placement after core startup; both paths use the same
-transaction authorization owner.
+**Prepared npm quota:** preview checks current workflow token's REST core allowance
+before emitting matrix/evidence handoff:
 
-Prepared npm preview checks the current workflow token's REST core allowance
-before emitting its publisher matrix. It budgets 512 requests per selected
-package (256 each for `consume` and `authorize`) and leaves 1,024 requests of
-headroom for final authority checks and surrounding workflow work. Each command
-enforces its own ceiling across `gh` and artifact HTTP transports, including
-explicit pagination, retries, and archive API requests. Preview itself is bounded
-to 1,024 requests. Exhaustion fails closed; it never skips authority or byte
-verification. Command accounting reports the actual attempted requests, not just
-metadata fetches. The earlier `fetch-metadata-only` telemetry remains partial.
-
-An oversized selection fails before matrix or evidence-handoff output and reports
-the supported smaller selection and quota reset time. For example, 98 packages
-require an allowance of 51,200 under these ceilings; a token with 5,000 remaining
-can admit at most seven. This is admission, not a claim that the existing
-per-package authentication now uses fewer requests or that all 98 packages can
-finish in one hour. Resume smaller selections after the observed reset with fresh
-parent authorization; original bytes and per-package receipts remain unchanged.
-
-The allowance is an observation, not a global reservation. Other workflows,
-parent/ClawHub work, action-internal requests, and manual retries can consume the
-same installation quota. The headroom is not an enforced budget for those owners;
-coordinate their capacity separately. A later quota failure still requires
-original-attempt reconciliation, not blind re-publication.
+- FRV-backed preview creates an authenticated evidence handoff for both direct and
+  parent-backed npm publication. It binds the exact FRV, publication attempt,
+  source/tooling, artifact, selection, and parent tuple when present. The handoff
+  reuses immutable evidence, not approval: every consumer authenticates its successful
+  preview and refreshes live authority and artifact identities.
+- With that current-attempt handoff, budget 108 requests/package: 54 `consume` +
+  54 `authorize`. Without it (including a failed-job rerun retaining an older
+  preview), budget 512: 256 per command. Leave 1,024 headroom for surrounding work.
+  Preview itself is capped at 1,024 requests; admission uses the enforced worker cap.
+- Commands enforce ceilings across `gh`/artifact HTTP, pagination, retries, archive
+  requests; exhaustion fails closed, never skipping authority/bytes. Accounting counts
+  actual attempted requests; old `fetch-metadata-only` telemetry is partial.
+- Oversized selection reports supported smaller selection/reset time before outputs.
+  Example: 101 packages with a current handoff need 11,932 allowance; without it,
+  52,736. This is not a promise of completions per hour. Resume smaller batches
+  after observed reset with fresh publication authorization; bytes
+  and per-package receipts stay unchanged.
+- Allowance is observation, not global reservation. Other workflows, parent/ClawHub,
+  action-internal requests, and manual retries share quota; coordinate separately.
+  Headroom does not enforce their budgets. Later exhaustion requires original-attempt
+  reconciliation, never blind republication.
 
 <a id="publication-waivers" />
 
 ## Release-tooling waivers
 
-Waivers are code in trusted release tooling **P**, not candidate **C** or its
-qualification harness **Q=C**. The grant list is
-`scripts/lib/release-validation-waivers.mjs` and is empty by default. Add a
-reviewed row with an exact target version, child role, job name, and reason.
-For example (illustrative only, not an active grant):
+The pinned release-tooling **Q** owns grant data in
+`scripts/lib/release-validation-waivers.json`. Trusted **P** owns the evaluator in
+`scripts/lib/release-validation-waivers.mjs`: it authenticates Q’s data and applies
+it to raw evidence, rather than using grants from P or the candidate **C**.
+Each operator-approved entry names the exact `targetVersion` and `childRole`,
+with a short `reason`. Add `targetSha` only to restrict a grant to one candidate.
 
-```js
-export const RELEASE_VALIDATION_WAIVERS = [
-  {
-    targetVersion: "YYYY.M.PATCH",
-    childRole: "releaseChecksIndependent",
-    jobName: "Run repo/live E2E validation / Native live suites (Native live Z.AI Coding Plan)",
-    reason: "Provider credential outage; tracked in the release handoff.",
-  },
-];
+For an authorized grant, commit only the ledger change directly to the selected
+release-tooling Q branch, then pin its new full SHA in a fresh qualification
+request/admission. Do not open a grant PR against `main`, cherry-pick the grant
+into C, or change candidate bytes/version to carry it. Executable policy and
+workflow changes still use the normal tooling-change process. Keep authorization
+and detailed diagnostics in the release handoff, not the ledger or public docs;
+Q branches in a public repository are public, not private storage. Main contains
+an empty ledger; actual grants belong only on the selected release Q branch.
+Missing or malformed Q ledgers, failed authentication, and transport errors remain
+blocking. There is no fallback to historical grants from main or another revision.
+
+Set `jobName` to waive one exact job, whether it passed, failed, was cancelled,
+was skipped, or never ran. Omit `jobName` to waive the entire child role and all
+its descendants: do not dispatch it, look up a run, or require a reuse receipt.
+An optional `step` narrows a named-job waiver to a non-successful terminal job
+whose first incomplete or failed step has exactly that name. A different,
+missing, or unobserved step does not match. A passing job does not record an
+exception just because a grant matches its name.
+
+Frozen v1 ledgers remain readable. A legacy named grant with empty
+`aggregates` and no other selectors remains failure-only. A historical
+aggregate-, run-, step-, or failure-signature-bound grant does not become a
+new unconditional approval. If recovery needs to excuse that work with the new
+policy, use a newly approved exact grant through the separate Q admission below.
+Historical composite hashes remain verified against their original job projection;
+step narrowing uses authenticated attempt evidence, not a rewritten receipt.
+
+Child receipts record execution at their producer Q, not at the current Q. With
+`reuse_evidence=true`, eligible raw successful or failed child receipts may be
+reused across Q after authenticating the producer and reevaluating the raw results
+under current Q grants. Preserve original producer Q, run/attempt, candidate,
+inputs, artifact digests, and raw conclusions. A prior accepted verdict is not a
+substitute for reevaluation: removing or narrowing a grant can make retained
+failures blocking again.
+
+Accepted receipts return before another unwaived child is dispatched. A waiver
+does not create a receipt or turn an old failed parent green. A new parent must
+complete admission, collection of required evidence, and final verification.
+Missing, expired, or incompatible unwaived evidence requires fresh work. A
+P-only change does not replace Q’s grants.
+
+State, manifests, and summaries retain raw outcomes and reasons. A failed gate
+blocks unless it is itself waived. Unwaived missing, cancelled, or failed required
+coverage blocks, as do timed-out, incomplete, or mismatched evidence. Package,
+dispatch, seal, and provenance integrity remain
+mandatory. Publication still requires a successful FRV parent under its admitted
+Q/P tuple; a publisher cannot add grants or swap Q after qualification.
+
+Kova grants cover approved thresholds only—not crashes, correctness, isolation, data
+integrity, install/update failures. Separate `qualificationExemption` means
+**waived-not-run**, not failed-job grant or reused measurement. Require:
+
+- P authenticates historical receipt and seals exemption into coverage.
+- Q supports `FULL_RELEASE_QUALIFICATION_EXEMPTION_CONTRACT` version `1`, consuming
+  verified admission before dispatch. Older frozen Q needs explicit repair: frozen C
+  plus reviewed exact Q in a fresh request, or backport/requalify new C=Q.
+  Changing P alone cannot suppress old Q dispatch.
+- Plan omits only exempted lane; manifest records not-run, empty run ID, supporting receipt.
+
+Strict consumers verify the record; historical receipts never qualify new bytes.
+Retain historical empty `telegram_waiver` support without rewriting evidence.
+FRV must conclude **success** under pinned policy before publication; publishers cannot
+waive failed FRV or change P only at publication. Beta confidence deferrals remain
+separate **not run** records.
+
+<a id="receipt-backed-beta-aggregate-recovery" />
+
+## Receipt-backed aggregate recovery
+
+Use receipt recovery to reseal a drained qualification. It reads the original receipts
+without rerunning jobs or rebuilding publication artifacts:
+
+```bash
+pnpm frv recover --run <original-parent-run-id> --workflow-sha <exact-trusted-main-P> --request-file <private-request-path>
+pnpm frv recover --reconcile-request <private-request-path> --json
 ```
 
-Land the policy in trusted tooling, pin that **P** when admitting validation,
-and run or revalidate FRV with the unchanged **C/Q**. P's
-`full-release-validation-state.mjs` owns Release Decision, Diagnostic Drain,
-manifest writing, and final validation. Candidate workflows still run every
-selected test except for the explicit pre-dispatch exception below. A failed-job
-waiver does not omit a test or change its raw conclusion.
-State, manifest, and summary retain each waived failure and its reason.
+The new aggregate authenticates the original admission, C/Q, complete child receipts,
+and unchanged npm/SDK/plugin/Docker bytes under current P policy. It never changes the
+original parent result. Qualification retains attempt 1; the request separately pins
+the latest terminal parent attempt. Missing evidence, changed attempts, or lost authority
+fail closed: recovery never dispatches qualification jobs as a fallback. Keep the private
+request: reconciliation never redispatches an uncertain request. Recovery preserves the
+original publication selection. Fresh qualification is a separate, explicit operation.
 
-The `Kova mock provider performance` leaf can be granted only for an exact
-version the operator named, and only for threshold breaches; retain the report.
-An `evidence: { runId, runAttempt }` restriction binds a grant to one reviewed
-execution, not subsequent failures of the same job. The 2026.9.37 exception
-uses this restriction for child 42361846301/1 in FRV 42361691019/1 on original
-C/Q `5ca478fb3d02d7d988ce09cfcc214ec1eed46ab8`. Its retained report records the
-bundled-plugin-startup gateway CPU threshold breach.
+### Recover with a later waiver ledger
 
-The operator additionally authorized a new 2026.9.37 candidate on November 7,
-2026 at 17:49 UTC, with performance explicitly **waived-not-run**. This is the
-only pre-dispatch exception: admitted P seals it into qualification coverage
-after checking the exact historical failed receipt, original source, current
-attempt, trusted upload, archive/payload digests, and absence of other child
-failures. The historical receipt supports the exception; it does not measure
-the new candidate. Q must declare `FULL_RELEASE_QUALIFICATION_EXEMPTION_CONTRACT`
-version `1` and consume the verified admission before dispatch. The execution
-plan omits only performance; the manifest records its explicit not-run
-disposition, empty run ID, and supporting receipt identity. Strict consumers
-require that record and reject presenting the old child as new-target evidence.
-All remaining gates and artifact checks stay mandatory.
+Use a separately admitted policy Q only when an authorized operator approved new
+waivers for the original candidate. It must be a signed direct child of the
+original Q that modifies only the waiver ledger, preserves existing entries, and
+appends grants bound to the original candidate, version, and admitted child roles.
+It cannot change unwaived coverage. A whole-child grant does not require a receipt.
 
-This cutover requires main-first trusted tooling and a deliberate qualification
-harness backport to the frozen candidate, producing new C=Q and a fresh request.
-Changing P alone cannot suppress the old Q dispatcher. No performance rerun,
-historical evidence rewrite, threshold change, or publisher override is used.
+1. Generate the exact admission request without dispatching anything:
 
-Waiver support requires a candidate workflow that routes state operations to
-admitted P. Pre-cutover frozen workflows retain strict validation; changing P
-alone does not retrofit waiver support. Readers still accept the historical empty
-`telegram_waiver` field without rewriting authenticated evidence.
+   ```bash
+   pnpm frv recover --run <original> --workflow-sha <P> \
+     --prepare-policy-admission --policy-sha <policy-Q> --json
+   ```
 
-Only exact terminal **failed** live-provider or Telegram leaves, or the
-operator-authorized Kova threshold exceptions above, are eligible.
-Every other required result must pass. Missing, skipped, cancelled, timed-out,
-incomplete, or mismatched required evidence still blocks. Normal CI, npm/Docker
-artifacts, package integrity, install/upgrade, soak, performance outside the
-explicit 2026.9.37 not-run exception, plugin
-prerelease, dispatch identity, and seal/evidence integrity cannot be waived.
-An aggregate failure is tolerated only when its causes are entirely explained
-by those exact waived leaves.
+2. Review the emitted `qualificationRequest`. An authorized release operator
+   sends that object unchanged as `qualification_request` to the existing
+   Release Prepare workflow at trusted P with `operation=admit-qualification`.
+   Retain the successful admission run ID. The policy transport ref in this
+   request is a locator only; do not create it or dispatch validation at it.
+3. Pass both pins to receipt recovery:
 
-FRV must itself conclude **success** under that policy before publication can
-accept it. There is no failed-but-publication-eligible verdict, publisher waiver
-input, operator JSON declaration, or runtime approver lookup. Changing P only
-at publication cannot retroactively authorize a failed FRV; produce successful
-validation under the pinned policy first. Beta confidence deferrals remain
-separate and are recorded as **not run**, never as passed or waived failures.
+   ```bash
+   pnpm frv recover --run <original> --workflow-sha <P> \
+     --policy-sha <policy-Q> --policy-admission-run <admission-run> \
+     --request-file <private-request-path>
+   ```
 
-## Receipt-backed beta aggregate recovery
-
-When a full beta qualification's original execution-plan artifact is unavailable,
-.github/workflows/full-release-receipt-recovery.yml is a separate, explicit
-trusted-main operation. It does not repair, recreate, or reinterpret the
-historical plan, registry observations, or failed parent conclusion.
-
-Its request input is a closed openclaw.full-release-receipt-recovery/v1 record:
-a new request UUID, repository, original qualification-admission descriptor,
-original parent run/attempt, complete sealed candidate binding, all five original
-beta child selections, and original publication-artifact descriptors. Original C
-must equal Q. The admission's original publication selection, complete coverage,
-and frozen upgrade baselines remain authoritative; there is no new test selection
-or current-registry baseline resolution.
-
-The recovery owner authenticates the original admission and dispatches, each
-current successful child attempt and its complete composite receipt, the sealed
-candidate and its package bytes, and all recorded npm, SDK, plugin, and Docker
-producer receipts and payload digests. Missing payloads, incomplete job history,
-changed attempts, or lost authority fail closed. Each recovery child verification
-has a ten-minute budget to read its complete rerun history; ordinary child reuse
-keeps its two-minute default, and job-inventory request timeouts and retry limits are unchanged.
-It never dispatches test or preparation workflows and has only Actions/content
-read permissions. Runtime setup installs only trusted P dependencies with lifecycle
-scripts disabled; it does not build or execute candidate code.
-
-The existing publication-admission owner then reads committed candidate metadata
-using current trusted P and collects new, honestly timestamped registry
-observations. The new successful aggregate records a separate source/admission
-and the original receipt request. Strict readers authenticate that workflow,
-upload order, observation bytes, current operator authority, original evidence,
-and the aggregate's trusted-main lineage. Publishers consume unchanged Q-owned
-npm/plugin/Docker artifacts; P owns aggregation and current publication admission.
-A retained original parent is not relabeled successful. Historical FRV validation
-and historical-plan restoration remain unchanged.
-
-The recovery producer hashes and inspects the original payloads once and seals
-that exact inventory in the aggregate. Publication readers first authenticate the
-successful recovery job, ordered uploads, and observation bytes. They then
-reconstruct the complete inventory from the original descriptors, small manifests,
-and live artifact metadata and require an exact match with the sealed inventory.
-Bulk npm, SDK, Docker, and candidate bodies are not downloaded again by every
-plugin publisher. A fresh bounded plugin-artifact listing replaces per-package
-metadata requests; it is local to that authentication, never immutable replay.
-Selected package consumers still download and verify their own original bytes,
-and current producer attempts, expiry, and operator authority remain mandatory.
-The immutable replay carries raw small evidence only; its limits are unchanged.
-
-Parsed payloads retain the archive owner's existing size and integrity limits.
-Opaque Docker and candidate image/registry archives use its streaming digest
-verification: the authenticated metadata size is the exact transfer bound, and
-every byte contributes to SHA-256 without retaining or expanding the archive.
-Recovery Docker archive requests may use the existing four-minute transfer budget
-to finish large bodies instead of aborting each attempt after sixty seconds.
-Metadata requests and other archive callers keep their sixty-second request cap;
-Docker transfers still share four minutes across at most three attempts. Metadata
-binding, expiry, exact size, and full-byte digest checks remain unchanged; missing
-or mismatched bytes never authorize omission or rebuilding.
+Recovery and publisher verification both authenticate the separate admission and
+reevaluate the original raw jobs against exactly that ledger.
+Child attempts, workflow provenance, artifacts, and the failed original run
+remain unchanged. Missing or changed required receipts still block recovery.
 
 ## Workflow files
 

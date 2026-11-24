@@ -26,7 +26,7 @@ export class BeamTranscriptCursorError extends Error {
   readonly kind: "invalid" | "stale";
 
   constructor(kind: "invalid" | "stale") {
-    super(`${kind} Beam transcript cursor`);
+    super(`${kind} Beam chat history cursor`);
     this.kind = kind;
   }
 }
@@ -147,6 +147,7 @@ export function createBeamSessionCatalog(store: BeamStore): SessionCatalogProvid
           connected: true,
           sessions: page.map((session) => ({
             threadId: session.beamId,
+            exportPolicy: { origin: "imported", automatic: false },
             name: session.title,
             status: session.completed ? "completed" : "live",
             createdAt: session.createdAt,

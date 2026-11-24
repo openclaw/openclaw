@@ -15,6 +15,7 @@ import { isPathInside } from "./path-guards.js";
 import { registerProcessExitCleanup } from "./process-exit-cleanup.js";
 import {
   captureSqliteDatabaseAdmissions,
+  captureSqliteDatabaseDescriptorCustodyLocations,
   retireSqliteDatabaseAdmissionForPath,
 } from "./sqlite-database-admission.js";
 import { recordSqliteSnapshotFailure } from "./sqlite-error-diagnostics.js";
@@ -558,10 +559,14 @@ export function sealRetainedSnapshotTempDirectory(
   for (const [, current] of ownedDirectories) {
     current.retirementStarted = true;
   }
-  // Native deletion cannot release the host's cached facts after their pathname is gone.
-  for (const admission of captureSqliteDatabaseAdmissions()) {
-    if (isPathInside(directory, admission.location)) {
-      retireSqliteDatabaseAdmissionForPath(admission.location);
+  // Native deletion must wait for descriptor custody, including closed readers' files.
+  const locations = new Set([
+    ...captureSqliteDatabaseAdmissions().map(({ location }) => location),
+    ...captureSqliteDatabaseDescriptorCustodyLocations(),
+  ]);
+  for (const location of locations) {
+    if (isPathInside(directory, location)) {
+      retireSqliteDatabaseAdmissionForPath(location);
     }
   }
 }

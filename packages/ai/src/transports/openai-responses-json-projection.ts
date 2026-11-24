@@ -1,6 +1,8 @@
 import { isProxy } from "node:util/types";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { getAiTransportHost } from "../host.js";
+import { getResponsesCompactionInputIdentity } from "./openai-responses-compaction-window.js";
+import { isSanitizedFrozenResponsesInput } from "./responses-image-payload-sanitizer.js";
 
 // Pure JSON projections depend only on the immutable source, not the request's route or session.
 const frozenJsonProjections = new WeakMap<object, unknown>();
@@ -124,4 +126,40 @@ export function projectedJsonEqual(left: unknown, right: unknown): boolean {
     }
   }
   return keys === 0;
+}
+
+export function jsonValuesEqual(left: object, right: object): boolean {
+  // Finish the left side before evaluating any right-side hook values.
+  return projectedJsonEqual(projectJsonObject(left), projectJsonObject(right));
+}
+
+/** Conversion owns immutable wire items; compaction republishes their byte identity. */
+export function hasSameResponsesInputPrefix(
+  previous: readonly unknown[],
+  current: readonly unknown[],
+): boolean {
+  const immutable = getAiTransportHost().immutableData;
+  for (let index = 0; index < previous.length; index++) {
+    const item = previous[index];
+    const next = current[index];
+    if (!item || typeof item !== "object") {
+      return false;
+    }
+    if (
+      item === next &&
+      (isSanitizedFrozenResponsesInput(item) || immutable?.isDeeplyFrozenPlainData(item))
+    ) {
+      continue;
+    }
+    const identity = getResponsesCompactionInputIdentity(item);
+    if (
+      !identity ||
+      !next ||
+      typeof next !== "object" ||
+      identity !== getResponsesCompactionInputIdentity(next)
+    ) {
+      return false;
+    }
+  }
+  return true;
 }

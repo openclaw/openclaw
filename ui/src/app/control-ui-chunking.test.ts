@@ -179,7 +179,7 @@ describe("Control UI build chunking", () => {
 
   it("groups catalog cards without eagerly loading the skill reader or Markdown", async () => {
     const discovery = modulePath("../pages/skills/discovery-view.tsx");
-    const reader = modulePath("../pages/skills/skill-reader-dialog.tsx");
+    const reader = modulePath("../pages/skills/clawhub-skill-page.tsx");
     const grid = modulePath("../pages/plugins/catalog-grid.tsx");
     const card = modulePath("../pages/plugins/plugin-card.tsx");
     const markdown = modulePath("../../node_modules/markdown-it/dist/markdown-it.mjs");
@@ -430,10 +430,6 @@ describe("Control UI build chunking", () => {
     const cronDomain = modulePath("../lib/cron/index.ts");
     const cronForm = modulePath("../lib/cron/form.ts");
     const cronSchedule = modulePath("../lib/cron/form-schedule.ts");
-    const cronModels = modulePath("../lib/cron/model-suggestions.ts");
-    const modelRefs = modulePath(
-      "../../../packages/model-catalog-core/src/configured-model-refs.ts",
-    );
     const cronStyle = modulePath("../styles/cron.css");
     const cronPagination = modulePath("../components/cron-jobs-pagination.tsx");
     const agents = modulePath("../pages/agents/agents-page.tsx");
@@ -601,7 +597,7 @@ describe("Control UI build chunking", () => {
       ],
       [
         cronView,
-        `import ${JSON.stringify(cronStyle)}; import { runLink } from ${JSON.stringify(cronRunLink)}; import { state } from ${JSON.stringify(cronDomain)}; import { models } from ${JSON.stringify(cronModels)}; import { pagination } from ${JSON.stringify(cronPagination)}; export function view() { return "overview" + runLink + state + models + pagination; } export const detail = () => import(${JSON.stringify(cronDetail)});`,
+        `import ${JSON.stringify(cronStyle)}; import { runLink } from ${JSON.stringify(cronRunLink)}; import { state } from ${JSON.stringify(cronDomain)}; import { pagination } from ${JSON.stringify(cronPagination)}; export function view() { return "overview" + runLink + state + pagination; } export const detail = () => import(${JSON.stringify(cronDetail)});`,
       ],
       [
         cronDomain,
@@ -612,11 +608,6 @@ describe("Control UI build chunking", () => {
         `import { validate } from ${JSON.stringify(validator)}; export const form = validate;`,
       ],
       [cronSchedule, 'export const schedule = "schedule";'],
-      [
-        cronModels,
-        `import { refs } from ${JSON.stringify(modelRefs)}; export const models = refs;`,
-      ],
-      [modelRefs, 'export const refs = "refs";'],
       [cronStyle, ".cron-fixture { color: maroon; }"],
       [cronPagination, 'export const pagination = "pagination";'],
       [validator, 'export const validate = "validate";'],
@@ -744,7 +735,7 @@ describe("Control UI build chunking", () => {
     const styles = result.output
       .filter((asset) => asset.type === "asset")
       .filter((asset) => asset.fileName.endsWith(".css"));
-    expect(styles).toHaveLength(5);
+    expect(styles).toHaveLength(4);
     const sharedStyles = styles.find((style) => String(style.source).includes(".shared-fixture"));
     for (const selector of ["sidebar", "transcript", "terminal-rail"]) {
       expect(sharedStyles).toMatchObject({
@@ -752,7 +743,8 @@ describe("Control UI build chunking", () => {
       });
     }
     expect(sharedStyles?.source).not.toContain(".optional-fixture");
-    expect(sharedStyles?.source).not.toContain(".tabs-fixture");
+    // The palette's mode tabs boot with the shell, so their sheet joins the shared one.
+    expect(sharedStyles?.source).toContain(".tabs-fixture");
     const routeStyles = styles.find((style) => String(style.source).includes(".settings-fixture"));
     expect(routeStyles?.source).toContain(".hub-fixture");
     expect(routeStyles?.source).not.toContain(".tabs-fixture");
@@ -842,7 +834,6 @@ describe("Control UI build chunking", () => {
     const cronDetailChunk = chunkFor(cronDetail);
     expect(cronView in cronChunk.modules).toBe(true);
     expect(cronRunLink in cronChunk.modules).toBe(true);
-    expect([cronModels, modelRefs].every((id) => id in cronChunk.modules)).toBe(true);
     const domainChunk = chunkFor(cronDomain);
     expect(domainChunk.fileName).toContain("cron-domain");
     expect([cronForm, cronSchedule].every((id) => id in domainChunk.modules)).toBe(true);
@@ -868,10 +859,7 @@ describe("Control UI build chunking", () => {
     expect([tabState, shadowStyles, inlineTabsStyle].every((id) => id in tabsChunk.modules)).toBe(
       true,
     );
-    expect([hubTabs, pendingFocus].some((id) => id in tabsChunk.modules)).toBe(false);
-    for (const initial of [entryChunk, chatChunk, newSessionChunk]) {
-      expect(staticImports(initial.fileName)).not.toContain(tabsChunk.fileName);
-    }
+    expect(hubTabs in tabsChunk.modules).toBe(false);
     for (const route of [sessions, cron]) {
       const routeChunk = chunkFor(route);
       expect(staticImports(routeChunk.fileName)).toContain(chromeChunk.fileName);
@@ -983,6 +971,8 @@ describe("Control UI build chunking", () => {
     expect(bootGroup.test(`${repoRoot}/ui/src/components/app-sidebar-session-narration.ts`)).toBe(
       true,
     );
+    // Provider account labels belong to the opened picker, not either route's boot.
+    expect(bootGroup.test(`${repoRoot}/ui/src/lib/model-provider-auth-label.ts`)).toBe(false);
     expect(bootGroup.test(`${repoRoot}/ui/src/pages/chat/chat-page.tsx`)).toBe(false);
     expect(bootGroup.test(`${repoRoot}/ui/src/pages/cron/cron-page.tsx`)).toBe(false);
     expect(bootGroup.test(`${repoRoot}/ui/src/pages/plugins/plugins-page.tsx`)).toBe(false);

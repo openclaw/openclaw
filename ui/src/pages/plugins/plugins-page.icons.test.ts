@@ -10,7 +10,6 @@ import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { createModelSetupIconLoader } from "../model-setup/model-setup-icon-loader.tsx";
 import type { ModelSetupPageState } from "../model-setup/state.ts";
-import { PluginArtTile } from "./consent-dialog.tsx";
 import {
   createClient,
   createContext,
@@ -27,6 +26,7 @@ import {
   settlePlugins,
 } from "./plugins-page.test-support.ts";
 import { createPluginsPage } from "./plugins-page.ts";
+import { PluginArtTile } from "./presentation.tsx";
 
 function stubUrls(value: () => string = () => "blob:icon") {
   const create = vi.fn(value);

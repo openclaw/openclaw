@@ -614,7 +614,11 @@ async function executeRunCommand(
         failed: true,
       };
     }
-    const result: SlashCommandResult = { content: t(`chat.commandResults.${command}.succeeded`) };
+    const result: SlashCommandResult = {
+      content: t(
+        `chat.commandResults.${command}.${ackStatus === "ok" ? "succeeded" : "requested"}`,
+      ),
+    };
     if (command === "redirect" && (ackStatus === "started" || ackStatus === "in_flight")) {
       result.trackRunId = typeof response?.runId === "string" ? response.runId : undefined;
     }

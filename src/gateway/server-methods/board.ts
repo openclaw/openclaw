@@ -56,7 +56,8 @@ import {
   resolveMcpAppAllowedToolNames,
 } from "../mcp-app-operations.js";
 import { mintMcpAppViewFromTranscript } from "../mcp-app-reconstruction.js";
-import { captureGatewayOperatorRunAuthority } from "../operator-run-authority.js";
+import { prepareGatewayOperatorRunAuthority } from "../operator-run-authority.js";
+import { resolveSandboxView } from "../sandbox-view.js";
 import { resolveRequestedSessionStoreTarget } from "../session-store-key.js";
 import {
   defineBoardMethod,
@@ -85,7 +86,6 @@ export function createBoardHandlers(store: BoardStore): GatewayRequestHandlers {
       authority.assertActive();
       const projectedSnapshot = projectBoardSnapshot(snapshot, boardSession.agentId);
       let sandboxPort = context.getMcpAppSandboxPort?.();
-      let sandboxOrigin: string | undefined | null = null;
       for (const widget of snapshot.widgets) {
         if (widget.grantState !== "none" && widget.grantState !== "granted") {
           continue;
@@ -121,19 +121,15 @@ export function createBoardHandlers(store: BoardStore): GatewayRequestHandlers {
         widget.viewTicketTtlMs = BOARD_VIEW_TICKET_TTL_MS;
         widget.viewGeneration = viewMetadata.viewGeneration;
         if (sandboxPort !== undefined) {
-          widget.sandboxUrl = buildBoardWidgetSandboxPath(viewMetadata);
-          if (ingress) {
-            widget.sandboxUrl = new URL(widget.sandboxUrl, ingress.sandboxOrigin).href;
-          }
+          Object.assign(
+            widget,
+            resolveSandboxView(
+              buildBoardWidgetSandboxPath(viewMetadata),
+              client,
+              context.getRuntimeConfig?.().mcp?.apps?.sandboxOrigin,
+            ),
+          );
           widget.sandboxPort = sandboxPort;
-          if (sandboxOrigin === null) {
-            const configuredOrigin =
-              ingress?.sandboxOrigin ?? context.getRuntimeConfig?.().mcp?.apps?.sandboxOrigin;
-            sandboxOrigin = configuredOrigin ? new URL(configuredOrigin).origin : undefined;
-          }
-          if (sandboxOrigin) {
-            widget.sandboxOrigin = sandboxOrigin;
-          }
         }
       }
       authority.assertActive();
@@ -180,7 +176,7 @@ export function createBoardHandlers(store: BoardStore): GatewayRequestHandlers {
           );
         }
         const boardAuthority = captureBoardRequestAuthority(invocation);
-        let requester: Awaited<ReturnType<typeof captureGatewayOperatorRunAuthority>>;
+        let requester: Awaited<ReturnType<typeof prepareGatewayOperatorRunAuthority>>;
         let canvasRead: Awaited<ReturnType<typeof retainCanvasWidgetRead>> | undefined;
         const authority = {
           ...boardAuthority,
@@ -188,7 +184,6 @@ export function createBoardHandlers(store: BoardStore): GatewayRequestHandlers {
             [boardAuthority.assertActive],
             (assertSources) => {
               assertSources();
-              requester?.authority.assertCurrent();
               canvasRead?.read.assertCurrent();
             },
           ),
@@ -237,7 +232,9 @@ export function createBoardHandlers(store: BoardStore): GatewayRequestHandlers {
               );
               return;
             }
-            const document = await readCanvasDocumentHtmlSource(requestParams.content.docId);
+            const document =
+              canvasRead?.document ??
+              (await readCanvasDocumentHtmlSource(requestParams.content.docId));
             authority.assertActive();
             if (document.cspSandbox !== "scripts") {
               throw new BoardValidationError(
@@ -247,7 +244,7 @@ export function createBoardHandlers(store: BoardStore): GatewayRequestHandlers {
             }
             content = { kind: "html", html: document.html };
           } else if (requestParams.content.kind === "mcp-app") {
-            requester = await captureGatewayOperatorRunAuthority({
+            requester = await prepareGatewayOperatorRunAuthority({
               client: invocation.client,
               context,
               hasCurrentClientAuthority: invocation.hasCurrentClientAuthority,

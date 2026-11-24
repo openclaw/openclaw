@@ -1,10 +1,8 @@
 import { readSessionMessageIdentity } from "@openclaw/gateway-client/browser";
-import { isHttpUrl } from "@openclaw/net-policy/url-protocol";
 import { safeParseJson, safeParseJsonRecord } from "@openclaw/normalization-core";
 import {
   asNullableObjectRecord as readRecord,
   asNullableRecord,
-  isRecord,
 } from "@openclaw/normalization-core/record-coerce";
 import {
   normalizeOptionalString,
@@ -251,18 +249,7 @@ function extractToolPresentation(
   if (browserToolName !== "browser" || !tab || !target) {
     return {};
   }
-  const url = typeof tab.url === "string" ? truncateUtf16Safe(tab.url, 2_048) : "";
-  return {
-    browserTab: target,
-    preview: isHttpUrl(url)
-      ? {
-          kind: "browser-tab",
-          ...target,
-          url,
-          ...(typeof tab.title === "string" ? { title: truncateUtf16Safe(tab.title, 512) } : {}),
-        }
-      : undefined,
-  };
+  return { browserTab: target };
 }
 
 function resolveToolCallId(
@@ -340,48 +327,7 @@ export function formatCollapsedToolPreviewText(value: string | undefined): strin
   return truncateUtf16Safe(normalized, 120);
 }
 
-const TOOL_ARGUMENT_PREVIEW_KEYS = [
-  "message",
-  "prompt",
-  "task",
-  "query",
-  "text",
-  "description",
-] as const;
-
-/** First meaningful user-authored line for compact generic tool rows. */
-export function resolveCollapsedToolArgumentPreview(args: unknown): string | undefined {
-  if (!isRecord(args)) {
-    return undefined;
-  }
-  for (const key of TOOL_ARGUMENT_PREVIEW_KEYS) {
-    const value = args[key];
-    if (typeof value !== "string") {
-      continue;
-    }
-    const preview = formatCollapsedToolPreviewText(value.trimStart().split(/[\r\n]/, 1)[0]);
-    if (preview) {
-      return preview;
-    }
-  }
-  return undefined;
-}
-
 let nextPreviewRevision = 0;
-
-export function isToolCallContentBlock(item: {
-  type?: unknown;
-  name?: unknown;
-  arguments?: unknown;
-  args?: unknown;
-  input?: unknown;
-}): boolean {
-  return (
-    isToolCallContentType(item.type) ||
-    (typeof item.name === "string" &&
-      (item.arguments != null || item.args != null || item.input != null))
-  );
-}
 
 function extractToolCards(message: unknown): ToolCard[] {
   const m = message as Record<string, unknown>;
@@ -416,14 +362,17 @@ function extractToolCards(message: unknown): ToolCard[] {
     // Recorded catalog prose cannot establish an execution outcome.
     const isError =
       readToolErrorFlag(item) ?? messageIsError ?? (catalogSource ? false : undefined);
-    const exitCode = readToolExitCode(
-      item,
-      details,
-      !catalogSource && text ? safeParseJsonRecord(text.trim()) : undefined,
-      standalone ? undefined : m,
-    );
+    const recordedResult = !catalogSource && text ? safeParseJsonRecord(text.trim()) : undefined;
+    const bridgeDispatchStarted = catalogSource
+      ? undefined
+      : (asNullableRecord(details)?.bridgeDispatchStarted ?? recordedResult?.bridgeDispatchStarted);
+    const exitCode = readToolExitCode(item, details, recordedResult, standalone ? undefined : m);
+    const collectionErrors = item.subagentCollectionErrors ?? m.subagentCollectionErrors;
     return {
       outputText: text,
+      ...(typeof collectionErrors === "number" && collectionErrors > 0
+        ? { subagentCollectionErrors: collectionErrors }
+        : {}),
       ...(catalogSource && metadata?.catalogTruncated === true ? { catalogTruncated: true } : {}),
       resultMessageId: catalogSource
         ? undefined
@@ -439,13 +388,17 @@ function extractToolCards(message: unknown): ToolCard[] {
       ...(details !== undefined ? { details } : {}),
       ...(isError !== undefined ? { isError } : {}),
       ...(exitCode !== undefined ? { exitCode } : {}),
+      ...(typeof bridgeDispatchStarted === "boolean" ? { bridgeDispatchStarted } : {}),
       ...(catalogSource ? {} : extractToolPresentation(details, text, browserToolName)),
     };
   };
 
   for (let index = 0; index < content.length; index++) {
     const item = content[index] ?? {};
-    const isCall = isToolCallContentBlock(item);
+    const isCall =
+      isToolCallContentType(item.type) ||
+      (typeof item.name === "string" &&
+        (item.arguments != null || item.args != null || item.input != null));
     if (!isCall && !isToolResultContentType(item.type)) {
       continue;
     }
@@ -493,7 +446,7 @@ function extractToolCards(message: unknown): ToolCard[] {
           card.outputText === undefined &&
           !fallbackMatchedCards.has(card),
       );
-    // Browser previews trigger I/O. Nested content cannot override its tool
+    // Browser routes select the panel target. Nested content cannot override its tool
     // envelope, and a paired result cannot override the authoritative call.
     const envelopeName = isStandaloneToolMessage ? resolveToolName({}, m) : undefined;
     const browserToolName =

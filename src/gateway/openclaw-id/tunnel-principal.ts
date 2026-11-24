@@ -1,28 +1,18 @@
-import { z } from "zod";
 import type {
   MemberRole,
   NodeDescription,
 } from "../../../packages/openclaw-id-protocol/src/statements/types.js";
-import { isMemberRole } from "../../../packages/openclaw-id-protocol/src/statements/validate.js";
 // Gateway identity of an admitted OpenClaw ID tunnel device (OCF-225). The
 // tunnel child authenticates the device endpoint key W in the QUIC handshake
 // and the private ingress listener attributes the request to it; this module
 // maps W onto the Gateway's existing auth vocabulary:
 // - an active owner device is the Gateway owner (no role ceiling);
 // - a member is a trusted-proxy user, `openclaw-id:<account_id>`, whose
-//   operator scopes are capped by a built-in operator role policy for the
-//   member's OpenClaw ID role; names without a policy are denied.
+//   operator scopes resolve through the linked Gateway profile.
 // While OpenClaw ID is off no resolver is published and nothing here runs.
 import type { GatewayOperatorRoleDefinition } from "../../config/types.gateway.js";
 import { GatewayOperatorRecoveryAuthorizationError } from "../../infra/restart-recovery-errors.js";
 import { notifyListeners, registerListener } from "../../shared/listeners.js";
-import {
-  APPROVALS_SCOPE,
-  QUESTIONS_SCOPE,
-  READ_SCOPE,
-  TALK_SCOPE,
-  WRITE_SCOPE,
-} from "../operator-scopes.js";
 
 /** Who an admitted tunnel device is, decided by the Gateway's membership authority. */
 export type OpenClawIdTunnelPrincipal = (
@@ -39,28 +29,6 @@ export type OpenClawIdTunnelPrincipal = (
   };
 };
 
-const sourceFields = {
-  peerKey: z.string().regex(/^iroh:[a-f0-9]{64}$/),
-  authority: z.strictObject({
-    clawId: z.string().min(1).max(256),
-    rootPub: z.string().min(1).max(256),
-    listedSeq: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
-    ownerDevice: z.string().min(1).max(256).optional(),
-  }),
-};
-
-/** Durable sources require the claw/root/listing identity; a bare peer is not recovery evidence. */
-export const openClawIdRecoveryPrincipalSchema = z.discriminatedUnion("kind", [
-  z.strictObject({ kind: z.literal("owner"), ...sourceFields }),
-  z.strictObject({ kind: z.literal("node"), ...sourceFields }),
-  z.strictObject({
-    kind: z.literal("member"),
-    ...sourceFields,
-    accountId: z.string().min(1).max(256),
-    role: z.string().refine(isMemberRole, "Invalid member role name"),
-  }),
-]);
-
 /** Resolves a tunnel peer key to its principal, or undefined when it is not admitted now. */
 export type OpenClawIdTunnelPrincipalResolver = (
   peerKey: string,
@@ -75,6 +43,19 @@ let resolver: OpenClawIdTunnelPrincipalResolver | undefined;
 let lookup: OpenClawIdTunnelPrincipalLookup | undefined;
 let prepareLookup: (() => Promise<void>) | undefined;
 let recordActivity: ((peerKey: string) => void) | undefined;
+let memberAccountLookup: ((accountId: string) => boolean) | undefined;
+
+/** The same resident membership owner serves socket and offline profile subjects. */
+export function setOpenClawIdMemberAccountLookup(
+  next: ((accountId: string) => boolean) | undefined,
+): void {
+  memberAccountLookup = next;
+}
+
+/** Stored provider links identify accounts; only current membership makes them members. */
+export function isOpenClawIdProfileMember(accountIds: readonly string[] | undefined): boolean {
+  return accountIds?.some((accountId) => memberAccountLookup?.(accountId) === true) ?? false;
+}
 const changes = new Set<() => void>();
 
 /** Notifies retained work after committed membership changes or a service lifecycle change. */
@@ -94,13 +75,11 @@ export function setOpenClawIdTunnelPrincipalResolver(
   resolver = next;
 }
 
-/** Gateway admission for a currently listed peer; member names need a role policy. */
+/** Membership admits the device; the linked profile decides its operator access. */
 export function isOpenClawIdTunnelPrincipalAdmitted(
   principal: OpenClawIdTunnelPrincipal | undefined,
 ): principal is OpenClawIdTunnelPrincipal {
-  return (
-    principal !== undefined && (principal.kind !== "member" || MEMBER_POLICIES.has(principal.role))
-  );
+  return principal !== undefined;
 }
 
 /**
@@ -127,9 +106,25 @@ export function setOpenClawIdTunnelPrincipalLookup(
   notifyOpenClawIdTunnelPrincipalsChanged();
 }
 
+/** Background delivery reads current membership without recording device activity. */
+export async function prepareOpenClawIdTunnelPrincipalLookup(): Promise<OpenClawIdTunnelPrincipalLookup> {
+  await prepareLookup?.();
+  return (peerKey) => {
+    const principal = lookup?.(peerKey);
+    return isOpenClawIdTunnelPrincipalAdmitted(principal) ? principal : undefined;
+  };
+}
+
+/** Null means the membership owner has not published its current facts. */
+export function readOpenClawIdTunnelPrincipal(
+  peerKey: string,
+): OpenClawIdTunnelPrincipal | undefined | null {
+  return lookup ? lookup(peerKey) : null;
+}
+
 /**
  * True while the membership authority still admits `principal` as it did at
- * admission: same kind, account and role. A removed device, a role change, or
+ * admission: same kind and account. A removed device or
  * OpenClaw ID turning off (no lookup published) makes it false.
  */
 export function isOpenClawIdTunnelPrincipalCurrent(principal: OpenClawIdTunnelPrincipal): boolean {
@@ -155,15 +150,13 @@ export function isOpenClawIdTunnelPrincipalCurrent(principal: OpenClawIdTunnelPr
   return (
     current.kind === "owner" ||
     current.kind === "node" ||
-    (principal.kind === "member" &&
-      current.accountId === principal.accountId &&
-      current.role === principal.role)
+    (principal.kind === "member" && current.accountId === principal.accountId)
   );
 }
 
 /**
  * True when two retained principals name the same admitted device listing: the
- * same peer, kind, account and role under the same claw, root and listing.
+ * same peer, kind and account under the same claw, root and listing.
  * Two absent principals match; a device and a non-device requester do not.
  */
 export function isSameOpenClawIdTunnelPrincipal(
@@ -188,7 +181,7 @@ export function isSameOpenClawIdTunnelPrincipal(
     return false;
   }
   if (left.kind === "member" && right.kind === "member") {
-    return left.accountId === right.accountId && left.role === right.role;
+    return left.accountId === right.accountId;
   }
   // Owners and nodes carry no account or role; the listing above identifies them.
   return true;
@@ -199,50 +192,18 @@ export function openclawIdTunnelUser(principal: OpenClawIdTunnelPrincipal): stri
   return principal.kind === "member" ? `openclaw-id:${principal.accountId}` : undefined;
 }
 
-// Operators chat and use the claw normally; config, admin and pairing stay with owners.
-const OPERATOR_POLICY: GatewayOperatorRoleDefinition = Object.freeze({
-  sessions: Object.freeze({ others: "write" as const }),
-  agents: "*" as const,
-  scopes: [READ_SCOPE, WRITE_SCOPE, APPROVALS_SCOPE, QUESTIONS_SCOPE, TALK_SCOPE],
-});
-
-// Viewers read only: no chat.send, no session writes.
-const VIEWER_POLICY: GatewayOperatorRoleDefinition = Object.freeze({
-  sessions: Object.freeze({ others: "view" as const }),
-  agents: "*" as const,
-  scopes: [READ_SCOPE],
-});
-
-const MEMBER_POLICIES = new Map<MemberRole, GatewayOperatorRoleDefinition>([
-  ["operator", OPERATOR_POLICY],
-  ["viewer", VIEWER_POLICY],
-]);
-
-/**
- * The operator role policy that caps a tunnel principal's scopes, or undefined
- * for owner devices, which keep full owner authority.
- */
+/** Owner devices bypass profile roles; nodes never receive operator scopes. */
 export function openclawIdTunnelRolePolicy(
   principal: OpenClawIdTunnelPrincipal | undefined,
 ): GatewayOperatorRoleDefinition | undefined {
-  if (principal?.kind === "node") {
-    return { scopes: [], agents: [], sessions: { others: "none" } };
-  }
-  if (principal?.kind !== "member") {
-    return undefined;
-  }
-  return (
-    MEMBER_POLICIES.get(principal.role) ?? {
-      scopes: [],
-      agents: [],
-      sessions: { others: "none" },
-    }
-  );
+  return principal?.kind === "node"
+    ? { scopes: [], agents: [], sessions: { others: "none" } }
+    : undefined;
 }
 
 /**
- * The named-role policy of a captured operator subject. OpenClaw ID members and nodes are
- * capped by their membership. An owner device is the Gateway owner, so no named role applies,
+ * The named-role policy of a captured operator subject. Members follow their profile.
+ * An owner device is the Gateway owner, so no named role applies,
  * even when it is attributed to the personal profile its account is linked to (OCF-510): the
  * profile decides who it is, its certificate what it may do. Others follow their profile's role.
  */
@@ -253,7 +214,13 @@ export function openclawIdSubjectRolePolicy(
   if (principal?.kind === "owner") {
     return undefined;
   }
-  return openclawIdTunnelRolePolicy(principal) ?? resolveProfileRole();
+  return (
+    openclawIdTunnelRolePolicy(principal) ??
+    resolveProfileRole() ??
+    (principal?.kind === "member"
+      ? { scopes: [], agents: [], sessions: { others: "none" } }
+      : undefined)
+  );
 }
 
 /**
@@ -283,13 +250,19 @@ export function currentOwnerDevicePrincipal(
     : undefined;
 }
 
+export class OpenClawIdPrincipalChangedError extends GatewayOperatorRecoveryAuthorizationError {
+  constructor() {
+    super("OpenClaw ID membership changed. Reconnect before starting a request.");
+  }
+}
+
 /** Wait only for local authority hydration; recovery does not count as a tunnel admission. */
 export async function prepareOpenClawIdTunnelPrincipal(
   principal: OpenClawIdTunnelPrincipal,
 ): Promise<void> {
   await prepareLookup?.();
   if (!isOpenClawIdTunnelPrincipalCurrent(principal)) {
-    throw new GatewayOperatorRecoveryAuthorizationError("OpenClaw ID membership authority changed");
+    throw new OpenClawIdPrincipalChangedError();
   }
 }
 

@@ -1,5 +1,6 @@
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { withTempDir } from "../test-utils/temp-dir.js";
 import {
   isLegacyRollingLogFilePath,
   isSameRollingLogFileFamily,
@@ -58,6 +59,22 @@ describe("resolveConfiguredLogFilePath", () => {
     expect(
       await resolveConfiguredLogFilePath({ logging: { file: "/var/log/openclaw/custom.log" } }),
     ).toBe("/var/log/openclaw/custom.log");
+  });
+
+  it("isolates default logs with the state directory even without a named profile", async () => {
+    await withTempDir("openclaw-log-isolation-", async (root) => {
+      vi.stubEnv("OPENCLAW_PROFILE", undefined);
+      const files: string[] = [];
+      for (const name of ["production", "test-harness"]) {
+        const stateDir = path.join(root, name);
+        vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+        const file = await resolveConfiguredLogFilePath();
+        expect(file.startsWith(`${stateDir}${path.sep}`)).toBe(true);
+        expect(await resolveConfiguredLogFilePath()).toBe(file);
+        files.push(file);
+      }
+      expect(files[0]).not.toBe(files[1]);
+    });
   });
 });
 

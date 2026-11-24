@@ -1,4 +1,5 @@
 import type { Static } from "typebox";
+import type { ClawHubRiskAcknowledgementRequiredErrorDetails } from "./clawhub-trust-error-details.js";
 import {
   ErrorCodes,
   SETUP_ADMISSION_BUSY_ERROR_CODE,
@@ -9,6 +10,10 @@ import { MISSING_SCOPE_ERROR_CODE, type MissingScopeErrorDetails } from "./missi
 import { asProtocolRecord } from "./protocol-value-normalization.js";
 import type * as ErrorSchemas from "./schema/error-codes.js";
 
+export {
+  readClawHubRiskAcknowledgementRequiredError,
+  type ClawHubRiskAcknowledgementRequiredErrorDetails,
+} from "./clawhub-trust-error-details.js";
 export { ErrorCodes, type ErrorCode } from "./gateway-error-codes.js";
 export {
   readMissingScopeError,
@@ -109,10 +114,6 @@ export type TaskWorktreeSourceRequiredErrorDetails = Static<
   typeof ErrorSchemas.TaskWorktreeSourceRequiredErrorDetailsSchema
 >;
 
-export type ClawHubRiskAcknowledgementRequiredErrorDetails = Static<
-  typeof ErrorSchemas.ClawHubRiskAcknowledgementRequiredErrorDetailsSchema
->;
-
 export type TemplateReviewRequiredErrorDetails = Static<
   typeof ErrorSchemas.TemplateReviewRequiredErrorDetailsSchema
 >;
@@ -141,19 +142,6 @@ export type GatewayErrorDetails =
   | PendingInputNotRetiredErrorDetails
   | { code: typeof GatewayErrorDetailCodes.TASK_HISTORY_PREVIEW_CAPACITY }
   | { code: typeof GatewayErrorDetailCodes.OPENCLAW_CONFIG_READONLY };
-
-export function readClawHubRiskAcknowledgementRequiredError(
-  error: unknown,
-): ClawHubRiskAcknowledgementRequiredErrorDetails | null {
-  const record = asProtocolRecord(error);
-  const details = asProtocolRecord(record?.details);
-  const warning = typeof details?.warning === "string" ? details.warning.trim() : "";
-  return record?.code === ErrorCodes.INVALID_REQUEST &&
-    details?.code === CLAWHUB_RISK_ACKNOWLEDGEMENT_REQUIRED &&
-    warning
-    ? { code: CLAWHUB_RISK_ACKNOWLEDGEMENT_REQUIRED, warning }
-    : null;
-}
 
 export function readTemplateReviewRequiredError(
   error: unknown,

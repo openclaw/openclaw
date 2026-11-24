@@ -56,7 +56,7 @@ function show(
     });
     return [...host.querySelectorAll<HTMLElement>("openclaw-message-reaction-picker")];
   };
-  return { onReact, pickers: render(initialReactions), render };
+  return { onReact, pickers: render(initialReactions), render, role };
 }
 
 function pickerButton(picker: HTMLElement, label: string) {
@@ -111,16 +111,21 @@ describe("transcript message reactions", () => {
     [{ streaming: true }, "ineligible"],
     [{ role: "system" }, "ineligible"],
   ] as const)("renders %j reactions as %s", async (options, access) => {
-    const { onReact, pickers, render } = show(options);
+    const { onReact, pickers, render, role } = show(options);
     if (access === "ineligible") {
       expect(pickers).toHaveLength(0);
       expect(host.querySelector(".chat-message-reactions")).toBeNull();
       return;
     }
-    // One summary tab hangs off the bubble; the toolbar keeps its own add-reaction picker.
+    // A bubble carries one summary tab; a flat reply's leads its footer. The toolbar keeps
+    // its own add-reaction picker.
     expect(pickers).toHaveLength(access === "writable" ? 2 : 1);
     const summary = host.querySelector(".chat-message-reactions")!;
-    expect(summary.parentElement?.classList.contains("chat-bubble")).toBe(true);
+    expect(
+      summary.parentElement?.classList.contains(
+        role === "assistant" ? "chat-group-footer" : "chat-bubble",
+      ),
+    ).toBe(true);
     expect(summary.classList.contains("chat-message-reactions--own")).toBe(true);
     // Most-used emoji lead; the total replaces per-emoji counts.
     expect(tab().textContent).toBe("🎉👍7");
@@ -208,7 +213,7 @@ describe("transcript message reactions", () => {
     expect(locations(new Map([["message-1", []]]))).toEqual([]);
   });
 
-  it("keeps reactions actionable on the bubble through an active continuation", async () => {
+  it("keeps a flat reply's reactions in its footer through an active continuation", async () => {
     host = document.body.appendChild(document.createElement("div"));
     const harness = createMessageGroupHarness(host);
     const group = createMessageGroup(
@@ -230,7 +235,9 @@ describe("transcript message reactions", () => {
         activeContinuation: active ? { parts: [], options: {} } : undefined,
       });
       const footer = host.querySelector(".chat-group > .chat-group-footer")!;
-      expect(host.querySelectorAll(".chat-bubble > .chat-message-reactions")).toHaveLength(1);
+      // The summary leads the footer and stays put while identity and time come and go.
+      expect(footer.firstElementChild?.classList.contains("chat-message-reactions")).toBe(true);
+      expect(host.querySelectorAll(".chat-message-reactions")).toHaveLength(1);
       expect(footer.querySelector(".chat-group-footer__meta") !== null).toBe(!active);
       const picker = await openTab();
       const didHide = hidden(picker);
@@ -241,7 +248,7 @@ describe("transcript message reactions", () => {
   });
 
   it.each(["user", "assistant"])(
-    "hangs each %s message's reactions off its own bubble",
+    "keeps each %s message's reactions with that message",
     async (role) => {
       host = document.body.appendChild(document.createElement("div"));
       const harness = createMessageGroupHarness(host);
@@ -275,7 +282,16 @@ describe("transcript message reactions", () => {
       // Reactions arriving must not rebuild the toolbar a keyboard user is on.
       expect(document.activeElement).toBe(copy);
       for (const id of ["first", "last"]) {
-        expect(tab(id).closest(".chat-bubble")?.getAttribute("data-message-id")).toBe(id);
+        // Bubbles carry their own tab; a flat reply's leads the row under that reply.
+        if (role === "user") {
+          expect(tab(id).closest(".chat-bubble")?.getAttribute("data-message-id")).toBe(id);
+        } else if (id === "first") {
+          expect(
+            tab(id).closest(".chat-message-actions-row")?.getAttribute("data-message-actions-for"),
+          ).toBe(id);
+        } else {
+          expect(tab(id).closest(".chat-group > .chat-group-footer")).not.toBeNull();
+        }
         const picker = await openTab(id);
         const didHide = hidden(picker);
         picker.querySelector<HTMLButtonElement>(".chat-reaction-chip")!.click();

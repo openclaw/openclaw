@@ -23,7 +23,8 @@ PostgreSQL stores in the state, agent, Workboard, Logbook and Team Reports
 families use local SQLite anchors plus PostgreSQL rows. Use `openclaw backup create`
 to capture their matched exports and anchors; it runs while the Gateway serves
 requests and exports each PostgreSQL store from its own repeatable-read snapshot.
-Restore, Git backups, and generic local snapshots that select PostgreSQL still
+Git capture, including scheduled Git backups, uses the same online per-store snapshots.
+Restore and generic local snapshots that select PostgreSQL still
 require the Gateway stopped through its service owner and never stop it automatically.
 See [Database engines](/reference/database-engines#anchors-and-backups).
 
@@ -358,8 +359,9 @@ snapshot repositories remain ordinary files that external backup tools can copy.
 
 `openclaw backup git create --all` includes declared PostgreSQL plugin stores and
 retained roots through their backup-resource declarations. Explicit `--global`
-and `--agent` selections keep their existing scope. A PostgreSQL source requires the Gateway stopped
-through its service owner; Git backup capture or restore refuses while it is running. The backup contains a
+and `--agent` selections keep their existing scope. PostgreSQL capture works while the Gateway runs, including scheduled Git backups,
+using one read-only snapshot per store. Restore requires the Gateway stopped
+through its service owner and refuses while it is running. The backup contains a
 sanitized SQLite export, its original anchor, and a format-2 manifest without a
 DSN. Restore verifies the matched set and creates a fresh owned PostgreSQL
 namespace before publishing its anchor. Retain the displaced namespace until

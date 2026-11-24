@@ -70,8 +70,8 @@ identical mappings share one binding, while conflicting mappings fail startup.
 fetching contents or listing the parent, under the existing read-path policy.
 For bootstrap reads, `file.fetch.rootPath` confines parent-alias resolution to
 the resolved workspace root; it does not grant access beyond the node policy.
-Unary reads and writes retain the 16 MiB transfer limit; directory reads consume
-the existing `dir.list` pages. `file.write.expectedSha256` verifies the submitted bytes, not
+By default, unary reads and writes have a 16 MiB transfer limit. Directory reads
+consume the existing `dir.list` pages. `file.write.expectedSha256` verifies the submitted bytes, not
 the previous file version. Owner-document conflict checks remain in the Gateway.
 
 With the Gateway's node duplex transport, the mapping also registers Memory file
@@ -305,6 +305,33 @@ agent workspace does not match `remoteRoot`. Path-policy errors require the
 specific missing grant; adding a command alone cannot fix them. Do not remove
 the mapping to hide an outage, because that changes which files are authoritative.
 
+### Size-limited node connections
+
+Before enabling this option, install matching OpenClaw builds that support
+binary `file.fetch` on the Gateway and the Linux node. An older node can ignore
+the binary request and send the entire file in one reply.
+
+If a paired Linux node connects through a route that limits WebSocket replies to
+4 MiB, add `boundedReplies: true` to its entry under
+`plugins.entries.file-transfer.config.nodes` on the Gateway. Use the exact
+paired node ID as the key. An exact-ID entry takes precedence over display-name
+and wildcard policies. If you create one, copy the applicable path grants,
+denials, and other policy settings into it.
+
+The option is disabled by default. On the selected node, single-reply
+`file.fetch` reads are limited to 2 MiB. Gateway workspace reads with a larger
+byte budget, including the default 16 MiB, use the existing binary stream.
+`dir.list` returns at most 120 entries per page. Use these pages to walk
+directories because `dir.fetch` archives are unavailable on this node.
+Paths must fit the 4,095-byte Linux path limit, and an optional
+`file.write.expectedSha256` must be a 64-character hexadecimal digest.
+
+A workspace read or complete directory listing has a 60-second request budget.
+The binary stream sends 8 KiB fragments serially. At 32 ms round-trip latency,
+the 2,048 progress requests for a 16 MiB read would take over 65 seconds, so
+large reads can time out. Write requests can still exceed a route's request-size
+limit.
+
 ### Workspace Skill installation
 
 A paired workspace uses the native Skill installers for source publication,
@@ -356,7 +383,8 @@ Directory tools return at most 8192 UTF-8 bytes of model-visible text, including
 the external-content wrapper. `dir_list` shows complete names, directory flags,
 and sizes. To continue a text-limited listing, pass the **text's** `nextPageToken`
 as `pageToken` with the same node and path; it resumes immediately after the last
-displayed entry. The default request remains 200 entries, with a ceiling of 5000.
+displayed entry. The default request is 200 entries, with a ceiling of 5000.
+On a node with `boundedReplies` enabled, the limit is 120 entries per page.
 Full returned metadata and the original page token remain in structured details.
 
 `dir_fetch` saves the whole tree and shows its local `rootDir`, total `fileCount`,

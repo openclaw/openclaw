@@ -47,12 +47,7 @@ export type ChatModelControlsProps = {
   fastModeDisplay?: ChatFastModePresentation;
   accessProgramMutationDisabledReason?: string;
   requestedAccessProgram?: CyberAccessProgram;
-  daybreakAccessProgram?: Exclude<CyberAccessProgram, "standard">;
-  onAccessProgramSelect?: (
-    value: CyberAccessProgram,
-    sessionKey: string,
-    previous?: Exclude<CyberAccessProgram, "standard">,
-  ) => unknown;
+  onAccessProgramSelect?: (value: CyberAccessProgram, sessionKey: string) => unknown;
   sending: boolean;
   sessionKey: string;
   selectedSession: SessionsListResult["sessions"][number] | undefined;

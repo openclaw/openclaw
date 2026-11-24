@@ -1,4 +1,5 @@
 import { SqliteReadOnlyInspectionContentionError } from "../infra/sqlite-readonly-worker-protocol.js";
+import { isSqliteSnapshotCapacityError } from "../infra/sqlite-snapshot-capacity-error.js";
 import {
   describeRunningOpenClawBuild,
   isNewerSqliteWriterVersion,
@@ -73,7 +74,9 @@ export function createIndeterminateDatabaseReadinessError(
           ? ""
           : causes.get(database) instanceof SqliteReadOnlyInspectionContentionError
             ? " Wait a moment for write activity to settle, then retry the inspection."
-            : " Stop OpenClaw processes, then restore the affected database from a verified backup.";
+            : isSqliteSnapshotCapacityError(causes.get(database))
+              ? " Free snapshot disk space or quota, then retry the inspection."
+              : " Stop OpenClaw processes, then restore the affected database from a verified backup.";
       return `${database.kind}${database.agentId ? ` ${database.agentId}` : ""} ${database.path}: ${database.reason}${guidance}`;
     });
   const action =

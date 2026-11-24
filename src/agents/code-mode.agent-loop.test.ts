@@ -1,32 +1,26 @@
 import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { Context } from "openclaw/plugin-sdk/llm";
-import {
-  afterEach,
-  describe,
-  expect,
-  it,
-  onTestFinished as registerTestCleanup,
-  type TestContext,
-  vi,
-} from "vitest";
+import { afterEach, describe, expect, it, type TestContext, vi } from "vitest";
 import {
   makeAssistantMessage,
   model as agentLoopModel,
   reply,
 } from "../../packages/agent-core/src/agent-loop.test-support.js";
-import { setInternalBeforeToolBatch } from "../../packages/agent-core/src/internal-hooks.js";
+import {
+  getInternalBeforeRequest,
+  setInternalBeforeRequest,
+} from "../../packages/agent-core/src/internal-hooks.js";
+import { isActiveTurnTainted } from "../../packages/agent-core/src/turn-taint.js";
 import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
-import type { AgentToolResultMiddleware } from "../plugins/agent-tool-result-middleware-types.js";
-import { capturePluginRegistration } from "../plugins/captured-registration.js";
-import { createEmptyPluginRegistry } from "../plugins/registry.js";
-import { clearActivePluginRegistry, setActivePluginRegistry } from "../plugins/runtime.js";
+import { readMemoryArtifactProvenance } from "../memory/memory-artifact-provenance.js";
 import { getProcessSupervisor } from "../process/supervisor/index.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { toToolDefinitions } from "./agent-tool-definition-adapter.js";
 import { wrapToolWithAbortSignal } from "./agent-tools.abort.js";
 import { wrapToolWithBeforeToolCallHook } from "./agent-tools.before-tool-call.js";
+import { createOpenClawCodingToolsAsync } from "./agent-tools.js";
 import { getSession, waitForExecSession } from "./bash-process-registry.js";
 import { resetProcessRegistryForTests } from "./bash-process-registry.test-support.js";
 import { createExecTool } from "./bash-tools.exec-run.js";
@@ -40,13 +34,15 @@ import {
   createCodeModeHarness,
   expectToolCalls,
   jsonTool,
+  mcpTool,
   pluginToolWithExecute,
   resetCodeModeTestState,
   resultDetails,
   testing,
 } from "./code-mode.test-support.js";
 import { buildEmbeddedExtensionFactories } from "./embedded-agent-runner/extensions.js";
-import { createToolLoopBatchAdmission } from "./embedded-agent-runner/run/tool-loop-recovery.js";
+import { steerActiveSessionWithOptionalDeliveryWait } from "./embedded-agent-runner/run/attempt-queue-message.js";
+import { createAgentTurnTaintState } from "./embedded-agent-runner/run/turn-taint-state.js";
 import {
   captureAgentPluginRuntimeRefresh,
   createAgentPluginRuntimeRefresh,
@@ -122,8 +118,12 @@ async function runCodeModeAgent(params: {
   embeddedSession?: boolean;
   configureAgent?: (
     agent: Agent,
-    harness: { tools: AnyAgentTool[]; ctx: Parameters<typeof createCodeModeTools>[0] },
-  ) => void;
+    harness: {
+      tools: AnyAgentTool[];
+      ctx: Parameters<typeof createCodeModeTools>[0];
+      session?: AgentSession;
+    },
+  ) => void | Promise<void>;
 }) {
   const harness = createCodeModeHarness({
     codeMode: params.executor ? { executor: params.executor } : undefined,
@@ -194,7 +194,7 @@ async function runCodeModeAgent(params: {
       modelRegistry: ModelRegistry.inMemory(authStorage),
     });
   }
-  params.configureAgent?.(agent, { tools, ctx });
+  await params.configureAgent?.(agent, { tools, ctx, session });
   try {
     await (session ?? agent).prompt("finish the task despite tool errors");
   } finally {
@@ -205,6 +205,68 @@ async function runCodeModeAgent(params: {
 
 describe("Code Mode agent-loop error recovery", () => {
   const tempDirs = createTempDirTracker();
+  it.each(["tool", "request-preparation"] as const)(
+    "injects steers after a failed cell at the next boundary (%s)",
+    async (arrival) => {
+      const corrections = ["first correction", "second correction"];
+      const receipts: Promise<unknown>[] = [];
+      let enqueue!: () => Promise<void>;
+      const failure = tool("failing_action", async () => {
+        if (arrival === "tool") {
+          await enqueue();
+        }
+        throw new Error("synthetic Code Mode failure");
+      });
+      let nextRequest: Context | undefined;
+      const { agent } = await runCodeModeAgent({
+        hiddenTools: [failure],
+        embeddedSession: true,
+        programs: [
+          "return await failing_action({});",
+          (context) => {
+            nextRequest = context;
+            return "return 1;";
+          },
+        ],
+        configureAgent(loop, { session }) {
+          if (!session) {
+            throw new Error("Expected embedded session");
+          }
+          loop.steeringMode = "all";
+          enqueue = async () => {
+            for (const text of corrections) {
+              const accepted = createDeferred<boolean>();
+              receipts.push(
+                steerActiveSessionWithOptionalDeliveryWait(session, text, {
+                  waitForTranscriptCommit: true,
+                  onQueueAccepted: accepted.resolve,
+                }),
+              );
+              expect(await accepted.promise).toBe(true);
+            }
+          };
+          const beforeRequest = getInternalBeforeRequest(loop);
+          let requests = 0;
+          setInternalBeforeRequest(loop, async (signal) => {
+            const result = await beforeRequest?.(signal);
+            if (++requests === 2 && arrival === "request-preparation") {
+              await enqueue();
+            }
+            return result;
+          });
+        },
+      });
+      await Promise.all(receipts);
+      expect(agent.state.messages.find((message) => message.role === "toolResult")).toMatchObject({
+        isError: true,
+        details: { status: "failed" },
+      });
+      expect(nextRequest?.messages.filter((message) => message.role === "user").slice(-2)).toEqual(
+        corrections.map((text) => expect.objectContaining({ content: [{ type: "text", text }] })),
+      );
+      expect(agent.state.messages.filter((message) => message.role === "user")).toHaveLength(3);
+    },
+  );
   it.for(["node", "quickjs"] as const)(
     "%s returns a rejected cell while a sibling bridge has no response",
     async (executor, { signal }) => {
@@ -252,95 +314,6 @@ describe("Code Mode agent-loop error recovery", () => {
       ]);
     },
   );
-
-  it.each(["unchanged", "tool", "middleware", "unmatched middleware"])(
-    "bounds repeated bridge failures independently of telemetry (error change=%s)",
-    async (errorChange) => {
-      let calls = 0;
-      const middleware = vi.fn<AgentToolResultMiddleware>(({ result }) => {
-        result.content.push({ type: "text", text: `failure ${calls}` });
-      });
-      const registry = createEmptyPluginRegistry();
-      if (errorChange.includes("middleware")) {
-        const captured = capturePluginRegistration({
-          register(api) {
-            api.registerAgentToolResultMiddleware(middleware, {
-              runtimes: ["openclaw"],
-              matcher: [errorChange === "middleware" ? "exec" : "read"],
-            });
-          },
-        });
-        registry.agentToolResultMiddlewares.push(...captured.agentToolResultMiddlewares);
-      }
-      setActivePluginRegistry(registry);
-      registerTestCleanup(() => clearActivePluginRegistry());
-      const failing = tool("failing_action", async () => {
-        calls++;
-        throw new Error(errorChange === "tool" ? `failure ${calls}` : "same failure");
-      });
-      const { agent } = await runCodeModeAgent({
-        embeddedSession: true,
-        hiddenTools: [failing],
-        programs: Array.from({ length: 4 }, () => "return await failing_action({});"),
-        configureAgent(activeAgent) {
-          setInternalBeforeToolBatch(
-            activeAgent,
-            createToolLoopBatchAdmission({ loopDetection: { enabled: false } }),
-          );
-        },
-      });
-      const changesError = errorChange === "tool" || errorChange === "middleware";
-      expect(middleware).toHaveBeenCalledTimes(errorChange === "middleware" ? 4 : 0);
-      expect(calls).toBe(changesError ? 4 : 3);
-      if (changesError) {
-        expectRecovered(agent);
-      } else {
-        expect(agent.state.messages.at(-1)).toMatchObject({
-          role: "assistant",
-          stopReason: "error",
-          errorCode: "openclaw_repeated_tool_error",
-          content: [{ type: "text", text: expect.stringContaining("exec call failed 3 times") }],
-        });
-      }
-    },
-  );
-  it.each([
-    { name: "omitted title", metadata: {}, accepted: true },
-    { name: "authored title", metadata: { title: "Record the fixture effect" }, accepted: true },
-    { name: "empty title", metadata: { title: "" }, accepted: false },
-    { name: "blank title", metadata: { title: " \t " }, accepted: false },
-    { name: "object title", metadata: { title: { text: "Record effect" } }, accepted: false },
-    { name: "oversized title", metadata: { title: "x".repeat(121) }, accepted: false },
-  ])("validates $name before executing a cell", async ({ metadata, accepted }) => {
-    const effects: string[] = [];
-    const target = effectTool("record_effect", effects, "recorded", { recorded: true });
-    const code = "return await record_effect({});";
-    const execInput = { ...metadata, code };
-    const { agent } = await runCodeModeAgent({
-      hiddenTools: [target],
-      programs: [code],
-      execInput,
-    });
-    const result = agent.state.messages.find((message) => message.role === "toolResult");
-    expect(result).toMatchObject({ toolName: "exec", isError: !accepted });
-    expect(effects).toEqual(accepted ? ["recorded"] : []);
-    expect(agent.state.messages.find((message) => message.role === "assistant")).toMatchObject({
-      content: [{ type: "toolCall", name: "exec", arguments: execInput }],
-    });
-    if (accepted) {
-      expect(readToolResultDetails(result)).toMatchObject({
-        status: "completed",
-        value: { recorded: true },
-      });
-    } else {
-      expect(result?.content).toEqual([
-        expect.objectContaining({
-          type: "text",
-          text: expect.stringContaining('Validation failed for tool "exec":\n  - title:'),
-        }),
-      ]);
-    }
-  });
 
   it("recovers after a parked read fails without replaying the mutation", async () => {
     const workspace = tempDirs.make("code-mode-wait-");
@@ -407,9 +380,10 @@ describe("Code Mode agent-loop error recovery", () => {
     }
   });
 
-  it("preserves native exec refusal diagnostics", async ({ onTestFinished }) => {
+  it("preserves native exec output and refusal diagnostics", async ({ onTestFinished }) => {
     const { state, shell } = await nativeExecFixture("exec-cwd-recovery", onTestFinished, storeEnv);
-    await writeFile(join(state.workspaceDir, "input.txt"), "review-ready");
+    const stdout = "  review-ready\n \n";
+    await writeFile(join(state.workspaceDir, "input.txt"), stdout);
     const execute = vi.spyOn(shell, "execute");
     const command = `${JSON.stringify(globalThis.process.execPath)} -e "require('node:fs').appendFileSync('executions.txt', 'run\\n'); process.stdout.write(require('node:fs').readFileSync('input.txt', 'utf8'))"`;
     const nonzeroCommand = `${JSON.stringify(globalThis.process.execPath)} -e "process.stdout.write('ordinary-exit'); process.exit(7)"`;
@@ -445,7 +419,7 @@ describe("Code Mode agent-loop error recovery", () => {
     );
     expect(results[1]).toMatchObject({
       status: "completed",
-      value: { status: "completed", exitCode: 0, aggregated: "review-ready" },
+      value: { status: "completed", exitCode: 0, aggregated: stdout },
     });
     expect(results[2]).toMatchObject({
       status: "completed",
@@ -463,6 +437,88 @@ describe("Code Mode agent-loop error recovery", () => {
     expectToolCalls(3, shell);
     expect(await readFile(join(state.workspaceDir, "executions.txt"), "utf8")).toBe("run\n");
   });
+
+  it.for(["exec", "process poll"])(
+    "delivers a steer during %s and resumes the exact result",
+    async (waitKind, { onTestFinished }) => {
+      const { state, shell, scopeKey } = await nativeExecFixture(
+        "steer-held-shell",
+        onTestFinished,
+      );
+      const processTool = createProcessTool({ scopeKey });
+      const pollCalls = vi.spyOn(processTool, "execute");
+      const started = join(state.workspaceDir, "started");
+      const release = join(state.workspaceDir, "release");
+      const command = nodeCommand(`const fs = require("node:fs");
+      const watcher = fs.watch(${JSON.stringify(state.workspaceDir)}, () => {
+        if (fs.existsSync(${JSON.stringify(release)})) { watcher.close(); clearTimeout(timer); console.log("original result"); }
+      });
+      const timer = setTimeout(() => watcher.close(), 10000);
+      fs.appendFileSync(${JSON.stringify(started)}, "started");`);
+      const correction = "Check this before the command finishes.";
+      let session!: AgentSession;
+      const observed: Context[] = [];
+      const run = runCodeModeAgent({
+        hiddenTools: [shell, processTool],
+        embeddedSession: true,
+        execInput: {
+          code:
+            waitKind === "exec"
+              ? `return (await exec({command:${JSON.stringify(command)}})).aggregated;`
+              : `let result = await exec({command:${JSON.stringify(command)}, background:true});
+             const sessionId = result.sessionId;
+             while (result.status === "running") {
+               result = await process({action:"poll", sessionId, timeout:1000});
+             }
+             return result.aggregated;`,
+          awaitResults: true,
+        },
+        programs: [
+          "exec",
+          async (context) => {
+            observed.push(context);
+            await writeFile(release, "finish");
+            const result = readToolResultDetails(
+              context.messages.findLast((m) => m.role === "toolResult"),
+            );
+            expect(result).toMatchObject({
+              status: "waiting",
+              reason: "steering",
+              runId: expect.any(String),
+            });
+            return { wait: true, runId: String(result?.runId) };
+          },
+        ],
+        configureAgent(_agent, harness) {
+          session = harness.session!;
+        },
+      });
+      await vi.waitFor(async () => expect(await readFile(started, "utf8")).toBe("started"), {
+        timeout: 15000,
+      });
+      if (waitKind === "process poll") {
+        // Deliver only once the background command is being observed, not during exec startup.
+        await vi.waitFor(() => expect(pollCalls).toHaveBeenCalled(), { timeout: 15000 });
+      }
+      const receipt = steerActiveSessionWithOptionalDeliveryWait(session, correction, {
+        waitForTranscriptCommit: true,
+      });
+      const { agent } = await run;
+      await receipt;
+      expect(observed[0]?.messages.slice(-2)).toMatchObject([
+        { role: "toolResult", details: { status: "waiting" } },
+        { role: "user", content: [{ type: "text", text: correction }] },
+      ]);
+      expect(
+        readToolResultDetails(agent.state.messages.findLast((m) => m.role === "toolResult")),
+      ).toMatchObject({
+        status: "completed",
+        value: "original result\n",
+      });
+      expect(agent.state.messages.filter((message) => message.role === "user")).toHaveLength(2);
+      expect(await readFile(started, "utf8")).toBe("started");
+    },
+  );
 
   it("keeps native failure output within its budget", async ({ onTestFinished }) => {
     const { shell } = await nativeExecFixture("exec-failure-budget", onTestFinished);
@@ -751,6 +807,90 @@ describe("Code Mode agent-loop error recovery", () => {
         error: expect.stringContaining("after terminal action"),
       },
     });
+  });
+
+  it.each([
+    {
+      use: "unused search",
+      code: 'const [handle] = await catalog.search("remote_metadata"); if (handle?.name !== "MCP.remote.metadata") throw new Error("Missing MCP handle"); return "found";',
+      tainted: false,
+    },
+    {
+      use: "read description",
+      code: 'const [handle] = await catalog.search("remote_metadata"); void handle.description; return "found";',
+      tainted: true,
+    },
+    {
+      use: "emitted handle",
+      code: 'return await catalog.search("remote_metadata");',
+      tainted: true,
+    },
+    {
+      use: "declaration",
+      code: 'await API.read("mcp/remote.d.ts"); return "found";',
+      tainted: true,
+    },
+  ])("records memory provenance after $use", async ({ code, tainted }) => {
+    const state = await createOpenClawTestState({ label: "catalog-memory-provenance" });
+    const remote = mcpTool({
+      name: "remote_metadata",
+      serverName: "remote",
+      toolName: "metadata",
+      description: "Externally supplied description",
+    });
+    const relativePath = "memory/catalog.md";
+    const taint = createAgentTurnTaintState();
+    try {
+      const { agent } = await runCodeModeAgent({
+        hiddenTools: [remote],
+        programs: [
+          code,
+          'return await write({ path: "memory/catalog.md", content: "Owner-requested note" });',
+        ],
+        async configureAgent(activeAgent, { ctx, tools }) {
+          const codingTools = await createOpenClawCodingToolsAsync({
+            workspaceDir: state.workspaceDir,
+            senderIsOwner: true,
+            isTurnTainted: taint.isTainted,
+            toolConstructionPlan: {
+              includeBaseCodingTools: true,
+              includeShellTools: false,
+              includeChannelTools: false,
+              includeOpenClawTools: false,
+              includePluginTools: false,
+            },
+          });
+          const write = codingTools.find((candidate) => candidate.name === "write");
+          if (!write) {
+            throw new Error("Missing memory write tool");
+          }
+          const controls = tools.map((control) =>
+            wrapToolWithBeforeToolCallHook(control, {
+              ...ctx,
+              onToolOutcome: (observation) => taint.observe(observation),
+            }),
+          );
+          activeAgent.state.tools = controls;
+          applyCodeModeCatalog({ ...ctx, tools: [...controls, remote, write] });
+        },
+      });
+      expectRecovered(agent);
+      expect(agent.state.messages.find((message) => message.role === "toolResult")).toMatchObject({
+        details: { status: "completed" },
+      });
+      expect(remote.execute).not.toHaveBeenCalled();
+      await expect(readFile(join(state.workspaceDir, relativePath), "utf8")).resolves.toBe(
+        "Owner-requested note",
+      );
+      await expect(
+        readMemoryArtifactProvenance({ workspaceDir: state.workspaceDir, relativePath }),
+      ).resolves.toMatchObject({
+        originClass: tainted ? "untrusted" : "agent",
+      });
+      expect(isActiveTurnTainted(agent.state.messages)).toBe(tainted);
+    } finally {
+      await state.cleanup();
+    }
   });
 
   it.each(["network", undefined] as const)("persists %s nested-call provenance", async (source) => {

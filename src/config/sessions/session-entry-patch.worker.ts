@@ -194,7 +194,7 @@ export function commitSessionEntryPatch(
       const options = {
         consumePendingReset: input.consumePendingReset,
         providerReviewMutation: input.providerReviewMutation,
-        workerGuard: { cliHistory: input.cliHistory, conversation: input.conversation },
+        workerGuard: { conversation: input.conversation },
         assertCommitAllowed: () => {
           const validation = readSessionSourceValidation(database, input.sources);
           const { refusedSource } = validation;

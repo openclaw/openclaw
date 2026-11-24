@@ -29,7 +29,7 @@ export type ResolvedSessionEntryRow = {
       board_present?: SqlBool;
       member_ids_json?: string;
       participant_identities_json?: string;
-      row_transcript_window_id?: string | null;
+      row_transcript_present?: SqlBool;
       row_transcript_json?: string | null;
       row_transcript_updated_at?: number | null;
       row_transcript_source_updated_at?: number | null;

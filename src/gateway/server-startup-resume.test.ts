@@ -107,10 +107,7 @@ it(
         });
         replaceSessionEntrySync(target, {
           ...loadExactSessionEntry(target)!.entry,
-          resumeAfterRestart: {
-            queuedInputIds: [],
-            ...(status === "done" ? { hadBackgroundExec: true } : {}),
-          },
+          resumeAfterRestart: {},
         });
         expect(loadExactSessionEntry(target)?.entry.resumeAfterRestart).toBeDefined();
         return target;
@@ -270,7 +267,7 @@ it("serves startup reads and unrelated turns while a resumed session retains inp
   const target = { agentId: "main", sessionKey: resumeKey };
   replaceSessionEntrySync(target, {
     ...loadExactSessionEntry(target)!.entry,
-    resumeAfterRestart: { queuedInputIds: [] },
+    resumeAfterRestart: {},
   });
   expect(loadExactSessionEntry(target)?.entry.resumeAfterRestart).toBeDefined();
   stage = "gateway startup";

@@ -62,6 +62,9 @@ function appCaller(): Caller {
     operatorRoleActor: { kind: "operator", profileId: "person-alice" },
     remoteIngressPrincipal: {
       bindingId: "synthetic-app",
+      pluginId: "mcp-relay",
+      audienceId: RELAY,
+      principal: { kind: "person", profileId: "person-alice" },
       admission: "opaque-local-admission",
       authenticatedUserProfile: { ...client.authenticatedUserProfile!, avatarRevision: "" },
       preparedSessionProfile: { profileId: "person-alice", role: null, aliases: new Set() },
@@ -388,6 +391,32 @@ describe("MCP relay Gateway consent and grant ownership", () => {
     },
   );
 
+  it("keeps identified callers person-bound with definitions alone and no explicit actor", async () => {
+    const config: OpenClawConfig = {
+      gateway: { auth: { mode: "token" }, roles: { definitions: {} } },
+    };
+    const h = await harness(config);
+    await h.addGrant("gr_alice", { kind: "person", profileId: "person-alice" });
+    await h.addGrant("gr_owner", { kind: "owner" });
+    const person = caller(undefined, "person-alice");
+    person.authenticatedUserId = "alice@example.test";
+    expect(await h.request("grants", {}, person)).toMatchObject([
+      true,
+      { grants: [{ grantId: "gr_alice" }], caller: { principal: { kind: "person" } } },
+    ]);
+    expect(await h.request("revoke", { grantId: "gr_owner" }, person)).toEqual(denied("not_found"));
+    expect(h.state.getGrant("gr_owner")).toBeDefined();
+    person.connect.scopes = ["operator.admin"];
+    expect(consentAuthority(relayCaller(person, config), undefined).principal).toEqual({
+      kind: "person",
+      profileId: "person-alice",
+    });
+    person.internal!.operatorRoleActor = { kind: "system" };
+    expect(consentAuthority(relayCaller(person, config), undefined).principal).toEqual({
+      kind: "owner",
+    });
+  });
+
   it("rechecks caller authority after loading grants before revocation", async () => {
     const h = await harness();
     await h.addGrant("gr_alice", { kind: "person", profileId: "person-alice" });
@@ -477,8 +506,25 @@ describe("MCP relay connect entrypoint", () => {
         surface: "tab",
         id: "connected-apps",
         label: "Connected apps",
+        placement: "settings",
         requiredScopes: ["operator.read"],
       }),
     );
+  });
+});
+
+it("keeps owner consent available with definitions alone", () => {
+  const config: OpenClawConfig = {
+    gateway: {
+      auth: { mode: "token" },
+      roles: {
+        definitions: { guest: { sessions: { others: "none" }, agents: [], scopes: [] } },
+      },
+    },
+  };
+  expect(consentAuthority(relayCaller(caller(["operator.admin"]), config), undefined)).toEqual({
+    principal: { kind: "owner" },
+    principalLabel: "Gateway owner",
+    ceiling: ["operator.read", "operator.write"],
   });
 });

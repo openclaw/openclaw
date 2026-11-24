@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
-import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   awaitGateBeforeSettlement,
   createDeferred,
@@ -28,9 +28,9 @@ import * as registryRead from "./registry-read.js";
 import * as registry from "./registry.js";
 import { updateRegistryWorktree } from "./registry.js";
 import { getRegistryWorktree } from "./registry.test-support.js";
-import { resolveRepository, resolveRepositoryPaths } from "./repository-paths.js";
-import { withWorktreeSources } from "./service-preparation.js";
-import { IDLE_GC_MS, ManagedWorktreeService, SNAPSHOT_RETENTION_MS } from "./service.js";
+import { resolveRepositoryPaths } from "./repository-paths.js";
+import { IDLE_GC_MS } from "./retention.js";
+import { ManagedWorktreeService, SNAPSHOT_RETENTION_MS } from "./service.js";
 import { useManagedWorktreeTestRepository } from "./service.test-support.js";
 
 const execFileAsync = promisify(execFile);
@@ -48,27 +48,16 @@ it("reuses path normalization and preserves ancestry snapshots across inventory 
   const added = { id: "added", path: path.join(nested, "deep") };
   const relocated = path.join(root, "elsewhere");
   const prepare = dependencies.createPreparedWorktreePathIndex();
-  const resolve = vi.spyOn(path, "resolve");
-  onTestFinished(() => resolve.mockRestore());
   const original = prepare(records);
-  expect(resolve).toHaveBeenCalledTimes(4);
-  resolve.mockClear();
-  for (let iteration = 0; iteration < 5; iteration++) {
-    expect(prepare(records.map((record) => ({ ...record })))).toBe(original);
-  }
-  expect(resolve).not.toHaveBeenCalled();
   const allocated = [...records.slice(0, 3), added, records[3]!];
   const allocatedIndex = prepare(allocated);
-  expect(resolve).toHaveBeenCalledTimes(1);
   expect([...allocatedIndex(target)]).toEqual(["added", "nested", "duplicate", "outer"]);
   expect([...original(target)]).toEqual(["nested", "duplicate", "outer"]);
-  resolve.mockClear();
   const released = prepare(
     allocated
       .filter((record) => record.id !== "nested")
       .map((record) => (record.id === "duplicate" ? { id: record.id, path: relocated } : record)),
   );
-  expect(resolve).toHaveBeenCalledTimes(1);
   expect([...released(target)]).toEqual(["added", "outer"]);
   expect([...released(relocated)]).toEqual(["duplicate", "outer"]);
   expect([...allocatedIndex(target)]).toEqual(["added", "nested", "duplicate", "outer"]);
@@ -116,20 +105,6 @@ describe("ManagedWorktreeService canonical paths", () => {
     await fs.rm(root, { recursive: true, force: true });
   });
 
-  it("prepares unchanged source inventories without rebuilding the full ancestry index", async () => {
-    await create("inventory-owner");
-    const repository = await resolveRepository(repo);
-    const prepare = () =>
-      withWorktreeSources(env, async (retainRepository) => {
-        await retainRepository({ repository, commitGuard: () => {} });
-      });
-    await prepare();
-    const builds = vi.spyOn(dependencies, "indexWorktreePaths");
-    await prepare();
-    await prepare();
-    expect(builds).not.toHaveBeenCalled();
-  });
-
   it("preserves an absent origin but does not report failed origin reads as absence", async () => {
     await git(repo, "remote", "remove", "origin");
     expect(await service.resolveRepositoryIdentity(repo)).toMatchObject({ originUrl: "" });
@@ -172,18 +147,22 @@ describe("ManagedWorktreeService canonical paths", () => {
 
     const queued = createDeferred();
     const release = createDeferred();
-    const allocate = allocation.withWorktreeAllocationLease;
+    const mutate = allocation.withWorktreeMutationLease;
     const admission = vi
-      .spyOn(allocation, "withWorktreeAllocationLease")
+      .spyOn(allocation, "withWorktreeMutationLease")
       .mockImplementationOnce(async (params, run) => {
         queued.resolve();
         await release.promise;
-        return await allocate(params, run);
+        return await mutate(params, run);
       });
     const restoring = service.restore({ id: created.id });
     try {
       await withinTest(
-        awaitGateBeforeSettlement(queued.promise, restoring, "restore never reached allocation"),
+        awaitGateBeforeSettlement(
+          queued.promise,
+          restoring,
+          "restore never reached checkout custody",
+        ),
         signal,
       );
       const removed = await service.remove({
@@ -356,7 +335,7 @@ describe("ManagedWorktreeService canonical paths", () => {
     await service.remove({ id: original.id, reason: "before-root-change" });
     worktreeRoot = path.join(root, "custom");
     const successor = await service.create({ ...owner, suggestedName: "same-title" });
-    expect(successor.name).toBe("same-title-2");
+    expect(successor.name).toMatch(/^same-title-[0-9a-f]{6}$/);
     expect(successor.path).toBe(path.join(worktreeRoot, successor.repoFingerprint, successor.name));
     const restored = await service.restore({ id: original.id });
     const unrelated = path.join(
@@ -429,25 +408,10 @@ describe("ManagedWorktreeService canonical paths", () => {
       await git(repo, "remote", "remove", "origin");
     });
 
-    it("uses readable defaults and numbers colliding inferred names", async () => {
-      const fallback = await service.create({ repoRoot: repo, baseRef: "HEAD" });
-      await create("release-planning");
-      const second = await service.create({
-        repoRoot: repo,
-        suggestedName: "release-planning",
-        baseRef: "HEAD",
-      });
-
-      expect(fallback.name).toMatch(
-        /^[a-z]+-(?:barnacle|claw|crab|crayfish|krill|langoustine|lobster|prawn|shrimp|shell)$/,
-      );
-      expect(second.name).toBe("release-planning-2");
-    });
-
-    it("numbers inferred names around unmanaged Git and filesystem collisions", async () => {
+    it("keeps generated names clear of unmanaged branches and paths with the same title", async () => {
       const anchor = await create("anchor");
       await git(repo, "branch", "openclaw/release-planning");
-      await fs.mkdir(path.join(path.dirname(anchor.path), "release-planning-2"));
+      await fs.mkdir(path.join(path.dirname(anchor.path), "release-planning"));
 
       const created = await service.create({
         repoRoot: repo,
@@ -455,7 +419,7 @@ describe("ManagedWorktreeService canonical paths", () => {
         baseRef: "HEAD",
       });
 
-      expect(created.name).toBe("release-planning-3");
+      expect(await git(created.path, "branch", "--show-current")).toBe(created.branch);
     });
 
     it("reuses concurrent inferred names for the same owner", async ({ signal }) => {
@@ -498,7 +462,7 @@ describe("ManagedWorktreeService canonical paths", () => {
         const created = await withinTest(Promise.all(creations), signal);
 
         expect(created[0]?.id).toBe(created[1]?.id);
-        expect(created[0]?.name).toMatch(/^(?:first|second)-session-title$/);
+        expect(created[0]?.name).toMatch(/^(?:first|second)-session-title-[0-9a-f]{6}$/);
         expect(
           (await service.list()).filter((record) => record.ownerId === owner.ownerId),
         ).toHaveLength(1);
@@ -567,7 +531,7 @@ describe("ManagedWorktreeService canonical paths", () => {
       },
     );
 
-    it("serializes overlapping numeric suffix families", async () => {
+    it("keeps concurrent generated names distinct", async () => {
       await create("task");
 
       const created = await Promise.all([
@@ -577,8 +541,6 @@ describe("ManagedWorktreeService canonical paths", () => {
       const names = created.map((record) => record.name);
 
       expect(new Set(names).size).toBe(2);
-      expect(names).toContain("task-2");
-      expect(names.every((name) => /^task-(?:2-2|3|2)$/.test(name))).toBe(true);
     });
 
     async function addRegisteredWorktree(

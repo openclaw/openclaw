@@ -30,6 +30,7 @@ routeLogsToStderr();
 registerSealedRuntimeProcessEntrypoints("managedHandoff", import.meta.url);
 
 export { parseLaunchctlJob } from "../daemon/launchctl-job.js";
+export { formatErrorMessage } from "@openclaw/normalization-core/error-coercion";
 export { classifyUpdateOutcome } from "../shared/update-outcome-classification.js";
 
 export { OPENCLAW_STATE_SCHEMA_SQL } from "../state/openclaw-state-schema.js";
@@ -37,6 +38,7 @@ export { assertOpenClawStateWriteAllowed } from "../state/openclaw-state-ownersh
 export { resolveImmutableSqliteFileUri } from "./node-sqlite.js";
 export { procCgroupMembershipMatches } from "./update-managed-service-handoff-scope.js";
 export { packageActivationIdentity } from "./package-update-activation-paths.js";
+export { resolveUpdateInstallRoot } from "./update-install-root.js";
 export {
   recoverInterruptedManagedUpdate,
   readManagedHandoffGatewayStop,

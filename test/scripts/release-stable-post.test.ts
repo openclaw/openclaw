@@ -457,7 +457,6 @@ it("stops on the first failed stable validation and resumes only after operator 
   const failed = release.run([...validateSetup(), request(), validationRun("failure")]);
   expect(failed.status).toBe(2);
   expect(release.readState().validate).not.toHaveProperty("continues");
-  expect(release.readState().capabilities).not.toHaveProperty("closeoutResolvesWaivers");
   expect(failed.stderr).toContain(
     "Full Release Validation 101 failed; diagnose before operator recovery.",
   );

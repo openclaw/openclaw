@@ -5,6 +5,7 @@ import { createComposerContainer } from "./chat-composer.test-support.ts";
 import { createChatViewFrame } from "./chat-view-frame.ts";
 import { createChatProps, renderChatPropsInto } from "./chat-view.test-helpers.ts";
 import { createAsyncQuestionPresentation } from "./components/chat-async-question.ts";
+import { resolveChatCommentAnchor } from "./components/chat-comment-anchor.ts";
 import { getTranscriptState } from "./components/chat-thread-interactions.ts";
 
 afterEach(() => {
@@ -76,13 +77,13 @@ it("resolves saved sources from the transcript registry instead of unrelated mat
     () => container,
     createAsyncQuestionPresentation(getTranscriptState(props.paneId), props),
   );
-  const range = frame.resolveCommentSource(source);
+  const range = resolveChatCommentAnchor(frame.commentSourceBubbles() ?? [], source)?.range;
   expect(range?.toString()).toBe("Selected passage");
   expect(bubble.contains(range!.startContainer)).toBe(true);
 
   draw({ messages: [] });
   await waitForSolid(() => expect(bubble.isConnected).toBe(false));
-  expect(frame.resolveCommentSource(source)).toBeUndefined();
+  expect(resolveChatCommentAnchor(frame.commentSourceBubbles() ?? [], source)).toBeNull();
 });
 
 it("exposes only connected pins fully inside the transcript and viewport, then retires its handle", async () => {

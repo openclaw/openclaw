@@ -16,6 +16,7 @@ import { readSessionEntryReadOnlyInWorker } from "../config/sessions/session-ent
 import { onSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import type { GatewayClient } from "./client.js";
 import { writeToolCall } from "./gateway-provider-fixture.test-support.js";
 import {
   createSubagentModelConfig,
@@ -33,6 +34,11 @@ const HANDOFF = "Handoff: middle runner\nPending: leaf check";
 const PAUSE_NOTICE = "A child is paused awaiting a continuation";
 const FOLLOWUP = "Continue with the follow-up check after requester completion.";
 const CLAIM = "Wait for a message from the middle runner.";
+
+function waitForRun(client: GatewayClient, runId: string) {
+  // The transport must outlive the server's observation window.
+  return client.request("agent.wait", { runId, timeoutMs: 30_000 }, { timeoutMs: 35_000 });
+}
 
 function promptStrings(value: unknown): string[] {
   if (typeof value === "string") {
@@ -76,7 +82,9 @@ function toolOutput(body: unknown, name: string): string | undefined {
   return output === undefined ? undefined : promptStrings(output).join("");
 }
 
-async function startModelServer(completion: "children" | "claimed" | "successor" = "children") {
+async function startModelServer(
+  completion: "children" | "claimed" | "unclaimed" | "successor" = "children",
+) {
   const rootSettlements: string[] = [];
   const middleDone = createDeferred<string>();
   const middleYieldResult = createDeferred<string>();
@@ -111,6 +119,11 @@ async function startModelServer(completion: "children" | "claimed" | "successor"
           throw new Error("Requester did not receive its child spawn receipt");
         }
         spawned.resolve(receipt);
+        if (completion === "unclaimed") {
+          await finishRequester.promise;
+          reply("REQUESTER-DONE", "requester_done");
+          return;
+        }
         if (completion === "claimed") {
           if (!calls.includes("sessions_send")) {
             await allowFollowup.promise;
@@ -193,7 +206,7 @@ async function startModelServer(completion: "children" | "claimed" | "successor"
         reply("CHILD-READY", "child_ready");
         return;
       }
-      if (completion === "claimed") {
+      if (completion === "claimed" || completion === "unclaimed") {
         await allowMessageWait.promise;
         writeToolCall(response, "sessions_yield", {
           waitFor: "message",
@@ -305,9 +318,9 @@ it("treats a subagent's waitFor yield for its own children as a child wait, not 
       idempotencyKey: `yield-wait-scope-${randomUUID()}`,
       deliver: false,
     });
-    await expect(
-      gateway.client.request("agent.wait", { runId: accepted.runId, timeoutMs: 30_000 }),
-    ).resolves.toMatchObject({ status: "ok" });
+    await expect(waitForRun(gateway.client, accepted.runId)).resolves.toMatchObject({
+      status: "ok",
+    });
 
     // The root is woken once, by the middle runner's completion carrying the leaf
     // answer, and is never told the runner is paused awaiting a sessions_send.
@@ -338,13 +351,14 @@ it("treats a subagent's waitFor yield for its own children as a child wait, not 
 });
 
 it.each([
-  ["before", false],
-  ["after", false],
-  ["before", true],
+  ["before", false, true],
+  ["after", false, true],
+  ["before", true, true],
+  ["after", false, false],
 ] as const)(
-  "closes a claimed child's message wait when its requester finishes %s it parks (later turn: %s)",
-  async (order, laterTurn) => {
-    const model = await startModelServer("claimed");
+  "settles only claimed message waits when requester finishes %s parking (later turn: %s, claimed: %s)",
+  async (order, laterTurn, claimed) => {
+    const model = await startModelServer(claimed ? "claimed" : "unclaimed");
     const state = await createOpenClawTestState({ label: "subagent-message-wait-requester-done" });
     const gateway = await startGatewayWithClient({
       cfg: {
@@ -368,7 +382,7 @@ it.each([
       }
     };
     const stop = subscribeSubagentRunChanges("persistence", observeChild);
-    // Terminal session effects publish after the registry row; join their own receipt.
+    // An earlier yield-status event can overlap the terminal row publication.
     const stopClosed = onSessionLifecycleEvent((event) => {
       if (
         event.sessionKey === child?.childSessionKey &&
@@ -376,7 +390,14 @@ it.each([
         child &&
         getSubagentRunByRunId(child.runId)?.execution.outcome
       ) {
-        closed.resolve();
+        void readSessionEntryReadOnlyInWorker({
+          agentId: "main",
+          sessionKey: child.childSessionKey,
+        }).then((entry) => {
+          if (entry?.status === "failed" && entry.lifecycleRunId === undefined) {
+            closed.resolve();
+          }
+        }, closed.reject);
       }
     });
     try {
@@ -392,20 +413,23 @@ it.each([
         30_000,
         () => "requester never spawned the child",
       );
-      await expect(
-        gateway.client.request("agent.wait", { runId: bootstrap.runId, timeoutMs: 30_000 }),
-      ).resolves.toMatchObject({ status: "ok" });
-      model.allowFollowup();
-      child = await within(model.claimed, 30_000, () => "requester never claimed the child");
-      expect(subagentRuns.getRequesterRunInstance(getSubagentRunByRunId(child.runId)!)?.runId).toBe(
-        requester.runId,
-      );
+      child = bootstrap;
+      if (claimed) {
+        await expect(waitForRun(gateway.client, bootstrap.runId)).resolves.toMatchObject({
+          status: "ok",
+        });
+        model.allowFollowup();
+        child = await within(model.claimed, 30_000, () => "requester never claimed the child");
+        expect(
+          subagentRuns.getRequesterRunInstance(getSubagentRunByRunId(child.runId)!)?.runId,
+        ).toBe(requester.runId);
+      }
       observeChild();
       const finishRequester = async () => {
         model.finishRequester();
-        await expect(
-          gateway.client.request("agent.wait", { runId: requester.runId, timeoutMs: 30_000 }),
-        ).resolves.toMatchObject({ status: "ok" });
+        await expect(waitForRun(gateway.client, requester.runId)).resolves.toMatchObject({
+          status: "ok",
+        });
       };
       if (order === "before") {
         await finishRequester();
@@ -417,9 +441,9 @@ it.each([
           idempotencyKey: `message-wait-later-${randomUUID()}`,
           deliver: false,
         });
-        await expect(
-          gateway.client.request("agent.wait", { runId: later.runId, timeoutMs: 30_000 }),
-        ).resolves.toMatchObject({ status: "ok" });
+        await expect(waitForRun(gateway.client, later.runId)).resolves.toMatchObject({
+          status: "ok",
+        });
         const pending = getSubagentRunByRunId(child.runId)!;
         expect(subagentRuns.getRequesterRunInstance(pending)?.runId).toBe(requester.runId);
         const entry = await readSessionEntryReadOnlyInWorker({
@@ -429,9 +453,9 @@ it.each([
         expect(entry?.lastRunId).toBe(later.runId);
       }
       model.allowMessageWait();
-      await expect(
-        gateway.client.request("agent.wait", { runId: child.runId, timeoutMs: 30_000 }),
-      ).resolves.toMatchObject({ status: "ok" });
+      await expect(waitForRun(gateway.client, child.runId)).resolves.toMatchObject({
+        status: "ok",
+      });
       await within(parked.promise, 5_000, () => "child never published its accepted message wait");
       expect(getSubagentRunByRunId(child.runId)).toMatchObject({
         pauseReason: "sessions_yield",
@@ -444,22 +468,28 @@ it.each([
       } else {
         await finishRequester();
       }
-      await within(
-        closed.promise,
-        5_000,
-        () =>
-          `finished requester left child parked: ${JSON.stringify(getSubagentRunByRunId(child!.runId)?.execution)}`,
-      );
-      expect(getSubagentRunByRunId(child.runId)?.execution.outcome).toMatchObject({
-        status: "error",
-        error: expect.stringMatching(/requester/i),
-      });
+      if (claimed) {
+        await within(
+          closed.promise,
+          5_000,
+          () =>
+            `finished requester left child parked: ${JSON.stringify(getSubagentRunByRunId(child!.runId)?.execution)}`,
+        );
+        expect(getSubagentRunByRunId(child.runId)?.execution.outcome).toMatchObject({
+          status: "error",
+          error: expect.stringMatching(/requester/i),
+        });
+      } else {
+        await testing.sweepOnceForTests();
+        expect(getSubagentRunByRunId(child.runId)?.execution.outcome).toBeUndefined();
+        expect(getSubagentRunByRunId(child.runId)?.pauseReason).toBe("sessions_yield");
+      }
       const entry = await readSessionEntryReadOnlyInWorker({
         agentId: "main",
         sessionKey: child.childSessionKey,
       });
       expect(entry).toBeDefined();
-      expect(entry?.lifecycleRunId).toBeUndefined();
+      expect(entry?.lifecycleRunId).toBe(claimed ? undefined : child.runId);
       // The writer fence remains, but the completed wait must allow a new turn.
       const followup = await gateway.client.request<{ runId: string; status: string }>(
         "sessions.send",
@@ -470,9 +500,9 @@ it.each([
         },
       );
       expect(followup.status).toBe("started");
-      await expect(
-        gateway.client.request("agent.wait", { runId: followup.runId, timeoutMs: 30_000 }),
-      ).resolves.toMatchObject({ status: "ok" });
+      await expect(waitForRun(gateway.client, followup.runId)).resolves.toMatchObject({
+        status: "ok",
+      });
     } finally {
       stop();
       stopClosed();
@@ -570,9 +600,9 @@ it("closes a claimed child's message wait when its requester task finishes throu
       30_000,
       () => "requester never spawned its leaf",
     );
-    await expect(
-      gateway.client.request("agent.wait", { runId: bootstrap.runId, timeoutMs: 30_000 }),
-    ).resolves.toMatchObject({ status: "ok" });
+    await expect(waitForRun(gateway.client, bootstrap.runId)).resolves.toMatchObject({
+      status: "ok",
+    });
     model.allowFollowup();
     child = await within(model.claimed, 30_000, () => "requester never claimed the leaf follow-up");
     observeRows();
@@ -612,9 +642,9 @@ it("closes a claimed child's message wait when its requester task finishes throu
       message: FOLLOWUP,
       idempotencyKey: `successor-child-followup-${randomUUID()}`,
     });
-    await expect(
-      gateway.client.request("agent.wait", { runId: followup.runId, timeoutMs: 30_000 }),
-    ).resolves.toMatchObject({ status: "ok" });
+    await expect(waitForRun(gateway.client, followup.runId)).resolves.toMatchObject({
+      status: "ok",
+    });
   } finally {
     stopRows();
     stopSessions();

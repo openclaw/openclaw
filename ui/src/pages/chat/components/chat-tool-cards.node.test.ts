@@ -49,9 +49,7 @@ it.each([
   }
   expect(card?.outputText).toBe(browserOutput);
   const browserOrigin = paired && callName === "browser";
-  expect(card?.preview).toEqual(
-    browserOrigin ? { kind: "browser-tab", ...browserDetails.browserTab } : undefined,
-  );
+  expect(card?.preview).toBeUndefined();
   expect(card?.browserTab).toEqual(browserOrigin ? browserTarget : undefined);
 });
 
@@ -72,9 +70,7 @@ it.each([
     ],
   });
   expect(card).toMatchObject({ name: "browser", outputText: browserOutput });
-  expect(card?.preview).toEqual(
-    toolName === "browser" ? { kind: "browser-tab", ...browserDetails.browserTab } : undefined,
-  );
+  expect(card?.preview).toBeUndefined();
   expect(card?.browserTab).toEqual(toolName === "browser" ? browserTarget : undefined);
 });
 

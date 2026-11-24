@@ -27,6 +27,7 @@ import {
   type SidebarSlotId,
 } from "../sidebar-layout.ts";
 import { MobilePanelLauncher } from "./chat-panel-launcher-mobile.tsx";
+import type { SidebarPanelHost } from "./chat-sidebar-panel-host.ts";
 import { SidebarRegionDivider } from "./chat-sidebar-region-divider.tsx";
 import { createSidebarRegionGeometry } from "./chat-sidebar-region-geometry.ts";
 import {
@@ -37,12 +38,7 @@ import {
   sidebarPanelType,
   readRegionHostedTabs,
 } from "./chat-sidebar-region-header.tsx";
-import type {
-  RegionProps,
-  RegionElement,
-  RegionMethods,
-  SidebarPanelHost,
-} from "./chat-sidebar-region-types.ts";
+import type { RegionProps, RegionElement, RegionMethods } from "./chat-sidebar-region-types.ts";
 
 const regionOperations = new WeakMap<
   RegionElement,

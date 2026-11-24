@@ -1,7 +1,10 @@
 import type { DatabaseSync } from "node:sqlite";
 import type { EngineConnection } from "../infra/sql-connection.js";
+import type { SqliteTransactionOptions } from "../infra/sqlite-transaction.js";
 import type { SqliteWalMaintenance } from "../infra/sqlite-wal.js";
 import type { DatabasePathIdentity } from "../infra/sqlite-worker-identity.js";
+
+export const STATE_DATABASE_LIFECYCLE_KEY = Symbol.for("openclaw.stateDatabaseLifecycle");
 
 export type OpenClawStateSchemaReadAdmission = (database: DatabaseSync) => (() => void) | undefined;
 
@@ -186,3 +189,8 @@ export type OpenClawStateDatabaseSchemaMigration = {
   kind: keyof typeof STATE_SCHEMA_MIGRATION_DESCRIPTIONS;
   path: string;
 };
+
+export type StateWriteTransactionOptions = Pick<
+  SqliteTransactionOptions,
+  "beginLockFailureReporting" | "busyTimeoutMs" | "operationLabel" | "slowTransactionHoldMs"
+> & { singleStatement?: true };

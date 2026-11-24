@@ -120,10 +120,15 @@ suite.define(() => {
             if (delivery === "receipt-first") {
               await result();
             }
+            await page.locator('.chat-activity-group__summary[aria-expanded="false"]').click();
           }
-          const screenshotSummary = page.locator("button.chat-tool-msg-summary", {
-            hasText: /^Computer\s*screenshot$/,
-          });
+          // The expanded result repeats its call as a nested row; target the result summary.
+          const screenshotSummary = page.locator(
+            "button.chat-tool-msg-summary:not(.chat-tool-row)",
+            {
+              hasText: /^Computer\s*screenshot$/,
+            },
+          );
           await expect.poll(() => screenshotSummary.count()).toBe(1);
           await expect.poll(() => screenshotSummary.getAttribute("aria-expanded")).toBe("false");
           const screenshotBody = page

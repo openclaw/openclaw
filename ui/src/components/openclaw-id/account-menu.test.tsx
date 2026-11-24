@@ -34,6 +34,10 @@ function status(overrides: Partial<OpenClawIdStatusResult> = {}): OpenClawIdStat
     status: { state: "on" },
     link: { linked: false },
     channel: "local_operator",
+    remoteAccessSetup:
+      (overrides.channel === undefined ? "local_operator" : overrides.channel) === "local_operator"
+        ? "local"
+        : null,
     accountSignIn: "popup",
     owner: true,
     connection: { kind: "local" },
@@ -364,17 +368,21 @@ describe("approved OpenClaw ID account menu", () => {
     expect(menu(status({ status: { state: "off" } })).text.trim()).toBe("");
   });
 
-  it("local signed-out shows only the sign-in button and keeps the local identity", () => {
+  it("local signed-out shows sign-in, keeps the local identity, and still offers Unlink", () => {
     const current = status({ link: linked });
     expect(openClawIdMenuIdentity(current)).toEqual({
       name: "Local access",
       detail: "This computer",
     });
-    expect(menu(current).labels).toEqual(["Sign in with OpenClaw ID"]);
+    // Unlinking needs only this computer's Gateway key, not an OpenClaw ID sign-in.
+    expect(menu(current).labels).toEqual(["Sign in with OpenClaw ID", "Unlink from OpenClaw ID"]);
     const entries = menu(current);
-    expect(entries.text.trim()).toBe("");
+    expect(entries.text.trim()).toBe("Unlink from OpenClaw ID");
     expect(entries.rows[0]?.render).toBeTypeOf("function");
-    expect(menu(current).text).not.toMatch(/People|\bAccess\b|Make reachable|Regenerate|Unlink/);
+    expect(menu(status()).labels).toEqual(["Sign in with OpenClaw ID"]);
+    expect(menu(status({ channel: null, link: linked })).labels).not.toContain(
+      "Unlink from OpenClaw ID",
+    );
   });
 
   it.each([
@@ -450,7 +458,7 @@ describe("approved OpenClaw ID account menu", () => {
     ["operator", "Operator"],
     ["guest", "guest"],
   ] as const)(
-    "remote %s shows own email, role and known inviter with no owner items",
+    "remote %s shows own identity and member device actions without owner controls",
     (role, label) => {
       const current = status({
         channel: "tunnel",
@@ -469,11 +477,9 @@ describe("approved OpenClaw ID account menu", () => {
         name: "member@example.test",
         detail: `${label} on studio`,
       });
-      expect(menu(current).labels).toEqual([]);
+      expect(menu(current).labels).toEqual(["Approve a new device", "Your devices"]);
       expect(menu(current).text).toContain("Invited by Owner");
-      expect(menu(current).text).not.toMatch(
-        /People|\bAccess\b|Your devices|Regenerate|Remote access|Sign in/,
-      );
+      expect(menu(current).text).not.toMatch(/People|\bAccess\b|Regenerate|Remote access|Sign in/);
     },
   );
 
@@ -528,11 +534,12 @@ describe("approved OpenClaw ID account menu", () => {
       expect(menu(current).labels).toEqual([
         "Copy claw link",
         "Move to new keys",
+        "Unlink from OpenClaw ID",
         "Your devices",
         "Sign out of OpenClaw ID",
       ]);
       expect(menu(current).text).toContain(`Remote access on${relayOnline ? "Online" : "Offline"}`);
-      expect(menu(current).text).not.toMatch(/People|\bAccess\b|Regenerate|Turn off remote|Unlink/);
+      expect(menu(current).text).not.toMatch(/People|\bAccess\b|Regenerate|Turn off remote/);
     },
   );
 
@@ -584,6 +591,17 @@ describe("approved OpenClaw ID account menu", () => {
     expect(keys.text).toContain("Remote access is off: a key file is missing");
     expect(keys.text).not.toContain("Remote access on");
     expect(keys.labels).toContain("Move to new keys");
+    // Unlinking signs with the Gateway key this computer cannot use.
+    expect(keys.labels).not.toContain("Unlink from OpenClaw ID");
+    // A refused endpoint key leaves the Gateway key usable, so Unlink stays.
+    const endpointRefused = menu(
+      status({
+        link: linked,
+        status: { state: "keys_refused", key: "endpoint", reason: "key_mismatch" },
+      }),
+    );
+    expect(endpointRefused.text).toContain("Remote access is off");
+    expect(endpointRefused.labels).toContain("Unlink from OpenClaw ID");
     const superseded = menu(status({ link: linked }), {
       state: "failed",
       code: "binding_superseded",
@@ -606,6 +624,7 @@ describe("approved OpenClaw ID account menu", () => {
     });
     expect(remote.text).not.toContain("Newer keys");
     expect(remote.labels).not.toContain("Move to new keys");
+    expect(remote.labels).not.toContain("Unlink from OpenClaw ID");
   });
 
   it("publishes new keys with a link code fetched from the signed-in account", async () => {
@@ -631,6 +650,57 @@ describe("approved OpenClaw ID account menu", () => {
       action: "account_link_code",
       idToken: "test-token",
     });
+  });
+
+  it("offers Turn on remote access to an admin on a personal sign-in, not to other people", async () => {
+    await signIn(status());
+    const personal = (remoteAccessSetup: OpenClawIdStatusResult["remoteAccessSetup"]) =>
+      status({
+        channel: null,
+        remoteAccessSetup,
+        accountSignIn: "device",
+        owner: false,
+        connection: { kind: "none" },
+      });
+    const admin = menu(personal("personal_admin"));
+    expect(admin.labels).toEqual(["Turn on remote access", "Sign out of OpenClaw ID"]);
+    expect(admin.rows[0]?.disabled).toBeFalsy();
+    const graham = menu(personal(null)).rows[0];
+    expect(graham?.label).toBe("Turn on remote access");
+    expect(graham?.disabled).toBe(true);
+    expect(graham?.attributes?.title).toBe(
+      "Only an admin can turn on remote access for this claw.",
+    );
+    // Linked: the admin may publish new keys (from the status's publication), never move them.
+    const linkedAdmin = menu(
+      status({
+        channel: null,
+        remoteAccessSetup: "personal_admin",
+        accountSignIn: "device",
+        owner: false,
+        connection: { kind: "none" },
+        link: linked,
+        publication: { state: "failed", code: "needs_link_code", message: "x" },
+      }),
+    );
+    expect(linkedAdmin.text).toContain("New keys aren't published yet");
+    expect(linkedAdmin.labels).toContain("Publish new keys");
+    expect(linkedAdmin.labels).not.toContain("Move to new keys");
+    expect(linkedAdmin.labels).not.toContain("Copy claw link");
+    const request = vi.fn(async (_method: string, params: Record<string, unknown>) =>
+      params.action === "account_link_code" ? { code: "ACCOUNT-CODE" } : { publication: null },
+    );
+    selectOpenClawIdMenuValue("openclaw-id:publish-keys", {
+      status: personal("personal_admin"),
+      client: { request } as unknown as GatewayBrowserClient,
+      basePath: "",
+    });
+    await vi.waitFor(() =>
+      expect(request).toHaveBeenLastCalledWith("openclawId.authority", {
+        action: "publish",
+        enrollmentCode: "ACCOUNT-CODE",
+      }),
+    );
   });
 
   it("offers remote sign-out only with the loader's real service worker", () => {

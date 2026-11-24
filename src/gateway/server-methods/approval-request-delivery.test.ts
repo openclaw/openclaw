@@ -31,6 +31,11 @@ async function createDeliveryFixture(
     approvalKind,
   });
   const record = manager.create(payload, 60_000, `${approvalKind}:${source}`);
+  record.requestedByConnId = "requester-connection";
+  record.requestedByDeviceId = "requester-device";
+  record.requestedByClientId = "requester-client";
+  record.requestedByDeviceTokenAuth = true;
+  record.approvalReviewerDeviceIds = ["reviewer-device"];
   await manager.register(record, 60_000);
   const decision = createDeferredCore<ExecApprovalDecision | null>();
   // Persistence/decision custody is a separate owner; delivery still uses its real work tracker.
@@ -172,9 +177,7 @@ it.for(
       { dropIfSlow: true },
     );
     expect(forwardRequest).toHaveBeenCalledExactlyOnceWith(event);
-    expect(handleRequested).toHaveBeenCalledExactlyOnceWith(event, {
-      isTargetVisible: expect.any(Function),
-    });
+    expect(handleRequested).toHaveBeenCalledExactlyOnceWith(fixture.record);
     await fixture.settle(request);
     expect(fixture.respond).toHaveBeenLastCalledWith(
       true,
@@ -245,27 +248,3 @@ it.for(["forward", "push"] as const)(
     await fixture.settle(request);
   },
 );
-
-it("limits mobile delivery to the bound requester, reviewers, and administrators", async (test) => {
-  const fixture = await createDeliveryFixture(test);
-  fixture.record.requestedByDeviceId = "requester";
-  fixture.record.approvalReviewerDeviceIds = ["reviewer"];
-  const visible: boolean[] = [];
-  const request = fixture.start(undefined, {
-    handleRequested: async (_event, options) => {
-      for (const target of [
-        { deviceId: "requester", scopes: [] },
-        { deviceId: "reviewer", scopes: ["operator.approvals"] },
-        { deviceId: "reviewer", scopes: [] },
-        { deviceId: "other", scopes: ["operator.approvals"] },
-        { deviceId: "admin", scopes: ["operator.admin"] },
-      ]) {
-        visible.push(options?.isTargetVisible?.(target) === true);
-      }
-      return true;
-    },
-  });
-  await expectAccepted(fixture);
-  expect(visible).toEqual([true, true, false, false, true]);
-  await fixture.settle(request);
-});

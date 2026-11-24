@@ -1,8 +1,11 @@
+import fs from "node:fs";
 import { expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import { createEnteredGate as gate } from "../agents/entered-gate.test-support.js";
 import { runExclusiveSqliteSessionWrite as writeSession } from "../config/sessions/session-accessor.sqlite-scope.js";
 import { readAgentDeletionJournalStatusInWorker } from "../state/agent-deletion-journal.read.js";
+import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
+import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
   beginSessionEffect,
   closeAgentWorkAdmissions as closeAgent,
@@ -147,18 +150,28 @@ it.each(["session-first", "agent-first"] as const)(
 );
 
 it("refuses deletion from the target agent's own admitted turn before closing ingress", async () => {
-  const { target, begin } = fixture("/agent-admission-self-delete");
-  const active = await begin("self-delete-turn");
-  try {
-    await expect(
-      active.run(async () => closeAgent({ ...target, reason: new Error("delete") })),
-    ).rejects.toThrow("Cannot delete an agent from its own active turn");
-    const following = await begin("following-turn");
-    following.release();
-    expect(active.isActive()).toBe(true);
-  } finally {
-    active.release();
-  }
+  await withOpenClawTestState({ label: "agent-admission-self-delete" }, async (state) => {
+    const database = openOpenClawStateDatabase({ env: state.env });
+    const statePath = fs.realpathSync.native(database.path);
+    const { target, begin } = fixture(state.stateDir);
+    using stat = vi.spyOn(fs, "statSync");
+    using realpath = vi.spyOn(fs.realpathSync, "native");
+    const active = await begin("self-delete-turn", { statePath });
+    try {
+      await expect(
+        active.run(async () => closeAgent({ ...target, statePath, reason: new Error("delete") })),
+      ).rejects.toThrow("Cannot delete an agent from its own active turn");
+      const following = await begin("following-turn", { statePath });
+      following.release();
+      expect(active.isActive()).toBe(true);
+      expect({
+        stat: stat.mock.calls.filter(([pathname]) => pathname === statePath).length,
+        realpath: realpath.mock.calls.filter(([pathname]) => pathname === statePath).length,
+      }).toEqual({ stat: 0, realpath: 0 });
+    } finally {
+      active.release();
+    }
+  });
 });
 
 it.each(["agent", "session"] as const)(

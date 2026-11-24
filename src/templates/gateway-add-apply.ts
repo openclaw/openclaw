@@ -1,14 +1,8 @@
 import { isDeepStrictEqual } from "node:util";
-import type {
-  TemplatePluginAcknowledgement,
-  TemplateSkillAcknowledgement,
-} from "../../packages/gateway-protocol/src/schema/templates.js";
 import { withCurrentConfigPolicyReader } from "../config/io.runtime.js";
 import { resolveAgentMainSessionKey } from "../config/sessions/main-session.js";
-import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createAgentConfigEntry } from "../gateway/server-methods/agents-config-mutations.js";
-import type { ClawHubFetchOptions } from "../infra/clawhub-client.js";
 import type { PluginInstallBatchReload } from "../plugins/install-runtime-batch.js";
 import { withPluginLifecycleLeaseAsync } from "../plugins/plugin-lifecycle-lease.js";
 import { normalizeAgentId } from "../routing/session-key.js";
@@ -21,27 +15,32 @@ import {
   type StatelessTemplateAddOptions,
 } from "./add-stateless.js";
 import { TemplateAddMutationError } from "./add.js";
-import { withResolvedClawHubSource, type ClawHubCoordinate } from "./clawhub-source.js";
-import type { TemplateCronGateway, PersistedTemplateCronRef } from "./cron.js";
+import { assertTemplatesEnabled } from "./availability.js";
+import { prefetchClawHubSource, type PrefetchedClawHubSource } from "./clawhub-source.js";
 import { digestTemplateValue } from "./digest.js";
+import { createTemplateAgentFromChat, selectChatTemplateAgentId } from "./gateway-add-chat.js";
 import {
+  refuseAdmittedTemplateAgent,
   templateInitializationCheckpoints,
   type AdmittedTemplateAgent,
-  type PreparedAgentChat,
 } from "./gateway-add-continuation.js";
+import type { GatewayTemplateAddInput, PreparedAgentChat } from "./gateway-add-input.js";
 import {
   buildGatewayTemplateAddPlan,
   projectGatewayTemplateAddPlan,
   selectTemplateAgentWorkspace,
-  type GatewayTemplateAddPlanningContext,
 } from "./gateway-add-plan.js";
+import {
+  projectTemplateAddOutcomes,
+  type GatewayTemplateAddApplyResult,
+} from "./gateway-add-result.js";
+import { withResolvedTemplateAddSource } from "./gateway-add-source.js";
 import { projectTemplateConfiguredAccess } from "./gateway-disclosure.js";
 import { plansMatchAcrossSourceRoots } from "./gateway-plan-projection.js";
 import { bindTemplatePluginInstallConsent } from "./gateway-plugin-consent.js";
 import { bindTemplateSkillWarningConsent } from "./gateway-skill-consent.js";
-import { assertTemplatesLabsEnabled } from "./labs-gate.js";
 import { assertTemplatePluginRequirementsEnabled } from "./plugin-runtime.js";
-import type { TemplateAddPlan } from "./types.js";
+import { continueTemplateSetup } from "./setup-continuation.js";
 
 export class TemplateGatewayPlanChangedError extends Error {
   constructor() {
@@ -57,54 +56,8 @@ export class TemplateGatewayPlanBlockedError extends Error {
   }
 }
 
-export type GatewayTemplateAddApplyResult = {
-  agentId: string;
-  status: "complete" | "partial";
-  agentRetained?: true;
-  initializationPending?: true;
-  sessionKey?: string;
-  readiness: { ready: boolean; requirements: Array<{ kind: string; owner: string }> };
-  error?: { code: string; message: string };
-};
-
 export async function applyTemplateAddForGateway(
-  input: ClawHubFetchOptions & {
-    source: ClawHubCoordinate;
-    agentId?: string;
-    planIntegrity?: string;
-    acknowledgeClawHubRisk?: boolean;
-    acknowledgeCapabilities?: readonly TemplatePluginAcknowledgement[];
-    acknowledgeSkillWarnings?: readonly TemplateSkillAcknowledgement[];
-    getPlanningContext: () => Promise<GatewayTemplateAddPlanningContext>;
-    policyConfig: { configPath: string; env: NodeJS.ProcessEnv };
-    assertCurrent: () => void;
-    signal?: AbortSignal;
-    stateDir?: string;
-    reloadPlugins?: PluginInstallBatchReload;
-    configWriteOptions?: StatelessTemplateAddOptions["configWriteOptions"];
-    waitForAgentRuntime?: StatelessTemplateAddOptions["waitForAgentRuntime"];
-    prepareAgentChat?: (
-      agentId: string,
-      config: OpenClawConfig,
-      pending?: {
-        initializationPending: true;
-        templateInitialization?: SessionEntry["templateInitialization"];
-        recover?: true;
-      },
-    ) => Promise<PreparedAgentChat>;
-    admissionConfigWriteOptions?: StatelessTemplateAddOptions["configWriteOptions"];
-    waitForAdmissionRuntime?: StatelessTemplateAddOptions["waitForAgentRuntime"];
-    onAgentAdmitted?: (agent: { agentId: string; sessionKey: string }) => Promise<void>;
-    onAgentReady?: StatelessTemplateAddOptions["onAgentReady"];
-    onSetupEvent?: StatelessTemplateAddOptions["onSetupEvent"];
-    cronGateway?: Pick<TemplateCronGateway, "add" | "list" | "writeScratch" | "enable"> &
-      Partial<Pick<TemplateCronGateway, "get" | "remove">>;
-    rollbackNewAgent?: (
-      agentId: string,
-      expectedAgentConfig: TemplateAddPlan["agent"]["config"],
-      expectedCronJobs: PersistedTemplateCronRef[],
-    ) => Promise<void>;
-  },
+  input: GatewayTemplateAddInput,
 ): Promise<GatewayTemplateAddApplyResult> {
   input.assertCurrent();
   const stateContext = captureOpenClawStateWorkerContext({ env: input.policyConfig.env });
@@ -128,13 +81,44 @@ export async function applyTemplateAddForGateway(
     return {
       ...context,
       config: withoutAdmission(context.config),
-      ...(admitted ? { admittedWorkspace: admitted.workspace } : {}),
+      // A receipt without a device zone keeps the declared zones, not the retrying device's.
+      ...(admitted
+        ? { admittedWorkspace: admitted.workspace, deviceTimeZone: admitted.deviceTimeZone }
+        : {}),
     };
   };
+  // A first chat-based Add reads the registry while its agent and chat are admitted.
+  // Nothing fetched is read before admission settles; every other outcome discards it.
+  let prefetched: PrefetchedClawHubSource | undefined;
   try {
+    if (input.mode === "chat" && !input.resume && input.prepareAgentChat) {
+      prefetched = prefetchClawHubSource({
+        coordinate: input.source,
+        mode: "apply",
+        ...(input.acknowledgeClawHubRisk ? { acknowledgeClawHubRisk: true } : {}),
+        ...(input.baseUrl ? { baseUrl: input.baseUrl } : {}),
+        ...(input.token ? { token: input.token } : {}),
+        ...(input.timeoutMs ? { timeoutMs: input.timeoutMs } : {}),
+        ...(input.signal ? { signal: input.signal } : {}),
+      });
+    }
+    if (input.mode === "chat" && input.agentId) {
+      const resumed = await continueTemplateSetup(input, input.agentId, stateContext);
+      if (resumed) {
+        return resumed;
+      }
+    }
     // A reviewed UI target is an ordinary creation request, not trust in Template bytes.
     // Local durable identity and an empty guarded chat precede all remote source reads.
-    if (input.agentId && input.prepareAgentChat && input.waitForAgentRuntime) {
+    // Local archives retain reviewed-plan installation: never persist upload bytes
+    // or a host path in the registry-only chat continuation.
+    if (
+      !("kind" in input.source) &&
+      input.agentId &&
+      input.prepareAgentChat &&
+      input.waitForAgentRuntime
+    ) {
+      const registrySource = input.source;
       // Policy discovery has no persistent effects and does not depend on the
       // deletion lease. Join it before creation, retaining failures through lease cleanup.
       const admissionContext = input.getPlanningContext().then(
@@ -142,10 +126,14 @@ export async function applyTemplateAddForGateway(
         (error: unknown) => ({ ok: false as const, error }),
       );
       try {
+        const admissionAgentId =
+          input.mode === "chat"
+            ? await selectChatTemplateAgentId(admissionContext, input)
+            : normalizeAgentId(input.agentId);
         await withOpenClawStateLeaseAsync(
           {
             scope: "core:agent-deletion",
-            key: normalizeAgentId(input.agentId),
+            key: admissionAgentId,
             leaseMs: 60_000,
             waitMs: 5_000,
             heartbeat: "worker",
@@ -167,8 +155,8 @@ export async function applyTemplateAddForGateway(
             const { config } = preparedContext.value;
             assertCurrent();
 
-            assertTemplatesLabsEnabled(config);
-            const agentId = normalizeAgentId(input.agentId!);
+            assertTemplatesEnabled(config);
+            const agentId = admissionAgentId;
             const workspace = await selectTemplateAgentWorkspace(config, agentId);
 
             const existingConfig = config.agents?.entries?.[agentId];
@@ -182,7 +170,7 @@ export async function applyTemplateAddForGateway(
                 config,
                 agentId,
                 workspace,
-                input.source,
+                registrySource,
                 assertCurrent,
               );
               const chat = await input.prepareAgentChat!(agentId, config, {
@@ -198,10 +186,14 @@ export async function applyTemplateAddForGateway(
                 chat,
                 workspaceIdentity: recoveredIdentity,
                 preparing: continuation.preparing,
+                deviceTimeZone: continuation.deviceTimeZone,
                 ...(configured ? { configured } : {}),
               };
               readySessionKey = sessionKey;
             } else {
+              const origin = preparedContext.value.deviceTimeZone
+                ? { deviceTimeZone: preparedContext.value.deviceTimeZone }
+                : {};
               let chat: PreparedAgentChat | undefined;
               let identity = "";
               const created = await createAgentConfigEntry(
@@ -216,7 +208,8 @@ export async function applyTemplateAddForGateway(
                     chat = await input.prepareAgentChat!(agentId, prospective, {
                       initializationPending: true,
                       templateInitialization: {
-                        source: input.source,
+                        source: registrySource,
+                        ...origin,
                         agentConfig: structuredClone(prospective.agents!.entries![agentId]!),
                         workspaceIdentity: identity,
                       },
@@ -234,6 +227,8 @@ export async function applyTemplateAddForGateway(
                       chat,
                       workspaceIdentity: identity,
                       config: structuredClone(result.config.agents!.entries![agentId]!),
+                      createdByRequest: true,
+                      ...origin,
                     };
                     readySessionKey = resolveAgentMainSessionKey({ cfg: result.config, agentId });
                   },
@@ -265,8 +260,22 @@ export async function applyTemplateAddForGateway(
       }
     }
 
-    const resolved = await withResolvedClawHubSource({
+    if (input.mode === "chat") {
+      // That path settles or removes its own admission; the handling below is plan-based.
+      const admission = admitted;
+      admitted = undefined;
+      return await createTemplateAgentFromChat(
+        input,
+        admission,
+        readySessionKey,
+        stateContext,
+        prefetched,
+      );
+    }
+
+    const resolved = await withResolvedTemplateAddSource({
       coordinate: input.source,
+      onStage: input.onStage,
       mode: "apply",
       ...(input.acknowledgeClawHubRisk ? { acknowledgeClawHubRisk: true } : {}),
       ...(input.baseUrl ? { baseUrl: input.baseUrl } : {}),
@@ -287,6 +296,7 @@ export async function applyTemplateAddForGateway(
           },
           stateContext,
           async (allocationLease) => {
+            input.onStage?.("apply");
             const assertAllocationCurrent = () => {
               input.assertCurrent();
               allocationLease.assertCurrent();
@@ -348,6 +358,8 @@ export async function applyTemplateAddForGateway(
                 ): GatewayTemplateAddApplyResult => {
                   settledResult = {
                     agentId: result.agent.finalId,
+                    workspace: result.agent.workspace,
+                    outcomes: projectTemplateAddOutcomes(result),
                     status: result.status,
                     ...(result.agentRetained ? { agentRetained: true } : {}),
                     ...(admitted && !initialized ? { initializationPending: true } : {}),
@@ -379,7 +391,7 @@ export async function applyTemplateAddForGateway(
                       async (getCurrentConfig) => {
                         const getCurrentTemplatesConfig = () => {
                           const config = getCurrentConfig();
-                          assertTemplatesLabsEnabled(config);
+                          assertTemplatesEnabled(config);
                           return config;
                         };
                         assertCurrent();
@@ -524,7 +536,7 @@ export async function applyTemplateAddForGateway(
                                 async (getPolicyConfig) => {
                                   currentConfig = getPolicyConfig();
                                   assertCurrent();
-                                  assertTemplatesLabsEnabled(currentConfig);
+                                  assertTemplatesEnabled(currentConfig);
                                 },
                               ),
                           );
@@ -546,7 +558,7 @@ export async function applyTemplateAddForGateway(
                                           assertCurrent();
                                           options?.commitGuard?.();
                                           const config = getReloadConfig();
-                                          assertTemplatesLabsEnabled(config);
+                                          assertTemplatesEnabled(config);
                                           assertReviewedConfig(config, "after-agent-commit");
                                           assertTemplatePluginRequirementsEnabled(
                                             targets.map((target) => target.pluginId),
@@ -585,7 +597,7 @@ export async function applyTemplateAddForGateway(
                                 },
                               }
                             : {}),
-                          ...(admitted
+                          ...(admitted && !("kind" in input.source)
                             ? templateInitializationCheckpoints(admitted, input.source)
                             : {}),
                           ...(input.prepareAgentChat && input.waitForAgentRuntime
@@ -664,9 +676,13 @@ export async function applyTemplateAddForGateway(
       defaultRuntime.log("Template source cleanup failed after Add; cached files may remain.");
       return settledResult;
     }
+    if (error instanceof TemplateGatewayPlanBlockedError) {
+      await refuseAdmittedTemplateAgent(admitted, input, stateContext, error);
+    }
     if (admitted) {
       return {
         agentId: admitted.agentId,
+        workspace: admitted.workspace,
         status: "partial",
         agentRetained: true,
         ...(!initialized ? { initializationPending: true } : {}),
@@ -684,5 +700,7 @@ export async function applyTemplateAddForGateway(
       };
     }
     throw error;
+  } finally {
+    await prefetched?.discard();
   }
 }

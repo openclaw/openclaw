@@ -157,3 +157,54 @@ it.each([390, 1440].flatMap((width) => [false, true].map((reduced) => ({ width, 
     expect(document.querySelectorAll('[role="listitem"]')).toHaveLength(1);
   },
 );
+
+it.each([
+  ["light", 390],
+  ["dark", 390],
+  ["light", 1440],
+  ["dark", 1440],
+] as const)("offers the loader approval route to a remote owner (%s %s)", async (theme, width) => {
+  await page.viewport(width, 900);
+  document.documentElement.dataset.theme = theme;
+  onTestFinished(startOpenClawIdFeatureLifetime());
+  const own = `ed25519:${"11".repeat(32)}`;
+  const done = showOwnerDevicesDialog({
+    client: {
+      request: async (method: string) =>
+        method === "openclawId.people"
+          ? {
+              link: {
+                linked: true,
+                clawId: "remote-owner-proof",
+                seq: 1,
+                rootPub: own,
+                ownerDevices: [
+                  {
+                    devicePub: own,
+                    deviceFp: "fp:owner",
+                    peerKeys: [],
+                    label: "Safari on iOS",
+                    approvedBy: "root",
+                  },
+                ],
+              },
+            }
+          : { channel: "tunnel", owner: true },
+    } as unknown as GatewayBrowserClient,
+  });
+  try {
+    const action = page.getByRole("link", { name: "Approve a new device", exact: true });
+    await expect.element(action).toBeVisible();
+    await expect.element(action).toHaveAttribute("href", "/_loader/?stay=1&view=approve");
+    await Promise.allSettled(
+      document
+        .getAnimations()
+        .filter((a) => a.effect?.getTiming().iterations !== Infinity)
+        .map((a) => a.finished),
+    );
+    await page.screenshot({ path: `./.vitest/ocf551/remote-owner-devices-${theme}-${width}.png` });
+  } finally {
+    await page.getByRole("button", { name: "Close", exact: true }).click();
+    await done;
+  }
+});

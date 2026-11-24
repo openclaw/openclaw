@@ -209,7 +209,7 @@ function runCommand(
 
 describe("Claude CLI node command", () => {
   it.runIf(process.platform !== "win32").each([true, false])(
-    "rechecks node authorization after Claude prompt staging (revoke=%s)",
+    "finishes an admitted launch when node policy changes during Claude prompt staging (revoke=%s)",
     async (revoke) => {
       const executable = await executableScript(
         'require("node:fs").writeFileSync("spawned.txt", "spawned"); process.stdout.write("approved\\n");',
@@ -218,7 +218,6 @@ describe("Claude CLI node command", () => {
       const marker = path.join(cwd, "spawned.txt");
       const calls: Calls = [];
       let staged = 0;
-      let stagedPrompt: string | undefined;
       const writeFile = fs.writeFile.bind(fs);
       await withEnvAsync({ OPENCLAW_HOME: cwd, PATH: "/usr/bin:/bin", HOME: cwd }, async () => {
         saveExecApprovals({ version: 1, defaults: { security: "full", ask: "off" }, agents: {} });
@@ -229,7 +228,6 @@ describe("Claude CLI node command", () => {
             return;
           }
           staged += 1;
-          stagedPrompt = args[0];
           if (revoke) {
             const current = loadExecApprovals();
             current.defaults = { ...current.defaults, security: "deny", ask: "off" };
@@ -256,15 +254,11 @@ describe("Claude CLI node command", () => {
       const reply = invocationResult(calls);
       const progress = progressText(calls);
       expect(staged).toBe(1);
-      expect(existsSync(marker)).toBe(!revoke);
-      expect(reply?.ok).toBe(!revoke);
-      expect(progress).toBe(revoke ? "" : "approved\n");
+      // The launch was admitted before staging; a later revoke applies to the next command.
+      expect(existsSync(marker)).toBe(true);
+      expect(reply?.ok).toBe(true);
+      expect(progress).toBe("approved\n");
       expect(calls.some((call) => call.method === "node.event")).toBe(false);
-      if (revoke) {
-        expect(reply?.error?.code).toBe("SYSTEM_RUN_DENIED");
-        expect(reply?.error?.message).toContain("exec approval changed before execution");
-        expect(stagedPrompt !== undefined && existsSync(stagedPrompt)).toBe(false);
-      }
     },
   );
 

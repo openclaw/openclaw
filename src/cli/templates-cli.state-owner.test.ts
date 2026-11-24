@@ -2,9 +2,10 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { TemplateLifecyclePlanResult } from "../../packages/gateway-protocol/src/schema/templates.js";
+import { templatesAddHandlers } from "../gateway/server-methods/templates-add.js";
 import { listDirectoryTreeStrict } from "../infra/directory-walk.js";
 import { defaultRuntime } from "../runtime.js";
-import type { GatewayTemplateAddApplyResult } from "../templates/gateway-add-apply.js";
+import type { GatewayTemplateAddApplyResult } from "../templates/gateway-add-result.js";
 import { useLocalStateOwnerFixture } from "./local-state-owner.fixture.test-support.js";
 import * as prompt from "./prompt.js";
 import { runTemplatesAddCommand } from "./templates-cli.runtime.js";
@@ -49,7 +50,7 @@ describe("Template Add CLI state ownership", () => {
   let source: string;
   let plan: TemplateLifecyclePlanResult;
   let applied: Record<string, unknown>[];
-  let entries: Array<{ packageName: string; latestVersion: string }>;
+  let entries: Array<{ packageName: string; ownerHandle?: string; latestVersion: string }>;
   let result: GatewayTemplateAddApplyResult;
 
   beforeEach(async () => {
@@ -95,17 +96,66 @@ describe("Template Add CLI state ownership", () => {
     );
   });
 
-  it("permits read-only preview but refuses Add while another process owns Gateway state", async () => {
+  it("rejects an unsupported online workspace override before dispatch", async () => {
+    await fixture.startOwner();
+    await expect(
+      runTemplatesAddCommand(source, { json: true, workspace: path.join(root, "custom") }),
+    ).rejects.toThrow("Omit --workspace");
+    expect(fixture.transport.request).not.toHaveBeenCalled();
+  });
+
+  it("rejects an explicitly empty agent ID through the live owner without creating an agent", async () => {
+    await fs.writeFile(
+      process.env.OPENCLAW_CONFIG_PATH!,
+      JSON.stringify({ gateway: { controlUi: { experimental: { templates: true } } } }),
+    );
+    await fixture.startOwner();
+    Object.assign(fixture.config.gateway, { controlUi: { experimental: { templates: true } } });
+    await fs.writeFile(
+      path.join(root, "package.json"),
+      JSON.stringify({ name: "@proof/demo", version: "1.0.0", openclaw: { template: "CLAW.md" } }),
+    );
+    Object.assign(fixture.handlers, templatesAddHandlers);
+    const before = await snapshotTree(root);
+    await expect(runTemplatesAddCommand(source, { json: true, agentId: "" })).rejects.toThrow(
+      /agentId/,
+    );
+    expect(await snapshotTree(root)).toEqual(before);
+  });
+
+  it("routes local Add through the live owner while preview stays read-only", async () => {
     await fs.writeFile(
       process.env.OPENCLAW_CONFIG_PATH!,
       JSON.stringify({ gateway: { controlUi: { experimental: { templates: true } } } }),
     );
     await fixture.startOwner();
     const before = await snapshotTree(root);
-    await expect(runTemplatesAddCommand(source, { json: true })).rejects.toThrow(
-      /exclusive offline state ownership.*stop the Gateway/s,
-    );
-    expect(output).toEqual([]);
+    fixture.handlers["templates.add.plan"] = async ({ params, respond }) => {
+      expect(params).toEqual({ source: { kind: "local", path: source } });
+      respond(true, {
+        operation: "add",
+        target: { agentId: "demo" },
+        planIntegrity: "sha256:reviewed",
+        blockers: [],
+        pluginReviews: [],
+        skillReviews: [],
+      });
+    };
+    fixture.handlers["templates.add.apply"] = async ({ params, respond }) => {
+      expect(params).toMatchObject({
+        source: { kind: "local", path: source },
+        planIntegrity: "sha256:reviewed",
+      });
+      respond(true, {
+        agentId: "demo",
+        status: "complete",
+        readiness: { ready: true, requirements: [] },
+      });
+    };
+    await runTemplatesAddCommand(source, { json: true });
+    expect(output).toEqual([expect.objectContaining({ agentId: "demo", status: "complete" })]);
+    output.length = 0;
+    fixture.transport.request.mockClear();
     expect(await snapshotTree(root)).toEqual(before);
 
     await runTemplatesAddCommand(source, { dryRun: true, json: true });
@@ -117,6 +167,29 @@ describe("Template Add CLI state ownership", () => {
     ]);
     expect(await snapshotTree(root)).toEqual(before);
     expect(fixture.transport.request).not.toHaveBeenCalled();
+  });
+
+  it("previews another Add of a ${VAR} MCP Template once the variable is set", async () => {
+    const statuspage = {
+      command: "npx",
+      args: ["--yes", "@acme/statuspage-mcp@1.0.0"],
+      env: { STATUSPAGE_TOKEN: "${STATUSPAGE_TOKEN}" },
+    };
+    await fs.writeFile(
+      process.env.OPENCLAW_CONFIG_PATH!,
+      JSON.stringify({
+        gateway: { controlUi: { experimental: { templates: true } } },
+        mcp: { servers: { statuspage } },
+      }),
+    );
+    await fs.writeFile(
+      source,
+      `---\n${JSON.stringify({ schemaVersion: 1, agent: { id: "demo" }, mcpServers: { statuspage } })}\n---\n`,
+    );
+    vi.stubEnv("STATUSPAGE_TOKEN", "synthetic-token");
+
+    await runTemplatesAddCommand(source, { dryRun: true, json: true });
+    expect(output).toEqual([expect.objectContaining({ blockers: [] })]);
   });
 
   it("adds a ClawHub Template through the running owner without local mutation", async () => {
@@ -138,6 +211,24 @@ describe("Template Add CLI state ownership", () => {
       },
     ]);
     expect(await snapshotTree(root)).toEqual(before);
+  });
+
+  it("adds an unscoped ClawHub Template by its publisher-qualified reference", async () => {
+    entries = [
+      { packageName: "demo", ownerHandle: "mallory", latestVersion: "9.9.9" },
+      { packageName: "@acme/demo", latestVersion: "1.2.3" },
+    ];
+    await fixture.startOwner();
+    // The exact scoped name wins over another publisher's unscoped package.
+    await runTemplatesAddCommand("@acme/demo", { json: true });
+
+    entries = [{ packageName: "demo", ownerHandle: "acme", latestVersion: "1.2.3" }];
+    fixture.handlers["templates.add.plan"] = async ({ params, respond }) => {
+      expect(params).toEqual({ source: { packageName: "demo", version: "1.2.3" } });
+      respond(true, plan);
+    };
+    await runTemplatesAddCommand("@acme/demo", { json: true });
+    expect(applied).toHaveLength(2);
   });
 
   it("rejects an online workspace override without touching state or dispatching", async () => {
@@ -261,6 +352,23 @@ describe("Template Add CLI state ownership", () => {
       expect(await snapshotTree(root)).toEqual(before);
     },
   );
+
+  it("names the rerun that continues a kept agent whose setup did not finish", async () => {
+    result = {
+      agentId: "demo",
+      status: "partial",
+      agentRetained: true,
+      initializationPending: true,
+      readiness: { ready: false, requirements: [] },
+      error: { code: "template_initialization_failed", message: "Download failed." },
+    };
+    await fixture.startOwner();
+    await runTemplatesAddCommand("@acme/demo", {});
+    expect(defaultRuntime.log).toHaveBeenCalledWith(
+      expect.stringContaining("Rerun with --agent-id demo"),
+    );
+    expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
+  });
 
   it.each(["none", "capabilities-only", "risk-only", "both", "declined-sibling"])(
     "requires separate exact plugin and skill trust consent: %s",

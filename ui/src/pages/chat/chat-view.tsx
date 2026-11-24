@@ -6,6 +6,7 @@ import type { ApplicationContext } from "../../app/context-types.ts";
 import { createSkillFileHovercard } from "../../components/skill-file-hovercard.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import { registerChatSessionEnglish } from "../../i18n/locales/en-chat-session.ts";
+import { composerInputFocusElement } from "../../lib/composer-input.ts";
 import {
   KEYBOARD_SHORTCUT_COMBOS,
   matchesShortcutCombo,
@@ -31,6 +32,7 @@ import {
 import type { ChatActivityPillsProps } from "./components/chat-activity-pills-types.ts";
 import { publicationOutsidePills } from "./components/chat-activity-pills-visibility.ts";
 import { ChatCommentController } from "./components/chat-comment-controller.ts";
+import { ChatComposerPluginContributions } from "./components/chat-composer-plugin-contributions.tsx";
 import {
   ComposerQuestionDock,
   createComposerQuestionPanel,
@@ -52,6 +54,7 @@ import {
 import "../../components/resizable-divider.ts";
 import { ChatThread } from "./components/chat-thread-view.tsx";
 import { TranscriptSearch } from "./components/chat-transcript-search.tsx";
+import { TemplateSetupComposer } from "./template-setup-composer.tsx";
 
 registerEnglishCatalog(registerChatSessionEnglish);
 
@@ -74,6 +77,7 @@ type ChatViewInput = {
   questions: ComposerQuestions;
   props: ChatProps;
   frame: ChatViewFrame;
+  showComposerSessionCards: boolean;
   presented: boolean;
   application?: ApplicationContext;
   bindTranscriptViewport: (element: HTMLDivElement) => () => void;
@@ -138,6 +142,7 @@ function ChatFooterContent(
   input: ChatViewInput & {
     mobileComposition?: boolean;
     activities?: ChatActivityPillsProps;
+    toolbar?: boolean;
   },
 ) {
   const pendingInputs = () => input.frame.pendingInputs;
@@ -175,7 +180,7 @@ function ChatFooterContent(
           </ChatLazyBoundary>
         </div>
       </Show>
-      <Show when={!input.props.detailsEnabled}>
+      <Show when={input.showComposerSessionCards}>
         <ChatPullRequests
           pullRequests={input.activities?.pullRequests ? [] : (input.props.pullRequests ?? [])}
           gateway={input.props.pullRequestsGateway}
@@ -208,14 +213,12 @@ function ChatFooterContent(
           />
         </ChatLazyBoundary>
       </Show>
-      <Show when={input.application}>
-        <openclaw-plugin-contributions
-          prop:kind="composer"
-          prop:sessionKey={input.props.sessionKey}
-          prop:agentId={input.props.currentAgentId}
-          prop:presented={input.presented}
-        />
-      </Show>
+      <ChatComposerPluginContributions
+        kind="composer"
+        composer={input.props}
+        presented={input.presented}
+        toolbar={input.toolbar}
+      />
     </>
   );
 }
@@ -270,20 +273,15 @@ function ChatComposerView(input: ChatViewInput) {
           : undefined,
     };
   });
+  const showProgress = () => input.showComposerSessionCards && !activities()?.progress;
   return (
     <ChatComposer
       {...input.props}
       questions={input.questions}
       getTranscriptElement={input.getTranscriptElement}
       getScrollToLatestElement={input.getScrollToLatestElement}
-      progressCard={
-        input.props.detailsEnabled || activities()?.progress ? null : input.props.progressCard
-      }
-      progressCardInitialLoading={
-        input.props.detailsEnabled || activities()?.progress
-          ? false
-          : input.props.progressCardInitialLoading
-      }
+      progressCard={showProgress() ? input.props.progressCard : null}
+      progressCardInitialLoading={showProgress() && input.props.progressCardInitialLoading}
       displayQueue={input.frame.displayQueue}
       footerContent={
         <ChatFooterContent
@@ -292,6 +290,7 @@ function ChatComposerView(input: ChatViewInput) {
           activities={activities()}
         />
       }
+      pluginActionsPresented={input.presented}
       mobileActivityPills={activities()}
       mobileApprovalContent={
         <Show
@@ -335,20 +334,20 @@ function ChatComposerView(input: ChatViewInput) {
 }
 
 function ChatComposerCompanion(input: ChatViewInput) {
+  const composer = createMemo(() => merge(input.props, { displayQueue: input.frame.displayQueue }));
   const questionPanel = createComposerQuestionPanel(
     () => input.questions,
-    undefined,
     () => input.getTranscriptElement,
   );
   return (
     <div class="chat-footer__context">
-      <ChatFooterContent {...input} />
+      <ChatFooterContent {...input} toolbar={false} />
       <div class="agent-chat__composer-notices">
         <ChatComposerNoticesView {...input.props} presented={input.presented} />
       </div>
       <ComposerQuestionDock panel={questionPanel()} />
       <ComposerQueue
-        composer={merge(input.props, { displayQueue: input.frame.displayQueue })}
+        composer={composer()}
         showAbortableUi={
           Boolean(input.props.canAbort && input.props.onAbort) &&
           !hasTerminalRunStatus(input.props.runStatus)
@@ -473,8 +472,9 @@ function ChatContent(input: { props: ChatProps; questions: ComposerQuestions }) 
       (replacement) => {
         const replacementElement = replacement && replacementComposer.read();
         const footer = getComposerFooter();
+        const composer = getChatComposerState(input.props.paneId).composerTextarea;
         const target =
-          replacementElement || getChatComposerState(input.props.paneId).composerTextarea || footer;
+          replacementElement || (composer && composerInputFocusElement(composer)) || footer;
         // The fallback is a keyboard destination, not a pointer-focusable editor ancestor.
         if (target === footer) {
           footer?.setAttribute("tabindex", "-1");
@@ -489,6 +489,8 @@ function ChatContent(input: { props: ChatProps; questions: ComposerQuestions }) 
     questions: input.questions,
     props: input.props,
     frame: frame(),
+    // Full chat owns these in Details; the assistant dock has no fallback cards.
+    showComposerSessionCards: !input.props.detailsEnabled && !input.props.hideComposerSessionCards,
     presented: presented(),
     application,
     bindTranscriptViewport,
@@ -577,7 +579,7 @@ function ChatContent(input: { props: ChatProps; questions: ComposerQuestions }) 
           paneId={input.props.paneId}
           onFocusComposer={frame().threadProps.onFocusComposer}
           visiblePin={(id) => getTranscriptState(input.props.paneId).commentPins?.visiblePin(id)}
-          resolveSourceRange={frame().resolveCommentSource}
+          sourceBubbles={frame().commentSourceBubbles}
           props={input.props}
           disabled={!input.props.canSend}
           sessionKey={input.props.sessionKey}
@@ -683,27 +685,29 @@ function ChatContent(input: { props: ChatProps; questions: ComposerQuestions }) 
                       ref={[bindComposerFooter, elementRef(input.props.onFooterElementRef)]}
                       onWheel={forwardWheel}
                     >
-                      <ChatSurface
-                        binding={{
-                          "prop:surface": "composer",
-                          "prop:props": {
-                            sessionKey: input.props.sessionKey,
-                            agentId: input.props.currentAgentId,
-                            draft: input.props.draft,
-                            canSend: input.props.canSend && !input.props.submitDisabledReason,
-                            sending: input.props.sending,
-                            disabledReason:
-                              input.props.submitDisabledReason ?? input.props.disabledReason,
-                            setDraft: input.props.onDraftChange,
-                            send: async () => input.props.onSend(),
-                            abort: input.props.onAbort,
-                          },
-                        }}
-                        viewProps={viewProps()}
-                        view={ChatComposerView}
-                        companion={ChatComposerCompanion}
-                        replacementRef={replacementComposer.bind}
-                      />
+                      <TemplateSetupComposer chat={input.props}>
+                        <ChatSurface
+                          binding={{
+                            "prop:surface": "composer",
+                            "prop:props": {
+                              sessionKey: input.props.sessionKey,
+                              agentId: input.props.currentAgentId,
+                              draft: input.props.draft,
+                              canSend: input.props.canSend && !input.props.submitDisabledReason,
+                              sending: input.props.sending,
+                              disabledReason:
+                                input.props.submitDisabledReason ?? input.props.disabledReason,
+                              setDraft: input.props.onDraftChange,
+                              send: async () => input.props.onSend(),
+                              abort: input.props.onAbort,
+                            },
+                          }}
+                          viewProps={viewProps()}
+                          view={ChatComposerView}
+                          companion={ChatComposerCompanion}
+                          replacementRef={replacementComposer.bind}
+                        />
+                      </TemplateSetupComposer>
                     </div>
                   </div>
                 </div>

@@ -97,9 +97,25 @@ const dependencies = [
         workspace ? join(dirname(process.argv[2]), workspace, "node_modules") : process.argv[2],
         dependency,
       );
-  try {
-    const target = realpathSync(installedPath);
-    assertDependencyTarget(target, process.argv[3]);
+  const inspectInstalled = (operation) => {
+    try {
+      return operation();
+    } catch {
+      console.error(
+        `Cannot resolve installed scripts/pr dependency '${dependency}' at ${installedPath}.`,
+      );
+      console.error(
+        "The current trusted wrapper can materialize this anchor’s frozen dependencies; retry from current main or select a matching OPENCLAW_PR_TOOLING_ROOT.",
+      );
+      // Only dependency drift permits the parent to prepare a frozen installation.
+      return process.exit(78);
+    }
+  };
+  const target = inspectInstalled(() => realpathSync(installedPath));
+  // Lifetime rejection is not dependency drift. Stop before reading package
+  // contents, preserving the owner's reason instead of authorizing an install.
+  assertDependencyTarget(target, process.argv[3]);
+  return inspectInstalled(() => {
     if (!statSync(target).isDirectory()) {
       throw new Error("not a package directory");
     }
@@ -115,17 +131,7 @@ const dependencies = [
       throw new Error("dependency version mismatch");
     }
     return { dependency, target, present };
-  } catch {
-    console.error(
-      `Cannot resolve installed scripts/pr dependency '${dependency}' at ${installedPath}.`,
-    );
-    console.error(
-      "The current trusted wrapper can materialize this anchor’s frozen dependencies; retry from current main or select a matching OPENCLAW_PR_TOOLING_ROOT.",
-    );
-    // Only dependency drift permits the parent to prepare a frozen installation;
-    // destination write failures must never trigger package installation.
-    return process.exit(78);
-  }
+  });
 });
 mkdirSync(process.argv[3], { recursive: true });
 for (const { dependency, target, present } of dependencies) {

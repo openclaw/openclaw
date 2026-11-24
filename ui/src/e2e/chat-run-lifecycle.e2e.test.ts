@@ -7,6 +7,7 @@ import { prepareChatHistoryFixture } from "../test-helpers/chat-activity-fixture
 import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { openAiAuthor } from "./chat-flow.test-support.ts";
 import { openMockAbortableRun } from "./chat-run-lifecycle.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -185,6 +186,7 @@ suite.define(() => {
       },
       {
         ...historyMessage("The release notes are ready for review.", startedAt + 22_000),
+        ...openAiAuthor,
         __openclaw: { id: "reply", runId, recordTimestampMs: startedAt + 34_000 },
       },
     ];
@@ -367,6 +369,7 @@ suite.define(() => {
     const reply = {
       // Creation precedes the long final request; the saved write marks its completion.
       ...historyMessage("Success after the earlier failure.", firstStartedAt + 983_000),
+      ...openAiAuthor,
       __openclaw: { id: "successful-reply", runId, recordTimestampMs: firstStartedAt + 994_000 },
     };
     messages.push(reply);
@@ -451,7 +454,7 @@ suite.define(() => {
     expect(await page.locator(".chat-turn-recap").allTextContents()).not.toEqual(
       expect.arrayContaining([expect.stringContaining("Done in")]),
     );
-    expect(await page.locator(".chat-turn-recap").textContent()).toBe("42 output tokens");
+    expect(await page.locator(".chat-turn-recap").count()).toBe(0);
     await gateway.setSessionsListResponse({ sessions: [completedSession] });
 
     await page.reload();
@@ -481,7 +484,7 @@ suite.define(() => {
 
     expect(await assistantGroup.count()).toBe(1);
     expect(await page.locator(".chat-reading-indicator").count()).toBe(0);
-    await assistantGroup.getByText("Working…", { exact: true }).waitFor();
+    await assistantGroup.getByText("Working", { exact: true }).waitFor();
     expect(
       await assistantGroup.getByText("Waiting for turn to start", { exact: true }).count(),
     ).toBe(0);
@@ -779,7 +782,7 @@ suite.define(() => {
       .poll(() => page.locator(".chat-working-indicator__elapsed").textContent())
       .toBe("2m 57s");
     const workingLabel = page.locator(".chat-working-indicator__status > span:first-child");
-    expect(await workingLabel.textContent()).toBe("Working…");
+    expect(await workingLabel.textContent()).toBe("Working");
     expect(await workingLabel.getAttribute("class")).toContain("sr-only");
     expect(
       await page.locator(".chat-working-indicator__status > span:not(.sr-only)").allTextContents(),

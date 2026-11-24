@@ -13,11 +13,12 @@ import { retainShadowStyles } from "./solid/shadow-styles.ts";
 import iconButtonStyles from "./solid/icon-button.css?inline";
 import modalStyles from "./solid/modal-dialog.css?inline";
 import modalScrollLockStyles from "./solid/modal-scroll-lock.css?inline";
-import overlayStyles from "./solid/overlay.css?inline";
+import overlayStyles from "./solid/overlay-shadow.css?inline";
 
 export type ModalDialogProperties = {
   open: boolean;
   manual: boolean;
+  nativeBrowserBackdrop: boolean;
   label: string;
   description: string;
   initialFocus?: () => HTMLElement | null;
@@ -36,6 +37,7 @@ export type OpenClawModalDialog = SolidBridgeElement<ModalDialogProperties, Moda
 type ModalDialogAttributes = SolidJSX.HTMLAttributes<OpenClawModalDialog> & {
   label: string;
   manual?: boolean;
+  "native-browser-backdrop"?: boolean;
   description?: string;
   "prop:onOpenChange"?: ModalDialogProperties["onOpenChange"];
   "prop:initialFocus"?: ModalDialogProperties["initialFocus"];
@@ -81,7 +83,7 @@ function setModalLayer(host: HTMLElement, open: boolean) {
   }
 }
 
-function acquirePresentation(host: HTMLElement): () => void {
+function acquirePresentation(host: OpenClawModalDialog): () => void {
   const doc = host.ownerDocument;
   const releaseScrollLockStyles = retainShadowStyles(doc, [modalScrollLockStyles]);
   let locks = scrollLocks.get(doc);
@@ -95,7 +97,7 @@ function acquirePresentation(host: HTMLElement): () => void {
     doc.documentElement.classList.toggle("oc-modal-scroll-gutter", gutter > 1);
   }
   doc.documentElement.classList.add("oc-modal-scroll-lock");
-  const releaseOcclusion = acquireNativeOverlayOcclusion();
+  const releaseOcclusion = acquireNativeOverlayOcclusion(host.nativeBrowserBackdrop);
   return () => {
     releaseOcclusion();
     locks.delete(host);
@@ -278,7 +280,11 @@ function createModalPolicy(host: OpenClawModalDialog): ModalPolicy {
       return dispatch(type, cancelable);
     },
     onRootChange: (root) =>
-      retainShadowStyles(root, [overlayStyles, iconButtonStyles, modalStyles]),
+      retainShadowStyles(root, [
+        ...("host" in root ? [overlayStyles] : []),
+        iconButtonStyles,
+        modalStyles,
+      ]),
     native: {
       isOpen: () => dialog.open,
       show: () => {
@@ -519,6 +525,11 @@ export const ModalDialog = defineSolidBridge<ModalDialogProperties, ModalDialogM
     properties: {
       open: { default: true, type: Boolean },
       manual: { default: false, type: Boolean, reflect: true },
+      nativeBrowserBackdrop: {
+        default: false,
+        type: Boolean,
+        attribute: "native-browser-backdrop",
+      },
       label: { default: "", type: String },
       description: { default: "", type: String },
       initialFocus: { default: undefined, attribute: false },

@@ -174,7 +174,6 @@ export const buildAllPluginInspectReportsMock: UnknownMock = vi.fn();
 export const buildPluginDiagnosticsReportMock: UnknownMock = vi.fn();
 export const withPluginDiagnosticsReportForInspectionMock =
   vi.fn<(typeof import("../plugins/status.js"))["withPluginDiagnosticsReportForInspection"]>();
-export const retirePluginDiagnosticsMock = vi.fn<() => void | Promise<void>>();
 export const buildPluginCompatibilityNoticesMock: UnknownMock = vi.fn();
 export const inspectPluginRegistryMock: AsyncUnknownMock = vi.fn();
 export const refreshPluginRegistryMock: AsyncUnknownMock = vi.fn();
@@ -496,20 +495,14 @@ vi.mock("../plugins/manifest-registry.js", async (importOriginal) => {
   };
 });
 
-// mock-isolation: CLI report fixtures own registry leases and cleanup without activating installed plugins.
+// mock-isolation: CLI formatting fixtures avoid installed plugins; status.runtime-inspection owns real custody proof.
 vi.mock("../plugins/status.js", () => ({
   buildPluginSnapshotReportAsync: async (
     ...args: Parameters<(typeof import("../plugins/status.js"))["buildPluginSnapshotReport"]>
   ) => buildPluginSnapshotReportMock(...args),
   withPluginDiagnosticsReportForInspection: async (
     ...args: Parameters<typeof withPluginDiagnosticsReportForInspectionMock>
-  ) => {
-    try {
-      return await withPluginDiagnosticsReportForInspectionMock(...args);
-    } finally {
-      await retirePluginDiagnosticsMock();
-    }
-  },
+  ) => await withPluginDiagnosticsReportForInspectionMock(...args),
   buildPluginSnapshotReport: ((
     ...args: Parameters<(typeof import("../plugins/status.js"))["buildPluginSnapshotReport"]>
   ) =>
@@ -540,11 +533,7 @@ vi.mock("../plugins/status.js", () => ({
     params: Parameters<(typeof import("../plugins/status.js"))["withPluginDiagnosticsReport"]>[0],
     consume: (report: import("../plugins/status.js").PluginStatusReport) => T | Promise<T>,
   ): Promise<T> => {
-    try {
-      return await consume(invokeMock(buildPluginDiagnosticsReportMock, params));
-    } finally {
-      await retirePluginDiagnosticsMock();
-    }
+    return await consume(invokeMock(buildPluginDiagnosticsReportMock, params));
   },
   buildPluginCompatibilityNotices: ((
     ...args: Parameters<(typeof import("../plugins/status.js"))["buildPluginCompatibilityNotices"]>
@@ -862,7 +851,6 @@ export function resetPluginsCliTestState() {
   withPluginDiagnosticsReportForInspectionMock.mockImplementation(async (_params, formatReport) =>
     formatReport({ ...createEmptyPluginRegistry(), workspaceScope: "omitted" }),
   );
-  retirePluginDiagnosticsMock.mockReset();
   buildPluginCompatibilityNoticesMock.mockReset();
   inspectPluginRegistryMock.mockReset();
   refreshPluginRegistryMock.mockReset();

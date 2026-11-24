@@ -72,22 +72,6 @@ it("does not cross an account or thread route", async () => {
   expectNotice("owed");
 });
 
-it("keeps the supplied owner for a global session notice", async () => {
-  const secondary = { agentId: "secondary", sessionKey: "global", storePath };
-  await replaceSessionEntry(secondary, { ...entry(), sessionId: "secondary-global" });
-  await deliverPendingDeliveryNotice(secondary.sessionKey, storePath, secondary.agentId);
-  expect(appendAssistantMessageToSessionTranscript).toHaveBeenCalledExactlyOnceWith(
-    expect.objectContaining({
-      ...secondary,
-      expectedSessionId: "secondary-global",
-      expectedLifecycleRevision: null,
-      text: PENDING_DELIVERY_NOTICE,
-    }),
-  );
-  expect(loadSessionEntry(secondary)?.pendingDeliveryNotice?.state).toBe("acknowledged");
-  expectNotice("owed");
-});
-
 it("does not acknowledge a new revision with the same session and notice identity", async () => {
   const sent = pendingNotice();
   const attempt = deliver();
@@ -102,12 +86,20 @@ it("does not acknowledge a new revision with the same session and notice identit
 });
 
 it.each([
-  ["failed", "unresolved"],
-  ["completed", "acknowledged"],
-  ["pending", "owed"],
-])("preserves %s durable notice status after a send error", async (status, state) => {
-  sendNotice.mockRejectedValue(new Error("notice send failed"));
-  findDeliveryIntentOwner.mockReturnValue({ status });
+  ["send error", "failed", "unresolved"],
+  ["send error", "completed", "acknowledged"],
+  ["send error", "pending", "owed"],
+  ["suppressed", "failed", "unresolved"],
+  ["suppressed", "completed", "acknowledged"],
+  ["suppressed", "pending", "unresolved"],
+  ["suppressed", "missing", "unresolved"],
+])("preserves durable %s / %s notice status", async (outcome, status, state) => {
+  if (outcome === "send error") {
+    sendNotice.mockRejectedValue(new Error("notice send failed"));
+  } else {
+    sendNotice.mockResolvedValue({ suppressed: true });
+  }
+  findDeliveryIntentOwner.mockReturnValue(status === "missing" ? null : { status });
   await deliver();
   if (status === "completed") {
     expect(sendNotice).toHaveBeenCalledWith({
@@ -118,6 +110,8 @@ it.each([
     expect(appendAssistantMessageToSessionTranscript).toHaveBeenCalledWith(
       expect.objectContaining({ expectedSessionId: "session-1", text: PENDING_DELIVERY_NOTICE }),
     );
+  } else {
+    expect(appendAssistantMessageToSessionTranscript).not.toHaveBeenCalled();
   }
   expectNotice(state);
 });
