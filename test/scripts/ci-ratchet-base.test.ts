@@ -2,6 +2,7 @@ import { execFileSync, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, expect, it } from "vitest";
 import { parse } from "yaml";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
@@ -26,9 +27,10 @@ function step(job: string, name: string): string {
   return selected.run;
 }
 
-const [expectedBase, expectedCandidate, merge, fork] = ["a", "b", "c", "d"].map((digit) =>
-  digit.repeat(40),
-);
+const expectedBase = "a".repeat(40);
+const expectedCandidate = "b".repeat(40);
+const merge = "c".repeat(40);
+const fork = "d".repeat(40);
 function compare(gh: string, merged = false) {
   const root = tempDirs.make("openclaw-ci-ratchet-base-");
   const output = path.join(root, "output");
@@ -71,7 +73,7 @@ it.each([false, true])(
     }
     const context = {
       preflightOutputs: {
-        checkout_base_revision: readWorkflowOutputs(output).sha,
+        checkout_base_revision: expectDefined(readWorkflowOutputs(output).sha, "checkout base"),
         diff_base_revision: expectedBase,
       },
     };
