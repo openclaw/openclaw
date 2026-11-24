@@ -5,6 +5,11 @@ on:
     - cron: "23 4 * * *"
     - cron: "41 6 * * 1"
   workflow_dispatch:
+    inputs:
+      every_file_only:
+        description: Run only the every-file lane (no credentialed live checks)
+        type: boolean
+        default: false
 
 permissions:
   actions: read
@@ -95,7 +100,7 @@ jobs:
         run: node --import tsx scripts/ci-run-node-test-shard.mts
 
   live_and_openwebui_checks:
-    if: github.repository == 'openclaw/openclaw' && (github.event_name == 'workflow_dispatch' || github.event.schedule == '23 4 * * *')
+    if: github.repository == 'openclaw/openclaw' && ((github.event_name == 'workflow_dispatch' && !inputs.every_file_only) || github.event.schedule == '23 4 * * *')
     permissions:
       actions: read
       contents: read
