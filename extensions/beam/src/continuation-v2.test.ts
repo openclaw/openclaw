@@ -258,6 +258,7 @@ it("requires the admitted Visitor grant for owned sends and disclosures", async 
   await using f = await fixture();
   let active = true;
   const checked: (string | undefined)[] = [];
+  let guestRefreshes = 0;
   function guard(requiredGrant?: string) {
     checked.push(requiredGrant);
     if (!active && requiredGrant === "visitor-access") throw new Error("Visitor grant revoked");
@@ -266,6 +267,7 @@ it("requires the admitted Visitor grant for owned sends and disclosures", async 
     ...owner,
     assertCurrent: guard,
     async revalidate(requiredGrant) {
+      if (requiredGrant === "visitor-access") guestRefreshes++;
       guard(requiredGrant);
     },
   };
@@ -275,9 +277,11 @@ it("requires the admitted Visitor grant for owned sends and disclosures", async 
   active = false;
   gate.release.resolve();
   await expect(inFlight).rejects.toThrow("Visitor grant revoked");
+  const refreshesBeforeRead = guestRefreshes;
   await expect(f.service().status(source, request.requestId, guest)).rejects.toThrow(
     "Visitor grant revoked",
   );
+  expect(guestRefreshes).toBe(refreshesBeforeRead);
   await expect(f.service().continue(source, request, guest)).rejects.toThrow(
     "Visitor grant revoked",
   );

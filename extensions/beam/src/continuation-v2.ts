@@ -86,7 +86,8 @@ export function createBeamContinuation(
     const requiredGrant = guestProfileId ? "visitor-access" : undefined;
     const assertCurrent = () => auth.assertCurrent(requiredGrant);
     async function revalidate() {
-      await auth.revalidate(requiredGrant);
+      // Read-only status uses the captured dispatch lease. Only effects refresh asynchronous guards.
+      if (input) await auth.revalidate(requiredGrant);
       assertCurrent();
     }
     async function current() {
