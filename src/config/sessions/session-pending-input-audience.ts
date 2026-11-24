@@ -1,7 +1,9 @@
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { expressionBuilder } from "kysely";
 import { jsonPathValue } from "../../infra/database-engine/json-values.js";
 import type { DB } from "../../state/openclaw-agent-db.generated.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
+import type { SessionPendingInput } from "./session-pending-input.types.js";
 
 export type PendingInputAudience = { profileId: string; revokedOnly?: true };
 
@@ -23,4 +25,17 @@ export function pendingInputAudienceEligibility(
   return audience.revokedOnly
     ? eb.and([eb("state", "=", "cancelled"), eb("end_cause", "=", "revoked"), own])
     : eb.or([eb("end_cause", "is", null), eb("end_cause", "!=", "revoked"), own]);
+}
+
+/** Apply the audience rule to one projected input read by exact ID. */
+export function isPendingInputVisibleToProfile(
+  input: Pick<SessionPendingInput, "endCause" | "message">,
+  profileId: string | undefined,
+) {
+  return (
+    input.endCause !== "revoked" ||
+    (Boolean(profileId) &&
+      asOptionalRecord(asOptionalRecord(input.message["__openclaw"])?.requesterOrigin)
+        ?.operatorProfileId === profileId)
+  );
 }

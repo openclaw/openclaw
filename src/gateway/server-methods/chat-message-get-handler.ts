@@ -5,6 +5,7 @@ import { validateChatMessageGetParams } from "../../../packages/gateway-protocol
 import { CHAT_PENDING_INPUT_MESSAGE_PREFIX } from "../../../packages/gateway-protocol/src/schema/chat-history-constants.js";
 import { getCliSessionBinding } from "../../config/sessions/cli-session-binding.js";
 import { readSessionPendingInput } from "../../config/sessions/session-accessor.js";
+import { isPendingInputVisibleToProfile } from "../../config/sessions/session-pending-input-audience.js";
 import { jsonUtf8Bytes } from "../../infra/json-utf8-bytes.js";
 import { createChannelMentionProjector } from "../chat-display-projection.channel-mentions.js";
 import { prepareForwardedMessageCronJobNameResolver } from "../chat-display-projection.cron.js";
@@ -101,10 +102,7 @@ export const chatMessageGetHandlers: GatewayRequestHandlers = {
           }
           if (
             !pending ||
-            (pending.endCause === "revoked" &&
-              (!client?.authenticatedUserProfile?.profileId ||
-                asOptionalRecord(asOptionalRecord(pending.message["__openclaw"])?.requesterOrigin)
-                  ?.operatorProfileId !== client.authenticatedUserProfile.profileId))
+            !isPendingInputVisibleToProfile(pending, client?.authenticatedUserProfile?.profileId)
           ) {
             await withCurrentSession(respondNotFound);
             return;

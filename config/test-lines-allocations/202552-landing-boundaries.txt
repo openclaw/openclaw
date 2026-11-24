@@ -1,8 +1,9 @@
-1302
-# Whole PR against rebased origin/main b0678469: 13,630 net test lines,
+1358
+# Whole PR against rebased origin/main 4d99cbb8: 13,686 net test lines,
 # less the unchanged 400-line allowance and 11,928 existing allocation lines.
 # Retains distinct boundaries: native composer selection and invitation handoff;
-# author-only revoked-input read/copy/remove without session-history access;
-# membership-backed People projection and removal; suggestion tray expansion;
-# lazy English loading and chronological sharing notices. Existing fixtures and
-# table cases are reused. No production threshold, file cap or timeout changes.
+# author-only revoked-input read/copy/remove/attachment reads without
+# session-history access; membership-backed People projection and removal;
+# suggestion tray expansion; lazy English loading and chronological sharing
+# notices. Existing fixtures and table cases are reused. No production
+# threshold, file cap or timeout changes.
