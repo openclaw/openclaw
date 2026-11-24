@@ -12,6 +12,7 @@ import {
 import {
   getActiveSecretsRuntimeSnapshotRevisionState,
   getActiveSecretsRuntimeSnapshotState,
+  hasActiveSecretsRuntimeSnapshotLineage,
   type PreparedSecretsRuntimeSnapshot,
 } from "../secrets/runtime-state.js";
 import { diffConfigPaths } from "./config-diff.js";
@@ -72,8 +73,10 @@ export function createGatewaySecretsReloader(params: GatewaySecretsReloaderParam
     if (!runtimeConfig) {
       throw new Error("Secrets runtime activation did not publish config.");
     }
+    // An in-lineage auth refresh can advance the snapshot revision without replacing
+    // this reload. Keep the exact config and shared-auth owner fences in force.
     const isCurrent = () =>
-      getActiveSecretsRuntimeSnapshotRevisionState() === publishedSnapshotRevision &&
+      hasActiveSecretsRuntimeSnapshotLineage(publishedSnapshotRevision) &&
       getRuntimeConfigSnapshot() === runtimeConfig &&
       params.sharedGatewaySessionGenerationState.owns(generationOwnership);
     // This publisher retires captured model config synchronously at the secrets commit edge.

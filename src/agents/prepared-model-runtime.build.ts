@@ -155,10 +155,12 @@ async function buildSnapshotBatch(
       // configured owner; provider discovery remains asynchronous. Existing read-only
       // startup admissions already have a database and must not borrow write permission.
       if (!readAgentDatabaseAdmissionRefusal(agentId, { env })) {
+        // Admission belongs to this build, not the individual catalog generation.
+        // Auth changes can retire that generation while this publication drains them.
         await prepareOpenClawAgentDatabaseExecution(
           { agentId, path: resolveAuthProfileDatabasePath(input.agentDir), env },
           () => assertBuildCurrent(input),
-          candidate.retirementSignal,
+          signal,
         );
         assertBuildCurrent(input);
       }
