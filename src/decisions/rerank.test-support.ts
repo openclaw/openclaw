@@ -2,7 +2,10 @@
 // plugin, prepared model runtime and Decision registry.
 import path from "node:path";
 import { resolveAgentDir } from "../agents/agent-scope.js";
-import { activateDecisionRegistry } from "../agents/decision-inference.test-support.js";
+import {
+  activateDecisionRegistry,
+  resetDecisionTestRuntime,
+} from "../agents/decision-inference.test-support.js";
 import { acquireAgentRunPreparedModelRuntime } from "../agents/prepared-model-runtime.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { withServer } from "../plugin-sdk/test-helpers/http-test-server.js";
@@ -130,7 +133,10 @@ export async function withRerank(
             }
           }
         },
-      );
+      ).finally(() => {
+        // Catalog workers still own native capture locks under the fixture root.
+        return resetDecisionTestRuntime();
+      });
     },
   );
 }
