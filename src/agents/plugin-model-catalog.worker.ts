@@ -1,10 +1,8 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import type { EngineConnection } from "../infra/sql-connection.js";
-import {
-  assertTransactionUsable,
-  runSqliteWorkerTransactionSync,
-} from "../infra/sqlite-transaction.js";
+import { runSqliteWorkerTransactionSync } from "../infra/sqlite-transaction.js";
+import { bindSqliteWorkerDatabase } from "../infra/sqlite-worker-binding.js";
 import type { SqliteWorkerBackend } from "../infra/sqlite-worker-contract.js";
 import type { SqliteWorkerDatabaseContext } from "../infra/sqlite-worker-database-context.js";
 import { normalizePluginProviderBaseUrl } from "../plugins/plugin-metadata-provider-facts.js";
@@ -25,6 +23,7 @@ import {
   PLUGIN_MODEL_CATALOG_CACHE_SCOPE,
   PLUGIN_MODEL_CATALOG_MIGRATION_SCOPE,
   replacePluginModelCatalogEntriesInDatabase,
+  type PluginModelCatalogReplacement,
 } from "./plugin-model-catalog.kernel.js";
 
 export type PluginModelCatalogCredentialOperations = {
@@ -39,7 +38,7 @@ export type PluginModelCatalogCredentialOperations = {
       authSnapshot?: PluginModelCatalogAuthSnapshot;
       env: NodeJS.ProcessEnv;
     };
-    output: boolean;
+    output: PluginModelCatalogReplacement;
   };
 };
 
@@ -150,7 +149,7 @@ export function bindSqliteWorkerBackend(
   _input: unknown,
   context: SqliteWorkerDatabaseContext,
 ): SqliteWorkerBackend<PluginModelCatalogCredentialOperations> {
-  return {
+  return bindSqliteWorkerDatabase<PluginModelCatalogCredentialOperations>(context.database, {
     execute(command) {
       return runSqliteWorkerTransactionSync(context, () => {
         if (command.type === "catalog.pruneRemovedProviders") {
@@ -221,12 +220,5 @@ export function bindSqliteWorkerBackend(
         return undefined;
       });
     },
-    assertSettled() {
-      assertTransactionUsable(context.database);
-      if (!context.database.isOpen || context.database.isTransaction) {
-        throw new Error("Catalog cleanup left an unsettled agent transaction");
-      }
-    },
-    close() {},
-  };
+  });
 }

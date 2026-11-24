@@ -1,28 +1,70 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
-import { describe, expect, it, vi } from "vitest";
+import { expect, it, onTestFinished, vi } from "vitest";
 import { getReplyPayloadMetadata } from "../auto-reply/reply-payload.js";
 import * as agentEvents from "../infra/agent-events.js";
+import { createDeliveryHarness } from "./embedded-agent-subscribe.delivery.test-support.js";
 import {
   createSubscribedSessionHarness,
-  emitAssistantLifecycleErrorAndEnd,
   emitMessageStartAndEndForAssistantText,
   emitToolRun,
   extractAgentEventPayloads,
-  findLifecycleErrorAgentEvent,
 } from "./embedded-agent-subscribe.e2e-harness.js";
+import * as streamSnapshots from "./embedded-agent-subscribe.handlers.messages.snapshot.js";
 import {
   createOpenAiResponsesPartial,
   createOpenAiResponsesTextBlock,
   createOpenAiResponsesTextEvent,
 } from "./embedded-agent-subscribe.openai-responses.test-helpers.js";
 import type { SubscribeEmbeddedAgentSessionParams } from "./embedded-agent-subscribe.types.js";
+import { sanitizeAssistantVisibleStreamText } from "./embedded-agent-utils.js";
+import { makeAgentAssistantMessage } from "./test-helpers/agent-message-fixtures.js";
 import { textAssistant } from "./test-helpers/sparse-transcript.test-support.js";
 import { markCoreTtsToolResult } from "./tools/tts-tool-result-provenance.js";
-import { makeZeroUsageSnapshot } from "./usage.js";
 
 type BlockReply = NonNullable<SubscribeEmbeddedAgentSessionParams["onBlockReply"]>;
 type ToolResult = NonNullable<SubscribeEmbeddedAgentSessionParams["onToolResult"]>;
+
+function emitMessage(
+  emit: (event: unknown) => void,
+  type: "message_start" | "message_end",
+  message: unknown = { role: "assistant" },
+) {
+  emit({ type, message });
+}
+
+function emitUpdate(
+  emit: (event: unknown) => void,
+  message: unknown,
+  assistantMessageEvent: unknown,
+) {
+  emit({ type: "message_update", message, assistantMessageEvent });
+}
+
+type SessionOptions = Parameters<typeof createSubscribedSessionHarness>[0];
+function emitResponsesText(
+  emit: (event: unknown) => void,
+  type: "text_delta" | "text_end",
+  text: string,
+  id: string,
+  delta?: string,
+) {
+  emit(createOpenAiResponsesTextEvent({ type, text, id, delta, signaturePhase: "final_answer" }));
+}
+
+function runTool(
+  emit: (event: unknown) => void,
+  toolName: string,
+  toolCallId: string,
+  args: Record<string, unknown> | undefined,
+  result: unknown,
+  isError = false,
+) {
+  emitToolRun({ emit, toolName, toolCallId, args, result, isError });
+}
+
+function thinkingMessage(thinking: string) {
+  return { role: "assistant", content: [{ type: "thinking", thinking }] };
+}
 
 const retryingCompactionEnd = () =>
   ({
@@ -46,868 +88,725 @@ function completion(source: "music_generation" | "subagent", mediaUrl: string) {
   };
 }
 
-function emitOrphanedVoice(emit: (event: unknown) => void) {
+type BlockReplyScenario = {
+  name: string;
+  source: string;
+  expected?: string;
+  chunkSize?: number;
+  maxSnapshots?: number;
+  minChars?: number;
+  maxChars?: number;
+  hidden?: boolean;
+  prefix?: string;
+  visible?: readonly string[];
+  beforeEnd?: string;
+};
+
+it.each<BlockReplyScenario>([
+  ...["indented", "lazy"].map((name) => {
+    const indent = name === "indented" ? "    " : "";
+    const opening = `${name === "lazy" ? "> Command\n" : ""}${indent}(no output)\n`;
+    const body = `${indent}Captured output remains visible.\n`.repeat(256);
+    const source = (opening + body).slice(0, 4096);
+    const expected = (name === "indented" ? source : source.replace("(no output)\n", "")).trimEnd();
+    return { name, source, expected, chunkSize: 4, maxSnapshots: 32 };
+  }),
+  { name: "graphemes", source: `${"x".repeat(1195)}👨‍👩‍👧‍👦done`, minChars: 800, maxChars: 1200 },
+  { name: "empty tool payloads", source: "[tool:read] {}\n[tool:read] {}\n", hidden: true },
+  {
+    name: "write payloads",
+    source:
+      '[tool:write]\n{"path":"notes.txt","content":"SECRET CONTENT"}\n[tool:read]\n{"path":"b"}\n',
+    hidden: true,
+  },
+  {
+    name: "literal inline code",
+    source:
+      '`\n[tool:write]\n{"content":"a` This literal example stays visible and keeps streaming as ordinary block replies without any structural terminator.',
+    minChars: 64,
+    maxChars: 128,
+    visible: ["ordinary block replies"],
+    // Markdown ownership can still change, so only settled or terminal delivery is promised.
+  },
+  {
+    name: "next message after an unfinished hold",
+    source: "Hello there, this is visible prose without newlines",
+    prefix: "[a]\n{",
+    visible: ["Hello there"],
+    beforeEnd: "Hello there",
+  },
+])("streams $name at the block-delivery boundary", async (test) => {
+  const { minChars = 8, maxChars = 24, chunkSize = 1 } = test;
+  const onAgentEvent = vi.fn();
+  const snapshots = vi.spyOn(streamSnapshots, "extractAssistantStreamSnapshot");
+  onTestFinished(() => snapshots.mockRestore());
+  const { emit, subscription, onBlockReply } = createDeliveryHarness({
+    onAgentEvent: test.maxSnapshots ? onAgentEvent : undefined,
+    blockReplyChunking: { minChars, maxChars, breakPreference: "paragraph" },
+  });
+  if (test.prefix) {
+    emitMessage(emit, "message_start");
+    emitResponsesText(emit, "text_delta", test.prefix, "prior");
+    emitResponsesText(emit, "text_end", test.prefix, "prior");
+    emitMessage(emit, "message_end", textAssistant(test.prefix));
+    await subscription.waitForPendingEvents();
+    onBlockReply.mockClear();
+  }
+  emitMessage(emit, "message_start");
+  let text = "";
+  for (let offset = 0; offset < test.source.length; offset += chunkSize) {
+    const delta = test.source.slice(offset, offset + chunkSize);
+    text += delta;
+    emitResponsesText(emit, "text_delta", text, "answer", delta);
+  }
+  const chunks = () => onBlockReply.mock.calls.map(([reply]) => reply.text ?? "");
+  await subscription.waitForPendingEvents();
+  if (test.maxSnapshots) {
+    expect(extractAgentEventPayloads(onAgentEvent.mock.calls).at(-1)?.text).toBe(test.expected);
+    expect(snapshots.mock.calls.length).toBeLessThan(test.maxSnapshots);
+  }
+  if (test.beforeEnd) {
+    expect(chunks().join("").replace(/\s/gu, "")).toContain(test.beforeEnd.replace(/\s/gu, ""));
+  }
+  emitResponsesText(emit, "text_end", test.source, "answer");
+  emit({ type: "agent_end", messages: [], willRetry: false });
+  await subscription.waitForPendingEvents();
+  if (test.hidden) {
+    expect(chunks()).toEqual([]);
+  }
+  const source = onBlockReply.mock.calls
+    .map(([reply]) => getReplyPayloadMetadata(reply)?.blockSourceText ?? reply.text ?? "")
+    .join("");
+  expect(source.trimEnd()).toBe(test.hidden ? "" : (test.expected ?? test.source));
+  for (const visible of test.visible ?? []) {
+    expect(chunks().join("").replace(/\s/gu, "")).toContain(visible.replace(/\s/gu, ""));
+  }
+  if (test.name === "graphemes") {
+    expect(chunks().length).toBeGreaterThan(1);
+    expect(chunks().join("")).toBe(test.source);
+    expect(chunks().filter((chunk) => chunk.includes("👨‍👩‍👧‍👦"))).toHaveLength(1);
+    expect(chunks().every((chunk) => chunk.length <= maxChars)).toBe(true);
+  }
+});
+
+function createAgentEventHarness(
+  options: Omit<SessionOptions, "runId" | "onAgentEvent"> & { runId?: string } = {},
+) {
+  const onAgentEvent = vi.fn();
+  const harness = createSubscribedSessionHarness({ runId: "run", onAgentEvent, ...options });
+  return { ...harness, onAgentEvent };
+}
+
+function emitAssistantTextDelta(emit: (evt: unknown) => void, delta: string) {
+  emitUpdate(emit, { role: "assistant" }, { type: "text_delta", delta });
+}
+
+async function createGeneratedImageHarness(
+  options: Pick<SessionOptions, "blockReplyBreak" | "blockReplyChunking"> = {},
+) {
+  const onToolResult = vi.fn<ToolResult>();
+  const { emit, subscription, onBlockReply } = createDeliveryHarness({
+    onToolResult,
+    verboseLevel: "full",
+    blockReplyBreak: "message_end",
+    builtinToolNames: new Set(["image_generate"]),
+    ...options,
+  });
+  runTool(emit, "image_generate", "tool-1", undefined, {
+    content: [{ type: "text", text: "Generated image.\nMEDIA:/tmp/generated.png" }],
+    details: { media: { mediaUrls: ["/tmp/generated.png"] } },
+  });
+  await vi.waitFor(() => expect(onToolResult).toHaveBeenCalledTimes(2));
+  return { emit, subscription, onToolResult, onBlockReply };
+}
+
+function expectBlockReplyPayload(
+  onBlockReply: ReturnType<typeof vi.fn<BlockReply>>,
+  expected: { text: string; mediaUrls?: string[]; trustedLocalMedia?: boolean },
+) {
+  const match = onBlockReply.mock.calls.find(([reply]) => reply.text === expected.text)?.[0];
+  const payload = expectDefined(match, "expected matching block reply");
+  if (expected.mediaUrls !== undefined) {
+    expect(payload.mediaUrls).toStrictEqual(expected.mediaUrls);
+  }
+  expect(payload.trustedLocalMedia).toBe(expected.trustedLocalMedia);
+}
+
+it("blocks local MEDIA urls from case-variant tool names in verbose output", async () => {
+  const onToolResult = vi.fn<ToolResult>();
+  const { emit } = createSubscribedSessionHarness({
+    runId: "run",
+    onToolResult,
+    verboseLevel: "full",
+    builtinToolNames: new Set(["web_search"]),
+  });
+  runTool(emit, "Web_Search", "tool-1", undefined, {
+    content: [{ type: "text", text: "Fetched page\nMEDIA:/tmp/secret.png" }],
+  });
+  await vi.waitFor(() => expect(onToolResult).toHaveBeenCalledTimes(2));
+  const payload = expectDefined(onToolResult.mock.calls.at(-1)?.[0], "expected tool result");
+  expect(payload.text ?? "").toContain("Fetched page");
+  expect(payload.mediaUrls).toBeUndefined();
+});
+
+it("delivers generated attachment metadata with the assistant reply", async () => {
+  const { emit, subscription, onBlockReply } = createDeliveryHarness({
+    blockReplyBreak: "message_end",
+    builtinToolNames: new Set(["video_generate"]),
+  });
+  const attachment = {
+    type: "video",
+    path: "/tmp/generated-video",
+    name: "friendly-video",
+    mimeType: "video/mp4",
+    sizeBytes: 137,
+    durationMs: 5_000,
+    width: 1280,
+    height: 720,
+  };
+  runTool(emit, "video_generate", "video-tool", undefined, {
+    content: [{ type: "text", text: "Generated media." }],
+    details: { media: { mediaUrls: [attachment.path], attachments: [attachment] } },
+  });
+  await subscription.waitForPendingEvents();
+  emitMessageStartAndEndForAssistantText({ emit, text: "Here is your generated file." });
+  emit({ type: "agent_end", messages: [], willRetry: false });
+  await subscription.waitForPendingEvents();
+  expect(onBlockReply).toHaveBeenCalledOnce();
+  expect(onBlockReply.mock.calls[0]?.[0]).toMatchObject({
+    text: "Here is your generated file.",
+    mediaUrls: [attachment.path],
+    attachments: [attachment],
+  });
+});
+
+it("delivers the caption and selected media once when terminal media follows an ended Responses block", async () => {
+  const { emit, subscription, onBlockReply } = await createGeneratedImageHarness({
+    blockReplyBreak: "text_end",
+  });
+  const caption = "Here is the selected image.";
+  const first = { text: caption, id: "caption", signaturePhase: "final_answer" as const };
+  emitMessage(emit, "message_start");
+  for (const type of ["text_delta", "text_end"] as const) {
+    emit(createOpenAiResponsesTextEvent({ type, ...first }));
+  }
+  const message = createOpenAiResponsesPartial(first);
+  message.content.push(
+    createOpenAiResponsesTextBlock({
+      text: "MEDIA:./selected.png",
+      id: "media",
+      phase: "final_answer",
+    }),
+  );
+  emitMessage(emit, "message_end", message);
+  await subscription.waitForPendingEvents();
+  const payloads = onBlockReply.mock.calls.map(([payload]) => payload);
+  expect({
+    captions: payloads.map((payload) => payload.text).filter(Boolean),
+    mediaUrls: payloads.flatMap((payload) => payload.mediaUrls ?? []),
+  }).toEqual({ captions: [caption], mediaUrls: ["./selected.png"] });
+});
+
+it("does not attach generated image media to an early streamed chunk before explicit MEDIA", async () => {
+  const { emit, subscription, onBlockReply } = await createGeneratedImageHarness({
+    blockReplyBreak: "text_end",
+    blockReplyChunking: { minChars: 5, maxChars: 200, breakPreference: "newline" },
+  });
+  emitMessage(emit, "message_start");
+  emitAssistantTextDelta(emit, "Generated 1 image.\n");
+  await subscription.waitForPendingEvents();
+  expectBlockReplyPayload(onBlockReply, { text: "Generated 1 image." });
+  expect(onBlockReply.mock.calls.filter(([payload]) => payload.mediaUrls?.length)).toStrictEqual(
+    [],
+  );
+  emitAssistantTextDelta(emit, "MEDIA:/tmp/generated.png");
+  emitUpdate(
+    emit,
+    { role: "assistant" },
+    { type: "text_end", content: "Generated 1 image.\nMEDIA:/tmp/generated.png" },
+  );
+  emitMessage(emit, "message_end", textAssistant("Generated 1 image.\nMEDIA:/tmp/generated.png"));
+  emit({ type: "agent_end" });
+  await subscription.waitForPendingEvents();
+  const mediaPayloads = onBlockReply.mock.calls.filter(([payload]) =>
+    payload.mediaUrls?.includes("/tmp/generated.png"),
+  );
+  expect(mediaPayloads).toHaveLength(1);
+  expect(subscription.hasToolMediaBlockReply()).toBe(true);
+});
+
+it("does not trust a mixed generated and non-generated pending media batch", async () => {
+  const { emit, subscription, onBlockReply } = createDeliveryHarness({
+    blockReplyBreak: "message_end",
+    internalEvents: [
+      completion("music_generation", "/tmp/generated.mp3"),
+      completion("subagent", "/tmp/untrusted.mp3"),
+    ],
+  });
+  emitMessageStartAndEndForAssistantText({ emit, text: "Done." });
+  emit({ type: "agent_end" });
+  await subscription.waitForPendingEvents();
+  expectBlockReplyPayload(onBlockReply, {
+    text: "Done.",
+    mediaUrls: ["/tmp/generated.mp3", "/tmp/untrusted.mp3"],
+    trustedLocalMedia: undefined,
+  });
+});
+
+it("counts orphaned tool media emitted through block replies", async () => {
+  const { emit, subscription, onBlockReply } = createDeliveryHarness({
+    blockReplyBreak: undefined,
+    builtinToolNames: new Set(["tts"]),
+    coreBuiltinToolNames: new Set(["tts"]),
+    sourceReplyDeliveryMode: "message_tool_only",
+  });
+  const media = { mediaUrl: "/tmp/reply.opus", audioAsVoice: true, trustedLocalMedia: true };
   emit({
     type: "tool_execution_end",
     toolName: "tts",
     toolCallId: "tc-1",
     isError: false,
-    result: markCoreTtsToolResult(
-      {
-        details: {
-          media: {
-            mediaUrl: "/tmp/reply.opus",
-            audioAsVoice: true,
-            trustedLocalMedia: true,
-          },
-        },
-      },
-      ["/tmp/reply.opus"],
-    ),
+    result: markCoreTtsToolResult({ details: { media } }, [media.mediaUrl]),
   });
+  emit({ type: "agent_end" });
+  await subscription.waitForPendingEvents();
+  expect(onBlockReply).toHaveBeenCalledWith({
+    mediaUrls: ["/tmp/reply.opus"],
+    mediaUrl: "/tmp/reply.opus",
+    attachments: [{ trustedLocalMedia: true }],
+    audioAsVoice: true,
+    trustedLocalMedia: true,
+  });
+  expect(subscription.getPendingToolMediaReply()).toBeNull();
+  expect(subscription.getToolAutoDeliveryMediaUrls()).toEqual([]);
+  expect(subscription.hasToolMediaBlockReply()).toBe(true);
+  expect(subscription.getVisibleBlockReplyCount()).toBe(1);
+  expect(getReplyPayloadMetadata(onBlockReply.mock.calls[0]?.[0] ?? {})).toMatchObject({
+    deliverDespiteSourceReplySuppression: true,
+  });
+});
+
+it("closes a reasoning preview before the commentary message ends without thinking_end", () => {
+  const visibleEvents: string[] = [];
+  const onReasoningEnd = vi.fn(async () => {
+    visibleEvents.push("reasoning-end");
+  });
+  const { emit } = createSubscribedSessionHarness({
+    runId: "run-reasoning-terminal",
+    reasoningMode: "stream",
+    onReasoningStream: vi.fn(),
+    onReasoningEnd,
+    onAgentEvent: (event) => {
+      if (event.stream === "assistant") {
+        visibleEvents.push("assistant");
+      }
+    },
+  });
+  const thinking = thinkingMessage("Checking files");
+  emitMessage(emit, "message_start", thinking);
+  emitUpdate(emit, thinking, { type: "thinking_delta", delta: "Checking files" });
+  emitMessage(emit, "message_end", {
+    role: "assistant",
+    stopReason: "stop",
+    phase: "commentary",
+    content: [...thinking.content, { type: "text", text: "Final answer" }],
+  });
+  expect(onReasoningEnd).toHaveBeenCalledTimes(1);
+  expect(visibleEvents[0]).toBe("reasoning-end");
+});
+
+it.each([false, true])("gates off-mode reasoning streaming with opt-in=%s", (enabled) => {
+  const onReasoningStream = vi.fn();
+  const { emit } = createSubscribedSessionHarness({
+    runId: "run",
+    reasoningMode: "off",
+    streamReasoningInNonStreamModes: enabled,
+    onReasoningStream,
+  });
+  emitUpdate(emit, thinkingMessage("Checking files"), {
+    type: "thinking_delta",
+    delta: "Checking files",
+  });
+  if (enabled) {
+    expect(onReasoningStream).toHaveBeenCalledWith({
+      text: "Checking files",
+      requiresReasoningProgressOptIn: true,
+    });
+  } else {
+    expect(onReasoningStream).not.toHaveBeenCalled();
+  }
+});
+
+it("emits live edit diff progress while tool arguments stream", () => {
+  const emitAgentEventSpy = vi.spyOn(agentEvents, "emitAgentEvent").mockImplementation(() => {});
+  const { emit } = createSubscribedSessionHarness({ runId: "run-live-edit-diff" });
+  const partialJson =
+    '{"path":"notes.md","edits":[{"oldText":"old\\nline","newText":"new\\nline\\n';
+  const message = {
+    role: "assistant",
+    content: [{ type: "toolCall", id: "tool-live-edit", name: "edit", arguments: {}, partialJson }],
+  };
+  emitUpdate(emit, message, {
+    type: "toolcall_delta",
+    contentIndex: 0,
+    delta: partialJson,
+    partial: message,
+  });
+  expect(
+    emitAgentEventSpy.mock.calls
+      .map(([event]) => event)
+      .find((event) => event.stream === "tool" && event.data?.phase === "input_delta"),
+  ).toMatchObject({
+    runId: "run-live-edit-diff",
+    stream: "tool",
+    data: {
+      phase: "input_delta",
+      toolCallId: "tool-live-edit",
+      name: "edit",
+      diff: { added: 2, removed: 1 },
+    },
+  });
+  emitAgentEventSpy.mockRestore();
+});
+
+it("emits reasoning end once when native and tagged reasoning end overlap", () => {
+  const onReasoningEnd = vi.fn();
+  const { emit } = createSubscribedSessionHarness({
+    runId: "run",
+    reasoningMode: "stream",
+    onReasoningStream: vi.fn(),
+    onReasoningEnd,
+  });
+  emitMessage(emit, "message_start");
+  emitAssistantTextDelta(emit, "<think>Checking");
+  emitUpdate(emit, thinkingMessage("Checking"), { type: "thinking_end" });
+  emitAssistantTextDelta(emit, " files</think>\nFinal answer");
+  expect(onReasoningEnd).toHaveBeenCalledTimes(1);
+});
+
+function hiddenTextEvents(chunks: string[], messageEnd?: string) {
+  const { emit, onAgentEvent } = createAgentEventHarness();
+  emitMessage(emit, "message_start");
+  for (const chunk of chunks) {
+    emitAssistantTextDelta(emit, chunk);
+  }
+  if (messageEnd !== undefined) {
+    emitMessage(emit, "message_end", textAssistant(messageEnd));
+  }
+  return extractAgentEventPayloads(onAgentEvent.mock.calls);
 }
 
-describe("subscribeEmbeddedAgentSession", () => {
-  it.each([1, 17, 1210])(
-    "delivers intact graphemes from %i-character provider deltas",
-    async (deltaSize) => {
-      const cluster = "👨‍👩‍👧‍👦";
-      const source = `${"x".repeat(1195)}${cluster}done`;
-      const codePoints = Array.from(source);
-      const onBlockReply = vi.fn<BlockReply>();
-      const { emit, subscription } = createSubscribedSessionHarness({
-        runId: "grapheme-boundary",
-        onBlockReply,
-        blockReplyBreak: "text_end",
-        blockReplyChunking: { minChars: 800, maxChars: 1200, breakPreference: "paragraph" },
-      });
-      try {
-        let text = "";
-        for (let offset = 0; offset < codePoints.length; offset += deltaSize) {
-          const delta = codePoints.slice(offset, offset + deltaSize).join("");
-          text += delta;
-          emit(
-            createOpenAiResponsesTextEvent({
-              type: "text_delta",
-              text,
-              delta,
-              id: "grapheme-answer",
-              signaturePhase: "final_answer",
+it("preserves media directives when orphan close replacement has no text", () => {
+  const last = hiddenTextEvents(
+    ["private chain of thought </thi", "nk>\nMEDIA:/tmp/a.png\n"],
+    "private chain of thought </think>\nMEDIA:/tmp/a.png\n",
+  ).at(-1);
+  expect(last).toMatchObject({ text: "", mediaUrls: ["/tmp/a.png"] });
+  expect(last?.replace).toBeUndefined();
+});
+
+it("keeps close tag literals inside hidden fenced code stripped across deltas", () => {
+  expect(hiddenTextEvents(["<think>\n```ts\nliteral ", "</think> still private"])).toEqual([]);
+});
+
+it.each([
+  ["new-target", "Corrected", "text_end", undefined],
+  [undefined, "Draft", "text_end", undefined],
+  [undefined, "Corrected", "message_end", "First block."],
+] as const)(
+  "replaces pending reply directives with authoritative checkpoint target %j",
+  async (replyToId, text, terminal, priorText) => {
+    const { emit, subscription, onBlockReply } = createDeliveryHarness({
+      blockReplyBreak: terminal === "message_end" && !priorText ? "message_end" : "text_end",
+      blockReplyChunking:
+        terminal === "message_end"
+          ? { minChars: 200, maxChars: 200, breakPreference: "sentence" }
+          : undefined,
+    });
+    try {
+      emitMessage(emit, "message_start");
+      if (priorText) {
+        for (const type of ["text_delta", "text_end"] as const) {
+          emitResponsesText(emit, type, priorText, "prior-answer");
+        }
+        await subscription.waitForPendingEvents();
+        expect(onBlockReply.mock.calls.map(([reply]) => reply.text)).toEqual([priorText]);
+      }
+      emitResponsesText(
+        emit,
+        "text_delta",
+        "[[reply_to:old-target]] [[audio_as_voice]] Draft",
+        "answer",
+      );
+      expect(onBlockReply).toHaveBeenCalledTimes(priorText ? 1 : 0);
+      const checkpoint = {
+        text: `${replyToId ? `[[reply_to:${replyToId}]] ` : ""}${text}`,
+        id: "answer",
+        signaturePhase: "final_answer" as const,
+      };
+      if (terminal === "message_end") {
+        const message = createOpenAiResponsesPartial(checkpoint);
+        if (priorText) {
+          message.content.unshift(
+            createOpenAiResponsesTextBlock({
+              text: priorText,
+              id: "prior-answer",
+              phase: "final_answer",
             }),
           );
         }
-        emit(
-          createOpenAiResponsesTextEvent({
-            type: "text_end",
-            text: source,
-            id: "grapheme-answer",
-            signaturePhase: "final_answer",
-          }),
-        );
-        emit({ type: "agent_end", messages: [], willRetry: false });
-        await subscription.waitForPendingEvents();
-
-        const chunks = onBlockReply.mock.calls.map(([reply]) => reply.text ?? "");
-        expect(chunks.length).toBeGreaterThan(1);
-        expect(chunks.join("")).toBe(source);
-        expect(chunks.filter((chunk) => chunk.includes(cluster))).toHaveLength(1);
-        expect(chunks.every((chunk) => chunk.length <= 1200)).toBe(true);
-      } finally {
-        subscription.unsubscribe();
+        emitMessage(emit, "message_end", message);
+      } else {
+        emit(createOpenAiResponsesTextEvent({ type: "text_end", ...checkpoint }));
       }
-    },
-  );
-
-  function createAgentEventHarness(options?: { runId?: string; sessionKey?: string }) {
-    const onAgentEvent = vi.fn();
-    const { emit } = createSubscribedSessionHarness({
-      runId: options?.runId ?? "run",
-      onAgentEvent,
-      sessionKey: options?.sessionKey,
-    });
-
-    return { emit, onAgentEvent };
-  }
-
-  function createToolErrorHarness(runId: string) {
-    return createSubscribedSessionHarness({
-      runId,
-      sessionKey: "test-session",
-    });
-  }
-
-  function emitAssistantTextDelta(
-    emit: (evt: unknown) => void,
-    delta: string,
-    message: Record<string, unknown> = { role: "assistant" },
-  ) {
-    emit({
-      type: "message_update",
-      message,
-      assistantMessageEvent: {
-        type: "text_delta",
-        delta,
-      },
-    });
-  }
-
-  function emitThinkingEvent(
-    emit: (evt: unknown) => void,
-    thinking: string,
-    assistantMessageEvent: { type: "thinking_delta"; delta: string } | { type: "thinking_end" },
-  ) {
-    emit({
-      type: "message_update",
-      message: { role: "assistant", content: [{ type: "thinking", thinking }] },
-      assistantMessageEvent,
-    });
-  }
-
-  async function createGeneratedImageHarness(
-    options: Pick<
-      Parameters<typeof createSubscribedSessionHarness>[0],
-      "blockReplyBreak" | "blockReplyChunking"
-    > = {},
-  ) {
-    const onToolResult = vi.fn<ToolResult>();
-    const onBlockReply = vi.fn<BlockReply>();
-    const { emit, subscription } = createSubscribedSessionHarness({
-      runId: "run",
-      onToolResult,
-      onBlockReply,
-      verboseLevel: "full",
-      blockReplyBreak: "message_end",
-      builtinToolNames: new Set(["image_generate"]),
-      ...options,
-    });
-    emitToolRun({
-      emit,
-      toolName: "image_generate",
-      toolCallId: "tool-1",
-      isError: false,
-      result: {
-        content: [
-          {
-            type: "text",
-            text: "Generated 1 image with google/gemini-3.1-flash-image-preview.\nMEDIA:/tmp/generated.png",
-          },
-        ],
-        details: { media: { mediaUrls: ["/tmp/generated.png"] } },
-      },
-    });
-    await vi.waitFor(() => {
-      expect(onToolResult).toHaveBeenCalledTimes(2);
-    });
-    return { emit, subscription, onToolResult, onBlockReply };
-  }
-
-  function expectBlockReplyPayload(
-    onBlockReply: ReturnType<typeof vi.fn<BlockReply>>,
-    expected: { text: string; mediaUrls?: string[]; trustedLocalMedia?: boolean },
-  ) {
-    const payload = expectDefined(
-      onBlockReply.mock.calls.find(([reply]) => reply.text === expected.text)?.[0],
-      "expected matching block reply",
-    );
-    if (expected.mediaUrls !== undefined) {
-      expect(payload.mediaUrls).toStrictEqual(expected.mediaUrls);
-    }
-    expect(payload.trustedLocalMedia).toBe(expected.trustedLocalMedia);
-  }
-
-  it("delivers generated media after dropping malformed provider attachment metadata", async () => {
-    const onBlockReply = vi.fn<BlockReply>();
-    const { emit, subscription } = createSubscribedSessionHarness({
-      runId: "generated-malformed-metadata",
-      onBlockReply,
-      blockReplyBreak: "message_end",
-      builtinToolNames: new Set(["music_generate"]),
-    });
-    const mediaPath = "/tmp/generated-song.mp3";
-
-    emitToolRun({
-      emit,
-      toolName: "music_generate",
-      toolCallId: "music-tool",
-      isError: false,
-      result: {
-        content: [{ type: "text", text: "Generated media." }],
-        details: {
-          media: {
-            mediaUrls: [mediaPath],
-            attachments: [
-              { type: "audio", path: mediaPath, name: 1, mimeType: null, durationMs: -1 },
-            ],
-          },
-        },
-      },
-    });
-    await subscription.waitForPendingEvents();
-    emitMessageStartAndEndForAssistantText({ emit, text: "Here is your generated song." });
-    emit({ type: "agent_end", messages: [], willRetry: false });
-    await subscription.waitForPendingEvents();
-
-    expect(onBlockReply).toHaveBeenCalledOnce();
-    expect(onBlockReply.mock.calls[0]?.[0]).toMatchObject({
-      text: "Here is your generated song.",
-      mediaUrls: [mediaPath],
-      attachments: [{ type: "audio", path: mediaPath }],
-    });
-  });
-
-  it("blocks local MEDIA urls from case-variant tool names in verbose output", async () => {
-    const onToolResult = vi.fn<ToolResult>();
-    const { emit } = createSubscribedSessionHarness({
-      runId: "run",
-      onToolResult,
-      verboseLevel: "full",
-      builtinToolNames: new Set(["web_search"]),
-    });
-
-    emitToolRun({
-      emit,
-      toolName: "Web_Search",
-      toolCallId: "tool-1",
-      isError: false,
-      result: {
-        content: [{ type: "text", text: "Fetched page\nMEDIA:/tmp/secret.png" }],
-      },
-    });
-
-    await vi.waitFor(() => {
-      expect(onToolResult).toHaveBeenCalledTimes(2);
-    });
-    const payload = expectDefined(onToolResult.mock.calls.at(-1)?.[0], "expected tool result");
-    expect(payload.text ?? "").toContain("Fetched page");
-    expect(payload.mediaUrls).toBeUndefined();
-  });
-
-  it("delivers generated attachment metadata with the assistant reply", async () => {
-    const onBlockReply = vi.fn<BlockReply>();
-    const { emit, subscription } = createSubscribedSessionHarness({
-      runId: "generated-video",
-      onBlockReply,
-      blockReplyBreak: "message_end",
-      builtinToolNames: new Set(["video_generate"]),
-    });
-    const attachment = {
-      type: "video",
-      path: "/tmp/generated-video",
-      name: "friendly-video",
-      mimeType: "video/mp4",
-      sizeBytes: 137,
-      durationMs: 5_000,
-      width: 1280,
-      height: 720,
-    };
-
-    emitToolRun({
-      emit,
-      toolName: "video_generate",
-      toolCallId: "video-tool",
-      isError: false,
-      result: {
-        content: [{ type: "text", text: "Generated media." }],
-        details: { media: { mediaUrls: [attachment.path], attachments: [attachment] } },
-      },
-    });
-    await subscription.waitForPendingEvents();
-    expect(subscription.getPendingToolMediaReply()).toMatchObject({
-      mediaUrls: [attachment.path],
-      attachments: [attachment],
-    });
-
-    emitMessageStartAndEndForAssistantText({ emit, text: "Here is your generated file." });
-    emit({ type: "agent_end", messages: [], willRetry: false });
-    await subscription.waitForPendingEvents();
-
-    expect(onBlockReply).toHaveBeenCalledOnce();
-    expect(onBlockReply.mock.calls[0]?.[0]).toMatchObject({
-      text: "Here is your generated file.",
-      mediaUrls: [attachment.path],
-      attachments: [attachment],
-    });
-  });
-
-  it("delivers the caption and selected media once when terminal media follows an ended Responses block", async () => {
-    const { emit, subscription, onBlockReply } = await createGeneratedImageHarness({
-      blockReplyBreak: "text_end",
-    });
-    const caption = "Here is the selected image.";
-    const first = { text: caption, id: "caption", signaturePhase: "final_answer" as const };
-    emit({ type: "message_start", message: { role: "assistant" } });
-    for (const type of ["text_delta", "text_end"] as const) {
-      emit(createOpenAiResponsesTextEvent({ type, ...first }));
-    }
-    const message = createOpenAiResponsesPartial(first);
-    message.content.push(
-      createOpenAiResponsesTextBlock({
-        text: "MEDIA:./selected.png",
-        id: "media",
-        phase: "final_answer",
-      }),
-    );
-    emit({ type: "message_end", message });
-    await subscription.waitForPendingEvents();
-    const payloads = onBlockReply.mock.calls.map(([payload]) => payload);
-    expect({
-      captions: payloads.map((payload) => payload.text).filter(Boolean),
-      mediaUrls: payloads.flatMap((payload) => payload.mediaUrls ?? []),
-    }).toEqual({ captions: [caption], mediaUrls: ["./selected.png"] });
-  });
-
-  it("does not attach generated image media to an early streamed chunk before explicit MEDIA", async () => {
-    const { emit, subscription, onBlockReply } = await createGeneratedImageHarness({
-      blockReplyBreak: "text_end",
-      blockReplyChunking: { minChars: 5, maxChars: 200, breakPreference: "newline" },
-    });
-
-    emit({ type: "message_start", message: { role: "assistant" } });
-    emitAssistantTextDelta(emit, "Generated 1 image.\n");
-    await subscription.waitForPendingEvents();
-
-    expectBlockReplyPayload(onBlockReply, {
-      text: "Generated 1 image.",
-    });
-    const earlyMediaPayloads = onBlockReply.mock.calls
-      .map(([payload]) => payload)
-      .filter((payload) => payload.mediaUrls?.length);
-    expect(earlyMediaPayloads).toStrictEqual([]);
-
-    emitAssistantTextDelta(emit, "MEDIA:/tmp/generated.png");
-    emit({
-      type: "message_update",
-      message: { role: "assistant" },
-      assistantMessageEvent: {
-        type: "text_end",
-        content: "Generated 1 image.\nMEDIA:/tmp/generated.png",
-      },
-    });
-    emit({
-      type: "message_end",
-      message: textAssistant("Generated 1 image.\nMEDIA:/tmp/generated.png"),
-    });
-    emit({ type: "agent_end" });
-    await subscription.waitForPendingEvents();
-
-    const mediaPayloads = onBlockReply.mock.calls
-      .map(([payload]) => payload)
-      .filter((payload) => payload.mediaUrls?.includes("/tmp/generated.png"));
-    expect(mediaPayloads).toHaveLength(1);
-    expect(subscription.hasToolMediaBlockReply()).toBe(true);
-  });
-
-  it("does not trust a mixed generated and non-generated pending media batch", async () => {
-    const onBlockReply = vi.fn<BlockReply>();
-    const { emit, subscription } = createSubscribedSessionHarness({
-      runId: "run",
-      onBlockReply,
-      blockReplyBreak: "message_end",
-      internalEvents: [
-        completion("music_generation", "/tmp/generated.mp3"),
-        completion("subagent", "/tmp/untrusted.mp3"),
-      ],
-    });
-
-    emit({ type: "message_start", message: { role: "assistant" } });
-    emit({
-      type: "message_end",
-      message: { role: "assistant", content: [{ type: "text", text: "Done." }] },
-    });
-    emit({ type: "agent_end" });
-    await subscription.waitForPendingEvents();
-
-    expectBlockReplyPayload(onBlockReply, {
-      text: "Done.",
-      mediaUrls: ["/tmp/generated.mp3", "/tmp/untrusted.mp3"],
-      trustedLocalMedia: undefined,
-    });
-  });
-
-  it("counts orphaned tool media emitted through block replies", async () => {
-    const onBlockReply = vi.fn<BlockReply>();
-    const { emit, subscription } = createSubscribedSessionHarness({
-      runId: "run",
-      builtinToolNames: new Set(["tts"]),
-      coreBuiltinToolNames: new Set(["tts"]),
-      sourceReplyDeliveryMode: "message_tool_only",
-      onBlockReply,
-    });
-
-    emitOrphanedVoice(emit);
-    emit({ type: "agent_end" });
-    await subscription.waitForPendingEvents();
-
-    expect(onBlockReply).toHaveBeenCalledWith({
-      mediaUrls: ["/tmp/reply.opus"],
-      mediaUrl: "/tmp/reply.opus",
-      attachments: [{ trustedLocalMedia: true }],
-      audioAsVoice: true,
-      trustedLocalMedia: true,
-    });
-    expect(subscription.getPendingToolMediaReply()).toBeNull();
-    expect(subscription.getToolAutoDeliveryMediaUrls()).toEqual([]);
-    expect(subscription.hasToolMediaBlockReply()).toBe(true);
-    expect(subscription.getVisibleBlockReplyCount()).toBe(1);
-    expect(getReplyPayloadMetadata(onBlockReply.mock.calls[0]?.[0] ?? {})).toMatchObject({
-      deliverDespiteSourceReplySuppression: true,
-    });
-  });
-
-  it.each([{ label: "commentary", stopReason: "stop", phase: "commentary" }] as const)(
-    "closes a reasoning preview before the $label message ends without thinking_end",
-    ({ stopReason, phase }) => {
-      const visibleEvents: string[] = [];
-      const onReasoningEnd = vi.fn(async () => {
-        visibleEvents.push("reasoning-end");
-      });
-      const { emit } = createSubscribedSessionHarness({
-        runId: "run-reasoning-terminal",
-        reasoningMode: "stream",
-        onReasoningStream: vi.fn(),
-        onReasoningEnd,
-        onAgentEvent: (event) => {
-          if (event.stream === "assistant") {
-            visibleEvents.push("assistant");
-          }
-        },
-      });
-      const thinkingMessage = {
-        role: "assistant" as const,
-        content: [{ type: "thinking" as const, thinking: "Checking files" }],
-      };
-
-      emit({ type: "message_start", message: thinkingMessage });
-      emit({
-        type: "message_update",
-        message: thinkingMessage,
-        assistantMessageEvent: { type: "thinking_delta", delta: "Checking files" },
-      });
-      emit({
-        type: "message_end",
-        message: {
-          role: "assistant",
-          stopReason,
-          ...(phase ? { phase } : {}),
-          content: [
-            { type: "thinking", thinking: "Checking files" },
-            { type: "text", text: "Final answer" },
-          ],
-        },
-      });
-
-      expect(onReasoningEnd).toHaveBeenCalledTimes(1);
-      expect(visibleEvents[0]).toBe("reasoning-end");
-    },
-  );
-
-  it.each([false, true])("gates off-mode reasoning streaming with opt-in=%s", (enabled) => {
-    const onReasoningStream = vi.fn();
-    const { emit } = createSubscribedSessionHarness({
-      runId: "run",
-      reasoningMode: "off",
-      streamReasoningInNonStreamModes: enabled,
-      onReasoningStream,
-    });
-    emitThinkingEvent(emit, "Checking files", { type: "thinking_delta", delta: "Checking files" });
-    if (enabled) {
-      expect(onReasoningStream).toHaveBeenCalledWith({
-        text: "Checking files",
-        requiresReasoningProgressOptIn: true,
-      });
-    } else {
-      expect(onReasoningStream).not.toHaveBeenCalled();
-    }
-  });
-
-  it("emits live edit diff progress while tool arguments stream", () => {
-    const emitAgentEventSpy = vi.spyOn(agentEvents, "emitAgentEvent").mockImplementation(() => {});
-    const { emit } = createSubscribedSessionHarness({ runId: "run-live-edit-diff" });
-    const partialJson =
-      '{"path":"notes.md","edits":[{"oldText":"old\\nline","newText":"new\\nline\\n';
-    const message = {
-      role: "assistant",
-      content: [
-        {
-          type: "toolCall",
-          id: "tool-live-edit",
-          name: "edit",
-          arguments: {},
-          partialJson,
-        },
-      ],
-    };
-
-    emit({
-      type: "message_update",
-      message,
-      assistantMessageEvent: {
-        type: "toolcall_delta",
-        contentIndex: 0,
-        delta: partialJson,
-        partial: message,
-      },
-    });
-
-    expect(
-      emitAgentEventSpy.mock.calls
-        .map(([event]) => event)
-        .find((event) => event.stream === "tool" && event.data?.phase === "input_delta"),
-    ).toMatchObject({
-      runId: "run-live-edit-diff",
-      stream: "tool",
-      data: {
-        phase: "input_delta",
-        toolCallId: "tool-live-edit",
-        name: "edit",
-        diff: { added: 2, removed: 1 },
-      },
-    });
-    emitAgentEventSpy.mockRestore();
-  });
-
-  it("emits reasoning end once when native and tagged reasoning end overlap", () => {
-    const onReasoningEnd = vi.fn();
-
-    const { emit } = createSubscribedSessionHarness({
-      runId: "run",
-      reasoningMode: "stream",
-      onReasoningStream: vi.fn(),
-      onReasoningEnd,
-    });
-
-    emit({ type: "message_start", message: { role: "assistant" } });
-    emitAssistantTextDelta(emit, "<think>Checking");
-    emitThinkingEvent(emit, "Checking", { type: "thinking_end" });
-
-    emitAssistantTextDelta(emit, " files</think>\nFinal answer");
-
-    expect(onReasoningEnd).toHaveBeenCalledTimes(1);
-  });
-
-  it.each<{
-    name: string;
-    chunks: string[];
-    expected?: Array<Record<string, unknown>>;
-    last?: Record<string, unknown>;
-    messageEnd?: string;
-    noReplacement?: boolean;
-  }>([
-    {
-      name: "preserves media directives when orphan close replacement has no text",
-      chunks: ["private chain of thought </thi", "nk>\nMEDIA:/tmp/a.png\n"],
-      messageEnd: "private chain of thought </think>\nMEDIA:/tmp/a.png\n",
-      last: { text: "", mediaUrls: ["/tmp/a.png"] },
-      noReplacement: true,
-    },
-    {
-      name: "keeps close tag literals inside hidden fenced code stripped across deltas",
-      chunks: ["<think>\n```ts\nliteral ", "</think> still private"],
-      expected: [],
-    },
-  ])("$name", (scenario) => {
-    const { emit, onAgentEvent } = createAgentEventHarness();
-    emit({ type: "message_start", message: { role: "assistant" } });
-    for (const chunk of scenario.chunks) {
-      emitAssistantTextDelta(emit, chunk);
-    }
-    if (scenario.messageEnd !== undefined) {
-      emit({
-        type: "message_end",
-        message: textAssistant(scenario.messageEnd),
-      });
-    }
-    const payloads = extractAgentEventPayloads(onAgentEvent.mock.calls);
-    if (scenario.expected !== undefined) {
-      expect(payloads).toHaveLength(scenario.expected.length);
-      expect(payloads).toMatchObject(scenario.expected);
-    }
-    if (scenario.last !== undefined) {
-      expect(payloads.at(-1)).toMatchObject(scenario.last);
-    }
-    if (scenario.noReplacement) {
-      expect(payloads.at(-1)?.replace).toBeUndefined();
-    }
-  });
-
-  it.each([
-    { replyToId: "new-target", text: "Corrected", terminal: "text_end" },
-    { replyToId: undefined, text: "Draft", terminal: "text_end" },
-    {
-      replyToId: undefined,
-      text: "Corrected",
-      terminal: "message_end",
-      priorText: "First block.",
-    },
-  ])(
-    "replaces pending reply directives with authoritative checkpoint target %j",
-    async ({ replyToId, text, terminal, priorText = "" }) => {
-      const onBlockReply = vi.fn<BlockReply>();
-      const { emit, subscription } = createSubscribedSessionHarness({
-        runId: "run-directive-replacement",
-        onBlockReply,
-        blockReplyBreak: terminal === "message_end" && !priorText ? "message_end" : "text_end",
-        blockReplyChunking:
-          terminal === "message_end"
-            ? { minChars: 200, maxChars: 200, breakPreference: "sentence" }
-            : undefined,
-      });
-      try {
-        emit({ type: "message_start", message: { role: "assistant" } });
-        if (priorText) {
-          for (const type of ["text_delta", "text_end"] as const) {
-            emit(
-              createOpenAiResponsesTextEvent({
-                type,
-                text: priorText,
-                id: "prior-answer",
-                signaturePhase: "final_answer",
-              }),
-            );
-          }
-          await subscription.waitForPendingEvents();
-          expect(onBlockReply.mock.calls.map(([reply]) => reply.text)).toEqual([priorText]);
-        }
-        emit(
-          createOpenAiResponsesTextEvent({
-            type: "text_delta",
-            text: "[[reply_to:old-target]] [[audio_as_voice]] Draft",
-            id: "answer",
-            signaturePhase: "final_answer",
-          }),
-        );
-        expect(onBlockReply).toHaveBeenCalledTimes(priorText ? 1 : 0);
-        const checkpoint = {
-          text: `${replyToId ? `[[reply_to:${replyToId}]] ` : ""}${text}`,
-          id: "answer",
-          signaturePhase: "final_answer" as const,
-        };
-        if (terminal === "message_end") {
-          const message = createOpenAiResponsesPartial(checkpoint);
-          if (priorText) {
-            message.content.unshift(
-              createOpenAiResponsesTextBlock({
-                text: priorText,
-                id: "prior-answer",
-                phase: "final_answer",
-              }),
-            );
-          }
-          emit({ type: "message_end", message });
-        } else {
-          emit(createOpenAiResponsesTextEvent({ type: "text_end", ...checkpoint }));
-        }
-        await subscription.waitForPendingEvents();
-
-        expect(onBlockReply.mock.calls.map(([reply]) => reply.text)).toEqual(
-          priorText ? [priorText, text] : [text],
-        );
-        const reply = expectDefined(onBlockReply.mock.calls.at(-1)?.[0], "corrected block reply");
-        expect({
-          text: reply.text,
-          replyToId: reply.replyToId,
-          replyToTag: Boolean(reply.replyToTag),
-          audioAsVoice: Boolean(reply.audioAsVoice),
-        }).toEqual({
-          text,
-          replyToId,
-          replyToTag: Boolean(replyToId),
-          audioAsVoice: false,
-        });
-      } finally {
-        subscription.unsubscribe();
-      }
-    },
-  );
-
-  it("keeps unresolved mutating failure when an unrelated tool succeeds", async () => {
-    const { emit, subscription } = createToolErrorHarness("run-tools-1");
-    emitToolRun({
-      emit,
-      toolName: "write",
-      toolCallId: "w1",
-      args: { path: "/tmp/demo.txt", content: "next" },
-      isError: true,
-      result: { error: "disk full" },
-    });
-    expect(subscription.getLastToolError()?.toolName).toBe("write");
-
-    emitToolRun({
-      emit,
-      toolName: "read",
-      toolCallId: "r1",
-      args: { path: "/tmp/demo.txt" },
-      isError: false,
-      result: { text: "ok" },
-    });
-
-    await subscription.waitForPendingEvents();
-    expect(subscription.getLastToolError()?.toolName).toBe("write");
-  });
-
-  it("preserves distinct mutation failures through compaction until each action recovers", async () => {
-    const { emit, subscription } = createToolErrorHarness("run-tools-compaction-retry");
-
-    for (const [toolCallId, filePath] of [
-      ["write-a-failed", "/tmp/a.txt"],
-      ["write-b-failed", "/tmp/b.txt"],
-    ] as const) {
-      emitToolRun({
-        emit,
-        toolName: "write",
-        toolCallId,
-        args: { path: filePath, content: "next" },
-        isError: true,
-        result: { error: "disk full" },
-      });
-    }
-
-    emit(retryingCompactionEnd());
-    emitToolRun({
-      emit,
-      toolName: "write",
-      toolCallId: "write-b-recovered",
-      args: { path: "/tmp/b.txt", content: "retry" },
-      isError: false,
-      result: { ok: true },
-    });
-
-    await subscription.waitForPendingEvents();
-    expect(subscription.getLastToolError()).toBeUndefined();
-
-    emitToolRun({
-      emit,
-      toolName: "write",
-      toolCallId: "write-a-recovered",
-      args: { path: "/tmp/a.txt", content: "retry" },
-      isError: false,
-      result: { ok: true },
-    });
-
-    await subscription.waitForPendingEvents();
-    expect(subscription.getLastToolError()).toBeUndefined();
-  });
-
-  it("emits lifecycle:error event on agent_end when last assistant message was an error", () => {
-    const { emit, onAgentEvent } = createAgentEventHarness({
-      runId: "run-error",
-      sessionKey: "test-session",
-    });
-
-    emitAssistantLifecycleErrorAndEnd({
-      emit,
-      errorMessage: "429 Rate limit exceeded",
-    });
-    const lifecycleError = findLifecycleErrorAgentEvent(onAgentEvent.mock.calls);
-
-    if (!lifecycleError) {
-      throw new Error("Expected lifecycle error event");
-    }
-    const error = (lifecycleError.data as { error?: unknown } | undefined)?.error;
-    expect(typeof error).toBe("string");
-    expect(error).toContain("The AI service needs a short break");
-  });
-
-  it("reads terminal abort state before emitting lifecycle:end", () => {
-    const onAgentEvent = vi.fn();
-    let terminalAborted = false;
-    const { emit } = createSubscribedSessionHarness({
-      runId: "run-aborted",
-      sessionKey: "test-session",
-      onAgentEvent,
-      isTerminalAborted: () => terminalAborted,
-    });
-    const assistantMessage = {
-      api: "test",
-      provider: "test",
-      model: "test",
-      role: "assistant",
-      stopReason: "aborted",
-      content: [],
-      usage: makeZeroUsageSnapshot(),
-      timestamp: 0,
-    } as AssistantMessage;
-
-    emit({ type: "message_start", message: assistantMessage });
-    emit({ type: "message_end", message: assistantMessage });
-    terminalAborted = true;
-    emit({ type: "agent_end", messages: [assistantMessage] });
-
-    const payloads = extractAgentEventPayloads(onAgentEvent.mock.calls);
-    expect(payloads).toContainEqual(
-      expect.objectContaining({
-        phase: "end",
-        stopReason: "aborted",
-        aborted: true,
-      }),
-    );
-  });
-
-  it.each([
-    {
-      toolName: "edit",
-      args: { file_path: "/tmp/demo.txt", old_string: "before", new_string: "after" },
-      result: { ok: true },
-      livenessState: "abandoned",
-    },
-    {
-      toolName: "cron",
-      args: { action: "add", job: { name: "reminder" } },
-      result: { details: { status: "ok" } },
-      livenessState: "working",
-    },
-    {
-      toolName: "sessions_spawn",
-      args: { prompt: "continue in a child session" },
-      result: {
-        details: {
-          status: "accepted",
-          runId: "run-child",
-          childSessionKey: "agent:claude:subagent:child",
-          expectsCompletionMessage: true,
-        },
-      },
-      livenessState: "working",
-    },
-  ])(
-    "preserves $toolName terminal evidence across compaction retries",
-    async ({ toolName, args, result, livenessState }) => {
-      const onAgentEvent = vi.fn();
-      const { emit, subscription } = createSubscribedSessionHarness({
-        runId: `run-${toolName}-compaction-evidence`,
-        sessionKey: toolName === "cron" ? undefined : "test-session",
-        onAgentEvent,
-      });
-      emitToolRun({ emit, toolName, toolCallId: "side-effect", args, result, isError: false });
       await subscription.waitForPendingEvents();
-      if (toolName === "cron") {
-        expect(subscription.getSuccessfulCronAdds()).toBe(1);
-      }
-      emit(retryingCompactionEnd());
-      await subscription.waitForPendingEvents();
-      if (toolName === "cron") {
-        expect(subscription.isCompacting()).toBe(true);
-        expect(subscription.getSuccessfulCronAdds()).toBe(1);
-      } else if (toolName === "sessions_spawn") {
-        expect(subscription.getAcceptedSessionSpawns()).toEqual([
-          {
-            runId: "run-child",
-            childSessionKey: "agent:claude:subagent:child",
-            expectsCompletionMessage: true,
-          },
-        ]);
-      }
-      emit({ type: "agent_end" });
-      await subscription.waitForPendingEvents();
-      if (toolName === "edit") {
-        expect(subscription.getReplayState()).toEqual({
-          replayInvalid: true,
-          hadPotentialSideEffects: true,
-        });
-      }
-      expect(extractAgentEventPayloads(onAgentEvent.mock.calls)).toContainEqual(
-        expect.objectContaining({ phase: "end", livenessState, replayInvalid: true }),
+      expect(onBlockReply.mock.calls.map(([reply]) => reply.text)).toEqual(
+        priorText ? [priorText, text] : [text],
       );
-    },
+      const reply = expectDefined(onBlockReply.mock.calls.at(-1)?.[0], "corrected block reply");
+      expect({
+        text: reply.text,
+        replyToId: reply.replyToId,
+        replyToTag: Boolean(reply.replyToTag),
+        audioAsVoice: Boolean(reply.audioAsVoice),
+      }).toEqual({ text, replyToId, replyToTag: Boolean(replyToId), audioAsVoice: false });
+    } finally {
+      subscription.unsubscribe();
+    }
+  },
+);
+
+it("preserves distinct mutation failures through compaction until each action recovers", async () => {
+  const { emit, subscription } = createSubscribedSessionHarness({
+    runId: "compaction-retry",
+    sessionKey: "test-session",
+  });
+  const fail = (id: string, path: string) =>
+    runTool(emit, "write", id, { path, content: "next" }, { error: "disk full" }, true);
+  const recover = (id: string, path: string) =>
+    runTool(emit, "write", id, { path, content: "retry" }, { ok: true });
+  fail("write-a-failed", "/tmp/a.txt");
+  fail("write-b-failed", "/tmp/b.txt");
+  emit(retryingCompactionEnd());
+  recover("write-b-recovered", "/tmp/b.txt");
+  await subscription.waitForPendingEvents();
+  expect(subscription.getLastToolError()).toBeUndefined();
+  recover("write-a-recovered", "/tmp/a.txt");
+  await subscription.waitForPendingEvents();
+  expect(subscription.getLastToolError()).toBeUndefined();
+});
+
+it("reads terminal abort state before emitting lifecycle:end", () => {
+  let terminalAborted = false;
+  const { emit, onAgentEvent } = createAgentEventHarness({
+    runId: "run-aborted",
+    sessionKey: "test-session",
+    isTerminalAborted: () => terminalAborted,
+  });
+  const assistantMessage = makeAgentAssistantMessage({
+    stopReason: "aborted",
+    content: [],
+  });
+  emitMessage(emit, "message_start", assistantMessage);
+  emitMessage(emit, "message_end", assistantMessage);
+  terminalAborted = true;
+  emit({ type: "agent_end", messages: [assistantMessage] });
+  const payloads = extractAgentEventPayloads(onAgentEvent.mock.calls);
+  expect(payloads).toContainEqual(
+    expect.objectContaining({ phase: "end", stopReason: "aborted", aborted: true }),
   );
 });
+
+const childSpawn = {
+  runId: "run-child",
+  childSessionKey: "agent:claude:subagent:child",
+  expectsCompletionMessage: true,
+};
+it.each([
+  ["edit", { file_path: "/tmp/demo.txt", old_string: "before", new_string: "after" }, { ok: true }],
+  ["cron", { action: "add", job: { name: "reminder" } }, { details: { status: "ok" } }],
+  [
+    "sessions_spawn",
+    { prompt: "continue in a child session" },
+    { details: { status: "accepted", ...childSpawn } },
+  ],
+] as const)(
+  "preserves %s terminal evidence across compaction retries",
+  async (toolName, args, result) => {
+    const { emit, subscription, onAgentEvent } = createAgentEventHarness({
+      runId: `run-${toolName}-compaction-evidence`,
+      sessionKey: toolName === "cron" ? undefined : "test-session",
+    });
+    runTool(emit, toolName, "side-effect", args, result);
+    await subscription.waitForPendingEvents();
+    if (toolName === "cron") {
+      expect(subscription.getSuccessfulCronAdds()).toBe(1);
+    }
+    emit(retryingCompactionEnd());
+    await subscription.waitForPendingEvents();
+    if (toolName === "cron") {
+      expect(subscription.isCompacting()).toBe(true);
+      expect(subscription.getSuccessfulCronAdds()).toBe(1);
+    } else if (toolName === "sessions_spawn") {
+      expect(subscription.getAcceptedSessionSpawns()).toEqual([childSpawn]);
+    }
+    emit({ type: "agent_end" });
+    await subscription.waitForPendingEvents();
+    if (toolName === "edit") {
+      expect(subscription.getReplayState()).toEqual({
+        replayInvalid: true,
+        hadPotentialSideEffects: true,
+      });
+    }
+    expect(extractAgentEventPayloads(onAgentEvent.mock.calls)).toContainEqual(
+      expect.objectContaining({
+        phase: "end",
+        livenessState: toolName === "edit" ? "abandoned" : "working",
+        replayInvalid: true,
+      }),
+    );
+  },
+);
+
+const SENTINEL = "SECRET CONTENT";
+const call = `[tool:block_reply_proof]\n{"path":"notes.txt","content":"${SENTINEL}"}\n`;
+const ordinaryProse =
+  "First sentence stays visible. Second sentence stays visible. Third sentence stays visible.";
+const documents = {
+  "indented placeholder": "    (no output)\n    Captured output.\n\nDone.",
+  "lazy blockquote placeholder": "> Command output\n(no output)\nContinued output.\n\nDone.",
+  "leading and trailing whitespace": "\n\t\nVisible text.\n\nMore text. \t\n",
+  "transformed whitespace": "\n\t\n(no output)\nVisible text.\n\nMore text. \t\n",
+  "reply directive": "(no output)\n[[reply_to:target]] Kept text.",
+  "force-flushed padding": "(no output)\n\n    code \n\t",
+  "late image reference":
+    "![example `x\n<tool_call><function=read>{}</function></tool_call>\nx`][id]\n\n[id]: /url\n",
+  "late link title":
+    '[label](/url "title\n`x\n<tool_call><function=read>{}</function></tool_call>\nx` trailing\n")\n',
+  "late table delimiter":
+    "| Example | `x\n<tool_call><function=read>{}</function></tool_call>\nx` |\n| --- | --- |\n",
+  "two-space fence": '  Example\n  ```text\n  [tool:read] {"path":"x"}\n  ```\n  Tail.',
+  "four-space code": "    <tool_call><function=read>{}</function></tool_call>",
+  "argument payload": call,
+  "prose around a call": `Intro paragraph stays visible.\n${call}Tail paragraph stays visible.`,
+  "ordinary prose": ordinaryProse,
+  "less-than literal": "The expression a < b && c > d remains ordinary prose.",
+  "partial tool literal": "Ordinary prose mentions <tool_ as a literal token.",
+  "inline XML example": "Use `<tool_call><function=read>{}</function></tool_call>` as an example.",
+  "fenced XML example":
+    "Example:\n```xml\n<tool_call><function=read>{}</function></tool_call>\n```\nTail.",
+  "fenced call example": 'Example:\n```text\n[tool:read] {"path":"x"}\n```\nTail.',
+  "multiline inline code":
+    '`\n[tool:write]\n{"content":"literal"` followed by ordinary visible text.',
+  "unfinished header": "[tool:block_reply_proof",
+  "unfinished payload": '[tool:block_reply_proof]\n{"content":"unfinished',
+} as const;
+
+function chunkings(text: string): string[][] {
+  return [
+    ...Array.from({ length: text.length + 1 }, (_, at) => [text.slice(0, at), text.slice(at)]),
+    ...[1, 4].map((size) =>
+      Array.from({ length: Math.ceil(text.length / size) }, (_, at) =>
+        text.slice(at * size, (at + 1) * size),
+      ),
+    ),
+  ];
+}
+
+async function streamReply(params: {
+  chunks: readonly string[];
+  emit: (evt: unknown) => void;
+  beforeEnd?: () => Promise<void>;
+}) {
+  emitMessage(params.emit, "message_start");
+  let prefix = "";
+  for (const delta of params.chunks) {
+    prefix += delta;
+    emitResponsesText(params.emit, "text_delta", prefix, "canonical-answer", delta);
+  }
+  await params.beforeEnd?.();
+  emitResponsesText(params.emit, "text_end", prefix, "canonical-answer");
+  emitMessage(params.emit, "message_end", { ...textAssistant(prefix), phase: "final_answer" });
+}
+
+it.each(Object.entries(documents))(
+  "preserves canonical delivered bytes across every split: %s",
+  async (_name, doc) => {
+    const expected =
+      _name === "reply directive"
+        ? "Kept text."
+        : sanitizeAssistantVisibleStreamText(doc, "final_answer");
+    expect(expected).not.toContain(SENTINEL);
+    for (const chunks of chunkings(doc)) {
+      const blocks: string[] = [];
+      const sources: string[] = [];
+      const targets: (string | undefined)[] = [];
+      const { emit, subscription } = createSubscribedSessionHarness({
+        runId: "block-parity",
+        onBlockReply: (payload) => {
+          blocks.push(payload.text ?? "");
+          sources.push(getReplyPayloadMetadata(payload)?.blockSourceText ?? payload.text ?? "");
+          targets.push(payload.replyToId);
+        },
+        blockReplyBreak: _name === "force-flushed padding" ? "message_end" : "text_end",
+        blockReplyChunking: { minChars: 12, maxChars: 40 },
+      });
+      try {
+        await streamReply({
+          chunks,
+          emit,
+          beforeEnd: async () => {
+            await subscription.waitForPendingEvents();
+            if (_name === "ordinary prose") {
+              expect(blocks.length).toBeGreaterThan(1);
+            }
+            if (
+              _name.startsWith("unfinished") ||
+              _name === "multiline inline code" ||
+              _name === "force-flushed padding"
+            ) {
+              expect(blocks).toEqual([]);
+            }
+            if (_name === "force-flushed padding") {
+              runTool(emit, "read", "flush-proof", { path: "fixture.txt" }, { content: [] });
+              await subscription.waitForPendingEvents();
+              expect(sources.join("").trimEnd()).toBe(expected);
+            }
+          },
+        });
+        await subscription.waitForPendingEvents();
+        // Source metadata excludes the chunker's synthetic close/reopen fences and retains
+        // separators consumed at message boundaries, so compare original visible bytes.
+        if (["prose around a call", "leading and trailing whitespace"].includes(_name)) {
+          // Separate channel messages own their boundary whitespace.
+          expect(blocks.map((text) => text.trim())).toEqual(expected.split(/\n+/u));
+        } else {
+          expect(sources.join("").trimEnd(), JSON.stringify({ chunks, blocks, sources })).toBe(
+            expected,
+          );
+        }
+        if (!expected) {
+          expect(blocks).toEqual([]);
+        }
+        if (_name === "reply directive") {
+          expect(targets).toContain("target");
+        }
+        if (_name === "unfinished payload") {
+          // A held candidate must not delay the next assistant message.
+          blocks.length = 0;
+          await streamReply({
+            chunks: [ordinaryProse],
+            emit,
+            beforeEnd: async () => {
+              await subscription.waitForPendingEvents();
+              expect(blocks.length).toBeGreaterThan(0);
+            },
+          });
+          await subscription.waitForPendingEvents();
+        }
+      } finally {
+        subscription.unsubscribe();
+      }
+    }
+  },
+);

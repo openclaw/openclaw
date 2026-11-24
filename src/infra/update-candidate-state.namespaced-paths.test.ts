@@ -9,13 +9,12 @@ import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
+import { CLIENT_CREDENTIAL_SCHEMA_VERSION } from "./client-credential-schema.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { readSqliteUserVersion } from "./sqlite-user-version.js";
-import {
-  readUpdateStateSchemaVersions,
-  updateStateSchemaVersionsMatch,
-} from "./update-candidate-state.js";
+import { readUpdateStateSchemaVersions } from "./update-candidate-state.js";
 import { runUpdateCandidateSnapshotWorker } from "./update-candidate-state.test-support.js";
+import { updateStateSchemaVersionsMatch } from "./update-candidate-state.versions.js";
 
 let root: string;
 beforeEach(async () => {
@@ -196,9 +195,8 @@ it.skipIf(process.platform !== "win32")(
       ["main", path.join("agents", "main", "agent", "openclaw-agent.sqlite")],
       ["main", namespaced],
     ]);
-    // Hand-built to mirror a released worker's response: every discovered
-    // spelling, with versions read straight from the physical databases rather
-    // than from a patched worker's response.
+    // Retain the released worker's raw aliases alongside this current profile's
+    // local credentials; neither comes from the response under test.
     const sharedDb = openNodeSqliteDatabase(shared, { readOnly: true });
     const releasedBaseline = [
       {
@@ -208,6 +206,10 @@ it.skipIf(process.platform !== "win32")(
       },
       { path: canonical, userVersion: 3 },
       { path: namespaced, userVersion: 3 },
+      {
+        path: path.join(source, "client", "credentials.sqlite"),
+        userVersion: CLIENT_CREDENTIAL_SCHEMA_VERSION,
+      },
     ];
     sharedDb.close();
     const inspected = await readUpdateStateSchemaVersions({
@@ -217,7 +219,15 @@ it.skipIf(process.platform !== "win32")(
     expect(inspected.map((entry) => entry.path)).toEqual(
       expect.arrayContaining([shared, canonical, namespaced]),
     );
-    expect(inspected).toHaveLength(3);
+    expect(inspected).toContainEqual({
+      path: path.join(source, "control", "services.sqlite"),
+      userVersion: null,
+    });
+    expect(inspected).toContainEqual({
+      path: path.join(source, "client", "credentials.sqlite"),
+      userVersion: CLIENT_CREDENTIAL_SCHEMA_VERSION,
+    });
+    expect(inspected).toHaveLength(5);
     expect(
       updateStateSchemaVersionsMatch(releasedBaseline, inspected, { sharedPath: shared }),
     ).toBe(true);

@@ -57,9 +57,27 @@ final class NativeGatewayWebSocketFixture: @unchecked Sendable {
         self.queue.sync { self.receivedRoles }
     }
 
+    var connectRoles: AsyncStream<String> {
+        self.connectRoleEvents.stream
+    }
+
+    /// Nil preserves the original node-only hello; set scopes to model an admitted operator session.
+    var acceptedOperatorScopes: [String]? {
+        get { self.queue.sync { self.operatorScopes } }
+        set { self.queue.sync { self.operatorScopes = newValue } }
+    }
+
+    private var operatorScopes: [String]?
+    var issuedDeviceTokensByRole: [String: String]? {
+        get { self.queue.sync { self.roleDeviceTokens } }
+        set { self.queue.sync { self.roleDeviceTokens = newValue } }
+    }
+
+    private var roleDeviceTokens: [String: String]?
     private var httpResponseHandler: HTTPResponseHandler?
     private var receivedRequests: [Request] = []
     private var receivedRoles: [String] = []
+    private let connectRoleEvents = AsyncStream<String>.makeStream()
     private var pendingHTTP: [Int: (Request, HTTPResponse)] = [:]
 
     private struct Client {
@@ -74,6 +92,41 @@ final class NativeGatewayWebSocketFixture: @unchecked Sendable {
         var buffer = Data()
         var phase = Phase.handshake
         var isStalled = false
+        var role = ""
+    }
+
+    /// Test-only Gateway methods after connect. Nil payload answers "unknown method".
+    typealias RequestHandler = @Sendable (_ role: String, _ method: String, _ params: [String: Any]) -> [String: Any]?
+    private var openRequestHandler: RequestHandler?
+    private var advertisedCapabilities: [String] = []
+
+    var requestHandler: RequestHandler? {
+        get { self.queue.sync { self.openRequestHandler } }
+        set { self.queue.sync { self.openRequestHandler = newValue } }
+    }
+
+    var helloCapabilities: [String] {
+        get { self.queue.sync { self.advertisedCapabilities } }
+        set { self.queue.sync { self.advertisedCapabilities = newValue } }
+    }
+
+    private func handleOpenRequest(_ data: Data, index: Int) -> Bool {
+        guard let handler = self.openRequestHandler, let client = self.clients[index], client.phase == .open,
+              let request = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              request["type"] as? String == "req",
+              let method = request["method"] as? String, method != "connect",
+              let id = request["id"] as? String
+        else { return false }
+        let params = request["params"] as? [String: Any] ?? [:]
+        if let payload = handler(client.role, method, params) {
+            self.sendJSON(["type": "res", "id": id, "ok": true, "payload": payload], index: index)
+        } else {
+            self.sendJSON([
+                "type": "res", "id": id, "ok": false,
+                "error": ["code": "INVALID_REQUEST", "message": "unknown method: \(method)"],
+            ], index: index)
+        }
+        return true
     }
 
     private static let websocketGUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
@@ -81,6 +134,7 @@ final class NativeGatewayWebSocketFixture: @unchecked Sendable {
     private let queue: DispatchQueue
     private let issuedDeviceTokens: [String?]
     private let connectFailures: [Int: ConnectFailure]
+    private let requiredWebSocketHeaders: [String: String]
     private var clients: [Int: Client] = [:]
     private var connectAuth: [ConnectAuth] = []
     private var nextConnectionIndex = 0
@@ -94,7 +148,8 @@ final class NativeGatewayWebSocketFixture: @unchecked Sendable {
         port: UInt16,
         fingerprint: String?,
         issuedDeviceTokens: [String?],
-        connectFailures: [Int: ConnectFailure])
+        connectFailures: [Int: ConnectFailure],
+        requiredWebSocketHeaders: [String: String])
     {
         self.listener = listener
         self.queue = queue
@@ -102,6 +157,7 @@ final class NativeGatewayWebSocketFixture: @unchecked Sendable {
         self.fingerprint = fingerprint
         self.issuedDeviceTokens = issuedDeviceTokens
         self.connectFailures = connectFailures
+        self.requiredWebSocketHeaders = requiredWebSocketHeaders
         self.listener.newConnectionHandler = { [weak self] connection in
             guard let self else {
                 connection.cancel()
@@ -116,7 +172,8 @@ final class NativeGatewayWebSocketFixture: @unchecked Sendable {
     nonisolated static func start(
         issuedDeviceTokens: [String?],
         connectFailures: [Int: ConnectFailure] = [:],
-        tls: Bool = false) async throws -> NativeGatewayWebSocketFixture
+        tls: Bool = false,
+        requiredWebSocketHeaders: [String: String] = [:]) async throws -> NativeGatewayWebSocketFixture
     {
         let parameters: NWParameters
         let fingerprint: String?
@@ -159,7 +216,8 @@ final class NativeGatewayWebSocketFixture: @unchecked Sendable {
                         port: port.rawValue,
                         fingerprint: fingerprint,
                         issuedDeviceTokens: issuedDeviceTokens,
-                        connectFailures: connectFailures)
+                        connectFailures: connectFailures,
+                        requiredWebSocketHeaders: requiredWebSocketHeaders)
                     try Task.checkCancellation()
                     return fixture
                 case let .failed(error):
@@ -209,6 +267,7 @@ final class NativeGatewayWebSocketFixture: @unchecked Sendable {
         self.queue.sync {
             guard !self.stopped else { return }
             self.stopped = true
+            self.connectRoleEvents.continuation.finish()
             self.listener.cancel()
             for index in Array(self.clients.keys) {
                 self.close(index)
@@ -304,6 +363,10 @@ final class NativeGatewayWebSocketFixture: @unchecked Sendable {
             return
         }
         self.receivedRequests.append(request)
+        guard self.requiredWebSocketHeaders.allSatisfy({ headers[$0.key.lowercased()] == $0.value }) else {
+            self.sendHTTP(HTTPResponse(status: 403), request: request, index: index)
+            return
+        }
         guard let key = headers["sec-websocket-key"], !key.isEmpty else {
             self.close(index)
             return
@@ -407,6 +470,7 @@ final class NativeGatewayWebSocketFixture: @unchecked Sendable {
     }
 
     private func handleText(_ data: Data, index: Int) {
+        if self.handleOpenRequest(data, index: index) { return }
         guard var client = self.clients[index], client.phase == .connect,
               let request = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               request["type"] as? String == "req",
@@ -416,17 +480,20 @@ final class NativeGatewayWebSocketFixture: @unchecked Sendable {
 
         let params = request["params"] as? [String: Any]
         let auth = params?["auth"] as? [String: Any]
-        self.receivedRoles.append(params?["role"] as? String ?? "")
+        let role = params?["role"] as? String ?? ""
+        self.receivedRoles.append(role)
         self.connectAuth.append(ConnectAuth(
             token: auth?["token"] as? String,
             bootstrapToken: auth?["bootstrapToken"] as? String,
             deviceToken: auth?["deviceToken"] as? String))
         client.phase = .open
+        client.role = role
         self.clients[index] = client
+        self.connectRoleEvents.continuation.yield(role)
         if let failure = self.connectFailures[index] {
             self.sendConnectFailure(id: id, failure: failure, index: index)
         } else {
-            self.sendConnectOK(id: id, index: index)
+            self.sendConnectOK(id: id, role: role, index: index)
         }
     }
 
@@ -442,14 +509,21 @@ final class NativeGatewayWebSocketFixture: @unchecked Sendable {
         self.sendJSON(frame, index: index)
     }
 
-    private func sendConnectOK(id: String, index: Int) {
+    private func sendConnectOK(id: String, role: String, index: Int) {
         var auth: [String: Any] = [
             "role": "node",
             "scopes": [],
         ]
-        if self.issuedDeviceTokens.indices.contains(index),
-           let token = self.issuedDeviceTokens[index]
-        {
+        if role == "operator", let scopes = self.operatorScopes {
+            auth["role"] = "operator"
+            auth["scopes"] = scopes
+        }
+        let token: String? = if let roleDeviceTokens = self.roleDeviceTokens {
+            roleDeviceTokens[role]
+        } else {
+            self.issuedDeviceTokens.indices.contains(index) ? self.issuedDeviceTokens[index] : nil
+        }
+        if let token {
             auth["deviceToken"] = token
         }
         let frame: [String: Any] = [
@@ -466,7 +540,7 @@ final class NativeGatewayWebSocketFixture: @unchecked Sendable {
                 "features": [
                     "methods": [],
                     "events": [],
-                    "capabilities": [],
+                    "capabilities": self.advertisedCapabilities,
                 ],
                 "snapshot": [
                     "presence": [["ts": 1]],

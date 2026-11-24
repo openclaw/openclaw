@@ -8,16 +8,18 @@ import {
 } from "../admitted-run-context.js";
 import { classifyToolAgainstSandboxToolPolicy } from "../sandbox/tool-policy.js";
 import { SANDBOX_DEFAULT_TOOL_ALLOW, type SandboxToolPolicy } from "../sandbox/types.js";
-import {
-  captureGatewayToolCallerAssertion,
-  getGatewayToolCallerIdentity,
-} from "./gateway-caller-context.js";
+import { getGatewayToolCallerIdentity } from "./gateway-caller-context.js";
 
 export function captureSessionControlAuthority(prepared?: AdmittedRunOperatorAuthority) {
   const invocation = readOperatorToolGatewayAuthority();
   const caller = getGatewayToolCallerIdentity()?.operatorAuthority;
   const scope = getPluginRuntimeGatewayRequestScope();
-  const retained = scope?.client?.internal?.operatorRunAuthority;
+  const ambient = scope?.client?.internal?.operatorRunAuthority;
+  // An admitted run owns its continuation authority, whether it arrives as the caller
+  // identity or as the run's own prepared authority. The ambient client may still belong
+  // to a completed recovery request or scheduled occurrence that launched this run. A
+  // prepared authority that is the ambient client's own keeps its live-client check.
+  const retained = caller || (prepared && prepared !== ambient) ? undefined : ambient;
   const authority = prepared ?? caller ?? invocation?.operatorRunAuthority ?? retained;
   if (!authority) {
     return undefined;
@@ -25,28 +27,17 @@ export function captureSessionControlAuthority(prepared?: AdmittedRunOperatorAut
   const sources = [
     ...new Set([authority, caller, invocation?.operatorRunAuthority, retained]),
   ].filter((source): source is AdmittedRunOperatorAuthority => source !== undefined);
+  for (const source of sources) {
+    assertAdmittedRunOperatorAuthority(source);
+    if (source.source !== authority.source) {
+      throw new Error("Session control operator source changed.");
+    }
+  }
   const assertCurrent = composeSessionSourceAssertion(
-    [
-      ...sources.map((source) =>
-        composeSessionSourceAssertion([source.assertCurrent], (assertSource) => {
-          assertAdmittedRunOperatorAuthority(source);
-          assertSource();
-          if (source.source !== authority.source) {
-            throw new Error("Session control operator source changed.");
-          }
-        }),
-      ),
-      captureGatewayToolCallerAssertion("sessions.patch"),
-      composeSessionSourceAssertion([invocation?.assertCurrent], (assertSource) => {
-        invocation?.signal.throwIfAborted();
-        assertSource();
-      }),
-    ],
-    (assertSources) => {
-      assertSources();
-      if (retained && scope?.hasCurrentClientAuthority?.() === false) {
-        throw new Error("Session control caller authority is no longer active.");
-      }
+    [invocation?.assertCurrent],
+    (assertSource) => {
+      invocation?.signal.throwIfAborted();
+      assertSource();
     },
   );
   assertCurrent();
@@ -65,32 +56,42 @@ export function hasSessionControlAuthority(prepared?: AdmittedRunOperatorAuthori
   return captureSessionControlAuthority(prepared)?.allows("operator.write") ?? false;
 }
 
-/** Rename uses the existing creator-scoped session mutation, not general session controls. */
-export function hasSessionRenameAuthority(prepared?: AdmittedRunOperatorAuthority): boolean {
+/** Create and rename use the existing creator-scoped session write grant, not general controls. */
+export function hasSessionWriteAuthority(prepared?: AdmittedRunOperatorAuthority): boolean {
   return captureSessionControlAuthority(prepared)?.allows("operator.sessions.write") ?? false;
 }
 
-/** Default sandbox exposure is paired with a label-only implementation, never full management. */
-export function prepareSandboxSessionRename(params: {
+/** Default guest exposure adds independent creation and label-only management, never full controls. */
+export function prepareSandboxSessionTools(params: {
   policy?: SandboxToolPolicy;
   senderIsOwner?: boolean;
-  authority?: AdmittedRunOperatorAuthority;
+  /** Captured policy owner; null explicitly projects a run without an operator. */
+  authority?: AdmittedRunOperatorAuthority | null;
 }): { policy?: SandboxToolPolicy; renameOnly: boolean } {
   const policy = params.policy;
-  if (
-    params.senderIsOwner !== false ||
-    !policy?.[SANDBOX_DEFAULT_TOOL_ALLOW] ||
-    policy[SANDBOX_DEFAULT_TOOL_ALLOW] !== policy.allow ||
-    !hasSessionRenameAuthority(params.authority)
-  ) {
+  const defaultAllow = policy?.[SANDBOX_DEFAULT_TOOL_ALLOW];
+  if (params.senderIsOwner !== false || !policy || !defaultAllow || defaultAllow !== policy.allow) {
     return { policy, renameOnly: false };
   }
-  const blocked = classifyToolAgainstSandboxToolPolicy("sessions", policy);
-  if (!blocked.blockedByAllow || blocked.blockedByDeny) {
+  // Catalog projection belongs to the captured run, not the request asking to
+  // compare it. Tool execution still intersects current caller authority.
+  const authority = params.authority;
+  if (authority) {
+    assertAdmittedRunOperatorAuthority(authority);
+  }
+  const canWrite =
+    authority === undefined
+      ? hasSessionWriteAuthority()
+      : authority !== null && operatorScopeSatisfied("operator.sessions.write", authority.scopes);
+  if (!canWrite) {
     return { policy, renameOnly: false };
   }
+  const added = ["sessions", "sessions_create"].filter((name) => {
+    const blocked = classifyToolAgainstSandboxToolPolicy(name, policy);
+    return blocked.blockedByAllow && !blocked.blockedByDeny;
+  });
   return {
-    policy: { ...policy, allow: [...policy[SANDBOX_DEFAULT_TOOL_ALLOW], "sessions"] },
-    renameOnly: true,
+    policy: added.length ? { ...policy, allow: [...defaultAllow, ...added] } : policy,
+    renameOnly: added.includes("sessions"),
   };
 }

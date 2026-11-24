@@ -1,14 +1,16 @@
-import type { spawn } from "node:child_process";
 import fs, { existsSync, readFileSync } from "node:fs";
 import { isPidAlive } from "../../src/shared/pid-alive.js";
 
 export { isPidAlive as isProcessAlive };
+
+type AbortEventPolicy = "recheck" | "reject";
 
 function waitForObservation<T>(
   observe: () => T | undefined,
   signal: AbortSignal,
   diagnostic: string,
   delay?: (ms: number) => Promise<unknown>,
+  abortEventPolicy: AbortEventPolicy = "recheck",
 ): Promise<T> {
   return new Promise((resolve, reject) => {
     let timer: ReturnType<typeof setTimeout> | undefined;
@@ -16,12 +18,13 @@ function waitForObservation<T>(
     const cleanup = () => {
       settled = true;
       clearTimeout(timer);
-      signal.removeEventListener("abort", check);
+      signal.removeEventListener("abort", onAbort);
     };
     const fail = (error: unknown) => {
       cleanup();
       reject(error instanceof Error ? error : new Error(diagnostic, { cause: error }));
     };
+    const abort = () => fail(new Error(diagnostic, { cause: signal.reason }));
     function check() {
       if (settled) {
         return;
@@ -33,7 +36,7 @@ function waitForObservation<T>(
           cleanup();
           resolve(value);
         } else if (signal.aborted) {
-          fail(new Error(diagnostic, { cause: signal.reason }));
+          abort();
         } else if (delay) {
           // The injected delay owns its timer; its late completion cannot restart polling.
           void delay(5).then(check, fail);
@@ -44,7 +47,8 @@ function waitForObservation<T>(
         fail(error);
       }
     }
-    signal.addEventListener("abort", check, { once: true });
+    const onAbort = abortEventPolicy === "reject" ? abort : check;
+    signal.addEventListener("abort", onAbort, { once: true });
     check();
   });
 }
@@ -80,41 +84,20 @@ export function waitForPidFile(
   );
 }
 
-export async function waitForDead(pid: number, signal: AbortSignal): Promise<void> {
+// An already-aborted signal still gets the initial observation. "reject" skips
+// only an abort event's final observation for foreign-process cleanup.
+export async function waitForDead(
+  pid: number,
+  signal: AbortSignal,
+  abortEventPolicy: AbortEventPolicy = "recheck",
+): Promise<void> {
   await waitForObservation(
     () => (!isPidAlive(pid) ? true : undefined),
     signal,
     `process still alive: ${pid}`,
+    undefined,
+    abortEventPolicy,
   );
-}
-
-// Register immediately after spawn, before awaiting or triggering an action: exitCode and
-// signalCode describe exit, not stdio closure, and cannot recover a missed close event.
-export function waitForChildClose(
-  child: ReturnType<typeof spawn>,
-  signal: AbortSignal,
-): Promise<{ code: number | null; signal: NodeJS.Signals | null }> {
-  return new Promise((resolve, reject) => {
-    const cleanup = () => {
-      child.removeListener("close", onClose);
-      signal.removeEventListener("abort", onAbort);
-    };
-    const onClose = (code: number | null, exitSignal: NodeJS.Signals | null) => {
-      cleanup();
-      resolve({ code, signal: exitSignal });
-    };
-    const onAbort = () => {
-      cleanup();
-      reject(
-        new Error(`aborted waiting for child ${child.pid} to close`, { cause: signal.reason }),
-      );
-    };
-    child.once("close", onClose);
-    signal.addEventListener("abort", onAbort, { once: true });
-    if (signal.aborted) {
-      onAbort();
-    }
-  });
 }
 
 export function waitForFixtureFile(

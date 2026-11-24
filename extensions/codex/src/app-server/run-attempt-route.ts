@@ -1,11 +1,11 @@
 import { embeddedAgentLog, formatErrorMessage } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { CodexAttemptNotificationController } from "./run-attempt-notification-controller.js";
-import type { CodexAttemptResources } from "./run-attempt-resources.js";
 import type { createCodexAttemptServerRequestController } from "./run-attempt-server-requests.js";
+import type { StartedCodexAttemptResources } from "./run-attempt-start.js";
 import type { CodexAttemptTurnState } from "./run-attempt-turn-state.js";
 
 export async function prepareCodexAttemptRoute(
-  resources: CodexAttemptResources,
+  resources: StartedCodexAttemptResources,
   turnRuntime: CodexAttemptTurnState,
   notifications: CodexAttemptNotificationController,
   handleServerRequest: ReturnType<
@@ -32,7 +32,7 @@ export async function prepareCodexAttemptRoute(
     }
     if (!resourceState.routeActivated) {
       if (!resourceState.nativeSubagentMonitor) {
-        await registerNativeSubagentMonitor(resourceState.thread.threadId);
+        await registerNativeSubagentMonitor(resourceState);
       }
       const route = resourceState.turnRoute;
       const onAbort = () => {

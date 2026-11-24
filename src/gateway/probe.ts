@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { filterStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { gatewayOriginScope } from "../../packages/gateway-client/src/gateway-origin-scope.js";
 import { startGatewayClientWhenEventLoopReady } from "../../packages/gateway-client/src/readiness.js";
 import {
@@ -20,6 +21,7 @@ import { publicKeyRawBase64UrlFromEd25519Pem } from "../infra/ed25519-signature.
 import { formatErrorMessage } from "../infra/errors.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
 import type { SystemPresence } from "../infra/system-presence.js";
+import { monotonicNow } from "../shared/monotonic-time.js";
 import type { StatusSummary } from "../status/summary.js";
 import { resolveSafeTimeoutDelayMs } from "../utils/timer-delay.js";
 import {
@@ -29,6 +31,7 @@ import {
   isGatewayProtocolResponseError,
 } from "./client.js";
 import { resolveGatewayDeviceAuthRoute } from "./connection-details.js";
+import type { ExplicitGatewayAuth } from "./credentials.js";
 import {
   gatewayEdgeAuthValueForTarget,
   normalizeEdgeAuthHeadersConfig,
@@ -38,10 +41,7 @@ import {
 import { isLoopbackHost } from "./net.js";
 import { ADMIN_SCOPE, READ_SCOPE, WRITE_SCOPE } from "./operator-scopes.js";
 
-export type GatewayProbeAuth = {
-  token?: string;
-  password?: string;
-};
+export type GatewayProbeAuth = ExplicitGatewayAuth;
 
 export type GatewayProbeClose = {
   code: number;
@@ -237,7 +237,7 @@ export async function probeGateway(opts: {
   env?: NodeJS.ProcessEnv;
   signal?: AbortSignal;
 }): Promise<GatewayProbeResult> {
-  const startedAt = Date.now();
+  const startedAt = monotonicNow();
   const instanceId = randomUUID();
   let connectLatencyMs: number | null = null;
   let connectError: string | null = null;
@@ -356,9 +356,9 @@ export async function probeGateway(opts: {
         timer = null;
       }
     };
-    const armProbeTimer = (onTimeout: () => void, timeoutMs = initialProbeTimeoutMs) => {
+    const armProbeTimer = (onTimeout: () => void) => {
       clearProbeTimer();
-      timer = setTimeout(onTimeout, resolveSafeTimeoutDelayMs(timeoutMs));
+      timer = setTimeout(onTimeout, resolveSafeTimeoutDelayMs(initialProbeTimeoutMs));
     };
     const settle = (
       result: Omit<GatewayProbeResult, "url" | "connectErrorDetails"> & {
@@ -471,7 +471,7 @@ export async function probeGateway(opts: {
           // Preserve the transport boundary: request-level handshake failures
           // still prove the listener was reachable once the socket opened.
           if (info?.transportValidated === true) {
-            connectLatencyMs = Date.now() - startedAt;
+            connectLatencyMs = Math.round(monotonicNow() - startedAt);
           }
           settleProbe({
             ok: false,
@@ -482,7 +482,7 @@ export async function probeGateway(opts: {
       onHelloOk: (hello) => {
         gatewayReached = true;
         void (async () => {
-          connectLatencyMs = Date.now() - startedAt;
+          connectLatencyMs = Math.round(monotonicNow() - startedAt);
           authMetadataPresent = typeof hello?.auth === "object" && hello.auth !== null;
           server = {
             version: typeof hello?.server?.version === "string" ? hello.server.version : null,
@@ -493,9 +493,7 @@ export async function probeGateway(opts: {
           };
           auth = resolveProbeAuthSummary({
             role: typeof hello?.auth?.role === "string" ? hello.auth.role : null,
-            scopes: Array.isArray(hello?.auth?.scopes)
-              ? hello.auth.scopes.filter((scope): scope is string => typeof scope === "string")
-              : [],
+            scopes: filterStringEntries(hello?.auth?.scopes),
             authMetadataPresent,
           });
           if (detailLevel === "none") {

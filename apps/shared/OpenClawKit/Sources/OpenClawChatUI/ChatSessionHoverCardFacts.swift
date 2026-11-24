@@ -172,9 +172,8 @@ public struct OpenClawSessionPullRequestSnapshot: Codable, Sendable {
             self.avatars[target, default: [:]][resource] = Avatar(version: version, task: Task { await load() })
         }
         guard let avatar = self.avatars[target]?[resource] else { return nil }
-        let generation = self.generation
         let result = await avatar.task.value
-        guard generation == self.generation, !avatar.task.isCancelled, !Task.isCancelled else { return nil }
+        guard !avatar.task.isCancelled, !Task.isCancelled else { return nil }
         // ui/src/lib/authenticated-avatar-route.ts:128: share images/404s while watched; other misses remain retryable.
         switch result {
         case let .image(data): return data
@@ -300,17 +299,14 @@ public struct OpenClawSessionPullRequestSnapshot: Codable, Sendable {
         guard let request = self.request, self.targets.contains(target) else { return }
         self.dirty.insert(target)
         guard self.reads[target] == nil else { return }
-        let generation = self.generation
         self.reads[target] = Task {
-            while self.generation == generation, !Task.isCancelled,
-                  self.dirty.remove(target) != nil
-            {
+            while !Task.isCancelled, self.dirty.remove(target) != nil {
                 let outcome: Result<Data, Error>
                 do {
                     outcome = try await .success(request(OpenClawChatGatewayRequests.progressCardGet(
                         sessionKey: target.sessionKey, agentID: target.agentID)))
                 } catch { outcome = .failure(error) }
-                guard self.generation == generation, !Task.isCancelled else { return }
+                guard !Task.isCancelled else { return }
                 self.progressNeedsReload.insert(target)
                 // session-progress-cards.ts:234: denial retires content; transient errors retain the last useful card.
                 if case let .failure(error) = outcome, let response = error as? GatewayResponseError,

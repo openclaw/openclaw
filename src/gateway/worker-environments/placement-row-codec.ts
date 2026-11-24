@@ -124,6 +124,10 @@ function parseTurnClaim(row: PlacementRow): PersistedTurnClaim | null {
 }
 
 export function fromRow(row: PlacementRow): WorkerSessionPlacementRecord {
+  normalizeNonNegativeInteger(row.transition_generation, "generation");
+  normalizeNonNegativeInteger(row.created_at_ms, "creation timestamp");
+  normalizeNonNegativeInteger(row.updated_at_ms, "update timestamp");
+  normalizeNonNegativeInteger(row.state_changed_at_ms, "state change timestamp");
   const state = parseWorkerSessionPlacementState(row.state);
   const executionMode = normalizeWorkerPlacementExecutionMode(row.execution_mode);
   const parsed = {
@@ -208,6 +212,18 @@ export function readWorkerPlacementsInDatabase(
     select = select.where("session_id", "in", sqliteStringSet(sessionIds));
   }
   return executeSqliteQuerySync(db, select.orderBy("session_id")).rows.map(fromRow);
+}
+
+export function readWorkerPlacementIdentitiesInDatabase(
+  db: EngineConnection,
+): WorkerSessionPlacementIdentity[] {
+  return executeSqliteQuerySync(
+    db,
+    query(db)
+      .selectFrom("worker_session_placements")
+      .select(["session_id as sessionId", "agent_id as agentId", "session_key as sessionKey"])
+      .orderBy("session_id"),
+  ).rows;
 }
 
 export function readWorkerPlacementChangeSnapshotInDatabase(

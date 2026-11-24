@@ -1,10 +1,8 @@
 import { consumeResponseBytes, decodeTextPrefix } from "@openclaw/normalization-core";
 import {
-  asDateTimestampMs,
   asFiniteNumber,
   asPositiveFiniteNumber,
   MAX_TIMER_TIMEOUT_SECONDS,
-  resolveExpiresAtMsFromDurationMs,
   resolveIntegerOption,
 } from "@openclaw/normalization-core/number-coercion";
 import { pruneMapToMaxSize } from "../../infra/map-size.js";
@@ -46,8 +44,8 @@ export function readCache<T>(
   if (!entry || ttlMs <= 0) {
     return null;
   }
-  const now = asDateTimestampMs(Date.now());
-  if (now === undefined || now >= entry.expiresAt) {
+  const now = Date.now();
+  if (now >= entry.expiresAt) {
     cache.delete(key);
     return null;
   }
@@ -61,18 +59,14 @@ export function writeCache<T>(
   value: T,
   ttlMs: number,
 ) {
-  if (ttlMs <= 0) {
+  if (!Number.isSafeInteger(ttlMs) || ttlMs <= 0) {
     return;
   }
   const now = Date.now();
-  const expiresAt = resolveExpiresAtMsFromDurationMs(ttlMs, { nowMs: now });
-  if (expiresAt === undefined) {
-    return;
-  }
   pruneMapToMaxSize(cache, DEFAULT_CACHE_MAX_ENTRIES - 1);
   cache.set(key, {
     value,
-    expiresAt,
+    expiresAt: now + ttlMs,
     insertedAt: now,
   });
 }
@@ -124,7 +118,7 @@ function shouldSniffDocumentCharset(contentType: string | null): boolean {
   );
 }
 
-function sniffCharset(contentType: string | null, bytes: Uint8Array): string | undefined {
+export function sniffCharset(contentType: string | null, bytes: Uint8Array): string | undefined {
   if (bytes[0] === 0xef && bytes[1] === 0xbb && bytes[2] === 0xbf) {
     return "utf-8";
   }
@@ -149,9 +143,13 @@ function sniffCharset(contentType: string | null, bytes: Uint8Array): string | u
 }
 
 function sniffDocumentCharset(bytes: Uint8Array): string | undefined {
-  const head = latin1Decoder.decode(
-    bytes.subarray(0, Math.min(bytes.byteLength, RESPONSE_CHARSET_SCAN_BYTES)),
-  );
+  // Commented-out metadata must not override declarations in the live document.
+  // An unfinished comment consumes the rest of the bounded scan as well.
+  const head = latin1Decoder
+    .decode(bytes.subarray(0, Math.min(bytes.byteLength, RESPONSE_CHARSET_SCAN_BYTES)))
+    .replace(/<!--[\s\S]*?(?:--!?>|$)|<[A-Za-z!?/](?:"[^"]*"|'[^']*'|[^'">])*>/g, (tag) =>
+      tag.startsWith("<!--") ? " " : tag,
+    );
   const xmlEncoding = /<\?xml\s+[^>]*\bencoding\s*=\s*(?:"([^"]+)"|'([^']+)')/i.exec(head);
   if (xmlEncoding) {
     return normalizeCharset(xmlEncoding[1] ?? xmlEncoding[2]);
@@ -173,10 +171,8 @@ function sniffDocumentCharset(bytes: Uint8Array): string | undefined {
   return undefined;
 }
 
-function decodeResponseBytes(res: Response, bytes: Uint8Array, truncated = false): string {
-  const headers = res.headers;
-  const contentType = typeof headers?.get === "function" ? headers.get("content-type") : null;
-  const charset = sniffCharset(contentType, bytes);
+export function decodeResponseBytes(res: Response, bytes: Uint8Array, truncated = false): string {
+  const charset = sniffCharset(res.headers.get("content-type"), bytes);
   try {
     return decodeTextPrefix(bytes, { encoding: charset ?? "utf-8", truncated });
   } catch {
@@ -192,7 +188,7 @@ export async function readResponseText(
   const maxBytes = maxBytesRaw === undefined ? undefined : Math.floor(maxBytesRaw);
 
   const body = res.body;
-  if (maxBytes && body && typeof body === "object" && typeof body.getReader === "function") {
+  if (maxBytes && body) {
     const reader = body.getReader();
     let bytesRead = 0;
     let truncated = false;
@@ -235,29 +231,13 @@ export async function readResponseText(
   }
 
   if (maxBytes) {
-    // Whole-body fallbacks cannot honor a byte cap. Only a native bodyless
-    // response is known complete without reading; other fallbacks fail closed.
-    return { text: "", truncated: !(res instanceof Response && res.body === null), bytesRead: 0 };
-  }
-
-  if (typeof res.arrayBuffer === "function") {
-    try {
-      const bytes = new Uint8Array(await res.arrayBuffer());
-      return {
-        text: decodeResponseBytes(res, bytes),
-        truncated: false,
-        bytesRead: bytes.byteLength,
-      };
-    } catch {
-      // Fall back to text() for lightweight Response-like mocks that do not expose bytes.
-    }
-  }
-
-  try {
-    const text = await res.text();
-    const bytes = new TextEncoder().encode(text);
-    return { text, truncated: false, bytesRead: bytes.byteLength };
-  } catch {
     return { text: "", truncated: false, bytesRead: 0 };
   }
+
+  const bytes = new Uint8Array(await res.arrayBuffer());
+  return {
+    text: decodeResponseBytes(res, bytes),
+    truncated: false,
+    bytesRead: bytes.byteLength,
+  };
 }

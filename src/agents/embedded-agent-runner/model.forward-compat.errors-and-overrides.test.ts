@@ -6,15 +6,16 @@ import {
 } from "../../config/runtime-snapshot.js";
 import { discoverModelsAsync } from "../agent-model-discovery.js";
 import type { PreparedModelRuntimeSnapshot } from "../prepared-model-runtime.js";
-import { buildConfiguredFallbackModel } from "./model.configured-fallback.js";
 import {
   catalogCost,
   configuredPricingCases,
   staleCost,
 } from "./model.configured-pricing.test-support.js";
+import { createEmptyPreparedModelRuntimeFixture } from "./model.fixture.test-support.js";
 import { expectResolvedForwardCompatFallbackResult } from "./model.forward-compat.test-support.js";
 import { buildInlineProviderModels } from "./model.inline-provider.js";
 import { createProviderRuntimeTestMock } from "./model.provider-runtime.test-support.js";
+import { normalizeConfiguredProviderModel } from "./model.registry-resolution.js";
 
 vi.mock("../../plugins/provider-runtime.js", () => ({
   applyProviderResolvedTransportWithPlugin: () => undefined,
@@ -31,7 +32,10 @@ vi.mock("../auth-profiles.js", () => ({
   resolveAuthProfileOrder: () => [],
 }));
 
+// mock-isolation: Resolution tests supply their own rows; bundled vendor rows must not leak in.
 vi.mock("./model.static-catalog.js", () => ({
+  createBundledStaticCatalogModelResolver: () => () => undefined,
+  listBundledVendorCatalogRows: () => [],
   resolveBundledProviderStaticCatalogModel: () => undefined,
   resolveBundledStaticCatalogModel: () => undefined,
   resolveManifestModelCatalogProviderAliasMetadata: ({
@@ -75,7 +79,7 @@ vi.mock("../model-suppression.js", async (importOriginal) => {
     ) {
       return undefined;
     }
-    return `Unknown model: ${provider}/gpt-5.3-codex-spark. gpt-5.3-codex-spark is available only through ChatGPT/Codex OAuth. Run \`openclaw models auth login --provider openai\` and use openai/gpt-5.3-codex-spark with that OAuth profile; OpenAI API-key auth cannot use this model.`;
+    return `Unknown model: ${provider}/gpt-5.3-codex-spark. gpt-5.3-codex-spark is available only through ChatGPT/Codex OAuth. Sign in to OpenAI with ChatGPT in OpenClaw and use openai/gpt-5.3-codex-spark with that sign-in; OpenAI API-key auth cannot use this model.`;
   }
   return {
     ...actual,
@@ -108,25 +112,18 @@ vi.mock("../prepared-model-runtime.js", async () => {
       Object.assign(modelRegistry, { fork: () => modelRegistry });
     }
     return {
-      catalogOwner: undefined,
-      agentDir: input.agentDir,
-      ...(input.workspaceDir ? { workspaceDir: input.workspaceDir } : {}),
-      activeProjectKeys: [],
-      allowGatewaySubagentBinding: false,
-      config,
-      observationConfig: config,
-      isCurrent: () => true,
-      authModes: {},
-      metadataSnapshot: createPluginMetadataSnapshot({
+      ...createEmptyPreparedModelRuntimeFixture({
+        agentDir: input.agentDir,
         config,
-        manifestRegistry: { plugins: [], diagnostics: [] },
-        ...(input.workspaceDir ? { workspaceDir: input.workspaceDir } : {}),
+        createStores: () => ({ authStorage, modelRegistry }),
+        metadataSnapshot: createPluginMetadataSnapshot({
+          config,
+          manifestRegistry: { plugins: [], diagnostics: [] },
+          ...(input.workspaceDir ? { workspaceDir: input.workspaceDir } : {}),
+        }),
       }),
-      modelCatalog: { entries: [], routeVariants: [] },
-      configuredRuntimeModels: [],
-      findConfiguredRuntimeModel: () => undefined,
+      ...(input.workspaceDir ? { workspaceDir: input.workspaceDir } : {}),
       inlineProviderModels: buildInlineProviderModels(config.models?.providers ?? {}),
-      createStores: () => ({ authStorage, modelRegistry }),
     } satisfies PreparedModelRuntimeSnapshot;
   };
   return {
@@ -240,7 +237,7 @@ describe("resolveModel forward-compat errors and overrides", () => {
 
       for (const cfg of [runtime, structuredClone(runtime)]) {
         const result = await resolveModelForTest(provider, modelId, "/tmp/agent", cfg);
-        const fallback = buildConfiguredFallbackModel({
+        const fallback = normalizeConfiguredProviderModel({
           provider,
           modelId,
           cfg,

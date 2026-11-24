@@ -71,6 +71,14 @@ replacement. Accepted control and close results still settle after revocation;
 revocation blocks the next effect. The optional callback preserves existing
 callers that do not carry channel-request authority.
 
+Results from `resolveCommandAuthorization(...)` and the preferred
+`await resolveCommandAuthorizationAsync(...)` also expose
+`assertAuthorizedCurrent?: () => void`. This rechecks the original command
+admission against current command policy; `isAuthorizedSender` remains an
+admission snapshot. Retain this callback across awaited preparation and recheck
+it before a command effect, including for non-owner senders. It does not grant
+ownership or replace channel, pairing, or `assertOwnerCurrent` checks.
+
 For intentional skips, `logInboundDrop({ log, channel, reason, target?, onceKey?, hint? })`
 formats a diagnostic through the supplied logger. Use a default-level logger and
 an actionable `hint` for mention-gated groups. Set `onceKey` to an account/conversation
@@ -141,6 +149,18 @@ Assemble `dispatchChannelInboundReply(...)` inputs for compatibility
 dispatchers that keep platform delivery in the delivery adapter. New send
 paths should use message adapters and durable message helpers from
 `channel-outbound` instead.
+
+## Debouncing
+
+`createInboundDebouncer` from `openclaw/plugin-sdk/channel-inbound-debounce`
+releases a keyed queue when the flush's `admission` promise settles and keeps its
+`completion` promise available to `drain()`. New `onFlush` callbacks should use
+the supplied `createFlush` helper or return those two promises explicitly.
+
+Plugins built against the stable `v2026.7.x` releases can still return a
+Promise or thenable. The host waits for that result for both admission and
+completion, preserving same-key ordering and rejection handling. No removal date
+has been announced for this runtime compatibility path.
 
 ## Platform-selected history windows
 

@@ -10,7 +10,7 @@ import type { resolveTelegramInboundBody } from "./bot-message-context.body.js";
 import type {
   TelegramMediaRef,
   TelegramMessageContextOptions,
-  TelegramMessageContextSessionRuntimeOverrides,
+  TelegramMessageContextSessionRuntime,
   TelegramPromptContextEntry,
 } from "./bot-message-context.types.js";
 import type { TelegramThreadSpec } from "./bot/helpers.js";
@@ -45,5 +45,5 @@ export type BuildTelegramInboundContextPayloadParams = {
   dmAllowFrom?: Array<string | number>;
   effectiveGroupAllow?: NormalizedAllowFrom;
   topicName?: string;
-  sessionRuntime?: TelegramMessageContextSessionRuntimeOverrides;
+  sessionRuntime?: TelegramMessageContextSessionRuntime;
 };

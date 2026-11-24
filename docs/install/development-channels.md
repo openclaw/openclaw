@@ -39,12 +39,12 @@ openclaw update --channel dev
 config after core update success. A refused or failed core update keeps the
 previous channel. The selected channel drives both install paths:
 
-| Channel           | npm/package installs                                                                                                                                                                   | git installs                                                                                       |
-| ----------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------- |
-| `stable`          | dist-tag `latest`                                                                                                                                                                      | switches to the npm package at `latest`                                                            |
-| `extended-stable` | resolves the public npm `extended-stable` selector, verifies the exact selected package, and installs that exact version. Fails closed with no fallback to `latest`, `beta`, or `dev`. | unsupported: OpenClaw leaves the checkout unchanged and asks you to use a package installation     |
-| `beta`            | dist-tag `beta`, falling back to `latest` when `beta` is missing or older                                                                                                              | switches to the npm package at `beta`, falling back to `latest` when beta is missing or older      |
-| `dev`             | switches to a Git checkout, builds it, and reinstalls the global CLI                                                                                                                   | fetches, rebases the checkout on the upstream `main` branch, builds, and reinstalls the global CLI |
+| Channel           | npm/package installs                                                                                                                                                                                    | git installs                                                                                       |
+| ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------- |
+| `stable`          | dist-tag `latest`                                                                                                                                                                                       | switches to the npm package at `latest`                                                            |
+| `extended-stable` | resolves the public npm `extended-stable` selector, verifies the exact selected package, and installs that exact version. Stops on verification errors, with no fallback to `latest`, `beta`, or `dev`. | unsupported: OpenClaw leaves the checkout unchanged and asks you to use a package installation     |
+| `beta`            | dist-tag `beta`, falling back to `latest` when `beta` is missing or older                                                                                                                               | switches to the npm package at `beta`, falling back to `latest` when beta is missing or older      |
+| `dev`             | switches to a Git checkout, builds it, and reinstalls the global CLI                                                                                                                                    | fetches, rebases the checkout on the upstream `main` branch, builds, and reinstalls the global CLI |
 
 An explicit `--channel stable` or `--channel beta` switches a Git installation
 to a package installation. A bare `openclaw update` in a Git checkout with a
@@ -133,9 +133,9 @@ Notes:
   `curl -fsSL https://openclaw.ai/install.sh | bash -s -- --install-method git --version main`.
 - Downgrade protection: if the target version is older than the current
   version, OpenClaw prompts for confirmation (skip with `--yes`).
-- Extended-stable always uses its verified exact package target. It is not a
-  one-off alias for `--tag extended-stable`, and `--tag` cannot be combined
-  with an effective extended-stable channel.
+- Extended-stable uses its verified exact package target by default. An explicit
+  `--tag` overrides that target for one update without replacing the saved channel.
+  The explicit target still goes through the normal compatibility checks.
 - `--channel beta` differs from `--tag beta`: the channel flow can fall back
   to stable/latest when beta is missing or older, while `--tag beta` always
   targets the raw `beta` dist-tag for that one run.

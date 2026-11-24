@@ -1,9 +1,7 @@
 /** Polls watched adopted sessions for direct upstream human activity. */
 import { createHash } from "node:crypto";
-import { isEmbeddedAgentRunActive } from "../agents/embedded-agent-runner/active-run-projections.js";
 import { allowsProcessHomeSessionScan } from "../config/paths.js";
-import type { loadSessionEntryReadOnly } from "../config/sessions/session-accessor.js";
-import { withSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
+import { readSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
 import { resolveSessionStorePathForScope } from "../config/sessions/session-store-path.js";
 import { readRecentUserAssistantTextForSession } from "../config/sessions/transcript.js";
 import type { SessionEntry } from "../config/sessions/types.js";
@@ -12,6 +10,7 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getPluginRegistryState } from "../plugins/runtime-state.js";
 import type { SessionCatalogProvider, SessionUpstreamProbe } from "../plugins/session-catalog.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
+import { isSessionRunActive } from "./session-controller.queries.js";
 import {
   recordSessionHumanDirectMessage,
   recordSessionStateEventAsync,
@@ -30,12 +29,6 @@ type SessionUpstreamMonitorOptions = OpenClawStateDatabaseOptions & {
   providers?: readonly SessionCatalogProvider[];
   now?: () => number;
   signal?: AbortSignal;
-  loadEntry?: typeof loadSessionEntryReadOnly;
-  isRunActive?: typeof isEmbeddedAgentRunActive;
-  loadOwnRecentUserTexts?: (params: {
-    entry: SessionEntry;
-    probe: Omit<SessionUpstreamProbe, "ownRecentUserTexts">;
-  }) => Promise<string[]>;
 };
 
 type SessionUpstreamMonitor = { stop: () => Promise<void> };
@@ -72,51 +65,33 @@ function assertMonitorCurrent(options: SessionUpstreamMonitorOptions): void {
 }
 
 function isIdleSession(
-  entry: SessionEntry | undefined,
+  entry: Pick<SessionEntry, "sessionId"> | undefined,
   options: SessionUpstreamMonitorOptions,
 ): boolean {
   return Boolean(
-    !options.signal?.aborted &&
-    entry?.sessionId &&
-    !(options.isRunActive ?? isEmbeddedAgentRunActive)(entry.sessionId),
+    !options.signal?.aborted && entry?.sessionId && !isSessionRunActive(entry.sessionId),
   );
 }
 
 async function loadProbeSession(
   probe: Pick<SessionUpstreamProbe, "sessionKey" | "agentId">,
   options: SessionUpstreamMonitorOptions,
-): Promise<SessionEntry | undefined> {
+): Promise<Pick<SessionEntry, "sessionId"> | undefined> {
   assertMonitorCurrent(options);
   const scope = {
     sessionKey: probe.sessionKey,
     agentId: probe.agentId,
     clone: false,
     env: options.env,
+    projection: "list" as const,
   };
-  const loadEntry = options.loadEntry;
-  const entry = loadEntry
-    ? loadEntry(scope)
-    : await withSessionEntryReadOnlyInWorker(
-        scope,
-        () => assertMonitorCurrent(options),
-        async (read) => {
-          if (!read.ok) {
-            throw read.error;
-          }
-          return read.value;
-        },
-      );
-  return entry;
+  return readSessionEntryReadOnlyInWorker(scope, () => assertMonitorCurrent(options));
 }
 
 async function loadOwnRecentUserTexts(
   probe: Omit<SessionUpstreamProbe, "ownRecentUserTexts">,
-  entry: SessionEntry,
   options: SessionUpstreamMonitorOptions,
 ): Promise<string[]> {
-  if (options.loadOwnRecentUserTexts) {
-    return await options.loadOwnRecentUserTexts({ entry, probe });
-  }
   const storePath = resolveSessionStorePathForScope({
     agentId: probe.agentId,
     sessionKey: probe.sessionKey,
@@ -173,7 +148,7 @@ async function runSessionUpstreamMonitorTick(
       continue;
     }
     const probes: SessionUpstreamProbe[] = [];
-    const sessionBySessionKey = new Map<string, SessionEntry>();
+    const sessionBySessionKey = new Map<string, Pick<SessionEntry, "sessionId">>();
     for (const link of links) {
       const probe = {
         sessionKey: link.sessionKey,
@@ -192,7 +167,7 @@ async function runSessionUpstreamMonitorTick(
         if (!session || !isIdleSession(session, options)) {
           continue;
         }
-        const ownRecentUserTexts = await loadOwnRecentUserTexts(probe, session, options);
+        const ownRecentUserTexts = await loadOwnRecentUserTexts(probe, options);
         if (options.signal?.aborted) {
           return;
         }

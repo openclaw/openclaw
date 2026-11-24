@@ -1,3 +1,6 @@
+import type { AgentModelConfig } from "../../../../src/config/types.agents-shared.js";
+import { modelSettingPatch, withModelSettingPrimary } from "../../lib/model-setting.ts";
+
 export type SessionObserverModelSelection =
   | { kind: "auto" }
   | { kind: "disabled" }
@@ -14,12 +17,19 @@ export function buildSessionObserverTogglePatch(enabled: boolean) {
   };
 }
 
-export function buildSessionObserverUtilityModelPatch(selection: SessionObserverModelSelection) {
+export function buildSessionObserverUtilityModelPatch(
+  selection: SessionObserverModelSelection,
+  current: AgentModelConfig | null = null,
+) {
   return {
     agents: {
       defaults: {
-        utilityModel:
-          selection.kind === "auto" ? null : selection.kind === "disabled" ? "" : selection.model,
+        utilityModel: modelSettingPatch(
+          withModelSettingPrimary(
+            current,
+            selection.kind === "auto" ? null : selection.kind === "disabled" ? "" : selection.model,
+          ),
+        ),
       },
     },
   };

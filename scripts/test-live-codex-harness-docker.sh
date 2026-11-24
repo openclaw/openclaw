@@ -142,10 +142,8 @@ set -euo pipefail
 [ -f "$HOME/.profile" ] && [ -r "$HOME/.profile" ] && source "$HOME/.profile" || true
 export NPM_CONFIG_PREFIX="${NPM_CONFIG_PREFIX:-$HOME/.npm-global}"
 export npm_config_prefix="$NPM_CONFIG_PREFIX"
-export XDG_CACHE_HOME="${XDG_CACHE_HOME:-$HOME/.cache}"
-export COREPACK_HOME="${COREPACK_HOME:-$XDG_CACHE_HOME/node/corepack}"
-export NPM_CONFIG_CACHE="${NPM_CONFIG_CACHE:-$XDG_CACHE_HOME/npm}"
-export npm_config_cache="$NPM_CONFIG_CACHE"
+trusted_scripts_dir="${OPENCLAW_LIVE_DOCKER_SCRIPTS_DIR:-/src/scripts}"
+source "$trusted_scripts_dir/lib/live-docker-stage.sh"
 cleanup_codex_live_mounts() {
   chmod -R a+rwX "$HOME" "$NPM_CONFIG_PREFIX" "$XDG_CACHE_HOME" 2>/dev/null || true
 }
@@ -164,8 +162,6 @@ fi
 mkdir -p "$NPM_CONFIG_PREFIX" "$XDG_CACHE_HOME" "$COREPACK_HOME" "$NPM_CONFIG_CACHE"
 chmod 700 "$XDG_CACHE_HOME" "$COREPACK_HOME" "$NPM_CONFIG_CACHE" || true
 export PATH="$NPM_CONFIG_PREFIX/bin:$PATH"
-trusted_scripts_dir="${OPENCLAW_LIVE_DOCKER_SCRIPTS_DIR:-/src/scripts}"
-source "$trusted_scripts_dir/lib/live-docker-stage.sh"
 openclaw_live_stage_mounted_auth
 run_setup_command() {
   openclaw_live_run_setup_command \
@@ -289,7 +285,6 @@ echo "==> Subagent count: ${OPENCLAW_LIVE_CODEX_HARNESS_SUBAGENT_COUNT:-1}"
 echo "==> Subagent-only fast path: ${OPENCLAW_LIVE_CODEX_HARNESS_SUBAGENT_ONLY:-auto}"
 echo "==> Guardian probe: ${OPENCLAW_LIVE_CODEX_HARNESS_GUARDIAN_PROBE:-1}"
 echo "==> Code-mode-only probe: ${OPENCLAW_LIVE_CODEX_HARNESS_CODE_MODE_ONLY:-0}"
-echo "==> Loop relay disabled: ${OPENCLAW_LIVE_CODEX_HARNESS_DISABLE_LOOP_RELAY:-0}"
 echo "==> Resume stress: ${OPENCLAW_LIVE_CODEX_HARNESS_RESUME_STRESS:-0}"
 echo "==> Resume stress history turns: ${OPENCLAW_LIVE_CODEX_HARNESS_RESUME_STRESS_HISTORY_TURNS:-4}"
 echo "==> Resume stress restarts: ${OPENCLAW_LIVE_CODEX_HARNESS_RESUME_STRESS_RESTARTS:-3}"
@@ -347,7 +342,7 @@ DOCKER_RUN_ARGS+=(--rm -t \
   -e OPENCLAW_LIVE_CODEX_HARNESS=1)
 openclaw_live_append_default_env OPENCLAW_LIVE_CODEX_HARNESS_ \
   CHAT_IMAGE_PROBE=0 CODE_MODE_ONLY=0 COMPACTION_STRESS=0 COMPACTION_STRESS_TURNS=4 \
-  DEBUG= DISABLE_LOOP_RELAY=0 GUARDIAN_PROBE=1 IMAGE_PROBE=1 LARGE_OUTPUT_BYTES=300000 \
+  DEBUG= GUARDIAN_PROBE=1 IMAGE_PROBE=1 LARGE_OUTPUT_BYTES=300000 \
   MCP_PROBE=1 MULTI_SESSION_PROBE=0 MODEL=openai/gpt-5.6-luna TARGETS= THINKING=low \
   EXPECTED_EFFORT= REQUIRE_GUARDIAN_EVENTS=1 REQUEST_TIMEOUT_MS= RESUME_STRESS=0 \
   RESUME_STRESS_HISTORY_TURNS=4 RESUME_STRESS_RESTARTS=3

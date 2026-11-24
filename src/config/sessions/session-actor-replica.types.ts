@@ -1,3 +1,4 @@
+import type { sessionChangeAffectsStoredRow } from "../../sessions/session-row-facts.js";
 import type { AgentDatabaseExecutionFileIdentity } from "../../state/openclaw-agent-execution-contract.js";
 import type { SessionActorHotState, SessionActorTarget } from "./session-actor-state.types.js";
 import type { SessionActorTranscriptReplica } from "./session-actor-transcript-replica.js";
@@ -18,17 +19,20 @@ export type SessionActorEntryFacts = Pick<
 export type FileTarget = SessionActorTarget & { database: AgentDatabaseExecutionFileIdentity };
 export type ReplicaCell = {
   target: SessionActorTarget;
+  publicationScope: Parameters<typeof sessionChangeAffectsStoredRow>[1];
   snapshot?: SessionActorHotState;
   entry?: SessionActorEntryFacts;
   transcript?: SessionActorTranscriptReplica;
+  transcriptBytes: number;
+  sharedFields?: object[];
   generation?: string;
-  reservation: number;
   handles: number;
-  pending: number;
   bytes: number;
 };
 export type ReplicaPool = {
   cells: Map<string, ReplicaCell>;
+  cellsBySessionKey: Map<string, Set<ReplicaCell>>;
+  sharedFields: Map<object, { bytes: number; references: number }>;
   snapshots: number;
   bytes: number;
   unsubscribe?: () => void;

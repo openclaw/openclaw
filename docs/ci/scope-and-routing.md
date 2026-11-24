@@ -13,7 +13,7 @@ Full main CI is [hourly by default](/ci/scheduled-workflows#hourly-main-ci), usi
 ordinary full manual coverage without changed-path filtering. The following
 push-routing rules apply when `OPENCLAW_CI_ON_PUSH=true`.
 
-Every admitted canonical `main` push run selects the published-upgrade Docker survivor;
+Every admitted upstream `main` push run selects the published-upgrade Docker survivor;
 QA Smoke retains owner-path selection. Pull requests and exact-head PR fallbacks
 omit those proofs while retaining unit/boundary checks. Control UI performance
 uses its UI/build/import owners. Ordinary manual and release validation select

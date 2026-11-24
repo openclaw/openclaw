@@ -2,12 +2,12 @@ export function downloadTextFile(filename: string, content: string, type = "text
   downloadBlobFile(filename, new Blob([content], { type }));
 }
 
-export function downloadBlobFile(filename: string, content: Blob): void {
+export function downloadBlobFile(filename: string, content: Blob, revokeAfterMs = 0): void {
   const url = URL.createObjectURL(content);
   const link = document.createElement("a");
   link.href = url;
   link.download = filename;
   link.click();
   // Let the browser consume the click before releasing the download payload.
-  setTimeout(() => URL.revokeObjectURL(url), 0);
+  setTimeout(() => URL.revokeObjectURL(url), revokeAfterMs);
 }

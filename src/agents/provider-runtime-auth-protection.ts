@@ -21,7 +21,7 @@ export function protectPreparedProviderRuntimeAuth(params: {
     ? Object.fromEntries(
         Object.entries(request.headers).map(([name, value]) => [
           name,
-          protect(value, `runtime-header:${name.toLowerCase()}`),
+          value === null ? null : protect(value, `runtime-header:${name.toLowerCase()}`),
         ]),
       )
     : undefined;

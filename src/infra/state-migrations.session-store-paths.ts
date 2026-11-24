@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { sameFileIdentity } from "@openclaw/fs-safe/advanced";
-import { isWithinDir } from "@openclaw/fs-safe/path";
+import { isWithinDir, safeStatSync } from "@openclaw/fs-safe/path";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { resolveStateDir } from "../config/paths.js";
 import { resolveAgentsDirFromSessionStorePath } from "../config/sessions/paths.js";
@@ -15,7 +15,7 @@ import {
   normalizeAgentId,
 } from "../routing/session-key.js";
 import { hasErrnoCode } from "./errno.js";
-import { existsDir, migrationFileExists, safeReadDir } from "./state-migrations.fs.js";
+import { readDirectoryEntriesSync } from "./path-existence.js";
 import type { SessionStoreAliasPlan } from "./state-migrations.types.js";
 
 type SessionStorePathRelationship = "same" | "different" | "unknown";
@@ -162,10 +162,10 @@ export function resolveLegacyAcpMetadataSessionStoreTargets(
   }
 
   for (const agentsDir of agentsDirs) {
-    if (!existsDir(agentsDir)) {
+    if (!safeStatSync(agentsDir)?.isDirectory()) {
       continue;
     }
-    for (const entry of safeReadDir(agentsDir)) {
+    for (const entry of readDirectoryEntriesSync(agentsDir)) {
       if (!entry.isDirectory()) {
         continue;
       }
@@ -186,7 +186,7 @@ function isManagedLegacySessionStorePathSafe(storePath: string): boolean {
   if (!agentsDir) {
     return true;
   }
-  if (!migrationFileExists(resolvedStorePath)) {
+  if (!safeStatSync(resolvedStorePath)?.isFile()) {
     return true;
   }
 

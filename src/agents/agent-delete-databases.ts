@@ -38,14 +38,19 @@ import { closeAuthProfileReadPool } from "./auth-profiles/sqlite-read-pool.js";
 
 export { AgentSharedStoreOwnerError } from "./agent-delete-session-store-safety.js";
 
-export type AgentDeleteDatabasePlan = {
-  agentDirs: string[];
-  registrationPaths: string[];
-  // Stale registrations can name a survivor's database; path-only readers must exclude it.
-  readerPaths: string[];
-  fileGroups: string[][];
-  relocatedFileGroups: string[][];
-};
+function resolveAgentDeleteRuntimeDirs(
+  agentId: string,
+  agentDir: string,
+  registeredDatabases: readonly OpenClawRegisteredAgentDatabase[],
+): string[] {
+  const normalizedId = normalizeAgentId(agentId);
+  return [
+    agentDir,
+    ...registeredDatabases
+      .filter((entry) => normalizeAgentId(entry.agentId) === normalizedId)
+      .map((entry) => path.dirname(entry.path)),
+  ];
+}
 
 function resolveAgentDeleteDatabasePaths(
   agentId: string,
@@ -168,9 +173,6 @@ export async function assertAgentSessionStoreDeletionSafe(
   );
   context.admission.assertCurrent();
   assertAgentSessionStoreDeletionTargetsCurrent(input.targets);
-  if (reply && (!reply.ok || reply.type !== "agentDeletion.sessionStoreBlocker")) {
-    throw new Error("Unexpected agent session-store deletion safety result");
-  }
   let blocker = reply?.blocker;
   if (!reply) {
     const anchor = input.targets.candidates.find(({ identity }) =>
@@ -233,7 +235,7 @@ export async function prepareAgentDeleteDatabases(
   agentDir: string,
   options: OpenClawStateDatabaseOptions = {},
   deletion?: AgentDeletionOperation,
-): Promise<AgentDeleteDatabasePlan> {
+) {
   const registeredDatabases = await readAgentDeleteDatabaseRegistry(options);
   const survivingDatabaseFilePaths = resolveSurvivingDatabaseFilePaths(
     registeredDatabases,
@@ -295,11 +297,9 @@ export async function prepareAgentDeleteDatabases(
     return relative.startsWith("..") || path.isAbsolute(relative);
   });
   return {
-    agentDirs: [
-      agentDir,
-      ...Array.from(registeredDatabasePaths, (databasePath) => path.dirname(databasePath)),
-    ],
+    agentDirs: resolveAgentDeleteRuntimeDirs(agentId, agentDir, registeredDatabases),
     registrationPaths: [...registeredDatabasePaths],
+    // Stale registrations can name a survivor's database; path-only readers must exclude it.
     readerPaths: databasePaths,
     fileGroups,
     relocatedFileGroups,

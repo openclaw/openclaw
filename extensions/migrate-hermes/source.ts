@@ -67,60 +67,40 @@ const HERMES_STATE_MARKERS = [
   ...HERMES_ARCHIVE_FILES,
 ] as const;
 
-async function discoverOpenCodeAuthPath(params: {
-  root: string;
-  includeFallback: boolean;
-  env: NodeJS.ProcessEnv;
-}): Promise<string | undefined> {
-  const rootParent = path.dirname(params.root);
-  const xdgDataHome = params.env.XDG_DATA_HOME?.trim();
-  const xdgAuthPath = xdgDataHome
-    ? path.join(resolveHomePath(xdgDataHome), "opencode", "auth.json")
-    : undefined;
-  const candidates = Array.from(
-    new Set([
-      ...(xdgAuthPath && (params.includeFallback || isPathInside(rootParent, xdgAuthPath))
-        ? [xdgAuthPath]
-        : []),
-      path.join(rootParent, OPENCODE_AUTH_RELATIVE_PATH),
-      ...(params.includeFallback
-        ? [
-            path.join(
-              path.resolve(
-                params.env.HOME?.trim() || params.env.USERPROFILE?.trim() || resolveHomePath("~"),
-              ),
-              OPENCODE_AUTH_RELATIVE_PATH,
-            ),
-          ]
-        : []),
-    ]),
-  );
-  for (const candidate of candidates) {
-    if (await exists(candidate)) {
-      return candidate;
-    }
-  }
-  return undefined;
-}
-
-export async function discoverHermesSource(
-  input?: string,
-  options: {
-    env?: NodeJS.ProcessEnv;
-    platform?: NodeJS.Platform;
-  } = {},
-): Promise<HermesSource> {
-  const env = options.env ?? process.env;
-  const platform = options.platform ?? process.platform;
+export async function discoverHermesSource(input?: string): Promise<HermesSource> {
   const explicitInput = input?.trim();
-  const root = explicitInput
-    ? resolveHomePath(explicitInput)
-    : await resolveImplicitHermesRoot(env, platform);
-  const opencodeAuthPath = await discoverOpenCodeAuthPath({
-    root,
-    includeFallback: !explicitInput,
-    env,
-  });
+  const root = explicitInput ? resolveHomePath(explicitInput) : await resolveImplicitHermesRoot();
+  const includeFallback = !explicitInput;
+  const opencodeAuthPath = await (async (): Promise<string | undefined> => {
+    const env = process.env;
+    const rootParent = path.dirname(root);
+    const xdgDataHome = env.XDG_DATA_HOME?.trim();
+    const xdgAuthPath = xdgDataHome
+      ? path.join(resolveHomePath(xdgDataHome), "opencode", "auth.json")
+      : undefined;
+    const candidates = Array.from(
+      new Set([
+        ...(xdgAuthPath && (includeFallback || isPathInside(rootParent, xdgAuthPath))
+          ? [xdgAuthPath]
+          : []),
+        path.join(rootParent, OPENCODE_AUTH_RELATIVE_PATH),
+        ...(includeFallback
+          ? [
+              path.join(
+                path.resolve(env.HOME?.trim() || env.USERPROFILE?.trim() || resolveHomePath("~")),
+                OPENCODE_AUTH_RELATIVE_PATH,
+              ),
+            ]
+          : []),
+      ]),
+    );
+    for (const candidate of candidates) {
+      if (await exists(candidate)) {
+        return candidate;
+      }
+    }
+    return undefined;
+  })();
   const profileParent = path.dirname(root);
   const globalRoot =
     !explicitInput && path.basename(profileParent) === "profiles"
@@ -163,10 +143,9 @@ export async function discoverHermesSource(
   return source;
 }
 
-async function resolveImplicitHermesRoot(
-  env: NodeJS.ProcessEnv,
-  platform: NodeJS.Platform,
-): Promise<string> {
+async function resolveImplicitHermesRoot(): Promise<string> {
+  const env = process.env;
+  const platform = process.platform;
   // Hermes pins the reserved supervised default slot to the root profile and
   // never follows active_profile there (hermes_cli/main.py:487). Mirror that so
   // a migration launched from that process keeps the default profile.

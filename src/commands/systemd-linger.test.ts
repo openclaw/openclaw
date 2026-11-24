@@ -56,13 +56,11 @@ describe("systemd linger setup", () => {
     const confirm = vi.fn(async () => false);
     const note = vi.fn();
     const runtime = { error: vi.fn() } as unknown as RuntimeEnv;
-    const env = { USER: "root", LOGNAME: "root", SUDO_USER: "debian" };
 
     await withLinux(async () => {
       await ensureSystemdUserLingerInteractive({
         runtime,
         prompter: { confirm, note },
-        env,
         requireConfirm: true,
       });
     });
@@ -76,10 +74,9 @@ describe("systemd linger setup", () => {
   it("reports the Gateway service owner in non-interactive recovery guidance", async () => {
     const log = vi.fn();
     const runtime = { log } as unknown as RuntimeEnv;
-    const env = { USER: "root", LOGNAME: "root", SUDO_USER: "debian" };
 
     await withLinux(async () => {
-      await ensureSystemdUserLingerNonInteractive({ runtime, env });
+      await ensureSystemdUserLingerNonInteractive({ runtime });
     });
 
     expect(log).toHaveBeenCalledWith(

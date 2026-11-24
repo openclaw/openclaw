@@ -12,9 +12,9 @@ The shared Linux Node checkout (`linux_node_checkout_step`) and shared Windows/m
 
 The sole maintained owner is `.github/actions/git-owner/owner.py`. `pnpm ci:git-owner:gen` projects it into the one pre-checkout Python heredoc in `ci.yml`; `pnpm ci:git-owner:check`, workflow checks, and the Git boundary test lane reject drift. The standalone composite action copies its own trusted bytes into a unique runner temporary directory and publishes `owner-path` and `CI_GIT_OWNER`. Neither bootstrap loads an owner from the selected candidate. Both use isolated Python (`-I -S`) and only its standard library, without a Git or network bootstrap.
 
-Timeout, cancellation, and leader exit drain the owned POSIX process group or Windows Job Object before workspace deletion, another Git command, or step completion. Cleanup has a ten-second allowance, separate from the operation deadline. POSIX cleanup uses a checked process census to distinguish terminated zombies from live writers. A denied group signal can be accepted only when that census proves there are no live members; live or unknown state still fails closed. After inspection failure, KILL is followed by group-disappearance observation within the remaining cleanup allowance; waiting for the leader alone is insufficient. Failed inspection or cleanup closes the owner and exits with code 125; later calls in the same policy cannot launch Git. Once cleanup succeeds, cancellation takes precedence over timeout or ordinary Git failure, including cancellation received during draining. A fetch timeout alone does not explain why transport stalled.
+Timeout, cancellation, and leader exit drain the owned POSIX process group or Windows Job Object before workspace deletion, another Git command, or step completion. Cleanup has a ten-second allowance, separate from the operation deadline. POSIX cleanup uses a checked process census to distinguish terminated zombies from live writers. A denied group signal can be accepted only when that census proves there are no live members; live or unknown state still stops the owner. After inspection failure, KILL is followed by group-disappearance observation within the remaining cleanup allowance; waiting for the leader alone is insufficient. Failed inspection or cleanup closes the owner and exits with code 125; later calls in the same policy cannot launch Git. Once cleanup succeeds, cancellation takes precedence over timeout or ordinary Git failure, including cancellation received during draining. A fetch timeout alone does not explain why transport stalled.
 
-The terminal exception boundary exits with 125 and appends a `[ci-git-owner] diagnostic=` record to its existing fail-closed annotation. The diagnostic reports up to four exceptions, following explicit causes before implicit contexts, with known exception types and bounded integer `errno`/`winerror` values when available. Each exception includes up to six owner-source function names and line numbers; these identify calls in the pinned owner revision. Traversal stops after 256 traceback frames per exception and marks truncation. Policy frames, paths, messages, arguments, commands, environment, and credentials are omitted. Unknown exception types are labeled `unknown`; diagnostic failures report `unavailable` without replacing the terminal exit. `FetchTimeout` is reported only when present in the chain. Earlier failures without this evidence retain an unknown cause; elapsed time or exit 125 alone cannot establish a timeout or a particular failing API.
+The terminal exception boundary exits with 125 and appends a `[ci-git-owner] diagnostic=` record to its existing failure annotation. The diagnostic reports up to four exceptions, following explicit causes before implicit contexts, with known exception types and bounded integer `errno`/`winerror` values when available. Each exception includes up to six owner-source function names and line numbers; these identify calls in the pinned owner revision. Traversal stops after 256 traceback frames per exception and marks truncation. Policy frames, paths, messages, arguments, commands, environment, and credentials are omitted. Unknown exception types are labeled `unknown`; diagnostic failures report `unavailable` without replacing the terminal exit. `FetchTimeout` is reported only when present in the chain. Earlier failures without this evidence retain an unknown cause; elapsed time or exit 125 alone cannot establish a timeout or a particular failing API.
 
 Straight-line callers use `--git <seconds> <args>`; zero means no operation deadline. Recovery policies use `--policy <trusted-python-file>` or `--policy -` (trusted source on stdin) in the same Python process and import `run_git`, `git_output`, `GitFailure`, and `FetchTimeout` from `ci_git_owner`. Policies catch only ordinary Git failures and operation timeouts. Ordinary Git exits 125 and 143 remain distinct from ownership failure and cancellation inside that typed boundary; shell exit codes alone cannot distinguish them. Generic Git and policy invocations require no GitHub or runner environment. `run_git` accepts output streams and command-local environment overrides without persisting Git configuration; cleanup always uses the shared ten-second allowance. Git stdin is always `DEVNULL`. `git_output` returns exact UTF-8 text with surrogate escapes for undecodable bytes, preserving whitespace and NUL separators; only checkout ref resolution trims output. Inline policy lets a running workflow supply its own trusted policy to a pinned owner without importing code from the selected checkout.
 
@@ -26,9 +26,9 @@ Lock reclamation is separate from process ownership. The checkout and base-fetch
 
 The shared `ensure-base-commit` action resolves the adjacent owner from its own action package and runs its availability/recovery policy in process. It retains 30-second fetch deadlines: exact SHA at depth one, then deepen by 25, 100, 300, and 1000. If the base is still missing, the final ref fetch uses `--unshallow` only when the checkout remains shallow; complete checkouts use a plain ref fetch. Explicit fetches request `--filter=blob:none`. Availability and shallow-state checks use command-local `GIT_NO_LAZY_FETCH=1`, so implicit promisor fetches cannot escape those budgets; downstream object reads retain normal lazy hydration. Availability is checked after successful fetches and ordinary failures, but never after cancellation or unverified cleanup.
 
-Workflow Sanity is the first external pinned typed-policy adopter: after Python 3.12 setup, it prepares `git-owner@dd4528b6393e7d00063067a080ca7241b48ce475` and supplies the trusted audit-config policy inline. An already-present base commit skips transport. Otherwise, its exclusively owned checkout enables lock reclamation while retaining 30-second fetch deadlines, at most three attempts per ref, and five-second cancellation-aware backoff only between timeout or ordinary Git 124/137 retries. Ordinary exact-SHA failure or retry exhaustion permits branch fallback; ownership failure or cancellation does not. Each config independently selects the exact SHA or existing remote branch with unbounded local reads, and the environment path is published only after both configs and the Zizmor path rewrite succeed.
+Workflow Sanity is the first external pinned typed-policy adopter: after Python 3.14.8 setup, it prepares `git-owner@88095dc00eef288c3829909d4dc64a9e249fa7ef` and supplies the trusted audit-config policy inline. An already-present base commit skips transport. Otherwise, its exclusively owned checkout enables lock reclamation while retaining 30-second fetch deadlines, at most three attempts per ref, and five-second cancellation-aware backoff only between timeout or ordinary Git 124/137 retries. Ordinary exact-SHA failure or retry exhaustion permits branch fallback; ownership failure or cancellation does not. Each config independently selects the exact SHA or existing remote branch with unbounded local reads, and the environment path is published only after both configs and the Zizmor path rewrite succeed.
 
-QA Profile Evidence is another pinned terminal adopter of `git-owner@dd4528b6393e7d00063067a080ca7241b48ce475`. Each Git-using job prepares the owner outside later checkouts using the established system Python bootstrap. Its four validation/protocol fetches retain 120-second operation deadlines; its six trusted-harness and selected-source bootstrap fetches retain no operation deadline. All ten use straight-line `--checkout-git` calls with one attempt, so ownership failure or cancellation stops before downstream checkout, readback, or publication. Called-workflow identity and selected-source trust classification remain separate and unchanged.
+QA Profile Evidence is another pinned terminal adopter of `git-owner@88095dc00eef288c3829909d4dc64a9e249fa7ef`. Each Git-using job prepares the owner outside later checkouts using the established system Python bootstrap. Its four validation/protocol fetches retain 120-second operation deadlines; its six trusted-harness and selected-source bootstrap fetches retain no operation deadline. All ten use straight-line `--checkout-git` calls with one attempt, so ownership failure or cancellation stops before downstream checkout, readback, or publication. Called-workflow identity and selected-source trust classification remain separate and unchanged.
 
 Mantis ref validation uses the same pinned owner. The shared `mantis-validate-trusted-ref` action owns one unbounded main fetch, even with both baseline and candidate refs. Discord smoke validation owns two fetch sites with 120-second deadlines: main, then the exact release branch when needed. Each fetch has one attempt and must drain before trust checks or outputs. The validators retain distinct trust policies and output contracts; a Discord release-branch mismatch never falls through to PR lookup.
 
@@ -44,7 +44,11 @@ Docs Agent prepares the same pinned owner immediately after checkout. Two truste
 
 Generated PR publication prepares the same pinned owner before minting tokens. One trusted action policy owns every Git operation through staging, commit, overlap/invalidation checks, leased push, reconciliation, and auth cleanup. Branch-head lookups and pushes retain 60-second deadlines; base fetches retain 120 seconds; local Git stays unbounded. There is no general Git retry or backoff. Only the existing deletion race permits one fresh-base rebuild and one create-only push after the observed nonempty head disappears. Typed ordinary `GitFailure` and `FetchTimeout` allow that semantic recovery only after verified cleanup; status 125 or 143 alone cannot identify an owner failure or cancellation. Git read failures cannot become no-overlap or merged-tree success. Cleanup uncertainty or cancellation stops before another Git/GH command, fallback, output consumption, summary, or auth-cleanup success. GitHub CLI commands retain their existing GNU timeout and reconciliation policies. The publisher remains the terminal step for Control UI locales, native locales, CI timing refit, and maturity publication. Stale generator runs preserve the existing pull request and its commits, disable inherited auto-merge, and defer to a fresh run (or fail when the caller requires it). They never empty the automation branch to close the pull request. A current no-change run leaves pending work alone; a validated successor restores the configured exact-head squash auto-merge policy. GitHub has no head-conditional disable operation: concurrent head movement fails reconciliation without overwriting the successor, which can be rearmed by rerunning its publisher. Required checks and repository protections still govern merging.
 
-Native locale freshness follows native source and inventory, shared glossary and translation helpers, platform generators, and publication tooling. Control UI catalog and config-schema changes remain inputs of the Control UI refresh. The shared translation helper loads UI catalog and verification code only for UI commands, so a UI hint change does not discard otherwise current native output. Both callers retain the same publisher freshness and owned-output overlap checks.
+Control UI locale workers upload zero-fallback translation memory in their existing one-day, same-run artifacts. The finalizer bootstraps full history and downloads artifacts outside the checkout, then uses the same pinned checkout action again to refresh canonical main before dependency setup and artifact admission. The warm fetch reuses existing history instead of relying on the branch tip advertised before a potentially long initial transfer. It validates the artifacts against the original source commit and workflow run (including completed workers from an earlier attempt when the finalizer is retried), and imports only compatible memory for currently owned catalogs. It never applies worker patches or restores source, metadata, or build artifacts. Canonical memory or fallback-metadata corrections, generator-policy changes, and catalog ownership changes discard the affected worker memory instead of overwriting current input.
+
+The finalizer uses the existing source-hash planner to translate only changed or new strings and regenerate metadata for its fresh checkout. A requested full refresh has already run in compatible workers; invalidated workers receive another forced pass. The finalizer receives the same translation-provider secrets as the workers for these catch-up calls, only after artifact admission. Aggregate zero-fallback validation and the shared publisher's source/owned-output checks remain unchanged: another source movement can still defer publication. This bounded catch-up narrows the stale window without shared-cache writes, cross-run downloads, new token permissions, or longer retention. Failed workers, missing artifacts, changed locale rosters, and repeated movement during catch-up can still require a fresh run; artifacts are not automatically imported by a successor workflow run.
+
+Native locale freshness follows native source and inventory, shared translation helpers, platform generators, and publication tooling. Control UI catalog and config-schema changes remain inputs of the Control UI refresh. The shared translation helper loads UI catalog and verification code only for UI commands, so a UI hint change does not discard otherwise current native output. Both callers retain the same publisher freshness and owned-output overlap checks.
 
 Maturity Scorecard prepares that immutable owner immediately before selected-ref checkout, preserving its runner-temporary environment handoff across checkout. Its trusted inline policy owns the full validation decision. Main, release-branch, and publication-base fetches and all local checks remain unbounded with one attempt. The sole 60-second operation is `ls-remote --exit-code --heads`: ordinary status 0 selects the branch, status 2 retains the default branch, and every other status fails with the lookup diagnostic after cleanup. A timeout is not absence; owner failure and cancellation never select a fallback or publish outputs. Main-ancestor, release-tag, and exact release-branch-head trust ordering, floating-main freeze, publication ancestry and excluded-path diff checks, and publication hash bytes remain unchanged.
 
@@ -59,6 +63,56 @@ directories. After a successful checkout, it copies the selected trusted scripts
 and policy runtime into the workspace root. Locks and late writes in the failed
 attempt's directory cannot alter the retry's files. Both attempts retain the
 event's trusted default-branch revision and sparse file selection.
+
+Security-fast also exports its trusted harness from the index when the actual
+checked-out `HEAD` equals `WORKFLOW_SHA`. It includes the security scanner, audit,
+report collector, and Zizmor configuration. Different revisions retain the pinned
+Actions checkout; inspection or export errors stop the job before candidate code.
+
+On Linux, compare the index export with the unchanged, cached checkout action:
+
+```sh
+python3 scripts/perf/ci-security-harness-measure.py \
+  --checkout-action /path/to/actions/checkout/3d3c42e5aac5ba805825da76410c181273ba90b1/dist/index.js \
+  --action-node /path/to/node24 --output /tmp/security-harness-result.json
+```
+
+This uses an isolated local Git origin, one excluded warm-up per variant, and five
+serial interleaved pairs with a fresh harness and warm filesystem. It checks indexed
+bytes, symlinks, executable modes and fetch counts, recording wall time, waited-child
+CPU, maximum single-process RSS and host resources. It does not measure WAN transfer,
+runner scheduling or whole-workflow savings.
+
+## Preflight materialization
+
+Preflight uses two Git checkout workers for the complete candidate tree. The planner
+reads source and test import graphs, file hashes, and native existence sentinels, so
+a scripts-only sparse checkout cannot preserve its selection. The depth-one source
+fetch, depth-two blobless parent fetch, exact revision checks, trusted harness export,
+and Node setup remain unchanged. The worker setting is command-local and applies
+only to preflight.
+
+The local five-pair comparison at `e8d8145cd62f` reduced median materialization from
+78.0s to 60.5s (22.5%); nearest-rank p95 was 94.1s versus 80.3s. This is 1.300 versus
+1.008 job-minutes for materialization, with no new jobs or runner changes. These are
+fresh full trees backed by shared local objects on a heavily loaded macOS host, not
+network checkout or remote CI timings. The first three pairs overlapped manifest
+proof; the last two had no other task-owned I/O. Two pairs regressed; natural CI runs
+must establish the remote saving. The single-pass fetch experiments did not establish a
+total checkout improvement and were not adopted.
+
+Reproduce the paired workload with at least five samples, without another owned
+I/O workload running alongside it:
+
+```sh
+node scripts/perf/ci-preflight-checkout-measure.mjs \
+  --revision <commit> --samples 5 --output /path/to/new-result.json
+```
+
+Each sample checks the exact revision and clean tree. Results include host load;
+complete saved pairs can resume at the same revision. Clone setup and cleanup are
+outside the measured interval. Compare complete preflight wall time and job-minutes
+in subsequent natural runs; do not infer network savings from this workload.
 
 ## Related
 

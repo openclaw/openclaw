@@ -26,7 +26,10 @@ function listLiveTestFiles(root: string): string[] {
 }
 
 describe("readLiveTestConfig", () => {
-  it("tolerates retired config keys without mutating process env", async () => {
+  it.each([
+    { name: "retired config keys", meta: { lastTouchedAt: "2026-07-25T00:00:00.000Z" } },
+    { name: "valid config", meta: undefined },
+  ])("reads $name without mutating process env", async ({ meta }) => {
     await withTempHome(async (home) => {
       const envKey = "OPENCLAW_LIVE_CONFIG_ISOLATION_TEST";
       const configDir = path.join(home, ".openclaw");
@@ -34,7 +37,7 @@ describe("readLiveTestConfig", () => {
       await fs.promises.writeFile(
         path.join(configDir, "openclaw.json"),
         `${JSON.stringify({
-          meta: { lastTouchedAt: "2026-07-25T00:00:00.000Z" },
+          meta,
           env: { vars: { [envKey]: "from-config" } },
           gateway: { mode: "local" },
         })}\n`,

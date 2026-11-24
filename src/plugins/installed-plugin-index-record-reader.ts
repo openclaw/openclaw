@@ -12,7 +12,7 @@ import {
   type PluginInstallRecordMapState,
 } from "../config/plugin-install-record-map.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
-import { tryReadJsonSync } from "../infra/json-files.js";
+import { tryReadJsonObjectSync as readJsonObjectFileSync } from "../infra/json-files.js";
 import { isPrereleaseResolutionAllowed, parseRegistryNpmSpec } from "../infra/npm-registry-spec.js";
 import { isNotFoundPathError, normalizeWindowsPathForComparison } from "../infra/path-guards.js";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
@@ -41,11 +41,6 @@ import { getPluginCache } from "./plugin-cache.js";
 import { groupPluginRecords } from "./record-groups.js";
 
 export { clearLoadInstalledPluginIndexInstallRecordsCache } from "./installed-plugin-index-record-cache.js";
-
-function readJsonObjectFileSync(filePath: string): Record<string, unknown> | null {
-  const parsed = tryReadJsonSync(filePath);
-  return isRecord(parsed) ? parsed : null;
-}
 
 function readStringRecord(value: unknown): Record<string, string> {
   if (!isRecord(value)) {

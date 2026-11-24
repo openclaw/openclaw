@@ -1,10 +1,13 @@
+import type {
+  SessionEntrySummary,
+  SessionFileState,
+  SessionTranscriptCorpusEntry,
+} from "openclaw/plugin-sdk/memory-core-host-engine-sessions";
 import {
   isCronRunSessionKey,
   isDreamingNarrativeSessionStoreKey,
-  type SessionFileEntry,
-  type SessionFileState,
-  type SessionTranscriptCorpusEntry,
-} from "openclaw/plugin-sdk/memory-core-host-engine-sessions";
+} from "openclaw/plugin-sdk/session-key-runtime";
+import { isActiveMemoryRecallSession } from "../active-memory-recall-session.js";
 import type { MemorySourceFileStateRow } from "./manager-source-state.js";
 
 export type MemorySessionStartupFileState = SessionFileState;
@@ -14,21 +17,28 @@ export function isMemorySessionIndexable(
     SessionTranscriptCorpusEntry,
     "generatedByDreamingNarrative" | "generatedByCronRun" | "sessionKind"
   > &
-    Partial<Pick<SessionFileEntry, "lineProvenance">>,
+    Partial<Pick<SessionTranscriptCorpusEntry, "sessionId" | "sessionKey" | "pluginOwnerId">> &
+    Partial<Pick<SessionEntrySummary, "lineOriginClasses">>,
   archivedSessionKey?: string,
 ): boolean {
   return !(
     entry.generatedByDreamingNarrative ||
     entry.generatedByCronRun ||
+    // Like cron and heartbeat runs: the recall sub-agent's prompt, not a conversation.
+    isActiveMemoryRecallSession({
+      sessionId: entry.sessionId,
+      pluginOwnerId: entry.pluginOwnerId,
+      sessionKey: entry.sessionKey ?? archivedSessionKey,
+    }) ||
     entry.sessionKind === "cron" ||
     entry.sessionKind === "heartbeat" ||
     (archivedSessionKey !== undefined &&
       (isDreamingNarrativeSessionStoreKey(archivedSessionKey) ||
         isCronRunSessionKey(archivedSessionKey) ||
         archivedSessionKey.endsWith(":heartbeat"))) ||
-    (entry.lineProvenance !== undefined &&
-      entry.lineProvenance.length > 0 &&
-      entry.lineProvenance.every((line) => line.originClass === "system"))
+    (entry.lineOriginClasses !== undefined &&
+      entry.lineOriginClasses.length > 0 &&
+      entry.lineOriginClasses.every((originClass) => originClass === "system"))
   );
 }
 
@@ -80,7 +90,6 @@ export function resolveMemorySessionSyncPlan(params: {
   return {
     activePaths,
     existingRows,
-    existingHashes: existingRows ? new Map(existingRows.map((row) => [row.path, row.hash])) : null,
     indexAll: params.needsFullReindex || Boolean(params.targetSessionFiles),
   };
 }

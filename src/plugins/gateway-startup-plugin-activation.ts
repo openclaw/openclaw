@@ -37,6 +37,8 @@ type GatewayStartupActivationParams = PluginStartupActivationParams & {
   configuredStorageProviderIds: ReadonlySet<string>;
   configuredSpeechProviderIds: ReadonlySet<string>;
   configuredWebSearchProviderIds: ReadonlySet<string>;
+  autoSelectWebSearchProvider: boolean;
+  autoSelectSpeechProvider: boolean;
   configuredModelProviderIds: ReadonlySet<string>;
   configuredGenerationProviderIds: ConfiguredGenerationProviderIds;
   configuredVoiceProviderIds: ConfiguredVoiceProviderIds;
@@ -54,7 +56,9 @@ type StartupActivationPolicy =
   | "root"
   | "harness"
   | "hook"
-  | "tool";
+  | "tool"
+  | "web-search-auto"
+  | "credentialed-auto";
 type StartupContractKey =
   | keyof ConfiguredGenerationProviderIds
   | keyof ConfiguredVoiceProviderIds
@@ -132,12 +136,27 @@ function isProviderCompatStartupPolicy(policy: StartupActivationPolicy): boolean
   );
 }
 
+/**
+ * Auto-selected capabilities (unpinned web search or TTS) choose among loaded owners, so an owner
+ * whose own setup credential is already present must load at startup like an explicitly enabled
+ * one. Owners without a credential stay lazy.
+ */
+function hasManifestSetupCredential(
+  manifest: PluginManifestRecord | undefined,
+  env: NodeJS.ProcessEnv | undefined,
+): boolean {
+  const source = env ?? process.env;
+  return (manifest?.setup?.providers ?? []).some((provider) =>
+    (provider.envVars ?? []).some((name) => Boolean(source[name.trim()]?.trim())),
+  );
+}
+
 function hasExplicitHookPolicyConfig(
   entry: NormalizedPluginsConfig["entries"][string] | undefined,
 ): boolean {
   return (
     entry?.hooks?.allowConversationAccess === true ||
-    entry?.hooks?.allowPromptInjection === true ||
+    entry?.hooks?.allowPromptModification === true ||
     entry?.hooks?.timeoutMs !== undefined ||
     (entry?.hooks?.timeouts !== undefined && Object.keys(entry.hooks.timeouts).length > 0)
   );
@@ -203,6 +222,14 @@ function passesPluginStartupPolicy(
   if (policy === "harness" || policy === "implicit-external" || policy === "decision") {
     return true;
   }
+  // Auto-detection may pick any enabled search owner, but only authored enablement justifies a
+  // startup load; default-enabled bundled owners stay lazy.
+  if (policy === "web-search-auto") {
+    return activationState.explicitlyEnabled;
+  }
+  if (policy === "credentialed-auto") {
+    return bundled || activationState.explicitlyEnabled;
+  }
   if (policy === "hook") {
     return (
       activationState.explicitlyEnabled ||
@@ -267,6 +294,17 @@ export function canStartGatewayStartupPlugin(params: GatewayStartupActivationPar
       params.configuredWebSearchProviderIds,
     ) &&
       passesPluginStartupPolicy(params, "implicit-external")) ||
+    // Prepared generations answer web_search provider lookups, so an unpinned search must see
+    // search-only owners that would otherwise wait for an explicit provider selection.
+    (params.autoSelectWebSearchProvider &&
+      (manifest?.contracts?.webSearchProviders?.length ?? 0) > 0 &&
+      passesPluginStartupPolicy(params, "web-search-auto")) ||
+    (((params.autoSelectWebSearchProvider &&
+      (manifest?.contracts?.webSearchProviders?.length ?? 0) > 0) ||
+      (params.autoSelectSpeechProvider &&
+        (manifest?.contracts?.speechProviders?.length ?? 0) > 0)) &&
+      hasManifestSetupCredential(manifest, params.env) &&
+      passesPluginStartupPolicy(params, "credentialed-auto")) ||
     (manifestOwnsConfiguredModelProvider({
       manifest,
       configuredModelProviderIds: params.configuredModelProviderIds,

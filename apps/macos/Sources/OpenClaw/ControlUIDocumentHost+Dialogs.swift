@@ -20,13 +20,7 @@ extension ControlUIDocumentHost {
         let alert = Self.makeJavaScriptConfirmAlert(
             message: message,
             host: host)
-        if let window = parent {
-            alert.beginSheetModal(for: window) { response in
-                completionHandler(Self.javaScriptConfirmResult(for: response))
-            }
-            return
-        }
-        AppActivation.shared.presentAlert(alert) { response in
+        AppActivation.shared.presentAlert(alert, over: parent) { response in
             completionHandler(Self.javaScriptConfirmResult(for: response))
         }
     }
@@ -63,7 +57,7 @@ extension ControlUIDocumentHost {
         host: String?) -> NSAlert
     {
         let alert = NSAlert()
-        alert.messageText = "OpenClaw Dashboard"
+        alert.messageText = "OpenClaw"
         if let host, !host.isEmpty {
             alert.informativeText = "\(host) is asking:\n\n\(message)"
         } else {

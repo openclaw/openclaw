@@ -46,43 +46,18 @@ type ProviderAuthProtectedProfilesReceipt = {
   rollback: (retainProfileIds?: ReadonlySet<string>) => Promise<void>;
 };
 
-/** Own commit fencing and one-shot compensation for both persistence stages. */
+/** Settle each persistence stage once, retaining failures for subsequent callers. */
 function createProviderAuthPersistenceReceipt(
   profiles: ProviderAuthProfile[],
   commit: () => Promise<void>,
   rollback: ProviderAuthProtectedProfilesReceipt["rollback"],
 ): ProviderAuthProtectedProfilesReceipt {
-  let outcome: "pending" | "committed" | "rolled-back" | "rollback-failed" = "pending";
-  let rollbackPromise: Promise<void> | undefined;
+  let settlement: Promise<void> | undefined;
   return {
     profiles,
-    commit: async () => {
-      // A concurrent commit cannot release locks while compensation is still running.
-      if (rollbackPromise) {
-        await rollbackPromise.catch(() => undefined);
-      }
-      if (outcome === "rolled-back") {
-        throw new Error("Cannot commit rolled-back provider auth persistence.");
-      }
-      if (outcome === "rollback-failed") {
-        throw new Error("Cannot commit provider auth persistence after rollback failed.");
-      }
-      outcome = "committed";
-      await commit();
-    },
+    commit: () => (settlement ??= Promise.resolve().then(commit)),
     rollback: (retainProfileIds) =>
-      (rollbackPromise ??=
-        outcome === "committed"
-          ? commit()
-          : rollback(retainProfileIds).then(
-              () => {
-                outcome = "rolled-back";
-              },
-              (error: unknown) => {
-                outcome = "rollback-failed";
-                throw error;
-              },
-            )),
+      (settlement ??= Promise.resolve().then(() => rollback(retainProfileIds))),
   };
 }
 

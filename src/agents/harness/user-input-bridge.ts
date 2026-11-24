@@ -3,6 +3,11 @@ import { runWithQuestionChannelDeliveries } from "../../infra/question-channel-r
 import type { MessagePresentation } from "../../interactive/payload.js";
 import type { EmbeddedRunAttemptParams } from "../embedded-agent-runner/run/types.js";
 import type {
+  AgentHarnessQuestionGatewayCall,
+  AgentQuestionDispatcher,
+} from "./gateway-question-dispatch.js";
+import type { AgentHarnessHostCapabilities } from "./host-capability-types.js";
+import type {
   AgentHarnessUserInputAnswers,
   AgentHarnessUserInputQuestion,
 } from "./user-input-types.js";
@@ -13,6 +18,21 @@ export type AgentHarnessUserInputPromptOptions = {
   secretWarning?: string;
   otherLabel?: string;
   presentation?: MessagePresentation;
+};
+
+export type RunAgentHarnessGatewayQuestionParams = {
+  questions: readonly AgentHarnessUserInputQuestion[];
+  sessionKey: string;
+  agentId?: string;
+  runId?: string;
+  timeoutMs: number;
+  gatewayCall?: AgentHarnessQuestionGatewayCall | AgentQuestionDispatcher;
+  delivery: Pick<EmbeddedRunAttemptParams, "onBlockReply" | "onPartialReply"> & {
+    hostCapabilities?: AgentHarnessHostCapabilities;
+  };
+  promptOptions?: AgentHarnessUserInputPromptOptions;
+  signal?: AbortSignal;
+  questionId?: string;
 };
 
 type AgentHarnessQuestionPromptPayload = {

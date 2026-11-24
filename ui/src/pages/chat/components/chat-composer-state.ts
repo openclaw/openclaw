@@ -1,90 +1,90 @@
-import type { ChatQueueItem, HumanMention } from "../../../lib/chat/chat-types.ts";
-import type { ChatRunUiStatus } from "../run-lifecycle.ts";
+import { createSignal, createStore } from "solid-js";
+import type { ChatGoalDraftMode, HumanMention } from "../../../lib/chat/chat-types.ts";
+import type { ComposerTasks } from "../../../lib/chat/composer-tasks.runtime.ts";
+import { loadComposerTasksRuntime } from "../../../lib/chat/composer-tasks.ts";
 import {
   adjustTextareaHeight,
   disconnectComposerPopoverAnchorObserver,
 } from "./chat-composer-dom.ts";
-import { ComposerEmojiMenu } from "./chat-composer-emoji.tsx";
-import { HumanMentionMenu } from "./chat-composer-mention-menu.tsx";
-import { createSkillMenuState } from "./chat-composer-skill-menu.tsx";
-import { createSlashMenuState } from "./chat-composer-slash-menu.tsx";
+import { createComposerEmojiMenu } from "./chat-composer-emoji-state.ts";
+import { createHumanMentionMenu } from "./chat-composer-mention-menu-state.ts";
+import { createSkillMenu } from "./chat-composer-skill-menu-state.ts";
+import { createSlashMenu } from "./chat-composer-slash-menu-state.ts";
 import type { ChatComposerProps, ChatComposerState } from "./chat-composer-types.ts";
 
 function createChatComposerState(): ChatComposerState {
-  return {
-    ...createSlashMenuState(),
-    ...createSkillMenuState(),
+  const [presentation, updatePresentation] = createStore<ChatComposerState["presentation"]>({
+    dictationError: null,
+    goalExpandedId: null,
+    queuedSubmit: null,
+  });
+  const [tasks, setTasks] = createSignal<ComposerTasks | null>(null);
+  // Signal writes commit on flush, so concurrent loads share this synchronous owner.
+  let owner: ComposerTasks | undefined;
+  const state: ChatComposerState = {
+    // Admission survives composer remounts while the same goal mode is pending.
+    goalPending: createSignal<ChatGoalDraftMode | null>(null),
+    presentation,
+    updatePresentation,
+    slashMenu: createSlashMenu(),
+    skillMenu: createSkillMenu(),
+    slashCommandDispatchConnected: false,
     composerComposing: false,
     editRevision: 0,
-    mentionMenu: new HumanMentionMenu(),
-    emojiMenu: new ComposerEmojiMenu(),
-    composingDraft: null,
+    mentionMenu: createHumanMentionMenu(),
+    emojiMenu: createComposerEmojiMenu(),
     composerInputIntentKey: null,
     pendingClearedSubmittedDraft: null,
-    goalExpandedId: null,
-    goalComposer: null,
-    activeQuestionKey: null,
-    gatewayQuestionIds: new Set(),
-    asyncQuestionIds: new Set(),
-    questionCollapsed: false,
-    questionTakeoverActive: false,
+    questionFocusActive: false,
     restoreComposerFocus: false,
     composerInput: null,
     composerTextarea: null,
+    composerContext: null,
     microphonePicker: null,
-    capabilityMenuOpen: false,
-    capabilityMenuView: "root",
     textareaRef: null,
     composerInputRef: null,
+    stopRunFromEscape: null,
+    sendDraft: null,
     dictation: null,
     composerDraftScope: null,
-    dictationError: null,
     dictationSelection: null,
+    tasks,
+    // One owner per pane, created once the runtime has loaded.
+    loadTasks: () =>
+      loadComposerTasksRuntime().then(({ createComposerTasks }) => {
+        if (!owner) {
+          const created = createComposerTasks(state);
+          owner = created;
+          setTasks(() => created);
+        }
+        return owner;
+      }),
+    taskPresenters: 0,
+  };
+  return state;
+}
+
+/** A mounted built-in composer presents the pane's tasks; a replacement composer cannot. */
+export function presentComposerTasks(state: ChatComposerState) {
+  state.taskPresenters += 1;
+  return () => {
+    state.taskPresenters -= 1;
+    if (state.taskPresenters === 0) {
+      // The next editor has fresh history, so the Undo receipt cannot restore anything.
+      state.tasks()?.dismiss();
+    }
   };
 }
 
 const composerStates = new Map<string, ChatComposerState>();
 
 export function getChatComposerState(paneId: string): ChatComposerState {
-  const existing = composerStates.get(paneId);
-  if (existing) {
-    return existing;
+  let state = composerStates.get(paneId);
+  if (!state) {
+    state = createChatComposerState();
+    composerStates.set(paneId, state);
   }
-  const state = createChatComposerState();
-  composerStates.set(paneId, state);
   return state;
-}
-
-export function hasTerminalRunStatus(status: ChatRunUiStatus | null | undefined): boolean {
-  return status?.phase === "done" || status?.phase === "interrupted";
-}
-
-export function isCurrentSessionSubmittedProgress(
-  item: ChatQueueItem,
-  sessionKey: string,
-  status: ChatRunUiStatus | null | undefined,
-): boolean {
-  return (
-    item.sessionKey === sessionKey &&
-    !item.pendingRunId &&
-    (item.sendState === "submitting" ||
-      item.sendState === "sending" ||
-      item.sendState === "waiting-model") &&
-    (status == null || item.sendRunId !== status.runId)
-  );
-}
-
-// Single source for "the selected session is visibly working": drives both
-// the thread's working spark and the composer's sr-only announcement.
-export function isChatRunWorking(
-  props: Pick<ChatComposerProps, "runActive" | "runStatus" | "queue" | "sessionKey">,
-): boolean {
-  return (
-    (props.runActive === true && !hasTerminalRunStatus(props.runStatus)) ||
-    props.queue.some((item) =>
-      isCurrentSessionSubmittedProgress(item, props.sessionKey, props.runStatus),
-    )
-  );
 }
 
 export function composerDraftKey(
@@ -102,23 +102,15 @@ export function commitComposerDraft(
   if (currentDraft === value && mentions === undefined) {
     return;
   }
-  const previousMentions = props.getMentions?.() ?? props.mentions ?? [];
   getChatComposerState(props.paneId).editRevision += 1;
   props.onDraftChange(value, mentions);
-  const nextMentions = props.getMentions?.() ?? mentions ?? props.mentions ?? [];
-  // Moving a token while typing prose changes its span, not the recipient strip.
-  if (
-    previousMentions.length !== nextMentions.length ||
-    previousMentions.some((previous, index) => {
-      const next = nextMentions[index]!;
-      return (
-        previous.profileId !== next.profileId ||
-        currentDraft.slice(previous.start, previous.end) !== value.slice(next.start, next.end)
-      );
-    })
-  ) {
-    props.onRequestUpdate?.();
-  }
+}
+
+/** Enter before the session is ready submits this exact draft once the composer can. */
+export function queueComposerSubmit(state: ChatComposerState, draft: string | null): void {
+  state.updatePresentation((presentation) => {
+    presentation.queuedSubmit = draft;
+  });
 }
 
 export function markComposerInputIntent(state: ChatComposerState, key: string): void {
@@ -164,7 +156,9 @@ export function suppressStaleSubmittedDraftReplay(
 }
 
 function disposeChatComposerState(state: ChatComposerState) {
-  state.emojiMenu.close();
+  state.slashMenu.dispose();
+  state.skillMenu.dispose();
+  state.emojiMenu.dispose();
   state.mentionMenu.dispose();
   state.composerDraftScope = null;
   state.dictation?.dispose();
@@ -175,16 +169,14 @@ function disposeChatComposerState(state: ChatComposerState) {
 }
 
 export function resetChatComposerState(paneId?: string) {
-  if (paneId) {
-    const paneState = composerStates.get(paneId);
-    if (paneState) {
-      disposeChatComposerState(paneState);
+  for (const state of paneId ? [composerStates.get(paneId)] : composerStates.values()) {
+    if (state) {
+      disposeChatComposerState(state);
     }
+  }
+  if (paneId) {
     composerStates.delete(paneId);
-    return;
+  } else {
+    composerStates.clear();
   }
-  for (const state of composerStates.values()) {
-    disposeChatComposerState(state);
-  }
-  composerStates.clear();
 }

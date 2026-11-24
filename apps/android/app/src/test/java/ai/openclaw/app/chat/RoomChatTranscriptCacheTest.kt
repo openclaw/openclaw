@@ -3,6 +3,7 @@ package ai.openclaw.app.chat
 import ai.openclaw.app.ui.chat.ChatTimelineItem
 import ai.openclaw.app.ui.chat.buildTimeline
 import ai.openclaw.app.ui.chat.prepareChatHistory
+import ai.openclaw.app.ui.chat.splitChatAttachmentMessage
 import androidx.room3.Room
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
@@ -381,6 +382,18 @@ class RoomChatTranscriptCacheTest {
     }
 
   @Test
+  fun canonicalInboundPhotoSurvivesOfflineTranscriptReopen() =
+    runTest {
+      val source = "media://inbound/photo---af3c4068.jpg"
+      val photo = ChatMessageContent(type = "image", mimeType = "image/jpeg", fileName = "photo.jpg", url = source)
+      saveTranscript(messages = listOf(message("See attached.", role = "user", timestampMs = 10, extraParts = listOf(photo))))
+
+      val content = loadTranscript().single().content
+      assertEquals(listOf(ChatMessageContent(type = "text", text = "See attached."), photo), content)
+      assertEquals(source, content.last().imageLoadKey())
+    }
+
+  @Test
   fun transcriptRoundTripKeepsManagedAudioVideoAndDocumentMetadata() =
     runTest {
       val audio =
@@ -460,6 +473,62 @@ class RoomChatTranscriptCacheTest {
       assertTrue(loadTranscript(gatewayId = "gateway-b").isEmpty())
       assertTrue(loadTranscript(agentId = "other").isEmpty())
       assertTrue(loadTranscript(sessionKey = "other").isEmpty())
+    }
+
+  @Test
+  fun transcribedVoiceNoteKeepsItsTranscriptQuoteAfterOfflineReopen() =
+    runTest {
+      // Fails on 5f35c4ed: the cache dropped `transcribed`, so a cold offline open showed the raw echo.
+      val voice =
+        ChatMessageContent(
+          type = "audio",
+          mimeType = "audio/mp4",
+          fileName = "voice-note-b9526ed8-69ef-44d1-ad36-0123456789ab.m4a",
+          artifactId = "artifact_managed_media_66666666-6666-4666-8666-666666666666",
+          durationMs = 5_000,
+          transcribed = true,
+        )
+      val untranscribedVoice = voice.copy(artifactId = "artifact_managed_media_77777777-7777-4777-8777-777777777777", transcribed = false)
+      val echo = ChatMessageContent(type = "text", text = "See attached.\n\uD83D\uDCDD \"hello\"")
+      saveTranscript(
+        messages =
+          listOf(
+            ChatMessage(id = "transcribed", role = "user", content = listOf(echo, voice), timestampMs = 10),
+            ChatMessage(id = "authored", role = "user", content = listOf(echo, untranscribedVoice), timestampMs = 11),
+          ),
+      )
+
+      val loaded = loadTranscript()
+
+      assertEquals(listOf(true, false), loaded.map { message -> message.content.single { it.type == "audio" }.transcribed })
+      val reopened = splitChatAttachmentMessage(loaded[0].content)
+      assertEquals(listOf(voice), reopened.content)
+      assertEquals("hello", reopened.transcript)
+      assertEquals(null, splitChatAttachmentMessage(loaded[1].content).transcript)
+    }
+
+  @Test
+  fun cachedAudioWithoutTheTranscribedKeyLoadsAsUntranscribed() =
+    runTest {
+      database.dao().insertMessages(
+        listOf(
+          CachedMessageEntity(
+            gatewayId = "gateway-a",
+            agentId = "main",
+            sessionKey = "main",
+            rowOrder = 0,
+            role = "user",
+            textPartsJson = """{"content":[{"type":"audio","mimeType":"audio/mp4","durationMs":5000}]}""",
+            timestampMs = 10L,
+            idempotencyKey = null,
+          ),
+        ),
+      )
+
+      val audio = loadTranscript().single().content.single()
+
+      assertEquals(5_000L, audio.durationMs)
+      assertEquals(false, audio.transcribed)
     }
 
   @Test

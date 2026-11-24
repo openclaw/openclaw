@@ -1,10 +1,10 @@
 // Irc tests cover doctor mutable allowlist warnings.
 import { describe, expect, it } from "vitest";
-import { collectIrcMutableAllowlistWarnings } from "./doctor.js";
+import { ircPlugin } from "./channel.js";
 
 describe("collectIrcMutableAllowlistWarnings", () => {
-  it("warns on a host-less nick!user allowlist entry", () => {
-    const warnings = collectIrcMutableAllowlistWarnings({
+  it("warns on a host-less nick!user allowlist entry", async () => {
+    const warnings = await ircPlugin.doctor!.collectMutableAllowlistWarnings!({
       cfg: {
         channels: {
           irc: {
@@ -16,8 +16,8 @@ describe("collectIrcMutableAllowlistWarnings", () => {
     expect(warnings).toContain("- channels.irc.allowFrom: alice!ident");
   });
 
-  it("does not warn on a full nick!user@host allowlist entry", () => {
-    const warnings = collectIrcMutableAllowlistWarnings({
+  it("does not warn on a full nick!user@host allowlist entry", async () => {
+    const warnings = await ircPlugin.doctor!.collectMutableAllowlistWarnings!({
       cfg: {
         channels: {
           irc: {

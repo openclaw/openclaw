@@ -98,13 +98,15 @@ Use WebSocket signals instead of a log substring:
 3. Send `connect` with the challenge-bound device signature.
 4. Treat `hello-ok` as application readiness for authenticated RPC.
 
-The challenge is deliberately earlier than full initialization. If startup
-sidecars are still pending, `connect` returns a retryable `UNAVAILABLE` error with
+The challenge is deliberately earlier than full initialization. While authentication
+and request state are still being prepared, `connect` returns a retryable `UNAVAILABLE` error with
 `details.reason: "startup-sidecars"`, a bounded `retryAfterMs`, and then closes
 with code `1013` and reason `gateway starting`. Use
 `resolveGatewayStartupRetryAfterMs` from
 `@openclaw/gateway-protocol/startup-unavailable` or the reference client's built-in
-policy, then reconnect.
+policy, then reconnect. Background session recovery does not hold authenticated
+connections or reads of available sessions. A successful handshake does not mean
+every agent is ready for writes; honor each RPC's recovery response.
 
 ## Interpret restart and shutdown
 

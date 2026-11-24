@@ -30,7 +30,6 @@ export function registerSubagentDismissedRetentionCases({
         completion: { required: true, resultText: "done", capturedAt: now - 8 * 60_000 },
         delivery: {
           status: "discarded",
-          disposition: "intentional_non_delivery",
           dismissedAt: now - 6 * 60_000,
         },
         cleanupHandled: true,

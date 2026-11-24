@@ -31,10 +31,10 @@ function serializeManifest(baseCommit, entries) {
   return JSON.stringify({
     version: 1,
     baseCommit,
-    entries: entries
-      .filter((entry) => !isDerivedWorkspacePath(entry.path, isStagedInputPath(entry.path, stagedInputs)))
-      .map(canonicalEntry)
-      .sort(compareManifestPaths),
+    entries: projectWorkspaceEntries(
+      entries.map(canonicalEntry).toSorted(compareManifestPaths),
+      (entryPath) => isStagedInputPath(entryPath, stagedInputs),
+    ),
   });
 }`;
 
@@ -98,7 +98,7 @@ function resolveManifest(manifestRoot, requestedDigest) {
       }
     })
     .filter(Boolean)
-    .sort((left, right) =>
+    .toSorted((left, right) =>
       right.mtimeMs - left.mtimeMs || (left.name < right.name ? -1 : left.name > right.name ? 1 : 0),
     )
     .slice(0, 256);
@@ -121,5 +121,5 @@ function resolveManifest(manifestRoot, requestedDigest) {
     publishManifest(manifestRoot, canonical);
     return requestedDigest;
   }
-  fail("worker workspace manifest is unavailable: " + requestedDigest);
+  return fail("worker workspace manifest is unavailable: " + requestedDigest);
 }`;

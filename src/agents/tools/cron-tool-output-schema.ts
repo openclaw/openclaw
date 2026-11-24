@@ -1,12 +1,17 @@
 import { Type, type TProperties } from "typebox";
+import { AutomationResultSchema } from "../../../packages/gateway-protocol/src/schema/cron-automation-result.js";
 import {
   CronAddJobResultSchema,
   CronAddResultSchema,
   CronDeliveryPreviewSchema,
   CronJobSchema,
   CronRunLogEntrySchema,
+  CronScratchGetResultSchema,
+  CronScratchSetResultSchema,
 } from "../../../packages/gateway-protocol/src/schema/cron.js";
+import { CronStreamApprovalEndedSchema } from "../../cron/stream-approval-outcome.js";
 import { defineToolOutputSchema } from "../schema/tool-output-schema.js";
+import { CronCreationSlotsSchema } from "./cron-tool-schema.js";
 
 function closedObject<T extends TProperties>(properties: T) {
   return Type.Object(properties, { additionalProperties: false });
@@ -22,6 +27,7 @@ const CompactCronJobSchema = closedObject({
   id: job.id,
   name: job.name,
   agentId: job.agentId,
+  cyberAccessProgram: job.cyberAccessProgram,
   // Protocol-v4 compact replies from older Gateways omit the update timestamp.
   updatedAtMs: Type.Optional(job.updatedAtMs),
   declarationKey: job.declarationKey,
@@ -37,7 +43,10 @@ const CompactCronJobSchema = closedObject({
     Type.Literal("cron"),
     Type.Literal("on-exit"),
     Type.Literal("stream"),
+    Type.Literal("event"),
   ]),
+  streamExecutionHost: job.streamExecutionHost,
+  reauthorizationRequired: job.reauthorizationRequired,
   schedule: Type.Optional(
     Type.Union(
       job.schedule.anyOf.filter((schema) =>
@@ -51,7 +60,11 @@ const CompactCronJobSchema = closedObject({
   lastRunStatus: Type.Union([...job.lastRunStatus.anyOf, Type.Null()]),
   lastRunError: nullableString,
   runningAtMs: job.state.properties.runningAtMs,
+  lastDurationMs: job.state.properties.lastDurationMs,
+  lastTriggerEvalAtMs: job.state.properties.lastTriggerEvalAtMs,
+  lastMeaningfulResult: job.state.properties.lastMeaningfulResult,
   autoDisabled: job.state.properties.autoDisabled,
+  admissionDeferred: job.state.properties.admissionDeferred,
   lastDelivered: job.lastDelivered,
   lastDeliveryStatus: job.lastDeliveryStatus,
   lastDeliveryError: job.lastDeliveryError,
@@ -77,6 +90,8 @@ const page = {
 const CronListOutputSchema = closedObject({
   jobs: Type.Array(Type.Union([CompactCronJobSchema, FullCronListJobSchema])),
   ...page,
+  includeDisabled: Type.Boolean(),
+  inventoryHint: Type.String(),
   // Self-scoped inventories intentionally remove the global snapshot token.
   snapshotRevision: Type.Optional(Type.String()),
   scope: Type.Optional(Type.Union([Type.Literal("caller"), Type.Literal("gateway")])),
@@ -95,6 +110,7 @@ const CronStatusOutputSchema = closedObject({
   storage: Type.Optional(Type.Literal("sqlite")),
   sqlitePath: Type.Optional(Type.String()),
   jobs: Type.Optional(Type.Integer({ minimum: 0 })),
+  reauthorizationRequired: Type.Optional(Type.Integer({ minimum: 0 })),
   nextWakeAtMs: Type.Optional(nullableNumber),
 });
 
@@ -143,6 +159,56 @@ const CronRunOutputSchema = Type.Union([
   }),
 ]);
 
+const streamExecutionApproval = Type.Optional(
+  Type.Object(
+    {
+      approvalId: Type.String(),
+      decision: Type.Literal("allow-once"),
+      source: Type.Literal("operator"),
+      message: Type.String({
+        minLength: 1,
+        description: "Human-readable attribution; the receipt does not identify the approver.",
+      }),
+    },
+    {
+      additionalProperties: false,
+      description:
+        "Native operator approval of this persistent watcher and its automatic restarts completed and was consumed by this successful save. This is a completed approval, not a pending question or permission for future agent actions.",
+    },
+  ),
+);
+
+const automationCreation = Type.Optional(
+  Type.Union([
+    closedObject({
+      type: Type.Literal("automation_creation_result"),
+      planId: Type.String(),
+      slotId: Type.String(),
+      status: Type.Literal("created"),
+      jobId: Type.String(),
+    }),
+    closedObject({
+      type: Type.Literal("automation_creation_result"),
+      planId: Type.String(),
+      slotId: Type.String(),
+      status: Type.Literal("failed"),
+    }),
+  ]),
+);
+const CronAddToolOutputSchema = Type.Union([
+  ...CronAddResultSchema.anyOf.map((schema) =>
+    closedObject({ ...schema.properties, streamExecutionApproval, automationCreation }),
+  ),
+  closedObject({ ...CronStreamApprovalEndedSchema.properties, automationCreation }),
+]);
+const CronUpdateToolOutputSchema = Type.Union([
+  Type.Object(
+    { ...CronAddJobResultSchema.properties, streamExecutionApproval },
+    { additionalProperties: false },
+  ),
+  CronStreamApprovalEndedSchema,
+]);
+
 /** Every non-throwing automations result, reusing the canonical job/history contracts. */
 export const CronToolOutputSchema = defineToolOutputSchema({
   inputProperty: "action",
@@ -150,9 +216,14 @@ export const CronToolOutputSchema = defineToolOutputSchema({
     status: CronStatusOutputSchema,
     list: CronListOutputSchema,
     get: CronJobSchema,
+    plan: closedObject({
+      type: Type.Literal("automation_creation_plan"),
+      planId: Type.String(),
+      slots: CronCreationSlotsSchema,
+    }),
     // Add can return a direct job or the declarative convergence envelope.
-    add: CronAddResultSchema,
-    update: CronAddJobResultSchema,
+    add: CronAddToolOutputSchema,
+    update: CronUpdateToolOutputSchema,
     remove: Type.Union([
       closedObject({
         ok: Type.Literal(true),
@@ -168,6 +239,13 @@ export const CronToolOutputSchema = defineToolOutputSchema({
       ok: Type.Literal(true),
       delayMs: Type.Number({ exclusiveMinimum: 0 }),
     }),
+    scratch_get: CronScratchGetResultSchema,
+    scratch_set: CronScratchSetResultSchema,
+    record_result: Type.Union(
+      AutomationResultSchema.anyOf.map((schema) =>
+        closedObject({ ok: Type.Literal(true), ...schema.properties }),
+      ),
+    ),
     wake: Type.Union([
       closedObject({ ok: Type.Literal(true) }),
       closedObject({

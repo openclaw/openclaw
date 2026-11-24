@@ -12,17 +12,17 @@ import {
   SettingsSegmented,
   SettingsStatus,
   SettingsToggleRow,
+  SettingsUnavailable,
 } from "../../components/solid/settings-ui.tsx";
 import { SettingsWorkspace } from "../../components/solid/settings-workspace.tsx";
 import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
 import { projectNativeDeviceSettings } from "../../lib/reactive/application-native.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
-import { defineSolidBridge } from "../../lit/solid-bridge.ts";
 
 registerEnglishCatalog(registerSettingsEnglish);
 
-function DevicePermissionsPageContent() {
+export function DevicePermissionsPage() {
   const capability = useApplication().nativeDeviceSettings;
   const projection = capability ? projectNativeDeviceSettings(capability) : null;
   const snapshot = () => projection?.read();
@@ -36,8 +36,7 @@ function DevicePermissionsPageContent() {
         <Show when={props.snapshot.permissions.entries.length > 0}>
           <SettingsSection title={t("configPage.deviceSettings.systemAccess")}>
             <For each={props.snapshot.permissions.entries} keyed={(entry) => entry.id}>
-              {(_entry, index) => {
-                const permission = () => props.snapshot.permissions.entries[index()]!;
+              {(permission) => {
                 const permissionTitle = () =>
                   t(`configPage.deviceSettings.permissions.${permission().id}.title`);
                 const requestableBinaryPermission = () =>
@@ -113,7 +112,15 @@ function DevicePermissionsPageContent() {
           <SettingsSection title={t("configPage.deviceSettings.location")}>
             <SettingsRow
               title={t("configPage.deviceSettings.locationAccess")}
-              description={t("configPage.deviceSettings.locationHint")}
+              description={
+                <>
+                  {t("configPage.deviceSettings.locationHint")}
+                  <Show when={props.snapshot.device.platform === "macos"}>
+                    {" "}
+                    {t("configPage.deviceSettings.locationAlwaysHint")}
+                  </Show>
+                </>
+              }
               stackedOnNarrow
               control={
                 <SettingsSegmented
@@ -123,7 +130,7 @@ function DevicePermissionsPageContent() {
                     value,
                     label: t(`configPage.deviceSettings.locationModes.${value}`),
                   }))}
-                  onChange={(value) => capability?.set("permissions.location.mode", value)}
+                  onChange={(value) => void capability?.set("permissions.location.mode", value)}
                 />
               }
             />
@@ -163,7 +170,7 @@ function DevicePermissionsPageContent() {
                 description={t("configPage.deviceSettings.preciseLocationHint")}
                 checked={location()!.precise}
                 disabled={location()!.mode === "off"}
-                onChange={(value) => capability?.set("permissions.location.precise", value)}
+                onChange={(value) => void capability?.set("permissions.location.precise", value)}
               />
             </Show>
           </SettingsSection>
@@ -175,7 +182,7 @@ function DevicePermissionsPageContent() {
               description={t("configPage.deviceSettings.activePresenceHint")}
               checked={props.snapshot.capabilities?.activeComputerPresenceEnabled ?? false}
               onChange={(value) =>
-                capability?.set("capabilities.activeComputerPresenceEnabled", value)
+                void capability?.set("capabilities.activeComputerPresenceEnabled", value)
               }
             />
           </SettingsSection>
@@ -184,7 +191,7 @@ function DevicePermissionsPageContent() {
     );
   }
   return (
-    <>
+    <openclaw-device-permissions-page>
       <SettingsPageHeader
         title={titleForRoute("device-permissions", t)}
         subtitle={
@@ -204,7 +211,11 @@ function DevicePermissionsPageContent() {
         <SettingsPage>
           <Show
             when={capability}
-            fallback={<SettingsEmpty message={t("configPage.deviceSettings.appOnly")} />}
+            fallback={
+              <SettingsSection>
+                <SettingsUnavailable message={t("configPage.deviceSettings.appOnly")} />
+              </SettingsSection>
+            }
           >
             <Show
               when={Boolean(snapshot())}
@@ -215,12 +226,6 @@ function DevicePermissionsPageContent() {
           </Show>
         </SettingsPage>
       </SettingsWorkspace>
-    </>
+    </openclaw-device-permissions-page>
   );
 }
-
-export const DevicePermissionsPage = defineSolidBridge(
-  "openclaw-device-permissions-page",
-  DevicePermissionsPageContent,
-  { properties: {} },
-);

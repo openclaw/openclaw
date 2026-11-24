@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { DatabaseSync, type SQLInputValue } from "node:sqlite";
+import { Kysely } from "kysely";
 import type { Client } from "pg";
+import { OpenClawPostgresDialect } from "../../src/infra/sql-query-compiler.js";
+import type { DB as AgentSchema } from "../../src/state/openclaw-agent-db.generated.js";
 
 /** Exercise generated DDL, including its triggers, against the canonical SQLite owner. */
 export async function checkAgentPostgresBehavior(client: Client): Promise<void> {
@@ -30,12 +33,13 @@ export async function checkAgentPostgresBehavior(client: Client): Promise<void> 
     sql: string,
     expected: Record<string, unknown>[],
     postgresSql = pgSql(sql),
+    parameters: readonly unknown[] = [],
   ) => {
     const canonical = sqlite
       .prepare(sql)
       .all()
       .map((row) => Object.fromEntries(Object.entries(row)));
-    const result = await client.query(postgresSql);
+    const result = await client.query(postgresSql, [...parameters]);
     const actual = result.rows.map((row) =>
       Object.fromEntries(
         result.fields.map((field) => [
@@ -49,7 +53,12 @@ export async function checkAgentPostgresBehavior(client: Client): Promise<void> 
     assert.deepEqual(canonical, expected, `${label}: canonical SQLite behavior`);
     assert.deepEqual(actual, expected, `${label}: generated PostgreSQL behavior`);
   };
-  const reject = async (label: string, sql: string, values: SQLInputValue[]) => {
+  const reject = async (
+    label: string,
+    sql: string,
+    values: SQLInputValue[],
+    postgresError = /check constraint|unique constraint/i,
+  ) => {
     assert.throws(
       () => sqlite.prepare(sql).run(...values),
       /CHECK|UNIQUE constraint/i,
@@ -57,15 +66,130 @@ export async function checkAgentPostgresBehavior(client: Client): Promise<void> 
     );
     await assert.rejects(
       client.query(pgSql(sql), values),
-      /check constraint|unique constraint/i,
+      postgresError,
       `${label}: PostgreSQL accepted row`,
     );
   };
-  const transaction = async (action: "BEGIN" | "ROLLBACK") => {
+  const transaction = async (action: "BEGIN" | "COMMIT" | "ROLLBACK") => {
     sqlite.exec(action);
     await client.query(action);
   };
   try {
+    const queue = new Kysely<Pick<AgentSchema, "context_engine_turn_outbox">>({
+      dialect: new OpenClawPostgresDialect({
+        pool: async () => {
+          throw new Error("Compile-only conformance query");
+        },
+      }),
+    });
+    const pending = queue
+      .selectFrom("context_engine_turn_outbox")
+      .where("engine_id", "=", "fifo")
+      .where("owner_plugin_id", "is", null)
+      .where("payload_state", "is distinct from", "blocked");
+    const recovery = pending
+      .where("session_id", "=", "session-a")
+      .select(["advancement_key", "payload_json"])
+      .orderBy("enqueue_sequence", "asc")
+      .compile();
+    const sessions = pending
+      .select("session_id")
+      .select((eb) => eb.fn.min("enqueue_sequence").as("oldest_enqueue_sequence"))
+      .groupBy("session_id")
+      .orderBy("oldest_enqueue_sequence", "asc")
+      .limit(2)
+      .compile();
+    const next = pending
+      .where("session_id", "=", "session-a")
+      .select(["advancement_key", "payload_json", "session_id"])
+      .orderBy("enqueue_sequence", "asc")
+      .limit(1)
+      .compile();
+    for (const [key, session, state, timestamp] of [
+      ["session-a:z-first", "session-a", "ready", 90],
+      ["session-a:m-blocked", "session-a", "blocked", 1],
+      ["session-a:a-second", "session-a", "accepted", 90],
+      ["session-b:first", "session-b", "ready", 0],
+    ] as const) {
+      await insert("context_engine_turn_outbox", {
+        advancement_key: key,
+        engine_id: "fifo",
+        session_id: session,
+        payload_json: JSON.stringify({ state }),
+        payload_state: state,
+        created_at: timestamp,
+      });
+    }
+    const fifo =
+      "FROM context_engine_turn_outbox WHERE engine_id = 'fifo' AND owner_plugin_id IS NULL AND payload_state IS DISTINCT FROM 'blocked'";
+    await rows(
+      "outbox recovery FIFO",
+      `SELECT advancement_key, payload_json ${fifo} AND session_id = 'session-a' ORDER BY enqueue_sequence`,
+      [
+        { advancement_key: "session-a:z-first", payload_json: '{"state":"ready"}' },
+        { advancement_key: "session-a:a-second", payload_json: '{"state":"accepted"}' },
+      ],
+      recovery.sql,
+      recovery.parameters,
+    );
+    await rows(
+      "pending session FIFO",
+      `SELECT session_id, MIN(enqueue_sequence) AS oldest_enqueue_sequence ${fifo} GROUP BY session_id ORDER BY oldest_enqueue_sequence LIMIT 2`,
+      [
+        { session_id: "session-a", oldest_enqueue_sequence: 1 },
+        { session_id: "session-b", oldest_enqueue_sequence: 4 },
+      ],
+      sessions.sql,
+      sessions.parameters,
+    );
+    await execute(
+      "UPDATE context_engine_turn_outbox SET attempt_count = attempt_count + 1, last_error = 'retry' WHERE advancement_key = 'session-a:z-first'",
+    );
+    await execute(
+      "UPDATE context_engine_turn_outbox SET payload_json = '{\"state\":\"ready\"}', payload_state = 'ready' WHERE advancement_key = 'session-a:a-second'",
+    );
+    await execute(
+      "INSERT INTO context_engine_turn_outbox (advancement_key, engine_id, session_id, payload_json, created_at) VALUES ('session-a:z-first', 'fifo', 'session-a', '{}', 0) ON CONFLICT (advancement_key) DO NOTHING",
+    );
+    await rows(
+      "retry remains the head",
+      `SELECT advancement_key, payload_json, session_id ${fifo} AND session_id = 'session-a' ORDER BY enqueue_sequence LIMIT 1`,
+      [
+        {
+          advancement_key: "session-a:z-first",
+          payload_json: '{"state":"ready"}',
+          session_id: "session-a",
+        },
+      ],
+      next.sql,
+      next.parameters,
+    );
+    await rows(
+      "payload and attempt updates retain sequence",
+      "SELECT advancement_key, enqueue_sequence, attempt_count FROM context_engine_turn_outbox ORDER BY enqueue_sequence",
+      [
+        { advancement_key: "session-a:z-first", enqueue_sequence: 1, attempt_count: 1 },
+        { advancement_key: "session-a:m-blocked", enqueue_sequence: 2, attempt_count: 0 },
+        { advancement_key: "session-a:a-second", enqueue_sequence: 3, attempt_count: 0 },
+        { advancement_key: "session-b:first", enqueue_sequence: 4, attempt_count: 0 },
+      ],
+    );
+    await execute(
+      "DELETE FROM context_engine_turn_outbox WHERE advancement_key = 'session-a:z-first'",
+    );
+    await rows(
+      "blocked evidence does not hold the next turn",
+      `SELECT advancement_key, payload_json, session_id ${fifo} AND session_id = 'session-a' ORDER BY enqueue_sequence LIMIT 1`,
+      [
+        {
+          advancement_key: "session-a:a-second",
+          payload_json: '{"state":"ready"}',
+          session_id: "session-a",
+        },
+      ],
+      next.sql,
+      next.parameters,
+    );
     // PostgreSQL runtime DDL leaves bootstrap rows to the runtime owner.
     await client.query("INSERT INTO memory_index_state (id, revision) VALUES (1, 0)");
     for (const key of ["snap-a", "snap-b", "route"]) {
@@ -179,27 +303,17 @@ export async function checkAgentPostgresBehavior(client: Client): Promise<void> 
       { primary_conversation_id: null },
     ]);
 
-    const memoryRevision = (revision: number) =>
-      rows("memory per-row revision", "SELECT revision FROM memory_index_state WHERE id = 1", [
-        { revision },
-      ]);
     await execute(
       "INSERT INTO memory_index_sources(id, path, hash, mtime, size) VALUES (1, 'a', 'hash', 0, 0), (2, 'b', 'hash', 0, 0)",
     );
-    await memoryRevision(2);
     await execute(
       "INSERT INTO memory_index_chunks(chunk_rowid, id, path, start_line, end_line, hash, model, text, embedding, updated_at) VALUES (1, 'chunk-1', 'a', 1, 2, 'hash', 'test', 'synthetic', ?, 1), (2, 'chunk-2', 'a', 1, 2, 'hash', 'test', 'synthetic', ?, 1), (3, 'chunk-3', 'a', 1, 2, 'hash', 'test', 'synthetic', ?, 1)",
       [Buffer.from([1]), Buffer.from([1]), Buffer.from([1])],
     );
-    await memoryRevision(5);
     await execute("UPDATE memory_index_sources SET hash = hash");
-    await memoryRevision(7);
     await execute("UPDATE memory_index_chunks SET text = text");
-    await memoryRevision(10);
     await execute("UPDATE memory_index_sources SET id = 3, path = 'moved' WHERE id = 2");
-    await memoryRevision(11);
     await execute("DELETE FROM memory_index_sources WHERE id = 1");
-    await memoryRevision(12);
     await insert("memory_index_chunk_recall_metadata", { chunk_id: "chunk-1", importance: 5 });
     await insert("memory_index_chunk_provenance", {
       chunk_id: "chunk-1",
@@ -208,16 +322,13 @@ export async function checkAgentPostgresBehavior(client: Client): Promise<void> 
       observed_at: 1,
     });
     await execute("DELETE FROM memory_index_chunks WHERE id = 'chunk-1'");
-    await memoryRevision(13);
     for (const table of ["memory_index_chunk_recall_metadata", "memory_index_chunk_provenance"]) {
       await rows("chunk child cascade", `SELECT count(*) AS count FROM ${table}`, [{ count: 0 }]);
     }
     await transaction("BEGIN");
     await execute("UPDATE memory_index_sources SET size = 4");
     await execute("DELETE FROM memory_index_chunks");
-    await memoryRevision(16);
     await transaction("ROLLBACK");
-    await memoryRevision(13);
     await rows(
       "memory rollback restored chunks",
       "SELECT count(*) AS count FROM memory_index_chunks",
@@ -225,7 +336,11 @@ export async function checkAgentPostgresBehavior(client: Client): Promise<void> 
     );
     await execute("DELETE FROM memory_index_sources");
     await execute("DELETE FROM memory_index_chunks");
-    await memoryRevision(16);
+    await rows(
+      "memory revisions belong to the batch writer",
+      "SELECT revision FROM memory_index_state WHERE id = 1",
+      [{ revision: 0 }],
+    );
 
     const conversation = (id: string, parent: SQLInputValue, thread: SQLInputValue) => [
       id,
@@ -281,9 +396,24 @@ export async function checkAgentPostgresBehavior(client: Client): Promise<void> 
     const navigationSql =
       "INSERT INTO transcript_events(session_id, seq, event_json, created_at, navigation_json) VALUES ('route-window', ?, '{}', 1, ?)";
     let seq = 0;
+    await transaction("BEGIN");
+    await client.query("SET LOCAL track_functions = 'all'");
+    const navigationCalls = async () =>
+      (
+        await client.query<{ calls: number }>(
+          "SELECT coalesce(sum(calls), 0)::integer AS calls FROM pg_stat_xact_user_functions WHERE funcid = 'openclaw_transcript_navigation_check(text)'::regprocedure",
+        )
+      ).rows[0]!.calls;
+    await execute(navigationSql, [++seq, null]);
+    assert.equal(await navigationCalls(), 0, "absent navigation must not invoke JSON validation");
+    await execute(navigationSql, [++seq, JSON.stringify(navigation)]);
+    assert.equal(
+      await navigationCalls(),
+      1,
+      "present navigation must still invoke JSON validation",
+    );
+    await transaction("COMMIT");
     for (const value of [
-      null,
-      JSON.stringify(navigation),
       JSON.stringify({ ...navigation, report: { kind: "leaf" } }),
       JSON.stringify(navigation).replace('"version":1', '"version":1,"version":2'),
       JSON.stringify(navigation).replace(
@@ -293,8 +423,14 @@ export async function checkAgentPostgresBehavior(client: Client): Promise<void> 
     ]) {
       await execute(navigationSql, [++seq, value]);
     }
+    // PostgreSQL 18 can reject malformed JSON before evaluating the CHECK.
+    await reject(
+      "malformed navigation JSON",
+      navigationSql,
+      [++seq, "{"],
+      /check constraint|invalid input syntax for type json/i,
+    );
     const invalidNavigation = [
-      "{",
       "null",
       "[]",
       "{}",
@@ -455,7 +591,7 @@ export async function checkAgentPostgresBehavior(client: Client): Promise<void> 
       `SELECT ${byteExpression} AS bytes FROM trajectory_runtime_events`,
     );
     console.log(
-      "agent: SQLite/PostgreSQL trigger parity (10 triggers, no-op/key move/bulk/cascade/rollback) and translated index/CHECK behavior verified",
+      "agent: SQLite/PostgreSQL trigger parity (4 triggers, no-op/key move/bulk/cascade/rollback) and translated index/CHECK behavior verified",
     );
   } finally {
     sqlite.close();

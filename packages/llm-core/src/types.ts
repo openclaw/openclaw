@@ -73,6 +73,9 @@ export interface ProviderResponse {
   headers: Record<string, string>;
 }
 
+/** Runtime header overrides; null preserves an SDK's default-header deletion sentinel. */
+export type ModelRequestHeaders = Record<string, string | null>;
+
 export interface StreamOptions {
   temperature?: number;
   maxTokens?: number;
@@ -99,6 +102,15 @@ export interface StreamOptions {
    * Default: "short".
    */
   cacheRetention?: CacheRetention;
+  /** Request-level cache lifetime for GPT-5.6+ Responses APIs; unset preserves provider defaults. */
+  promptCacheTtl?: "30m" | "12h";
+  /**
+   * Read the prompt into the provider's prompt cache without generating output:
+   * Anthropic Messages `max_tokens: 0`, OpenAI Responses `prompt_cache_options.prewarm`.
+   * The rest of the request is unchanged, so it reads and refreshes the cached prefix.
+   * Only those two transports honor it; callers send it only on such a route.
+   */
+  cachePrewarm?: true;
   /**
    * Optional session identifier for providers that support session-based caching.
    * Providers can use this to enable prompt caching, request routing, or other
@@ -125,6 +137,8 @@ export interface StreamOptions {
    * its body stream is consumed.
    */
   onResponse?: (response: ProviderResponse, model: Model) => void | Promise<void>;
+  /** Local-provider wait observation. Slot waits require request-correlated backend evidence. */
+  onProviderWait?: (reason: "response" | "slot" | null) => void;
   /**
    * Observe a live response that accepts user input before generation finishes.
    * `steer` resolves false only when the input was definitely not admitted;
@@ -147,7 +161,7 @@ export interface StreamOptions {
    * Merged with provider defaults; can override default headers.
    * Not supported by all providers (e.g., AWS Bedrock uses SDK auth).
    */
-  headers?: Record<string, string>;
+  headers?: ModelRequestHeaders;
   /**
    * HTTP request timeout in milliseconds for providers/SDKs that support it.
    * For example, OpenAI and Anthropic SDK clients default to 10 minutes.
@@ -302,6 +316,8 @@ export interface ToolCall {
    * `toolcall_end` or terminal cleanup; it never appears in final messages or transcripts.
    */
   partialJson?: string;
+  /** Provider argument bytes paired with their normalized value for exact replay. */
+  argumentsSignature?: { value: string; raw: string };
   thoughtSignature?: string; // Google-specific: opaque signature for reusing thought context
   executionMode?: "sequential" | "parallel";
 }
@@ -315,6 +331,8 @@ export interface Usage {
   cacheTelemetry?: { state: "available" | "unavailable" };
   /** Subset of `cacheWrite` written with 1-hour retention when reported. */
   cacheWrite1h?: number;
+  /** Subset of `cacheWrite` written with 5-minute retention when reported. */
+  cacheWrite5m?: number;
   /**
    * Whether usage is complete for this provider response. Missing terminal usage
    * and provisional stream counters are unavailable, including after interruption.
@@ -357,6 +375,8 @@ export type StopReason = "stop" | "length" | "toolUse" | "error" | "aborted";
 /** Stable error codes for provider outcomes that cannot be replayed safely. */
 export const PROVIDER_POST_DISPATCH_AMBIGUITY_ERROR_CODE = "PROVIDER_POST_DISPATCH_AMBIGUITY";
 export const PROVIDER_FAILURE_WITH_OUTPUT_ERROR_CODE = "PROVIDER_FAILURE_WITH_OUTPUT";
+/** The stream owner removed repetitive content before persistence and replay. */
+export const REPETITIVE_OUTPUT_ERROR_CODE = "openclaw_repetitive_output";
 /** Pre-dispatch argument rejection; callers still enforce output and effect guards. */
 export const MALFORMED_TOOL_CALL_ARGUMENTS_ERROR_CODE = "malformed_tool_call_arguments";
 
@@ -386,6 +406,8 @@ export interface UserMessage {
   runtimeContextCarrierRetained?: boolean;
   /** Operator-authored text projected to system authority on capable routes. */
   operatorMessage?: { turnScoped: boolean };
+  /** `false`: sent once and never replayed, so transports place no prompt-cache checkpoint on it. */
+  cacheCheckpoint?: false;
 }
 
 export const RUNTIME_CONTEXT_CUSTOM_TYPE = "openclaw.runtime-context";
@@ -520,6 +542,8 @@ export interface AssistantMessage {
     mediaUrls?: string[];
     replyToCurrent?: true;
     replyToId?: string;
+    /** Consumed transport input; implicit reply policy still applies. */
+    sourceMessageId?: string;
     /** @deprecated Ignored; omit this field. Retained until the next Plugin SDK major. */
     textPhaseRequiresTerminal?: true;
     /** Parsed once at the assistant write boundary; delivery resolves policy from these facts. */
@@ -529,6 +553,8 @@ export interface AssistantMessage {
   provider: Provider;
   model: string;
   responseModel?: string; // Concrete `chunk.model` when different from the requested `model` (e.g. OpenRouter `auto` -> `anthropic/...`)
+  /** Provider-reported access only; absent/null never confirms a requested program. */
+  responseAccessProgram?: "standard" | "daybreak_blue" | "daybreak_red" | null;
   responseId?: string; // Provider-specific response/message identifier when the upstream API exposes one
   providerReplay?: ProviderReplayState; // Opaque provider state carried into a compatible later request.
   turnId?: string; // Runtime-assigned stable turn identity when the provider does not expose one
@@ -539,8 +565,12 @@ export interface AssistantMessage {
   endTurn?: boolean;
   errorMessage?: string;
   errorCode?: string;
+  /** Transport-owned repair outcome; execution owns whether a deferred request can replay. */
+  itemConflictRecovery?: "deferred" | "recovered" | "failed";
   errorType?: string;
   errorBody?: string;
+  /** Provider retry floor before diagnostic clipping; null means too large to represent. */
+  retryAfterMs?: number | null;
   timestamp: number; // Unix timestamp in milliseconds
 }
 
@@ -554,7 +584,13 @@ export interface ToolResultMessage<TDetails = unknown> {
   timestamp: number; // Unix timestamp in milliseconds
 }
 
-export type Message = UserMessage | AssistantMessage | ToolResultMessage;
+/** Historical token counts can survive without a recorded price; absence is not zero cost. */
+export type HistoryUsage = Omit<Usage, "cost"> & { cost?: Usage["cost"] };
+
+/** Replay input is weaker than a live provider result, which always supplies Usage. */
+export type AssistantHistoryMessage = Omit<AssistantMessage, "usage"> & { usage: HistoryUsage };
+
+export type Message = UserMessage | AssistantHistoryMessage | ToolResultMessage;
 
 export type ImagesInputContent = TextContent | ImageContent;
 export type ImagesOutputContent = TextContent | ImageContent;
@@ -588,8 +624,16 @@ export interface Tool<TParameters extends TSchema = TSchema> {
   async?: false;
 }
 
+/** Derived prompt bytes belong to this exact immutable text revision. */
+export interface PreparedSystemPrompt {
+  readonly text: string;
+  readonly stripped: string;
+  readonly instructions: string;
+}
+
 export interface Context {
   systemPrompt?: string;
+  preparedSystemPrompt?: PreparedSystemPrompt;
   messages: Message[];
   tools?: Tool[];
 }
@@ -665,7 +709,7 @@ export interface OpenAICompletionsCompat {
   requiresThinkingAsText?: boolean;
   /** Whether all replayed assistant messages must include an empty reasoning_content field when reasoning is enabled. Default: auto-detected from URL. */
   requiresReasoningContentOnAssistantMessages?: boolean;
-  /** Format for reasoning/thinking parameter. "openai" uses reasoning_effort, "openrouter" uses reasoning: { effort }, "deepseek" uses thinking: { type } plus reasoning_effort, "together" uses reasoning: { enabled } plus reasoning_effort when supported, "zai" uses top-level enable_thinking: boolean, "qwen" uses top-level enable_thinking: boolean, and "qwen-chat-template" uses chat_template_kwargs.enable_thinking. Default: "openai". */
+  /** Format for reasoning/thinking parameter. "openai" uses reasoning_effort, "openrouter" uses reasoning: { effort }, "deepseek" uses thinking: { type } plus reasoning_effort, "together" uses reasoning: { enabled } plus reasoning_effort when supported, "zai" uses top-level enable_thinking: boolean, "qwen" uses top-level enable_thinking: boolean, and "qwen-chat-template" uses chat_template_kwargs.enable_thinking, plus chat_template_kwargs.reasoning_effort for selected enabled levels when supportedReasoningEfforts is declared. Default: "openai". */
   thinkingFormat?: ModelDataThinkingFormat;
   /** OpenRouter-specific routing preferences. Only used when baseUrl points to OpenRouter. */
   openRouterRouting?: OpenRouterRouting;
@@ -703,10 +747,14 @@ export interface OpenAIResponsesCompat {
   supportsTemperature?: boolean;
   /** Whether to send the OpenAI `session_id` cache-affinity header from `options.sessionId` when caching is enabled. Default: true. */
   sendSessionIdHeader?: boolean;
+  /** Whether to send `prompt_cache_key`. Default: true for Azure; endpoint-detected for OpenAI. */
+  supportsPromptCacheKey?: boolean;
   /** Whether the provider supports `prompt_cache_retention: "24h"`. Default: true. */
   supportsLongCacheRetention?: boolean;
   /** Whether the provider honors top-level `instructions`. Defaults to true only for verified native routes (OpenAI, xAI); every other route defaults to false and embeds the system prompt in `input` unless set true here after verifying against that endpoint. */
   supportsInstructions?: boolean;
+  /** Whether the model caches top-level `instructions`. False sends the system prompt as a cacheable input item placed after the last compaction item. Default: true. */
+  cachesInstructions?: boolean;
   /**
    * Explicit opt-in for HTTP continuation (client-side delta + `previous_response_id`)
    * on a custom/proxy OpenAI-Responses-compatible endpoint. A native `api.openai.com`
@@ -819,10 +867,14 @@ export interface Model<TApi extends Api = Api> {
    * smaller practical window.
    */
   contextTokens?: number;
+  /** Provider/catalog-declared total parameter count, including inactive experts. */
+  parameterCount?: number;
+  /** Provider/catalog-declared canonical developer lineage, such as `anthropic`. */
+  family?: string;
   maxTokens: number;
   /** Provider-specific request/runtime parameters passed through to provider plugins. */
   params?: Record<string, unknown>;
-  headers?: Record<string, string>;
+  headers?: ModelRequestHeaders;
   /** Sends runtime credentials as Authorization: Bearer instead of provider-specific key headers. */
   authHeader?: boolean;
   /** Compatibility overrides for OpenAI-compatible APIs. If not set, auto-detected from baseUrl. */

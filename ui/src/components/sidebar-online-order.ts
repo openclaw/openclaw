@@ -1,12 +1,10 @@
+import { presenceUserKey } from "../../../src/shared/presence-user.ts";
 import {
   presenceViewerActivity,
   presenceViewerLabel,
   type PresenceViewer,
 } from "../lib/presence-users.ts";
-import type {
-  SidebarPeopleSortMode,
-  SidebarPeopleStatusFilter,
-} from "./sidebar-people-controller.ts";
+import type { SidebarPeopleSortMode, SidebarPeopleStatusFilter } from "./sidebar-people.ts";
 
 export type SidebarOnlineCount = { open: number; running: number };
 
@@ -38,6 +36,8 @@ export class SidebarOnlineOrder {
 
   resolve({
     users,
+    offlineUsers = [],
+    presenceFilter = "online",
     counts,
     countsFailed = false,
     sortMode,
@@ -46,6 +46,8 @@ export class SidebarOnlineOrder {
     now = Date.now(),
   }: {
     users: readonly PresenceViewer[] | null;
+    offlineUsers?: readonly PresenceViewer[];
+    presenceFilter?: "online" | "all";
     counts: ReadonlyMap<string, SidebarOnlineCount> | null;
     countsFailed?: boolean;
     sortMode: SidebarPeopleSortMode;
@@ -56,37 +58,47 @@ export class SidebarOnlineOrder {
     this.counts = countsFailed ? null : (counts ?? this.counts);
     const countsFor = (user: PresenceViewer) => sidebarOnlineCountFor(this.counts, user);
     const running = (user: PresenceViewer) => Number((countsFor(user)?.running ?? 0) > 0);
-    const activityOrder = { active: 0, idle: 1, unknown: 2 };
+    const activityOrder = { active: 0, idle: 1, unknown: 2, offline: 3 };
+    const activity = (user: PresenceViewer) =>
+      user.entries?.length === 0 ? "offline" : presenceViewerActivity(user, now);
+    const compare = (a: PresenceViewer, b: PresenceViewer) => {
+      const order =
+        sortMode === "presence"
+          ? activityOrder[activity(a)] - activityOrder[activity(b)] || running(b) - running(a)
+          : sortMode === "name"
+            ? 0
+            : (countsFor(b)?.[sortMode] ?? -1) - (countsFor(a)?.[sortMode] ?? -1);
+      return (
+        order ||
+        presenceViewerLabel(a).localeCompare(presenceViewerLabel(b), undefined, {
+          sensitivity: "base",
+        })
+      );
+    };
     // Snapshot order is a recorded display fact; only live presence admits clock-based sorting.
     const sorted =
       presentation === "snapshot" || users === null
         ? (users ?? this.users)
-        : users.toSorted((a, b) => {
-            const order =
-              sortMode === "presence"
-                ? activityOrder[presenceViewerActivity(a, now)] -
-                    activityOrder[presenceViewerActivity(b, now)] || running(b) - running(a)
-                : sortMode === "name"
-                  ? 0
-                  : (countsFor(b)?.[sortMode] ?? -1) - (countsFor(a)?.[sortMode] ?? -1);
-            return (
-              order ||
-              presenceViewerLabel(a).localeCompare(presenceViewerLabel(b), undefined, {
-                sensitivity: "base",
-              })
-            );
-          });
-    // Stable facepile inputs avoid recreating its projection on unrelated updates.
+        : users.toSorted(compare);
+    // Retain the recorded online list for warm sidebar snapshots.
     if (
       this.users.length !== sorted.length ||
       sorted.some((user, index) => user !== this.users[index])
     ) {
       this.users = sorted;
     }
+    let listUsers = this.users;
+    if (presenceFilter === "all") {
+      const onlineKeys = new Set(this.users.map(presenceUserKey));
+      listUsers = [
+        ...this.users,
+        ...offlineUsers.filter((user) => !onlineKeys.has(presenceUserKey(user))),
+      ].toSorted(compare);
+    }
     return {
       users: this.users,
       listUsers:
-        statusFilter === "running" ? this.users.filter((user) => running(user) > 0) : this.users,
+        statusFilter === "running" ? listUsers.filter((user) => running(user) > 0) : listUsers,
       counts: this.counts,
     };
   }

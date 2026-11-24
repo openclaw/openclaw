@@ -2,7 +2,8 @@ import { createSignal } from "solid-js";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { flush } from "../../test-helpers/solid-settle.ts";
 import type { ModelProviderCard } from "./data.ts";
-import { ModelProviders, type ModelProvidersViewProps } from "./view.tsx";
+import type { ModelProvidersViewProps } from "./view-types.ts";
+import { ModelProviders } from "./view.tsx";
 
 const mountedViews = new WeakMap<HTMLElement, (props: ModelProvidersViewProps) => void>();
 
@@ -18,7 +19,8 @@ export function card(overrides: Partial<ModelProviderCard> = {}): ModelProviderC
     profileOrderLocks: {},
     credentialProviderIds: ["openai"],
     logoutTargets: [],
-    hasConfigApiKey: false,
+    configKeys: [],
+    configApiKeys: [],
     modelCount: 1,
     availableModelCount: 1,
     apiKey: { source: "env", envVar: "OPENAI_API_KEY" },
@@ -33,13 +35,16 @@ export function props(overrides: Partial<ModelProvidersViewProps> = {}): ModelPr
     refreshing: false,
     error: null,
     providerUsageFailed: false,
-    supplementalLoading: false,
     updatedAt: 1,
+    onOpenUsage: () => undefined,
+    onOpenAgent: () => undefined,
+    basePath: "",
     credentialAgentLabel: "Writer",
     cards: [card()],
     configuredModels: [{ id: "openai/gpt-5", provider: "openai", name: "GPT-5", available: true }],
     decisionModels: [],
     defaultModels: { primary: "openai/gpt-5", fallbacks: [], utilityModel: null },
+    modelRequired: false,
     thinkingLevel: "off",
     thinkingOverridden: true,
     fastMode: false,
@@ -63,13 +68,14 @@ export function props(overrides: Partial<ModelProvidersViewProps> = {}): ModelPr
     addProviderOpen: false,
     addProviderId: "",
     addProviderKey: "",
+    addStartChat: null,
+    onAddStartChat: () => undefined,
     installedAgents: undefined,
     onRefresh: () => undefined,
     onOpenKeyEditor: () => undefined,
     onCloseKeyEditor: () => undefined,
     onKeyDraftChange: () => undefined,
     onSaveKey: () => undefined,
-    onRemoveKey: () => undefined,
     onProbe: () => undefined,
     onRequestLogout: () => undefined,
     onProfileOrderChange: () => undefined,
@@ -79,13 +85,19 @@ export function props(overrides: Partial<ModelProvidersViewProps> = {}): ModelPr
     onPrimaryChange: () => undefined,
     onFallbackChange: () => undefined,
     onUtilityChange: () => undefined,
+    onUtilityFallbackChange: () => undefined,
     onDecisionChange: () => undefined,
     onThinkingChange: () => undefined,
     onThinkingReset: () => undefined,
     onFastModeChange: () => undefined,
     onFastModeReset: () => undefined,
     onCatalogRetry: () => undefined,
-    onConnectProvider: () => undefined,
+    catalogProviders: [],
+    agentModelRef: null,
+    onCatalogConnect: () => undefined,
+    onDiscover: () => undefined,
+    discoverDisabled: false,
+    catalogSearchRef: () => undefined,
     onConnect: () => undefined,
     canConnect: () => false,
     loginBusy: false,
@@ -109,4 +121,26 @@ export function mount(viewProps: ModelProvidersViewProps, container?: HTMLElemen
 
 export function text(element: Element | null): string {
   return element?.textContent?.replace(/\s+/gu, " ").trim() ?? "";
+}
+
+/** Opens the folded defaults (fallback, utility and decision models). */
+export function openMoreSettings(container: Element): void {
+  container
+    .querySelector<HTMLButtonElement>('[data-models-more-settings][aria-expanded="false"]')
+    ?.click();
+  flush();
+}
+
+export function settingsRow(container: Element, label: string): HTMLElement {
+  const match = [...container.querySelectorAll<HTMLElement>(".settings-row")].find(
+    (candidate) =>
+      text(
+        candidate.querySelector(".model-providers__label-with-help > span:first-child") ??
+          candidate.querySelector(".settings-row__title"),
+      ) === label,
+  );
+  if (!match) {
+    throw new Error(`Missing settings row: ${label}`);
+  }
+  return match;
 }

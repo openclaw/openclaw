@@ -1,8 +1,7 @@
-import { render } from "lit";
-import { afterEach, beforeEach, expect, it } from "vitest";
+import { afterEach, beforeEach, expect, it, onTestFinished } from "vitest";
 import type { GatewaySessionRow } from "../../../api/types.ts";
 import { createTestTranscript } from "../chat-view.test-helpers.ts";
-import { renderChatThread } from "./chat-thread.test-support.ts";
+import { createChatThreadHarness } from "./chat-message-native.test-support.tsx";
 import {
   flushDeferredRowPrune,
   installTranscriptDomMocks,
@@ -43,13 +42,15 @@ it.each([
     props.selectedSession = row;
     const transcript = createTestTranscript();
     const container = document.body.appendChild(document.createElement("div"));
+    const view = createChatThreadHarness(container, transcript);
+    onTestFinished(() => view.unmount());
     const rerender = async () => {
-      render(renderChatThread(props, transcript), container);
-      transcript.hostUpdated();
+      view.render(props);
+      transcript.update();
       await flushDeferredRowPrune();
     };
     await rerender();
-    transcript.hostConnected();
+    transcript.start();
     // Navigation ancestry alone also describes human-created forks.
     expect(container.querySelector(".chat-avatar.user")).not.toBeNull();
     props.selectedSession = { ...row, ...metadata };
@@ -64,7 +65,7 @@ it.each([
       "Molty",
     );
     expect(container.textContent).toContain("Workspace inspected");
-    transcript.hostDisconnected();
+    transcript.dispose();
   },
 );
 
@@ -74,9 +75,11 @@ it("hides avatars for a subagent key before its session row loads", async () => 
   props.userName = "Example User";
   const transcript = createTestTranscript();
   const container = document.body.appendChild(document.createElement("div"));
-  render(renderChatThread(props, transcript), container);
-  transcript.hostUpdated();
-  transcript.hostConnected();
+  const view = createChatThreadHarness(container, transcript);
+  onTestFinished(() => view.unmount());
+  view.render(props);
+  transcript.update();
+  transcript.start();
   await flushDeferredRowPrune();
   expect(container.querySelectorAll(".chat-group").length).toBeGreaterThan(0);
   expect(container.querySelector(".chat-avatar, .chat-author-avatar")).toBeNull();
@@ -86,5 +89,5 @@ it("hides avatars for a subagent key before its session row loads", async () => 
   expect(container.querySelector(".chat-group.assistant .chat-sender-name")?.textContent).toBe(
     "Molty",
   );
-  transcript.hostDisconnected();
+  transcript.dispose();
 });

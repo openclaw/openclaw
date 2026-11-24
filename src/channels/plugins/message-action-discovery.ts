@@ -2,7 +2,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { Type, type TSchema } from "typebox";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { formatErrorMessage } from "../../infra/errors.js";
+import { formatErrorMessage, formatErrorStackWithMessage } from "../../infra/errors.js";
 import {
   getPreparedMessageToolCatalog,
   type PreparedMessageToolCatalog,
@@ -15,6 +15,7 @@ import {
   resolveBundledChannelMessageToolDiscoveryAdapter,
   type ChannelMessageToolDiscoveryAdapter,
 } from "./message-tool-api.js";
+import { createConfiguredMessageToolDiscoveryAdapter } from "./outbound-message-tool-discovery.js";
 import type {
   ChannelMessageActionDiscoveryContext,
   ChannelMessageActionName,
@@ -94,9 +95,10 @@ function reportDiscoveryError(pluginId: string, error: unknown) {
   // Discovery runs while building tool schemas, so report each plugin/error pair once.
   if (!loggedMessageActionErrors.has(key)) {
     loggedMessageActionErrors.add(key);
-    const stack = error instanceof Error && error.stack ? error.stack : null;
-    defaultRuntime.error?.(
-      `[message-action-discovery] ${pluginId}.actions.describeMessageTool failed: ${stack ?? message}`,
+    const detail =
+      error instanceof Error && error.stack ? formatErrorStackWithMessage(error) : message;
+    defaultRuntime.error(
+      `[message-action-discovery] ${pluginId}.actions.describeMessageTool failed: ${detail}`,
     );
   }
 }
@@ -143,16 +145,17 @@ export function resolveCurrentChannelMessageToolDiscoveryAdapter(
   }
   const catalog = preparedMessageToolCatalog ?? getPreparedMessageToolCatalog();
   const prepared = catalog?.getChannel(channelId);
-  if (prepared?.actions) {
-    return { pluginId: prepared.id, actions: prepared.actions };
+  const preparedActions = prepared?.actions ?? prepared?.outboundDiscovery;
+  if (prepared && preparedActions) {
+    return { pluginId: prepared.id, actions: preparedActions };
   }
   if (!catalog) {
     const loadedPlugin = getLoadedChannelPlugin(channelId);
-    if (loadedPlugin?.actions) {
-      return {
-        pluginId: loadedPlugin.id,
-        actions: loadedPlugin.actions,
-      };
+    const actions =
+      loadedPlugin &&
+      (loadedPlugin.actions ?? createConfiguredMessageToolDiscoveryAdapter(loadedPlugin));
+    if (actions) {
+      return { pluginId: channelId, actions };
     }
   }
   // Prefer the bundled public artifact before full plugin materialization so
@@ -165,7 +168,21 @@ export function resolveCurrentChannelMessageToolDiscoveryAdapter(
     };
   }
   const plugin = catalog ? undefined : getChannelPlugin(channelId);
-  return plugin?.actions ? { pluginId: plugin.id, actions: plugin.actions } : null;
+  const actions = plugin && (plugin.actions ?? createConfiguredMessageToolDiscoveryAdapter(plugin));
+  return actions ? { pluginId: channelId, actions } : null;
+}
+
+/** Registered send configuration is independent of transport health or action readiness. */
+export function resolveConfiguredOutboundMessageToolDiscoveryAdapter(
+  channel: string,
+  preparedMessageToolCatalog?: PreparedMessageToolCatalog,
+): ChannelMessageToolDiscoveryAdapter | undefined {
+  const catalog = preparedMessageToolCatalog ?? getPreparedMessageToolCatalog();
+  if (catalog) {
+    return catalog.getChannel(channel)?.outboundDiscovery;
+  }
+  const plugin = getLoadedChannelPlugin(channel);
+  return plugin ? createConfiguredMessageToolDiscoveryAdapter(plugin) : undefined;
 }
 
 type MessageActionDiscoveryRequest = {

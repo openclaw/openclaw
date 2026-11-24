@@ -7,28 +7,13 @@ import {
 import type { ChannelMessageActionAdapter } from "openclaw/plugin-sdk/channel-contract";
 import { parseStrictNonNegativeInteger } from "openclaw/plugin-sdk/number-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { removeReactionSignal, sendReactionSignal } from "../reaction-runtime-api.js";
 import { listEnabledSignalAccounts, resolveSignalAccount } from "./accounts.js";
 import { normalizeSignalReactionRecipient } from "./normalize.js";
 import { resolveSignalReactionLevel } from "./reaction-level.js";
+import { removeReactionSignal, sendReactionSignal } from "./send-reactions.js";
 
 const providerId = "signal";
 const GROUP_PREFIX = "group:";
-
-function resolveSignalReactionTarget(raw: string): { recipient?: string; groupId?: string } {
-  const withoutSignal = raw
-    .trim()
-    .replace(/^signal:/i, "")
-    .trim();
-  if (!withoutSignal) {
-    return {};
-  }
-  if (normalizeLowercaseStringOrEmpty(withoutSignal).startsWith(GROUP_PREFIX)) {
-    const groupId = withoutSignal.slice(GROUP_PREFIX.length).trim();
-    return groupId ? { groupId } : {};
-  }
-  return { recipient: normalizeSignalReactionRecipient(withoutSignal) };
-}
 
 export const signalMessageActions: ChannelMessageActionAdapter = {
   describeMessageTool: ({ cfg, accountId }) => {
@@ -97,12 +82,18 @@ export const signalMessageActions: ChannelMessageActionAdapter = {
         throw new Error("Signal reactions are disabled via actions.reactions.");
       }
 
-      const recipientRaw = readStringParam(params, "to", {
+      const recipientTarget = readStringParam(params, "to", {
         required: true,
         label: "recipient (UUID, phone number, or group)",
-      });
-      const target = resolveSignalReactionTarget(recipientRaw);
-      if (!target.recipient && !target.groupId) {
+      })
+        .trim()
+        .replace(/^signal:/i, "")
+        .trim();
+      const isGroup = normalizeLowercaseStringOrEmpty(recipientTarget).startsWith(GROUP_PREFIX);
+      const groupId = isGroup ? recipientTarget.slice(GROUP_PREFIX.length).trim() : undefined;
+      const recipient =
+        !isGroup && recipientTarget ? normalizeSignalReactionRecipient(recipientTarget) : undefined;
+      if (!recipient && !groupId) {
         throw new Error("recipient or group required");
       }
 
@@ -115,7 +106,7 @@ export const signalMessageActions: ChannelMessageActionAdapter = {
       }
       const targetAuthor = readStringParam(params, "targetAuthor");
       const targetAuthorUuid = readStringParam(params, "targetAuthorUuid");
-      if (target.groupId && !targetAuthor && !targetAuthorUuid) {
+      if (groupId && !targetAuthor && !targetAuthorUuid) {
         throw new Error("targetAuthor or targetAuthorUuid required for group reactions.");
       }
 
@@ -131,10 +122,10 @@ export const signalMessageActions: ChannelMessageActionAdapter = {
         throw new Error(`Emoji required to ${remove ? "remove" : "add"} reaction.`);
       }
       const mutateReaction = remove ? removeReactionSignal : sendReactionSignal;
-      await mutateReaction(target.recipient ?? "", timestamp, emoji, {
+      await mutateReaction(recipient ?? "", timestamp, emoji, {
         cfg,
         accountId: account.accountId,
-        groupId: target.groupId,
+        groupId,
         targetAuthor,
         targetAuthorUuid,
         ...(assertDirectAdapterHandoff ? { assertDirectAdapterHandoff } : {}),

@@ -28,7 +28,7 @@ The tool can return:
 - `details.artifactId` and `details.expiresAt`: artifact identity and TTL metadata
 - `details.context`: available routing metadata such as `agentId`, `sessionId`, `messageChannel`, and `agentAccountId`
 
-When the plugin is enabled, it also ships a companion skill from `skills/` and prepends stable tool-usage guidance into system-prompt space via `before_prompt_build`. The hook uses `prependSystemContext`, so the guidance stays out of user-prompt space while still being available every turn.
+When the plugin is enabled, it also ships a companion skill from `skills/` and registers tool-usage guidance with the `diffs` tool (`promptGuidance`). The system prompt includes that guidance only while `diffs` is callable, so a run that denies the tool gets no diffs guidance.
 
 This means an agent can:
 
@@ -57,6 +57,8 @@ Patch:
   "mode": "both"
 }
 ```
+
+Patch content preserves trailing spaces and final newlines in changed lines.
 
 Useful options:
 

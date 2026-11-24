@@ -5,7 +5,6 @@ import {
   stripInlineDirectiveTagsForDelivery,
 } from "../../utils/directive-tags.js";
 import { appendReplyMediaFailures, type ReplyMediaFailure } from "../reply-payload.js";
-import { isSilentReplyPayloadText, SILENT_REPLY_TOKEN } from "../tokens.js";
 
 export type ReplyDirectiveParseResult = {
   text: string;
@@ -15,23 +14,19 @@ export type ReplyDirectiveParseResult = {
   replyToCurrent?: boolean;
   replyToTag: boolean;
   audioAsVoice?: boolean;
-  isSilent: boolean;
 };
 
 export function parseReplyDirectives(
   raw: string,
   options: {
     currentMessageId?: string;
-    silentToken?: string;
     extractMarkdownImages?: boolean;
-    extractMediaDirectives?: boolean;
     preserveTrailingWhitespace?: boolean;
     onAudioDirective?: () => void;
   } = {},
 ): ReplyDirectiveParseResult {
   const split = splitMediaFromOutput(raw, {
     extractMarkdownImages: options.extractMarkdownImages,
-    extractMediaDirectives: options.extractMediaDirectives,
     preserveTrailingWhitespace: options.preserveTrailingWhitespace,
     onAudioDirective: options.onAudioDirective,
   });
@@ -49,8 +44,6 @@ export function parseReplyDirectives(
     preserveTrailingWhitespace: options.preserveTrailingWhitespace,
   }).text;
 
-  const silentToken = options.silentToken ?? SILENT_REPLY_TOKEN;
-  const isSilent = isSilentReplyPayloadText(text, silentToken);
   const mediaFailures = Array.from(
     { length: split.rejectedMediaCount ?? 0 },
     (): ReplyMediaFailure => ({
@@ -61,8 +54,7 @@ export function parseReplyDirectives(
   );
 
   return {
-    // Silent payloads must not leak the control token into channel delivery.
-    text: appendReplyMediaFailures(isSilent ? "" : text, mediaFailures) ?? "",
+    text: appendReplyMediaFailures(text, mediaFailures) ?? "",
     // Keep native path conversion outside the browser-shared parser and before reply policy.
     mediaUrls: split.mediaUrls?.map((source) => trySafeFileURLToPath(source) ?? source),
     ...(mediaFailures.length ? { mediaFailures } : {}),
@@ -70,6 +62,5 @@ export function parseReplyDirectives(
     replyToCurrent: replyParsed?.replyToCurrent || undefined,
     replyToTag: replyParsed?.hasReplyTag ?? false,
     audioAsVoice: split.audioAsVoice,
-    isSilent: isSilent && !mediaFailures.length,
   };
 }

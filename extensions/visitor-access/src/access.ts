@@ -1,3 +1,4 @@
+import { isNamedOperatorRoleEnforcementEnabled } from "openclaw/plugin-sdk/gateway-config-runtime";
 import type { PluginRuntime } from "../api.js";
 import type { VisitorTarget } from "./cloudflare.js";
 import { VisitorAccessError } from "./errors.js";
@@ -15,7 +16,7 @@ type VisitorProfile = {
   effectiveRole?: string;
   roleSource?: "assigned" | "githubLogin" | "default";
   mergedInto?: string | null;
-  githubIdentity?: { login: string } | null;
+  githubIdentity?: { host?: string; login: string } | null;
 };
 
 type VisitorGatewayAccess = {
@@ -59,15 +60,20 @@ export function createVisitorAccessReader(
     const profile = (target: VisitorTarget) =>
       typeof target === "string" ? byEmail.get(target) : byGithub.get(target);
     const config = runtime.config.current();
-    const roles = config.gateway?.roles;
+    const roles = isNamedOperatorRoleEnforcementEnabled(config) ? config.gateway?.roles : undefined;
     const access = (target: VisitorTarget) => describeAccess(profile(target), roles);
     return {
       describe: (target) => access(target).description,
-      githubLogin: (target) => profile(target)?.githubIdentity?.login,
+      githubLogin: (target) => {
+        const identity = profile(target)?.githubIdentity;
+        return (identity?.host ?? "github.com") === "github.com" ? identity?.login : undefined;
+      },
       assertGithubSelection(login, accountId) {
         const normalized = login.toLowerCase();
         const matches = canonical.filter(
-          (entry) => entry.githubIdentity?.login.toLowerCase() === normalized,
+          (entry) =>
+            (entry.githubIdentity?.host ?? "github.com") === "github.com" &&
+            entry.githubIdentity?.login.toLowerCase() === normalized,
         );
         if (matches.length > 1 || (matches[0] && matches[0].id !== profile(accountId)?.id)) {
           throw new VisitorAccessError(
@@ -98,7 +104,7 @@ export function createVisitorAccessReader(
         const result = access(target);
         if (!result.invitable) {
           throw new VisitorAccessError(
-            `${result.description}. Configure a default role with isolated own-session work and shared-session viewing before inviting this person.`,
+            `${result.description}. Configure a default role with isolated own-session work and sessions.others: "invited" or "view" before inviting this person.`,
           );
         }
       },

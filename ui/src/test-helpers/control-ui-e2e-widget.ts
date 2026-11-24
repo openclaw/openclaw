@@ -32,9 +32,16 @@ export async function clickBoardWidgetControl(page: Page, control: Locator): Pro
       dispose: () => element.removeEventListener("pointermove", observe, true),
     };
   });
+  let lastHover:
+    | { before: number[][]; after: number[][]; pointerReceived: boolean | null }
+    | undefined;
   try {
     for (let frame = await target.ownerFrame(); frame?.parentFrame(); frame = frame.parentFrame()) {
       elements.push(await frame.frameElement());
+    }
+    // Offscreen child frames can suspend rAF, including Playwright's stability wait.
+    for (const element of elements.toReversed()) {
+      await element.scrollIntoViewIfNeeded({ timeout: Math.max(1, deadline - Date.now()) });
     }
     const layout = () =>
       Promise.all(
@@ -60,18 +67,23 @@ export async function clickBoardWidgetControl(page: Page, control: Locator): Pro
       await pointer.evaluate((state) => state.reset());
       await target.hover({ timeout: Math.max(1, deadline - Date.now()) });
       const after = await layout();
-      if (
-        before.every((rect, index) =>
-          rect.every((value, axis) => value === after[index]?.[axis]),
-        ) &&
-        (await pointer.evaluate((state) => state.received()))
-      ) {
+      const stable = before.every((rect, index) =>
+        rect.every((value, axis) => value === after[index]?.[axis]),
+      );
+      const pointerReceived = stable ? await pointer.evaluate((state) => state.received()) : null;
+      lastHover = { before, after, pointerReceived };
+      if (stable && pointerReceived) {
         break;
       }
       if (Date.now() >= deadline) {
         throw new Error("Board widget control never received pointer events at a stable target.");
       }
     }
+  } catch (cause) {
+    throw new Error(
+      `Board widget pointer routing failed. Last completed hover: ${JSON.stringify(lastHover ?? null)}`,
+      { cause },
+    );
   } finally {
     try {
       await pointer.evaluate((state) => state.dispose());

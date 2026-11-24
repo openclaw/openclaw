@@ -13,9 +13,11 @@ import {
 } from "openclaw/plugin-sdk/sandbox";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveCrabboxBinary } from "./crabbox-binary.js";
+import { ensureManagedCrabboxBinary } from "./crabbox-managed-binary.js";
 import { runCrabboxProcess } from "./crabbox-process.js";
 import type { ResolvedCrabboxSandboxConfig } from "./crabbox-sandbox-config.js";
 import { CRABBOX_SANDBOX_LEASE_ID_PATTERN } from "./crabbox-sandbox-lease.js";
+import { isUnrecognizedLease } from "./crabbox-worker-command.js";
 import { CRABBOX_LIFECYCLE_TIMEOUT_MS } from "./crabbox-worker-timeouts.js";
 
 export const CRABBOX_SANDBOX_BACKEND_ID = "crabbox";
@@ -30,6 +32,7 @@ type CrabboxSandboxBackendDependencies = {
 type CrabboxSandboxClient = {
   binary: string;
   pluginConfig: ResolvedCrabboxSandboxConfig;
+  acquisition?: Promise<void>;
   execSupport?: Promise<void>;
 };
 
@@ -54,9 +57,17 @@ async function runCrabbox(
   cwd: string | undefined,
   timeoutMs: number,
 ): Promise<SpawnResult> {
-  let result: SpawnResult;
+  client.acquisition ??= ensureManagedCrabboxBinary({ binary: client.binary, cwd })
+    .then(({ binary }) => {
+      client.binary = binary;
+    })
+    .catch((error: unknown) => {
+      client.acquisition = undefined;
+      throw error;
+    });
+  await client.acquisition;
   try {
-    result = await runCrabboxProcess([client.binary, ...args], {
+    return await runCrabboxProcess([client.binary, ...args], {
       ...(cwd ? { cwd } : {}),
       killProcessTree: true,
       maxOutputBytes: 64 * 1024,
@@ -67,6 +78,9 @@ async function runCrabbox(
       cause: error,
     });
   }
+}
+
+function assertCrabboxSuccess(action: string, result: SpawnResult): void {
   if (result.code !== 0) {
     // Warmup can print token-bearing SSH commands even when a later step fails.
     const detail =
@@ -75,7 +89,6 @@ async function runCrabbox(
         : result.stderr.trim() || result.stdout.trim() || `exit ${String(result.code)}`;
     throw new Error(`Crabbox sandbox ${action} failed: ${detail}`);
   }
-  return result;
 }
 
 async function requireExecSupport(client: CrabboxSandboxClient, cwd: string): Promise<void> {
@@ -91,6 +104,7 @@ async function requireExecSupport(client: CrabboxSandboxClient, cwd: string): Pr
     10_000,
   )
     .then((result) => {
+      assertCrabboxSuccess("exec capability", result);
       const capability: unknown = JSON.parse(result.stdout);
       if (
         !isRecord(capability) ||
@@ -110,14 +124,18 @@ async function requireExecSupport(client: CrabboxSandboxClient, cwd: string): Pr
   await client.execSupport;
 }
 
-async function inspectLease(client: CrabboxSandboxClient, leaseId: string, cwd?: string) {
-  const result = await runCrabbox(
+function inspectLease(client: CrabboxSandboxClient, leaseId: string, cwd?: string) {
+  return runCrabbox(
     client,
     "inspect",
     ["inspect", "--id", leaseId, "--json"],
     cwd,
     CRABBOX_LIFECYCLE_TIMEOUT_MS,
   );
+}
+
+function parseLeaseInspection(result: SpawnResult, leaseId: string) {
+  assertCrabboxSuccess("inspect", result);
   let parsed: unknown;
   try {
     parsed = JSON.parse(result.stdout);
@@ -134,7 +152,7 @@ async function inspectLease(client: CrabboxSandboxClient, leaseId: string, cwd?:
 async function ensureLease(client: CrabboxSandboxClient, leaseId: string, cwd: string) {
   await requireExecSupport(client, cwd);
   const config = client.pluginConfig;
-  await runCrabbox(
+  const result = await runCrabbox(
     client,
     "warmup",
     [
@@ -152,14 +170,22 @@ async function ensureLease(client: CrabboxSandboxClient, leaseId: string, cwd: s
     cwd,
     10 * 60_000,
   );
-  const lease = await inspectLease(client, leaseId, cwd);
+  assertCrabboxSuccess("warmup", result);
+  const lease = parseLeaseInspection(await inspectLease(client, leaseId, cwd), leaseId);
   if (!lease.ready) {
     throw new Error(`Crabbox lease ${leaseId} is not ready (state=${lease.state || "unknown"})`);
   }
 }
 
 async function stopLease(client: CrabboxSandboxClient, leaseId: string, cwd?: string) {
-  await runCrabbox(client, "stop", ["stop", "--current-repo", "--id", leaseId], cwd, 5 * 60_000);
+  const result = await runCrabbox(
+    client,
+    "stop",
+    ["stop", "--current-repo", "--id", leaseId],
+    cwd,
+    5 * 60_000,
+  );
+  assertCrabboxSuccess("stop", result);
 }
 
 export function createCrabboxSandboxBackendFactory(
@@ -180,7 +206,9 @@ export function createCrabboxSandboxBackendFactory(
     try {
       await ensureLease(client, runtimeId, workspaceDir);
     } catch (error) {
-      const lease = await inspectLease(client, runtimeId, workspaceDir).catch(() => undefined);
+      const lease = await inspectLease(client, runtimeId, workspaceDir)
+        .then((result) => parseLeaseInspection(result, runtimeId))
+        .catch(() => undefined);
       if (lease?.state === "released") {
         throw new SandboxRuntimeRetiredError(runtimeId);
       }
@@ -227,16 +255,16 @@ export function createCrabboxSandboxBackendManager(
       if (!CRABBOX_SANDBOX_LEASE_ID_PATTERN.test(entry.containerName)) {
         return { running: false, configLabelMatch: false };
       }
-      try {
-        const lease = await inspectLease(client, entry.containerName, entry.workspaceDir);
-        return {
-          running: lease.ready,
-          actualConfigLabel: entry.image,
-          configLabelMatch: entry.image === label,
-        };
-      } catch {
+      const result = await inspectLease(client, entry.containerName, entry.workspaceDir);
+      if (isUnrecognizedLease(result, entry.containerName, "inspect")) {
         return { running: false, actualConfigLabel: entry.image, configLabelMatch: false };
       }
+      const lease = parseLeaseInspection(result, entry.containerName);
+      return {
+        running: lease.ready,
+        actualConfigLabel: entry.image,
+        configLabelMatch: entry.image === label,
+      };
     },
     async removeRuntime({ entry }) {
       if (!CRABBOX_SANDBOX_LEASE_ID_PATTERN.test(entry.containerName)) {

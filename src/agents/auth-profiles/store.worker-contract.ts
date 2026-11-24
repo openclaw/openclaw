@@ -1,3 +1,4 @@
+import type { SqliteAuthSchema } from "../../infra/sqlite-readonly-auth-schema.js";
 import type { DatabasePathIdentity } from "../../infra/sqlite-worker-identity.js";
 import type { OpenClawStateWorkerErrorPayload } from "../../state/openclaw-state-worker-error.js";
 import type {
@@ -5,12 +6,20 @@ import type {
   AuthProfileStore,
   AuthProfileStoreOwner,
   OAuthCredential,
+  ProfileUsageStats,
   SharedAuthStoreOwnership,
 } from "./types.js";
-import type {
-  PersonalAuthProfileUsageReduction,
-  PersonalAuthProfileUsageResult,
-} from "./usage-reduction.js";
+import type { PersonalAuthProfileUsageReduction } from "./usage-reduction.js";
+
+export type AuthProfileReadSource =
+  | { kind: "shared-state"; databasePath: string }
+  | {
+      kind: "agent";
+      databasePath: string;
+      agentId: string;
+      identity: string | undefined;
+      schema: SqliteAuthSchema | undefined;
+    };
 
 export type AuthProfileUsageInput = {
   profileId: string;
@@ -24,12 +33,13 @@ export type AuthProfileUsageInput = {
 
 export type AuthProfileUsageReceipt = {
   store: AuthProfileStore;
-  result: PersonalAuthProfileUsageResult | undefined;
+  result: ProfileUsageStats | undefined;
   publication: {
     credentialsChanged: boolean;
     profileSetChanged: boolean;
     stateChanged: boolean;
     selectionChanged: boolean;
+    availabilityOnly?: boolean;
     profileIds: string[];
   };
 };

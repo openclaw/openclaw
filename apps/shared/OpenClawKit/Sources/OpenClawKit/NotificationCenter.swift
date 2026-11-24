@@ -1,6 +1,16 @@
 import Foundation
 import UserNotifications
 
+extension OpenClawNotificationPriority {
+    public var interruptionLevel: UNNotificationInterruptionLevel {
+        switch self {
+        case .passive: .passive
+        case .active: .active
+        case .timeSensitive: .timeSensitive
+        }
+    }
+}
+
 public struct NotificationSnapshot: @unchecked Sendable {
     public let identifier: String
     public let userInfo: [AnyHashable: Any]

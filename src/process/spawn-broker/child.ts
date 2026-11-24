@@ -15,7 +15,19 @@ import {
 
 type ChildMessage = Exclude<
   BrokerResponse,
-  { type: "ready" | "prepared" | "owned" | "pipe" | "pipe-prefix" | "execa-result" }
+  {
+    type:
+      | "ready"
+      | "startup-failed"
+      | "prepared"
+      | "owned"
+      | "pipe"
+      | "pipe-prefix"
+      | "execa-result"
+      | "file-read-chunk"
+      | "file-read-result"
+      | "file-output";
+  }
 >;
 
 /** Native pipes remain native streams; only lifecycle and IPC cross the broker. */
@@ -54,6 +66,7 @@ export class BrokerChild extends EventEmitter implements ChildProcess {
       handle?: SendHandle,
       initiateSpawn?: SpawnInitiation,
     ) => Promise<void>,
+    private fileOutputPending = false,
   ) {
     super();
     this.spawnfile = argv[0]!;
@@ -83,6 +96,11 @@ export class BrokerChild extends EventEmitter implements ChildProcess {
   /** Transport bookkeeping survives disposal of the caller's event listeners. */
   waitForClose(): Promise<void> {
     return this.completion.promise;
+  }
+
+  settleFileOutput(): void {
+    this.fileOutputPending = false;
+    this.finishClose();
   }
 
   attachPipe(fd: number, socket: Socket): void {
@@ -222,6 +240,7 @@ export class BrokerChild extends EventEmitter implements ChildProcess {
         this.connected = false;
         this.channel = undefined;
         this.emit("disconnect");
+        this.finishClose();
         break;
       case "ipc":
         this.emit("message", message.message);
@@ -245,10 +264,10 @@ export class BrokerChild extends EventEmitter implements ChildProcess {
       return;
     }
     this.opened.reject(error);
-    this.failSends(error);
     const wasConnected = this.connected;
     this.connected = false;
     this.channel = undefined;
+    this.failSends(error);
     if (wasConnected) {
       this.emit("disconnect");
     }
@@ -264,7 +283,13 @@ export class BrokerChild extends EventEmitter implements ChildProcess {
   }
 
   private finishClose(): void {
-    if (!this.exited || this.pipes.size > 0 || this.closed) {
+    if (
+      !this.exited ||
+      this.channel ||
+      this.pipes.size > 0 ||
+      this.closed ||
+      this.fileOutputPending
+    ) {
       return;
     }
     this.closed = true;

@@ -1,6 +1,7 @@
 import { isDeepStrictEqual } from "node:util";
 import { sha256Base64Url } from "../infra/crypto-digest.js";
 import { isDeeplyFrozenPlainData, isPlainData } from "../shared/immutable-data.js";
+import { configPathAffectsReader, projectConfigReadDependencies } from "./read-dependencies.js";
 import {
   cloneConfigWithResolutionFacts,
   serializeConfigResolutionFacts,
@@ -64,4 +65,31 @@ export function matchesRuntimeConfigValueFact(
   return fact.value
     ? isDeepStrictEqual(config, fact.value)
     : hashRuntimeConfigValue(config) === fact.fingerprint;
+}
+
+export function matchesRuntimeSourceConfigValueFact(
+  config: OpenClawConfig,
+  fact: RuntimeConfigValueFact,
+): boolean {
+  const project = ({ meta, ...values }: OpenClawConfig) => {
+    const { lastTouchedVersion: _lastTouchedVersion, ...sourceMeta } = meta ?? {};
+    return { ...values, meta: sourceMeta };
+  };
+  return (
+    (matchesRuntimeConfigValueFact(config, fact) ||
+      (fact.value !== null && isDeepStrictEqual(project(config), project(fact.value)))) &&
+    isDeepStrictEqual(serializeConfigResolutionFacts(config), fact.facts)
+  );
+}
+
+export function hashModelConfig(config: OpenClawConfig, sourceConfig: OpenClawConfig): string {
+  const project = (value: OpenClawConfig) => ({
+    config: projectConfigReadDependencies(value, "metadata"),
+    facts: serializeConfigResolutionFacts(value, (path) =>
+      configPathAffectsReader(path, "metadata"),
+    ),
+  });
+  return sha256Base64Url(
+    stableConfigStringify({ runtime: project(config), source: project(sourceConfig) }),
+  );
 }

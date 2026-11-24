@@ -1,27 +1,230 @@
 import assert from "node:assert/strict";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { expect, vi } from "vitest";
+import { withinTest } from "../../test/helpers/promise.js";
 import { PluginInstanceDrainTimeoutError } from "../plugins/plugin-instance-error.js";
-import { getPluginInstance } from "../plugins/plugin-instance-scope.js";
 import {
   disposePluginRegistryInstances,
   waitForPluginRegistryRetirement,
 } from "../plugins/runtime.js";
 import { startPluginServices } from "../plugins/services.test-support.js";
-import { createDeferredCore } from "../shared/deferred.js";
+import { markGatewayRestartDraining } from "../process/gateway-work-admission.js";
 import { createChannelTestPluginBase } from "../test-utils/channel-plugins.js";
 import {
-  createRecoveryChannelManager,
+  firstReloaded,
+  reloadFailure,
+  rejectWith,
+  heldWork,
+  observeSettlement,
+  pluginInstance,
+} from "./server-plugin-reload.fixture-tools.test-support.js";
+import {
+  createCleanupChannels,
+  expectSiblingUnchanged,
+  invokeReloadMethod,
+  observeRetainedWork,
   type RecoveryFixtureFactory,
 } from "./server-plugin-reload.recovery.test-support.js";
 import { GatewayConfigReloadSupersededError } from "./server-reload-contracts.js";
+
+export async function verifySerializedCandidateStartup(
+  createRecoveryFixture: RecoveryFixtureFactory,
+  generationOverlap: false | undefined | "mixed",
+  signal: AbortSignal,
+) {
+  const stop = heldWork();
+  const events: string[] = [];
+  let registrations = 0;
+  const fixture = await createRecoveryFixture({
+    generationOverlap: generationOverlap === "mixed" ? true : generationOverlap,
+    abortOnCandidateStart: false,
+    initialStop: async () => {
+      events.push("stop:1");
+      await stop.run();
+    },
+    registerFirst(api) {
+      const generation = ++registrations;
+      events.push(`register:${generation}`);
+      assert(api.lifecycle.onDispose);
+      api.lifecycle.onDispose(() => {
+        events.push(`dispose:${generation}`);
+      });
+    },
+  });
+  if (generationOverlap === "mixed") {
+    expect(fixture.instance().lifecycle.runInBackgroundContext(() => "background ready")).toBe(
+      "background ready",
+    );
+  }
+  const reloading = fixture.reload(
+    undefined,
+    generationOverlap === "mixed" ? ["first", "sibling"] : ["first"],
+  );
+  try {
+    await withinTest(stop.entered, signal);
+    expect(events).toEqual(["register:1", "stop:1"]);
+    expect(fixture.candidates).toHaveLength(0);
+    expect(fixture.registryOwner.registry).toBe(fixture.previousRegistry);
+    stop.release();
+    await expect(withinTest(reloading, signal)).resolves.toMatchObject({
+      runtime: {
+        pluginIds: generationOverlap === "mixed" ? ["first", "sibling"] : ["first"],
+      },
+    });
+    expect(events).toEqual(["register:1", "stop:1", "dispose:1", "register:2"]);
+    if (generationOverlap === "mixed") {
+      fixture.expectServices({ firstStop: 1, siblingStart: 2, siblingStop: 1 });
+      expect(fixture.instance().lifecycle.signal.aborted).toBe(true);
+    } else {
+      expectSiblingUnchanged(fixture);
+    }
+  } finally {
+    stop.release();
+    await reloading;
+  }
+}
+
+export async function verifyOverlappingCandidatePreparationFailure(
+  createRecoveryFixture: RecoveryFixtureFactory,
+  signal: AbortSignal,
+) {
+  const failure = new Error("successor bindings could not be prepared");
+  const disposed: number[] = [];
+  let registrations = 0;
+  const fixture = await createRecoveryFixture({
+    generationOverlap: true,
+    abortOnCandidateStart: false,
+    prepareAttached: rejectWith(failure),
+    registerFirst(api) {
+      const generation = ++registrations;
+      api.registerGatewayMethod("first.generation", ({ respond }) => {
+        respond(true, { generation });
+      });
+      assert(api.lifecycle.onDispose);
+      api.lifecycle.onDispose(() => {
+        disposed.push(generation);
+      });
+    },
+  });
+  const previous = fixture.instance();
+  const admitted = previous.retainConsumer();
+  const reloading = fixture.reload();
+  try {
+    await expect(withinTest(reloading, signal)).rejects.toThrow(failure.message);
+    expect(fixture.registryOwner.registry).toBe(fixture.previousRegistry);
+    expect(previous.acceptingCalls).toBe(true);
+    expect(previous.lifecycle.signal.aborted).toBe(false);
+    const response = await invokeReloadMethod(fixture.registryOwner.registry, "first.generation");
+    expect(response).toHaveBeenCalledWith(true, { generation: 1 }, undefined, undefined);
+    expect(admitted.run(() => "admitted predecessor")).toBe("admitted predecessor");
+    expect(registrations).toBe(2);
+    expect(disposed).toEqual([2]);
+    fixture.expectServices({ firstStart: 1, firstStop: 0 });
+    expectSiblingUnchanged(fixture);
+  } finally {
+    admitted.release();
+    await reloading.catch(() => {});
+  }
+}
+
+export async function verifyOverlappingGenerationRetirement(
+  createRecoveryFixture: RecoveryFixtureFactory,
+  action: "reload again" | "restart",
+  signal: AbortSignal,
+) {
+  const disposed: number[] = [];
+  let registrations = 0;
+  const fixture = await createRecoveryFixture({
+    generationOverlap: true,
+    abortOnCandidateStart: false,
+    registerFirst(api) {
+      const generation = ++registrations;
+      api.registerGatewayMethod("first.generation", ({ respond }) => {
+        respond(true, { generation });
+      });
+      assert(api.lifecycle.onDispose);
+      api.lifecycle.onDispose(() => {
+        disposed.push(generation);
+      });
+    },
+  });
+  const previous = fixture.instance();
+  const first = previous.retainConsumer();
+  let second: ReturnType<typeof previous.retainConsumer> | undefined;
+  let shutdown: Promise<unknown> | undefined;
+  let reloading: Promise<unknown> | undefined;
+  try {
+    reloading = fixture.reload();
+    await expect(withinTest(reloading, signal)).resolves.toMatchObject(firstReloaded);
+    const successorRegistry = fixture.registryOwner.registry;
+    const successor = pluginInstance(successorRegistry);
+    expect(successor).not.toBe(previous);
+    expect(disposed).toEqual([]);
+    expect(() => previous.run(() => "fresh predecessor call")).toThrow();
+    const oldResponse = await first.run(() =>
+      invokeReloadMethod(fixture.previousRegistry, "first.generation"),
+    );
+    expect(oldResponse).toHaveBeenCalledWith(true, { generation: 1 }, undefined, undefined);
+    const newResponse = await invokeReloadMethod(successorRegistry, "first.generation");
+    expect(newResponse).toHaveBeenCalledWith(true, { generation: 2 }, undefined, undefined);
+    fixture.expectServices({ firstStop: 0 });
+    expectSiblingUnchanged(fixture);
+
+    if (action === "reload again") {
+      second = successor.retainConsumer();
+      reloading = fixture.reload();
+      await expect(withinTest(reloading, signal)).resolves.toMatchObject(firstReloaded);
+      const latest = fixture.registryOwner.registry;
+      expect(latest).not.toBe(successorRegistry);
+      expect(disposed).toEqual([]);
+      const latestResponse = await invokeReloadMethod(latest, "first.generation");
+      expect(latestResponse).toHaveBeenCalledWith(true, { generation: 3 }, undefined, undefined);
+      const middleResponse = await second.run(() =>
+        invokeReloadMethod(successorRegistry, "first.generation"),
+      );
+      expect(middleResponse).toHaveBeenCalledWith(true, { generation: 2 }, undefined, undefined);
+      first.release();
+      await withinTest(waitForPluginRegistryRetirement(fixture.previousRegistry), signal);
+      expect(disposed).toEqual([1]);
+      expect(successor.lifecycle.signal.aborted).toBe(false);
+      second.release();
+      await withinTest(waitForPluginRegistryRetirement(successorRegistry), signal);
+      expect(disposed).toEqual([1, 2]);
+      expect(pluginInstance(latest).lifecycle.signal.aborted).toBe(false);
+      expectSiblingUnchanged(fixture);
+    } else {
+      fixture.runtime.requestEntryLifetime.beginClose();
+      markGatewayRestartDraining();
+      const stopping = observeSettlement(
+        (async () => {
+          await fixture.owner.currentServices()?.stop();
+          await fixture.lifetime.stop();
+          await fixture.registryOwner.close();
+          await fixture.runtime.kernel.pluginMetadata.close();
+        })(),
+      );
+      shutdown = stopping.result;
+      await nextTurn();
+      expect(stopping.state.settled).toBe(false);
+      expect(disposed).not.toContain(1);
+      first.release();
+      expect(await withinTest(shutdown, signal)).toBeUndefined();
+      expect(disposed.toSorted((left, right) => left - right)).toEqual([1, 2]);
+      expect(previous.lifecycle.signal.aborted).toBe(true);
+      expect(successor.lifecycle.signal.aborted).toBe(true);
+    }
+  } finally {
+    first.release();
+    second?.release();
+    await Promise.allSettled([reloading, shutdown]);
+  }
+}
 
 export async function verifyManagedCandidateRetirement(
   createRecoveryFixture: RecoveryFixtureFactory,
   action: "retry" | "shutdown",
 ) {
-  const entered = createDeferredCore();
-  const release = createDeferredCore();
+  const startupGate = heldWork();
   const event = "gateway-managed-candidate-start";
   const listeners: Array<() => void> = [];
   const before = process.listenerCount(event);
@@ -46,8 +249,7 @@ export async function verifyManagedCandidateRetirement(
         id: "held-candidate",
         async start() {
           if (current === 2) {
-            entered.resolve();
-            await release.promise;
+            await startupGate.run();
           }
           process.on(event, listener);
           order.push(`start:${current}`);
@@ -61,36 +263,23 @@ export async function verifyManagedCandidateRetirement(
     },
   });
   vi.useFakeTimers();
-  let outcome: unknown;
   let alternateRetirement: Promise<void> | undefined;
   let shuttingDown: Promise<void> | undefined;
   let retry: Promise<void> | undefined;
-  const reloading = fixture.reload().then(
-    (result) => {
-      outcome = result;
-    },
-    (error: unknown) => {
-      outcome = error;
-    },
-  );
+  const operation = observeSettlement(fixture.reload());
+  const reloading = operation.result;
   try {
-    await entered.promise;
+    await startupGate.entered;
     const candidate = fixture.candidates[0]!.registry;
-    const instance = getPluginInstance(candidate.plugins.find((record) => record.id === "first")!);
-    assert(instance);
-    expect(process.listenerCount(event)).toBe(before);
+    const instance = pluginInstance(candidate);
     // Observe each existing deadline: failed startup, service stop, then instance drain.
     await vi.advanceTimersByTimeAsync(5_000);
-    expect(outcome).toBeUndefined();
     expect(instance.disposing).toBe(false);
-    expect(queuedStart).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(5_000);
     expect(
       await waitForPluginRegistryRetirement(candidate, { deferConsumers: true }),
     ).toMatchObject({ deferredPluginIds: ["first"] });
     expect(instance.disposing).toBe(true);
-    expect(order).toEqual([]);
-    expect(process.listenerCount(event)).toBe(before);
     let retired = false;
     let logicalRetirement = false;
     alternateRetirement = disposePluginRegistryInstances(candidate).then(async (result) => {
@@ -106,41 +295,35 @@ export async function verifyManagedCandidateRetirement(
     }
     await vi.advanceTimersByTimeAsync(5_000);
     // Logical retirement is bounded; the metadata owner still joins physical service cleanup.
-    expect(outcome).toBeUndefined();
+    expect(operation.state.value).toBeUndefined();
     expect(logicalRetirement).toBe(true);
-    expect(retired).toBe(false);
     expect(instance.lifecycle.signal.aborted).toBe(true);
     await vi.advanceTimersByTimeAsync(5_000);
     await reloading;
-    expect(outcome).toMatchObject({
+    expect(operation.state.value).toMatchObject({
       details: { phase: "activate", committed: false },
       message: expect.stringContaining("plugin service startup timed out"),
     });
     expect(retired).toBe(false);
-    expect(instance.lifecycle.signal.aborted).toBe(true);
     expect(() => instance.run(() => "retired dispatch")).toThrow("reloaded or disabled");
-    expect(order.filter((entry) => entry.endsWith(":2"))).toEqual([]);
-    expect(process.listenerCount(event)).toBe(before);
+    expect(order).toEqual([]);
     expect(queuedStart).not.toHaveBeenCalled();
     expect(fixture.runtime.runtimeState.gatewayLifetimeSidecars.snapshot()).toEqual([]);
     if (action === "shutdown") {
       shuttingDown = fixture.lifetime.sealAndJoin();
     } else {
-      retry = expect(fixture.reload()).resolves.toMatchObject({
-        runtime: { pluginIds: ["first"] },
-      });
+      retry = expect(fixture.reload()).resolves.toMatchObject(firstReloaded);
       await nextTurn();
       expect(queuedStart).not.toHaveBeenCalled();
       expect(fixture.candidates).toHaveLength(1);
     }
     // Native startup can acquire resources late; its one stop still precedes instance disposal.
-    release.resolve();
+    startupGate.release();
     await vi.advanceTimersByTimeAsync(0);
     await alternateRetirement;
     await shuttingDown;
     await retry;
     expect(retired).toBe(true);
-    expect(instance.lifecycle.signal.aborted).toBe(true);
     expect(order.filter((entry) => entry.endsWith(":2"))).toEqual([
       "start:2",
       "stop:2",
@@ -150,13 +333,9 @@ export async function verifyManagedCandidateRetirement(
     expect(() => instance.run(() => "still retired")).toThrow("reloaded or disabled");
     expect(queuedStart).toHaveBeenCalledTimes(action === "retry" ? 1 : 0);
   } finally {
-    release.resolve();
+    startupGate.release();
     await reloading;
-    await Promise.allSettled(
-      [alternateRetirement, shuttingDown, retry].filter(
-        (pending): pending is Promise<void> => pending !== undefined,
-      ),
-    );
+    await Promise.allSettled([alternateRetirement, shuttingDown, retry]);
     for (const listener of listeners) {
       process.removeListener(event, listener);
     }
@@ -167,16 +346,11 @@ export async function verifyManagedCandidateRetirement(
 export async function verifyPendingServiceCleanupRetry(
   createRecoveryFixture: RecoveryFixtureFactory,
 ) {
-  const hookEntered = createDeferredCore();
-  const hookRelease = createDeferredCore();
-  const startupEntered = createDeferredCore();
-  const startupRelease = createDeferredCore();
+  const hookGate = heldWork();
+  const startupGate = heldWork();
   let starts = 0;
   const serviceStop = vi.fn();
-  const hookStop = vi.fn(async () => {
-    hookEntered.resolve();
-    await hookRelease.promise;
-  });
+  const hookStop = vi.fn(hookGate.run);
   const fixture = await createRecoveryFixture({
     abortOnCandidateStart: false,
     register: (api, owner) => {
@@ -186,8 +360,7 @@ export async function verifyPendingServiceCleanupRetry(
           id: "pending-startup",
           start: () => {
             if (++starts === 2) {
-              startupEntered.resolve();
-              return startupRelease.promise;
+              return startupGate.run();
             }
             return undefined;
           },
@@ -202,119 +375,76 @@ export async function verifyPendingServiceCleanupRetry(
     registry: fixture.previousRegistry,
     config: fixture.getConfig(),
     onHandle: (handle) => {
-      expect(fixture.owner.publishServices(fixture.owner.currentClaim(), handle)).toBe(true);
+      fixture.owner.setServices(handle);
     },
   });
-  await startupEntered.promise;
-  expect(fixture.siblingStart).toHaveBeenCalledOnce();
-  expect(fixture.siblingStop).toHaveBeenCalledOnce();
-  const instance = getPluginInstance(fixture.previousRegistry.plugins[0]!);
-  assert(instance);
-  const drainEntered = createDeferredCore();
-  const wait = instance.waitForRetainedWork.bind(instance);
-  const observation = vi.spyOn(instance, "waitForRetainedWork").mockImplementation((...args) => {
-    const draining = wait(...args);
-    drainEntered.resolve();
-    return draining;
-  });
+  await startupGate.entered;
+  fixture.expectServices({ siblingStart: 1, siblingStop: 1 });
+  const instance = fixture.instance();
+  const observation = observeRetainedWork(instance);
   vi.useFakeTimers();
   let retry: Promise<unknown> | undefined;
   const first = fixture.reload().catch((error: unknown) => error);
   try {
-    await Promise.race([drainEntered.promise, first]);
+    await Promise.race([observation.entered, first]);
     await vi.advanceTimersByTimeAsync(1_000);
     expect(serviceStop).toHaveBeenCalledOnce();
-    expect(starts).toBe(2);
     expect(hookStop).not.toHaveBeenCalled();
-    expect(fixture.candidates).toHaveLength(0);
     await vi.advanceTimersByTimeAsync(60_000);
-    expect(await first).toMatchObject({ details: { phase: "drain", committed: false } });
+    expect(await first).toMatchObject(reloadFailure("drain"));
     expect(instance.run(() => "still serving")).toBe("still serving");
     expect(fixture.registryOwner.registry).toBe(fixture.previousRegistry);
-    startupRelease.resolve();
+    startupGate.release();
     await startup;
     retry = fixture.reload();
-    await hookEntered.promise;
+    await hookGate.entered;
     expect(serviceStop).toHaveBeenCalledTimes(2);
     expect(starts).toBe(2);
     expect(fixture.candidates).toHaveLength(0);
-    hookRelease.resolve();
+    hookGate.release();
     await vi.advanceTimersByTimeAsync(0);
-    expect(await retry).toMatchObject({ runtime: { pluginIds: ["first"] } });
+    expect(await retry).toMatchObject(firstReloaded);
     expect(fixture.registryOwner.registry).not.toBe(fixture.previousRegistry);
     expect(starts).toBe(3);
     expect(instance.lifecycle.signal.aborted).toBe(true);
     expect(() => instance.run(() => "retired dispatch")).toThrow("reloaded or disabled");
     expect(hookStop).toHaveBeenCalledOnce();
-    expect(fixture.siblingStart).toHaveBeenCalledTimes(2);
-    expect(fixture.siblingStop).toHaveBeenCalledOnce();
+    fixture.expectServices({ siblingStart: 2, siblingStop: 1 });
     retry = fixture.reload();
-    await expect(retry).resolves.toMatchObject({ runtime: { pluginIds: ["first"] } });
+    await expect(retry).resolves.toMatchObject(firstReloaded);
     expect(starts).toBe(4);
     expect(serviceStop).toHaveBeenCalledTimes(3);
     expect(hookStop).toHaveBeenCalledTimes(2);
     expect(() => instance.run(() => "still retired")).toThrow("reloaded or disabled");
-    expect(fixture.siblingStart).toHaveBeenCalledTimes(2);
-    expect(fixture.siblingStop).toHaveBeenCalledOnce();
+    fixture.expectServices({ siblingStart: 2, siblingStop: 1 });
   } finally {
-    observation.mockRestore();
-    hookRelease.resolve();
-    startupRelease.resolve();
+    observation.restore();
+    hookGate.release();
+    startupGate.release();
     await Promise.allSettled([first, retry, startup]);
     vi.useRealTimers();
   }
 }
 
 export async function verifyGatewayCleanupRefusal(createRecoveryFixture: RecoveryFixtureFactory) {
-  const entered = createDeferredCore();
-  const release = createDeferredCore();
+  const hookGate = heldWork();
   const hookStart = vi.fn();
-  const hookStop = vi.fn(async () => {
-    entered.resolve();
-    await release.promise;
-  });
+  const hookStop = vi.fn(hookGate.run);
   const channelIds = { first: "cleanup-first", sibling: "cleanup-sibling" } as const;
-  const signals = { first: [] as AbortSignal[], sibling: [] as AbortSignal[] };
-  const fixture = await createRecoveryFixture({
-    abortOnCandidateStart: false,
-    register: (api, owner) => {
-      if (owner === "first") {
-        api.on("gateway_start", hookStart);
-        api.on("gateway_stop", hookStop);
-      }
-      api.registerChannel({
-        plugin: {
-          ...createChannelTestPluginBase({ id: channelIds[owner] }),
-          gateway: {
-            startAccount: async ({ abortSignal }) => {
-              signals[owner].push(abortSignal);
-              await new Promise<void>((resolve) => {
-                abortSignal.addEventListener("abort", () => resolve(), { once: true });
-              });
-            },
-          },
-        },
-      });
+  const { fixture, manager, signals } = await createCleanupChannels(
+    createRecoveryFixture,
+    (api) => {
+      api.on("gateway_start", hookStart);
+      api.on("gateway_stop", hookStop);
     },
-  });
-  const manager = createRecoveryChannelManager(fixture);
-  fixture.runtime.channelManager = manager;
-  await manager.startChannel(channelIds.first);
-  await manager.startChannel(channelIds.sibling);
-  await vi.waitFor(() => {
-    expect(signals.first).toHaveLength(1);
-    expect(signals.sibling).toHaveLength(1);
-  });
-  const instance = getPluginInstance(fixture.previousRegistry.plugins[0]!);
-  assert(instance);
+  );
+  const instance = fixture.instance();
   vi.useFakeTimers();
   const reloading = fixture.reload().catch((error: unknown) => error);
   try {
-    await entered.promise;
+    await hookGate.entered;
     await vi.advanceTimersByTimeAsync(5_000);
-    expect(fixture.candidates).toHaveLength(0);
-    expect(hookStart).not.toHaveBeenCalled();
-    release.resolve();
+    hookGate.release();
     await vi.advanceTimersByTimeAsync(0);
     expect(await reloading).toMatchObject({
       details: { phase: "drain", committed: false, pluginIds: ["first"] },
@@ -324,13 +454,10 @@ export async function verifyGatewayCleanupRefusal(createRecoveryFixture: Recover
     expect(fixture.candidates).toHaveLength(0);
     expect(instance.lifecycle.signal.aborted).toBe(true);
     expect(() => instance.run(() => "closed")).toThrow("reloaded or disabled");
-    expect(signals.first).toHaveLength(1);
-    expect(signals.first[0]?.aborted).toBe(true);
-    expect(signals.sibling).toHaveLength(1);
-    expect(signals.sibling[0]?.aborted).toBe(false);
+    expect(signals).toMatchObject({ first: [{ aborted: true }], sibling: [{ aborted: false }] });
     expect(hookStop).toHaveBeenCalledOnce();
   } finally {
-    release.resolve();
+    hookGate.release();
     await manager.stopChannel(channelIds.first);
     await reloading;
     await manager.stopChannel(channelIds.first);
@@ -342,16 +469,14 @@ export async function verifyGatewayCleanupRefusal(createRecoveryFixture: Recover
 export async function verifyPendingServiceCleanupRollback(
   createRecoveryFixture: RecoveryFixtureFactory,
 ) {
-  const stopEntered = createDeferredCore();
-  const releaseStop = createDeferredCore();
+  const stopGate = heldWork();
   const events: string[] = [];
   let candidateStarts = 0;
   const fixture = await createRecoveryFixture({
     abortOnCandidateStart: false,
     initialStop: async () => {
       events.push("old-stop-started");
-      stopEntered.resolve();
-      await releaseStop.promise;
+      await stopGate.run();
       events.push("old-stop-finished");
     },
     candidateStart: () => {
@@ -367,32 +492,26 @@ export async function verifyPendingServiceCleanupRollback(
   vi.useFakeTimers();
   const reload = fixture.reload().catch((error: unknown) => error);
   try {
-    await stopEntered.promise;
+    await stopGate.entered;
     await vi.advanceTimersByTimeAsync(1_000);
-    expect(events).toEqual(["old-stop-started"]);
-    expect(candidateStarts).toBe(0);
-    releaseStop.resolve();
+    stopGate.release();
     await vi.advanceTimersByTimeAsync(0);
-    expect(await reload).toMatchObject({ details: { phase: "activate", committed: false } });
+    expect(await reload).toMatchObject(reloadFailure("activate"));
     expect(events).toEqual([
       "old-stop-started",
       "old-stop-finished",
       "candidate-started",
       "old-restarted",
     ]);
-    expect(fixture.firstStart).toHaveBeenCalledTimes(2);
     expect(fixture.registryOwner.registry).not.toBe(fixture.previousRegistry);
-    expect(fixture.siblingStart).toHaveBeenCalledOnce();
-    expect(fixture.siblingStop).not.toHaveBeenCalled();
+    expectSiblingUnchanged(fixture);
 
-    await expect(fixture.reload()).resolves.toMatchObject({ runtime: { pluginIds: ["first"] } });
+    await expect(fixture.reload()).resolves.toMatchObject(firstReloaded);
     expect(candidateStarts).toBe(2);
-    expect(fixture.firstStart).toHaveBeenCalledTimes(2);
-    expect(fixture.firstStop).toHaveBeenCalledTimes(2);
-    expect(fixture.siblingStart).toHaveBeenCalledOnce();
-    expect(fixture.siblingStop).not.toHaveBeenCalled();
+    fixture.expectServices({ firstStart: 2, firstStop: 2 });
+    expectSiblingUnchanged(fixture);
   } finally {
-    releaseStop.resolve();
+    stopGate.release();
     await reload;
     vi.useRealTimers();
   }
@@ -404,12 +523,8 @@ export async function verifyFailedRecoveryServiceOwnership(
   const startFailure = new Error("previous service failed to restart");
   const stopFailure = new Error("previous service cleanup failed");
   const fixture = await createRecoveryFixture({
-    recoveryStart: async () => {
-      throw startFailure;
-    },
-    recoveryStop: async () => {
-      throw stopFailure;
-    },
+    recoveryStart: rejectWith(startFailure),
+    recoveryStop: rejectWith(stopFailure),
   });
   const failure = await fixture.reload().catch((error: unknown) => error);
   expect(failure).toMatchObject({
@@ -422,17 +537,13 @@ export async function verifyFailedRecoveryServiceOwnership(
     },
   });
   expect(fixture.firstStart).toHaveBeenCalledTimes(2);
-  expect(fixture.siblingStart).toHaveBeenCalledOnce();
-  expect(fixture.siblingStop).not.toHaveBeenCalled();
+  expectSiblingUnchanged(fixture);
   const shutdown = await fixture.owner
     .currentServices()!
     .stop({ strict: true, deadlineAtMs: Date.now() + 5_000 })
     .catch((error: unknown) => error);
-  expect(shutdown).toMatchObject({
-    errors: [expect.objectContaining({ cause: stopFailure })],
-  });
-  expect(fixture.siblingStop).toHaveBeenCalledOnce();
-  expect(fixture.firstStop).toHaveBeenCalledTimes(2);
+  expect(shutdown).toMatchObject({ errors: [expect.objectContaining({ cause: stopFailure })] });
+  fixture.expectServices({ siblingStop: 1, firstStop: 2 });
 }
 
 export async function verifyCandidateCleanupRefusal(createRecoveryFixture: RecoveryFixtureFactory) {
@@ -442,10 +553,7 @@ export async function verifyCandidateCleanupRefusal(createRecoveryFixture: Recov
   const disposed: number[] = [];
   const fixture = await createRecoveryFixture({
     expectedMetadataCloseError: stopFailure,
-    register(api, owner) {
-      if (owner !== "first") {
-        return;
-      }
+    registerFirst(api) {
       expect(resourceOpen).toBe(false);
       resourceOpen = true;
       const registration = ++registrations;
@@ -465,44 +573,34 @@ export async function verifyCandidateCleanupRefusal(createRecoveryFixture: Recov
       });
     },
   });
-  try {
-    const failure = await fixture.reload().catch((error: unknown) => error);
-    expect(fixture.firstStart).toHaveBeenCalledOnce();
-    expect(failure).toMatchObject({
-      details: { phase: "activate", committed: false },
-      message: expect.stringContaining("automatic recovery could not safely start"),
-    });
-    expect(registrations).toBe(2);
-    expect(disposed).toEqual([1, 2]);
-    expect(resourceOpen).toBe(true);
-    expect(fixture.registryOwner.registry).toBe(fixture.previousRegistry);
-    expect(fixture.siblingStart).toHaveBeenCalledOnce();
-    expect(fixture.siblingStop).not.toHaveBeenCalled();
-    const sibling = getPluginInstance(
-      fixture.registryOwner.registry.plugins.find((record) => record.id === "sibling")!,
-    );
-    assert(sibling);
-    expect(sibling.run(() => "still serving")).toBe("still serving");
-    await expect(fixture.reload()).rejects.toMatchObject({
-      details: { phase: "prepare", committed: false },
-      message: expect.stringContaining(stopFailure.message),
-    });
-    expect(registrations).toBe(2);
-    expect(resourceOpen).toBe(true);
-    expect(sibling.run(() => "still serving after rejected retry")).toBe(
-      "still serving after rejected retry",
-    );
-  } finally {
-    // Model external cleanup of the resource whose plugin-owned stop failed.
-    resourceOpen = false;
-  }
+  const failure = await fixture.reload().catch((error: unknown) => error);
+  expect(fixture.firstStart).toHaveBeenCalledOnce();
+  expect(failure).toMatchObject({
+    details: { phase: "activate", committed: false },
+    message: expect.stringContaining("automatic recovery could not safely start"),
+  });
+  expect(registrations).toBe(2);
+  expect(disposed).toEqual([1, 2]);
+  expect(resourceOpen).toBe(true);
+  expect(fixture.registryOwner.registry).toBe(fixture.previousRegistry);
+  expectSiblingUnchanged(fixture);
+  const sibling = pluginInstance(fixture.registryOwner.registry, "sibling");
+  expect(sibling.run(() => "still serving")).toBe("still serving");
+  await expect(fixture.reload()).rejects.toMatchObject({
+    details: { phase: "prepare", committed: false },
+    message: expect.stringContaining(stopFailure.message),
+  });
+  expect(registrations).toBe(2);
+  expect(resourceOpen).toBe(true);
+  expect(sibling.run(() => "still serving after rejected retry")).toBe(
+    "still serving after rejected retry",
+  );
 }
 
 export async function verifyPreCommitRetirementOwnership(
   createRecoveryFixture: RecoveryFixtureFactory,
 ) {
-  const entered = createDeferredCore();
-  const release = createDeferredCore();
+  const cleanupGate = heldWork();
   let generations = 0;
   let cleanupCalls = 0;
   const first = await createRecoveryFixture({
@@ -512,55 +610,36 @@ export async function verifyPreCommitRetirementOwnership(
         assert(api.lifecycle.onDispose);
         api.lifecycle.onDispose(async () => {
           cleanupCalls++;
-          entered.resolve();
-          await release.promise;
+          await cleanupGate.run();
         });
       }
     },
   });
   // A second real registry owner retains the shared boot inventory throughout this cutover.
   await createRecoveryFixture({ abortOnCandidateStart: false });
-  let operationSettled = false;
-  const reloading = first.reload().then(
-    (result) => {
-      operationSettled = true;
-      return result;
-    },
-    (error: unknown) => {
-      operationSettled = true;
-      return error;
-    },
-  );
-  let closeSettled = false;
+  const operation = observeSettlement(first.reload());
+  const reloading = operation.result;
   let closing: Promise<unknown> | undefined;
   try {
-    await entered.promise;
-    closing = (async () => {
-      await first.owner.currentServices()?.stop();
-      await first.registryOwner.close();
-      await first.runtime.kernel.pluginMetadata.close();
-    })().then(
-      () => {
-        closeSettled = true;
-      },
-      (error: unknown) => {
-        closeSettled = true;
-        return error;
-      },
+    await cleanupGate.entered;
+    const shutdown = observeSettlement(
+      (async () => {
+        await first.owner.currentServices()?.stop();
+        await first.registryOwner.close();
+        await first.runtime.kernel.pluginMetadata.close();
+      })(),
     );
+    closing = shutdown.result;
     await nextTurn();
-    expect.soft(operationSettled).toBe(false);
-    expect.soft(closeSettled).toBe(false);
+    expect.soft(operation.state.settled).toBe(false);
+    expect.soft(shutdown.state.settled).toBe(false);
     expect(first.candidates).toHaveLength(0);
-    expect(cleanupCalls).toBe(1);
-    release.resolve();
-    expect(await reloading).toMatchObject({
-      details: { committed: false },
-    });
+    cleanupGate.release();
+    expect(await reloading).toMatchObject({ details: { committed: false } });
     expect(await closing).toBeUndefined();
     expect(cleanupCalls).toBe(1);
   } finally {
-    release.resolve();
+    cleanupGate.release();
     await Promise.allSettled([reloading, closing]);
   }
 }
@@ -579,18 +658,14 @@ export async function verifyExpandedReplacementTargets(
     prepareConfigEffects: ({ pluginIds, channels }) => {
       expect(pluginIds).toEqual(new Set(["first", "sibling"]));
       expect(channels).toEqual(new Set(["discord", "slack"]));
-      expect(fixture.firstStop).not.toHaveBeenCalled();
-      expect(fixture.siblingStop).not.toHaveBeenCalled();
+      fixture.expectServices({ firstStop: 0, siblingStop: 0 });
       throw refusal;
     },
   });
   const pause = vi.spyOn(fixture.runtime.channelManager, "pauseChannelStarts");
   await expect(
     fixture.reload(undefined, ["first"], ["plugins.entries.sibling.enabled"]),
-  ).rejects.toMatchObject({
-    cause: refusal,
-    details: { phase: "prepare", committed: false },
-  });
+  ).rejects.toMatchObject({ cause: refusal, details: { phase: "prepare", committed: false } });
   expect(pause).not.toHaveBeenCalled();
   expect(fixture.registryOwner.registry).toBe(fixture.previousRegistry);
 }

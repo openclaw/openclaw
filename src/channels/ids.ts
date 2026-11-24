@@ -4,19 +4,19 @@ import { GENERATED_BUNDLED_CHANNEL_IDS } from "./bundled-channel-ids.generated.j
 
 export type ChatChannelId = string;
 
-const BUNDLED_CHAT_CHANNEL_ENTRIES = Object.freeze(
-  GENERATED_BUNDLED_CHANNEL_IDS.filter((entry) => entry.configurable !== false)
-    .map((entry) => ({
-      id: normalizeOptionalLowercaseString(entry.channelId) ?? entry.channelId,
-      aliases: entry.aliases ?? [],
-      label: entry.label?.trim() || undefined,
-      order: entry.order ?? Number.MAX_SAFE_INTEGER,
-    }))
-    .toSorted(
-      (left, right) =>
-        left.order - right.order || left.id.localeCompare(right.id, "en", { sensitivity: "base" }),
-    ),
-);
+const BUNDLED_CHAT_CHANNEL_ENTRIES = GENERATED_BUNDLED_CHANNEL_IDS.filter(
+  (entry) => entry.configurable !== false,
+)
+  .map((entry) => ({
+    id: normalizeOptionalLowercaseString(entry.channelId) ?? entry.channelId,
+    aliases: entry.aliases ?? [],
+    label: entry.label?.trim() || undefined,
+    order: entry.order ?? Number.MAX_SAFE_INTEGER,
+  }))
+  .toSorted(
+    (left, right) =>
+      left.order - right.order || left.id.localeCompare(right.id, "en", { sensitivity: "base" }),
+  );
 const CHAT_CHANNEL_ID_SET = new Set(BUNDLED_CHAT_CHANNEL_ENTRIES.map((entry) => entry.id));
 
 /**
@@ -31,13 +31,11 @@ export const CHAT_CHANNEL_ORDER = Object.freeze(
  */
 export const CHANNEL_IDS = CHAT_CHANNEL_ORDER;
 
-const CHAT_CHANNEL_ALIASES: Record<string, ChatChannelId> = Object.freeze(
-  Object.fromEntries(
-    BUNDLED_CHAT_CHANNEL_ENTRIES.flatMap((entry) =>
-      entry.aliases.map((alias) => [alias, entry.id] as const),
-    ),
+const CHAT_CHANNEL_ALIASES: Record<string, ChatChannelId> = Object.fromEntries(
+  BUNDLED_CHAT_CHANNEL_ENTRIES.flatMap((entry) =>
+    entry.aliases.map((alias) => [alias, entry.id] as const),
   ),
-) as Record<string, ChatChannelId>;
+);
 
 /** Finds the generated operator-facing label for a built-in channel id or alias. */
 export function findChatChannelLabel(raw?: string | null): string | undefined {

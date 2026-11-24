@@ -21,7 +21,7 @@ const RELEASE_VERSION_PATTERN =
 const PRERELEASE_VERSION_PATTERN =
   /^([0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*)-(?:alpha|beta)\.[1-9][0-9]*$/u;
 
-export function resolvePackageChangelogVersions(packageVersion, options = {}) {
+function resolvePackageChangelogVersions(packageVersion, options = {}) {
   const match = RELEASE_VERSION_PATTERN.exec(packageVersion);
   if (!match) {
     throw new Error(

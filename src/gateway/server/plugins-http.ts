@@ -22,12 +22,11 @@ import { onUserProfilesChanged } from "../../state/user-profile-events.js";
 import { respondControlUiPluginAuthCookieProbe } from "../control-ui-plugin-auth-cookie.js";
 import { listControlUiPluginTabAuthGrants } from "../control-ui-plugin-tabs.js";
 import { prepareGatewayRecipientProfile } from "../expected-profile.js";
-import { finishFailedGatewayHttpResponse } from "../http-common.js";
 import {
-  bindHttpResponseAuthority,
-  finishGatewayHttpAuthorityError,
-  GatewayHttpRequestAuthorityError,
-} from "../http-request-authority.js";
+  finishFailedGatewayHttpResponse,
+  finishGatewayHttpDatabaseAdmissionError,
+} from "../http-common.js";
+import { finishGatewayHttpAuthorityError } from "../http-request-authority.js";
 import type { AuthorizedGatewayHttpRequest } from "../http-utils.js";
 import {
   getRemoteControlUiIngressContext,
@@ -84,6 +83,8 @@ function createPluginRouteRuntimeClient(
   const authenticatedUserProfile = requestAuth?.authenticatedUserProfile;
   const operatorRoleActor = requestAuth?.operatorRoleActor;
   const operatorAccessAuthority = requestAuth?.operatorAccessAuthority;
+  // Work a relayed device starts here stays bound to that device, as on every other surface.
+  const openclawIdPrincipal = requestAuth?.openclawIdPrincipal;
   const client: NonNullable<GatewayRequestOptions["client"]> = {
     connId: `plugin-http:${clientIp ?? "unknown"}`,
     ...(clientIp ? { clientIp } : {}),
@@ -94,12 +95,16 @@ function createPluginRouteRuntimeClient(
           preparedSessionProfile: principal.preparedSessionProfile,
         }
       : {}),
-    ...(operatorRoleActor || operatorAccessAuthority !== undefined || principal
+    ...(operatorRoleActor ||
+    operatorAccessAuthority !== undefined ||
+    principal ||
+    openclawIdPrincipal
       ? {
           internal: {
             ...(operatorRoleActor ? { operatorRoleActor } : {}),
             ...(operatorAccessAuthority !== undefined ? { operatorAccessAuthority } : {}),
             ...(principal ? { remoteIngressPrincipal: principal } : {}),
+            ...(openclawIdPrincipal ? { openclawIdPrincipal } : {}),
           },
         }
       : {}),
@@ -167,7 +172,6 @@ function createPluginRouteRuntimeScope(params: {
   registry: PluginRegistry;
   route: PluginHttpRouteRegistration;
   req: IncomingMessage;
-  res?: ServerResponse;
   gatewayRequestContext?: GatewayRequestContext;
   gatewayRequestAuth?: AuthorizedGatewayHttpRequest;
   gatewayRequestOperatorScopes?: readonly string[];
@@ -195,30 +199,10 @@ function createPluginRouteRuntimeScope(params: {
     hasCurrentRemoteControlUiIngress(ingress) &&
     requestAuth?.hasCurrentClientAuthority?.() !== false &&
     hasCurrentGatewayOperatorAccess(operatorAccessAuthority);
-  if (params.res) {
-    bindHttpResponseAuthority(
-      { operatorAccessAuthority },
-      params.res,
-      hasCurrentClientAuthority,
-    ).assertCurrent();
-  } else if (!hasCurrentClientAuthority()) {
-    params.req.socket.destroy();
-    throw new GatewayHttpRequestAuthorityError("HTTP request authority expired");
-  }
   return {
     pluginRegistry: params.registry,
-    ...(requestAuth?.revalidate || ingress
-      ? {
-          revalidate: async () => {
-            assertRemoteControlUiIngressCurrent(ingress);
-            await requestAuth?.revalidate?.();
-            assertRemoteControlUiIngressCurrent(ingress);
-          },
-        }
-      : {}),
-    ...(requestAuth?.hasCurrentClientAuthority || operatorAccessAuthority || ingress
-      ? { hasCurrentClientAuthority }
-      : {}),
+    ...(ingress ? { revalidate: async () => assertRemoteControlUiIngressCurrent(ingress) } : {}),
+    ...(requestAuth || operatorAccessAuthority || ingress ? { hasCurrentClientAuthority } : {}),
     ...(params.gatewayRequestContext ? { context: params.gatewayRequestContext } : {}),
     client: runtimeClient,
     ...(operatorAccessAuthority || ingress
@@ -385,7 +369,6 @@ export function createGatewayPluginRequestHandler(params: {
                 registry,
                 route,
                 req,
-                res,
                 gatewayRequestContext,
                 gatewayRequestAuth,
                 gatewayRequestOperatorScopes,
@@ -405,7 +388,10 @@ export function createGatewayPluginRequestHandler(params: {
           return true;
         }
       } catch (err) {
-        if (finishGatewayHttpAuthorityError(res, err)) {
+        if (
+          finishGatewayHttpAuthorityError(res, err) ||
+          finishGatewayHttpDatabaseAdmissionError(res, err)
+        ) {
           return true;
         }
         log.warn(`plugin http route failed (${route.pluginId ?? "unknown"}): ${String(err)}`);

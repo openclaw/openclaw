@@ -11,8 +11,8 @@ import {
 import { hasHttpUrlPrefix } from "@openclaw/net-policy/url-protocol";
 import { expectDefined } from "@openclaw/normalization-core";
 import type { MarkdownImageSpan as MarkdownImageMatch } from "../../packages/markdown-core/src/image-spans.js";
-import { findCodeRegions } from "../shared/text/code-regions.js";
-import { parseInlineDirectives } from "../utils/directive-tags.js";
+import { findCodeRegions } from "../shared/text/code-ranges.js";
+import { parseInlineDirectives } from "../utils/directive-tags-batch.js";
 import { parseInboundMediaUri } from "./inbound-media-uri.js";
 
 // A MEDIA directive consumes its entire line. Keep the optional leading backtick:
@@ -36,18 +36,6 @@ type ParsedMediaOutputSegment =
       type: "media";
       url: string;
     };
-
-type SplitMediaOutputOptions = {
-  extractAudioDirectives?: boolean;
-  extractMediaDirectives?: boolean;
-  preserveTrailingWhitespace?: boolean;
-  onAudioDirective?: () => void;
-};
-
-type MarkdownImageExtraction = {
-  scan: (text: string) => MarkdownImageMatch[];
-  allowlist?: readonly string[];
-};
 
 const FILE_URL_PREFIX_RE = /^file:(?:\/\/)?/i;
 
@@ -363,84 +351,19 @@ function removeMarkdownImageSpans(line: string, matches: MarkdownImageMatch[]): 
   return pieces.join("");
 }
 
-function collectMarkdownImageSegments(params: {
-  line: string;
-  matches: MarkdownImageMatch[];
-  media: string[];
-  allowlist?: ReadonlyMap<string, string>;
-  preserveTrailingWhitespace?: boolean;
-}): {
-  cleanedLine?: string;
-  lineSegments: ParsedMediaOutputSegment[];
-  foundMedia: boolean;
-} {
-  const { matches } = params;
-  if (matches.length === 0) {
-    return { lineSegments: [], foundMedia: false };
-  }
-
-  const segmentPieces: string[] = [];
-  const visiblePieces: string[] = [];
-  const extractedImages: MarkdownImageMatch[] = [];
-  const lineSegments: ParsedMediaOutputSegment[] = [];
-  let cursor = 0;
-  let foundMedia = false;
-
-  for (const match of matches) {
-    const before = params.line.slice(cursor, match.start);
-    segmentPieces.push(before);
-    visiblePieces.push(before);
-
-    const target = normalizeMediaSource(match.destination.trim());
-    const selectedTarget = params.allowlist?.get(target);
-    if (selectedTarget || (!params.allowlist && hasHttpUrlPrefix(target) && isValidMedia(target))) {
-      extractedImages.push(match);
-      const beforeText = params.preserveTrailingWhitespace
-        ? segmentPieces.join("")
-        : cleanLineText(segmentPieces.join(""));
-      if (beforeText.trim()) {
-        lineSegments.push({ type: "text", text: beforeText });
-      }
-      segmentPieces.length = 0;
-      const mediaTarget = selectedTarget ?? target;
-      params.media.push(mediaTarget);
-      lineSegments.push({ type: "media", url: mediaTarget });
-      foundMedia = true;
-    } else {
-      const original = params.line.slice(match.start, match.end);
-      segmentPieces.push(original);
-      visiblePieces.push(original);
-    }
-
-    cursor = match.end;
-  }
-
-  const after = params.line.slice(cursor);
-  segmentPieces.push(after);
-  visiblePieces.push(after);
-  const trailingText = params.preserveTrailingWhitespace
-    ? segmentPieces.join("")
-    : cleanLineText(segmentPieces.join(""));
-  if (trailingText.trim()) {
-    lineSegments.push({ type: "text", text: trailingText });
-  }
-  // Prepared projection cleans only gaps attached to removed images, preserving all other source.
-  const cleanedLine = params.preserveTrailingWhitespace
-    ? removeMarkdownImageSpans(params.line, extractedImages)
-    : cleanLineText(visiblePieces.join(""));
-
-  return {
-    cleanedLine: params.preserveTrailingWhitespace ? cleanedLine : cleanedLine || undefined,
-    lineSegments,
-    foundMedia,
-  };
-}
-
 /** Splits tool/stdout text into visible text, media attachments, voice tags, and ordered segments. */
 export function splitMediaOutput(
   raw: string,
-  options: SplitMediaOutputOptions = {},
-  imageExtraction?: MarkdownImageExtraction,
+  options: {
+    extractAudioDirectives?: boolean;
+    extractMediaDirectives?: boolean;
+    preserveTrailingWhitespace?: boolean;
+    onAudioDirective?: () => void;
+  } = {},
+  imageExtraction?: {
+    scan: (text: string) => MarkdownImageMatch[];
+    allowlist?: readonly string[];
+  },
 ): {
   text: string;
   mediaUrls?: string[];
@@ -564,7 +487,10 @@ export function splitMediaOutput(
       codeBlockIndex += 1;
       codeBlock = codeBlocks[codeBlockIndex];
     }
-    if (codeBlock && lineEnd > codeBlock.start) {
+    if (
+      (codeBlock && lineEnd > codeBlock.start) ||
+      (!isMediaDirective && lineImages.length === 0)
+    ) {
       keepLine(line);
       pushTextSegment(line);
       lineOffset += line.length + lineSeparator.length;
@@ -572,29 +498,62 @@ export function splitMediaOutput(
     }
 
     if (!isMediaDirective) {
-      const markdownImageResult = extractMarkdownImages
-        ? collectMarkdownImageSegments({
-            line,
-            matches: lineImages,
-            media,
-            allowlist: markdownImageAllowlist,
-            preserveTrailingWhitespace: options.preserveTrailingWhitespace,
-          })
-        : { lineSegments: [], foundMedia: false };
-      if (!markdownImageResult.foundMedia) {
+      const preserveTrailingWhitespace = options.preserveTrailingWhitespace;
+      const segmentPieces: string[] = [];
+      const visiblePieces: string[] = [];
+      const extractedImages: MarkdownImageMatch[] = [];
+      let cursor = 0;
+
+      for (const imageMatch of lineImages) {
+        const before = line.slice(cursor, imageMatch.start);
+        segmentPieces.push(before);
+        visiblePieces.push(before);
+
+        const target = normalizeMediaSource(imageMatch.destination.trim());
+        const selectedTarget = markdownImageAllowlist?.get(target);
+        if (
+          selectedTarget ||
+          (!markdownImageAllowlist && hasHttpUrlPrefix(target) && isValidMedia(target))
+        ) {
+          extractedImages.push(imageMatch);
+          const beforeText = preserveTrailingWhitespace
+            ? segmentPieces.join("")
+            : cleanLineText(segmentPieces.join(""));
+          if (beforeText.trim()) {
+            pushTextSegment(beforeText);
+          }
+          segmentPieces.length = 0;
+          const mediaTarget = selectedTarget ?? target;
+          media.push(mediaTarget);
+          segments.push({ type: "media", url: mediaTarget });
+        } else {
+          const original = line.slice(imageMatch.start, imageMatch.end);
+          segmentPieces.push(original);
+          visiblePieces.push(original);
+        }
+        cursor = imageMatch.end;
+      }
+
+      if (extractedImages.length === 0) {
         keepLine(line);
         pushTextSegment(line);
       } else {
         foundMediaToken = true;
-        if (markdownImageResult.cleanedLine !== undefined) {
-          keepLine(markdownImageResult.cleanedLine);
+        const after = line.slice(cursor);
+        segmentPieces.push(after);
+        visiblePieces.push(after);
+        const trailingText = preserveTrailingWhitespace
+          ? segmentPieces.join("")
+          : cleanLineText(segmentPieces.join(""));
+        if (trailingText.trim()) {
+          pushTextSegment(trailingText);
         }
-        for (const segment of markdownImageResult.lineSegments) {
-          if (segment.type === "text") {
-            pushTextSegment(segment.text);
-            continue;
-          }
-          segments.push(segment);
+        // Prepared projection cleans only gaps attached to removed images, preserving all other source.
+        const cleanedLine = preserveTrailingWhitespace
+          ? removeMarkdownImageSpans(line, extractedImages)
+          : cleanLineText(visiblePieces.join(""));
+        if (preserveTrailingWhitespace || cleanedLine) {
+          keepLine(cleanedLine);
         }
       }
       lineOffset += line.length + lineSeparator.length;

@@ -19,7 +19,7 @@ import {
   withSessionTranscriptReadSource,
   type SessionTranscriptWorkerReadSource,
 } from "./session-transcript-read-source.js";
-import { targetDiscoveryLane } from "./session-transcript-worker-resources.js";
+import { sessionStoreLane } from "./session-transcript-worker-resources.js";
 import { captureSessionTranscriptStorageEnvironment } from "./transcript-target-binding.js";
 import {
   getOwnedSessionTranscriptReader,
@@ -49,6 +49,12 @@ export async function readSessionTranscriptAnchorsAsync(
     const facts = memory.missing
       ? {
           anchors: [],
+          // Like the SQLite reader, an absent transcript has only the empty root on its path.
+          ...(selection.activePathEntryId !== undefined
+            ? {
+                onActivePath: selection.activePathEntryId === null,
+              }
+            : {}),
           ...(selection.includeMetadata
             ? { metadata: { present: false, observedAt: null, updatedAt: null } }
             : {}),
@@ -63,6 +69,7 @@ export async function readSessionTranscriptAnchorsAsync(
   }
   signal?.throwIfAborted();
   const hot = readOwnedSessionTranscriptState(scope);
+  const retained = hot && readSessionActorTranscriptReplica(hot);
   if (scope.storePath) {
     const target = {
       agentId: scope.agentId ?? resolveAgentIdFromSessionKey(scope.sessionKey),
@@ -75,7 +82,8 @@ export async function readSessionTranscriptAnchorsAsync(
           hot,
           target,
           selection,
-          readSessionActorTranscriptReplica(hot)?.tail,
+          retained?.tail,
+          retained?.anchors,
         )) ??
       readSessionActorTranscriptAnchorsFromReplica(
         { ...target, sessionKey: scope.sessionKey },
@@ -116,26 +124,12 @@ export async function readSessionTranscriptAnchorsAsync(
     ...(scope.storePath ? { storePath: path.resolve(scope.storePath) } : {}),
     env: captureSessionTranscriptStorageEnvironment(scope.env ?? process.env),
   };
-  const request = {
-    entryIds: [...selection.entryIds],
-    activePathEntryId: selection.activePathEntryId,
-    afterSeq: selection.afterSeq,
-    includeMessagesForRunId: selection.includeMessagesForRunId,
-    includeSession: selection.includeSession,
-    includeHeader: selection.includeHeader,
-    includeWatermark: selection.includeWatermark,
-    includeMessagePresence: selection.includeMessagePresence,
-    includeMetadata: selection.includeMetadata,
-    contextValidation: selection.contextValidation && structuredClone(selection.contextValidation),
-    contextAuthority: selection.contextAuthority && structuredClone(selection.contextAuthority),
-    replayValidation: selection.replayValidation && { ...selection.replayValidation },
-  };
   const empty: SessionTranscriptAnchorFacts = {
     anchors: [],
-    ...(request.includeMetadata
+    ...(selection.includeMetadata
       ? { metadata: { present: false, observedAt: null, updatedAt: null } }
       : {}),
-    ...(request.replayValidation?.allowInitial ? { replayValidated: "initial" } : {}),
+    ...(selection.replayValidation?.allowInitial ? { replayValidated: "initial" } : {}),
   };
   signal?.throwIfAborted();
   return withSessionTranscriptReadSource(
@@ -148,17 +142,17 @@ export async function readSessionTranscriptAnchorsAsync(
       return readSessionTranscriptAnchorsFromSource(
         {
           ...source,
-          preparedReads: request.afterSeq === undefined ? source.preparedReads : undefined,
+          preparedReads: selection.afterSeq === undefined ? source.preparedReads : undefined,
           scope: { ...source.scope, sessionKey: captured.sessionKey },
         },
-        request,
+        selection,
         signal,
         onRead ? consume : undefined,
       );
     },
     signal,
     // Callback acceptance retains writer admission through reader failure and cleanup.
-    onRead ? targetDiscoveryLane : undefined,
+    onRead ? sessionStoreLane : undefined,
   );
 }
 

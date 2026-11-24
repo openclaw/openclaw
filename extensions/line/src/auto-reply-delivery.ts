@@ -27,13 +27,12 @@ import {
   findLineHttpError,
   resolveLineNonDispatchRetryable,
 } from "./send-retry.js";
+import { pushMessagesLine, replyMessageLine } from "./send.js";
 import {
+  buildTemplateMessageFromPayload,
   createFlexMessage,
   createLocationMessage,
-  pushMessagesLine,
-  replyMessageLine,
-} from "./send.js";
-import { buildTemplateMessageFromPayload } from "./template-messages.js";
+} from "./template-messages.js";
 import type { LineChannelData, LineQuickReplyItem } from "./types.js";
 
 type LineAutoReplyDeliveryResult =
@@ -125,7 +124,7 @@ export async function deliverLineAutoReply(params: {
     }
   >();
   const pushLineMessages = async (
-    messages: messagingApi.Message[],
+    messages: readonly messagingApi.Message[],
     allowFailedBatchTextRecovery: boolean,
     externalTail: messagingApi.Message[] = [],
   ): Promise<void> => {
@@ -152,7 +151,7 @@ export async function deliverLineAutoReply(params: {
   };
 
   const sendLineMessages = async (
-    messages: messagingApi.Message[],
+    messages: readonly messagingApi.Message[],
     allowReplyToken: boolean,
   ): Promise<void> => {
     if (messages.length === 0) {

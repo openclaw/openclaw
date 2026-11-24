@@ -13,6 +13,7 @@ import type {
 } from "./session-accessor.sqlite-lifecycle-types.js";
 import type { SqliteMutationWorkerCoordination } from "./session-accessor.sqlite-worker-coordination.js";
 import type { SqliteMutationWorkerMessage } from "./session-accessor.sqlite-worker-request.js";
+import type { WorkerCleanup } from "./session-accessor.sqlite-worker-transport.js";
 
 export type SqliteReclamationClaim = Pick<OpenClawAgentDatabaseClaim, "identity" | "assertCurrent">;
 
@@ -59,7 +60,6 @@ export type SqliteCanonicalValidationWorkerRequest = {
   initializeCanonicalValidation: boolean;
   coordination: SqliteMutationWorkerCoordination;
 };
-export type WorkerCleanup = { cleanupWarnings: string[]; settled: boolean };
 export type SqliteReclamationWorkerMessage =
   | SqliteMutationWorkerMessage<SqliteSessionReclamationResult | SqliteReclamationPreparation>
   | { type: "lease"; receipt: OpenClawAgentDatabaseWorkerLeaseReceipt }

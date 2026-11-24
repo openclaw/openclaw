@@ -1,4 +1,8 @@
-import type { DatabaseSync } from "node:sqlite";
+import {
+  admitStoreSearch,
+  type EngineConnection,
+} from "openclaw/plugin-sdk/database-engine-worker-runtime";
+import { isPostgresSqlConnection } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
@@ -8,16 +12,18 @@ import {
 } from "openclaw/plugin-sdk/sqlite-worker-runtime";
 import {
   INTENT_INJECTION_MAX_COUNT,
+  needsLiteralIntentCandidates,
   parseStoredTriggerKeywords,
   readKnownCreatorSender,
-  tokenizeIntentText,
   rowToIntent,
   standingIntentsFitContext,
+  triggerKeywordMatchesPrompt,
   type StandingIntent,
   type StandingIntentMatchInput,
   type StandingIntentOperations,
   type StandingIntentRow,
 } from "./standing-intents-model.js";
+import { standingIntentSearchSchema } from "./standing-intents-search.js";
 
 const INTENT_MATCH_CANDIDATE_BATCH_SIZE = 32;
 const INTENT_MATCH_CANDIDATE_LIMIT = 256;
@@ -34,23 +40,23 @@ type StandingIntentMatchDatabase = StandingIntentDatabase & {
 };
 
 const lifecycleDeadlines = new WeakMap<
-  DatabaseSync,
+  EngineConnection,
   { observedAt: number; nextDueAt: number; hasActiveIntents: boolean }
 >();
 
-export function invalidateStandingIntentLifecycle(db: DatabaseSync): void {
+export function invalidateStandingIntentLifecycle(db: EngineConnection): void {
   lifecycleDeadlines.delete(db);
 }
 
-export function getStandingIntentLifecycleDeadline(db: DatabaseSync): number | null {
+export function getStandingIntentLifecycleDeadline(db: EngineConnection): number | null {
   return lifecycleDeadlines.get(db)?.nextDueAt ?? null;
 }
 
-export function hasNoActiveStandingIntents(db: DatabaseSync): boolean {
+export function hasNoActiveStandingIntents(db: EngineConnection): boolean {
   return lifecycleDeadlines.get(db)?.hasActiveIntents === false;
 }
 
-export function maintainStandingIntentLifecycle(db: DatabaseSync, nowMs: number): void {
+export function maintainStandingIntentLifecycle(db: EngineConnection, nowMs: number): void {
   const deadline = lifecycleDeadlines.get(db);
   if (deadline && nowMs >= deadline.observedAt && nowMs < deadline.nextDueAt) {
     return;
@@ -127,7 +133,7 @@ export function maintainStandingIntentLifecycle(db: DatabaseSync, nowMs: number)
 }
 
 export function createStandingIntentInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   row: StandingIntentRow,
 ): StandingIntent {
   const kysely = getNodeSqliteKysely<StandingIntentDatabase>(db);
@@ -137,7 +143,7 @@ export function createStandingIntentInDatabase(
 }
 
 export function listStandingIntentsInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   params: StandingIntentOperations["list"]["input"],
 ): StandingIntent[] {
   const nowMs = params.nowMs ?? Date.now();
@@ -154,7 +160,7 @@ export function listStandingIntentsInDatabase(
 }
 
 export function cancelStandingIntentInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   params: StandingIntentOperations["cancel"]["input"],
 ): StandingIntent | null {
   const kysely = getNodeSqliteKysely<StandingIntentDatabase>(db);
@@ -177,17 +183,18 @@ export function cancelStandingIntentInDatabase(
   return row ? rowToIntent(row) : null;
 }
 
-function triggerMatchesPrompt(row: StandingIntentRow, promptTokens: ReadonlySet<string>): boolean {
-  return parseStoredTriggerKeywords(row.trigger_keywords)
-    .map((keyword) => tokenizeIntentText(keyword))
-    .some(
-      (keywordTokens) =>
-        keywordTokens.length > 0 && keywordTokens.every((token) => promptTokens.has(token)),
-    );
+function triggerMatchesPrompt(
+  row: StandingIntentRow,
+  promptTokens: ReadonlySet<string>,
+  promptText: string,
+): boolean {
+  return parseStoredTriggerKeywords(row.trigger_keywords).some((keyword) =>
+    triggerKeywordMatchesPrompt(keyword, promptTokens, promptText),
+  );
 }
 
 export function matchStandingIntentsInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   params: StandingIntentMatchInput,
 ): StandingIntent[] {
   const promptTokens = new Set(params.promptTokens);
@@ -201,11 +208,16 @@ export function matchStandingIntentsInDatabase(
     return [];
   }
   const kysely = getNodeSqliteKysely<StandingIntentMatchDatabase>(db);
-  let candidatesQuery = kysely
+  const search = admitStoreSearch(db, standingIntentSearchSchema(db));
+  if (!search.fullText) {
+    throw new Error(search.diagnostics.join("; "));
+  }
+  // `unicode61` folds an unspaced CJK run into one token, so a prompt containing one also needs the
+  // scoped rows the index cannot address. Every other prompt keeps index-only selection.
+  const candidatePassCount = needsLiteralIntentCandidates(params.promptText) ? 2 : 1;
+  let scopedCandidatesQuery = kysely
     .selectFrom("standing_intents as intent")
-    .innerJoin("standing_intents_fts as fts", "fts.rowid", "intent.intent_key")
     .selectAll("intent")
-    .where("fts.trigger_keywords", "match", ftsQuery)
     .where("intent.status", "=", "armed")
     .where("intent.creator_sender", "is not", null)
     .where("intent.expires_at", ">", nowMs)
@@ -214,90 +226,106 @@ export function matchStandingIntentsInDatabase(
     ["intent.channel_scope", channelScopes],
     ["intent.sender_scope", storedSenderScope ? [storedSenderScope] : []],
   ] as const) {
-    candidatesQuery =
+    scopedCandidatesQuery =
       scopes.length > 0
-        ? candidatesQuery.where((expression) =>
+        ? scopedCandidatesQuery.where((expression) =>
             expression.or([
               expression(column, "is", null),
               ...scopes.map((scope) => expression(column, "=", scope)),
             ]),
           )
-        : candidatesQuery.where(column, "is", null);
+        : scopedCandidatesQuery.where(column, "is", null);
   }
+  const indexedCandidatesQuery = (
+    isPostgresSqlConnection(db)
+      ? scopedCandidatesQuery
+      : scopedCandidatesQuery.innerJoin(
+          "standing_intents_fts as fts",
+          "fts.rowid",
+          "intent.intent_key",
+        )
+  ).where(search.fullText.match(search.text.intents!, ftsQuery));
   const fired: StandingIntent[] = [];
   let scannedCandidates = 0;
-  let cursor: { createdAt: number; id: string } | undefined;
-  while (
-    fired.length < INTENT_INJECTION_MAX_COUNT &&
-    scannedCandidates < INTENT_MATCH_CANDIDATE_LIMIT
-  ) {
-    let pageQuery = candidatesQuery;
-    const currentCursor = cursor;
-    if (currentCursor) {
-      pageQuery = pageQuery.where((expression) =>
-        expression.or([
-          expression("intent.created_at", ">", currentCursor.createdAt),
-          expression.and([
-            expression("intent.created_at", "=", currentCursor.createdAt),
-            expression("intent.id", ">", currentCursor.id),
+  // The literal lane reads the same scoped rows without the index, so it runs last and shares the
+  // candidate budget: firing writes `fired`/`done`, which keeps the second lane off a fired row.
+  for (let pass = 0; pass < candidatePassCount; pass++) {
+    const candidatesQuery = pass === 0 ? indexedCandidatesQuery : scopedCandidatesQuery;
+    let cursor: { createdAt: number; id: string } | undefined;
+    while (
+      fired.length < INTENT_INJECTION_MAX_COUNT &&
+      scannedCandidates < INTENT_MATCH_CANDIDATE_LIMIT
+    ) {
+      let pageQuery = candidatesQuery;
+      const currentCursor = cursor;
+      if (currentCursor) {
+        pageQuery = pageQuery.where((expression) =>
+          expression.or([
+            expression("intent.created_at", ">", currentCursor.createdAt),
+            expression.and([
+              expression("intent.created_at", "=", currentCursor.createdAt),
+              expression("intent.id", ">", currentCursor.id),
+            ]),
           ]),
-        ]),
-      );
-    }
-    const candidates = executeSqliteQuerySync(
-      db,
-      pageQuery
-        .orderBy("intent.created_at", "asc")
-        .orderBy("intent.id", "asc")
-        .limit(
-          Math.min(
-            INTENT_MATCH_CANDIDATE_BATCH_SIZE,
-            INTENT_MATCH_CANDIDATE_LIMIT - scannedCandidates,
+        );
+      }
+      const candidates = executeSqliteQuerySync(
+        db,
+        pageQuery
+          .orderBy("intent.created_at", "asc")
+          .orderBy("intent.id", "asc")
+          .limit(
+            Math.min(
+              INTENT_MATCH_CANDIDATE_BATCH_SIZE,
+              INTENT_MATCH_CANDIDATE_LIMIT - scannedCandidates,
+            ),
           ),
-        ),
-    ).rows;
-    if (candidates.length === 0) {
-      break;
-    }
-    const lastCandidate = candidates.at(-1);
-    scannedCandidates += candidates.length;
-    cursor = lastCandidate ? { createdAt: lastCandidate.created_at, id: lastCandidate.id } : cursor;
-    for (const current of candidates) {
-      if (fired.length >= INTENT_INJECTION_MAX_COUNT) {
+      ).rows;
+      if (candidates.length === 0) {
         break;
       }
-      // This write transaction's page stays current: firing only changes the selected row.
-      if (
-        !readKnownCreatorSender(current.creator_sender) ||
-        (current.last_fired_at !== null &&
-          !(current.last_fired_at + current.cooldown_seconds * 1_000 <= nowMs)) ||
-        !triggerMatchesPrompt(current, promptTokens)
-      ) {
-        continue;
+      const lastCandidate = candidates.at(-1);
+      scannedCandidates += candidates.length;
+      cursor = lastCandidate
+        ? { createdAt: lastCandidate.created_at, id: lastCandidate.id }
+        : cursor;
+      for (const current of candidates) {
+        if (fired.length >= INTENT_INJECTION_MAX_COUNT) {
+          break;
+        }
+        // This write transaction's page stays current: firing only changes the selected row.
+        if (
+          !readKnownCreatorSender(current.creator_sender) ||
+          (current.last_fired_at !== null &&
+            !(current.last_fired_at + current.cooldown_seconds * 1_000 <= nowMs)) ||
+          !triggerMatchesPrompt(current, promptTokens, params.promptText)
+        ) {
+          continue;
+        }
+        const nextFireCount = current.fire_count + 1;
+        const firedState = {
+          fire_count: nextFireCount,
+          last_fired_at: nowMs,
+          status: nextFireCount >= current.max_fires ? "done" : "fired",
+        } satisfies Pick<StandingIntentRow, "fire_count" | "last_fired_at" | "status">;
+        const firedIntent = rowToIntent({ ...current, ...firedState });
+        if (!standingIntentsFitContext([...fired, firedIntent])) {
+          continue;
+        }
+        invalidateStandingIntentLifecycle(db);
+        executeSqliteQuerySync(
+          db,
+          kysely
+            .updateTable("standing_intents")
+            .set(firedState)
+            .where("id", "=", current.id)
+            .where("status", "=", "armed"),
+        );
+        fired.push(firedIntent);
       }
-      const nextFireCount = current.fire_count + 1;
-      const firedState = {
-        fire_count: nextFireCount,
-        last_fired_at: nowMs,
-        status: nextFireCount >= current.max_fires ? "done" : "fired",
-      } satisfies Pick<StandingIntentRow, "fire_count" | "last_fired_at" | "status">;
-      const firedIntent = rowToIntent({ ...current, ...firedState });
-      if (!standingIntentsFitContext([...fired, firedIntent])) {
-        continue;
+      if (candidates.length < INTENT_MATCH_CANDIDATE_BATCH_SIZE) {
+        break;
       }
-      invalidateStandingIntentLifecycle(db);
-      executeSqliteQuerySync(
-        db,
-        kysely
-          .updateTable("standing_intents")
-          .set(firedState)
-          .where("id", "=", current.id)
-          .where("status", "=", "armed"),
-      );
-      fired.push(firedIntent);
-    }
-    if (candidates.length < INTENT_MATCH_CANDIDATE_BATCH_SIZE) {
-      break;
     }
   }
   return fired;

@@ -40,19 +40,14 @@ final class LiveActivityManager {
         self.hydrateCurrentAndPruneDuplicates()
     }
 
-    func showConnecting(
-        statusText: String = String(localized: "Connecting..."),
-        agentName: String,
-        sessionKey: String)
-    {
-        let presentation = Self.connectingPresentation(statusText: statusText)
+    func showConnecting(reconnect: Bool, agentName: String, sessionKey: String) {
         let startedAt = Self.lifecycleStartedAt(
             existing: self.arbiter.connection,
             agentName: agentName,
             sessionKey: sessionKey)
         let state = OpenClawActivityAttributes.ContentState(
-            status: presentation.status,
-            verbatimDetail: presentation.verbatimDetail,
+            status: reconnect ? .reconnecting : .connecting,
+            verbatimDetail: nil,
             startedAt: startedAt)
         self.arbiter.setConnection(self.request(
             state: state,
@@ -159,8 +154,7 @@ final class LiveActivityManager {
         else { return }
         self.pendingVoiceSample = sample
         guard self.voiceSampleTask == nil else { return }
-        self.voiceSampleTask = Task { [weak self] in
-            guard let self else { return }
+        self.voiceSampleTask = Task {
             try? await Task.sleep(for: self.voiceSamplePublishDelay)
             guard !Task.isCancelled else { return }
             self.voiceSampleTask = nil
@@ -277,9 +271,8 @@ final class LiveActivityManager {
     /// renewal so stale work pauses; ending either producer leaves the other alive.
     private func ensureStaleRefreshTask() {
         guard self.staleRefreshTask == nil else { return }
-        self.staleRefreshTask = Task { [weak self] in
+        self.staleRefreshTask = Task {
             while !Task.isCancelled {
-                guard let self else { return }
                 try? await Task.sleep(for: self.staleRefreshDelay)
                 guard !Task.isCancelled else { return }
                 let staleDate = Date().addingTimeInterval(self.transientStaleSeconds)
@@ -330,16 +323,14 @@ final class LiveActivityManager {
         self.currentStaleDate = staleDate
         self.pendingActivityUpdate = ActivityContent(state: state, staleDate: staleDate)
         guard self.activityUpdateTask == nil else { return }
-        self.activityUpdateTask = Task { [weak self] in
+        self.activityUpdateTask = Task {
             while !Task.isCancelled {
-                guard let self,
-                      let pending = self.pendingActivityUpdate
-                else { break }
+                guard let pending = self.pendingActivityUpdate else { break }
                 self.pendingActivityUpdate = nil
                 await activity.update(pending)
             }
 
-            guard let self, !Task.isCancelled else { return }
+            guard !Task.isCancelled else { return }
             self.activityUpdateTask = nil
         }
     }
@@ -423,7 +414,6 @@ final class LiveActivityManager {
         now: Date,
         maximumStartAge: TimeInterval = 300) -> Bool
     {
-        guard status != .idle, status != .disconnected else { return false }
         if let staleDate, staleDate <= now {
             return false
         }
@@ -475,16 +465,6 @@ final class LiveActivityManager {
 
     /// Existing callers still pass rendered app copy. Collapse known values here so
     /// ActivityKit persists semantics; only unknown external detail remains verbatim.
-    private static func connectingPresentation(statusText: String) -> StatusPresentation {
-        if statusText == String(localized: "Connecting...") || statusText == "Connecting..." {
-            return StatusPresentation(status: .connecting, verbatimDetail: nil)
-        }
-        if statusText == String(localized: "Reconnecting...") || statusText == "Reconnecting..." {
-            return StatusPresentation(status: .reconnecting, verbatimDetail: nil)
-        }
-        return StatusPresentation(status: .connecting, verbatimDetail: statusText.trimmedNonEmpty)
-    }
-
     private static func attentionPresentation(statusText: String) -> StatusPresentation {
         if statusText == String(localized: "Approval needed") || statusText == "Approval needed" {
             return StatusPresentation(status: .approvalNeeded, verbatimDetail: nil)

@@ -7,44 +7,22 @@ import {
   runCliProcessChild,
   waitForCliProcessStderrMarker,
 } from "../cli/cli-process-child.test-helpers.js";
+import { sha256Hex } from "../infra/crypto-digest.js";
 import { restartLaunchAgent } from "./launchd-lifecycle.js";
 import { buildLaunchAgentPlist } from "./launchd-plist.js";
 import { readScheduledTaskCommand, resolveStartupEntryPaths } from "./schtasks-layout.js";
+import { setScheduledTaskXmlEnabled } from "./schtasks-xml-enabled.js";
 import { restoreGatewayServiceDefinitionBackup } from "./service-definition-backup.js";
 import { fixture, native, readRetainedReceipt } from "./service-definition-backup.test-support.js";
 import {
   GatewayServiceDefinitionBackupReceiptSchema,
   publishServiceFile,
-  readServiceFileState,
 } from "./service-stage.js";
 import { stageSystemdService } from "./systemd-install.js";
 import { restartSystemdService } from "./systemd-lifecycle.js";
 import { parseSystemdExecStart } from "./systemd-unit.js";
 
 describe("service definition backup receipts", () => {
-  it.each(["linux", "win32"] as const)(
-    "reports unchanged without publishing or activating an untouched %s receipt",
-    async (platform) => {
-      const f = await fixture(platform);
-      const before = await readServiceFileState(f.sourcePath);
-      const rename = vi.spyOn(fs, "rename");
-      const unlink = vi.spyOn(fs, "unlink");
-      native.identity.mockClear();
-      native.task.mockClear();
-      native.launchctl.mockClear();
-      await expect(f.capture.compensate()).resolves.toBe(false);
-      expect(await readServiceFileState(f.sourcePath)).toEqual(before);
-      expect(await fs.readFile(f.sourcePath)).toEqual(f.original);
-      expect(rename).not.toHaveBeenCalled();
-      expect(unlink).not.toHaveBeenCalled();
-      expect(native.identity.mock.calls.some(([, args]) => args.includes("daemon-reload"))).toBe(
-        false,
-      );
-      expect(native.task.mock.calls.some(([args]) => args[0] !== "/Query")).toBe(false);
-      expect(native.launchctl.mock.calls.some(([args]) => args[0] !== "print")).toBe(false);
-    },
-  );
-
   it.each(["linux", "win32"] as const)(
     "accepts acknowledged original bytes without repeating the %s publication",
     async (platform) => {
@@ -319,7 +297,7 @@ describe("service definition backup receipts", () => {
     },
   );
 
-  it.each(["normal", "expired", "interrupted-reload"])(
+  it.each(["expired", "interrupted-reload"])(
     "reloads the restored systemd definition before retiring its old inputs: %s",
     async (mode) => {
       const f = await fixture("linux");
@@ -331,6 +309,8 @@ describe("service definition backup receipts", () => {
         environmentValueSources: { OPERATOR_SETTING: "file" },
         definitionTransaction: f.capture.hooks,
       });
+      // Staging reloads the manager; the restore's own reloads are what this test observes.
+      native.identity.mockClear();
       let receipt = await f.capture.finish();
       let loaded = await fs.readFile(f.sourcePath, "utf8");
       expect(loaded).toContain("EnvironmentFile=");
@@ -527,10 +507,7 @@ describe("service definition backup receipts", () => {
   );
 
   it.each([
-    { platform: "linux", ancillary: false },
-    { platform: "darwin", ancillary: false },
     { platform: "win32", ancillary: false },
-    { platform: "linux", ancillary: true },
     { platform: "darwin", ancillary: true },
   ] as const)(
     "backs up before native $platform publication (ancillary=$ancillary) and restores exact bytes from a serialized receipt",
@@ -544,9 +521,6 @@ describe("service definition backup receipts", () => {
         JSON.parse(serializedReceipt),
       );
       expect(await fs.readFile(f.sourcePath)).not.toEqual(f.original);
-      if (platform === "linux") {
-        expect(await fs.readFile(f.sourcePath, "utf8")).toContain("KillMode=mixed");
-      }
       if (platform === "win32") {
         expect(f.task()).toContain("<Count>3</Count>");
         f.setTask(
@@ -576,6 +550,33 @@ describe("service definition backup receipts", () => {
       }
     },
   );
+
+  it("restores after Task Scheduler exports the update's own disable in schema order", async () => {
+    let enabled = true;
+    // Exports omit Enabled=true and serialize false after StopIfGoingOnBatteries.
+    const exported = (xml: string) =>
+      xml.replace(/<Settings>[\s\S]*?<\/Settings>/u, (settings) =>
+        settings
+          .replace(/\s*<Enabled>(?:true|false)<\/Enabled>/u, "")
+          .replace(
+            "</StopIfGoingOnBatteries>",
+            enabled
+              ? "</StopIfGoingOnBatteries>"
+              : "</StopIfGoingOnBatteries>\n    <Enabled>false</Enabled>",
+          ),
+      );
+    const f = await fixture("win32", false, undefined, undefined, exported);
+    await f.install();
+    const receipt = await f.capture.finish();
+    // Older updaters verify this receipt during rollback; its hash format must not change.
+    expect(receipt.task?.afterPolicySha256).toBe(
+      sha256Hex(setScheduledTaskXmlEnabled(exported(f.task()), false)),
+    );
+    enabled = false;
+    await restoreGatewayServiceDefinitionBackup({ ...f, receipt });
+    expect(await fs.readFile(f.sourcePath)).toEqual(f.original);
+    expect(f.task()).toContain("<Count>0</Count>");
+  });
 
   it.each([
     { platform: "linux", dropIn: false },

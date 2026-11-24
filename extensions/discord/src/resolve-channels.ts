@@ -1,7 +1,7 @@
 import { DISCORD_DIRECTORY_LOOKUP_TIMEOUT_MS, DiscordApiError, fetchDiscord } from "./api.js";
 import { isDiscordThreadChannelType } from "./channel-type.js";
-import { listGuilds } from "./guilds.js";
-import { normalizeDiscordSlug } from "./monitor/allow-list.js";
+import { listDiscordGuildChannels, listGuilds, type DiscordGuildChannel } from "./guilds.js";
+import { normalizeDiscordDisplaySlug, normalizeDiscordSlug } from "./monitor/allow-list.js";
 import {
   filterDiscordGuilds,
   parseDiscordAllowlistInput,
@@ -14,14 +14,6 @@ type DiscordChannelSummary = {
   guildId: string;
   type?: number;
   archived?: boolean;
-};
-
-type DiscordChannelPayload = {
-  id?: string;
-  name?: string;
-  type?: number;
-  guild_id?: string;
-  thread_metadata?: { archived?: boolean };
 };
 
 export type DiscordChannelResolution = {
@@ -40,12 +32,7 @@ async function listGuildChannels(
   fetcher: typeof fetch,
   guildId: string,
 ): Promise<DiscordChannelSummary[]> {
-  const raw = await fetchDiscord<DiscordChannelPayload[]>(
-    `/guilds/${guildId}/channels`,
-    token,
-    fetcher,
-    { timeoutMs: DISCORD_DIRECTORY_LOOKUP_TIMEOUT_MS },
-  );
+  const raw = await listDiscordGuildChannels(token, fetcher, guildId);
   return raw
     .map((channel) => {
       const archived = channel.thread_metadata?.archived;
@@ -71,9 +58,9 @@ async function fetchChannel(
   fetcher: typeof fetch,
   channelId: string,
 ): Promise<FetchChannelResult> {
-  let raw: DiscordChannelPayload;
+  let raw: DiscordGuildChannel;
   try {
-    raw = await fetchDiscord<DiscordChannelPayload>(`/channels/${channelId}`, token, fetcher, {
+    raw = await fetchDiscord<DiscordGuildChannel>(`/channels/${channelId}`, token, fetcher, {
       timeoutMs: DISCORD_DIRECTORY_LOOKUP_TIMEOUT_MS,
     });
   } catch (err) {
@@ -161,8 +148,16 @@ export async function resolveDiscordChannelAllowlist(params: {
         return ids;
       }
     }
-    const slug = normalizeDiscordSlug(query);
-    return channels.filter((channel) => normalizeDiscordSlug(channel.name) === slug);
+    // Keep non-Latin letters; a name with none (emoji only) slugs to "" and would match others.
+    const slug = normalizeDiscordDisplaySlug(query);
+    if (!slug) {
+      return [];
+    }
+    // ASCII keys keep the ASCII-only match, so existing keys stay bound to the same channel id
+    // (an unbound key would apply its policy to any other channel or thread of that name).
+    const matchSlug =
+      normalizeDiscordSlug(query) === slug ? normalizeDiscordSlug : normalizeDiscordDisplaySlug;
+    return channels.filter((channel) => matchSlug(channel.name) === slug);
   }
 
   const resolveEntry = async (input: string): Promise<DiscordChannelResolution> => {

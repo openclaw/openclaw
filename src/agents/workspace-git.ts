@@ -1,16 +1,25 @@
-import { existsSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { observeOwnedDirectory } from "../infra/owned-directory-observation.js";
-import { runCommandWithTimeout } from "../process/exec.js";
+import { resolveGlobalMap } from "../shared/global-singleton.js";
 import { createLazyPromise } from "../shared/lazy-promise.js";
+import { runWorkspaceFilesystemOperation } from "./workspace-filesystem.js";
+import type { WorkspaceStateGuard } from "./workspace-state-store.worker-contract.js";
 
-/** Find the nearest .git entry, including the file used by linked worktrees. */
-export function findGitCheckoutRoot(start: string): string | null {
+/** Find the nearest Git metadata, including damaged linked-worktree pointers. */
+export async function findGitCheckoutRoot(start: string): Promise<string | null> {
   let current = path.resolve(start);
   for (;;) {
-    if (existsSync(path.join(current, ".git"))) {
-      return current;
+    const metadata = path.join(current, ".git");
+    if (await fs.stat(metadata).catch(() => undefined)) {
+      try {
+        if ((await fs.readdir(metadata)).length > 0) {
+          return current;
+        }
+      } catch {
+        // Files and unreadable metadata still require checkout preservation.
+        return current;
+      }
     }
     const parent = path.dirname(current);
     if (parent === current) {
@@ -20,68 +29,71 @@ export function findGitCheckoutRoot(start: string): string | null {
   }
 }
 
-export function insideGitCheckout(start: string): boolean {
-  return findGitCheckoutRoot(start) !== null;
+export async function insideGitCheckout(start: string): Promise<boolean> {
+  return (await findGitCheckoutRoot(start)) !== null;
 }
 
-const workspaceCheckouts = new Map<string, { value: boolean; refresh(): void; close(): void }>();
+type WorkspaceCheckout = {
+  value?: Promise<boolean>;
+  watches: ReturnType<typeof observeOwnedDirectory>[];
+};
+const workspaceCheckouts = resolveGlobalMap<string, WorkspaceCheckout>(
+  Symbol.for("openclaw.workspaceCheckouts"),
+  (entries) => {
+    for (const entry of entries.values()) {
+      entry.watches.forEach((watch) => watch.close());
+    }
+    entries.clear();
+  },
+  "shared-state",
+);
 
 /** Display projection only; action admission keeps using current Git discovery. */
-export function hasWorkspaceGitCheckout(start: string): boolean {
+export function hasWorkspaceGitCheckout(start: string): Promise<boolean> {
   const key = path.resolve(start);
-  const cached = workspaceCheckouts.get(key);
-  if (cached) {
-    return cached.value;
-  }
-  const observers: Array<{ close(): void }> = [];
-  let pending = false;
-  const entry = {
-    value: insideGitCheckout(key),
-    refresh() {
-      this.value = insideGitCheckout(key);
-    },
-    close() {
-      for (const observer of observers) {
-        observer.close();
+  let entry = workspaceCheckouts.get(key);
+  if (!entry) {
+    entry = { watches: [] };
+    workspaceCheckouts.set(key, entry);
+    const selected = entry;
+    const invalidate = (_filename?: string, event?: string) => {
+      // Recovery ticks preserve the recorded fact while native observation is healthy.
+      if (event || selected.watches.some((watch) => !watch.isWatching())) {
+        selected.value = undefined;
       }
-    },
-  };
-  workspaceCheckouts.set(key, entry);
-  for (let directory = key, child: string | undefined; ;) {
-    const childName = child;
-    observers.push(
-      observeOwnedDirectory(directory, (filename) => {
-        if (!pending && (filename === undefined || filename === ".git" || filename === childName)) {
-          pending = true;
-          queueMicrotask(() => {
-            pending = false;
-            if (workspaceCheckouts.get(key) === entry) {
-              entry.refresh();
-            }
-          });
-        }
-      }),
-    );
-    const parent = path.dirname(directory);
-    if (parent === directory) {
-      break;
+    };
+    // Ancestor metadata and replaced lexical aliases can both change checkout membership.
+    for (
+      let current = key, child: string | undefined;
+      ;
+      child = current, current = path.dirname(current)
+    ) {
+      const childName = child && path.basename(child);
+      selected.watches.push(
+        observeOwnedDirectory(current, (filename, event) => {
+          if (!filename || filename === ".git" || filename === childName) {
+            invalidate(filename, event);
+          }
+        }),
+        observeOwnedDirectory(path.join(current, ".git"), invalidate),
+      );
+      if (path.dirname(current) === current) {
+        break;
+      }
     }
-    child = path.basename(directory);
-    directory = parent;
-  }
-  for (const [oldest, status] of workspaceCheckouts) {
-    if (workspaceCheckouts.size <= 128) {
-      break;
+    if (workspaceCheckouts.size > 128) {
+      const oldest = workspaceCheckouts.entries().next().value!;
+      oldest[1].watches.forEach((watch) => watch.close());
+      workspaceCheckouts.delete(oldest[0]);
     }
-    workspaceCheckouts.delete(oldest);
-    status.close();
   }
-  return entry.value;
+  return (entry.value ??= insideGitCheckout(key));
 }
 
 // Git availability is process-stable; cache the probe result, including failure, until restart.
 const isGitAvailable = createLazyPromise(async () => {
   try {
+    const { runCommandWithTimeout } = await import("../process/exec.js");
     const result = await runCommandWithTimeout(["git", "--version"], { timeoutMs: 2_000 });
     return result.code === 0;
   } catch {
@@ -92,28 +104,24 @@ const isGitAvailable = createLazyPromise(async () => {
 export async function ensureGitRepo(
   dir: string,
   isBrandNewWorkspace: boolean,
-  beforePersistentApply?: () => void,
+  guard?: WorkspaceStateGuard,
 ) {
   if (!isBrandNewWorkspace) {
     return;
   }
-  beforePersistentApply?.();
+  guard?.assertHost?.();
   if (await fs.stat(path.join(dir, ".git")).catch(() => undefined)) {
     return;
   }
   if (!(await isGitAvailable())) {
     return;
   }
-  beforePersistentApply?.();
-  try {
-    await runCommandWithTimeout(["git", "init"], { cwd: dir, timeoutMs: 10_000 });
-  } catch {
-    // Ignore git init failures; workspace creation should still succeed.
-  }
+  guard?.assertHost?.();
+  await runWorkspaceFilesystemOperation({ kind: "git-init", dir }, guard);
   const root = path.resolve(dir);
-  for (const [workspace, checkout] of workspaceCheckouts) {
+  for (const [workspace, entry] of workspaceCheckouts) {
     if (workspace === root || workspace.startsWith(root + path.sep)) {
-      checkout.refresh();
+      entry.value = undefined;
     }
   }
 }

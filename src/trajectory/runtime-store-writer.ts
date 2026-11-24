@@ -30,7 +30,7 @@ import type { RetainedWorkerTransactionAdmission } from "../infra/sqlite-worker-
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import type { OpenClawAgentDatabaseOptions } from "../state/openclaw-agent-db-contract.js";
 import type { AgentDatabaseRequestExecutionSource } from "../state/openclaw-agent-execution-admission-contract.js";
-import { captureOpenClawAgentDatabaseExecution } from "../state/openclaw-agent-execution.js";
+import { captureOpenClawAgentDatabaseExecutionAsync } from "../state/openclaw-agent-execution.js";
 import {
   runOpenClawAgentWorkerWrite,
   runOpenClawAgentWriteAdmission,
@@ -40,7 +40,12 @@ import { createMemoryTrajectoryRuntimeSink } from "./runtime-store-memory.js";
 import type {
   SerializedTrajectoryEvent,
   SqliteTrajectoryRuntimeAppend,
+  TrajectoryRuntimeWindowFacts,
 } from "./runtime-store.contract.js";
+import {
+  publishTrajectoryRuntimeWindowFacts,
+  takeTrajectoryRuntimeWindowFacts,
+} from "./runtime-window-facts.js";
 import type { TrajectoryEvent } from "./types.js";
 
 type TrajectoryRuntimeSinkParams = {
@@ -281,7 +286,7 @@ function buildSqliteTrajectoryRuntimeSink(
       backgroundFlush ||
       backgroundFailed ||
       unsettledAppend ||
-      (pendingEvents.size < 32 && queuedBytes < 256 * 1024)
+      (pendingEvents.size < 32 && !discardPrevious)
     ) {
       return;
     }
@@ -320,7 +325,7 @@ async function appendSqliteTrajectoryRuntimeEventsInWorker(
   assertCommitAllowed: (() => void) | undefined,
   settle: (outcome: "committed" | "unknown") => void,
 ): Promise<void> {
-  const execution = captureOpenClawAgentDatabaseExecution(options);
+  const execution = await captureOpenClawAgentDatabaseExecutionAsync(options);
   const assertCurrent = () => {
     execution.assertCurrent();
     assertCommitAllowed?.();
@@ -334,7 +339,7 @@ async function appendSqliteTrajectoryRuntimeEventsInWorker(
       return (retained) => {
         const admission = createSqliteWorkerOperationAdmission((request, grant) => {
           binding.authorize(request);
-          if (request.stage === "transaction") {
+          if (request.stage === "transaction" || request.stage === "commit") {
             transaction = { admission, retained };
           }
           assertCurrent();
@@ -349,9 +354,17 @@ async function appendSqliteTrajectoryRuntimeEventsInWorker(
   try {
     await runOpenClawAgentWorkerWrite(options, async () => {
       const written = await execution.runExisting(source, async (worker) => {
+        const fileIdentity = execution.fileIdentity;
+        const windowFacts = fileIdentity
+          ? takeTrajectoryRuntimeWindowFacts(fileIdentity, input.sessionId)
+          : undefined;
         let completed = false;
+        let committedWindow: TrajectoryRuntimeWindowFacts;
         try {
-          await worker.execute({ type: "trajectory.events.append", input });
+          committedWindow = await worker.execute({
+            type: "trajectory.events.append",
+            input: { ...input, windowFacts },
+          });
           completed = true;
         } finally {
           if (transaction) {
@@ -364,6 +377,9 @@ async function appendSqliteTrajectoryRuntimeEventsInWorker(
               settle("unknown");
             }
           }
+        }
+        if (fileIdentity) {
+          publishTrajectoryRuntimeWindowFacts(fileIdentity, input.sessionId, committedWindow);
         }
         return true;
       });

@@ -3,7 +3,6 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { encodePngRgba, fillPixel } from "openclaw/plugin-sdk/media-runtime";
 import type { OpenClawPluginToolFactory } from "openclaw/plugin-sdk/plugin-entry";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import {
@@ -19,11 +18,15 @@ import {
   REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ,
   type RealtimeVoiceBridge,
   type RealtimeVoiceBridgeEvent,
+  type RealtimeVoiceTool,
 } from "openclaw/plugin-sdk/realtime-voice";
 import { isBillingErrorMessage } from "openclaw/plugin-sdk/test-live";
 import { describe, expect, it } from "vitest";
+import { createReferencePng as createSyntheticPng } from "../test-support/generation-live-test-helpers.js";
+import { createModelProviderConfig } from "../test-support/model-provider-config.test-support.js";
 import { createCodeExecutionTool } from "./code-execution.js";
 import plugin from "./index.js";
+import { xaiPluginConfig } from "./plugin-config.test-support.js";
 
 const XAI_API_KEY = process.env.XAI_API_KEY ?? "";
 const LIVE_IMAGE_MODEL = process.env.OPENCLAW_LIVE_XAI_IMAGE_MODEL?.trim() || "grok-imagine-image";
@@ -33,58 +36,40 @@ const describeLive = liveEnabled ? describe : describe.skip;
 const EMPTY_AUTH_STORE = { version: 1, profiles: {} } as const;
 
 function createLiveConfig(): OpenClawConfig {
-  return {
-    models: {
-      providers: {
-        xai: {
-          apiKey: XAI_API_KEY,
-          baseUrl: "https://api.x.ai/v1",
-          models: [],
-        },
-      },
+  return createModelProviderConfig({
+    xai: {
+      apiKey: XAI_API_KEY,
+      baseUrl: "https://api.x.ai/v1",
+      models: [],
     },
-  };
+  });
 }
 
 function createReferencePng(): Buffer {
-  const width = 96;
-  const height = 96;
-  const buf = Buffer.alloc(width * height * 4, 255);
-
-  for (let y = 0; y < height; y += 1) {
-    for (let x = 0; x < width; x += 1) {
-      fillPixel(buf, x, y, width, 230, 244, 255, 255);
-    }
-  }
-
-  for (let y = 24; y < 72; y += 1) {
-    for (let x = 24; x < 72; x += 1) {
-      fillPixel(buf, x, y, width, 255, 153, 51, 255);
-    }
-  }
-
-  return encodePngRgba(buf, width, height);
+  return createSyntheticPng(96, 96, (x, y) =>
+    x >= 24 && x < 72 && y >= 24 && y < 72 ? [255, 153, 51, 255] : [230, 244, 255, 255],
+  );
 }
 
 function createVideoReferencePng(): Buffer {
-  const width = 384;
-  const height = 384;
-  const buf = Buffer.alloc(width * height * 4, 255);
+  return createSyntheticPng(384, 384, (x, y) =>
+    x >= 112 && x < 272 && y >= 112 && y < 272
+      ? [255, 153, 51, 255]
+      : [32, 96, Math.round(160 + (80 * y) / 384), 255],
+  );
+}
 
-  for (let y = 0; y < height; y += 1) {
-    for (let x = 0; x < width; x += 1) {
-      const blue = Math.round(160 + (80 * y) / height);
-      fillPixel(buf, x, y, width, 32, 96, blue, 255);
-    }
-  }
-
-  for (let y = 112; y < 272; y += 1) {
-    for (let x = 112; x < 272; x += 1) {
-      fillPixel(buf, x, y, width, 255, 153, 51, 255);
-    }
-  }
-
-  return encodePngRgba(buf, width, height);
+function createLiveProbeTool(): RealtimeVoiceTool {
+  return {
+    type: "function",
+    name: "openclaw_live_probe",
+    description: "Return the live validation marker.",
+    parameters: {
+      type: "object",
+      properties: { token: { type: "string" } },
+      required: ["token"],
+    },
+  };
 }
 
 async function createTempAgentDir(): Promise<string> {
@@ -164,29 +149,13 @@ describeLive("xai plugin live", () => {
       if (!codeExecutionFactory) {
         throw new Error("expected code_execution factory to be registered");
       }
-      const baseConfig = {
-        plugins: {
-          entries: {
-            xai: {
-              config: {
-                webSearch: { apiKey: XAI_API_KEY },
-              },
-            },
-          },
-        },
-      } as OpenClawConfig;
-      const explicitConfig = {
-        plugins: {
-          entries: {
-            xai: {
-              config: {
-                webSearch: { apiKey: XAI_API_KEY },
-                codeExecution: { enabled: true, maxTurns: 1, timeoutSeconds: 90 },
-              },
-            },
-          },
-        },
-      } as OpenClawConfig;
+      const baseConfig = xaiPluginConfig({
+        webSearch: { apiKey: XAI_API_KEY },
+      }) as OpenClawConfig;
+      const explicitConfig = xaiPluginConfig({
+        webSearch: { apiKey: XAI_API_KEY },
+        codeExecution: { enabled: true, maxTurns: 1, timeoutSeconds: 90 },
+      }) as OpenClawConfig;
 
       expect(
         codeExecutionFactory({
@@ -231,18 +200,10 @@ describeLive("xai plugin live", () => {
   it("runs remote code execution with the current default model", async () => {
     await runXaiLiveCase("code-execution", async () => {
       const tool = createCodeExecutionTool({
-        config: {
-          plugins: {
-            entries: {
-              xai: {
-                config: {
-                  webSearch: { apiKey: XAI_API_KEY },
-                  codeExecution: { enabled: true, maxTurns: 1, timeoutSeconds: 90 },
-                },
-              },
-            },
-          },
-        },
+        config: xaiPluginConfig({
+          webSearch: { apiKey: XAI_API_KEY },
+          codeExecution: { enabled: true, maxTurns: 1, timeoutSeconds: 90 },
+        }),
       });
       if (!tool) {
         throw new Error("expected code_execution tool to be registered");
@@ -526,18 +487,7 @@ describeLive("xai plugin live", () => {
       audioFormat: REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ,
       instructions:
         "Reply briefly to spoken input. When a text message asks to call the live probe, call openclaw_live_probe. After a tool result, say its marker exactly.",
-      tools: [
-        {
-          type: "function",
-          name: "openclaw_live_probe",
-          description: "Return the live validation marker.",
-          parameters: {
-            type: "object",
-            properties: { token: { type: "string" } },
-            required: ["token"],
-          },
-        },
-      ],
+      tools: [createLiveProbeTool()],
       onAudio: (audio) => {
         outputAudioBytes += audio.byteLength;
       },
@@ -697,7 +647,9 @@ describeLive("xai plugin live", () => {
       );
 
       const reconnectStart = clientEvents.length;
-      const socket = (bridge as unknown as { ws?: { terminate(): void } }).ws;
+      const socket = (
+        bridge as unknown as { transport?: { socket?: { terminate(): void } | null } }
+      ).transport?.socket;
       if (!socket) {
         throw new Error("xAI realtime voice live bridge has no active WebSocket");
       }
@@ -736,18 +688,7 @@ describeLive("xai plugin live", () => {
       audioFormat: REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ,
       instructions:
         "When asked, call openclaw_live_probe with the exact token. After the tool result, say its marker exactly.",
-      tools: [
-        {
-          type: "function",
-          name: "openclaw_live_probe",
-          description: "Return the live validation marker.",
-          parameters: {
-            type: "object",
-            properties: { token: { type: "string" } },
-            required: ["token"],
-          },
-        },
-      ],
+      tools: [createLiveProbeTool()],
       onAudio: () => {},
       onClearAudio: () => {},
       onMark: (markName) => bridge.acknowledgeMark(markName),

@@ -6,6 +6,7 @@ import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, vi } from "vitest";
 import { clearSessionStoreCacheForTest } from "../../../src/config/sessions/store-writer-state.js";
 import { stop } from "../../../src/cron/service/ops-lifecycle.js";
+import { resetCronProviderBackoff } from "../../../src/cron/service/provider-backoff.js";
 import {
   createCronServiceState,
   type CronServiceDeps,
@@ -39,12 +40,7 @@ export const noopLogger = {
   trace: () => {},
 };
 
-type CronRegressionDefaults =
-  | "scheduler"
-  | "cronEnabled"
-  | "log"
-  | "enqueueSystemEvent"
-  | "requestHeartbeat";
+type CronRegressionDefaults = "scheduler" | "cronEnabled" | "log" | "enqueueSystemEvent";
 
 export function createCronRegressionState(
   deps: Omit<CronServiceDeps, CronRegressionDefaults> &
@@ -56,7 +52,8 @@ export function createCronRegressionState(
     cronEnabled: true,
     log: noopLogger,
     enqueueSystemEvent: vi.fn(),
-    requestHeartbeat: vi.fn(),
+    enqueueSessionEvent: vi.fn<NonNullable<CronServiceDeps["enqueueSessionEvent"]>>(),
+    runSessionEvent: vi.fn(async () => ({ status: "ok" as const })),
     ...deps,
   });
   fixtureStates.get(path.dirname(path.resolve(deps.storePath)))?.add(state);
@@ -92,6 +89,7 @@ export function setupCronRegressionFixtures(options?: { prefix?: string; baseTim
     useRealTime();
     await waitForCommandQueueIdle(250);
     resetCommandQueueStateForTest();
+    resetCronProviderBackoff();
     clearSessionStoreCacheForTest();
     resetAgentEventsForTest();
   });

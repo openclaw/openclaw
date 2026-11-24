@@ -132,8 +132,7 @@ function holdServingLeaseUntilResponseDone(
       res.destroy();
     }
     release();
-  }, SYNOLOGY_OUTBOUND_MEDIA_SERVE_TIMEOUT_MS);
-  timeout.unref?.();
+  }, SYNOLOGY_OUTBOUND_MEDIA_SERVE_TIMEOUT_MS).unref();
   res.once("finish", release);
   res.once("close", release);
   return { isActive: () => !released, release };
@@ -239,13 +238,8 @@ function readUnicodeCodePoint(
   return littleEndian ? buffer.readUInt32LE(offset) : buffer.readUInt32BE(offset);
 }
 
-function containsEncodedMarkupStart(
-  buffer: Buffer,
-  width: 2 | 4,
-  littleEndian: boolean,
-  offset = 0,
-): boolean {
-  for (let cursor = offset; cursor + width * 2 <= buffer.length; cursor += width) {
+function containsEncodedMarkupStart(buffer: Buffer, width: 2 | 4, littleEndian: boolean): boolean {
+  for (let cursor = 0; cursor + width * 2 <= buffer.length; cursor += width) {
     if (
       readUnicodeCodePoint(buffer, cursor, width, littleEndian) === 0x3c &&
       isAsciiMarkupStart(readUnicodeCodePoint(buffer, cursor + width, width, littleEndian))
@@ -426,7 +420,6 @@ export async function prepareSynologyHostedMedia(params: {
     );
   }
   try {
-    await store.cleanupExpired();
     const stagedUrl = new URL(
       await store.prepareUrl({
         mediaUrl: params.mediaUrl,

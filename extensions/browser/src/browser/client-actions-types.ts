@@ -3,7 +3,6 @@ import type { AnnotationItem } from "./screenshot-annotate.js";
 
 export type BrowserActionOk = { ok: true };
 
-/** Per-action result returned by a browser batch. */
 export type BrowserBatchActionResult = {
   ok: boolean;
   error?: string;

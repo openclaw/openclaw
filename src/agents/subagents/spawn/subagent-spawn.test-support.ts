@@ -27,6 +27,15 @@ type Testing = {
 const runtime: SpawnDeps = spawnRuntime;
 const overridesToRestore: Array<Pick<MockInstance, "mockRestore">> = [];
 
+function install<K extends keyof SpawnDeps>(key: K) {
+  const createSpy = () => vi.spyOn(runtime, key);
+  return (implementation?: Parameters<ReturnType<typeof createSpy>["mockImplementation"]>[0]) => {
+    if (implementation) {
+      overridesToRestore.push(createSpy().mockImplementation(implementation));
+    }
+  };
+}
+
 export const testing: Testing = {
   setDepsForTest(overrides) {
     for (const mock of overridesToRestore.splice(0).toReversed()) {
@@ -35,60 +44,14 @@ export const testing: Testing = {
     if (!overrides) {
       return;
     }
-    if (overrides.callGateway) {
-      overridesToRestore.push(
-        vi.spyOn(runtime, "callGateway").mockImplementation(overrides.callGateway),
-      );
-    }
-    if (overrides.dispatchGatewayMethodInProcess) {
-      overridesToRestore.push(
-        vi
-          .spyOn(runtime, "dispatchGatewayMethodInProcess")
-          .mockImplementation(overrides.dispatchGatewayMethodInProcess),
-      );
-    }
-    if (overrides.ensureContextEnginesInitialized) {
-      overridesToRestore.push(
-        vi
-          .spyOn(runtime, "ensureContextEnginesInitialized")
-          .mockImplementation(overrides.ensureContextEnginesInitialized),
-      );
-    }
-    if (overrides.forkSessionEntryFromParent) {
-      overridesToRestore.push(
-        vi
-          .spyOn(runtime, "forkSessionEntryFromParent")
-          .mockImplementation(overrides.forkSessionEntryFromParent),
-      );
-    }
-    if (overrides.getGlobalHookRunner) {
-      overridesToRestore.push(
-        vi.spyOn(runtime, "getGlobalHookRunner").mockImplementation(overrides.getGlobalHookRunner),
-      );
-    }
-    if (overrides.getRuntimeConfig) {
-      overridesToRestore.push(
-        vi.spyOn(runtime, "getRuntimeConfig").mockImplementation(overrides.getRuntimeConfig),
-      );
-    }
-    if (overrides.hasInProcessGatewayContext) {
-      overridesToRestore.push(
-        vi
-          .spyOn(runtime, "hasInProcessGatewayContext")
-          .mockImplementation(overrides.hasInProcessGatewayContext),
-      );
-    }
-    if (overrides.prepareModelChoice) {
-      overridesToRestore.push(
-        vi.spyOn(runtime, "prepareModelChoice").mockImplementation(overrides.prepareModelChoice),
-      );
-    }
-    if (overrides.resolveContextEngine) {
-      overridesToRestore.push(
-        vi
-          .spyOn(runtime, "resolveContextEngine")
-          .mockImplementation(overrides.resolveContextEngine),
-      );
-    }
+    install("callGateway")(overrides.callGateway);
+    install("dispatchGatewayMethodInProcess")(overrides.dispatchGatewayMethodInProcess);
+    install("ensureContextEnginesInitialized")(overrides.ensureContextEnginesInitialized);
+    install("forkSessionEntryFromParent")(overrides.forkSessionEntryFromParent);
+    install("getGlobalHookRunner")(overrides.getGlobalHookRunner);
+    install("getRuntimeConfig")(overrides.getRuntimeConfig);
+    install("hasInProcessGatewayContext")(overrides.hasInProcessGatewayContext);
+    install("prepareModelChoice")(overrides.prepareModelChoice);
+    install("resolveContextEngine")(overrides.resolveContextEngine);
   },
 };

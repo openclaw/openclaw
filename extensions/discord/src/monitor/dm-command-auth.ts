@@ -7,7 +7,6 @@ import type {
   ResolveChannelMessageIngressParams,
 } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import type { RequestClient } from "../internal/discord.js";
 import { getDiscordRuntime } from "../runtime.js";
 import { canViewDiscordGuildChannel } from "../send.permissions.js";
@@ -36,6 +35,7 @@ type DiscordCommandAccessParams = {
   conversationParentId?: string;
   conversationThreadId?: string;
   contextBinding?: ChannelIngressContextBinding;
+  childSessionPublication?: ResolveChannelMessageIngressParams["childSessionPublication"];
   minIdentifierAuthentication?: IdentifierAuthentication;
 };
 
@@ -64,7 +64,7 @@ function createDiscordDynamicAccessGroupResolver(params: {
     return undefined;
   }
   const cfg = params.cfg;
-  return async ({ name, group, accountId, subject }) => {
+  return async ({ group, accountId, subject }) => {
     if (group.type !== "discord.channelAudience") {
       return false;
     }
@@ -76,17 +76,12 @@ function createDiscordDynamicAccessGroupResolver(params: {
     if (membership !== "canViewChannel") {
       return false;
     }
-    try {
-      return await canViewDiscordGuildChannel(group.guildId, group.channelId, senderId, {
-        cfg,
-        accountId,
-        token: params.token,
-        rest: params.rest,
-      });
-    } catch (err) {
-      logVerbose(`discord: accessGroup:${name} lookup failed for user ${senderId}: ${String(err)}`);
-      throw err;
-    }
+    return await canViewDiscordGuildChannel(group.guildId, group.channelId, senderId, {
+      cfg,
+      accountId,
+      token: params.token,
+      rest: params.rest,
+    });
   };
 }
 
@@ -125,6 +120,7 @@ function createDiscordCommandContext(
       threadId: params.conversationThreadId,
     },
     ...(params.contextBinding ? { contextBinding: params.contextBinding } : {}),
+    childSessionPublication: params.childSessionPublication,
     policy: {
       mutableIdentifierMatching: params.allowNameMatching
         ? ("enabled" as const)

@@ -4,7 +4,7 @@ import { incrementCompactionCount } from "../../auto-reply/reply/session-updates
 import type { SessionEntry } from "../../config/sessions/types.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { CompactionAccountingFact } from "../embedded-agent-runner/run/internal-params.js";
-import type { CompactionRequestBudget } from "../sessions/compaction/request-budget.js";
+import type { CompactionRequestBudget } from "../sessions/compaction/preparation.types.js";
 import type { AgentCommandOpts } from "./types.js";
 
 const log = createSubsystemLogger("agents/agent-command");
@@ -101,8 +101,13 @@ export function createCommandCompactionAccounting(params: {
           const carriedCount = hasSameCompactionWriter(accounting?.target, fact.target)
             ? (accounting?.count ?? 0)
             : 0;
+          const transitions = [
+            ...(accounting?.admissionTransitions ?? []),
+            ...(fact.admissionTransitions ?? []),
+          ];
           accounting = {
             ...fact,
+            ...(transitions.length ? { admissionTransitions: transitions } : {}),
             count: carriedCount + fact.count,
             currentContextSnapshot:
               fact.currentContextSnapshot ?? accounting?.currentContextSnapshot,

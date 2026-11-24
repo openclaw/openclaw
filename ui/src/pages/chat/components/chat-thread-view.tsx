@@ -1,4 +1,5 @@
-import { createEffect, createMemo, onCleanup } from "solid-js";
+import { Loading, Show, lazy, createMemo, createSignal, onSettled, useContext } from "solid-js";
+import { routeIdFromPath } from "../../../app-route-paths.ts";
 import { handleMarkdownCodeBlockClick } from "../../../components/markdown-code-blocks.ts";
 import {
   linkReaderPrefetchRef as createLinkReaderPrefetchRef,
@@ -15,27 +16,66 @@ import {
 import { handleMarkdownTableInteraction } from "../../../components/markdown-tables.ts";
 import { LoadingState } from "../../../components/solid/loading-state.tsx";
 import { PanelLoadingSkeleton } from "../../../components/solid/panel-loading-skeleton.tsx";
+import type { TemplateReference } from "../../../components/template-reference-surface.tsx";
+import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
+import { cancelLayout, scheduleLayout } from "../../../lib/layout-frame.ts";
 import {
   anchorFromNavigationEvent,
   shouldHandleNavigationClick,
 } from "../../../lib/navigation-click.ts";
-import { t } from "../../../lib/reactive/i18n.ts";
-import { LitContent } from "../../../lit/solid-content.tsx";
-import { hydrateLinkFavicons } from "../link-favicon-loader.ts";
-import { ChatCommentPins } from "./chat-comment-pins.tsx";
+import { elementRef } from "../../../lib/reactive/element-ref.ts";
+import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
+import { listen } from "../../../lib/reactive/listener.ts";
+import { createParkedProjection } from "../../../lib/reactive/parked-projection.ts";
+import { projectOwner, projectSource } from "../../../lib/reactive/projection.ts";
+import { createTimeout } from "../../../lib/reactive/timers.ts";
+import { TemplateCreatorReview } from "../../templates/creator-review.tsx";
 import {
-  CHAT_HISTORY_BOUNDARY_HEIGHT_PX,
-  renderChatHistoryBoundary,
-} from "./chat-history-boundary.ts";
+  hasAutomationActivity,
+  loadAutomationProjection,
+  type AutomationProjection,
+} from "../chat-automation-projection-loader.ts";
+import { usePanePresentation } from "../chat-pane-presentation.ts";
+import {
+  getExpandedToolCards,
+  getExpandedUserMessages,
+  getExpansionStateVersion,
+  subscribeExpansionState,
+} from "../chat-thread.ts";
+import { retainLinkFaviconCache } from "../link-favicon-cache.ts";
+import { splitChatConstruction, yieldChatTask } from "../yield-chat-task.ts";
+import { ChatConversationLoading } from "./chat-conversation-loading.tsx";
+import { ChatConversationMobile } from "./chat-conversation-presentation.ts";
+import { CHAT_HISTORY_BOUNDARY_HEIGHT_PX, ChatHistoryBoundary } from "./chat-history-boundary.tsx";
 import { ChatPositionRail } from "./chat-position-rail-solid.tsx";
+import { watchChatSearchHighlight } from "./chat-search-highlight.ts";
 import {
+  getTranscriptState,
   handleTranscriptContextMenu,
+  handleTranscriptSelectionMouseDown,
   handleTranscriptPointerUp,
+  registerTranscriptElement,
   type ChatThreadProps,
 } from "./chat-thread-interactions.ts";
-import type { ChatTranscriptController } from "./chat-transcript-controller.ts";
+import type { ChatTranscript } from "./chat-transcript-controller.ts";
+import { resolveTranscriptAvatarPlacement } from "./chat-transcript-identity.ts";
 import { projectChatTranscript } from "./chat-transcript-projection.ts";
-import { renderWelcomeState, resolveAssistantDisplayAvatar } from "./chat-welcome.ts";
+import type { TranscriptHeader } from "./chat-transcript-session.ts";
+import { resolveAssistantDisplayAvatar } from "./chat-welcome.ts";
+import { WIDGET_COMMENT_INTENT, type WidgetCommentIntent } from "./widget-comment-intent.ts";
+import "../../../styles/chat/selection-annotations.css";
+
+registerEnglishCatalog(registerChatSessionEnglish);
+
+const TemplateReferenceView = lazy(
+  () => import("../../../components/template-reference-view.tsx"),
+  { export: "TemplateReferenceView" },
+);
+
+// Both transcript overlays are optional; ordinary chat boot needs neither renderer.
+const ChatCommentPins = lazy(() => import("./chat-comment-pins.tsx"), {
+  export: "ChatCommentPins",
+});
 
 const EMPTY_ENTRY_KEYS: ReadonlyMap<string, string> = new Map();
 
@@ -49,33 +89,266 @@ function navigateCronRunLink(event: Event, props: ChatThreadProps): boolean {
   return true;
 }
 
-export function ChatThread(input: {
+function navigatePluginLink(event: MouseEvent, props: ChatThreadProps): void {
+  const anchor = anchorFromNavigationEvent(event);
+  if (
+    !props.onNavigate ||
+    !anchor ||
+    anchor.hasAttribute("download") ||
+    (anchor.target && anchor.target !== "_self")
+  ) {
+    return;
+  }
+  const url = URL.parse(anchor.href, window.location.href);
+  if (
+    !url ||
+    url.origin !== window.location.origin ||
+    routeIdFromPath(url.pathname, props.basePath) !== "plugin"
+  ) {
+    return;
+  }
+  // Keep the current document and its Gateway connection when opening a plugin record.
+  event.preventDefault();
+  props.onNavigate("plugin", { pathname: url.pathname, search: url.search, hash: url.hash });
+}
+
+function openManagedArtifactLink(event: Event, props: ChatThreadProps): boolean {
+  const anchor = anchorFromNavigationEvent(event);
+  // Attachment-card Download keeps its already-authorized native link action.
+  if (!anchor || anchor.hasAttribute("download") || !props.onOpenManagedArtifact?.(anchor.href)) {
+    return false;
+  }
+  event.preventDefault();
+  return true;
+}
+
+type ChatThreadInput = {
   props: ChatThreadProps;
-  transcript: ChatTranscriptController;
-}) {
-  let root: HTMLDivElement | undefined;
-  const historyIntent = (event: Event) => input.props.onHistoryIntent?.(event);
-  onCleanup(() => {
-    root?.removeEventListener("wheel", historyIntent);
-    root?.removeEventListener("touchstart", historyIntent);
-    root?.removeEventListener("touchmove", historyIntent);
-  });
-  const current = createMemo(() =>
-    input.transcript.renderSession(input.props.sessionKey, (session) => {
-      const projection = projectChatTranscript(input.props, session);
-      // Empty shells establish the baseline for first-submission animation.
-      if (projection.isEmpty || projection.showLoadingSkeleton) {
-        session.entryAnimations.sync(
-          EMPTY_ENTRY_KEYS,
-          input.props.announceTranscript !== false &&
-            !projection.searchOpen &&
-            !input.props.loading,
-        );
-      }
-      return { session, projection };
-    }),
+  transcript: ChatTranscript;
+  bindViewport?: (element: HTMLDivElement) => () => void;
+  historySupplement?: TranscriptHeader;
+};
+
+export function ChatThread(input: ChatThreadInput) {
+  // Use the existing warm-frame hold to split pane and transcript construction.
+  // Cached route handoffs still render immediately.
+  const initialRestoring = Boolean(input.props.restoring);
+  const heldWarmBoot =
+    initialRestoring &&
+    document.documentElement.getAttribute("data-openclaw-warm-frame") === "holding";
+  const initialReady =
+    (initialRestoring && !heldWarmBoot) || Boolean(input.props.initialSubmission);
+  const [ready, setReady] = createSignal(initialReady);
+  const needsAutomation = createMemo(
+    () =>
+      input.props.messages.some(hasAutomationActivity) ||
+      input.props.toolMessages.some(hasAutomationActivity),
   );
+  // History owns the transcript. Optional card enrichment must not suspend its first mount.
+  const projectAutomations = createMemo(
+    () => (needsAutomation() ? loadAutomationProjection().catch(() => undefined) : undefined),
+    { loadingValue: undefined },
+  );
+  const isPresented = usePanePresentation(() => input.props.transcriptVisible ?? true);
+  const reveal = createTimeout(() => {
+    if (isPresented()) {
+      setReady(true);
+    }
+  });
+  return (
+    <div class="chat-thread-viewport" ref={[elementRef(input.props.onScrollPortRef)]}>
+      <Show when={ready() || isPresented()}>
+        {(_presented) => {
+          onSettled(() => {
+            let active = true;
+            if (heldWarmBoot) {
+              void yieldChatTask().then(() => {
+                if (active && isPresented()) {
+                  setReady(true);
+                }
+              });
+            } else {
+              // Let this frame paint the composer before preparing the transcript in a task.
+              scheduleLayout(reveal, () => () => reveal.schedule());
+            }
+            return () => {
+              active = false;
+              cancelLayout(reveal);
+              reveal.cancel();
+            };
+          });
+          return (
+            <>
+              {ready() ? (
+                <ChatThreadContent
+                  {...input}
+                  presented={isPresented()}
+                  projectAutomations={projectAutomations()}
+                />
+              ) : (
+                <div
+                  class={[
+                    "chat-thread",
+                    {
+                      "chat-thread--annotations": input.props.commentAttachments !== undefined,
+                      // Before row preparation, use session identity; forwarded-row chrome resolves later.
+                      "chat-thread--direct": resolveTranscriptAvatarPlacement(input.props, [])
+                        .isDirectThread,
+                    },
+                  ]}
+                  ref={[elementRef(input.bindViewport)]}
+                >
+                  {!heldWarmBoot && input.props.selectedSession?.hasMessages === true && (
+                    <div class="chat-thread-content">
+                      <div class="chat-thread-inner">
+                        <ChatConversationLoading route />
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+            </>
+          );
+        }}
+      </Show>
+    </div>
+  );
+}
+
+function ChatThreadContent(
+  input: ChatThreadInput & { presented: boolean; projectAutomations?: AutomationProjection },
+) {
+  const mobile = useContext(ChatConversationMobile);
+  // Admission stays with the transcript; all overlay lifetime work loads on intent.
+  const [templateIntent, setTemplateIntent] = createSignal<TemplateReference | null>(null);
+  function handleTemplateReference(event: Event) {
+    const anchor = anchorFromNavigationEvent(event);
+    const client = input.props.gatewayClient;
+    if (
+      !anchor?.matches("a.markdown-template-link") ||
+      !client ||
+      !input.props.applicationContext
+    ) {
+      return false;
+    }
+    if (event.type === "click") {
+      event.preventDefault();
+    }
+    setTemplateIntent({ anchor, client, sessionKey: input.props.sessionKey, type: event.type });
+    return true;
+  }
+  const [root, setRoot] = createSignal<HTMLDivElement>();
+  let stopSelectionGesture: (() => void) | undefined;
+  const historyIntent = (event: Event) => input.props.onHistoryIntent?.(event);
+  const paneId = createMemo(() => input.props.paneId);
+  onSettled(() => {
+    const element = root();
+    const unregister = element && registerTranscriptElement(paneId(), element);
+    const stopWidgetComments =
+      element &&
+      listen(element, WIDGET_COMMENT_INTENT, (event) => {
+        if (!(event instanceof CustomEvent) || !input.presented || !input.props.onAddToChat) {
+          return;
+        }
+        const widget: WidgetCommentIntent = event.detail;
+        event.stopPropagation();
+        event.preventDefault();
+        input.props.onAddToChat(
+          { text: widget.text, start: 0, end: widget.text.length },
+          widget.anchor,
+          widget,
+        );
+      });
+    const searchState = getTranscriptState(paneId()).search;
+    let query = searchState.snapshot.query.trim();
+    const stopSearch = searchState.subscribe(() => {
+      const nextQuery = searchState.snapshot.query.trim();
+      if (nextQuery && nextQuery !== query) {
+        // A live reply remains below the matches; end-follow must not hide them.
+        input.transcript.scrollToOffset(0);
+      }
+      query = nextQuery;
+    });
+    return () => {
+      stopSearch();
+      unregister?.();
+      stopWidgetComments?.();
+    };
+  });
+  const search = createMemo(() =>
+    projectOwner(getTranscriptState(paneId()).search, (owner) => owner.snapshot, Object.is),
+  );
+  const transcript = createMemo(() => input.transcript);
+  const geometry = createMemo(() => projectOwner(transcript(), (owner) => owner));
+  const presentation = createMemo(
+    () =>
+      input.transcript.renderSession(input.props.sessionKey, (session) => ({
+        session,
+        maps: [
+          getExpandedToolCards(input.props.sessionKey),
+          getExpandedUserMessages(input.props.sessionKey),
+          session.expandedAssistantMessages,
+        ],
+      })),
+    {
+      // Session caches can replace maps while the retained pane stays mounted.
+      equals: (previous, next) =>
+        previous.session === next.session &&
+        previous.maps.every((value, index) => value === next.maps[index]),
+    },
+  );
+  const expansions = createMemo(() =>
+    presentation().maps.map((values) =>
+      projectSource(values, {
+        read: getExpansionStateVersion,
+        subscribe: subscribeExpansionState,
+        equality: Object.is,
+      }),
+    ),
+  );
+  const expansionVersions = createParkedProjection(
+    () => expansions().map((expansion) => expansion.read()),
+    () => {
+      const visible = input.props.transcriptVisible ?? true;
+      return typeof visible === "object" ? visible.isPresented() : visible;
+    },
+  );
+  const splitColdRows =
+    !input.props.restoring && !input.props.initialSubmission && splitChatConstruction;
+  const started = splitColdRows ? performance.now() : 0;
+  const current = createMemo(() => {
+    const searchState = search().read();
+    const { session } = presentation();
+    const projection = projectChatTranscript(
+      input.props,
+      session,
+      searchState,
+      input.projectAutomations,
+    );
+    expansionVersions();
+    // Empty shells establish the baseline for first-submission animation.
+    if (projection.isEmpty || projection.isLoading) {
+      session.entryAnimations.sync(
+        EMPTY_ENTRY_KEYS,
+        input.props.announceTranscript !== false && !projection.searchOpen && !input.props.loading,
+      );
+    }
+    return { session, projection };
+  });
+  // Sample once before choosing the first row frame; cheap preparations need no placeholder.
+  if (splitColdRows) {
+    current();
+  }
+  const [renderReady, setRenderReady] = createSignal(
+    !splitColdRows || performance.now() - started <= 15,
+  );
+  onSettled(() => {
+    if (!renderReady()) {
+      void yieldChatTask().then(() => setRenderReady(true));
+    }
+  });
   const showLoadingSkeleton = createMemo(() => current().projection.showLoadingSkeleton);
+  const isLoading = createMemo(() => current().projection.isLoading);
   const isEmpty = createMemo(() => current().projection.isEmpty);
   const searchOpen = createMemo(() => current().projection.searchOpen);
   const routeLoading = createMemo(() => input.props.routeLoadingSkeleton && showLoadingSkeleton());
@@ -86,40 +359,61 @@ export function ChatThread(input: {
     current().projection.showLoadingSkeleton ? false : (input.props.transcriptVisible ?? true),
     Boolean(input.props.gatewayClient?.connected),
   ]);
-  const markdownRef = createMarkdownBlocksRef(() => input.props.transcriptVisible ?? true);
-  createEffect(
-    () => [current(), input.props.fetchLinkFavicon] as const,
-    ([, fetchLinkFavicon]) => {
-      if (root) {
-        hydrateLinkFavicons(root, fetchLinkFavicon);
-      }
-    },
+  const markdownRef = createMarkdownBlocksRef(
+    () => input.props.transcriptVisible ?? true,
+    (links) => input.props.onWorkspaceFileLinks?.(links),
+    () => input.props.workspaceFileLinkScope,
   );
-  const historyHeader = () =>
-    input.props.historyPagination
-      ? {
-          template: renderChatHistoryBoundary(input.props.historyPagination),
-          height: CHAT_HISTORY_BOUNDARY_HEIGHT_PX,
-        }
-      : null;
-  const historySentinel = <div class="chat-history-sentinel" />;
+  // The supplement takes the header only once the transcript has no earlier page,
+  // so its controls never stack under the history boundary.
+  const headerContent = (
+    <Show when={input.props.historyPagination} fallback={input.historySupplement?.content}>
+      {(pagination) => <ChatHistoryBoundary {...pagination()} />}
+    </Show>
+  );
+  const historyHeader = (): TranscriptHeader | null => {
+    const height = input.props.historyPagination
+      ? CHAT_HISTORY_BOUNDARY_HEIGHT_PX
+      : input.historySupplement?.height;
+    return height === undefined ? null : { content: headerContent, height };
+  };
+  const historySentinel = (
+    <div class="chat-history-sentinel" ref={[elementRef(input.props.onHistorySentinelRef)]} />
+  );
   const sentinel = () => (input.props.historyPagination ? historySentinel : undefined);
   const contents = createMemo(() => {
-    if (routeLoading()) {
-      return <LoadingState />;
+    if (!renderReady()) {
+      return (
+        <div class="chat-thread-inner">
+          {input.props.selectedSession?.hasMessages === true && <ChatConversationLoading route />}
+        </div>
+      );
     }
-    if (showLoadingSkeleton() || isEmpty()) {
+    // Native range changes redraw this island without preparing the whole pane.
+    geometry().read();
+    if (routeLoading() && mobile()) {
+      return (
+        <div class="chat-thread-inner">
+          <ChatConversationLoading route />
+        </div>
+      );
+    }
+    if (isLoading() || isEmpty()) {
       return (
         <div class="chat-thread-inner">
           {sentinel()}
-          {isEmpty() && !showLoadingSkeleton() ? (
-            <LitContent value={historyHeader()?.template} />
-          ) : undefined}
+          {isEmpty() && !showLoadingSkeleton() ? historyHeader()?.content : undefined}
           {showLoadingSkeleton() ? (
-            <PanelLoadingSkeleton variant="chat" label={t("chat.thread.loading")} />
+            mobile() ? (
+              <ChatConversationLoading route={false} />
+            ) : routeLoading() ? (
+              <LoadingState messagesOnly />
+            ) : (
+              <PanelLoadingSkeleton variant="chat" label={t("chat.thread.loading")} />
+            )
           ) : undefined}
           {isEmpty() && !showLoadingSkeleton() && !searchOpen() ? (
-            <LitContent value={renderWelcomeState({ ...input.props, onModelSetup: undefined })} />
+            <div class="agent-chat__empty">{t("chat.thread.noMessages")}</div>
           ) : undefined}
           {isEmpty() && searchOpen() ? (
             <div class="agent-chat__empty">{t("chat.thread.noMatches")}</div>
@@ -135,32 +429,83 @@ export function ChatThread(input: {
     return current().session.liveAnnouncementText;
   });
   return (
-    <div class="chat-thread-viewport">
-      <div
-        ref={(element) => {
-          root = element;
-          markdownRef(element);
-          prefetchRef(element);
-          element.addEventListener("wheel", historyIntent, { passive: true });
-          element.addEventListener("touchstart", historyIntent, { passive: true });
-          element.addEventListener("touchmove", historyIntent, { passive: true });
+    <>
+      <Show when={input.presented && root()}>
+        {(element) => {
+          onSettled(() => {
+            const initialStopSearch = watchChatSearchHighlight(
+              element(),
+              getTranscriptState(paneId()).search,
+            );
+            return () => {
+              initialStopSearch();
+              setTemplateIntent(null);
+            };
+          });
+          return null;
         }}
+      </Show>
+      <Show when={input.props.fetchLinkFavicon} keyed>
+        {(fetcher) => {
+          onSettled(() => retainLinkFaviconCache(fetcher));
+          return null;
+        }}
+      </Show>
+      <div
+        ref={[
+          elementRef((element: HTMLDivElement) => {
+            setRoot(element);
+            // Retained roots can settle before refs; bind viewport and input together here.
+            const releaseViewport = input.bindViewport?.(element);
+            const stopHistory = ["wheel", "touchstart", "touchmove"].map((type) =>
+              listen(element, type, historyIntent, { passive: true }),
+            );
+            return () => {
+              stopSelectionGesture?.();
+              stopHistory.forEach((stop) => stop());
+              releaseViewport?.();
+            };
+          }),
+          markdownRef,
+          prefetchRef,
+          elementRef(input.props.onScrollPortRef),
+        ]}
         class={[
           "chat-thread",
           {
             "chat-thread--direct": current().projection.isDirectThread,
-            "chat-thread--route-loading": routeLoading(),
+            "chat-thread--route-loading": mobile() && routeLoading(),
             "chat-thread--comment-pins": commentPins(),
+            "chat-thread--annotations": input.props.commentAttachments !== undefined,
           },
         ]}
         role="log"
+        data-restoring={input.props.restoring ? "" : undefined}
+        aria-label={t("chat.sidePanel.conversation")}
         aria-live="off"
         aria-relevant="additions"
         tabindex={0}
-        onFocusIn={(event) => current().session.handleFocusIn(event)}
-        onFocusOut={(event) => current().session.handleFocusOut(event)}
-        onScroll={(event) => input.props.onChatScroll?.(event)}
+        onPointerOver={handleTemplateReference}
+        onFocusIn={(event) => {
+          handleTemplateReference(event);
+          current().session.handleFocusIn(event);
+        }}
+        onFocusOut={(event) => {
+          current().session.handleFocusOut(event);
+        }}
         onKeyDown={(event) => {
+          if (
+            !event.defaultPrevented &&
+            !event.isComposing &&
+            !event.altKey &&
+            !event.ctrlKey &&
+            !event.metaKey &&
+            !event.shiftKey &&
+            (event.key === "Enter" || event.key === " ") &&
+            openManagedArtifactLink(event, input.props)
+          ) {
+            return;
+          }
           if (
             !event.defaultPrevented &&
             !event.isComposing &&
@@ -186,7 +531,13 @@ export function ChatThread(input: {
         onClick={(event) => {
           handleMarkdownCodeBlockClick(event);
           handleMarkdownTableInteraction(event);
-          if (shouldHandleNavigationClick(event) && navigateCronRunLink(event, input.props)) {
+          const navigation = shouldHandleNavigationClick(event);
+          if (
+            navigation &&
+            (handleTemplateReference(event) ||
+              openManagedArtifactLink(event, input.props) ||
+              navigateCronRunLink(event, input.props))
+          ) {
             return;
           }
           const target = markdownFileLinkFromEvent(event);
@@ -195,15 +546,40 @@ export function ChatThread(input: {
             return;
           }
           const sessionTarget = markdownSessionLinkFromEvent(event, input.props.basePath);
-          if (sessionTarget && shouldHandleNavigationClick(event)) {
+          if (sessionTarget && navigation) {
             event.preventDefault();
             input.props.onOpenSessionLink?.(sessionTarget);
+          } else if (navigation) {
+            navigatePluginLink(event, input.props);
           }
         }}
-        onContextMenu={(event) => handleTranscriptContextMenu(event, input.props)}
-        onPointerUp={(event) => handleTranscriptPointerUp(event, input.props)}
+        onMouseDown={(event) => {
+          stopSelectionGesture?.();
+          stopSelectionGesture = handleTranscriptSelectionMouseDown(event);
+        }}
+        onPointerDown={(event) => {
+          // Keep late floating controls from stealing the pressed content's context menu.
+          if (event.button === 2 && event.target instanceof Element) {
+            event.target.setPointerCapture(event.pointerId);
+          }
+        }}
+        onContextMenu={(event) =>
+          handleTranscriptContextMenu(
+            event,
+            input.props,
+            presentation().session.messageElements.elements.values(),
+          )
+        }
+        onPointerUp={(event) =>
+          handleTranscriptPointerUp(
+            event,
+            input.props,
+            presentation().session.messageElements.elements.values(),
+          )
+        }
       >
         <span
+          ref={[elementRef(input.props.onTranscriptAnnouncementRef)]}
           class="chat-transcript-announcement sr-only"
           role="status"
           aria-live={input.props.announceTranscript !== false ? "polite" : "off"}
@@ -219,15 +595,36 @@ export function ChatThread(input: {
             name: input.props.assistantName,
           }}
         />
-        {contents()}
-        {commentPins() ? (
-          <ChatCommentPins
-            attachments={input.props.commentAttachments}
-            sessionKey={input.props.sessionKey}
-            disabled={input.props.commentsDisabled ?? false}
-          />
-        ) : undefined}
+        <div class="chat-thread-content">
+          {contents()}
+          <Show when={input.props.applicationContext}>
+            {(context) => (
+              <TemplateCreatorReview context={context()} sessionKey={input.props.sessionKey} />
+            )}
+          </Show>
+        </div>
+        <Show when={commentPins() ? getTranscriptState(paneId()) : undefined} keyed>
+          {(threadState) => (
+            <Loading>
+              <ChatCommentPins
+                threadState={threadState}
+                transcript={current().session}
+                attachments={input.props.commentAttachments}
+                sessionKey={input.props.sessionKey}
+                disabled={input.props.commentsDisabled ?? false}
+              />
+            </Loading>
+          )}
+        </Show>
       </div>
-    </div>
+      <Show when={templateIntent()}>
+        <TemplateReferenceView
+          presented={input.presented}
+          source={() => input.props}
+          intent={templateIntent()!}
+          onDismiss={() => setTemplateIntent(null)}
+        />
+      </Show>
+    </>
   );
 }

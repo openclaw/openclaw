@@ -3,14 +3,18 @@ import {
   asPositiveFiniteNumber,
 } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { SESSION_PARTICIPANT_LIMIT } from "../../packages/gateway-protocol/src/schema/session-participant.js";
+import { readAgentConfigEntry } from "../agents/agent-scope-config.js";
+import { countRunningBackgroundProcesses } from "../agents/bash-process-observation.js";
 import { resolveModelContextTokenProjection } from "../agents/context.js";
 import { resolveFastModeState } from "../agents/fast-mode.js";
 import type { AgentHarnessSessionRuntimeOwnership } from "../agents/harness/types.js";
-import type { ModelCatalogEntry } from "../agents/model-catalog.js";
+import type { ModelCatalogEntry } from "../agents/model-catalog.types.js";
 import { resolveModelContextWindowProfile } from "../agents/model-context-window.js";
 import { buildSubagentRunReadIndexFromRuns } from "../agents/subagents/registry/subagent-registry-queries.js";
-import { resolveSelectedAndActiveModel } from "../auto-reply/model-runtime.js";
+import {
+  sessionWorktreeAvailability,
+  type SessionWorktreeObservation,
+} from "../agents/worktrees/session-lifecycle.js";
 import { resolveQueueSettingsCore } from "../auto-reply/reply/queue/settings.js";
 import { resolveEffectiveResponseUsage } from "../auto-reply/thinking.js";
 import {
@@ -23,25 +27,17 @@ import {
 } from "../config/sessions.js";
 import { resolveSessionModelOverrideSource } from "../config/sessions/model-override-provenance.js";
 import { sessionEntryForkedFromParent } from "../config/sessions/session-entry-lineage.js";
-import {
-  sessionCreatorProfileId,
-  MAX_SESSION_PARTICIPANTS,
-} from "../config/sessions/session-entry-provenance.js";
 import { isPinnableSessionEntry } from "../config/sessions/session-pin-policy.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import {
-  buildProjectedAgentRunIndex,
-  resolveProjectedAgentRunModel,
-  type ProjectedAgentRunIndex,
-} from "../infra/agent-run-registry.js";
+import { buildProjectedAgentRunIndex } from "../infra/agent-run-registry.js";
 import { projectPluginSessionExtensionsSync } from "../plugins/host-hook-state.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
+import { parseAgentSessionKey } from "../routing/session-key.js";
 import { resolveSessionCommunicationPolicy } from "../sessions/communication-policy.js";
 import { resolveActiveSessionAgentStatus } from "../sessions/session-agent-status.js";
+import { freezeTrustedJsonSnapshot } from "../shared/immutable-data.js";
 import { deriveSessionUnread } from "../shared/session-unread.js";
 import type { SessionRepositoryWorkspaceRecord } from "../state/session-repository-workspaces.types.js";
-import { resolveActiveFallbackState } from "../status/fallback-notice-state.js";
-import { readSessionFallbackModel } from "../status/session-fallback-model.js";
 import { projectSessionDeliveryFields } from "../utils/delivery-context.shared.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel-constants.js";
 import { channelAvatarRevision } from "./channel-avatar-reference.js";
@@ -49,30 +45,39 @@ import { buildControlUiChannelAvatarUrl } from "./control-ui-contract.js";
 import { normalizeControlUiBasePath } from "./control-ui-shared.js";
 import { sessionHasAutomation } from "./session-automation-index.js";
 import { sessionClassificationForRow } from "./session-classification.js";
-import {
-  projectSessionActor,
-  projectSessionOwner,
-  projectSessionParticipants,
-} from "./session-identity-projection.js";
+import { projectSessionRowProfiles } from "./session-identity-projection.js";
 import { sessionModelRevision } from "./session-model-revision.js";
 import { isSessionPermissionChangePending } from "./session-permission-change.js";
-import { projectSessionProviderReview } from "./session-provider-review-projection.js";
-import { readSessionRowModelFacts } from "./session-row-model-facts.js";
+import {
+  definedSessionRowField,
+  definedSessionRowFields,
+  freezeSessionRow,
+  freezeSessionRowPatch,
+} from "./session-row-identity.js";
+import {
+  readSessionRowModelFacts,
+  resolveGatewaySessionActiveModel,
+} from "./session-row-model-facts.js";
+import { projectSessionRowProviderReview } from "./session-row-provider-review.js";
+import type { SessionRuntimeResolution } from "./session-runtime-resolution.js";
 import { buildSessionSwarmSummary } from "./session-swarm-summary.js";
 import type { SessionTranscriptUsageSnapshot } from "./session-transcript-derived-readers.js";
 import type {
   GatewaySessionModelSource,
+  SessionChildActivity,
   SessionListRowContext,
 } from "./session-utils-contracts.js";
 import {
   resolveEstimatedSessionCostUsd,
+  prepareGatewaySessionBackgroundProcessScope,
   readStoreChildSessionLinks,
   type SessionChildLink,
-  resolveSessionChildOwners,
+  resolveSessionChildController,
 } from "./session-utils-core.js";
 import {
   resolveGatewaySessionDisplayName,
   projectGatewaySessionRunState,
+  projectPreparedSessionChild,
   resolveGatewaySessionKind,
   resolveGatewaySessionGoal,
 } from "./session-utils-display.js";
@@ -83,6 +88,7 @@ import {
 } from "./session-utils-projection.js";
 import { parseGroupKey } from "./session-utils-store.js";
 import type { GatewaySessionRow, SessionListModelCatalog } from "./session-utils.types.js";
+import { isUnscopedSessionHostWorkspace } from "./session-workspace-roots.js";
 import { projectWorkerPlacementAgentRuntime } from "./worker-environments/placement-session-runtime.js";
 
 export function readSessionRowInputs(params: {
@@ -99,12 +105,17 @@ export function readSessionRowInputs(params: {
   entry?: InternalSessionEntry;
   preparedAcpMeta?: SessionEntry["acp"] | null;
   preparedRuntimeOwnership?: AgentHarnessSessionRuntimeOwnership | null;
+  runtimeResolution?: SessionRuntimeResolution;
   preparedModelMetadata?: PluginMetadataSnapshot | null;
   preparedRepositoryWorkspace?: Readonly<SessionRepositoryWorkspaceRecord> | null;
+  preparedWorktree?: SessionWorktreeObservation | null;
   modelCatalog?: SessionListModelCatalog | ModelCatalogEntry[];
   now?: number;
-  preparedTitle?: Pick<GatewaySessionRow, "derivedTitle" | "lastMessagePreview">;
-  childLinks?: SessionChildLink[];
+  preparedTitle?: Pick<
+    GatewaySessionRow,
+    "derivedTitle" | "lastMessagePreview" | "lastAssistantMessage"
+  >;
+  childLinks?: readonly SessionChildLink[];
   excludedChildKeys?: ReadonlySet<string>;
   rowContext?: SessionListRowContext;
   configuredAgentIds?: ReadonlySet<string>;
@@ -112,6 +123,7 @@ export function readSessionRowInputs(params: {
   skipTranscriptUsageFallback?: boolean;
   transcriptUsage?: SessionTranscriptUsageSnapshot | null;
   lightweightListRow?: boolean;
+  hasMessages?: boolean;
   includeSwarmChildren?: boolean;
 }) {
   const { cfg, storePath, store, key, entry, agentId } = params;
@@ -128,6 +140,7 @@ export function readSessionRowInputs(params: {
       entry,
       preparedAcpMeta: params.preparedAcpMeta,
       preparedRuntimeOwnership: params.preparedRuntimeOwnership,
+      runtimeResolution: params.runtimeResolution,
       preparedModelMetadata: params.preparedModelMetadata,
       source: params.modelSource ?? { entry, readSourceEntry: (parentKey) => store[parentKey] },
       agentId,
@@ -155,7 +168,7 @@ export function readSessionRowInputs(params: {
           transcriptUsage: params.transcriptUsage,
         })
       : undefined;
-  const { provider, model } = selectedModel;
+  const { provider, model } = selectedModel ?? {};
   // Display aliases do not change the selected route's catalog or runtime policy.
   const activeModel = resolveGatewaySessionActiveModel({
     cfg,
@@ -176,7 +189,7 @@ export function readSessionRowInputs(params: {
     catalogEntry,
     selected: entry?.contextWindow,
   });
-  const modelContext = resolveModelContextTokenProjection({
+  const modelContext = (params.runtimeResolution?.context ?? resolveModelContextTokenProjection)({
     cfg,
     provider,
     model,
@@ -196,10 +209,15 @@ export function readSessionRowInputs(params: {
 
   return {
     inputs: {
+      worktreeState:
+        entry?.worktree && params.preparedWorktree !== undefined
+          ? sessionWorktreeAvailability(params.preparedWorktree, key)
+          : undefined,
       cfg,
       key,
       entry,
       lightweight,
+      preparedRuntimeOwnership: params.preparedRuntimeOwnership,
       swarm: buildSessionSwarmSummary(
         params.rowContext?.subagentRuns.swarmRunsByRequesterSessionKey.get(key) ?? [],
         key,
@@ -226,16 +244,18 @@ export function readSessionRowInputs(params: {
       displayName,
       derivedTitle: params.preparedTitle?.derivedTitle,
       lastMessagePreview: params.preparedTitle?.lastMessagePreview,
+      hasMessages: params.hasMessages,
+      lastAssistantMessage: params.preparedTitle?.lastAssistantMessage,
       thinkingProjection,
-      agentRuntime: projectWorkerPlacementAgentRuntime(thinkingProjection.agentRuntime),
+      agentRuntime: (params.runtimeResolution?.placement ?? projectWorkerPlacementAgentRuntime)(
+        thinkingProjection.agentRuntime,
+      ),
       contextWindowProfile,
-      fastModeState: resolveFastModeState({
-        cfg,
-        provider,
-        model,
-        agentId,
-        sessionEntry: entry,
-      }),
+      // Fast mode is a model property; a session without a model has none.
+      fastModeState:
+        provider && model
+          ? resolveFastModeState({ cfg, provider, model, agentId, sessionEntry: entry })
+          : undefined,
       hasAutomation: sessionHasAutomation(key, cfg, agentId) ? true : undefined,
       rowModelIdentity,
       selectedModel,
@@ -266,7 +286,6 @@ export function readSessionRowInputs(params: {
       estimatedCostUsd: lightweight
         ? asNonNegativeFiniteNumber(entry?.estimatedCostUsd)
         : resolveEstimatedSessionCostUsd({
-            cfg,
             provider,
             model,
             entry,
@@ -292,113 +311,18 @@ export function buildGatewaySessionRow(
   return presentSessionRow(materializeSessionRow(inputs), presentation);
 }
 
-export function resolveGatewaySessionActiveModel(params: {
-  cfg: OpenClawConfig;
-  active?: boolean;
-  activeModel?: { provider: string; model: string } | null;
-  terminalModel?: { modelProvider: string; model: string } | null;
-  agentId: string;
-  storeAgentId?: string;
-  sessionId?: string;
-  sessionKey: string;
-  projectedAgentRuns: ProjectedAgentRunIndex;
-  selectedModel: { provider: string; model: string };
-  entry?: InternalSessionEntry;
-  storePath: string;
-}): { provider: string; model: string } | undefined {
-  const liveModel = resolveProjectedAgentRunModel({
-    agentId: params.agentId,
-    sessionId: params.sessionId,
-    index: params.projectedAgentRuns,
-  });
-  if (params.active ?? liveModel !== undefined) {
-    return liveModel ?? undefined;
-  }
-  if (!params.entry?.fallbackNotice) {
-    return undefined;
-  }
-  const { selectedModel } = params;
-
-  const fallbackEntry =
-    params.activeModel === undefined
-      ? readSessionFallbackModel({
-          selectedProvider: selectedModel.provider,
-          selectedModel: selectedModel.model,
-          sessionEntry: params.entry,
-          config: params.cfg,
-          terminalModel: params.terminalModel ?? null,
-          sessionScope: {
-            agentId: params.storeAgentId ?? params.agentId,
-            sessionKey: params.sessionKey,
-            storePath: params.storePath,
-          },
-        })
-      : params.activeModel
-        ? { modelProvider: params.activeModel.provider, model: params.activeModel.model }
-        : undefined;
-  const { selected, active } = resolveSelectedAndActiveModel({
-    selectedProvider: selectedModel.provider,
-    selectedModel: selectedModel.model,
-    sessionEntry: fallbackEntry ?? params.entry,
-  });
-  return resolveActiveFallbackState({
-    selectedModelRef: selected.label,
-    activeModelRef: active.label,
-    config: params.cfg,
-    state: params.entry,
-  }).active
-    ? { provider: active.provider, model: active.model }
-    : undefined;
-}
-
-/** Profile publications invalidate display facts independently of stored session metadata. */
-function projectSessionRowProfiles(
-  input: Pick<
-    ReturnType<typeof readSessionRowInputs>["inputs"],
-    "entry" | "cfg" | "userProfileIdentityById" | "configuredAgentIds" | "identityProjection"
-  >,
-) {
-  const { entry, cfg, userProfileIdentityById, configuredAgentIds, identityProjection } = input;
-  const owner = (identityProjection?.owner ?? projectSessionOwner)(
-    entry,
-    userProfileIdentityById,
-    cfg,
-    configuredAgentIds,
-  );
-  const projected = (identityProjection?.participants ?? projectSessionParticipants)(
-    entry,
-    userProfileIdentityById,
-    cfg,
-  );
-  const ownerKey = owner?.actor.identity && JSON.stringify(owner.actor.identity);
-  const participants = [...projected].flatMap(([key, participant]) =>
-    key === ownerKey ? [] : [participant],
-  );
-  return {
-    createdActor: projectSessionActor(
-      entry?.createdActor,
-      userProfileIdentityById,
-      cfg,
-      Boolean(sessionCreatorProfileId(entry?.createdActor)),
-    ),
-    owner,
-    // Keep the released v4 summary stable; expanded identities are additive for newer clients.
-    participants: participants.length
-      ? participants.slice(0, SESSION_PARTICIPANT_LIMIT)
-      : undefined,
-    expandedParticipants: participants.length
-      ? participants.slice(0, MAX_SESSION_PARTICIPANTS)
-      : undefined,
-    participantCount: participants.length || undefined,
-    archivedBy: projectSessionActor(entry?.archivedBy, userProfileIdentityById, cfg),
-  };
-}
-
 export function refreshSessionRowProfiles(materialized: ReturnType<typeof materializeSessionRow>) {
-  Object.assign(materialized.row, projectSessionRowProfiles(materialized.source));
+  return replaceSessionRowFacts(materialized, projectSessionRowProfiles(materialized.source));
 }
 
-export function materializeSessionRow(input: ReturnType<typeof readSessionRowInputs>["inputs"]) {
+export function materializeSessionRow(
+  input: ReturnType<typeof readSessionRowInputs>["inputs"],
+  previous?: {
+    publicationIdentity: object;
+    row: Readonly<GatewaySessionRow>;
+    source: { childLinks?: Readonly<ReturnType<typeof projectSessionRowChildLinks>> };
+  },
+) {
   const { cfg, key, entry } = input;
   const observerDigest =
     entry?.observerDigest &&
@@ -415,166 +339,213 @@ export function materializeSessionRow(input: ReturnType<typeof readSessionRowInp
   // Snooze shares the pin root-session rule.
   const pinnable = isPinnableSessionEntry(key, entry);
   const pinnedAt = pinnable ? entry?.pinnedAt : undefined;
+  const classification = sessionClassificationForRow(cfg, key, input.agentId, entry);
+  // Custody identifiers stay in storage for recovery; clients receive their friendly display name.
+  // Explicit human labels and ordinary conversations retain normal label precedence.
+  const generatedPublicationLabel =
+    classification.classification === "github-publication" &&
+    /^github-publication-(?:[a-f0-9]{32}|[a-f0-9]{8}-[a-f0-9]{4}-8[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12})$/iu.test(
+      entry?.label ?? "",
+    );
 
   const row: GatewaySessionRow = {
     key,
-    sessionModelRevision: sessionModelRevision(entry),
+    sessionModelRevision: sessionModelRevision(entry, undefined, input.preparedRuntimeOwnership),
     // Only explicitly requested summaries may clear swarm state in event merges.
-    ...(input.includeSwarmSummary ? { swarm: input.swarm } : {}),
-    visibility: entry ? (entry.visibility ?? "shared") : undefined,
-    incognito: entry?.incognito,
-    swarmGroupId: entry?.swarmGroupId,
-    spawnedWorkspaceDir: entry?.spawnedWorkspaceDir,
-    spawnedCwd: entry?.spawnedCwd,
-    workspaceDir: entry?.spawnedCwd ?? entry?.spawnedWorkspaceDir,
-    projectId: entry?.projectId,
-    permissionMode: entry?.permissionMode,
-    communication: entry?.communication,
+    ...definedSessionRowField("swarm", input.includeSwarmSummary ? input.swarm : undefined),
+    ...definedSessionRowField("visibility", entry ? (entry.visibility ?? "shared") : undefined),
+    ...definedSessionRowField("incognito", entry?.incognito),
+    ...definedSessionRowField("swarmGroupId", entry?.swarmGroupId),
+    ...definedSessionRowField("spawnedWorkspaceDir", entry?.spawnedWorkspaceDir),
+    ...definedSessionRowField("spawnedCwd", entry?.spawnedCwd),
+    ...definedSessionRowField("workspaceDir", entry?.spawnedCwd ?? entry?.spawnedWorkspaceDir),
+    ...definedSessionRowField("projectId", entry?.projectId),
+    ...definedSessionRowField("permissionMode", entry?.permissionMode),
+    ...definedSessionRowField("communication", entry?.communication),
     effectiveCommunication: resolveSessionCommunicationPolicy({ config: input.cfg, entry }),
-    sandboxMode: entry?.sandboxMode,
-    nativeRuntimeConsent: entry?.nativeRuntimeConsent,
+    ...definedSessionRowField("sandboxMode", entry?.sandboxMode),
+    ...definedSessionRowField("nativeRuntimeConsent", entry?.nativeRuntimeConsent),
     permissionModePending: input.permissionModePending,
     ...(entry?.permissionMode !== undefined && entry.sessionRoot !== undefined
       ? { sessionRoot: entry.sessionRoot }
       : {}),
-    worktree: entry?.worktree,
-    deviceFolder: entry?.deviceFolder,
-    repositoryWorkspaceId: entry?.repositoryWorkspaceId,
+    ...definedSessionRowField("worktree", entry?.worktree),
+    ...definedSessionRowField("worktreeState", input.worktreeState),
+    ...definedSessionRowField("deviceFolder", entry?.deviceFolder),
+    ...definedSessionRowField("repositoryWorkspaceId", entry?.repositoryWorkspaceId),
     ...(input.repository ? { repository: input.repository } : {}),
-    execNode: entry?.execNode,
-    execCwd: entry?.execCwd,
-    forkedFromParent: sessionEntryForkedFromParent(entry) ? true : undefined,
-    spawnDepth: entry?.spawnDepth,
-    subagentRole: entry?.subagentRole,
-    subagentControlScope: entry?.subagentControlScope,
-    createdVia: entry?.createdVia,
-    createdSurface: entry?.createdSurface,
-    ...projectSessionRowProfiles(input),
-    createdAt: entry?.createdAt,
-    forkSource: entry?.forkSource,
-    previousSessionId: entry?.previousSessionId,
+    ...definedSessionRowField("execNode", entry?.execNode),
+    ...definedSessionRowField("execCwd", entry?.execCwd),
+    ...definedSessionRowField(
+      "forkedFromParent",
+      sessionEntryForkedFromParent(entry) ? true : undefined,
+    ),
+    ...definedSessionRowField("spawnDepth", entry?.spawnDepth),
+    ...definedSessionRowField("subagentRole", entry?.subagentRole),
+    ...definedSessionRowField("subagentControlScope", entry?.subagentControlScope),
+    ...definedSessionRowField("createdVia", entry?.createdVia),
+    ...definedSessionRowField("createdSurface", entry?.createdSurface),
+    ...definedSessionRowFields(projectSessionRowProfiles(input)),
+    ...definedSessionRowField("createdAt", entry?.createdAt),
+    ...definedSessionRowField("forkSource", entry?.forkSource),
+    ...definedSessionRowField("previousSessionId", entry?.previousSessionId),
     kind: resolveGatewaySessionKind(key, entry),
-    label: entry?.label,
-    autoLabel: entry?.autoLabel,
-    icon: entry?.icon,
-    color: entry?.color,
-    channelAvatarUrl: avatar
-      ? buildControlUiChannelAvatarUrl(controlUiBasePath, key, channelAvatarRevision(avatar))
-      : undefined,
-    category: entry?.category,
-    boardFace: entry?.boardFace,
-    boardPresentation: entry?.boardPresentation,
-    ...sessionClassificationForRow(cfg, key, input.agentId, entry),
-    displayName: input.displayName,
-    derivedTitle: input.derivedTitle,
-    lastMessagePreview: input.lastMessagePreview,
-    channel,
-    subject: entry?.subject,
-    groupChannel: entry?.groupChannel,
-    space: entry?.space,
-    chatType: entry?.chatType,
-    origin: storedOrigin
-      ? (({ avatar: _avatar, ...safeOrigin }) => safeOrigin)(storedOrigin)
-      : undefined,
+    ...definedSessionRowField("label", generatedPublicationLabel ? undefined : entry?.label),
+    ...definedSessionRowField("autoLabel", entry?.autoLabel),
+    ...definedSessionRowField("icon", entry?.icon),
+    ...definedSessionRowField("color", entry?.color),
+    ...definedSessionRowField(
+      "channelAvatarUrl",
+      avatar
+        ? buildControlUiChannelAvatarUrl(controlUiBasePath, key, channelAvatarRevision(avatar))
+        : undefined,
+    ),
+    ...definedSessionRowField("category", entry?.category),
+    ...definedSessionRowField("boardFace", entry?.boardFace),
+    ...definedSessionRowField("boardPresentation", entry?.boardPresentation),
+    ...classification,
+    ...definedSessionRowField(
+      "displayName",
+      generatedPublicationLabel
+        ? (normalizeOptionalString(entry?.displayName) ?? "GitHub publication")
+        : input.displayName,
+    ),
+    ...definedSessionRowField("derivedTitle", input.derivedTitle),
+    ...definedSessionRowField("lastMessagePreview", input.lastMessagePreview),
+    ...definedSessionRowField("hasMessages", input.hasMessages),
+    ...definedSessionRowField("lastAssistantMessage", input.lastAssistantMessage),
+    ...definedSessionRowField("channel", channel),
+    ...definedSessionRowField("subject", entry?.subject),
+    ...definedSessionRowField("groupChannel", entry?.groupChannel),
+    ...definedSessionRowField("space", entry?.space),
+    ...definedSessionRowField("chatType", entry?.chatType),
+    ...definedSessionRowField(
+      "origin",
+      storedOrigin ? (({ avatar: _avatar, ...safeOrigin }) => safeOrigin)(storedOrigin) : undefined,
+    ),
     updatedAt: entry?.updatedAt ?? null,
     archived: entry?.archivedAt !== undefined,
-    archivedAt: entry?.archivedAt,
-    archiveReason: entry?.archiveReason,
+    ...definedSessionRowField("archivedAt", entry?.archivedAt),
+    ...definedSessionRowField("archiveReason", entry?.archiveReason),
     pinned: pinnedAt !== undefined,
     sidebarRoot: entry?.sidebarRoot === true,
-    pinnedAt,
-    snoozedUntil: pinnable ? entry?.snoozedUntil : undefined,
-    snoozedAt: pinnable ? entry?.snoozedAt : undefined,
+    ...definedSessionRowField("pinnedAt", pinnedAt),
+    ...definedSessionRowField("snoozedUntil", pinnable ? entry?.snoozedUntil : undefined),
+    ...definedSessionRowField("snoozedAt", pinnable ? entry?.snoozedAt : undefined),
     unread: deriveSessionUnread(entry),
-    lastReadAt: entry?.lastReadAt,
-    markedUnreadAt: entry?.markedUnreadAt,
-    observerDigest: observerDigest
-      ? {
-          ...(observerDigest.agentId ? { agentId: observerDigest.agentId } : {}),
-          runId: observerDigest.runId,
-          headline: observerDigest.headline,
-          health: observerDigest.health,
-          updatedAt: observerDigest.updatedAt,
-          revision: observerDigest.revision,
-        }
-      : undefined,
-    lastInteractionAt: entry?.lastInteractionAt,
-    lastActivityAt: entry?.lastActivityAt,
-    sessionId: entry?.sessionId,
-    lifecycleRevision: entry?.lifecycleRevision,
-    systemSent: entry?.systemSent,
-    abortedLastRun: entry?.abortedLastRun,
-    restartRecoveryStatus: entry?.mainRestartRecovery?.tombstone ? "tombstoned" : undefined,
-    thinkingLevel: input.thinkingProjection.thinkingLevel,
-    contextWindow: input.contextWindowProfile.contextWindow,
-    contextWindows: input.contextWindowProfile.contextWindows,
-    contextWindowDefault: input.contextWindowProfile.contextWindowDefault,
-    thinkingLevels: input.thinkingProjection.thinkingLevels,
-    thinkingOptions: input.thinkingProjection.thinkingOptions,
-    thinkingDefault: input.thinkingProjection.thinkingDefault,
-    fastMode: entry?.fastMode,
-    toolOverrides: entry?.toolOverrides,
-    effectiveFastMode: input.fastModeState.mode,
-    effectiveFastModeSource: input.fastModeState.source,
-    fastAutoOnSeconds: input.fastModeState.fastAutoOnSeconds,
-    verboseLevel: entry?.verboseLevel,
-    traceLevel: entry?.traceLevel,
-    reasoningLevel: entry?.reasoningLevel,
-    elevatedLevel: entry?.elevatedLevel,
-    sendPolicy: entry?.sendPolicy,
-    inputTokens: entry?.inputTokens,
-    outputTokens: entry?.outputTokens,
-    usageReport: entry?.usageReport,
-    providerReview: projectSessionProviderReview(entry, key),
-    lastRunId: entry?.lastRunId,
-    hasAutomation: input.hasAutomation,
-    // Navigation lineage is persisted; runtime control is exposed separately above.
-    parentSessionKey: entry?.parentSessionKey,
-    parentSessionId: entry?.parentSessionId,
-    responseUsage: entry?.responseUsage,
-    effectiveResponseUsage: resolveEffectiveResponseUsage(
-      entry?.responseUsage,
-      cfg.messages?.responseUsage,
-      channel,
+    ...definedSessionRowField("lastReadAt", entry?.lastReadAt),
+    ...definedSessionRowField("markedUnreadAt", entry?.markedUnreadAt),
+    ...definedSessionRowField(
+      "observerDigest",
+      observerDigest
+        ? {
+            ...(observerDigest.agentId ? { agentId: observerDigest.agentId } : {}),
+            runId: observerDigest.runId,
+            headline: observerDigest.headline,
+            health: observerDigest.health,
+            updatedAt: observerDigest.updatedAt,
+            revision: observerDigest.revision,
+          }
+        : undefined,
     ),
-    queueMode: entry?.queueMode,
+    ...definedSessionRowField("lastInteractionAt", entry?.lastInteractionAt),
+    ...definedSessionRowField("lastActivityAt", entry?.lastActivityAt),
+    ...definedSessionRowField("sessionId", entry?.sessionId),
+    ...definedSessionRowField("lifecycleRevision", entry?.lifecycleRevision),
+    ...definedSessionRowField("systemSent", entry?.systemSent),
+    ...definedSessionRowField("abortedLastRun", entry?.abortedLastRun),
+    ...definedSessionRowField("thinkingLevel", input.thinkingProjection.thinkingLevel),
+    ...definedSessionRowField("contextWindow", input.contextWindowProfile.contextWindow),
+    ...definedSessionRowField("contextWindows", input.contextWindowProfile.contextWindows),
+    ...definedSessionRowField(
+      "contextWindowDefault",
+      input.contextWindowProfile.contextWindowDefault,
+    ),
+    ...definedSessionRowField("thinkingLevels", input.thinkingProjection.thinkingLevels),
+    ...definedSessionRowField("thinkingOptions", input.thinkingProjection.thinkingOptions),
+    ...definedSessionRowField("thinkingDefault", input.thinkingProjection.thinkingDefault),
+    ...definedSessionRowField("cyberAccessProgram", entry?.cyberAccessProgram),
+    ...definedSessionRowField("fastMode", entry?.fastMode),
+    ...definedSessionRowField("toolOverrides", entry?.toolOverrides),
+    ...definedSessionRowField("effectiveFastMode", input.fastModeState?.mode),
+    ...definedSessionRowField("effectiveFastModeSource", input.fastModeState?.source),
+    ...definedSessionRowField("fastAutoOnSeconds", input.fastModeState?.fastAutoOnSeconds),
+    ...definedSessionRowField("verboseLevel", entry?.verboseLevel),
+    ...definedSessionRowField("traceLevel", entry?.traceLevel),
+    ...definedSessionRowField("reasoningLevel", entry?.reasoningLevel),
+    ...definedSessionRowField(
+      "reasoningDefault",
+      readAgentConfigEntry(cfg, input.agentId)?.reasoningDefault ??
+        cfg.agents?.defaults?.reasoningDefault,
+    ),
+    ...definedSessionRowField("elevatedLevel", entry?.elevatedLevel),
+    ...definedSessionRowField("sendPolicy", entry?.sendPolicy),
+    ...definedSessionRowField("inputTokens", entry?.inputTokens),
+    ...definedSessionRowField("outputTokens", entry?.outputTokens),
+    ...definedSessionRowField("usageReport", entry?.usageReport),
+    ...definedSessionRowField("providerReview", projectSessionRowProviderReview(key, entry)),
+    ...definedSessionRowField("lastRunId", entry?.lastRunId),
+    ...definedSessionRowField("hasAutomation", input.hasAutomation),
+    // Navigation lineage is persisted; runtime control is exposed separately above.
+    ...definedSessionRowField("parentSessionKey", entry?.parentSessionKey),
+    ...definedSessionRowField("parentSessionId", entry?.parentSessionId),
+    ...definedSessionRowField("responseUsage", entry?.responseUsage),
+    ...definedSessionRowField(
+      "effectiveResponseUsage",
+      resolveEffectiveResponseUsage(entry?.responseUsage, cfg.messages?.responseUsage, channel),
+    ),
+    ...definedSessionRowField("queueMode", entry?.queueMode),
     effectiveQueueMode: resolveQueueSettingsCore({
       cfg,
       channel: INTERNAL_MESSAGE_CHANNEL,
       sessionEntry: entry,
     }).mode,
-    modelProvider: input.rowModelIdentity.provider,
-    model: input.rowModelIdentity.model,
-    modelOverrideSource:
-      input.selectedModel.storedOverrideSource === "parent"
+    ...definedSessionRowField("modelProvider", input.rowModelIdentity.provider),
+    ...definedSessionRowField("model", input.rowModelIdentity.model),
+    ...definedSessionRowField(
+      "modelOverrideSource",
+      input.selectedModel?.storedOverrideSource === "parent"
         ? "inherited"
         : resolveSessionModelOverrideSource(entry),
-    modelSelectionLocked: entry?.modelSelectionLocked,
-    runtimeSelectionLocked: input.thinkingProjection.runtimeSelectionLocked,
-    agentRuntime: input.agentRuntime,
-    contextTokens: input.contextTokens,
-    contextBudgetStatus: resolveProjectedSessionContextBudgetStatus({
-      entry,
-      provider: input.selectedModel.provider,
-      model: input.selectedModel.model,
-      contextTokens: input.contextTokens,
-    }),
-    deliveryContext: deliveryFields.deliveryContext,
-    lastChannel: deliveryFields.lastChannel,
-    lastTo: deliveryFields.lastTo,
-    lastAccountId: deliveryFields.lastAccountId,
-    lastThreadId: deliveryFields.lastThreadId,
-    pluginExtensions: input.pluginExtensions.length > 0 ? input.pluginExtensions : undefined,
+    ),
+    ...definedSessionRowField("modelSelectionLocked", entry?.modelSelectionLocked),
+    ...definedSessionRowField(
+      "runtimeSelectionLocked",
+      input.thinkingProjection.runtimeSelectionLocked,
+    ),
+    ...definedSessionRowField("agentRuntime", input.agentRuntime),
+    ...definedSessionRowField("contextTokens", input.contextTokens),
+    ...definedSessionRowField(
+      "contextBudgetStatus",
+      resolveProjectedSessionContextBudgetStatus({
+        entry,
+        provider: input.selectedModel?.provider,
+        model: input.selectedModel?.model,
+        contextTokens: input.contextTokens,
+      }),
+    ),
+    ...definedSessionRowField("deliveryContext", deliveryFields.deliveryContext),
+    ...definedSessionRowField("lastChannel", deliveryFields.lastChannel),
+    ...definedSessionRowField("lastTo", deliveryFields.lastTo),
+    ...definedSessionRowField("lastAccountId", deliveryFields.lastAccountId),
+    ...definedSessionRowField("lastThreadId", deliveryFields.lastThreadId),
+    ...definedSessionRowField(
+      "pluginExtensions",
+      input.pluginExtensions.length > 0 ? input.pluginExtensions : undefined,
+    ),
   };
-  // JSON omits undefined fields; keep the resident projection equally sparse.
-  for (const field in row) {
-    if (Reflect.get(row, field) === undefined) {
-      Reflect.deleteProperty(row, field);
-    }
-  }
-  return {
-    row,
-    source: {
+  return Object.freeze({
+    publicationIdentity: previous?.publicationIdentity ?? {},
+    row: freezeSessionRow(row, previous?.row),
+    source: Object.freeze({
+      parsedKey: parseAgentSessionKey(key),
+      backgroundProcessScope: prepareGatewaySessionBackgroundProcessScope(input),
+      // Materialization already owns config and workspace-entry invalidation.
+      unscopedHostRoot: Boolean(
+        entry &&
+        isUnscopedSessionHostWorkspace({ cfg, agentId: input.agentId, sessionKey: key, entry }),
+      ),
+      agentId: input.agentId,
       cfg,
       entry,
       selectedModel: input.selectedModel,
@@ -592,14 +563,39 @@ export function materializeSessionRow(input: ReturnType<typeof readSessionRowInp
       estimatedCostUsd: input.estimatedCostUsd,
       subagentRunInputs: input.subagentRunInputs,
       lastMessagePreview: input.lastMessagePreview,
-      childLinks: projectSessionRowChildLinks(input.childLinks),
-    },
-  };
+      lastAssistantMessage: input.lastAssistantMessage,
+      // The relation reader returns the previous frozen list when its child facts match.
+      childLinks:
+        input.childLinks === previous?.source.childLinks
+          ? previous?.source.childLinks
+          : freezeTrustedJsonSnapshot(projectSessionRowChildLinks(input.childLinks)),
+    }),
+  });
+}
+
+/** Writers replace published facts; config and live indexes keep their own owners. */
+export function replaceSessionRowFacts(
+  materialized: ReturnType<typeof materializeSessionRow>,
+  row?: Partial<GatewaySessionRow>,
+  source?: Partial<ReturnType<typeof materializeSessionRow>["source"]>,
+): ReturnType<typeof materializeSessionRow> {
+  const nextSource = source ? { ...materialized.source, ...source } : materialized.source;
+  freezeTrustedJsonSnapshot(source?.childLinks);
+  return Object.freeze({
+    publicationIdentity: materialized.publicationIdentity,
+    row: row ? freezeSessionRowPatch(materialized.row, row) : materialized.row,
+    source: Object.freeze(nextSource),
+  });
 }
 
 export function presentSessionRow(
   materialized: ReturnType<typeof materializeSessionRow>,
-  options: Partial<ReturnType<typeof readSessionRowInputs>["presentation"]> & { now: number },
+  options: Partial<ReturnType<typeof readSessionRowInputs>["presentation"]> & {
+    now: number;
+    childActivity?: SessionChildActivity;
+    backgroundProcessCount?: number;
+    preparedRunState?: ReturnType<typeof projectGatewaySessionRunState>;
+  },
 ): GatewaySessionRow {
   const row = { ...materialized.row };
   const { source } = materialized;
@@ -608,18 +604,27 @@ export function presentSessionRow(
   // Stamp the temporal projection, not the reusable materialized inputs.
   // Completed list caches retain this sample when they replay the finished row.
   row.snapshotAt = now;
+  const backgroundProcessCount =
+    options.backgroundProcessCount ??
+    countRunningBackgroundProcesses(source.backgroundProcessScope);
+  if (backgroundProcessCount > 0) {
+    row.backgroundProcessCount = backgroundProcessCount;
+  }
   const subagentRuns =
     options.subagentRuns ?? buildSubagentRunReadIndexFromRuns({ ...source.subagentRunInputs, now });
-  const { subagentRun, subagentOwner, fields } = projectGatewaySessionRunState({
-    key: row.key,
-    entry,
-    now,
-    rowContext: {
-      subagentRuns,
-      projectedAgentRuns: options.projectedAgentRuns,
-      projectedSubagentActivity: options.projectedSubagentActivity,
-    },
-  });
+  const { subagentRun, fields } =
+    options.preparedRunState ??
+    projectGatewaySessionRunState({
+      key: row.key,
+      parsedKey: source.parsedKey,
+      entry,
+      now,
+      rowContext: {
+        subagentRuns,
+        projectedAgentRuns: options.projectedAgentRuns,
+        projectedSubagentActivity: options.projectedSubagentActivity,
+      },
+    });
   Object.assign(row, fields);
   const usage = source.usageByFallbackModel?.get(subagentRun?.model);
   row.usageReport ??= usage?.usageReport;
@@ -629,7 +634,8 @@ export function presentSessionRow(
     (typeof row.totalTokens === "number" && row.totalTokens > 0) ||
     usage?.totalTokensFresh === true;
   row.agentStatus = resolveActiveSessionAgentStatus(entry?.agentStatus, now);
-  row.spawnedBy = row.controlOwnerSessionKey = subagentOwner || entry?.spawnedBy;
+  row.spawnedBy = entry?.spawnedBy;
+  row.controlOwnerSessionKey = entry ? resolveSessionChildController(row.key, entry) : undefined;
   row.goal = resolveGatewaySessionGoal(entry, now, {
     totalTokens: row.totalTokens,
     totalTokensFresh: row.totalTokensFresh,
@@ -638,37 +644,30 @@ export function presentSessionRow(
   row.estimatedCostUsd =
     source.estimatedCostUsd ??
     asNonNegativeFiniteNumber(source.lightweight ? undefined : usage?.estimatedCostUsd);
-  const children = source.childLinks?.flatMap(({ key, entry: childEntry }) => {
-    if (options.excludedChildKeys?.has(key)) {
-      return [];
-    }
-    const childActive = projectGatewaySessionRunState({
-      key,
-      entry: childEntry,
-      now,
-      rowContext: {
+  let children = options.childActivity;
+  if (!children) {
+    const keys: string[] = [];
+    let active = false;
+    for (const child of source.childLinks ?? []) {
+      if (options.excludedChildKeys?.has(child.key)) {
+        continue;
+      }
+      const contribution = projectPreparedSessionChild(child, row.key, now, {
         subagentRuns,
         projectedAgentRuns: options.projectedAgentRuns,
         projectedSubagentActivity: options.projectedSubagentActivity,
-      },
-    }).fields.hasActiveSubagentRun;
-    if (
-      !resolveSessionChildOwners({
-        key,
-        entry: childEntry,
-        now,
-        subagentRuns,
-        hasActiveRun: childActive,
-      }).includes(row.key)
-    ) {
-      return [];
+      });
+      if (contribution.included) {
+        keys.push(child.key);
+        active ||= contribution.active === true;
+      }
     }
-    if (childActive) {
-      row.hasActiveSubagentRun = true;
-    }
-    return [key];
-  });
-  row.childSessions = children?.length ? children : undefined;
+    children = { childSessions: keys.length ? keys : undefined, hasActiveSubagentRun: active };
+  }
+  row.childSessions = children.childSessions;
+  if (children.hasActiveSubagentRun) {
+    row.hasActiveSubagentRun = true;
+  }
   row.activeModelProvider = options.activeModel?.provider;
   row.activeModel = options.activeModel?.model;
   return row;

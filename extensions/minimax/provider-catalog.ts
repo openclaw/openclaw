@@ -11,6 +11,9 @@ export function buildMinimaxModelDiscovery(
   const basePath = new URL(baseUrl).pathname.replace(/\/+$/, "");
   return {
     endpointPath: usesOpenAI || basePath.endsWith("/v1") ? "models" : "v1/models",
+    // MiniMax still lists the M2 generation, but every request to it returns
+    // 404 "no longer available" (verified live 2026-11-22).
+    acceptUnknownModel: ({ id }) => !/^minimax-m2(?:[.-]|$)/iu.test(id),
     // Anthropic API keys use X-Api-Key; OpenAI-compatible catalogs and portal
     // OAuth use Bearer authentication.
     buildRequestHeaders: ({ apiKey, discoveryApiKey }): HeadersInit => {
@@ -44,8 +47,4 @@ export function buildMinimaxProvider(env?: NodeJS.ProcessEnv): ModelProviderConf
     authHeader: true,
     models: MINIMAX_TEXT_MODEL_ORDER.map(buildMinimaxApiModelDefinition),
   };
-}
-
-export function buildMinimaxPortalProvider(env?: NodeJS.ProcessEnv): ModelProviderConfig {
-  return buildMinimaxProvider(env);
 }

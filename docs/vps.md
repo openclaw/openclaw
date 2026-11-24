@@ -16,6 +16,7 @@ tuning that applies everywhere.
 
 <CardGroup cols={2}>
   <Card title="Azure" href="/install/azure">Linux VM</Card>
+  <Card title="Boat" href="/install/boat">Ubuntu sandbox with private SSH forwarding</Card>
   <Card title="Daytona" href="/install/daytona">Cloud sandbox with preview URLs</Card>
   <Card title="DigitalOcean" href="/install/digitalocean">Simple paid VPS</Card>
   <Card title="exe.dev" href="/install/exe-dev">VM with HTTPS proxy</Card>
@@ -127,7 +128,7 @@ TimeoutStartSec=90
 If you deliberately installed a system unit instead, edit it via
 `sudo systemctl edit openclaw-gateway.service`.
 
-For the canonical managed unit body and its restart policy, see the [Gateway runbook](/gateway).
+For the standard managed unit definition and its restart policy, see the [Gateway runbook](/gateway).
 
 For Linux OOM behavior, child process victim selection, and `exit 137`
 diagnostics, see [Linux memory pressure and OOM kills](/platforms/linux#memory-pressure-and-oom-kills).

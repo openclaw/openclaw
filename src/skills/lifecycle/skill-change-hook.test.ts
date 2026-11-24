@@ -15,6 +15,25 @@ import {
 } from "./skill-change-hook.js";
 
 const tempDirs = createTrackedTempDirs();
+const digest = (data: Buffer | string) => createHash("sha256").update(data).digest("hex");
+const snapshot = (
+  skillDir: string,
+  options: Partial<Parameters<typeof snapshotCommittedSkillArtifactBestEffort>[0]> = {},
+) =>
+  snapshotCommittedSkillArtifactBestEffort({
+    skillDir,
+    skillKey: "installed-key",
+    source: "source-install",
+    ...options,
+  });
+
+async function writeFiles(root: string, files: Record<string, string | Buffer>) {
+  for (const [name, content] of Object.entries(files)) {
+    const file = path.join(root, name);
+    await fs.mkdir(path.dirname(file), { recursive: true });
+    await fs.writeFile(file, content);
+  }
+}
 
 afterEach(async () => {
   __setFsSafeTestHooksForTest(undefined);
@@ -33,21 +52,18 @@ describe("committed skill artifact snapshots", () => {
     const nestedMetadata = Buffer.from([0, 255, 1]);
     const literalTildeContent = Buffer.from("literal support\n");
     const binary = Buffer.alloc(64 * 1024 + 7, 0xab);
-    await fs.mkdir(path.join(skillDir, "assets", ".clawhub"), { recursive: true });
     await fs.mkdir(path.join(skillDir, "empty-directory"));
-    await fs.mkdir(path.join(skillDir, "~"));
-    for (const excluded of [".clawhub", ".clawdhub", ".openclaw"]) {
-      await fs.mkdir(path.join(skillDir, excluded));
-      await fs.writeFile(path.join(skillDir, excluded, "ignored.txt"), "ignored");
-    }
-    await fs.writeFile(path.join(skillDir, "z.bin"), binary);
-    await fs.writeFile(path.join(skillDir, "SKILL.MD"), legacyContent);
-    await fs.writeFile(path.join(skillDir, "assets", "empty.txt"), "");
-    await fs.writeFile(path.join(skillDir, "assets", ".clawhub", "retained.bin"), nestedMetadata);
-    await fs.writeFile(path.join(skillDir, "skills.md"), content);
-    await fs.writeFile(path.join(skillDir, "~", "support.txt"), literalTildeContent);
-
-    const digest = (data: Buffer | string) => createHash("sha256").update(data).digest("hex");
+    await writeFiles(skillDir, {
+      ".clawhub/ignored.txt": "ignored",
+      ".clawdhub/ignored.txt": "ignored",
+      ".openclaw/ignored.txt": "ignored",
+      "z.bin": binary,
+      "SKILL.MD": legacyContent,
+      "assets/empty.txt": "",
+      "assets/.clawhub/retained.bin": nestedMetadata,
+      "skills.md": content,
+      "~/support.txt": literalTildeContent,
+    });
     const expectedFiles = [
       { path: "SKILL.MD", sha256: digest(legacyContent), sizeBytes: legacyContent.byteLength },
       { path: "assets/.clawhub/retained.bin", sha256: digest(nestedMetadata), sizeBytes: 3 },
@@ -62,9 +78,7 @@ describe("committed skill artifact snapshots", () => {
     ];
 
     await expect(
-      snapshotCommittedSkillArtifactBestEffort({
-        skillDir,
-        skillKey: "installed-key",
+      snapshot(skillDir, {
         source: "clawhub",
         sourceVersion: "release-7",
       }),
@@ -87,12 +101,9 @@ describe("committed skill artifact snapshots", () => {
   it.each(["asset.bin"])("rejects a hardlink added before reading %s", async (name) => {
     const parent = await tempDirs.make("openclaw-skill-change-race-");
     const skillDir = path.join(parent, "skill");
-    const assetPath = path.join(skillDir, "asset.bin");
     const targetPath = path.join(skillDir, name);
     const outsidePath = path.join(parent, "outside.bin");
-    await fs.mkdir(skillDir);
-    await fs.writeFile(path.join(skillDir, "SKILL.md"), "# Skill\n");
-    await fs.writeFile(assetPath, "original");
+    await writeFiles(skillDir, { "SKILL.md": "# Skill\n", "asset.bin": "original" });
     const warn = vi.fn();
     const read = vi.fn().mockRejectedValue(new Error("unexpected file read"));
     let linked = false;
@@ -101,21 +112,13 @@ describe("committed skill artifact snapshots", () => {
         if (filePath === targetPath) {
           __setFsSafeTestHooksForTest(undefined);
           vi.spyOn(handle, "read").mockImplementation(read);
-          vi.spyOn(handle, "readFile").mockImplementation(read);
           await fs.link(targetPath, outsidePath);
           linked = true;
         }
       },
     });
 
-    await expect(
-      snapshotCommittedSkillArtifactBestEffort({
-        skillDir,
-        skillKey: "installed-key",
-        source: "source-install",
-        logger: { warn },
-      }),
-    ).resolves.toBeUndefined();
+    await expect(snapshot(skillDir, { logger: { warn } })).resolves.toBeUndefined();
     expect(linked).toBe(true);
     expect(read).not.toHaveBeenCalled();
     expect(warn).toHaveBeenCalledWith(expect.stringContaining(`hard-linked file "${name}"`));
@@ -129,14 +132,7 @@ describe("committed skill artifact snapshots", () => {
       await fs.symlink("missing", path.join(skillDir, "alias"));
       const warn = vi.fn();
 
-      await expect(
-        snapshotCommittedSkillArtifactBestEffort({
-          skillDir,
-          skillKey: "installed-key",
-          source: "source-install",
-          logger: { warn },
-        }),
-      ).resolves.toBeUndefined();
+      await expect(snapshot(skillDir, { logger: { warn } })).resolves.toBeUndefined();
       expect(warn).toHaveBeenCalledWith(expect.stringContaining('unsupported entry "alias"'));
     },
   );
@@ -145,34 +141,25 @@ describe("committed skill artifact snapshots", () => {
     const parent = await tempDirs.make("openclaw-skill-change-version-");
     const skillDir = path.join(parent, "skill");
     const skillFile = path.join(skillDir, "SKILL.md");
-    const laterAsset = path.join(skillDir, "z.txt");
     const replacement = path.join(parent, "replacement.md");
     const initialContent = "---\nname: Before\nversion: 1.0.0\n---\n";
     const replacementContent = "---\nname: After\nversion: 2.0.0\n---\n";
-    await fs.mkdir(skillDir);
-    await fs.writeFile(skillFile, initialContent);
-    await fs.writeFile(laterAsset, "asset");
+    await writeFiles(skillDir, { "SKILL.md": initialContent, "z.txt": "asset" });
     await fs.writeFile(replacement, replacementContent);
     __setFsSafeTestHooksForTest({
       beforeRootReadFinalFence: async (filePath) => {
-        if (filePath === laterAsset) {
+        if (filePath === path.join(skillDir, "z.txt")) {
           __setFsSafeTestHooksForTest(undefined);
           await fs.rename(replacement, skillFile);
         }
       },
     });
 
-    await expect(
-      snapshotCommittedSkillArtifactBestEffort({
-        skillDir,
-        skillKey: "installed-key",
-        source: "source-install",
-      }),
-    ).resolves.toMatchObject({
+    await expect(snapshot(skillDir)).resolves.toMatchObject({
       name: "Before",
       revision: {
         declaredVersion: "1.0.0",
-        contentSha256: `sha256:${createHash("sha256").update(initialContent).digest("hex")}`,
+        contentSha256: `sha256:${digest(initialContent)}`,
       },
     });
     await expect(fs.readFile(skillFile, "utf8")).resolves.toBe(replacementContent);

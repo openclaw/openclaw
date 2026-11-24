@@ -8,6 +8,9 @@ import {
   readSqliteShmPosixLocks,
 } from "../../../infra/sqlite-posix-locks.test-support.js";
 import { runSqliteReadOnlyWorker } from "../../../infra/sqlite-readonly-worker.js";
+import { runWithSpawnBroker } from "../../../process/spawn-broker/context.js";
+import { createSpawnBrokerHost } from "../../../process/spawn-broker/host.js";
+import { wrapToolWorkspaceRootGuardWithOptions } from "../../agent-tools.read.js";
 import { createReadTool } from "./read.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -37,12 +40,38 @@ it.skipIf(process.platform !== "linux" && process.platform !== "darwin")(
       ]);
       expect(shmLocks).toEqual([{ length: 1, pid: process.pid, start: 128, type: "read" }]);
       const read = createReadTool(directory, { modelHasVision: false });
-      for (const suffix of ["", "-wal", "-shm"]) {
-        await read.execute("read-live-file", { path: pathname + suffix });
-      }
       const alias = path.join(directory, "notes.txt");
       fs.linkSync(`${pathname}-shm`, alias);
-      await read.execute("read-live-alias", { path: alias });
+      const broker = createSpawnBrokerHost();
+      try {
+        await broker.ready();
+        for (const owner of [undefined, broker]) {
+          await runWithSpawnBroker(owner, async () => {
+            for (const suffix of ["", "-wal", "-shm"]) {
+              await read.execute("read-live-file", { path: pathname + suffix });
+            }
+            await read.execute("read-live-alias", { path: alias });
+          });
+          expect(readSqliteShmPosixLocks(`${pathname}-shm`)).toEqual(shmLocks);
+          expect(readMainDatabasePosixLocks(pathname)).toEqual(mainLocks);
+        }
+        const guarded = wrapToolWorkspaceRootGuardWithOptions(read, directory);
+        const outside = tempDirs.make("read-outside-");
+        fs.writeFileSync(path.join(outside, "secret.txt"), "outside bytes");
+        fs.symlinkSync(outside, path.join(directory, "escape"), "dir");
+        await runWithSpawnBroker(broker, async () => {
+          for (const filePath of [
+            path.relative(directory, path.join(outside, "secret.txt")),
+            path.join(directory, "escape", "secret.txt"),
+          ]) {
+            await expect(guarded.execute("read-escape", { path: filePath })).rejects.toThrow(
+              /(?:Path|Symlink) escapes sandbox root/,
+            );
+          }
+        });
+      } finally {
+        await broker.close();
+      }
       // Fail before opening another SQLite connection: a lost DMS lock can SIGBUS this process.
       expect(readSqliteShmPosixLocks(`${pathname}-shm`)).toEqual(shmLocks);
       expect(readMainDatabasePosixLocks(pathname)).toEqual(mainLocks);

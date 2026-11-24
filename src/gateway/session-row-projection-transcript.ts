@@ -124,6 +124,13 @@ export function createSessionRowProjectionTranscriptUpdates(params: {
                   maxSeq: fact.value.rawSeq,
                 },
                 transcriptPreview: fact.value.lastMessagePreview,
+                transcriptHasMessages: fact.value.hasMessages,
+                transcriptAssistantMessage:
+                  fact.value.lastAssistantMessage === "unchanged"
+                    ? facts.transcriptAssistantMessage
+                    : fact.value.lastAssistantMessage === undefined
+                      ? "unknown"
+                      : fact.value.lastAssistantMessage,
                 transcriptTerminalModel: fact.value.terminalModel,
               }
             : undefined;

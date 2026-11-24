@@ -9,6 +9,7 @@ import { captureManagedUpdateLeaseDatabaseIdentity } from "../infra/update-manag
 import { createManagedHandoffLeaseStore } from "../infra/update-managed-service-handoff-lease.js";
 import {
   heldServiceLockCoordinate,
+  readManagedHandoffRowsJson,
   seedRetainedBorrower,
   type RetainedBorrowerSource,
 } from "../infra/update-retained-custody.test-support.js";
@@ -100,18 +101,7 @@ function seedRetained(
   return result.lease;
 }
 
-function rowBytes() {
-  const db = new DatabaseSync(path.join(fixture.root, "managed-update-handoffs.sqlite"), {
-    readOnly: true,
-  });
-  try {
-    return JSON.stringify(
-      db.prepare("SELECT * FROM managed_update_handoffs ORDER BY install_root").all(),
-    );
-  } finally {
-    db.close();
-  }
-}
+const rowBytes = () => readManagedHandoffRowsJson(fixture.root);
 function sidecar(file = source.serviceKey) {
   const lockPath = file + ".lock";
   const stat = fs.lstatSync(lockPath);

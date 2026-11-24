@@ -18,26 +18,18 @@ import {
 import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import {
+  resolveRuntimeBootstrapExternalEntrypointUrl,
+  resolveRuntimeDependencyEntrypointUrlFromDirectory,
+} from "../../runtime-process-bootstrap.generated.mjs";
 import { buildCmdExeCommandLine, resolveWindowsCmdExePath } from "../windows-cmd-helpers.mjs";
+import { FS_SAFE_NPM_CLI_PRELOAD_DATA_URL } from "./fs-safe-npm-cli-preload.generated.mjs";
+import { NPM_CLI_REPORT } from "./fs-safe-npm-cli-protocol.mjs";
 
 const PROBE_TIMEOUT_MS = 10_000;
 const INSTALL_TIMEOUT_MS = 60_000;
-const scriptPath = fileURLToPath(import.meta.url);
-const NPM_CLI_REPORT = "OPENCLAW_NPM_CLI:";
-// Inline preloading gives delayed manager descendants no temporary file to outlive.
-// It reports the selected CLI before npm initializes or can run package scripts.
-const NPM_CLI_PRELOAD = `data:text/javascript;base64,${Buffer.from(`
-  import fs from "node:fs";
-  import path from "node:path";
-  try {
-    const cli = fs.realpathSync(process.argv[1]);
-    if (path.basename(cli) === "npm-cli.js" &&
-        JSON.parse(fs.readFileSync(path.join(path.dirname(cli), "../package.json"), "utf8")).name === "npm") {
-      fs.writeFileSync(1, ${JSON.stringify(NPM_CLI_REPORT)} + JSON.stringify(cli) + "\\n");
-      process.exit(0);
-    }
-  } catch {}
-`).toString("base64")}`;
+const scriptPath = fileURLToPath(resolveRuntimeBootstrapExternalEntrypointUrl("fsSafePrebuild"));
+// The built data URL remains available to manager descendants after discovery exits.
 
 async function probePrebuild(packageRoot) {
   const requireFromPackage = createRequire(path.join(packageRoot, "package.json"));
@@ -122,8 +114,12 @@ function inspectNpmCli(launcher, env, cwd) {
     cwd,
     env: {
       ...env,
-      NODE_OPTIONS: [env.NODE_OPTIONS, `--import=${NPM_CLI_PRELOAD}`].filter(Boolean).join(" "),
-      BUN_OPTIONS: [env.BUN_OPTIONS, `--preload=${NPM_CLI_PRELOAD}`].filter(Boolean).join(" "),
+      NODE_OPTIONS: [env.NODE_OPTIONS, `--import=${FS_SAFE_NPM_CLI_PRELOAD_DATA_URL}`]
+        .filter(Boolean)
+        .join(" "),
+      BUN_OPTIONS: [env.BUN_OPTIONS, `--preload=${FS_SAFE_NPM_CLI_PRELOAD_DATA_URL}`]
+        .filter(Boolean)
+        .join(" "),
     },
     encoding: "utf8",
     timeout: PROBE_TIMEOUT_MS,
@@ -212,7 +208,8 @@ function runNpmInstall(npmCli, ownerRoot, stageRoot, spec, env) {
   const childEnv = Object.fromEntries(
     Object.entries(env).filter(([key]) => key.toLowerCase() !== "npm_config_allow_scripts"),
   );
-  const result = spawnSync(process.execPath, [npmCli, ...args], {
+  const entry = resolveRuntimeDependencyEntrypointUrlFromDirectory("npm", path.dirname(npmCli));
+  const result = spawnSync(process.execPath, [fileURLToPath(entry), ...args], {
     cwd: ownerRoot,
     env: childEnv,
     encoding: "utf8",

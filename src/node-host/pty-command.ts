@@ -147,6 +147,7 @@ export async function runNodePtyCommand(
   params.assertCurrent?.();
   const pty = await spawn(
     {
+      executionIntent: "agent-tool",
       file: params.file,
       args: params.args,
       cwd: resolvePtyCwd(params.cwd, params.requiredCwd),

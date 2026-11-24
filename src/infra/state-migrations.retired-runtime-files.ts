@@ -1,20 +1,16 @@
 import os from "node:os";
 import path from "node:path";
 import { resolveRequiredHomeDir } from "./home-dir.js";
-import { assertNoRetiredRestartSentinelFiles } from "./state-migrations.restart-sentinel.js";
+import { listRetiredRestartSentinelFiles } from "./state-migrations.restart-sentinel.js";
 import { assertNoRetiredStateFiles } from "./state-migrations.retired-files.js";
 
-export function assertNoRetiredRuntimeStateFiles(
+export function listImportableRetiredRuntimeStateFiles(
   stateDir: string,
   env: NodeJS.ProcessEnv = process.env,
   homedir: () => string = os.homedir,
-): void {
+): string[] {
   const defaultStateDir = path.join(resolveRequiredHomeDir(env, homedir), ".openclaw");
-  // A leftover update-check.json is a disposable notification cache, so it never blocks
-  // Doctor or updates; losing it only repeats one update notice.
-  assertNoRetiredStateFiles("Runtime JSON sidecars", [
-    path.join(stateDir, "acp", "event-ledger.json"),
-    path.join(stateDir, "acp", "event-ledger.json.doctor-import"),
+  return [
     path.join(stateDir, "settings", "voicewake.json"),
     path.join(stateDir, "settings", "voicewake-routing.json"),
     path.join(stateDir, "bindings", "current-conversations.json"),
@@ -22,6 +18,29 @@ export function assertNoRetiredRuntimeStateFiles(
     ...(path.resolve(stateDir) === path.resolve(defaultStateDir)
       ? [path.join(defaultStateDir, "plugin-binding-approvals.json")]
       : []),
-  ]);
-  assertNoRetiredRestartSentinelFiles(stateDir);
+  ];
+}
+
+export function listRetiredRuntimeStateFiles(
+  stateDir: string,
+  env: NodeJS.ProcessEnv = process.env,
+  homedir: () => string = os.homedir,
+): string[] {
+  return [
+    ...listImportableRetiredRuntimeStateFiles(stateDir, env, homedir),
+    path.join(stateDir, "acp", "event-ledger.json"),
+    path.join(stateDir, "acp", "event-ledger.json.doctor-import"),
+    ...listRetiredRestartSentinelFiles(stateDir),
+  ];
+}
+
+export function assertNoRetiredRuntimeStateFiles(
+  stateDir: string,
+  env: NodeJS.ProcessEnv = process.env,
+  homedir: () => string = os.homedir,
+): void {
+  assertNoRetiredStateFiles(
+    "Runtime JSON sidecars",
+    listRetiredRuntimeStateFiles(stateDir, env, homedir),
+  );
 }

@@ -58,7 +58,7 @@ export type SessionRowFacts =
       actorVersion?: { epoch: string; sequence: number };
     }
   | { kind: "category"; sessionId: string; category: string | null }
-  | { kind: "removed" };
+  | { kind: "removed"; transcriptInventoryUnchanged?: true };
 
 export type SessionRowChange =
   | {
@@ -66,6 +66,8 @@ export type SessionRowChange =
       agentId?: string;
       storePath?: string;
       scope?: "automation" | "runtime" | "session-entry" | "acp" | "transcript";
+      /** Runtime aliases can select stored rows by session ID independently of their key. */
+      runtimeSession?: { sessionId: string; agentId?: string };
       /** Category uncertainty cannot change identity or lineage; other storage outcomes can. */
       factsInvalidated?: true | "category";
       /** Omission is a metadata notification; storage owners publish their changed facts. */
@@ -74,6 +76,8 @@ export type SessionRowChange =
   | {
       all: true;
       scope: string | { agentId?: string; storePath?: string; topology?: true };
+      /** Run owners without a logical key retain the identity for indexed row invalidation. */
+      runtimeSession?: { sessionId: string; agentId?: string };
       factsInvalidated?: true;
     };
 
@@ -109,6 +113,33 @@ export function isSessionStoreTopologyChange(change: SessionRowChange): boolean 
     (change.scope === "stores" ||
       (typeof change.scope === "object" && change.scope.topology === true))
   );
+}
+
+/** Replay descriptive reads when a committed topology change supersedes their captured stores. */
+export async function readWithSessionStoreTopology<T>(read: () => Promise<T>): Promise<T> {
+  let changed: boolean;
+  const stop = sessionChanges.subscribeFacts((change) => {
+    if (isSessionStoreTopologyChange(change)) {
+      changed = true;
+    }
+  });
+  try {
+    for (;;) {
+      changed = false;
+      try {
+        const result = await read();
+        if (!changed) {
+          return result;
+        }
+      } catch (error) {
+        if (!changed) {
+          throw error;
+        }
+      }
+    }
+  } finally {
+    stop();
+  }
 }
 
 type SessionRowNotification =

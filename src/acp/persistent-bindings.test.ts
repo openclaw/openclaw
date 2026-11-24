@@ -1,7 +1,6 @@
 /** Tests configured channel-to-ACP binding resolution and generated session keys. */
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, expect, it } from "vitest";
 import type { ChannelConfiguredBindingProvider } from "../channels/plugins/types.adapters.js";
-import type { ChannelPlugin } from "../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
@@ -15,13 +14,12 @@ type BindingRecordInput = Parameters<typeof resolveConfiguredAcpBindingRecord>[0
 
 const baseCfg = {
   session: { mainKey: "main", scope: "per-sender" },
-  agents: {
-    entries: { codex: {}, claude: {} },
-  },
+  agents: { entries: { codex: {}, claude: {} } },
 } satisfies OpenClawConfig;
 
 const defaultDiscordConversationId = "1478836151241412759";
 const defaultDiscordAccountId = "default";
+const model = "anthropic/claude-sonnet-4-6";
 
 const discordBindings: ChannelConfiguredBindingProvider = {
   compileConfiguredBinding: ({ conversationId }) => {
@@ -43,63 +41,35 @@ const discordBindings: ChannelConfiguredBindingProvider = {
   },
 };
 
-function createConfiguredBindingTestPlugin(
-  id: ChannelPlugin["id"],
-  bindings: ChannelConfiguredBindingProvider,
-): Pick<ChannelPlugin, "id" | "meta" | "capabilities" | "config" | "bindings"> {
-  return {
-    ...createChannelTestPluginBase({ id }),
-    bindings,
-  };
-}
-
-function createCfgWithBindings(
-  bindings: ConfiguredBinding[],
-  overrides?: Partial<OpenClawConfig>,
-): OpenClawConfig {
-  return {
-    ...baseCfg,
-    ...overrides,
-    bindings,
-  } as OpenClawConfig;
-}
-
 function createDiscordBinding(params: {
-  agentId: string;
-  conversationId: string;
+  agentId?: string;
+  conversationId?: string;
   accountId?: string;
   acp?: Record<string, unknown>;
 }): ConfiguredBinding {
   return {
     type: "acp",
-    agentId: params.agentId,
+    agentId: params.agentId ?? "codex",
     match: {
       channel: "discord",
       accountId: params.accountId ?? defaultDiscordAccountId,
-      peer: { kind: "channel", id: params.conversationId },
+      peer: { kind: "channel", id: params.conversationId ?? defaultDiscordConversationId },
     },
     ...(params.acp ? { acp: params.acp } : {}),
   } as ConfiguredBinding;
 }
 
-function resolveBindingRecord(cfg: OpenClawConfig, overrides: Partial<BindingRecordInput> = {}) {
+function resolveBindingRecord(
+  bindings: Parameters<typeof createDiscordBinding>[0][],
+  overrides: Partial<BindingRecordInput> = {},
+  entries: NonNullable<OpenClawConfig["agents"]>["entries"] = baseCfg.agents.entries,
+) {
   return resolveConfiguredAcpBindingRecord({
-    cfg,
+    cfg: { ...baseCfg, agents: { entries }, bindings: bindings.map(createDiscordBinding) },
     channel: "discord",
     accountId: defaultDiscordAccountId,
     conversationId: defaultDiscordConversationId,
     ...overrides,
-  });
-}
-
-function resolveDiscordBindingSpecBySession(
-  cfg: OpenClawConfig,
-  conversationId = defaultDiscordConversationId,
-) {
-  const resolved = resolveBindingRecord(cfg, { conversationId });
-  return resolveConfiguredAcpBindingSpecBySessionKey({
-    cfg,
-    sessionKey: resolved?.record.targetSessionKey ?? "",
   });
 }
 
@@ -108,133 +78,89 @@ beforeEach(() => {
     createTestRegistry([
       {
         pluginId: "discord",
-        plugin: createConfiguredBindingTestPlugin("discord", discordBindings),
+        plugin: { ...createChannelTestPluginBase({ id: "discord" }), bindings: discordBindings },
         source: "test",
       },
     ]),
   );
 });
 
-describe("resolveConfiguredAcpBindingRecord", () => {
-  it("resolves discord channel ACP binding from top-level typed bindings", () => {
-    const cfg = createCfgWithBindings(
-      [
-        createDiscordBinding({
-          agentId: "codex",
-          conversationId: defaultDiscordConversationId,
-          acp: { cwd: "/repo/openclaw" },
-        }),
-      ],
-      {
-        agents: {
-          entries: { codex: { model: { primary: "anthropic/claude-sonnet-4-6" } } },
-        },
-      },
-    );
-    const resolved = resolveBindingRecord(cfg);
-
-    expect(resolved?.spec.channel).toBe("discord");
-    expect(resolved?.spec.conversationId).toBe(defaultDiscordConversationId);
-    expect(resolved?.spec.agentId).toBe("codex");
-    expect(resolved?.spec.model).toBe("anthropic/claude-sonnet-4-6");
-    expect(resolved?.record.targetSessionKey).toContain("agent:codex:acp:binding:discord:default:");
-    expect(resolved?.record.metadata?.source).toBe("config");
-  });
-
-  it("prefers exact account binding over wildcard for the same discord conversation", () => {
-    const cfg = createCfgWithBindings([
-      createDiscordBinding({
-        agentId: "codex",
-        conversationId: defaultDiscordConversationId,
-        accountId: "*",
-      }),
-      createDiscordBinding({
-        agentId: "claude",
-        conversationId: defaultDiscordConversationId,
-      }),
-    ]);
-    const resolved = resolveBindingRecord(cfg);
-
-    expect(resolved?.spec.agentId).toBe("claude");
-  });
-
-  it("returns null when no top-level ACP binding matches the conversation", () => {
-    const cfg = createCfgWithBindings([
-      createDiscordBinding({
-        agentId: "codex",
-        conversationId: "different-channel",
-      }),
-    ]);
-    const resolved = resolveBindingRecord(cfg, {
-      conversationId: "thread-123",
-      parentConversationId: "channel-parent-1",
-    });
-
-    expect(resolved).toBeNull();
-  });
-
-  it("applies agent runtime ACP defaults for bound conversations", () => {
-    const cfg = createCfgWithBindings(
-      [
-        createDiscordBinding({
-          agentId: "coding",
-          conversationId: defaultDiscordConversationId,
-        }),
-      ],
-      {
-        agents: {
-          entries: {
-            main: {},
-            coding: {
-              runtime: {
-                type: "acp",
-                acp: {
-                  agent: "codex",
-                  backend: "acpx",
-                  mode: "oneshot",
-                  cwd: "/workspace/repo-a",
-                },
-              },
-            },
-          },
-        },
-      },
-    );
-    const resolved = resolveBindingRecord(cfg);
-
-    expect(resolved?.spec.agentId).toBe("coding");
-    expect(resolved?.spec.acpAgentId).toBe("codex");
-    expect(resolved?.spec.mode).toBe("oneshot");
-    expect(resolved?.spec.cwd).toBe("/workspace/repo-a");
-    expect(resolved?.spec.backend).toBe("acpx");
+it("resolves discord channel ACP binding from top-level typed bindings", () => {
+  const resolved = resolveBindingRecord(
+    [{ acp: { cwd: "/repo/openclaw" } }],
+    {},
+    {
+      codex: { model: { primary: model } },
+    },
+  );
+  expect(resolved).toMatchObject({
+    spec: {
+      channel: "discord",
+      conversationId: defaultDiscordConversationId,
+      agentId: "codex",
+      model,
+    },
+    record: {
+      targetSessionKey: expect.stringContaining("agent:codex:acp:binding:discord:default:"),
+      metadata: { source: "config" },
+    },
   });
 });
 
-describe("resolveConfiguredAcpBindingSpecBySessionKey", () => {
-  it("returns null for unknown session keys", () => {
-    const spec = resolveConfiguredAcpBindingSpecBySessionKey({
+it("prefers exact account binding over wildcard for the same discord conversation", () => {
+  expect(resolveBindingRecord([{ accountId: "*" }, { agentId: "claude" }])?.spec.agentId).toBe(
+    "claude",
+  );
+});
+
+it("returns null when no top-level ACP binding matches the conversation", () => {
+  expect(
+    resolveBindingRecord([{ conversationId: "different-channel" }], {
+      conversationId: "thread-123",
+      parentConversationId: "channel-parent-1",
+    }),
+  ).toBeNull();
+});
+
+it("applies agent runtime ACP defaults for bound conversations", () => {
+  const entries = {
+    main: {},
+    coding: {
+      runtime: {
+        type: "acp",
+        acp: {
+          agent: "codex",
+          backend: "acpx",
+          mode: "oneshot",
+          cwd: "/workspace/repo-a",
+        },
+      },
+    },
+  } satisfies NonNullable<OpenClawConfig["agents"]>["entries"];
+  expect(resolveBindingRecord([{ agentId: "coding" }], {}, entries)?.spec).toMatchObject({
+    agentId: "coding",
+    acpAgentId: "codex",
+    mode: "oneshot",
+    cwd: "/workspace/repo-a",
+    backend: "acpx",
+  });
+});
+
+it("returns null for unknown session keys", () => {
+  expect(
+    resolveConfiguredAcpBindingSpecBySessionKey({
       cfg: baseCfg,
       sessionKey: "agent:main:acp:binding:discord:default:notfound",
-    });
-    expect(spec).toBeNull();
-  });
+    }),
+  ).toBeNull();
+});
 
-  it("prefers exact account ACP settings over wildcard when session keys collide", () => {
-    const cfg = createCfgWithBindings([
-      createDiscordBinding({
-        agentId: "codex",
-        conversationId: defaultDiscordConversationId,
-        accountId: "*",
-        acp: { backend: "wild" },
-      }),
-      createDiscordBinding({
-        agentId: "codex",
-        conversationId: defaultDiscordConversationId,
-        acp: { backend: "exact" },
-      }),
-    ]);
-    const spec = resolveDiscordBindingSpecBySession(cfg);
-
-    expect(spec?.backend).toBe("exact");
-  });
+it("prefers exact account ACP settings over wildcard when session keys collide", () => {
+  const bindings = [{ accountId: "*", acp: { backend: "wild" } }, { acp: { backend: "exact" } }];
+  expect(
+    resolveConfiguredAcpBindingSpecBySessionKey({
+      cfg: { ...baseCfg, bindings: bindings.map(createDiscordBinding) },
+      sessionKey: resolveBindingRecord(bindings)?.record.targetSessionKey ?? "",
+    })?.backend,
+  ).toBe("exact");
 });

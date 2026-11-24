@@ -5,11 +5,13 @@ import { finished } from "node:stream/promises";
 import { createChildAdapter } from "../../src/process/supervisor/adapters/child.js";
 import { runWithProcessCleanupBudget } from "../../src/process/supervisor/cleanup-budget.js";
 import type { ProcessExtinctionResult } from "../../src/process/supervisor/types.js";
+import { scheduleAbsoluteDeadline } from "../../src/utils/absolute-deadline.js";
 import { runQaGatewayFixture } from "./qa-gateway-cleanup.js";
 
 /** Observable command facts; the custody adapter, not this view, owns termination. */
 export type OpenClawTestProcess = EventEmitter & {
   readonly pid?: number;
+  readonly memoryRootPid?: number;
   exitCode: number | null;
   signalCode: NodeJS.Signals | null;
   killed: boolean;
@@ -23,10 +25,28 @@ export async function createOpenClawTestProcess(params: {
   cwd: string;
   env: NodeJS.ProcessEnv;
   signal?: AbortSignal;
+  startDeadline?: number;
   gracefulShutdownTimeoutMs?: number;
   onError: (error: Error) => void;
   onSpawnCleanup: (cleanup: Promise<ProcessExtinctionResult>) => void;
 }) {
+  const startupDeadline = new AbortController();
+  const startupExpired = () => {
+    startupDeadline.abort(new Error("timeout waiting for gateway process startup"));
+  };
+  const cancelDeadline =
+    params.startDeadline === undefined
+      ? undefined
+      : scheduleAbsoluteDeadline(params.startDeadline, startupExpired);
+  const startupSignal = params.signal
+    ? AbortSignal.any([params.signal, startupDeadline.signal])
+    : startupDeadline.signal;
+  const startupFailure = (error: unknown) =>
+    startupSignal.aborted && startupSignal.reason !== error
+      ? new AggregateError([startupSignal.reason, error], "Gateway startup aborted", {
+          cause: startupSignal.reason,
+        })
+      : error;
   let constructionCleanup: Promise<ProcessExtinctionResult> | undefined;
   const startup = await createChildAdapter({
     argv: params.argv,
@@ -35,22 +55,36 @@ export async function createOpenClawTestProcess(params: {
     exactEnv: true,
     ownProcessTree: true,
     stdinMode: "pipe-closed",
-    abortSignal: params.signal,
+    abortSignal: startupSignal,
     onSpawnCleanup: (cleanup) => {
-      constructionCleanup = cleanup;
-      params.onSpawnCleanup(cleanup);
-      void cleanup.catch(() => {});
+      constructionCleanup = cleanup.then(requireProcessExtinction);
+      params.onSpawnCleanup(constructionCleanup);
+      void constructionCleanup.catch(() => {});
     },
   }).catch(async (error: unknown) => {
+    cancelDeadline?.();
     // Construction publishes custody before readiness can fail.
     return await runQaGatewayFixture(
       async (): Promise<never> => {
-        throw error;
+        throw startupFailure(error);
       },
       () => constructionCleanup,
     );
   });
   const { adapter, ready } = startup;
+  const started = ready
+    .then(() => {
+      // Admission and IPC readiness spend the same budget as the HTTP probe.
+      if (params.startDeadline !== undefined && Date.now() >= params.startDeadline) {
+        startupExpired();
+      }
+      startupSignal.throwIfAborted();
+    })
+    .catch((error: unknown) => {
+      throw startupFailure(error);
+    })
+    .finally(() => cancelDeadline?.());
+  void started.catch(() => {});
   const stdout = new PassThrough();
   const stderr = new PassThrough();
   let shutdownTimer: NodeJS.Timeout | undefined;
@@ -82,8 +116,9 @@ export async function createOpenClawTestProcess(params: {
       return true;
     },
   });
-  // Command admission may assign its PID after construction.
+  // Command admission may assign its PID later; sampling retains the separate custody root.
   Object.defineProperty(child, "pid", { get: () => adapter.pid });
+  Object.defineProperty(child, "memoryRootPid", { get: () => adapter.memoryRootPid });
   child.on("error", params.onError);
   adapter.onStdout((chunk) => stdout.write(chunk));
   adapter.onStderr((chunk) => stderr.write(chunk));
@@ -101,7 +136,7 @@ export async function createOpenClawTestProcess(params: {
     child.emit("close", result.code, result.signal);
   });
   void completion.catch(() => {});
-  const extinction = adapter.waitForExtinction?.();
+  const extinction = adapter.waitForExtinction?.()?.then(requireProcessExtinction);
   if (!extinction) {
     throw new Error("Gateway process custody did not provide an extinction receipt");
   }
@@ -109,7 +144,7 @@ export async function createOpenClawTestProcess(params: {
   let stopped: Promise<boolean> | undefined;
   return {
     process: child,
-    started: ready,
+    started,
     stop: (deadline: number, warn: (message: string) => void) =>
       (stopped ??= (async () => {
         if (child.exitCode !== null || child.signalCode !== null) {
@@ -143,4 +178,14 @@ export async function createOpenClawTestProcess(params: {
         return true;
       })()),
   };
+}
+
+function requireProcessExtinction(result: ProcessExtinctionResult): void {
+  // A settled receipt can release custody without proving descendant exit.
+  // Keep the fixture owner and its state until the adapter confirms extinction.
+  if (result && result.status !== "confirmed") {
+    throw new Error(`Gateway process extinction was not confirmed (${result.status})`, {
+      cause: result,
+    });
+  }
 }

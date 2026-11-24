@@ -197,7 +197,11 @@ final class StatusMenuRenderer: NSObject {
         switch content.kind {
         case .header:
             Self.configureHostedView(
-                item, rootView: StatusMenuHeaderView(state: self.state, isSleeping: self.isSleeping))
+                item,
+                rootView: StatusMenuHeaderView(
+                    state: self.state,
+                    isSleeping: self.isSleeping,
+                    onCheckForUpdates: self.onInstallUpdate))
         case let .session(row):
             StatusMenuSessions.shared.configureSessionItem(item, row: row)
         case let .approval(request):
@@ -255,8 +259,10 @@ final class StatusMenuRenderer: NSObject {
 
     private func configureAction(_ item: NSMenuItem, action: StatusMenuDescriptor.Action) {
         let (title, symbol) = switch action {
+        case .openClawIDSignIn:
+            (String(localized: "Sign in with OpenClaw ID…"), "person.crop.circle")
         case .dashboard:
-            (String(localized: "Open Dashboard"), "gauge")
+            (String(localized: "Open OpenClaw"), "gauge")
         case .quickChat:
             (String(localized: "Quick Chat"), "text.bubble")
         case .talkMode:
@@ -278,8 +284,11 @@ final class StatusMenuRenderer: NSObject {
         }
 
         self.configureNative(item, title: title, symbol: symbol, action: #selector(self.performAction(_:)))
-        item.isEnabled = action != .talkMode || voiceWakeSupported
         item.keyEquivalent = ""
+        if action == .dashboard {
+            item.isEnabled = self.state.connectionMode != .unconfigured ||
+                !DashboardManager.shared.gatewayEntries.isEmpty
+        }
 
         switch action {
         case .settings, .quit:
@@ -313,6 +322,8 @@ final class StatusMenuRenderer: NSObject {
         else { return }
 
         switch action {
+        case .openClawIDSignIn:
+            MacOpenClawIDSignInPresenter.shared.present()
         case .dashboard:
             AppNavigationActions.openDashboard()
         case .quickChat:

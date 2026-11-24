@@ -233,7 +233,6 @@ struct ChatSessionSidebarBatchTests {
         let batch = ChatSessionSidebarBatch()
         try await batch.movePin(keys: ["a"], key: "a", target: nil, after: false, connection: connection)
         #expect(written == [
-            "route:agents-home",
             "route:dashboards",
             "route:systems",
             "route:cron",

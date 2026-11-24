@@ -140,26 +140,22 @@ export async function readBoardGitHubActions(
       // must not inherit that widget's lifetime; every caller gates delivery below.
       return cache.results.read(key, () =>
         context.trackExecution(async () => {
-          const response = await gitHubPublicApi.fetchGitHubApi(
+          const { value: raw } = await gitHubPublicApi.fetchGitHubJsonPage(
             request.url,
             fetch,
             identity.token,
-            async () => {
-              // A redirect is a new target, not authority to read another repository or operation.
-              throw new BoardValidationError(
-                "invalid_operation",
-                "GitHub Actions redirected the request; verify the repository/workflow, update the widget grant if needed, and retry.",
-              );
+            {
+              beforeRedirect: async () => {
+                // A redirect is a new target, not authority to read another repository or operation.
+                throw new BoardValidationError(
+                  "invalid_operation",
+                  "GitHub Actions redirected the request; verify the repository/workflow, update the widget grant if needed, and retry.",
+                );
+              },
+              signal: getAsyncWorkSignal(),
+              apiBaseUrl: gitHubPublicApi.GITHUB_API_ORIGIN,
+              maxBytes: ACTIONS_MAX_RESPONSE_BYTES,
             },
-            undefined,
-            undefined,
-            getAsyncWorkSignal(),
-            undefined,
-            gitHubPublicApi.GITHUB_API_ORIGIN,
-          );
-          const raw = await gitHubPublicApi.readGitHubJsonResponse(
-            response,
-            ACTIONS_MAX_RESPONSE_BYTES,
           );
           const parsed = runsSchema.safeParse(raw);
           if (
@@ -188,9 +184,20 @@ export async function readBoardGitHubActions(
         }),
       );
     });
-    await identity.start(() =>
-      publish(true, structuredClone({ ...result.value, ...(result.stale ? { stale: true } : {}) })),
-    );
+    await identity.start(() => {
+      // The cache holds credential-scoped upstream data. Each delivery applies
+      // this widget's field restrictions under its current query grant.
+      const fields = authority.query && new Set<string>(authority.query.fields);
+      const value = fields
+        ? {
+            ...(fields.has("total_count") ? { total_count: result.value.total_count } : {}),
+            workflow_runs: result.value.workflow_runs.map((run) =>
+              Object.fromEntries(Object.entries(run).filter(([field]) => fields.has(field))),
+            ),
+          }
+        : result.value;
+      publish(true, structuredClone({ ...value, ...(result.stale ? { stale: true } : {}) }));
+    });
   } catch (error) {
     throw actionsFailure(error);
   } finally {

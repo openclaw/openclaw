@@ -41,7 +41,7 @@ scenario:
     - docs/gateway/heartbeat.md
     - docs/tools/subagents.md
   codeRefs:
-    - src/infra/heartbeat-runner-execution.ts
+    - src/auto-reply/reply/session-event-handoff.ts
     - src/agents/bash-tools.exec-runtime.ts
     - src/agents/subagents/spawn/subagent-spawn.ts
   execution:

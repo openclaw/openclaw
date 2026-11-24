@@ -10,9 +10,7 @@ import {
   readSessionIdentitySnapshot,
   writeSessionEntry,
 } from "./session-accessor.sqlite-entry-store.js";
-import { withSessionParticipantWriteSnapshot } from "./session-accessor.sqlite-participant-projection.js";
 import { assertCanonicalSqliteSessionKeysCurrent } from "./session-canonical-key.js";
-import { assertSessionEntryPatchCliHistory } from "./session-entry-patch-guard.js";
 import type { SessionEntryPatchGuard } from "./session-entry-patch.types.js";
 import type { SessionEntryWritePostimages } from "./session-entry-write-postimage.js";
 import { collectSessionEntryLookupKeys } from "./store-entry.js";
@@ -38,8 +36,9 @@ export function replaceSessionEntryInDatabase(
 ): SessionEntryIdentityChange {
   const identityKeys = collectSessionEntryLookupKeys(sessionKey);
   const previous = readSessionIdentitySnapshot(database, identityKeys);
-  writeSessionEntry(database, sessionKey, entry);
-  const current = readSessionIdentitySnapshot(database, identityKeys);
+  const written = writeSessionEntry(database, sessionKey, entry);
+  const current = new Map(previous);
+  current.set(sessionKey, written);
   return { previous, current };
 }
 
@@ -57,16 +56,14 @@ export function applySessionEntryPatchInDatabase(
     options: Pick<
       SessionEntryPatchOptions,
       "consumePendingReset" | "assertCommitAllowed" | "providerReviewMutation"
-    > & { workerGuard?: Pick<SessionEntryPatchGuard, "cliHistory" | "conversation"> };
+    > & { workerGuard?: Pick<SessionEntryPatchGuard, "conversation"> };
   },
 ): SessionEntryPatchMutation {
   // Canonical validation belongs to the current connection, not the captured rows.
   if (params.validateCanonicalKeys) {
     assertCanonicalSqliteSessionKeysCurrent(database);
   }
-  const fresh = withSessionParticipantWriteSnapshot(database.db, () =>
-    params.readSnapshot(database),
-  );
+  const fresh = params.readSnapshot(database);
   assertLifecycleTargetSnapshotUnchanged(params.prepared, fresh, params.operationLabel);
   return writeSessionEntryPatchInDatabase(database, { ...params, fresh });
 }
@@ -88,11 +85,6 @@ export function writeSessionEntryPatchInDatabase(
       conversation,
     );
   }
-  assertSessionEntryPatchCliHistory(
-    database,
-    params.sessionKey,
-    params.options.workerGuard?.cliHistory,
-  );
   if (!params.next) {
     return { applied: false, entry: structuredClone(params.writeBase) };
   }

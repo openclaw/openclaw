@@ -12,10 +12,7 @@ import {
   prepareAgentAuthProfileRowsRead,
   readSharedAuthProfileRows,
 } from "./auth-profiles/sqlite-read.js";
-import {
-  resolveAuthProfileDatabaseOwnerId,
-  resolveAuthProfileDatabasePath,
-} from "./auth-profiles/sqlite.js";
+import { resolveAuthProfileDatabasePath } from "./auth-profiles/sqlite.js";
 import type { AuthProfileCredential, AuthProfileRowRead } from "./auth-profiles/types.js";
 
 export type PluginModelCatalogAuthSnapshot = Array<{
@@ -36,7 +33,7 @@ export function pluginModelCatalogCredentialValues(
       : credential.type === "token"
         ? [credential.token]
         : [credential.access, credential.refresh];
-  return values.filter((value): value is string => typeof value === "string" && value.length > 0);
+  return values.filter((value): value is string => value !== undefined && value.length > 0);
 }
 
 /** Retain credentials acquired during discovery, even if logout removes them before it settles. */
@@ -106,9 +103,8 @@ export async function capturePluginModelCatalogAuth(
   for (const owner of owners) {
     const reader =
       owner.kind === "agent"
-        ? prepareAgentAuthProfileRowsRead({
+        ? await prepareAgentAuthProfileRowsRead({
             databasePath: owner.databasePath,
-            agentId: resolveAuthProfileDatabaseOwnerId(owner.agentDir),
             env: capturedEnv,
           })
         : undefined;

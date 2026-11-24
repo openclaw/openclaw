@@ -21,6 +21,7 @@ import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../src/state/openclaw-state-db.js";
+import { requireNativeSqliteDatabase } from "../src/test-utils/native-sqlite.js";
 import { parseStrictIntegerOption } from "./lib/dev-tooling-safety.ts";
 import {
   collectSqliteQueryPlanEvidence,
@@ -724,9 +725,10 @@ function main(): void {
     if (!(stateDb instanceof DatabaseSync)) {
       throw new Error("SQLite state benchmark requires a SQLite state database");
     }
-    const agentDatabases = Array.from({ length: config.agentCount }, (_, index) =>
-      openOpenClawAgentDatabase({ agentId: `perf-agent-${index}`, env }),
-    );
+    const agentDatabases = Array.from({ length: config.agentCount }, (_, index) => {
+      const database = openOpenClawAgentDatabase({ agentId: `perf-agent-${index}`, env });
+      return { path: database.path, db: requireNativeSqliteDatabase(database.db) };
+    });
 
     const seedStarted = nowMs();
     seedStateDatabase(stateDb, config);

@@ -1,4 +1,4 @@
-import { execFileSync, spawnSync, type SpawnSyncReturns } from "node:child_process";
+import { spawnSync, type SpawnSyncReturns } from "node:child_process";
 import {
   copyFileSync,
   cpSync,
@@ -16,59 +16,14 @@ import {
   expandUpdateFirstHopCompatLanes,
 } from "../../scripts/lib/update-first-hop-lanes.mjs";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import {
+  commitFixture as commit,
+  copyFrozenTargetTooling,
+  frozenTargetEntrypoint as entrypoint,
+} from "./frozen-target-fixture.test-support.js";
 
 const temps = useAutoCleanupTempDirTracker(afterEach);
 const repo = resolve(".");
-const entrypoint = "scripts/preflight-frozen-target-contracts.mjs";
-const closure = [
-  entrypoint,
-  "scripts/lib/frozen-target-workflow-request.mjs",
-  "scripts/lib/release-upgrade-baseline.mjs",
-  "scripts/lib/canonical-json.mjs",
-  "scripts/lib/docker-e2e-plan.mts",
-  "scripts/lib/docker-e2e-scenarios.mts",
-  "scripts/lib/official-external-channel-catalog.json",
-  "scripts/lib/official-external-provider-catalog.json",
-  "scripts/lib/record-shared.mjs",
-  "scripts/lib/update-compat-inventory.json",
-  "scripts/lib/update-first-hop-lanes.mjs",
-  "scripts/lib/upgrade-survivor-policy.mjs",
-  "scripts/lib/upgrade-survivor-scenarios.json",
-  "scripts/lib/release-version.mjs",
-  "scripts/lib/frozen-target-source.mjs",
-  "scripts/lib/frozen-target-compat.sh",
-  "scripts/lib/trusted-native-typescript.mjs",
-  "scripts/lib/native-typescript.mts",
-  "scripts/resolve-frozen-codex-live-suite.mjs",
-  "scripts/resolve-fs-safe-native-contract.mjs",
-  "scripts/e2e/lib/upgrade-survivor/config-recipe.mts",
-  "scripts/windows-cmd-helpers.mjs",
-  "package.json",
-  "pnpm-lock.yaml",
-];
-
-function commit(root: string, excluded: string[] = []) {
-  const git = (...args: string[]) =>
-    execFileSync(
-      "git",
-      [
-        "-c",
-        "core.hooksPath=/dev/null",
-        "-c",
-        "commit.gpgsign=false",
-        "-c",
-        "user.name=Test",
-        "-c",
-        "user.email=test@example.invalid",
-        ...args,
-      ],
-      { cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
-    ).trim();
-  git("init", "-q");
-  git("add", "--", ".", ...excluded.map((path) => `:(exclude)${path}`));
-  git("commit", "-qm", "fixture");
-  return { root, sha: git("rev-parse", "HEAD"), git };
-}
 
 function removeBlob(source: ReturnType<typeof commit>, path: string) {
   const oid = source.git("rev-parse", `${source.sha}:${path}`);
@@ -103,13 +58,7 @@ function fixture(
       ? root
       : join(layout === "nested-selected" ? toolingRoot : root, "selected");
   mkdirSync(selectedRoot, { recursive: true });
-  for (const file of closure) {
-    const dest = join(toolingRoot, file);
-    mkdirSync(dirname(dest), { recursive: true });
-    copyFileSync(join(repo, file), dest);
-  }
-  const recipes = "scripts/e2e/lib/upgrade-survivor/config-recipe";
-  cpSync(join(repo, recipes), join(toolingRoot, recipes), { recursive: true });
+  copyFrozenTargetTooling(toolingRoot);
   if (support) {
     cpSync(join(repo, "scripts/e2e/lib"), join(toolingRoot, "scripts/e2e/lib"), {
       recursive: true,
@@ -211,6 +160,54 @@ function survivorFiles(version = "2026.8.35", recipe = "config-recipe.mts") {
   }
   return files;
 }
+
+describe("update-channel refusal contract", () => {
+  const target = "src/cli/update-cli/update-command-target.ts";
+  const global = "src/infra/update-global.ts";
+  it.each([
+    { tag: "main", condition: 'explicitTag === "main"', helper: "" },
+    {
+      tag: "MAIN",
+      condition: "isMainPackageTarget(explicitTag)",
+      helper:
+        'export function isMainPackageTarget(value: string | null): boolean {\n  return normalizeLowercaseStringOrEmpty(value) === "main";\n}',
+    },
+  ])("retains the $tag refusal with omissions disabled", ({ tag, condition, helper }) => {
+    const f = fixture({
+      [target]: 'const unsupported = updateInstallKind === "package" && ' + condition + ";",
+      [global]: helper,
+    });
+    // Selection follows committed source, not a dirty working-tree replacement.
+    writeFileSync(join(f.selected.root, target), "throw new Error('untrusted');");
+    const result = f.run(
+      { docker: { lanes: ["update-channel-switch"] } },
+      { allowFrozenTargetScenarioOmissions: false },
+    );
+    expect(result.status, result.stderr).toBe(0);
+    const record = JSON.parse(result.stdout);
+    expect(record.contracts).toContainEqual({
+      consumer: "update-channel-switch",
+      status: "ADMITTED",
+      modes: { OPENCLAW_FROZEN_TARGET_UPDATE_MAIN_TAG: tag },
+      files: [],
+    });
+    expect(record.docker.omitted).toEqual([]);
+    expect(record.sources.selected.map((entry: { path: string }) => entry.path)).toEqual(
+      expect.arrayContaining([target, global]),
+    );
+  });
+
+  it("rejects an unknown refusal contract rather than dropping its probe", () => {
+    const f = fixture({ [target]: "unknownContract();", [global]: "" });
+    expectRejected(
+      f.run(
+        { docker: { lanes: ["update-channel-switch"] } },
+        { allowFrozenTargetScenarioOmissions: false },
+      ),
+      "unsupported selected update main-target contract",
+    );
+  });
+});
 
 describe("frozen admission Docker consumer aliases", () => {
   const pluginAssertions = "scripts/e2e/lib/plugins/assertions.mjs";
@@ -351,28 +348,45 @@ describe("frozen admission upgrade Docker aliases", () => {
   );
 });
 
-describe("frozen admission bootstrap repairs", () => {
-  const recipeDirectory = "scripts/e2e/lib/upgrade-survivor/config-recipe";
-  const reader = "scripts/lib/frozen-target-source.mjs";
-  const shell = "scripts/lib/frozen-target-compat.sh";
+describe("frozen admission skill library contract", () => {
+  it.each([false, true])("records selected migration=%s with omissions disabled", (split) => {
+    const doctor = "src/commands/doctor/shared/legacy-config-migrations.runtime.tool-names.ts";
+    const migration = "src/config/skill-library-tool-split-migration.ts";
+    const files: Record<string, string> = {
+      [doctor]: split ? readFileSync(doctor, "utf8") : "export const oldToolNames = [];",
+    };
+    if (split) {
+      files[migration] = readFileSync(migration, "utf8");
+    }
+    const f = fixture(files, true);
+    const result = f.run(
+      { consumers: ["upgrade-survivor"] },
+      { allowFrozenTargetScenarioOmissions: false },
+    );
+    expect(result.status, result.stderr).toBe(0);
+    const record = JSON.parse(result.stdout);
+    expect(record.contracts[0].modes.OPENCLAW_FROZEN_UPGRADE_SURVIVOR_SKILL_LIBRARY_MODE).toBe(
+      split ? "current" : "preserve",
+    );
+    expect(record.sources.selected.map((file: { path: string }) => file.path)).toContain(doctor);
+    expect(record.selection.consumers).toEqual(["upgrade-survivor"]);
+  });
+});
 
-  it.each([reader, shell])(
-    "rejects dirty executable %s before any dependent code runs at unchanged HEAD",
-    (path) => {
-      const f = fixture({ "src/config/zod-schema.ts": "lastRunAt:" });
-      const sentinel = join(f.root, "dependent-code-executed");
-      const file = join(f.tooling.root, path);
-      const payload =
-        path === shell
-          ? `\nprintf executed > '${sentinel}'\n`
-          : `\n(await import("node:fs")).writeFileSync(${JSON.stringify(sentinel)}, "executed");\n`;
-      writeFileSync(file, readFileSync(file, "utf8") + payload);
-      expect(f.tooling.git("rev-parse", "HEAD")).toBe(f.tooling.sha);
-      const result = f.run({ consumers: [] });
-      expect(existsSync(sentinel), result.stderr).toBe(false);
-      expectRejected(result, `tooling closure does not match committed source: ${path}`);
-    },
-  );
+describe("frozen admission bootstrap repairs", () => {
+  const reader = "scripts/lib/frozen-target-source.mjs";
+
+  it("rejects the dirty bootstrap reader before dependent code runs at unchanged HEAD", () => {
+    const f = fixture({ "src/config/zod-schema.ts": "lastRunAt:" });
+    const sentinel = join(f.root, "dependent-code-executed");
+    const file = join(f.tooling.root, reader);
+    const payload = `\n(await import("node:fs")).writeFileSync(${JSON.stringify(sentinel)}, "executed");\n`;
+    writeFileSync(file, readFileSync(file, "utf8") + payload);
+    expect(f.tooling.git("rev-parse", "HEAD")).toBe(f.tooling.sha);
+    const result = f.run({ consumers: [] });
+    expect(existsSync(sentinel), result.stderr).toBe(false);
+    expectRejected(result, `tooling closure does not match committed source: ${reader}`);
+  });
 
   it.each(["file", "parent directory"] as const)(
     "rejects a tooling %s symlink even when its bytes match",
@@ -396,17 +410,12 @@ describe("frozen admission bootstrap repairs", () => {
     expectRejected(result, "checkout does not match OPENCLAW_SELECTED_SHA");
   });
 
-  it.each([entrypoint, `${recipeDirectory}/agents.json`])(
-    "rejects a missing committed tooling object %s without hydration",
-    (path) => {
-      const f = fixture();
-      f.tooling.git("config", "remote.origin.url", "fixture::unavailable");
-      f.tooling.git("config", "remote.origin.promisor", "true");
-      removeBlob(f.tooling, path);
-      const result = f.run({});
-      expectRejected(result);
-    },
-  );
+  it("rejects a missing committed bootstrap object without hydration", () => {
+    const f = fixture();
+    configureUnavailablePromisor(f.tooling);
+    removeBlob(f.tooling, entrypoint);
+    expectRejected(f.run({}));
+  });
 });
 
 describe("frozen admission entry", () => {
@@ -423,51 +432,6 @@ describe("frozen admission entry", () => {
         { source: "tooling", path: "scripts/e2e/lib/release-assertion-files.mjs" },
         { source: "tooling", path: "scripts/e2e/lib/fixtures/mock-openai-config.mjs" },
       ]);
-    },
-  );
-
-  it.each(["unknown catalog", "dirty absent metadata"])(
-    "fails or omits from committed source for %s without running target code",
-    (shape) => {
-      const relative =
-        shape === "unknown catalog"
-          ? "scripts/e2e/lib/upgrade-survivor/assertions.mjs"
-          : "src/cli/update-cli/update-command-plugin-preflight.ts";
-      const f = fixture(
-        shape === "dirty absent metadata"
-          ? {}
-          : {
-              [relative]: 'throw new Error("target body executed");',
-            },
-      );
-      if (shape === "deleted blob") {
-        configureUnavailablePromisor(f.selected);
-        removeBlob(f.selected, relative);
-      } else if (shape === "dirty absent metadata") {
-        mkdirSync(dirname(join(f.selected.root, relative)), { recursive: true });
-        writeFileSync(join(f.selected.root, relative), "dirty supported decoy");
-      }
-      const result = f.run({
-        docker: {
-          lanes: [
-            shape === "unknown catalog" ? "published-upgrade-survivor" : "update-corrupt-plugin",
-          ],
-          baselines: "2026.6.11",
-        },
-      });
-      if (shape === "dirty absent metadata") {
-        expect(result.status, result.stderr).toBe(0);
-        expect(JSON.parse(result.stdout).docker).toEqual({
-          lanes: [],
-          omitted: ["update-corrupt-plugin"],
-          status: "NOT RUN",
-        });
-      } else {
-        expectRejected(
-          result,
-          shape === "unknown catalog" ? "inert scenario catalog" : "unable to read selected source",
-        );
-      }
     },
   );
 

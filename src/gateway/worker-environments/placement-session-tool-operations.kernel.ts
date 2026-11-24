@@ -1,3 +1,4 @@
+import { isStringArray } from "@openclaw/normalization-core/record-coerce";
 import { WORKER_PROTOCOL_MAX_CONCURRENT_TOOLS } from "../../../packages/gateway-protocol/src/schema/worker-protocol-primitives.js";
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
 import { generateSecureToken } from "../../infra/secure-random.js";
@@ -82,7 +83,7 @@ export function createPlacementSessionToolOperationKernel(runtime: {
   };
   const exactWorkerClaim = (claim: WorkerSessionTurnClaim): void => {
     if (!currentWorkerClaim(claim)) {
-      throw new Error(`Session ${claim.sessionId} worker turn authority changed`);
+      throw new Error(`Session ${claim.sessionId} worker turn ended. Start a new turn.`);
     }
   };
   const hasToolAuthority = (claim: WorkerSessionTurnClaim, toolName: string) => {
@@ -106,11 +107,7 @@ export function createPlacementSessionToolOperationKernel(runtime: {
     }
     try {
       const names: unknown = JSON.parse(authority.tool_names_json);
-      return (
-        Array.isArray(names) &&
-        names.every((name) => typeof name === "string") &&
-        names.includes(toolName)
-      );
+      return isStringArray(names) && names.includes(toolName);
     } catch {
       return false;
     }
@@ -173,7 +170,7 @@ export function createPlacementSessionToolOperationKernel(runtime: {
     clear(claim: WorkerSessionTurnClaim): boolean {
       const current = getRequired(db, required(claim.sessionId, "session id"));
       if (!isCurrentPlacementTurnClaim(current, claim)) {
-        throw new Error(`Session ${claim.sessionId} turn authority changed`);
+        throw new Error(`Session ${claim.sessionId} turn ended. Start a new turn.`);
       }
       if (executeSqliteQuerySync(db, runningOperations(db, claim).limit(1)).rows.length) {
         return false;

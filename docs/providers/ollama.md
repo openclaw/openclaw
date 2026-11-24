@@ -24,7 +24,7 @@ cloud routing separate from the local `ollama` provider.
 Do not use the `/v1` OpenAI-compatible URL (`http://host:11434/v1`). It breaks tool calling and models can emit raw tool-call JSON as plain text. Use the native URL: `baseUrl: "http://host:11434"` (no `/v1`).
 </Warning>
 
-The canonical config key is `baseUrl`. `baseURL` is also accepted for
+The current config key is `baseUrl`. `baseURL` is also accepted for
 OpenAI-SDK-style examples, but new config should use `baseUrl`.
 
 This page is an index. Ollama is documented on nine pages, one per reader
@@ -125,7 +125,7 @@ Each entry points at the page that now holds the content.
 - <a id="no-models-available" />[No models available](/providers/ollama/troubleshooting#no-models-available)
 - <a id="connection-refused" />[Connection refused](/providers/ollama/troubleshooting#connection-refused)
 - <a id="remote-host-works-with-curl-but-not-openclaw" />[Remote host works with curl but not OpenClaw](/providers/ollama/troubleshooting#remote-host-works-with-curl-but-not-openclaw)
-- <a id="model-outputs-tool-json-as-text" />[Model outputs tool JSON as text](/providers/ollama/troubleshooting#model-outputs-tool-json-as-text)
+- <a id="model-outputs-tool-json-as-text" />[Model outputs tool calls as text](/providers/ollama/troubleshooting#model-outputs-tool-calls-as-text)
 - <a id="kimi-or-glm-returns-garbled-symbols" />[Kimi or GLM returns garbled symbols](/providers/ollama/troubleshooting#kimi-or-glm-returns-garbled-symbols)
 - <a id="cold-local-model-times-out" />[Cold local model times out](/providers/ollama/troubleshooting#cold-local-model-times-out)
 - <a id="large-context-model-is-too-slow-or-runs-out-of-memory" />[Large-context model is too slow or runs out of memory](/providers/ollama/troubleshooting#large-context-model-is-too-slow-or-runs-out-of-memory)

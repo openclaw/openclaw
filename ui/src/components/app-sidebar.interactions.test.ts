@@ -1,6 +1,5 @@
-/* @vitest-environment jsdom */
-
 import { expect, it } from "vitest";
+/* @vitest-environment jsdom */
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import {
   createContext,
@@ -9,6 +8,7 @@ import {
   createSidebarElement,
 } from "../test-helpers/app-sidebar.ts";
 import { createApplicationContextProvider } from "../test-helpers/application-context.ts";
+import { sessionListResult } from "../test-helpers/chat-model.ts";
 import "../test-helpers/app-sidebar-suite.ts";
 import "../test-helpers/app-sidebar-cases/basics.ts";
 import "../test-helpers/app-sidebar-cases/footer-status.ts";
@@ -34,13 +34,9 @@ it("resolves sidebar rows before agent selection is available", async () => {
   document.body.append(provider);
   await sidebar.updateComplete;
   sidebar.sessionData.sessionsAgentId = "main";
-  sidebar.sessionData.sessionsResult = {
-    ts: 1,
-    path: "",
-    count: 1,
-    defaults: { modelProvider: null, model: null, contextTokens: null },
-    sessions: [{ key, kind: "direct", updatedAt: 1 }],
-  };
+  sidebar.sessionData.sessionsResult = sessionListResult(1, [
+    { key, kind: "direct", updatedAt: 1 },
+  ]);
   const navigation = sidebar.getSessionNavigationState();
   expect(navigation.selectedAgentId).toBe("main");
   expect(navigation.activeRowKey).toBe(key);

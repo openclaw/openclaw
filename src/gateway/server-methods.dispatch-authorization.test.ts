@@ -8,36 +8,20 @@ import {
 import { createPluginGatewayMethodDescriptor } from "./methods/descriptor.js";
 import { createGatewayMethodRegistry } from "./methods/registry.js";
 import { WRITE_SCOPE } from "./operator-scopes.js";
-import { handleGatewayRequest } from "./server-methods.js";
+import { sendAuthorizationRequest as send } from "./server-methods.authorization.test-support.js";
 import type { GatewayRequestHandler } from "./server-methods/types.js";
-
-function requestDefaults(
-  scopes: string[] = [WRITE_SCOPE],
-): Pick<Parameters<typeof handleGatewayRequest>[0], "client" | "isWebchatConnect" | "context"> {
-  return {
-    client: {
-      connId: "conn-proof",
-      connect: {
-        role: "operator",
-        scopes,
-        client: { id: "cli", version: "test", platform: "linux", mode: "cli" },
-        minProtocol: 1,
-        maxProtocol: 1,
-      },
-    },
-    isWebchatConnect: () => false,
-    context: {
-      getRuntimeConfig: () => ({}),
-      logGateway: { warn: vi.fn() },
-    } as unknown as Parameters<typeof handleGatewayRequest>[0]["context"],
-  };
-}
 
 const METHOD = "workboard.cards.dispatch";
 
-afterEach(() => {
-  resetPluginRuntimeStateForTest();
-});
+function pluginRegistry(name: string, handler: GatewayRequestHandler, pluginId: string) {
+  const registry = createEmptyPluginRegistry();
+  registry.gatewayMethodDescriptors.push(
+    createPluginGatewayMethodDescriptor({ pluginId, name, handler, scope: WRITE_SCOPE }),
+  );
+  return registry;
+}
+
+afterEach(resetPluginRuntimeStateForTest);
 
 describe("gateway method authorization", () => {
   it.each([
@@ -47,26 +31,20 @@ describe("gateway method authorization", () => {
   ])(
     "returns INVALID_REQUEST for an invalid chat target $sessionKey",
     async ({ message, ...target }) => {
-      const defaults = requestDefaults(["operator.admin"]);
       const handler = vi.fn<GatewayRequestHandler>();
-      const respond = vi.fn();
-      await handleGatewayRequest({
-        ...defaults,
-        context: {
-          ...defaults.context,
-          getRuntimeConfig: () => ({
-            agents: { ownership: "explicit", entries: { main: {}, research: {} } },
-          }),
+      const respond = await send(
+        "chat.send",
+        { ...target, message: "hello", idempotencyKey: "invalid-chat-target" },
+        {
+          scopes: ["operator.admin"],
+          context: {
+            getRuntimeConfig: () => ({
+              agents: { ownership: "explicit", entries: { main: {}, research: {} } },
+            }),
+          },
+          extraHandlers: { "chat.send": handler },
         },
-        req: {
-          type: "req",
-          id: "invalid-chat-target",
-          method: "chat.send",
-          params: { ...target, message: "hello", idempotencyKey: "invalid-chat-target" },
-        },
-        respond,
-        extraHandlers: { "chat.send": handler },
-      });
+      );
       expect(respond).toHaveBeenCalledWith(
         false,
         undefined,
@@ -80,33 +58,22 @@ describe("gateway method authorization", () => {
   );
 
   async function dispatch(scopes: string[]) {
-    const attachedPluginRegistry = createEmptyPluginRegistry();
     const handler: GatewayRequestHandler = ({ respond }) => {
       expect(requireActivePluginRegistry()).toBe(attachedPluginRegistry);
       respond(true, { ok: true });
     };
+    const attachedPluginRegistry = pluginRegistry(METHOD, handler, "workboard");
     const methodRegistry = createGatewayMethodRegistry(
-      [
-        createPluginGatewayMethodDescriptor({
-          pluginId: "workboard",
-          name: METHOD,
-          handler,
-          scope: "operator.write",
-        }),
-      ],
+      attachedPluginRegistry.gatewayMethodDescriptors,
       attachedPluginRegistry,
     );
-    const respond = vi.fn();
 
     // Reproduce a request whose attached dispatch registry is newer than the global runtime state.
     setActivePluginRegistry(createEmptyPluginRegistry());
-    await handleGatewayRequest({
-      req: { type: "req", id: "req-1", method: METHOD },
-      respond,
-      ...requestDefaults(scopes),
+    return send(METHOD, undefined, {
+      scopes,
       methodRegistry,
     });
-    return respond;
   }
 
   it("authorizes from the attached registry used for dispatch", async () => {
@@ -126,34 +93,20 @@ describe("gateway method authorization", () => {
   });
 
   it("dispatches plugin methods registered after the startup method registry snapshot", async () => {
-    const handler = vi.fn<GatewayRequestHandler>(({ respond }) => {
-      respond(true, { ok: true, ts: 42 });
-    });
-    const activeRegistry = createEmptyPluginRegistry();
-    activeRegistry.gatewayHandlers["demo.ping"] = handler;
-    activeRegistry.gatewayMethodDescriptors.push(
-      createPluginGatewayMethodDescriptor({
-        pluginId: "demo",
-        name: "demo.ping",
-        handler,
-        scope: WRITE_SCOPE,
-      }),
+    const handler = vi.fn<GatewayRequestHandler>(({ respond }) =>
+      respond(true, { ok: true, ts: 42 }),
     );
+    const activeRegistry = pluginRegistry("demo.ping", handler, "demo");
+    activeRegistry.gatewayHandlers["demo.ping"] = handler;
     setActivePluginRegistry(activeRegistry);
 
-    const staleStartupRegistry = createGatewayMethodRegistry([]);
-    const respond = vi.fn();
-    await handleGatewayRequest({
-      req: {
-        type: "req",
-        id: "proof-94127",
-        method: "demo.ping",
-        params: { hello: "world" },
+    const respond = await send(
+      "demo.ping",
+      { hello: "world" },
+      {
+        methodRegistry: createGatewayMethodRegistry([]),
       },
-      respond,
-      ...requestDefaults(),
-      methodRegistry: staleStartupRegistry,
-    });
+    );
 
     expect(handler).toHaveBeenCalledTimes(1);
     expect(respond).toHaveBeenCalledWith(true, { ok: true, ts: 42 });
@@ -161,17 +114,16 @@ describe("gateway method authorization", () => {
 
   it("rejects every node RPC when its connection no longer owns the pairing generation", async () => {
     const handler = vi.fn<GatewayRequestHandler>(({ respond }) => respond(true, { ok: true }));
-    const respond = vi.fn();
     const isConnectionCurrentPairingState = vi.fn().mockResolvedValue(false);
 
-    await handleGatewayRequest({
-      req: { type: "req", id: "req-node-stale", method: "node.event", params: { event: "test" } },
-      respond,
-      client: {
+    const respond = await send(
+      "node.event",
+      { event: "test" },
+      {
         connId: "conn-node-stale",
+        scopes: [],
         connect: {
           role: "node",
-          scopes: [],
           device: {
             id: "node-stale",
             publicKey: "public-key",
@@ -180,18 +132,13 @@ describe("gateway method authorization", () => {
             nonce: "nonce",
           },
           client: { id: "node-host", version: "1", platform: "test", mode: "node" },
-          minProtocol: 1,
-          maxProtocol: 1,
         },
-      } as Parameters<typeof handleGatewayRequest>[0]["client"],
-      isWebchatConnect: () => false,
-      context: {
-        getRuntimeConfig: () => ({}),
-        logGateway: { warn: vi.fn() },
-        nodeRegistry: { isConnectionCurrentPairingState },
-      } as unknown as Parameters<typeof handleGatewayRequest>[0]["context"],
-      extraHandlers: { "node.event": handler },
-    });
+        context: {
+          nodeRegistry: { isConnectionCurrentPairingState },
+        },
+        extraHandlers: { "node.event": handler },
+      },
+    );
 
     expect(isConnectionCurrentPairingState).toHaveBeenCalledWith("conn-node-stale");
     expect(handler).not.toHaveBeenCalled();

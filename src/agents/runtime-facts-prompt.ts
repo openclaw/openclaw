@@ -2,7 +2,6 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { buildTemporalContextText } from "./date-time.js";
 import type { RuntimeContextFragment } from "./internal-runtime-context.js";
-import { buildInterruptedInputContext } from "./interrupted-input-context.js";
 import { buildMediaTaskRuntimeContext } from "./media-generation-task-status.js";
 import type { AgentRunSessionTarget } from "./run-session-target.types.js";
 import {
@@ -16,6 +15,7 @@ export async function buildRuntimeFactsContext(
     cfg: OpenClawConfig;
     executionHost?: boolean;
     sessionTarget?: AgentRunSessionTarget;
+    runId?: string;
   },
 ): Promise<RuntimeContextFragment[]> {
   const includeEmptySnapshots = params.includeEmptySnapshots === true;
@@ -25,6 +25,7 @@ export async function buildRuntimeFactsContext(
     cfg: params.cfg,
     controllerSessionKey: params.sessionKey,
     controllerAgentId: params.agentId,
+    runId: params.runId,
     includeSpawnContext: canSpawn,
   });
   if (subagentContext || (canSpawn && includeEmptySnapshots)) {
@@ -33,10 +34,6 @@ export async function buildRuntimeFactsContext(
   const media = await buildMediaTaskRuntimeContext({ ...params, includeEmptySnapshots });
   if (media) {
     facts.push({ kind: "conversation-data", text: media });
-  }
-  const interrupted = await buildInterruptedInputContext(params);
-  if (interrupted) {
-    facts.push(interrupted);
   }
   facts.push({
     kind: "conversation-data",

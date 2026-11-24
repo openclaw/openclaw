@@ -1,4 +1,3 @@
-import { containingSegment } from "@openclaw/normalization-core/grapheme";
 import stringWidth from "string-width";
 import {
   ANSI_COMPAT_CONTROL_SEQUENCE_PATTERN,
@@ -227,7 +226,7 @@ export function truncateToVisibleWidth(input: string, maxWidth: number): string 
         position >= current.index + current.segment.length
       ) {
         // SAFETY: the end sentinel returns above; other probes resolve inside this segment.
-        current = containingSegment(segments, segment, position) as Intl.SegmentData;
+        current = segments.containing(position) as Intl.SegmentData;
         candidateWidth =
           current.index === 0
             ? 0

@@ -227,17 +227,14 @@ final class NativeConversationController {
     }
 
     private func routeURL(baseURL: URL) -> URL? {
-        guard let context = self.viewModel.webConversationContext,
-              let path = WebChatRoute.dashboardPath(
-                  sessionKey: context.sessionKey,
-                  agentID: context.agentId)
-        else { return nil }
+        guard let context = self.viewModel.webConversationContext else { return nil }
         self.loadedContext = context
         self.loadedDraft = self.initialDraft.flatMap { $0.text(for: context) == nil ? nil : $0 }
-        return DashboardRouteMap.dashboardURL(
-            byAppendingSameAppPath: path,
-            search: WebChatRoute.dashboardSearch(draft: self.loadedDraft?.text),
-            to: baseURL)
+        return WebChatRoute.documentURL(
+            sessionKey: context.sessionKey,
+            agentID: context.agentId,
+            draft: self.loadedDraft?.text,
+            baseURL: baseURL)
     }
 
     private func navigate(
@@ -426,8 +423,9 @@ final class NativeConversationController {
         let scope = await self.connection.conversationOwnershipScope(
             sessionKey: context.sessionKey,
             agentID: context.agentId)
+        let hasDestinationDraft = await self.viewModel.hasPendingNativeConversationInput(for: context)
         guard !self.isClosed, !self.didFallBack, self.ownershipID == owner,
-              isCurrent(), !self.viewModel.hasPendingNativeConversationInput(for: context) else { return false }
+              isCurrent(), !hasDestinationDraft else { return false }
         if self.ownedScopes.contains(scope) { return true }
         let ownership = self.connection.chatSendOwnership
         // Each awaiting attempt owns its own claim. A stale completion must not
@@ -445,8 +443,9 @@ final class NativeConversationController {
         }
         guard accepted else { return false }
         defer { ownership.endWeb(scope, owner: reservation) }
+        let hasTransferredDraft = await self.viewModel.hasPendingNativeConversationInput(for: context)
         guard !self.isClosed, !self.didFallBack, self.ownershipID == owner,
-              isCurrent(), !self.viewModel.hasPendingNativeConversationInput(for: context) else { return false }
+              isCurrent(), !hasTransferredDraft else { return false }
         // The temporary claim keeps native admission closed across this transfer.
         guard ownership.beginWeb(scope, owner: owner) else { return false }
         self.ownedScopes.insert(scope)

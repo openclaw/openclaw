@@ -11,8 +11,7 @@ import { getPluginToolMeta } from "../../plugins/tool-metadata.js";
 import { isReasoningTagProvider } from "../../utils/provider-utils.js";
 import { createBundleLspToolRuntime } from "../agent-bundle-lsp-runtime.js";
 import { createBundleMcpToolRuntime } from "../agent-bundle-mcp-tools.js";
-import { createOpenClawCodingToolsInternalAsync } from "../agent-tools.js";
-import { createSkillInstructionDeliveryCache } from "../agent-tools.read.js";
+import { createOpenClawCodingToolsInternalAsync } from "../agent-tools.async.js";
 import { ensureAuthProfileStoreWithoutExternalProfilesAsync } from "../auth-profiles/store-runtime.js";
 import { listActiveProcessSessionReferences } from "../bash-process-references.js";
 import { resolveProcessToolScopeKey } from "../bash-process-scope.js";
@@ -29,11 +28,7 @@ import {
 import { prepareConversationCapabilityProfile } from "../conversation-capability-profile.js";
 import { resolveOpenClawReferencePaths } from "../docs-path.js";
 import { prepareAgentMemoryPrompt } from "../memory-prompt-prepare.js";
-import {
-  applyAuthHeaderOverride,
-  applyLocalNoAuthHeaderOverride,
-  resolveModelAuthModeAsync,
-} from "../model-auth.js";
+import { applyAuthHeaderOverride, applyLocalNoAuthHeaderOverride } from "../model-auth.js";
 import { supportsModelTools } from "../model-tool-support.js";
 import { getPreparedModelRuntimeAuthStore } from "../prepared-model-runtime-auth.js";
 import { resolveAgentPromptSurfaceForSessionKey } from "../prompt-surface.js";
@@ -46,6 +41,7 @@ import {
   resolveSessionPermissionExecMode,
   SESSION_PERMISSION_BY_EXEC_MODE,
 } from "../session-permission-exec-mode.js";
+import { isSessionProjectMoveEligible } from "../session-project-guidance.js";
 import { detectRuntimeShell } from "../shell-utils.js";
 import { buildConfiguredAgentSystemPrompt } from "../system-prompt-config.js";
 import { resolveRuntimeAgentName } from "../system-prompt-params.js";
@@ -88,6 +84,7 @@ export async function buildPreparedCompactionRuntime(
     thinkLevel,
     runtimeModel,
     apiKeyInfo,
+    runtimeApiKey,
     resolvedRuntimeAuthPlan,
     hasRuntimeAuthExchange,
     resolvedWorkspace,
@@ -181,8 +178,7 @@ export async function buildPreparedCompactionRuntime(
     const bootstrapTruncationNotice = buildBootstrapPromptWarningNotice(
       bootstrapBudget.bootstrapPromptWarning.lines,
     );
-    // Apply contextTokens cap to model so session runtime's auto-compaction
-    // threshold uses the effective limit, not the native context window.
+    // Keep session sizing separate from the summarizer's native request window.
     const contextTokenBudget = resolveCompactionContextTokenBudget({
       config: params.config,
       provider: contextConfigProvider,
@@ -192,12 +188,7 @@ export async function buildPreparedCompactionRuntime(
       fallbackTokenBudget: params.tokenBudget,
     });
     const modelWithAuth = applyAuthHeaderOverride(
-      applyLocalNoAuthHeaderOverride(
-        contextTokenBudget < (runtimeModel.contextWindow ?? Infinity)
-          ? { ...runtimeModel, contextWindow: contextTokenBudget }
-          : runtimeModel,
-        apiKeyInfo,
-      ),
+      applyLocalNoAuthHeaderOverride(runtimeModel, { apiKey: runtimeApiKey }),
       // Skip header injection when runtime auth exchange produced a
       // different credential — the SDK reads the exchanged token from
       // authStorage automatically.
@@ -241,7 +232,6 @@ export async function buildPreparedCompactionRuntime(
     const runtimePlan = reuseFullRuntimePlan
       ? preparedRuntimePlan
       : { ...preparedRuntimePlan, auth: resolvedRuntimeAuthPlan };
-    const runAbortController = new AbortController();
     const spawnWorkspaceDir =
       effectiveCwd !== effectiveWorkspace
         ? resolvedWorkspace
@@ -260,6 +250,11 @@ export async function buildPreparedCompactionRuntime(
       agentAccountId: params.agentAccountId,
       messageProvider: resolvedMessageProvider,
       chatType: params.chatType,
+      requesterOrigin: params.requesterOrigin,
+      operatorProfileId: params.operatorProfileId,
+      conversationId: params.conversationId,
+      messageThreadId: params.messageThreadId,
+      memberRoleIds: params.memberRoleIds,
       groupId: params.groupId,
       groupChannel: params.groupChannel,
       groupSpace: params.groupSpace,
@@ -293,7 +288,7 @@ export async function buildPreparedCompactionRuntime(
         (await ensureAuthProfileStoreWithoutExternalProfilesAsync(agentDir)))
       : undefined;
     params.abortSignal?.throwIfAborted();
-    const skillInstructionDeliveryCache = createSkillInstructionDeliveryCache();
+    const skillInstructionDeliveryCache = new Map<string, Promise<boolean>>();
     const toolsRaw = toolsEnabled
       ? await createOpenClawCodingToolsInternalAsync(
           {
@@ -312,8 +307,12 @@ export async function buildPreparedCompactionRuntime(
             pinnedWidgetAuthoring: params.pinnedWidgetAuthoring,
             oneShotCliRun: params.oneShotCliRun,
             allowGatewaySubagentBinding: params.allowGatewaySubagentBinding,
+            sessionProjectMoveEligible: isSessionProjectMoveEligible(
+              params.config,
+              sessionAgentId,
+              params.sessionEntry,
+            ),
             webSearchEnabled: params.toolOverrides?.webSearch !== false,
-            abortSignal: runAbortController.signal,
             sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
             modelHasVision: effectiveModel.input?.includes("image") ?? false,
             modelCompat: extractModelCompat(effectiveModel),
@@ -321,14 +320,6 @@ export async function buildPreparedCompactionRuntime(
             skillInstructionDeliveryCache,
             conversationCapabilityProfile: runtimeCapabilityProfile,
             preparedModelRuntime: params.preparedModelRuntime,
-            modelAuthMode: await resolveModelAuthModeAsync(
-              effectiveModel.provider,
-              params.config,
-              authProfileStore,
-              {
-                workspaceDir: effectiveWorkspace,
-              },
-            ),
           },
           skillReadResources,
         )
@@ -416,6 +407,7 @@ export async function buildPreparedCompactionRuntime(
       cfg: params.config,
       channel: params.messageChannel ?? params.messageProvider,
       accountId: params.agentAccountId,
+      requester: params,
     });
 
     const runtimeInfo = {
@@ -432,6 +424,7 @@ export async function buildPreparedCompactionRuntime(
       chatType: params.chatType,
       capabilities: runtimeCapabilities,
       customInlineButtonHint,
+      blind: params.sessionEntry?.blindPrompt,
       activeProcessSessions: listActiveProcessSessionReferences({
         scopeKey: resolveProcessToolScopeKey({
           sessionKey: params.sessionKey,
@@ -478,6 +471,7 @@ export async function buildPreparedCompactionRuntime(
       surface: promptSurface,
     });
     const openClawReferences = await resolveOpenClawReferencePaths({
+      sandbox,
       workspaceDir: effectiveWorkspace,
       argv1: process.argv[1],
       cwd: effectiveCwd,
@@ -520,8 +514,8 @@ export async function buildPreparedCompactionRuntime(
     const { prepareTtsPreferences } = await import("../../tts/tts-preferences.js");
     const preparedTtsPreferences =
       promptMode === "full" ? await prepareTtsPreferences() : undefined;
-    const buildSystemPromptText = () => {
-      const builtSystemPrompt = buildConfiguredAgentSystemPrompt({
+    const buildSystemPromptText = async () => {
+      const builtSystemPrompt = await buildConfiguredAgentSystemPrompt({
         preparedTtsPreferences,
         config: params.config,
         preparedModelRuntime: params.preparedModelRuntime,
@@ -572,7 +566,6 @@ export async function buildPreparedCompactionRuntime(
       effectiveModel,
       runtimePlan,
       runtimePlanModelContext,
-      runAbortController,
       effectiveTools,
       allowedToolNames,
       buildSystemPromptText,

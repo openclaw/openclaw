@@ -7,6 +7,10 @@ export function createPluginModelRuntimeMock(
 ): Pick<PluginRuntime, "decisions" | "modelConfig" | "modelAuth" | "llm"> {
   return {
     decisions: {
+      evaluateV2: vi.fn(async () => ({
+        status: "unavailable" as const,
+        reason: "disabled" as const,
+      })),
       evaluate: vi.fn(async () => ({
         status: "unavailable" as const,
         reason: "disabled" as const,

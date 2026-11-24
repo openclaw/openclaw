@@ -90,6 +90,8 @@ export type MessageReceipt = {
   deleteToken?: string;
   sentAt: number;
   raw?: readonly MessageReceiptSourceResult[];
+  /** Normalized physical send evidence, retained even when a source has no platform ID. */
+  sourceResults?: readonly MessageReceiptSourceResult[];
 };
 
 export type RenderedMessageBatchPlanKind =
@@ -336,6 +338,11 @@ export type ChannelMessageDurableFinalAdapter = {
   capabilities?: DurableFinalDeliveryRequirementMap;
   /** Opt into provider reconciliation for ordinary single-payload queued sends. */
   automaticUnknownSendReconciliation?: boolean;
+  /**
+   * @deprecated Ignored. Core resends an ordinary agent final text once after an unconfirmed
+   * send on every channel whose adapter cannot reconcile it.
+   */
+  replayAmbiguousFinalText?: boolean;
   /** Recognize inert channel metadata without admitting controls or side effects. */
   isTextOnlyChannelData?: (channelData: NonNullable<ReplyPayload["channelData"]>) => boolean;
   /**

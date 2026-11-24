@@ -5,9 +5,9 @@ import { pathToFileURL } from "node:url";
 import { afterEach, expect, it, vi } from "vitest";
 import { runNodeScript } from "../../test/helpers/run-node-script.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { createPluginCache, withPluginCache } from "./plugin-cache.js";
-import { bindPluginInstanceModuleLoader } from "./plugin-instance-module-loader.js";
-import { PluginInstance } from "./plugin-instance.js";
+import { loadPluginFixture } from "./plugin-generation-module.test-support.js";
+import type { PluginInstance } from "./plugin-instance.js";
+import { writeArtifacts as write } from "./public-surface.test-support.js";
 
 const temp = useAutoCleanupTempDirTracker(afterEach);
 const nativeRequire = createRequire(import.meta.url);
@@ -19,28 +19,20 @@ afterEach(async () => {
   }
 });
 
-function write(root: string, files: Record<string, string>) {
-  for (const [filename, source] of Object.entries(files)) {
-    const target = path.join(root, filename);
-    fs.mkdirSync(path.dirname(target), { recursive: true });
-    fs.writeFileSync(target, source);
-  }
+function bodyModule(value: string) {
+  return {
+    "package.json": '{"exports":"./index.cjs"}',
+    "index.cjs": "exports.value = require('./body.cjs').value;",
+    "body.cjs": `exports.value = '${value}';`,
+  };
 }
 
-function load(rootDir: string, entry: string) {
-  const instance = new PluginInstance("generation-fixture");
-  instances.push(instance);
-  withPluginCache(createPluginCache(), () =>
-    bindPluginInstanceModuleLoader({
-      instance,
-      origin: "config",
-      source: path.join(rootDir, entry),
-      rootDir,
-      standalone: true,
-    }),
-  );
-  return instance.loadModule(path.join(rootDir, entry));
-}
+const load = (root: string, entry: string) => loadPluginFixture(root, entry, instances);
+const entryName = (mode: string) => (mode === "import" ? "index.mjs" : "index.cjs");
+const readSource = (mode: string, specifier = "#selected") =>
+  mode === "import"
+    ? `export const read = async () => (await import('${specifier}')).value;`
+    : `exports.read = async () => require('${specifier}').value;`;
 
 it.each(
   ["#selected", "condition-owner/selected"].flatMap((specifier) =>
@@ -96,7 +88,7 @@ it.each(
       },
     };
     write(root, {
-      "package.json": JSON.stringify(manifest),
+      "package.json": manifest,
       [entry]:
         mode === "import"
           ? "export const read = async () => { const loaded = await import('#selected'); return [loaded.value, loaded.body]; };"
@@ -115,17 +107,14 @@ it.each(
     }
     const plugin = load(root, entry) as { read(): string[] | Promise<string[]> };
     write(root, {
-      "package.json": JSON.stringify({
-        ...manifest,
-        imports: { "#selected": "import-dependency" },
-      }),
+      "package.json": { ...manifest, imports: { "#selected": "import-dependency" } },
     });
     const selected = path.join(root, "node_modules", "sync-dependency");
     write(selected, {
-      "package.json": JSON.stringify({
+      "package.json": {
         [entryField]: "./replacement.mjs",
         dependencies: { "missing-later-dependency": "1.0.0" },
-      }),
+      },
       "original.mjs": "export const value = 'first demand'; export { body } from './body.mjs';",
       "body.mjs": "export const body = 'selected body';",
     });
@@ -139,37 +128,52 @@ it.each(
   },
 );
 
-it.each(["import", "require"])(
-  "retains a missing selected conditional target for %s",
-  async (mode) => {
-    const root = temp.make("plugin-missing-conditional-target-");
-    const entry = mode === "import" ? "index.mjs" : "index.cjs";
+const missingTarget = {
+  name: "missing target",
+  type: "module",
+  value: "installed later",
+  imports: { "module-sync": "./missing.mjs", import: "./fallback.mjs", require: "./fallback.mjs" },
+  files: Object.fromEntries([["fallback.mjs", "export const value = 'wrong fallback';"]]),
+  repair: ["missing.mjs", "export const value = 'installed later';"] as const,
+  code: undefined,
+};
+const invalidMetadata = {
+  name: "invalid optional metadata",
+  type: undefined,
+  value: 42,
+  imports: { "module-sync": "invalid-dependency", default: "valid-dependency" },
+  files: Object.fromEntries([
+    ["node_modules/invalid-dependency/package.json", "invalid JSON"],
+    ["node_modules/invalid-dependency/index.cjs", "exports.value = 42;"],
+    ["node_modules/valid-dependency/package.json", '{"main":"index.cjs"}'],
+    ["node_modules/valid-dependency/index.cjs", "exports.value = 42;"],
+  ]),
+  repair: ["node_modules/invalid-dependency/package.json", '{"main":"index.cjs"}'] as const,
+  code: "ERR_INVALID_PACKAGE_CONFIG",
+};
+it.each([
+  { mode: "import", ...missingTarget },
+  { mode: "import", ...invalidMetadata },
+  { mode: "require", ...missingTarget },
+  { mode: "require", ...invalidMetadata },
+])(
+  "retains selected $name for $mode",
+  async ({ mode, type, imports, files, repair, code, value }) => {
+    const root = temp.make("plugin-selected-failure-");
+    const entry = entryName(mode);
     write(root, {
-      "package.json": JSON.stringify({
-        type: "module",
-        imports: {
-          "#selected": {
-            "module-sync": "./missing.mjs",
-            import: "./fallback.mjs",
-            require: "./fallback.mjs",
-          },
-        },
-      }),
-      "fallback.mjs": "export const value = 'wrong fallback';",
-      [entry]:
-        mode === "import"
-          ? "export const read = async () => (await import('#selected')).value;"
-          : "exports.read = async () => require('#selected').value;",
+      "package.json": { type, imports: { "#selected": imports } },
+      [entry]: readSource(mode),
+      ...files,
     });
-    const plugin = load(root, entry) as { read(): Promise<string> };
+    const plugin = load(root, entry) as { read(): Promise<unknown> };
     const expected = expect.objectContaining({
-      code: mode === "import" ? "ERR_MODULE_NOT_FOUND" : "MODULE_NOT_FOUND",
+      code: code ?? (mode === "import" ? "ERR_MODULE_NOT_FOUND" : "MODULE_NOT_FOUND"),
     });
     await expect(plugin.read()).rejects.toEqual(expected);
-    fs.writeFileSync(path.join(root, "missing.mjs"), "export const value = 'installed later';");
+    write(root, { [repair[0]]: repair[1] });
     await expect(plugin.read()).rejects.toEqual(expected);
-    const fresh = load(root, entry) as { read(): Promise<string> };
-    await expect(fresh.read()).resolves.toBe("installed later");
+    await expect((load(root, entry) as { read(): Promise<unknown> }).read()).resolves.toBe(value);
   },
 );
 
@@ -184,14 +188,10 @@ it.each([
     : kind === "local"
       ? "./absent.mjs"
       : "absent-dependency";
-  const entry = mode === "import" ? "index.mjs" : "index.cjs";
+  const entry = entryName(mode);
   write(root, {
     ...(computed ? { "package.json": '{"imports":{"#selected":"./missing.cjs"}}' } : {}),
-    [entry]: computed
-      ? "exports.read = name => require(name);"
-      : mode === "import"
-        ? `export const read = async () => (await import(${JSON.stringify(specifier)})).value;`
-        : `exports.read = async () => require(${JSON.stringify(specifier)}).value;`,
+    [entry]: computed ? "exports.read = name => require(name);" : readSource(mode, specifier),
   });
   const plugin = load(root, entry) as { read(name: string): unknown };
   if (computed) {
@@ -219,43 +219,10 @@ it.each([
     await expect(fresh.read(specifier)).resolves.toBe("installed");
   }
 });
-it.each(["import", "require"])(
-  "defers invalid optional metadata until selected by %s",
-  async (mode) => {
-    const root = temp.make("plugin-invalid-optional-metadata-");
-    const entry = mode === "import" ? "index.mjs" : "index.cjs";
-    write(root, {
-      "package.json": JSON.stringify({
-        imports: {
-          "#selected": { "module-sync": "invalid-dependency", default: "valid-dependency" },
-        },
-      }),
-      [entry]:
-        mode === "import"
-          ? "export const read = async () => (await import('#selected')).value;"
-          : "exports.read = async () => require('#selected').value;",
-    });
-    for (const name of ["invalid-dependency", "valid-dependency"]) {
-      write(path.join(root, "node_modules", name), {
-        "package.json": name === "invalid-dependency" ? "invalid JSON" : '{"main":"index.cjs"}',
-        "index.cjs": "exports.value = 42;",
-      });
-    }
-    const plugin = load(root, entry) as { read(): Promise<number> };
-    const invalid = expect.objectContaining({ code: "ERR_INVALID_PACKAGE_CONFIG" });
-    await expect(plugin.read()).rejects.toEqual(invalid);
-    fs.writeFileSync(
-      path.join(root, "node_modules", "invalid-dependency", "package.json"),
-      '{"main":"index.cjs"}',
-    );
-    await expect(plugin.read()).rejects.toEqual(invalid);
-    await expect((load(root, entry) as { read(): Promise<number> }).read()).resolves.toBe(42);
-  },
-);
 
 type ComputedFixture = {
   name: string;
-  modes: string[];
+  modes?: string[];
   files: Record<string, string>;
   edits?: Record<string, string>;
   links?: Record<string, string>;
@@ -275,7 +242,6 @@ const computedFixtures: ComputedFixture[] = [
     const body = `${directory}/${path.dirname(filename)}/body.cjs`;
     return {
       name: `legacy ${main} to ${filename} entry selection`,
-      modes: ["import", "require"],
       legacy: true,
       files: {
         "package.json": '{"imports":{"#selected":"legacy-dependency"}}',
@@ -290,12 +256,9 @@ const computedFixtures: ComputedFixture[] = [
   }),
   {
     name: "tsconfig aliases",
-    modes: ["import", "require"],
     tsconfig: true,
     files: {
-      "tsconfig.json": JSON.stringify({
-        compilerOptions: { baseUrl: ".", paths: { "@fixture/*": ["./lib/*"] } },
-      }),
+      "tsconfig.json": '{"compilerOptions":{"baseUrl":".","paths":{"@fixture/*":["./lib/*"]}}}',
       "lib/value.ts": "export const value: number = 42;",
     },
     reads: [["@fixture/value", 42]],
@@ -320,11 +283,8 @@ const computedFixtures: ComputedFixture[] = [
   },
   {
     name: "wildcard trailer precedence",
-    modes: ["import", "require"],
     files: {
-      "package.json": JSON.stringify({
-        imports: { "#selected/*": "./broad.cjs", "#selected/*.js": "./specific.cjs" },
-      }),
+      "package.json": '{"imports":{"#selected/*":"./broad.cjs","#selected/*.js":"./specific.cjs"}}',
       "broad.cjs": "exports.value = 'broad';",
       "specific.cjs": "exports.value = 'specific';",
     },
@@ -339,9 +299,8 @@ const computedFixtures: ComputedFixture[] = [
     name: "unselected native runtime alias exclusion",
     modes: ["require"],
     files: {
-      "package.json": JSON.stringify({
-        imports: { "#selected": { bun: "bun-dependency", default: "node-dependency" } },
-      }),
+      "package.json":
+        '{"imports":{"#selected":{"bun":"bun-dependency","default":"node-dependency"}}}',
       ...Object.fromEntries(
         ["bun-dependency", "node-dependency"].flatMap((name) => [
           [
@@ -360,7 +319,11 @@ const computedFixtures: ComputedFixture[] = [
     reads: [["#selected", 42]],
   },
 ];
-it.each(computedFixtures.flatMap((fixture) => fixture.modes.map((mode) => ({ ...fixture, mode }))))(
+it.each(
+  computedFixtures.flatMap((fixture) =>
+    (fixture.modes ?? ["import", "require"]).map((mode) => Object.assign({ mode }, fixture)),
+  ),
+)(
   "preserves computed $name for $mode",
   async ({ mode, files, edits, links, tsconfig, legacy, prelude, reads }) => {
     if (tsconfig) {
@@ -403,7 +366,7 @@ it.each(
   async ({ mode, target }) => {
     const root = temp.make("plugin-native-builtin-alias-");
     write(root, {
-      "package.json": JSON.stringify({ imports: { "#builtin": target } }),
+      "package.json": { imports: { "#builtin": target } },
       ...(Array.isArray(target) ? { "fallback.cjs": "exports.Database = 'fallback';" } : {}),
       "index.cjs":
         mode === "import"
@@ -439,15 +402,11 @@ it("scopes observed package-map absences to the target selected by custom condit
   const roots = ["import", "require"].map((mode) => {
     const root = path.join(home, mode);
     fs.mkdirSync(root, { mode: 0o700 });
-    const filename = mode === "import" ? "index.mjs" : "index.cjs";
+    const filename = entryName(mode);
     const entry = path.join(root, filename);
     write(root, {
-      "package.json": JSON.stringify({
-        imports: {
-          "#selected": { "openclaw-custom": "./valid.cjs", default: "./missing.cjs" },
-          "#late": "./missing.cjs",
-        },
-      }),
+      "package.json":
+        '{"imports":{"#selected":{"openclaw-custom":"./valid.cjs","default":"./missing.cjs"},"#late":"./missing.cjs"}}',
       "valid.cjs": "exports.value = 42;",
       [filename]:
         mode === "import"
@@ -463,20 +422,11 @@ it("scopes observed package-map absences to the target selected by custom condit
     `import assert from 'node:assert/strict';
      import fs from 'node:fs';
      import path from 'node:path';
-     import { createPluginCache, withPluginCache } from ${JSON.stringify(moduleUrl("plugin-cache.ts"))};
-     import { bindPluginInstanceModuleLoader } from ${JSON.stringify(moduleUrl("plugin-instance-module-loader.ts"))};
-     import { PluginInstance } from ${JSON.stringify(moduleUrl("plugin-instance.ts"))};
+     import { loadPluginFixture } from ${JSON.stringify(moduleUrl("plugin-generation-module.test-support.ts"))};
      const values = [];
      for (const { root, entry } of ${JSON.stringify(roots)}) {
        const instances = [];
-       const load = () => {
-         const instance = new PluginInstance('custom-condition-fixture');
-         instances.push(instance);
-         withPluginCache(createPluginCache(), () => bindPluginInstanceModuleLoader({
-           instance, origin: 'config', source: entry, rootDir: root, standalone: true,
-         }));
-         return instance.loadModule(entry);
-       };
+       const load = () => loadPluginFixture(root, entry, instances);
        try {
          const plugin = load();
          fs.writeFileSync(path.join(root, 'missing.cjs'), 'exports.value = 84;');
@@ -503,35 +453,23 @@ it("scopes observed package-map absences to the target selected by custom condit
     undefined,
     { executable: process.execPath },
   );
-  expect(result.error).toBeUndefined();
-  expect(result.status, result.stderr).toBe(0);
+  expect(result, result.stderr).toMatchObject({ error: undefined, status: 0 });
   expect(JSON.parse(result.stdout)).toEqual([42, 42]);
 });
 
 // Native erasure keeps specifier-only empty requests; the existing Node/Jiti adapter removes them.
+const erasedSpecifier = process.versions.bun ? "before" : "after";
 it.each([
-  ["import type", "import type { Shape } from '#selected';", "after"],
-  [
-    "type import specifier",
-    "import { type Shape } from '#selected';",
-    process.versions.bun ? "before" : "after",
-  ],
-  ["implicit type import", "import { Shape } from '#selected'; type Alias = Shape;", "after"],
-  ["export type", "export type { Shape } from '#selected';", "after"],
-  [
-    "type export specifier",
-    "export { type Shape } from '#selected';",
-    process.versions.bun ? "before" : "after",
-  ],
-  ["export type all", "export type * from '#selected';", "after"],
-  ["side-effect import", "import '#selected';", "before"],
-  [
-    "mixed runtime import",
-    "import { type Shape, value } from '#selected'; export const observed = value;",
-    "before",
-  ],
-  ["mixed runtime export", "export { type Shape, value } from '#selected';", "before"],
-])("acquires the dependency body at runtime after %s", (_name, declaration, expected) => {
+  ["import type { Shape } from '#selected';", "after"],
+  ["import { type Shape } from '#selected';", erasedSpecifier],
+  ["import { Shape } from '#selected'; type Alias = Shape;", "after"],
+  ["export type { Shape } from '#selected';", "after"],
+  ["export { type Shape } from '#selected';", erasedSpecifier],
+  ["export type * from '#selected';", "after"],
+  ["import '#selected';", "before"],
+  ["import { type Shape, value } from '#selected'; export const observed = value;", "before"],
+  ["export { type Shape, value } from '#selected';", "before"],
+])("acquires the dependency body at runtime after %s", (declaration, expected) => {
   const root = temp.make("plugin-type-only-reference-");
   const dependency = path.join(root, "node_modules", "selected-dependency");
   write(root, {
@@ -541,11 +479,7 @@ it.each([
       export const read = () => require('#selected').value;
       export const load = async (name: string) => import(name);`,
   });
-  write(dependency, {
-    "package.json": '{"exports":"./index.cjs"}',
-    "index.cjs": "exports.value = require('./body.cjs').value;",
-    "body.cjs": "exports.value = 'before';",
-  });
+  write(dependency, bodyModule("before"));
   const plugin = load(root, "index.ts") as { read(): string };
   fs.writeFileSync(path.join(dependency, "body.cjs"), "exports.value = 'after';");
   expect(plugin.read()).toBe(expected);
@@ -562,21 +496,17 @@ it.each(["declared", "alias", "undeclared"])(
       "index.cjs": "exports.select = () => require('#outer');",
     });
     write(outer, {
-      "package.json": JSON.stringify({
+      "package.json": {
         exports: "./index.cjs",
         ...(kind === "declared"
           ? { dependencies: { "inner-dependency": "1.0.0" } }
           : kind === "alias"
             ? { imports: { "#inner": "inner-dependency" } }
             : {}),
-      }),
+      },
       "index.cjs": `exports.read = () => require(${JSON.stringify(kind === "alias" ? "#inner" : "inner-dependency")}).value;`,
     });
-    write(inner, {
-      "package.json": '{"exports":"./index.cjs"}',
-      "index.cjs": "exports.value = require('./body.cjs').value;",
-      "body.cjs": "exports.value = 'before-load';",
-    });
+    write(inner, bodyModule("before-load"));
     const body = path.join(inner, "body.cjs");
     const plugin = load(root, "index.cjs") as { select(): { read(): string } };
     fs.writeFileSync(body, "exports.value = 'before-selection';");

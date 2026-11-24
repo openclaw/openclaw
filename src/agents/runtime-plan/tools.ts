@@ -1,6 +1,4 @@
 import type { TSchema } from "typebox";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import type { ProviderRuntimePluginHandle } from "../../plugins/provider-hook-runtime.js";
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
 import { copyAgentToolMetadata } from "../agent-tool-metadata.js";
 import {
@@ -12,20 +10,14 @@ import {
   filterProviderNormalizableTools,
   type RuntimeToolSchemaDiagnostic,
 } from "../tool-schema-projection.js";
-import type { AnyAgentTool } from "../tools/common.js";
+import type { AgentToolWithMeta } from "../tools/common.js";
 import type { AgentRuntimePlan } from "./types.js";
 
-type AgentRuntimeToolPolicyParams<TSchemaType extends TSchema = TSchema, TResult = unknown> = {
+type AgentRuntimeToolPolicyParams<TSchemaType extends TSchema = TSchema, TResult = unknown> = Omit<
+  Parameters<typeof normalizeProviderToolSchemas<TSchemaType, TResult>>[0],
+  "allowRuntimePluginLoad"
+> & {
   runtimePlan?: AgentRuntimePlan;
-  tools: AgentTool<TSchemaType, TResult>[];
-  provider: string;
-  config?: OpenClawConfig;
-  workspaceDir?: string;
-  env?: NodeJS.ProcessEnv;
-  modelId?: string;
-  modelApi?: string | null;
-  model?: ProviderRuntimeModel;
-  runtimeHandle?: ProviderRuntimePluginHandle;
   allowProviderRuntimePluginLoad?: boolean;
   /**
    * Invoked on every normalization, including with an empty list, so
@@ -51,16 +43,32 @@ function runtimePlanToolContext(params: {
 
 // Normalizers may return cloned tool definitions. Preserve owner and private
 // execution metadata so downstream dispatch keeps the same policy and result contract.
-function copyRuntimeToolMetadata(source: AgentTool, target: AgentTool): void {
+function copyRuntimeToolMetadata<TSchemaType extends TSchema, TResult>(
+  source: AgentToolWithMeta<TSchemaType, TResult>,
+  target: AgentToolWithMeta<TSchemaType, TResult>,
+): void {
   if (source === target) {
     return;
   }
-  const { catalogMode, outputSchema, hideFromChannelProgress } = source as AnyAgentTool;
-  Object.assign(target, {
-    ...(catalogMode ? { catalogMode } : {}),
-    ...(outputSchema !== undefined ? { outputSchema } : {}),
-    ...(hideFromChannelProgress === true ? { hideFromChannelProgress } : {}),
-  });
+  const { catalogMode, outputSchema, hideFromChannelProgress } = source;
+  if (
+    catalogMode &&
+    Object.getOwnPropertyDescriptor(target, "catalogMode")?.value !== catalogMode
+  ) {
+    target.catalogMode = catalogMode;
+  }
+  if (
+    outputSchema !== undefined &&
+    Object.getOwnPropertyDescriptor(target, "outputSchema")?.value !== outputSchema
+  ) {
+    target.outputSchema = outputSchema;
+  }
+  if (
+    hideFromChannelProgress === true &&
+    Object.getOwnPropertyDescriptor(target, "hideFromChannelProgress")?.value !== true
+  ) {
+    target.hideFromChannelProgress = true;
+  }
   copyAgentToolMetadata(source as never, target as never);
 }
 
@@ -74,9 +82,8 @@ function preserveRuntimeToolMetadata<TSchemaType extends TSchema = TSchema, TRes
   const duplicateNames = new Set<string>();
   for (const source of sourceTools) {
     const name = source.name;
-    if (sourcesByUniqueName.has(name)) {
+    if (sourcesByUniqueName.delete(name)) {
       duplicateNames.add(name);
-      sourcesByUniqueName.delete(name);
       continue;
     }
     if (!duplicateNames.has(name)) {
@@ -131,7 +138,7 @@ export function normalizeAgentRuntimeTools<
         }));
   // Provider collection views wrap the results of map, including host-owned tool wrappers.
   // Own the assembly array so later wrapping keeps its metadata; retain fenced tool elements.
-  const normalizedTools = Array.isArray(normalized) ? Array.from(normalized) : normalizableTools;
+  const normalizedTools = Array.from(normalized);
   return preserveRuntimeToolMetadata(normalizableTools, normalizedTools);
 }
 

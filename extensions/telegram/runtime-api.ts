@@ -80,7 +80,9 @@ export {
   createTelegramThreadBindingManager,
   getTelegramThreadBindingManager,
   setTelegramThreadBindingIdleTimeoutBySessionKey,
+  setTelegramThreadBindingIdleTimeoutBySessionKeyAsync,
   setTelegramThreadBindingMaxAgeBySessionKey,
+  setTelegramThreadBindingMaxAgeBySessionKeyAsync,
 } from "./src/thread-bindings.js";
 export { resolveTelegramToken } from "./src/token.js";
 export { setTelegramRuntime } from "./src/runtime.js";

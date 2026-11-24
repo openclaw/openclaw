@@ -7,10 +7,10 @@ import {
 } from "../../sessions/model-overrides.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db-contract.js";
 import type { AgentWorkerOperationContext } from "../../state/openclaw-agent-operation-context.js";
+import { forkCliHistoryBoundary } from "./cli-history-boundary.js";
 import { forkCliSessionBindings } from "./cli-session-binding.js";
 import type {
   ForkSessionEntryFromParentTargetResult,
-  ForkSessionFromParentTranscriptParams,
   ForkSessionFromParentTranscriptResult,
   SessionParentForkDecision,
 } from "./session-accessor.sqlite-contract.js";
@@ -24,11 +24,12 @@ import {
   buildForkedChildTranscriptEvents,
   estimateParentForkPromptTokens,
   planParentForkDecision,
+  resolveParentForkLimitDecision,
   resolveParentForkSourceTranscript,
   type ParentForkSourceTranscript,
 } from "./session-accessor.sqlite-parent-fork.js";
 import { loadTranscriptEventsFromDatabase } from "./session-accessor.sqlite-read.js";
-import { prepareSessionEntryReplacementPublication } from "./session-accessor.sqlite-replacement-state.js";
+import { prepareSessionEntryReplacementPublication } from "./session-accessor.sqlite-replacement-publication.js";
 import {
   formatLegacySqliteSessionMarkerForScope,
   type ResolvedSqliteScope,
@@ -179,6 +180,7 @@ function commitEntry(
     { parentEntry, base },
     forkCliSessionBindings(parentEntry, (provider) => providers.has(normalizeProviderId(provider))),
     forkedPatch,
+    patch?.preserveVisibility,
   );
   if (!("skip" in committed)) {
     return committed.result;
@@ -199,6 +201,7 @@ function forkSessionEntryInTransaction(
   prepared: { parentEntry: SessionEntry; base: SessionEntry },
   cliSessionBindings: SessionEntry["cliSessionBindings"],
   patch?: Partial<SessionEntry>,
+  preserveVisibility?: boolean,
 ):
   | { result: ForkSessionEntryFromParentTargetResult }
   | {
@@ -246,6 +249,7 @@ function forkSessionEntryInTransaction(
     totalTokensFresh: false,
     totalTokensVersion: undefined,
     cliSessionBindings,
+    cliHistoryBoundary: forkCliHistoryBoundary(freshParent, fork.transcript.sessionId),
     cliSessionIds: undefined,
     claudeCliSessionId: undefined,
   };
@@ -253,7 +257,11 @@ function forkSessionEntryInTransaction(
     writeDatabase,
     sessionTarget.canonicalKey,
     mergeSessionEntry(freshBase, forkIdentityPatch),
-    { previousEntry: freshBase },
+    {
+      previousEntry: freshBase,
+      // The child may have received an explicit sharing choice while preparation awaited.
+      preserveVisibility,
+    },
   );
   return {
     result: {
@@ -323,25 +331,4 @@ function forkSqliteParentTranscriptInTransaction(
       sessionId,
     },
   };
-}
-
-function resolveParentForkLimitDecision(
-  params: Pick<
-    ForkSessionFromParentTranscriptParams,
-    "enforceTokenLimit" | "forkFrom" | "maxTokens" | "parentEntry"
-  >,
-  source: ParentForkSourceTranscript,
-): Extract<SessionParentForkDecision, { status: "skip" }> | undefined {
-  if (!params.enforceTokenLimit) {
-    return undefined;
-  }
-  const decision = planParentForkDecision(
-    params.parentEntry,
-    estimateParentForkPromptTokens(source),
-    {
-      maxTokens: params.maxTokens,
-      preferTranscriptEstimate: params.forkFrom === "last-completed",
-    },
-  );
-  return decision.status === "skip" ? decision : undefined;
 }

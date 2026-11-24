@@ -24,7 +24,6 @@ export function buildLineQuestionPostbackData(callback: LineQuestionPostback): s
   return Buffer.byteLength(data, "utf8") <= POSTBACK_DATA_MAX_BYTES ? data : undefined;
 }
 
-/** Reads a question choice back out of inbound postback data, if it carries one. */
 export function parseLineQuestionPostbackData(data: string): LineQuestionPostback | undefined {
   if (!data.includes(QUESTION_ID_PARAM)) {
     return undefined;

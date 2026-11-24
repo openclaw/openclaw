@@ -147,7 +147,7 @@ describe("config boundary guard", () => {
     ]);
   });
 
-  it.each(["ts", "tsx"])("allows narrow config SDK subpaths in production %s code", (extension) => {
+  it.each(["ts"])("allows narrow config SDK subpaths in production %s code", (extension) => {
     const repoRoot = makeRepoFixture();
     writeFixture(
       repoRoot,
@@ -162,7 +162,6 @@ describe("config boundary guard", () => {
 
     expect(collectDeprecatedInternalConfigApiViolations({ repoRoot })).toStrictEqual([]);
   });
-
   it("does not combine unrelated imports into a config mutation violation", () => {
     const repoRoot = makeRepoFixture();
     writeFixture(

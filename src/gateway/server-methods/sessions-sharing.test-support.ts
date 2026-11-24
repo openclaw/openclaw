@@ -1,4 +1,5 @@
 import { vi } from "vitest";
+import { gatewayConnect } from "../server/client-fixtures.test-support.js";
 import {
   initializeSessionReadContext,
   identifiedClient as preparedClient,
@@ -8,18 +9,7 @@ import type { GatewayClient, GatewayRequestContext, RespondFn } from "./types.js
 
 export function soloClient(): GatewayClient {
   return {
-    connect: {
-      minProtocol: 1,
-      maxProtocol: 1,
-      client: {
-        id: "openclaw-control-ui",
-        version: "test",
-        platform: "test",
-        mode: "webchat",
-      },
-      role: "operator",
-      scopes: ["operator.read", "operator.write"],
-    },
+    connect: gatewayConnect(["operator.read", "operator.write"]),
   };
 }
 
@@ -42,7 +32,6 @@ export function sessionSharingTestContext(
     broadcast,
     broadcastToConnIds: vi.fn(),
     getSessionEventSubscriberConnIds: () => new Set(),
-    chatAbortControllers: new Map(),
   } as unknown as GatewayRequestContext;
 }
 

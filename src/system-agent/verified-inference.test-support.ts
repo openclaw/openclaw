@@ -1,6 +1,18 @@
 import { vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { InstalledPluginIndexRecord } from "../plugins/installed-plugin-index.js";
+import * as pluginRegistrySnapshot from "../plugins/plugin-registry-snapshot.js";
+import * as pluginArtifactIdentity from "../plugins/plugin-runtime-artifact-identity.js";
+import { createInstalledPluginIndex } from "../plugins/test-helpers/installed-plugin-index.js";
+
+export function mockPluginRegistry(records: InstalledPluginIndexRecord[]) {
+  vi.spyOn(pluginRegistrySnapshot, "loadPluginRegistrySnapshot").mockReturnValue(
+    createInstalledPluginIndex({ plugins: records }),
+  );
+  vi.spyOn(pluginArtifactIdentity, "loadPluginRuntimeArtifactIdentitySources").mockReturnValue(
+    records,
+  );
+}
 
 export function pluginRecord(
   pluginId: string,
@@ -22,19 +34,6 @@ export function pluginRecord(
     installRecordHash: `${pluginId}-install-v1`,
     packageJson: { path: `${rootDir}/package.json`, hash: `${pluginId}-package-v1` },
     ...overrides,
-  };
-}
-
-export function pluginArtifactDeps() {
-  return {
-    fingerprintPluginRuntimeArtifact: (record: { pluginId: string }) =>
-      `${record.pluginId}-runtime-v1`,
-  };
-}
-
-export function cliRuntimeArtifactDeps(fingerprint = "claude-cli-artifact-v1") {
-  return {
-    resolveCliRuntimeArtifactFingerprint: vi.fn(async () => fingerprint),
   };
 }
 

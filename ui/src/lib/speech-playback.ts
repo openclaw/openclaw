@@ -1,9 +1,9 @@
 import type { TtsSpeakResult } from "@openclaw/gateway-protocol";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import { chunkText } from "../../../packages/markdown-core/src/chunk-text.js";
 import { DEFAULT_MAX_TEXT_LENGTH } from "../../../src/tts/tts-limits.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import { base64ToBytes } from "./bytes-base64.ts";
+import { listen } from "./reactive/listener.ts";
 
 const activePlayback = new WeakMap<GatewayBrowserClient, GatewaySpeechPlayback>();
 
@@ -33,9 +33,7 @@ export class GatewaySpeechPlayback {
       }
       this.client = client;
     }
-    if (superseded) {
-      this.superseded = superseded;
-    }
+    this.superseded = superseded ?? this.superseded;
     if (this.audio) {
       return this.audio;
     }
@@ -80,6 +78,7 @@ export class GatewaySpeechPlayback {
       this.cancel = () => resolve(undefined);
     });
     try {
+      const { chunkText } = await import("../../../packages/markdown-core/src/chunk-text.js");
       for (const textChunk of chunkText(text, maxTextLength)) {
         if (generation !== this.generation || !isCurrent()) {
           return;
@@ -118,8 +117,8 @@ export class GatewaySpeechPlayback {
           return;
         }
         this.finish = undefined;
-        audio.removeEventListener("ended", cancel);
-        audio.removeEventListener("error", failed);
+        stopEnded();
+        stopError();
         audio.pause();
         audio.removeAttribute("src");
         audio.load();
@@ -133,8 +132,8 @@ export class GatewaySpeechPlayback {
       const cancel = () => finish();
       const failed = () => finish(new Error("The browser could not play the generated speech."));
       this.finish = cancel;
-      audio.addEventListener("ended", cancel, { once: true });
-      audio.addEventListener("error", failed, { once: true });
+      const stopEnded = listen(audio, "ended", cancel, { once: true });
+      const stopError = listen(audio, "error", failed, { once: true });
       void audio
         .play()
         .catch((error: unknown) =>

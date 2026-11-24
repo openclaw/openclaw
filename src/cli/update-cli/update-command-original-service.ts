@@ -4,6 +4,7 @@ import { isDeepStrictEqual } from "node:util";
 import {
   readDaemonRuntimePin,
   readDaemonRuntimePinForInstall,
+  readDaemonRuntimePinMigrationPending,
 } from "../../daemon/runtime-pin-state.js";
 import {
   resolveManagedServiceNodeRunner,
@@ -11,7 +12,7 @@ import {
 } from "../../daemon/service-layout.js";
 import { fingerprintGatewayServiceDefinition } from "../../daemon/service-rebind.js";
 import {
-  hasGatewayServiceDefinitionOverrides,
+  canPreserveGatewayServiceDefinitionOverrides,
   type GatewayServiceCommandConfig,
 } from "../../daemon/service-types.js";
 import { resolveGatewayService } from "../../daemon/service.js";
@@ -118,15 +119,17 @@ export async function revalidateOriginalManagedServiceRuntime(
   const definition = await fingerprintGatewayServiceDefinition(state.command);
   assertCurrent();
   const ownRebind = allowOwnRebind && original.definition.rebound === definition;
-  const runtimePin = readDaemonRuntimePinForInstall(
-    { kind: "gateway", env: original.service.serviceEnv ?? {} },
-    state.command,
-    true,
-  );
+  const runtimePin =
+    original.definition.runtimePin &&
+    readDaemonRuntimePinForInstall(
+      { kind: "gateway", env: original.service.serviceEnv ?? {} },
+      state.command,
+      true,
+    );
   const expectedRuntimePin = ownRebind
     ? original.definition.reboundRuntimePin
-    : original.definition.runtimePin.revision;
-  if (runtimePin.revision !== expectedRuntimePin) {
+    : original.definition.runtimePin?.revision;
+  if (runtimePin?.revision !== expectedRuntimePin) {
     throw new Error("Original managed service runtime intent changed.");
   }
   if (definition !== original.definition.fingerprint && !ownRebind) {
@@ -210,14 +213,20 @@ export async function observeOriginalManagedServiceRuntime(
     if (!state.command) {
       throw new Error("Original service definition is unavailable.");
     }
-    if (hasGatewayServiceDefinitionOverrides(state.command) || state.command.reloadPending) {
+    if (
+      !canPreserveGatewayServiceDefinitionOverrides(state.command) ||
+      state.command.reloadPending
+    ) {
       throw new Error(
         "Original service has overrides that cannot be restored by the service writer.",
       );
     }
+    const runtimePinMigrationPending = readDaemonRuntimePinMigrationPending(before.serviceEnv);
     const definition = {
       command: structuredClone(state.command),
-      runtimePin: readDaemonRuntimePin({ kind: "gateway", env: before.serviceEnv }, state.command),
+      runtimePin: runtimePinMigrationPending
+        ? undefined
+        : readDaemonRuntimePin({ kind: "gateway", env: before.serviceEnv }, state.command),
       fingerprint: await fingerprintGatewayServiceDefinition(state.command),
     };
     assertCurrent();
@@ -231,7 +240,11 @@ export async function observeOriginalManagedServiceRuntime(
       service: {
         serviceEnv: { ...before.serviceEnv },
         serviceManagerUid: before.serviceManagerUid,
-        serviceUpdateVerdict: { ...verdict, root, refreshDefinition: false },
+        serviceUpdateVerdict: {
+          ...verdict,
+          root,
+          refreshDefinition: false,
+        },
       },
       ...files,
     };

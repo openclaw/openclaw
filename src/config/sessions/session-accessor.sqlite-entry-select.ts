@@ -1,5 +1,5 @@
 import { expressionBuilder } from "kysely";
-import { jsonOrderedArray } from "../../infra/database-engine/json-values.js";
+import { jsonArrayValue, jsonOrderedArray } from "../../infra/database-engine/json-values.js";
 import { executeSqliteQuerySync, sqliteStringSet } from "../../infra/kysely-sync.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db-contract.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
@@ -34,6 +34,7 @@ export function readSelectedSessionEntryRows(
     includeMembership?: boolean;
     includeWindowFacts?: true;
     includeRowTranscriptProjection?: true;
+    projectParticipants?: false;
   },
 ): ReadableSessionEntryRow[] {
   const key =
@@ -92,7 +93,36 @@ export function readSelectedSessionEntryRows(
           .as("transcript_max_seq"),
       ]),
   );
-  const transcriptQuery = windowQuery.$if(
+  const participantQuery = windowQuery.$if(
+    (options?.includeWindowFacts === true || options?.includeRowTranscriptProjection === true) &&
+      options.projectParticipants !== false &&
+      projection !== "delivery",
+    (builder) =>
+      builder.select((outer) =>
+        tableExists(database.db, "session_participants")
+          ? outer
+              .selectFrom("session_participants")
+              .select((inner) =>
+                jsonOrderedArray(
+                  database.db,
+                  jsonArrayValue(database.db, [
+                    inner.ref("identity_namespace"),
+                    inner.ref("actor_id"),
+                  ]),
+                  [
+                    inner.ref("first_prompted_at"),
+                    inner.ref("actor_id"),
+                    inner.ref("identity_namespace"),
+                  ],
+                ).as("identities"),
+              )
+              .whereRef("session_participants.session_key", "=", "session_nodes.session_key")
+              .$asScalar()
+              .as("participant_identities_json")
+          : outer.val("[]").as("participant_identities_json"),
+      ),
+  );
+  const transcriptQuery = participantQuery.$if(
     options?.includeRowTranscriptProjection === true,
     (builder) =>
       builder
@@ -107,12 +137,29 @@ export function readSelectedSessionEntryRows(
           "session_nodes.current_session_id",
         )
         .select([
-          "row_transcript_window.session_id as row_transcript_window_id",
           "row_transcript_window.row_transcript_json",
           "row_transcript_window.row_transcript_updated_at",
           "row_transcript_window.transcript_updated_at as row_transcript_source_updated_at",
           "row_transcript_index.indexed_seq as row_transcript_indexed_seq",
-        ]),
+        ])
+        .select((eb) =>
+          eb
+            .or([
+              eb.exists(
+                eb
+                  .selectFrom("transcript_events")
+                  .select("seq")
+                  .whereRef("session_id", "=", "session_nodes.current_session_id"),
+              ),
+              eb.exists(
+                eb
+                  .selectFrom("session_transcript_cold_archives")
+                  .select("session_id")
+                  .whereRef("session_id", "=", "session_nodes.current_session_id"),
+              ),
+            ])
+            .as("row_transcript_present"),
+        ),
   );
   const eb = expressionBuilder<OpenClawAgentKyselyDatabase, "session_nodes">();
   // Old stores have no board tables until first use; branch before compiling SQL.
@@ -135,9 +182,12 @@ export function readSelectedSessionEntryRows(
           ? outer
               .selectFrom("session_members")
               .select((builder) =>
-                jsonOrderedArray(database.db, builder.ref("identity_id"), [
+                jsonOrderedArray(
+                  database.db,
                   builder.ref("identity_id"),
-                ]).as("ids"),
+                  [builder.ref("identity_id")],
+                  "not-null",
+                ).as("ids"),
               )
               .whereRef("session_members.session_key", "=", "session_nodes.session_key")
               .$asScalar()

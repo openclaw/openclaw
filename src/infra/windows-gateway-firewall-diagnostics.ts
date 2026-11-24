@@ -1,5 +1,5 @@
 import { safeParseJson } from "@openclaw/normalization-core";
-import { runCommandWithTimeout as defaultRunCommandWithTimeout } from "../process/exec.js";
+import { runCommandWithTimeout } from "../process/exec.js";
 import { getWindowsPowerShellExePath } from "./windows-install-roots.js";
 
 const WINDOWS_GATEWAY_FIREWALL_TIMEOUT_MS = 5_000;
@@ -142,25 +142,9 @@ export type WindowsGatewayFirewallDiagnostic = {
   details: string[];
 };
 
-type WindowsGatewayFirewallCommandResult = {
-  code: number | null;
-  stdout: string;
-  stdoutTruncatedBytes?: number;
-  stderrTruncatedBytes?: number;
-};
-
-type WindowsGatewayFirewallCommandRunner = (
-  argv: string[],
-  opts: { timeoutMs: number; maxOutputBytes?: number },
-) => Promise<WindowsGatewayFirewallCommandResult>;
-
 type InspectWindowsGatewayFirewallParams = {
   bind: string | undefined;
   port: number;
-  mode?: "quick";
-  platform?: NodeJS.Platform;
-  runCommandWithTimeout?: WindowsGatewayFirewallCommandRunner;
-  timeoutMs?: number;
 };
 
 type FirewallStatePayload = {
@@ -201,14 +185,10 @@ type QuickFirewallPayload = {
   LocalRules?: unknown;
 };
 
-async function runBestEffortCommand(
-  runCommandWithTimeout: WindowsGatewayFirewallCommandRunner,
-  argv: string[],
-  timeoutMs: number,
-): Promise<string | null> {
+async function runBestEffortCommand(argv: string[]): Promise<string | null> {
   try {
     const result = await runCommandWithTimeout(argv, {
-      timeoutMs,
+      timeoutMs: WINDOWS_GATEWAY_FIREWALL_TIMEOUT_MS,
       maxOutputBytes: DEFAULT_OUTPUT_BYTES,
     });
     if ((result.stdoutTruncatedBytes ?? 0) > 0 || (result.stderrTruncatedBytes ?? 0) > 0) {
@@ -264,13 +244,6 @@ function parseFirewallProfiles(value: unknown): FirewallProfile[] {
     .filter((profile) => profile.name.length > 0);
 }
 
-function parseConnectionProfileNames(value: unknown): string[] {
-  const names = parseJsonRows(value)
-    .map((row) => normalizeProfileName(stringField(row, "NetworkCategory")))
-    .filter(Boolean);
-  return [...new Set(names)];
-}
-
 function parseFirewallRules(value: unknown): FirewallRule[] {
   return parseJsonRows(value).map((row) => ({
     displayName: stringField(row, "DisplayName", "displayName", "Name") || "unnamed rule",
@@ -287,18 +260,6 @@ function parseFirewallRules(value: unknown): FirewallRule[] {
   }));
 }
 
-function isTruthyFirewallValue(value: string): boolean {
-  return value === "true" || value === "allow" || value === "1";
-}
-
-function isBlockingInbound(profile: FirewallProfile): boolean {
-  return profile.enabled !== "false" && profile.defaultInboundAction !== "allow";
-}
-
-function inboundRulesAreAllowed(profiles: FirewallProfile[]): boolean {
-  return profiles.every((profile) => profile.allowInboundRules !== "false");
-}
-
 function findProfileSettings(
   profiles: FirewallProfile[],
   activeProfileNames: string[],
@@ -307,15 +268,6 @@ function findProfileSettings(
     return profiles;
   }
   return profiles.filter((profile) => activeProfileNames.includes(profile.name));
-}
-
-function profileMaskMatches(value: number, activeProfileNames: string[]): boolean {
-  const masks: Record<string, number> = {
-    domain: 1,
-    private: 2,
-    public: 4,
-  };
-  return activeProfileNames.some((name) => (value & (masks[name] ?? 0)) !== 0);
 }
 
 function ruleMatchesActiveProfile(rule: FirewallRule, activeProfileNames: string[]): boolean {
@@ -328,18 +280,14 @@ function ruleMatchesActiveProfile(rule: FirewallRule, activeProfileNames: string
   }
   const numeric = Number.parseInt(profile, 10);
   if (Number.isFinite(numeric)) {
-    return profileMaskMatches(numeric, activeProfileNames);
+    const masks: Record<string, number> = {
+      domain: 1,
+      private: 2,
+      public: 4,
+    };
+    return activeProfileNames.some((name) => (numeric & (masks[name] ?? 0)) !== 0);
   }
   return activeProfileNames.some((name) => profile.includes(name));
-}
-
-function isLocalRule(rule: FirewallRule): boolean {
-  return (
-    !rule.policyStoreSourceType ||
-    rule.policyStoreSourceType === "local" ||
-    rule.policyStoreSourceType === "persistentstore" ||
-    rule.policyStoreSource === "persistentstore"
-  );
 }
 
 function isProgramAgnosticRule(rule: FirewallRule): boolean {
@@ -365,17 +313,16 @@ function localRulesAreAllowed(params: {
         profile.allowLocalFirewallRules && profile.allowLocalFirewallRules !== "notconfigured",
     );
     if (explicitProfiles.length > 0) {
-      return explicitProfiles.every((profile) =>
-        isTruthyFirewallValue(profile.allowLocalFirewallRules),
+      return explicitProfiles.every(
+        (profile) =>
+          profile.allowLocalFirewallRules === "true" ||
+          profile.allowLocalFirewallRules === "allow" ||
+          profile.allowLocalFirewallRules === "1",
       );
     }
   }
 
   return true;
-}
-
-function formatProfiles(activeProfileNames: string[]): string {
-  return activeProfileNames.length > 0 ? activeProfileNames.join(", ") : "unknown";
 }
 
 function formatRuleNames(rules: FirewallRule[]): string {
@@ -386,7 +333,9 @@ function classifyWindowsGatewayFirewallState(
   state: ClassifiedFirewallState,
 ): WindowsGatewayFirewallDiagnostic {
   const activeProfiles = findProfileSettings(state.activeProfiles, state.activeProfileNames);
-  const blockingProfiles = activeProfiles.filter(isBlockingInbound);
+  const blockingProfiles = activeProfiles.filter(
+    (profile) => profile.enabled !== "false" && profile.defaultInboundAction !== "allow",
+  );
   const matchingActiveRules = state.matchingRules.filter((rule) =>
     ruleMatchesActiveProfile(rule, state.activeProfileNames),
   );
@@ -408,11 +357,13 @@ function classifyWindowsGatewayFirewallState(
   const mismatchedRules = state.matchingRules.filter(
     (rule) => !ruleMatchesActiveProfile(rule, state.activeProfileNames),
   );
-  const activeProfileText = formatProfiles(state.activeProfileNames);
+  const activeProfileNames = state.activeProfileNames;
+  const activeProfileText =
+    activeProfileNames.length > 0 ? activeProfileNames.join(", ") : "unknown";
   const diagnostic = (
     code: WindowsGatewayFirewallDiagnosticCode,
     message: string,
-    details: string[] = [],
+    details: string[],
     severity: WindowsGatewayFirewallDiagnostic["severity"] = "warning",
   ): WindowsGatewayFirewallDiagnostic => ({
     applies: true,
@@ -445,7 +396,7 @@ function classifyWindowsGatewayFirewallState(
   }
 
   if (programAgnosticMatchingRules.length > 0) {
-    if (!inboundRulesAreAllowed(activeProfiles)) {
+    if (!activeProfiles.every((profile) => profile.allowInboundRules !== "false")) {
       return diagnostic(
         "windows_firewall_inbound_rules_disabled",
         "Windows Firewall is configured to block inbound connections even when allow rules exist.",
@@ -455,7 +406,13 @@ function classifyWindowsGatewayFirewallState(
         ],
       );
     }
-    const onlyLocalRules = programAgnosticMatchingRules.every(isLocalRule);
+    const onlyLocalRules = programAgnosticMatchingRules.every(
+      (rule) =>
+        !rule.policyStoreSourceType ||
+        rule.policyStoreSourceType === "local" ||
+        rule.policyStoreSourceType === "persistentstore" ||
+        rule.policyStoreSource === "persistentstore",
+    );
     if (onlyLocalRules && !localRulesAreAllowed(state)) {
       return localRulesIgnored(
         `Matching local allow rule(s): ${formatRuleNames(programAgnosticMatchingRules)}.`,
@@ -541,8 +498,7 @@ function firewallInspectionFailed(message: string): WindowsGatewayFirewallDiagno
 export async function inspectWindowsGatewayFirewall(
   params: InspectWindowsGatewayFirewallParams,
 ): Promise<WindowsGatewayFirewallDiagnostic> {
-  const platform = params.platform ?? process.platform;
-  if (platform !== "win32" || params.bind !== "lan") {
+  if (process.platform !== "win32" || params.bind !== "lan") {
     return {
       applies: false,
       severity: "info",
@@ -552,20 +508,14 @@ export async function inspectWindowsGatewayFirewall(
     };
   }
 
-  const runCommandWithTimeout = params.runCommandWithTimeout ?? defaultRunCommandWithTimeout;
-  const timeoutMs = params.timeoutMs ?? WINDOWS_GATEWAY_FIREWALL_TIMEOUT_MS;
-  const quickJson = await runBestEffortCommand(
-    runCommandWithTimeout,
-    [
-      getWindowsPowerShellExePath(),
-      "-NoProfile",
-      "-ExecutionPolicy",
-      "Bypass",
-      "-Command",
-      buildWindowsQuickFirewallCommand(params.port),
-    ],
-    timeoutMs,
-  );
+  const quickJson = await runBestEffortCommand([
+    getWindowsPowerShellExePath(),
+    "-NoProfile",
+    "-ExecutionPolicy",
+    "Bypass",
+    "-Command",
+    buildWindowsQuickFirewallCommand(params.port),
+  ]);
   if (quickJson === null) {
     return firewallInspectionFailed(
       "OpenClaw could not quickly inspect Windows Firewall LAN Gateway policy.",
@@ -585,8 +535,11 @@ export async function inspectWindowsGatewayFirewall(
   const state = quickPayload.State as FirewallStatePayload;
   const managedActiveRules = parseFirewallRules(quickPayload.ActiveRules);
   const localRules = parseFirewallRules(quickPayload.LocalRules);
+  const names = parseJsonRows(state.ConnectionProfiles)
+    .map((row) => normalizeProfileName(stringField(row, "NetworkCategory")))
+    .filter(Boolean);
   const policyState: ClassifiedFirewallState = {
-    activeProfileNames: parseConnectionProfileNames(state.ConnectionProfiles),
+    activeProfileNames: [...new Set(names)],
     activeProfiles: parseFirewallProfiles(state.ActiveFirewallProfiles),
     localProfiles: parseFirewallProfiles(state.LocalFirewallProfiles),
     matchingRules: [],
@@ -601,10 +554,8 @@ export async function inspectWindowsGatewayFirewall(
 
 export function formatWindowsGatewayFirewallGuidance(params: {
   bind: string | undefined;
-  platform?: NodeJS.Platform;
 }): string[] {
-  const platform = params.platform ?? process.platform;
-  if (platform !== "win32" || params.bind !== "lan") {
+  if (process.platform !== "win32" || params.bind !== "lan") {
     return [];
   }
   return [

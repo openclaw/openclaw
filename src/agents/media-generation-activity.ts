@@ -10,18 +10,24 @@ export type MediaGenerationOperation = {
   runId?: string;
   taskKind: string;
   sourceId?: string;
+  /** Successful generation result; sourceId retains the submission identity. */
+  provider?: string;
+  model?: string;
+  requestKey?: string;
   requesterSessionKey: string;
   requesterAgentId?: string;
+  requesterSessionId?: string;
+  requesterStorePath?: string;
+  requesterLifecycleRevision?: string | null;
   task?: string;
   status: "queued" | "running" | "succeeded" | "failed";
-  createdAt: number;
-  startedAt?: number;
   endedAt?: number;
-  lastEventAt?: number;
   progressSummary?: string;
-  terminalSummary?: string;
+  /** The durable queue owns delivery; the requester must release its turn. */
+  completionDelivery?: "queued";
   terminalOutcome?: "blocked";
-  error?: string;
+  /** Explicit correction of this task only; paid generation continues to settlement. */
+  superseded?: true;
 };
 
 type MediaProgressDraft = {
@@ -33,6 +39,7 @@ type MediaProgressDraft = {
 
 const state = resolveGlobalSingleton(Symbol.for("openclaw.mediaGenerationOperations"), () => ({
   operations: new Map<string, MediaGenerationOperation>(),
+  producedRetainers: new WeakMap<MediaGenerationOperation, () => Promise<void>>(),
   active: new Map<string, { sessionKey: string; agentId?: string; generation: string }>(),
   owners: new Map<string, string>(),
   admissions: new Map<string, string>(),
@@ -132,7 +139,6 @@ export function adoptMediaGenerationProgressDraft(
         ? [
             [
               operation.runId,
-              // `image_generation` → `Image generation`
               `${operation.taskKind.charAt(0).toUpperCase()}${operation.taskKind.slice(1).replaceAll("_", " ")}`,
             ] as const,
           ]
@@ -169,13 +175,14 @@ export function updateMediaGenerationOperation(
   update: Partial<
     Pick<
       MediaGenerationOperation,
+      | "requestKey"
       | "status"
       | "endedAt"
-      | "lastEventAt"
       | "progressSummary"
-      | "terminalSummary"
+      | "provider"
+      | "model"
+      | "completionDelivery"
       | "terminalOutcome"
-      | "error"
     >
   >,
 ): void {
@@ -185,6 +192,38 @@ export function updateMediaGenerationOperation(
   }
   Object.assign(operation, update);
 }
+/** A targeted correction also retires recent successful-request reuse. */
+export function supersedeMediaGenerationOperation(runId: string): void {
+  const operation = findMediaGenerationOperation(runId);
+  if (operation && !operation.superseded) {
+    operation.superseded = true;
+  }
+}
+
+/** One live completion owns the produced-file handoff for this operation. */
+export function registerMediaGenerationOutputRetainer(
+  runId: string,
+  acceptedOperation: Pick<MediaGenerationOperation, "superseded">,
+  retain: () => Promise<void>,
+): () => void {
+  const operation = findMediaGenerationOperation(runId);
+  if (operation !== acceptedOperation) {
+    return () => {};
+  }
+  state.producedRetainers.set(operation, retain);
+  return () => {
+    if (state.producedRetainers.get(operation) === retain) {
+      state.producedRetainers.delete(operation);
+    }
+  };
+}
+
+export function retainMediaGenerationProducedOutput(operation: MediaGenerationOperation) {
+  return operation.runId && findMediaGenerationOperation(operation.runId) === operation
+    ? state.producedRetainers.get(operation)?.()
+    : undefined;
+}
+
 export function findMediaGenerationOperation(runId: string): MediaGenerationOperation | undefined {
   return isMediaGenerationOperationCurrent(runId) ? state.operations.get(runId) : undefined;
 }
@@ -193,15 +232,16 @@ export function listMediaGenerationOperations(
   requesterAgentId?: string,
 ): MediaGenerationOperation[] {
   pruneCompletedOperations();
-  const agentId = requesterAgentId ?? parseAgentSessionKey(sessionKey)?.agentId;
+  let keyAgentId: string | undefined;
+  const agentId = requesterAgentId ?? (keyAgentId = parseAgentSessionKey(sessionKey)?.agentId);
   if (!agentId) {
     return [];
   }
   return [...state.operations.values()].filter(
     (operation) =>
       operation.requesterSessionKey === sessionKey &&
-      (operation.requesterAgentId ??
-        parseAgentSessionKey(operation.requesterSessionKey)?.agentId) === agentId &&
+      (operation.requesterAgentId ?? (keyAgentId ??= parseAgentSessionKey(sessionKey)?.agentId)) ===
+        agentId &&
       Boolean(operation.runId && isMediaGenerationOperationCurrent(operation.runId)),
   );
 }

@@ -17,7 +17,10 @@ import type {
   PreparedTranscriptReport,
   TranscriptReportWorkerOperations,
 } from "./session-accessor.sqlite-transcript-reports.types.js";
-import type { SessionTranscriptManualTrimResult } from "./session-accessor.types.js";
+import type {
+  SessionTranscriptManualTrimResult,
+  SessionTranscriptWriteLockAccessorContext,
+} from "./session-accessor.types.js";
 import type { SessionSourcePredicate } from "./session-source-authority.js";
 import type {
   SessionMessageRewriteSelection,
@@ -36,14 +39,10 @@ export type SessionActorMemoryWorkerTranscriptLedger = {
 type Target = { scope: SessionTranscriptWriteScope & { sessionId: string } };
 export type SessionActorMemoryReportsReads = {
   "session.transcript.messageFacts": {
-    input: Target & { idempotencyKeys: readonly string[]; sourceRunId?: string };
+    input: Target & Parameters<SessionTranscriptWriteLockAccessorContext["readMessageFacts"]>[0];
     output: {
       version: SessionTranscriptContextVersion;
-      facts: Awaited<
-        ReturnType<
-          import("./session-accessor.types.js").SessionTranscriptWriteLockAccessorContext["readMessageFacts"]
-        >
-      >;
+      facts: Awaited<ReturnType<SessionTranscriptWriteLockAccessorContext["readMessageFacts"]>>;
     };
   };
   "session.rewrite.prepare": {
@@ -86,6 +85,7 @@ export type SessionActorMemoryReportsWrites = {
     input: SessionActorMemoryReportsReads["session.rewrite.prepare"]["input"] & {
       expected: SessionMessageRewriteSnapshot;
       message: unknown;
+      returnUnchanged?: boolean;
     };
     output: SessionMessageRewriteCommitted;
   };

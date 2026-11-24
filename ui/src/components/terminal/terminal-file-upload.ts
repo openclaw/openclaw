@@ -5,8 +5,11 @@ import type {
   TerminalUploadResult,
 } from "../../../../packages/gateway-protocol/src/schema/terminal.ts";
 import { t } from "../../i18n/index.ts";
+import { registerTerminalEnglish } from "../../i18n/locales/en-terminal.ts";
 import { bytesToBase64 } from "../../lib/bytes-base64.ts";
 import type { TerminalGatewayClient } from "./terminal-connection.ts";
+
+registerTerminalEnglish();
 
 type TerminalUploadFile = { name: string; contentBase64: string };
 
@@ -14,12 +17,10 @@ export async function uploadTerminalFile(
   client: Pick<TerminalGatewayClient, "request">,
   sessionId: string,
   file: TerminalUploadFile,
-  signal?: AbortSignal,
+  signal: AbortSignal,
 ): Promise<TerminalUploadResult> {
   const params = { sessionId, ...file };
-  return await (signal
-    ? client.request<TerminalUploadResult>("terminal.upload", params, { signal })
-    : client.request<TerminalUploadResult>("terminal.upload", params));
+  return await client.request<TerminalUploadResult>("terminal.upload", params, { signal });
 }
 
 export async function encodeTerminalUpload(file: File): Promise<string> {

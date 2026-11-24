@@ -96,11 +96,12 @@ export function commitSessionActorMemoryMessageRewrite(
   return {
     kind: "session-message-rewrite",
     result:
-      generation && (changed || input.target.kind === "terminal-assistant")
+      generation && (changed || input.target.kind === "terminal-assistant" || input.returnUnchanged)
         ? {
             generation,
             messageId: String(current.event.id),
             message: changed ? input.message : current.event.message,
+            ...(!changed && input.returnUnchanged ? { unchanged: true as const } : {}),
           }
         : null,
   };

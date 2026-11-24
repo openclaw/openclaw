@@ -1,4 +1,3 @@
-import { randomUUID } from "node:crypto";
 import type {
   WorkboardArtifact,
   WorkboardAttachment,
@@ -8,16 +7,10 @@ import type {
   WorkboardProof,
 } from "@openclaw/workboard-contract";
 import type { PersistedWorkboardAttachment } from "./persistence-types.js";
-import {
-  assertCanMutateClaimedCard,
-  cardRunId,
-  cardSessionKey,
-  closeRunningAttempts,
-} from "./store-card-helpers.js";
+import { assertCanMutateClaimedCard, cardRunId, cardSessionKey } from "./store-card-helpers.js";
 import {
   MAX_CARD_ARTIFACTS,
   MAX_CARD_ATTACHMENTS,
-  MAX_CARD_NOTIFICATIONS,
   MAX_CARD_PROOF,
   MAX_CARD_WORKER_LOGS,
 } from "./store-constants.js";
@@ -25,7 +18,6 @@ import { WorkboardCoreStore } from "./store-core.js";
 import type {
   WorkboardArtifactInput,
   WorkboardAttachmentInput,
-  WorkboardCardPatch,
   WorkboardMutationScope,
   WorkboardProofInput,
   WorkboardProtocolViolationInput,
@@ -40,49 +32,15 @@ import {
   normalizeProofInput,
   workerLogEntry,
 } from "./store-normalizers.js";
+import { appendCardNotification, finishRun } from "./store-status-write.js";
 
 export class WorkboardEnrichmentStore extends WorkboardCoreStore {
-  protected finishRun(
-    card: WorkboardCard,
-    status: "done" | "blocked",
-    now: number,
-    reason?: string,
-  ): WorkboardCardPatch & { metadata: WorkboardMetadata } {
-    const execution =
-      card.execution?.status === "running"
-        ? { ...card.execution, status, updatedAt: now }
-        : card.execution;
-    return {
-      status,
-      ...(execution ? { execution } : {}),
-      metadata: {
-        ...card.metadata,
-        claim: undefined,
-        attempts: closeRunningAttempts(
-          card.metadata?.attempts,
-          now,
-          status === "done" ? "succeeded" : "blocked",
-          reason,
-        ),
-        failureCount: status === "done" ? 0 : (card.metadata?.failureCount ?? 0) + 1,
-      },
-    };
-  }
-
   protected appendNotification(
     metadata: WorkboardMetadata | undefined,
     now: number,
     notification: Omit<WorkboardNotification, "id" | "createdAt" | "sequence">,
   ): WorkboardNotification[] {
-    return [
-      ...(metadata?.notifications ?? []),
-      {
-        id: randomUUID(),
-        createdAt: now,
-        sequence: this.nextNotificationSequence(now),
-        ...notification,
-      },
-    ].slice(-MAX_CARD_NOTIFICATIONS);
+    return appendCardNotification(metadata, now, this.nextNotificationSequence(now), notification);
   }
 
   async addProof(
@@ -168,7 +126,7 @@ export class WorkboardEnrichmentStore extends WorkboardCoreStore {
       try {
         const updated = await this.withMutationAuthority(
           async () =>
-            this.updateCard(await this.requireCard(id), {
+            this.updateCard(existing, {
               metadata: {
                 ...clearDiagnostics(existing.metadata, ["missing_proof"]),
                 attachments: [...(existing.metadata?.attachments ?? []), attachment].slice(
@@ -199,8 +157,7 @@ export class WorkboardEnrichmentStore extends WorkboardCoreStore {
 
   async getAttachment(id: string): Promise<PersistedWorkboardAttachment | undefined> {
     const attachmentId = id.trim();
-    const entry = await this.attachmentStore.lookup(attachmentId);
-    return entry?.version === 1 ? entry : undefined;
+    return await this.attachmentStore.lookup(attachmentId);
   }
 
   async deleteAttachment(
@@ -216,7 +173,7 @@ export class WorkboardEnrichmentStore extends WorkboardCoreStore {
         throw new Error(`attachment not found: ${attachmentId}`);
       }
       await this.attachmentStore.delete(attachmentId);
-      return await this.updateCard(await this.requireCard(cardId), {
+      return await this.updateCard(existing, {
         metadata: {
           ...existing.metadata,
           attachments: attachments.filter((attachment) => attachment.id !== attachmentId),
@@ -259,7 +216,7 @@ export class WorkboardEnrichmentStore extends WorkboardCoreStore {
         "Worker stopped without completing or blocking the card.";
       const log = workerLogEntry({ ...input, level: "error" }, detail, now);
       const { sessionKey, runId } = log;
-      const finished = this.finishRun(card, "blocked", now, detail);
+      const finished = finishRun(card, "blocked", now, detail);
       const notifications = this.appendNotification(card.metadata, now, {
         kind: "failed",
         message: capText(detail, 240) ?? "Worker protocol violation.",
@@ -268,7 +225,7 @@ export class WorkboardEnrichmentStore extends WorkboardCoreStore {
           : {}),
         ...(runId || cardRunId(card) ? { runId: runId ?? cardRunId(card) } : {}),
       });
-      return await this.updateCard(await this.requireCard(card.id), {
+      return await this.updateCard(card, {
         ...finished,
         status: card.status === "done" ? card.status : "blocked",
         metadata: {

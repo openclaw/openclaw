@@ -3,8 +3,8 @@
 // Prevents local primitive-coercion helpers from regrowing after consolidation.
 import fs from "node:fs";
 import path from "node:path";
-import * as ts from "typescript/unstable/ast";
-import { API } from "typescript/unstable/sync";
+import * as ts from "typescript/ast";
+import { API } from "typescript/sync";
 import { isCodeFile, listRepoFilesSync } from "./check-file-utils.js";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
 import { runWithFailedTrailer } from "./lib/failed-trailer.mts";
@@ -70,6 +70,7 @@ export const CANONICAL_COERCION_HELPER_OWNERS = [
     file: "packages/normalization-core/src/string-normalization.ts",
     kind: "function",
     names: [
+      "commonPrefixLength",
       "containsAsciiControlCharacter",
       "filterStringEntries",
       "normalizeArrayBackedTrimmedStringList",
@@ -101,12 +102,15 @@ export const CANONICAL_COERCION_HELPER_OWNERS = [
       "asFiniteNumber",
       "asFiniteNumberInRange",
       "asNonNegativeFiniteNumber",
+      "asNonNegativeInteger",
       "asPositiveFiniteNumber",
+      "asPositiveInteger",
       "asPositiveSafeInteger",
       "asSafeIntegerInRange",
       "clampTimerTimeoutMs",
       "clampPositiveTimerTimeoutMs",
       "finiteSecondsToTimerSafeMilliseconds",
+      "floorPositiveFiniteNumber",
       "isFutureDateTimestampMs",
       "nonNegativeSecondsToSafeMilliseconds",
       "parseDateFirstTimestampMs",
@@ -147,9 +151,12 @@ export const CANONICAL_COERCION_HELPER_OWNERS = [
       "asOptionalObjectRecord",
       "asOptionalRecord",
       "asRecord",
+      "ensureRecord",
       "filterStringRecord",
       "isRecord",
+      "isStringArray",
       "isStringRecord",
+      "omitUndefinedFields",
       "readStringField",
     ],
   },
@@ -166,12 +173,18 @@ export const CANONICAL_COERCION_HELPER_OWNERS = [
       "collectErrorGraphCandidates",
       "collectNestedErrorCandidates",
       "extractErrorCodeOrErrno",
+      "formatErrorStackWithMessage",
+      "mapErrorCauseChain",
       "readErrorCauses",
       "stringifyNonErrorCause",
       "toErrorObject",
-      "toStringifiedError",
       "toStructuredErrorObject",
     ],
+  },
+  {
+    file: "packages/normalization-core/src/stringified-error.ts",
+    kind: "function",
+    names: ["toStringifiedError"],
   },
   {
     file: "scripts/lib/error-format.mts",
@@ -207,6 +220,7 @@ export const CANONICAL_COERCION_MODULES = [
   "packages/normalization-core/src/record-coerce.ts",
   "packages/normalization-core/src/json-coercion.ts",
   "packages/normalization-core/src/error-coercion.ts",
+  "packages/normalization-core/src/stringified-error.ts",
   "packages/normalization-core/src/boolean-coercion.ts",
   "scripts/lib/error-format.mts",
   "src/utils/boolean.ts",
@@ -235,6 +249,12 @@ export const DEFERRED_CANONICAL_COERCION_EXPORTS = [
     name: "formatErrorMessage",
     reason: "Dependency-light scripts retain a deliberately smaller formatting policy.",
   },
+  {
+    file: "scripts/lib/error-format.mts",
+    name: "formatErrorMessageWithCauses",
+    reason:
+      "Dependency-light release diagnostics need bounded cause-chain rendering before install.",
+  },
 ] as const satisfies readonly { file: string; name: string; reason: string }[];
 
 const EXCEPTIONAL_COERCION_HELPER_CARVE_OUTS = [
@@ -255,12 +275,6 @@ const EXCEPTIONAL_COERCION_HELPER_CARVE_OUTS = [
     name: "asStandaloneRecord",
     kind: "variable",
     reason: "Serialized standalone app closure cannot capture module imports.",
-  },
-  {
-    file: "extensions/diffs/src/viewer-payload.ts",
-    name: "isViewerRecord",
-    kind: "function",
-    reason: "Standalone browser asset build cannot resolve workspace package imports.",
   },
   {
     file: "scripts/lib/kova-report-gate.mts",
@@ -620,7 +634,8 @@ function auditDefaultCanonicalExports(repoRoot: string, parser: API): CanonicalC
   const exportsByFile = new Map(
     auditedModules.map((file) => {
       const source = fs.readFileSync(path.join(repoRoot, file), "utf8");
-      const exportedNames = findExportedCallableNames(parser.createSourceFile(file, source));
+      using retainedSource = parser.createSourceFile(file, source);
+      const exportedNames = findExportedCallableNames(retainedSource.sourceFile);
       if (!mixedModules.has(file)) {
         return [file, exportedNames] as const;
       }
@@ -686,11 +701,12 @@ export async function runCoercionHelperDeclarationGuard(
         if (!BANNED_HELPER_NAME_PATTERN.test(result.value.source)) {
           continue;
         }
+        using retainedSource = parser.createSourceFile(result.value.file, result.value.source);
         declarations.push(
           ...findBannedCoercionHelperDeclarations(
             result.value.source,
             result.value.file,
-            parser.createSourceFile(result.value.file, result.value.source),
+            retainedSource.sourceFile,
           ),
         );
       }

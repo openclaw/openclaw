@@ -452,6 +452,7 @@ export async function normalizeWebchatReplyMediaPathsForDisplay(
       }
       const mergedMediaUrls: string[] = [];
       const mergedAttachments: NonNullable<ReplyPayload["attachments"]> = [];
+      const sourceUrls = new Map(getReplyPayloadMetadata(payload)?.replyMediaSourceUrls);
       const previousMediaFailures = getReplyPayloadMetadata(payload)?.assistantMediaFailures ?? [];
       const mediaFailures: ReplyMediaFailure[] = [...previousMediaFailures];
       let text = payload.text;
@@ -471,6 +472,10 @@ export async function normalizeWebchatReplyMediaPathsForDisplay(
           }),
         );
         const normalizedMediaUrls = resolveSendableOutboundReplyParts(normalizedPayload).mediaUrls;
+        for (const [url, sources] of getReplyPayloadMetadata(normalizedPayload)
+          ?.replyMediaSourceUrls ?? []) {
+          sourceUrls.set(url, sources);
+        }
         mediaFailures.push(
           ...(getReplyPayloadMetadata(normalizedPayload)?.assistantMediaFailures ?? []).slice(
             previousMediaFailures.length,
@@ -493,9 +498,10 @@ export async function normalizeWebchatReplyMediaPathsForDisplay(
         attachments: mergedAttachments,
       });
       normalized.push(
-        mediaFailures.length > 0
-          ? setReplyPayloadMetadata(merged, { assistantMediaFailures: mediaFailures })
-          : merged,
+        setReplyPayloadMetadata(merged, {
+          replyMediaSourceUrls: sourceUrls,
+          ...(mediaFailures.length > 0 ? { assistantMediaFailures: mediaFailures } : {}),
+        }),
       );
     }
     return normalized;

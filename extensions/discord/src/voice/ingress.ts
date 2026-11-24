@@ -5,11 +5,11 @@ import type { RealtimeVoiceSelectionHandle } from "openclaw/plugin-sdk/realtime-
 import { createSubsystemLogger, type RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { Client } from "../internal/discord.js";
-import { formatMention } from "../mentions.js";
 import { normalizeDiscordSlug } from "../monitor/allow-list.js";
 import { buildDiscordGroupSystemPrompt } from "../monitor/inbound-context.js";
 import type { DiscordLivePolicyReader } from "../monitor/live-policy.js";
 import { getDiscordRuntime } from "../runtime.js";
+import { formatMention } from "../target-parsing.js";
 import { authorizeDiscordVoiceIngress } from "./access.js";
 import type { VoiceRealtimeSpeakerContext, VoiceSessionEntry } from "./session.js";
 import type { DiscordVoiceSpeakerContextResolver } from "./speaker-context.js";
@@ -51,11 +51,9 @@ export async function resolveDiscordVoiceIngressContext(params: {
   const { entry, userId } = params;
   if (!entry.guildName) {
     const guild = await params.client.fetchGuild(entry.guildId).catch(() => null);
-    entry.guildName =
-      guild && typeof guild.name === "string" && guild.name.trim() ? guild.name : undefined;
+    entry.guildName = guild?.name.trim() ? guild.name : undefined;
   }
   const speaker = await params.speakerContext.resolveContext(entry.guildId, userId);
-  const speakerIdentity = await params.speakerContext.resolveIdentity(entry.guildId, userId);
   const access = await authorizeDiscordVoiceIngress({
     readPolicy: params.readPolicy,
     cfg: params.cfg,
@@ -66,12 +64,12 @@ export async function resolveDiscordVoiceIngressContext(params: {
     channelName: entry.channelName,
     channelSlug: entry.channelName ? normalizeDiscordSlug(entry.channelName) : "",
     channelLabel: formatMention({ channelId: entry.channelId }),
-    memberRoleIds: speakerIdentity.memberRoleIds,
+    memberRoleIds: speaker.memberRoleIds,
     admissionAllowFrom: params.admissionAllowFrom,
     sender: {
-      id: speakerIdentity.id,
-      name: speakerIdentity.name,
-      tag: speakerIdentity.tag,
+      id: speaker.id,
+      name: speaker.name,
+      tag: speaker.tag,
     },
   });
   if (!access.ok) {

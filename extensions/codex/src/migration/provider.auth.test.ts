@@ -3,6 +3,7 @@
 import {
   closeCredentialReader,
   nativeCredentialReaderStart,
+  credentialReaderRequest,
   credentialStorage,
   createCodexFixture,
   createConfigRuntime,
@@ -315,6 +316,65 @@ describe("Codex migration credential inspection and persistence", () => {
       expect(nativeCredentialReaderStart).toHaveBeenCalledTimes(1);
     },
   );
+
+  it("imports OAuth after a startup account update invalidates the first read", async () => {
+    const access = nativeToken();
+    await writeOAuth(access);
+    credentialReaderRequest.mockImplementationOnce(() => {
+      credentialStorage.revision++;
+    });
+    const ctx = authContext();
+
+    const plan = await provider.plan(ctx);
+    expect(findItem(plan.items, "auth:openai").status).toBe("planned");
+    const result = await provider.apply(ctx, plan);
+
+    expect(findItem(result.items, "auth:openai").status).toBe("migrated");
+    expect(loadTargetAuthStore(fixture).profiles["openai:account-native-account"]).toMatchObject({
+      access,
+      refresh: "native-refresh",
+    });
+  });
+
+  it("discards credentials when account updates invalidate both reads", async () => {
+    await writeOAuth();
+    credentialReaderRequest.mockImplementation((method) => {
+      if (method === "config/read") {
+        credentialStorage.revision++;
+      }
+    });
+
+    const credentials = await readCodexCliCredentialsAsync({
+      codexHome: fixture.codexHome,
+      allowKeychainPrompt: true,
+    });
+
+    expect(credentials).toBeUndefined();
+    expect(
+      credentialReaderRequest.mock.calls.filter(([method]) => method === "config/read"),
+    ).toHaveLength(2);
+    expect(closeCredentialReader).toHaveBeenCalledOnce();
+  });
+
+  it("rereads credentials instead of accepting a displaced same-route snapshot", async () => {
+    await writeAuth({ auth_mode: "apikey", OPENAI_API_KEY: "fixture-old-key" });
+    credentialReaderRequest.mockImplementation(async (method) => {
+      if (method === "account/read" && credentialStorage.revision === 0) {
+        await writeAuth({ auth_mode: "apikey", OPENAI_API_KEY: "fixture-current-key" });
+        credentialStorage.revision++;
+      }
+    });
+
+    const credentials = await readCodexCliCredentialsAsync({
+      codexHome: fixture.codexHome,
+      credentialKind: "api_key",
+      allowKeychainPrompt: true,
+    });
+
+    expect(credentials).toEqual({
+      apiKey: { type: "api_key", provider: "openai", key: "fixture-current-key" },
+    });
+  });
 
   it("imports auth into the selected agent directory under the effective OpenClaw home", async () => {
     const effectiveHome = path.join(fixture.root, "openclaw-home");

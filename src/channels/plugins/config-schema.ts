@@ -73,6 +73,7 @@ type ChannelGroupEntryField = keyof typeof ChannelGroupEntrySchema.shape;
 
 /** Extend the canonical group/room policy shape with channel-owned fields. */
 export function buildGroupEntrySchema<
+  // oxlint-disable-next-line typescript/no-generated-empty-object-type -- A keyless Zod shape preserves named fields without a string index signature.
   T extends ZodRawShape = Record<never, never>,
   const TOmit extends readonly ChannelGroupEntryField[] = [],
 >(extraShape?: T, options?: { omit?: TOmit }) {

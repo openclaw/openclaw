@@ -8,10 +8,7 @@ import {
   parseOpaqueLeafEntry,
   parseParentLinkedOpaqueEntry,
 } from "./session-entry-codec.js";
-import {
-  isSessionTranscriptSideAppendEntry,
-  type SessionTranscriptTreeNode,
-} from "./transcript-tree.js";
+import type { SessionTranscriptTreeNode } from "./transcript-tree.js";
 
 export type SessionNavigationEntry = Pick<SessionEntryBase, "id" | "parentId"> & {
   timestamp?: string;
@@ -40,7 +37,7 @@ export function* walkSessionCurrentTurn(
   return parentId;
 }
 
-function resolveSessionCanonicalParentId(
+export function resolveSessionCanonicalParentId(
   parentId: string | null,
   byId: ReadonlyMap<string, SessionParentEntry>,
   opaqueParentsById: ReadonlyMap<string, string | null>,
@@ -185,6 +182,12 @@ export class SessionEntryNavigation<T extends SessionNavigationEntry> {
     this.resetDescendantIds.clear();
   }
 
+  private recordResetDescendant(id: string, parentId: string | null): void {
+    if (parentId !== null && this.resetDescendantIds.has(parentId)) {
+      this.resetDescendantIds.add(id);
+    }
+  }
+
   protected resolveOpaqueLeafTargetId(targetId: string | null): string | null {
     return this.resolveCanonicalParentId(targetId);
   }
@@ -242,13 +245,7 @@ export class SessionEntryNavigation<T extends SessionNavigationEntry> {
         ? { leafId: this.leafId, appendParentId: this.leafId }
         : leafState;
       this.opaqueParentsById.set(leafEntry.id, effectiveLeafState.leafId);
-      if (
-        this.latestResetId !== undefined &&
-        effectiveLeafState.leafId !== null &&
-        this.resetDescendantIds.has(effectiveLeafState.leafId)
-      ) {
-        this.resetDescendantIds.add(leafEntry.id);
-      }
+      this.recordResetDescendant(leafEntry.id, effectiveLeafState.leafId);
       this.leafId = effectiveLeafState.leafId;
       this.appendParentId = effectiveLeafState.appendParentId;
       this.appendMode = effectiveLeafState.appendMode;
@@ -257,13 +254,7 @@ export class SessionEntryNavigation<T extends SessionNavigationEntry> {
     const link = parseParentLinkedOpaqueEntry(opaqueRecord);
     if (link) {
       this.opaqueParentsById.set(link.id, link.parentId);
-      if (
-        this.latestResetId !== undefined &&
-        link.parentId !== null &&
-        this.resetDescendantIds.has(link.parentId)
-      ) {
-        this.resetDescendantIds.add(link.id);
-      }
+      this.recordResetDescendant(link.id, link.parentId);
       this.appendParentId = link.id;
     }
   }
@@ -276,16 +267,15 @@ export class SessionEntryNavigation<T extends SessionNavigationEntry> {
       this.opaqueParentsById.set(entry.id, entry.parentId);
       return;
     }
+    const sideAppend = entry.appendMode === "side";
     const crossesResetBoundary =
       this.latestResetId !== undefined &&
-      !isSessionTranscriptSideAppendEntry(entry) &&
+      !sideAppend &&
       (entry.parentId === null || !this.resetDescendantIds.has(entry.parentId));
     if (
       crossesResetBoundary ||
       !hasParentId ||
-      (!isSessionTranscriptSideAppendEntry(entry) &&
-        entry.parentId === this.appendParentId &&
-        this.leafId !== this.appendParentId)
+      (!sideAppend && entry.parentId === this.appendParentId && this.leafId !== this.appendParentId)
     ) {
       this.logicalParentsById.set(entry.id, this.leafId);
     }
@@ -298,16 +288,10 @@ export class SessionEntryNavigation<T extends SessionNavigationEntry> {
       const logicalParentId = this.logicalParentsById.has(entry.id)
         ? (this.logicalParentsById.get(entry.id) ?? null)
         : entry.parentId;
-      if (
-        this.latestResetId !== undefined &&
-        logicalParentId !== null &&
-        this.resetDescendantIds.has(logicalParentId)
-      ) {
-        this.resetDescendantIds.add(entry.id);
-      }
+      this.recordResetDescendant(entry.id, logicalParentId);
     }
     this.appendParentId = entry.id;
-    if (isSessionTranscriptSideAppendEntry(entry)) {
+    if (sideAppend) {
       this.appendMode = "side";
     } else {
       this.leafId = entry.id;
@@ -335,30 +319,38 @@ export class SessionEntryNavigation<T extends SessionNavigationEntry> {
   }
 
   protected normalizeEntryParent(entry: T): T {
-    const parentId = this.resolveEntryParentId(entry);
-    let normalized = parentId === entry.parentId ? entry : { ...entry, parentId };
-    if (normalized.parentId === normalized.id) {
-      normalized = { ...normalized, parentId: null };
-    }
-    return normalized;
+    const resolvedParentId = this.resolveEntryParentId(entry);
+    const parentId = resolvedParentId === entry.id ? null : resolvedParentId;
+    return parentId === entry.parentId ? entry : { ...entry, parentId };
   }
 
   getBranch(fromId?: string): T[] {
-    const path: T[] = [];
-    const seen = new Set<string>();
-    let currentId = fromId ?? this.leafId;
-    while (currentId && !seen.has(currentId)) {
-      seen.add(currentId);
-      const current = this.byId.get(currentId);
-      if (current) {
-        const normalizedCurrent = this.normalizeEntryParent(current);
-        path.push(normalizedCurrent);
-        currentId = normalizedCurrent.parentId;
-      } else {
-        currentId = this.opaqueParentsById.get(currentId) ?? null;
-      }
-    }
-    path.reverse();
-    return path;
+    return readSessionEntryBranch(fromId ?? this.leafId, (id) => {
+      const entry = this.byId.get(id);
+      const normalized = entry ? this.normalizeEntryParent(entry) : undefined;
+      return {
+        entry: normalized,
+        parentId: normalized ? normalized.parentId : (this.opaqueParentsById.get(id) ?? null),
+      };
+    });
   }
+}
+
+/** Traverse the same selected ancestry for full entries and payload-free compaction facts. */
+export function readSessionEntryBranch<T>(
+  fromId: string | null,
+  read: (id: string) => { entry?: T; parentId: string | null },
+): T[] {
+  const path: T[] = [];
+  const seen = new Set<string>();
+  let currentId = fromId;
+  while (currentId && !seen.has(currentId)) {
+    seen.add(currentId);
+    const { entry, parentId } = read(currentId);
+    if (entry) {
+      path.push(entry);
+    }
+    currentId = parentId;
+  }
+  return path.toReversed();
 }

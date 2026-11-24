@@ -5,7 +5,8 @@ import { createCopilotToolBridge } from "./tool-bridge.test-support.js";
 
 describe("Copilot GitHub publication tools", () => {
   it.each([
-    { profile: "coding", expected: ["github_identity_status", "github_publish"] },
+    // Unsandboxed publication stays direct, before the cataloged identity tool.
+    { profile: "coding", expected: ["github_publish", "github_identity_status"] },
     { profile: "messaging", expected: [] },
   ] as const)(
     "filters host-prepared GitHub tools for the $profile profile",

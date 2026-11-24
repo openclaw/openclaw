@@ -2,6 +2,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import type {
   SessionCatalog,
   SessionCatalogHost,
+  SessionCatalogProfileRelation,
   SessionCatalogSession,
 } from "../../../packages/gateway-protocol/src/index.ts";
 import type { GatewaySessionRow } from "../api/types.ts";
@@ -15,7 +16,29 @@ import type {
   CatalogSessionKey,
 } from "../lib/sessions/catalog-key.ts";
 import { buildCatalogSessionKey, parseCatalogSessionKey } from "../lib/sessions/catalog-key.ts";
-import type { SidebarSessionHovercardRow } from "./app-sidebar-session-types.ts";
+import type {
+  SidebarRecentSession,
+  SidebarSessionHovercardRow,
+} from "./app-sidebar-session-types.ts";
+
+export function catalogSessionActivity(
+  sessions: readonly SessionCatalogSession[],
+  liveRowsByKey: ReadonlyMap<
+    string,
+    Pick<SidebarRecentSession, "unread" | "backgroundProcessCount" | "isRunVisuallyActive">
+  >,
+) {
+  let running = false;
+  let unread = false;
+  for (const session of sessions) {
+    const row = session.sessionKey ? liveRowsByKey.get(session.sessionKey) : undefined;
+    running ||= row
+      ? row.isRunVisuallyActive === true || (row.backgroundProcessCount ?? 0) > 0
+      : session.status === "active" || session.status === "running";
+    unread ||= row?.unread === true;
+  }
+  return { running, unread };
+}
 
 export function formatSidebarTimestamp(timestampMs: number | null | undefined): string {
   const now = Date.now();
@@ -130,7 +153,7 @@ export type SidebarSessionCatalog = SessionCatalog & { visibleHosts: SessionCata
 
 type SessionVisibilityRow = Pick<GatewaySessionRow, "key" | "archived" | "snoozedUntil">;
 
-/** Section peers and rendering share the same nonempty, owner-filtered catalogs. */
+/** Section peers and rendering share the same owner-filtered catalogs and discovery failures. */
 export function projectSidebarSessionCatalogs(
   catalogs: readonly SessionCatalog[],
   ownerId: string | null,
@@ -147,6 +170,7 @@ export function projectSidebarSessionCatalogs(
         // Catalog access and creator attribution do not establish involvement.
         // Only the Gateway-filtered backing roster can admit a catalog row.
         if (
+          !host.profileRelation &&
           involvingSessionKeys &&
           (!session.sessionKey || !involvingSessionKeys.has(session.sessionKey))
         ) {
@@ -158,7 +182,7 @@ export function projectSidebarSessionCatalogs(
         if (session.sessionKey && isSessionHidden?.(adoptedRow ?? { key: session.sessionKey })) {
           return false;
         }
-        if (!ownerId) {
+        if (!ownerId || host.profileRelation) {
           return true;
         }
         const effectiveOwnerId = adoptedRow ? adoptedRow.owner?.actor.id : session.createdActor?.id;
@@ -168,22 +192,38 @@ export function projectSidebarSessionCatalogs(
         visibleHosts.push(sessions.length === host.sessions.length ? host : { ...host, sessions });
       }
     }
-    return visibleHosts.length > 0 ? [{ ...catalog, visibleHosts }] : [];
+    // Discovery failures may expose an empty catalog, not sessions excluded by the user's filter.
+    // A partially applied relation is the exception: its guidance explains the empty result.
+    const partial = catalog.hosts.some((host) => host.error?.code === "FILTER_PARTIAL");
+    return visibleHosts.length > 0 ||
+      ((partial || catalog.hosts.every((host) => host.sessions.length === 0)) &&
+        catalogErrorMessages(catalog).length > 0)
+      ? [{ ...catalog, visibleHosts }]
+      : [];
   });
 }
 
+export type CatalogRowControls = Partial<
+  Record<"link" | "children" | "pin" | "archive" | "menu" | "catalogMenu", HTMLElement>
+>;
+
 export type CatalogBackingSessionDisplay = {
   catalogIdentityKey: string;
-  catalogMenu: CatalogSessionMenuRequest;
-  rowRef?: (element: Element | undefined) => void;
+  rowRef?: (
+    element: HTMLElement,
+    controls: CatalogRowControls,
+    previousFocus: Element | null,
+  ) => () => void;
   pullRequest?: SessionCatalogSession["pullRequest"];
 };
 
 export type CatalogSessionMenuRequest = {
+  originalUrl?: string;
   key: CatalogSessionKey;
   agentId: string;
   routeId: "chat" | "new-session";
   navigation: ApplicationNavigationOptions;
+  profileRelation?: SessionCatalogProfileRelation;
   canOpenTerminal: boolean;
   canDelete: boolean;
   name: string;

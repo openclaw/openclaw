@@ -1,5 +1,4 @@
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { fileURLToPath } from "node:url";
@@ -7,120 +6,48 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
-import {
-  restoreStateDirEnv,
-  setStateDirEnv,
-  snapshotStateDirEnv,
-} from "../test-helpers/state-dir-env.js";
 import { auditDocsConfigExamples } from "./docs-config-examples.js";
 import { resolveRepoBundledPluginEnv } from "./repo-bundled-plugin-env.js";
 
-type SkipStat = "skippedFragment" | "skippedNonObject" | "skippedOptOut" | "skippedParseFailure";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+afterEach(() => {
+  vi.unstubAllEnvs();
+  vi.restoreAllMocks();
+});
+const fence = (body: string, info = "json5") => `\`\`\`${info}\n${body}\n\`\`\``;
+const pluginFence = (key: string, value: string) =>
+  fence(`{ plugins: { entries: { openai: { config: { ${key}: "${value}" } } } } }`);
+type SkipStat = "skippedFragment" | "skippedNonObject" | "skippedOptOut" | "skippedParseFailure";
 
 function auditMarkdown(markdown: string): ReturnType<typeof auditDocsConfigExamples> {
-  const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-docs-config-"));
+  const repoRoot = tempDirs.make("openclaw-docs-config-");
   const docsRoot = path.join(repoRoot, "docs");
   fs.mkdirSync(docsRoot);
   fs.writeFileSync(path.join(docsRoot, "fixture.md"), markdown);
-  try {
-    return auditDocsConfigExamples({ repoRoot });
-  } finally {
-    fs.rmSync(repoRoot, { recursive: true, force: true });
-  }
+  return auditDocsConfigExamples({ repoRoot });
 }
 
 describe("docs config examples", () => {
-  it.each([
-    {
-      name: "reports a retired nested key in a whole config",
-      markdown: "```json5\n{ agents: { defaults: { promptOverlays: {} } } }\n```",
-      findings: 1,
-      skipped: undefined,
-      issuePath: "agents.defaults",
-    },
-    {
-      name: "validates a canonical roster in an indented MDX component fence",
-      markdown: [
-        '<Accordion title="Agent roster">',
-        "    ```json5",
-        "    { agents: { entries: { main: {} } } }",
-        "    ````",
-        "</Accordion>",
-      ].join("\n"),
-      findings: 0,
-      skipped: undefined,
-    },
-    {
-      name: "skips a fragment without a recognized-key majority",
-      markdown: "```json5\n{ agents: {}, payloads: [] }\n```",
-      findings: 0,
-      skipped: "skippedFragment" as SkipStat,
-    },
-    {
-      name: "skips an explicit opt-out",
-      markdown:
-        '```json5 title="legacy config" validate=false\n{ agents: { defaults: { promptOverlays: {} } } }\n```',
-      findings: 0,
-      skipped: "skippedOptOut" as SkipStat,
-    },
-    {
-      name: "skips invalid JSON5",
-      markdown: "```json5\n{ agents: {\n```",
-      findings: 0,
-      skipped: "skippedParseFailure" as SkipStat,
-    },
-    {
-      name: "validates JSON fences",
-      markdown: '```json\n{ "gateway": { "port": 18789 } }\n```',
-      findings: 0,
-      skipped: undefined,
-    },
-    {
-      name: "validates JSONC tilde fences",
-      markdown: '~~~JSONC\n{ // comment\n  "gateway": { "port": 18789 }\n}\n~~~',
-      findings: 0,
-      skipped: undefined,
-    },
-    {
-      name: "skips arrays",
-      markdown: "```json5\n[{ gateway: {} }]\n```",
-      findings: 0,
-      skipped: "skippedNonObject" as SkipStat,
-    },
-    {
-      name: "reports a retired root key beside a recognized key",
-      markdown: "```json5\n{ agents: {}, gateway: {}, promptOverlays: {} }\n```",
-      findings: 1,
-      skipped: undefined,
-      issuePath: "",
-    },
-    {
-      name: "reports a retired bundled channel key",
-      markdown: '```json5\n{ channels: { slack: { identity: "bot" } } }\n```',
-      findings: 1,
-      skipped: undefined,
-      issuePath: "channels.slack",
-    },
-
-    {
-      name: "accepts a supported OpenAI plugin config value",
-      markdown:
-        '```json5\n{ plugins: { entries: { openai: { config: { personality: "off" } } } } }\n```',
-      findings: 0,
-      skipped: undefined,
-    },
-    {
-      name: "drops nested include directives before validation",
-      markdown:
-        '```json5\n{ agents: { $include: "./agents.json5" }, gateway: { port: 18789 } }\n```',
-      findings: 0,
-      skipped: undefined,
-    },
-  ])("$name", ({ markdown, findings, skipped, issuePath }) => {
+  it.each<[string, SkipStat?, string?]>([
+    [fence("{ agents: { defaults: { promptOverlays: {} } } }"), undefined, "agents.defaults"],
+    [
+      '<Accordion title="Agent roster">\n    ```json5\n    { agents: { entries: { main: {} } } }\n    ````\n</Accordion>',
+    ],
+    [fence("{ agents: {}, payloads: [] }"), "skippedFragment"],
+    [
+      '```json5 title="legacy config" validate=false\n{ agents: { defaults: { promptOverlays: {} } } }\n```',
+      "skippedOptOut",
+    ],
+    [fence("{ agents: {"), "skippedParseFailure"],
+    [fence('{ "gateway": { "port": 18789 } }', "json")],
+    ['~~~JSONC\n{ // comment\n  "gateway": { "port": 18789 }\n}\n~~~'],
+    [fence("[{ gateway: {} }]"), "skippedNonObject"],
+    [fence("{ agents: {}, gateway: {}, promptOverlays: {} }"), undefined, ""],
+    [fence('{ channels: { slack: { identity: "bot" } } }'), undefined, "channels.slack"],
+    [fence('{ agents: { $include: "./agents.json5" }, gateway: { port: 18789 } }')],
+  ])("audits %s", (markdown, skipped, issuePath) => {
     const audit = auditMarkdown(markdown);
-
-    expect(audit.findings).toHaveLength(findings);
+    expect(audit.findings).toHaveLength(issuePath !== undefined ? 1 : 0);
     expect(audit.stats.candidatesValidated).toBe(skipped ? 0 : 1);
     if (skipped) {
       expect(audit.stats[skipped]).toBe(1);
@@ -130,8 +57,8 @@ describe("docs config examples", () => {
     }
   });
 
-  it("validates plugin-owned keys without opening the operator state database", () => {
-    const poisonedRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-docs-config-poison-"));
+  it("uses source plugin schemas without reading operator state or the cwd plugin tree", () => {
+    const poisonedRoot = tempDirs.make("openclaw-docs-config-poison-");
     const databasePath = resolveOpenClawStateSqlitePath({
       ...process.env,
       OPENCLAW_STATE_DIR: poisonedRoot,
@@ -143,24 +70,8 @@ describe("docs config examples", () => {
     } finally {
       database.close();
     }
-    const envSnapshot = snapshotStateDirEnv();
-    setStateDirEnv(poisonedRoot);
-    try {
-      const audit = auditMarkdown(
-        '```json5\n{ plugins: { entries: { openai: { config: { personalityy: "friendly" } } } } }\n```',
-      );
-      expect(audit.findings).toHaveLength(1);
-      expect(audit.findings[0]?.issuePath).toBe("plugins.entries.openai.config");
-      expect(fs.existsSync(resolveRepoBundledPluginEnv("unused").OPENCLAW_STATE_DIR!)).toBe(false);
-    } finally {
-      restoreStateDirEnv(envSnapshot);
-      fs.rmSync(poisonedRoot, { recursive: true, force: true });
-    }
-  });
-
-  it("uses source schemas instead of another working directory's plugin tree", () => {
-    const directory = tempDirs.make("openclaw-docs-config-cwd-");
-    const pluginDir = path.join(directory, "extensions", "openai");
+    vi.stubEnv("OPENCLAW_STATE_DIR", poisonedRoot);
+    const pluginDir = path.join(poisonedRoot, "extensions", "openai");
     fs.mkdirSync(pluginDir, { recursive: true });
     fs.writeFileSync(path.join(pluginDir, "index.js"), "export default {};\n");
     fs.writeFileSync(
@@ -170,32 +81,22 @@ describe("docs config examples", () => {
         configSchema: { type: "object", properties: {}, additionalProperties: false },
       }),
     );
-    const cwd = vi.spyOn(process, "cwd").mockReturnValue(directory);
-    try {
-      const audit = auditMarkdown(
-        [
-          '```json5\n{ plugins: { entries: { openai: { config: { personality: "off" } } } } }\n```',
-          '```json5\n{ plugins: { entries: { openai: { config: { personalityy: "friendly" } } } } }\n```',
-        ].join("\n"),
-      );
-      expect(audit.stats.candidatesValidated).toBe(2);
-      expect(audit.findings).toEqual([
-        expect.objectContaining({
-          issuePath: "plugins.entries.openai.config",
-          message: expect.stringContaining('"personalityy"'),
-        }),
-      ]);
-    } finally {
-      cwd.mockRestore();
-    }
+    vi.spyOn(process, "cwd").mockReturnValue(poisonedRoot);
+    const audit = auditMarkdown(
+      [pluginFence("personality", "off"), pluginFence("personalityy", "friendly")].join("\n"),
+    );
+    expect(audit.stats.candidatesValidated).toBe(2);
+    expect(audit.findings).toEqual([
+      expect.objectContaining({
+        issuePath: "plugins.entries.openai.config",
+        message: expect.stringContaining('"personalityy"'),
+      }),
+    ]);
+    expect(fs.existsSync(resolveRepoBundledPluginEnv("unused").OPENCLAW_STATE_DIR!)).toBe(false);
   });
 
   it("keeps real docs aligned with the config schema", () => {
     const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
-
-    // This test is selected when src/config changes, so retiring a key checks docs even
-    // without a docs edit. The check:docs script covers docs-only PRs; together the two
-    // CI lanes leave no change-classification gap.
     expect(auditDocsConfigExamples({ repoRoot }).findings).toEqual([]);
   });
 });

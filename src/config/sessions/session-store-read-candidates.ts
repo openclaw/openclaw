@@ -1,14 +1,19 @@
 import fs from "node:fs";
 import path from "node:path";
-import { resolveIdentityPathViaExistingAncestorSync } from "../../infra/boundary-path.js";
+import { isMainThread } from "node:worker_threads";
 import {
+  matchesAgentDatabaseReadCandidatePath,
+  type AgentDatabaseReadCandidate,
+} from "../../infra/agent-database-readers.js";
+import { resolveIdentityPathViaExistingAncestorSync } from "../../infra/path-existence.js";
+import {
+  assertDatabasePathIdentity,
+  assertExistingDatabaseIdentity,
+  type DatabasePathIdentity,
   inspectDatabasePathIdentitySync,
   readDatabasePathIdentitySync,
 } from "../../infra/sqlite-worker-identity.js";
-import {
-  matchesAgentDatabaseReadCandidatePath,
-  type OpenClawAgentDatabaseReadCandidateResource,
-} from "../../state/openclaw-agent-db-resources.js";
+import { isArtifactPreservingStateRead } from "../../state/artifact-preserving-state-reads.js";
 import { resolveSessionStorePathCore } from "./paths.js";
 
 export type CapturedSessionStorePaths = ReadonlyMap<
@@ -44,10 +49,33 @@ export function resolveCapturedSessionStorePath(
   return captured[kind];
 }
 
-export type SessionStoreReadCandidate = Pick<
-  OpenClawAgentDatabaseReadCandidateResource,
-  "path" | "scope"
-> & { physicalPath: string };
+export type SessionStoreReadCandidate = AgentDatabaseReadCandidate & {
+  physicalPath: string;
+  identity?: DatabasePathIdentity;
+};
+
+export type SessionStoreReadCustody = {
+  sourcePath: string;
+  candidates: readonly SessionStoreReadCandidate[];
+};
+
+/** Registry receipts must retain the captured file generation through every spelling. */
+export function isSessionStoreSourceGenerationCurrent(
+  captured: { path: string; identity: string; birthtime?: string },
+  source: { path: string; physicalPath: string },
+): boolean {
+  if (captured.birthtime === undefined) {
+    return false;
+  }
+  try {
+    for (const pathname of new Set([captured.path, source.path, source.physicalPath])) {
+      assertExistingDatabaseIdentity(pathname, captured.identity, captured.birthtime);
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 /** Capture exact candidates before discovery yields; sibling families have no file identity. */
 export function captureSessionStoreCandidateIdentities(
@@ -57,7 +85,7 @@ export function captureSessionStoreCandidateIdentities(
     candidates
       .filter((candidate) => !candidate.scope)
       .map((candidate) => {
-        const identity = readDatabasePathIdentitySync(candidate.path);
+        const identity = candidate.identity ?? readDatabasePathIdentitySync(candidate.path);
         return [identity.canonicalPath, identity] as const;
       }),
   );
@@ -84,6 +112,13 @@ export function isSessionStoreReadCandidateCurrent(candidate: SessionStoreReadCa
     candidate.path,
     candidate.scope,
   ).physicalPath;
+  return matchesSessionStoreReadCandidatePhysicalPath(candidate, currentPhysicalPath);
+}
+
+function matchesSessionStoreReadCandidatePhysicalPath(
+  candidate: SessionStoreReadCandidate,
+  currentPhysicalPath: string,
+): boolean {
   const capturedPhysicalPath = resolveCapturedSessionStoreReadCandidatePhysicalPath(candidate);
   if (currentPhysicalPath === capturedPhysicalPath) {
     return true;
@@ -163,6 +198,18 @@ export function assertSessionStoreReadCandidate(
   pathname: string,
   candidates: readonly SessionStoreReadCandidate[],
 ): string {
+  if (isMainThread && isArtifactPreservingStateRead()) {
+    const selected = candidates.find(
+      (candidate) =>
+        candidate.identity &&
+        (candidate.path === path.resolve(pathname) ||
+          candidate.physicalPath === path.resolve(pathname)),
+    );
+    if (!selected) {
+      throw new Error("Session inspection requires a worker-prepared physical candidate");
+    }
+    return selected.physicalPath;
+  }
   const physicalPath = resolveIdentityPathViaExistingAncestorSync(pathname);
   for (const candidate of candidates) {
     const matchesCapturedPhysicalPath =
@@ -177,8 +224,14 @@ export function assertSessionStoreReadCandidate(
           { ...candidate, path: resolveCapturedSessionStoreReadCandidatePhysicalPath(candidate) },
           physicalPath,
         )) &&
-      isSessionStoreReadCandidateCurrent(candidate)
+      // The exact selected path was resolved above in this synchronous assertion.
+      (!candidate.scope && candidate.path === path.resolve(pathname)
+        ? matchesSessionStoreReadCandidatePhysicalPath(candidate, physicalPath)
+        : isSessionStoreReadCandidateCurrent(candidate))
     ) {
+      if (candidate.identity) {
+        assertDatabasePathIdentity(candidate.path, candidate.identity);
+      }
       return physicalPath;
     }
   }
@@ -188,7 +241,7 @@ export function assertSessionStoreReadCandidate(
 }
 
 /** Unlisted siblings inherit absence only from a complete inventory of the original physical family. */
-export function qualifyAbsentSessionStoreReadCandidate(
+function qualifyAbsentSessionStoreReadCandidate(
   pathname: string,
   captured: { candidates: readonly SessionStoreReadCandidate[]; familyListingComplete: boolean },
 ) {
@@ -224,4 +277,24 @@ export function qualifyAbsentSessionStoreReadCandidate(
     throw new Error("Session database appeared after its initial inventory");
   }
   return identity;
+}
+
+export function resolveSessionStoreWriteCandidate(
+  pathname: string,
+  captured: {
+    candidates: readonly SessionStoreReadCandidate[];
+    familyListingComplete: boolean;
+    identities: readonly DatabasePathIdentity[];
+  },
+) {
+  if (!captured.candidates.every(isSessionStoreReadCandidateCurrent)) {
+    throw new Error("Session database selector changed during discovery");
+  }
+  const physicalPath = assertSessionStoreReadCandidate(pathname, captured.candidates);
+  const identity = captured.identities.find((entry) => entry.canonicalPath === physicalPath);
+  if (identity) {
+    assertDatabasePathIdentity(pathname, identity);
+    return identity;
+  }
+  return qualifyAbsentSessionStoreReadCandidate(pathname, captured);
 }

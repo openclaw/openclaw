@@ -4,9 +4,9 @@
  * guidance, and weakly-attached channel metadata for wrapped tools.
  */
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
-import type { ChatType } from "../channels/chat-type.js";
 import { getChannelPlugin, listChannelPlugins } from "../channels/plugins/index.js";
 import {
+  type ChannelMessageActionDiscoveryInput,
   createMessageActionDiscoveryContext,
   type MessageActionDiscoverySteps,
   resolveMessageActionDiscoveryChannelId,
@@ -27,18 +27,10 @@ import { setChannelAgentToolMeta } from "./channel-tool-metadata.js";
 
 export { getChannelAgentToolMeta } from "./channel-tool-metadata.js";
 
-type ChannelMessageActionDiscoveryParams = {
-  cfg?: OpenClawConfig;
-  chatType?: ChatType | null;
-  currentChannelId?: string | null;
-  currentThreadTs?: string | null;
-  currentMessageId?: string | number | null;
-  accountId?: string | null;
-  sessionKey?: string | null;
-  sessionId?: string | null;
-  agentId?: string | null;
-  requesterSenderId?: string | null;
-  senderIsOwner?: boolean;
+type ChannelMessageActionDiscoveryParams = Omit<
+  ChannelMessageActionDiscoveryInput,
+  "channel" | "currentChannelProvider"
+> & {
   preparedMessageToolCatalog?: PreparedMessageToolCatalog;
 };
 
@@ -69,9 +61,7 @@ export function* listChannelSupportedActionsSteps(
   return discovered.actions;
 }
 
-/** List agent tools contributed by registered channel plugins. */
 export function listChannelAgentTools(params: { cfg?: OpenClawConfig }): ChannelAgentTool[] {
-  // Channel docking: aggregate channel-owned tools (login, etc.).
   const tools: ChannelAgentTool[] = [];
   for (const plugin of listChannelPlugins()) {
     const entry = plugin.agentTools;

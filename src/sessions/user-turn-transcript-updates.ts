@@ -1,12 +1,21 @@
 import { publishTranscriptUpdate } from "../config/sessions/session-accessor.sqlite-events.js";
-import { rewritePreparedTranscriptMessageAtAnchor } from "../config/sessions/session-message-rewrite.js";
-import { isUserMessage, readModelPromptProjection } from "./user-turn-transcript.message.js";
+import {
+  capturePreparedTranscriptModelPromptProjection,
+  rewritePreparedTranscriptMessageAtAnchor,
+} from "../config/sessions/session-message-rewrite.js";
+import { readPersistedMediaFacts } from "../media/media-facts.js";
+import type { PersistedUserTurnMessage } from "./user-turn-input.types.js";
+import {
+  isUserMessage,
+  prepareModelPromptProjection,
+  readModelPromptProjection,
+} from "./user-turn-transcript.message.js";
 import {
   normalizePersistedSteerTargetRunId,
   rewritePersistedSteerTargetRunId,
 } from "./user-turn-transcript.metadata.js";
 import type {
-  PersistedUserTurnMessage,
+  PreparedModelPromptProjection,
   UserTurnTranscriptAdmissionReceipt,
 } from "./user-turn-transcript.types.js";
 
@@ -43,7 +52,79 @@ export async function confirmPersistedSteerTargetRunId(params: {
   return { admission, message: rewritten.message };
 }
 
-export async function capturePersistedModelPromptProjection(params: {
+type AudioApiKeyFailure = { reference: string; provider: string };
+
+async function annotateAudioApiKeyFailures(
+  admission: UserTurnTranscriptAdmissionReceipt,
+  failures: readonly AudioApiKeyFailure[],
+) {
+  const rewritten = await rewritePreparedTranscriptMessageAtAnchor(admission, (message) => {
+    if (!isUserMessage(message) || message["__openclaw"]?.audioApiKeyRequired) {
+      return undefined;
+    }
+    const media = readPersistedMediaFacts(message);
+    const failure = failures.find(({ reference }) =>
+      media?.some(
+        (fact) => !fact.transcribed && (fact.url === reference || fact.path === reference),
+      ),
+    );
+    return failure
+      ? {
+          ...message,
+          __openclaw: { ...message["__openclaw"], audioApiKeyRequired: failure.provider },
+        }
+      : undefined;
+  });
+  if (!rewritten) {
+    return undefined;
+  }
+  const next = { ...admission, generation: rewritten.generation };
+  await publishTranscriptUpdate(next, {
+    message: rewritten.message,
+    messageId: next.entryId,
+    messageSeq: next.activeMessagePosition + 1,
+  });
+  return { admission: next, message: rewritten.message };
+}
+
+export function createAudioApiKeyFailureCapture(params: {
+  admission: () => UserTurnTranscriptAdmissionReceipt | undefined;
+  admitting: () => Promise<void> | undefined;
+  onCommitted: (
+    admission: UserTurnTranscriptAdmissionReceipt,
+    message: PersistedUserTurnMessage,
+  ) => void;
+  onError: (error: unknown) => void;
+}) {
+  let pending: readonly AudioApiKeyFailure[] | undefined;
+  const stamp = async () => {
+    const admission = params.admission();
+    if (!admission || !pending) {
+      return;
+    }
+    const failures = pending;
+    pending = undefined;
+    await annotateAudioApiKeyFailures(admission, failures).then(
+      (annotated) => annotated && params.onCommitted(annotated.admission, annotated.message),
+      params.onError,
+    );
+  };
+  return {
+    afterAdmission: async (published: void | Promise<void>) => {
+      await published;
+      await stamp();
+    },
+    record: async (failures: readonly AudioApiKeyFailure[]) => {
+      if (failures.length > 0) {
+        pending = failures;
+        await params.admitting();
+        await stamp();
+      }
+    },
+  };
+}
+
+type ModelPromptProjectionParams = {
   admission: UserTurnTranscriptAdmissionReceipt;
   message: PersistedUserTurnMessage;
   text: string;
@@ -53,56 +134,49 @@ export async function capturePersistedModelPromptProjection(params: {
     admission: UserTurnTranscriptAdmissionReceipt,
     message: PersistedUserTurnMessage,
   ) => void;
-}): Promise<PersistedUserTurnMessage> {
-  params.assertCurrent();
-  const text = params.text;
-  const requireMatchingProjection = (candidate: PersistedUserTurnMessage) => {
-    const existing = readModelPromptProjection(candidate);
-    if (existing !== undefined && existing !== text) {
-      throw new Error("A captured user-turn model prompt projection cannot be changed");
-    }
-    return existing !== undefined;
-  };
-  if (requireMatchingProjection(params.message)) {
-    return params.message;
+};
+
+export function preparePersistedModelPromptProjection(
+  params: ModelPromptProjectionParams,
+): PreparedModelPromptProjection | undefined {
+  if (readModelPromptProjection(params.message) !== undefined) {
+    prepareModelPromptProjection(params.message, params.text);
+    return undefined;
   }
   params.assertWritable();
-  let captured: PersistedUserTurnMessage | undefined;
-  const rewritten = await rewritePreparedTranscriptMessageAtAnchor(
-    params.admission,
-    (candidate) => {
-      if (!isUserMessage(candidate)) {
+  return {
+    intent: { anchor: params.admission, text: params.text },
+    async onCommitted(rewritten) {
+      if (!rewritten || !isUserMessage(rewritten.message)) {
         throw new Error("Model prompt projection lost its canonical user turn");
       }
-      if (requireMatchingProjection(candidate)) {
-        captured = candidate;
-        return undefined;
+      const admission = { ...params.admission, generation: rewritten.generation };
+      params.onCommitted(admission, rewritten.message);
+      if (!rewritten.unchanged) {
+        await publishTranscriptUpdate(admission, {
+          message: rewritten.message,
+          messageId: admission.entryId,
+          messageSeq: admission.activeMessagePosition + 1,
+        });
       }
-      return {
-        ...candidate,
-        __openclaw: {
-          ...candidate["__openclaw"],
-          modelPromptProjection: { version: 1, text },
-        },
-      };
+      return rewritten.message;
     },
-    { active: "sequence", assertCurrent: params.assertWritable },
-  );
-  params.assertCurrent();
-  if (!rewritten) {
-    if (!captured) {
-      throw new Error("Model prompt projection lost its canonical user turn");
-    }
-    params.onCommitted(params.admission, captured);
-    return captured;
+  };
+}
+
+export async function capturePersistedModelPromptProjection(
+  params: ModelPromptProjectionParams,
+): Promise<PersistedUserTurnMessage> {
+  const prepared = preparePersistedModelPromptProjection(params);
+  if (!prepared) {
+    return params.message;
   }
-  const admission = { ...params.admission, generation: rewritten.generation };
-  params.onCommitted(admission, rewritten.message);
-  await publishTranscriptUpdate(admission, {
-    message: rewritten.message,
-    messageId: admission.entryId,
-    messageSeq: admission.activeMessagePosition + 1,
-  });
+  const rewritten = await capturePreparedTranscriptModelPromptProjection(
+    prepared.intent.anchor,
+    prepared.intent.text,
+    params.assertWritable,
+  );
+  const message = await prepared.onCommitted(rewritten);
   params.assertCurrent();
-  return rewritten.message;
+  return message;
 }

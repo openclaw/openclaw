@@ -36,8 +36,8 @@ sidebarTitle: "Configuration"
             api: "ollama",
             models: [
               {
-                id: "kimi-k2.5:cloud",
-                name: "kimi-k2.5:cloud",
+                id: "kimi-k2.6:cloud",
+                name: "kimi-k2.6:cloud",
                 reasoning: false,
                 input: ["text", "image"],
                 cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },

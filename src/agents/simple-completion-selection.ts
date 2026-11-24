@@ -22,14 +22,9 @@ export type SimpleCompletionSelectionParams = {
     | Pick<PluginMetadataSnapshot, "plugins" | "owners">;
 };
 
-type SimpleCompletionSelectionRequest = {
-  selection: AgentSimpleCompletionSelection;
-  shorthandModelId?: string;
-};
-
 export function resolveSimpleCompletionSelectionRequest(
   params: SimpleCompletionSelectionParams,
-): SimpleCompletionSelectionRequest | null {
+): { selection: AgentSimpleCompletionSelection; shorthandModelId?: string } | null {
   const fallbackRef = resolveDefaultModelForAgent({
     cfg: params.cfg,
     agentId: params.agentId,
@@ -43,7 +38,8 @@ export function resolveSimpleCompletionSelectionRequest(
       ? resolveUtilityModelRefForAgent({
           cfg: params.cfg,
           agentId: params.agentId,
-          primaryProvider: fallbackRef.provider,
+          primaryProvider: fallbackRef?.provider,
+          primaryModelId: fallbackRef?.model,
           ...(params.manifestPlugins
             ? {
                 metadataSnapshot:
@@ -61,7 +57,7 @@ export function resolveSimpleCompletionSelectionRequest(
   const aliasIndex = buildModelAliasIndex({
     cfg: params.cfg,
     agentId: params.agentId,
-    defaultProvider: fallbackRef.provider || DEFAULT_PROVIDER,
+    defaultProvider: fallbackRef?.provider ?? DEFAULT_PROVIDER,
     manifestPlugins: params.manifestPlugins,
   });
   const resolved = split
@@ -69,7 +65,7 @@ export function resolveSimpleCompletionSelectionRequest(
         cfg: params.cfg,
         agentId: params.agentId,
         raw: split.model,
-        defaultProvider: fallbackRef.provider || DEFAULT_PROVIDER,
+        defaultProvider: fallbackRef?.provider ?? DEFAULT_PROVIDER,
         aliasIndex,
         manifestPlugins: params.manifestPlugins,
       })
@@ -77,8 +73,8 @@ export function resolveSimpleCompletionSelectionRequest(
   if (params.useUtilityModel === "required" && !resolved) {
     return null;
   }
-  const provider = resolved?.ref.provider ?? fallbackRef.provider;
-  const modelId = resolved?.ref.model ?? fallbackRef.model;
+  const provider = resolved?.ref.provider ?? fallbackRef?.provider;
+  const modelId = resolved?.ref.model ?? fallbackRef?.model;
   if (!provider || !modelId) {
     return null;
   }

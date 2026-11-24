@@ -22,7 +22,6 @@ export function collectGatewayServiceStartRepairIssues(
     parseTcpPort(command.environment?.OPENCLAW_GATEWAY_PORT ?? "");
   if (expectedPort !== undefined && servicePort !== null && servicePort !== expectedPort) {
     issues.push({
-      code: "port-mismatch",
       message: `service port ${servicePort} does not match current gateway config port ${expectedPort}`,
     });
   }
@@ -40,14 +39,12 @@ export function collectGatewayServiceStartRepairIssues(
       )
     ) {
       issues.push({
-        code: "temporary-program",
         message: `service command points at a temporary path: ${candidate}`,
       });
       continue;
     }
     if (!fs.existsSync(candidate)) {
       issues.push({
-        code: "missing-program",
         message: `service command points at a missing path: ${candidate}`,
       });
     }

@@ -1,4 +1,3 @@
-// Logging config tests cover config file loading and defaults.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -15,6 +14,10 @@ function writeConfig(source: string): string {
   const configPath = path.join(dir, "openclaw.json");
   fs.writeFileSync(configPath, source);
   return configPath;
+}
+
+function readConfig(configPath: string, env: Record<string, string | undefined> = {}) {
+  return withEnv({ OPENCLAW_CONFIG_PATH: configPath, ...env }, readLoggingConfig);
 }
 
 describe("readLoggingConfig", () => {
@@ -113,73 +116,29 @@ describe("readLoggingConfig", () => {
 
   it("does not cache a partial style while environment-backed fields are unresolved", () => {
     const configPath = writeConfig(`{
-      logging: {
-        consoleStyle: "json",
-        file: "\${OPENCLAW_TEST_LOG_FILE}",
-        level: "debug",
-      },
+      logging: { consoleStyle: "json", file: "\${OPENCLAW_TEST_LOG_FILE}", level: "debug" },
     }`);
-
-    withEnv(
-      {
-        OPENCLAW_CONFIG_PATH: configPath,
-        OPENCLAW_TEST_LOG_FILE: undefined,
-      },
-      () => {
-        expect(readLoggingConfig()).toStrictEqual({ consoleStyle: "json" });
-      },
-    );
-
-    withEnv(
-      {
-        OPENCLAW_CONFIG_PATH: configPath,
-        OPENCLAW_TEST_LOG_FILE: "/tmp/openclaw-env-backed.log",
-      },
-      () => {
-        expect(readLoggingConfig()).toStrictEqual({
-          consoleStyle: "json",
-          file: "/tmp/openclaw-env-backed.log",
-          level: "debug",
-        });
-      },
-    );
+    expect(readConfig(configPath, { OPENCLAW_TEST_LOG_FILE: undefined })).toStrictEqual({
+      consoleStyle: "json",
+    });
+    expect(
+      readConfig(configPath, { OPENCLAW_TEST_LOG_FILE: "/tmp/openclaw-env-backed.log" }),
+    ).toStrictEqual({ consoleStyle: "json", file: "/tmp/openclaw-env-backed.log", level: "debug" });
   });
 
   it("preserves custom redaction patterns while another logging field is unresolved", () => {
-    const configPath = writeConfig(`{
-      logging: {
-        consoleStyle: "json",
-        redactPatterns: ["/custom-only-secret/g"],
-        file: "\${MISSING_LOG_FILE}",
-      },
-    }`);
-
-    withEnv(
-      {
-        OPENCLAW_CONFIG_PATH: configPath,
-        MISSING_LOG_FILE: undefined,
-      },
-      () => {
-        expect(readLoggingConfig()).toStrictEqual({
-          consoleStyle: "json",
-          redactPatterns: ["/custom-only-secret/g"],
-        });
-      },
-    );
+    const configPath = writeConfig(`{ logging: {
+      consoleStyle: "json", redactPatterns: ["/custom-only-secret/g"], file: "\${MISSING_LOG_FILE}",
+    } }`);
+    expect(readConfig(configPath, { MISSING_LOG_FILE: undefined })).toStrictEqual({
+      consoleStyle: "json",
+      redactPatterns: ["/custom-only-secret/g"],
+    });
   });
 
   it("returns undefined for missing or malformed config files", () => {
-    withEnv(
-      { OPENCLAW_CONFIG_PATH: path.join(os.tmpdir(), "openclaw-missing-config.json") },
-      () => {
-        expect(readLoggingConfig()).toBeUndefined();
-      },
-    );
-
-    const configPath = writeConfig(`{ logging: `);
-    withEnv({ OPENCLAW_CONFIG_PATH: configPath }, () => {
-      expect(readLoggingConfig()).toBeUndefined();
-    });
+    expect(readConfig(path.join(os.tmpdir(), "openclaw-missing-config.json"))).toBeUndefined();
+    expect(readConfig(writeConfig(`{ logging: `))).toBeUndefined();
   });
 
   it("caches a missing config until the path selector changes", () => {

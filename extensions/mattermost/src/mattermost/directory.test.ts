@@ -101,7 +101,7 @@ describe("mattermost directory", () => {
       token: "token-a",
       request: vi.fn().mockResolvedValueOnce([
         { id: "chan-1", type: "O", name: "alerts", display_name: "Alerts" },
-        { id: "chan-2", type: "P", name: "ops", display_name: "Ops" },
+        { id: "chan-2", type: "P", name: "ops", display_name: "O\u0308ps" },
         { id: "chan-3", type: "D", name: "dm", display_name: "Direct" },
       ]),
     };
@@ -112,7 +112,7 @@ describe("mattermost directory", () => {
     const clientC = {
       token: "token-c",
       request: vi.fn().mockResolvedValueOnce([
-        { id: "chan-2", type: "P", name: "ops", display_name: "Ops" },
+        { id: "chan-2", type: "P", name: "ops", display_name: "O\u0308ps" },
         { id: "chan-4", type: "O", name: "infra", display_name: "Infra" },
       ]),
     };
@@ -139,9 +139,9 @@ describe("mattermost directory", () => {
       listMattermostDirectoryGroups({
         cfg: {} as never,
         runtime: {} as never,
-        query: "  op  ",
+        query: "  ÖP  ",
       }),
-    ).resolves.toEqual([{ kind: "group", id: "channel:chan-2", name: "ops", handle: "Ops" }]);
+    ).resolves.toEqual([{ kind: "group", id: "channel:chan-2", name: "ops", handle: "O\u0308ps" }]);
   });
 
   it("labels public O channels as channel and private P channels as group (#95646)", async () => {
@@ -233,14 +233,14 @@ describe("mattermost directory", () => {
       listMattermostDirectoryPeers({
         cfg: {} as never,
         runtime: {} as never,
-        query: "  ali  ",
+        query: "  A\u0301LI  ",
         limit: 1,
       }),
     ).resolves.toEqual([{ kind: "user", id: "user:user-1", name: "alice", handle: "Alice Ng" }]);
 
     expect(client.request).toHaveBeenNthCalledWith(2, "/users/search", {
       method: "POST",
-      body: JSON.stringify({ term: "ali", team_id: "team-1" }),
+      body: JSON.stringify({ term: "a\u0301li", team_id: "team-1" }),
     });
   });
 });

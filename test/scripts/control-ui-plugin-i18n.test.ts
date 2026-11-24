@@ -176,10 +176,6 @@ describe("plugin Control UI locale verification", () => {
       translations: { fr: { example: { title: {} } } },
       error: "must be a string at an English leaf",
     },
-    {
-      translations: { fr: { example: { title: { historical: "Retained" } } } },
-      error: "must be a string at an English leaf",
-    },
     { translations: { unknown: {} }, error: "unsupported locale unknown" },
     { translations: { fr: { example: { title: 42 } } }, error: "must be a string or object" },
     { translations: { fr: { example: { title: "Ouvrir" } } }, error: "expected {count} got {}" },

@@ -31,6 +31,14 @@ or database migrations. Once state has migrated beyond the older release's
 supported format, the supported recovery is to restore a verified pre-update
 backup with its matching OpenClaw release.
 
+When an older Gateway service refuses newer-written config, run the newer
+OpenClaw binary or reinstall the service from that newer installation. Service
+startup ignores `OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS=1`, including
+values set in systemd's environment or unit drop-ins. For an intentional
+downgrade, restore the verified pre-update backup with its matching release as
+described below. The override is for intentional CLI recovery actions; it does
+not reverse migrations or bypass database compatibility checks.
+
 <Warning>
 Fresh shared-state databases created after tenant-container management was retired
 omit `fleet_cells`. Older revisions that require this table can reject them even
@@ -47,13 +55,27 @@ runs required Doctor migrations, and verifies the activated Gateway. A raw
 workflow; use `openclaw update` or [create a backup first](#before-updating-create-a-verified-backup).
 
 The updater retains the previous package during activation and keeps it when
-failed recovery cannot prove a working installation. Migration recovery originals
-and original-state update captures remain until explicit
+failed recovery cannot prove a working installation. A verified healthy update
+retires its own migration recovery originals and original-state update capture;
+other copies remain until a later update or explicit
 [update cleanup](/cli/update#update-cleanup). These are
 separate recovery mechanisms: cleanup does not manage package or Git runtime
 backups, and retained migration originals are not a full pre-update backup.
 Preserve every recovery location named in the update report until you have
 verified the installation.
+
+A verified update that cannot remove an obsolete package backup still succeeds
+with a warning that names the backup it could not remove. This includes the npm
+link to a dev checkout that a switch to a package moved aside, when the
+filesystem refuses to remove that unchanged link; see
+[replacing the package directory](/cli/update/how-updates-run#replacing-the-package-directory)
+for how to remove that link safely. A backup link that was replaced or cannot be
+read, and a backup directory that another writer replaced, still fail the
+update. See [status and history](/cli/update/status-and-history) for the
+warning.
+
+If a launcher backup cannot be restored, the update error names the affected
+launcher and the retained backup path.
 
 Launcher backups compare the link type and target, plus ownership when it can
 be preserved. Symlink permission bits do not block an update; macOS link modes
@@ -156,8 +178,11 @@ Snapshots whose source write generations could not be sealed remain available
 for manual recovery even after successful activation. Rollback, failed or
 unverified completion, and refused restoration also retain snapshots.
 If cleanup cannot finish, the update reports a maintenance warning with the
-retained path. Older snapshot directories are not automatically removed: their
-ownership and successful outcome cannot be proven from existing receipts.
+retained path. A retained snapshot directory is removed by
+[update cleanup](/cli/update/repair-and-recovery#what-automatic-cleanup-deletes),
+automatically after a later update is verified successful, when update history
+records that directory for an update that finished before the verified one
+started. Snapshot directories that no listed update recorded are not removed.
 Doctor reports older npm snapshot directories with their size and removal command.
 Confirm no update is in progress and inspect the corresponding update report and
 recovery state before manual cleanup.
@@ -178,6 +203,13 @@ the source, so WAL files left by an exited writer are not mistaken for a change
 during capture. The installed
 updater owns this ordering; staging a newer candidate cannot change an
 already-running older updater.
+While those fingerprints are tracked, the new version's Doctor also reads databases
+through private copies for its schema checks. A Doctor that fails before writing
+therefore leaves the snapshots restorable, and the package rolls back.
+A short-lived OpenClaw command holding state when Doctor starts maintenance does
+not cause that rollback: Doctor first waits for it to finish, while keeping time for
+its own work inside the update step (see
+[how updates run](/cli/update/how-updates-run#when-restart-is-skipped-or-fails)).
 On Windows, an eligible capture first runs the same native SQLite exclusion check
 used by rollback. This settles any retained WAL before recording write fingerprints,
 so later check cleanup is not mistaken for another writer. If another connection
@@ -186,7 +218,9 @@ Snapshots taken while a Gateway may still be writing are available for
 manual recovery only until verified successful activation, even if it exits later.
 Migrated files are kept as
 `<database>.migrated-<runId>` for inspection, and the report names the snapshots
-and displaced files. See [Recovery limits](/cli/update/how-updates-run#recovery-limits)
+and displaced files. A `<database>.migrated-<runId>.receipt.json` beside them records
+which files the rollback moved; the next verified successful update deletes them (see
+[what automatic cleanup deletes](/cli/update/repair-and-recovery#what-automatic-cleanup-deletes)). See [Recovery limits](/cli/update/how-updates-run#recovery-limits)
 for disk requirements and the lifecycle checks.
 
 Database restoration preserves current update history, including failure details
@@ -254,6 +288,18 @@ verification failure. The command still exits nonzero; recovery does not turn a
 rejected version into a successful update.
 
 Recovery reports distinguish restored package files from a healthy Gateway.
+Once the updater verifies that the target Gateway is serving, a late
+restart-health report remains a warning and does not trigger rollback or turn the
+update into a failure. An old CLI wrapper that cannot be removed after a switch
+from a Git checkout to a package install is also a warning, whether or not the
+Gateway restarted: the package install is kept, and the wrapper keeps starting
+the old checkout wherever it comes first on `PATH` until you remove it. The
+warning names the path it could not remove or inspect. A wrapper that a system package owns still fails the
+update and rolls the package install back. Authority refusals, data-at-risk
+failures, and unclassified errors still block successful completion. This does
+not rewrite an earlier failed attempt when a later status check finds the
+Gateway healthy.
+
 A verified rollback names the version serving after recovery, including when
 an additional repair was needed. If the restored service fails its health check,
 the result records `recovery.service: "failed"`; the report says health failed
@@ -309,6 +355,15 @@ block even if the original updater has exited. Preserve the recovery snapshots
 and follow the reported process-inspection guidance before retrying repair.
 The installed updater owns this process supervision: a first update driven by
 2026.9.5 remains limited by that older parent's settlement checks.
+
+Delegated update and Doctor workers also watch their recorded parent processes.
+If an updater exits while a worker is stalled, the worker requests shutdown and
+allows ten seconds for settlement before exiting. State remains protected until
+the worker has stopped; the next CLI or Gateway start can then reclaim its dead
+maintenance owner. A surviving maintenance owner is identified by role and PID
+in the refusal, with `openclaw update status --json` for update progress. Package
+recovery still verifies the installed candidate before settling its activation
+receipt, and retains the printed repair command when recovery is unsafe.
 
 Before starting a preserved candidate, the updater checks shared and existing
 agent database schemas against the candidate's contract. If migrations remain
@@ -399,9 +454,10 @@ repair. A reachable version retained after a schema migration can continue
 serving while you diagnose it.
 The failed update retains its nonzero exit code even if the agent repairs it.
 
+- If `openclaw` cannot start after an update was interrupted on an `install-cli.sh` prefix or the durable service copy, and `lib/node_modules/openclaw` is missing, rename the leftover `lib/node_modules/.openclaw.release-link-*` link onto `lib/node_modules/openclaw`. It names the unchanged previous release. See [release directories](/cli/update/how-updates-run#release-directories-on-openclaw-owned-prefixes).
 - For `openclaw update --channel dev` on source checkouts, the updater auto-bootstraps `pnpm` when needed. If you see a pnpm/corepack bootstrap error, install `pnpm` manually (or re-enable `corepack`) and rerun the update.
 - Check: [Troubleshooting](/gateway/troubleshooting)
-- Ask in Discord: [https://discord.gg/clawd](https://discord.gg/clawd)
+- For official OpenClaw support, visit [community.openclaw.ai](https://community.openclaw.ai/).
 
 ### Unattended repair on your own inference
 

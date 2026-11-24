@@ -3,6 +3,7 @@ import fsp from "node:fs/promises";
 import net from "node:net";
 import path from "node:path";
 import { createAsyncLock } from "openclaw/plugin-sdk/async-lock-runtime";
+import { createSubsystemLogger } from "openclaw/plugin-sdk/logging-core";
 import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
 import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import {
@@ -11,18 +12,16 @@ import {
 } from "openclaw/plugin-sdk/ssrf-runtime";
 import { fetchConfiguredLocalOriginWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime-internal";
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { racePromiseWithAbortSignal } from "openclaw/plugin-sdk/time-runtime";
 import {
   DEFAULT_LLAMA_CPP_EMBEDDING_CACHE_FILE,
   DEFAULT_LLAMA_CPP_EMBEDDING_MODEL,
   DEFAULT_LLAMA_CPP_EMBEDDING_MODEL_REVISION,
   DEFAULT_LLAMA_CPP_EMBEDDING_MODEL_SHA256,
   DEFAULT_LLAMA_CPP_EMBEDDING_MODEL_SIZE_BYTES,
-  DEFAULT_LLAMA_CPP_MODEL_CACHE_FILE,
-  DEFAULT_LLAMA_CPP_MODEL_URI,
   LLAMA_CPP_DEFAULT_PORT,
   resolveCachedLlamaCppModelPath,
   resolveHomePath,
-  resolveLegacyLlamaCppModelCacheDir,
   resolveLlamaCppModelCacheDir,
   resolveLlamaCppModelSource,
 } from "./defaults.js";
@@ -43,7 +42,6 @@ import {
   type ManagedLlamaChatModel,
   type ManagedLlamaModel,
 } from "./llama-server-preset.js";
-import { recoverManagedLlamaServer } from "./managed-server-orphans.js";
 import { resolveLlamaCppMediaArtifact } from "./media-catalog.js";
 import { resolveLlamaCppCatalogArtifact } from "./model-catalog.js";
 
@@ -62,6 +60,9 @@ export type ManagedLlamaServer = {
 };
 
 const modelPromises = new Map<string, Promise<string>>();
+const log = createSubsystemLogger("llama-cpp");
+// A new host process recovers once; in-process restarts retain that host's children.
+const recoveries = new Map<string, Promise<"recovered" | "cancelled">>();
 const resolvedModelArtifacts = new Map<string, ModelArtifact>(); // Presets remain request-scoped.
 const presetState = {
   appliedRevisions: new Map<string, string>(),
@@ -70,13 +71,18 @@ const presetState = {
 const runPresetTransition = createAsyncLock();
 const LLAMA_CPP_PRESET_RELOAD_TIMEOUT_MS = 15_000; // Allows five seconds beyond model shutdown.
 
-function parseHuggingFaceSource(source: string): {
-  user: string;
-  repository: string;
-  file?: string;
-  revision: string;
-  tag?: string;
-} {
+function readUniqueArgument(argv: readonly string[], name: string): string | undefined {
+  const values = argv.flatMap((argument, index) => {
+    if (argument === name) {
+      const value = argv[index + 1];
+      return value === undefined ? [] : [value];
+    }
+    return argument.startsWith(`${name}=`) ? [argument.slice(name.length + 1)] : [];
+  });
+  return values.length === 1 ? values[0] : undefined;
+}
+
+function parseHuggingFaceSource(source: string) {
   const content = source.replace(/^(?:hf|huggingface):(?:\/\/)?/iu, "");
   const [pathPart, revisionPart] = content.split("#", 2);
   const [user, repositoryWithTag, ...fileParts] = (pathPart ?? "").split("/");
@@ -301,9 +307,10 @@ export async function ensureLlamaCppModel(params: {
   }
   const artifact = await resolveCachedModelArtifact(localSource, params.cacheDir, params.signal);
   const destination = path.join(params.cacheDir, artifact.fileName);
-  const load =
-    modelPromises.get(destination) ??
-    (async () => {
+  let load = modelPromises.get(destination);
+  if (!load) {
+    const shared = (async () => {
+      // Shared work outlives any caller; only each caller's wait is cancellable.
       const exists = await fsp
         .stat(destination)
         .then((stat) => stat.isFile())
@@ -313,7 +320,7 @@ export async function ensureLlamaCppModel(params: {
         artifact.expectedSha256 &&
         (artifact.expectedSize === undefined ||
           (await fsp.stat(destination)).size === artifact.expectedSize) &&
-        (await sha256File(destination, params.signal)) === artifact.expectedSha256
+        (await sha256File(destination)) === artifact.expectedSha256
       ) {
         await assertGguf(destination);
         return destination;
@@ -334,20 +341,22 @@ export async function ensureLlamaCppModel(params: {
         expectedSha256: artifact.expectedSha256,
         expectedSize: artifact.expectedSize,
         requireServerDigest: !artifact.expectedSha256,
-        signal: params.signal,
         onProgress: params.onProgress,
       });
       await assertGguf(destination);
       return destination;
     })();
-  modelPromises.set(destination, load);
-  try {
-    return await load;
-  } finally {
-    if (modelPromises.get(destination) === load) {
-      modelPromises.delete(destination);
-    }
+    modelPromises.set(destination, shared);
+    // Evict only on settlement so a cancelled waiter cannot start duplicate work.
+    const release = () => {
+      if (modelPromises.get(destination) === shared) {
+        modelPromises.delete(destination);
+      }
+    };
+    void shared.then(release, release);
+    load = shared;
   }
+  return await racePromiseWithAbortSignal(load, params.signal);
 }
 
 async function writePreset(presetPath: string, contents: string): Promise<void> {
@@ -493,13 +502,56 @@ export async function prepareManagedLlamaServer(params: {
   };
   const configuredPreset = resolveLlamaCppPresetPath(params.localService);
   if (params.localService && !params.isolated) {
-    await recoverManagedLlamaServer({
-      command,
-      port,
-      cwd: params.localService.cwd,
-      args: params.localService.args,
-      signal: params.signal,
-    });
+    const { cwd: configuredCwd, args: configuredArgs } = params.localService;
+    const signal = params.signal;
+    signal?.throwIfAborted();
+    if (findManagedLlamaServerAsset(command)) {
+      const args = configuredArgs ?? [];
+      const preset = readUniqueArgument(args, "--models-preset");
+      const host = readUniqueArgument(args, "--host");
+      if (preset && host && readUniqueArgument(args, "--port") === String(port)) {
+        const required = new Map([
+          ["--port", String(port)],
+          ["--models-preset", preset],
+          ["--host", host],
+        ]);
+        const cwd = !path.isAbsolute(preset)
+          ? path.resolve(configuredCwd ?? process.cwd())
+          : undefined;
+        const key = JSON.stringify([command, [...required], cwd]);
+        while (true) {
+          let recovery = recoveries.get(key);
+          if (!recovery) {
+            recovery = (async () => {
+              const { reapOrphanedProcesses } = await import("openclaw/plugin-sdk/process-runtime");
+              await reapOrphanedProcesses({
+                command,
+                cwd,
+                matchesArguments: (argv) =>
+                  [...required].every(([name, value]) => readUniqueArgument(argv, name) === value),
+                signal,
+                onReap: (pid) =>
+                  log.info(`reaping orphaned managed llama-server: pid=${pid} port=${port}`),
+              });
+              return "recovered" as const;
+            })().catch((error: unknown) => {
+              recoveries.delete(key);
+              // A cancelled owner has joined cleanup; live waiters can try under their own signal.
+              if (signal?.aborted && error === signal.reason) {
+                return "cancelled" as const;
+              }
+              throw error;
+            });
+            recoveries.set(key, recovery);
+          }
+          const outcome = await recovery;
+          signal?.throwIfAborted();
+          if (outcome === "recovered") {
+            break;
+          }
+        }
+      }
+    }
   }
   // Existing services may own a direct --model command instead of a router preset.
   // Keep that public localService contract; only setup creates a new router.
@@ -615,20 +667,6 @@ export async function ensureManagedLlamaServerForChat(params: {
     model: params.model,
     provider: params.provider,
   });
-  if (!chatModelPath && resolveLlamaCppModelSource(params.model) === DEFAULT_LLAMA_CPP_MODEL_URI) {
-    const legacy = path.join(
-      resolveLegacyLlamaCppModelCacheDir(),
-      DEFAULT_LLAMA_CPP_MODEL_CACHE_FILE,
-    );
-    if (
-      await fsp
-        .stat(legacy)
-        .then((stat) => stat.isFile())
-        .catch(() => false)
-    ) {
-      chatModelPath = legacy;
-    }
-  }
   chatModelPath = await ensureLlamaCppModel({
     source: chatModelPath ?? resolveLlamaCppModelSource(params.model),
     cacheDir,

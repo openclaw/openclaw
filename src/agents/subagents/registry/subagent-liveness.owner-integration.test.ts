@@ -28,7 +28,7 @@ import {
 } from "../../admitted-run-context.js";
 import { resolveSpawnAdmission } from "../../spawn-plan.js";
 import { maybeWakeRequesterAfterAllChildrenSettled } from "../announce/subagent-announce.requester-settle-wake.js";
-import { blockSubagentCompletionDelivery } from "../completion/subagent-completion-admission.store.js";
+import { settleSubagentCompletionInHistory } from "../completion/subagent-completion-admission.store.js";
 import { withPreparedSessionCapabilityRead } from "../spawn/subagent-session-store.js";
 import {
   activateSwarmRun,
@@ -49,7 +49,6 @@ import {
   isSubagentSessionRunActive,
   listActiveSubagentSessionKeys,
 } from "./subagent-registry-read.js";
-import { preserveSubagentRunForRestart } from "./subagent-registry-run-pause.js";
 import { loadSubagentRegistryFromSqlite } from "./subagent-registry-state.fixture.test-support.js";
 import {
   countActiveRunsForSession,
@@ -101,7 +100,7 @@ async function register(id: string, collect = false, expectsCompletionMessage = 
   return subagentRuns.get(id)!;
 }
 
-it("admits new work at the child cap when finished descendants have suspended delivery", async () => {
+it("admits new work at the child cap when finished descendants have delivered results", async () => {
   const now = Date.now();
   const completed = Array.from({ length: 5 }, (_, index) => ({
     runId: `completed-orchestrator-${index}`,
@@ -121,7 +120,7 @@ it("admits new work at the child cap when finished descendants have suspended de
       runId: `${entry.runId}-child`,
       childSessionKey: `${entry.childSessionKey}:subagent:child`,
       requesterSessionKey: entry.childSessionKey,
-      delivery: { status: "suspended", suspendedAt: now, suspendedReason: "expiry" },
+      delivery: { status: "delivered" },
     });
   }
   const admission = () =>
@@ -193,6 +192,16 @@ it("retains quiet admitted execution in listing, admission count, and requester 
     expect(isSubagentRunLive(entry)).toBe(true);
     expect(isSubagentRunLive(updated)).toBe(true);
     expect(isSubagentRunLive({ ...updated })).toBe(false);
+    const displayed = buildSubagentSessionListReadIndex().getDisplaySubagentRun(
+      entry.childSessionKey,
+    );
+    expect(displayed).not.toBe(updated);
+    const serialize = vi.spyOn(JSON, "stringify");
+    const live = Array.from({ length: 100 }, () => isSubagentRunLive(displayed));
+    const serializations = serialize.mock.calls.length;
+    serialize.mockRestore();
+    expect(live.every(Boolean)).toBe(true);
+    expect(serializations).toBe(0);
     expect(sweepStaleRunContexts()).toBe(0);
     await testing.sweepOnceForTests();
     expect(entry.execution.endedAt).toBeUndefined();
@@ -226,7 +235,7 @@ it("retains quiet admitted execution in listing, admission count, and requester 
         ).active.map((row) => ({ runId: row.runId, execution: row.execution.state })),
       )
       .toEqual([{ runId: entry.runId, execution: "running" }]);
-    // A persisted completed sibling already owns an unfrozen settle outbox.
+    // This sibling owes a continuation; fire-and-forget wakes retire independently.
     await addSubagentRunForTests({
       runId: "settled-sibling",
       childSessionKey: "agent:main:subagent:settled-sibling",
@@ -240,21 +249,23 @@ it("retains quiet admitted execution in listing, admission count, and requester 
       endedAt: start + 1,
       outcome: { status: "ok" },
       cleanupCompletedAt: start + 2,
-      expectsCompletionMessage: false,
+      expectsCompletionMessage: true,
+      completion: { required: true },
+      delivery: { status: "pending" },
       requesterSettleWake: { status: "pending", attemptCount: 0 },
     });
     const sibling = subagentRuns.get("settled-sibling")!;
     const completeBatch = vi.fn();
-    const transitionBatch = vi.fn();
     await maybeWakeRequesterAfterAllChildrenSettled({
       isSourceCurrent: () => true,
       requesterSessionKey: parent,
       settledEntry: sibling,
+      transitionBatch: () => {
+        throw new Error("A live sibling cannot transition requester delivery");
+      },
       completeBatch,
-      transitionBatch,
     });
     expect.soft(completeBatch).not.toHaveBeenCalled();
-    expect.soft(transitionBatch).not.toHaveBeenCalled();
   } finally {
     finish.resolve();
     await task;
@@ -356,6 +367,9 @@ it("retains an exact queued collector reservation without calling it executor-li
   });
   const hold = holdQueuedSwarmRun(entry.runId);
   try {
+    await testing.sweepOnceForTests();
+    expect(subagentRuns.get(entry.runId)).toMatchObject({ execution: { status: "queued" } });
+    expect(subagentRuns.get(entry.runId)?.collectorCompletion).toBeUndefined();
     expect(hold?.withdraw()).toBe(true);
     expect(captured.countActiveDescendantRuns(parent)).toBe(0);
     expect(captured.countPendingDescendantRuns(parent)).toBe(0);
@@ -592,10 +606,10 @@ it("does not keep a recent orphan executor-live after its admitted owner closes"
   ).toEqual([{ runId: entry.runId, execution: "unknown" }]);
 });
 
-it("retains durable suspended completion debt without reporting a live executor or awaiting automatic settlement", async () => {
+it("settles durable completion debt without reporting a live executor", async () => {
   const now = vi.spyOn(Date, "now").mockReturnValue(start);
-  let entry = await register("suspended-debt", false, true);
-  // Restore a terminal result awaiting delivery, then use the real atomic suspension owner.
+  let entry = await register("history-settlement", false, true);
+  // Restore a terminal result awaiting delivery, then use the real atomic settlement owner.
   await mutateSubagentRuns([entry.runId], (rows) => {
     const draft = structuredClone(rows.get(entry.runId)!);
     draft.execution = {
@@ -611,18 +625,12 @@ it("retains durable suspended completion debt without reporting a live executor 
   now.mockReturnValue(olderThanCutoff);
   expect(await countPendingDescendantRuns(parent, () => {})).toBe(1);
   expect(buildSubagentSessionListReadIndex().hasDescendantRunAwaitingSettle(parent)).toBe(true);
-  expect(
-    await blockSubagentCompletionDelivery({
-      subagent: entry,
-      reason: "delivery budget exhausted",
-      suspendedReason: "expiry",
-    }),
-  ).toBe(true);
-  const suspended = subagentRuns.get(entry.runId)!;
-  expect(suspended.delivery?.status).toBe("suspended");
+  expect(await settleSubagentCompletionInHistory({ subagent: entry })).toBe(true);
+  const settled = subagentRuns.get(entry.runId)!;
+  expect(settled.delivery?.status).toBe("delivered");
   expect(await countPendingDescendantRuns(parent, () => {})).toBe(1);
   expect(buildSubagentSessionListReadIndex().hasDescendantRunAwaitingSettle(parent)).toBe(false);
-  expect(isSubagentRunLive(suspended)).toBe(false);
+  expect(isSubagentRunLive(settled)).toBe(false);
   expect(isSubagentSessionRunActive(entry.childSessionKey)).toBe(false);
   expect(countActiveRunsForSession(parent)).toBe(0);
   subagentRuns.clear();
@@ -630,37 +638,6 @@ it("retains durable suspended completion debt without reporting a live executor 
     childSessionKey: entry.childSessionKey,
     requesterSessionKey: parent,
     execution: entry.execution,
-  });
-});
-
-it("keeps a restart-preserved native record distinct from an executor", async () => {
-  const now = vi.spyOn(Date, "now").mockReturnValue(start);
-  const entry = await register("interrupted-task");
-  expect(
-    (
-      await preserveSubagentRunForRestart({
-        entry,
-        terminal: {
-          reason: "cancelled",
-          status: "error",
-          stopReason: "restart",
-          endedAt: start + 1,
-        },
-        runs: subagentRuns,
-      })
-    ).preserved,
-  ).toBe(true);
-  const interrupted = subagentRuns.get(entry.runId)!;
-  now.mockReturnValue(olderThanCutoff);
-  expect(interrupted.execution.status).toBe("interrupted");
-  expect(interrupted.execution.endedAt).toBeUndefined();
-  expect(isSubagentRunLive(interrupted)).toBe(false);
-  expect(isSubagentSessionRunActive(entry.childSessionKey)).toBe(false);
-  subagentRuns.clear();
-  expect(loadSubagentRegistryFromSqlite().get(entry.runId)).toMatchObject({
-    childSessionKey: entry.childSessionKey,
-    requesterSessionKey: parent,
-    execution: interrupted.execution,
   });
 });
 

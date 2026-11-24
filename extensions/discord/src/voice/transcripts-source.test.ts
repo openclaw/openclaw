@@ -101,10 +101,7 @@ describe("discordVoiceTranscriptsSourceProvider", () => {
   });
 
   it("authorizes the resolved target with the native voice policy", async () => {
-    const guild = new Guild<true>(
-      { rest: new RequestClient("token-primary"), fetchUser: vi.fn() },
-      "g1",
-    );
+    const guild = new Guild<true>({ rest: new RequestClient("token-primary") }, "g1");
     vi.spyOn(guild, "name", "get").mockReturnValue("Guild One");
     registerManager({
       accountId: "primary",

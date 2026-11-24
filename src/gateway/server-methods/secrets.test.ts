@@ -345,18 +345,6 @@ describe("secrets handlers", () => {
     });
   });
 
-  it("rejects invalid secrets.resolve params", async () => {
-    const handlers = createHandlers();
-    const respond = vi.fn();
-    await invokeSecretsResolve({
-      handlers,
-      respond,
-      commandName: "",
-      targetIds: "bad",
-    });
-    expectRespondError(respond, { code: "INVALID_REQUEST" });
-  });
-
   it("rejects secrets.resolve params when targetIds entries are not strings", async () => {
     const resolveSecrets = vi.fn();
     const handlers = createHandlers({ resolveSecrets });

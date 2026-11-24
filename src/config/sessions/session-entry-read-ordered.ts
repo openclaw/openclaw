@@ -1,13 +1,19 @@
 import path from "node:path";
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
-import { readSqliteDatabaseWriteTokenForPath } from "../../infra/sqlite-database-admission.js";
+import {
+  getSqliteDatabaseAdmissionIdentityForPath,
+  readSqliteDatabaseWriteTokenForPath,
+} from "../../infra/sqlite-database-admission.js";
 import { readSqliteNativeMutationRevision } from "../../infra/sqlite-schema-facts.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { getOpenClawAgentDatabaseIfOpen } from "../../state/openclaw-agent-db.js";
 import type { AgentDatabaseGenerationClaim } from "../../state/openclaw-agent-execution-admission-contract.js";
 import type { OpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution-contract.js";
 import { runOpenClawAgentWriteAdmissions } from "../../state/openclaw-agent-write-admission.js";
-import type { SessionAccessScope, SessionEntryTargetPatchScope } from "./session-accessor.types.js";
+import type {
+  SessionEntryReadScope,
+  SessionEntryTargetPatchScope,
+} from "./session-accessor.types.js";
 import type { CanonicalSessionReaderContinuation } from "./session-canonical-key.js";
 import { assertSessionEntryCohortScope } from "./session-entry-cohort-scope.js";
 import { SessionEntryChangedDuringReadError } from "./session-entry-read-errors.js";
@@ -25,7 +31,7 @@ import type {
 import type { SessionEntryCohortRequest } from "./session-entry-read.types.js";
 import { resolveUnsuffixedSqliteTargetFromSessionStorePath } from "./session-sqlite-target-paths.js";
 import { captureSessionStoreReadCandidate } from "./session-store-read-candidates.js";
-import { targetDiscoveryLane } from "./session-transcript-worker-resources.js";
+import { sessionStoreLane } from "./session-transcript-worker-resources.js";
 import { withSessionHistoryWorkerDatabase } from "./session-transcript-worker-runtime.js";
 import type { SessionHistoryWorkerDatabase } from "./session-transcript-worker.types.js";
 import { createSessionWorkerExecutionSource } from "./session-worker-execution-source.js";
@@ -43,13 +49,13 @@ type ReadSessionStore = <T>(
 /** Data-only return; decisions/effects consume withRead's synchronous callback directly. */
 export async function readAdmittedSessionEntry(
   reader: SessionEntryCohortReader,
-  input: SessionAccessScope,
+  input: SessionEntryReadScope,
   assertCurrent: () => void,
   onReadTarget?: (target: SessionEntryTargetPatchScope) => void,
 ) {
   assertCurrent();
   const key = assertSessionEntryCohortScope(reader, input);
-  const read = await reader.readEntry(assertCurrent);
+  const read = await reader.readEntry(assertCurrent, input.projection);
   assertCurrent();
   reader.assertCurrent();
   onReadTarget?.({
@@ -67,6 +73,7 @@ export function createAdmittedSessionEntryCohortReader(params: {
   execution: OpenClawAgentDatabaseExecution;
   generation: AgentDatabaseGenerationClaim;
   database: PreparedSessionEntryWorkerRead["database"];
+  identity: SessionEntryCohortReader["identity"];
   sessionKey: string;
   logicalAgentId: string;
   storePaths: readonly string[];
@@ -83,24 +90,28 @@ export function createAdmittedSessionEntryCohortReader(params: {
   };
   return {
     database,
+    identity: Object.freeze(params.identity),
     sessionKey: params.sessionKey,
     logicalAgentId: params.logicalAgentId,
     storePaths: Object.freeze([
       ...new Set([...params.storePaths, database.path].map((p) => path.resolve(p))),
     ]),
     assertCurrent: assertOwnerCurrent,
-    async readEntry(assertCallerCurrent) {
+    async readEntry(assertCallerCurrent, projection) {
       const assertCurrent = () => {
         assertOwnerCurrent();
         assertCallerCurrent();
       };
       assertCurrent();
-      const request = { sessionKeys: [params.sessionKey] };
+      const request = {
+        sessionKeys: [params.sessionKey],
+        snapshotFields: projection === "list" ? [] : projection === "full" ? undefined : projection,
+      };
       const read = await readSessionEntriesWithRetainedFacts(database, request, () =>
         withSessionHistoryWorkerDatabase(
           database,
           (reader) => reader.readExactEntries({ ...request, env: database.env }),
-          targetDiscoveryLane,
+          sessionStoreLane,
         ),
       );
       assertCurrent();
@@ -143,11 +154,15 @@ export function createAdmittedSessionEntryCohortReader(params: {
       const source = createSessionWorkerExecutionSource(
         assertCurrent,
         "Session cohort authority expired",
+        captured.readCustody,
       );
       const result = await params.execution.runExisting(
         source,
         async (worker) => {
-          const before = readSqliteDatabaseWriteTokenForPath(database.path);
+          const before =
+            !database.readIdentity || getSqliteDatabaseAdmissionIdentityForPath(database.path)
+              ? readSqliteDatabaseWriteTokenForPath(database.path)
+              : undefined;
           const cached = readRetainedSessionEntryFacts(database, captured, params.generation);
           const read =
             cached ?? (await worker.execute({ type: "session.entry.read", input: captured }));
@@ -176,7 +191,6 @@ export function createAdmittedSessionEntryCohortReader(params: {
                   assertNativeCurrent = undefined;
                 }
               },
-              true,
               signal,
             ),
         },
@@ -216,7 +230,17 @@ export function captureSessionEntryNativeMutationWitness(
 export async function withOrderedSessionEntriesInWorker<T>(
   inputs: readonly SessionEntryWorkerRead[],
   consume: (reads: readonly PreparedSessionEntryWorkerRead[]) => T,
-  { readStore, onReadAdmitted }: { readStore: ReadSessionStore; onReadAdmitted?: () => void },
+  {
+    readStore,
+    onReadAdmitted,
+    prepareConsume,
+    signal,
+  }: {
+    readStore: ReadSessionStore;
+    onReadAdmitted?: () => void;
+    prepareConsume?: () => Promise<void>;
+    signal?: AbortSignal;
+  },
 ): Promise<T> {
   const selected: Array<{
     input: SessionEntryWorkerRead;
@@ -288,6 +312,7 @@ export async function withOrderedSessionEntriesInWorker<T>(
         });
         let active = true;
         const assertCurrent = () => {
+          signal?.throwIfAborted();
           if (!active) {
             throw new Error("Session entry read consumer is no longer active");
           }
@@ -306,20 +331,30 @@ export async function withOrderedSessionEntriesInWorker<T>(
           for (const { input: selectedInput, owner, database, continuation } of selected) {
             assertCurrent();
             const request = captureSessionEntryWorkerRequest(selectedInput);
-            const before = readSqliteDatabaseWriteTokenForPath(database.path);
+            const before =
+              !database.readIdentity || getSqliteDatabaseAdmissionIdentityForPath(database.path)
+                ? readSqliteDatabaseWriteTokenForPath(database.path)
+                : undefined;
             const cached = readRetainedSessionEntryFacts(database, request);
             const result =
               cached ??
-              (await owner.readExactEntries({
-                ...request,
-                env: database.env,
-                continuation,
-              }));
+              (await owner.readExactEntries(
+                {
+                  ...request,
+                  env: database.env,
+                  continuation,
+                },
+                signal,
+              ));
             assertCurrent();
             if (!cached) {
               retainSessionEntryReadFacts(database, request, result, before);
             }
             reads.push({ result, database, assertCurrent });
+          }
+          if (prepareConsume) {
+            await prepareConsume();
+            assertCurrent();
           }
           const result = consume(reads);
           if (isPromiseLike(result)) {
@@ -332,7 +367,7 @@ export async function withOrderedSessionEntriesInWorker<T>(
           unsubscribe();
         }
       },
-      true,
+      signal,
     );
   };
   return enter(0);

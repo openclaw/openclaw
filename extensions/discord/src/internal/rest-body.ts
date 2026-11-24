@@ -71,7 +71,7 @@ export function serializeRequestBody(
         : { ...bodyObject, data: payloadFilesContainer };
       const formData = new FormData();
       const existingAttachments = Array.isArray(payloadFilesContainer.attachments)
-        ? [...payloadFilesContainer.attachments]
+        ? payloadFilesContainer.attachments
         : [];
       const uploaded = files.map((file, index) => {
         const item = file as RequestFile;

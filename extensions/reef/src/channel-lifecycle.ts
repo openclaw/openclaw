@@ -1,8 +1,8 @@
 import type { PluginServiceSchedulerV1 } from "openclaw/plugin-sdk/plugin-entry";
+import { isRetryableReefRelayFailure } from "./transport.js";
 
 const REEF_RECONCILE_INTERVAL_MS = 30_000;
 const CONTINUE_AFTER_RECONCILE_ERROR = () => true;
-const STOP_AFTER_RECONCILE_ERROR = () => false;
 
 async function runReconcileStep(params: {
   reconcile: (signal: AbortSignal) => Promise<void>;
@@ -32,27 +32,23 @@ export async function runReefChannelLifecycle(params: {
   startInbox: (signal: AbortSignal) => Promise<void>;
   reconcile: (signal: AbortSignal) => Promise<void>;
   onReconcileError: (error: unknown) => void;
-  // Startup may continue only for errors the channel classifies as retryable.
+  // Startup may continue only for retryable relay errors.
   // Periodic reconcile remains best-effort once the account is already active.
-  shouldContinueAfterStartupReconcileError?: (error: unknown) => boolean;
   // Runs after the startup reconcile either refreshes peer keys or reports a
   // classified retryable failure, before the inbox can dispatch a turn.
   onReady?: () => Promise<void>;
-  reconcileIntervalMs?: number;
 }): Promise<void> {
   if (params.scheduler.signal.aborted) {
     return;
   }
   const lifecycle = params.scheduler.scope();
-  const intervalMs = params.reconcileIntervalMs ?? REEF_RECONCILE_INTERVAL_MS;
   // Declared outside the try so the finally can await it even when the startup
   // steps below throw before the inbox is started.
   let inboxTask: Promise<void> | undefined;
   try {
     await runReconcileStep({
       ...params,
-      shouldContinueAfterError:
-        params.shouldContinueAfterStartupReconcileError ?? STOP_AFTER_RECONCILE_ERROR,
+      shouldContinueAfterError: isRetryableReefRelayFailure,
       signal: lifecycle.signal,
     });
     if (lifecycle.signal.aborted) {
@@ -64,8 +60,8 @@ export async function runReefChannelLifecycle(params: {
     }
     lifecycle.schedule({
       id: "reconcile",
-      delayMs: intervalMs,
-      everyMs: intervalMs,
+      delayMs: REEF_RECONCILE_INTERVAL_MS,
+      everyMs: REEF_RECONCILE_INTERVAL_MS,
       run: () =>
         runReconcileStep({
           ...params,

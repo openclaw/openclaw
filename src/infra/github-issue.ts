@@ -120,39 +120,6 @@ export function browserFallbackResult(
     : { cause: reason, reason: "fallback-url-too-long", status: "fallback-unavailable" };
 }
 
-function issueCreateArgs(): readonly string[] {
-  return [
-    "api",
-    "--hostname",
-    "github.com",
-    "--include",
-    "--method",
-    "POST",
-    GITHUB_REPOSITORY_ISSUES_API,
-    "--input",
-    "-",
-    "--jq",
-    ".html_url",
-  ];
-}
-
-function issueLookupArgs(marker: string): readonly string[] {
-  return [
-    "issue",
-    "list",
-    "--repo",
-    GITHUB_REPOSITORY,
-    "--state",
-    "all",
-    "--search",
-    `"${marker}" in:body`,
-    "--limit",
-    "100",
-    "--json",
-    "url,title,body",
-  ];
-}
-
 function createdIssueUrl(value: unknown): string | undefined {
   if (typeof value !== "string") {
     return undefined;
@@ -173,26 +140,6 @@ function createdIssueUrl(value: unknown): string | undefined {
   return undefined;
 }
 
-function issueUrlFromOutput(result: GithubCliResult): string | undefined {
-  return createdIssueUrl(result.stdout.toString("utf8").trim().split(/\r?\n/u).at(-1));
-}
-
-function finalApiHttpStatus(result: GithubCliResult): number | undefined {
-  const matches = [...result.stdout.toString("utf8").matchAll(/^HTTP\/\S+\s+(\d{3})(?:\s|$)/gmu)];
-  const status = Number(matches.at(-1)?.[1]);
-  return Number.isInteger(status) ? status : undefined;
-}
-
-function browserFallbackReason(
-  result: GithubCliResult,
-): "authentication-unavailable" | "cli-unavailable" {
-  return result.errorCode === "ENOENT" ||
-    result.errorCode === "EACCES" ||
-    result.errorCode === "EPERM"
-    ? "cli-unavailable"
-    : "authentication-unavailable";
-}
-
 /** Looks up one exact prepared issue without creating or mutating remote state. */
 export async function reconcileGithubIssue(
   issue: PreparedGithubIssue,
@@ -203,7 +150,23 @@ export async function reconcileGithubIssue(
     return { status: "unavailable" };
   }
   await hooks.beforeIssueLookup?.();
-  const lookup = await runGh(issueLookupArgs(issue.marker), { input: "" });
+  const lookup = await runGh(
+    [
+      "issue",
+      "list",
+      "--repo",
+      GITHUB_REPOSITORY,
+      "--state",
+      "all",
+      "--search",
+      `"${issue.marker}" in:body`,
+      "--limit",
+      "100",
+      "--json",
+      "url,title,body",
+    ],
+    { input: "" },
+  );
   if (lookup.errorCode || lookup.status !== 0) {
     return { status: "unavailable" };
   }
@@ -244,17 +207,39 @@ async function submitGithubIssueOnce(
   const auth = await runGh(GITHUB_AUTH_ARGS, { input: "" });
   await hooks.afterAuthPreflight?.();
   if (auth.errorCode || auth.status !== 0) {
-    return browserFallbackResult(issue, browserFallbackReason(auth));
+    return browserFallbackResult(
+      issue,
+      auth.errorCode === "ENOENT" || auth.errorCode === "EACCES" || auth.errorCode === "EPERM"
+        ? "cli-unavailable"
+        : "authentication-unavailable",
+    );
   }
   const commitIssueCreate = await hooks.beforeIssueCreate?.();
   // The caller's live authority and durable claim must not yield before child creation.
   commitIssueCreate?.();
-  const created = await runGh(issueCreateArgs(), {
-    input: JSON.stringify({ body: issue.body, title: issue.title }),
-  });
-  const httpStatus = finalApiHttpStatus(created);
+  const created = await runGh(
+    [
+      "api",
+      "--hostname",
+      "github.com",
+      "--include",
+      "--method",
+      "POST",
+      GITHUB_REPOSITORY_ISSUES_API,
+      "--input",
+      "-",
+      "--jq",
+      ".html_url",
+    ],
+    { input: JSON.stringify({ body: issue.body, title: issue.title }) },
+  );
+  const matches = [...created.stdout.toString("utf8").matchAll(/^HTTP\/\S+\s+(\d{3})(?:\s|$)/gmu)];
+  const status = Number(matches.at(-1)?.[1]);
+  const httpStatus = Number.isInteger(status) ? status : undefined;
   const directUrl =
-    httpStatus === undefined || httpStatus === 201 ? issueUrlFromOutput(created) : undefined;
+    httpStatus === undefined || httpStatus === 201
+      ? createdIssueUrl(created.stdout.toString("utf8").trim().split(/\r?\n/u).at(-1))
+      : undefined;
   if (directUrl) {
     return { status: "created", url: directUrl };
   }
@@ -358,8 +343,7 @@ async function runGithubCli(
       child.stdout.destroy();
       child.unref();
       settle(null);
-    }, GITHUB_ISSUE_CREATE_TIMEOUT_MS);
-    timeout.unref?.();
+    }, GITHUB_ISSUE_CREATE_TIMEOUT_MS).unref();
     child.stdin.end(options.input);
   });
 }

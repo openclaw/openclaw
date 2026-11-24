@@ -1,3 +1,8 @@
+import type { DatabaseSync } from "node:sqlite";
+import {
+  requireNativeDatabaseFile,
+  getPostgresPhysicalFacts,
+} from "../infra/database-engine/physical-facts.js";
 import type { EngineConnection } from "../infra/sql-connection.js";
 import { isPostgresSqlConnection } from "../infra/sql-connection.js";
 import {
@@ -12,13 +17,29 @@ import {
   admitSqliteSchema,
   getAdmittedSqliteSchemaFacts,
   isSqliteSchemaAdmissionCold,
-  type SqliteSchemaFacts,
 } from "../infra/sqlite-schema-facts.js";
+import { readSqliteUserVersion } from "../infra/sqlite-user-version.js";
+import { OPENCLAW_STATE_SCHEMA_VERSION } from "./openclaw-schema-versions.js";
+
+function getStateSchemaFacts(database: EngineConnection) {
+  return isPostgresSqlConnection(database)
+    ? getPostgresPhysicalFacts(database)
+    : getAdmittedSqliteSchemaFacts(database);
+}
+
+/** PostgreSQL admits the current schema; SQLite may still expose a pre-feature version. */
+export function isStateSchemaVersionAtLeast(database: EngineConnection, version: number): boolean {
+  return (
+    isPostgresSqlConnection(database) ||
+    (getAdmittedSqliteSchemaFacts(database)?.userVersion ?? 0) >= version
+  );
+}
 
 export type StateSchemaVersionFacts = { userVersion: number; contentVersion: number };
 
 const versionKey: SqliteDatabaseAdmissionKey<StateSchemaVersionFacts> = {
   name: "state.schema-version",
+  lifetime: "process",
   schemaDependent: true,
   read(value) {
     if (
@@ -44,9 +65,11 @@ type StateSchemaAdmission<Value> = {
 export function createStateSchemaAdmission<Value>(
   name: string,
   read: SqliteDatabaseAdmissionKey<Value>["read"],
+  lifetime?: "process",
 ) {
   const key: SqliteDatabaseAdmissionKey<StateSchemaAdmission<Value>> = {
     name,
+    lifetime,
     schemaDependent: true,
     read(input) {
       if (
@@ -71,20 +94,18 @@ export function createStateSchemaAdmission<Value>(
       if (!admitted) {
         return undefined;
       }
-      const schema = getAdmittedSqliteSchemaFacts(database);
+      const schema = getStateSchemaFacts(database);
       return admitted.admissionId === schema?.admissionId ? admitted.value : undefined;
     },
     publish(database: EngineConnection, value: Value): void {
-      if (isPostgresSqlConnection(database)) {
-        return;
-      }
-      if (isSqliteSchemaAdmissionCold(database)) {
+      if (!isPostgresSqlConnection(database) && isSqliteSchemaAdmissionCold(database)) {
         admitSqliteSchema(database);
       }
-      const schema = getAdmittedSqliteSchemaFacts(database);
+      const schema = getStateSchemaFacts(database);
       if (
         !schema ||
-        getSqliteDatabaseAdmission(database, schemaAdmission)?.admissionId !== schema.admissionId
+        (!isPostgresSqlConnection(database) &&
+          getSqliteDatabaseAdmission(database, schemaAdmission)?.admissionId !== schema.admissionId)
       ) {
         return;
       }
@@ -98,16 +119,19 @@ export function createStateSchemaAdmission<Value>(
   };
 }
 
-const runtimeAdmission = createStateSchemaAdmission("state.runtime-schema", (value) =>
-  typeof value === "object" &&
-  value !== null &&
-  "startupReady" in value &&
-  typeof value.startupReady === "boolean"
-    ? { startupReady: value.startupReady }
-    : undefined,
+const runtimeAdmission = createStateSchemaAdmission(
+  "state.runtime-schema",
+  (value) =>
+    typeof value === "object" &&
+    value !== null &&
+    "startupReady" in value &&
+    typeof value.startupReady === "boolean"
+      ? { startupReady: value.startupReady }
+      : undefined,
+  "process",
 );
 
-type ConnectionVersion = { schema: SqliteSchemaFacts; facts: StateSchemaVersionFacts };
+type ConnectionVersion = { schema: { admissionId: string }; facts: StateSchemaVersionFacts };
 const connectionVersions = new WeakMap<EngineConnection, ConnectionVersion>();
 
 function rememberConnectionVersion(database: EngineConnection, value?: ConnectionVersion): void {
@@ -137,7 +161,7 @@ function schemaVersionKey(
 }
 
 export function getStateSchemaVersionAdmission(database: EngineConnection) {
-  const schema = getAdmittedSqliteSchemaFacts(database);
+  const schema = getStateSchemaFacts(database);
   if (!schema) {
     return undefined;
   }
@@ -147,7 +171,11 @@ export function getStateSchemaVersionAdmission(database: EngineConnection) {
   }
   const history = getSqliteDatabaseAdmission(database, schemaVersionKey(schema.admissionId));
   const currentSchema = history ? undefined : getSqliteDatabaseAdmission(database, schemaAdmission);
-  if (!history && currentSchema?.admissionId !== schema.admissionId) {
+  if (
+    !history &&
+    !isPostgresSqlConnection(database) &&
+    currentSchema?.admissionId !== schema.admissionId
+  ) {
     // An unknown or historical snapshot cannot borrow the current catalog's marker.
     return undefined;
   }
@@ -166,13 +194,13 @@ export function rememberStateSchemaVersionAdmission(
   database: EngineConnection,
   facts: StateSchemaVersionFacts,
 ): void {
-  const schema = getAdmittedSqliteSchemaFacts(database);
+  const schema = getStateSchemaFacts(database);
   if (!schema) {
     return;
   }
   rememberConnectionVersion(database, { schema, facts });
   const current = getSqliteDatabaseAdmission(database, schemaAdmission);
-  if (current?.admissionId !== schema.admissionId) {
+  if (!isPostgresSqlConnection(database) && current?.admissionId !== schema.admissionId) {
     return;
   }
   publishSqliteDatabaseAdmission(database, schemaVersionKey(schema.admissionId), facts);
@@ -184,13 +212,35 @@ export function publishStateSchemaVersionAdmission(
   facts: StateSchemaVersionFacts,
 ): void {
   publishSqliteDatabaseAdmission(database, versionKey, facts);
-  const schema = getAdmittedSqliteSchemaFacts(database);
+  const schema = getStateSchemaFacts(database);
   if (schema) {
     rememberConnectionVersion(database, { schema, facts });
     publishSqliteDatabaseAdmission(database, schemaVersionKey(schema.admissionId), facts);
   } else {
     rememberConnectionVersion(database);
   }
+}
+
+/**
+ * A peer process (the Gateway's update-run watcher) may publish the deferred
+ * 2026.9.2 schema version after this connection admitted its floor. Adopt it
+ * only when the header and metadata both read current inside this connection.
+ */
+export function adoptPeerPublishedStateSchemaVersion(
+  database: DatabaseSync,
+  metadata: { schema_version?: unknown } | undefined,
+): boolean {
+  if (
+    metadata?.schema_version !== OPENCLAW_STATE_SCHEMA_VERSION ||
+    readSqliteUserVersion(database) !== OPENCLAW_STATE_SCHEMA_VERSION
+  ) {
+    return false;
+  }
+  publishStateSchemaVersionAdmission(database, {
+    userVersion: OPENCLAW_STATE_SCHEMA_VERSION,
+    contentVersion: OPENCLAW_STATE_SCHEMA_VERSION,
+  });
+  return true;
 }
 
 /** Runtime shape and integrity are physical-file facts, independent of live write authority. */
@@ -203,4 +253,15 @@ export function publishStateRuntimeSchemaAdmission(
   startupReady: boolean,
 ): void {
   runtimeAdmission.publish(database, { startupReady });
+}
+
+export function readPublishedStateSchemaVersion(database: EngineConnection): number {
+  const admitted = getStateSchemaVersionAdmission(database);
+  if (admitted) {
+    return admitted.userVersion;
+  }
+  if (isPostgresSqlConnection(database)) {
+    requireNativeDatabaseFile("postgres", "repair");
+  }
+  return readSqliteUserVersion(database);
 }

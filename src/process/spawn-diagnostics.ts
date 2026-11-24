@@ -1,27 +1,27 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import type { ChildProcess } from "node:child_process";
 import path from "node:path";
+import { isMainThread } from "node:worker_threads";
 import {
   areDiagnosticsEnabledForProcess,
   emitInternalDiagnosticEvent,
 } from "../infra/diagnostic-events.js";
+import type { DiagnosticChildProcessSpawnFields } from "../infra/diagnostic-process-types.js";
 import {
   isPowerShellInlineFileCommandFlag,
   POSIX_INLINE_COMMAND_FLAGS,
   resolveInlineCommandMatch,
   resolvePowerShellInlineCommandMatch,
 } from "../infra/shell-inline-command.js";
-import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
-import { resolveOomScoreWrappedCommand } from "./linux-oom-score.js";
+import { resolveOomScoreWrappedCommand } from "./linux-oom-score-spawn.js";
 
 const spawnCounts = resolveGlobalSingleton(Symbol.for("openclaw.childProcessSpawnCounts"), () => ({
-  counts: new Map<string, { family: string; operation: string; count: number }>(),
+  counts: new Map<string, Omit<DiagnosticChildProcessSpawnFields, "type" | "intervalMs">>(),
   sampledAt: performance.now(),
 }));
-let spawnLog: ReturnType<typeof createSubsystemLogger> | undefined;
 const COMMAND_FAMILIES =
-  /^(node|bun|git|ps|pgrep|lsof|sh|bash|zsh|cmd|powershell|pwsh|npm|pnpm|python|python3|uv|ssh|openclaw)$/;
+  /^(node|bun|git|ps|pgrep|lsof|sh|bash|zsh|cmd|powershell|pwsh|npm|pnpm|python|python3|uv|ssh|openclaw|ffprobe|ffmpeg|xdg-open)$/;
 const GIT_OPERATIONS = [
   "repository.identities",
   "repository.branches",
@@ -55,7 +55,18 @@ const gitOperation = resolveGlobalSingleton(
   Symbol.for("openclaw.gitSpawnOperation"),
   () => new AsyncLocalStorage<GitProcessOperation | "unknown">(),
 );
-const CHILD_OPERATIONS = ["agent.exec", "shell.snapshot", "service.relay"] as const;
+const CHILD_OPERATIONS = [
+  "agent.exec",
+  "agent.cli",
+  "agent.file-read",
+  "shell.snapshot",
+  "service.relay",
+  "service.manager",
+  "plugin.capture-reclamation",
+  "worktree.filesystem",
+  "worktree.cleanup",
+  "worktree.maintenance",
+] as const;
 type ChildProcessOperation = (typeof CHILD_OPERATIONS)[number];
 const childOperations: ReadonlySet<string> = new Set(CHILD_OPERATIONS);
 const childOperation = resolveGlobalSingleton(
@@ -157,33 +168,57 @@ export function withGitProcessOperation<T>(
 
 /** Capture attribution before native preparation; record only after a successful launch. */
 export function prepareChildProcessSpawnRecorder(
-  command: string,
-  args: readonly string[] = [],
+  inputCommand: string,
+  inputArgs: readonly string[] = [],
   sqliteOperation?: `sqlite.${"scoped-read" | "session"}.${"broker" | "native"}`,
+  transport?: DiagnosticChildProcessSpawnFields["transport"],
 ): (() => void) | undefined {
   if (!areDiagnosticsEnabledForProcess()) {
     return undefined;
   }
-  // Like nice+git, an owner-prepared OOM shim execs the target in the same process;
-  // the broker can omit that shell entirely. Report its logical command, not the shim.
+  let command = inputCommand;
+  let args = inputArgs;
+  // The OOM shim is outermost; its target may itself be a priority wrapper.
   const wrappedCommand = resolveOomScoreWrappedCommand(command, args);
-  const commandArgs = wrappedCommand ? args.slice(3) : args;
+  if (wrappedCommand) {
+    command = wrappedCommand;
+    args = args.slice(3);
+  }
+  // Priority wrappers exec their target in the same child, including nested nice.
+  if (command === "ionice" && args[0] === "-c" && args[1] === "3" && args[2]) {
+    command = args[2];
+    args = args.slice(3);
+  }
+  if (command === "taskpolicy" && args[0] === "-b" && args[1]) {
+    command = args[1];
+    args = args.slice(2);
+  }
+  if (command === "nice" && args[0] === "-n" && args[1] === "10" && args[2]) {
+    command = args[2];
+    args = args.slice(3);
+  }
   const name = path.win32
-    .basename(wrappedCommand ?? command)
+    .basename(command)
     .toLowerCase()
     .replace(/\.(exe|cmd)$/, "");
   const family = COMMAND_FAMILIES.test(name) ? name : "other";
   const operation =
     family === "git"
-      ? (gitOperation.getStore() ?? childOperation.getStore() ?? unscopedGitOperation(commandArgs))
+      ? (gitOperation.getStore() ?? childOperation.getStore() ?? unscopedGitOperation(args))
       : (sqliteOperation ??
         childOperation.getStore() ??
-        unscopedProcessOperation(family, name, commandArgs));
-  const key = `${family}:${operation}`;
+        unscopedProcessOperation(family, name, args));
+  const key = `${family}:${operation}:${transport ?? ""}`;
   return () => {
     if (areDiagnosticsEnabledForProcess()) {
       const previous = spawnCounts.counts.get(key);
-      spawnCounts.counts.set(key, { family, operation, count: (previous?.count ?? 0) + 1 });
+      spawnCounts.counts.set(key, {
+        family,
+        operation,
+        transport,
+        thread: isMainThread ? "main" : "worker",
+        count: (previous?.count ?? 0) + 1,
+      });
     }
   };
 }
@@ -194,8 +229,9 @@ export function recordChildProcessSpawn(
   child: ChildProcess,
   sqliteOperation?: `sqlite.${"scoped-read" | "session"}.${"broker" | "native"}`,
   args: readonly string[] = [],
+  transport?: DiagnosticChildProcessSpawnFields["transport"],
 ): void {
-  const record = prepareChildProcessSpawnRecorder(command, args, sqliteOperation);
+  const record = prepareChildProcessSpawnRecorder(command, args, sqliteOperation, transport);
   if (record) {
     child.once("spawn", record);
   }
@@ -213,17 +249,12 @@ export function emitChildProcessSpawnSample(): void {
   if (intervalMs < 60_000) {
     return;
   }
-  for (const { family, operation, count } of spawnCounts.counts.values()) {
+  for (const fields of spawnCounts.counts.values()) {
     emitInternalDiagnosticEvent({
       type: "diagnostic.child_process.spawn",
-      family,
-      operation,
-      count,
+      ...fields,
       intervalMs,
     });
-    (spawnLog ??= createSubsystemLogger("gateway/diagnostics/process")).debug(
-      `child process spawns: family=${family} operation=${operation} count=${count} ratePerMinute=${((count * 60_000) / intervalMs).toFixed(2)}`,
-    );
   }
   spawnCounts.counts.clear();
   spawnCounts.sampledAt = now;

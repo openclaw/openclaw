@@ -1,45 +1,101 @@
-import { createEffect, createMemo, createSignal, onCleanup, onSettled, untrack } from "solid-js";
+import { createMemo } from "solid-js";
+import { splitTrailingAuthProfile } from "../../../../src/agents/model-ref-profile.js";
 import type { ApplicationContext } from "../../app/context-types.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
-import { defineSolidBridge, type SolidBridgeElement } from "../../lit/solid-bridge.ts";
+import { t } from "../../lib/reactive/i18n.ts";
+import { modelCatalogRef } from "./data.ts";
+import { buildLoginProviders } from "./login-providers.ts";
 import { ModelProviderAccountRecovery, ModelProviderLoginView } from "./login-view.tsx";
-import { ModelProvidersController } from "./model-providers-controller.ts";
+import { createModelProviders, type ModelProvidersOwner } from "./model-providers-controller.ts";
 import type { ModelProvidersRouteData } from "./route.ts";
 import {
   ModelProviders,
-  renderModelProviderScope as ModelProviderScope,
   renderModelProvidersPageShell as ModelProvidersPageShell,
 } from "./view.tsx";
 
-export function ModelProvidersContent(props: {
-  controller: ModelProvidersController;
-  revision: () => unknown;
-}) {
-  // A mounted content subtree belongs to one controller lifetime.
-  const controller = untrack(() => props.controller);
-  const revision = () => props.revision();
-  const current = createMemo(() => {
-    revision();
-    return controller.viewProps();
+export function ModelProvidersContent(props: { controller: ModelProvidersOwner }) {
+  const current = createMemo(() => props.controller.viewProps());
+  let initialLoadComplete = false;
+  const showProviderDetails = createMemo(() => {
+    const snapshot = current();
+    if (
+      snapshot.props.connected &&
+      !snapshot.props.loading &&
+      props.controller.installedAgents.initialized
+    ) {
+      initialLoadComplete = true;
+    }
+    return initialLoadComplete || !snapshot.props.connected;
   });
-  const Recovery = () => (
-    <ModelProviderAccountRecovery controller={controller.login} revision={revision} />
-  );
-  const Login = () => <ModelProviderLoginView controller={controller.login} revision={revision} />;
+  const Recovery = () => <ModelProviderAccountRecovery controller={props.controller.login} />;
+  const Login = () => <ModelProviderLoginView controller={props.controller.login} />;
   const cards = createMemo(() => current().cards);
+  const catalogDiscovering = createMemo(() => current().props.catalogDiscovering);
   const discoveryData = createMemo(() => current().discovery);
   const InstalledAgents = () =>
-    controller.installedAgents.render(cards, () => controller.retryCatalog(), revision);
-  const Discovery = () => controller.discovery.render(discoveryData, revision);
+    props.controller.installedAgents.render(
+      cards,
+      props.controller.retryCatalog,
+      catalogDiscovering,
+    );
+  const Discovery = () => props.controller.discovery.render(discoveryData);
   const installedAgents = <InstalledAgents />;
+  // Installed agents report their own listing failures on their rows; an error naming only them
+  // repeats that. A failing provider without a card isn't set up, so it stays quiet too.
+  const agentFailuresOnly = createMemo(() => {
+    const failures = current().cards.filter((card) => card.catalogStatus === "unavailable");
+    return (
+      failures.length > 0 &&
+      failures.every((card) => props.controller.installedAgents.owns(card.id))
+    );
+  });
+  const catalogProviders = createMemo(() =>
+    buildLoginProviders({ authStatus: current().props.authStatus, allowQuickApiKey: true }),
+  );
+  // Sign-in sets the agent's own model and leaves the global default alone, so the default row
+  // names the model this agent really uses when the two differ.
+  const agentModel = createMemo(() => {
+    const view = current().props;
+    const model = view.agentModelRef ? splitTrailingAuthProfile(view.agentModelRef).model : "";
+    if (!model || model === splitTrailingAuthProfile(view.defaultModels.primary).model) {
+      return undefined;
+    }
+    const name = view.configuredModels.find((entry) => modelCatalogRef(entry) === model)?.name;
+    return t("modelProviders.defaults.agentModel", {
+      agent: view.credentialAgentLabel,
+      model: name ?? model,
+    });
+  });
   return (
     <ModelProvidersPageShell
       body={
         <ModelProviders
           {...current().props}
+          defaultsSaving={props.controller.mutations.defaultsSaving()}
+          defaultsSavingField={props.controller.mutations.defaultsSavingField()}
+          defaultsSaved={props.controller.mutations.defaultsSaved()}
+          logoutSaving={props.controller.logoutSaving()}
+          providerDetailsReady={showProviderDetails()}
           accountRecovery={<Recovery />}
           installedAgents={current().installedAgentsAvailable ? installedAgents : undefined}
-          providerScope={<ModelProviderScope {...current().scope} />}
+          agentModel={agentModel()}
+          catalogReceipt={agentFailuresOnly() ? undefined : current().props.catalogReceipt}
+          catalogDiscoveryError={agentFailuresOnly() ? null : current().props.catalogDiscoveryError}
+          catalogProviders={catalogProviders()}
+          onCatalogConnect={(providerId) => {
+            const { login } = props.controller;
+            const group = catalogProviders().find((entry) => entry.id === providerId);
+            // A provider with one way in starts it; the rest open its method step.
+            if (group && current().props.canMutate && !login.busy && !login.enter(group)) {
+              void login.open(group.authProviders, { select: group.id });
+            }
+          }}
+          discoverDisabled={
+            !current().props.canMutate ||
+            props.controller.discovery.busy ||
+            current().props.loginBusy ||
+            current().props.addProviderOpen
+          }
         />
       }
       loginMessage={current().loginMessage}
@@ -58,54 +114,16 @@ export type ModelProvidersPageProps = {
   loaderPending?: boolean;
 };
 
-declare module "@solidjs/web" {
-  namespace JSX {
-    interface IntrinsicElements {
-      "openclaw-model-providers-page": HTMLAttributes<HTMLElement> & {
-        [Key in keyof ModelProvidersPageProps as `prop:${Key}`]?: ModelProvidersPageProps[Key];
-      };
-    }
-  }
-}
-
-declare global {
-  interface HTMLElementTagNameMap {
-    "openclaw-model-providers-page": SolidBridgeElement<ModelProvidersPageProps>;
-  }
-}
-
-export function ModelProvidersPageBody(props: ModelProvidersPageProps & { host: HTMLElement }) {
+export function ModelProvidersPageBody(props: ModelProvidersPageProps) {
   const context: ApplicationContext = useApplication();
-  const [revision, setRevision] = createSignal(0);
-  const controller = new ModelProvidersController(
-    untrack(() => props.host),
-    context,
-    () => setRevision((value) => value + 1),
-  );
-  createEffect(
-    () => ({ routeData: props.routeData, loaderPending: props.loaderPending ?? false }),
-    (value) => {
-      controller.routeData = value.routeData;
-      controller.loaderPending = value.loaderPending;
-      controller.beforeUpdate();
-    },
-  );
-  createEffect(revision, () => {
-    controller.beforeUpdate();
-    controller.afterUpdate();
-  });
-  onSettled(() => controller.connect());
-  onCleanup(() => controller.disconnect());
-  return <ModelProvidersContent controller={controller} revision={revision} />;
+  const controller = createModelProviders(context, props);
+  return <ModelProvidersContent controller={controller} />;
 }
 
-export const ModelProvidersPage = defineSolidBridge<ModelProvidersPageProps>(
-  "openclaw-model-providers-page",
-  (props, host) => <ModelProvidersPageBody {...props} host={host} />,
-  {
-    properties: {
-      routeData: { default: undefined, attribute: false },
-      loaderPending: { default: false, attribute: false },
-    },
-  },
-);
+export function ModelProvidersPage(props: ModelProvidersPageProps) {
+  return (
+    <openclaw-model-providers-page>
+      <ModelProvidersPageBody {...props} />
+    </openclaw-model-providers-page>
+  );
+}

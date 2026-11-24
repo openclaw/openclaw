@@ -1,4 +1,3 @@
-// Sms plugin module owns durable Twilio webhook admission and replay.
 import {
   bindIngressLifecycleToReplyOptions,
   createChannelIngressMonitor,

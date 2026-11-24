@@ -2,7 +2,6 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   ErrorCodes,
-  errorShape,
   isWellFormedApprovalId,
   type ApprovalDecision,
   type ApprovalHistoryResult,
@@ -22,7 +21,6 @@ import type { OpenClawStateDatabaseOptions } from "../../state/openclaw-state-db
 import { prepareApprovalChannelCustody } from "../approval-channel-custody.js";
 import { normalizeControlUiBasePath } from "../control-ui-shared.js";
 import type { ExecApprovalManager, ExecApprovalRecord } from "../exec-approval-manager.js";
-import { canAccessOperatorApproval } from "../operator-approval-authorization.js";
 import { projectOperatorApprovalSnapshot } from "../operator-approval-snapshot.js";
 import {
   listTerminalOperatorApprovals,
@@ -36,10 +34,14 @@ import {
   type ExecApprovalIosPushDelivery,
   type PluginApprovalIosPushDelivery,
 } from "./approval-publication.js";
-import { prepareApprovalSessionAccess } from "./approval-record-lookup.js";
+import {
+  prepareApprovalSessionAccess,
+  readOperatorApprovalRequestSource,
+} from "./approval-record-lookup.js";
 import { createApprovalRequestAuthority } from "./approval-request-authority.js";
 import { respondApprovalStorageUnavailable } from "./approval-shared.js";
 import { loadVisibleApproval } from "./approval-visible-record.js";
+import { respondError } from "./response.js";
 import type { GatewayClient, GatewayRequestHandlers, RespondFn } from "./types.js";
 
 type CreateApprovalHandlersParams = {
@@ -96,13 +98,9 @@ function resolveLegacyApprovalLabel(client: GatewayClient | null): string | null
 }
 
 function respondApprovalNotFound(respond: RespondFn): void {
-  respond(
-    false,
-    undefined,
-    errorShape(ErrorCodes.INVALID_REQUEST, "approval not found", {
-      details: { reason: ErrorCodes.APPROVAL_NOT_FOUND },
-    }),
-  );
+  respondError(respond, ErrorCodes.INVALID_REQUEST, "approval not found", {
+    details: { reason: ErrorCodes.APPROVAL_NOT_FOUND },
+  });
 }
 
 function readExactApprovalId(params: unknown): string | null {
@@ -190,11 +188,7 @@ export function createApprovalHandlers(
       const { params: rawParams, respond, client, context } = options;
       using authority = createApprovalRequestAuthority(options);
       if (!validateApprovalHistoryParams(rawParams)) {
-        respond(
-          false,
-          undefined,
-          errorShape(ErrorCodes.INVALID_REQUEST, "invalid approval.history params"),
-        );
+        respondError(respond, ErrorCodes.INVALID_REQUEST, "invalid approval.history params");
         return;
       }
       if (!authority.isCurrent()) {
@@ -216,11 +210,7 @@ export function createApprovalHandlers(
           return;
         }
         if (error instanceof OperatorApprovalHistoryCursorError) {
-          respond(
-            false,
-            undefined,
-            errorShape(ErrorCodes.INVALID_REQUEST, "invalid approval.history cursor"),
-          );
+          respondError(respond, ErrorCodes.INVALID_REQUEST, "invalid approval.history cursor");
           return;
         }
         respondApprovalStorageUnavailable({ context, respond, operation: "history", error });
@@ -233,13 +223,13 @@ export function createApprovalHandlers(
       using sessionAccess = await prepareApprovalSessionAccess({
         client,
         getCfg: context.getRuntimeConfig,
-        sources: history.records.map((record) => record.source),
+        sources: history.records.map(readOperatorApprovalRequestSource),
       });
       authority.assertCurrent();
       const cfg = context.getRuntimeConfig();
       const controlUiBasePath = normalizeControlUiBasePath(cfg.gateway?.controlUi?.basePath);
       const items = history.records.flatMap((record) => {
-        if (!sessionAccess.canAccess(record.source)) {
+        if (!sessionAccess.canAccess(readOperatorApprovalRequestSource(record))) {
           return [];
         }
         const snapshot = buildApprovalSnapshot(record, controlUiBasePath);
@@ -256,11 +246,7 @@ export function createApprovalHandlers(
       const { params: rawParams, respond, client, context } = options;
       using authority = createApprovalRequestAuthority(options);
       if (!validateApprovalGetParams(rawParams)) {
-        respond(
-          false,
-          undefined,
-          errorShape(ErrorCodes.INVALID_REQUEST, "invalid approval.get params"),
-        );
+        respondError(respond, ErrorCodes.INVALID_REQUEST, "invalid approval.get params");
         return;
       }
       const id = readExactApprovalId(rawParams);
@@ -396,16 +382,10 @@ export function createApprovalHandlers(
       const assertCurrent = () => {
         approvalGuard.assertCurrent();
         if (
-          client?.invalidated ||
-          !canAccessOperatorApproval({
-            client,
-            allowApprovalRuntime: true,
-            binding: { reviewerDeviceIds: record.reviewerDeviceIds },
-          }) ||
           (approvalGuard.family === "native-compatibility" && !readCurrent()) ||
           (resolveParams?.reviewer && (!liveRecord || !custody?.isCurrent(liveRecord)))
         ) {
-          throw new Error("approval resolver authority is no longer active");
+          throw new Error("The approval record changed. Look up the approval again.");
         }
       };
       let resolution: ApplyApprovalDecisionResult<ApprovalPayload>;

@@ -173,6 +173,7 @@ struct BundledRuntimeTests {
         let home = try makeTempDirForTests()
         defer { try? FileManager.default.removeItem(at: home) }
         let profile = AppProfile(environment: ["OPENCLAW_PROFILE": "seed-fixture"])
+        let environment = ["HOME": home.path, "PATH": "/usr/bin:/bin", "SHELL": "/bin/zsh"]
         let state = profile.stateDirectoryURL(homeDirectory: home)
         let runtimeRoot = state.appendingPathComponent("runtime")
         let shellProfile = home.appendingPathComponent(".zshrc")
@@ -183,8 +184,16 @@ struct BundledRuntimeTests {
             _ = try self.makeBundle(
                 at: app, builtAt: "2026-08-27T00:00:0\(index).000Z", buildID: "build-\(index)", command: "unused")
             let bundle = try #require(Bundle(url: app))
-            let seeded = try await BundledRuntime.seed(bundle: bundle, profile: profile, homeDirectory: home)
-            _ = try await BundledRuntime.seed(bundle: bundle, profile: profile, homeDirectory: home)
+            let seeded = try await BundledRuntime.seed(
+                bundle: bundle,
+                profile: profile,
+                homeDirectory: home,
+                environment: environment)
+            let installedShellText = try String(contentsOf: shellProfile, encoding: .utf8)
+            #expect(installedShellText.hasPrefix("# existing settings\n"))
+            _ = try await BundledRuntime.seed(
+                bundle: bundle, profile: profile, homeDirectory: home, environment: environment)
+            #expect(try String(contentsOf: shellProfile, encoding: .utf8) == installedShellText)
             #expect(seeded.root.path == runtimeRoot.appendingPathComponent("build-\(index)").path)
             #expect(try FileManager.default.destinationOfSymbolicLink(
                 atPath: runtimeRoot.appendingPathComponent("current").path) == "build-\(index)")
@@ -200,11 +209,18 @@ struct BundledRuntimeTests {
             #expect(result.success)
             #expect(result
                 .stdout == "seed-fixture\n\(runtimeRoot.path)/current/lib/libsqlite3.dylib\nargument with spaces\n")
+            let discovered = await ShellExecutor.runDetailed(
+                command: ["/bin/zsh", "-ic", "command -v openclaw; openclaw \"argument with spaces\""],
+                cwd: nil,
+                env: environment,
+                timeout: 5)
+            #expect(discovered.success)
+            #expect(discovered.stdout == home.appendingPathComponent(".openclaw/bin/openclaw").path + "\n" + result
+                .stdout)
         }
         #expect(try FileManager.default.destinationOfSymbolicLink(
             atPath: runtimeRoot.appendingPathComponent("previous").path) == "build-0")
         let shellText = try String(contentsOf: shellProfile, encoding: .utf8)
-        #expect(shellText == "# existing settings\n")
 
         let brokenApp = home.appendingPathComponent("Broken.app")
         _ = try self.makeBundle(
@@ -218,8 +234,13 @@ struct BundledRuntimeTests {
             ofItemAtPath: brokenApp.appendingPathComponent("Contents/Resources/runtime/bin/bun").path)
         let broken = try #require(Bundle(url: brokenApp))
         await #expect(throws: BundledRuntime.SeedError.self) {
-            try await BundledRuntime.seed(bundle: broken, profile: profile, homeDirectory: home)
+            try await BundledRuntime.seed(
+                bundle: broken,
+                profile: profile,
+                homeDirectory: home,
+                environment: environment)
         }
+        #expect(try String(contentsOf: shellProfile, encoding: .utf8) == shellText)
         #expect(try FileManager.default.destinationOfSymbolicLink(
             atPath: runtimeRoot.appendingPathComponent("current").path) == "build-1")
         #expect(try FileManager.default.contentsOfDirectory(atPath: runtimeRoot.path)
@@ -245,19 +266,19 @@ struct BundledRuntimeTests {
         _ = try self.makeBundle(
             at: app, builtAt: "2026-08-27T00:00:00.000Z", buildID: "shim-build", command: "unused")
         let bundle = try #require(Bundle(url: app))
-        _ = try await BundledRuntime.seed(bundle: bundle, profile: profile, homeDirectory: home)
+        _ = try await BundledRuntime.seed(bundle: bundle, profile: profile, homeDirectory: home, environment: [:])
         let result = await ShellExecutor.runDetailed(command: [cli.path], cwd: nil, env: [:], timeout: 5)
         #expect(result.success)
         #expect(result.stdout == "shim-fixture\n\(state.path)/runtime/current/lib/libsqlite3.dylib\n")
         let operatorScript = "#!/bin/sh\nexec /custom/openclaw \"$@\"\n"
         try operatorScript.write(to: cli, atomically: true, encoding: .utf8)
-        _ = try await BundledRuntime.seed(bundle: bundle, profile: profile, homeDirectory: home)
+        _ = try await BundledRuntime.seed(bundle: bundle, profile: profile, homeDirectory: home, environment: [:])
         #expect(try String(contentsOf: cli, encoding: .utf8) == operatorScript)
         try FileManager.default.removeItem(at: cli)
         let operatorTarget = home.appendingPathComponent("operator-command")
         try managed.write(to: operatorTarget, atomically: true, encoding: .utf8)
         try FileManager.default.createSymbolicLink(at: cli, withDestinationURL: operatorTarget)
-        _ = try await BundledRuntime.seed(bundle: bundle, profile: profile, homeDirectory: home)
+        _ = try await BundledRuntime.seed(bundle: bundle, profile: profile, homeDirectory: home, environment: [:])
         #expect(try FileManager.default.destinationOfSymbolicLink(atPath: cli.path) == operatorTarget.path)
         #expect(try String(contentsOf: operatorTarget, encoding: .utf8) == managed)
     }
@@ -289,20 +310,27 @@ struct BundledRuntimeTests {
         _ = try self.makeBundle(
             at: app, builtAt: "2026-08-27T00:00:00.000Z", buildID: "shell-build", command: "unused")
         let runtime = try await BundledRuntime.seed(
-            bundle: #require(Bundle(url: app)), profile: profile, homeDirectory: home)
+            bundle: #require(Bundle(url: app)), profile: profile, homeDirectory: home, environment: [:])
         #expect(runtime.root.path == state.appendingPathComponent("runtime/shell-build").path)
         #expect(FileManager.default.isExecutableFile(atPath: state.appendingPathComponent("bin/openclaw").path))
         #expect(try String(contentsOf: operatorSettings, encoding: .utf8) == "# operator settings\n")
         #expect(try FileManager.default.destinationOfSymbolicLink(atPath: zshrc.path) == operatorSettings.path)
         #expect(try String(contentsOf: macCLI, encoding: .utf8) == "operator command\n")
         #expect(try unsupportedProfile.resourceValues(forKeys: [.isDirectoryKey]).isDirectory == true)
-        #expect(try String(contentsOf: bashrc, encoding: .utf8)
-            == "export PATH=\"\(state.path)/bin:$PATH\"\n# existing bash settings\n")
+        #expect(try String(contentsOf: bashrc, encoding: .utf8).hasPrefix("# existing bash settings\n"))
+        let found = await ShellExecutor.runDetailed(
+            command: ["/bin/bash", "--noprofile", "-ic", "command -v openclaw"],
+            cwd: nil,
+            env: ["HOME": home.path, "PATH": "/usr/bin:/bin"],
+            timeout: 5)
+        #expect(found.success)
+        #expect(found.stdout.trimmingCharacters(in: .whitespacesAndNewlines) == state
+            .appendingPathComponent("bin/openclaw").path)
         try FileManager.default.removeItem(at: macCLI)
         let missingOperatorCLI = root.appendingPathComponent("Other.app/Contents/MacOS/openclaw-mac")
         try FileManager.default.createSymbolicLink(at: macCLI, withDestinationURL: missingOperatorCLI)
         _ = try await BundledRuntime.seed(
-            bundle: #require(Bundle(url: app)), profile: profile, homeDirectory: home)
+            bundle: #require(Bundle(url: app)), profile: profile, homeDirectory: home, environment: [:])
         #expect(try FileManager.default.destinationOfSymbolicLink(atPath: macCLI.path) == missingOperatorCLI.path)
     }
 
@@ -320,7 +348,11 @@ struct BundledRuntimeTests {
         _ = try self.makeBundle(
             at: app, builtAt: "2026-08-27T00:00:00.000Z", buildID: "installed-build", command: "unused")
         let stableBundle = try #require(Bundle(url: app))
-        let runtime = try await BundledRuntime.seed(bundle: stableBundle, profile: profile, homeDirectory: home)
+        let runtime = try await BundledRuntime.seed(
+            bundle: stableBundle,
+            profile: profile,
+            homeDirectory: home,
+            environment: [:])
         let link = state.appendingPathComponent("bin/openclaw-mac")
         let previousTarget = try FileManager.default.destinationOfSymbolicLink(atPath: link.path)
         if !existingLink { try FileManager.default.removeItem(at: link) }
@@ -340,7 +372,11 @@ struct BundledRuntimeTests {
             (existingLink ? previousTarget : nil))
         #expect(!FileManager.default.fileExists(atPath: shim.path))
         runtime.installCLI(
-            bundle: temporaryBundle, profile: profile, homeDirectory: home, allowsPersistentIntegration: allowed)
+            bundle: temporaryBundle,
+            profile: profile,
+            homeDirectory: home,
+            allowsPersistentIntegration: allowed,
+            environment: [:])
         #expect((try? FileManager.default.destinationOfSymbolicLink(atPath: link.path)) ==
             (existingLink ? previousTarget : nil))
         #expect(FileManager.default.isExecutableFile(atPath: shim.path))
@@ -349,9 +385,9 @@ struct BundledRuntimeTests {
     }
 
     @Test(arguments: [(false, true), (true, true), (false, false)])
-    func `only the persistent default profile adds its CLI to shell startup files`(
+    func `the first persistent installation adds its CLI to shell startup files`(
         namedProfile: Bool,
-        allowsPersistentIntegration: Bool) throws
+        allowsPersistentIntegration: Bool) async throws
     {
         let root = try makeTempDirForTests()
         defer { try? FileManager.default.removeItem(at: root) }
@@ -372,17 +408,139 @@ struct BundledRuntimeTests {
                 bundle: bundle,
                 profile: profile,
                 homeDirectory: home,
-                allowsPersistentIntegration: allowsPersistentIntegration)
+                allowsPersistentIntegration: allowsPersistentIntegration,
+                environment: ["SHELL": "/bin/zsh", "PATH": "/usr/bin:/bin"])
             #expect(FileManager.default.isExecutableFile(atPath: state.appendingPathComponent("bin/openclaw").path))
             let shellText = try String(contentsOf: shellProfile, encoding: .utf8)
-            if allowsPersistentIntegration, !namedProfile {
-                #expect(shellText == "export PATH=\"\(home.path)/.openclaw/bin:$PATH\"\n# existing settings\n")
+            if allowsPersistentIntegration {
+                #expect(shellText.hasPrefix("# existing settings\n"))
+                let found = await ShellExecutor.runDetailed(
+                    command: ["/bin/zsh", "-ic", "command -v openclaw"],
+                    cwd: nil,
+                    env: ["HOME": home.path, "PATH": "/usr/bin:/bin"],
+                    timeout: 5)
+                #expect(found.success)
+                #expect(found.stdout.trimmingCharacters(in: .whitespacesAndNewlines) == home
+                    .appendingPathComponent(".openclaw/bin/openclaw").path)
             } else {
                 #expect(shellText == "# existing settings\n")
                 #expect(try Set(FileManager.default.contentsOfDirectory(atPath: home.path)) ==
                     Set([".zshrc", state.lastPathComponent]))
             }
         }
+    }
+
+    @Test(arguments: [false, true])
+    func `first named install is discoverable and later profiles preserve its default`(
+        externalStartup: Bool) async throws
+    {
+        let root = try makeTempDirForTests()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let home = root.appendingPathComponent("home")
+        let startup = externalStartup ? root.appendingPathComponent("zsh config") : home
+        try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: startup, withIntermediateDirectories: true)
+        try "export PATH=/usr/bin:/bin\n".write(
+            to: startup.appendingPathComponent(".zshrc"),
+            atomically: true,
+            encoding: .utf8)
+        var environment = ["HOME": home.path, "PATH": "/usr/bin:/bin", "SHELL": "/bin/zsh"]
+        if externalStartup { environment["ZDOTDIR"] = startup.path }
+        for name in ["first", "second"] {
+            let profile = AppProfile(environment: ["OPENCLAW_PROFILE": name])
+            let app = home.appendingPathComponent("\(name).app")
+            _ = try self.makeBundle(at: app, builtAt: "2026-08-27T00:00:00.000Z", command: "unused")
+            let bundle = try #require(Bundle(url: app))
+            let runtime = try await BundledRuntime.seed(
+                bundle: bundle,
+                profile: profile,
+                homeDirectory: home,
+                environment: environment)
+            runtime.installCLI(
+                bundle: bundle,
+                profile: profile,
+                homeDirectory: home,
+                allowsPersistentIntegration: true,
+                environment: environment)
+        }
+        let sqlite = home.appendingPathComponent(".openclaw-first/runtime/current/lib/libsqlite3.dylib").path
+        for mode in ["-ic", "-lic"] {
+            let result = await ShellExecutor.runDetailed(
+                command: ["/bin/zsh", mode, "openclaw qr"],
+                cwd: nil,
+                env: environment,
+                timeout: 5)
+            #expect(result.success)
+            #expect(result.stdout == "first\n\(sqlite)\nqr\n")
+        }
+        let override = await ShellExecutor.runDetailed(
+            command: [home.appendingPathComponent(".openclaw/bin/openclaw").path, "--profile", "default", "qr"],
+            cwd: nil,
+            env: ["OPENCLAW_PROFILE": "override"],
+            timeout: 5)
+        #expect(override.success)
+        #expect(override.stdout == "override\n\(sqlite)\n--profile\ndefault\nqr\n")
+    }
+
+    @Test(arguments: ["default", "new"])
+    func `installation preserves an operator command already selected on PATH`(name: String) async throws {
+        let home = try makeTempDirForTests()
+        defer { try? FileManager.default.removeItem(at: home) }
+        let bin = home.appendingPathComponent(".local/bin")
+        try FileManager.default.createDirectory(at: bin, withIntermediateDirectories: true)
+        let command = bin.appendingPathComponent("openclaw")
+        try "#!/bin/sh\necho operator\n".write(to: command, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: command.path)
+        let profile = AppProfile(environment: ["OPENCLAW_PROFILE": name])
+        let app = home.appendingPathComponent("Fixture.app")
+        _ = try self.makeBundle(at: app, builtAt: "2026-08-27T00:00:00.000Z", command: "unused")
+        let environment = ["HOME": home.path, "SHELL": "/bin/zsh", "PATH": bin.path + ":/usr/bin:/bin"]
+        try BundledRuntime(root: app.appendingPathComponent("Contents/Resources/runtime")).installCLI(
+            bundle: #require(Bundle(url: app)),
+            profile: profile,
+            homeDirectory: home,
+            allowsPersistentIntegration: true,
+            environment: environment)
+        #expect(!FileManager.default.fileExists(atPath: home.appendingPathComponent(".openclaw/bin/openclaw").path))
+        let result = await ShellExecutor.runDetailed(
+            command: ["/bin/zsh", "-ic", "openclaw qr"], cwd: nil, env: environment, timeout: 5)
+        #expect(result.success)
+        #expect(result.stdout == "operator\n")
+    }
+
+    @Test(arguments: [("new", ".openclaw"), ("new", ".openclaw-other"), ("default", ".openclaw-first")])
+    func `installation does not claim a configured offline terminal default`(name: String, other: String) async throws {
+        let home = try makeTempDirForTests()
+        defer { try? FileManager.default.removeItem(at: home) }
+        let otherState = home.appendingPathComponent(other)
+        try FileManager.default.createDirectory(at: otherState, withIntermediateDirectories: true)
+        let config = otherState.appendingPathComponent("openclaw.json")
+        try "{\"gateway\":{\"mode\":\"local\"}}".write(to: config, atomically: true, encoding: .utf8)
+        let profile = AppProfile(environment: ["OPENCLAW_PROFILE": name])
+        let app = home.appendingPathComponent("Fixture.app")
+        _ = try self.makeBundle(at: app, builtAt: "2026-08-27T00:00:00.000Z", command: "unused")
+        let bundle = try #require(Bundle(url: app))
+        let runtime = try await BundledRuntime.seed(
+            bundle: bundle,
+            profile: profile,
+            homeDirectory: home,
+            environment: [:])
+        runtime.installCLI(
+            bundle: bundle,
+            profile: profile,
+            homeDirectory: home,
+            allowsPersistentIntegration: true,
+            environment: ["SHELL": "/bin/zsh", "PATH": "/usr/bin:/bin"])
+        #expect(!FileManager.default.fileExists(atPath: home.appendingPathComponent(".openclaw/bin/openclaw").path))
+        #expect(try String(contentsOf: config, encoding: .utf8) == "{\"gateway\":{\"mode\":\"local\"}}")
+        if name == "default" { return }
+        let result = await ShellExecutor.runDetailed(
+            command: [home.appendingPathComponent(".openclaw-new/bin/openclaw").path, "qr"],
+            cwd: nil,
+            env: [:],
+            timeout: 5)
+        #expect(result.success)
+        #expect(result.stdout.hasPrefix("new\n"))
     }
 
     @Test func `owned mac CLI link follows app moves without seeding or creating terminal commands`() throws {
@@ -399,7 +557,12 @@ struct BundledRuntimeTests {
             bundle: bundle, profile: profile, homeDirectory: home, allowsPersistentIntegration: true)
         #expect(!FileManager.default.fileExists(atPath: state.path))
         let runtime = BundledRuntime(root: app.appendingPathComponent("Contents/Resources/runtime"))
-        runtime.installCLI(bundle: bundle, profile: profile, homeDirectory: home, allowsPersistentIntegration: true)
+        runtime.installCLI(
+            bundle: bundle,
+            profile: profile,
+            homeDirectory: home,
+            allowsPersistentIntegration: true,
+            environment: [:])
         let command = state.appendingPathComponent("bin/openclaw-mac")
         try #require(FileManager.default.isExecutableFile(atPath: command.path))
         let terminalCLI = state.appendingPathComponent("bin/openclaw")
@@ -445,7 +608,12 @@ struct BundledRuntimeTests {
             try #require(result == 0)
         }
         BundledRuntime(root: app.appendingPathComponent("Contents/Resources/runtime"))
-            .installCLI(bundle: bundle, profile: profile, homeDirectory: home, allowsPersistentIntegration: true)
+            .installCLI(
+                bundle: bundle,
+                profile: profile,
+                homeDirectory: home,
+                allowsPersistentIntegration: true,
+                environment: [:])
         let moved = root.appendingPathComponent("Moved.app")
         try FileManager.default.moveItem(at: app, to: moved)
         let movedBundle = try #require(Bundle(url: moved))
@@ -464,7 +632,7 @@ struct BundledRuntimeTests {
             _ = try self.makeBundle(
                 at: app, builtAt: "2026-08-27T00:00:0\(index).000Z", buildID: "gc-\(index)", command: "unused")
             _ = try await BundledRuntime.seed(
-                bundle: #require(Bundle(url: app)), profile: profile, homeDirectory: home)
+                bundle: #require(Bundle(url: app)), profile: profile, homeDirectory: home, environment: [:])
         }
 
         // A copied native executable exercises the kernel's real process-path boundary.
@@ -513,7 +681,7 @@ struct BundledRuntimeTests {
             _ = try self.makeBundle(
                 at: app, builtAt: "2026-08-27T00:00:0\(index).000Z", buildID: "gc-\(index)", command: "unused")
             let seeded = try await BundledRuntime.seed(
-                bundle: #require(Bundle(url: app)), profile: profile, homeDirectory: home)
+                bundle: #require(Bundle(url: app)), profile: profile, homeDirectory: home, environment: [:])
             let resolved = try #require(try BundledRuntime.seeded(profile: profile, homeDirectory: home))
             #expect(resolved.root.path == seeded.root.path)
             try await BundledRuntime.garbageCollectAfterHealthy(profile: profile, homeDirectory: home)
@@ -525,5 +693,118 @@ struct BundledRuntimeTests {
                 atPath: directory.appendingPathComponent("previous").path)) == (index == 3 ? nil : "gc-3"))
             #expect(FileManager.default.fileExists(atPath: directory.appendingPathComponent("gc-3").path))
         }
+    }
+
+    private func seedBuilds(_ count: Int, home: URL, profile: AppProfile) async throws -> [BundledRuntime] {
+        var runtimes: [BundledRuntime] = []
+        for index in 0..<count {
+            let app = home.appendingPathComponent("Service-\(index).app")
+            _ = try self.makeBundle(
+                at: app, builtAt: "2026-08-28T00:00:0\(index).000Z", buildID: "svc-\(index)", command: "unused")
+            let runtime = try await BundledRuntime.seed(
+                bundle: #require(Bundle(url: app)), profile: profile, homeDirectory: home, environment: [:])
+            // Fixture builds share one Bun script; give each build its own bytes.
+            let handle = try FileHandle(forWritingTo: runtime.bun)
+            try handle.seekToEnd()
+            try handle.write(contentsOf: Data("# build \(index)\n".utf8))
+            try handle.close()
+            runtimes.append(runtime)
+        }
+        return runtimes
+    }
+
+    @Test
+    func `service Bun keeps one real path and follows the installed service after a failed install`() async throws {
+        let home = try makeTempDirForTests()
+        defer { try? FileManager.default.removeItem(at: home) }
+        let profile = AppProfile(environment: ["OPENCLAW_PROFILE": "service-bun-fixture"])
+        let builds = try await self.seedBuilds(2, home: home, profile: profile)
+        let (old, new) = (builds[0], builds[1])
+        let service = old.serviceBun
+        #expect(service == new.serviceBun)
+        #expect(service.path == profile.stateDirectoryURL(homeDirectory: home)
+            .appendingPathComponent("runtime/service/bun").path)
+        func serviceMatches(_ runtime: BundledRuntime) -> Bool {
+            FileManager.default.contentsEqual(atPath: service.path, andPath: runtime.bun.path)
+        }
+        func leftovers() throws -> [String] {
+            try FileManager.default.contentsOfDirectory(atPath: service.deletingLastPathComponent().path)
+                .filter { $0 != "bun" }
+        }
+
+        func stage(_ runtime: BundledRuntime, published: Bool) async throws {
+            let prepared = try await runtime.prepareServiceBun()
+            defer { prepared.discard() }
+            try prepared.publish()(published)
+        }
+
+        // A first move can fail after the installer published the service; its executable must remain.
+        try await stage(old, published: false)
+        #expect(serviceMatches(old))
+        // A real file, not a link: macOS records the resolved executable path for privacy grants.
+        #expect((try? FileManager.default.destinationOfSymbolicLink(atPath: service.path)) == nil)
+        #expect(FileManager.default.isExecutableFile(atPath: service.path))
+
+        try await stage(new, published: false)
+        #expect(serviceMatches(old))
+        #expect(try leftovers().isEmpty)
+
+        try await stage(new, published: true)
+        #expect(serviceMatches(new))
+        #expect(try leftovers().isEmpty)
+
+        func cli(_ executable: URL, _ runtime: BundledRuntime) -> GatewayLaunchAgentManager.InstalledServiceCLI {
+            .init(
+                prefix: [executable.path, runtime.packageRoot.appendingPathComponent("dist/index.js").path],
+                sqliteLibrary: runtime.sqliteLibrary.path)
+        }
+        #expect(cli(service, new).matchesBundledRuntime(new))
+        #expect(!cli(service, old).matchesBundledRuntime(old))
+        #expect(cli(old.bun, old).matchesBundledRuntime(old))
+        let entry = new.packageRoot.appendingPathComponent("dist/index.js").path
+        #expect(BundledRuntime(serviceEntrypoint: entry)?.root.path == new.root.path)
+        #expect(BundledRuntime(serviceEntrypoint: "/operator/bin/openclaw.mjs") == nil)
+    }
+
+    @Test func `healthy collection retains a build a stable service Bun still runs`() async throws {
+        let home = try makeTempDirForTests()
+        defer { try? FileManager.default.removeItem(at: home) }
+        let profile = AppProfile(environment: ["OPENCLAW_PROFILE": "service-gc-fixture"])
+        let builds = try await self.seedBuilds(3, home: home, profile: profile)
+        let directory = builds[0].root.deletingLastPathComponent()
+        // The process runs from the stable path and names its older build only through argv.
+        try FileManager.default.createDirectory(
+            at: builds[0].serviceBun.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try FileManager.default.copyItem(at: URL(fileURLWithPath: "/bin/cat"), to: builds[0].serviceBun)
+        let signed = await ShellExecutor.runDetailed(
+            command: ["/usr/bin/codesign", "--force", "--sign", "-", builds[0].serviceBun.path],
+            cwd: nil,
+            env: [:],
+            timeout: 5)
+        try #require(signed.success, "Fixture signing failed: \(signed.stderr)")
+        let process = Process()
+        let input = Pipe()
+        let output = Pipe()
+        process.executableURL = builds[0].serviceBun
+        process.arguments = ["-", builds[0].packageRoot.appendingPathComponent("dist/build-info.json").path]
+        process.standardInput = input
+        process.standardOutput = output
+        process.standardError = FileHandle.nullDevice
+        try process.run()
+        defer {
+            try? input.fileHandleForWriting.close()
+            if process.isRunning { process.terminate() }
+            process.waitUntilExit()
+        }
+        let ready = Data("ready\n".utf8)
+        try input.fileHandleForWriting.write(contentsOf: ready)
+        try #require(try output.fileHandleForReading.read(upToCount: ready.count) == ready)
+        try await BundledRuntime.garbageCollectAfterHealthy(profile: profile, homeDirectory: home)
+        #expect(FileManager.default.fileExists(atPath: builds[0].root.path))
+        try input.fileHandleForWriting.close()
+        process.waitUntilExit()
+        try await BundledRuntime.garbageCollectAfterHealthy(profile: profile, homeDirectory: home)
+        #expect(!FileManager.default.fileExists(atPath: builds[0].root.path))
+        #expect(FileManager.default.fileExists(atPath: directory.appendingPathComponent("service/bun").path))
     }
 }

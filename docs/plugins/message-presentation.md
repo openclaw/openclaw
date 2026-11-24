@@ -141,16 +141,24 @@ Button semantics:
 
 - `action.type: "command"` runs a native slash command through core's command
   path. Use this for built-in command buttons and menus.
-- `action.type: "callback"` carries opaque plugin data through the channel's
+- `action.type: "callback"` carries opaque data through the channel's
   interaction path. Channel plugins must not reinterpret callback data as slash
-  commands.
+  commands. When the agent or an operator authors the control through a
+  `message` action, core marks the value as owned by the conversation's agent.
+  A plugin interactive handler that registers the value's namespace still gets
+  the tap first, with the mark removed. A tap that no handler claims reaches the
+  agent as `callback_data: <value>`, on every channel and without expiry.
+  Channels decode a tapped value with `agentControlText(data)` from
+  `openclaw/plugin-sdk/interactive-runtime`: it returns that agent input for a
+  marked value and `undefined` for any other value. The mark takes 2 bytes of the
+  channel's value limit.
 - `action.type: "approval"` identifies one durable operator approval, its
   explicit `exec` or `plugin` kind, and the requested decision. Channel plugins
   encode that action into a transport-private callback and resolve it through
   the approval service; they must not parse `/approve` command text or infer
   kind from the ID.
 - `action.type: "question"` identifies one choice for a live, runtime-authored
-  `ask_user` question. Like `approval`, this is an OpenClaw runtime action;
+  question. Like `approval`, this is an OpenClaw runtime action;
   agents and plugins must not synthesize question IDs. Telegram, Discord,
   Slack, Mattermost, and LINE direct chats map it to transport-private native
   callbacks and resolve the choice through the Gateway. When the question becomes answered,
@@ -164,9 +172,11 @@ Button semantics:
   destinations also use text. LINE cannot edit a message it already delivered, so a
   tap after the question ends receives a notice.
   LINE draws at most four controls on one card, matching its two-to-four option
-  bound. WhatsApp, Signal, and iMessage render up to four single-select choices
-  as `1️⃣` through `4️⃣` reactions. Other question shapes degrade to label text,
-  and the user can answer with a plain-text reply.
+  bound. Other question shapes degrade to label text, and the user can answer
+  with a plain-text reply. These renderer contracts are separate from tool
+  availability: OpenClaw's built-in [`ask_user`](/tools/ask-user) is exposed only
+  on Discord, Slack, Telegram, and WebChat. Native agent runtimes can have their
+  own question tools. Bundled channels no longer use question reactions.
 - `intent: "custom-input"` switches a live question to its free-text answer
   path without resolving it. Producers must also state the free-text route in
   visible text. A channel can omit this one native control while keeping
@@ -223,6 +233,8 @@ Table semantics:
 
 - `caption` is a required short heading. `headers` must contain at least one
   unique, non-empty column label.
+  The `message` tool rejects a table without a non-empty `caption` before
+  sending any part of the message.
 - `rows` must contain at least one row. Every row must have exactly one cell per
   header, and every cell must be a non-empty string or a finite number.
 - `rowHeaderColumnIndex` is an optional zero-based index identifying the column
@@ -651,6 +663,7 @@ code:
 ```ts
 import {
   adaptMessagePresentationForChannel,
+  agentControlText,
   applyPresentationActionLimits,
   hasMessagePresentationBlocks,
   interactiveReplyToPresentation,

@@ -288,11 +288,15 @@ extension ChatSessionSidebar {
         let generation: Int?
         let loading: Bool
         let healthy: Bool
-        // ui/src/components/session-lineage-controller.ts:302: lifecycle facts, not live display updates, retire reads.
+        // ui/src/components/session-lineage.ts: lifecycle facts, not live display updates, retire reads.
         let selection: OpenClawChatSessionEntry
         let parents: [OpenClawChatSessionEntry]
         let inlineParents: Set<String>
-        let homeParents: [OpenClawChatSessionEntry]
+        let homeParentsByAgent: [String: [OpenClawChatSessionEntry]]
+
+        var homeParents: [OpenClawChatSessionEntry] {
+            self.homeParentsByAgent.keys.sorted().flatMap { self.homeParentsByAgent[$0] ?? [] }
+        }
 
         static func == (lhs: Self, rhs: Self) -> Bool {
             lhs.scope == rhs.scope && lhs.generation == rhs.generation && lhs.loading == rhs.loading &&
@@ -331,20 +335,32 @@ extension ChatSessionSidebar {
             .first
     }
 
-    func homeLoadParents(agentID: String) -> [OpenClawChatSessionEntry] {
-        guard self.sessionStatus != .archived, let home = self.homeTree(agentID: agentID), !home.loadParentKeys.isEmpty
+    var homeTrees: [String: ChatSessionSidebarModel.Node] {
+        guard self.query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return [:] }
+        let agents = self.showsAgentRoster ? self.viewModel.agentChoices.map(\.id) :
+            [self.viewModel.selectedAgentID].compactMap(\.self)
+        return Dictionary(uniqueKeysWithValues: agents.compactMap { id in
+            self.homeTree(agentID: id).map { (id, $0) }
+        })
+    }
+
+    private func homeLoadParents(_ home: ChatSessionSidebarModel.Node) -> [OpenClawChatSessionEntry] {
+        guard self.sessionStatus != .archived, !home.loadParentKeys.isEmpty
         else { return [] }
         return [home.session] + home.loadParentKeys.filter { $0 != home.id }.compactMap {
-            self.viewModel.rosterEntry(key: $0, agentID: agentID)
+            self.viewModel.rosterEntry(key: $0, agentID: home.session.agentId)
         }
     }
 
-    func hydrationRequest(_ sections: [ChatSessionSidebarModel.Section]) -> HydrationRequest {
+    func hydrationRequest(
+        _ sections: [ChatSessionSidebarModel.Section],
+        homes: [String: ChatSessionSidebarModel.Node]) -> HydrationRequest
+    {
         let model = self.viewModel
         let owner = model.sidebarData
         var parents: [String: OpenClawChatSessionEntry] = [:]
         var inlineParents = Set<String>()
-        var homeParents: [OpenClawChatSessionEntry] = []
+        var homeParentsByAgent: [String: [OpenClawChatSessionEntry]] = [:]
         func visit(_ node: ChatSessionSidebarModel.Node) {
             let expanded = self.childExpansion(node).wrappedValue
             if expanded || self.isCurrentInteractionRow(node.session) {
@@ -364,13 +380,11 @@ extension ChatSessionSidebar {
                 self.visibleAgentRows(section.nodes, agentID: agent.id).forEach(visit)
             } else { section.nodes.forEach(visit) }
         }
-        if self.query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            // app-sidebar-session-navigation.ts:302 hydrates expanded agents' Homes independently of Pages.
-            let agents = self.showsAgentRoster ? model.agentChoices.map(\.id)
-                .filter { !self.collapsedAgentIDs.contains($0) } :
-                [model.selectedAgentID].compactMap(\.self)
-            homeParents = agents.flatMap(self.homeLoadParents)
-            for row in homeParents {
+        // app-sidebar-session-navigation.ts:302 hydrates expanded agents' Homes independently of Pages.
+        for (agent, home) in homes where !self.showsAgentRoster || !self.collapsedAgentIDs.contains(agent) {
+            let rows = self.homeLoadParents(home)
+            homeParentsByAgent[agent] = rows
+            for row in rows {
                 parents[ChatSessionSidebarChildren.key(for: row)] = row
             }
         }
@@ -382,7 +396,7 @@ extension ChatSessionSidebar {
             selection: self.selectedTreeSession,
             parents: parents.keys.sorted().compactMap { parents[$0] },
             inlineParents: inlineParents,
-            homeParents: homeParents)
+            homeParentsByAgent: homeParentsByAgent)
     }
 
     func childExpansion(_ node: ChatSessionSidebarModel.Node) -> Binding<Bool> {
@@ -397,29 +411,25 @@ extension ChatSessionSidebar {
     func treeRow(
         _ node: ChatSessionSidebarModel.Node,
         isChild: Bool,
-        now: Date,
-        ownership: ChatSidebarOwnership,
-        previewRequest: ChatSessionSidebarPreviews.Request) -> AnyView
+        context: RowContext) -> AnyView
     {
-        let row = self.row(for: node, isChild: isChild, now: now, ownership: ownership, previewRequest: previewRequest)
+        let row = self.row(for: node, isChild: isChild, context: context)
         let visible = node.visibleChildren(
             selectedKey: self.viewModel.sessionKey,
             selectedAgentID: self.viewModel.selectedAgentID,
             fullyShown: self.childModes[node.sidebarID] == .all,
-            now: now)
+            now: context.now)
         {
-            self.attentionSummary(sessions: $0.previewSessions, agentID: self.sessionAgentID($0.session), now: now)
+            self.attentionSummary(
+                sessions: $0.previewSessions,
+                agentID: self.sessionAgentID($0.session),
+                now: context.now)
         }
         return AnyView(Group {
             if node.hasNavigationChildren || !node.children.isEmpty {
                 DisclosureGroup(isExpanded: self.childExpansion(node)) {
                     ForEach(visible, id: \.sidebarID) { child in
-                        self.treeRow(
-                            child,
-                            isChild: true,
-                            now: now,
-                            ownership: ownership,
-                            previewRequest: previewRequest)
+                        self.treeRow(child, isChild: true, context: context)
                     }
                     ForEach(node.loadParentKeys, id: \.self) { key in
                         if let parent = self.viewModel.rosterEntry(key: key, agentID: node.session.agentId) {

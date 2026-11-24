@@ -12,6 +12,7 @@ import type { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import type { ChannelType, Client, User } from "../internal/discord.js";
 import type { DiscordChannelConfigResolved, DiscordGuildEntryResolved } from "./allow-list.js";
 import type { DiscordIngressLifecycle } from "./ingress.js";
+import type { DiscordLivePolicyReader } from "./live-policy.js";
 import type { DiscordAvatarResolver } from "./message-avatar.js";
 import type { DiscordChannelInfo } from "./message-channel-info.js";
 import type { DiscordHistoryEntry } from "./message-handler.history.js";
@@ -24,7 +25,7 @@ export type { DiscordSenderIdentity } from "./sender-identity.js";
 
 type BuildChannelInboundContext =
   typeof import("openclaw/plugin-sdk/channel-inbound").buildChannelInboundEventContext;
-export type RuntimeEnv = import("openclaw/plugin-sdk/runtime-env").RuntimeEnv;
+type RuntimeEnv = import("openclaw/plugin-sdk/runtime-env").RuntimeEnv;
 
 export type DiscordMessageEvent = import("./listeners.js").DiscordMessageEvent;
 
@@ -79,13 +80,11 @@ export type DiscordMessagePreflightContext = DiscordMessagePreflightSharedFields
   // Keep one required receipt-time snapshot: queued processing must never
   // fall back to Discord's expiring attachment URLs.
   preparedMedia: DiscordMediaInfo[];
-  wasMentioned: boolean;
   conversationAvatar?: string;
 
   route: ReturnType<typeof resolveAgentRoute>;
   threadBinding?: SessionBindingRecord;
   boundSessionKey?: string;
-  boundAgentId?: string;
 
   guildInfo: DiscordGuildEntryResolved | null;
   guildSlug: string;
@@ -120,5 +119,6 @@ export type DiscordMessagePreflightParams = DiscordMessagePreflightSharedFields 
   allowFrom?: string[];
   guildEntries?: Record<string, DiscordGuildEntryResolved>;
   avatarResolver?: DiscordAvatarResolver;
+  readPolicy?: DiscordLivePolicyReader;
   precedingMessages?: readonly DiscordMessageEvent["message"][];
 };

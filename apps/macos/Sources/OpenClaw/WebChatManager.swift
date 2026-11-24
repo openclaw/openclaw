@@ -250,7 +250,7 @@ final class WebChatManager {
                     requestedRoute: route,
                     sourceIsCurrent: sourceIsCurrent)
             } catch is CancellationError {
-                webChatManagerLogger.debug("Cancelled native Gateway window open after its owner changed")
+                // Owner retirement cancels the pending open.
             } catch {
                 guard generation == self.windowGeneration else { return }
                 Self.showProfileError(error, message: "Could Not Open Gateway Window")
@@ -495,6 +495,13 @@ final class WebChatManager {
         guard self.primaryGatewayID != gatewayID else { return }
         self.resetPrimaryConnections()
         self.primaryGatewayID = gatewayID
+    }
+
+    /// Quit runs inside the composer's save pause; write every open draft first.
+    func persistComposerDrafts() async {
+        for instance in self.gatewayWindows.values {
+            await instance.controller.persistComposerDraft()
+        }
     }
 
     func close() {

@@ -26,7 +26,13 @@ export function installPackageBunCliLauncher(params) {
     return;
   }
   // Reuse preinstall's persistent-Node check; a Bun install with Node keeps its bin.
-  if (!probePackageCliNodeRuntime({ env, cwd: params.packageRoot })?.bunVersion) {
+  if (
+    !probePackageCliNodeRuntime({
+      env,
+      cwd: params.packageRoot,
+      allowUnavailableNodeFallback: true,
+    })?.bunVersion
+  ) {
     return;
   }
   if (

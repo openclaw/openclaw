@@ -1,5 +1,16 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { For, createEffect, createSignal, onCleanup, untrack } from "solid-js";
+import {
+  action,
+  createMemo,
+  createOptimistic,
+  createSignal,
+  Errored,
+  For,
+  latest,
+  Loading,
+  onSettled,
+} from "solid-js";
+import { ErrorDetails } from "../../components/config-error.tsx";
 import {
   LearnMoreLink,
   SettingsPage,
@@ -9,78 +20,68 @@ import {
   SettingsToggleRow,
 } from "../../components/solid/settings-ui.tsx";
 import { SettingsWorkspace } from "../../components/solid/settings-workspace.tsx";
+import { registerLabsEnglish } from "../../i18n/locales/en-labs.ts";
+import { registerRouteSubtitlesEnglish } from "../../i18n/locales/en-route-subtitles.ts";
 import {
   currentConfigObject,
   resolveEditableSnapshotConfig,
 } from "../../lib/config/config-state-model.ts";
-import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../../lib/external-link.ts";
-import { formatUiError } from "../../lib/format-error.ts";
-import { createGatewayConnectionLifecycle } from "../../lib/gateway-connection-lifecycle.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { projectRuntimeConfig } from "../../lib/reactive/domain-capabilities.ts";
-import { t } from "../../lib/reactive/i18n.ts";
-import { defineSolidBridge } from "../../lit/solid-bridge.ts";
-import { PageLayout } from "../page-layout.tsx";
-import {
-  labFeatureMergePatch,
-  labFeatureResetPatch,
-  LAB_FEATURES,
-  resolveLabFeatureState,
-  type LabFeature,
-} from "./labs-registry.ts";
+import { useGatewayPage } from "../../lib/reactive/gateway-page.ts";
+import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
+import { SettingsSelectRow } from "../config/settings-select-row.tsx";
+import { resolveLabFeatureState, type LabFeature } from "./labs-feature-state.ts";
+import { labFeatureMergePatch, labFeatureResetPatch, LAB_FEATURES } from "./labs-registry.ts";
 
-function LabsPageContent() {
+registerEnglishCatalog(registerLabsEnglish);
+registerEnglishCatalog(registerRouteSubtitlesEnglish);
+
+export function LabsPage() {
   const context = useApplication();
-  const config = projectRuntimeConfig(untrack(() => context.runtimeConfig));
-  const lifecycle = createGatewayConnectionLifecycle(untrack(() => context.gateway.snapshot));
-  const [revision, setRevision] = createSignal(0, { ownedWrite: true });
-  let pending: { featureId: string; value: boolean | string } | null = null;
-  let saveError: string | null = null;
-  const publish = () => setRevision((value) => value + 1);
-  const currentPending = () => {
-    revision();
-    return pending;
-  };
-  const currentError = () => {
-    revision();
-    return saveError;
-  };
-
-  createEffect(
-    () => context.runtimeConfig,
-    (runtimeConfig) => {
-      config.replaceSource(runtimeConfig);
-      pending = null;
-      saveError = null;
-      publish();
-      void runtimeConfig.ensureLoaded();
+  const config = projectRuntimeConfig(context.runtimeConfig);
+  type ExpectedSetting = { featureId: string; value: boolean | string };
+  let admittedFeatureId: string | null = null;
+  let lifetime = Promise.withResolvers<void>();
+  const [receipt, setReceipt] = createSignal({ completion: Promise.resolve() });
+  const page = useGatewayPage({
+    getGateway: () => latest(() => context.gateway),
+    invalidateRequests: () => {
+      admittedFeatureId = null;
+      lifetime.resolve();
+      lifetime = Promise.withResolvers<void>();
+      setReceipt({ completion: Promise.resolve() });
     },
-  );
-  createEffect(
-    () => context.gateway,
-    (gateway) => {
-      lifecycle.transition(gateway.snapshot);
-      const unsubscribe = gateway.subscribe((snapshot) => {
-        if (context.gateway !== gateway) {
-          return;
-        }
-        // A same-tick reconnect must retire a save before Solid's next flush.
-        if (lifecycle.transition(snapshot)) {
-          pending = null;
-          saveError = null;
-          publish();
-        }
-      });
-      return () => {
-        unsubscribe();
-        lifecycle.invalidate();
-        pending = null;
-        saveError = null;
-        publish();
-      };
-    },
-  );
-  onCleanup(() => lifecycle.dispose());
+  });
+  const presentation = createMemo(() => {
+    const epoch = page.epoch;
+    const gateway = context.gateway;
+    const runtimeConfig = context.runtimeConfig;
+    const [expected, setExpected] = createOptimistic<ExpectedSetting | null>(null);
+    const [saving, setSaving] = createOptimistic(false);
+    return { epoch, gateway, runtimeConfig, expected, setExpected, saving, setSaving };
+  });
+  const currentPending = () => presentation().expected();
+  const savingFeatureId = () => {
+    const expected = currentPending();
+    // The receipt publishes synchronous admission before the optimistic action starts.
+    receipt();
+    return admittedFeatureId ?? expected?.featureId ?? null;
+  };
+  onSettled(() => {
+    void context.runtimeConfig.ensureLoaded();
+    const stopRoute = context.router.subscribe(() => {
+      const route = context.router.getState();
+      if ((route.pendingMatches[0] ?? route.matches[0])?.routeId !== "labs") {
+        lifetime.resolve();
+        lifetime = Promise.withResolvers<void>();
+      }
+    });
+    return () => {
+      stopRoute();
+      lifetime.resolve();
+    };
+  });
 
   function editableConfig(): Record<string, unknown> | null {
     return resolveEditableSnapshotConfig(config.read().state.configSnapshot);
@@ -90,27 +91,36 @@ function LabsPageContent() {
     return (
       state.connected &&
       !state.configLoading &&
-      !state.lastError &&
+      // A validation refusal leaves the accepted preference unchanged.
+      (!state.lastError || state.configAutoSaveStatus === "rejected") &&
       state.configSnapshot?.valid !== false &&
       currentConfigObject(state) !== null &&
       editableConfig() !== null
     );
   }
-  function canToggle(): boolean {
+  function toggleAvailable(): boolean {
     const state = config.read().state;
-    return Boolean(
-      state.connected &&
-      state.configSnapshot?.hash &&
-      !state.configLoading &&
-      currentPending() === null,
-    );
+    return Boolean(state.connected && state.configSnapshot?.hash && !state.configLoading);
   }
-  async function updateSetting(
-    featureId: string,
-    value: boolean | string,
-    raw: Record<string, unknown>,
+  function canToggle(): boolean {
+    return toggleAvailable() && admittedFeatureId === null;
+  }
+  const presentSave = action(function* (
+    view: ReturnType<typeof presentation>,
+    expected: ExpectedSetting,
+    work: Promise<void>,
+    retired: Promise<void>,
+    isCurrent: () => boolean,
   ) {
-    const scope = lifecycle.capture();
+    if (isCurrent()) {
+      view.setExpected(expected);
+      view.setSaving(true);
+    }
+    // The configuration owner finishes admitted writes even after this page retires.
+    yield Promise.race([work, retired]);
+  });
+  function updateSetting(featureId: string, value: boolean | string, raw: Record<string, unknown>) {
+    const scope = page.capture();
     const gateway = context.gateway;
     const runtimeConfig = context.runtimeConfig;
     if (
@@ -120,68 +130,71 @@ function LabsPageContent() {
     ) {
       return;
     }
+    const view = presentation();
     const isCurrent = () =>
-      lifecycle.isCurrent(scope) &&
+      page.isCurrent(scope) &&
       context.gateway === gateway &&
       context.runtimeConfig === runtimeConfig;
-    pending = { featureId, value };
-    saveError = null;
-    publish();
-    try {
-      const patched = await runtimeConfig.patch({ raw, note: `labs: update ${featureId}` });
-      if (isCurrent() && !patched) {
-        saveError = runtimeConfig.state.lastError ?? t("labsPage.saveFailed");
+    admittedFeatureId = featureId;
+    const retired = lifetime.promise;
+    const work = (async () => {
+      try {
+        const patched = await runtimeConfig.patch({ raw, note: `labs: update ${featureId}` });
+        if (isCurrent() && !patched) {
+          throw new Error(runtimeConfig.state.lastError ?? t("labsPage.saveFailed"));
+        }
+      } finally {
+        if (isCurrent()) {
+          admittedFeatureId = null;
+        }
       }
-    } catch (error) {
-      if (isCurrent()) {
-        saveError = formatUiError(error);
-      }
-    } finally {
-      if (isCurrent()) {
-        pending = null;
-        publish();
-      }
-    }
+    })();
+    // Publish the owner's synchronous changes before entering its presentation action.
+    const completion = Promise.resolve().then(() =>
+      presentSave(
+        view,
+        { featureId, value },
+        work,
+        retired,
+        () =>
+          isCurrent() &&
+          view.epoch === page.readEpoch() &&
+          view.gateway === gateway &&
+          view.runtimeConfig === runtimeConfig,
+      ),
+    );
+    setReceipt({ completion });
+    // SaveOutcome consumes this failure through the inline error boundary.
+    void completion.catch(() => {});
   }
   function setFeatureEnabled(feature: LabFeature, enabled: boolean) {
     const value = editableConfig();
     const featureState = resolveLabFeatureState(value, feature);
     const resetPatch =
       enabled === featureState.defaultEnabled ? labFeatureResetPatch(value, feature) : null;
-    void updateSetting(feature.id, enabled, resetPatch ?? labFeatureMergePatch(feature, enabled));
+    updateSetting(feature.id, enabled, resetPatch ?? labFeatureMergePatch(feature, enabled));
   }
-  function codeModeConfig(): unknown {
-    const tools = editableConfig()?.tools;
-    return isRecord(tools) ? tools.codeMode : undefined;
+  function predictionModel() {
+    const gateway = editableConfig()?.gateway;
+    const controlUi = isRecord(gateway) ? gateway.controlUi : undefined;
+    const experimental = isRecord(controlUi) ? controlUi.experimental : undefined;
+    const prediction = isRecord(experimental) ? experimental.composerPredictions : undefined;
+    const current = currentPending();
+    const value =
+      current?.featureId === "predictionModel"
+        ? current.value
+        : isRecord(prediction)
+          ? prediction.model
+          : undefined;
+    return value === "conversation" || value === "default" ? value : "utility";
   }
-  function setCodeModeExecutor(executor: string) {
-    if (executor !== "node" && executor !== "quickjs") {
+  function setPredictionModel(model: string) {
+    if (model !== "utility" && model !== "conversation" && model !== "default") {
       return;
     }
-    const value = codeModeConfig();
-    void updateSetting("codeModeExecutor", executor, {
-      tools: {
-        codeMode: {
-          ...(value === undefined
-            ? { enabled: "auto" }
-            : typeof value === "boolean" || value === "auto"
-              ? { enabled: value }
-              : {}),
-          executor: executor === "node" ? null : executor,
-        },
-      },
+    updateSetting("predictionModel", model, {
+      gateway: { controlUi: { experimental: { composerPredictions: { model } } } },
     });
-  }
-  function executorValue() {
-    const value = codeModeConfig();
-    const current = currentPending();
-    const executor =
-      current?.featureId === "codeModeExecutor"
-        ? current.value
-        : isRecord(value)
-          ? value.executor
-          : null;
-    return executor === "quickjs" ? "quickjs" : "node";
   }
   function FeatureRow(props: { feature: LabFeature }) {
     const featureState = () => resolveLabFeatureState(editableConfig(), props.feature);
@@ -198,8 +211,7 @@ function LabsPageContent() {
             title={props.feature.title()}
             description={
               <>
-                {props.feature.description()}
-                <br />
+                {props.feature.description()}{" "}
                 <span role="status">
                   {t(
                     config.read().state.configLoading
@@ -207,21 +219,27 @@ function LabsPageContent() {
                       : "labsPage.decisionAssistance.unavailable",
                   )}
                 </span>
-                <button
-                  class="btn btn--sm"
-                  disabled={!config.read().state.connected || config.read().state.configLoading}
-                  onClick={() => void context.runtimeConfig.refresh()}
-                >
-                  {t("labsPage.decisionAssistance.refresh")}
-                </button>
               </>
+            }
+            control={
+              <button
+                class="btn btn--sm"
+                disabled={!config.read().state.connected || config.read().state.configLoading}
+                onClick={() => void context.runtimeConfig.refresh()}
+              >
+                {t("labsPage.decisionAssistance.refresh")}
+              </button>
             }
           />
         ) : (
           <SettingsToggleRow
             title={props.feature.title()}
             checked={checked()}
-            disabled={!canToggle()}
+            disabled={
+              !toggleAvailable() ||
+              (savingFeatureId() !== null && savingFeatureId() !== props.feature.id)
+            }
+            saving={savingFeatureId() === props.feature.id}
             onChange={(enabled) => setFeatureEnabled(props.feature, enabled)}
             description={
               <>
@@ -231,90 +249,79 @@ function LabsPageContent() {
                     <br />
                     {t("labsPage.decisionAssistance.optedIn")}
                   </>
-                ) : null}{" "}
-                <a
-                  href={props.feature.docsUrl}
-                  target={EXTERNAL_LINK_TARGET}
-                  rel={buildExternalLinkRel()}
-                >
-                  {t("labsPage.documentation")}
-                </a>
-                {featureState().overridden ? (
-                  <>
-                    <br />
-                    {t("configForm.defaultValue", {
-                      value: featureState().defaultEnabled
-                        ? t("common.enabled")
-                        : t("common.disabled"),
-                    })}
-                  </>
                 ) : null}
               </>
             }
           />
         )}
-        {props.feature.id === "codeMode" ? (
-          <SettingsRow
-            title={t("labsPage.codeMode.executor")}
-            description={t("labsPage.codeMode.executorDescription")}
-            control={
-              <select
-                class="settings-select"
-                aria-label={t("labsPage.codeMode.executor")}
-                value={executorValue()}
-                disabled={!canToggle()}
-                onChange={(event) => setCodeModeExecutor(event.currentTarget.value)}
-              >
-                <option value="node" selected={executorValue() === "node"}>
-                  {t("labsPage.codeMode.executorNode")}
-                </option>
-                <option value="quickjs" selected={executorValue() === "quickjs"}>
-                  {t("labsPage.codeMode.executorQuickjs")}
-                </option>
-              </select>
-            }
+        {props.feature.id === "composerPredictions" ? (
+          <SettingsSelectRow
+            nested
+            title={t("labsPage.composerPredictions.model")}
+            description={t("labsPage.composerPredictions.modelDescription")}
+            value={predictionModel()}
+            disabled={presentation().saving() || !canToggle()}
+            onChange={setPredictionModel}
+            options={[
+              { value: "utility", label: t("labsPage.composerPredictions.utility") },
+              { value: "conversation", label: t("labsPage.composerPredictions.conversation") },
+              { value: "default", label: t("labsPage.composerPredictions.default") },
+            ]}
           />
         ) : null}
       </>
     );
   }
+  function SaveOutcome() {
+    const complete = createMemo(() => receipt().completion.then(() => true));
+    return <>{complete() && null}</>;
+  }
   return (
-    <>
+    <openclaw-labs-page>
       <SettingsPageHeader
         title={t("tabs.labs")}
         subtitle={
           <>
-            {t("labsPage.intro")}{" "}
+            {t("subtitles.labs")}{" "}
             <LearnMoreLink url="https://docs.openclaw.ai/concepts/experimental-features" />
           </>
         }
       />
       <SettingsWorkspace>
         <SettingsPage>
-          <SettingsSection
-            title={t("labsPage.sectionTitle")}
-            description={t("labsPage.sectionDescription")}
-          >
+          <SettingsSection description={t("labsPage.sectionDescription")}>
             <For each={LAB_FEATURES}>{(feature) => <FeatureRow feature={feature} />}</For>
-            {currentError() ? (
-              <SettingsRow
-                title={t("labsPage.saveErrorTitle")}
-                description={<span role="alert">{currentError()}</span>}
-              />
-            ) : null}
+            <For
+              each={config
+                .read()
+                .state.configSnapshot?.warnings?.filter(
+                  (warning) => warning.path === "gateway.openclawId.enabled",
+                )}
+            >
+              {(warning) => (
+                <SettingsRow
+                  role="status"
+                  title={t("labsPage.openclawId.title")}
+                  description={warning.message}
+                />
+              )}
+            </For>
+            <Loading on={receipt()}>
+              <Errored
+                fallback={(error) => (
+                  <SettingsRow
+                    role="alert"
+                    title={t("labsPage.saveErrorTitle")}
+                    description={<ErrorDetails error={error()} />}
+                  />
+                )}
+              >
+                <SaveOutcome />
+              </Errored>
+            </Loading>
           </SettingsSection>
         </SettingsPage>
       </SettingsWorkspace>
-    </>
+    </openclaw-labs-page>
   );
 }
-
-export const LabsPage = defineSolidBridge(
-  "openclaw-labs-page",
-  (_props, host) => (
-    <PageLayout host={host}>
-      <LabsPageContent />
-    </PageLayout>
-  ),
-  { properties: {} },
-);

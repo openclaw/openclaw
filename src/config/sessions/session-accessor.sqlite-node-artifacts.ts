@@ -1,11 +1,13 @@
 import { createHash } from "node:crypto";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
+import { getPostgresPhysicalFacts } from "../../infra/database-engine/physical-facts.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
   iterateSqliteQuerySync,
 } from "../../infra/kysely-sync.js";
+import { isPostgresSqlConnection } from "../../infra/sql-connection.js";
 import { withSqliteDatabaseWriteScope } from "../../infra/sqlite-database-admission.js";
 import { getAdmittedSqliteSchemaFacts } from "../../infra/sqlite-schema-facts.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
@@ -210,10 +212,10 @@ export function copySessionNodeArtifactsForRepair(
                   .doUpdateSet(canonicalProgressCard)
                   .where((eb) =>
                     eb.or([
-                      eb("revision", "<", progressCard.revision),
+                      eb("session_progress_cards.revision", "<", progressCard.revision),
                       eb.and([
-                        eb("revision", "=", progressCard.revision),
-                        eb("updated_at", "<", progressCard.updated_at),
+                        eb("session_progress_cards.revision", "=", progressCard.revision),
+                        eb("session_progress_cards.updated_at", "<", progressCard.updated_at),
                       ]),
                     ]),
                   ),
@@ -250,7 +252,7 @@ export function copySessionNodeArtifactsForRepair(
                     created_by: tab.created_by,
                     revision: tab.revision,
                   })
-                  .where("revision", "<", tab.revision),
+                  .where("board_tabs.revision", "<", tab.revision),
               ),
           );
         }
@@ -269,10 +271,10 @@ export function copySessionNodeArtifactsForRepair(
                   .doUpdateSet({ ...widget, session_key: canonicalKey })
                   .where((eb) =>
                     eb.or([
-                      eb("revision", "<", widget.revision),
+                      eb("board_widgets.revision", "<", widget.revision),
                       eb.and([
-                        eb("revision", "=", widget.revision),
-                        eb("updated_at", "<", widget.updated_at),
+                        eb("board_widgets.revision", "=", widget.revision),
+                        eb("board_widgets.updated_at", "<", widget.updated_at),
                       ]),
                     ]),
                   ),
@@ -379,10 +381,10 @@ export function copySessionNodeArtifactsForRepair(
                   .doUpdateSet(canonicalHeartbeat)
                   .where((eb) =>
                     eb.or([
-                      eb("updated_at", "<", heartbeat.updated_at),
+                      eb("heartbeat_outcomes.updated_at", "<", heartbeat.updated_at),
                       eb.and([
-                        eb("updated_at", "=", heartbeat.updated_at),
-                        eb("occurred_at", "<", heartbeat.occurred_at),
+                        eb("heartbeat_outcomes.updated_at", "=", heartbeat.updated_at),
+                        eb("heartbeat_outcomes.occurred_at", "<", heartbeat.occurred_at),
                       ]),
                     ]),
                   ),
@@ -610,6 +612,13 @@ export function deleteSessionNodeArtifacts(
 function readSessionNodeArtifactTables(
   database: Pick<OpenClawAgentDatabase, "db">,
 ): ReadonlySet<string> {
+  if (isPostgresSqlConnection(database.db)) {
+    const facts = getPostgresPhysicalFacts(database.db);
+    if (!facts) {
+      throw new Error("Session artifacts require admitted PostgreSQL schema facts");
+    }
+    return new Set(facts.catalog.filter((fact) => fact.kind === "table").map((fact) => fact.table));
+  }
   const schema = getAdmittedSqliteSchemaFacts(database.db);
   if (schema) {
     return schema.tables;

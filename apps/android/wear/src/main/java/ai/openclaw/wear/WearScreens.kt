@@ -49,6 +49,7 @@ import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
@@ -177,10 +178,11 @@ internal fun OpenClawWearScreens(
   val agentPulseSupported = snapshot?.agentPulseSupported == true
   val homePages = remember(agentPulseSupported) { wearHomePages(agentPulseSupported) }
   val initialPageIndex = homePages.indexOf(initialPage).takeIf { it >= 0 } ?: 0
+  var pageCount by rememberSaveable { mutableIntStateOf(homePages.size) }
   val pagerState =
     rememberPagerState(
       initialPage = initialPageIndex,
-      pageCount = { homePages.size },
+      pageCount = { pageCount },
     )
   var lifecycleResumed by remember(lifecycleOwner) {
     mutableStateOf(
@@ -204,9 +206,12 @@ internal fun OpenClawWearScreens(
     }
   }
   LaunchedEffect(homePages) {
+    // Move off a removed page before shrinking the count: the indicator indexes both together.
+    // Save the published count with the pager so restoration preserves that ordering too.
     if (homePages.getOrNull(pagerState.currentPage) == null) {
       pagerState.scrollToPage(homePages.indexOf(WearHomePage.Chat))
     }
+    pageCount = homePages.size
   }
   LaunchedEffect(pagerState, lifecycleResumed, snapshot != null, homePages) {
     snapshotFlow { homePages.getOrNull(pagerState.currentPage) == WearHomePage.Pulse }
@@ -494,7 +499,9 @@ private fun ChatPage(
         }
       } else {
         visibleMessages.forEach { message ->
-          item(key = message.id ?: "${message.role}:${message.timestamp}:${message.text.hashCode()}") {
+          // Repeated unidentified messages are valid; let the list assign positional keys.
+          // Namespace transcript identities separately from the list's own anchors.
+          item(key = (message.entryId ?: message.id)?.let { "chat-message:$it" }) {
             MessageBubble(
               role = message.chatRole,
               text = message.text,

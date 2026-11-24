@@ -1,9 +1,6 @@
 import type { ImageGenerationProvider } from "openclaw/plugin-sdk/image-generation";
 import type { MediaUnderstandingProvider } from "openclaw/plugin-sdk/media-understanding";
-import type {
-  PluginCapabilityCatalogHostContext,
-  OpenClawConfig,
-} from "openclaw/plugin-sdk/plugin-entry";
+import type { PluginCapabilityCatalogHostContext } from "openclaw/plugin-sdk/plugin-entry";
 import type {
   RealtimeTranscriptionProviderConfig,
   RealtimeTranscriptionProviderPlugin,
@@ -91,16 +88,23 @@ export const DEFAULT_XAI_VIDEO_MODEL = "grok-imagine-video";
 const XAI_VIDEO_15_MODEL = "grok-imagine-video-1.5";
 export const XAI_VIDEO_DEFAULT_TIMEOUT_MS = 600_000;
 export const XAI_VIDEO_ASPECT_RATIOS = new Set(["1:1", "16:9", "9:16", "4:3", "3:4", "3:2", "2:3"]);
+
+function createXaiVideoGenerationMode(resolutions: string[]) {
+  return {
+    maxDurationSeconds: 15,
+    aspectRatios: [...XAI_VIDEO_ASPECT_RATIOS],
+    resolutions,
+    supportsAspectRatio: true,
+    supportsResolution: true,
+  };
+}
+
 const XAI_VIDEO_15_CAPABILITIES = {
   imageToVideo: {
     enabled: true,
     maxVideos: 1,
     maxInputImages: 1,
-    maxDurationSeconds: 15,
-    aspectRatios: [...XAI_VIDEO_ASPECT_RATIOS],
-    resolutions: ["480P", "720P", "1080P"],
-    supportsAspectRatio: true,
-    supportsResolution: true,
+    ...createXaiVideoGenerationMode(["480P", "720P", "1080P"]),
   },
   videoToVideo: {
     enabled: false,
@@ -138,21 +142,13 @@ export function createXaiVideoGenerationProviderMetadata(
     capabilities: {
       generate: {
         maxVideos: 1,
-        maxDurationSeconds: 15,
-        aspectRatios: [...XAI_VIDEO_ASPECT_RATIOS],
-        resolutions: ["480P", "720P"],
-        supportsAspectRatio: true,
-        supportsResolution: true,
+        ...createXaiVideoGenerationMode(["480P", "720P"]),
       },
       imageToVideo: {
         enabled: true,
         maxVideos: 1,
         maxInputImages: 7,
-        maxDurationSeconds: 15,
-        aspectRatios: [...XAI_VIDEO_ASPECT_RATIOS],
-        resolutions: ["480P", "720P"],
-        supportsAspectRatio: true,
-        supportsResolution: true,
+        ...createXaiVideoGenerationMode(["480P", "720P"]),
       },
       videoToVideo: {
         enabled: true,
@@ -222,6 +218,7 @@ export function createXaiRealtimeTranscriptionProviderMetadata(
     aliases: ["xai-realtime", "grok-stt-streaming"],
     autoSelectOrder: 25,
     resolveConfig: ({ rawConfig }) => normalizeXaiRealtimeTranscriptionProviderConfig(rawConfig),
+    // Retained for synchronous SDK consumers through 2026-12-31.
     isConfigured: ({ providerConfig, cfg }) =>
       Boolean(
         normalizeXaiRealtimeTranscriptionProviderConfig(providerConfig).apiKey ??
@@ -274,21 +271,39 @@ export function createXaiRealtimeVoiceProviderMetadata(
       supportsToolCalls: true,
       supportsSessionResumption: true,
     },
+    // Retained for synchronous SDK consumers through 2026-12-31.
     resolveConfig: ({ rawConfig }) => normalizeXaiRealtimeProviderConfig(rawConfig),
-    isConfigured: ({ providerConfig, cfg, agentId }) =>
-      hasXaiRealtimeApiKeyInput(
-        normalizeXaiRealtimeProviderConfig(providerConfig).apiKey,
+    isConfigured: ({ providerConfig, cfg, agentId }) => {
+      const configApiKey = normalizeXaiRealtimeProviderConfig(providerConfig).apiKey;
+      const { isProviderAuthProfileConfigured, resolveAgentDir } = context;
+      if (
+        normalizeOptionalString(configApiKey) ||
+        normalizeOptionalString(process.env.XAI_API_KEY)
+      ) {
+        return true;
+      }
+      return isProviderAuthProfileConfigured({
+        provider: "xai",
         cfg,
-        agentId,
-        context,
-      ),
-    isConfiguredAsync: ({ providerConfig, cfg, agentId }) =>
-      hasXaiRealtimeApiKeyInputAsync(
-        normalizeXaiRealtimeProviderConfig(providerConfig).apiKey,
+        ...(cfg && agentId ? { agentDir: resolveAgentDir(cfg, agentId) } : {}),
+      });
+    },
+    resolveConfigAsync: async ({ rawConfig }) => normalizeXaiRealtimeProviderConfig(rawConfig),
+    isConfiguredAsync: ({ providerConfig, cfg, agentId }) => {
+      const configApiKey = normalizeXaiRealtimeProviderConfig(providerConfig).apiKey;
+      const { isProviderAuthProfileConfiguredAsync, resolveAgentDir } = context;
+      if (
+        normalizeOptionalString(configApiKey) ||
+        normalizeOptionalString(process.env.XAI_API_KEY)
+      ) {
+        return Promise.resolve(true);
+      }
+      return isProviderAuthProfileConfiguredAsync({
+        provider: "xai",
         cfg,
-        agentId,
-        context,
-      ),
+        ...(cfg && agentId ? { agentDir: resolveAgentDir(cfg, agentId) } : {}),
+      });
+    },
   } satisfies Omit<RealtimeVoiceProviderPlugin, "createBridge" | "createBrowserSession">;
 }
 
@@ -304,48 +319,4 @@ export function assertXaiRealtimeVoiceRequestSupported(
   if ((req.interruptResponseOnInputAudio ?? config.interruptResponseOnInputAudio) === false) {
     throw new Error("xAI realtime voice requires automatic server-VAD interruption handling");
   }
-}
-
-function hasXaiRealtimeApiKeyInput(
-  configApiKey: string | undefined,
-  cfg: OpenClawConfig | undefined,
-  agentId: string | undefined,
-  {
-    isProviderAuthProfileConfigured,
-    resolveAgentDir,
-  }: Pick<
-    PluginCapabilityCatalogHostContext,
-    "isProviderAuthProfileConfigured" | "resolveAgentDir"
-  >,
-): boolean {
-  if (normalizeOptionalString(configApiKey) || normalizeOptionalString(process.env.XAI_API_KEY)) {
-    return true;
-  }
-  return isProviderAuthProfileConfigured({
-    provider: "xai",
-    cfg,
-    ...(cfg && agentId ? { agentDir: resolveAgentDir(cfg, agentId) } : {}),
-  });
-}
-
-async function hasXaiRealtimeApiKeyInputAsync(
-  configApiKey: string | undefined,
-  cfg: OpenClawConfig | undefined,
-  agentId: string | undefined,
-  {
-    isProviderAuthProfileConfiguredAsync,
-    resolveAgentDir,
-  }: Pick<
-    PluginCapabilityCatalogHostContext,
-    "isProviderAuthProfileConfiguredAsync" | "resolveAgentDir"
-  >,
-): Promise<boolean> {
-  if (normalizeOptionalString(configApiKey) || normalizeOptionalString(process.env.XAI_API_KEY)) {
-    return true;
-  }
-  return isProviderAuthProfileConfiguredAsync({
-    provider: "xai",
-    cfg,
-    ...(cfg && agentId ? { agentDir: resolveAgentDir(cfg, agentId) } : {}),
-  });
 }

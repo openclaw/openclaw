@@ -1,20 +1,62 @@
+import type { ServerResponse } from "node:http";
+import path from "node:path";
 import { readFileWindowFully, safeFileURLToPath } from "@openclaw/fs-safe/advanced";
 import { detectMime, kindFromMime } from "@openclaw/media-core/mime";
 import { startsWithSvgRootElement } from "../../packages/gateway-protocol/src/svg-image.js";
-import { openLocalFileSafely } from "../infra/fs-safe.js";
+import { relativePathInsideSandboxRoot, resolveSandboxPathMapping } from "../agents/path-policy.js";
+import { FsSafeError, openLocalFileSafely } from "../infra/fs-safe.js";
+import { isPathInside } from "../infra/path-guards.js";
+import { resolveScratchFilePath } from "../infra/scratch-expiry.js";
 import { assertLocalMediaAllowed, LocalMediaAccessError } from "../media/local-media-access.js";
+import type { MediaProbeResult } from "../media/media-probe.js";
 import { resolveMediaReferenceLocalPathInfo } from "../media/media-reference.js";
-import { resolvePlaybackMetadataForSource } from "../media/playback-transcode.js";
+import {
+  PlaybackInspectionBusyError,
+  resolvePlaybackMetadataForSource,
+} from "../media/playback-transcode.js";
+import { SCRATCH_EXPIRED_MESSAGE } from "../shared/scratch-expiry.js";
 import { resolveUserPath } from "../utils.js";
 import {
-  classifyAssistantMediaError,
-  type AssistantMediaAvailability,
-} from "./assistant-media-errors.js";
-import {
   createAssistantMediaTicket,
+  resolveAssistantMediaWorkspaceTicketKey,
   type resolveAssistantMediaPolicy,
   type AssistantMediaTicketPayload,
 } from "./assistant-media-policy.js";
+import { respondNotFound, respondPlainText } from "./control-ui-http-utils.js";
+
+type AssistantMediaAvailability =
+  | ({
+      available: true;
+      mimeType?: string;
+      playback?: "native" | "transcode";
+      sizeBytes?: number;
+    } & MediaProbeResult)
+  | { available: false; reason: string; code: string; retryable?: boolean };
+
+export async function respondAssistantMediaReadFailure(
+  error: unknown,
+  source: string,
+  res: ServerResponse,
+  publishResponse: (publish: () => void) => Promise<void>,
+): Promise<void> {
+  if (res.destroyed || res.writableEnded) {
+    return;
+  }
+  if (
+    error instanceof Error &&
+    "code" in error &&
+    error.code === "not-found" &&
+    resolveScratchFilePath(source)
+  ) {
+    try {
+      await publishResponse(() => respondPlainText(res, 410, SCRATCH_EXPIRED_MESSAGE));
+      return;
+    } catch {
+      // Expiry disclosure still requires the current session and message authority.
+    }
+  }
+  respondNotFound(res);
+}
 
 export function normalizeAssistantMediaSource(source: string): string | null {
   const trimmed = source.trim();
@@ -37,6 +79,28 @@ export function normalizeAssistantMediaSource(source: string): string | null {
 type AssistantMediaPolicy = NonNullable<Awaited<ReturnType<typeof resolveAssistantMediaPolicy>>>;
 type AssistantMediaFile = NonNullable<AssistantMediaTicketPayload["file"]>;
 
+/** Keep relative sandbox references in their namespace for reads, association and tickets. */
+export function resolveAssistantMediaSource(
+  source: string,
+  policy: AssistantMediaPolicy,
+): string | null {
+  if (path.isAbsolute(source) || /^[a-z][a-z0-9+.-]*:/iu.test(source)) {
+    return source;
+  }
+  if (policy.remote || !policy.executionCwd || !path.isAbsolute(policy.executionCwd)) {
+    return null;
+  }
+  const resolved = path.resolve(policy.executionCwd, source);
+  const sandbox = policy.sandboxWorkspace;
+  if (!sandbox) {
+    return resolved;
+  }
+  const relative = relativePathInsideSandboxRoot(sandbox.hostRoot, resolved);
+  return relative === null
+    ? null
+    : path.posix.join(sandbox.containerRoot, ...relative.split(path.sep));
+}
+
 function sameAssistantMediaFile(actual: AssistantMediaFile, expected: AssistantMediaFile) {
   return (
     actual.realPath === expected.realPath &&
@@ -49,14 +113,38 @@ export async function openAssistantMedia(
   source: string,
   policy: AssistantMediaPolicy,
   allowance: true | AssistantMediaFile | undefined,
+  assertCurrent: () => void,
 ) {
-  const reference = await resolveMediaReferenceLocalPathInfo(source);
+  const sandbox = policy.sandboxWorkspace;
+  const mapped = !policy.remote && sandbox ? resolveSandboxPathMapping([sandbox], source) : null;
+  const reference = await resolveMediaReferenceLocalPathInfo(mapped?.hostPath ?? source);
+  let workspaceDir = sandbox?.hostRoot;
+  let assertWorkspaceCurrent = assertCurrent;
+  let filePath = reference.path;
+  let localRoots = policy.localRoots;
   if (policy.remote && reference.kind === "local") {
     throw new LocalMediaAccessError("invalid-path", "File is on another computer");
   }
+  if (sandbox && reference.kind === "local" && isPathInside(sandbox.hostRoot, reference.path)) {
+    const { readLocalWorkspacePath } =
+      await import("./worker-environments/local-workspace-read.js");
+    assertCurrent();
+    const backing = await readLocalWorkspacePath({
+      cwd: sandbox.hostRoot,
+      worktreeId: sandbox.worktreeId,
+      assertCurrent,
+    });
+    if (mapped && backing.worktreeId !== sandbox.worktreeId) {
+      throw new LocalMediaAccessError("invalid-path", "Sandbox image backing is unavailable");
+    }
+    workspaceDir = backing.root;
+    assertWorkspaceCurrent = backing.assertCurrent;
+    filePath = path.join(workspaceDir, path.relative(sandbox.hostRoot, reference.path));
+    localRoots = policy.localRoots.map((root) => (root === sandbox.hostRoot ? backing.root : root));
+  }
   let outsideRoots = false;
   try {
-    await assertLocalMediaAllowed(reference.path, policy.localRoots);
+    await assertLocalMediaAllowed(filePath, localRoots);
   } catch (error) {
     if (!(error instanceof LocalMediaAccessError) || error.code !== "path-not-allowed") {
       throw error;
@@ -66,8 +154,28 @@ export async function openAssistantMedia(
       throw error;
     }
   }
-  const opened = await openLocalFileSafely({ filePath: reference.path });
+  const opened = await openLocalFileSafely({ filePath });
   try {
+    let assertSourceCurrent = assertWorkspaceCurrent;
+    if (mapped && sandbox && workspaceDir) {
+      if (!isPathInside(workspaceDir, opened.realPath)) {
+        throw new LocalMediaAccessError("invalid-path", "Sandbox image backing is unavailable");
+      }
+      const { prepareLocalWorkspaceFileRead } =
+        await import("../agents/sandbox/local-workspace-quiescence.js");
+      assertSourceCurrent = await prepareLocalWorkspaceFileRead({
+        workspaceDir,
+        containerRoot: sandbox.containerRoot,
+        targets: [
+          source,
+          path.posix.join(
+            sandbox.containerRoot,
+            ...path.relative(workspaceDir, opened.realPath).split(path.sep),
+          ),
+        ],
+        assertCurrent: assertWorkspaceCurrent,
+      });
+    }
     let file: AssistantMediaFile | undefined;
     if (outsideRoots && allowance) {
       const identity = await opened.handle.stat({ bigint: true });
@@ -85,7 +193,7 @@ export async function openAssistantMedia(
     }
     // Validate the descriptor target too: a symlink may change between containment and open.
     if (!outsideRoots) {
-      await assertLocalMediaAllowed(opened.realPath, policy.localRoots);
+      await assertLocalMediaAllowed(opened.realPath, localRoots);
     }
     const sniffBuffer = Buffer.alloc(Math.min(opened.stat.size, 8192));
     const bytesRead = sniffBuffer.length
@@ -99,7 +207,8 @@ export async function openAssistantMedia(
     if (outsideRoots && kindFromMime(mimeType) !== "image") {
       throw new LocalMediaAccessError("unsupported-media-type", "Not an image");
     }
-    return { opened, reference, mimeType, outsideRoots, file };
+    assertSourceCurrent();
+    return { opened, reference, mimeType, outsideRoots, file, assertSourceCurrent };
   } catch (error) {
     await opened.handle.close().catch(() => {});
     throw error;
@@ -113,10 +222,21 @@ export async function resolveAssistantMediaAvailability(
   agentId: string | undefined,
   signal: AbortSignal,
   assertCurrent: () => void,
-): Promise<AssistantMediaAvailability & { mediaTicket?: string; mediaTicketExpiresAt?: string }> {
+): Promise<
+  AssistantMediaAvailability & {
+    mediaTicket?: string;
+    mediaTicketExpiresAt?: string;
+    assertSourceCurrent?: () => void;
+  }
+> {
   try {
     assertCurrent();
-    const { opened, mimeType, file } = await openAssistantMedia(source, policy, allowance);
+    const { opened, mimeType, file, assertSourceCurrent } = await openAssistantMedia(
+      source,
+      policy,
+      allowance,
+      assertCurrent,
+    );
     // The inspection owner reopens and verifies this identity after queue admission.
     await opened[Symbol.asyncDispose]();
     const mediaKind = kindFromMime(mimeType);
@@ -133,24 +253,79 @@ export async function resolveAssistantMediaAvailability(
             mimeType,
             kind: mediaKind,
             signal,
-            assertCurrent,
+            assertCurrent: assertSourceCurrent,
           })
         : undefined;
-    assertCurrent();
+    assertSourceCurrent();
     return {
       available: true,
+      assertSourceCurrent,
       ...(mimeType ? { mimeType } : {}),
       sizeBytes: opened.stat.size,
       ...playbackMetadata,
       ...createAssistantMediaTicket({
         source,
+        workspaceKey: resolveAssistantMediaWorkspaceTicketKey(source, policy),
         agentId,
         session: policy.session,
+        ...(policy.messageId ? { messageId: policy.messageId } : {}),
         reader: policy.reader,
         ...(file ? { file } : {}),
       }),
     };
   } catch (error) {
-    return classifyAssistantMediaError(error);
+    if (error instanceof Error && "code" in error && error.code === "not-found") {
+      return resolveScratchFilePath(source)
+        ? {
+            available: false,
+            code: "artifact-file-expired",
+            reason: SCRATCH_EXPIRED_MESSAGE,
+            retryable: false,
+          }
+        : { available: false, code: "file-not-found", reason: "File not found" };
+    }
+    if (error instanceof PlaybackInspectionBusyError) {
+      return {
+        available: false,
+        code: "attachment-unavailable",
+        reason: error.message,
+        retryable: true,
+      };
+    }
+    if (error instanceof FsSafeError) {
+      switch (error.code) {
+        case "not-file":
+          return { available: false, code: "not-a-file", reason: "Not a file" };
+        case "invalid-path":
+        case "path-mismatch":
+        case "symlink":
+          return { available: false, code: "invalid-file", reason: "Invalid file" };
+        default:
+          break;
+      }
+    } else if (error instanceof Error && "code" in error) {
+      const errorCode = error.code;
+      switch (typeof errorCode === "string" ? errorCode : "") {
+        case "unsupported-media-type":
+          return { available: false, code: "unsupported-media-type", reason: "Not an image" };
+        case "path-not-allowed":
+          return {
+            available: false,
+            code: "outside-allowed-folders",
+            reason: "Outside allowed folders",
+          };
+        case "invalid-file-url":
+        case "invalid-path":
+        case "unsafe-bypass":
+        case "network-path-not-allowed":
+        case "invalid-root":
+          return { available: false, code: "blocked-local-file", reason: "Blocked local file" };
+        case "not-file":
+          return { available: false, code: "not-a-file", reason: "Not a file" };
+        default:
+          break;
+      }
+    }
+    return { available: false, code: "attachment-unavailable", reason: "Attachment unavailable" };
   }
 }

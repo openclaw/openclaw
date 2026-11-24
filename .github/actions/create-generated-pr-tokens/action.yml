@@ -2,6 +2,9 @@ name: Create generated PR tokens
 description: Mint repo-scoped GitHub App tokens for generated branch and pull request publication.
 
 inputs:
+  repository:
+    description: Destination repository name under the workflow repository owner.
+    required: false
   contents-client-id:
     description: GitHub App client id with contents write access.
     required: true
@@ -31,21 +34,21 @@ runs:
   steps:
     - name: Create generated branch app token
       id: contents-token
-      uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
+      uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3
       with:
         client-id: ${{ inputs.contents-client-id }}
         private-key: ${{ inputs.contents-private-key }}
         owner: ${{ github.repository_owner }}
-        repositories: ${{ github.event.repository.name }}
+        repositories: ${{ inputs.repository || github.event.repository.name }}
         permission-contents: write
 
     - name: Create generated PR app token
       id: pull-request-token
-      uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
+      uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3
       with:
         client-id: ${{ inputs.pull-request-client-id }}
         private-key: ${{ inputs.pull-request-private-key }}
         owner: ${{ github.repository_owner }}
-        repositories: ${{ github.event.repository.name }}
+        repositories: ${{ inputs.repository || github.event.repository.name }}
         permission-contents: ${{ inputs.pull-request-contents-permission }}
         permission-pull-requests: write

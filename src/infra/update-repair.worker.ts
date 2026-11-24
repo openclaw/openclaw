@@ -1,8 +1,10 @@
 import { retainCliProcessJobUntilExit, withCliProcessScope } from "../cli/runtime-cleanup-scope.js";
 import { AsyncWorkScope, runOutsideAsyncWorkScope } from "../shared/async-work-scope.js";
 import { drainGlobalSingletonLifecycleState } from "../shared/global-singleton.js";
+import { truncateUtf8Prefix } from "../utils/utf8-truncate.js";
 import {
   UPDATE_REPAIR_IPC_MAX_BYTES,
+  UPDATE_REPAIR_TEXT_MAX_CHARS,
   updateRepairParentMessageSchema,
   type UpdateRepairWorkerMessage,
 } from "./update-repair-protocol.js";
@@ -82,8 +84,8 @@ function stop(code: number, reason?: unknown, messages: UpdateRepairWorkerMessag
   });
 }
 
-function finish(status: "unavailable" | "aborted", reason: string): void {
-  stop(0, undefined, [
+function finish(status: "unavailable" | "aborted", reason: string, exitCode = 0): void {
+  stop(exitCode, exitCode !== 0 ? new Error(reason) : undefined, [
     { type: "event", event: { type: "stopped", status, reason } },
     {
       type: "result",
@@ -95,6 +97,17 @@ function finish(status: "unavailable" | "aborted", reason: string): void {
       },
     },
   ]);
+}
+
+// Error termination paths route through finish(...) so the orchestrator receives
+// a stopped event and a result message carrying the failure reason, matching the
+// worker's other exit paths, while still surfacing a non-zero exit code.
+// The reason is bounded to the protocol's text limit so the released response
+// parser never rejects the diagnostic (e.g. multi-field Zod parse errors).
+function fail(error: unknown): void {
+  const message = error instanceof Error ? error.message : String(error);
+  const reason = truncateUtf8Prefix(message, UPDATE_REPAIR_TEXT_MAX_CHARS);
+  finish("aborted", reason, 1);
 }
 
 function onDisconnect(): void {
@@ -155,9 +168,9 @@ function onMessage(raw: unknown): void {
           }
         }),
       )
-      .catch((error: unknown) => stop(1, error));
+      .catch((error: unknown) => fail(error));
   } catch (error) {
-    stop(1, error);
+    fail(error);
   }
 }
 process.once("disconnect", onDisconnect);
@@ -176,5 +189,5 @@ void startup.then(
       }).catch(() => {});
     }
   },
-  (error: unknown) => stop(1, error),
+  (error: unknown) => fail(error),
 );

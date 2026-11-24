@@ -3,17 +3,27 @@ import {
   openExistingOpenClawStateWriter,
   type ExistingOpenClawStateWriter,
 } from "../state/openclaw-state-db-existing-write.js";
+import { isPostgresSqlConnection } from "./sql-connection.js";
 import { setSqliteBusyTimeout } from "./sqlite-busy-timeout.js";
 import { isSqliteLockError } from "./sqlite-error-diagnostics.js";
-import { SqliteWorkerAdmissionTimeoutError } from "./sqlite-worker-contract.js";
-import { requestSqliteWorkerOperationAdmission } from "./sqlite-worker-operation-admission.js";
+import {
+  retrySqliteWorkerAdmission,
+  SQLITE_WORKER_ADMISSION_DEADLINE_MS,
+} from "./sqlite-worker-admission-retry.js";
+import {
+  requestSqliteWorkerOperationAdmission,
+  takeSqliteWorkerOperationAdmissionAttachment,
+} from "./sqlite-worker-operation-admission.js";
+import { PluginCohortRecoveryWriteBindingSchema } from "./update-plugin-cohort-schema.js";
+import { claimUpdateResultInTransaction } from "./update-result-claim.js";
 import { resolveUpdateRunCodecEnv, type UpdateRunLedgerOptions } from "./update-run-codec.js";
 import { createUpdateRun } from "./update-run-ledger.js";
 import type {
   UpdateRunWriteCommand,
   UpdateRunWriteOperations,
 } from "./update-run-mutation.types.js";
-import { readRecovery } from "./update-run-recovery-store.js";
+import { readPluginCohortRecoveryInDatabase, readRecovery } from "./update-run-recovery-store.js";
+import { pluginCohortRecoveryMatchesSource } from "./update-run-recovery.js";
 import { recordUpdateRunVerificationRecord } from "./update-run-verification.js";
 import {
   applyFinishUpdateRun,
@@ -41,23 +51,11 @@ export function withUpdateRunWriteAdmission<T>(
     requestSqliteWorkerOperationAdmission({
       stage,
       facts: undefined,
-      // The serving Gateway's writers have a five-second lock budget. A busy
-      // updater host must release this lock well before that budget expires.
-      ...(stage === "commit" ? { deadlineMs: 1_000 } : {}),
+      ...(stage === "commit" ? { deadlineMs: SQLITE_WORKER_ADMISSION_DEADLINE_MS } : {}),
     });
-  for (;;) {
-    try {
-      return operation(assertCurrent);
-    } catch (error) {
-      // Transaction helpers finish rollback before throwing. Cleanup/rollback
-      // failures and authority refusals escape; neither certifies a safe retry.
-      if (!(error instanceof SqliteWorkerAdmissionTimeoutError)) {
-        throw error;
-      }
-      // Fresh transaction admission waits outside BEGIN, so a stalled host no
-      // longer holds SQLite's writer. Each attempt rereads authoritative rows.
-    }
-  }
+  // A slow host policy snapshot can exceed every commit grant. Repeating it
+  // forever rewrites the same database without ever recording progress.
+  return retrySqliteWorkerAdmission(() => operation(assertCurrent), { maxAttempts: 3 });
 }
 
 export function recordUpdateRunMutationInWorker(
@@ -97,14 +95,43 @@ export function recordUpdateRunMutationInWorker(
     return writer().run(({ db }) => {
       entered = true;
       // The longer wait is for BEGIN only; mutation and commit keep the normal lock budget.
-      if (busyTimeoutMs > OPENCLAW_SQLITE_BUSY_TIMEOUT_MS) {
+      if (!isPostgresSqlConnection(db) && busyTimeoutMs > OPENCLAW_SQLITE_BUSY_TIMEOUT_MS) {
         setSqliteBusyTimeout(db, OPENCLAW_SQLITE_BUSY_TIMEOUT_MS);
       }
       if (input.requireNoRecovery) {
+        const binding = input.pluginCohort;
+        const eligible =
+          binding &&
+          (command.type === "updateRuns.recordPhase" ||
+            command.type === "updateRuns.recordStep" ||
+            command.type === "updateRuns.recordDiagnostics");
+        // Check even when the reservation disappeared: an orphan companion is never admission.
+        const pair = eligible ? readPluginCohortRecoveryInDatabase(db, input.runId) : undefined;
         const recovery = readRecovery(db, input.runId);
         if (recovery) {
-          assertCurrent("commit");
-          return { kind: "recovery-required", recovery };
+          if (
+            !binding ||
+            !pair ||
+            binding.runId !== input.runId ||
+            binding.transactionId !== pair.cohort.transactionId ||
+            binding.installKey !== pair.cohort.installKey ||
+            !pluginCohortRecoveryMatchesSource(pair, options)
+          ) {
+            assertCurrent("commit");
+            return { kind: "recovery-required", recovery };
+          }
+          // The attachment belongs to this request's retained admission callback,
+          // which rechecks the live executor/source before BEGIN and COMMIT.
+          const admitted = PluginCohortRecoveryWriteBindingSchema.parse(
+            takeSqliteWorkerOperationAdmissionAttachment(),
+          );
+          if (
+            admitted.runId !== binding.runId ||
+            admitted.transactionId !== binding.transactionId ||
+            admitted.installKey !== binding.installKey
+          ) {
+            throw new Error("Plugin cohort bookkeeping lost its admitted operation");
+          }
         }
       }
       const record = mutateRunInTransaction(
@@ -136,8 +163,13 @@ export function recordUpdateRunMutationInWorker(
         },
         codecOptions,
       );
+      // The host owner dispatches a claimed outcome only after this commit.
+      const updateResult =
+        command.type === "updateRuns.finish"
+          ? claimUpdateResultInTransaction(db, record)
+          : undefined;
       assertCurrent("commit");
-      return { kind: "recorded", record };
+      return { kind: "recorded", record, ...(updateResult ? { updateResult } : {}) };
     }, options);
   } catch (cause) {
     if (entered || !isSqliteLockError(cause)) {

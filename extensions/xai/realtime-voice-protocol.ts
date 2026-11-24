@@ -3,7 +3,6 @@ import type {
   RealtimeVoiceAudioFormat,
   RealtimeVoiceBargeInOptions,
   RealtimeVoicePlaybackItem,
-  RealtimeVoiceSessionConnection,
   RealtimeVoiceToolResultOptions,
 } from "openclaw/plugin-sdk/realtime-voice";
 import {
@@ -18,8 +17,6 @@ import {
   XAI_REALTIME_DEFAULT_VAD_THRESHOLD,
   XAI_REALTIME_INPUT_TRANSCRIPTION_MODEL,
   XAI_REALTIME_MAX_PENDING_PLAYBACK_MARKS,
-  serializeXaiRealtimeToolResult,
-  type XaiRealtimeEvent,
   type XaiRealtimeSessionUpdate,
   type XaiRealtimeVoiceBridgeConfig,
 } from "./realtime-voice-config.js";
@@ -67,13 +64,9 @@ export abstract class XaiRealtimeVoiceProtocol {
 
   protected submitToolResultNow(
     callId: string,
-    result: unknown,
+    output: string,
     options?: RealtimeVoiceToolResultOptions,
   ): void {
-    if (options?.willContinue === true) {
-      return;
-    }
-    const output = serializeXaiRealtimeToolResult(result);
     this.sendEvent({
       type: "conversation.item.create",
       item: {
@@ -261,7 +254,7 @@ export abstract class XaiRealtimeVoiceProtocol {
       detail: `reason=${params.reason}`,
       itemId: params.itemId,
     });
-    this.submitToolResultNow(params.callId, { error: "Invalid tool arguments." });
+    this.submitToolResultNow(params.callId, '{"error":"Invalid tool arguments."}');
   }
 
   protected requestResponseCreate(): void {
@@ -320,8 +313,4 @@ export abstract class XaiRealtimeVoiceProtocol {
   }
 
   protected abstract resetInputTranscripts(): void;
-  protected abstract handleEvent(
-    event: XaiRealtimeEvent,
-    connection: RealtimeVoiceSessionConnection,
-  ): void;
 }

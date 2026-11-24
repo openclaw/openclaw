@@ -1,5 +1,6 @@
 /** Read-only discovery of Codex-owned local, curated, and remote plugin marketplaces. */
 import { asOptionalRecord as readRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { CODEX_PLUGIN_MARKETPLACE_NAME_PATTERN } from "./app-server/config-contracts.shared.js";
 import type { v2 } from "./app-server/protocol.js";
 
@@ -225,9 +226,11 @@ function boundedCatalogText(value: unknown): string {
   if (typeof value !== "string") {
     return "";
   }
-  return value
-    .replace(/\p{Cc}/gu, " ")
-    .replace(/\s+/g, " ")
-    .trim()
-    .slice(0, MAX_PLUGIN_METADATA_LENGTH);
+  return truncateUtf16Safe(
+    value
+      .replace(/\p{Cc}/gu, " ")
+      .replace(/\s+/g, " ")
+      .trim(),
+    MAX_PLUGIN_METADATA_LENGTH,
+  );
 }

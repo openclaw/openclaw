@@ -60,7 +60,7 @@ OpenClaw runtime code reads the current configuration schema only.
 We do not keep long-lived aliases or compatibility branches that silently accept old, renamed, or malformed config keys.
 
 When a config change makes existing user config invalid, the same change needs a doctor migration.
-`openclaw doctor --fix` should detect the old shape, explain it, back it up when needed, and rewrite it to the canonical format.
+`openclaw doctor --fix` should detect the old shape, explain it, back it up when needed, and rewrite it to the current format.
 Core-owned config and auth state are repaired in core doctor code; plugin-owned config is repaired by that plugin's doctor contract.
 
 ## Security
@@ -71,16 +71,16 @@ The goal is to stay powerful for real work while making risky paths explicit and
 A shared Gateway is for people who trust each other.
 Mutually untrusted users need separate Gateways, host or container isolation, and access controls.
 
-Canonical security policy and reporting:
+Security policy and reporting:
 
 - [`SECURITY.md`](SECURITY.md)
 
 We prioritize secure defaults, but also expose clear knobs for trusted high-power workflows.
 
 Privacy follows the same default rule.
-OpenClaw sends no usage analytics, tracking identifiers, or telemetry attribution to the project unless the operator turned that on themselves.
+OpenClaw sends no tracking identifiers to the project. Usage analytics and telemetry attribution require operator opt-in, except for the bounded update checks and update-outcome reports described below.
 This rule governs what leaves your install. It is not a rule about shared Gateways: when you join a team Gateway, the people you share it with see the work you do there, and features like Git co-author credit exist to attribute that work to you.
-The setup wizard offers optional anonymous feature statistics, with no selected by default; the daily update check reports version and platform and can be disabled.
+The setup wizard offers optional anonymous feature statistics, with no selected by default. Update checks and bounded terminal update-outcome reports are on by default under the existing update-request controls: `update.checkOnStart: false` or `OPENCLAW_NO_AUTO_UPDATE=1` disables both. Feature-statistics opt-out and `DO_NOT_TRACK` do not disable these update requests. Outcomes contain release versions and fixed platform, installation, timing-bucket, verification, and failure categories, never identifiers, raw logs, or diagnostic prose. An outcome payload is sent only after the configured receiver advertises support for isolated outcome storage.
 See [Usage telemetry and update checks](https://docs.openclaw.ai/gateway/telemetry).
 
 ## Plugins & Memory
@@ -96,7 +96,7 @@ Plugins, skills, channels, and apps carry no such tax, and we want that surface 
 When our contribution rules read as hostile to a feature, re-check the layer: usually they object to where it plugs in, not to the feature existing.
 
 Recurring demand defines interfaces.
-Once several independent PRs or requests wire in the same kind of capability, the right response is a contract, not a queue of merges: land the seam in core or the SDK, port the bundled implementation onto it, and let the remaining candidates ship as plugins against it.
+Once several independent PRs or requests wire in the same kind of capability, the right response is a contract, not a queue of merges: add the shared interface in core or the SDK, update the bundled implementation to use it, and let the remaining candidates ship as plugins against it.
 
 There are two broad plugin styles:
 

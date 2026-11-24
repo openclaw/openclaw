@@ -2,18 +2,20 @@ import Darwin
 import Foundation
 import OpenClawIPC
 
+/// Only emitted by connect, before credentials or request bytes are sent.
+struct MacControlConnectionRefused: Error {}
+
 struct MacControlClient {
     let options: MacControlOptions
+    let directory: URL
 
     func send(_ request: MacControlRequest) throws -> Data {
-        let directory = self.options.profile
-            .stateDirectoryURL(homeDirectory: FileManager.default.homeDirectoryForCurrentUser)
-        let socketURL = directory.appendingPathComponent(MacControlCredentials.socketFilename)
+        let socketURL = self.directory.appendingPathComponent(MacControlCredentials.socketFilename)
         let deadline = ContinuousClock.now + .milliseconds(self.options.timeoutMs)
         let fd = try self.reachableSocket(at: socketURL, deadline: deadline)
         defer { close(fd) }
         let token = try MacControlCredentials
-            .read(at: directory.appendingPathComponent(MacControlCredentials.tokenFilename))
+            .read(at: self.directory.appendingPathComponent(MacControlCredentials.tokenFilename))
         var request = request
         let remaining = ContinuousClock.now.duration(to: deadline).components
         request.deadline = Date().addingTimeInterval(
@@ -51,8 +53,14 @@ struct MacControlClient {
     }
 
     private func reachableSocket(at url: URL, deadline: ContinuousClock.Instant) throws -> Int32 {
-        if let fd = try? Self.connect(at: url, deadline: deadline) { return fd }
-        guard self.options.launch else { throw Self.unreachable() }
+        do {
+            return try Self.connect(at: url, deadline: deadline)
+        } catch {
+            if !self.options.launch {
+                if error is MacControlConnectionRefused { throw error }
+                throw Self.unreachable()
+            }
+        }
         try self.launchApp(deadline: deadline)
         while ContinuousClock.now < deadline {
             if let fd = try? Self.connect(at: url, deadline: deadline) { return fd }
@@ -99,13 +107,17 @@ struct MacControlClient {
                 }
             }
             if result != 0 {
-                guard errno == EINPROGRESS else { throw Self.unreachable() }
-                try Self.wait(fd, events: Int16(POLLOUT), deadline: deadline)
+                let connectionError = errno
+                if connectionError == ECONNREFUSED { throw MacControlConnectionRefused() }
+                guard connectionError == EINPROGRESS else { throw Self.unreachable() }
+                try Self.wait(fd, events: Int16(POLLOUT | POLLERR | POLLHUP), deadline: deadline)
                 var error: Int32 = 0
                 var size = socklen_t(MemoryLayout.size(ofValue: error))
-                guard getsockopt(fd, SOL_SOCKET, SO_ERROR, &error, &size) == 0, error == 0 else {
+                guard getsockopt(fd, SOL_SOCKET, SO_ERROR, &error, &size) == 0 else {
                     throw Self.unreachable()
                 }
+                if error == ECONNREFUSED { throw MacControlConnectionRefused() }
+                guard error == 0 else { throw Self.unreachable() }
             }
             var peerUID: uid_t = 0
             var peerGID: gid_t = 0
@@ -173,7 +185,7 @@ struct MacControlClient {
             message: "Timed out waiting for the app. The operation may still be running; check status before retrying.")
     }
 
-    private static func unreachable() -> MacControlError {
+    static func unreachable() -> MacControlError {
         MacControlError(
             code: "unreachable",
             message: """

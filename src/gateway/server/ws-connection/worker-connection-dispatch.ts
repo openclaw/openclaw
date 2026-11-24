@@ -14,6 +14,12 @@ import {
   validateWorkerLiveEventParams,
   validateWorkerTranscriptCommitParams,
 } from "../../../../packages/gateway-protocol/src/index.js";
+import { WORKER_GITHUB_REFRESH_PROTOCOL_FEATURE } from "../../../../packages/gateway-protocol/src/schema/worker-admission.js";
+import {
+  WORKER_EXEC_APPROVAL_METHOD,
+  WORKER_EXEC_APPROVAL_PROTOCOL_FEATURE,
+  validateWorkerExecApprovalParams,
+} from "../../../../packages/gateway-protocol/src/schema/worker-exec-approval.js";
 import {
   WORKER_GATEWAY_TOOLS_PROTOCOL_FEATURE,
   WORKER_GATEWAY_TOOL_METHODS,
@@ -27,6 +33,12 @@ import {
   validateWorkerInferenceCancelParams,
   validateWorkerInferenceStartParams,
 } from "../../../../packages/gateway-protocol/src/schema/worker-inference.js";
+import {
+  WORKER_TURN_ADMISSION_METHOD,
+  WORKER_TURN_ADMISSION_PROTOCOL_FEATURE,
+  validateWorkerTurnAdmissionParams,
+} from "../../../../packages/gateway-protocol/src/schema/worker-turn-admission.js";
+import { formatErrorMessage } from "../../../infra/errors.js";
 import type { WorkerConnectionIdentity } from "../../worker-environments/connection-identity.js";
 import type { createWorkerTurnRpc } from "../../worker-environments/worker-turn-rpc.js";
 import {
@@ -59,6 +71,9 @@ export type WorkerConnectionService = Pick<
       | "cancelGatewayTool"
       | "startInference"
       | "cancelInference"
+      | "admitTurn"
+      | "refreshGitHubBinding"
+      | "execApproval"
     >
   >;
 
@@ -137,6 +152,38 @@ export async function dispatchWorkerRequest(params: {
     ok: false as const,
     closeReason: "method-not-allowed" as const,
   });
+  if (params.request.method === WORKER_EXEC_APPROVAL_METHOD) {
+    const operation = service.execApproval;
+    try {
+      return await execute(
+        WORKER_EXEC_APPROVAL_PROTOCOL_FEATURE,
+        validateWorkerExecApprovalParams,
+        operation &&
+          ((request) => operation.call(service, params.identity, request, params.signal)),
+        "invalid-frame",
+        () => workerProtocolError("gateway-unavailable"),
+      );
+    } catch (error) {
+      params.respond(
+        false,
+        undefined,
+        workerProtocolError("gateway-unavailable", {
+          message: `Worker exec approval failed: ${formatErrorMessage(error)}`,
+        }),
+      );
+      return;
+    }
+  }
+  if (params.request.method === WORKER_TURN_ADMISSION_METHOD) {
+    const operation = service.admitTurn;
+    return execute(
+      WORKER_TURN_ADMISSION_PROTOCOL_FEATURE,
+      validateWorkerTurnAdmissionParams,
+      operation && ((request) => operation.call(service, params.identity, request)),
+      "invalid-frame",
+      () => workerProtocolError("gateway-unavailable"),
+    );
+  }
   if (params.request.method === WORKER_GATEWAY_TOOL_METHODS.invoke) {
     const operation = service.invokeGatewayTool;
     return execute(
@@ -220,10 +267,38 @@ export async function dispatchWorkerRequest(params: {
     reject("invalid-heartbeat");
     return;
   }
+  let github: WorkerHeartbeatResult["github"];
+  if (
+    params.request.params.githubGeneration !== undefined &&
+    params.identity.protocolFeatures.includes(WORKER_GITHUB_REFRESH_PROTOCOL_FEATURE) &&
+    service.refreshGitHubBinding
+  ) {
+    const refreshed = await service.refreshGitHubBinding(
+      params.identity,
+      params.request.params.githubGeneration,
+    );
+    if (!refreshed.ok) {
+      reject(refreshed.closeReason);
+      return;
+    }
+    const currentFailure = service.validateWorkerConnection(params.identity);
+    if (params.signal?.aborted || currentFailure) {
+      reject(currentFailure ?? "placement-mismatch");
+      return;
+    }
+    if (refreshed.result) {
+      refreshed.assertCurrent();
+    }
+    github = refreshed.result;
+  } else if (params.request.params.githubGeneration !== undefined) {
+    reject("invalid-heartbeat");
+    return;
+  }
   const result: WorkerHeartbeatResult = {
     receivedAtMs: Date.now(),
     status: "ok",
     ownerEpoch: params.identity.ownerEpoch,
+    ...(github ? { github } : {}),
   };
   params.respond(true, result);
 }

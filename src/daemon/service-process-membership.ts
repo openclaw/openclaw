@@ -11,6 +11,23 @@ type ResourceCoalition = { id: number; name?: string };
 const PROBE_TIMEOUT_MS = 2_000;
 declare const SEALED_RUNTIME_BUILD: boolean;
 
+export function resolveServiceProcessMembershipBlock(
+  membership: ServiceProcessMembership,
+  ancestryComplete: boolean,
+  platform: NodeJS.Platform = process.platform,
+) {
+  if (membership === "inside") {
+    return "inside-gateway-service";
+  }
+  if (membership === "unknown") {
+    return "service-membership-unverified";
+  }
+  // Darwin containment proves an external terminal even when a root-owned login is unreadable.
+  return !ancestryComplete && (platform !== "darwin" || membership !== "outside")
+    ? "service-ancestry-unverified"
+    : undefined;
+}
+
 function readNativeResourceCoalition(pid: number): ResourceCoalition | null | undefined {
   if (typeof SEALED_RUNTIME_BUILD === "boolean" && SEALED_RUNTIME_BUILD) {
     return undefined;
@@ -78,7 +95,7 @@ function readResourceCoalition(pid: number): ResourceCoalition | null | undefine
   }
   const headers = result.stdout.match(/^\s*resource coalition\s*=/gm);
   if (!headers) {
-    return /resource coalition/i.test(result.stdout) ? undefined : null;
+    return /resource coalition/i.test(result.stdout) ? undefined : readNativeResourceCoalition(pid);
   }
   const body = /^\s*resource coalition\s*=\s*\{([^{}]*)^\s*\}/m.exec(result.stdout)?.[1];
   if (headers.length !== 1 || !body) {
@@ -103,8 +120,11 @@ function readResourceCoalition(pid: number): ResourceCoalition | null | undefine
     : undefined;
 }
 
-function inspectLaunchdMembership(gatewayPid: number): ServiceProcessMembership {
-  const expected = new Set([process.pid, gatewayPid]);
+function inspectLaunchdMembership(
+  gatewayPid: number,
+  subjectPid = process.pid,
+): ServiceProcessMembership {
+  const expected = new Set([subjectPid, gatewayPid]);
   const result = spawnPsSync(
     ["-o", "pid=,pgid=,sess=", "-p", [...expected].join(",")],
     PROBE_TIMEOUT_MS,
@@ -125,11 +145,11 @@ function inspectLaunchdMembership(gatewayPid: number): ServiceProcessMembership 
   if (groups.size !== expected.size) {
     return "unknown";
   }
-  if (groups.get(process.pid) === groups.get(gatewayPid)) {
+  if (groups.get(subjectPid) === groups.get(gatewayPid)) {
     return "inside";
   }
   // Reparenting and setsid can remove ancestry/group evidence while launchd still owns the job.
-  const caller = readResourceCoalition(process.pid);
+  const caller = readResourceCoalition(subjectPid);
   const gateway = readResourceCoalition(gatewayPid);
   if (caller === undefined || gateway === undefined) {
     return "unknown";
@@ -146,6 +166,26 @@ function inspectLaunchdMembership(gatewayPid: number): ServiceProcessMembership 
     : caller.name === gateway.name
       ? "inside"
       : "outside";
+}
+
+/** Compare a listener with its launchd supervisor without trusting environment markers or argv. */
+export function inspectLaunchdProcessMembershipSync(
+  subjectPid: number,
+  managedPid: number,
+): ServiceProcessMembership {
+  if (
+    !Number.isSafeInteger(subjectPid) ||
+    subjectPid <= 0 ||
+    !Number.isSafeInteger(managedPid) ||
+    managedPid <= 0
+  ) {
+    return "unknown";
+  }
+  try {
+    return inspectLaunchdMembership(managedPid, subjectPid);
+  } catch {
+    return "unknown";
+  }
 }
 
 function readLinuxProcessGroupId(pid: number): number | undefined {

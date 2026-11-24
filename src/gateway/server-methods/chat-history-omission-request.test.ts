@@ -5,7 +5,7 @@ import type { WebSocket } from "ws";
 import { appendTranscriptMessageSync } from "../../config/sessions/session-accessor.js";
 import { onDiagnosticEvent, type DiagnosticEventPayload } from "../../infra/diagnostic-events.js";
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
-import { getMaxChatHistoryMessagesBytes } from "../server-constants.js";
+import { getMaxChatHistoryMessagesBytes } from "../chat-history-budget.js";
 import { installGatewayTestHooks, rpcReq, testState, writeSessionStore } from "../test-helpers.js";
 import { installConnectedControlUiServerSuite } from "../test-with-server.js";
 

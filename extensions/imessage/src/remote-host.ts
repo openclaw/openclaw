@@ -105,8 +105,8 @@ export async function resolveIMessageRemoteHost(params: {
   }
 
   const key = cacheKey(params.cliPath);
-  if (detectedRemoteHosts.has(key)) {
-    const cached = detectedRemoteHosts.get(key);
+  const cached = detectedRemoteHosts.get(key);
+  if (cached !== undefined) {
     if (cached === ambiguousSshWrapper) {
       throwAmbiguousSshWrapper();
     }
@@ -133,9 +133,6 @@ export async function resolveIMessageRemoteHost(params: {
     if (detected === null) {
       detectedRemoteHosts.set(key, ambiguousSshWrapper);
       throwAmbiguousSshWrapper();
-    }
-    if (detected) {
-      logVerbose(`imessage: detected remoteHost=${detected} from cliPath`);
     }
     detectedRemoteHosts.set(key, detected ?? null);
     return detected;

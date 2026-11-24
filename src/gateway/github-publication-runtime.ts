@@ -1,8 +1,10 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { isConstrainedProcessLowOnMemory } from "../infra/host-memory.js";
 import { githubPublicationReceipts } from "../state/github-publication-receipts.js";
 import { createGitHubPublicationWorkerScope } from "../state/github-publication-worker.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
+import { createGitHubPublicationRecoveryBackoff } from "./github-publication-recovery.js";
 import {
   listRepositoryGitHubPublicationsAsync,
   listSharedGitHubPublicationsAsync,
@@ -17,12 +19,18 @@ import type {
 
 export function createGitHubPublicationRuntime(params: {
   placements: WorkerSessionPlacementStore;
+  environments?: Parameters<typeof createGitHubPublicationCoordinator>[0]["environments"];
+  prepareRepositoryIntegration?: import("./repository-publication-integration.js").PrepareRepositoryPublicationIntegration;
   getCommittedRuntimeConfig: () => OpenClawConfig;
   loadSessionRuntime: Parameters<typeof reportGitHubPublicationTranscript>[0];
   warn: (message: string) => void;
 }) {
   const context = captureOpenClawStateWorkerContext();
   const scope = createGitHubPublicationWorkerScope(context);
+  const recovery = {
+    shared: createGitHubPublicationRecoveryBackoff(),
+    repository: createGitHubPublicationRecoveryBackoff(),
+  };
   const pendingRequests = new Set<string>();
   let pendingKnown = false;
   let reconcileNeeded = true;
@@ -70,10 +78,12 @@ export function createGitHubPublicationRuntime(params: {
     loadingUpdates = updates;
     pendingKnown = true;
     try {
-      const [shared, repository] = await Promise.all([
-        listSharedGitHubPublicationsAsync({ pending: true }),
-        listRepositoryGitHubPublicationsAsync({ ownerProfileId: null, pending: true }),
-      ]);
+      // Read serially so startup can reuse the same state-reader worker.
+      const shared = await listSharedGitHubPublicationsAsync({ pending: true });
+      const repository = await listRepositoryGitHubPublicationsAsync({
+        ownerProfileId: null,
+        pending: true,
+      });
       pendingRequests.clear();
       for (const row of shared) {
         pendingRequests.add(JSON.stringify(["shared", row.request_id]));
@@ -85,15 +95,19 @@ export function createGitHubPublicationRuntime(params: {
       for (const [key, pending] of updates) {
         updatePending(key, pending);
       }
+      // This invocation can skip empty recovery only until a receipt changes the loaded facts.
+      return (kind: "shared" | "repository") =>
+        (kind === "shared" ? shared : repository).length === 0 &&
+        updates.size === 0 &&
+        pendingKnown;
     } catch (error) {
       pendingKnown = false;
       throw error;
-    } finally {
-      loadingUpdates = undefined;
     }
   };
   const coordinator = createGitHubPublicationCoordinator({
     ...params,
+    recovery,
     assertCurrent: scope.assertCurrent,
     signal: scope.signal,
   });
@@ -126,63 +140,69 @@ export function createGitHubPublicationRuntime(params: {
   };
   const publishAcceptedWorkspace = async (claim: WorkerSessionTurnClaim) => {
     await ready;
-    const placement = await params.placements.getAsync(claim.sessionId);
-    if (!placement) {
-      params.warn(`GitHub publication deferred because placement ${claim.sessionId} disappeared.`);
-      return;
-    }
-    let results;
-    try {
-      results = await coordinator.processClaim(claim);
-    } catch (error) {
-      params.warn(
-        `GitHub publication deferred for ${claim.sessionId}: ${formatErrorMessage(error)}`,
-      );
-      throw error;
-    }
-    for (const result of results) {
-      if (result.status !== "published" && result.status !== "failed") {
-        continue;
-      }
-      await reportDeferred({
-        sessionId: placement.sessionId,
-        sessionKey: placement.sessionKey,
-        agentId: placement.agentId,
-        result,
-      });
-    }
+    // The accepted snapshot is durable before this handoff. Release its claim binding
+    // through the existing writer; the lifecycle sweep publishes after workspace
+    // settlement, including after a restart, without holding settlement on network I/O.
+    await coordinator.deferClaimPreparationAsync(claim);
+    reconcileNeeded = true;
   };
-  const reconcilePublications = async () => {
-    await ready;
-    if (!pendingKnown) {
-      await loadPendingRequests();
-    }
-    if (!reconcileNeeded && pendingRequests.size === 0) {
+  const reconcilePublications = async (isStopping?: () => boolean) => {
+    const isPaused = () => isStopping?.() || isConstrainedProcessLowOnMemory();
+    if (isPaused()) {
       return;
     }
-    reconcileNeeded = false;
-    try {
-      await coordinator.deferOrphanedRequestsAsync();
-      await coordinator.resumeSessionRequests();
-    } catch (error) {
-      reconcileNeeded = true;
-      params.warn(`GitHub publication recovery deferred: ${formatErrorMessage(error)}`);
+    await ready;
+    if (isPaused()) {
+      return;
     }
     try {
-      for (const publication of await coordinator.listUnreportedResultsAsync()) {
-        if (!(await reportDeferred(publication))) {
-          reconcileNeeded = true;
-        }
+      const isPendingEmpty = !pendingKnown ? await loadPendingRequests() : undefined;
+      if (isPaused()) {
+        return;
       }
-    } catch (error) {
-      reconcileNeeded = true;
-      throw error;
+      if (!reconcileNeeded && pendingRequests.size === 0) {
+        recovery.shared.clear();
+        recovery.repository.clear();
+        return;
+      }
+      reconcileNeeded = false;
+      try {
+        await coordinator.deferOrphanedRequestsAsync(isPendingEmpty);
+        if (!isPaused()) {
+          await coordinator.resumeSessionRequests(isPaused, isPendingEmpty);
+        }
+      } catch (error) {
+        reconcileNeeded = true;
+        params.warn(`GitHub publication recovery deferred: ${formatErrorMessage(error)}`);
+      }
+      if (isPaused()) {
+        reconcileNeeded = true;
+        return;
+      }
+      try {
+        for (const publication of await coordinator.listUnreportedResultsAsync()) {
+          if (isPaused()) {
+            reconcileNeeded = true;
+            break;
+          }
+          if (!(await reportDeferred(publication))) {
+            reconcileNeeded = true;
+          }
+        }
+      } catch (error) {
+        reconcileNeeded = true;
+        throw error;
+      }
+    } finally {
+      loadingUpdates = undefined;
     }
   };
   return {
     ready,
     close: () => {
       stopFacts();
+      recovery.shared.clear();
+      recovery.repository.clear();
       return scope.close();
     },
     coordinator,

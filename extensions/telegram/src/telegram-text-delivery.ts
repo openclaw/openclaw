@@ -1,3 +1,4 @@
+import type { MessageEntity } from "grammy/types";
 import type { MarkdownTableMode } from "openclaw/plugin-sdk/config-contracts";
 import { chunkByParagraph, type ChunkMode } from "openclaw/plugin-sdk/reply-chunking";
 import {
@@ -8,9 +9,7 @@ import {
   telegramHtmlToPlainTextFallback,
 } from "./format.js";
 import type { TelegramRichBlocksDegradationReason } from "./rich-block-model.js";
-import { splitTelegramRichBlocks } from "./rich-block-split.js";
 import {
-  buildTelegramRichBlocksPlan,
   buildTelegramRichMarkdownPlan,
   splitTelegramRichMessageTextChunks,
   type TelegramInputRichMessage,
@@ -27,6 +26,8 @@ export type TelegramTextDeliveryPage = {
   sourceTextMode: "html" | "markdown";
   fullSourceText?: string;
   htmlText?: string;
+  /** A code-only page must remain inert even when formatted delivery is rejected. */
+  literalOnly?: true;
   richMessage?: TelegramInputRichMessage;
   degradationReasons?: readonly TelegramRichBlocksDegradationReason[];
 };
@@ -56,7 +57,17 @@ function htmlPage(
   htmlText: string,
   plainText = telegramHtmlToPlainTextFallback(htmlText),
 ): TelegramTextDeliveryPage {
-  return { htmlText, plainText, sourceText: htmlText, sourceTextMode: "html" };
+  const literalOnly =
+    /^<pre><code(?: class="language-[^"]*")?>[^<]*<\/code><\/pre>$|^<(pre|code)>[^<]*<\/\1>$/u.test(
+      htmlText,
+    );
+  return {
+    htmlText,
+    plainText,
+    sourceText: htmlText,
+    sourceTextMode: "html",
+    ...(literalOnly ? { literalOnly: true } : {}),
+  };
 }
 
 export function planTelegramTextDeliveryPages(
@@ -64,48 +75,49 @@ export function planTelegramTextDeliveryPages(
 ): TelegramTextDeliveryPage[] {
   const maxChars = Math.max(1, Math.floor(params.maxChars));
   if (params.richMessages && params.textMode !== "html" && params.textMode !== "plain") {
-    if (params.richMessage) {
-      const skipEntityDetection = params.richMessage.skip_entity_detection === true;
-      const pages = splitTelegramRichBlocks(params.richMessage.blocks, { textLimit: maxChars }).map(
-        (blocks, index) => {
-          const plan = buildTelegramRichBlocksPlan(blocks, { skipEntityDetection });
-          const page = plainPage(plan.plainText);
-          page.richMessage = plan.richMessage;
-          page.degradationReasons = index === 0 ? params.degradationReasons : undefined;
-          return page;
-        },
-      );
-      if (pages.length === 0 && params.text.trim()) {
-        return [
-          {
-            ...plainPage(params.text),
-            richMessage: {
-              blocks: [{ type: "paragraph", text: params.text }],
-              ...(skipEntityDetection ? { skip_entity_detection: true } : {}),
-            },
-            ...(params.degradationReasons?.length
-              ? { degradationReasons: params.degradationReasons }
-              : {}),
-          },
-        ];
-      }
-      return pages;
-    }
-    const richPlan = buildTelegramRichMarkdownPlan(params.text, {
-      tableMode: params.tableMode,
-      skipEntityDetection: params.skipEntityDetection,
-    });
-    if (richPlan.richMessage.blocks.length === 0 && params.text.trim()) {
+    const richPlan = params.richMessage
+      ? {
+          richMessage: params.richMessage,
+          plainText: params.text,
+          degradationReasons: params.degradationReasons ?? [],
+        }
+      : buildTelegramRichMarkdownPlan(params.text, {
+          tableMode: params.tableMode,
+          skipEntityDetection: params.skipEntityDetection,
+        });
+    if (!params.richMessage && richPlan.richMessage.blocks.length === 0 && params.text.trim()) {
       return [plainPage(params.text)];
     }
-    return splitTelegramRichMessageTextChunks({ plan: richPlan, textLimit: maxChars }).map(
-      (chunk) => {
+    const pages = splitTelegramRichMessageTextChunks({ plan: richPlan, textLimit: maxChars }).map(
+      (chunk, index) => {
         const page = plainPage(chunk.plainText);
         page.richMessage = chunk.richMessage;
-        page.degradationReasons = chunk.degradationReasons;
+        if (chunk.richMessage.blocks.every((block) => block.type === "pre")) {
+          page.literalOnly = true;
+        }
+        page.degradationReasons = params.richMessage
+          ? index === 0
+            ? params.degradationReasons
+            : undefined
+          : chunk.degradationReasons;
         return page;
       },
     );
+    if (params.richMessage && pages.length === 0 && params.text.trim()) {
+      return [
+        {
+          ...plainPage(params.text),
+          richMessage: {
+            blocks: [{ type: "paragraph", text: params.text }],
+            ...(params.richMessage.skip_entity_detection ? { skip_entity_detection: true } : {}),
+          },
+          ...(params.degradationReasons?.length
+            ? { degradationReasons: params.degradationReasons }
+            : {}),
+        },
+      ];
+    }
+    return pages;
   }
   if (params.textMode === "plain") {
     return splitTelegramPlainTextChunks(params.text, maxChars)
@@ -155,6 +167,7 @@ type TelegramTextPageSender<TPlain, THtml, TRich> = {
       text: string,
       fallback?: { index: number; count: number },
       label?: string,
+      entities?: MessageEntity[],
     ) => Promise<TPlain>;
     sendHtml: (html: string) => Promise<THtml>;
     sendRich: (richMessage: TelegramInputRichMessage) => Promise<TRich>;
@@ -210,11 +223,15 @@ export async function* sendTelegramTextPageParts<TPlain, THtml, TRich>(
         text,
         page.richMessage ? { index, count: delivery.chunks.length } : undefined,
         delivery.label,
+        page.literalOnly ? [{ type: "pre", offset: 0, length: text.length }] : undefined,
       ),
       page: {
         plainText: text,
-        sourceText: escapeTelegramHtml(text),
+        sourceText: page.literalOnly
+          ? `<pre><code>${escapeTelegramHtml(text)}</code></pre>`
+          : escapeTelegramHtml(text),
         sourceTextMode: "html",
+        ...(page.literalOnly ? { literalOnly: true } : {}),
       },
     };
   }

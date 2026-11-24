@@ -22,22 +22,17 @@ export function coerceOpenAiCompatibleVideoText(
   if (!message) {
     return null;
   }
-  if (typeof message.content === "string" && message.content.trim()) {
-    return message.content.trim();
-  }
-  if (Array.isArray(message.content)) {
-    const text = message.content
-      .map((part) => part.text?.trim() ?? "")
-      .filter(Boolean)
-      .join("\n");
-    if (text) {
-      return text;
-    }
-  }
-  if (typeof message.reasoning_content === "string" && message.reasoning_content.trim()) {
-    return message.reasoning_content.trim();
-  }
-  return null;
+  const text = Array.isArray(message.content)
+    ? message.content
+        .map((part) => part.text?.trim() ?? "")
+        .filter(Boolean)
+        .join("\n")
+    : message.content;
+  return (
+    (typeof text === "string" && text.trim()) ||
+    (typeof message.reasoning_content === "string" && message.reasoning_content.trim()) ||
+    null
+  );
 }
 
 export function buildOpenAiCompatibleVideoRequestBody(params: {

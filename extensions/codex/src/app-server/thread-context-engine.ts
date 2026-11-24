@@ -9,11 +9,15 @@ import type {
 export type CodexContextEngineThreadBootstrapProjection = Pick<
   CodexAppServerContextEngineProjectionBinding,
   "mode" | "epoch" | "fingerprint"
->;
+> & {
+  /** Final selection identity; the ordinary fingerprint admits the previous native prefix. */
+  deliveredFingerprint?: string;
+};
 
 export function buildContextEngineBinding(
   params: AgentHarnessSessionRuntimeParamsV1,
   projection?: CodexContextEngineThreadBootstrapProjection,
+  acknowledged = false,
 ): CodexAppServerContextEngineBinding | undefined {
   const contextEngine = isActiveHarnessContextEngine(params.contextEngine)
     ? params.contextEngine
@@ -22,6 +26,9 @@ export function buildContextEngineBinding(
   if (!contextEngine || !engineId) {
     return undefined;
   }
+  const configuredContextBudget = params.authoredContextTokenCap
+    ? Math.min(params.authoredContextTokenCap, params.contextTokenBudget ?? Infinity)
+    : undefined;
   return {
     schemaVersion: 1,
     engineId,
@@ -32,9 +39,16 @@ export function buildContextEngineBinding(
       ownsCompaction: contextEngine.info.ownsCompaction === true,
       turnMaintenanceMode: contextEngine.info.turnMaintenanceMode,
       citationsMode: params.config?.memory?.citations,
-      contextTokenBudget: params.contextTokenBudget,
+      contextTokenBudget: configuredContextBudget ?? params.contextTokenBudget,
+      ...(configuredContextBudget
+        ? {
+            historyCarrier: "thread/inject_items",
+            modelProvider: params.provider,
+            model: params.modelId,
+          }
+        : {}),
       projectionMaxChars: resolveCodexContextEngineProjectionMaxChars({
-        contextTokenBudget: params.contextTokenBudget,
+        contextTokenBudget: configuredContextBudget ?? params.contextTokenBudget,
       }),
     }),
     projection: projection
@@ -42,7 +56,8 @@ export function buildContextEngineBinding(
           schemaVersion: 1,
           mode: "thread_bootstrap",
           epoch: projection.epoch,
-          fingerprint: projection.fingerprint,
+          fingerprint:
+            (acknowledged ? projection.deliveredFingerprint : undefined) ?? projection.fingerprint,
         }
       : undefined,
   };

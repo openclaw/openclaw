@@ -303,10 +303,13 @@ jobs:
             exit 1
           fi
           if ! release_manifest_run_json="$(jq -ce '
+            (if .recovery != null then .recovery.producer else . end) as $producer |
             if .workflowName == "Full Release Validation" and
-              (.runId | type == "string" and test("^[1-9][0-9]*$")) and
-              (.runAttempt | type == "string" and test("^[1-9][0-9]*$"))
-            then {id: .runId, runAttempt: .runAttempt}
+              (.recovery != null or ($producer.runId | type) == "string") and
+              (.recovery != null or ($producer.runAttempt | type) == "string") and
+              ($producer.runId | tostring | test("^[1-9][0-9]*$")) and
+              ($producer.runAttempt | tostring | test("^[1-9][0-9]*$"))
+            then {id: ($producer.runId | tostring), runAttempt: ($producer.runAttempt | tostring)}
             else empty
             end
           ' "$release_manifest_path")"; then
@@ -446,13 +449,14 @@ jobs:
         uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
 
       - name: Setup supported Node runtime
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: "24.21.0"
+          node-version: "24.22.1"
           package-manager-cache: false
 
       - name: Verify release workflow evidence
         env:
+          CLOSEOUT_TOOLING_SHA: ${{ github.workflow_sha }}
           RELEASE_TAG: ${{ needs.resolve.outputs.tag }}
           GH_TOKEN: ${{ github.token }}
           EVIDENCE_TAG: ${{ needs.resolve.outputs.evidence_tag }}
@@ -465,26 +469,11 @@ jobs:
           . "$RUNNER_TEMP/github-api-backoff.sh"
           gh_with_retry api "repos/${GITHUB_REPOSITORY}/actions/runs/${FULL_RELEASE_VALIDATION_RUN_ID}/attempts/${FULL_RELEASE_VALIDATION_RUN_ATTEMPT}" \
             > "$RUNNER_TEMP/full-release-validation-run.json"
-          node --input-type=module - "$RUNNER_TEMP/full-release-validation-run.json" <<'NODE'
-          import { readFileSync } from "node:fs";
-          const run = JSON.parse(readFileSync(process.argv[2], "utf8"));
-          for (const [key, expected] of [
-            ["name", "Full Release Validation"],
-            ["event", "workflow_dispatch"],
-            ["status", "completed"],
-            ["conclusion", "success"],
-          ]) {
-            if (run[key] !== expected) {
-              throw new Error(`Full Release Validation must have ${key}=${expected}, got ${run[key] ?? "<missing>"}.`);
-            }
-          }
-          if (String(run.run_attempt ?? "") !== process.env.FULL_RELEASE_VALIDATION_RUN_ATTEMPT) {
-            throw new Error(`Full Release Validation run attempt mismatch: expected ${process.env.FULL_RELEASE_VALIDATION_RUN_ATTEMPT}, got ${run.run_attempt ?? "<missing>"}.`);
-          }
-          NODE
+          publish_workflow_path="$(gh_with_retry api "repos/${GITHUB_REPOSITORY}/actions/runs/${RELEASE_PUBLISH_RUN_ID}" --jq .path)"
           gh_with_retry run view "$RELEASE_PUBLISH_RUN_ID" --repo "$GITHUB_REPOSITORY" \
-            --json workflowName,event,status,conclusion,headSha,jobs \
-            > "$RUNNER_TEMP/release-publish-run.json"
+            --json event,status,conclusion,headSha,jobs | \
+            jq --arg path "$publish_workflow_path" '. + {path: $path}' \
+              > "$RUNNER_TEMP/release-publish-run.json"
 
           manifest_dir="$RUNNER_TEMP/full-release-validation-manifest"
           rm -rf "$manifest_dir"
@@ -502,14 +491,50 @@ jobs:
             --arg tag_sha "$tag_sha" \
             --arg run_id "$FULL_RELEASE_VALIDATION_RUN_ID" \
             --arg run_attempt "$FULL_RELEASE_VALIDATION_RUN_ATTEMPT" '
+            (if .recovery != null then .recovery.producer else . end) as $producer |
             .workflowName == "Full Release Validation" and
-            .runId == $run_id and
-            .runAttempt == $run_attempt and
+            (if .recovery != null then ($producer.runId | tostring) else $producer.runId end) == $run_id and
+            (if .recovery != null then ($producer.runAttempt | tostring) else $producer.runAttempt end) == $run_attempt and
             .targetSha == $tag_sha
           ' "$manifest_dir/$manifest_asset" >/dev/null || {
             echo "Full Release Validation manifest does not contain the required stable release controls." >&2
             exit 1
           }
+          SOURCE_SHA="$tag_sha" node --input-type=module - "$RUNNER_TEMP/full-release-validation-run.json" "$manifest_dir/$manifest_asset" <<'NODE'
+          import { readFileSync } from "node:fs";
+          import { createReleaseEvidenceClient, validateReleaseRunEvidence } from "./.closeout-tooling/scripts/release-ci-summary.mjs";
+          const manifest = JSON.parse(readFileSync(process.argv[3], "utf8"));
+          const run = JSON.parse(readFileSync(process.argv[2], "utf8"));
+          const recovery = manifest.receiptRecovery ?? manifest.recovery;
+          for (const [key, expected] of [
+            ...(!recovery ? [["name", "Full Release Validation"]] : []),
+            ["event", "workflow_dispatch"],
+            ["status", "completed"],
+            ["conclusion", "success"],
+          ]) {
+            if (run[key] !== expected) {
+              throw new Error(`Full Release Validation must have ${key}=${expected}, got ${run[key] ?? "<missing>"}.`);
+            }
+          }
+          if (String(run.run_attempt ?? "") !== process.env.FULL_RELEASE_VALIDATION_RUN_ATTEMPT) {
+            throw new Error(`Full Release Validation run attempt mismatch: expected ${process.env.FULL_RELEASE_VALIDATION_RUN_ATTEMPT}, got ${run.run_attempt ?? "<missing>"}.`);
+          }
+          if (recovery) {
+            // Recovery is a separate authenticated producer, never a renamed FRV.
+            // The shared owner binds this published manifest to its exact artifact,
+            // original C/Q receipts, successful seal, and current operator authority.
+            const evidence = await validateReleaseRunEvidence({
+              repository: process.env.GITHUB_REPOSITORY,
+              runId: process.env.FULL_RELEASE_VALIDATION_RUN_ID,
+              manifestPath: process.argv[3],
+              expectedTargetSha: process.env.SOURCE_SHA,
+              verifierSourceSha: process.env.CLOSEOUT_TOOLING_SHA,
+            }, createReleaseEvidenceClient(process.env.GITHUB_REPOSITORY));
+            if (String(evidence.current.runAttempt) !== process.env.FULL_RELEASE_VALIDATION_RUN_ATTEMPT) {
+              throw new Error("Recovery current attempt differs from published evidence.");
+            }
+          }
+          NODE
           node .closeout-tooling/scripts/lib/release-publish-gates.mts \
             --consumer stable-closeout --manifest "$manifest_dir/$manifest_asset"
 
@@ -525,7 +550,7 @@ jobs:
           import { basename } from "node:path";
           const run = JSON.parse(readFileSync(process.argv[2], "utf8"));
           for (const [key, expected] of [
-            ["workflowName", "OpenClaw Release Publish"],
+            ["path", ".github/workflows/openclaw-release-publish.yml"],
             ["event", "workflow_dispatch"],
             ["status", "completed"],
           ]) {
@@ -723,7 +748,7 @@ jobs:
             "openclaw-${release_version}-stable-main-closeout.json.sha256"
 
       - name: Upload closeout workflow evidence
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: openclaw-stable-main-closeout-${{ needs.resolve.outputs.tag }}
           path: ${{ runner.temp }}/openclaw-stable-main-closeout

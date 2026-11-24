@@ -22,8 +22,6 @@ const GOOGLECHAT_MEDIA_MAX_TIMEOUT_MS = 15 * 60_000;
 const GOOGLECHAT_RESPONSE_READ_IDLE_TIMEOUT_MS = 30_000;
 const GOOGLECHAT_JSON_RESPONSE_MAX_BYTES = 16 * 1024 * 1024;
 const GOOGLECHAT_ERROR_BODY_MAX_BYTES = 16 * 1024;
-const GOOGLE_CHAT_DEFAULT_MEDIA_MAX_MB = 20;
-const GOOGLE_CHAT_MEDIA_RESPONSE_MAX_BYTES = GOOGLE_CHAT_DEFAULT_MEDIA_MAX_MB * 1024 * 1024;
 
 type GoogleChatRequestHooks = Pick<
   ChannelMessageActionContext,
@@ -40,10 +38,7 @@ export class GoogleChatApiError extends Error {
   }
 }
 
-function resolveGoogleChatMediaTimeoutMs(maxBytes?: number): number {
-  if (!maxBytes) {
-    return GOOGLECHAT_MEDIA_MAX_TIMEOUT_MS;
-  }
+function resolveGoogleChatMediaTimeoutMs(maxBytes: number): number {
   const transferMs = Math.ceil((maxBytes / GOOGLECHAT_MEDIA_MIN_BYTES_PER_SECOND) * 1000);
   return Math.min(GOOGLECHAT_MEDIA_TIMEOUT_GRACE_MS + transferMs, GOOGLECHAT_MEDIA_MAX_TIMEOUT_MS);
 }
@@ -154,9 +149,9 @@ async function fetchJson<T>(
 export async function downloadGoogleChatMedia(params: {
   account: ResolvedGoogleChatAccount;
   resourceName: string;
-  maxBytes?: number;
+  maxBytes: number;
 }): Promise<{ buffer: Buffer; contentType?: string }> {
-  const { account, resourceName, maxBytes: requestedMaxBytes } = params;
+  const { account, resourceName, maxBytes } = params;
   const url = `${CHAT_API_BASE}/media/${resourceName}?alt=media`;
   return await withGoogleChatResponse({
     account,
@@ -164,9 +159,8 @@ export async function downloadGoogleChatMedia(params: {
     auditContext: "googlechat.api.buffer",
     // Media gets transfer time proportional to its accepted size, while a silent
     // response body is still bounded independently below.
-    timeoutMs: resolveGoogleChatMediaTimeoutMs(requestedMaxBytes),
+    timeoutMs: resolveGoogleChatMediaTimeoutMs(maxBytes),
     handleResponse: async (res) => {
-      const maxBytes = requestedMaxBytes ?? GOOGLE_CHAT_MEDIA_RESPONSE_MAX_BYTES;
       const lengthHeader = res.headers.get("content-length");
       if (lengthHeader) {
         const length = parseMediaContentLength(lengthHeader);
@@ -292,10 +286,14 @@ export async function findGoogleChatDirectMessage(params: {
 export async function getGoogleChatSpace(params: {
   account: ResolvedGoogleChatAccount;
   spaceName: string;
+  assertDirectAdapterHandoff?: () => void;
 }): Promise<GoogleChatSpace> {
-  return await fetchJson<GoogleChatSpace>(params.account, `${CHAT_API_BASE}/${params.spaceName}`, {
-    method: "GET",
-  });
+  return await fetchJson<GoogleChatSpace>(
+    params.account,
+    `${CHAT_API_BASE}/${params.spaceName}`,
+    { method: "GET" },
+    { assertDirectAdapterHandoff: params.assertDirectAdapterHandoff },
+  );
 }
 
 export async function probeGoogleChat(account: ResolvedGoogleChatAccount): Promise<{

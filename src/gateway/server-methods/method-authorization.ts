@@ -4,6 +4,7 @@ import {
   missingScopeErrorShape,
   type ErrorShape,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { operatorScopeSatisfied } from "../../shared/operator-scope-compat.js";
 import {
   resolveSessionMethodScope,
   type SessionOperatorScope,
@@ -14,61 +15,33 @@ import {
   ADMIN_SCOPE,
   authorizeOperatorScopesForMethod,
   authorizeOperatorScopesForRequiredScope,
+  resolveAgentRuntimeCronScope,
   resolveLeastPrivilegeOperatorScopesForMethod,
 } from "../method-scopes.js";
 import type { GatewayMethodRegistryView } from "../methods/descriptor.js";
+import { isHostPluginApprovalCall } from "../operator-approval-authorization.js";
 import {
   authorizeCurrentOperatorRoleScopes,
   resolveGatewayOperatorRoleActor,
 } from "../operator-role-policy.js";
-import { isOperatorScope } from "../operator-scopes.js";
+import { APPROVALS_SCOPE, isOperatorScope } from "../operator-scopes.js";
+import {
+  isPublicationTransportCurrent,
+  isPublicationTransportEnabled,
+  isPublicationTransportMethod,
+  isPublicationTransportScope,
+} from "../publication-reader.js";
 import { isRoleAuthorizedForMethod, parseGatewayRole } from "../role-policy.js";
+import { isDirectCronOwnerClient, isHumanCronMutation } from "./cron-human-owner.js";
 import type { GatewayRequestContext, GatewayRequestOptions } from "./shared-types.js";
 
-export function authorizeGatewayMethod(
+/** Resolve the grant's dispatch ceiling without rechecking source or role liveness. */
+function authorizeGatewayMethodScopes(
   method: string,
-  client: GatewayRequestOptions["client"],
+  scopes: readonly string[],
   params: unknown,
   methodRegistry: GatewayMethodRegistryView,
-  context: GatewayRequestContext,
-): { error: ErrorShape | null; sessionScope?: SessionOperatorScope } {
-  // Pre-connect and health requests are allowed through; role/scope checks require the
-  // authenticated connect metadata established by the gateway handshake.
-  if (!client?.connect || method === "health") {
-    return { error: null };
-  }
-  const roleRaw = client.connect.role ?? "operator";
-  const role = parseGatewayRole(roleRaw);
-  if (!role) {
-    return { error: errorShape(ErrorCodes.INVALID_REQUEST, `unauthorized role: ${roleRaw}`) };
-  }
-  const scopes = client.connect.scopes ?? [];
-  if (!isRoleAuthorizedForMethod(role, method)) {
-    return { error: errorShape(ErrorCodes.INVALID_REQUEST, `unauthorized role: ${role}`) };
-  }
-  if (role === "node") {
-    return { error: null };
-  }
-  if (client.invalidated) {
-    return { error: errorShape(ErrorCodes.FORBIDDEN, "Gateway requester authority changed") };
-  }
-  if (resolveGatewayOperatorRoleActor(client)?.kind === "operator") {
-    const roleError = authorizeCurrentOperatorRoleScopes(
-      client,
-      (context.getCommittedRuntimeConfig ?? context.getRuntimeConfig)(),
-    );
-    if (roleError) {
-      return { error: roleError };
-    }
-  }
-  if (method === "device.scopes.requestUpgrade" || method === "device.scopes.waitUpgrade") {
-    // Scope recovery must remain reachable from a paired operator whose grant is empty;
-    // the handlers bind both calls to the connection's exact device identity.
-    return { error: null };
-  }
-  if (scopes.includes(ADMIN_SCOPE)) {
-    return { error: null };
-  }
+) {
   const registeredScope = methodRegistry.getScope(method);
   let scopeAuth = isOperatorScope(registeredScope)
     ? authorizeOperatorScopesForRequiredScope(
@@ -88,7 +61,93 @@ export function authorizeGatewayMethod(
       method,
     );
   }
+  return scopeAuth;
+}
+
+export function authorizeGatewayMethod(
+  method: string,
+  client: GatewayRequestOptions["client"],
+  params: unknown,
+  methodRegistry: GatewayMethodRegistryView,
+  context: GatewayRequestContext,
+): { error: ErrorShape | null; sessionScope?: SessionOperatorScope } {
+  if (
+    client?.internal?.publicationTransport ||
+    client?.connect.scopes?.some(isPublicationTransportScope)
+  ) {
+    const admission = client.internal?.publicationTransport;
+    const allowed =
+      isPublicationTransportCurrent(admission) &&
+      isPublicationTransportEnabled(admission.scope) &&
+      !client.invalidated &&
+      client.isDeviceTokenAuth === true &&
+      client.connect.role === "operator" &&
+      client.connect.scopes?.length === 1 &&
+      client.connect.scopes[0] === admission.scope &&
+      client.connect.device?.id === admission.deviceId &&
+      client.internal?.operatorDeviceTokenIdentity?.key === admission.key &&
+      !client.internal?.syntheticClient &&
+      !client.authenticatedUserProfile &&
+      !client.internal?.operatorRoleActor &&
+      isPublicationTransportMethod(methodRegistry, method, admission.scope);
+    return {
+      error: allowed
+        ? null
+        : errorShape(ErrorCodes.FORBIDDEN, "publication transport method denied"),
+    };
+  }
+  // Pre-connect and health requests are allowed through; role/scope checks require the
+  // authenticated connect metadata established by the gateway handshake.
+  if (!client?.connect || method === "health") {
+    return { error: null };
+  }
+  const roleRaw = client.connect.role ?? "operator";
+  const role = parseGatewayRole(roleRaw);
+  if (!role) {
+    return { error: errorShape(ErrorCodes.INVALID_REQUEST, `unauthorized role: ${roleRaw}`) };
+  }
+  const scopes = client.connect.scopes ?? [];
+  if (!isRoleAuthorizedForMethod(role, method)) {
+    return { error: errorShape(ErrorCodes.INVALID_REQUEST, `unauthorized role: ${role}`) };
+  }
+  if (role === "node") {
+    return { error: null };
+  }
+  if (client.invalidated) {
+    return {
+      error: errorShape(
+        ErrorCodes.FORBIDDEN,
+        "This connection lost access. Reconnect and try again.",
+      ),
+    };
+  }
+  if (resolveGatewayOperatorRoleActor(client)?.kind === "operator") {
+    const roleError = authorizeCurrentOperatorRoleScopes(
+      client,
+      (context.getCommittedRuntimeConfig ?? context.getRuntimeConfig)(),
+    );
+    if (roleError) {
+      return { error: roleError };
+    }
+  }
+  if (method === "device.scopes.requestUpgrade" || method === "device.scopes.waitUpgrade") {
+    // Scope recovery must remain reachable from a paired operator whose grant is empty;
+    // the handlers bind both calls to the connection's exact device identity.
+    return { error: null };
+  }
+  if (scopes.includes(ADMIN_SCOPE)) {
+    return { error: null };
+  }
+  const registeredScope = methodRegistry.getScope(method);
+  if (registeredScope === APPROVALS_SCOPE && isHostPluginApprovalCall(method, client)) {
+    return { error: null };
+  }
+  const scopeAuth = authorizeGatewayMethodScopes(method, scopes, params, methodRegistry);
   if (!scopeAuth.allowed) {
+    // Handlers recheck the stored human owner at the mutation commit boundary.
+    if (isHumanCronMutation(method) && isDirectCronOwnerClient(client)) {
+      return { error: null };
+    }
     // A configured channel owner's automation management runs without operator.admin; its
     // one-use grant, bound to this method and run, is the admitted authority instead.
     const runtimeIdentity = client.internal?.agentRuntimeIdentity;
@@ -96,6 +155,12 @@ export function authorizeGatewayMethod(
       runtimeIdentity?.cronManagementGrant &&
       holdsCronManagementGrant(runtimeIdentity.cronManagementGrant, runtimeIdentity, method)
     ) {
+      return { error: null };
+    }
+    // Only an authenticated agent runtime supplies the conversation/account boundary
+    // enforced by the cron handlers. Other global scheduler mutations remain admin-only.
+    const cronScope = runtimeIdentity && resolveAgentRuntimeCronScope(method);
+    if (cronScope && operatorScopeSatisfied(cronScope, scopes)) {
       return { error: null };
     }
     const resolvedRequiredScopes = isOperatorScope(registeredScope)

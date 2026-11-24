@@ -278,7 +278,7 @@ export function createChildOwner(params: {
                   "Update process can be bound only once.",
                 );
               }
-              const assigned = store.bindUpdateChildren(children, pid, argv);
+              const assigned = store.bindUpdateChildren(children, store.processIdentity(pid, argv));
               if (!assigned) {
                 throw new UpdateCommandRecoveryPendingError("Update process binding failed.");
               }

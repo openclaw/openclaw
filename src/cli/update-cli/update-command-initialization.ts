@@ -1,16 +1,16 @@
 import fs from "node:fs/promises";
 import type { LegacyConfigUpdatePlan } from "../../commands/doctor/legacy-config-repair.js";
 import { acquireGatewayStateOwner } from "../../infra/gateway-state-owner.js";
+import { compareSemverStrings } from "../../infra/npm-registry-spec.js";
 import { hasNodeErrorCode } from "../../infra/path-guards.js";
 import { SQLITE_SIDECAR_SUFFIXES } from "../../infra/sqlite-files.js";
 import type { UpdateCandidateAdmissionResult } from "../../infra/update-candidate-admission.js";
-import { compareSemverStrings } from "../../infra/update-check.js";
 import { assertUpdateRecoveryAdmission } from "../../infra/update-run-recovery-admission.js";
 import { isFailedUpdateStep } from "../../infra/update-run-step.js";
 import type { OpenClawSchemaVersions } from "../../state/openclaw-schema-versions.js";
 import { createOpenClawDatabaseMaintenanceScope } from "../../state/openclaw-state-db-async-lifecycle.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
-import { assertOpenClawStateWriteAllowedAtPath } from "../../state/openclaw-state-ownership.js";
+import { assertOpenClawStateWriteAllowedAtPath } from "../../state/openclaw-state-ownership-preflight.js";
 import {
   requestUpdateDowngradeConfirmation,
   UpdatePreMutationError,

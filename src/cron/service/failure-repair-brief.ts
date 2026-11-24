@@ -30,8 +30,8 @@ export function buildCronFailureRepairBrief(params: {
   return [
     `Automation repair request from the scheduler, not a user message. Do not relay it; follow the steps below.`,
     params.terminal
-      ? `A one-time automation (id ${job.id}), created in this conversation, failed and will not run again (now disabled). No failure alert was sent.`
-      : `An automation (id ${job.id}), created in this conversation, failed ${params.consecutiveErrors} consecutive runs. No failure alert was sent.`,
+      ? `A one-time automation (id ${job.id}), created in this conversation, failed and will not run again (now disabled). The user was not alerted; you are their notice.`
+      : `An automation (id ${job.id}), created in this conversation, failed${params.consecutiveErrors > 1 ? ` ${params.consecutiveErrors} runs in a row` : ""}. The user was not alerted; you are their notice.`,
     `Schedule: ${JSON.stringify(job.schedule)}. Payload kind: ${payload.kind}.`,
     // Job text and provider errors can carry third-party content: data, never instructions.
     wrapUntrustedPromptDataBlock({ label: "Automation name", text: job.name, maxChars: 200 }),
@@ -52,14 +52,15 @@ export function buildCronFailureRepairBrief(params: {
     ...(params.terminal
       ? [
           `1. If its work is still needed, do that work now or add a new automation; the failed one stays disabled, so do not update it. To resume this conversation later, use automations add with an at schedule, payload {kind:"agentTurn",message:"instructions for your next turn"}, and sessionTarget ${JSON.stringify(`session:${job.owner?.sessionKey?.trim()}`)}.`,
-          `2. If the work is no longer needed, reply exactly ${SILENT_REPLY_TOKEN}.`,
+          `2. If the work is no longer needed, reply with exactly ${SILENT_REPLY_TOKEN} as the entire final answer.`,
           "3. Otherwise, ask the user for what you need to continue.",
         ]
       : [
-          `1. Transient (provider outage, network, rate limit, or temporary upstream error): change nothing and reply exactly ${SILENT_REPLY_TOKEN}.`,
+          `1. Transient (provider outage, network, rate limit, or temporary upstream error): change nothing and reply with exactly ${SILENT_REPLY_TOKEN} as the entire final answer.`,
           "2. Fixable in the workspace (for example the helper script or instructions file the payload follows): change it, then reply with one line saying what you changed. Do not claim the automation is fixed; a later run must verify it.",
-          "3. Otherwise: ask the user for exactly what you need to fix it.",
-          "If the automation keeps failing, the user gets the normal failure alert.",
+          "3. Otherwise: tell the user in one or two plain sentences what is broken and exactly what you need from them. Do not paste the raw error.",
+          "If the same failure happens again, you will get this request again.",
         ]),
+    `${SILENT_REPLY_TOKEN} discards anything written this turn that was not sent, so send confirmations before ending silently.`,
   ].join("\n");
 }

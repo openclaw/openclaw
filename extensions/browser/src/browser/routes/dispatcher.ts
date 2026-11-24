@@ -42,7 +42,6 @@ function compileRoute(path: string): { regex: RegExp; paramNames: string[] } {
   return { regex: new RegExp(`^${parts.join("/")}$`), paramNames };
 }
 
-/** Create an in-process dispatcher for registered browser routes. */
 export function createBrowserRouteDispatcher(ctx: BrowserRouteContext) {
   const routes: RouteEntry[] = [];
   const register =

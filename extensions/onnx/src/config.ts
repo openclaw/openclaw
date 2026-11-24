@@ -1,7 +1,6 @@
 import path from "node:path";
 import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
 import { Type } from "typebox";
-import type { WorkerRequest } from "./protocol.js";
 
 export const ConfigSchema = Type.Object(
   {
@@ -12,7 +11,7 @@ export const ConfigSchema = Type.Object(
   { additionalProperties: false },
 );
 
-export type WorkerConfig = Extract<WorkerRequest, { kind: "init" }>["config"];
+export type WorkerConfig = { modelDir: string; threads: number; maxLoadedModels: number };
 
 export function resolveOnnxConfig(
   config: Record<string, unknown> | undefined,

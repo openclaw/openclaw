@@ -1,5 +1,5 @@
 ---
-summary: "Encode-once transcript events: ownership, transport copies, and the first broadcast slice"
+summary: "Encode-once transcript events: ownership, transport copies, and implemented slices"
 read_when:
   - Changing transcript ingestion, replicas, worker transport, or subscriber encoding
   - Reducing transcript allocation without changing stored formats
@@ -8,7 +8,7 @@ title: "Transcript event bytes"
 
 # Transcript event bytes
 
-**Design; broadcast message slice implemented.** Preserve the transcript owner's
+**Design; broadcast and shared-response slices implemented.** Preserve the transcript owner's
 canonical JSON and carry encoded payloads through readers and transports. Decode
 only for consumers that need message fields. This complements
 [conversation transcript ownership](/refactor/conversation-transcript-ownership):
@@ -75,10 +75,27 @@ mutations between recipients, and `toJSON`. The encoding expires
 with the publication, so there is no invalidation policy to maintain.
 
 This slice still encodes the message independently of SQLite and copies bytes
-into each distinct recipient frame. Next, carry the committed encoding to this
-boundary and to replicas, then migrate history forwarding with lane 1062. Keep
-provider-copy work (1061) and immutable-data admission (1065) separate; their
-files are outside this slice. No schema change is required.
+into each distinct recipient frame.
+
+### Slice 2: retain the owned shared-response buffer
+
+History forwarding already prepares and encodes the response message array in
+the transcript worker. The worker transfers those bytes; `SerializedJsonArray`
+carries them into the socket serializer without main-thread decode/re-encode.
+List subscription snapshots similarly register their owner's encoded rows.
+Consumed history paging metadata is removed before the worker reply.
+
+`SerializedJsonPayload` now retains a view of the serializer's owned frame buffer
+instead of copying the full frame before retaining the payload. The frame assembly
+already separates it from the input row/worker bytes. Ordinary string responses
+still require UTF-8 encoding. Shared-read expiry and revision invalidation continue
+to own retention; each recipient still receives a separately framed response with
+its own request id and current disclosure authority.
+
+Remaining work is to carry committed storage encoding into broadcast and replica
+consumers where they still materialize objects. Worker message transport and
+transcript-worker GC remain separate owners; this slice changes neither. No schema
+change is required.
 
 Measure sampled allocated bytes including collected objects, GC time, event
 counts, and main-thread CPU on identical synthetic fixtures. Report sampling

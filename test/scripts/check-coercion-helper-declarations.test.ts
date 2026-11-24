@@ -1,6 +1,4 @@
-import fs from "node:fs";
-import path from "node:path";
-import { API } from "typescript/unstable/sync";
+import { API } from "typescript/sync";
 import { afterAll, afterEach, describe, expect, it } from "vitest";
 import {
   auditCanonicalCoercionExports,
@@ -13,6 +11,7 @@ import {
   type CoercionHelperDeclaration,
 } from "../../scripts/check-coercion-helper-declarations.mts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { fixtureFiles } from "./script-fixture-files.test-support.js";
 
 const parser = new API();
 afterAll(() => parser.close());
@@ -38,13 +37,10 @@ describe("coercion helper declaration AST guard", () => {
       "const isValidAgentId = () => true;",
       "function containsAsciiControlCharacter() {}",
     ].join("\n");
+    using retainedSource = parser.createSourceFile("src/example.ts", source);
 
     expect(
-      findBannedCoercionHelperDeclarations(
-        source,
-        "src/example.ts",
-        parser.createSourceFile("src/example.ts", source),
-      ),
+      findBannedCoercionHelperDeclarations(source, "src/example.ts", retainedSource.sourceFile),
     ).toEqual([
       { file: "src/example.ts", kind: "function", line: 1, name: "readString" },
       { file: "src/example.ts", kind: "variable", line: 2, name: "isRecord" },
@@ -74,13 +70,10 @@ describe("coercion helper declaration AST guard", () => {
       "// function asRecord() {}",
       'const fixture = "function toError() {}";',
     ].join("\n");
+    using retainedSource = parser.createSourceFile("src/example.ts", source);
 
     expect(
-      findBannedCoercionHelperDeclarations(
-        source,
-        "src/example.ts",
-        parser.createSourceFile("src/example.ts", source),
-      ),
+      findBannedCoercionHelperDeclarations(source, "src/example.ts", retainedSource.sourceFile),
     ).toEqual([]);
   });
 
@@ -180,11 +173,9 @@ describe("coercion helper declaration AST guard", () => {
       "export { local as alias };",
       "export const VALUE = 1;",
     ].join("\n");
+    using retainedSource = parser.createSourceFile("src/owner.ts", source);
 
-    expect(findExportedCallableNames(parser.createSourceFile("src/owner.ts", source))).toEqual([
-      "alias",
-      "canonical",
-    ]);
+    expect(findExportedCallableNames(retainedSource.sourceFile)).toEqual(["alias", "canonical"]);
   });
 
   it("reports unclassified exports and stale, duplicate, or blank deferred entries", () => {
@@ -222,18 +213,10 @@ describe("coercion helper declaration AST guard", () => {
 
   it("scans a temporary repository and reports sorted, owner-specific diagnostics", async () => {
     const repoRoot = tempDirs.make("coercion-helper-guard-");
-    fs.mkdirSync(path.join(repoRoot, "src"), { recursive: true });
-    fs.mkdirSync(path.join(repoRoot, "extensions", "demo"), { recursive: true });
-    fs.mkdirSync(path.join(repoRoot, "config"), { recursive: true });
-    fs.writeFileSync(path.join(repoRoot, "src", "z.ts"), "class Owner { readString() {} }\n");
-    fs.writeFileSync(
-      path.join(repoRoot, "extensions", "demo", "a.ts"),
-      "const asRecord = () => ({});\n",
-    );
-    fs.writeFileSync(
-      path.join(repoRoot, "config", "root.ts"),
-      "class Config { normalizeOptionalString() {} }\n",
-    );
+    const fixture = fixtureFiles(repoRoot);
+    fixture.write("src/z.ts", "class Owner { readString() {} }\n");
+    fixture.write("extensions/demo/a.ts", "const asRecord = () => ({});\n");
+    fixture.write("config/root.ts", "class Config { normalizeOptionalString() {} }\n");
     const stdout: string[] = [];
     const stderr: string[] = [];
     expect(

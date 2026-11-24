@@ -48,70 +48,41 @@ export function resolveDiscordNativePolicyReader(
   );
 }
 
-export async function createDiscordNativeCommandAuthority(params: {
+/** Reads command access once, when the command is admitted. */
+export function resolveDiscordNativeCommandAccess(params: {
   cfg: OpenClawConfig;
   ctx: MsgContext;
   commandAuthorized: boolean;
   sender: { id: string; name?: string; tag?: string };
   allowNameMatching: boolean;
-  isPolicyCurrent?: () => boolean;
   accountId: string;
   guildId?: string;
   commandName: string;
   pluginCommand: boolean;
 }) {
-  const assertAdmittedOwner = (await resolveCommandAuthorizationAsync(params)).assertOwnerCurrent;
-  const readAuthorization = () => {
-    const cfg = getRuntimeConfigSnapshot() ?? params.cfg;
-    const owners = resolveDiscordCommandOwnerAllowFrom(cfg);
-    const senderIsOwner =
-      params.isPolicyCurrent?.() !== false &&
-      (resolveDiscordOwnerAccess({
-        allowFrom: owners,
-        sender: params.sender,
-        allowNameMatching: params.allowNameMatching,
-      }).ownerAllowed ||
-        resolveCommandAuthorization({ ...params, cfg }).senderIsOwner);
-    const commands = resolveDiscordNativeCommandAllowlistAccess({
-      cfg,
+  const cfg = getRuntimeConfigSnapshot() ?? params.cfg;
+  const owners = resolveDiscordCommandOwnerAllowFrom(cfg);
+  const senderIsOwner =
+    resolveDiscordOwnerAccess({
+      allowFrom: owners,
       sender: params.sender,
-      guildId: params.guildId,
-    });
-    return {
-      senderIsOwner,
-      allowed:
-        (!commands.configured || commands.allowed) &&
-        (!owners ||
-          owners.includes("*") ||
-          senderIsOwner ||
-          commands.allowed ||
-          params.commandName === "status" ||
-          params.pluginCommand),
-    };
-  };
-  const assertActive = () => {
-    assertAdmittedOwner?.();
-    if (params.isPolicyCurrent?.() === false || !readAuthorization().allowed) {
-      throw new Error("Discord command authority changed; send a new request.");
-    }
-  };
+      allowNameMatching: params.allowNameMatching,
+    }).ownerAllowed || resolveCommandAuthorization({ ...params, cfg }).senderIsOwner;
+  const commands = resolveDiscordNativeCommandAllowlistAccess({
+    cfg,
+    sender: params.sender,
+    guildId: params.guildId,
+  });
   return {
-    assertActive,
-    assertOwnerCurrent: () => {
-      assertActive();
-      if (!readAuthorization().senderIsOwner) {
-        throw new Error("Discord owner authority changed; send a new request.");
-      }
-    },
-    senderIsOwner: () => readAuthorization().senderIsOwner,
-    isAllowed: () => {
-      try {
-        assertActive();
-        return true;
-      } catch {
-        return false;
-      }
-    },
+    senderIsOwner,
+    allowed:
+      (!commands.configured || commands.allowed) &&
+      (!owners ||
+        owners.includes("*") ||
+        senderIsOwner ||
+        commands.allowed ||
+        params.commandName === "status" ||
+        params.pluginCommand),
   };
 }
 
@@ -184,7 +155,7 @@ export function resolveDiscordNativeCommandAccessContext(params: {
   });
   const guildInfo = resolveDiscordGuildEntry({
     guild: guild ?? undefined,
-    guildId: guild?.id ?? undefined,
+    guildId: guild?.id,
     guildEntries: params.discordConfig?.guilds,
   });
   const channelConfig = guild
@@ -312,21 +283,11 @@ export async function resolveDiscordNativeAutocompleteAuthorized(params: {
   }
   const sender = resolveDiscordSenderIdentity({ author: user, pluralkitInfo: null });
   const channelContext = await resolveDiscordNativeInteractionChannelContext(interaction, "");
-  const {
-    isDirectMessage,
-    isGroupDm,
-    isThreadChannel,
-    channelName,
-    channelSlug,
-    rawChannelId,
-    threadParentId,
-  } = channelContext;
+  const { isDirectMessage, isGroupDm, channelName, channelSlug, rawChannelId, memberRoleIds } =
+    channelContext;
   if (params.isPolicyCurrent?.() === false) {
     return false;
   }
-  const memberRoleIds = Array.isArray(interaction.rawData.member?.roles)
-    ? interaction.rawData.member.roles.slice()
-    : [];
   const channelAccess = resolveDiscordNativeCommandAccessContext({
     cfg,
     accountId,
@@ -395,18 +356,12 @@ export async function resolveDiscordNativeAutocompleteAuthorized(params: {
     const routeState = resolveDiscordNativeInteractionRouteState({
       cfg,
       accountId,
-      guildId: interaction.guild?.id,
-      memberRoleIds,
-      isDirectMessage,
-      isGroupDm,
-      directUserId: user.id,
-      conversationId: rawChannelId,
-      parentConversationId: threadParentId,
-      threadBinding: isThreadChannel
-        ? params.threadBindings?.getByThreadId(rawChannelId)
-        : undefined,
+      interaction,
+      channelContext,
+      threadBindings: params.threadBindings,
     });
     const { ctxPayload } = await buildDiscordNativeInteractionContext({
+      cfg,
       buildContext: params.buildContext,
       interaction,
       channelContext,

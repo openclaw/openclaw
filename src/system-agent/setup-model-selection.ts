@@ -1,12 +1,19 @@
 import { parseProviderModelRef } from "@openclaw/model-catalog-core/model-catalog-refs";
-import { findNormalizedProviderKey } from "@openclaw/model-catalog-core/provider-id";
+import {
+  findNormalizedProviderKey,
+  normalizeProviderId,
+} from "@openclaw/model-catalog-core/provider-id";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { toAgentEntriesRecord } from "../agents/agent-scope-config.js";
 import type { AuthProfileCredential } from "../agents/auth-profiles/types.js";
+import { isNonSecretApiKeyMarker } from "../agents/model-auth-markers.js";
 import { resolveModelRuntimePolicy } from "../agents/model-runtime-policy.js";
+import { applyMergePatch } from "../config/merge-patch.js";
 import { mergeAgentModelEntryForConfig } from "../config/model-input.js";
 import { materializeModelPolicyAllowlist } from "../config/model-policy-allowlist-migration.js";
+import { resolveMergedModelProviderEntry } from "../config/model-provider-config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { parseSecretRef } from "../config/types.secrets.js";
 import { materializeUtilityModelSeparation } from "../config/utility-model-separation-migration.js";
 import { normalizeAgentId, normalizeAgentIdStrict } from "../routing/session-key.js";
 
@@ -70,8 +77,14 @@ export async function createSystemAgentModelSelectionUpdater(
       modelConfig.upsertCanonicalModelConfigEntry(configuredVisibleModels, target);
     }
     if (selection.runtimeInDefaults) {
-      // Include the approved model in legacy restrictions before adding runtime-only metadata.
-      nextConfig = materializeModelPolicyAllowlist(nextConfig).config;
+      // Provider-added metadata is not a legacy restriction. Only extend the
+      // previous model map with the newly approved selection before migrating it.
+      const policySource = structuredClone(previousConfig);
+      const previousModels = policySource?.agents?.defaults?.models;
+      if (previousModels && Object.keys(previousModels).length > 0) {
+        modelConfig.upsertCanonicalModelConfigEntry(previousModels, target);
+      }
+      nextConfig = materializeModelPolicyAllowlist(nextConfig, policySource).config;
     }
     nextConfig.agents ??= {};
     nextConfig.agents.defaults ??= {};
@@ -118,11 +131,10 @@ export async function createSystemAgentModelSelectionUpdater(
     }
     const selectedModel = selection.authProfileId ? `${key}@${selection.authProfileId}` : key;
     if (selection.modelTarget === "utility") {
-      if (writesAgent && agent) {
-        agent.utilityModel = selectedModel;
-      } else {
-        agentDefaults.utilityModel = selectedModel;
-      }
+      const owner = writesAgent && agent ? agent : agentDefaults;
+      const existing = owner.utilityModel;
+      owner.utilityModel =
+        typeof existing === "object" ? { ...existing, primary: selectedModel } : selectedModel;
     } else {
       agentScope.setAgentEffectiveModelPrimary(nextConfig, agentId, selectedModel, {
         forceAgent: Boolean(targetAgentId),
@@ -219,6 +231,23 @@ export function prepareSetupModelRuntime(params: {
   };
 }
 
+export function mergeSavedSetupInferenceConfig(base: OpenClawConfig, saved: unknown): unknown {
+  const savedProviders =
+    isRecord(saved) && isRecord(saved.models) ? saved.models.providers : undefined;
+  if (!isRecord(savedProviders)) {
+    return applyMergePatch(base, saved);
+  }
+  const providers = { ...base.models?.providers };
+  // Saved provider entries are complete snapshots; merging would revive omitted credentials.
+  for (const provider of Object.keys(savedProviders)) {
+    const currentKey = findNormalizedProviderKey(providers, provider);
+    if (currentKey) {
+      delete providers[currentKey];
+    }
+  }
+  return applyMergePatch({ ...base, models: { ...base.models, providers } }, saved);
+}
+
 export function projectSetupInferenceConfig(params: {
   base: OpenClawConfig;
   prepared: OpenClawConfig;
@@ -241,12 +270,24 @@ export function projectSetupInferenceConfig(params: {
     }
   }
   const provider = parseProviderModelRef(params.modelRef)?.provider ?? "";
-  const providerKey = findNormalizedProviderKey(params.prepared.models?.providers, provider);
-  const providerConfig = providerKey ? params.prepared.models?.providers?.[providerKey] : undefined;
-  if (providerKey && providerConfig) {
+  const providerEntry = resolveMergedModelProviderEntry(params.prepared, provider);
+  if (providerEntry) {
+    const { providerKey, providerConfig } = providerEntry;
     const selectedProvider = structuredClone(providerConfig);
     if (params.profileId) {
-      delete selectedProvider.apiKey;
+      if (params.credential?.type === "api_key" || params.credential?.type === "token") {
+        if (!parseSecretRef(selectedProvider.apiKey, params.prepared.secrets?.defaults)) {
+          const key =
+            params.credential.type === "api_key" ? params.credential.key : params.credential.token;
+          // No-auth markers must remain visible to the provider's transport preparation.
+          selectedProvider.apiKey =
+            key && isNonSecretApiKeyMarker(key, { includeEnvVarName: false })
+              ? key.trim()
+              : params.profileId;
+        }
+      } else {
+        delete selectedProvider.apiKey;
+      }
     }
     if (
       selectedProvider.headers?.["api-key"] &&
@@ -257,7 +298,14 @@ export function projectSetupInferenceConfig(params: {
     }
     config.models = {
       ...config.models,
-      providers: { ...config.models?.providers, [providerKey]: selectedProvider },
+      providers: {
+        ...Object.fromEntries(
+          Object.entries(config.models?.providers ?? {}).filter(
+            ([key]) => normalizeProviderId(key) !== normalizeProviderId(providerKey),
+          ),
+        ),
+        [providerKey]: selectedProvider,
+      },
     };
   }
   for (const pluginId of new Set([params.pluginId, params.agentRuntimeId])) {

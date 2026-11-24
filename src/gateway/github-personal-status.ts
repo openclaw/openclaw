@@ -91,24 +91,14 @@ export async function resolvePersonalGitHubStatus(
     prepared = await prepareUserGitHubConnection(action.owner);
   } catch {
     action.assertCurrent();
-    return {
-      state: "unavailable",
-      generation: null,
-      account: null,
-      accessExpiresAtMs: null,
-      refreshState: "failed",
-      pending: null,
-    };
+    return unavailablePersonalGitHubStatus();
   }
   action.assertCurrent();
   const record = prepared.read();
   const status = projectPersonalGitHubStatus(record);
   statusAuthorities.set(status, prepared.read);
-  if (status.state !== "connected") {
-    return status;
-  }
   if (record?.selection.kind !== "connected") {
-    return { ...status, state: "unavailable" };
+    return status;
   }
   const assertCurrent = () => {
     revalidatePersonalGitHubStatus(action, status);
