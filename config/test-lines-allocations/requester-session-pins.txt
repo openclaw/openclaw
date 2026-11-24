@@ -7,4 +7,5 @@
 # +71: signed native Archive with failed profile acquisition, unchanged saved layout, no false Undo and a stale incarnation control.
 # +70: signed compare-only Archive, new pin during lifecycle drain, untouched absence and mixed-batch conflict receipts.
 # +24: actual embedded tool rejects an oversized pin layout without changing it; removing an old pin lets the same request succeed.
-1557
+# +10: compare real serialized rename receipts for personal and legacy clients without modifying the historical timestamp.
+1567

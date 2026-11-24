@@ -216,16 +216,11 @@ function createSessionPatchHandler(
       }
       const prepared = executed.preparedByIndex[0]!;
       diagnostics?.scope("response");
-      const catalog = await executed.catalogs.available(prepared.targetAgentId);
+      const { targetAgentId: agentId, canonicalKey: sessionKey } = prepared;
+      const catalog = await executed.catalogs.available(agentId);
       const [acpMeta] = await readAcpSessionMetaForEntries({
         cfg: executed.cfg,
-        entries: [
-          {
-            agentId: prepared.targetAgentId,
-            sessionKey: prepared.canonicalKey,
-            entry: outcome.entry,
-          },
-        ],
+        entries: [{ agentId, sessionKey, entry: outcome.entry }],
       });
       assertCurrent();
       const result = projectSessionPatchResult({
@@ -239,6 +234,10 @@ function createSessionPatchHandler(
         modelCatalog: catalog?.entries,
         modelCatalogRouteVariants: catalog?.routeVariants,
       });
+      if (!usesLegacySessionPins(client)) {
+        // This shared metadata patch did not read the requester's sidebar.
+        delete result.entry.pinnedAt;
+      }
       const receipt = archivePins?.receipt(0, outcome.entry.archivedAt);
       respond(true, { ...result, ...receipt, ...archivePins?.undo }, undefined);
     } finally {

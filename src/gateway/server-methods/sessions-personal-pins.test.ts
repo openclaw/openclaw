@@ -411,6 +411,16 @@ it("shares ordered sidebar pins with session RPCs, not rail-only shortcuts, lega
     await expect(list(bob, { pinned: true })).resolves.toMatchObject({
       sessions: [{ key: a, pinned: true }],
     });
+    const renamed = await rpc(modernMac, "sessions.patch", { key: a, label: "Renamed" });
+    expect(renamed.entry).toMatchObject({ sessionId: a, label: "Renamed" });
+    expect(renamed.entry).not.toHaveProperty("pinnedAt");
+    expect(renamed.entry).not.toHaveProperty("pinned");
+    const legacyRename = await rpc(oldMac, "sessions.patch", { key: a, label: "Legacy rename" });
+    expect(legacyRename.entry).toMatchObject({
+      sessionId: a,
+      label: "Legacy rename",
+      pinnedAt: 100,
+    });
     expect(loadSessionEntry({ agentId: "main", sessionKey: a })?.pinnedAt).toBe(100);
     // With global session scope, main is a real root stored in the sidebar's session:global slot.
     cfg = { ...cfg, session: { scope: "global" } };
