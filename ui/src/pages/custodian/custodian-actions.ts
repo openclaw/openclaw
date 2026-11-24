@@ -1,10 +1,5 @@
 import { action, createOptimistic, onSettled } from "solid-js";
-import type {
-  CustodianAutoSetup,
-  SetupAuthOption,
-  SetupManualProvider,
-  SetupPrepareOption,
-} from "./custodian-auto-setup.ts";
+import type { SetupAutoCandidate } from "./custodian-auto-setup.ts";
 import type { CustodianSessionStore } from "./custodian-session-store.ts";
 import type { CustodianMessage } from "./transcript.ts";
 
@@ -103,15 +98,10 @@ export function createCustodianActions(getStore: () => CustodianSessionStore) {
     get cancelling() {
       return cancelling();
     },
-    activate: (candidate: Parameters<CustodianAutoSetup["activate"]>[0]) =>
-      void run("wizard", (source) => source.autoSetup.activate(candidate)),
-    prepare: (option: SetupPrepareOption) =>
-      void run("wizard", (source) => source.autoSetup.prepare(option)),
-    connectKey: (provider: SetupManualProvider, apiKey: string) =>
-      void run("wizard", (source) => source.autoSetup.connectKey(provider, apiKey)),
+    activate: (candidate: SetupAutoCandidate) =>
+      void run("verification", (source) => source.autoSetup.activate(candidate)),
     retry: () => void run("verification", (source) => source.autoSetup.retry()),
-    signIn: (option: SetupAuthOption) =>
-      void run("wizard", (source) => source.autoSetup.signIn(option)),
+    signIn: () => void run("wizard", (source) => source.autoSetup.signIn()),
     answer: (value: unknown) =>
       void run("wizard", (source) => source.autoSetup.answerWizard(value)),
     cancel: () => void run("cancellation", (source) => source.autoSetup.cancelWizard()),

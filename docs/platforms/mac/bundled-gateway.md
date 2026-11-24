@@ -23,7 +23,7 @@ This page covers local hosting, updates, recovery, and runtime details.
 
 On a fresh local setup with no configuration or saved connections, opening the
 app shows **Setting up OpenClaw on this Mac**. The app prepares its runtime,
-starts the Gateway, and opens setup in the dashboard.
+starts the Gateway, and opens automatic setup in the dashboard.
 
 - Choose **Set up manually** to use native setup. Its **Getting things ready**
   page prepares the same runtime when needed.

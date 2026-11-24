@@ -3,98 +3,49 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import type { AgentsListResult, SystemAgentSetupDetectResult } from "../../api/types.ts";
+import type { AgentsListResult } from "../../api/types.ts";
 import { makeBootRoster } from "../../app/bootstrap.test-support.ts";
+import { createNativeDeviceSettingsCapability } from "../../app/native-device-settings.ts";
+import { createNativeDeviceSettingsSnapshot } from "../../test-helpers/native-device-settings.ts";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
+import type { SetupAutoResult } from "./custodian-auto-setup.ts";
 import { createContext, mountPage } from "./custodian-page.test-harness.ts";
 import { CustodianSessionStore } from "./custodian-session-store.ts";
 
-type Detection = SystemAgentSetupDetectResult;
-const codex = {
-  kind: "codex-cli",
-  brandId: "openai",
-  label: "Codex",
-  // What Gateway detection reports for a Codex login it found on disk.
-  detail: "installed; stored credentials found; login status unverified",
-  modelRef: "openai/gpt-5.5",
-  recommended: true,
-  credentials: true,
-} satisfies Detection["candidates"][number];
-const local = {
-  kind: "provider-auto:ollama",
-  brandId: "ollama",
-  label: "Local model",
-  detail: "Loaded in Ollama",
-  modelRef: "ollama/qwen3",
-  recommended: false,
-} satisfies Detection["candidates"][number];
-const chatgpt = {
-  id: "openai-token-sharing",
-  brandId: "openai",
-  label: "Sign in with ChatGPT",
-  kind: "oauth",
-  featured: false,
-} satisfies NonNullable<Detection["authOptions"]>[number];
-const apiKey = { id: "openai-api-key", brandId: "openai", groupLabel: "OpenAI", label: "API key" };
-const lmStudio = {
-  id: "lmstudio",
-  brandId: "lmstudio",
-  label: "LM Studio",
-  actionLabel: "Connect server",
-};
-// The Gateway always sends its bundled install catalog (scripts/lib/recommended-tool-installs.json).
-const ollamaInstall = {
-  id: "ollama",
-  brandId: "ollama",
-  label: "Ollama",
-  hint: "Run open models locally",
-  website: "https://ollama.com/download",
-  icon: "https://cdn.simpleicons.org/ollama",
-};
-function detection(candidates: Detection["candidates"] = [codex, local]): Detection {
-  return {
-    candidates,
-    manualProviders: [apiKey],
-    authOptions: [chatgpt],
-    prepareOptions: [lmStudio],
-    recommendedInstalls: [ollamaInstall],
-    workspace: "/workspace",
-    setupComplete: false,
-  };
+function candidate(kind: string, label: string, modelRef: string) {
+  return { kind, label, modelRef, detail: "Available" };
 }
-/** Activation runs as a wizard; a finished one reports the model it saved. */
-const activated = (modelRef: string) => ({
-  done: true,
-  status: "done",
-  modelActivation: { modelRef },
-});
-const failed = (error: string) => ({ done: true, status: "error", error });
-const methods = [
-  "chat",
-  "setup.detect",
-  "setup.activate.start",
-  "setup.auth.start",
-  "setup.prepare.start",
-].map((method) => "openclaw." + method);
+const selected = candidate("codex", "ChatGPT", "openai/gpt-5.5");
+const alternative = candidate("ollama", "Local model", "ollama/qwen3");
+function result(status: SetupAutoResult["status"] = "activated"): SetupAutoResult {
+  return { status, selected, alternatives: [alternative], attempts: [], installedPlugins: [] };
+}
+const methods = ["chat", "setup.auto", "setup.activate", "setup.auth.start"].map(
+  (method) => "openclaw." + method,
+);
 const agentsList: AgentsListResult = makeBootRoster({ scope: "global" });
 const reply = { sessionId: "setup-session", reply: "Welcome.", action: "none" };
 type Page = Awaited<ReturnType<typeof mountPage>>["page"];
 type Request = Parameters<typeof createContext>[0];
 const text = (page: Page) => expect(page.textContent);
+const alertText = (page: Page) => expect(page.querySelector('[role="alert"]')?.textContent);
 const expectRpc = (request: Request, method: string, params: unknown) =>
   expect(request).toHaveBeenCalledWith("openclaw.setup." + method, params, { timeoutMs: null });
 function setupRequest(
-  detect: () => unknown = () => detection(),
+  auto: () => unknown = () => result(),
   handlers: Record<string, (params?: { answer?: unknown }) => unknown> = {},
 ) {
   return vi.fn(async (method: string, params?: { answer?: unknown }) =>
     method === "openclaw.chat.history"
       ? (handlers[method]?.(params) ?? { turns: [] })
-      : method === "openclaw.setup.detect"
-        ? detect()
+      : method === "openclaw.setup.auto"
+        ? auto()
         : (handlers[method]?.(params) ?? reply),
   );
+}
+function unavailable(attempts: SetupAutoResult["attempts"] = []): SetupAutoResult {
+  return { status: "unavailable", alternatives: [], attempts, installedPlugins: [] };
 }
 const setupContext = (request: Request) => createContext(request, methods, { agentsList });
 async function mountSetup(request: Request) {
@@ -148,289 +99,256 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-async function openAiStep(page: Page) {
-  text(page).toContain("Welcome to OpenClaw");
-  await click(page, "Next");
-  text(page).toContain("Where should your assistant run?");
-  text(page).toContain("On another computer");
-  text(page).toContain("gateway.test");
-  await click(page, "Next");
-  text(page).toContain("Connect your AI");
-}
-const calls = (request: Request, method: string) =>
-  request.mock.calls.filter(([name]) => name === "openclaw.setup." + method);
-
-it("waits for the user to pick the detected AI before testing and saving it", async () => {
-  const activation = createDeferred<unknown>();
-  const request = setupRequest(undefined, {
-    "openclaw.setup.activate.start": () => activation.promise,
+it.each([true, false])("presents a held activation and its outcome (success=%s)", async (ok) => {
+  const setup = createDeferred<SetupAutoResult>();
+  const activation = createDeferred<{ ok: boolean; error?: string }>();
+  const request = setupRequest(() => setup.promise, {
+    "openclaw.setup.activate": () => activation.promise,
   });
-  const { page } = await mountSetup(request);
-  await openAiStep(page);
-  expectRpc(request, "detect", {});
-  expect(calls(request, "activate.start")).toHaveLength(0);
-  expect(request.mock.calls.filter(([method]) => method === "openclaw.chat")).toHaveLength(0);
-  // One row per provider, ChatGPT first as on main, never a model id.
-  expect(
-    [...page.querySelectorAll(".custodian-setup .option-card__choice")].map(
-      (row) => row.textContent,
-    ),
-  ).toEqual(["ChatGPT", "Run a model locally", "Another provider"]);
-  text(page).not.toContain("Codex");
-  text(page).not.toContain("Sign in with ChatGPT");
-  text(page).not.toContain("openai/gpt-5.5");
-  await click(page, "Run a model locally");
-  const row = findButton(page, "Local modelLoaded in OllamaUse");
-  row.click();
-  row.click();
-  await waitForFast(() =>
-    text(page).toContain("Checking a real conversation. This may take a minute."),
-  );
-  expect(calls(request, "activate.start")).toHaveLength(1);
-  expectRpc(
-    request,
-    "activate.start",
-    expect.objectContaining({ kind: local.kind, modelRef: local.modelRef }),
-  );
-  activation.resolve(activated("ollama/qwen3"));
-  await settled(page, () => page.store.autoSetup.ready);
-  text(page).toContain("You’re all set!");
-  text(page).not.toContain("ollama/qwen3");
-  await waitForFast(() => text(page).toContain(reply.reply));
-});
-
-it("shows a short reason for a failed test and folds the Gateway's error into details", async () => {
-  const error =
-    "OAuth token refresh failed for openai: Auth profile credential authority is unavailable";
-  const request = setupRequest(undefined, {
-    "openclaw.setup.activate.start": () => failed(error),
-    "openclaw.setup.auth.start": () => new Promise(() => {}),
-  });
-  const { page } = await mountSetup(request);
-  await openAiStep(page);
-  await click(page, "ChatGPT");
-  await waitForFast(() =>
-    text(page).toContain("It couldn’t complete the test. Try again, or choose another AI."),
-  );
-  const details = page.querySelector<HTMLDetailsElement>(".custodian-setup details")!;
-  expect(details.open).toBe(false);
-  expect(details.querySelector("pre")?.textContent).toBe(error);
-  expect(page.store.autoSetup.ready).toBe(false);
-  // After the stored login fails its test, ChatGPT offers its one sign-in, as on main.
-  findButton(page, "Sign in with ChatGPT").click();
-  await waitForFast(() =>
-    expectRpc(request, "auth.start", expect.objectContaining({ authChoice: chatgpt.id })),
-  );
-});
-
-// Real error text from a failed first-run ChatGPT sign-in (Control UI, 2026-11-19).
-const realSignInError =
-  "Credentials saved; default unchanged. OAuth token refresh failed for openai: Auth profile credential authority is unavailable; retry after owner recovery. Please try again or re-authenticate. Choose the saved sign-in in Model Setup to retry without signing in again.";
-
-it.each([
-  ["done", { done: true, status: "done", modelActivation: { modelRef: "openai/gpt-5.5" } }],
-  ["error", { done: true, status: "error", error: realSignInError }],
-] as const)("signs in with ChatGPT from the AI step (%s)", async (outcome, finish) => {
-  const request = setupRequest(() => detection([]), {
-    "openclaw.setup.auth.start": () => ({ sessionId: "auth-session", done: false }),
-    "wizard.next": (params) =>
-      params?.answer
-        ? finish
-        : { done: false, step: { id: "confirm", type: "confirm", message: "Finish signing in?" } },
-  });
-  const { page } = await mountSetup(request);
-  await openAiStep(page);
-  await click(page, "ChatGPT");
-  await click(page, "Sign in with ChatGPT");
-  expectRpc(request, "auth.start", expect.objectContaining({ authChoice: chatgpt.id }));
-  await click(page, "Yes");
-  if (outcome === "done") {
-    text(page).toContain("You’re all set!");
-    return;
-  }
-  const alert = page.querySelector<HTMLElement>('.custodian-setup [role="alert"]')!;
-  expect(alert.querySelector("strong")?.textContent).toBe("Sign-in didn’t complete");
-  expect(alert.querySelector("p")?.textContent).toBe("Try again, or choose another AI.");
-  expect(alert.querySelector("details")?.open).toBe(false);
-  expect(alert.querySelector("pre")?.textContent).toContain(realSignInError);
-});
-
-it("shows detection failures briefly and checks again", async () => {
-  let attempts = 0;
-  const request = setupRequest(() => {
-    if (attempts++ === 0) {
-      throw new Error("Gateway lost its connection");
-    }
-    return detection();
-  });
-  const { page } = await mountSetup(request);
-  await openAiStep(page);
-  const alert = page.querySelector('[role="alert"]')!;
-  expect(alert.querySelector("strong")?.textContent).toBe(
-    "Couldn’t check this Gateway for AI access",
-  );
-  expect(alert.querySelector("pre")?.textContent).toContain("Gateway lost its connection");
-  await click(page, "Try again");
-  expect(calls(request, "detect")).toHaveLength(2);
-  findButton(page, "ChatGPT");
-});
-
-it("shows a configured Gateway as done without testing anything", async () => {
-  // The Gateway reports configured setup; an agent's model alone is not proof (fresh
-  // Gateways always name an implicit default).
-  const request = setupRequest(() => ({ ...detection(), setupComplete: true }));
-  const configured = makeBootRoster({
-    agents: [{ id: "main", model: { primary: "openai/gpt-5.5" } }],
-  });
-  const { context } = createContext(request, methods, { agentsList: configured });
+  const { context } = setupContext(request);
   const { page } = await mountPage(context);
+  text(page).toContain("Connecting your AI");
+  expect(request.mock.calls.map(([method]) => method)).toEqual(["openclaw.setup.auto"]);
+  expectRpc(request, "auto", {});
+  setup.resolve(result(ok ? "configured" : "activated"));
   await settled(page);
-  await waitForSolid(() => text(page).toContain("You’re all set!"));
-  expect(calls(request, "activate")).toHaveLength(0);
+  text(page).toContain("Using ChatGPT (openai/gpt-5.5) on gateway.test");
   text(page).toContain(reply.reply);
-});
-
-it("uses shell-neutral native capabilities for Gateway selection and permissions", async () => {
-  const openGateways = vi.fn();
-  const reviewPermissions = vi.fn();
-  window["__OPENCLAW_NATIVE_SETUP__"] = {
-    currentGateway: { name: "Studio Mac", kind: "local" },
-    openGateways,
-    reviewPermissions,
-  };
-  const { page } = await mountSetup(setupRequest());
-  await click(page, "Next");
-  text(page).toContain("On this computerStudio Mac");
-  await click(page, "Use a different Gateway");
-  await click(page, "Review permissions");
-  expect(openGateways).toHaveBeenCalledOnce();
-  expect(reviewPermissions).toHaveBeenCalledOnce();
+  const button = findButton(page, "Local model");
+  button.click();
+  button.click();
+  await waitForFast(() => expect(page.querySelector(".custodian-setup__progress")).not.toBeNull());
+  expect(
+    request.mock.calls.filter(([method]) => method === "openclaw.setup.activate"),
+  ).toHaveLength(1);
+  expect(page.store.autoSetup.result?.selected).toEqual(selected);
+  expect(
+    [...page.querySelectorAll<HTMLButtonElement>(".custodian-setup__alternatives button")].every(
+      (entry) => entry.disabled,
+    ),
+  ).toBe(true);
+  activation.resolve(ok ? { ok } : { ok, error: "Local model is offline" });
+  await settled(page);
+  expectRpc(request, "activate", { kind: "ollama" });
+  text(page).toContain(ok ? "Using Local model (ollama/qwen3) on gateway.test" : "Using ChatGPT");
+  expect(request.mock.calls.filter(([method]) => method === "openclaw.setup.auto")).toHaveLength(1);
+  if (!ok) {
+    alertText(page).toContain("Local model is offline");
+  }
 });
 
 it("retires a held activation when the visible store is replaced", async () => {
-  const activation = createDeferred<unknown>();
-  const request = setupRequest(undefined, {
-    "openclaw.setup.activate.start": () => activation.promise,
+  const activation = createDeferred<{ ok: boolean; error: string }>();
+  const request = setupRequest(() => result(), {
+    "openclaw.setup.activate": () => activation.promise,
   });
   const { page } = await mountSetup(request);
-  await openAiStep(page);
-  findButton(page, "ChatGPT").click();
-  await waitForFast(() => expect(page.store.autoSetup.testing).toBe("codex-cli"));
+  findButton(page, "Local model").click();
+  await waitForFast(() => expect(page.store.autoSetup.pending).toBe(true));
   page.store = new CustodianSessionStore();
-  await settled(page, () => page.store.autoSetup.detection !== null);
-  text(page).toContain("Welcome to OpenClaw");
-  activation.resolve(failed("Retired activation failed"));
+  await settled(page, () => page.store.autoSetup.ready);
+  text(page).toContain("Using ChatGPT");
+  expect(page.querySelector(".custodian-setup__progress")).toBeNull();
+  expect(
+    [...page.querySelectorAll<HTMLButtonElement>(".custodian-setup__alternatives button")].every(
+      (entry) => !entry.disabled,
+    ),
+  ).toBe(true);
+  activation.resolve({ ok: false, error: "Retired activation failed" });
   await activation.promise;
   await page.updateComplete;
-  expect(page.store.autoSetup.attemptFailure).toBeNull();
   text(page).not.toContain("Retired activation failed");
 });
 
-it("sets up a local model from the card, as on the Mac", async () => {
-  const lmStudioModel: Detection["candidates"][number] = {
-    kind: "provider-auto:lmstudio",
-    brandId: "lmstudio",
-    label: "LM Studio",
-    detail: "Model loaded",
-    modelRef: "lmstudio/qwen3",
-    recommended: false,
-  };
-  let prepared = false;
-  const request = setupRequest(() => detection(prepared ? [lmStudioModel] : [codex]), {
-    "openclaw.setup.activate.start": () => activated("lmstudio/qwen3"),
-    "openclaw.setup.prepare.start": () => {
-      prepared = true;
-      return { done: true, status: "done", preparedModelRef: "lmstudio/qwen3" };
-    },
-  });
+it("follows a replacement store without accepting the old store's dismissal", async () => {
+  let autoCalls = 0;
+  const request = setupRequest(() => ({
+    ...result(),
+    selected: autoCalls++ === 0 ? selected : alternative,
+  }));
   const { page } = await mountSetup(request);
-  await openAiStep(page);
-  await click(page, "Run a model locally");
-  await click(page, "LM StudioConnect server");
-  expectRpc(request, "prepare.start", expect.objectContaining({ authChoice: lmStudio.id }));
-  await waitForFast(() =>
-    expectRpc(
-      request,
-      "activate.start",
-      expect.objectContaining({ kind: "provider-auto:lmstudio", modelRef: "lmstudio/qwen3" }),
-    ),
-  );
+  const previous = page.store;
+  page.store = new CustodianSessionStore();
   await settled(page, () => page.store.autoSetup.ready);
-  text(page).toContain("You’re all set!");
+  text(page).toContain("Using Local model (ollama/qwen3)");
+  previous.autoSetup.dismiss();
+  flush();
+  await page.updateComplete;
+  expect(page.querySelector(".custodian-setup")).not.toBeNull();
+  text(page).toContain("Using Local model (ollama/qwen3)");
+  text(page).not.toContain("Using ChatGPT");
 });
 
-it("connects an API key from the card's own form", async () => {
-  const request = setupRequest(undefined, {
-    "openclaw.setup.activate.start": () => activated("openai/gpt-5.5"),
+it("activates an alternative from the standalone compact onboarding surface", async () => {
+  const request = setupRequest(() => result(), {
+    "openclaw.setup.activate": () => ({ ok: true, modelRef: alternative.modelRef }),
+  });
+  const { page, provider } = await mountSetup(request);
+  const surface = document.createElement("openclaw-custodian-surface");
+  surface.store = page.store;
+  surface.onboarding = true;
+  surface.compact = true;
+  page.remove();
+  provider.append(surface);
+  await surface.updateComplete;
+  await waitForFast(() => expect(surface.textContent).toContain("Using ChatGPT"));
+  findButton(surface, "Local model").click();
+  await waitForFast(() => expect(surface.textContent).toContain("Using Local model"));
+  expectRpc(request, "activate", { kind: "ollama" });
+});
+
+it.each(["needs-sign-in", "configured"] as const)("refreshes sign-in from %s", async (status) => {
+  let autoCalls = 0;
+  const shared = status === "configured";
+  const authChoice = shared ? "codex-separate-sign-in" : "codex-sign-in";
+  const signIn = { authOptionId: authChoice, label: "ChatGPT" };
+  const initial = shared
+    ? { ...result(status), selected: { ...selected, shared: true }, separateSignIn: signIn }
+    : { ...unavailable(), status, installedPlugins: ["codex"], signIn };
+  const request = setupRequest(() => (autoCalls++ ? result() : initial), {
+    "openclaw.setup.auth.start": () => ({ sessionId: "auth-session", done: false }),
+    "wizard.next": (params) =>
+      params?.answer
+        ? { done: true, status: "done" }
+        : {
+            done: false,
+            step: { id: "confirm", type: "confirm", message: "Finish signing in?" },
+          },
   });
   const { page } = await mountSetup(request);
-  await openAiStep(page);
-  await click(page, "Another provider");
-  const form = page.querySelector("form")!;
-  form.querySelector<HTMLInputElement>('input[name="key"]')!.value = "sk-test-not-real";
-  form.requestSubmit();
-  await waitForFast(() =>
-    expectRpc(
-      request,
-      "activate.start",
-      expect.objectContaining({
-        kind: "api-key",
-        authChoice: apiKey.id,
-        apiKey: "sk-test-not-real",
-      }),
-    ),
-  );
+  const setup = page.store.autoSetup;
+  if (!shared) {
+    expect(request.mock.calls.filter(([method]) => method === "openclaw.chat")).toHaveLength(0);
+  } else {
+    text(page).toContain("Using your existing Codex login · sessions shared with Codex");
+  }
+  await click(page, shared ? "Sign in separately" : "Sign in with ChatGPT");
+  expectRpc(request, "auth.start", expect.objectContaining({ authChoice }));
+  text(page).toContain("Finish signing in?");
+  await click(page, "Yes", () => autoCalls === 2 && setup.ready && !setup.result?.selected?.shared);
+  expect(autoCalls).toBe(2);
+  text(page).toContain("Using ChatGPT");
+  text(page).toContain(reply.reply);
+  text(page).not.toContain("sessions shared with Codex");
+  text(page).not.toContain("Sign in separately");
 });
 
-it("uses a Claude Code login the Gateway found with one click", async () => {
-  const claudeCode = {
-    kind: "claude-cli",
-    brandId: "anthropic",
-    label: "Claude Code",
-    detail: "installed; signed in",
-    modelRef: "anthropic/claude-sonnet",
-    recommended: false,
-  } satisfies Detection["candidates"][number];
-  const request = setupRequest(() => detection([claudeCode]), {
-    "openclaw.setup.activate.start": () => activated(claudeCode.modelRef),
-  });
-  const { page } = await mountSetup(request);
-  await openAiStep(page);
-  await click(page, "Claude");
-  expect(page.querySelector('.custodian-setup input[name="key"]')).toBeNull();
-  await click(page, "Use my Claude Code login");
-  expectRpc(request, "activate.start", expect.objectContaining({ kind: "claude-cli" }));
-  await settled(page, () => page.store.autoSetup.ready);
-  text(page).toContain("You’re all set!");
-});
-
-it("ignores an old Gateway result after connection ownership changes", async () => {
-  const pending = createDeferred<Detection>();
-  const request = vi.fn(async () => pending.promise);
-  const { context, setGatewaySnapshot } = setupContext(request);
-  const { page } = await mountPage(context);
-  const replacement = setupRequest(() => detection([local]));
-  setGatewaySnapshot({
-    client: { request: replacement } as unknown as GatewayBrowserClient,
-    hello: {
-      type: "hello-ok",
-      protocol: 1,
-      auth: { role: "operator", scopes: ["operator.admin"], deviceToken: "synthetic-new-owner" },
-      features: { methods },
+it.each(["cancelled", ""])("explains a sign-in the Gateway cancelled (%j)", async (error) => {
+  const signIn = { authOptionId: "codex-sign-in", label: "ChatGPT" };
+  const request = setupRequest(
+    () => ({ ...unavailable(), status: "needs-sign-in", installedPlugins: ["codex"], signIn }),
+    {
+      "openclaw.setup.auth.start": () => ({ sessionId: "auth-session", done: false }),
+      "wizard.next": () => ({ done: true, status: "cancelled", error }),
     },
+  );
+  const { page } = await mountSetup(request);
+  await click(page, "Sign in with ChatGPT");
+  alertText(page).toBe("Sign-in canceled");
+});
+
+it("uses shell-neutral native capabilities for fallback, Gateway selection, and permissions", async () => {
+  const openAiSetup = vi.fn();
+  const openGateways = vi.fn();
+  const reviewPermissions = vi.fn();
+  window["__OPENCLAW_NATIVE_SETUP__"] = { openAiSetup, openGateways, reviewPermissions };
+  const request = vi.fn(async () => unavailable());
+  const { page } = await mountSetup(request);
+  await click(page, "Open AI setup");
+  await click(page, "Use a different Gateway");
+  await click(page, "Review permissions");
+  expect(openAiSetup).toHaveBeenCalledOnce();
+  expect(openGateways).toHaveBeenCalledOnce();
+  expect(reviewPermissions).toHaveBeenCalledOnce();
+  text(page).not.toContain("openclaw onboard");
+});
+
+it.each([false, true])(
+  "updates native recovery when its capability snapshot arrives (failed attempt: %s)",
+  async (failedAttempt) => {
+    const snapshot = createNativeDeviceSettingsSnapshot();
+    const post = vi.fn().mockResolvedValue(snapshot);
+    vi.stubGlobal("webkit", { messageHandlers: { openclawDeviceSettings: { postMessage: post } } });
+    vi.stubGlobal("__OPENCLAW_NATIVE_DEVICE_SETTINGS__", snapshot);
+    const nativeDeviceSettings = createNativeDeviceSettingsCapability()!;
+    const request = vi.fn(async () =>
+      unavailable(
+        failedAttempt
+          ? [{ kind: "codex", label: "ChatGPT", error: "Could not prepare the plugin" }]
+          : [],
+      ),
+    );
+    const { context } = setupContext(request);
+    try {
+      const { page } = await mountPage({ ...context, nativeDeviceSettings });
+      await settled(page);
+      text(page).toContain("openclaw onboard");
+      if (failedAttempt) {
+        text(page).toContain("Could not prepare the plugin");
+      }
+      text(page).toContain("only connect tools you trust");
+      expect(request).toHaveBeenCalledTimes(1);
+      window.dispatchEvent(
+        new CustomEvent("openclaw:native-device-settings-changed", {
+          detail: {
+            ...snapshot,
+            capabilities: { ...snapshot.capabilities, aiSetupAvailable: true },
+          },
+        }),
+      );
+      await settled(page);
+      await click(page, "Open AI setup");
+      expect(post).toHaveBeenCalledWith({ type: "open", panel: "ai-setup" });
+      text(page).not.toContain("openclaw onboard");
+    } finally {
+      nativeDeviceSettings.dispose();
+    }
+  },
+);
+
+it("shows RPC failures and retries without a premature greeting", async () => {
+  const request = setupRequest(() => {
+    throw new Error("Gateway lost its connection");
   });
-  await settled(page);
-  pending.resolve(detection());
-  await pending.promise;
-  await settled(page);
-  expect(page.store.autoSetup.detection?.candidates).toEqual([local]);
+  const { page } = await mountSetup(request);
+  await waitForSolid(() => expect(page.querySelector(".sidebar-issues-button")).not.toBeNull());
+  alertText(page).toContain("Gateway lost its connection");
+  expect(request).toHaveBeenCalledTimes(1);
+  await click(page, "Retry");
+  expect(request).toHaveBeenCalledTimes(2);
+});
+
+it("retires a user retry on same-client ownership replacement", async () => {
+  const retry = createDeferred<SetupAutoResult>();
+  let calls = 0;
+  const request = setupRequest(() => {
+    calls += 1;
+    if (calls === 1) {
+      throw new Error("Try again");
+    }
+    return calls === 2 ? retry.promise : { ...result(), selected: alternative };
+  });
+  const { page, setGatewayToken, setGatewaySnapshot } = await mountSetup(request);
+  findButton(page, "Retry").click();
+  await waitForSolid(() => expect(page.querySelector(".custodian-setup__progress")).not.toBeNull());
+  setGatewayToken("synthetic-replacement-owner");
+  setGatewaySnapshot({});
+  await waitForSolid(() => text(page).toContain("Using Local model"));
+  expect(page.querySelector(".custodian-setup__progress")).toBeNull();
+  retry.reject(new Error("Retired retry failed"));
+  await retry.promise.catch(() => {});
+  await waitForSolid(() => text(page).not.toContain("Retired retry failed"));
 });
 
 it("keeps cancellation available during an answer and resumes after protected cancellation", async () => {
   const answer = createDeferred<unknown>();
   const cancellation = createDeferred<unknown>();
   const request = setupRequest(
-    () => ({ ...detection([]), authOptions: [{ ...chatgpt, featured: true }] }),
+    () => ({
+      ...unavailable(),
+      status: "needs-sign-in",
+      signIn: { authOptionId: "codex-sign-in", label: "ChatGPT" },
+    }),
     {
       "openclaw.setup.auth.start": () => ({ done: false }),
       "wizard.next": (params) =>
@@ -441,8 +359,6 @@ it("keeps cancellation available during an answer and resumes after protected ca
     },
   );
   const { page } = await mountSetup(request);
-  await openAiStep(page);
-  await click(page, "ChatGPT");
   await click(page, "Sign in with ChatGPT");
   findButton(page, "Yes").click();
   await waitForSolid(() => expect(findButton(page, "Yes").disabled).toBe(true));
@@ -472,6 +388,30 @@ it("persists dismissal across a new custodian store", async () => {
   const second = await mountPage(context);
   await settled(second.page);
   expect(second.page.querySelector(".custodian-setup")).toBeNull();
+  expect(second.page.textContent).toContain(reply.reply);
+});
+
+it("ignores an old Gateway result after connection ownership changes", async () => {
+  const pending = createDeferred<SetupAutoResult>();
+  const request = vi.fn(async () => pending.promise);
+  const { context, setGatewaySnapshot } = setupContext(request);
+  const { page } = await mountPage(context);
+  const replacement = setupRequest(() => ({ ...result(), selected: alternative }));
+  setGatewaySnapshot({
+    client: { request: replacement } as unknown as GatewayBrowserClient,
+    hello: {
+      type: "hello-ok",
+      protocol: 1,
+      auth: { role: "operator", scopes: ["operator.admin"], deviceToken: "synthetic-new-owner" },
+      features: { methods },
+    },
+  });
+  await settled(page);
+  pending.resolve(result());
+  await pending.promise;
+  await settled(page);
+  text(page).toContain("Using Local model");
+  text(page).not.toContain("Using ChatGPT");
 });
 
 it("preserves the existing caretaker flow without the advertised method", async () => {

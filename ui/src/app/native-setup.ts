@@ -6,6 +6,7 @@ import { nativeGatewaysCapability } from "./native-gateways.runtime.ts";
 export type NativeSetupCapability = {
   /** Display label supplied by the shell, including its local-device name. */
   readonly currentGateway?: { name: string; kind: "local" | "remote" };
+  openAiSetup?: () => void;
   openGateways?: () => void;
   reviewPermissions?: () => void;
 };
@@ -41,6 +42,10 @@ export function nativeSetupCapability(
           kind: current.kind,
         }
       : undefined,
+    openAiSetup:
+      settings?.snapshot?.capabilities?.aiSetupAvailable === true
+        ? () => settings.openPanel("ai-setup")
+        : undefined,
     openGateways: gateways ? () => gateways.openSettings() : undefined,
     reviewPermissions: settings ? () => context.navigate("device-permissions") : undefined,
   };

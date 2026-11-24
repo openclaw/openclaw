@@ -83,20 +83,47 @@ onboarding in the dashboard. **Set up manually** opens native setup instead.
 It does not automatically connect to a discovered Gateway. Existing local and
 remote setups keep their connection and native onboarding behavior.
 
-The dashboard then walks the same steps as the Mac app: **Welcome to OpenClaw**,
-**Where should your assistant run?** (the Gateway it is connected to, with
-**Use a different Gateway** and **Review permissions** in the Mac app), and
-**Connect your AI**. That page lists one row per provider (ChatGPT first, then
-Claude, local models and other providers), and each opens its own card for
-sign-in, keys and the test. Nothing is tested or saved until you pick one;
-OpenClaw then asks it a real test question and keeps it only when it answers.
-Errors show one short sentence with the Gateway's message under **Show
-details**. An existing configured model is kept and shown as **You're all
-set!**. See [AI connection options](/start/onboarding#ai-connection-options).
+The dashboard shows **Connecting your AI…** while automatic setup runs, then a
+summary of the selected provider, model, and Gateway. You can select another
+available provider, use a different Gateway, or review device permissions. If
+sign-in is needed, choose **Sign in with ChatGPT** and follow the inline steps.
+If automatic setup is unavailable, the summary explains the failed attempts and
+offers native AI setup in the Mac app, or `openclaw onboard` in a browser.
+
+Automatic setup keeps an existing configured model. Otherwise it tries usable
+connections in this order:
+
+1. Saved OpenClaw auth profiles.
+2. Codex with stored credentials on the Gateway host.
+3. A Claude CLI login.
+4. `OPENAI_API_KEY`, then `ANTHROPIC_API_KEY`.
+5. Eligible loaded models in Ollama, LM Studio, or llama.cpp.
+
+The first connection that passes a live completion becomes the primary model.
+If Codex detection or runtime inspection fails, automatic setup shows the error
+and stops rather than selecting a local model. Fix the reported problem and
+retry, or choose another available provider manually. A missing Codex executable
+or login still allows the remaining connections to be tried.
+If none works, OpenClaw installs or enables the official Codex plugin and uses
+its existing login, or offers ChatGPT sign-in. If a connection failed for a reason
+other than credentials, setup shows **Couldn’t connect your AI** and the failed
+attempts instead of presenting sign-in as the diagnosis. You can still choose
+ChatGPT sign-in as another connection. Missing or expired credentials without
+other failures keep the sign-in prompt. Apple Foundation Models is a utility
+option and is never chosen as the primary model.
+
+When automatic setup reuses Codex, it shares the Gateway user's `CODEX_HOME`
+(or `~/.codex`), including the login, threads, and `config.toml`. Codex owns
+authentication and token refresh; OpenClaw does not copy the OAuth tokens into
+its auth store. Choose **Sign in separately** on the setup card, or sign in
+with ChatGPT or an OpenAI API key through **Models**, to use an isolated
+OpenClaw agent home, even after reusing a native login.
+See [Codex login and isolation](/start/onboarding#codex-login-and-isolation)
+to switch between these modes.
 
 After inference works, OpenClaw continues its existing guided conversation for
 optional setup, including memory import and channels. You can dismiss the
-setup card; it stays dismissed for that Gateway. Fresh installs leave native
+summary; it stays dismissed for that Gateway. Fresh installs leave native
 Claude/Codex conversation discovery off. Permissions are requested when needed
 and remain available in **Settings → Permissions**.
 
