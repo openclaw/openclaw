@@ -399,7 +399,7 @@ it("discovers peer filter support and never turns transport errors into identity
   };
   client.request.mockResolvedValue({ sessions: [row] });
   expect((await catalog.list({ profileRelation }))[0]).toMatchObject({
-    sessions: [row],
+    sessions: [{ ...row, exportPolicy: { origin: "federated", automatic: false } }],
     error: { code: "FILTER_PARTIAL" },
   });
   expect(client.request).toHaveBeenLastCalledWith("session-share.list", { limit: 20 });

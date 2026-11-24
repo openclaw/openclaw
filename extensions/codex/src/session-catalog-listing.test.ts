@@ -543,6 +543,8 @@ it("exposes every local source as an actionable host for the selected owner", as
       hosts?.every(
         (host) =>
           host.sessions[0]?.sourceHomeId &&
+          host.sessions[0]?.exportPolicy?.origin === "native-local" &&
+          host.sessions[0]?.exportPolicy?.automatic === true &&
           host.sessions[0]?.canContinue &&
           host.sessions[0]?.canArchive,
       ),

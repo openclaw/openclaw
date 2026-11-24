@@ -276,16 +276,18 @@ export function createSessionShareGatewayCatalog(api: OpenClawPluginApi): Sessio
                       },
                     }
                   : {}),
-                sessions: page.sessions.map((session) =>
-                  session.createdActor?.identity
-                    ? Object.assign({}, session, {
+                sessions: page.sessions.map((session) => ({
+                  ...session,
+                  exportPolicy: { origin: "federated" as const, automatic: false },
+                  ...(session.createdActor?.identity
+                    ? {
                         createdActor: {
                           ...session.createdActor,
                           identity: namespace(session.createdActor.identity, source.hostId),
                         },
-                      })
-                    : session,
-                ),
+                      }
+                    : {}),
+                })),
               });
             } catch (error) {
               query.signal?.throwIfAborted();

@@ -59,6 +59,12 @@ export default definePluginEntry({
   `onHost(host)` callback as each host settles; the returned host array remains
   required as the final compatibility snapshot.
 
+  A catalog row can declare its `exportPolicy`. Set `origin` to `native-local` for
+  a native session on this Gateway, `imported` for a received copy, or `federated`
+  for a remote source. Set `automatic: true` only when this source permits
+  background export. An unknown origin requires explicit selection. Assign the
+  policy at the receiving Gateway when projecting a peer's rows.
+
   Providers whose rows require current source authorization declare
   `requiresFreshList: true`. Each list, search, and page request must reauthorize
   its rows at the source. The Gateway bypasses cached pages for these providers;
