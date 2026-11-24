@@ -162,6 +162,78 @@ it("does not let a successful append consume a pending full-window retry", async
   expect(read).toHaveBeenCalledTimes(4);
 });
 
+it.each([
+  { query: owners[0], activityExpiresAt: undefined },
+  { query: owners[1], activityExpiresAt: 20_000 },
+])(
+  "repairs the held $query.source prefix when Load More crosses its cutoff",
+  async ({ query, activityExpiresAt }) => {
+    vi.useFakeTimers();
+    const tail = sessionRow("agent:main:tail");
+    const read = vi
+      .fn()
+      .mockReturnValueOnce({ ...held, totalCount: 4 })
+      // The saved pin moved into the prefix, so offset 2 repeats the last held row.
+      .mockReturnValueOnce({
+        ...sessionsResult([recent, tail], 10_102),
+        offset: 2,
+        activityExpiresAt,
+      })
+      .mockReturnValue({ ...sessionsResult([saved, returning, recent], 10_103), totalCount: 4 });
+    const { sessions, watch, listRows } = rosterReadFixture(read);
+    watch(query);
+    await sessions.refreshList(query);
+    // Gateway time already crossed the cutoff, but the browser timer hasn't run.
+    await sessions.refreshList({ ...query, offset: 2, append: true });
+    expect(listRows(query)).toEqual([saved, recent, tail]);
+    await advance(102);
+    expect(listRows(query)).toEqual([saved, returning, recent]);
+    await advance(120_000);
+    expect(read.mock.calls.map(([params]) => [params.offset, params.limit])).toEqual([
+      [undefined, 2],
+      [2, 2],
+      [undefined, 3],
+    ]);
+  },
+);
+
+it.each([
+  { delivery: 10, wake: 61 },
+  { delivery: 90, wake: 101 },
+])(
+  "honors the first due cutoff when an earlier tail receipt arrives at $delivery ms",
+  async ({ delivery, wake }) => {
+    vi.useFakeTimers();
+    const query = owners[1];
+    const append = createDeferred<SessionsListResult>();
+    const tail = {
+      ...sessionsResult([sessionRow(returning.key)], 10_001),
+      offset: 2,
+      activityExpiresAt: 10_051,
+    };
+    const repaired = [saved, returning, recent];
+    const read = vi
+      .fn()
+      .mockReturnValueOnce(held)
+      .mockReturnValueOnce(append.promise)
+      .mockReturnValue(sessionsResult(repaired, 10_103));
+    const { sessions, watch, resolveOnCleanup, listRows } = rosterReadFixture(read);
+    watch(query);
+    resolveOnCleanup([append, tail]);
+    await sessions.refreshList(query);
+    const more = sessions.refreshList({ ...query, offset: 2, append: true });
+    await advance(delivery);
+    append.resolve(tail);
+    await more;
+    await advance(wake - delivery - 1);
+    expect(read).toHaveBeenCalledTimes(2);
+    await advance(2);
+    expect(listRows(query)).toEqual(repaired);
+    await advance(120_000);
+    expect(read).toHaveBeenCalledTimes(3);
+  },
+);
+
 it("parks both retries while hidden and catches up only the still-mounted window", async () => {
   vi.useFakeTimers();
   const visibility = vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");

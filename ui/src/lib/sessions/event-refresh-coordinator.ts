@@ -30,6 +30,7 @@ export function createSessionEventRefreshCoordinator({
   let retryAt: number | null = null;
   let fallback: ReturnType<typeof setTimeout> | undefined;
   let windowExpiry: number | undefined;
+  let armedWindowDeadline = Infinity;
   // Keep the cutoff's work distinct from events: a newer receipt can retire
   // just this wake, including one waiting for background admission.
   let windowWake: { queued: boolean; retryAt: number | null } | undefined;
@@ -108,8 +109,12 @@ export function createSessionEventRefreshCoordinator({
       at >= result.ts
         ? at
         : undefined;
-    if (next === windowExpiry || (append && windowWake)) {
-      return; // Same cutoff cannot replay; an appended tail cannot settle a due prefix.
+    const deadline =
+      next !== undefined && result ? monotonicDeadlineAfter(next - result.ts + 1) : Infinity;
+    // Only a replacement covers the prefix. A tail can bring its wake forward,
+    // but cannot cancel or delay it, even if the two receipts took different times to arrive.
+    if (next === windowExpiry || (append && (windowWake || deadline >= armedWindowDeadline))) {
+      return;
     }
     if (windowWake && !queued) {
       clearTimer();
@@ -118,10 +123,12 @@ export function createSessionEventRefreshCoordinator({
     cancelWindowExpiry?.();
     cancelWindowExpiry = undefined;
     windowExpiry = next;
-    if (next !== undefined && result) {
+    armedWindowDeadline = deadline;
+    if (next !== undefined) {
       cancelWindowExpiry = scheduleAbsoluteDeadline(
-        monotonicDeadlineAfter(next - result.ts + 1),
+        deadline,
         () => {
+          armedWindowDeadline = Infinity;
           windowWake = { queued: true, retryAt: null };
           arm(false);
         },

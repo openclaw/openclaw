@@ -2,4 +2,5 @@
 # Also covers admitted versus fresh sharing at routed, direct and agent boundaries, live Stop/identity/row fences, and the verified versus device-local table clock.
 # Mounted signed sidebar coverage: independent primary/all-agent roster deadlines, immediate saved-layout edits, menu/selection parity and three device-local compatibility branches.
 # +264: both finite browser rows and cursor continuation versus native/tool controls; signed/device-local clocks without version sniffing; transient expiry, permanent refusal, at-most-once pacing, appended pages, supersession and independent mounted owners.
-1224
+# +72: both bounded owners replace a stale prefix after pagination, even when a delayed tail appears first; an earlier tail cutoff advances the one timer without delaying it.
+1296
