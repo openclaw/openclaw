@@ -1027,7 +1027,7 @@ Chat error banners, including cloud runner failures, show short messages in full
 
 When an active run compacts the conversation while your next message is being prepared, OpenClaw follows the verified continuation automatically, even if the earlier run finishes before preparation does. This keeps the original message and send identity without displaying a retry error.
 
-Run-error banners offer **Refresh** to reload the conversation without resending a message or replacing your draft. If the conversation changes before a message can run and dispatch cannot verify a safe continuation, the banner explains that the message did not run and asks you to refresh before sending it again. The original diagnostic remains under **Details**. OpenClaw does not automatically redirect that message into a replacement conversation.
+When a reply fails and its thread notice isn't available, the composer shows a short notice with a recovery action. **Refresh** reloads the conversation without resending a message or replacing your draft. If the AI service needs you to sign in again, **Open Models** takes you to Models instead. Open **Details** to read or copy the diagnostic or report a bug. If the conversation changed before a message could run, the diagnostic explains when to refresh and send it again; OpenClaw does not redirect it into a replacement conversation automatically.
 
 <AccordionGroup>
   <Accordion title="Send and history semantics">

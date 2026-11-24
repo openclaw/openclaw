@@ -226,21 +226,20 @@ suite.define(() => {
       });
       const alert = page.locator(".chat-error");
       await alert.waitFor();
-      expect(await alert.locator(".app-toast__message").textContent()).toBe(
-        "Couldn't finish this reply.",
-      );
-      expect(await alert.locator("summary").textContent()).not.toContain(skillPath);
-      expect(await alert.locator("summary").textContent()).not.toContain("INVALID_BUNDLE");
+      expect(await alert.getByRole("alert").textContent()).toBe("Couldn't finish this reply.");
+      const toggle = exactButton(alert, "Details");
+      expect(await alert.innerText()).not.toContain(skillPath);
+      expect(await alert.innerText()).not.toContain("INVALID_BUNDLE");
       expect(await alert.locator(".lazy-view-error__detail").isVisible()).toBe(false);
       expect(await page.locator(".chat-thread").textContent()).toContain(prompt);
-      await alert.locator("summary").click();
+      await toggle.click();
       const details = alert.locator(".lazy-view-error__detail");
       await polledVisible(details).toBe(true);
       expect(await details.textContent()).toBe(safeError);
       await exactButton(alert, "Copy error").click();
       await polledClipboard(page).toBe(safeError);
       await expectMobileFit(page, alert);
-      await alert.locator("summary").click();
+      await toggle.click();
       const input = page.locator(".agent-chat__input textarea");
       await input.fill("A newer draft stays here");
       const historyCount = (await gateway.getRequests("chat.history")).length;

@@ -277,7 +277,7 @@ it.each(["native", "delegated"] as const)(
     render(initial);
     await waitForSolid(() => {
       expect(provider.querySelector(".chat-conversation-loading")).not.toBeNull();
-      expect(provider.querySelector(".chat-error.app-toast")?.textContent).toContain(
+      expect(provider.querySelector(".chat-reply-notice [role='alert']")?.textContent).toBe(
         "Couldn't finish this reply.",
       );
     });
@@ -286,14 +286,11 @@ it.each(["native", "delegated"] as const)(
     provider.querySelector<HTMLButtonElement>(".chat-error__refresh")!.click();
     expect(onRefresh).toHaveBeenCalledOnce();
 
-    const notice = provider.querySelector(".chat-error.app-toast");
+    const notice = provider.querySelector(".chat-reply-notice");
     render({ ...initial, mobileComposer: false });
     await waitForSolid(() => {
       expect(provider.querySelector(".chat-conversation-loading")).toBeNull();
-      expect(provider.querySelector(".chat-error.app-toast")).toBe(notice);
-      expect(provider.querySelector(".chat-error")?.textContent).toContain(
-        "Couldn't finish this reply. Check the conversation before trying again.",
-      );
+      expect(provider.querySelector(".chat-reply-notice")).toBe(notice);
     });
     expect(provider.querySelector("textarea")).toBe(textarea);
     expect(textarea.value).toBe("Retain this draft");

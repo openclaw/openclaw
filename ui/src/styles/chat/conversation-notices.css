@@ -1,3 +1,50 @@
+.chat-reply-notice.chat-composer-neighbor-card {
+  min-height: 44px;
+  padding-block: 6px;
+  column-gap: 8px;
+  row-gap: 6px;
+}
+
+.chat-reply-notice__message {
+  font-size: calc(13px * var(--control-ui-text-scale));
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.chat-reply-notice__actions,
+.chat-reply-notice__tools {
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.chat-reply-notice__actions .btn--ghost {
+  background: transparent;
+  color: var(--muted);
+}
+
+.chat-reply-notice__details:not([hidden]) {
+  display: grid;
+  grid-column: 2 / -1;
+  gap: 8px;
+  border-block-start: 1px solid var(--border);
+  padding-block: 8px 4px;
+}
+
+.chat-reply-notice__tools {
+  justify-content: space-between;
+}
+
+@media (max-width: 560px) {
+  .chat-reply-notice__message {
+    grid-column: 2 / -1;
+  }
+
+  .chat-reply-notice__actions {
+    grid-column: 2 / -1;
+    justify-content: flex-end;
+  }
+}
+
 .chat-history-error:not(.chat-history-error--inline) {
   display: block;
   padding: 0;

@@ -64,17 +64,23 @@ function publishHistory(
 }
 
 it.each([false, true])("collapses a replacement diagnostic (mobile=%s)", async (mobile) => {
-  const { container, publish } = publishedComposer(
+  const { container, getByRole, publish } = publishedComposer(
     { runError: { summary: "First diagnostic" } },
     mobile,
   );
   await vi.dynamicImportSettled();
-  const details = await waitForElement(container, "details", "first diagnostic");
-  details.setAttribute("open", "");
+  const details = await waitForElement(
+    container,
+    ".chat-reply-notice__details",
+    "first diagnostic",
+  );
+  const toggle = getByRole("button", { name: "Details", exact: true });
+  toggle.click();
+  await waitForSolid(() => expect(details.hasAttribute("hidden")).toBe(false));
   publish({ messages: [], runError: { summary: "Second diagnostic" } });
   await waitForSolid(() => {
-    expect(container.querySelector("details")).not.toBe(details);
-    expect(container.querySelector("details")?.open).toBe(false);
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
+    expect(details.textContent).toContain("Second diagnostic");
   });
 });
 it("preserves caller-owned recovery instructions in request notices", async () => {
@@ -198,15 +204,11 @@ it.each([
   await waitForSolid(() => expect(container.querySelector(".chat-error")).not.toBeNull());
   const notice = container.querySelector(".chat-error");
   if (contention) {
-    expect(notice?.classList.contains("app-toast--warning")).toBe(true);
+    expect(notice?.classList.contains("chat-composer-neighbor-card--warn")).toBe(true);
     expect(notice?.classList.contains("chat-composer-neighbor-card--danger")).toBe(false);
-    expect(notice?.getAttribute("role")).toBe("status");
-    const details = notice?.querySelector("details");
-    expect(details).toMatchObject({ open: false });
-    expect(notice?.querySelector(".app-toast__message")?.textContent).toBe("OpenClaw is busy.");
-    expect(notice?.querySelector(".app-toast__description")?.textContent).toBe(
-      "Check status before trying again.",
-    );
+    const details = notice?.querySelector(".chat-reply-notice__details");
+    expect(details?.hasAttribute("hidden")).toBe(true);
+    expect(notice?.querySelector('[role="status"]')?.textContent).toBe("OpenClaw is busy.");
     expect(details?.querySelector(".lazy-view-error__detail")?.textContent).toBe(diagnostic);
     expect(notice?.querySelector("img")).toBeNull();
   }
@@ -232,15 +234,24 @@ it.each([
     placementStartup: kind === "placement" ? failedPlacement(diagnostic) : undefined,
   };
   const { container, publish } = publishedComposer(initial, mobile);
-  await waitForSolid(() => expect(container.querySelector("details")).not.toBeNull());
-  const details = container.querySelector("details")!;
-  const summary = details.querySelector("summary")!;
-  details.open = true;
-  summary.focus();
+  const panelSelector = kind === "run" ? ".chat-reply-notice__details" : "details";
+  const details = await waitForElement(container, panelSelector, "error diagnostic");
+  const toggle = requireElement(
+    container,
+    kind === "run" ? "[aria-controls]" : "summary",
+    "error toggle",
+  );
+  (toggle as HTMLElement).click();
+  (toggle as HTMLElement).focus();
+  flush();
   publishHistory(publish, initial, () => {
-    expect(container.querySelector("details")).toBe(details);
-    expect(details.open).toBe(true);
-    expect(document.activeElement).toBe(summary);
+    expect(container.querySelector(panelSelector)).toBe(details);
+    expect(
+      kind === "run"
+        ? toggle.getAttribute("aria-expanded") === "true"
+        : details.hasAttribute("open"),
+    ).toBe(true);
+    expect(document.activeElement).toBe(toggle);
     expect(details.querySelector(".lazy-view-error__detail")?.textContent).toBe(
       kind === "run" ? diagnostic : t("newSession.placementStartFailed", { error: diagnostic }),
     );
@@ -355,9 +366,22 @@ describe("chat view notice integration", () => {
         });
 
         const alert = await waitForElement(container, ".chat-error", "chat run error");
-        expect(alert.getAttribute("role")).toBe("alert");
-        const details = requireElement(alert, "details", "error disclosure");
-        expect(details.hasAttribute("open")).toBe(false);
+        expect(
+          (source === "run" ? alert.querySelector('[role="alert"]') : alert)?.getAttribute("role"),
+        ).toBe("alert");
+        const details = requireElement(
+          alert,
+          source === "run" ? ".chat-reply-notice__details" : "details",
+          "error disclosure",
+        );
+        const toggle = requireElement(
+          alert,
+          source === "run" ? "[aria-controls]" : "summary",
+          "error header",
+        ) as HTMLElement;
+        const isOpen = () =>
+          source === "run" ? !details.hasAttribute("hidden") : details.hasAttribute("open");
+        expect(isOpen()).toBe(false);
         const fullDiagnostic = requireElement(
           details,
           ".lazy-view-error__detail",
@@ -368,21 +392,19 @@ describe("chat view notice integration", () => {
         expect(alert.textContent).not.toMatch(/[⚠🛠]/u);
         expect(alert.textContent).toContain("🧭");
         expect(alert.querySelector("img")).toBeNull();
-        const summary = requireElement(details, "summary", "error header");
-        expect(summary.textContent).toContain("Show details");
-        expect(summary.textContent).not.toContain("Error details");
+        expect(toggle.textContent).toContain(source === "run" ? "Details" : "Show details");
+        expect(toggle.textContent).not.toContain("Error details");
         expect(alert.querySelectorAll(".chat-copy-btn")).toHaveLength(1);
         const copy = details.querySelector<HTMLButtonElement>('[aria-label="Copy error"]');
         expect(copy).not.toBeNull();
-        for (const open of [false, true]) {
-          details.toggleAttribute("open", open);
-          copy?.click();
-          await waitForFast(() => expect(copy?.disabled).toBe(false));
-          await waitForFast(() => expect(writeText).toHaveBeenCalledTimes(open ? 2 : 1));
-          expect(writeText).toHaveBeenLastCalledWith(diagnostic);
-          expect(details.hasAttribute("open")).toBe(open);
-        }
-        (summary as HTMLElement).click();
+        toggle.click();
+        await waitForSolid(() => expect(isOpen()).toBe(true));
+        copy?.click();
+        await waitForFast(() => expect(copy?.disabled).toBe(false));
+        await waitForFast(() => expect(writeText).toHaveBeenCalledOnce());
+        expect(writeText).toHaveBeenLastCalledWith(diagnostic);
+        expect(isOpen()).toBe(true);
+        toggle.click();
         expect(onDismissError).not.toHaveBeenCalled();
         expect(onRetrySessionPlacementStartup).not.toHaveBeenCalled();
         expect(

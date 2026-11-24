@@ -44,15 +44,8 @@ suite.define(() => {
       errorMessage,
     });
     const failure = page.locator(".chat-error").filter({ hasText: errorMessage });
-    await failure
-      .locator(".app-toast__message")
-      .getByText("Couldn't finish this reply.", { exact: true })
-      .waitFor();
-    await failure
-      .locator(".app-toast__description")
-      .getByText("Check the conversation before trying again.", { exact: true })
-      .waitFor();
-    await failure.locator("summary").click();
+    await failure.getByText("Couldn't finish this reply.", { exact: true }).waitFor();
+    await failure.getByRole("button", { name: "Details", exact: true }).click();
     const details = failure.getByLabel("Error details", { exact: true });
     await details.waitFor();
     expect(await details.textContent()).toContain(errorMessage);

@@ -9,6 +9,7 @@ import {
   ChatTopbarNoticesContent,
 } from "./chat-view-notices-content.tsx";
 import "../../styles.css";
+import "../../styles/chat/conversation-notices.css";
 import "../../styles/chat/layout.css";
 
 const box = (root: Element, selector: string) =>
@@ -83,34 +84,40 @@ it("keeps redacted diagnostics readable, stable across refreshes, and reset for 
 });
 
 it("keeps the recovery action beside the title with a visible dismiss", async () => {
-  const dismiss = vi.fn();
-  const view = mountSolid(() => (
-    <ChatComposerNoticesContent
-      sessionKey="agent:main:main"
-      connected
-      messages={[]}
-      runError={{
-        runId: "run-1",
-        summary: "Error: Restore failed.\nprovider reported lease destroyed",
-      }}
-      onRefresh={() => {}}
-      onDismissRunError={dismiss}
-    />
-  ));
-  await waitForSolid(() =>
-    expect(view.container.querySelector(".chat-error__refresh")).not.toBeNull(),
-  );
-  const offset = () =>
-    box(view.container, ".chat-error__refresh").top -
-    box(view.container, ".app-toast__message").top;
-  const closed = offset();
-  expect(Math.abs(closed)).toBeLessThan(8);
-  view.container.querySelector("details")!.open = true;
-  await waitForSolid(() => expect(offset()).toBe(closed));
-  const close = view.container.querySelector<HTMLButtonElement>(".app-toast__dismiss")!;
-  expect(getComputedStyle(close).opacity).toBe("1");
-  close.click();
-  expect(dismiss).toHaveBeenCalledOnce();
+  const previous = { width: window.innerWidth, height: window.innerHeight };
+  await page.viewport(820, previous.height);
+  try {
+    const dismiss = vi.fn();
+    const view = mountSolid(() => (
+      <ChatComposerNoticesContent
+        sessionKey="agent:main:main"
+        connected
+        messages={[]}
+        runError={{
+          runId: "run-1",
+          summary: "Error: Restore failed.\nprovider reported lease destroyed",
+        }}
+        onRefresh={() => {}}
+        onDismissRunError={dismiss}
+      />
+    ));
+    await waitForSolid(() =>
+      expect(view.container.querySelector(".chat-error__refresh")).not.toBeNull(),
+    );
+    const offset = () =>
+      box(view.container, ".chat-error__refresh").top -
+      box(view.container, ".chat-reply-notice__message").top;
+    const closed = offset();
+    expect(Math.abs(closed)).toBeLessThan(8);
+    view.getByRole("button", { name: "Details", exact: true }).click();
+    await waitForSolid(() => expect(offset()).toBe(closed));
+    const close = view.getByRole("button", { name: "Dismiss error", exact: true });
+    expect(getComputedStyle(close).opacity).toBe("1");
+    close.click();
+    expect(dismiss).toHaveBeenCalledOnce();
+  } finally {
+    await page.viewport(previous.width, previous.height);
+  }
 });
 
 it.each([300, 500])("keeps recovery and reporting clickable at %ipx", async (width) => {
@@ -129,6 +136,10 @@ it.each([300, 500])("keeps recovery and reporting clickable at %ipx", async (wid
         onRefresh={() => {}}
       />
     ));
+    await waitForSolid(() =>
+      expect(view.container.querySelector("[aria-controls]")).not.toBeNull(),
+    );
+    view.getByRole("button", { name: "Details", exact: true }).click();
     await waitForSolid(() => {
       const recovery = view.container.querySelector<HTMLElement>(".chat-error__refresh")!;
       const report = view.container.querySelector<HTMLAnchorElement>("a.report-issue-link")!;

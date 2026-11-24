@@ -187,7 +187,7 @@ suite.define(() => {
       );
       const alert = page.locator(".chat-error");
       await alert.waitFor();
-      const summary = alert.locator("summary");
+      const summary = alert.getByRole("button", { name: "Details", exact: true });
       const copy = alert.getByRole("button", { name: "Copy error", exact: true });
       expect(await copy.isVisible()).toBe(false);
       await summary.press("Enter");

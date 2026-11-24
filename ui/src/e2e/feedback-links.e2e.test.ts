@@ -35,46 +35,29 @@ suite.define(() => {
         });
         await page.goto(new URL("/chat/main", suite.server.baseUrl).href);
         const notice = page.locator(".chat-error");
-        const title = notice.locator(".app-toast__message");
-        const description = notice.locator(".app-toast__description");
+        const message = notice.getByRole("alert");
+        const details = notice.getByRole("button", { name: "Details", exact: true });
         const refresh = notice.getByRole("button", { name: "Refresh", exact: true });
         const report = notice.getByRole("link", { name: "Report a bug", exact: true });
-        await report.waitFor();
+        await details.waitFor();
+        expect(await message.textContent()).toBe("Couldn't finish this reply.");
+        expect(await report.isVisible()).toBe(false);
         const frame = await takeControlUiScreenshotFrame(
           page,
           notice,
-          [title, description, refresh, report],
+          [message, refresh, details],
           {
-            elements: [notice, title, description, refresh, report],
+            elements: [notice, message, refresh, details],
             animations: "disabled",
           },
         );
-        const bounds = frame.elements.map((element) => element.bounds);
-        const [cardBox, titleBox, descriptionBox] = bounds;
-        const fontSize = await report.evaluate((element) => getComputedStyle(element).fontSize);
         await writeFile(path.join(suite.artifactDir, `layout-${width}.png`), frame.png);
-        await writeFile(
-          path.join(suite.artifactDir, `layout-${width}.json`),
-          JSON.stringify(
-            {
-              viewport: page.viewportSize(),
-              bounds,
-              fontSize,
-              gap: descriptionBox!.y - titleBox!.y - titleBox!.height,
-            },
-            null,
-            2,
-          ),
-        );
-        const gap = descriptionBox!.y - titleBox!.y - titleBox!.height;
-        expect.soft(gap).toBeGreaterThanOrEqual(2);
-        expect.soft(gap).toBeLessThanOrEqual(6);
-        expect
-          .soft(fontSize)
-          .toBe(await description.evaluate((element) => getComputedStyle(element).fontSize));
         if (width === 1280) {
-          expect.soft(cardBox!.height).toBeLessThanOrEqual(104);
+          expect(frame.elements[0]!.bounds.height).toBeLessThanOrEqual(48);
         }
+        await details.press("Enter");
+        await notice.getByLabel("Error details", { exact: true }).waitFor();
+        expect(await details.getAttribute("aria-expanded")).toBe("true");
         await context.route("https://github.com/**", (route) =>
           route.fulfill({ body: "Issue form destination verified" }),
         );
@@ -84,9 +67,6 @@ suite.define(() => {
         await popup.waitForLoadState();
         expect(new URL(popup.url()).pathname).toBe("/openclaw/openclaw/issues/new");
         await popup.close();
-        await notice.locator("summary").press("Enter");
-        await notice.getByLabel("Error details", { exact: true }).waitFor();
-        expect(await notice.locator("details").getAttribute("open")).not.toBeNull();
         const reads = (await gateway.getRequests("chat.history")).length;
         await refresh.click();
         await gateway.waitForRequest("chat.history", { after: reads });
