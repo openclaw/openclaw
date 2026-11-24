@@ -437,18 +437,9 @@ jobs:
           persist-credentials: false
 
       - name: Setup trusted validation verifier dependencies
-        uses: ./trusted-workflow/.github/actions/setup-pnpm-store-cache
+        uses: ./trusted-workflow/.github/actions/setup-release-verifier
         with:
-          cache-mode: off
-          package-manager-file: trusted-workflow/package.json
-          lockfile-path: trusted-workflow/pnpm-lock.yaml
-          node-version: ${{ env.NODE_VERSION }}
-
-      - name: Install trusted validation verifier dependencies
-        working-directory: trusted-workflow
-        env:
-          CI: "true"
-        run: pnpm install --frozen-lockfile --prefer-offline --ignore-scripts
+          tooling-root: trusted-workflow
 
       - name: Acquire authenticated publication manifest
         if: ${{ inputs.release_evidence_mode == 'full-release-validation' && inputs.full_release_validation_run_id != '' }}

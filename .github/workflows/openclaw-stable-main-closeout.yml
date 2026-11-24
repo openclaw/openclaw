@@ -461,18 +461,9 @@ jobs:
           package-manager-cache: false
 
       - name: Setup trusted closeout dependencies
-        uses: ./.closeout-tooling/.github/actions/setup-pnpm-store-cache
+        uses: ./.closeout-tooling/.github/actions/setup-release-verifier
         with:
-          cache-mode: off
-          package-manager-file: .closeout-tooling/package.json
-          lockfile-path: .closeout-tooling/pnpm-lock.yaml
-          node-version: "24.22.1"
-
-      - name: Install trusted closeout dependencies
-        working-directory: .closeout-tooling
-        env:
-          CI: "true"
-        run: pnpm install --frozen-lockfile --ignore-scripts
+          tooling-root: .closeout-tooling
 
       - name: Verify release workflow evidence
         env:

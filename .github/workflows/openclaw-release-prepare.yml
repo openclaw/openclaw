@@ -95,14 +95,7 @@ jobs:
           node-version: "24.22.1"
 
       - name: Setup trusted readiness dependencies
-        uses: ./.github/actions/setup-pnpm-store-cache
-        with:
-          cache-mode: off
-          node-version: "24.22.1"
-      - name: Install trusted readiness dependencies
-        env:
-          CI: "true"
-        run: pnpm install --frozen-lockfile --prefer-offline --ignore-scripts
+        uses: ./.github/actions/setup-release-verifier
       - name: Dispatch non-publishing preparation
         id: dispatch
         env:
@@ -155,14 +148,7 @@ jobs:
           node-version: "24.22.1"
 
       - name: Setup trusted readiness dependencies
-        uses: ./.github/actions/setup-pnpm-store-cache
-        with:
-          cache-mode: off
-          node-version: "24.22.1"
-      - name: Install trusted readiness dependencies
-        env:
-          CI: "true"
-        run: pnpm install --frozen-lockfile --prefer-offline --ignore-scripts
+        uses: ./.github/actions/setup-release-verifier
       # Set up trusted tooling before introducing candidate files into the workspace.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

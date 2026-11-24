@@ -11,6 +11,7 @@ if (process.env.CI) {
 export default createScopedVitestConfig(
   [
     "test/manual-release-approval.checks.ts",
+    "test/manual-release-verifier.checks.ts",
     "test/manual-fast-track-publication.checks.ts",
     "test/manual-fast-track-receipt.checks.ts",
     "test/manual-fast-track-button.checks.ts",

@@ -1,0 +1,8 @@
+{
+  "name": "openclaw-release-verifier-runtime",
+  "private": true,
+  "version": "1.0.0",
+  "dependencies": {
+    "zod": "4.6.7"
+  }
+}
