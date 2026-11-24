@@ -19,7 +19,7 @@ function issueAuthority(
   scopes: readonly string[] = ["operator.sessions.write"],
   profileId = "create-requester",
 ) {
-  const authority = createTestOperatorAuthority({ profileId, scopes, assertCurrent: () => {} });
+  const authority = createTestOperatorAuthority({ profileId, scopes });
   return { authority };
 }
 

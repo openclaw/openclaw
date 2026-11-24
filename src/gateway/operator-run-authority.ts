@@ -23,7 +23,6 @@ import { prepareUserProfileIdentity } from "../state/user-profile-list.js";
 import type { UserChannelAuthorizationReference } from "../state/user-profiles.types.js";
 import { isBrowserOperatorUiClient, isWebchatClient } from "../utils/message-channel.js";
 import {
-  bindGatewayDeviceRevocation,
   readGatewayDeviceSourceAuthority,
   readGatewayDeviceSourceIdentity,
   readGatewayDeviceReconnectSourceIdentity,
@@ -186,7 +185,6 @@ export function captureChannelOperatorRunAuthority(input: {
     scopes: params.scopes,
     rolePolicy: prepareRunRolePolicy(sourceRolePolicy(role)),
     gatewayAccessGrant: params.gatewayAccessGrant,
-    assertCurrent: () => params.signal?.throwIfAborted(),
     signal: params.signal,
     readCurrentRoleFacts: () => ({
       assignedRole: params.assignedRole,
@@ -234,7 +232,7 @@ export async function prepareGatewayOperatorRunAuthority(
   const inherited = params.client?.internal?.operatorRunAuthority;
   if (inherited !== undefined) {
     assertAdmittedRunOperatorAuthority(inherited);
-    inherited.assertCurrent();
+    inherited.signal?.throwIfAborted();
     const scopes = intersectOperatorScopes(inherited.scopes, params.client?.connect.scopes ?? []);
     const authority = roleScopesAllow({
       role: "operator",
@@ -249,7 +247,6 @@ export async function prepareGatewayOperatorRunAuthority(
             return inherited.modelPolicy;
           },
         });
-    bindGatewayDeviceRevocation(authority.assertCurrent, inherited.assertCurrent);
     return { authority, release: inherited.retain?.() ?? (() => {}) };
   }
   const actor = resolveGatewayOperatorRoleActor(params.client);
@@ -471,7 +468,6 @@ export async function prepareGatewayOperatorRunAuthority(
       openclawIdPrincipal,
       scopes,
       gatewayAccessGrant: grant ? Object.freeze({ ...grant }) : grant,
-      assertCurrent,
     };
     const {
       snapshot: recoverySnapshot,
@@ -522,7 +518,6 @@ export async function prepareGatewayOperatorRunAuthority(
       },
       modelPolicy,
     });
-    bindGatewayDeviceRevocation(authority.assertCurrent, params.hasCurrentClientAuthority);
     if (
       authenticatedOwner &&
       client.usesSharedGatewayAuth === true &&

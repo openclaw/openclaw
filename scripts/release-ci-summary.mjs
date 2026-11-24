@@ -87,6 +87,7 @@ import {
   validateReleaseWaiverAggregates,
 } from "./lib/release-validation-waivers.mjs";
 import {
+  resolveQualificationAdmissionDescriptor,
   revalidateQualificationAdmissionAuthority,
   verifyQualificationAdmission,
   runQualificationAdmissionGh,
@@ -663,8 +664,18 @@ export async function restoreOriginalPublicationAdmission({ request, client, cac
     throw new Error("cached publication plan differs from its authenticated original");
   }
   const source = validatePublicationSourceBinding(plan);
+  // Older Q bound an explicit empty, retired publication-artifact input.
+  // Its signed source bytes stay untouched; only compare the effective operands.
+  const effectiveCoverage = (coverage) => {
+    if (coverage.publication_artifact_source_json !== "") {
+      return coverage;
+    }
+    const { publication_artifact_source_json: _retired, ...current } = coverage;
+    return current;
+  };
   if (
-    publicationSourceJson(source.coverage) !== publicationSourceJson(request.coverage) ||
+    publicationSourceJson(effectiveCoverage(source.coverage)) !==
+      publicationSourceJson(effectiveCoverage(request.coverage)) ||
     publicationSourceJson(source.publicationSelection) !==
       publicationSourceJson(request.publicationSelection) ||
     source.validationPurpose !== request.validationPurpose
@@ -2159,10 +2170,11 @@ export function createReleaseEvidenceClient(repository = DEFAULT_REPO, { immutab
       : immutableReads.text(route, load);
   };
   return {
-    validateChildReuse(selection, request, { deadlineMs } = {}) {
+    validateChildReuse(selection, request, { deadlineMs, waiverPolicy } = {}) {
       return validateReusableReleaseChild(selection, request, {
         immutableReads,
         deadlineMs,
+        waiverPolicy,
         getJobLog: (id) => parentJobLog(id, normalizedRepository, immutableReads),
       });
     },
@@ -2209,6 +2221,12 @@ export function createReleaseEvidenceClient(repository = DEFAULT_REPO, { immutab
     },
     compareCommits(base, head) {
       return readJson(`compare/${base}...${head}`);
+    },
+    getCommit(sha) {
+      return readJson(`commits/${normalizeSha(sha, "waiver policy SHA")}?per_page=2`);
+    },
+    resolveQualificationAdmissionDescriptor(options) {
+      return resolveQualificationAdmissionDescriptor(options);
     },
     getJobLog(jobId) {
       return parentJobLog(jobId, normalizedRepository, immutableReads);

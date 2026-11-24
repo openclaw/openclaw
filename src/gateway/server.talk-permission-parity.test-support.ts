@@ -423,7 +423,7 @@ export async function runTalkNodePermissionParity({
             ),
           ).toBe(false);
           await expect(provider.run("Start new work after revocation")).rejects.toThrow(
-            /authority|active|closed|stopped/i,
+            /ended or changed|closed|stopped/i,
           );
         }
         const completed =

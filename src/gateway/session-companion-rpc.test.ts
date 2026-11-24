@@ -118,9 +118,7 @@ it("keeps a memory incognito source current through operator authority for durab
     const ask = vi.fn(async (request: Parameters<SessionCompanionService["ask"]>[0]) => {
       const authority = expectDefined(request.operatorAuthority, "Captured operator authority");
       expect(authority.profileId).toBe(profile.id);
-      await patchSessionEntryCore(target, () => ({ label: "private source accepted" }), {
-        workerGuard: { source: authority.assertCurrent },
-      });
+      await patchSessionEntryCore(target, () => ({ label: "private source accepted" }));
       return { answer: "Private source accepted.", ts: 125 };
     });
     const respond = await invoke(
@@ -135,7 +133,7 @@ it("keeps a memory incognito source current through operator authority for durab
     expect(loadSessionEntry(target)?.label).toBe("private source accepted");
   }));
 
-it("carries the authenticated model policy and releases it after answering", async () => {
+it("carries the authenticated model policy", async () => {
   const controller = new AbortController();
   await withProfiles(async () => {
     const client = viewer("companion-policy", "policy-connection");
@@ -163,7 +161,6 @@ it("carries the authenticated model policy and releases it after answering", asy
       expect(captured?.modelPolicy?.models).toEqual([
         { provider: "test-provider", model: "allowed" },
       ]);
-      captured?.assertCurrent();
       return { answer: "Allowed answer.", ts: 125 };
     });
     const respond = await invoke(
@@ -174,7 +171,6 @@ it("carries the authenticated model policy and releases it after answering", asy
     );
     expect(respond).toHaveBeenCalledExactlyOnceWith(true, { answer: "Allowed answer.", ts: 125 });
     expect(captured).toBeDefined();
-    expect(() => captured?.assertCurrent()).toThrow("Operator execution ended.");
   });
 });
 

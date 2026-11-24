@@ -584,6 +584,19 @@ openclaw-session-owner-chip .viewer-avatar__initials {
     box-shadow var(--duration-fast) var(--ease-out);
 }
 
+/* All states size the same grid cell; only the active one is visible and named. */
+.state-stack {
+  display: inline-grid;
+
+  & > * {
+    grid-area: 1 / 1;
+  }
+
+  & > [aria-hidden="true"] {
+    visibility: hidden;
+  }
+}
+
 .btn:hover:where(:not(:disabled, [aria-disabled="true"])) {
   background: var(--btn-bg-hover, var(--bg-hover));
   border-color: var(--border-strong);

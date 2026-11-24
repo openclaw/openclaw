@@ -716,3 +716,80 @@ it("keeps one toolbar at phone width and moves page actions into a menu", async 
   });
   expect(onExport).toHaveBeenCalledWith([raw], "filtered");
 });
+
+it("resumes following when WebKit delivers a wheel's travel to the end after the idle window", () => {
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  const clock = createFrameClock();
+  vi.stubGlobal("requestAnimationFrame", clock.request);
+  vi.stubGlobal("cancelAnimationFrame", clock.cancel);
+  let rowHeight = 20;
+  vi.spyOn(HTMLElement.prototype, "offsetHeight", "get").mockImplementation(function (
+    this: HTMLElement,
+  ) {
+    return this.classList.contains("log-stream") ? 380 : rowHeight;
+  });
+  const lines = (count: number) =>
+    Array.from({ length: count }, (_, id) => ({ id, raw: `line ${id}` }));
+  const [autoFollow, setAutoFollow] = createSignal(true);
+  const onToggleAutoFollow = vi.fn(setAutoFollow);
+  let stream!: HTMLDivElement;
+  let jump!: () => void;
+  const view = mountSolid(() => (
+    <LogsView
+      {...createProps({
+        status: { error: null, hasLoaded: true, stale: false, awaitingGateway: false },
+        onToggleAutoFollow,
+        onStreamRef: (element, scroll) => {
+          stream = element;
+          jump = scroll;
+          installClampedLogsViewport(element, 378);
+        },
+      })}
+      autoFollow={autoFollow()}
+      entries={lines(500)}
+    />
+  ));
+  const frame = (scroll: boolean) => {
+    vi.advanceTimersByTime(16);
+    clock.flush(performance.now());
+    flush();
+    if (scroll) {
+      stream.dispatchEvent(new Event("scroll"));
+    }
+    flush();
+  };
+  const end = () => stream.scrollHeight - stream.clientHeight;
+  try {
+    flush();
+    jump();
+    for (let i = 0; i < 4; i++) {
+      frame(true);
+    }
+    stream.dispatchEvent(new WheelEvent("wheel", { deltaY: -4000 }));
+    stream.scrollTop = 2000;
+    stream.dispatchEvent(new Event("scroll"));
+    flush();
+    vi.advanceTimersByTime(300);
+    expect(onToggleAutoFollow).toHaveBeenLastCalledWith(false);
+
+    // Rows near the end render taller than the estimate. A busy main thread delivers the wheel's
+    // scroll event after the idle window; its measurements then carry the view to the end.
+    rowHeight = 23;
+    stream.dispatchEvent(new WheelEvent("wheel", { deltaY: 1_000_000 }));
+    stream.scrollTop = end();
+    for (let i = 0; i < 3; i++) {
+      frame(false);
+    }
+    vi.advanceTimersByTime(250);
+    stream.dispatchEvent(new Event("scroll"));
+    flush();
+    for (let i = 0; i < 6; i++) {
+      frame(true);
+    }
+
+    expect(end() - stream.scrollTop).toBeLessThan(2);
+    expect(onToggleAutoFollow).toHaveBeenLastCalledWith(true);
+  } finally {
+    view.unmount();
+  }
+});

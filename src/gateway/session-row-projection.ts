@@ -65,7 +65,8 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
   const byParent = new Map<string, Set<string>>(),
     byKey = new Map<string, Set<string>>();
   const indexes = { byStore, byAgent, byParent, byKey };
-  const referenced = (ref: string) => records.firstReferenced(ref, rows, byKey, stores.keys());
+  const referenced = (ref: string) =>
+    rowIdentities.firstReferenced(ref, rows, byKey, stores.keys());
   const dirty = new Set<string>();
   const recents = createSessionRowRecents({
     rows,

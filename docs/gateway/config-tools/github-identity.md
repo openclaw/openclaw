@@ -119,6 +119,9 @@ For OpenClaw-owned `exec` with `host=gateway`, including Pi `exec` and Codex `ga
 
 **Managed Codex execution uses the same host-owned boundary.** When a managed GitHub identity is selected for a run, OpenClaw disables Codex-native shell execution and routes commands through its host-owned execution tools. These tools retain the executing agent's selected profile, caller authority, approval checks, and cancellation lifecycle. A missing or unavailable managed profile refuses execution rather than falling back to a native account; reconnect or change the identity in Settings before retrying. Without a managed selection, native Codex defaults remain unchanged. This routing does not export Gateway credentials to ordinary paired-node execution.
 
+On packaged Windows Gateways, the credential reader reuses the known native dependency redirect
+from Gateway startup. Exec environment overrides do not change the reader's redirect roots.
+
 Choosing a different identity or inheritance target selects another profile for new runs. An admitted run keeps its prior profile selection, and already-launched local exec processes keep their launch token until they exit. Retired profile files are cleaned on the next Gateway restart, so changing this setting is not immediate credential revocation.
 
 If cleanup cannot read a directory's identity, it leaves that directory untouched, logs a warning with the path and reason, and continues checking the remaining profiles. Missing directories are skipped without a warning.
