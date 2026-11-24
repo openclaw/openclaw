@@ -85,19 +85,23 @@ export async function runPluginForkedTurn<T>(
   // session key supplied by a plugin is not an execution grant.
   const scopes = scope?.client?.connect.scopes ?? [];
   const profileId = scope?.client?.authenticatedUserProfile?.profileId;
-  const source =
+  const resource =
     profileId &&
     scopes.includes("operator.sessions.write") &&
     !scopes.includes("operator.write") &&
     !scopes.includes("operator.admin")
-      ? scope?.sessionResourceForFork?.()
+      ? scope?.sessionResourceForFork
       : undefined;
+  const source = resource?.target;
   if (source && (source.sessionKey !== params.sessionKey || source.agentId !== agentId)) {
     throw new Error("Plugin fork must use the admitted session.");
   }
   if (source && params.tools.some((tool) => tool !== "read" && tool !== "ls")) {
     return { status: "refused", reason: "tool_policy" };
   }
+  // The fork may outlive its RPC. Let the resource owner fence resets and replacements.
+  const sessionLifetime = resource?.retainSession();
+  using _ = sessionLifetime && { [Symbol.dispose]: sessionLifetime.release };
   const sessionRun = source && {
     sessionKey: source.sessionKey,
     sessionId: source.sessionId,
@@ -113,6 +117,7 @@ export async function runPluginForkedTurn<T>(
   try {
     const assertExecutionCurrent = () => {
       assertOwnerCurrent();
+      sessionLifetime?.assertCurrent();
       runtimeLifetime?.throwIfAborted();
       execution.assertCurrent();
       assertConversationAccess(execution.context.getRuntimeConfig());
@@ -139,16 +144,9 @@ export async function runPluginForkedTurn<T>(
           agentId,
           assertActive: assertCurrent,
         });
+        sessionLifetime?.assertCurrent();
         if (!target.entry?.sessionId) {
           throw new Error(`No active session context for "${params.sessionKey}".`);
-        }
-        if (
-          sessionRun &&
-          (sessionRun.sessionKey !== target.canonicalKey ||
-            sessionRun.sessionId !== target.entry.sessionId ||
-            sessionRun.lifecycleRevision !== (target.entry.lifecycleRevision ?? null))
-        ) {
-          throw new Error("Plugin fork source changed during admission.");
         }
         if (params.through && target.entry.sessionId !== params.through.sessionId) {
           throw new Error(
@@ -179,7 +177,7 @@ export async function runPluginForkedTurn<T>(
           timeoutMs: resolveTimerTimeoutMs(params.timeoutMs, 120_000),
           ...(params.maxTokens !== undefined ? { maxTokens: params.maxTokens } : {}),
           abortSignal: AbortSignal.any(
-            [params.signal, runtimeLifetime, execution.signal].filter(
+            [params.signal, runtimeLifetime, execution.signal, sessionLifetime?.signal].filter(
               (candidate): candidate is AbortSignal => candidate !== undefined,
             ),
           ),
