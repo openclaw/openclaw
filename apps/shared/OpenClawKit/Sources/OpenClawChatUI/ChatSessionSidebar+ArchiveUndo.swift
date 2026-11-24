@@ -1,7 +1,17 @@
 #if os(macOS)
 import Foundation
+import struct OpenClawKit.GatewayResponseError
 import OpenClawProtocol
 import SwiftUI
+
+struct ChatSidebarArchiveRecovery: Identifiable {
+    let id = UUID()
+    let row: OpenClawChatSessionEntry
+    let connection: OpenClawSessionMenuConnection
+    let message: String
+    let archivedAt: Int
+    let lifecycleRevision: String?
+}
 
 struct ChatSidebarArchiveReceipt {
     let id = UUID()
@@ -116,6 +126,7 @@ extension ChatSessionSidebarBatch {
         requestArchiveUndo: Bool = false,
         pinned: Bool? = nil,
         archiveUndoToken: String? = nil,
+        recovery: ChatSidebarArchiveRecovery? = nil,
         connection: OpenClawSessionMenuConnection,
         owner: OpenClawChatSessionSidebarData?) async -> OpenClawChatSessionPatchReceipt?
     {
@@ -135,6 +146,12 @@ extension ChatSessionSidebarBatch {
         defer { owner?.finishMutation(token, receipt: receipt) }
         do {
             var fields: [String: AnyCodable] = ["archived": .init(archived)]
+            if let recovery {
+                fields["expectedArchivedAt"] = .init(recovery.archivedAt)
+                if let revision = recovery.lifecycleRevision {
+                    fields["expectedLifecycleRevision"] = .init(revision)
+                }
+            }
             if requestArchiveUndo {
                 fields["requestArchiveUndo"] = .init(true)
             }
@@ -160,9 +177,30 @@ extension ChatSessionSidebarBatch {
         } catch {
             if connection.isCurrent() {
                 errors[OpenClawChatSessionSidebarData.identity(row)] = error.localizedDescription
+                if archiveUndoToken != nil, let response = error as? GatewayResponseError,
+                   response.method == "sessions.patch", response.code == "INVALID_REQUEST",
+                   response.detailsReason == "ARCHIVE_UNDO_REQUIRES_RESTORE",
+                   let archivedAt = response.details["archivedAt"]?.value as? Int
+                {
+                    self.archiveRecoveries[Self.archiveIdentity(row)] = .init(
+                        row: row, connection: connection, message: error.localizedDescription,
+                        archivedAt: archivedAt, lifecycleRevision: response.details["lifecycleRevision"]?.stringValue)
+                }
             }
             return nil
         }
+    }
+
+    func restoreArchivedSnapshot(_ displayed: ChatSidebarArchiveRecovery, owner: OpenClawChatSessionSidebarData?) async {
+        let key = Self.archiveIdentity(displayed.row)
+        guard archiveRecoveries[key]?.id == displayed.id else { return }
+        archiveRecoveries.removeValue(forKey: key)
+        guard displayed.connection.isCurrent() else { return }
+        let errorKey = OpenClawChatSessionSidebarData.identity(displayed.row)
+        if self.errors[errorKey] == displayed.message { self.errors[errorKey] = nil }
+        // A separate user choice starts ordinary Restore; it never sends a pin or redeems the receipt.
+        _ = await self.patchArchive(
+            displayed.row, archived: false, recovery: displayed, connection: displayed.connection, owner: owner)
     }
 
     func takeArchiveUndo(id: UUID) -> ChatSidebarArchiveReceipt? {
@@ -239,8 +277,39 @@ extension ChatSessionSidebar {
         viewModel.refreshSidebarData()
     }
 
-    var archiveUndoNotice: some View {
-        ChatSidebarArchiveNotice(batch: batch, undo: self.undoSidebarArchive)
+    @ViewBuilder var archiveUndoNotice: some View {
+        ChatSidebarArchiveNotice(batch: batch, undo: undoSidebarArchive)
+        let recoveries = batch.archiveRecoveries.values.sorted { $0.row.key < $1.row.key }
+        if let first = recoveries.first {
+            HStack {
+                if recoveries.count == 1 {
+                    self.restoreSnapshotButton(first)
+                } else {
+                    Menu(String(localized: "Restore")) {
+                        ForEach(recoveries) { self.restoreSnapshotButton($0) }
+                    }
+                }
+                Button(String(localized: "Dismiss"), systemImage: "xmark") {
+                    self.batch.archiveRecoveries.removeAll()
+                }.labelStyle(.iconOnly)
+            }.padding(8)
+        }
+    }
+
+    private func restoreSnapshotButton(_ recovery: ChatSidebarArchiveRecovery) -> some View {
+        let title = ChatSessionSidebarModel.sidebarDisplayName(for: recovery.row)
+        return Button {
+            Task { @MainActor in
+                await self.batch.restoreArchivedSnapshot(recovery, owner: self.viewModel.sidebarData)
+                self.viewModel.refreshSessions(limit: 200)
+                self.viewModel.refreshSidebarData()
+            }
+        } label: {
+            HStack {
+                Text(String(localized: "Restore"))
+                Text(verbatim: title)
+            }
+        }
     }
 
     func undoSidebarArchive(_ displayed: ChatSidebarArchiveReceipt) {

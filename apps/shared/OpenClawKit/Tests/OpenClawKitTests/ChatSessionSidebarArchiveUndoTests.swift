@@ -1,5 +1,6 @@
 #if os(macOS)
 import Foundation
+import struct OpenClawKit.GatewayResponseError
 import OpenClawProtocol
 import Testing
 @testable import OpenClawChatUI
@@ -284,7 +285,45 @@ struct ChatSessionSidebarArchiveUndoTests {
         #expect(owner.row(key: row.key, agentID: "research") == replacement)
         #expect(owner.rows(at: Date(timeIntervalSince1970: 100)) == [replacement])
         #expect(batch.errors[OpenClawChatSessionSidebarData.identity(row)] == "Session changed before patch.")
+        #expect(batch.archiveRecoveries.isEmpty)
         #expect(batch.archiveUndo == nil)
+    }
+
+    @Test(arguments: [false, true])
+    func `retired checkout offers a separate ordinary Restore on the original connection`(reconnect: Bool) async throws {
+        let batch = ChatSessionSidebarBatch(), row = try self.row()
+        var calls: [OpenClawChatGatewayRequest] = []
+        var current = true
+        let connection = try self.connection(capabilities: ["personal-session-pins", "session-archive-undo-v1"], current: { current }) { request in
+            calls.append(request)
+            if request.params["requestArchiveUndo"]?.value as? Bool == true {
+                return try self.acknowledgement(row, archived: true, token: "one-use")
+            }
+            if request.params["archiveUndoToken"]?.value as? String == "one-use" {
+                throw GatewayResponseError(method: "sessions.patch", code: "INVALID_REQUEST", message: "Retired",
+                                           details: ["reason": .init("ARCHIVE_UNDO_REQUIRES_RESTORE"), "archivedAt": .init(20), "lifecycleRevision": .init("generation")])
+            }
+            return try self.acknowledgement(row, archived: false)
+        }
+        _ = await batch.archive(row, mainKey: "main", connection: connection, owner: nil)
+        await undo(batch, owner: nil)
+        #expect(calls.count == 2) // Refusing Undo never creates a checkout or sends a shared write.
+        let action = try #require(batch.archiveRecoveries.values.first)
+        current = !reconnect
+        await batch.restoreArchivedSnapshot(action, owner: nil)
+        await batch.restoreArchivedSnapshot(action, owner: nil)
+        #expect(batch.archiveRecoveries.isEmpty)
+        if reconnect {
+            #expect(calls.count == 2); return
+        }
+        #expect(calls.count == 3)
+        let params = try #require(calls.last?.params)
+        #expect(Set(params.keys) == ["key", "agentId", "expectedSessionId", "expectedLifecycleRevision", "expectedArchivedAt", "archived"])
+        #expect(params["expectedSessionId"]?.value as? String == row.sessionId)
+        #expect(params["expectedLifecycleRevision"]?.value as? String == "generation")
+        #expect(params["expectedArchivedAt"]?.value as? Int == 20)
+        #expect(params["archived"]?.value as? Bool == false)
+        #expect(batch.errors.isEmpty)
     }
 
     @Test func `failed archives offer no undo and reconnect fences captured receipts`() async throws {

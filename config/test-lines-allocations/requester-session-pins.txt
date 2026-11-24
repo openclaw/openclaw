@@ -10,4 +10,5 @@
 # +6: an exact live transport, not a lookalike or a retained old request sharing the replacement connection ID, owns its Archive Undo.
 # +94: an admitted Archive drain settles on ordinary disconnect; queued work, Stop, changed profile, invalidation and revoked grants remain fenced.
 # +22: observe filtered count and ordinary first-page rank on a warm cache, rewind across wake, and read at the inclusive deadline.
-2246
+# +70: negotiated remote Archive without receipts, explicit named Mac Restore after checkout retirement, and real snapshot recovery versus stale archive time, incarnation and reconnect.
+2316

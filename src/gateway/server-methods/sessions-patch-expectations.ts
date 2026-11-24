@@ -30,6 +30,12 @@ import type { SessionMutationAuthorization } from "./types.js";
 export function resolveSessionPatchExpectationError(
   patch: SessionsPatchParams,
 ): string | undefined {
+  if (
+    patch.expectedArchivedAt !== undefined &&
+    (!patch.expectedSessionId || patch.archived !== false)
+  ) {
+    return "expectedArchivedAt requires Restore of an exact session identity.";
+  }
   if (patch.expectedSandboxMode !== undefined && patch.sandboxMode === undefined) {
     return "expectedSandboxMode requires a sandboxMode replacement.";
   }
@@ -70,6 +76,7 @@ export function resolveSessionPatchTargetError(
       (entry?.sidebarRoot === true) !== patch.expectedSidebarRoot) ||
     (patch.expectedCategory !== undefined &&
       (entry?.category ?? null) !== patch.expectedCategory) ||
+    (patch.expectedArchivedAt !== undefined && entry?.archivedAt !== patch.expectedArchivedAt) ||
     (patch.expectedArchived !== undefined &&
       (entry?.archivedAt !== undefined) !== patch.expectedArchived) ||
     (patch.expectedLifecycleRevision !== undefined &&

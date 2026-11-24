@@ -5749,6 +5749,7 @@
     {"path":"apps/macos/Sources/OpenClaw/ControlUIDocumentHost+Scripts.swift","kind":"conditional-branch","surface":"apple","id":"native.apple.92ccb780ba6e3791","source":"[\\(host)]"},
     {"path":"apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatSessionSidebar+ArchiveUndo.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.b940f1856c7f7ee4","source":"%lld threads archived."},
     {"path":"apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatSessionSidebar+ArchiveUndo.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.41a43534d216ebad","source":"Dismiss"},
+    {"path":"apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatSessionSidebar+ArchiveUndo.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.31ff01b8056ce11f","source":"Restore"},
     {"path":"apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatSessionSidebar+ArchiveUndo.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.395e6d4337642971","source":"The Gateway changed. Archive Undo is no longer available."},
     {"path":"apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatSessionSidebar+ArchiveUndo.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.9a2e6077996125f2","source":"The Gateway connection is not ready. Try again."},
     {"path":"apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatSessionSidebar+ArchiveUndo.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.c9bb488ca6baca15","source":"These threads cannot be archived or restored. Refresh and try again."},

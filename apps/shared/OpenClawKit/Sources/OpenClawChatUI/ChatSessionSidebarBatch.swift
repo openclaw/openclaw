@@ -86,6 +86,7 @@ final class ChatSessionSidebarBatch {
     var errors: [String: String] = [:]
     var notices: [String] = []
     var archiveUndo: ChatSidebarArchiveReceipt?
+    var archiveRecoveries: [String: ChatSidebarArchiveRecovery] = [:]
     var pendingArchives: [String: UUID] = [:]
     var running = false
     var pendingDelete: [OpenClawChatSessionEntry] = []
@@ -107,6 +108,7 @@ final class ChatSessionSidebarBatch {
             self.errors = [:]
             self.notices = []
             self.archiveUndo = nil
+            self.archiveRecoveries = [:]
             self.pendingArchives = [:]
             self.writingPins = false
             self.sidebarEntries = []

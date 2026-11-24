@@ -129,6 +129,8 @@ export const SessionsPatchParamsSchema = closedObject({
   key: NonEmptyString,
   agentId: Type.Optional(NonEmptyString),
   archiveUndoToken: Type.Optional(Type.String({ minLength: 1, maxLength: 128 })),
+  /** Ordinary single Restore may compare the archived occurrence before recreating a checkout. */
+  expectedArchivedAt: Type.Optional(Type.Integer({ minimum: 0 })),
   /** Insert a new personal pin relative to an already saved sidebar pin, in one guarded write. */
   pinPlacement: Type.Optional(
     closedObject({

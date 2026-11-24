@@ -283,7 +283,15 @@ test("explicit Archive Undo preserves a retired checkout while ordinary Restore 
   const archived = f.entry();
   const refused = {
     ok: false,
-    error: { code: "INVALID_REQUEST", message: expect.stringContaining("Use Restore") },
+    error: {
+      code: "INVALID_REQUEST",
+      message: expect.stringContaining("Use Restore"),
+      details: {
+        reason: "ARCHIVE_UNDO_REQUIRES_RESTORE",
+        archivedAt: archived!.archivedAt,
+        lifecycleRevision: archived!.lifecycleRevision,
+      },
+    },
   };
   expect(await undo(token)).toMatchObject(refused);
   expect(f.entry()).toEqual(archived);
@@ -318,7 +326,22 @@ test("explicit Archive Undo preserves a retired checkout while ordinary Restore 
     ok: false,
     error: { message: expect.stringContaining("no longer current") },
   });
-  await f.archive(false);
+  const restore = {
+    archived: false,
+    expectedArchivedAt: archived!.archivedAt,
+    expectedLifecycleRevision: archived!.lifecycleRevision,
+  };
+  for (const stale of [
+    { expectedArchivedAt: archived!.archivedAt! - 1 },
+    { expectedSessionId: "replaced" },
+    { expectedLifecycleRevision: "replaced" },
+  ]) {
+    expect(await f.patch({ ...restore, ...stale }, { client, context })).toMatchObject({
+      ok: false,
+    });
+    await f.expectSnapshot();
+  }
+  expect(await f.patch(restore, { client, context })).toMatchObject({ ok: true });
   expect(f.entry()?.archivedAt).toBeUndefined();
   expect(f.entry()?.pinnedAt).toBeUndefined();
   expect(f.registry()?.removedAt).toBeUndefined();
