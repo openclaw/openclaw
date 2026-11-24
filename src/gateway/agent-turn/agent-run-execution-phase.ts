@@ -385,15 +385,7 @@ async function executeAgentRun(
                   sessionMutationCommitGuard: params.assertGatewayLifetimeCurrent,
                 },
                 params.resolvedSessionKey,
-                !params.inputProvenance &&
-                  !params.isOneShotModelRun &&
-                  !params.request.internalEvents &&
-                  !params.request.internalRuntimeHandoffId &&
-                  !params.request.execApprovalFollowupExpectedSessionId &&
-                  params.sessionEffects !== "internal" &&
-                  !params.request.suppressPromptPersistence &&
-                  !params.request.swarmCollector &&
-                  params.request.lane !== "subagent",
+                prepared.operatorAuthority?.grant,
               )
             : undefined;
         finalizePreparedAgentRunUserTurn(prepared.userTurn);

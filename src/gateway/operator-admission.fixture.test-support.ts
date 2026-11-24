@@ -398,7 +398,7 @@ export async function runCase(
           scenario === "profile-deleted",
       );
       await runLiveAdmissionCase(row.credential, scenario, fixture);
-      return;
+      return c;
     }
     let operator: Pick<GatewayClient, "request"> | GatewayIngressPrincipalBindingV1 | undefined;
     let nativeSend: (() => Promise<unknown>) | undefined;
@@ -460,7 +460,7 @@ export async function runCase(
       });
       expect(c.queuedCalls).toBe(1);
       expect(fixture.providerErrors).toEqual([]);
-      return;
+      return c;
     }
     const admin = await fixture.admin(signal);
     const first = await admin.request<{ runId: string }>("chat.send", {
@@ -642,6 +642,7 @@ export async function runCase(
       }
     }
     expect(fixture.providerErrors).toEqual([]);
+    return c;
   } finally {
     fallbackEnv.restore();
     c.releaseFirst.resolve();
