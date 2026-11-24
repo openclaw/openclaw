@@ -142,7 +142,7 @@ it("reads a rollback-journal store with locks, so a writer's commit is not skipp
   const sql = `PRAGMA journal_mode = DELETE; BEGIN EXCLUSIVE; PRAGMA user_version = ${OPENCLAW_AGENT_SCHEMA_VERSION};`;
   const code = `const db = new (require("node:sqlite").DatabaseSync)(process.argv[1]); db.exec(process.argv[2]); console.log(); setTimeout(() => db.exec("COMMIT"), 300);`;
   const writer = spawn(process.execPath, ["-e", code, file, sql]);
-  await once(writer.stdout, "data");
+  await Promise.race([once(writer.stdout, "data"), once(writer, "exit")]);
   expect(inspect(root, env)?.pending?.agent).toBe(OPENCLAW_AGENT_SCHEMA_VERSION);
   await once(writer, "exit");
 });

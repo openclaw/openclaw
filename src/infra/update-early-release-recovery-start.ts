@@ -341,8 +341,9 @@ export async function startEarlyGitReleaseRecovery(
     return { started: false, reason: `the built release could not be kept (${String(error)})` };
   } finally {
     // Only this check's own lock; a lock another check holds stays with it.
+    // Renamed away first: an emptied lock directory would accept another check's rename.
     if (readText(path.join(lock, "owner")) === owner) {
-      fs.rmSync(lock, { recursive: true, force: true });
+      removeTree(lock);
     }
   }
 }

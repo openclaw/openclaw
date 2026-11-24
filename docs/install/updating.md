@@ -2269,8 +2269,9 @@ what to fix before the next `openclaw update`. That outcome is not recorded for
 `openclaw update status`, because recording through the new release would migrate the databases
 the previous build uses. The new release is removed only once the previous build serves. Once the
 release has migrated anything, or when the stop does not finish so that cannot be known, the
-previous build is never put back: the outcome is recorded, and then the Gateway service is
-started again on the new release.
+previous build is never put back: the outcome is recorded (when a stop did not finish, the
+release may still hold the databases, and then only the journal has it), and then the Gateway
+service is started again on the new release.
 
 It never resets, stashes, cleans or rebases the checkout. It starts nothing, and the update
 prints the rebuild below with the reason, when the checkout has uncommitted changes to tracked

@@ -6,6 +6,7 @@ import { createDeferred } from "../../test/helpers/promise.js";
 import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import { readUpdateLock } from "../update/store.js";
+import { waitForGatewayReady } from "./update-early-release-recovery-ready.js";
 import { startEarlyGitReleaseRecovery } from "./update-early-release-recovery-start.js";
 import type { StartDeps } from "./update-early-release-recovery-start.js";
 import * as recovery from "./update-early-release-recovery.js";
@@ -14,7 +15,6 @@ import { getUpdateRunStatusAsync } from "./update-run-reader.js";
 import { createUpdateRunAsync, finishUpdateRunAsync } from "./update-run-write.async.js";
 
 type RecoveryOutcome = Parameters<RunnerDeps["record"]>[0];
-
 const roots: string[] = [];
 afterEach(async () => {
   await closeOpenClawStateDatabaseAsync();
@@ -203,7 +203,7 @@ posix("moves a dead check's lock once, whichever check sees it first", async () 
       publish(fx, LIVE);
     }
     rename(from, to);
-    // A third check takes the lock path whenever it is free.
+    // A third check takes the lock path whenever it is free (a rename-back would lose to it).
     if (from === lock && !fs.existsSync(lock)) {
       publish(fx, "1 third");
     }
@@ -289,8 +289,9 @@ function runner(opts: Opts) {
     }
     // The release commits one store's migration and exits while it stops.
     schema = verb === "stop" && opts.stopMs ? { ...planned, agents: { "/a": 1, "/b": 2 } } : schema;
-    [running, failed] =
-      verb === "stop" ? [false, false] : verb === "start" ? [true, false] : [running, failed];
+    // A failed unit starts again only after `reset-failed` (systemd refuses a start-limit hit).
+    failed = verb === "reset-failed" || verb === "stop" ? false : failed;
+    running = verb === "stop" ? false : verb === "start" && !failed ? true : running;
     enabled = verb === "disable" ? false : enabled;
     return { code: fail[name] ?? 0, output };
   };
@@ -376,7 +377,6 @@ it.each(runs)("%s", async (_name, opts, serves, reason, said) => {
 });
 
 it("gives up on a slow crash loop at the unit's restart allowance, not on a long migration", async () => {
-  vi.spyOn(process.stdout, "write").mockReturnValue(true);
   for (const crashEveryMs of [35_000, 0]) {
     let clock = 0;
     const restarts = () => (crashEveryMs ? Math.floor(clock / crashEveryMs) : 0);
@@ -386,7 +386,8 @@ it("gives up on a slow crash loop at the unit's restart allowance, not on a long
     };
     // Each probe takes 5 s; the migration is done after 15 minutes.
     const probe = async () => (clock += 5000) >= 15 * 60_000;
-    expect(await recovery.waitForGatewayReady("u", probe, run, () => clock)).toBe(!crashEveryMs);
+    const deps = { run, now: () => clock, log: () => {} };
+    expect(await waitForGatewayReady("u", probe, deps)).toBe(!crashEveryMs);
     expect(restarts()).toBe(crashEveryMs ? 10 : 0);
   }
 });
@@ -414,9 +415,7 @@ posix("finishes the run the runner holds and removes what the early layout left"
     mkdir .removing-r-1 releases/.removing-r-2 .recovery-start.stale-1-2 && echo '{"attempts":1}' > releases/.trial
     ln -s ../../releases/git-old lib/node_modules/openclaw`,
   );
-  // The real store: the runner takes the update lock; the worker's `<plan> finish <facts>`
-  // arguments carry its run to the finishing step, which settles it.
-  // The update the Gateway started, which the early updater recorded as failed.
+  // The real store: the Gateway-started update the early updater failed, then the held run.
   const api = await createUpdateRunAsync({ trigger: "api" });
   await finishUpdateRunAsync(api.runId, { status: "failed", reason: "check-failed" });
   const deps = recovery.defaultRunnerDeps();

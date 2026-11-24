@@ -10,6 +10,7 @@ import { GATEWAY_SERVICE_STOP_TIMEOUT_MS } from "./gateway-shutdown-budget.js";
 import { runtimeProcessEntrypoints } from "./runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
 import { readSchemaVersions, type SchemaVersions } from "./update-candidate-check-early-release.js";
+import { waitForGatewayReady } from "./update-early-release-recovery-ready.js";
 import { holdUpdateLock, recordOutcome } from "./update-early-release-recovery-record.js";
 
 /**
@@ -22,15 +23,13 @@ import { holdUpdateLock, recordOutcome } from "./update-early-release-recovery-r
  * which current updates continue from.
  *
  * Linux with a systemd user service only; other platforms keep the printed rebuild.
- * Remove with `update-candidate-check-early-release.ts` and `update-early-release-recovery-record.ts`.
+ * Remove with `update-candidate-check-early-release.ts` and its `-ready` and `-record` siblings.
  */
 
 export const EARLY_RELEASE_RECOVERY_FLAG = "--early-release-recovery";
 const DRIVER_EXIT_TIMEOUT_MS = 30 * 60_000;
 /** Each rebuild command's limit. */
 const COMMAND_TIMEOUT_MS = 60 * 60_000;
-/** A boot migration of a large agent database runs before the Gateway reports ready. */
-const READY_TIMEOUT_MS = 20 * 60_000;
 const MAX_RESTARTS = 2;
 
 export type RecoveryPlan = {
@@ -639,42 +638,6 @@ export function readEarlyGitReleaseRecoveryArgs(argv: readonly string[]) {
 
 const log = (line: string) => process.stdout.write(`[openclaw update recovery] ${line}\n`);
 
-/**
- * Waits for `probe` (the Gateway's `/readyz`). A migrating Gateway stays up while it works. One
- * that keeps exiting before it serves gives up when its unit fails (the start limit, or an exit
- * systemd does not restart), or once systemd restarted it as often as that limit allows starts:
- * a boot that crashes later than the limit's window allows never reaches the limit itself.
- */
-export async function waitForGatewayReady(
-  unit: string,
-  probe: () => Promise<boolean>,
-  run: RunCommand = runRecoveryCommand,
-  now: () => number = Date.now,
-): Promise<boolean> {
-  const show = async (key: string) =>
-    (
-      await run(["systemctl", "--user", "show", `--property=${key}`, "--value", unit])
-    ).output.trim();
-  const restartCount = async () => Number(await show("NRestarts")) || 0;
-  // The installed Gateway unit's burst, when systemd does not report one.
-  const burst = Number(await show("StartLimitBurst")) || 10;
-  let first = await restartCount();
-  const until = now() + READY_TIMEOUT_MS;
-  while (now() < until) {
-    if (await probe()) {
-      return true;
-    }
-    const [state, restarts] = [await show("ActiveState"), await restartCount()];
-    // A start that is not systemd's own restart resets the count.
-    first = Math.min(first, restarts);
-    if (state === "failed" || restarts - first >= burst) {
-      const result = state === "failed" ? await show("Result") : "";
-      log(`${unit} ${result ? `failed (${result})` : `restarted ${restarts - first} times`}`);
-      return false;
-    }
-  }
-  return false;
-}
 const record = async (outcome: RecoveryOutcome) => {
   try {
     await recordOutcome(outcome);
@@ -722,7 +685,7 @@ export function defaultRunnerDeps(): RunnerDeps {
             delayMs: 1000,
           })
         ).readyz === 200;
-      return waitForGatewayReady(unit, probe);
+      return waitForGatewayReady(unit, probe, { run: runRecoveryCommand, now: Date.now, log });
     },
     record,
     hold: holdUpdateLock,
