@@ -24,6 +24,16 @@ openclaw plugins enable beam
 Enablement applies to a running Gateway automatically. If it is offline, start
 it to use Beam. See [Apply changes and inspect](/plugins/manage-plugins#apply-changes-and-inspect).
 
+Before configuring an outbound mirror, check the installed cleaner:
+
+```bash
+openclaw beam doctor --json
+```
+
+The command verifies the native cleaner for this machine and exits with status
+1 if the executable is missing or fails verification. Receiving and viewing
+snapshots work independently of the sender's cleaner.
+
 Equivalent config:
 
 ```json5
@@ -116,6 +126,51 @@ Uploading the same `beamId` updates the existing catalog row when its `updatedAt
 
 `sourceModel` is optional. Automatic mirrors include the latest model reported by the source catalog. Older clients and snapshots remain valid without it.
 
+## Read a portable snapshot
+
+Authenticated clients can discover the receiver with `GET /api/v2/beam/capabilities`.
+Use the advertised operations for the current caller. An operator can read the
+shared snapshots. A verified Visitor with a current invitation can read their
+own publications. The Gateway checks access when each read starts. A read already
+in progress can finish after an invitation changes. The next read uses the new
+access decision.
+
+For a known full Beam ID, request `GET /api/v2/beam/snapshots/{beamId}/head`.
+It returns a strong ETag in `revision`, a SHA-256 `digest`, and, for a publication
+with an assigned generation, an opaque `publicationId` and relative `apiUrl`.
+Append `/snapshot` to that machine link to read the chronological v2 packet.
+Resolve links against the exact request URL so a reverse proxy can mount the
+Gateway under a path. For example, `../../publications/{id}` returned by
+`/team/api/v2/beam/snapshots/{beamId}/head` resolves under `/team/api/v2/beam/`.
+An independently configured Control UI base such as `/console` appears in
+the view link under `/team/console/`.
+
+Rows from receivers that predate publication generations return `legacy_unbound`
+and a `snapshotUrl`. Read it with `If-Match` set to the advertised revision.
+Receiver reads never assign a generation or claim an ownerless row.
+
+The `Beam-Digest` response header covers the exact JSON bytes. Opening a link
+performs a read only. A link to a deleted generation cannot read a later
+publication with the same Beam ID.
+
+### Publish a portable packet
+
+Send the reviewed v2 JSON bytes unchanged with `PUT /api/v2/beam/snapshots/{beamId}`.
+Provide a fresh UUID in `Idempotency-Key`. Create with `If-None-Match: *`, or replace
+the selected revision with `If-Match`. The receipt returns the accepted digest and
+`applied` or `unchanged`. Keep the UUID and original bytes when retrying the same
+operation. A changed body or precondition with the same UUID returns a conflict.
+The receiver keeps up to 10,000 write receipts for seven days. A restricted Visitor
+can hold 400 receipts in that window. Replaying an accepted request uses its existing
+receipt. At the Visitor limit, the receiver returns the seconds until the earliest
+receipt expires in `Retry-After`. Keep the same operation UUID for that retry.
+Both API versions share the same per-IP upload limits.
+
+An accepted v1 write may supersede a v2 revision even at the same source timestamp.
+Inspect the current head on a precondition failure. Packet-local speaker labels
+identify participants only within the imported packet and confer no Gateway identity.
+The bundled receiver uses the [standalone Beam packet schema and validator](https://github.com/openclaw/beam/tree/a4272c5bde4e52cdf87a1534447a6b98f3fb4a7b/schema).
+
 ## Continue on the Team Gateway
 
 Publishing alone shares a read-only snapshot. To move the logical conversation, use the updated Beam skill's `handoff` command with the exact source session. The sender durably retires that Beam identity before network dispatch, obtains the receiver's `publicationId`, and explicitly releases that generation with `handoffId`. Release requires the original verified publisher; shared-token and older ownerless snapshots cannot be claimed through this route. A lost acknowledgment can retry the same generation but cannot recreate an expired publication.
@@ -184,7 +239,7 @@ Beam publication is not remote control.
 
 ## Mirroring
 
-Beam can also act as the sender: an opt-in mirror that continuously publishes this machine's active local coding sessions (Claude Code, Codex, and other registered session catalogs) to a remote Beam receiver, such as a shared team Gateway. Teammates then watch near-live session transcripts in the remote Control UI without any access to the source machine.
+Beam can also act as the sender: an opt-in mirror that continuously publishes this machine's active local coding sessions (including Claude Code and Pi sessions with a verified local source) to a remote Beam receiver, such as a shared team Gateway. Teammates then watch near-live session transcripts in the remote Control UI without any access to the source machine.
 
 ```json5
 {
@@ -210,6 +265,10 @@ Beam can also act as the sender: an opt-in mirror that continuously publishes th
 - `catalogs` (required): the session catalog ids to mirror, as explicit per-catalog consent — an omitted or empty list mirrors nothing. The local `beam` receiver catalog is always excluded so two mirrored Gateways cannot re-mirror each other's rows.
 - `pollSeconds` (default 30, minimum 10): how often the mirror scans local catalogs.
 - `activeWindowMinutes` (default 180): sessions with newer activity than this window count as live and stay mirrored; when a session goes idle past the window the running mirror service retries its final `completed` update until the receiver accepts it or the seven-day retention window ends. Retry state is process-local: a Gateway restart clears pending terminal retries, so the remote row remains live until its normal seven-day retention expires.
+
+The v1 mirror keeps the original publication ID when the producer confirms that host and thread identify the same native session across agents and source homes. Every read stays bound to the selected agent and home. Conflicting selections, rebindable aliases, imported copies, and unclassified sources require explicit selection. A previously released publication stays released.
+
+The upload keeps its original v1 publication ID across upgrades. Claude and Pi reads bind to one selected local file and skip conflicting IDs. A Codex home can move between two historical aliases, so use an explicit Beam copy for Codex until a receiver can reconcile its prior publication.
 
 The mirror uploads user and agent message text, replacing structured reasoning, tool calls, tool results, and raw payloads with compact counts. Titles and messages preserve their original text, including credentials, before clipping. `logging.redactPatterns` applies to logs and diagnostics, not mirrored content. The manual beam skill separately strips setup wrappers, local paths, contact identifiers, and opaque values; automatic mirroring does not apply those rules. Enable it only for catalogs whose visible message text you intend to share.
 
