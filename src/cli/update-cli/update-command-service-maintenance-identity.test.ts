@@ -13,10 +13,12 @@ import * as gatewayService from "../../daemon/service.js";
 import { createMockGatewayService } from "../../daemon/service.test-helpers.js";
 import { sha256Hex } from "../../infra/crypto-digest.js";
 import { createUpdateFailureFact } from "../../infra/update-failure-facts.js";
+import { UPDATE_PREFLIGHT_DETAILS } from "../../infra/update-preflight-details.js";
 import { CommandProcessCleanupError } from "../../process/exec-result.js";
 import * as nativeExec from "../../process/exec.js";
 import { defaultRuntime } from "../../runtime.js";
 import { mockProcessPlatform } from "../../test-utils/vitest-spies.js";
+import { UpdatePreMutationError } from "./shared.js";
 import { updateResult } from "./update-command-maintenance-fixtures.test-support.js";
 import { withUpdateInProgressEnv } from "./update-command-service-env.js";
 import {
@@ -416,6 +418,22 @@ describe("service fingerprint", () => {
         await expect(admission).resolves.toBeUndefined();
       } else {
         await expect(admission).rejects.toMatchObject({ reason: "runtime-artifact-publication" });
+      }
+      if (scenario === "other native unit") {
+        const error: unknown = await admission.catch((caught: unknown) => caught);
+        // The terminal keeps the service; recorded facts keep the cause past path redaction.
+        expect(error).toBeInstanceOf(UpdatePreMutationError);
+        expect((error as Error).message).toContain('systemd user unit "custom-sibling.service"');
+        expect((error as UpdatePreMutationError).failureFacts).toEqual([
+          {
+            check: "runtime-artifact-publication",
+            code: "shared-installation-gateway-running",
+            message: UPDATE_PREFLIGHT_DETAILS["shared-installation-gateway-running"],
+          },
+        ]);
+        const recorded = JSON.stringify((error as UpdatePreMutationError).failureFacts);
+        expect(recorded).not.toContain(home);
+        expect(recorded).not.toContain("custom-sibling");
       }
     }),
   );

@@ -623,6 +623,12 @@ Windows host-wide legacy capture cleanup remains report-only.
   verified offline. Inspect `openclaw gateway status --deep`, stop it through its
   service owner, and retry. On macOS, a loaded LaunchAgent can respawn even when
   disabled and temporarily has no PID; `openclaw gateway stop` unloads it.
+  When the update says another Gateway service uses this installation, that is a
+  second profile's Gateway on the same install, such as a
+  [rescue bot](/gateway/multiple-gateways#updating-with-a-rescue-bot). Stop it with
+  `openclaw --profile <name> gateway stop` (add `--force` from a non-interactive
+  shell), retry the update, then start it again. The updater never stops another
+  profile's Gateway itself.
   On Linux, source builds use loaded command locations to prove that their
   output paths are physically separate from managed Gateways without reading
   those services’ environment files. Overlapping or unverified locations retain

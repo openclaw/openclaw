@@ -105,6 +105,8 @@ export const UPDATE_PREFLIGHT_DETAILS = {
     "Gateway service management is unavailable for this supervisor or installation identity. Run openclaw gateway status --deep and retry through the service owner's update workflow.",
   "service-process-changed":
     "The Gateway process changed during maintenance drain. Run openclaw gateway status --deep to inspect its current service, then retry openclaw update.",
+  "shared-installation-gateway-running":
+    "Another running Gateway service, such as a second profile's, uses this installation. Stop it (openclaw --profile <name> gateway stop --force), retry the update, then start it again.",
   "task-ownership-unverified":
     "Scheduled Task ownership could not be verified. Inspect the task's autostart state through its service owner, then retry openclaw update.",
 } as const;

@@ -293,9 +293,18 @@ export async function assertManagedGatewayArtifactPublication(params: {
         continue;
       }
       const owner = describeManagedGatewayBinding(binding, state);
+      // The local message names the root and service; recorded facts keep a closed cause
+      // and next step, because path redaction drops everything after the root.
       throw new UpdatePreMutationError(
         "runtime-artifact-publication",
         `Cannot replace ${root}: another managed Gateway (${owner}) is still using this installation. Stop that Gateway through its own service manager or Startup process, then retry the update. Its files and service were left unchanged.`,
+        {
+          failureFacts: createUpdatePreflightFailure(
+            "shared-installation-gateway-running",
+            undefined,
+            "runtime-artifact-publication",
+          ).failureFacts,
+        },
       );
     }
   }
