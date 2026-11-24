@@ -410,12 +410,12 @@ ${snapshot.raw}`;
     const { io, configPath } = createTestConfigIO(home);
     await fsp.mkdir(path.dirname(configPath), { recursive: true });
     await fsp.writeFile(
-      path.join(path.dirname(configPath), "future-meta.json5"),
-      '{ meta: { lastTouchedVersion: "9999.1.1" } }\n',
+      path.join(path.dirname(configPath), "included-meta.json5"),
+      '{ meta: { lastTouchedVersion: "2026.4.22" } }\n',
       "utf-8",
     );
     await seedConfigBackup(configPath, {
-      $include: "./future-meta.json5",
+      $include: "./included-meta.json5",
       gateway: { mode: "local" },
     });
     const clobbered = await writeConfigRaw(configPath, {});
@@ -434,7 +434,7 @@ ${snapshot.raw}`;
     expect(allowSuspiciousRecovery).toHaveBeenCalledTimes(2);
     expect(await listClobberFiles(configPath)).toHaveLength(0);
 
-    expect(candidateVersion).toBe("9999.1.1");
+    expect(candidateVersion).toBe("2026.4.22");
     expect(currentConfig).toBeDefined();
     expect(currentConfig?.meta).toBeUndefined();
     await expectRaw(configPath, clobbered.raw);

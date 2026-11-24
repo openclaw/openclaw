@@ -110,6 +110,30 @@ async function recovery(io: ReturnType<typeof createConfigIO>) {
 }
 
 describe("prepared config recovery", () => {
+  it.each(["prepared", "sync", "async"] as const)(
+    "retains restored config through %s recovery",
+    async (mode) => {
+      const { root, configPath, env, io } = fixture({ observe: mode !== "prepared" });
+      const backup = JSON.stringify({
+        gateway: { mode: "local", trustedProxies: Array(60).fill("192.0.2.1") },
+        meta: { lastTouchedVersion: "9999.1.1" },
+      });
+      fs.writeFileSync(configPath, backup);
+      fs.writeFileSync(`${configPath}.bak`, backup);
+      const logger = { warn: vi.fn(), error: vi.fn() };
+      const deps = normalizeConfigIoDeps({ env, homedir: () => root, logger });
+      observeConfigSnapshotSync(deps, await io.readConfigFileSnapshot());
+      const restored = JSON.stringify({ gateway: { mode: "local" } });
+      fs.writeFileSync(configPath, restored);
+      if (mode === "prepared") {
+        expect(await io.prepareConfigRecovery(await io.readConfigFileSnapshot())).toBeNull();
+      } else {
+        const config = mode === "sync" ? io.loadConfig() : await io.loadConfigAsync();
+        expect(config.meta?.lastTouchedVersion).toBeUndefined();
+      }
+      expectUnchanged(root, configPath, restored, backup);
+    },
+  );
   it("prepares a plugin-bearing backup without synchronous shared-state reads", async () => {
     const { root, configPath, original, io } = fixture();
     const backup = JSON.stringify({
