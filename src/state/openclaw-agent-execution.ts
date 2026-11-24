@@ -90,7 +90,7 @@ export async function prepareOpenClawAgentDatabaseExecution(
       () => {
         assertCurrent();
         // Join unpublished creation only after entering the writer turn.
-        execution = captureOpenClawAgentDatabaseExecution(options, {}, true);
+        execution = captureOpenClawAgentDatabasePreparationExecution(options);
         return execution.prepare(
           {
             assertCurrent,

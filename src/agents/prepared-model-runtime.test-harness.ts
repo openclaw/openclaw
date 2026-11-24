@@ -406,6 +406,12 @@ vi.mock("./model-discovery-context.js", async (importOriginal) => {
   return { resolveModelWorkspaceDir, resolveModelPluginMetadataSnapshot: () => undefined };
 });
 
+// Lifecycle fixtures own persistence timing; the real Gateway proves native admission.
+vi.mock("../state/openclaw-agent-execution.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../state/openclaw-agent-execution.js")>()),
+  prepareOpenClawAgentDatabaseExecution: async () => {},
+}));
+
 vi.mock("./models-config.js", () => ({
   ensureOpenClawModelsJson: (...args: unknown[]) =>
     preparedModelRuntimeMocks.ensureOpenClawModelsJson(...args),

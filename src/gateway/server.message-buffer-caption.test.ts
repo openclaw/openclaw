@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import { createServer } from "node:http";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import type {
   ArtifactsDownloadResult,
   ArtifactsListResult,
@@ -13,9 +13,15 @@ import {
 } from "../../test/helpers/openai-responses-sse.js";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import {
+  encodePluginModelCatalogRelativePath,
+  PLUGIN_MODEL_CATALOG_GENERATED_BY,
+  replacePersistedPluginModelCatalogs,
+} from "../agents/plugin-model-catalog.js";
 import { clearConfigCache, clearRuntimeConfigSnapshot } from "../config/config.js";
 import { clearSessionStoreCacheForTest } from "../config/sessions/store-writer-state.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
+import * as chatSession from "./server-methods/chat-send-session.js";
 import { disconnectGatewayClient, startGatewayWithClient } from "./test-helpers.e2e.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -204,6 +210,28 @@ it(
       })().catch((error: unknown) => response.destroy(error instanceof Error ? error : undefined));
     });
     let gateway: Awaited<ReturnType<typeof startGatewayWithClient>> | undefined;
+    let savedCatalog = false;
+    const prepareFacts = chatSession.qualifyChatSendSession;
+    const factsSpy = vi
+      .spyOn(chatSession, "qualifyChatSendSession")
+      .mockImplementation(async (...args) => {
+        const facts = await prepareFacts(...args);
+        if (args[0].sessionKey === "agent:main:buffer-ordinary" && !savedCatalog) {
+          savedCatalog = true;
+          // Hold only the chat facts, then let the real catalog writer take its first turn.
+          // Discovery itself is immaterial; the catalog can arrive at any point during startup.
+          await replacePersistedPluginModelCatalogs({
+            agentDir: path.join(state, "agents", "main", "agent"),
+            pluginCatalogWrites: {
+              [encodePluginModelCatalogRelativePath("openai")]: JSON.stringify({
+                generatedBy: PLUGIN_MODEL_CATALOG_GENERATED_BY,
+                providers: {},
+              }),
+            },
+          });
+        }
+        return facts;
+      });
     try {
       const listening = createDeferred();
       provider.once("error", listening.reject);
@@ -345,7 +373,9 @@ it(
           primaryCount,
         );
       }
+      expect(savedCatalog).toBe(true);
     } finally {
+      factsSpy.mockRestore();
       try {
         if (gateway) {
           await disconnectGatewayClient(gateway.client);
