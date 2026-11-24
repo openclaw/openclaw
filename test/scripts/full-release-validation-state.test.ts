@@ -273,22 +273,6 @@ describe("full release execution plan", () => {
       ]),
       blockers: [expect.objectContaining({ kind: "reused_evidence_invalid" })],
     });
-    const unverifiableTooling = runPlanSubprocess(
-      {
-        childPhaseVersion: 3,
-        childReuse: { normalCi: { ...selection, workflowSha: "c".repeat(40) } },
-      },
-      { PATH: `${root}${process.platform === "win32" ? ";" : ":"}${process.env.PATH}` },
-    );
-    expect(unverifiableTooling.result.status).toBe(2);
-    expect(JSON.parse(readFileSync(unverifiableTooling.output, "utf8"))).toMatchObject({
-      blockers: [
-        expect.objectContaining({
-          kind: "reused_evidence_invalid",
-          message: expect.stringContaining("invalid workflow commit tree"),
-        }),
-      ],
-    });
     writeFileSync(gh, "#!/bin/sh\nprintf '%s\\n' 'HTTP 503: Service unavailable' >&2\nexit 1\n");
     const clock = join(root, "retry-clock.mjs");
     const sleeps = join(root, "retry-sleeps.txt");

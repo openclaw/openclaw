@@ -1696,6 +1696,7 @@ src/plugins/doctor-contract-relevance.ts
 src/plugins/loader-channel-setup.ts
 src/plugins/doctor-session-route-state-owner-types.ts
 src/plugins/enable.ts
+src/plugins/git-source-spec.ts
 src/plugins/hardlink-policy.ts
 src/plugins/hook-policy-decisions.ts
 src/plugins/host-hook-cleanup-result.ts

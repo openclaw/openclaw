@@ -133,14 +133,11 @@ manually. `--dry-run` previews the tuple, not hosted admission or success.
 
 5. Record new admission and parent run/attempt; require fresh parent success and
    strict verification before publication. Whole-parent reuse keeps exact Q/P.
-   Cross-Q child reuse requires authenticated identical workload closure or a complete
-   ancestor-to-descendant delta confined to the explicit [orchestration-only paths](/reference/full-release-validation/stages).
-   Both routes retain exact C, role, effective inputs, candidate descriptor, receipt,
-   artifact, live-attempt, and producer-Q checks. Current Q grants are reevaluated.
-   Parent workflow and reuse-policy repairs can be combined with ledger updates
-   without repeating unchanged execution. Child workflow, harness, and dependency
-   changes remain subject to workload comparison. Missing evidence or a changed
-   workload requires fresh work, never relabeling.
+   [Cross-Q child reuse](/reference/full-release-validation/stages) keeps exact C,
+   role, effective inputs, candidate descriptor, receipt, artifact, live attempt,
+   and authenticated producer Q. Current Q grants are reevaluated. Tooling and
+   harness changes do not force reruns; set `reuse_evidence=false` to execute the
+   new harness. Missing or invalid evidence requires fresh work, never relabeling.
 
 ### November 2026 plan-cache restoration incident
 
@@ -171,11 +168,10 @@ at original Q=C and exact recorded inputs:
 | Candidate release checks      | `43747437691/1` | `14178081554`       |
 | Independent release checks    | `43744253043/2` | `14177235935`       |
 
-All five must rerun: independent-Q changes shared qualification scripts under
-current conservative closure policy. Original receipts remain historical, not
-cross-Q evidence; later parent-only changes may preserve eligible children after
-strict verification. Existing npm/Docker bytes/receipts are not a qualified new-Q
-bundle. Reacquire/qualify selected stages against unchanged C; preserve coverage,
+At the time, all five needed reruns under the former cross-Q closure rule.
+Under the current rule, assess each receipt against the new parent and reuse only
+if strict verification accepts it. Existing npm/Docker bytes/receipts are not a
+qualified new-Q bundle. Reacquire/qualify selected stages against unchanged C; preserve coverage,
 soak, platforms, and exact policy-grant scope. Rerun missing/failed required work.
 New P admission, successful FRV, immutable plan, and final verification are mandatory.
 
