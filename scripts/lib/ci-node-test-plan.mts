@@ -4663,10 +4663,16 @@ export function createSelectedNodeTestShardBundles(
     ) {
       delete env.OPENCLAW_VITEST_MAX_WORKERS;
     }
+    // The whole-config timeout belongs to an unselected whole group; exact files keep the default.
+    const { timeoutMinutes, ...job } = shard;
+    const keepsTimeout =
+      timeoutMinutes !== COMPACT_WHOLE_NODE_TEST_TIMEOUT_MINUTES ||
+      groups.some((group) => !group.includePatterns);
     return groups.length
       ? [
           {
-            ...shard,
+            ...job,
+            ...(keepsTimeout && timeoutMinutes !== undefined ? { timeoutMinutes } : {}),
             env: Object.keys(env).length > 0 ? env : undefined,
             checkName: `checks-node-changed-${shard.shardName}`,
             shardName: `changed-${shard.shardName}`,

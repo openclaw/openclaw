@@ -61,7 +61,6 @@ for (const scenario of [
   "followup",
   "steer",
   "conflict",
-  "exhaust",
   "replaced",
   "revoked",
   "effect",
@@ -94,7 +93,6 @@ for (const scenario of [
         requestCount = 0,
         synthesisCount = 0,
         effectCalls = 0;
-      const synthesisBodies: string[] = [];
       const sentTexts: string[] = [];
       const providerServer = createServer((req, res) => {
         void (async () => {
@@ -130,7 +128,6 @@ for (const scenario of [
           if (synthesis) {
             expectSynthesis = false;
             synthesisIndex = ++synthesisCount;
-            synthesisBodies.push(body);
             started.resolve();
             await release.promise;
           }
@@ -398,13 +395,10 @@ for (const scenario of [
         const completedChildTranscript = childTranscript();
         expect(completedChildTranscript.split(childText)).toHaveLength(2);
         const readChild = () => loadSubagentRegistryFromSqlite().get(childId);
-        const expectDelivery = (status: "delivered" | "failed") => {
+        const expectDelivery = () => {
           const persisted = readChild();
           expect(persisted?.requesterSettleWake).toBeUndefined();
-          expect(persisted?.delivery?.status).toBe(status);
-          if (status === "failed") {
-            expect(persisted?.suppressCompletionDelivery).toBe(true);
-          }
+          expect(persisted?.delivery?.status).toBe("delivered");
         };
         const expectNoRetry = async (count: number) => {
           expect(synthesisCount).toBe(count);
@@ -475,7 +469,7 @@ for (const scenario of [
           expect(await wake).toBe(false);
           expect(transcriptText()).not.toContain("Requester synthesis ");
           expect(childTranscript()).toBe(completedChildTranscript);
-          expect(readChild()?.delivery?.status).not.toBe("delivered");
+          expectDelivery();
           await expectNoRetry(1);
           return;
         }
@@ -487,71 +481,42 @@ for (const scenario of [
         if (scenario === "send") {
           expect(sentTexts).toEqual(["One committed message."]);
         }
-        const conflictCount = scenario === "exhaust" ? 3 : 1;
-        for (let index = 1; index <= conflictCount; index++) {
-          const mode = scenario === "steer" ? "steer" : "followup";
-          const conflict =
-            scenario === "conflict" ||
-            scenario === "exhaust" ||
-            scenario === "effect" ||
-            scenario === "send";
-          const humanRun = index === 1 ? await sendHuman(index, mode) : undefined;
-          // Ordinary input uses the real Gateway, but its authority differs from
-          // this system turn, so even steer queues it until synthesis settles.
-          expect(transcriptText()).not.toContain(humanText + index);
-          if (conflict) {
-            // A separate committed writer invalidates the prepared transcript.
-            // Use the actual SQLite owner, not a thrown/mocked conflict. This
-            // does not identify the incident's unproved competing writer.
-            await appendTranscriptMessage(scope, {
-              message: { role: "user", content: concurrentText + index },
-            });
-            expect(transcriptText()).toContain(concurrentText + index);
-          }
-          release.resolve();
-          const delivered = await wake;
-          if (humanRun) {
-            await waitForHuman(humanRun);
-          }
-          expect(childTranscript()).toBe(completedChildTranscript);
-          if (humanRun) {
-            expect(transcriptText()).toContain(humanText + index);
-          }
-          if (!conflict) {
-            expect(delivered).toBe(true);
-            expect(transcriptText().split("Requester synthesis 1.")).toHaveLength(2);
-            expectDelivery("delivered");
-            return;
-          }
-          expect(delivered).toBe(false);
-          expect(transcriptText()).toContain(concurrentText + index);
-          expect(transcriptText()).not.toContain("Requester synthesis ");
-          if (scenario === "effect" || scenario === "send") {
-            expectDelivery("failed");
-            expect(effectCalls).toBe(1);
-            expect(sentTexts).toEqual(scenario === "send" ? ["One committed message."] : []);
-            await expectNoRetry(1);
-            return;
-          }
-          // An uncommitted result stays owed and is due at once: no ladder, no attempt limit.
-          expect(readChild()?.requesterSettleWake).toMatchObject({
-            status: "pending",
-            attemptCount: index,
-            lastError: `SQLite transcript changed while preparing rewrite for ${sessionId}`,
+        const mode = scenario === "steer" ? "steer" : "followup";
+        const conflict = scenario === "conflict" || scenario === "effect" || scenario === "send";
+        const humanRun = await sendHuman(1, mode);
+        // Ordinary input uses the real Gateway, but its authority differs from
+        // this system turn, so even steer queues it until synthesis settles.
+        expect(transcriptText()).not.toContain(humanText + 1);
+        if (conflict) {
+          // A separate committed writer invalidates the prepared transcript.
+          // Use the actual SQLite owner, not a thrown/mocked conflict. This
+          // does not identify the incident's unproved competing writer.
+          await appendTranscriptMessage(scope, {
+            message: { role: "user", content: concurrentText + 1 },
           });
-          expect(readChild()?.requesterSettleWake?.nextAttemptAt).toBeLessThanOrEqual(Date.now());
-          await startSynthesis(subagentRuns.get(childId)!);
+          expect(transcriptText()).toContain(concurrentText + 1);
         }
-        // A fresh admission observes the newer human input; the rejected answer is never rebased.
-        expect(synthesisBodies[1]).toContain(humanText + 1);
         release.resolve();
-        expect(await wake).toBe(true);
-        const delivering = conflictCount + 1;
-        expect(transcriptText()).not.toContain(`Requester synthesis ${conflictCount}.`);
-        expect(transcriptText().split(`Requester synthesis ${delivering}.`)).toHaveLength(2);
-        expectDelivery("delivered");
+        const delivered = await wake;
+        await waitForHuman(humanRun);
         expect(childTranscript()).toBe(completedChildTranscript);
-        await expectNoRetry(delivering);
+        expect(transcriptText()).toContain(humanText + 1);
+        if (!conflict) {
+          expect(delivered).toBe(true);
+          expect(transcriptText().split("Requester synthesis 1.")).toHaveLength(2);
+          expectDelivery();
+          return;
+        }
+        expect(delivered).toBe(false);
+        expect(transcriptText()).toContain(concurrentText + 1);
+        expect(transcriptText()).not.toContain("Requester synthesis ");
+        expectDelivery();
+        if (scenario === "effect" || scenario === "send") {
+          expect(effectCalls).toBe(1);
+          expect(sentTexts).toEqual(scenario === "send" ? ["One committed message."] : []);
+        }
+        expect(transcriptText()).toContain(childText);
+        await expectNoRetry(1);
       } finally {
         release.resolve();
         if (wake) {

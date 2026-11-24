@@ -145,7 +145,7 @@ describe("accepted steering queue custody", () => {
                       queueSessionsSendSteeringWithCustody(
                         { agentId: "main", sessionKey, sessionId },
                         operation,
-                        () => source.authority.assertCurrent(),
+                        () => source.authority.signal?.throwIfAborted(),
                         async (assertCurrent, lifecycle) => {
                           assertRetained = assertCurrent;
                           settle = lifecycle.onQueueSettled;

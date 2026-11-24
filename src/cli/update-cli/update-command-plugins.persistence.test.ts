@@ -20,6 +20,7 @@ import { UpdateRequesterRevokedError } from "../../infra/update-requester-author
 import { createUpdateRun } from "../../infra/update-run-ledger.js";
 import { loadPluginCohortRecovery } from "../../infra/update-run-recovery-store.js";
 import { resolvePluginInstallTransactionRequest } from "../../plugins/install-transaction.js";
+import { hashStableJson } from "../../plugins/installed-plugin-index-hash.js";
 import { readPersistedInstalledPluginIndexInstallRecordsAsync } from "../../plugins/installed-plugin-index-records.js";
 import { withPluginLifecycleLease } from "../../plugins/plugin-lifecycle-lease.js";
 import * as registryRefresh from "../../plugins/registry-refresh.js";
@@ -752,7 +753,7 @@ it.each(["records only", "records and config", "unchanged"] as const)(
       }));
       // What a copy taken at this moment would hold: the index as it was before publication.
       const indexAtCopy: unknown[] = [];
-      await updatePluginsAfterCoreUpdate({
+      const result = await updatePluginsAfterCoreUpdate({
         ...prepared,
         configChanged: false,
         configWriteOptions: preparedWrite.writeOptions,
@@ -763,9 +764,15 @@ it.each(["records only", "records and config", "unchanged"] as const)(
         },
       });
       expect(indexAtCopy.slice(0, 1)).toEqual(shape === "unchanged" ? [] : [{}]);
-      expect(
-        await readPersistedInstalledPluginIndexInstallRecordsAsync({ env: state.env }),
-      ).toEqual(shape === "unchanged" ? {} : records);
+      const persisted = await readPersistedInstalledPluginIndexInstallRecordsAsync({
+        env: state.env,
+      });
+      expect(persisted).toEqual(shape === "unchanged" ? {} : records);
+      expect(result.reloadTargets).toEqual(
+        shape === "unchanged"
+          ? undefined
+          : [{ pluginId: "next", installHash: hashStableJson(persisted?.next) }],
+      );
       if (shape === "records and config") {
         const saved = (await readConfigFileSnapshot()).sourceConfig;
         expect(saved.plugins?.entries?.next?.enabled).toBe(true);

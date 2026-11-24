@@ -513,6 +513,7 @@ describe("independent release child reuse", () => {
       if (conclusion === "failure") {
         // Exercise the workflow entrypoint and its real gh/ZIP transport, not only helpers.
         const directory = tempDirs.make("q-waiver-rerun-");
+        writeFileSync(join(directory, "package.json"), JSON.stringify({ type: "commonjs" }));
         const archive = await data.deps.downloadArchive();
         responses["actions/artifacts/301"] = data.artifact;
         writeFileSync(join(directory, "responses.json"), JSON.stringify(responses));

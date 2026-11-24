@@ -393,7 +393,7 @@ it.each(["operator.cron", "operator.write"])(
           }
           await fixture.rejectMutation(
             () => request("cron.add", { ...job, name: "Revoked requester job" }),
-            /authority.*no longer active/i,
+            /cron access has ended/i,
             () =>
               invalidateGatewayDeviceRevocation(
                 fixture.context,
@@ -526,7 +526,7 @@ it.each([
             () => invoke("Revoked creator"),
             reason === "skill selection"
               ? /Creator session changed before scheduling/
-              : /authority.*no longer active/i,
+              : /cron access has ended/i,
             () => {
               if (reason === "skill selection") {
                 const session = expectDefined(
