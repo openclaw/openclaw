@@ -1,16 +1,20 @@
 import { StatementSync } from "node:sqlite";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import { observeSqliteReadSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
+import { createTestOperatorAuthority } from "../agents/admitted-run-context.test-support.js";
 import type {
   SessionEventOptions,
   SessionEventOutcome,
 } from "../auto-reply/reply/session-event-contract.js";
 import type * as SessionHandoff from "../auto-reply/reply/session-event-handoff.js";
+import { withTestChannelRegistry } from "../channels/message-access/host-ingress.test-support.js";
+import type { ChannelPlugin } from "../channels/plugins/types.public.js";
 import type { RestoredGatewayOperatorAuthority } from "../gateway/operator-run-recovery.js";
 import { operatorRecoverySnapshotFixture } from "../gateway/server/client-fixtures.test-support.js";
 import { prepareAutomationSystemEvents } from "../infra/system-events.js";
 import { writeConfigMachineStateAsync } from "../state/config-machine-state-async.js";
+import { loadBundledPluginFacade } from "../test-utils/bundled-plugin-public-surface.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { makeCronJob } from "./delivery.test-helpers.js";
 import { resolveCronSourceDeliveryPlan } from "./isolated-agent/source-delivery-plan.js";
@@ -119,7 +123,7 @@ function input(): Parameters<typeof runCronSessionTurn>[0] {
           sourceRunId: "original-request",
           snapshot: operatorRecoverySnapshotFixture("requester", "original-grant", {
             sourceIngress: "control-ui",
-            controlUiAdmin: true,
+            automationAdmin: true,
           }),
         },
       },
@@ -131,12 +135,10 @@ function input(): Parameters<typeof runCronSessionTurn>[0] {
 
 function restoredSource(): RestoredGatewayOperatorAuthority {
   return {
-    authority: {
+    authority: createTestOperatorAuthority({
       profileId: "requester",
       scopes: ["operator.read"],
-      assertCurrent: vi.fn(() => {}),
-    },
-    assertPolicyCurrent: vi.fn(),
+    }),
     authenticatedUserProfile: {
       profileId: "requester",
       displayName: null,
@@ -144,7 +146,8 @@ function restoredSource(): RestoredGatewayOperatorAuthority {
       hasAvatar: false,
       updatedAt: 0,
     },
-    controlUiAdmin: true,
+    automationAdmin: true,
+    controlUiAdmin: false,
     release: vi.fn(),
   };
 }
@@ -177,6 +180,80 @@ describe("scheduled session prompts", () => {
       receipt(Promise.resolve({ status: "completed", executionStarted: true, delivered: false })),
     );
   });
+
+  const threadId = "123456789012345678";
+  const sameThread = { threadId };
+  const baseRoute = { channel: "discord", accountId: "work", to: `channel:${threadId}` };
+  it.each([
+    ["retained thread", sameThread, sameThread, true],
+    ["omitted redundant thread", sameThread, {}, true],
+    ["added redundant thread", {}, sameThread, true],
+    ["sibling thread", sameThread, { threadId: "234567890123456789" }, false],
+    ["parent vs child", {}, { threadId: "234567890123456789" }, false],
+    ["changed recipient", sameThread, { to: "channel:222" }, false],
+    ["changed account", sameThread, { accountId: "other" }, false],
+    ["changed channel", sameThread, { channel: "other" }, false],
+    [
+      "DM with matching id",
+      { ...sameThread, to: `user:${threadId}` },
+      { to: `user:${threadId}` },
+      false,
+    ],
+    [
+      "channel without an equivalence rule",
+      { ...sameThread, channel: "other" },
+      { channel: "other" },
+      false,
+    ],
+    ["delivery disabled", sameThread, { requested: false }, false],
+  ] as const)(
+    "rechecks queued announcement delivery: %s",
+    async (_label, admitted, current, allowed) => {
+      const { discordPlugin } = await loadBundledPluginFacade<{ discordPlugin: ChannelPlugin }>({
+        pluginId: "discord",
+        artifactBasename: "api.ts",
+      });
+      function context({
+        requested = true,
+        ...route
+      }: Partial<typeof baseRoute> & { threadId?: string; requested?: boolean }) {
+        const deliveryPlan = { source: "delivery", mode: "announce", requested } as const;
+        const resolvedDelivery = { ok: true, mode: "explicit", ...baseRoute, ...route } as const;
+        return {
+          deliveryPlan,
+          resolvedDelivery,
+          deliveryRequested: requested,
+          sourceDelivery: resolveCronSourceDeliveryPlan({ deliveryPlan, resolvedDelivery }),
+          deliverySystemPrompt: undefined,
+          messageToolFormatPrompt: undefined,
+        };
+      }
+      await withTestChannelRegistry(discordPlugin, async () => {
+        fixture.delivery
+          .mockResolvedValueOnce(context(admitted))
+          .mockResolvedValueOnce(context(current));
+        const { terminal, enqueued } = captureSession();
+        const run = runCronSessionTurn(input());
+        try {
+          const options = await awaitGateBeforeSettlement(
+            enqueued.promise,
+            run,
+            "settled before enqueue",
+          );
+          const check = options.scheduledAutomation?.beforeDeliver;
+          assert(check);
+          if (allowed) {
+            await expect(check()).resolves.toBeUndefined();
+          } else {
+            await expect(check()).rejects.toThrow("policy or route changed");
+          }
+        } finally {
+          terminal.resolve({ status: "completed", executionStarted: true, delivered: false });
+          await run;
+        }
+      });
+    },
+  );
 
   it("resolves store off-thread before submitting localized job context", async () => {
     await withOpenClawTestState({ label: "cron-session-store-path" }, async (state) => {
@@ -346,6 +423,47 @@ describe("scheduled session prompts", () => {
 });
 
 describe("scheduled session execution custody", () => {
+  it.each([
+    {
+      reason: "failed",
+      errorReason: "server_error",
+      expected: { kind: "reason", reason: "server_error" },
+    },
+    {
+      reason: "failed",
+      errorReason: "auth_permanent",
+      expected: { kind: "reason", reason: "auth_permanent" },
+    },
+    { reason: "cancelled", errorReason: "server_error", expected: { kind: "aborted" } },
+    { reason: "superseded", errorReason: "server_error", expected: { kind: "aborted" } },
+    {
+      reason: "hard_timeout",
+      errorReason: "server_error",
+      expected: { kind: "reason", reason: "timeout" },
+    },
+  ] as const)(
+    "preserves $reason precedence over provider $errorReason",
+    async ({ reason, errorReason, expected }) => {
+      fixture.restore.mockResolvedValue(restoredSource());
+      fixture.enqueue.mockReturnValue(
+        receipt(
+          Promise.resolve({
+            status: "failed",
+            executionStarted: true,
+            delivered: false,
+            error: "The AI service is having trouble.",
+            errorReason,
+            terminalOutcome: { reason, status: "error" },
+          }),
+        ),
+      );
+      await expect(runCronSessionTurn(input())).resolves.toMatchObject({
+        status: "error",
+        errorClassification: expected,
+      });
+    },
+  );
+
   it("times out adopted preparation without spending the setup budget in the queue", async () => {
     vi.useFakeTimers();
     const { terminal, enqueued } = captureSession(undefined, (options) => {
@@ -408,7 +526,7 @@ describe("scheduled session execution custody", () => {
     await accepted.promise;
     expect(source.release).not.toHaveBeenCalled();
     expect(options.scheduledAutomation?.operatorAuthority).toBe(source.authority);
-    expect(options.scheduledAutomation?.controlUiAdmin).toBe(true);
+    expect(options.scheduledAutomation?.automationAdmin).toBe(true);
     expect(options.scheduledAutomation?.admissionSource).toBe("requester-schedule");
     options.scheduledAutomation?.onExecutionStarted?.({
       runId: "scheduled-run",
@@ -446,7 +564,7 @@ describe("scheduled session execution custody", () => {
     },
   );
 
-  it("refuses a source revoked while restoration was awaited", async () => {
+  it("refuses an occurrence stopped while source restoration was awaited", async () => {
     const source = restoredSource();
     const restoring = createDeferred();
     const restored = createDeferred<RestoredGatewayOperatorAuthority>();
@@ -454,13 +572,14 @@ describe("scheduled session execution custody", () => {
       restoring.resolve();
       return restored.promise;
     });
-    const run = runCronSessionTurn(input());
+    const params = input();
+    const run = runCronSessionTurn(params);
     await awaitGateBeforeSettlement(restoring.promise, run, "settled before restoring source");
-    vi.mocked(source.authority.assertCurrent).mockImplementation(() => {
-      throw new Error("original requester revoked");
+    vi.mocked(params.assertCurrent).mockImplementation(() => {
+      throw new Error("scheduled occurrence stopped");
     });
     restored.resolve(source);
-    await expect(run).rejects.toThrow("original requester revoked");
+    await expect(run).rejects.toThrow("scheduled occurrence stopped");
     expect(fixture.enqueue).not.toHaveBeenCalled();
     expect(source.release).toHaveBeenCalledOnce();
   });

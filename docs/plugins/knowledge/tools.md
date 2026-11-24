@@ -196,7 +196,10 @@ The server:
    openers, role terms, and bare first names are not guessed. `infer_subject:
    false` turns this off for one item.
 3. Returns `duplicate` with the existing ID for an exact repeat: same normalized
-   text, kind, and linked subjects.
+   text, kind, linked subjects, assertion origin, occurrence/due/validity dates,
+   and commitment owner. Dates keep their original precision and explicit offset;
+   a date-only occurrence is not the same as a timestamp on that date. Different
+   dates or origins remain separate claims.
 4. Retains the excerpt as `artifacts/<requestId>/excerpt.txt` and cites it from
    every inserted claim.
 5. Publishes the inserted claims as one batch with one receipt.

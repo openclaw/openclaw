@@ -438,9 +438,10 @@ describe("ClawRouter native speech", () => {
         });
         const provider = speech(cfg);
         const storedCfg = withoutKey(cfg);
-        await expect(provider.synthesize({ ...request(), cfg: storedCfg })).resolves.toMatchObject({
-          audioBuffer: AUDIO,
-        });
+        // Use TTS readiness before synthesis, as callers do, while retaining the 5 s request budget.
+        await expect(
+          tts({ cfg: { ...storedCfg, tts: { ...storedCfg.tts, timeoutMs: 5000 } } }),
+        ).resolves.toMatchObject({ success: true, audioBuffer: AUDIO });
         await expect(
           provider.synthesize(
             request({ profileId: "clawrouter:speech", apiKey: "fixture-inline-must-not-win" }),

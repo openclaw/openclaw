@@ -23,6 +23,7 @@ import { parseReleaseVersion } from "./lib/release-version.mjs";
 import { resolveFullReleaseNpmPreflight } from "./npm-preflight-tooling-identity.mjs";
 import {
   QUALIFIED_NPM_PREFLIGHT_SCHEMA,
+  SEALED_NPM_PREFLIGHT_SCHEMA,
   sameJobExecution,
   validatePreparedNpmBundleDescriptor,
   verifyNpmBundleProducer,
@@ -84,7 +85,7 @@ function artifactRequest(env) {
     "Invalid artifact release tag.",
   );
   requireValue(
-    ["all", "prepare"].includes(env.PREFLIGHT_PHASE),
+    ["all", "prepare", "build-only"].includes(env.PREFLIGHT_PHASE),
     "Invalid artifact npm preparation phase.",
   );
   requireValue(
@@ -146,18 +147,23 @@ export function validateArtifactProducerRun(
   { allowNewerAttempts = false, allowFailure = false } = {},
 ) {
   validateArtifactProducerTuple(runId, runAttempt);
+  const plugin = request.stage === "plugin-npm";
+  const workflow = plugin ? ".github/workflows/plugin-npm-release.yml" : WORKFLOW;
+  const title = plugin
+    ? `Plugin NPM Artifact Preflight [${request.npmDistTag}] ${request.sourceSha} (${request.dispatchId})`
+    : `Full Release Artifacts ${request.dispatchId}`;
   requireValue(
     String(run.id) === String(runId) &&
       (allowNewerAttempts
         ? DECIMAL.test(String(run.run_attempt)) && BigInt(run.run_attempt) >= BigInt(runAttempt)
         : String(run.run_attempt) === String(runAttempt)) &&
       run.event === "workflow_dispatch" &&
-      String(run.path).split("@", 1)[0] === WORKFLOW &&
+      String(run.path).split("@", 1)[0] === workflow &&
       run.repository?.full_name === request.repository &&
       run.head_repository?.full_name === request.repository &&
       run.head_sha === request.toolingSha &&
       run.head_branch === request.workflowRef &&
-      run.display_title === `Full Release Artifacts ${request.dispatchId}`,
+      run.display_title === title,
     "Artifact producer run identity changed.",
   );
   requireValue(
@@ -201,10 +207,13 @@ function validateArtifactReceipt(receipt, request, runId, runAttempt) {
       raw.producer.runId === String(runId) && BigInt(raw.producer.runAttempt) <= BigInt(runAttempt),
       "Raw npm bundle came from another artifact producer.",
     );
-    if (request.preflightPhase === "all") {
+    if (["all", "build-only"].includes(request.preflightPhase)) {
       const qualified = JSON.parse(outputs.qualified_preflight_bundle_json);
       requireValue(
-        qualified.schema === QUALIFIED_NPM_PREFLIGHT_SCHEMA &&
+        qualified.schema ===
+          (request.preflightPhase === "build-only"
+            ? SEALED_NPM_PREFLIGHT_SCHEMA
+            : QUALIFIED_NPM_PREFLIGHT_SCHEMA) &&
           qualified.source.sha === request.sourceSha &&
           qualified.producer.runId === String(runId) &&
           DECIMAL.test(qualified.producer.runAttempt) &&
@@ -290,7 +299,7 @@ async function readArtifact(
   runId,
   name,
   fileName,
-  { retained = false, runGh, immutableReads } = {},
+  { retained = false, runGh, immutableReads, retryMetadataNotFound = false, deadlineMs } = {},
 ) {
   const metadata = findArtifact(request, runId, name, { retained, runGh });
   if (!metadata) {
@@ -310,6 +319,8 @@ async function readArtifact(
     maxArchiveBytes: MAX_ARCHIVE_BYTES,
     token: process.env.GH_TOKEN,
     immutableReads,
+    retryMetadataNotFound: !retained && retryMetadataNotFound,
+    outerDeadlineMs: deadlineMs,
   }).catch((/** @type {unknown} */ error) => {
     if (
       retained &&
@@ -380,13 +391,124 @@ function verifyRetainedArtifact({
   return expected;
 }
 
+// Selecting bytes is independent of selecting a successful aggregate verdict.
+// The original admission/plan and artifact owners authenticate every producer;
+// the new parent still has to qualify every selected workload and pass normally.
+export async function selectPublicationArtifactSource(selectionInput, env, providedClient) {
+  const { validatePublicationArtifactSelection } =
+    await import("./lib/full-release-publication-inputs.mjs");
+  const { createReleaseEvidenceClient, restoreOriginalPublicationAdmission } =
+    await import("./release-ci-summary.mjs");
+  const { discoverPublicationArtifacts } =
+    await import("./lib/full-release-publication-artifacts.mjs");
+  const { verifySealedFullReleaseCandidate, candidateArtifactJsonFromBinding } =
+    await import("./lib/full-release-candidate-reuse.mjs");
+  const selection = validatePublicationArtifactSelection(selectionInput);
+  const client = providedClient ?? createReleaseEvidenceClient(env.GITHUB_REPOSITORY);
+  const current = JSON.parse(env.SOURCE_ADMISSION_JSON);
+  const parent = await client.getRun(selection.runId);
+  requireValue(
+    parent.run_attempt === selection.runAttempt && parent.status === "completed",
+    "Selected publication artifact parent attempt changed or is not terminal.",
+  );
+  const indexed = await client.loadExecutionPlanEvidence(selection.runId);
+  requireValue(
+    indexed?.plan?.sourceAdmission,
+    "Selected publication source has no authenticated plan.",
+  );
+  const { plan, source } = await restoreOriginalPublicationAdmission({
+    request: indexed?.plan?.sourceAdmission,
+    client,
+  });
+  requireValue(
+    source.runId === selection.runId &&
+      source.candidateSha === env.TARGET_SHA &&
+      source.repository === env.GITHUB_REPOSITORY &&
+      current?.qualificationAdmission &&
+      source.qualificationAdmission &&
+      source.targetContextRef === current.targetContextRef &&
+      isDeepStrictEqual(source.publicationSelection, current.publicationSelection),
+    "Selected publication artifact source differs from the admitted candidate or publication selection.",
+  );
+  await client.verifyQualificationAdmission({
+    descriptor: source.qualificationAdmission,
+    repository: env.GITHUB_REPOSITORY,
+    candidateSha: env.TARGET_SHA,
+    qualificationSha: source.workflow.sha,
+    workflowRef: parent.head_branch,
+    inputs: plan.qualificationInputs,
+  });
+  const request = validateFullReleaseCandidateRequest(JSON.parse(env.CANDIDATE_REQUEST_JSON));
+  const candidate = validateFullReleaseCandidateBinding(plan.candidate);
+  requireValue(
+    isDeepStrictEqual({ ...candidate.request, toolingSha: request.toolingSha }, request),
+    "Selected publication candidate request differs from the admitted workload inputs.",
+  );
+  await verifySealedFullReleaseCandidate({
+    binding: candidate,
+    consumerRunId: env.GITHUB_RUN_ID,
+    consumerRunAttempt: env.GITHUB_RUN_ATTEMPT,
+    readArtifact: (id) => client.getArtifact(id),
+    readRunAttempt: (id, attempt) => client.getRunAttempt(id, Number(attempt)),
+    readWorkflowJobs: async (id, attempt) => {
+      const jobs = await client.getRunAttemptJobs(id, Number(attempt), { requireComplete: true });
+      return { jobs, total_count: jobs.length };
+    },
+    downloadArchive: (options) => client.downloadArtifactArchive(options),
+    token: env.GH_TOKEN,
+  });
+  const jobs = await client.getRunAttemptJobs(selection.runId, 1, { requireComplete: true });
+  const descriptors = await discoverPublicationArtifacts(parent, source, jobs, client, candidate);
+  const raw = descriptors.publicationArtifacts.npmPreflight?.preparedBundle;
+  requireValue(
+    raw?.package?.sha256 === candidate.package.packageSha256,
+    "Selected candidate package differs from the prepared publication bytes.",
+  );
+  const root = {
+    workflowName: "Full Release Validation",
+    runId: selection.runId,
+    runAttempt: String(selection.runAttempt),
+    sourceParentRunAttempt: plan.parentRunAttempt,
+    targetSha: source.candidateSha,
+    workflowSha: source.workflow.sha,
+    workflowRef: parent.head_branch,
+    workflowFullRef: source.workflow.ref,
+    publicationArtifacts: descriptors.publicationArtifacts,
+  };
+  // Final verification has no dispatch environment; the sealed candidate owns the tag.
+  const releaseTag = `v${candidate.package.version}`;
+  requireValue(
+    env.RELEASE_TAG === undefined || env.RELEASE_TAG === releaseTag,
+    "Selected publication release tag differs from the sealed candidate.",
+  );
+  const retained = await client.verifyRetainedPublicationArtifacts(root, {
+    ...env,
+    RELEASE_TAG: releaseTag,
+  });
+  return {
+    source,
+    candidate,
+    publicationArtifacts: root.publicationArtifacts,
+    outputs: {
+      ...retained.outputs,
+      publication_artifact_source: JSON.stringify(source),
+      candidate_binding_json: JSON.stringify(candidate),
+      candidate_artifact_json: candidateArtifactJsonFromBinding(candidate),
+    },
+  };
+}
+
 async function reusePublicationArtifacts(env) {
   const source = JSON.parse(env.SOURCE_ADMISSION_JSON || "null");
+  const selected = source?.coverage?.publication_artifact_source_json;
+  if (selected) {
+    output((await selectPublicationArtifactSource(JSON.parse(selected), env)).outputs);
+    return;
+  }
   if (
     env.EVIDENCE_REUSE !== "true" ||
     env.EVIDENCE_POLICY !== "exact-target-full-validation-v1" ||
     env.EVIDENCE_SHA !== env.TARGET_SHA ||
-    env.TARGET_SHA !== env.PARENT_WORKFLOW_SHA ||
     !source?.qualificationAdmission
   ) {
     output({ publication_artifacts_reused: "false" });
@@ -1006,12 +1128,7 @@ async function effectiveNpmPreparationAttempt(request, runId, runAttempt) {
 
 function assertNpmPreparationExecutionPreserved(request, runId, runAttempt, producer) {
   const sourceAttempt = Number(producer.runAttempt);
-  let sourceJobs;
-  try {
-    sourceJobs = artifactAttemptJobs(request, runId, sourceAttempt);
-  } catch {
-    throw new Error("Raw npm bundle requires its unique exact completed producer job.");
-  }
+  const sourceJobs = artifactAttemptJobs(request, runId, sourceAttempt);
   const sourceMatches = sourceJobs.filter(
     (job) => String(job.id) === producer.jobId && job.name === producer.jobName,
   );
@@ -1063,6 +1180,7 @@ async function waitForArtifact(request, env) {
           runId,
           name,
           raw ? "prepared-npm-bundle.json" : "artifact-receipt.json",
+          { retryMetadataNotFound: raw, deadlineMs: deadline },
         )
       )?.value;
       if (receipt && raw) {
@@ -1104,7 +1222,7 @@ async function waitForArtifact(request, env) {
             requireCompletedParent: true,
           });
         }
-        if (request.stage === "npm" && request.preflightPhase === "all") {
+        if (request.stage === "npm" && ["all", "build-only"].includes(request.preflightPhase)) {
           const qualified = JSON.parse(values.qualified_preflight_bundle_json);
           verifyNpmBundleProducer({
             producer: qualified.producer,
@@ -1164,7 +1282,10 @@ async function main() {
     try {
       await reusePublicationArtifacts(env);
     } catch (error) {
-      if (!(error instanceof PublicationArtifactUnavailable)) {
+      if (
+        !(error instanceof PublicationArtifactUnavailable) ||
+        JSON.parse(env.SOURCE_ADMISSION_JSON || "null")?.coverage?.publication_artifact_source_json
+      ) {
         throw error;
       }
       console.error(`${error.message} Preparing fresh publication artifacts.`);
@@ -1227,5 +1348,11 @@ async function main() {
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  await main();
+  // Finish module evaluation before the selector imports the summary, which imports this module.
+  void main().catch(
+    /** @param {unknown} error */ (error) => {
+      console.error(error);
+      process.exitCode = 1;
+    },
+  );
 }

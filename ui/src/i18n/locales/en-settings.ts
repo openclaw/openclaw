@@ -134,6 +134,7 @@ const enSettings = {
       utilityModelInheritAutomatic: "Automatic",
       utilityModelDisabled: "Disabled for this agent",
       utilityModelFallbacks: "This agent's utility fallbacks: {models}",
+      inheritDefaultThinking: "Inherit default ({level})",
       fallbacks: "Fallbacks",
       addFallback: "Add fallback…",
     },
@@ -444,23 +445,33 @@ const enSettings = {
     },
     transcription: {
       title: "Speech to text",
-      description:
-        "Speech to text for Talk dictation and inbound voice notes (tools.media). Status shows the provider Talk uses.",
+      description: "How Talk hears you, and which model transcribes voice notes.",
       unavailableHint: "Connect to the Gateway to check speech-to-text readiness.",
       failedHint: "Couldn’t check speech-to-text readiness.",
-      noProvider: "No speech-to-text model is configured yet.",
-      readyWithoutProvider: "A configured local transcription model is ready.",
+      readyWithoutProvider: "A local transcription model is ready.",
+      talkTitle: "Talk",
+      talkVoiceCall: "{provider} live transcription, set in Voice Call settings.",
+      talkVoiceModel: "{provider}, set by the voice model in AI Agents settings.",
+      talkAutomatic: "{provider} live transcription, picked automatically from your keys.",
+      talkNotSetUp: "Not set up yet. Add a live transcription key in Voice Call settings.",
+      talkUsesVoiceNotes: "Uses the voice notes model below.",
+      talkUsesFallback: "Uses {provider}, because the voice notes model below isn’t ready.",
+      talkUses: "Uses {provider}.",
+      change: "Change",
+      setUp: "Set up",
+      voiceNotesTitle: "Voice notes",
+      voiceNotesDescription:
+        "Transcribes voice notes you send. Automatic tries your audio models in order.",
       modelTitle: "Speech-to-text model",
-      modelDescription:
-        "Used for voice notes, and for Talk dictation when no streaming transcription provider or speech-to-text voice-model default is configured; those take precedence for Talk. Automatic tries configured audio models in order.",
       invalidModel:
         "“{value}” isn’t a provider/model reference, so it wasn’t saved. Use provider/model, for example openrouter/openai/whisper-large-v3-turbo.",
       automatic: "Automatic",
       custom: "Other model (provider/model)",
-      preferredNotReadyTitle: "Preferred model",
       providerNotReady: "Not ready",
       providerNotReadyDescription:
         "{provider} can’t transcribe yet. It may need a key, which is added on Settings → Models, or it may not support speech to text.",
+      providerKeyOutsideModels:
+        "{provider} can’t transcribe yet. Models can’t add its key: set it in the Gateway’s environment, or pick another model.",
       openModels: "Open Models",
     },
   },
@@ -514,6 +525,7 @@ const enSettings = {
     schemaUnavailable: "Schema unavailable.",
     unsupportedSchema: "Unsupported schema. Use Raw.",
     unsupportedNode: "Unsupported schema node. Use Raw mode.",
+    editInAdvancedRaw: "Edit this setting in the Raw tab of Advanced settings.",
     noSettingsMatch: "No settings match your search.",
     noSettingsInSection: "No settings in this section.",
     sections: {
@@ -1000,7 +1012,8 @@ const enSettings = {
       providerDefault: "Provider default",
       machineClass: "Device class",
       machineClassHelp:
-        "Enter a class accepted by the selected Crabbox backend and binary. The provider determines its effective sizing.",
+        "Choose an advertised class when available, or enter a custom class. The provider determines its effective sizing.",
+      customMachineClass: "Custom device class…",
       ttl: "Max lifetime",
       ttlHelp: "Use a positive Go duration such as 8h or 90m.",
       ttlPlaceholder: "8h",
@@ -1084,7 +1097,7 @@ const enSettings = {
         "Sign in and enable this provider for this agent without changing the active model.",
       nativeDone: "Provider enabled. The active model has not changed.",
       setupDescription:
-        "Choose how to connect. Verifying an API key or token can also set this agent's active model.",
+        "Choose how to connect. Setup can also verify and select a model for this agent.",
       done: "Provider credentials saved.",
       statusRefreshFailed: "Sign-in saved, but refreshing status failed. Retry",
       startChat: "Start a new chat with {model}",
@@ -1102,15 +1115,28 @@ const enSettings = {
       sessionExpired:
         "This sign-in session ended. Close this dialog and refresh Models to check the result.",
     },
-    accessTitle: "Provider access",
-    accessDescription: "Accounts for {agent}. Defaults above apply to all agents.",
+    accessTitle: "Providers",
+    accessDescription: "Accounts for {agent}. Model defaults apply to all agents.",
     search: "Search providers…",
+    searchConnected: "Filter providers…",
+    catalog: {
+      firstTitle: "Connect a provider",
+      firstDescription:
+        "Sign in with your account or add an API key. Your agents use its models right away.",
+      title: "Add a provider",
+      description: "Sign in or add an API key for {agent}.",
+      browserSignIn: "Sign in with browser",
+      token: "Access token",
+      connect: "Connect",
+      connected: "Connected",
+      showAll: "Show all {count} providers",
+      showPopular: "Show popular providers",
+      discover: "Find local models",
+    },
     noMatches: "No providers match your search.",
     updated: "Updated {time}",
     refreshing: "Refreshing…",
     disconnected: "Connect to the gateway to see configured model providers.",
-    emptyTitle: "No model providers configured",
-    emptySubtitle: "Sign in to a provider or add an API key, then refresh.",
     status: {
       ok: "Signed in",
       ready: "Ready",
@@ -1145,6 +1171,13 @@ const enSettings = {
     },
     limits: {
       title: "Plan limits",
+      oneAccount: "Limits for one account",
+      subscriptionLimits: "Subscription allowance left",
+      credits: "Credits",
+      detailsFor: "Account details: {account}",
+      notReported: "Not reported",
+      readFailed: "{error} · Refresh to try again.",
+      accountDetails: "Account details",
     },
     saving: "Saving…",
     requestFailed: "Couldn’t complete the request. Try again.",
@@ -1209,6 +1242,14 @@ const enSettings = {
         "API key saved, but OpenClaw couldn’t check it. Use Test access to try again.",
       authModeBlocked: "API key changes aren’t available with the current sign-in method.",
     },
+    voice: {
+      title: "Talk, speech, and transcription",
+      detail:
+        "Sign in with ChatGPT doesn’t include {provider} voice. API usage is billed separately from your ChatGPT plan.",
+      providerDetail:
+        "Signing in with {provider} doesn’t include voice. Voice API usage is billed separately.",
+      status: "API key needed",
+    },
     probe: {
       test: "Test access",
       testing: "Testing…",
@@ -1227,14 +1268,8 @@ const enSettings = {
       },
     },
     readiness: {
-      title: "AI setup",
-      heading: "Set up a model",
       signedInNoModels:
         "You’re signed in, but this account has no usable models. Choose another provider or account.",
-      notConfigured: "Add a provider and test the model OpenClaw will use.",
-      noModels: "No models available",
-      modelRequired: "Model required",
-      chooseProvider: "Choose another provider",
     },
     logout: {
       action: "Sign out",
@@ -1248,6 +1283,12 @@ const enSettings = {
     remove: {
       action: "Remove provider",
       title: "Remove {provider}?",
+      config:
+        "This deletes the Gateway settings for {key}, including its configured model list. Saved accounts and credentials managed outside OpenClaw may still make the provider available. Models downloaded on the provider’s server are not deleted.",
+      configNote: "Removed provider configuration for {key}.",
+      configChanged: "The configuration changed. Review the provider and confirm removal again.",
+      accessAction: "Remove saved access",
+      accessTitle: "Remove saved access to {provider}?",
       accounts:
         "This removes the saved accounts for {provider} available to this agent. Shared accounts are also removed for other agents that use them. Active replies for this provider on the selected agent may stop.",
       keys: "Saved API keys for {key} and its configured aliases will also be deleted. Provider settings and external secrets stay in place.",
@@ -1270,6 +1311,8 @@ const enSettings = {
       saved: "Added {provider}",
       verified: "Added {provider}. Access verified.",
       ready: "Added {provider}. {model} is ready to chat.",
+      billingFailed:
+        "API key saved, but the account couldn’t be used. {reason} Check the provider’s billing or quota, then save again.",
     },
     defaults: {
       title: "Defaults for all agents",
@@ -1296,7 +1339,9 @@ const enSettings = {
       clearFallbacks: "No fallback model (remove all {count})",
       moreFallbackOne: "1 more fallback after this one",
       moreFallbacks: "{count} more fallbacks after this one",
-      selectModel: "Select a model",
+      selectModel: "Not set",
+      agentModel: "{agent} uses {model}, set on the agent.",
+      moreSettings: "More settings",
       discoveringMore: "Looking for more models in the background…",
       savedDiscoveringMore: "Saved. Looking for more models in the background…",
       discoverFailed: "Couldn’t load more models. Try again.",
@@ -1326,7 +1371,7 @@ const enSettings = {
       unverifiedHint:
         "Check this app’s custom launch command on the computer running OpenClaw, then check again.",
       notDetected:
-        "Not found on the computer running OpenClaw: {names}. Install one, then check again.",
+        "None found on the computer running OpenClaw. Supported apps: {names}. Install one, then check again.",
       disabledHint: "Enable this app to include its models in the picker.",
       signInHint:
         "Open {name} on the computer running OpenClaw and check its sign-in, then check again.",
@@ -1336,7 +1381,7 @@ const enSettings = {
       check: "Check again",
       checking: "Checking…",
       empty: "No supported coding apps yet.",
-      note: "Update installed agents from Control UI",
+      note: "Update installed agents from the OpenClaw app",
       enabled: "{name} is enabled.",
       sessionExpired:
         "This setup session ended. Close this dialog and check the installed agent status.",
@@ -1346,7 +1391,7 @@ const enSettings = {
       adminRequired: "You can view Models, but only admins can change them.",
     },
     notes: {
-      defaultModel: "Update defaults from Control UI",
+      defaultModel: "Update defaults from the OpenClaw app",
     },
   },
   updates: {
@@ -1372,7 +1417,7 @@ const enSettings = {
     page: {
       buildTitle: "Current build",
       gatewayVersion: "Gateway version",
-      controlUiCommit: "Control UI commit",
+      controlUiCommit: "Web app commit",
       builtAt: "Built",
       installedAt: "Installed",
       installedAtUnknown: "Unknown",
@@ -1722,6 +1767,19 @@ const enSettings = {
     themeRemoved: "Custom theme removed.",
   },
   configView: {
+    toolWorkflows: {
+      codeMode: "Code Mode",
+      codeModeDescription:
+        "Use compact JavaScript tool workflows. On selects Auto for evaluated models; Off disables the global default. Agent and per-model activation settings take precedence. Applies to future replies.",
+      executor: "Code Mode executor",
+      executorDescription:
+        "Node.js is for trusted code; its VM is not a security sandbox. QuickJS runs code in an isolated WebAssembly runtime. Calls through OpenClaw tools use the same permissions. Applies to future replies; agent overrides take precedence.",
+      executorNode: "Node.js (default)",
+      executorQuickjs: "QuickJS (isolated)",
+      toolSearch: "Tool Search",
+      toolSearchDescription:
+        "Defer tool schemas and discover tools on demand. Enabled by default with structured tool calls. Code Mode takes precedence when engaged; native harness tool surfaces remain independent. Applies to future replies.",
+    },
     adminRequired: en.configView.adminRequired,
     channelSettings: "Channel settings",
     categories: {
@@ -1852,6 +1910,8 @@ const enSettings = {
       status: "Status",
       unsubscribe: "Unsubscribe",
       sendTest: "Send test",
+      testAllBrowsers: "Test all browsers",
+      testAllBrowsersHint: "Tests include browsers registered by other people on this Gateway.",
       sendingTest: "Sending test…",
       updateFailed: "Couldn’t complete the notification request. Try again.",
       testError: "Not sent",
@@ -1883,12 +1943,24 @@ const enSettings = {
       quietHoursStart: "Quiet hours start",
       quietHoursEnd: "Quiet hours end",
       timeZone: "Time zone",
-      onlyAgents: "Only these agents",
-      onlyAgentsHint: "Enter agent IDs separated by commas. Leave blank for all agents.",
+      agents: "Agents",
+      chooseAgents: "Choose notification agents",
+      agentScope: "Notify for",
+      allAgents: "All agents",
+      allAgentsHint: "Includes agents added in the future.",
+      specificAgents: "Specific agents",
+      inheritAgents: "Account default: {agents}",
+      inheritAgentsHint: "Follows your account defaults, including later changes.",
+      searchAgents: "Search agents",
+      savedAgentUnavailable: "Saved selection · not in the current list",
+      agentsLoadFailed: "Couldn’t load available agents. Saved selections are kept.",
+      noMatchingAgents: "No matching agents",
+      noAgents: "No agents available",
+      agentsSelected: "{count} selected",
+      selectAgentRequired: "Choose at least one agent, or switch to All agents.",
       inherit: "Use account default",
       inheritDetail: "Use account detail level",
       inheritQuietHours: "Use account quiet hours",
-      overrideAgents: "Override for this device",
     },
     appearance: {
       customTheme: "Custom",
@@ -2029,7 +2101,7 @@ const enSettings = {
       devices: "Microphone and camera",
       messageWidth: "Message width",
       messageWidthHint:
-        "Optional CSS width for the centered transcript, such as 960px, 82%, or min(1280px, 82%).",
+        "Optional CSS width for the centered chat, such as 960px, 82%, or min(1280px, 82%).",
       messageWidthInvalid:
         "Enter a CSS width such as 960px, 82%, min(1280px, 82%), or calc(100% - 2rem).",
       showTaskProgress: "Show task progress cards",
@@ -2051,7 +2123,7 @@ const enSettings = {
       title: "Session observer",
       scope: "Applies to everyone on this Gateway.",
       toggle: "Session observer",
-      toggleHint: "Generate live status digests for subscribed Control UI sessions.",
+      toggleHint: "Generate live status digests for sessions that are open in the app.",
       resolvedModel: "Resolved small model",
       modelAuto: "auto ({model})",
       modelConfigured: "configured ({model})",
@@ -2063,7 +2135,7 @@ const enSettings = {
       modelCatalogUnavailable: "Explicit model catalog unavailable",
       auto: "Auto (provider default)",
       disabled: "Disabled",
-      toggleNote: "Update the Control UI session observer",
+      toggleNote: "Update the session observer",
       modelNote: "Update the default utility model",
     },
     connection: {
@@ -2106,7 +2178,7 @@ const enSettings = {
     rawDraftBlocksFormEdit: en.configView.rawDraftBlocksFormEdit,
     rawDraftUnverified: en.configView.rawDraftUnverified,
     invalidConfig: "Your configuration is invalid. Some settings may not work as expected.",
-    dismissWarning: "Don’t remind me again",
+    dismissWarning: "Dismiss warning",
     viewPendingChangesRaw: "View pending changes",
     hideEnvValues: "Hide environment values",
     revealEnvValues: "Reveal environment values",
@@ -2150,8 +2222,8 @@ const enSettings = {
     },
     sessionStorage: {
       title: "Session storage",
-      description: "Transcript counts and disk usage across agent databases.",
-      transcripts: "Transcripts",
+      description: "Chat counts and disk usage across agent databases.",
+      transcripts: "Chats",
       transcriptCounts: "{hot} uncompressed · {cold} archived",
       database: "Databases",
       walSize: "Write-ahead logs: {size}",
@@ -2163,29 +2235,28 @@ const enSettings = {
       agentCounts:
         "{hot} uncompressed · {cold} archived · Database {database} · WAL {wal} · Archive files {archives} · Compressed in database {embedded}",
       worker: "Background maintenance",
-      completed: "Last completed {time} · {count} transcripts archived",
+      completed: "Last completed {time} · {count} chats archived",
       notRun: "No maintenance batches completed yet.",
       running: "Running",
-      runningProgress: "{archived} transcripts archived · {externalized} archives moved to files",
+      runningProgress: "{archived} chats archived · {externalized} archives moved to files",
       externalized: "{count} compressed archives moved from the database to files.",
       idle: "Idle",
       failed: "Needs attention",
       adminRequired: "You need admin access to inspect session storage.",
       disconnected: "Reconnect to inspect session storage.",
       automatic: "Automatic archival",
-      enabled: "Archive older transcripts",
+      enabled: "Archive older chats",
       enabledHint:
-        "Inactive transcripts move into compressed JSONL files. Active sessions stay in the database; archived history is restored before use.",
+        "Inactive chats move into compressed JSONL files. Active sessions stay in the database; archived history is restored before use.",
       afterDays: "Archive after (days)",
-      afterDaysHint:
-        "Days since the transcript last changed. Changes apply without a Gateway restart.",
+      afterDaysHint: "Days since the chat last changed. Changes apply without a Gateway restart.",
       backupHint:
         "OpenClaw backups capture archived history with the database. Direct database copies also need the archive files. Missing or damaged archives require recovery from a backup.",
       advanced: "Advanced session settings",
       runNow: "Run now",
       runHint: "Start one maintenance batch using the saved, applied policy.",
       runStarted: "Maintenance batch started. You can leave this page while it runs.",
-      runCompleted: "Maintenance batch completed. {count} transcripts archived.",
+      runCompleted: "Maintenance batch completed. {count} chats archived.",
     },
   },
   memoryPage: {

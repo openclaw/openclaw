@@ -10,6 +10,7 @@ import {
   runCodexAppServerAttempt as runSharedCodexAppServerAttempt,
   userMessage,
 } from "./run-attempt-test-harness.js";
+import { createSteeringRecorder } from "./run-attempt.steering.test-support.js";
 import { writeCodexAppServerBinding as writeRawCodexAppServerBinding } from "./session-binding.test-helpers.js";
 import { withoutCodexTurnContextHandoffs } from "./test-support.js";
 
@@ -87,12 +88,11 @@ export async function createCurrentInputContinuityHarness(
     params.images = [image];
   }
   if (scenario !== "no-recorder") {
-    params.userTurnTranscriptRecorder = {
-      message: admittedMessage,
-      resolveMessage: async () => admittedMessage,
-      markRuntimePersisted() {},
-      getAdmissionReceipt: () => undefined,
-    } as EmbeddedRunAttemptParams["userTurnTranscriptRecorder"];
+    params.userTurnTranscriptRecorder = createSteeringRecorder(
+      admittedMessage,
+      async () => undefined,
+      () => false,
+    );
   }
   return { harness, params, currentUserMessageId };
 }

@@ -1,4 +1,11 @@
-import { history, historyKeymap, insertNewline, standardKeymap } from "@codemirror/commands";
+import {
+  history,
+  historyKeymap,
+  insertNewline,
+  isolateHistory,
+  standardKeymap,
+  undo,
+} from "@codemirror/commands";
 import {
   Compartment,
   EditorSelection,
@@ -373,6 +380,20 @@ export function mountComposerEditor(
 
   input.after(view.dom);
   input.hidden = true;
+  const inputStyle = input.getAttribute("style");
+  // Cocoa WebKit moves the native caret when setSelectionRange targets a
+  // display:none field. Keep the raw port rendered, invisible and out of flow;
+  // content-visibility skips laying out its zero-width text on every keystroke.
+  Object.assign(input.style, {
+    contentVisibility: "hidden",
+    display: "block",
+    position: "absolute",
+    visibility: "hidden",
+    width: "0",
+    height: "0",
+    minHeight: "0",
+    padding: "0",
+  });
   input.setAttribute("aria-hidden", "true");
   input.tabIndex = -1;
 
@@ -477,6 +498,20 @@ export function mountComposerEditor(
         scrollIntoView: true,
       });
     },
+    replaceAll(text) {
+      sync();
+      view.dispatch({
+        changes: { from: 0, to: view.state.doc.length, insert: text },
+        userEvent: "input.replace",
+        annotations: isolateHistory.of("full"),
+        selection: { anchor: text.length },
+        scrollIntoView: true,
+      });
+    },
+    undo() {
+      sync();
+      undo(view);
+    },
   });
   // Container queries can shrink the scrollport without a document change.
   // Keep the active caret visible after that real geometry change.
@@ -546,6 +581,11 @@ export function mountComposerEditor(
       unregister();
       view.destroy();
       input.hidden = false;
+      if (inputStyle === null) {
+        input.removeAttribute("style");
+      } else {
+        input.setAttribute("style", inputStyle);
+      }
       input.removeAttribute("aria-hidden");
       input.removeAttribute("tabindex");
     },

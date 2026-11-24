@@ -1,5 +1,6 @@
 import type { ResponsesInputItem, StreamEvent } from "./mock-openai-contracts.js";
 import { buildAssistantEvents } from "./mock-openai-events.js";
+import { hasToolOutput } from "./mock-openai-input.js";
 
 type PlanParams = {
   input: ResponsesInputItem[];
@@ -41,8 +42,7 @@ function planBackgroundCompletionTurn(
     }
     return undefined;
   };
-  const answeredAfter = (index: number) =>
-    params.input.slice(index + 1).some((item) => item.type === "function_call_output");
+  const answeredAfter = (index: number) => hasToolOutput(params.input.slice(index + 1));
   const start = latest(script.start);
   const completion = latest(new RegExp(`${script.prefix}-OUTPUT-([a-z0-9-]+)`));
   if (completion && (!start || completion.index > start.index)) {

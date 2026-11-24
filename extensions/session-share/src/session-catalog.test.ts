@@ -12,7 +12,8 @@ import {
   type SessionCatalogProvider,
   type SessionCatalogSession,
 } from "openclaw/plugin-sdk/session-catalog";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import * as transcriptRuntime from "openclaw/plugin-sdk/session-transcript-runtime";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createSessionShareCatalog } from "./session-catalog.js";
 
 const diagnostics = vi.hoisted(() => ({ enabled: false, warnEnabled: true, warn: vi.fn() }));
@@ -44,6 +45,11 @@ afterEach(async () => {
 });
 
 const commands = ["openclaw.sessions.list.v1", "openclaw.sessions.read.v1"];
+const federatedRow = <T>(session: T) => ({
+  ...session,
+  exportPolicy: { origin: "federated", automatic: false },
+});
+
 const nativeSession: SessionCatalogSession = {
   threadId: "agent:main:shared",
   name: "Shared session",
@@ -126,7 +132,7 @@ async function catalogFixture() {
     host: async (query: CatalogQuery = {}) => (await readList(query))[0],
     read: (hostId = "node:alpha") => catalog.read({ hostId, threadId: nativeSession.threadId }),
     expectSessions: async (sessions = [nativeSession], query: CatalogQuery = {}) =>
-      expect((await readList(query))[0]?.sessions).toEqual(sessions),
+      expect((await readList(query))[0]?.sessions).toEqual(sessions.map(federatedRow)),
     watch: async (query: CatalogQuery = {}) => {
       const publications: Promise<void>[] = [];
       const onHost = vi.fn();
@@ -134,10 +140,14 @@ async function catalogFixture() {
       return { done: () => Promise.all(publications), onHost };
     },
     paginate: (sessions: SessionCatalogSession[], delayMs = 0) => {
+      // Every explicit list starts a fresh read, so each read waits out a full refresh.
       readDelayMs = Math.ceil(sessions.length / 100) * delayMs + 2;
       invoke.mockImplementation(async ({ params }) => {
-        const { cursor } = params as { cursor?: string };
-        const offset = decodeCursor(cursor);
+        const { cursor, profileRelation } = params as {
+          cursor?: string;
+          profileRelation?: CatalogQuery["profileRelation"];
+        };
+        const offset = decodeCursor(cursor, profileRelation);
         if (delayMs) {
           await new Promise<void>((resolve) => {
             setTimeout(resolve, delayMs);
@@ -145,7 +155,9 @@ async function catalogFixture() {
         }
         return {
           sessions: sessions.slice(offset, offset + 100),
-          ...(offset + 100 < sessions.length ? { nextCursor: encodeCursor(offset + 100) } : {}),
+          ...(offset + 100 < sessions.length
+            ? { nextCursor: encodeCursor(offset + 100, profileRelation) }
+            : {}),
         };
       });
     },
@@ -225,6 +237,16 @@ it("bounds admission and refresh concurrency without interrupting work", async (
   }
 });
 
+it("evicts older relation snapshots of the same node instead of loading forever", async () => {
+  for (let id = 1; id <= 33; id++) {
+    const profileRelation = {
+      relationship: "owned",
+      target: { type: "github-account", id: String(id) },
+    } as const;
+    expect(await f.host({ profileRelation })).toMatchObject({ sessions: [nativeSession] });
+  }
+});
+
 it("restarts after retiring queued refreshes before dispatch", async () => {
   const { done } = await f.watch();
   await f.restart();
@@ -233,26 +255,53 @@ it("restarts after retiring queued refreshes before dispatch", async () => {
   await f.expectSessions();
 });
 
-it.each(["München", "Mu\u0308nchen"])("pages and finds %s", async (title) => {
+it.each([
+  { title: "München", profileRelation: undefined },
+  {
+    title: "Mu\u0308nchen",
+    profileRelation: {
+      relationship: "involving",
+      target: { type: "github-account", id: "101" },
+    } as const,
+  },
+])("pages and finds $title (relation: $profileRelation)", async ({ title, profileRelation }) => {
+  if (profileRelation) {
+    f.list.mockResolvedValue({
+      nodes: [
+        {
+          ...makeNode("alpha"),
+          commands: [
+            ...commands,
+            "openclaw.sessions.catalog.list.v1",
+            "openclaw.sessions.catalog.read.v1",
+          ],
+        },
+      ],
+    });
+  }
   const sessions = rows(601);
   sessions[100]!.name = title;
   f.paginate(sessions, 5_000);
-  expect((await f.begin())[0]?.pending).toBe(true);
+  expect((await f.begin({ profileRelation }))[0]?.pending).toBe(true);
   await advance(35_005);
-  const first = (await f.host({ limitPerHost: 100 }))!;
-  expect(first.sessions).toEqual(sessions.slice(0, 100));
+  const first = (await f.host({ limitPerHost: 100, profileRelation }))!;
+  expect(first.sessions).toEqual(sessions.slice(0, 100).map(federatedRow));
   expect(first.error).toBeUndefined();
   await f.expectSessions(sessions.slice(100, 200), {
     limitPerHost: 100,
     cursors: { "node:alpha": first.nextCursor! },
+    profileRelation,
   });
-  await f.expectSessions(sessions.slice(600), { cursors: { "node:alpha": encodeCursor(600) } });
+  await f.expectSessions(sessions.slice(600), {
+    cursors: { "node:alpha": encodeCursor(600, profileRelation) },
+    profileRelation,
+  });
   const query = title === "München" ? "Mu\u0308nchen" : "München";
-  await f.expectSessions([sessions[100]!], { search: query.toUpperCase() });
-  await f.expectSessions([sessions[100]!], { search: "MAIN:100" });
+  await f.expectSessions([sessions[100]!], { search: query.toUpperCase(), profileRelation });
+  await f.expectSessions([sessions[100]!], { search: "MAIN:100", profileRelation });
   f.invoke.mockResolvedValue({ sessions: [] });
   await advance(30_000);
-  await f.expectSessions([]);
+  await f.expectSessions([], { profileRelation });
 });
 
 it.each(["rows", "bytes"])("rejects oversized snapshot %s", async (budget) => {
@@ -288,6 +337,7 @@ it.each(["failure", "config", "connection", "disconnect"])(
     await f.expectSessions();
     const gate = createDeferred<unknown>();
     f.invoke.mockImplementationOnce(() => gate.promise);
+    await advance(30_005);
     const { done, onHost } = await f.watch();
     expect((await f.begin())[0]).toMatchObject({ sessions: [], pending: true });
     await advance();
@@ -486,7 +536,7 @@ it("preserves eligible host order and separates offline and failed sources", asy
     { hostId: "node:offline", error: { code: "NODE_OFFLINE" } },
     { hostId: "node:broken", error: { code: "NODE_INVOKE_FAILED" } },
   ]);
-  expect(hosts[0]?.sessions).toEqual([nativeSession]);
+  expect(hosts[0]?.sessions).toEqual([federatedRow(nativeSession)]);
   expect(f.invoke).toHaveBeenCalledTimes(4);
   expect(f.catalog.continueSession).toBeUndefined();
   expect(f.catalog.archive).toBeUndefined();
@@ -516,6 +566,248 @@ it.each([
     await f.hydrate();
     expect(await f.host()).toMatchObject({ sessions: [], error: { code: "NODE_INVOKE_FAILED" } });
   } else {
-    await expect(f.read()).rejects.toThrow("Invalid OpenClaw transcript");
+    await expect(f.read()).rejects.toThrow("Invalid OpenClaw chat history");
   }
+});
+
+it("does not send relationship params to legacy nodes and pages only advertised filtered commands", async () => {
+  const profileRelation = {
+    relationship: "owned",
+    target: { type: "github-account", id: "101" },
+  } as const;
+  expect(await f.host({ profileRelation })).toMatchObject({
+    sessions: [nativeSession],
+    error: { code: "FILTER_PARTIAL" },
+  });
+  expect(f.invoke).toHaveBeenCalledWith(
+    expect.objectContaining({ command: commands[0], params: { limit: 100 } }),
+  );
+  f.invoke.mockClear();
+  f.list.mockResolvedValue({
+    nodes: [
+      {
+        ...makeNode("alpha"),
+        commands: [
+          ...commands,
+          "openclaw.sessions.catalog.list.v1",
+          "openclaw.sessions.catalog.read.v1",
+        ],
+      },
+    ],
+  });
+  const cursor = encodeCursor(20, profileRelation);
+  f.invoke.mockResolvedValue(wire({ sessions: rows(21) }));
+  expect(await f.host({ profileRelation })).toMatchObject({
+    sessions: rows(21).slice(0, 20),
+    nextCursor: cursor,
+  });
+  expect(f.invoke).toHaveBeenCalledTimes(1);
+  expect(f.invoke).toHaveBeenLastCalledWith(
+    expect.objectContaining({
+      command: "openclaw.sessions.catalog.list.v1",
+      params: { limit: 100, profileRelation },
+    }),
+  );
+  // A source that cannot resolve the target answers with a typed page, not an error text.
+  f.invoke.mockClear();
+  f.invoke
+    .mockResolvedValueOnce(wire({ sessions: [], relationUnresolved: true }))
+    .mockResolvedValueOnce(wire({ sessions: [nativeSession] }));
+  const unresolved = { ...profileRelation, relationship: "involving" } as const;
+  expect(await f.host({ profileRelation: unresolved })).toMatchObject({
+    sessions: [nativeSession],
+    error: { code: "FILTER_PARTIAL" },
+  });
+  expect(f.invoke.mock.calls.map(([request]) => request.params)).toEqual([
+    { limit: 100, profileRelation: unresolved },
+    { limit: 100 },
+  ]);
+});
+
+it("keeps configured owner and portable identity attribution on filtered node pages", async () => {
+  const owner = {
+    type: "human",
+    id: "local-owner",
+    identity: { type: "profile", id: "local-owner" },
+  } as const;
+  const identity = {
+    type: "remote",
+    pluginId: "session-share",
+    domain: "source",
+    idKind: "github-account",
+    id: "101",
+  } as const;
+  const linked = { type: "profile", id: "linked-person" } as const;
+  const resolveOwner = vi.fn(() => owner);
+  const linkParticipant = vi.fn(
+    (
+      participant: Parameters<
+        typeof transcriptRuntime.prepareSessionCatalogGitHubLinker
+      >[0]["participants"][number],
+    ) => ({ ...participant, identity: linked }),
+  );
+  const prepare = vi
+    .spyOn(transcriptRuntime, "prepareSessionCatalogGitHubLinker")
+    .mockResolvedValue({
+      assertCurrent() {},
+      resolveOwner,
+      linkParticipant,
+    });
+  f.configure({
+    plugins: {
+      entries: {
+        "session-share": {
+          config: {
+            nodes: { alpha: { owner: "profile:local-owner", linkGitHubIdentities: true } },
+          },
+        },
+      },
+    },
+  });
+  await f.restart();
+  f.list.mockResolvedValue({
+    nodes: [
+      {
+        ...makeNode("alpha"),
+        commands: [
+          ...commands,
+          "openclaw.sessions.catalog.list.v1",
+          "openclaw.sessions.catalog.read.v1",
+        ],
+      },
+    ],
+  });
+  f.invoke.mockResolvedValue(
+    wire({
+      sessions: [
+        nativeSession,
+        {
+          ...nativeSession,
+          threadId: "agent:main:portable",
+          createdActor: { type: "human", identity },
+        },
+      ],
+    }),
+  );
+  const profileRelation = {
+    relationship: "involving",
+    target: { type: "github-account", id: "101" },
+  } as const;
+  const filtered = await f.host({ profileRelation });
+  expect(filtered?.sessions.map((session) => session.createdActor?.identity)).toEqual([
+    owner.identity,
+    linked,
+  ]);
+  expect(prepare).toHaveBeenCalledWith({
+    owners: ["profile:local-owner"],
+    participants: [{ identity }],
+  });
+  expect(resolveOwner).toHaveBeenCalledWith("profile:local-owner");
+  expect(linkParticipant).toHaveBeenCalledWith(
+    expect.objectContaining({ identity: { ...identity, domain: "node:alpha" } }),
+  );
+  await f.hydrate();
+  expect((await f.host())?.sessions).toEqual(filtered?.sessions);
+});
+
+describe("catalog pair and optional original links", () => {
+  const linkedCommand = "openclaw.sessions.catalog.list.v1";
+  const originalPath = "/chat/main/shared";
+  const configure = () => {
+    f.configure({
+      plugins: {
+        entries: {
+          "session-share": {
+            config: {
+              nodes: {
+                alpha: { controlUiOrigin: "https://source.example", controlUiBasePath: "/control" },
+              },
+            },
+          },
+        },
+      },
+    });
+  };
+  const linkedNode = {
+    nodeId: "alpha",
+    connected: true,
+    commands: [linkedCommand, "openclaw.sessions.catalog.read.v1"],
+  };
+
+  it.each([false, true])(
+    "requests original paths only with the advertised pair and configured origin (filtered: %s)",
+    async (filtered) => {
+      configure();
+      const command = filtered ? "openclaw.sessions.catalog.list.v1" : linkedCommand;
+      const profileRelation = filtered
+        ? { relationship: "owned" as const, target: { type: "github-account" as const, id: "101" } }
+        : undefined;
+      f.list.mockResolvedValue({ nodes: [linkedNode] });
+      f.invoke.mockResolvedValue({ sessions: [{ ...nativeSession, originalPath }] });
+      expect((await f.host({ profileRelation }))?.sessions).toEqual([
+        {
+          ...federatedRow(nativeSession),
+          originalUrl: "https://source.example/control/chat/main/shared",
+        },
+      ]);
+      expect(f.invoke).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({
+          command,
+          params: {
+            limit: 100,
+            includeOriginalPath: true,
+            ...(profileRelation ? { profileRelation } : {}),
+          },
+        }),
+      );
+    },
+  );
+
+  it("uses the catalog pair for plain list/read without requesting original paths", async () => {
+    f.list.mockResolvedValue({ nodes: [linkedNode] });
+    f.invoke.mockResolvedValue(wire({ sessions: [nativeSession] }));
+    await f.expectSessions();
+    expect(f.invoke).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        command: linkedCommand,
+        params: { limit: 100 },
+      }),
+    );
+    f.invoke.mockResolvedValue(wire(transcript({})));
+    await f.read();
+    expect(f.invoke).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        command: "openclaw.sessions.catalog.read.v1",
+        params: { threadId: nativeSession.threadId, limit: 20 },
+      }),
+    );
+  });
+
+  it("keeps an old source readable with visible unavailable navigation", async () => {
+    configure();
+    await f.expectSessions();
+    expect(f.invoke).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ command: commands[0] }),
+    );
+  });
+
+  it("withdraws an in-flight linked snapshot when the command is removed without reconnecting", async () => {
+    configure();
+    f.list.mockResolvedValue({ nodes: [linkedNode] });
+    const gate = createDeferred<unknown>();
+    f.invoke.mockImplementationOnce(() => gate.promise);
+    const publication = await f.watch();
+    await vi.advanceTimersByTimeAsync(2);
+    f.nodes("alpha");
+    await f.begin();
+    gate.resolve({ sessions: [{ ...nativeSession, originalPath }] });
+    await publication.done();
+    expect(publication.onHost.mock.calls.flatMap(([host]) => host.sessions)).toEqual([]);
+    f.invoke.mockResolvedValue({ sessions: [nativeSession] });
+    await f.expectSessions();
+    expect(f.invoke.mock.calls.map(([request]) => request.command)).toEqual([
+      linkedCommand,
+      commands[0],
+    ]);
+  });
 });

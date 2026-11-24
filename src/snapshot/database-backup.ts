@@ -13,11 +13,8 @@ import {
   getScopedDatabaseEngineSelection,
   withDatabaseEngineSelection,
 } from "../infra/database-engine/context.js";
-import {
-  readBackupEngine,
-  readBackupEngineImage,
-  type BackupEngine,
-} from "../infra/database-engine/physical-store.js";
+import { readBackupEngineImage } from "../infra/database-engine/physical-store-inspection.js";
+import { readBackupEngine, type BackupEngine } from "../infra/database-engine/physical-store.js";
 import type { DatabasePortPluginOwners } from "../infra/database-engine/port-descriptor.js";
 import type { DatabaseEngineSelection } from "../infra/database-engine/types.js";
 import { hasActiveGatewayStateOwner } from "../infra/gateway-state-owner.js";
@@ -26,8 +23,14 @@ import { runtimeProcessEntrypoints } from "../infra/runtime-process-entrypoints.
 import { captureRuntimeWorkerSource } from "../infra/runtime-worker-generation.js";
 import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import type { SqliteSnapshotValidator } from "../infra/sqlite-snapshot.types.js";
+import { isPrivateDoctorPostgresStore } from "../infra/update-doctor-private-store.js";
 import { resolveDefaultSecretProviderAlias } from "../secrets/ref-contract.js";
-import type { BackupTask, Capture, Restore } from "./database-backup.operations.js";
+import type {
+  BackupTask,
+  Capture,
+  Restore,
+  PostgresUpgradeInspection,
+} from "./database-backup.operations.js";
 import type { PostgresExportEnvelope } from "./export-envelope.js";
 import type { GitBackupIdentity, GitBackupManifest } from "./git-backup-codec.js";
 export { captureDatabaseArtifact, assertDatabaseArtifact } from "./database-backup-core.worker.js";
@@ -53,7 +56,7 @@ export async function runOfflineDatabaseBackup<T>(
         /** Replaces only the captured `database.postgres.connection` with this env var for this run. */
         postgresConnectionEnv?: string;
       },
-  /** Archive capture reads a running owner's stores through per-store snapshots. */
+  /** User backup capture reads a running owner's stores through per-store snapshots. */
   options?: { online?: true },
 ): Promise<T> {
   const existing = offlineBackup.getStore();
@@ -186,7 +189,7 @@ export async function createVerifiedDatabaseMigrationBackup(params: {
   config: OpenClawConfig;
   assertCurrent: () => void;
   validate: SqliteSnapshotValidator;
-}): Promise<{ path: string }> {
+}): Promise<{ path: string } | undefined> {
   params.assertCurrent();
   if (readBackupEngine(params.sourcePath).engine === "sqlite") {
     const { createVerifiedSqliteSnapshot } = await import("../infra/sqlite-snapshot.js");
@@ -197,6 +200,10 @@ export async function createVerifiedDatabaseMigrationBackup(params: {
       beforePublish: params.assertCurrent,
       validate: params.validate,
     });
+  }
+  if (isPrivateDoctorPostgresStore(params.sourcePath)) {
+    // Startup already owns the original namespace; this pass only changes its private copy.
+    return undefined;
   }
   await capturePostgresBackup({
     sourcePath: params.sourcePath,
@@ -225,6 +232,12 @@ export async function captureGitPostgresBackup(params: {
   if ((params.physicalEngine ?? readBackupEngine(params.snapshotPath).engine) !== "postgres") {
     return undefined;
   }
+  const { captureRuntimeConfigAsyncReader } = await import("../config/config.js");
+  const capturedConfig = await captureRuntimeConfigAsyncReader({
+    observe: false,
+    skipPluginValidation: true,
+  })();
+  const selection = await resolveDatabaseEngineSelection(capturedConfig);
   await fs.mkdir(params.outputPath, { mode: 0o700 });
   const exported = await runOfflineDatabaseBackup(
     params.snapshotPath,
@@ -237,6 +250,8 @@ export async function captureGitPostgresBackup(params: {
         assertCurrent,
         ...(params.excludeSecrets ? { gitIdentity: params.identity } : {}),
       }),
+    { config: capturedConfig, selection },
+    { online: true },
   );
   const { gitBackupRedaction } = await import("./git-backup-sanitizer.js");
   const redaction = gitBackupRedaction(
@@ -315,6 +330,56 @@ export function fingerprintPostgresBackup(
 ) {
   return runBackupTask<string>(
     { operation: "fingerprint", params: { sourcePath, config, pluginOwners } },
+    () => {},
+  );
+}
+
+/** Read physical PostgreSQL metadata without migrating the selected store. */
+export function inspectPostgresUpgrade(sourcePath: string, config: OpenClawConfig) {
+  return runBackupTask<PostgresUpgradeInspection>(
+    { operation: "inspect-upgrade", params: { sourcePath, config } },
+    () => {},
+  );
+}
+
+/** Call for the complete store inventory before allocating any protected copy. */
+export function preflightPostgresUpgrade(sourcePaths: string[], config: OpenClawConfig) {
+  return runBackupTask<void>(
+    { operation: "preflight-upgrade", params: { sourcePaths, config } },
+    () => {},
+  );
+}
+
+export function clonePostgresUpgrade(
+  sourcePath: string,
+  anchorPath: string,
+  config: OpenClawConfig,
+) {
+  return runBackupTask<{ namespace: string }>(
+    { operation: "clone-upgrade", params: { sourcePath, anchorPath, config } },
+    () => {},
+  );
+}
+
+export function validatePostgresUpgrade(
+  anchorPath: string,
+  config: OpenClawConfig,
+  expectedVersion: number,
+) {
+  return runBackupTask<void>(
+    { operation: "validate-upgrade", params: { anchorPath, config, expectedVersion } },
+    () => {},
+  );
+}
+
+/** Keep the preserved anchor when this operation refuses or server cleanup fails. */
+export function retirePostgresUpgrade(
+  anchorPath: string,
+  config: OpenClawConfig,
+  activeAnchors: string[],
+) {
+  return runBackupTask<void>(
+    { operation: "retire-upgrade", params: { anchorPath, config, activeAnchors } },
     () => {},
   );
 }

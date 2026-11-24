@@ -14,7 +14,7 @@ import type { ChannelAdmissionEvidence } from "../../../channels/message-access/
 import type { PrepareAssistantTranscriptMessage } from "../../../config/sessions/transcript-assistant-delivery.js";
 import type { ReplyToMode } from "../../../config/types.base.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
-import type { CronCreatorAuthorityRunScope as CronCreatorAuthorityCapability } from "../../../gateway/cron-creator-authority-grant.js";
+import type { CronCreatorAuthorityRunScope as CronCreatorAuthorityCapability } from "../../../gateway/cron-creator-authority-grant.types.js";
 import type { GatewayLocalUserIngress } from "../../../gateway/local-user-ingress.js";
 import type { MediaFact } from "../../../media/media-facts.js";
 import type { PromptImageOrderEntry } from "../../../media/prompt-image-order.js";
@@ -35,6 +35,7 @@ import type {
   VerboseLevel,
 } from "../../thinking.shared.js";
 import type { GoalContinuation } from "../goal-continuation.types.js";
+import type { ReplyCallbackCustodyBinding } from "../reply-callback-custody.js";
 import type {
   ScheduledSessionAutomation,
   SessionEventExecution,
@@ -50,7 +51,7 @@ export type {
 } from "../../get-reply-options.types.js";
 
 // Leaf contracts only: get-reply.types.ts imports this module.
-export type FollowupRunPayload = {
+export type FollowupRunPayload = ReplyCallbackCustodyBinding & {
   /** Original config owner, read only when this input receives a new execution admission. */
   readAdmissionConfig?: () => OpenClawConfig;
   /** External-turn eligibility; queued execution refreshes the session-selected profile. */

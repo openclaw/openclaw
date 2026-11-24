@@ -13,7 +13,6 @@ import {
   hasBeforeToolCallPolicy,
   runBeforeToolCallHook,
 } from "../agent-tools.before-tool-call.js";
-import { resolveToolLoopDetectionConfig } from "../tool-loop-detection-config.js";
 import { payloadTextResult } from "../tools/tool-results.js";
 import { runAgentHarnessAfterToolCallHook } from "./hook-helpers.js";
 import { runAgentHarnessBeforeAgentFinalizeHook } from "./lifecycle-hook-helpers.js";
@@ -47,10 +46,7 @@ function getGlobalToolHookMatcherScope(hookName: "before_tool_call" | "after_too
   return registry ? getToolHookMatcherScope(registry, hookName) : undefined;
 }
 
-type NativeHookRelayPolicy = Pick<
-  ActiveNativeHookRelayRegistration,
-  "preToolUseLoopDetection" | "requirePreToolUse" | "sessionKey" | "config" | "agentId"
-> & {
+type NativeHookRelayPolicy = Pick<ActiveNativeHookRelayRegistration, "requirePreToolUse"> & {
   executionAdmissionToolNames?: readonly string[];
   postToolUseToolNames?: readonly string[];
 };
@@ -67,17 +63,6 @@ export function snapshotNativeHookRelayExecutionAdmission(
     : undefined;
 }
 
-function nativePreToolUseMayRunLoopDetection(registration: NativeHookRelayPolicy): boolean {
-  if (!registration.preToolUseLoopDetection || !registration.sessionKey) {
-    return false;
-  }
-  const loopDetection = resolveToolLoopDetectionConfig({
-    cfg: registration.config,
-    agentId: registration.agentId,
-  });
-  return loopDetection?.enabled === true;
-}
-
 export function nativeHookRelayEventHasLocalWork(
   registration: NativeHookRelayPolicy,
   event: NativeHookRelayEvent,
@@ -86,8 +71,7 @@ export function nativeHookRelayEventHasLocalWork(
     return (
       registration.requirePreToolUse === true ||
       Boolean(registration.executionAdmissionToolNames?.length) ||
-      hasBeforeToolCallPolicy() ||
-      nativePreToolUseMayRunLoopDetection(registration)
+      hasBeforeToolCallPolicy()
     );
   }
   if (event === "post_tool_use") {
@@ -108,7 +92,7 @@ export function nativeHookRelayEventToolMatcher(
   event: NativeHookRelayEvent,
 ): readonly string[] | undefined {
   if (event === "pre_tool_use") {
-    if (registration.requirePreToolUse || nativePreToolUseMayRunLoopDetection(registration)) {
+    if (registration.requirePreToolUse) {
       return undefined;
     }
     // Relay selection and policy execution must read the same scoped/root registry.

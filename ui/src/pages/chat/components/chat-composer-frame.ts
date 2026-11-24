@@ -40,7 +40,7 @@ import {
   scheduleTextareaHeightAdjustment,
 } from "./chat-composer-dom.ts";
 import type { GoalComposer } from "./chat-composer-goal-mode.tsx";
-import { createComposerKeyDownHandler } from "./chat-composer-keydown.ts";
+import { createComposerKeyDownHandler, stopRunFromEscape } from "./chat-composer-keydown.ts";
 import type { HumanMentionMenuHost } from "./chat-composer-mention-menu-state.ts";
 import { resolveChatSlashCommandArgOptions, resolveComposerMenus } from "./chat-composer-menus.ts";
 import type { ComposerPrediction } from "./chat-composer-prediction.ts";
@@ -74,7 +74,11 @@ export function createChatComposerContext(
   props: ChatComposerProps,
   interaction: ComposerInteraction,
   goalComposer: GoalComposer,
-  voice: { dictation: ComposerDictationOwner; picker: ComposerMicrophoneOwner },
+  voice: {
+    dictation: ComposerDictationOwner;
+    picker: ComposerMicrophoneOwner;
+    configureApiKey?: (modelProvider: string | undefined) => void;
+  },
   prediction: ComposerPrediction | undefined,
   questionPanelProps: QuestionPanelProps | null,
   streaming: boolean,
@@ -244,7 +248,8 @@ export function createChatComposerContext(
         ? "queue"
         : "steer"
       : undefined;
-  const showComposer =
+  // Expanded questions keep routine progress quiet without replacing the writing surface.
+  const showComposerProgress =
     !questionPanelProps ||
     questionPanelProps.model.nonBlocking === true ||
     questionPanelProps.model.requestedBySession !== undefined ||
@@ -301,20 +306,21 @@ export function createChatComposerContext(
     draft: string,
     submissionAction?: Event,
     followUpModeOverride?: ChatFollowUpMode,
-  ) => {
+  ): boolean => {
     if (state.composerDraftScope !== draftScope || !canSubmitDraft(draft)) {
-      return;
+      return false;
     }
     state.composerComposing = false;
+    state.tasks()?.clearAccepted();
     interaction.setComposition(null);
     commitComposerDraft(props, draft);
     props.onTypingChange?.(false);
     if (goalComposer.activateDraft(draft, true)) {
-      return;
+      return true;
     }
     if (goalComposer.active) {
       void goalComposer.submit(submissionAction);
-      return;
+      return true;
     }
     const completion = props.onSend(followUpModeOverride, submissionAction);
     syncComposerDraftAfterSend(state.composerTextarea);
@@ -323,6 +329,7 @@ export function createChatComposerContext(
     } else {
       settleSubmittedCommandMenus();
     }
+    return true;
   };
 
   const queuedSubmit = createQueuedSubmit(props, state, visibleDraft, canSubmitDraft, submitDraft);
@@ -333,9 +340,16 @@ export function createChatComposerContext(
     }
     prediction?.acceptInto(state.composerTextarea);
   };
+  const acceptProposal = () => {
+    if (state.composerComposing || !canCompose) {
+      return false;
+    }
+    return state.tasks()?.accept(state.composerTextarea) ?? false;
+  };
   const handleKeyDown = createComposerKeyDownHandler({
     prediction,
     acceptPrediction,
+    acceptProposal,
     state,
     props,
     skillMenuHost,
@@ -360,6 +374,7 @@ export function createChatComposerContext(
     );
   const syncComposerValue = (target: HTMLTextAreaElement, typedAtSign = false) => {
     prediction?.dismiss();
+    state.tasks()?.clearAccepted();
     adjustTextareaHeight(target, { nativeInput: true });
     target.dir = detectTextDirection(target.value);
     const mentions = getMentions();
@@ -492,10 +507,16 @@ export function createChatComposerContext(
     props.onTypingChange?.(false);
   };
   const devicePicker = voice.picker;
+  const talkModelKey = devicePicker.apiKeyProviders.talk;
+  const talkKey = talkModelKey ?? devicePicker.apiKeyProviders.speech;
   const startRealtimeTalk = () => {
     // Catalog help does not require history; only starting Talk does.
     if (devicePicker.realtimeStatus !== "ready") {
-      devicePicker.handleOpen();
+      if (talkKey && voice.configureApiKey) {
+        devicePicker.setTalkApiKeyNotice(true);
+      } else {
+        devicePicker.handleOpen();
+      }
       return;
     }
     if (props.submitDisabledReason) {
@@ -544,6 +565,8 @@ export function createChatComposerContext(
         onOpenDictationSettings: devicePicker.canConfigure
           ? props.onOpenDictationSettings
           : undefined,
+        apiKeyProviders: devicePicker.apiKeyProviders,
+        onConfigureApiKey: devicePicker.canConfigure ? voice.configureApiKey : undefined,
       }
     : undefined;
   const dictationOptions = createComposerDictationOptions(
@@ -609,6 +632,14 @@ export function createChatComposerContext(
     onToggleVoice: props.onToggleRealtimeTalk ? handleVoicePrimaryAction : undefined,
     onToggleCamera: props.onToggleRealtimeCamera,
     microphonePicker,
+    talkApiKeyNotice:
+      devicePicker.talkApiKeyNotice && talkKey
+        ? {
+            provider: talkKey,
+            onConfigure: () => voice.configureApiKey?.(talkModelKey),
+            onDismiss: () => devicePicker.setTalkApiKeyNotice(false),
+          }
+        : undefined,
     readDictation: dictation ? () => dictation : undefined,
     onDictationPointerDown: handleDictationStart,
     onDirectDictationStart: handleDictationStart,
@@ -659,8 +690,9 @@ export function createChatComposerContext(
     cancellationCaveat,
     sendShortcut,
     questionPanelProps,
-    showComposer,
+    showComposerProgress,
     handleKeyDown,
+    stopRunFromEscape: () => stopRunFromEscape({ state, props, showAbortableUi }),
     handleBeforeInput,
     handleInput,
     handleSelect,

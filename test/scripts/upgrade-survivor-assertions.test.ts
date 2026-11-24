@@ -308,6 +308,76 @@ function missingCodexUpdateResult(source: "npm" | "clawhub" | "fallback") {
 }
 
 describe("upgrade recovery result assertions", () => {
+  // Scoped projection of the recovery receipt from Actions artifact 14890042643.
+  const lifecycle = {
+    runId: "00000000-0000-4000-8000-000000000000",
+    phase: "finished",
+    status: "succeeded",
+    after: { version: "2026.11.16-first-hop.0" },
+    steps: [
+      { step: "activating", status: "completed" },
+      { step: "notice:activating", status: "skipped" },
+    ],
+  };
+  it.each([
+    { name: "terminal success", patch: {}, status: 0 },
+    { name: "prepared activation", patch: { phase: "activating", status: "running" }, status: 1 },
+    {
+      name: "failed step",
+      patch: { steps: [{ step: "activating", status: "failed" }] },
+      status: 1,
+    },
+  ])("classifies lifecycle receipts: $name", ({ patch, status }) => {
+    const result = runJsonAssertion(
+      "assert-successful-update-json",
+      { ...lifecycle, ...patch },
+      lifecycle.after.version,
+    );
+    expect(result.status, result.stderr).toBe(status);
+  });
+
+  it.each([
+    { name: "skipped startup", patch: {}, succeeds: true },
+    { name: "failed startup", patch: { exitCode: 1 }, succeeds: false },
+    { name: "unclassified skip", patch: { advisory: undefined }, succeeds: false },
+    { name: "another step", patch: { name: "database migration" }, succeeds: false },
+    { name: "timeout", patch: { termination: "timeout" }, succeeds: false },
+    { name: "signal", patch: { signal: "SIGTERM" }, succeeds: false },
+    { name: "killed process", patch: { killed: true }, succeeds: false },
+    { name: "truncated output", patch: { outputLimitExceeded: true }, succeeds: false },
+    {
+      name: "failure facts",
+      patch: { failureFacts: [{ code: "startup-failed" }] },
+      succeeds: false,
+    },
+  ])("classifies activated Gateway $name", ({ patch, succeeds }) => {
+    const result = runJsonAssertion(
+      "assert-successful-update-json",
+      {
+        status: "ok",
+        after: { version: "2026.11.5" },
+        steps: [
+          {
+            name: "activated-gateway-startup",
+            exitCode: null,
+            advisory: {
+              kind: "recoverable-maintenance",
+              message:
+                "This profile does not configure a local Gateway; the activated release was not started.",
+            },
+            ...patch,
+          },
+        ],
+        postUpdate: { plugins: { status: "ok", sync: { errors: [] }, npm: { outcomes: [] } } },
+      },
+      "2026.11.5",
+    );
+    expect(result.status, result.stderr).toBe(succeeds ? 0 : 1);
+    if (!succeeds) {
+      expect(result.stderr).toContain("successful update contained a failed core step");
+    }
+  });
+
   it.each<{
     name: string;
     patch?: Record<string, unknown>;

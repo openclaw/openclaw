@@ -184,6 +184,14 @@ probes: they still wait for initialization and retain their normal authenticatio
 
 `/startupz` returns `503` with `status: "starting"` while startup sidecars or agent database inspection/preparation are pending, `503` with `status: "draining"` during drain, and `200` with `status: "started"` otherwise. After sidecars settle, pending inspection for any agent, including an optional agent, reports `pendingReason: "agent-database-inspection"`. This lets `openclaw update` candidate verification wait within its startup budget before checking readiness. A settled inspection failure does not keep startup pending; readiness and per-agent admission report the failure.
 
+A direct loopback `GET /startupz` with the header `X-OpenClaw-Startup-Boot-Id: 1`
+can read `gatewayBootId` after startup settles. This is the Gateway boot ID in
+WebSocket hello and can correlate observations from one Gateway lifetime. Use the
+loopback listener and a loopback Host without credentials or an Origin header.
+Requests from an address already listed in `gateway.trustedProxies` omit the ID,
+including local probes from that address. A same-host reverse proxy should
+preserve forwarding evidence on relayed requests.
+
 Startup admits one resume input for each eligible session marked at graceful
 shutdown or retaining a persisted unfinished run from the immediately preceding
 Gateway lifetime with no live owner. Older orphaned runs are settled without
@@ -218,10 +226,20 @@ still alive. A confirmed missing executable or runtime loader failure marks
 `503` with `failing: ["child-runtime"]`. Worker requests explain which runtime
 failed and ask you to restart the Gateway. The diagnosis is logged once and
 further worker launches fail immediately; ordinary worker crashes do not mark
-the runtime unavailable. A health or readiness check that finds the executable
+the runtime unavailable. An explicit health check that finds the executable
 missing publishes the same diagnosis, even when resident workers still serve reads.
 Clients without `operator.admin` see `[redacted]` in `childRuntime.execPath` while
 the availability flag remains visible.
+
+HTTP readiness reads the runtime owner's recorded diagnosis; it does not launch a
+child, stat the executable, ping a database worker, or attempt a commit. A slow
+SQLite commit or filesystem operation alone does not make the Gateway unready
+while its admitted traffic can still be served. Startup and explicit health
+diagnostics retain executable verification, and actual child-launch failures
+publish the same diagnosis. Until one of those owners observes a broken runtime,
+readiness can remain green. Known failures still return `503` with their named
+`failing` owner; there is no elapsed-write-time threshold or new timeout verdict.
+`/healthz` remains HTTP liveness, and `/startupz` reads recorded startup state.
 
 For a service-managed Gateway, the lifecycle owner checks the effective service
 command's Node with a bounded `--version` probe. On macOS, the loaded launchd
@@ -347,12 +365,12 @@ The optional `cpuBreakdown` separates independent native counters:
   measured main and tracked worker CPU, clamped at zero. It includes untracked
   workers and native threads, not a measured worker category.
 
-Thread values use the same core-equivalent unit as `cpuCoreRatio`. Worker reads
-are asynchronous and must complete within 100 ms of each sampling boundary;
-these are not atomic cross-thread measurements. The residual can vary with
-measurement skew. A timed-out request never delays the event-loop sample, and
-at most one native request is outstanding per tracked worker, even across
-monitor resets. Startup, worker creation/exit, host CPU topology changes, counter
+Thread values use the same core-equivalent unit as `cpuCoreRatio`. Linux host
+reads and worker reads are asynchronous and must complete within 100 ms of each
+sampling boundary; these are not atomic measurements. The residual can vary
+with measurement skew. A timed-out request never delays the event-loop sample.
+At most one host filesystem sample per monitor and one native request per
+tracked worker remain outstanding, even across monitor resets. Startup, worker creation/exit, host CPU topology changes, counter
 resets, and collection failures require fresh baselines before publishing the
 affected rates. Missing fields mean unavailable, not zero.
 

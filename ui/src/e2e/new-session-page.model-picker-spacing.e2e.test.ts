@@ -67,20 +67,30 @@ suite.define(() => {
       },
     );
   });
-  it.each([1440, 390])(
-    "keeps the empty model picker beside Dictate at %s pixels",
-    async (width) => {
+  it.each(
+    [1440, 390].flatMap((width) => ["empty", "available"].map((catalog) => ({ width, catalog }))),
+  )(
+    "keeps the $catalog model control beside Dictate at $width pixels",
+    async ({ width, catalog }) => {
       await suite.withPage(
         { viewport: { width, height: 900 }, colorScheme: "dark" },
         async ({ page }) => {
-          const gateway = await installMockGateway(page, { models: [] });
+          const empty = catalog === "empty";
+          const gateway = await installMockGateway(page, {
+            agentModel: empty ? undefined : "example/model-a",
+            models: empty
+              ? []
+              : [{ id: "model-a", name: "Example Model", provider: "example", reasoning: false }],
+          });
           await page.goto(`${suite.server.baseUrl}new?agent=main`);
           await gateway.waitForRequest("models.list");
           const composer = page.locator(".new-session-page__composer");
-          const trigger = composer.locator('[data-chat-model-select="true"]');
+          const trigger = empty
+            ? composer.getByRole("button", { name: "Set up a model", exact: true })
+            : composer.locator('[data-chat-model-select="true"]');
           const microphone = composer.getByRole("button", { name: "Dictate", exact: true });
           const measurements = [];
-          for (const state of ["closed", "open", "closed-again"]) {
+          for (const state of empty ? ["setup"] : ["closed", "open", "closed-again"]) {
             if (state === "open") {
               await trigger.click();
               await page.locator(".chat-controls__model-menu").waitFor();
@@ -103,7 +113,10 @@ suite.define(() => {
                   animationFrameBeforeCapture: true,
                 },
               );
-              await writeFile(path.join(suite.artifactDir, `${width}-${state}.png`), frame.png);
+              await writeFile(
+                path.join(suite.artifactDir, `${width}-${catalog}-${state}.png`),
+                frame.png,
+              );
             }
             const modelBox = await trigger.boundingBox();
             const microphoneBox = await microphone.boundingBox();
@@ -113,7 +126,7 @@ suite.define(() => {
           }
           if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
             await writeFile(
-              path.join(suite.artifactDir, `${width}-measurements.json`),
+              path.join(suite.artifactDir, `${width}-${catalog}-measurements.json`),
               JSON.stringify(measurements),
             );
           }

@@ -7,7 +7,7 @@ import { registerUsageEnglish } from "../../i18n/locales/en-usage.ts";
 import "../../styles/usage.css";
 import { t, registerEnglishCatalog } from "../../lib/reactive/i18n.ts";
 import { isUsageCacheIncomplete } from "./cache-status.ts";
-import { buildPeakErrorHours, formatUsageCost, formatUsageTokens } from "./metrics.ts";
+import { buildPeakErrorHours, formatHeadlineCost, formatUsageTokens } from "./metrics.ts";
 import { UsageEmptyState } from "./page-shell.tsx";
 import { createUsagePhoneLayout } from "./phone-layout.ts";
 import { buildProviderSeries } from "./provider-series.ts";
@@ -126,7 +126,7 @@ function UsageView(props: UsageControlsProps & { loading: boolean; read: UsageRe
     const sessions = displaySessionCount();
     return [
       [totals ? formatUsageTokens(totals.totalTokens) : empty, t("usage.metrics.tokens")],
-      [totals ? formatUsageCost(totals.totalCost) : empty, t("usage.metrics.cost")],
+      [totals ? formatHeadlineCost(totals) : empty, t("usage.metrics.cost")],
       [totals ? sessions.toLocaleString() : empty, t("usage.overview.sessions")],
     ];
   });

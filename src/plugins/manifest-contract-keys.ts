@@ -36,8 +36,13 @@ export const PLUGIN_MANIFEST_CONTRACT_KEYS = [
   "subagentProfiles",
   /** Required repository policy supplied by this plugin. */
   "repositoryIntegrations",
+  /** `["read"]` requests raw conversation reads; approving the plugin's capabilities grants it. */
+  "conversationAccess",
   "tools",
 ] as const;
+
+/** The declared-surface entry that approving a plugin's capabilities turns into conversation access. */
+export const CONVERSATION_ACCESS_SURFACE_ENTRY = "conversationAccess: read";
 
 /** Static transcript setup metadata; runtime registration does not gate configuration. */
 export const TRANSCRIPT_SOURCE_LOCATOR_FIELDS = [

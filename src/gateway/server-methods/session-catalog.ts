@@ -6,6 +6,7 @@ import {
   validateSessionsCatalogContinueParams,
   validateSessionsCatalogImportParams,
   validateSessionsCatalogReadParams,
+  validateSessionsCatalogRouteParams,
   validateSessionsCatalogStartTerminalParams,
   type SessionCatalogLocator,
 } from "../../../packages/gateway-protocol/src/index.js";
@@ -38,6 +39,7 @@ import {
 } from "./session-catalog-provider-access.js";
 import { readAuthorizedSessionCatalog } from "./session-catalog-read.js";
 import { catalogError } from "./session-catalog-result.js";
+import { resolveSessionCatalogRoute } from "./session-catalog-route.js";
 import { resolveSessionCatalogThreadVisibility } from "./session-catalog-visibility.js";
 import type { GatewayRequestHandlerOptions, GatewayRequestHandlers, RespondFn } from "./types.js";
 import { defineValidatedGatewayHandler } from "./validation.js";
@@ -133,6 +135,16 @@ async function authorizeSessionCatalogThread(
 
 export const sessionCatalogHandlers: GatewayRequestHandlers = {
   "sessions.catalog.list": listSessionCatalogHandler,
+  "sessions.catalog.route": defineValidatedGatewayHandler(
+    "sessions.catalog.route",
+    validateSessionsCatalogRouteParams,
+    ({ params, context, client, respond }) => {
+      respond(
+        true,
+        resolveSessionCatalogRoute(params, client, context.getGatewayMethodRegistry?.()),
+      );
+    },
+  ),
 
   "sessions.catalog.resolve": defineValidatedGatewayHandler(
     "sessions.catalog.resolve",
@@ -161,7 +173,7 @@ export const sessionCatalogHandlers: GatewayRequestHandlers = {
           },
         });
         if (result.ok) {
-          options.respond(true, result.sessionKey ? { sessionKey: result.sessionKey } : null);
+          options.respond(true, result.destination);
         } else {
           options.respond(false, undefined, result.error);
         }

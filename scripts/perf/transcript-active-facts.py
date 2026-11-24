@@ -299,11 +299,12 @@ def main():
     parser.add_argument("--name", required=True)
     parser.add_argument("--rows", required=True, type=int)
     parser.add_argument("--mode", choices=("compact", "full", "hybrid"), required=True)
-    parser.add_argument("--schema-version", type=int, choices=(40, 41), default=40)
+    parser.add_argument("--schema-version", type=int, choices=(40, 41, 42), default=40)
     parser.add_argument("--longest-session-rows", type=int, default=50000)
     parser.add_argument("--finalize-long-sessions", action="store_true")
     parser.add_argument("--activity-epoch-ms", type=int, default=0)
     parser.add_argument("--file-bytes", type=int, default=0)
+    parser.add_argument("--cover-message-facts", action="store_true")
     args = parser.parse_args()
     if not re.fullmatch(r"[a-z0-9][a-z0-9-]*", args.name) or args.rows < 1 or args.file_bytes < 0:
         parser.error("name must be lowercase letters/digits/hyphens; rows must be positive; file-bytes nonnegative")
@@ -326,7 +327,7 @@ def main():
         )
         db.executescript(schema)
         has_facts = db.execute("SELECT 1 FROM sqlite_schema WHERE name='session_transcript_active_event_facts'").fetchone() is not None
-        if has_facts != (args.schema_version == 41):
+        if has_facts != (args.schema_version >= 41):
             raise ValueError("schema-version must match the supplied active-facts table shape")
         db.execute("INSERT INTO schema_meta VALUES ('primary','agent',?,'main','synthetic',1,1)",
                    (args.schema_version,))
@@ -357,6 +358,12 @@ def main():
         finalization = finalize_measured_sessions(db, sizes, finalized_count,
                                                   replay_messages=args.finalize_long_sessions,
                                                   activity_epoch_ms=args.activity_epoch_ms)
+        if args.cover_message_facts:
+            # Synthetic message rows have no dependency navigation; leave custom markers for real batches.
+            db.execute("INSERT INTO session_transcript_active_event_facts "
+                       "SELECT session_id,seq,event_utf8_bytes+1,'{}' FROM transcript_events "
+                       "WHERE navigation_type='message'")
+            db.commit()
         report = {
             "name": args.name, "mode": args.mode, "schema_version": args.schema_version, "rows": rows,
             "sessions": len(sizes), "long_sessions": longs,

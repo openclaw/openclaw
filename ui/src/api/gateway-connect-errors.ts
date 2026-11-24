@@ -85,7 +85,14 @@ export function resolveBrowserGatewayClose(
           details: connectError?.details,
           protocolMismatchIsTerminal: true,
         });
-  return { retry, notify: true, pendingError: error };
+  return {
+    retry,
+    notify: true,
+    // A failed liveness probe already proved this socket dead, so replace it at once.
+    // The override spends no backoff attempt: a failing replacement backs off as usual.
+    reconnectDelayMs: context.reason === "inbound silence probe timeout" ? 0 : undefined,
+    pendingError: error,
+  };
 }
 
 export function notifyBrowserWebSocketError(

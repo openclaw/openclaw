@@ -20,12 +20,12 @@ import type {
 } from "./session-pending-input-operations.types.js";
 import {
   isFinalInputCompletion,
-  markSessionPendingInputCancelledByUser,
   normalizePendingInputReceiptRunIds,
   projectPendingInputReceipts,
   resolvePendingInputHistoryLimit,
   selectPendingInputHistoryPage,
   parseSessionPendingInputMessage,
+  restagePendingInputMessageJson,
 } from "./session-pending-input-value.js";
 import type {
   SessionInputCompletion,
@@ -130,6 +130,7 @@ export function createSessionActorMemoryPending(
         return snapshot;
       }
       const row = pending(input);
+      snapshot.completion = input.includeCompletion ? completion(input)?.outcome : undefined;
       let committedEntryId: string | undefined;
       if (row) {
         if (Buffer.byteLength(row.message_json, "utf8") > MAX_PAYLOAD_BYTES) {
@@ -156,12 +157,9 @@ export function createSessionActorMemoryPending(
           row.session_key === query.sessionKey &&
           row.session_id === query.sessionId &&
           row.consumed_event_id === null &&
-          (query.queuedInputIds
-            ? row.state === "queued" &&
-              query.queuedInputIds.includes(row.input_id) &&
-              !query.liveInputIds?.includes(row.input_id)
-            : row.state === "cancelled" ||
-              (row.state === "queued" && query.liveInputIds?.includes(row.input_id))),
+          (query.queuedOnly
+            ? row.state === "queued" && !query.liveInputIds?.includes(row.input_id)
+            : row.state === "cancelled" || row.state === "queued"),
       );
       const total =
         query.id === undefined && query.includeTotal !== false ? rows.length : undefined;
@@ -263,8 +261,12 @@ export function createSessionActorMemoryPending(
           ? {
               ...row,
               state: "queued",
+              // Like the SQL kernel: an adopted owed row takes the new bytes.
+              message_json: restagePendingInputMessageJson(row.message_json, input.messageJson),
               run_id: input.runId,
               lifecycle_generation: input.lifecycleGeneration,
+              end_cause: null,
+              origin_source_json: row.origin_source_json ?? input.originSourceJson ?? null,
             }
           : {
               seq:
@@ -283,9 +285,17 @@ export function createSessionActorMemoryPending(
               state: "queued",
               accepted_at: Date.now(),
               consumed_event_id: null,
+              end_cause: null,
+              origin_source_json: input.originSourceJson ?? null,
             };
         state.pendingInputs.set(input.idempotencyKey, staged);
         receipt.stagedInput = structuredClone(staged);
+        for (const key of input.absorbedIdempotencyKeys ?? []) {
+          const absorbed = state.pendingInputs.get(key);
+          if (absorbed?.state === "queued" && absorbed.consumed_event_id === null) {
+            state.pendingInputs.delete(key);
+          }
+        }
       } else if (input.kind === "complete") {
         const retained = completion(input);
         if (
@@ -314,7 +324,7 @@ export function createSessionActorMemoryPending(
           if (!retained || retained.succeeded === 0) {
             state.completions.set(input.idempotencyKey, next);
           }
-          if (isFinalInputCompletion(outcome) && row) {
+          if (isFinalInputCompletion(outcome) && !outcome.activeSteer && row) {
             state.pendingInputs.delete(input.idempotencyKey);
           }
           receipt.outcome = structuredClone(outcome);
@@ -323,9 +333,8 @@ export function createSessionActorMemoryPending(
         state.pendingInputs.set(input.idempotencyKey, {
           ...row,
           state: input.disposition,
-          ...(input.cancelledByUser
-            ? { message_json: markSessionPendingInputCancelledByUser(row.message_json) }
-            : {}),
+          end_cause: input.endCause,
+          origin_source_json: null,
         });
         if (input.disposition === "cancelled") {
           receipt.withdrawnInputId = input.inputId;

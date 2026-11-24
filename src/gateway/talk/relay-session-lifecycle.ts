@@ -3,6 +3,9 @@ import { throwSettledAggregate } from "../../infra/error-graph-internal.js";
 const MAX_RELAY_SESSIONS_PER_CONN = 2;
 const MAX_RELAY_SESSIONS_GLOBAL = 64;
 
+/** Admission refused because the Gateway or this connection has no free Talk session. */
+export class TalkRelayCapacityError extends Error {}
+
 type TalkRelayLifecycleSession = {
   connId: string;
   expiresAtMs: number;
@@ -18,12 +21,12 @@ export function assertTalkRelaySessionCapacity(
   label: "realtime relay" | "transcription Talk",
 ): void {
   if (sessions.length >= MAX_RELAY_SESSIONS_GLOBAL) {
-    throw new Error(`Too many active ${label} sessions`);
+    throw new TalkRelayCapacityError(`Too many active ${label} sessions`);
   }
   if (
     sessions.filter((session) => session.connId === connId).length >= MAX_RELAY_SESSIONS_PER_CONN
   ) {
-    throw new Error(`Too many active ${label} sessions for this connection`);
+    throw new TalkRelayCapacityError(`Too many active ${label} sessions for this connection`);
   }
 }
 

@@ -28,7 +28,6 @@ const enNewSessionSetup = {
     requiredWorkerUnavailable: runtime.requiredWorkerUnavailable,
     requiredWorkerChanged: runtime.requiredWorkerChanged,
     title: en.newSession.title,
-    hint: en.newSession.hint,
     environments: "Devices",
     gateway: "This computer",
     cloudWorkerMachine: "{profile} · {machine}",
@@ -200,7 +199,7 @@ const enNewSessionSetup = {
     searchProjects: "Search projects",
     githubProjects: "GitHub",
     githubTokenHint:
-      "No GitHub account is configured for the Control UI or Gateway. Only public GitHub results are shown.",
+      "No GitHub account is configured for the web app or Gateway. Only public GitHub results are shown.",
     cloneProject: "Clone",
     recentFolders: "Recent",
     what: "What",

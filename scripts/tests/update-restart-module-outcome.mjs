@@ -183,6 +183,8 @@ async function fixture({
       return { verification: { ...observed.verification, recovery: observed.recovery } };
     },
     recordUpdateRunStep: () => {},
+    // No earlier run owes a step. Recording or settling one would be an unexpected call.
+    readOwedUpdateSteps: () => [],
     async runUpdatedInstallGatewayCommand(activation, command) {
       commandCalls++;
       events.push("command:" + command);
@@ -216,6 +218,8 @@ async function fixture({
       return verification;
     },
     withOwnedManagedUpdateEnv: async (_env, action) => action(),
+    // No shared-state handles exist in this fixture; the restart runs unchanged.
+    withUpdateStateReleasedAcrossRestart: async (_run, restart) => restart(),
     acquireWithWait: ({ acquire }) => acquire(),
     readConfigFileSnapshot: async () => ({}),
     prepareUpdateRestart: async () => restartContext,
@@ -236,7 +240,7 @@ async function fixture({
     assertUpdatePluginCohortReportingContinuation: () => {},
     assertUpdatePluginCohortReportingAdmission: async () => {},
     // Every case here fails after the swap, so none retires its own capture.
-    failedBeforeActivation: () => false,
+    failedUpdateCanCleanUp: () => false,
     prepareResult: async (value) => () => printed.push(value),
     printResult: (value) => printed.push(value),
     writeControlPlaneUpdateRestartSentinel: async () => {},
@@ -317,6 +321,8 @@ async function fixture({
     "../daemon-cli/restart-health-probe",
     "../../utils/absolute-deadline",
     "update-command-post-update-maintenance",
+    "update-command-owed",
+    "../../infra/update-run-owed-step",
     "../../infra/update-candidate-predecessor-stop",
     // Recovery and reporting stay real; only their I/O uses finite fixture facts.
     "update-command-failure-recovery",
@@ -329,6 +335,7 @@ async function fixture({
     "../../shared/update-outcome",
     "../../state/openclaw-state-lease-error",
     "../../infra/update-run-report",
+    "../../infra/update-run-notice",
     "../../infra/update-run-record",
     "../../infra/update-run-limits",
     // Post-update state reads and Doctor facts use their production owners,
@@ -442,6 +449,7 @@ async function fixture({
   values.recordFailedUpdateGatewayState =
     verificationOwner.namespace.recordFailedUpdateGatewayState;
   values.readFailedUpdateGatewayState = verificationOwner.namespace.readFailedUpdateGatewayState;
+  values.releaseLaunchedState = verificationOwner.namespace.releaseLaunchedState;
   const entry = modules.get("update-command-post-update.js");
   await entry.link(link);
   await entry.evaluate();

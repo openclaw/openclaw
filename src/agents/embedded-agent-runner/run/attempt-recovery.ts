@@ -7,7 +7,6 @@ import { formatErrorMessage, toErrorObject } from "../../../infra/errors.js";
 import { isTransientNetworkError } from "../../../infra/retryable-network-errors.js";
 import { isRetryableAssistantError, isTerminalAssistantError } from "../../../llm/utils/retry.js";
 import { projectAgentRunAttemptTerminal } from "../../agent-run-terminal-outcome.js";
-import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../../defaults.js";
 import { buildAssistantFailoverSignal } from "../../embedded-agent-helpers/assistant-message-failures.js";
 import {
   findCliTerminalStopError,
@@ -24,6 +23,7 @@ import { observeReplyDelivery } from "../../reply-completion.js";
 import type { normalizeUsage } from "../../usage.js";
 import { resolveSourceReplyDelivery } from "../delivery-evidence.js";
 import { log } from "../logger.js";
+import { isEmbeddedRunReplaySafe } from "../transcript-conflict.js";
 import type { EmbeddedAgentRunResult, TraceAttempt } from "../types.js";
 import type { createUsageAccumulator } from "../usage-accumulator.js";
 import type { NormalizedEmbeddedRunAttempt } from "./attempt-normalization.js";
@@ -70,7 +70,6 @@ export async function recoverEmbeddedRunAttempt(input: {
     typeof recoverEmbeddedRunTimeout
   >[0]["resolveContextEnginePluginId"];
   buildRuntimeSettings: Parameters<typeof recoverEmbeddedRunTimeout>[0]["buildRuntimeSettings"];
-  armPostCompactionGuard: () => void;
   usageAccumulator: ReturnType<typeof createUsageAccumulator>;
   lastRunPromptUsage: ReturnType<typeof normalizeUsage> | undefined;
   runtimeAuthRetry: boolean;
@@ -131,6 +130,10 @@ export async function recoverEmbeddedRunAttempt(input: {
   const midTurnPrecheck =
     promptErrorSource === "precheck" && attempt.preflightRecovery?.source === "mid-turn";
   const settledEvidence = resolveSettledToolBatchEvidence(attempt, { midTurn: midTurnPrecheck });
+  // The context-pressure owner stops for maintenance only at a boundary it proved
+  // continuable, and maintenance always continues the turn.
+  const boundaryMaintenance =
+    promptErrorSource === "precheck" && attempt.preflightRecovery?.pressure === "maintenance";
   // Project decisions at their existing return points; diagnostics never decide
   // replay safety or imply that recorded tool results prove settled side effects.
   const recordRecoveryDecision = (
@@ -140,6 +143,7 @@ export async function recoverEmbeddedRunAttempt(input: {
       | "live_model_switch"
       | "timeout_recovery"
       | "transient_retry"
+      | "item_conflict"
       | "replay_unsafe"
       | "overflow_recovery"
       | "overflow_unrecoverable"
@@ -147,6 +151,7 @@ export async function recoverEmbeddedRunAttempt(input: {
       | "harness_retry_unavailable"
       | "prompt_failure"
       | "prompt_recovery"
+      | "boundary_maintenance"
       | "no_recovery",
   ) => {
     emitDiagnosticsTimelineEvent(
@@ -303,8 +308,8 @@ export async function recoverEmbeddedRunAttempt(input: {
     sessionPersistence: params.sessionPersistence,
     sessionKey: runInput.resolvedSessionKey,
     agentId: params.agentId,
-    defaultProvider: DEFAULT_PROVIDER,
-    defaultModel: DEFAULT_MODEL,
+    defaultProvider: preparedRuntime.provider,
+    defaultModel: preparedRuntime.modelId,
     currentProvider: preparedRuntime.provider,
     currentModel: preparedRuntime.modelId,
     currentAgentRuntimeOverride: params.agentHarnessRuntimeOverride,
@@ -321,8 +326,8 @@ export async function recoverEmbeddedRunAttempt(input: {
       cfg: params.config,
       sessionKey: runInput.resolvedSessionKey,
       agentId: params.agentId,
-      defaultProvider: DEFAULT_PROVIDER,
-      defaultModel: DEFAULT_MODEL,
+      defaultProvider: preparedRuntime.provider,
+      defaultModel: preparedRuntime.modelId,
       expectedSelection: requestedSelection,
     });
     log.info(
@@ -331,6 +336,23 @@ export async function recoverEmbeddedRunAttempt(input: {
     );
     recordRecoveryDecision("accepted", "live_model_switch");
     throw new LiveSessionModelSwitchError(requestedSelection);
+  }
+  if (
+    attemptAssistant?.itemConflictRecovery === "deferred" &&
+    !input.contextRecoveryState.itemConflictRecoveryAttempted &&
+    !terminalInterrupted &&
+    !promptError &&
+    isEmbeddedRunReplaySafe(normalizedAttempt.replayState, attempt) &&
+    (await observeReplyDelivery(params.resolveReplyDelivery, 0, (error) =>
+      log.warn(
+        `reply delivery observation failed; retaining custody: ${formatErrorMessage(error)}`,
+      ),
+    )) === "missing"
+  ) {
+    // The transport saved the repair; execution and delivery owners must both allow replay.
+    input.contextRecoveryState.itemConflictRecoveryAttempted = true;
+    recordRecoveryDecision("accepted", "item_conflict");
+    return retry();
   }
   const assistantSignal =
     attemptAssistant?.stopReason === "error"
@@ -404,7 +426,6 @@ export async function recoverEmbeddedRunAttempt(input: {
       target: sessionPromptState.sessionTarget,
     }),
     prepareCompactedTranscriptRetry: sessionPromptState.prepareCompactedTranscriptRetry,
-    armPostCompactionGuard: input.armPostCompactionGuard,
     usageAccumulator: input.usageAccumulator,
   };
   if (
@@ -461,6 +482,7 @@ export async function recoverEmbeddedRunAttempt(input: {
   // The finished attempt has released its tools. Continue its transcript, including
   // partial output and uncertain effects; never resubmit the original user request.
   if (
+    !boundaryMaintenance &&
     !externalAbort &&
     !terminalState.signalOwnedInterruption &&
     !timedOutByRunBudget &&
@@ -536,7 +558,7 @@ export async function recoverEmbeddedRunAttempt(input: {
       // Native snapshots contain only this attempt; embedded retries reload their full transcript.
       // Accumulating embedded snapshots retains another history on every provider rejection.
       messages: runtime.pluginHarnessOwnsTransport ? attempt.messagesSnapshot : undefined,
-      ...(rejectedWithoutOutput ? { replayCurrentUserTurn: true } : {}),
+      unsettledTail: !rejectedWithoutOutput,
     });
     recordRecoveryDecision("accepted", "transient_retry");
     return retry({
@@ -544,6 +566,7 @@ export async function recoverEmbeddedRunAttempt(input: {
     });
   }
   if (
+    !boundaryMaintenance &&
     !currentAttemptReplaySafe &&
     !canContinueSettledMidTurnOverflow &&
     !canRecoverSettledToolResults
@@ -578,7 +601,10 @@ export async function recoverEmbeddedRunAttempt(input: {
       }),
   });
   if (overflowRecovery.action === "retry") {
-    recordRecoveryDecision("accepted", "overflow_recovery");
+    recordRecoveryDecision(
+      "accepted",
+      boundaryMaintenance ? "boundary_maintenance" : "overflow_recovery",
+    );
     return retry();
   }
   if (overflowRecovery.action === "surface") {

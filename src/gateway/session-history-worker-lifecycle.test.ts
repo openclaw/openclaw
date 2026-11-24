@@ -22,9 +22,9 @@ import { readSessionHistoryPageInWorker } from "../config/sessions/session-histo
 import {
   clearDatabaseWorkerIdleRetirement,
   historyLane,
-  maintenanceLane,
+  sessionStoreLane,
   rotateDatabaseWorkers,
-  targetDiscoveryLane,
+  withSessionHistoryWorkerReadCandidates,
 } from "../config/sessions/session-transcript-worker-resources.js";
 import {
   prewarmSessionHistoryWorker,
@@ -99,7 +99,7 @@ afterEach(async () => {
   memorySessionActorOwners.reset();
   observed.dispatch = undefined;
   await Promise.all(
-    [historyLane, maintenanceLane, targetDiscoveryLane].map(async (lane) => {
+    [historyLane, sessionStoreLane].map(async (lane) => {
       clearDatabaseWorkerIdleRetirement(lane);
       await rotateDatabaseWorkers(lane);
     }),
@@ -267,6 +267,41 @@ async function seed(state: OpenClawTestState, agentId: string, sessionId: string
     read: () => readChatHistoryPage(params),
   };
 }
+
+it("preserves pages as discovery targets change and their reader workers restart", async () => {
+  await withHistoryState(async (state) => {
+    const a = await seed(state, "main", "candidate-a");
+    const b = await seed(state, "other", "candidate-b");
+    for (const targets of [[a], [a, b], [b], [a]]) {
+      for (const restart of [false, true]) {
+        if (restart) {
+          await rotateDatabaseWorkers(historyLane);
+        }
+        const results = await withSessionHistoryWorkerReadCandidates(
+          targets.map(({ path: pathname }) => ({ path: pathname, physicalPath: pathname })),
+          async (discovery) => {
+            const pages = [];
+            for (const target of targets) {
+              const selected = await discovery.readStoreTarget({
+                agentId: target.target.agentId,
+                storePath: target.target.storePath,
+                env: state.env,
+                registeredDatabases: [],
+              });
+              expect(selected).toMatchObject({
+                kind: "session-store-target",
+                database: { path: target.path },
+              });
+              pages.push((await target.read()).messages.map(readChatHistoryMessageId));
+            }
+            return pages;
+          },
+        );
+        expect(results).toEqual(targets.map(({ target }) => [`${target.sessionId}-message`]));
+      }
+    }
+  });
+});
 
 it("settles cancelled message reads before later reads and closes their database handles", async () => {
   await withHistoryState(async (state) => {

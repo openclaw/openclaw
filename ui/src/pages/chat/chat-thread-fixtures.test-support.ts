@@ -10,6 +10,12 @@ export function message(
   return { role, content, ...(timestamp === undefined ? {} : { timestamp }), ...extra };
 }
 
+export const openAIModel = { provider: "openai", model: "gpt-5.5" } as const;
+
+export function openAIMessage(content: unknown, timestamp: number, extra: object = {}) {
+  return message("assistant", content, timestamp, { ...openAIModel, ...extra });
+}
+
 export function nativeMessage<C, M extends object>(
   role: string,
   content: C,

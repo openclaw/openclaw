@@ -8,10 +8,14 @@
 // staged `.next` file that holds it, else refuse. A linked claw never creates a
 // key; only an unlinked one does (`loadOrCreateEndpointKey`).
 import { createHash, createPrivateKey, createPublicKey, randomBytes } from "node:crypto";
-import fs from "node:fs";
+import fs from "node:fs/promises";
 import path from "node:path";
+import { ignoreMissingPath } from "../../../infra/errno.js";
+import { KeyedAsyncQueue } from "../../../plugin-sdk/keyed-async-queue.js";
 
 const KEY_BYTES = 32;
+// Keep current and staged key publication ordered while filesystem work yields.
+const keyFiles = new KeyedAsyncQueue();
 // PKCS#8 DER prefix for a raw Ed25519 seed (RFC 8410).
 const ED25519_PKCS8_PREFIX = Buffer.from("302e020100300506032b657004220420", "hex");
 
@@ -27,15 +31,15 @@ export function stagedKeyPath(file: string): string {
 }
 
 /** Loads the key at `file`, or undefined when there is no file. Never creates one. */
-export function loadKeyFile(file: string): Buffer | undefined {
-  if (!fs.existsSync(file)) {
+export async function loadKeyFile(file: string): Promise<Buffer | undefined> {
+  const stat = await fs.stat(file).catch(ignoreMissingPath);
+  if (!stat) {
     return undefined;
   }
-  const stat = fs.statSync(file);
   if (process.platform !== "win32" && (stat.mode & 0o077) !== 0) {
     throw new KeyFileRefusedError(`${file} must not be group- or world-accessible`);
   }
-  const key = fs.readFileSync(file);
+  const key = await fs.readFile(file);
   if (key.length !== KEY_BYTES) {
     throw new KeyFileRefusedError(`${file} is not a ${KEY_BYTES}-byte key`);
   }
@@ -43,19 +47,21 @@ export function loadKeyFile(file: string): Buffer | undefined {
 }
 
 /** Creates a new key at `file` (directory 0700, file 0600). */
-function createKeyFile(file: string): Buffer {
+async function createKeyFile(file: string): Promise<Buffer> {
   const key = randomBytes(KEY_BYTES);
-  fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
+  await fs.mkdir(path.dirname(file), { recursive: true, mode: 0o700 });
   const tmp = `${file}.${randomBytes(4).toString("hex")}.tmp`;
-  fs.writeFileSync(tmp, key, { mode: 0o600, flag: "wx" });
-  fs.renameSync(tmp, file);
+  await fs.writeFile(tmp, key, { mode: 0o600, flag: "wx" });
+  await fs.rename(tmp, file);
   return key;
 }
 
 /** Loads the key at `file`, creating it when missing. Only for keys no binding names yet. */
-export function loadOrCreateEndpointKey(file: string): { key: Buffer; created: boolean } {
-  const key = loadKeyFile(file);
-  return key ? { key, created: false } : { key: createKeyFile(file), created: true };
+export function loadOrCreateEndpointKey(file: string): Promise<{ key: Buffer; created: boolean }> {
+  return keyFiles.enqueue(path.resolve(path.dirname(file)), async () => {
+    const key = await loadKeyFile(file);
+    return key ? { key, created: false } : { key: await createKeyFile(file), created: true };
+  });
 }
 
 /** Lowercase hex of the Ed25519 public key for a 32-byte seed (K_gw, or K_srv's iroh id). */
@@ -79,22 +85,24 @@ export function ed25519PublicKeyHex(seed: Buffer): string {
 export function loadBoundKey(
   file: string,
   expectedHex: string,
-): { key: Buffer; promoted: boolean } | { refused: BoundKeyRefusal } {
-  const staged = stagedKeyPath(file);
-  const current = loadKeyFile(file);
-  if (current && ed25519PublicKeyHex(current) === expectedHex) {
-    // A staged key of a re-bind not committed yet stays for that re-bind.
-    return { key: current, promoted: false };
-  }
-  current?.fill(0);
-  const next = loadKeyFile(staged);
-  if (next && ed25519PublicKeyHex(next) === expectedHex) {
-    // The binding was committed before the key was promoted: finish the re-bind.
-    fs.renameSync(staged, file);
-    return { key: next, promoted: true };
-  }
-  next?.fill(0);
-  return { refused: current ? "key_mismatch" : "keys_missing" };
+): Promise<{ key: Buffer; promoted: boolean } | { refused: BoundKeyRefusal }> {
+  return keyFiles.enqueue(path.resolve(path.dirname(file)), async () => {
+    const staged = stagedKeyPath(file);
+    const current = await loadKeyFile(file);
+    if (current && ed25519PublicKeyHex(current) === expectedHex) {
+      // A staged key of a re-bind not committed yet stays for that re-bind.
+      return { key: current, promoted: false };
+    }
+    current?.fill(0);
+    const next = await loadKeyFile(staged);
+    if (next && ed25519PublicKeyHex(next) === expectedHex) {
+      // The binding was committed before the key was promoted: finish the re-bind.
+      await fs.rename(staged, file);
+      return { key: next, promoted: true };
+    }
+    next?.fill(0);
+    return { refused: current ? "key_mismatch" : "keys_missing" };
+  });
 }
 
 /** Short non-secret label for logs: `fp:` + 8 hex of SHA-256 over the raw key. */

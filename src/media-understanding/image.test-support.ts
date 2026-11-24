@@ -67,7 +67,8 @@ vi.mock("../llm/stream.js", async () => {
   };
 });
 
-vi.mock("../agents/model-auth.js", () => ({
+vi.mock("../agents/model-auth.js", async () => ({
+  ...(await vi.importActual<typeof import("../agents/model-auth.js")>("../agents/model-auth.js")),
   applySecretRefHeaderSentinels: (model: unknown) => model,
   getApiKeyForModelCore: getApiKeyForModelMock,
   resolveApiKeyForProviderCore: resolveApiKeyForProviderCoreMock,

@@ -31,7 +31,7 @@ suite.define(() => {
         await page.clock.runFor(29_000);
         expect(await gateway.getRequests("connect")).toHaveLength(attempts);
         if (transient) {
-          await page.getByText("Reconnecting…", { exact: true }).first().waitFor();
+          await page.getByText("Reconnecting", { exact: true }).first().waitFor();
           await page.clock.runFor(7_000);
         } else {
           const gate = page.locator(".login-gate");

@@ -1,6 +1,7 @@
 import "../test-utils/prepare-compiled-subprocesses.js";
 import { AsyncLocalStorage } from "node:async_hooks";
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterAll, afterEach, beforeAll, beforeEach, expect, test, vi } from "vitest";
@@ -32,12 +33,15 @@ import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
-import {
-  createAdmittedRunOperatorAuthority,
-  readAdmittedRunOperatorAuthority,
-} from "./admitted-run-context.js";
+import { readAdmittedRunOperatorAuthority } from "./admitted-run-context.js";
+import { createTestOperatorAuthority } from "./admitted-run-context.test-support.js";
 import { waitForExecScope } from "./bash-process-registry.js";
 import { resetProcessRegistryForTests } from "./bash-process-registry.test-support.js";
+import {
+  awaitExecsForYield,
+  listYieldAwaitableExecs,
+  openExecYieldResume,
+} from "./bash-tools.exec-notify.js";
 import { createExecTool } from "./bash-tools.exec-run.js";
 import type { ExecToolDefaults } from "./bash-tools.exec-types.js";
 import {
@@ -56,6 +60,7 @@ import {
   type PluginToolExecutionCapabilities,
 } from "./plugin-tool-execution.js";
 import { withGatewayToolCallerIdentity } from "./tools/gateway-caller-context.js";
+import { runWithAgentWorkspaceReadiness } from "./workspace-readiness.js";
 
 // mock-isolation: Keep model inference outside the real process and session-event ownership fixture.
 vi.mock("./embedded-agent-runner/run.js", () => ({ runEmbeddedAgent: vi.fn() }));
@@ -71,6 +76,7 @@ let reviewFactory: OpenClawPluginToolFactory<2>;
 let state: OpenClawTestState;
 let config: OpenClawConfig;
 const receipts: sessionEvents.SessionEventReceipt[] = [];
+const cronInvocation = () => new Map([["nightly", { nextCheckEnabled: false }]]);
 const enqueue = sessionEvents.enqueueSessionEventForHost;
 
 beforeAll(async () => {
@@ -285,7 +291,12 @@ test.for(["ordinary", "live cron", "queued cron", "ended cron", "cron ended duri
     await seedOrigin(sessionKey);
     const claim = claimAgentRunContext(
       "cron-run-followup",
-      { sessionKey, sessionId, agentId: "main" },
+      {
+        sessionKey,
+        sessionId,
+        agentId: "main",
+        ...(cron ? { cronRunsByJobId: cronInvocation() } : {}),
+      },
       { trackOwner: true },
     );
     const release = () => releaseAgentRunContext("cron-run-followup", claim);
@@ -308,6 +319,7 @@ test.for(["ordinary", "live cron", "queued cron", "ended cron", "cron ended duri
         const { sessionId: processSessionId, followUp } = runningSession(started.details);
         await withinTest(waitForExecScope(sessionKey), signal);
         if (cron) {
+          // Without sessions_yield on this run, its exit cannot resume it.
           expect(followUp).toContain("collect it before ending the turn");
           expect(followUp).not.toContain("end this turn now");
         }
@@ -352,7 +364,7 @@ test.for(["ordinary", "live cron", "queued cron", "ended cron", "cron ended duri
           expect(await withinTest(receipt.settled, signal)).toMatchObject({
             status: "failed",
             executionStarted: false,
-            error: expect.stringContaining("Originating cron run ended"),
+            error: expect.stringContaining("cron run has ended"),
           });
         } else {
           expect(receipts).toHaveLength(0);
@@ -388,6 +400,94 @@ test.for(["ordinary", "live cron", "queued cron", "ended cron", "cron ended duri
     }
   },
 );
+
+test("wakes the session after the turn that started the exec retired its workspace gate", async ({
+  signal,
+}) => {
+  // Incident: a worktree turn started a wake-armed exec and yielded. The exit callback
+  // inherited that turn's workspace gate, whose ownership check failed once the turn
+  // ended, so the wake was refused before it started and the result was dropped.
+  const sessionKey = "agent:main:dashboard:retired-workspace-gate";
+  const sessionId = sessionKey.replaceAll(":", "-");
+  await seedOrigin(sessionKey);
+  const claim = claimAgentRunContext(
+    "retired-gate-run",
+    { sessionKey, sessionId, agentId: "main" },
+    { trackOwner: true },
+  );
+  // Outside the workspace: a wake turn attests the content it saw, and removing it
+  // afterwards would read as a vanished workspace to later turns.
+  const directory = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "retired-gate-")));
+  const releasePath = path.join(directory, "release");
+  let retired = false;
+  const exec = backgroundExec(sessionKey, { agentId: "main" });
+  try {
+    await runWithAgentWorkspaceReadiness(
+      {
+        sessionKey,
+        isReady: () => true,
+        waitUntilReady: async () => {},
+        assertCurrent: () => {
+          if (retired) {
+            throw new Error("Session changed while preparing its project; retry the task.");
+          }
+        },
+      },
+      () =>
+        exec(
+          "retired-gate",
+          `const fs = require("node:fs"); const release = ${JSON.stringify(releasePath)};
+           const finish = () => { if (fs.existsSync(release)) { watcher.close(); process.stdout.write("RETIRED_GATE_EXEC_RESULT"); } };
+           const watcher = fs.watch(${JSON.stringify(directory)}, finish); finish();`,
+        ),
+    );
+    // The starting turn yields and ends before the command exits.
+    retired = true;
+    await fs.writeFile(releasePath, "release");
+    await withinTest(waitForExecScope(sessionKey), signal);
+    await completion(signal);
+    expect(model).toHaveBeenCalledOnce();
+    const [params] = expectDefined(model.mock.calls[0], "completion turn");
+    expect(params.sessionKey).toBe(sessionKey);
+    expect(params.prompt).toContain("RETIRED_GATE_EXEC_RESULT");
+  } finally {
+    releaseAgentRunContext("retired-gate-run", claim);
+    await fs.writeFile(releasePath, "release");
+    await waitForExecScope(sessionKey);
+    await fs.rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("admits every completion that arrives while its cron run is live", async ({ signal }) => {
+  const sessionKey = "agent:main:cron:nightly:run:two-live";
+  const sessionId = sessionKey.replaceAll(":", "-");
+  await seedOrigin(sessionKey);
+  const claim = claimAgentRunContext(
+    "cron-run-two-live",
+    { sessionKey, sessionId, agentId: "main", cronRunsByJobId: cronInvocation() },
+    { trackOwner: true },
+  );
+  vi.spyOn(sessionEvents, "enqueueSessionEventForHost").mockImplementation((text, options) => {
+    const receipt = enqueue(text, options);
+    receipts.push(receipt);
+    return receipt;
+  });
+  const exec = backgroundExec(sessionKey, { agentId: "main" });
+  try {
+    await exec("cron-two-a", 'process.stdout.write("A")');
+    await exec("cron-two-b", 'process.stdout.write("B")');
+    await withinTest(
+      vi.waitFor(() => expect(receipts).toHaveLength(2)),
+      signal,
+    );
+    // Both were admitted while the run was live, so ending it refuses neither.
+    for (const receipt of receipts) {
+      expect(await withinTest(receipt.accepted, signal)).toEqual({ ok: true });
+    }
+  } finally {
+    releaseAgentRunContext("cron-run-two-live", claim);
+  }
+});
 
 test.for([
   { label: "starting run", runId: "origin-run", expected: { runId: "origin-run" } },
@@ -543,6 +643,10 @@ test("tells a woken conversation to end its wait and names its other running com
       "Its exit wakes this conversation with the result, silent success included. If only waiting remains, end this turn now; do not poll it or start another command for the same result.",
     );
     expect(first.followUp).toContain("run one command that loops until it holds");
+    // A waiter on its own push must not read a moving head as settled.
+    expect(first.followUp).toContain(
+      "pin the expected state: for example, wait for the exact commit you pushed and exit non-zero if it moved.",
+    );
     expect(first.followUp).not.toContain("Also running");
     // A second waiter in the same turn sees the first; the turn-start snapshot cannot.
     const second = runningSession((await exec("second-waiter", waitForRelease(release))).details);
@@ -561,28 +665,92 @@ test("tells a woken conversation to end its wait and names its other running com
   }
 });
 
-test("wakes a dashboard conversation on silent success, with exit, duration and a bounded tail", async ({
+test("wakes a dashboard conversation on silent success, with exit, duration, a bounded tail and the output file", async ({
   signal,
 }) => {
   const sessionKey = "agent:main:dashboard:silent-waiter";
   await seedOrigin(sessionKey);
   const exec = backgroundExec(sessionKey, { agentId: "main" });
   const wakes = vi.mocked(sessionEvents.enqueueSessionEventForHost);
-  for (const [script, expected] of [
-    ["void 0", /^Exec completed \([^,]+, code 0, [^)]+\) with no output\.$/],
-    [
-      'process.stdout.write("x".repeat(3000) + "TAIL_END")',
-      /^Exec completed \([^,]+, code 0, [^)]+\), last 2000 of 3008 output chars \(process log has the rest\):\nx{1992}TAIL_END$/,
-    ],
-  ] as const) {
+  const wake = async (script: string) => {
     await exec("silent-waiter", script);
     await withinTest(waitForExecScope(sessionKey), signal);
     await completion(signal);
-    expect(wakes.mock.calls.at(-1)?.[0]).toMatch(expected);
-  }
+    return String(wakes.mock.calls.at(-1)?.[0]);
+  };
+  expect(await wake("void 0")).toMatch(
+    /^Exec completed \([^,]+, code 0, [^)]+\) with no output\.$/,
+  );
+  const short = await wake('process.stdout.write("x".repeat(3000) + "TAIL_END")');
+  const [, shortPath] = expectDefined(
+    /^Exec completed \([^,]+, code 0, [^)]+\), last 2000 of 3008 output chars:\nx{1992}TAIL_END\nFull output: (\S+) \(3008 bytes\)$/.exec(
+      short,
+    ),
+    "wake with output file",
+  );
+  expect(await fs.readFile(expectDefined(shortPath, "path"), "utf8")).toBe(
+    `${"x".repeat(3000)}TAIL_END`,
+  );
+  // The in-memory window keeps 200k chars; the file keeps every byte in order.
+  const long = await wake('process.stdout.write("FIRST\\n" + "y".repeat(500000) + "LAST")');
+  const [, longPath] = expectDefined(
+    /\nFull output: (\S+) \(500010 bytes\)$/.exec(long),
+    "long wake with output file",
+  );
+  expect(long).not.toContain("process log");
+  expect(await fs.readFile(expectDefined(longPath, "path"), "utf8")).toBe(
+    `FIRST\n${"y".repeat(500000)}LAST`,
+  );
 });
 
-test("does not promise a hidden subagent an exit wake", async ({ signal }) => {
+test("wakes the same conversation after its session id rotates while the command runs", async ({
+  signal,
+}) => {
+  const sessionKey = "agent:main:dashboard:rotated-waiter";
+  await seedOrigin(sessionKey);
+  const release = path.join(state.workspaceDir, "release-rotated-waiter");
+  const started = runningSession(
+    (
+      await backgroundExec(sessionKey, { agentId: "main" })(
+        "rotated-waiter",
+        waitForRelease(release),
+      )
+    ).details,
+  );
+  // Compaction installs a new physical session id and keeps the lifecycle revision.
+  const rotated = await upsertSessionEntryCore(
+    { agentId: "main", sessionKey },
+    { sessionId: "rotated-session" },
+  );
+  expect(rotated).toMatchObject({ sessionId: "rotated-session", lifecycleRevision: "original" });
+  await fs.writeFile(release, "release");
+  await withinTest(waitForExecScope(sessionKey), signal);
+  await completion(signal);
+  const [prompt] = expectDefined(model.mock.calls.at(-1), "rotated wake turn");
+  expect(prompt.sessionId).toBe("rotated-session");
+  expect(prompt.prompt).toContain(`Exec completed (${started.sessionId.slice(0, 8)}`);
+});
+
+test("wakes a reset conversation by its key", async ({ signal }) => {
+  const sessionKey = "agent:main:dashboard:reset-waiter";
+  await seedOrigin(sessionKey);
+  const release = path.join(state.workspaceDir, "release-reset-waiter");
+  runningSession(
+    (await backgroundExec(sessionKey, { agentId: "main" })("reset-waiter", waitForRelease(release)))
+      .details,
+  );
+  // A reset keeps the transcript id and starts a new lifecycle; the wake follows the key.
+  await upsertSessionEntryCore({ agentId: "main", sessionKey }, { lifecycleRevision: "reset" });
+  const wakes = vi.mocked(sessionEvents.enqueueSessionEventForHost);
+  const calls = wakes.mock.calls.length;
+  await fs.writeFile(release, "release");
+  await withinTest(waitForExecScope(sessionKey), signal);
+  await vi.waitFor(() => expect(wakes.mock.calls.length).toBe(calls + 1));
+});
+
+test("does not promise a hidden subagent without sessions_yield an exit wake", async ({
+  signal,
+}) => {
   const sessionKey = "agent:main:dashboard:hidden-waiter";
   await seedOrigin(sessionKey, "agent:main:main");
   const release = path.join(state.workspaceDir, "release-hidden-waiter");
@@ -600,6 +768,71 @@ test("does not promise a hidden subagent an exit wake", async ({ signal }) => {
     expect(idle.details).toMatchObject({
       followUp: expect.stringContaining("poll with a timeout"),
     });
+  } finally {
+    await fs.writeFile(release, "release");
+    await withinTest(waitForExecScope(sessionKey), signal);
+  }
+});
+
+test("resumes a hidden subagent on exit only after sessions_yield awaits the command", async ({
+  signal,
+}) => {
+  const sessionKey = "agent:main:dashboard:hidden-waiter";
+  await seedOrigin(sessionKey, "agent:main:main");
+  const exec = backgroundExec(sessionKey, {
+    agentId: "main",
+    runId: "hidden-run",
+    sessionsYieldAvailabilityRef: { value: true },
+  });
+  const wakes = vi.mocked(sessionEvents.enqueueSessionEventForHost);
+  for (const yielded of [false, true]) {
+    const release = path.join(state.workspaceDir, `release-hidden-${yielded}`);
+    const started = runningSession(
+      (await exec(`hidden-${yielded}`, waitForRelease(release))).details,
+    );
+    expect(started.followUp).toContain("If only waiting remains, call sessions_yield now");
+    expect(started.followUp).not.toContain("wakes this conversation");
+    if (yielded) {
+      // Another agent on the same raw session key is a different chat.
+      expect(listYieldAwaitableExecs({ agentId: "research", sessionKey })).toEqual([]);
+      const awaited = listYieldAwaitableExecs({ agentId: "main", sessionKey });
+      expect(awaited.map((session) => session.id)).toEqual([started.sessionId]);
+      awaitExecsForYield(awaited);
+    }
+    await fs.writeFile(release, "release");
+    await withinTest(waitForExecScope(sessionKey), signal);
+    // A run that ended without yielding gets a passive notice; a yielded run gets a wake turn.
+    expect(
+      wakes.mock.calls.filter(([, options]) => options.sessionKey === sessionKey),
+    ).toHaveLength(yielded ? 1 : 0);
+  }
+  expect(wakes.mock.calls.at(-1)?.[1]).toMatchObject({ source: "exec", sourceRunId: "hidden-run" });
+  expect(wakes.mock.calls.at(-1)?.[0]).toMatch(/^Exec completed \([^)]*\):\nWAITER_DONE$/);
+});
+
+test("resumes a yielded cron run in place with the exit instead of a session event", async ({
+  signal,
+}) => {
+  const sessionKey = "agent:main:cron:nightly:run:yielded";
+  await seedOrigin(sessionKey);
+  const exec = backgroundExec(sessionKey, {
+    agentId: "main",
+    runId: "cron-yield-run",
+    sessionsYieldAvailabilityRef: { value: true },
+  });
+  using resume = openExecYieldResume({ agentId: "main", sessionKey });
+  const release = path.join(state.workspaceDir, "release-cron-yield");
+  try {
+    const started = runningSession((await exec("cron-yield", waitForRelease(release))).details);
+    expect(started.followUp).toContain("If only waiting remains, call sessions_yield now");
+    awaitExecsForYield(listYieldAwaitableExecs({ agentId: "main", sessionKey }));
+    await fs.writeFile(release, "release");
+    expect(await withinTest(resume.next(signal), signal)).toMatch(
+      /^Exec completed \([^)]*\):\nWAITER_DONE$/,
+    );
+    // Nothing awaited remains, so the run finishes with its resumed turn.
+    expect(await resume.next(signal)).toBeUndefined();
+    expect(vi.mocked(sessionEvents.enqueueSessionEventForHost)).not.toHaveBeenCalled();
   } finally {
     await fs.writeFile(release, "release");
     await withinTest(waitForExecScope(sessionKey), signal);
@@ -690,15 +923,10 @@ test.for(["completed", "revoked", "missing"] as const)(
     await seedOrigin(sessionKey);
     const revoked = new AbortController();
     let references = 1;
-    const authority = createAdmittedRunOperatorAuthority({
+    const authority = createTestOperatorAuthority({
       profileId: "original-guest",
       scopes: ["operator.write"],
       signal: revoked.signal,
-      assertCurrent() {
-        if (!references) {
-          throw new Error("original source released");
-        }
-      },
       retain() {
         references++;
         return () => {
@@ -710,10 +938,9 @@ test.for(["completed", "revoked", "missing"] as const)(
         allows: (ref) => ref.provider === "mock-openai" && ref.model === "gpt-5.6-luna",
       },
     });
-    const admin = createAdmittedRunOperatorAuthority({
+    const admin = createTestOperatorAuthority({
       profileId: "another-admin",
       scopes: ["operator.admin"],
-      assertCurrent() {},
     });
     const enqueueFromAdmin = await withGatewayToolCallerIdentity(
       { agentId: "main", sessionKey, operatorAuthority: admin },

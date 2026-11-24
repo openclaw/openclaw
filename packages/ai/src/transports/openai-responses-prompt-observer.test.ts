@@ -22,7 +22,10 @@ import {
 } from "../providers/openai-chatgpt-responses.test-helpers.js";
 import { streamOpenAIResponses } from "../providers/openai-responses.js";
 import { cleanupSessionResources } from "../session-resources.js";
-import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "../utils/system-prompt-cache-boundary.js";
+import {
+  prepareSystemPrompt,
+  SYSTEM_PROMPT_CACHE_BOUNDARY,
+} from "../utils/system-prompt-cache-boundary.js";
 import {
   recordResponsesContextUsage,
   resolveResponsesContextUsageBoundary,
@@ -66,7 +69,7 @@ const nativeModel = () =>
   });
 const invalidEncryptedContent = () =>
   Object.assign(new Error("invalid encrypted content"), { code: "invalid_encrypted_content" });
-const identity = { sessionId: "observer-session", authProfileId: "observer-profile" };
+const identity = { sessionId: "observer-session" };
 const sdkOptions = { apiKey: "test-key", ...identity };
 function compactionCase() {
   const model = fixtures.createModel();
@@ -343,6 +346,64 @@ describe("OpenAI Responses provider prompt observer", () => {
       expect(rewritten.boundary).toBeUndefined();
     },
   );
+
+  it("checkpoints tool history behind embedded instructions across completed responses", async () => {
+    configureAiTransportHost({ immutableData: { freezeJsonSnapshot, isDeeplyFrozenPlainData } });
+    const model = fixtures.createModel({ reasoning: true, compat: { cachesInstructions: false } });
+    const context = fixtures.createOrphanedToolOutputCompactionContext(model, identity);
+    const toolOutput = context.messages.find((message) => message.role === "toolResult");
+    if (!toolOutput) {
+      throw new Error("missing historical tool result");
+    }
+    const toolText = "historical tool result";
+    toolOutput.content = [{ type: "text", text: toolText }];
+    context.messages = context.messages.map(freezeJsonSnapshot);
+    context.preparedSystemPrompt = prepareSystemPrompt(context.systemPrompt ?? "");
+    sdkState.outcomes = [fixtures.completedSdkResponse("resp_first")];
+    const first = await managedResult(model, context, { ...sdkOptions, transport: "sse" });
+    expect(first).toHaveProperty(
+      "openclawResponsesInputReplay.contextUsage.prefixHash",
+      "12447e970cae30a6cded1a6b2aef05da7f5f411355e2734e3838ea7d12ecda58",
+    );
+
+    context.messages.push(freezeJsonSnapshot(fixtures.userMessage("next question", 5)));
+    sdkState.outcomes = [fixtures.completedSdkResponse("resp_second")];
+    const stringify = vi.spyOn(JSON, "stringify");
+    const second = await managedResult(model, context, { ...sdkOptions, transport: "sse" });
+    const encodedToolText = stringify.mock.calls.filter(([value]) => value === toolText).length;
+    stringify.mockRestore();
+    expect(second).toHaveProperty(
+      "openclawResponsesInputReplay.contextUsage.prefixHash",
+      "ef878aea05c13d5eea96edc24246ba04e008aa28de9db69d804546feacfa0e91",
+    );
+    expect(encodedToolText).toBe(0);
+  });
+
+  it("isolates edits to embedded instructions from later requests", async () => {
+    configureAiTransportHost({ immutableData: { freezeJsonSnapshot, isDeeplyFrozenPlainData } });
+    const model = fixtures.createModel({ reasoning: true, compat: { cachesInstructions: false } });
+    const context = fixtures.createContext("Original instructions");
+    context.preparedSystemPrompt = prepareSystemPrompt("Original instructions");
+    const options = { ...sdkOptions, transport: "sse" };
+    sdkState.outcomes = ["first", "hook", "last"].map((id) => fixtures.completedSdkResponse(id));
+    await managedResult(model, context, options);
+    await managedResult(model, context, {
+      ...options,
+      onPayload: (payload: { input: Array<{ content: Array<{ text: string }> }> }) => {
+        const instruction = payload.input[0]?.content[0];
+        if (!instruction) {
+          throw new Error("missing embedded instructions");
+        }
+        instruction.text = "Hook instructions";
+      },
+    });
+    await managedResult(model, context, options);
+    expect(sdkState.requests.map((_, index) => JSON.parse(requestInput(index))[0])).toEqual([
+      fixtures.inputMessage("Original instructions", "developer"),
+      fixtures.inputMessage("Hook instructions", "developer"),
+      fixtures.inputMessage("Original instructions", "developer"),
+    ]);
+  });
 
   it("preserves persisted context hashes across reasoning edits, metadata and frozen replay", () => {
     configureAiTransportHost({ immutableData: { freezeJsonSnapshot, isDeeplyFrozenPlainData } });

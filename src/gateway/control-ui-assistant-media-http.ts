@@ -298,7 +298,6 @@ export async function handleControlUiAssistantMediaRequest(
   ) {
     if (
       !(await prepareHttpUserProfileCatalog(res)) ||
-      requestAuth?.hasCurrentClientAuthority?.() === false ||
       (!isMetaRequest &&
         ticketCandidate &&
         !verifyAssistantMediaTicket(
@@ -353,12 +352,7 @@ export async function handleControlUiAssistantMediaRequest(
       : undefined;
   const assertCurrentPolicy = () => {
     assertRemoteControlUiIngressCurrent(getRemoteControlUiIngressContext(req));
-    return assertAssistantMediaPolicyCurrent(
-      policyParams,
-      mediaPolicy,
-      Boolean(allowance),
-      requestAuth ?? undefined,
-    );
+    return assertAssistantMediaPolicyCurrent(policyParams, mediaPolicy, Boolean(allowance));
   };
   const requestAbort = createHttpRequestAbortSignal(res.req, res);
   using _ = { [Symbol.dispose]: requestAbort.cleanup };
@@ -434,14 +428,17 @@ export async function handleControlUiAssistantMediaRequest(
       );
       await byteStream.close();
       await publishResponse(() => {
-        res.setHeader("Content-Type", "image/webp");
-        res.setHeader("Content-Length", String(thumbnail.byteLength));
+        res.setHeader("Content-Type", thumbnail.mimeType);
+        res.setHeader("Content-Length", String(thumbnail.data.byteLength));
         res.setHeader("Cache-Control", "private, no-cache");
         res.setHeader(
           "Content-Disposition",
-          buildAssistantMediaContentDisposition(`${filename}-preview.webp`, "image/webp"),
+          buildAssistantMediaContentDisposition(
+            `${filename}-preview${thumbnail.extension}`,
+            thumbnail.mimeType,
+          ),
         );
-        res.end(req.method === "HEAD" ? undefined : thumbnail);
+        res.end(req.method === "HEAD" ? undefined : thumbnail.data);
       });
       return true;
     }

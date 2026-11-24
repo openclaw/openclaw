@@ -111,7 +111,7 @@ it.each(["source replacement", "transport refresh"] as const)(
         assert(successor, "Reconnect fixture did not capture its successor source");
         expect(successor).not.toBe(original);
         expect(() => successor.receiptAuthority()).not.toThrow();
-        expect(() => original.receiptAuthority()).toThrow("worker turn authority changed");
+        expect(() => original.receiptAuthority()).toThrow("worker turn ended");
       } else {
         const credentialHash = await renewCredential("reconnected-fixture");
         nextIdentity = { ...identity, credentialHash };

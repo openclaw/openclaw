@@ -7,11 +7,7 @@ import { resolveToolSearchConfig } from "./tool-search-config.js";
 import { buildToolSchemaDirectoryPrompt } from "./tool-search-directory.js";
 import { ToolSearchRuntime } from "./tool-search-runtime.js";
 import type { ToolSearchCatalogRef } from "./tool-search-types.js";
-import {
-  applyToolSearchCatalog,
-  applyUsageRankedMcpToolSearchDirectory,
-  createToolSearchTools,
-} from "./tool-search.js";
+import { applyToolSearchCatalog, createToolSearchTools } from "./tool-search.js";
 import type { ToolUsageRankingSnapshot } from "./tool-usage-ranking.js";
 import type { AnyAgentTool } from "./tools/common.js";
 
@@ -27,6 +23,19 @@ function mcpTool(server: string, toolName: string, description: string, name?: s
 
 function nativeTool(name: string, description = "Trusted native tool.") {
   return Object.assign(createStubTool(name), { description }) as AnyAgentTool;
+}
+
+const MCP_HEADING = "Deferred MCP tools.";
+
+/** The MCP part of the system prompt's deferred-tool directory. */
+function mcpDirectory(
+  config: OpenClawConfig,
+  catalogRef: ToolSearchCatalogRef,
+  usageRanking?: ToolUsageRankingSnapshot,
+) {
+  const prompt = buildToolSchemaDirectoryPrompt({ config, catalogRef }, { usageRanking });
+  const start = prompt.indexOf(MCP_HEADING);
+  return start < 0 ? "" : prompt.slice(start);
 }
 
 function apply(
@@ -49,11 +58,17 @@ function apply(
   const search = result.tools.find((tool) => tool.name === "tool_search");
   const base = controls.find((tool) => tool.name === "tool_search")?.description ?? "";
   const description = search?.description ?? "";
-  const directory = description.startsWith(`${base}\n\n`) ? description.slice(base.length + 2) : "";
-  return { result, catalogRef, description, directory, base, config };
+  return {
+    result,
+    catalogRef,
+    description,
+    directory: mcpDirectory(config, catalogRef),
+    base,
+    config,
+  };
 }
 
-describe("MCP directory in the tool_search description", () => {
+describe("MCP directory in the system prompt", () => {
   it("keeps listed MCP identifiers resolvable after same-named client tools join", async () => {
     const { directory, catalogRef, config } = apply([
       nativeTool("native_helper"),
@@ -80,14 +95,15 @@ describe("MCP directory in the tool_search description", () => {
       source: "mcp",
       name: "world__slack_post_message",
     });
-    expect(buildToolSchemaDirectoryPrompt({ config, catalogRef })).toContain(
-      "Deferred MCP tools are listed in the tool_search description.",
-    );
   });
 
-  it("leaves the description byte-identical without deferred MCP tools", () => {
-    const { description, base } = apply([nativeTool("native_helper")]);
-    expect(description).toBe(base);
+  it("keeps the tool_search definition fixed whatever the MCP inventory", () => {
+    const without = apply([nativeTool("native_helper")]);
+    expect(without.description).toBe(without.base);
+    expect(without.directory).toBe("");
+    const withMcp = apply([nativeTool("native_helper"), mcpTool("world", "read", "Read.")]);
+    expect(withMcp.description).toBe(withMcp.base);
+    expect(withMcp.directory).toContain("- mcp:world:world__read: Read.");
   });
 
   it("confines hostile names and descriptions to one bounded row", () => {
@@ -179,14 +195,15 @@ describe("MCP directory in the tool_search description", () => {
     ];
     const catalogRef: ToolSearchCatalogRef = {};
     const shared = tools();
-    const first = apply(shared, { catalogRef }).description;
+    const first = apply(shared, { catalogRef }).directory;
     const reused = apply(shared, { catalogRef });
     expect(reused.result.catalogReused).toBe(true);
-    expect(reused.description).toBe(first);
+    expect(reused.directory).toBe(first);
     // A later turn materializes fresh MCP tool objects, possibly in another order.
-    expect(apply(tools().toReversed(), { catalogRef }).description).toBe(first);
+    expect(apply(tools().toReversed(), { catalogRef }).directory).toBe(first);
     const changed = apply([...tools(), mcpTool("world", "c_tool", "Third.")], { catalogRef });
-    expect(changed.description).not.toBe(first);
+    expect(changed.directory).not.toBe(first);
+    expect(changed.description).toBe(changed.base);
     expect(changed.directory).toContain("- mcp:world:world__c_tool: Third.");
   });
 
@@ -215,7 +232,7 @@ describe("MCP directory in the tool_search description", () => {
     const nativeOnly = apply([mcpTool("world", "write_file", "Write a file.")], {
       config: { tools: { toolSearch: { mode: "tools", include: [{ source: "openclaw" }] } } },
     });
-    expect(nativeOnly.description).toBe(nativeOnly.base);
+    expect(nativeOnly.directory).toBe("");
   });
 
   it("lists the exact catalog id when a bare name collides with a direct tool", async () => {
@@ -236,28 +253,18 @@ describe("usage-ranked MCP directory", () => {
   const at = 20 * 24 * 60 * 60 * 1_000;
   const ranking = (orderedToolIds: string[], newcomers: Record<string, number> = {}) =>
     ({ version: 1, at, orderedToolIds, newcomers }) satisfies ToolUsageRankingSnapshot;
-  const rankedDirectory = (applied: ReturnType<typeof apply>, usage: ToolUsageRankingSnapshot) => {
-    const tools = applyUsageRankedMcpToolSearchDirectory(
-      applied.result.tools,
-      applied.catalogRef.current,
-      usage,
-    );
-    const description = tools.find((tool) => tool.name === "tool_search")?.description ?? "";
-    expect(description.startsWith(`${applied.base}\n\n`)).toBe(true);
-    return description.slice(applied.base.length + 2);
-  };
+  const rankedDirectory = (applied: ReturnType<typeof apply>, usage: ToolUsageRankingSnapshot) =>
+    mcpDirectory(applied.config, applied.catalogRef, usage);
   const longDescription =
     "Does something useful for the caller with a fairly long description text.";
 
-  it("leaves tools byte-identical without learned usage or when every row fits", () => {
+  it("leaves the directory byte-identical without learned usage or when every row fits", () => {
     const fits = apply([
       mcpTool("world", "a_tool", "First."),
       mcpTool("world", "b_tool", "Second."),
     ]);
-    for (const usage of [undefined, ranking([]), ranking(["mcp:world:world__b_tool"])]) {
-      expect(
-        applyUsageRankedMcpToolSearchDirectory(fits.result.tools, fits.catalogRef.current, usage),
-      ).toBe(fits.result.tools);
+    for (const usage of [ranking([]), ranking(["mcp:world:world__b_tool"])]) {
+      expect(rankedDirectory(fits, usage)).toBe(fits.directory);
     }
   });
 

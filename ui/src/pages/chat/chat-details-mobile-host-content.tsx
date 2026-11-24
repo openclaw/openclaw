@@ -1,5 +1,8 @@
 import { For, Show, createMemo, createSignal, onSettled } from "solid-js";
-import type { ControlUiSessionPullRequestSnapshot } from "../../../../src/gateway/control-ui-contract.js";
+import type {
+  ControlUiSessionPullRequest,
+  ControlUiSessionPullRequestSnapshot,
+} from "../../../../src/gateway/control-ui-contract.js";
 import { PanelLoadingSkeleton } from "../../components/solid/panel-loading-skeleton.tsx";
 import { registerChatDetailsEnglish } from "../../i18n/locales/en-chat-details.ts";
 import { registerChatSessionEnglish } from "../../i18n/locales/en-chat-session.ts";
@@ -230,12 +233,12 @@ function MobileHostContent(
     const owner = capturePresentation();
     return {
       ...recovery(),
-      pullRequests: owner.details.pullRequests ?? [],
-      onOpen: (request: NonNullable<ChatDetailsProps["pullRequests"]>[number]) => {
+      pullRequests: owner.details.displayPullRequests ?? owner.details.pullRequests ?? [],
+      onOpen: (request: ControlUiSessionPullRequest) => {
         if (
           owner.current() &&
           (owner.destination.page?.details?.kind ?? "root") === origin &&
-          owner.details.pullRequests?.includes(request)
+          (owner.details.displayPullRequests ?? owner.details.pullRequests)?.includes(request)
         ) {
           open({ kind: "pull-request", id: chatPullRequestId(request) }, request.title);
         }
@@ -474,15 +477,16 @@ function MobileHostContent(
         selected?.kind === "pull-request-checks" ||
         selected?.kind === "pull-request-monitoring"
       ) {
-        const pullRequest = details.pullRequests?.find(
-          (request) => chatPullRequestId(request) === selected.id,
+        const pullRequests = details.displayPullRequests ?? details.pullRequests;
+        const pullRequest = pullRequests?.find(
+          (request): request is ControlUiSessionPullRequest & { taskOnly?: true } =>
+            request.state !== undefined && chatPullRequestId(request) === selected.id,
         );
+        const checkoutRequest = pullRequest?.taskOnly ? undefined : pullRequest;
         const currentRequest = () =>
-          owner.current() &&
-          pullRequest !== undefined &&
-          details.pullRequests?.includes(pullRequest);
+          owner.current() && pullRequest !== undefined && pullRequests?.includes(pullRequest);
         const openCi = (kind: "pull-request-checks" | "pull-request-monitoring", title: string) => {
-          if (currentRequest() && selected.kind === "pull-request") {
+          if (checkoutRequest && currentRequest() && selected.kind === "pull-request") {
             open({ kind, id: selected.id }, title);
           }
         };
@@ -491,9 +495,12 @@ function MobileHostContent(
           content: {
             ...recovery(),
             pullRequest,
-            onOpenChecks: () => openCi("pull-request-checks", t("chat.pullRequests.checksTitle")),
-            onOpenMonitoring: () =>
-              openCi("pull-request-monitoring", t("chat.pullRequests.ciMonitoring")),
+            onOpenChecks: checkoutRequest
+              ? () => openCi("pull-request-checks", t("chat.pullRequests.checksTitle"))
+              : undefined,
+            onOpenMonitoring: checkoutRequest
+              ? () => openCi("pull-request-monitoring", t("chat.pullRequests.ciMonitoring"))
+              : undefined,
             onDismiss: (request) => {
               if (
                 !currentRequest() ||
@@ -517,7 +524,7 @@ function MobileHostContent(
         });
         const ci = {
           ...recovery(),
-          pullRequest,
+          pullRequest: checkoutRequest,
           gateway: details.pullRequestsGateway,
           sessionKey: scopedSessionArtifactKey(
             details.sessionKey,

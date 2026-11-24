@@ -5,8 +5,8 @@ import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
 } from "../state/openclaw-state-db.js";
-import type { TranscriptUtterance } from "../transcripts/provider-types.js";
 import { TranscriptsStore } from "../transcripts/store.js";
+import type { TranscriptUtterance } from "../transcripts/types.js";
 import {
   readTestMeetingTranscript,
   TEST_CAPTION_SOURCE,

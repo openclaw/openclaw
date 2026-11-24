@@ -58,7 +58,6 @@ import {
 } from "../../operator-role-policy.js";
 import { broadcastRejectedNodePairing } from "../../pairing-events.js";
 import { MAX_PAYLOAD_BYTES } from "../../payload-limits.js";
-import { resolveBrowserAuthOrigin } from "../../provider-browser-auth.js";
 import {
   MAX_BUFFERED_BYTES,
   TICK_INTERVAL_MS,
@@ -229,12 +228,8 @@ export async function sendGatewayHello(
     features: {
       methods: gatewayMethods.filter(
         (method) =>
-          (method !== "mcp.authLogin" ||
-            Boolean(
-              resolveBrowserAuthOrigin(context.browserOrigin, { authPolicy: state.authPolicy }),
-            )) &&
-          (isOpenClawIdEnabled(context.configSnapshot.gateway?.openclawId) ||
-            !method.startsWith("openclawId.")),
+          isOpenClawIdEnabled(context.configSnapshot.gateway?.openclawId) ||
+          !method.startsWith("openclawId."),
       ),
       events: isOpenClawIdEnabled(context.configSnapshot.gateway?.openclawId)
         ? events
@@ -272,6 +267,7 @@ export async function sendGatewayHello(
         GATEWAY_SERVER_CAPS.NODE_WORKER_BUNDLE_STATUS,
         GATEWAY_SERVER_CAPS.NODE_WORKER_BUNDLE_PREFETCH,
         GATEWAY_SERVER_CAPS.NODE_WORKER_CAPTURED_EXEC_POLICY,
+        GATEWAY_SERVER_CAPS.NODE_WORKER_EXEC_MEMORY_BOUNDARY,
         GATEWAY_SERVER_CAPS.NODE_WORKER_WORKSPACE_QUIESCENCE,
         GATEWAY_SERVER_CAPS.NODE_WORKER_WORKSPACE_RESULT,
         GATEWAY_SERVER_CAPS.NODE_WORKER_ENVIRONMENT_SESSION,
@@ -297,6 +293,7 @@ export async function sendGatewayHello(
         GATEWAY_SERVER_CAPS.SYSTEM_AGENT_SETUP_MODEL_REF,
         GATEWAY_SERVER_CAPS.TASK_SUGGESTIONS_ACCEPT_MODES,
         GATEWAY_SERVER_CAPS.TALK_SESSION_CLOSE_DISPOSITION,
+        GATEWAY_SERVER_CAPS.UPDATE_RUN_CONSENT_IDENTITY,
       ],
     },
     snapshot,
@@ -410,6 +407,12 @@ export async function sendGatewayHello(
       }
     }
     snapshot.suspension = { phase: getGatewaySuspendAdmissionPhase() };
+    if (
+      (deviceToken || bootstrapDeviceTokens.length > 0) &&
+      state.isDeviceTokenSubjectCurrent?.() === false
+    ) {
+      throw new Error("Credential delivery requires current profile membership");
+    }
     helloWriteStarted = true;
     await sendFrame({ type: "res", id: frame.id, ok: true, payload: helloOk });
   } catch (err) {

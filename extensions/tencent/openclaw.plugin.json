@@ -104,6 +104,27 @@
             }
           },
           {
+            "id": "hy4-flash",
+            "name": "Hy4 flash (TokenHub)",
+            "reasoning": true,
+            "input": ["text", "image"],
+            "contextWindow": 1048576,
+            "contextTokens": 983040,
+            "maxTokens": 65536,
+            "cost": {
+              "input": 0.07,
+              "output": 0.281,
+              "cacheRead": 0.003,
+              "cacheWrite": 0
+            },
+            "compat": {
+              "supportsUsageInStreaming": true,
+              "supportsReasoningEffort": true,
+              "supportedReasoningEfforts": ["none", "high"],
+              "defaultThinkingLevel": "high"
+            }
+          },
+          {
             "id": "hy4-preview",
             "name": "Hy4 preview (TokenHub)",
             "reasoning": true,
@@ -155,6 +176,27 @@
               "input": 0.834,
               "output": 2.501,
               "cacheRead": 0.042,
+              "cacheWrite": 0
+            },
+            "compat": {
+              "supportsUsageInStreaming": true,
+              "supportsReasoningEffort": true,
+              "supportedReasoningEfforts": ["none", "high"],
+              "defaultThinkingLevel": "high"
+            }
+          },
+          {
+            "id": "hy4-flash",
+            "name": "Hy4 flash (TokenPlan)",
+            "reasoning": true,
+            "input": ["text", "image"],
+            "contextWindow": 1048576,
+            "contextTokens": 983040,
+            "maxTokens": 65536,
+            "cost": {
+              "input": 0.07,
+              "output": 0.281,
+              "cacheRead": 0.003,
               "cacheWrite": 0
             },
             "compat": {

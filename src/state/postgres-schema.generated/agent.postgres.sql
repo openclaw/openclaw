@@ -369,7 +369,9 @@ CREATE TABLE "session_members" (
   "identity_id" text COLLATE "C" NOT NULL,
   "added_by" text COLLATE "C" NOT NULL,
   "added_at" bigint NOT NULL,
-  PRIMARY KEY ("session_key", "identity_id")
+  "access" text COLLATE "C",
+  PRIMARY KEY ("session_key", "identity_id"),
+  CHECK ("access" IS NULL OR ("access" IN ('read', 'suggest', 'send')))
 );
 
 CREATE TABLE "session_nodes" (
@@ -437,6 +439,8 @@ CREATE TABLE "session_pending_inputs" (
   "state" text COLLATE "C" NOT NULL,
   "accepted_at" bigint NOT NULL,
   "consumed_event_id" text COLLATE "C",
+  "end_cause" text COLLATE "C",
+  "origin_source_json" text COLLATE "C",
   PRIMARY KEY ("seq"),
   CHECK (("state" IN ('queued', 'interrupted', 'cancelled'))),
   UNIQUE ("input_id"),

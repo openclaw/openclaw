@@ -185,7 +185,6 @@ it("captures plugin system instructions once and refreshes plugin context on res
   const fixture = await createFixture({
     trigger: "user",
     toolAuthorityFingerprint: "fixture-prompt-authority",
-    contextTokenBudget: 32_000,
   });
   promptFixture.declarations = toolDeclarations("memory_search", "memory_get");
   const hook = vi.fn().mockReturnValue({
@@ -197,12 +196,6 @@ it("captures plugin system instructions once and refreshes plugin context on res
   promptHooks({ handler: hook }, { handler: recall, requiresToolAuthority: true });
 
   const binding = await fixture.run();
-  expect(openModelContextAsyncMock).toHaveBeenCalledWith(
-    expect.anything(),
-    expect.objectContaining({
-      limits: { maxBytes: 256_000, maxEvents: 10_000, toolResultOverflow: "omit" },
-    }),
-  );
   expect(hook).toHaveBeenCalledWith(
     expect.objectContaining({ messages: [{ role: "user", content: "Earlier request" }] }),
     expect.anything(),
@@ -430,10 +423,8 @@ it("includes shared policies for the admitted Gateway tools in the initial instr
   const instructions = fixture.requests[0]?.agent.instructions;
   expect(instructions).toContain("## UI Presentation");
   expect(instructions).toContain("Permission blocks:");
-  expect(instructions).toContain("Omit unverified remediation advice");
   expect(instructions).toContain("## Skill Workshop");
   expect(instructions).toContain("## Delegation");
-  expect(instructions).toContain("Use or store credentials the user supplies as requested");
   expect(instructions).toContain("Fixture Git co-authors: Example <example@example.test>.");
   expect(instructions).toContain("Extra fixture instructions");
 });

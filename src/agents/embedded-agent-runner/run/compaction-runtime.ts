@@ -83,7 +83,6 @@ export type EmbeddedRunCompactionRecoveryInput = {
     target?: ContextEngineSessionTarget;
   };
   prepareCompactedTranscriptRetry: (assertActive: () => void) => Promise<void>;
-  armPostCompactionGuard: () => void;
   usageAccumulator: UsageAccumulator;
 } & ReturnType<typeof createEmbeddedRunCompactionRuntime>;
 
@@ -363,6 +362,7 @@ export function createEmbeddedRunCompactionRuntime(input: {
   hookRunner: PreparedEmbeddedRunInput["hookRunner"];
   hookContext: PreparedEmbeddedRunInput["hookContext"];
   sessionPromptState: SessionPromptState;
+  isTurnTainted?: () => boolean;
 }) {
   const { runParams: params, contextEngine, hookRunner, hookContext, sessionPromptState } = input;
   const abortSignal = params.abortSignal;
@@ -524,7 +524,7 @@ export function createEmbeddedRunCompactionRuntime(input: {
       },
     };
   };
-  const prepareRecoverySession = async (contextTokenBudget: number) => {
+  const prepareRecoverySession = async () => {
     const owner = prepareRecoveryOwner();
     const sessionManager =
       memoryManager ??
@@ -534,7 +534,7 @@ export function createEmbeddedRunCompactionRuntime(input: {
             SessionManager.openAsync(
               owner.session.target,
               params.workspaceDir,
-              resolveEmbeddedSessionContextLimits({ contextTokenBudget }),
+              resolveEmbeddedSessionContextLimits({}),
             ),
           ));
     owner.assertActive();
@@ -555,6 +555,7 @@ export function createEmbeddedRunCompactionRuntime(input: {
   const resolveActiveHookContext = () => ({
     ...hookContext,
     sessionId: sessionPromptState.sessionId,
+    ...(input.isTurnTainted ? { turnTainted: input.isTurnTainted() } : {}),
   });
   const adoptCompactionTranscript = async (
     compactResult: CompactionResult,

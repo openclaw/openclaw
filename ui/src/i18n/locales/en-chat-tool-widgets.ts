@@ -8,10 +8,14 @@ const enChatToolWidgets = {
       showRawDetails: "Show raw details",
       hideRawDetails: "Hide raw details",
       widgetActions: "Widget actions",
+      annotateWidget: "Annotate widget",
+      widgetInspectUnavailable:
+        "Element comments aren’t available yet. Try again once the widget loads, or ask the agent to render this widget again.",
       copyAsImage: "Copy as image",
       downloadAsImage: "Download as image",
       widgetExportRerender: "Render this widget again to export it as an image.",
-      widgetExportHtmlFallback: "Image unavailable. Downloaded the widget as HTML instead.",
+      widgetExportHtmlFallback:
+        "Image unavailable. HTML download started instead. Check your browser downloads.",
       widgetExportFailed: "Couldn’t export this widget. Try again.",
       pinToDashboard: "Pin to dashboard",
       pinToDashboardPending: "Pinning…",

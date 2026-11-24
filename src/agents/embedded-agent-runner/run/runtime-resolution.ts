@@ -6,11 +6,12 @@ import type { ThinkLevel } from "../../../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { PluginMetadataSnapshot } from "../../../plugins/plugin-metadata-snapshot.types.js";
 import { resolveRunModelFallbacksOverride } from "../../agent-scope.js";
-import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../../defaults.js";
+import { DEFAULT_PROVIDER } from "../../defaults.js";
 import type { AgentHarnessPluginSelection } from "../../harness/runtime-plugin-load-plan.js";
 import { resolveModelCandidateChain } from "../../model-fallback-candidates.js";
 import {
   buildModelAliasIndex,
+  NO_MODEL_CONFIGURED_MESSAGE,
   resolveDefaultModelForAgent,
   resolveModelRefFromString,
 } from "../../model-selection.js";
@@ -155,7 +156,7 @@ export function resolveInitialEmbeddedRunModel(params: {
   const configuredDefault = resolveDefaultModelForAgent(resolutionContext);
   const explicitProvider = normalizeOptionalString(params.provider);
   const explicitModel = normalizeOptionalString(params.model);
-  const defaultProvider = configuredDefault.provider || DEFAULT_PROVIDER;
+  const defaultProvider = configuredDefault?.provider || DEFAULT_PROVIDER;
 
   if (explicitProvider && explicitModel) {
     return { provider: explicitProvider, modelId: explicitModel };
@@ -178,8 +179,11 @@ export function resolveInitialEmbeddedRunModel(params: {
     };
   }
 
+  if (!configuredDefault) {
+    throw new Error(NO_MODEL_CONFIGURED_MESSAGE);
+  }
   return {
-    provider: explicitProvider ?? defaultProvider,
-    modelId: configuredDefault.model || DEFAULT_MODEL,
+    provider: explicitProvider ?? configuredDefault.provider,
+    modelId: configuredDefault.model,
   };
 }

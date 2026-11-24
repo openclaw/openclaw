@@ -34,7 +34,7 @@ import {
   sessionToolsTranscript,
   seedSessionToolsEntry,
 } from "./local-request-context.session-tools.test-support.js";
-import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
+import { prepareGatewayOperatorRunAuthority } from "./operator-run-authority.js";
 import { handleGatewayRequest } from "./server-methods.js";
 import type { GatewayRequestOptions } from "./server-methods/types.js";
 import * as operatorContinuation from "./server-plugin-in-process-dispatch.js";
@@ -97,7 +97,7 @@ describe("sessions_send steering custody", () => {
         }
         const context = sessionToolsContext();
         const captured = expectDefined(
-          await captureGatewayOperatorRunAuthority({ client, context }),
+          await prepareGatewayOperatorRunAuthority({ client, context }),
           "session writer authority",
         );
         try {
@@ -149,7 +149,7 @@ describe("sessions_send steering custody", () => {
                       sessionId: "session-tools-requester-id",
                       storePath: sessionToolsStorePath(cfg),
                     },
-                    assertCommitAllowed: captured.authority.assertCurrent,
+                    assertCommitAllowed: () => captured.authority.signal?.throwIfAborted(),
                     withTranscriptWrite: async (write) => await write(),
                   },
                   () =>
@@ -212,12 +212,11 @@ describe("sessions_send steering custody", () => {
     ["abort", false],
     ["replaced run end", false],
     ["sender completed", true],
-    ["source revoked", true],
     ["receiver cancelled", true],
   ] as const)(
     "settles accepted steering custody after %s (backend settlement: %s)",
     async (outcome, reportSettlement) => {
-      const custodyReleased = createDeferredCore();
+      let custodyReleased = createDeferredCore();
       const capture = operatorContinuation.captureOperatorToolGatewayContinuationContext;
       const observeCapture = vi
         .spyOn(operatorContinuation, "captureOperatorToolGatewayContinuationContext")
@@ -255,7 +254,8 @@ describe("sessions_send steering custody", () => {
               expect(receiver.pendingCount()).toBe(0);
             }
             const existingLeases = new Set(turn.authorityLeases);
-            const acknowledged = vi.fn();
+            // Observe this send's custody; a refused earlier send releases its own.
+            custodyReleased = createDeferredCore();
             const sent = createSessionsSendTool({
               config: cfg,
               agentSessionKey: REQUESTER,
@@ -269,14 +269,15 @@ describe("sessions_send steering custody", () => {
               mode: "steer",
               timeoutSeconds: 0,
             });
-            void sent.then(acknowledged, acknowledged);
             await receiver.waitForAccepted();
-            await setImmediate();
-            expect(acknowledged).not.toHaveBeenCalled();
+            // The receipt returns at acceptance; the receiver keeps the input until it settles.
+            expect((await sent).details).toMatchObject({
+              status: "accepted",
+              targetDisposition: "steered",
+            });
             expect(receiver.pendingCount()).toBe(1);
             await turn.complete();
             await setImmediate();
-            expect(acknowledged).not.toHaveBeenCalled();
             const custodyLeases = turn.authorityLeases.filter(
               (lease) =>
                 !existingLeases.has(lease) &&
@@ -294,9 +295,6 @@ describe("sessions_send steering custody", () => {
                 }
                 receiver.end();
               }
-            } else if (outcome === "source revoked") {
-              turn.revoke(alice.profileId);
-              await expect(receiver.commit()).rejects.toThrow(/authority|access|revoked/i);
             } else if (outcome === "receiver cancelled") {
               await receiver.cancel();
               expect(receiver.pendingCount()).toBe(0);
@@ -304,9 +302,7 @@ describe("sessions_send steering custody", () => {
               await receiver.commit();
               expect(receiver.pendingCount()).toBe(0);
             }
-            // Recipient custody can settle after the sender ends, but a closed
-            // personal-tool turn must never receive a fresh result.
-            await expect(sent).rejects.toThrow("This turn has ended");
+            // Recipient custody settles after the sender ends.
             expect(receiver.pendingCount()).toBe(0);
             await custodyReleased.promise;
             for (const lease of custodyLeases) {
@@ -317,8 +313,9 @@ describe("sessions_send steering custody", () => {
             )
               .map(readTranscriptEventMessage)
               .filter((message) => message?.idempotencyKey === "participant-delayed-steer:user");
-            expect(messages).toHaveLength(outcome === "sender completed" ? 1 : 0);
-            if (outcome === "sender completed") {
+            const committed = outcome === "sender completed";
+            expect(messages).toHaveLength(committed ? 1 : 0);
+            if (committed) {
               expect(messages[0]).toMatchObject({
                 role: "user",
                 content: expect.stringContaining(
@@ -391,7 +388,7 @@ describe("runtime-only session authority", () => {
               undefined,
               {
                 message: expect.stringContaining(
-                  "Personal-tool turn authority is no longer active",
+                  "This agent run is no longer active. Start a new turn to retry.",
                 ),
               },
             ],

@@ -481,7 +481,7 @@ suite.define(() => {
           ...activeHistory.pendingInputs,
           items: [
             ...cancelledHistory.pendingInputs.items,
-            { ...stoppedInput, state: "cancelled", cancelledByUser: true },
+            { ...stoppedInput, state: "cancelled", endCause: "user-stop" },
           ],
         },
       };

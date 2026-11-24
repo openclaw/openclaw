@@ -26,7 +26,7 @@ import type { QueuedAgentRunParams } from "./queued-run-params.types.js";
 
 export type AgentRunClientContext = Pick<
   QueuedAgentRunParams,
-  "clientCaps" | "bootstrapUserProfileId" | "gatewayUiCommandTarget"
+  "clientCaps" | "bootstrapUserProfileId" | "sessionUserProfileId" | "gatewayUiCommandTarget"
 > & {
   /** Host-admitted dashboard authoring without an originating inline renderer. */
   pinnedWidgetAuthoring?: boolean;

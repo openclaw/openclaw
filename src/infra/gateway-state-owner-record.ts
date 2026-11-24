@@ -125,7 +125,9 @@ export function assertPersistedStateDatabaseAccessAllowed(params: {
     return;
   }
   if (namespace === "same" && !isPidAlive(owner.pid)) {
-    throw new StateDatabaseAccessError(unavailable);
+    // The owner can exit after the stale check. Cold admission must re-observe
+    // proof of death, not treat this transient disagreement as a terminal failure.
+    throw new StateDatabaseAdmissionPendingError(databasePath, unavailable);
   }
   const role = owner.role ?? "gateway";
   if (role === "gateway" || role === "agent-embedded") {

@@ -1,3 +1,4 @@
+import { unwrapToolCallForDisplay } from "../../../../src/agents/tool-display-call.js";
 import { messageClientSourcesKey } from "../../../../src/chat/message-client-source.js";
 import {
   accumulatedStreamText,
@@ -7,7 +8,11 @@ import {
 } from "../../lib/chat/chat-types.ts";
 import { stripHeartbeatTokenForDisplay } from "../../lib/chat/heartbeat-display.ts";
 import { readChatThreadMessageIdentity } from "../../lib/chat/history-message-identity.ts";
-import { isStandaloneToolMessageForDisplay } from "../../lib/chat/message-normalizer.ts";
+import {
+  isStandaloneToolMessageForDisplay,
+  normalizeMessage,
+} from "../../lib/chat/message-normalizer.ts";
+import { resolveMessageVisibleContent } from "../../lib/chat/message-visibility.ts";
 import { senderIdentityKey } from "../../lib/chat/sender-label.ts";
 import { extractToolCardsCached } from "../../lib/chat/tool-cards.ts";
 import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
@@ -27,6 +32,7 @@ import type { ChatInputOrderState } from "./chat-thread-inputs.ts";
 import { sanitizeStreamText } from "./chat-thread-items.ts";
 import type { PrependFacts } from "./chat-thread-prepend.ts";
 import { carryMovedDisclosures } from "./chat-tool-activity-coalesce.ts";
+import { activityDisclosureCalls } from "./components/chat-activity-projection.ts";
 import { getOrCreateSessionCacheValue, setSessionCacheValue } from "./session-cache.ts";
 
 type CachedChatItems = {
@@ -133,6 +139,7 @@ function sameMessageGroup(previous: MessageGroup, next: MessageGroup): boolean {
     sameReplySource(previous.replyCurrentSource, next.replyCurrentSource) &&
     previous.isStreaming === next.isStreaming &&
     previous.visibleContent === next.visibleContent &&
+    previous.startsActivityGroup === next.startsActivityGroup &&
     previous.runId === next.runId &&
     previous.messages.length === next.messages.length &&
     previous.messages.every((entry, index) => {
@@ -154,6 +161,7 @@ const CHAT_ITEM_FIELDS = {
     "text",
     "label",
     "handoffBoundary",
+    "activityBoundary",
     "startsTurn",
     "boundaryId",
     "timestamp",
@@ -637,33 +645,70 @@ export function syncToolCardExpansionState(
     let groupCallId: string | undefined;
     for (const entry of item.messages) {
       const cards = extractToolCardsCached(entry.message);
+      const standalone = isStandaloneToolMessageForDisplay(entry.message);
+      const imageCard =
+        cards.length === 1 && unwrapToolCallForDisplay(cards[0]!).name === "view_image"
+          ? cards[0]
+          : undefined;
+      // Bare live tool envelopes still render the card; text/media owns the outer disclosure.
+      const imageMessage = Boolean(
+        imageCard &&
+        standalone &&
+        resolveMessageVisibleContent(entry.message, normalizeMessage(entry.message)) !== "none",
+      );
+      const imageIdentity = imageCard?.callId
+        ? JSON.stringify([imageCard.runId, imageCard.callId])
+        : undefined;
       for (let cardIndex = 0; cardIndex < cards.length; cardIndex++) {
         const card = cards[cardIndex]!;
         groupCallId ??= card.callId;
-        retainDisclosure(`${entry.key}:toolcard:${cardIndex}`, card.callId, "card");
+        retainDisclosure(
+          `${entry.key}:toolcard:${cardIndex}`,
+          imageCard ? (imageMessage ? undefined : imageIdentity) : card.callId,
+          imageCard ? "image" : "card",
+        );
       }
-      if (!isStandaloneToolMessageForDisplay(entry.message)) {
+      if (!standalone) {
         continue;
       }
-      retainDisclosure(`toolmsg:${entry.key}`, cards[0]?.callId, "message");
+      retainDisclosure(
+        `toolmsg:${entry.key}`,
+        imageCard ? (imageMessage ? imageIdentity : undefined) : cards[0]?.callId,
+        imageCard ? "image" : "message",
+      );
     }
-    if (groupCallId && (!inlineCommands || !transcriptItems)) {
+    if (groupCallId && !transcriptItems) {
       calls.set(`activity:${item.key}`, `activity:${groupCallId}`);
     }
   }
-  if (inlineCommands && transcriptItems) {
-    for (const [id, call] of inlineCommands.inlineActivityDisclosureCalls(
+  if (transcriptItems) {
+    for (const [id, call] of activityDisclosureCalls(
       transcriptItems,
       bubbleMode,
+      Boolean(inlineCommands),
     )) {
+      if (id.startsWith("lifecycle:")) {
+        retainDisclosure(id, undefined, "lifecycle");
+      }
       calls.set(id, call);
     }
   }
   if (!isFilteredProjection) {
     carryMovedDisclosures(state, state.calls, calls, writeExpansionState);
-    // Reconnect temporarily clears live rows before restoring stored history.
-    // Keep their call associations with the explicit choices retained below.
+    // A history refresh can remove live rows while older tools remain visible.
+    // Keep explicitly chosen activity segments tied to their run-scoped calls.
     if (calls.size > 0) {
+      const represented = new Set(calls.values());
+      for (const [id, call] of state.calls ?? []) {
+        if (
+          (id.startsWith("activity:") || id.startsWith("lifecycle:")) &&
+          explicit.has(id) &&
+          !calls.has(id) &&
+          !represented.has(call)
+        ) {
+          calls.set(id, call);
+        }
+      }
       state.calls = calls;
     }
   }

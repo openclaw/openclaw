@@ -1,7 +1,12 @@
 /** Gateway writes behind the Scribes controls: start, run now, pause, turn off, repair and update. */
 import type { ControlUiHost } from "openclaw/plugin-sdk/control-ui";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { repairPrompt, scribeLabel, setupIdempotencyKey } from "./scribes-catalog.js";
+import {
+  repairPrompt,
+  rescheduledRunMessage,
+  scribeLabel,
+  setupIdempotencyKey,
+} from "./scribes-catalog.js";
 import type { ScribeJob, ScribeSnapshot } from "./scribes-state.js";
 
 type ScribeHost = Pick<ControlUiHost, "request" | "sessions">;
@@ -64,7 +69,7 @@ export async function startScribe(
  * Repair a scribe so its automation runs again in its own conversation.
  * - Archived conversation: restore it and turn the automation back on, without a model turn.
  *   Archiving turned the automation off; one paused before archiving also comes back on, a
- *   visible change Pause undoes.
+ *   visible change Disable undoes.
  * - Deleted conversation, or a failing scribe: the automation must be owned by the scribe's
  *   conversation, which only a turn there can do, so send it the repair prompt (in a new
  *   conversation when the old one was deleted).
@@ -129,7 +134,7 @@ function savedOptions(job: ScribeJob) {
 // What a refused run means for the operator, by the scheduler's reason.
 const RUN_REFUSALS: Record<string, string> = {
   stopped: "the scheduler is stopped",
-  disabled: "the automation is paused",
+  disabled: "the automation is disabled",
   ownerless: "the automation lost its owner; open the conversation and ask it to repair its setup",
   "invalid-spec": "its schedule is invalid; open the conversation and ask it to repair its setup",
 };
@@ -150,7 +155,7 @@ export async function runScribeNow(host: ScribeHost, job: ScribeJob) {
   throw new Error(`The run did not start: ${(RUN_REFUSALS[reason] ?? reason) || "not accepted"}.`);
 }
 
-/** Pause or resume the scribe's automation; rejected if it changed since it was read. */
+/** Disable or enable the automation; rejected if it changed since it was read. */
 export const setScribePaused = (host: ScribeHost, job: ScribeJob, paused: boolean) =>
   host.request("cron.update", {
     id: job.id,
@@ -179,30 +184,44 @@ export function needsUpdate(snapshot: ScribeSnapshot) {
 
 /**
  * Ask the scribe's conversation to bring its automation up to date, with `runMessage` (the job's
- * own message by default, an unedited earlier one becoming the current one). The conversation
- * re-declares the automation in a turn, as setup did. A direct edit from the page would drop the
- * owner's turn authority that the automation's runs use. One request per automation revision.
+ * own message by default, an unedited earlier one becoming the current one), or to move it to
+ * `schedule`, with the run message that schedule takes. The conversation re-declares the
+ * automation in a turn, as setup did. A direct edit from the page would drop the owner's turn
+ * authority that the automation's runs use. One request per automation revision and change.
  */
 export async function updateScribe(
   host: ScribeHost,
   snapshot: ScribeSnapshot,
   job: ScribeJob,
   agentId: string,
-  runMessage = job.payload?.message,
-  attempt = "1",
+  change: { runMessage?: string; schedule?: ScribeJob["schedule"]; attempt?: string } = {},
 ) {
   const { scribe } = snapshot;
+  const { schedule, attempt = "1" } = change;
+  const saved = job.payload?.message;
+  const runMessage =
+    change.runMessage ??
+    (schedule && saved ? rescheduledRunMessage(scribe.id, saved, job.schedule, schedule) : saved);
   const sessionKey = await conversation(host, snapshot, agentId);
   const prompt = repairPrompt(
     scribe.id,
-    { schedule: job.schedule, ...(runMessage ? { runMessage } : {}), saved: savedOptions(job) },
-    "update",
+    {
+      schedule: schedule ?? job.schedule,
+      ...(runMessage ? { runMessage } : {}),
+      saved: savedOptions(job),
+    },
+    schedule ? "reschedule" : "update",
   );
+  const kind = schedule
+    ? `schedule:${schedule.expr ?? schedule.kind}:${schedule.tz ?? ""}`
+    : runMessage === saved
+      ? "update"
+      : "reset";
   await host.request("chat.send", {
     sessionKey,
     agentId,
     message: prompt,
-    idempotencyKey: `knowledge:scribe:${scribe.id}:${runMessage === job.payload?.message ? "update" : "reset"}:${job.id}:${job.configRevision ?? ""}:${attempt}`,
+    idempotencyKey: `knowledge:scribe:${scribe.id}:${kind}:${job.id}:${job.configRevision ?? ""}:${attempt}`,
   });
   return sessionKey;
 }

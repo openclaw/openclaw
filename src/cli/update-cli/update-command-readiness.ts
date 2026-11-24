@@ -43,10 +43,8 @@ export async function verifyPreviousGatewayForUpdate(params: {
   env: NodeJS.ProcessEnv;
   opts: UpdateCommandOptions;
   timeoutMs?: number;
-  observedStartupMs?: number;
   assertCurrent?: () => void;
   signal?: AbortSignal;
-  requirePluginHealth?: boolean;
   expectedVersion?: string;
   gatewayPort?: number;
   waitForStartup?: boolean;
@@ -56,9 +54,7 @@ export async function verifyPreviousGatewayForUpdate(params: {
   const run = proofOptions.run;
   const { deadlineMs: timeoutMs, derivation } = resolveGatewayStartupTiming(process.platform, {
     timeoutMs: params.timeoutMs,
-    observedStartupMs: params.observedStartupMs,
     migrationLeaseMs: STARTUP_MIGRATION_LEASE_TTL_MS,
-    previousGateway: true,
   });
   const startedAtMs = Date.now();
   const sharedDeadline = params.opts.run?.deadline;
@@ -118,7 +114,6 @@ export async function verifyPreviousGatewayForUpdate(params: {
         requireRunningService: true,
         waitForStartup: params.waitForStartup,
         signal: deadline.signal,
-        requirePluginHealth: params.requirePluginHealth,
         assertCurrent,
         onProgress: progress,
       });
@@ -190,11 +185,9 @@ export type UpdateGatewayReadinessParams = {
   deadlineMs?: number;
   deadline?: GatewayRestartDeadline;
   onProgress?: (stage: string, reason: string) => void;
-  observedStartupMs?: number;
   expectedVersion?: string;
   expectedBuildId?: string;
   requireRunningService?: boolean;
-  requirePluginHealth?: boolean;
   health?: GatewayRestartSnapshot;
   /** Installation observes native startup; final verification owns HTTP and identity proof. */
   healthOnly?: boolean;
@@ -212,6 +205,13 @@ export type UpdateGatewayReadinessParams = {
   }>;
 };
 
+export function hasRunningGatewayService(health: GatewayRestartSnapshot): boolean {
+  return (
+    health.runtime.status === "running" &&
+    (process.platform === "win32" || health.runtime.pid !== undefined)
+  );
+}
+
 export function gatewayReadinessPending(health: GatewayRestartSnapshot): boolean {
   if (health.waitOutcome === "still-starting") {
     return true;
@@ -224,7 +224,6 @@ export function gatewayReadinessPending(health: GatewayRestartSnapshot): boolean
     ["waiting for Gateway listener", "startup migration"].includes(health.startupPhase ?? "") &&
     !health.versionMismatch &&
     !health.buildIdMismatch &&
-    !health.activatedPluginErrors?.length &&
     health.staleGatewayPids.length === 0
   );
 }
@@ -234,7 +233,6 @@ export async function observeUpdateGatewayReadiness(params: UpdateGatewayReadine
   const waitForStartup = params.waitForStartup !== false;
   const { deadlineMs: timeoutMs } = resolveGatewayStartupTiming(process.platform, {
     timeoutMs: params.timeoutMs,
-    observedStartupMs: params.observedStartupMs,
     migrationLeaseMs: STARTUP_MIGRATION_LEASE_TTL_MS,
   });
   const startedAtMs = performance.now();
@@ -260,7 +258,6 @@ export async function observeUpdateGatewayReadiness(params: UpdateGatewayReadine
     port: params.gatewayPort,
     expectedVersion: params.expectedVersion,
     ...(params.expectedBuildId ? { expectedBuildId: params.expectedBuildId } : {}),
-    requirePluginHealth: params.requirePluginHealth ?? false,
     requireChannelHealth: false,
     env: params.serviceEnv,
     signal: deadline.signal,
@@ -344,7 +341,6 @@ export async function observeUpdateGatewayReadiness(params: UpdateGatewayReadine
           (health.waitOutcome !== undefined && health.waitOutcome !== "healthy") ||
           health.versionMismatch ||
           health.buildIdMismatch ||
-          health.activatedPluginErrors?.length ||
           health.staleGatewayPids.length > 0)
       ) {
         return { health, readyz: false, http: undefined, launchAgentRecovery };
@@ -374,11 +370,7 @@ export async function observeUpdateGatewayReadiness(params: UpdateGatewayReadine
       assertCurrent();
       const readyz = http.readyz === 200;
       // HTTP does not change the restart owner's observed process/build identity.
-      if (
-        params.requireRunningService &&
-        (health.runtime.status !== "running" ||
-          (process.platform !== "win32" && health.runtime.pid === undefined))
-      ) {
+      if (params.requireRunningService && !hasRunningGatewayService(health)) {
         health.healthy = false;
       }
       if (!(http.coreReady ?? readyz) || remainingMs() === 0) {

@@ -96,7 +96,10 @@ export async function configureBifrostInteractive(ctx: ProviderAuthContext) {
           signal: ctx.signal,
           beforeRequest: ctx.assertCurrent,
         })
-      ).models.filter((entry) => entry.inference?.chat !== false);
+      ).models.filter(
+        // Setup offers likely chat models only; others stay reachable by typed ref.
+        (entry) => entry.inference?.chat !== false && entry.inference?.chatEvidence !== "unlikely",
+      );
     } catch {
       // Discovery is advisory; authority and cancellation remain terminal below.
     }
@@ -191,7 +194,7 @@ export async function configureBifrostNonInteractive(ctx: ProviderAuthMethodNonI
   if (!model) {
     try {
       model = (await listBifrostModels({ config, apiKey: resolved?.key })).models.find(
-        (entry) => entry.inference?.chat !== false,
+        (entry) => entry.inference?.chat !== false && entry.inference?.chatEvidence !== "unlikely",
       );
     } catch {
       // The failure below gives non-interactive callers an actionable next step.

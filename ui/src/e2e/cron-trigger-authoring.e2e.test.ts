@@ -4,7 +4,15 @@ import type { CronJob } from "../api/types.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { cronListResponseFixture } from "../test-helpers/cron.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
-import { cronJob, cronList, cronRuns } from "./cron-fixtures.test-support.ts";
+import {
+  automationRow,
+  cronJob,
+  cronList,
+  cronRuns,
+  cronSidebarFeatureMethods,
+  openAutomationActivity,
+  chooseScheduleKind,
+} from "./cron-fixtures.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI automation condition-trigger authoring",
@@ -23,12 +31,11 @@ const pageOptions = {
   viewport: { height: 1_050, width: 1_440 },
 };
 const triggerToggle = (page: Page) =>
-  page.locator(".settings-row--toggle").filter({ hasText: "Condition trigger" });
+  page.locator(".settings-row--toggle").filter({ hasText: "Check a condition first" });
 const field = (page: Page, name: string) => page.locator(`#cron-${name}`);
 const submit = (page: Page) => page.locator('[data-test-id="cron-submit"]');
-async function newTask(page: Page, name: string, message: string) {
+async function newTask(page: Page, message: string) {
   await page.locator('[data-test-id="cron-new-task"]').click();
-  await field(page, "name").fill(name);
   await field(page, "payload-text").fill(message);
 }
 const advanced = (page: Page) => page.locator("details.cron-advanced > summary").click();
@@ -60,7 +67,7 @@ suite.define(() => {
       });
 
       await page.goto(`${suite.server.baseUrl}cron`);
-      await newTask(page, "Conditional interval", "Run when the condition matches");
+      await newTask(page, "Run when the condition matches");
       await selectSeconds(page);
       await field(page, "every-amount").fill("5");
       await advanced(page);
@@ -81,13 +88,13 @@ suite.define(() => {
 
       const triggeredRequest = await gateway.waitForRequest("cron.add");
       expect(triggeredRequest.params).toMatchObject({
-        name: "Conditional interval",
+        payload: { message: "Run when the condition matches" },
         schedule: { kind: "every", everyMs: 30_000 },
         trigger: { script: "json({ fire: true })", once: false },
       });
       await expect.poll(async () => submit(page).count()).toBe(0);
 
-      await newTask(page, "Unconditional interval", "Run every five seconds");
+      await newTask(page, "Run every five seconds");
       await selectSeconds(page);
       await field(page, "every-amount").fill("5");
 
@@ -100,7 +107,7 @@ suite.define(() => {
         after: previousAdds,
       });
       expect(untriggeredRequest.params).toMatchObject({
-        name: "Unconditional interval",
+        payload: { message: "Run every five seconds" },
         schedule: { kind: "every", everyMs: 5_000 },
       });
       expect(untriggeredRequest.params).not.toHaveProperty("trigger");
@@ -110,12 +117,12 @@ suite.define(() => {
   it("keeps a rejected trigger draft visible without reloading inventory", async () => {
     await suite.withPage(pageOptions, async ({ page }) => {
       const gateway = await installMockGateway(page, {
+        featureMethods: cronSidebarFeatureMethods,
         methodResponses: cronMethodResponses([scriptJob]),
       });
       await page.goto(`${suite.server.baseUrl}cron`);
-      const existingRow = page.locator('[data-test-id="cron-row-existing-script-automation"]');
-      await existingRow.waitFor();
-      await newTask(page, "Malformed condition", "Run when the condition matches");
+      const existingRow = await automationRow(page, scriptJob.id);
+      await newTask(page, "Run when the condition matches");
       await advanced(page);
       await triggerToggle(page).click();
       const triggerScript = field(page, "trigger-script");
@@ -127,7 +134,7 @@ suite.define(() => {
       await save.click();
       const request = await gateway.waitForRequest("cron.add");
       expect(request.params).toMatchObject({
-        name: "Malformed condition",
+        payload: { message: "Run when the condition matches" },
         trigger: { script: "const x = ;", once: false },
       });
       const message = "Condition script is invalid";
@@ -141,15 +148,20 @@ suite.define(() => {
       await errorBanner.scrollIntoViewIfNeeded();
 
       // A rejected save must release the fieldset's inherited disabled state.
-      const once = page.locator('[data-test-id="cron-schedule-kind-at"]').getByRole("radio");
-      await once.scrollIntoViewIfNeeded();
-      await expect.poll(() => once.isEnabled()).toBe(true);
-      await once.click();
+      await expect
+        .poll(() =>
+          page
+            .locator("fieldset.cron-editor")
+            .evaluate((element) => (element as HTMLFieldSetElement).disabled),
+        )
+        .toBe(false);
+      await chooseScheduleKind(page, "at");
       await field(page, "schedule-at").waitFor();
-      expect(await field(page, "name").inputValue()).toBe("Malformed condition");
+      expect(await field(page, "payload-text").inputValue()).toBe("Run when the condition matches");
       expect(await gateway.getRequests("cron.add")).toHaveLength(1);
 
-      await page.locator('[data-test-id="cron-back"]').click();
+      // Leaving the rejected draft keeps the sidebar's inventory without reading it again.
+      await openAutomationActivity(page);
       await existingRow.waitFor();
       expect(await gateway.getRequests("cron.list")).toHaveLength(listsBeforeSave);
     });

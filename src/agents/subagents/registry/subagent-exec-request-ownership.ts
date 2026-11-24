@@ -1,5 +1,5 @@
-import type { SessionDeliveryGeneration } from "../../../config/sessions/session-delivery-generation.types.js";
 import type { ExecRequestIdentity, ExecRequestOwner } from "../../../infra/exec-request-context.js";
+import type { SessionGeneration } from "../../../sessions/session-notice.js";
 import type { ResolvedSubagentController } from "./subagent-control.types.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import { getSubagentRunRuntimeKey } from "./subagent-run-generation.js";
@@ -10,7 +10,8 @@ type ControllerIdentity = Pick<
 >;
 
 export type SubagentRequestSessionOrigin = {
-  target: SessionDeliveryGeneration;
+  /** The requester transcript an abort selected; a kill holds it with a transcript lease. */
+  target: Readonly<SessionGeneration>;
   acceptsRequest: (identity: Readonly<ExecRequestIdentity>) => boolean;
 };
 

@@ -1,6 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { stat } from "node:fs/promises";
 import { getDatabaseProcessRole } from "../infra/database-engine/admission-scope.js";
+import { withStateDatabaseColdAdmissionAsync } from "../infra/gateway-state-owner-cold-admission.js";
 import { getPostgresPool } from "../infra/postgres-sync/pool.js";
 import { resolveRuntimeProcessEntrypointUrl } from "../infra/runtime-process-url.js";
 import { captureRuntimeWorkerSource } from "../infra/runtime-worker-generation.js";
@@ -16,11 +17,12 @@ import { DEFAULT_WORKER_PENDING_TASKS } from "../infra/worker-task-capacity.js";
 import { WorkerTaskError } from "../infra/worker-task-pool.js";
 import { getPluginExecutionFrame } from "../plugins/plugin-instance-invocation.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
-import { isDeeplyFrozenPlainData } from "../shared/immutable-data.js";
+import { isStartupConfigStateRead } from "./artifact-preserving-state-reads.js";
 import {
   registerOpenClawStateDatabaseAsyncResource,
   registerOpenClawStateDatabaseLifecycleListener,
 } from "./openclaw-state-db-cache.js";
+import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "./openclaw-state-db-contract.js";
 import {
   closeReadResources,
   createStateReadPool,
@@ -229,6 +231,7 @@ class StateReadSource {
 
   constructor(readonly state: ReadRuntime) {}
 
+  /** Adopts the producer's command; borrowed mutable inputs must be captured by that producer. */
   createTransport(
     command: OpenClawStateReadCommand,
     onChunk?: OpenClawStateReadOptions["onChunk"],
@@ -265,7 +268,6 @@ type ReadTask = ReturnType<ReadPool["runTask"]>;
 
 // Methods are shared; cancellation, command bytes, and failed cleanup remain per read.
 class StateReadTransport {
-  private readonly capturedCommand: OpenClawStateReadCommand;
   private readonly tasks = new Map<ReadTask, { retire: boolean }>();
   private closed = false;
   private closing: Promise<void> | undefined;
@@ -273,15 +275,12 @@ class StateReadTransport {
   private chunksDrained: (() => void) | undefined;
 
   constructor(
-    command: OpenClawStateReadCommand,
+    private readonly capturedCommand: OpenClawStateReadCommand,
     private readonly source: StateReadSource,
     private readonly onChunk?: OpenClawStateReadOptions["onChunk"],
     private readonly onChunkAsync?: OpenClawStateReadOptions["onChunkAsync"],
     private readonly awaitedOnly = false,
-  ) {
-    // Immutable owner snapshots can cross preparation waits without another private copy.
-    this.capturedCommand = isDeeplyFrozenPlainData(command) ? command : structuredClone(command);
-  }
+  ) {}
 
   private async closeTask(task: ReadTask): Promise<void> {
     await task.close(this.tasks.get(task)?.retire ? { retire: true } : undefined);
@@ -344,29 +343,44 @@ class StateReadTransport {
       // Maintenance reuses this reader; standalone inspection releases it before metadata loads.
       const retireAfterRead =
         !pool.retained && !context.maintenanceScope && readCommand.type !== "admit";
-      const task = pool.pool.runTask(
-        async () => {
-          const physicalLocation = resolveSqliteDatabaseFilePath(location);
-          const turn = acquireSqliteDatabaseAdmissionTurn(physicalLocation);
+      const prepareDispatch = async () => {
+        const physicalLocation = resolveSqliteDatabaseFilePath(location);
+        try {
+          const turn = acquireSqliteDatabaseAdmissionTurn(physicalLocation, [], undefined, () =>
+            authority.assertCurrent(),
+          );
           if (turn) {
             releaseAdmission = await turn;
           }
-          try {
+          authority.assertCurrent();
+          // Queue admission can outlive the captured file at this pathname.
+          if (expectedIdentity !== undefined) {
+            assertDatabaseFileIdentity(await stat(physicalLocation, { bigint: true }), {
+              key: expectedIdentity,
+            });
             authority.assertCurrent();
-            // Queue admission can outlive the captured file at this pathname.
-            if (expectedIdentity !== undefined) {
-              assertDatabaseFileIdentity(await stat(physicalLocation, { bigint: true }), {
-                key: expectedIdentity,
-              });
-              authority.assertCurrent();
-            }
-            return request;
-          } catch (error) {
-            releaseAdmission?.();
-            releaseAdmission = undefined;
-            throw error;
           }
-        },
+          return request;
+        } catch (error) {
+          releaseAdmission?.();
+          releaseAdmission = undefined;
+          throw error;
+        }
+      };
+      // The parallel startup config read can meet schema custody before the child sees its request.
+      const waitForAdmission = isStartupConfigStateRead();
+      const task = pool.pool.runTask(
+        waitForAdmission
+          ? () =>
+              withStateDatabaseColdAdmissionAsync(
+                {
+                  databasePath: context.admission.databasePath,
+                  busyTimeoutMs: OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
+                  signal: authority.signal,
+                },
+                prepareDispatch,
+              )
+          : prepareDispatch,
         {
           signal: authority.signal,
           inputBytes: requestBytes(request),

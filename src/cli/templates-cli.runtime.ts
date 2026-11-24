@@ -3,6 +3,7 @@ import { redactSensitiveUrlLikeString } from "@openclaw/net-policy/redact-sensit
 import { filterStringEntries } from "@openclaw/normalization-core";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { listAgentIds, resolveAgentWorkspaceDir } from "../agents/agent-scope-config.js";
+import { seedDeferredWorkspaceDefaults } from "../agents/workspace-preparation.js";
 import { getRuntimeConfig } from "../config/config.js";
 import { readCurrentConfigForPolicyCheck } from "../config/io.js";
 import { listConfiguredMcpServers } from "../config/mcp-config.js";
@@ -19,17 +20,17 @@ import { withOpenClawStateLease } from "../state/openclaw-state-lease.js";
 import { applyTemplateAddPlanStateless } from "../templates/add-stateless.js";
 import { TEMPLATE_ADD_RESULT_SCHEMA_VERSION, TemplateAddMutationError } from "../templates/add.js";
 import {
+  assertTemplatesEnabled,
+  TEMPLATES_DISABLED_MESSAGE,
+  TemplatesDisabledError,
+  isTemplatesEnabled,
+} from "../templates/availability.js";
+import {
   ClawHubSourceError,
   withResolvedClawHubSource,
   type ClawHubTemplateTrust,
 } from "../templates/clawhub-source.js";
 import { templateDependencyInventory } from "../templates/dependency-inventory.js";
-import {
-  assertTemplatesLabsEnabled,
-  TEMPLATES_LABS_DISABLED_MESSAGE,
-  TemplatesLabsDisabledError,
-  isTemplatesLabsEnabled,
-} from "../templates/labs-gate.js";
 import { buildTemplateAddPlan } from "../templates/lifecycle.js";
 import {
   preflightTemplatePackage,
@@ -186,12 +187,13 @@ export async function runTemplatesAddCommand(
       request.mode === "preview"
         ? readCurrentConfigForPolicyCheck({ configPath: resolveConfigPath(), env: process.env })
         : getRuntimeConfig();
-    if (!isTemplatesLabsEnabled(config)) {
-      emitTemplateFailure(opts.json, TEMPLATES_LABS_DISABLED_MESSAGE, {
+    // Preserve the shipped JSON error code; Labs no longer owns availability.
+    if (!isTemplatesEnabled(config)) {
+      emitTemplateFailure(opts.json, TEMPLATES_DISABLED_MESSAGE, {
         schemaVersion: TEMPLATE_ADD_PLAN_SCHEMA_VERSION,
         stability: TEMPLATE_OUTPUT_STABILITY,
         ok: false,
-        error: { code: "templates_labs_disabled", message: TEMPLATES_LABS_DISABLED_MESSAGE },
+        error: { code: "templates_labs_disabled", message: TEMPLATES_DISABLED_MESSAGE },
       });
       return;
     }
@@ -227,7 +229,7 @@ export async function runTemplatesAddCommand(
         throw error;
       }
       const message = error instanceof Error ? error.message : String(error);
-      emitTemplateFailure(opts.json, message, {
+      emitTemplateFailure(opts.json, sanitizeTerminalText(message), {
         schemaVersion: TEMPLATE_ADD_PLAN_SCHEMA_VERSION,
         stability: TEMPLATE_OUTPUT_STABILITY,
         ok: false,
@@ -293,13 +295,18 @@ async function runTemplatesAddFromSource(
     diagnostics: result.diagnostics,
     context: {
       config,
+      resolvePreferredModel: async (requested) => {
+        const { resolveLocalTemplatePreferredModel } =
+          await import("../templates/preferred-model-runtime.js");
+        return resolveLocalTemplatePreferredModel(requested, config);
+      },
       agentId: opts.agentId,
       ...(opts.workspace ? { workspace: opts.workspace } : {}),
       existingAgentIds,
       existingWorkspacePaths: existingAgentIds.map((agentId) =>
         resolveAgentWorkspaceDir(config, agentId),
       ),
-      existingMcpServers: listedMcpServers.mcpServers,
+      existingMcpServers: listedMcpServers.authoredConfig?.mcp?.servers ?? {},
       packagePreflight: (pkg, workspace, sourceContext) =>
         preflightTemplatePackage(pkg, workspace, { config, ...sourceContext }),
     },
@@ -427,9 +434,9 @@ async function runTemplatesAddFromSource(
   try {
     const configPath = resolveConfigPath();
     const configEnv = process.env;
-    const assertCurrentLab = () =>
-      assertTemplatesLabsEnabled(readCurrentConfigForPolicyCheck({ configPath, env: configEnv }));
-    assertCurrentLab();
+    const assertCurrentAvailability = () =>
+      assertTemplatesEnabled(readCurrentConfigForPolicyCheck({ configPath, env: configEnv }));
+    assertCurrentAvailability();
     addResult = await withOpenClawStateLease(
       {
         scope: "core:agent-deletion",
@@ -442,7 +449,7 @@ async function runTemplatesAddFromSource(
         operationLabel: "template.add.lease",
       },
       async (lease) => {
-        assertCurrentLab();
+        assertCurrentAvailability();
         const onCapabilityConsent = resolvePluginCapabilityConsentCliOptions({
           action: "install",
           acceptCapabilities: opts.acceptCapabilities,
@@ -453,7 +460,7 @@ async function runTemplatesAddFromSource(
         const assertCurrent = () => {
           request.assertCurrent();
           lease.assertOwned();
-          assertCurrentLab();
+          assertCurrentAvailability();
         };
         assertCurrent();
         const conversation = createLocalTemplateConversationAdapters({
@@ -464,12 +471,12 @@ async function runTemplatesAddFromSource(
         });
         const { withLocalCronService } = await import("../cron/local-service.js");
         const { createTemplateCronGateway } = await import("../templates/cron-gateway.js");
-        return await withLocalCronService(getRuntimeConfig, async (cron) =>
+        const applied = await withLocalCronService(getRuntimeConfig, async (cron) =>
           applyTemplateAddPlanStateless(plan, {
             ...conversation,
             config,
             assertCurrent,
-            assertForwardCurrent: assertCurrentLab,
+            assertForwardCurrent: assertCurrentAvailability,
             pluginConsent: {
               onCapabilityConsent: async (review) => await onCapabilityConsent?.(review),
               confirmInstall: async (_pluginId, warning) =>
@@ -482,11 +489,19 @@ async function runTemplatesAddFromSource(
             cronGateway: createTemplateCronGateway(cron, getRuntimeConfig, assertCurrent),
           }),
         );
+        if (applied.agentRetained && applied.status !== "complete") {
+          // Offline Add has no resume, so the package BOOTSTRAP.md stays held.
+          await seedDeferredWorkspaceDefaults(
+            plan.agent.workspace,
+            getRuntimeConfig().agents?.defaults,
+          );
+        }
+        return applied;
       },
     );
   } catch (error) {
     const code =
-      error instanceof TemplatesLabsDisabledError
+      error instanceof TemplatesDisabledError
         ? "templates_labs_disabled"
         : error instanceof TemplateAddMutationError
           ? error.code

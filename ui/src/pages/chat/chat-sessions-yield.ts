@@ -2,6 +2,7 @@ import { extractBalancedJsonPrefix } from "@openclaw/normalization-core";
 import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { readNodePermissionRequest } from "../../../../packages/gateway-protocol/src/node-permissions.js";
+import { readMcpConnectAction } from "../../../../src/agents/mcp-connect-action.js";
 import {
   isToolCallContentType,
   isToolResultContentType,
@@ -24,7 +25,7 @@ import {
 } from "./chat-thread-items.ts";
 import { transcriptRunId } from "./chat-thread-run-identity.ts";
 import { coalesceToolActivityMessages } from "./chat-tool-activity-coalesce.ts";
-import { chatItemStartsUserTurn } from "./chat-turn-boundary.ts";
+import { chatItemStartsUserTurn, readProjectedContinuation } from "./chat-turn-boundary.ts";
 
 function readYieldReceipt(card: ToolCard): Record<string, unknown> | null {
   const details = asRecord(card.details);
@@ -382,6 +383,13 @@ function scanSessionsYieldItems(
   return { items: projected.toReversed().flat(), pending };
 }
 
+export function toolCardNeedsUserAction(card: ToolCard): boolean {
+  return Boolean(
+    readNodePermissionRequest(asRecord(card.details)?.permissionMissing) ||
+    readMcpConnectAction(card),
+  );
+}
+
 /**
  * Keeps private yield calls out of tool details and separates a resumed run from the
  * run that handed off. A public acknowledgment becomes assistant text that stays
@@ -393,7 +401,7 @@ function scanSessionsYieldItems(
  * so working and waiting statuses are taken from there, not from the matching rows.
  */
 // Hidden tool calls keep assistant text, whose ordinary calls coalescing split
-// into their own rows. Only handoff and permission rows stay visible.
+// into their own rows. Handoffs and actionable results still feed the transcript.
 function keepsRowWithToolsHidden(item: ChatItem): boolean {
   if (item.kind !== "message") {
     return true;
@@ -415,8 +423,41 @@ function keepsRowWithToolsHidden(item: ChatItem): boolean {
     cards.length === 0 ||
     hasContent ||
     hasHandoffToolCall(item.message) ||
-    cards.some((card) => readNodePermissionRequest(asRecord(card.details)?.permissionMissing))
+    // A resumed run's first row keeps its Resumed rule; its hidden tools render nothing.
+    readProjectedContinuation(item.message) !== undefined ||
+    cards.some(toolCardNeedsUserAction)
   );
+}
+
+/**
+ * Work that resumes after a hidden wake, such as a finished background command,
+ * continues the block before it like a handoff. Rows split from one resumed
+ * message share its mark, so only the first opens the handoff.
+ */
+function projectContinuations(items: ChatItem[]): ChatItem[] {
+  // The run of the previous row when it carried the mark; null when it did not.
+  let continued: string | undefined | null = null;
+  return items.flatMap<ChatItem>((item) => {
+    if (item.kind !== "message") {
+      return [item];
+    }
+    const runId = transcriptRunId(item.message);
+    const marked = readProjectedContinuation(item.message) !== undefined;
+    const opens = marked && continued !== runId;
+    continued = marked ? runId : null;
+    return opens
+      ? [
+          {
+            kind: "notice",
+            key: `resume:${item.key}`,
+            handoffBoundary: true,
+            text: "",
+            timestamp: rawMessageTimestamp(item.message) ?? 0,
+          },
+          item,
+        ]
+      : [item];
+  });
 }
 
 export function projectSessionsYieldItems(
@@ -425,7 +466,7 @@ export function projectSessionsYieldItems(
   complete?: readonly ChatItem[],
 ): ChatItem[] {
   const shown = showToolCalls ? items : items.filter(keepsRowWithToolsHidden);
-  const projected = scanSessionsYieldItems(shown, showToolCalls).items;
+  const projected = scanSessionsYieldItems(projectContinuations(shown), showToolCalls).items;
   const status = complete?.find(isTurnStatus);
   const completeKeys = complete && new Set(complete.map((item) => item.key));
   const visible = completeKeys

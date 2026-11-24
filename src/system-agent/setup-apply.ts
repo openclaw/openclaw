@@ -126,7 +126,11 @@ export async function applySystemAgentSetup(
   const [
     { applySecurityAcknowledgement, readSetupConfigFileSnapshot, resolveQuickstartGatewayDefaults },
     onboardHelpers,
-    { applyLocalSetupWorkspaceConfig, resolveOnboardingWorkspaceConflict },
+    {
+      applyLocalSetupWorkspaceConfig,
+      describeSetupToolProfile,
+      resolveOnboardingWorkspaceConflict,
+    },
     { transformConfigWithPendingPluginInstalls },
   ] = await Promise.all([
     import("../wizard/setup.shared.js"),
@@ -445,9 +449,11 @@ export async function applySystemAgentSetup(
     }
   }
 
+  const toolProfileLine = describeSetupToolProfile(nextConfig, onboardingTarget.agentId);
   const lines: string[] = [
     ...sessionMigrationWarnings,
     `Workspace: ${shortenHomePath(effectiveWorkspace)}`,
+    ...(toolProfileLine ? [toolProfileLine] : []),
   ];
 
   const runCommittedFollowUp = async <T>(
@@ -552,8 +558,9 @@ export async function applySystemAgentSetup(
         } else if (gateway.reason === "external") {
           lines.push(`Gateway: ${formatExternalSupervisorActionRequired("start the gateway")}`);
         } else if (params.installDaemon === false) {
+          const { formatUserCliCommand } = await import("../daemon/durable-service-entrypoint.js");
           lines.push(
-            "Gateway: service installation skipped. Run `openclaw gateway run` to start it in the foreground.",
+            `Gateway: service installation skipped. Run \`${await formatUserCliCommand("gateway run")}\` to start it in the foreground.`,
           );
         } else {
           lines.push(

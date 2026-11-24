@@ -6,6 +6,7 @@ import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, onTestFinished, vi } from "vitest";
 import { resolveManagedUpdateLeaseDatabasePath } from "../../infra/update-managed-service-handoff-lease.js";
 import { flushLogger, getLogger, resetLogger, setLoggerOverride } from "../../logging/logger.js";
+import { chatRef } from "../../sessions/chat-ref.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { hasOpenClawAgentDatabaseAsyncResources } from "../../state/openclaw-agent-db-resources.js";
 import {
@@ -19,11 +20,9 @@ import {
   SessionDeliveryGenerationUnavailableError,
   SessionDeliveryGenerationRevokedError,
 } from "./session-delivery-generation-errors.js";
-import {
-  prepareCronRootSessionGeneration,
-  prepareSessionGenerationFacts,
-} from "./session-delivery-generation.js";
+import { prepareLeaseFacts } from "./session-delivery-generation.js";
 import * as entryReads from "./session-entry-read-runtime.js";
+import { acquireCronRootTranscriptLease } from "./transcript-lease.js";
 
 type RecordValue = {
   event: string;
@@ -89,8 +88,8 @@ async function fixture(cron = false, onRevoked?: (reason: unknown) => void) {
   };
   replaceSessionEntrySync(scope, original);
   const lease = cron
-    ? await prepareCronRootSessionGeneration({ ...scope, ...original }, onRevoked)
-    : await prepareSessionGenerationFacts({ ...scope, ...original });
+    ? await acquireCronRootTranscriptLease(chatRef(scope), original, onRevoked)
+    : await prepareLeaseFacts({ ...scope, ...original });
   if (!lease) {
     throw new Error("Expected lease");
   }
@@ -211,13 +210,9 @@ it("records an untagged prepare failure before cleanup and preserves its cause",
         throw error;
       }),
   );
-  const failure: unknown = await prepareCronRootSessionGeneration(
-    {
-      agentId: "agent-canary",
-      storePath,
-      sessionKey: "agent:agent-canary:cron:broken",
-      ...original,
-    },
+  const failure: unknown = await acquireCronRootTranscriptLease(
+    chatRef({ agentId: "agent-canary", storePath, sessionKey: "agent:agent-canary:cron:broken" }),
+    original,
     callback,
   ).then(
     (lease) => {
@@ -263,10 +258,10 @@ it("keeps row invalidation effective when diagnostic capture throws", async () =
 });
 it("keeps separate latches for two leases", async () => {
   const { scope, lease } = await fixture();
-  const other = await prepareSessionGenerationFacts({ ...scope, ...original });
+  const other = await prepareLeaseFacts({ ...scope, ...original });
   onTestFinished(() => other.release());
   const seen = records();
-  sessionChanges.emit({ all: true, scope: "runtime" });
+  sessionChanges.emit({ all: true, scope: { storePath: scope.storePath } });
   refusal(lease.assertCurrent);
   refusal(other.assertCurrent);
   expect(seen).toHaveLength(2);

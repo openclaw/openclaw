@@ -168,6 +168,22 @@ describe("anthropic provider replay hooks", () => {
     expect(classify({ code: "RATE_LIMIT_ERROR" })).toBe("rate_limit");
     expect(classify({ code: "API_ERROR" })).toBe("server_error");
     expect(classify({ errorType: "UNKNOWN_ERROR", code: "INSUFFICIENT_QUOTA" })).toBeUndefined();
+    expect(
+      classify({
+        status: 429,
+        errorType: "rate_limit_error",
+        errorMessage:
+          '429 {"error":{"type":"rate_limit_error","details":{"disabled_reason":"org_level_disabled","error_code":"credits_required","exhausted_included_allowance":false}}}',
+      }),
+    ).toBe("billing");
+    for (const errorMessage of [
+      "The response did not include credits_required",
+      '{"error":{"details":{"error_code":"credits_required_extra"}}}',
+    ]) {
+      expect(classify({ status: 429, errorType: "rate_limit_error", errorMessage })).toBe(
+        "rate_limit",
+      );
+    }
   });
 
   it("backfills current Sonnet models into API-key agent model allowlists", async () => {

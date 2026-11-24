@@ -14,11 +14,10 @@ import {
 } from "../infra/backup-archive-path-policy.js";
 import { createBackupProgressLogger, type ReportBackupProgress } from "../infra/backup-progress.js";
 import { readEngineAnchor } from "../infra/database-engine/open.js";
-import { readEngineAnchorIdentity } from "../infra/database-engine/physical-store.js";
+import { readEngineAnchorIdentity } from "../infra/database-engine/physical-store-inspection.js";
 import { loadSqliteVecExtension } from "../infra/database-engine/sqlite-vec.js";
 import { sha256File } from "../infra/directory-durability.js";
 import { formatErrorMessage, hasErrnoCode } from "../infra/errors.js";
-import { expandHomePrefix } from "../infra/home-dir.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { SQLITE_SIDECAR_SUFFIXES } from "../infra/sqlite-files.js";
 import { assertSqliteIntegrity } from "../infra/sqlite-integrity.js";
@@ -690,14 +689,7 @@ export async function prepareBackupArchive(
   requiredSnapshots: readonly BackupSqliteSnapshotFact[] = [],
   onProgress?: ReportBackupProgress,
 ) {
-  let archivePath = resolveBackupArchivePath(archive, "<archive>");
-  if (process.platform !== "win32") {
-    const input = expandHomePrefix(archive);
-    if (input.split("/").includes("..")) {
-      // POSIX resolves ".." after following symlinks in the archive path.
-      archivePath = path.isAbsolute(input) ? input : `${process.cwd()}/${input}`;
-    }
-  }
+  const archivePath = resolveBackupArchivePath(archive, "<archive>");
   return await verifyResolvedBackupArchive(archivePath, requiredSnapshots, onProgress).catch(
     (error: unknown) => {
       const detail = error instanceof Error ? error.message : formatErrorMessage(error);

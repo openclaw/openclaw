@@ -288,6 +288,9 @@ async function runEmbeddedAttemptOwned(
           yieldMessage = message;
           yieldAcknowledgment = acknowledgment;
           yieldMessageWaitRegistered = messageWaitRegistered;
+          yieldResumesInPlace = options?.resumesInPlace === true;
+          // An armed command still resumes the chat if a later yield of this turn arms none.
+          yieldExecWakeArmed ||= options?.execWakeArmed === true;
           if (options?.terminal) {
             runAbortController.abort(options.terminal);
             abortTerminalYield?.(options.terminal);
@@ -329,6 +332,8 @@ async function runEmbeddedAttemptOwned(
     let yieldMessage: string | null = null;
     let yieldAcknowledgment: string | undefined;
     let yieldMessageWaitRegistered: boolean | undefined;
+    let yieldResumesInPlace = false;
+    let yieldExecWakeArmed = false;
     let yieldAbortSettled: Promise<void> | null = null;
     let abortTerminalYield: ((reason: unknown) => void) | undefined;
     const preparedBundleTools = await prepare("attempt.bundle-tools", () =>
@@ -465,10 +470,14 @@ async function runEmbeddedAttemptOwned(
                 yieldMessage = null;
                 yieldAcknowledgment = undefined;
                 yieldMessageWaitRegistered = undefined;
+                yieldExecWakeArmed = false;
                 return;
               }
               // Keep sibling execution and authority live until their results settle.
-              params.replyOperation?.yield();
+              // An in-place resume continues this operation with the run's next turn.
+              if (!yieldResumesInPlace) {
+                params.replyOperation?.yield();
+              }
               queueSessionsYieldInterruptMessage(activeSession);
               runAbortController.abort(SESSIONS_YIELD_ABORT_REASON);
               yieldAbortSettled = abortActiveSession(SESSIONS_YIELD_ABORT_REASON);
@@ -548,6 +557,7 @@ async function runEmbeddedAttemptOwned(
             yieldMessage,
             yieldAcknowledgment,
             yieldMessageWaitRegistered,
+            yieldExecWakeArmed,
           }),
           setToolSearchCatalogExecutor: (executor) => {
             toolSearchCatalogExecutor = executor;

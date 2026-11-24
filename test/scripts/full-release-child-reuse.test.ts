@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { chmodSync, readFileSync, writeFileSync } from "node:fs";
 import { delimiter, join } from "node:path";
@@ -205,6 +206,20 @@ async function fixture(
       if (response) {
         return response();
       }
+      if (endpoint.startsWith("contents/scripts/lib/release-validation-waivers.json?ref=")) {
+        const bytes = readFileSync("scripts/lib/release-validation-waivers.json");
+        return {
+          type: "file",
+          path: "scripts/lib/release-validation-waivers.json",
+          encoding: "base64",
+          size: bytes.length,
+          content: bytes.toString("base64"),
+          sha: createHash("sha1")
+            .update("blob " + bytes.length + "\0")
+            .update(bytes)
+            .digest("hex"),
+        };
+      }
       if (endpoint.startsWith("actions/runs/101/artifacts?")) {
         return { total_count: 1, artifacts: [artifact] };
       }
@@ -244,85 +259,229 @@ async function fixture(
 }
 
 describe("independent release child reuse", () => {
-  it("recovers an exact policy-waived receipt without treating its failed workload as success", async () => {
+  it("reuses authenticated child evidence across changes to the child workflow and test harness", async () => {
     const data = await fixture();
-    const original = await discoverReusableReleaseChild(data.request, data.deps);
-    if (!original) {
-      throw new Error("expected original reusable receipt");
-    }
-    data.run.conclusion = "failure";
-    data.jobs[0]!.name = "checks-node-agentic-control-plane-runtime-state";
-    data.jobs[1]!.name = "openclaw/ci-gate";
-    for (const job of data.jobs.slice(0, 2)) {
-      job.conclusion = "failure";
-    }
-    data.jobs[1]!.steps = [
-      {
-        name: "Verify selected CI lanes",
-        status: "completed",
-        conclusion: "failure",
-      },
-    ];
-    data.receipt.workloadConclusion = "failure";
-    data.receipt.jobs = data.receipt.jobs.map((job, index) => ({
-      ...job,
-      name: data.jobs[index]!.name,
-      conclusion: "failure",
-    }));
-    data.receipt.compositeJobsSha256 = jsonDigest({
-      effectiveRunAttempt: data.receipt.effectiveRunAttempt,
-      plannedRunAttempt: data.receipt.plannedRunAttempt,
-      jobs: data.receipt.jobs,
-    });
-    await data.seal();
-    const selection = {
-      ...original,
+    const request = {
+      ...data.request,
+      workflowSha: "c".repeat(40),
+      policyTargetVersion: "2099.1.1",
+    };
+    const comparison = {
+      status: "ahead",
+      merge_base_commit: { sha: TOOLING },
+      files: [".github/workflows/ci.yml", "scripts/run-vitest.mjs"].map((filename) => ({
+        filename,
+        status: "modified",
+      })),
+    };
+    const github = data.deps.github;
+    data.deps.github = async (endpoint) =>
+      endpoint === "compare/" + TOOLING + "..." + request.workflowSha + "?per_page=1"
+        ? comparison
+        : github(endpoint);
+
+    const selection = await discoverReusableReleaseChild(request, data.deps);
+    expect(selection, data.deps.report.mock.calls.flat().join("\n")).toMatchObject({
+      workflowSha: TOOLING,
+      runId: "101",
       receiptSha256: data.receipt.sha256,
-      artifact: {
-        ...original.artifact,
-        digest: data.artifact.digest,
-        sizeInBytes: data.artifact.size_in_bytes,
-      },
-    };
-    const deps = {
-      ...data.deps,
-      getJobLog: async () =>
-        "##[error]checks-node-core-test-nondist-shard finished with failure (selected=true)",
-    };
-    await expect(validateReusableReleaseChild(selection, data.request, deps)).rejects.toThrow(
-      "current successful attempt",
-    );
-    const recovered = await validateReusableReleaseChild(
-      selection,
-      {
-        ...data.request,
-        policyTargetVersion: "2026.11.5-beta.3",
-      },
-      deps,
-    );
-    expect(recovered.run.conclusion).toBe("failure");
-    expect(recovered.receipt.workloadConclusion).toBe("failure");
+    });
+    await expect(
+      validateReusableReleaseChild(selection, request, data.deps),
+    ).resolves.toMatchObject({
+      receipt: data.receipt,
+    });
     await expect(
       validateReusableReleaseChild(
-        selection,
-        {
-          ...data.request,
-          policyTargetVersion: "2026.11.5-beta.3",
-        },
-        { ...deps, getJobLog: async () => "##[error]artifact integrity failed" },
+        { ...selection, receiptSha256: "0".repeat(64) },
+        request,
+        data.deps,
       ),
-    ).rejects.toThrow("unwaived failure");
-    await expect(
-      validateReusableReleaseChild(
-        selection,
-        {
-          ...data.request,
-          policyTargetVersion: "2026.11.5-beta.4",
-        },
-        deps,
-      ),
-    ).rejects.toThrow();
+    ).rejects.toThrow("receipt digest changed");
+
+    comparison.status = "diverged";
+    await expect(validateReusableReleaseChild(selection, request, data.deps)).rejects.toThrow(
+      "workflow SHA is not a main ancestor or the candidate SHA",
+    );
+    expect(await discoverReusableReleaseChild(request, data.deps)).toBeNull();
   });
+
+  it.each(["success", "failure"])(
+    "reuses raw %s execution after a Q-only grant commit",
+    async (conclusion) => {
+      const data = await fixture("normalCi", undefined, TOOLING, 3);
+      const version = "2099.1.1";
+      const nextQ = "c".repeat(40);
+      data.run.conclusion = conclusion;
+      data.artifact.expires_at = "2099-01-01T00:00:00Z";
+      data.jobs[0]!.name = "a synthetic failing test";
+      data.jobs[0]!.conclusion = conclusion;
+      data.jobs[0]!.steps = [{ name: "Run workload", status: "completed", conclusion }];
+      data.receipt.workloadConclusion = conclusion;
+      data.receipt.jobs = data.receipt.jobs.map((job, index) => ({
+        ...job,
+        name: data.jobs[index]!.name,
+        conclusion: data.jobs[index]!.conclusion,
+      }));
+      data.receipt.compositeJobsSha256 = jsonDigest({
+        effectiveRunAttempt: 1,
+        plannedRunAttempt: 1,
+        jobs: data.receipt.jobs,
+      });
+      await data.seal();
+      const originalBytes = JSON.stringify(data.receipt);
+      const policy = { schema: "openclaw.release-validation-waivers/v1", waivers: [] as unknown[] };
+      const github = data.deps.github;
+      data.deps.github = async (endpoint) => {
+        if (endpoint.startsWith("contents/scripts/lib/release-validation-waivers.json?ref=")) {
+          const bytes = Buffer.from(JSON.stringify(policy));
+          return {
+            type: "file",
+            path: "scripts/lib/release-validation-waivers.json",
+            encoding: "base64",
+            size: bytes.length,
+            content: bytes.toString("base64"),
+            sha: createHash("sha1")
+              .update("blob " + bytes.length + "\0")
+              .update(bytes)
+              .digest("hex"),
+          };
+        }
+        if (endpoint === "compare/" + TOOLING + "..." + nextQ + "?per_page=1") {
+          return {
+            status: "ahead",
+            merge_base_commit: { sha: TOOLING },
+            files: [
+              { filename: "scripts/lib/release-validation-waivers.json", status: "modified" },
+            ],
+          };
+        }
+        return github(endpoint);
+      };
+      const responses: Record<string, unknown> = {};
+      const deps = {
+        ...data.deps,
+        github: async (endpoint: string) => {
+          const response = await data.deps.github(endpoint);
+          responses[endpoint] = response;
+          return response;
+        },
+      };
+      const initial = await discoverReusableReleaseChild(
+        { ...data.request, policyTargetVersion: version },
+        deps,
+      );
+      expect(initial === null, data.deps.report.mock.calls.flat().join("\n")).toBe(
+        conclusion === "failure",
+      );
+      policy.waivers.push({
+        targetVersion: version,
+        targetSha: TARGET,
+        childRole: "normalCi",
+        jobName: "a synthetic failing test",
+        ...(conclusion === "failure" ? { step: "Run workload" } : {}),
+        reason: "Synthetic operator approval",
+      });
+      const request = { ...data.request, workflowSha: nextQ, policyTargetVersion: version };
+      const selected = await discoverReusableReleaseChild(request, deps);
+      expect(selected, data.deps.report.mock.calls.flat().join("\n")).toMatchObject({
+        runId: "101",
+        workflowSha: TOOLING,
+        targetSha: TARGET,
+      });
+      const reused = await validateReusableReleaseChild(selected, request, deps);
+      expect(reused.run.conclusion).toBe(conclusion);
+      expect(JSON.stringify(reused.receipt)).toBe(originalBytes);
+      expect(reused.jobs.find((job) => job.name === "workload 3")?.conclusion).toBe("success");
+      if (conclusion === "failure") {
+        // Exercise the workflow entrypoint and its real gh/ZIP transport, not only helpers.
+        const directory = tempDirs.make("q-waiver-rerun-");
+        writeFileSync(join(directory, "package.json"), JSON.stringify({ type: "commonjs" }));
+        const archive = await data.deps.downloadArchive();
+        responses["actions/artifacts/301"] = data.artifact;
+        writeFileSync(join(directory, "responses.json"), JSON.stringify(responses));
+        writeFileSync(join(directory, "receipt.zip"), archive.archiveBytes);
+        writeFileSync(
+          join(directory, "ci.yml"),
+          "on:\n  workflow_dispatch:\n    inputs:\n      target_ref:\n        type: string\n      release_scope:\n        type: string\n",
+        );
+        writeFileSync(
+          join(directory, "gh"),
+          `#!${testNodeExecPath}
+const fs = require("node:fs");
+const endpoint = process.argv[3].replace("repos/openclaw/openclaw/", "");
+if (endpoint === "actions/artifacts/301/zip") process.stdout.write(fs.readFileSync(__dirname + "/receipt.zip"));
+else {
+ const responses = JSON.parse(fs.readFileSync(__dirname + "/responses.json", "utf8"));
+ if (!(endpoint in responses)) { console.error("Unexpected fixture endpoint: " + endpoint); process.exit(2); }
+ process.stdout.write(JSON.stringify(responses[endpoint]));
+}
+`,
+        );
+        chmodSync(join(directory, "gh"), 0o755);
+        const outputPath = join(directory, "output");
+        const cli = spawnSync(
+          testNodeExecPath,
+          [
+            "scripts/find-reusable-release-child.mjs",
+            "ci.yml",
+            "-f",
+            "target_ref=" + TARGET,
+            "-f",
+            "release_scope=full",
+          ],
+          {
+            encoding: "utf8",
+            env: {
+              ...process.env,
+              PATH: directory + delimiter + process.env.PATH,
+              GH_TOKEN: "",
+              GITHUB_TOKEN: "",
+              CHILD_WORKFLOW_KIND: "ci",
+              CHILD_WORKFLOW_DIRECTORY: directory,
+              GITHUB_REPOSITORY: REPOSITORY,
+              TARGET_SHA: TARGET,
+              TARGET_VERSION: version,
+              PARENT_WORKFLOW_SHA: nextQ,
+              GITHUB_RUN_ID: "900",
+              GITHUB_OUTPUT: outputPath,
+            },
+          },
+        );
+        expect(cli.status, cli.stderr).toBe(0);
+        expect(cli.stdout).toContain("Reused ci.yml:");
+        expect(readFileSync(outputPath, "utf8")).toContain("run_id=101\nrun_attempt=1");
+        policy.waivers = [];
+        expect(await discoverReusableReleaseChild(request, deps)).toBeNull();
+      }
+    },
+  );
+  it("retains original C-owned child identity and exact inputs across a Q change", async () => {
+    const data = await fixture("normalCi", undefined, TARGET);
+    data.request.workflowSha = "c".repeat(40);
+    const selection = await discoverReusableReleaseChild(data.request, data.deps);
+    expect(selection).toMatchObject({
+      workflowSha: TARGET,
+      runId: "101",
+      receiptSha256: data.receipt.sha256,
+    });
+    await expect(
+      validateReusableReleaseChild(selection, data.request, data.deps),
+    ).resolves.toMatchObject({
+      receipt: { workflowSha: TARGET, targetSha: TARGET },
+    });
+    await expect(
+      validateReusableReleaseChild(selection, { ...data.request, targetSha: TOOLING }, data.deps),
+    ).rejects.toThrow("selection identity");
+    await expect(
+      validateReusableReleaseChild(
+        selection,
+        { ...data.request, inputs: { ...data.request.inputs, release_scope: "changed" } },
+        data.deps,
+      ),
+    ).rejects.toThrow("selection identity");
+  });
+
   it("reads twelve complete inventories four at a time within the shared deadline", async () => {
     const data = await fixture("normalCi", undefined, TOOLING, 261, 12);
     const selection = await discoverReusableReleaseChild(data.request, data.deps);
@@ -645,28 +804,31 @@ describe("independent release child reuse", () => {
 
   it.each([
     { workflowSha: "", reason: "current parent workflow SHA is invalid" },
-    { workflowSha: "c".repeat(40), reason: "same tooling is required" },
-  ])("rejects invalid current-parent tooling: $reason", async ({ workflowSha, reason }) => {
-    const data = await fixture();
-    const selection = await discoverReusableReleaseChild(data.request, data.deps);
-    data.request.workflowSha = workflowSha;
-    await expect(validateReusableReleaseChild(selection, data.request, data.deps)).rejects.toThrow(
-      reason,
-    );
-    if (!workflowSha) {
-      await expect(discoverReusableReleaseChild(data.request, data.deps)).rejects.toThrow(reason);
-      return;
-    }
-    expect(await discoverReusableReleaseChild(data.request, data.deps)).toBeNull();
-    expect(data.deps.report).toHaveBeenCalledWith(
-      expect.stringContaining(
-        `run 101 ${data.run.display_title}: rejected: tooling ${TOOLING} differs from current parent ${"c".repeat(40)}`,
-      ),
-    );
-    expect(data.deps.report).toHaveBeenCalledWith(
-      expect.stringContaining('evaluated 0; dispatching fresh work; skipped {"other tooling":1}'),
-    );
-  });
+    { workflowSha: "c".repeat(40), reason: "Full release child evidence API GET" },
+  ])(
+    "rejects invalid or unavailable current-parent tooling: $reason",
+    async ({ workflowSha, reason }) => {
+      const data = await fixture();
+      const selection = await discoverReusableReleaseChild(data.request, data.deps);
+      const request = { ...data.request, workflowSha, policyTargetVersion: "2099.1.1" };
+      await expect(validateReusableReleaseChild(selection, request, data.deps)).rejects.toThrow(
+        reason,
+      );
+      if (!workflowSha) {
+        await expect(discoverReusableReleaseChild(request, data.deps)).rejects.toThrow(reason);
+        return;
+      }
+      expect(await discoverReusableReleaseChild(request, data.deps)).toBeNull();
+      expect(data.deps.report).toHaveBeenCalledWith(
+        expect.stringContaining(
+          `run 101 ${data.run.display_title}: rejected: Full release child evidence API GET`,
+        ),
+      );
+      expect(data.deps.report).toHaveBeenCalledWith(
+        expect.stringContaining("evaluated 1; dispatching fresh work; skipped {}"),
+      );
+    },
+  );
 
   it.each(["active parent", "publisher cleanup failure"])(
     "reuses sealed green work despite %s",

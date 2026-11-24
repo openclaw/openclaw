@@ -12,6 +12,7 @@ import { sessionListResult } from "../../test-helpers/chat-model.ts";
 import { createState } from "./chat-gateway.test-support.ts";
 import { handleChatGatewayEvent, type ChatEventPayload } from "./chat-gateway.ts";
 import { getChatHistoryLoadState } from "./chat-history-state.ts";
+import { createState as createInFlightState } from "./chat-history.inflight.test-support.ts";
 import { loadChatHistory } from "./chat-history.ts";
 import { activeChatRunStartupStatus, chatStartupStatusLabel } from "./chat-run-startup.ts";
 import type { ChatHistoryHost, ChatState } from "./chat-state-contract.ts";
@@ -37,8 +38,8 @@ import {
   rememberAuthoritativeTerminal,
   rememberLiveTerminalRun,
 } from "./terminal-message-identity.ts";
-import type { ToolStreamHost } from "./tool-stream-contract.ts";
 import { buildToolStreamIdentity } from "./tool-stream-identity.ts";
+import { handleAgentEvent } from "./tool-stream.ts";
 
 beforeEach(() => vi.useFakeTimers());
 afterEach(() => {
@@ -322,49 +323,48 @@ function runningSession(chatStream: string, overrides: Partial<ChatState> = {}):
   };
 }
 
-type HistoryToolSegment = { text: string; ts: number; toolCallId?: string };
-type LiveToolState = ChatHistoryHost &
-  Pick<ToolStreamHost, "toolStreamById" | "toolStreamOrder"> & {
-    chatStreamSegments: HistoryToolSegment[];
-    chatToolMessages: Record<string, unknown>[];
-    toolStreamSyncTimer: number | null;
-  };
-
 function createLiveToolHistoryState(
   messages: unknown[],
   chatStream: string,
   tools: Record<string, unknown>[],
-  segments: HistoryToolSegment[],
-): LiveToolState {
-  const state = createHistorySnapshot(messages, {
-    chatMessages: [messages[0]],
-    chatRunId: "run-1",
-    chatStream,
-    chatStreamStartedAt: 100,
-  }).state;
-  const liveState = state as LiveToolState;
-  liveState.chatStreamSegments = segments;
-  liveState.chatToolMessages = tools;
-  liveState.toolStreamById = new Map(
-    tools.map((tool) => {
-      const toolCallId = String(tool.toolCallId);
-      const runId = typeof tool.runId === "string" ? tool.runId : (state.chatRunId ?? "run-1");
-      return [
-        buildToolStreamIdentity(runId, toolCallId),
-        {
-          toolCallId,
-          runId,
-          message: tool,
-          name: "shell",
-          startedAt: 0,
-          receivedAt: 0,
+  preambles: Array<{ text: string; ts: number }>,
+) {
+  const state = createInFlightState({ messages, thinkingLevel: "low" });
+  state.chatMessages = [messages[0]];
+  state.chatRunId = "run-1";
+  state.chatStreamStartedAt = 100;
+  vi.stubGlobal("window", globalThis);
+  onTestFinished(() => {
+    vi.unstubAllGlobals();
+  });
+  for (const [index, tool] of tools.entries()) {
+    const preamble = preambles[index];
+    const envelope = { sessionKey: state.sessionKey, runId: "run-1" };
+    if (preamble) {
+      handleAgentEvent(state, {
+        ...envelope,
+        seq: index * 2 + 1,
+        ts: preamble.ts,
+        stream: "item",
+        data: {
+          kind: "preamble",
+          phase: "end",
+          itemId: `commentary-${index}`,
+          progressText: preamble.text,
         },
-      ];
-    }),
-  );
-  liveState.toolStreamOrder = [...liveState.toolStreamById.keys()];
-  liveState.toolStreamSyncTimer = null;
-  return liveState;
+      });
+    }
+    handleAgentEvent(state, {
+      ...envelope,
+      seq: index * 2 + 2,
+      ts: typeof tool.timestamp === "number" ? tool.timestamp : (preamble?.ts ?? 0) + 1,
+      stream: "tool",
+      data: { phase: "start", toolCallId: String(tool.toolCallId), name: "shell", args: {} },
+    });
+  }
+  vi.advanceTimersByTime(100);
+  receive(state, "delta", { message: replyText(chatStream) });
+  return state;
 }
 
 function textMessage(
@@ -476,12 +476,12 @@ describe("handleChatGatewayEvent", () => {
     const label = () =>
       chatStartupStatusLabel(activeChatRunStartupStatus(state.chatRunStartup), null);
     receive(state, "status", { phase: "preparing_context", seq: 1 });
-    expect(label()).toBe("Preparing reply…");
+    expect(label()).toBe("Preparing reply");
     receive(state, "delta", {
       runId: "run-other",
       message: { role: "assistant", content: "Other" },
     });
-    expect(label()).toBe("Preparing reply…");
+    expect(label()).toBe("Preparing reply");
     receive(state, "status", { phase: "starting_model", seq: 2 });
     expect(label()).toBe("Waiting for a response");
     receive(state, "status", { phase: "preparing_context", seq: 3 });
@@ -960,7 +960,7 @@ describe("handleChatGatewayEvent", () => {
         retry: { attempt, maxAttempts: 10, reason: "rate_limit", retryAt: 10_000 + attempt },
       });
       expect(chatStartupStatusLabel(activeChatRunStartupStatus(state.chatRunStartup), null)).toBe(
-        "Retrying…",
+        "Retrying",
       );
       expect(state.chatRunStartup).toMatchObject({
         phase: "retrying",
@@ -1269,7 +1269,7 @@ describe("loadChatHistory retry handling", () => {
   });
 
   it.each([false, true])(
-    "recovers stream segments and prunes only persisted tool cards (partial=%s)",
+    "recovers keyed commentary and prunes only persisted tool cards (partial=%s)",
     async (partial) => {
       const tools = [
         historyTool("call_1", "first output", 2, 2),
@@ -1285,17 +1285,11 @@ describe("loadChatHistory retry handling", () => {
           : historyTool("call_2", "second output", 4, 3),
       ];
       const persistedCount = partial ? 1 : 2;
-      const segments = [
-        { text: "before first tool", ts: 1, ...(partial ? { toolCallId: "call_1" } : {}) },
-        {
-          text: "before first tool\nbefore second tool",
-          ts: 3,
-          ...(partial ? { toolCallId: "call_2" } : {}),
-        },
+      const preambles = [
+        { text: "before first tool", ts: 1 },
+        { text: "before second tool", ts: 3 },
       ];
-      const stream = partial
-        ? "before first tool\nbefore second tool\nStill answering."
-        : "Still answering.";
+      const stream = "Still answering.";
       const expectedRows: Array<number | { text: string; timestamp: number }> = [
         { text: "before first tool", timestamp: 1 },
         0,
@@ -1310,8 +1304,9 @@ describe("loadChatHistory retry handling", () => {
         [persistedUser, ...tools.slice(0, persistedCount)],
         stream,
         tools,
-        segments,
+        preambles,
       );
+      const liveTools = [...state.chatToolMessages];
 
       await loadChatHistory(state);
 
@@ -1328,7 +1323,7 @@ describe("loadChatHistory retry handling", () => {
         chatStream: stream,
         chatStreamStartedAt: 100,
       });
-      expect(state.chatToolMessages).toEqual(remainingTools.map((index) => tools[index]));
+      expect(state.chatToolMessages).toEqual(remainingTools.map((index) => liveTools[index]));
       expect(state.toolStreamOrder).toEqual(
         remainingTools.map((index) =>
           buildToolStreamIdentity("run-1", String(tools[index]?.toolCallId)),
@@ -1408,18 +1403,21 @@ describe("loadChatHistory retry handling", () => {
   it("keeps live tool cards when history only replaces streamed text", async () => {
     const persistedUser = userText("latest ask", { seq: 1 });
     const historyAssistant = replyText("First visible stream text. More final text.", { seq: 2 });
-    const liveToolMessage = toolCall("call_current");
     const state = createLiveToolHistoryState(
       [persistedUser, historyAssistant],
       "First visible stream text.",
-      [liveToolMessage],
-      [{ text: "First visible stream text.", ts: 90 }],
+      [toolCall("call_current")],
+      [],
     );
+    const liveToolMessage = state.chatToolMessages[0];
     await loadChatHistory(state);
     expect(state.chatMessages).toEqual([persistedUser, historyAssistant]);
     expect(state.chatStream).toBeNull();
     expect(state.chatStreamStartedAt).toBeNull();
     expect(state.chatToolMessages).toEqual([liveToolMessage]);
+    expect(state.chatStreamSegments).toMatchObject([
+      { text: "First visible stream text.", runId: "run-1", persisted: true },
+    ]);
     expect(visibleParts(state)).toEqual([]);
     expect(state.toolStreamById.size).toBe(1);
     expect(state.toolStreamOrder).toEqual([buildToolStreamIdentity("run-1", "call_current")]);
