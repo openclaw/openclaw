@@ -1,11 +1,14 @@
 import type { lookup as dnsLookupCb } from "node:dns";
+import { posix, win32 } from "node:path";
+import { runExec } from "openclaw/plugin-sdk/process-runtime";
+import { isWSL2Sync } from "openclaw/plugin-sdk/runtime-env";
 import { formatErrorMessage } from "openclaw/plugin-sdk/security-runtime";
 import { asOptionalRecord, readStringField } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { rawDataToString } from "openclaw/plugin-sdk/webhook-ingress";
 import { WebSocket } from "openclaw/plugin-sdk/websocket-runtime";
 import type { Browser, ConnectOverCDPTransport } from "playwright-core";
 import { cdpNetworkLogs, createCdpNetworkLog } from "./cdp-network-log.js";
-import { isWebSocketUrl, openCdpWebSocket } from "./cdp.helpers.js";
+import { isLoopbackHost, isWebSocketUrl, openCdpWebSocket } from "./cdp.helpers.js";
 import { resolveBrowserEngine } from "./engines/registry.js";
 import type { BrowserEngineId } from "./engines/types.js";
 import { getPlaywrightCore } from "./playwright-core.runtime.js";
@@ -15,6 +18,19 @@ type CdpSocketLookup = typeof dnsLookupCb;
 const FIRST_INTERNAL_COMMAND_ID = -10_000;
 const MAX_DIAGNOSTIC_TARGETS = 3;
 const MAX_DIAGNOSTIC_TARGET_ID_CHARS = 128;
+
+async function windowsDownloadPath(downloadPath: string): Promise<string> {
+  try {
+    const { stdout } = await runExec("wslpath", ["-w", downloadPath], 1000);
+    const translated = stdout.trimEnd();
+    if (win32.isAbsolute(translated)) {
+      return translated;
+    }
+  } catch {
+    // Keep the connection usable if WSL path translation is unavailable.
+  }
+  return downloadPath;
+}
 
 export class UnresponsiveCdpTargetError extends Error {
   constructor(targetIds: string[]) {
@@ -124,7 +140,11 @@ export async function connectOverCdpTransport(
 ): Promise<Browser> {
   const networkLog = createCdpNetworkLog();
   const normalizer = resolveBrowserEngine(opts.engine).createCdpNormalizer?.();
+  const translateLocalDownloads =
+    !opts.preparedTransport && isWSL2Sync() && isLoopbackHost(new URL(connectionUrl).hostname);
   const wire = opts.preparedTransport ?? (await openCdpTransportSocket(connectionUrl, opts));
+  let versionCommandId: number | undefined;
+  let windowsBrowser = false;
   const pageTargetIdsBySession = new Map<string, string>();
   const pendingTargetCommands = new Map<number, string>();
   let trackInitializationCommands = true;
@@ -218,6 +238,33 @@ export async function connectOverCdpTransport(
         if (trackInitializationCommands && typeof id === "number" && id > 0 && sessionId) {
           pendingTargetCommands.set(id, sessionId);
         }
+        const method = readStringField(command, "method");
+        if (translateLocalDownloads && method === "Browser.getVersion" && typeof id === "number") {
+          versionCommandId = id;
+        }
+        if (windowsBrowser && method === "Browser.setDownloadBehavior") {
+          const params = asOptionalRecord(command?.params);
+          const downloadPath = readStringField(params, "downloadPath");
+          if (
+            params?.behavior === "allowAndName" &&
+            downloadPath &&
+            posix.isAbsolute(downloadPath)
+          ) {
+            // Playwright still reads and cleans up its original WSL-local directory.
+            void windowsDownloadPath(downloadPath)
+              .then((translatedPath) => {
+                if (!closingReason && !transportClosed) {
+                  const translated = {
+                    ...command,
+                    params: { ...params, downloadPath: translatedPath },
+                  };
+                  wire.send(normalizer?.send(translated) ?? translated);
+                }
+              })
+              .catch((error: unknown) => closeTransportSocket(formatErrorMessage(error)));
+            return;
+          }
+        }
         try {
           wire.send(normalizer?.send(message) ?? message);
         } catch (error) {
@@ -276,6 +323,11 @@ export async function connectOverCdpTransport(
                 sendInternalCommand("Target.detachFromTarget", { sessionId: targetSessionId });
               }
               continue;
+            }
+            if (versionCommandId !== undefined && id === versionCommandId) {
+              versionCommandId = undefined;
+              const userAgent = readStringField(asOptionalRecord(parsed.result), "userAgent");
+              windowsBrowser = userAgent?.includes("Windows NT") ?? false;
             }
             if (typeof id === "number") {
               pendingTargetCommands.delete(id);
