@@ -1057,7 +1057,10 @@ function finalizationFixture(overrides: Record<string, unknown> = {}) {
         ),
       );
       const job = workflow.jobs[owner === "button" ? "finalize" : "finalize_github_release"];
-      const step = job.steps.find((entry: { run?: string }) => entry.run);
+      const step = job.steps.find(
+        (entry: { run?: string; env?: { RELEASE_TAG?: string } }) =>
+          entry.run && entry.env?.RELEASE_TAG,
+      );
       // Bash 5.3 can block on these JSON here-strings on macOS.
       return spawnSync(process.platform === "darwin" ? "/bin/bash" : "bash", ["-c", step.run], {
         cwd: dirname(fixture.scripts),
@@ -2271,10 +2274,14 @@ process.exitCode = 1;
       expect(workflow.jobs.publish.outputs.npm_dist_tag).toBe(
         "${{ steps.dispatch.outputs.npm_dist_tag }}",
       );
-      const activate = workflow.jobs.finalize.steps.find((step: { run?: string }) => step.run);
+      const activate = workflow.jobs.finalize.steps.find(
+        (step: { name?: string }) => step.name === "Publish the verified draft",
+      );
       expect(activate.env.RELEASE_NPM_DIST_TAG).toBe("${{ needs.publish.outputs.npm_dist_tag }}");
       if (resumeRunId) {
-        const verify = workflow.jobs.verify.steps.find((step: { run?: string }) => step.run);
+        const verify = workflow.jobs.verify.steps.find((step: { run?: string }) =>
+          step.run?.includes("openclaw-release-ready.mjs verify"),
+        );
         const verified = spawnSync("bash", ["-c", verify.run], {
           cwd: dirname(fixture.scripts),
           env: { ...fixture.env, RELEASE_REQUEST: JSON.stringify(request) },
