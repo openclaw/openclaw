@@ -236,7 +236,7 @@ it.each([
       const pathname = databasePath(agentDir);
       const version = OPENCLAW_AGENT_SCHEMA_VERSION + 1;
       {
-        using writer = new DatabaseSync(pathname);
+        using writer = nodeSqlite.openNodeSqliteDatabase(pathname);
         runSqliteImmediateTransactionSync(writer, () => {
           writeSqliteUserVersion(writer, version);
           persistAgentSchemaMetadata(
