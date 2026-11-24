@@ -22,6 +22,7 @@ import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { getMediaDir } from "../media/store-path.js";
 import {
   clonePostgresUpgrade,
+  preflightPostgresUpgrade,
   retirePostgresUpgrade,
   validatePostgresUpgrade,
 } from "../snapshot/database-backup.js";
