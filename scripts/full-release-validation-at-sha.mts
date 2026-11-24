@@ -108,6 +108,7 @@ const TRUSTED_WORKFLOW_TAG_PATTERN = /^release-publish\/([a-f0-9]{12})-[1-9][0-9
 const SHA_PATTERN = /^[a-f0-9]{40}$/u;
 const RERUN_GROUPS = new Set([
   "all",
+  "build-only",
   "ci",
   "plugin-prerelease",
   "install-smoke",
@@ -251,7 +252,10 @@ A numeric correction branch also accepts the base package only when its
 published base tag resolves to the exact Validation SHA.
 The release profile defaults to beta for beta candidates and stable otherwise; pass
 -f release_profile=full for the broad advisory sweep. Focused retries must use
-one controller rerun_group; the removed release-checks aggregate and the direct
+one controller rerun_group. For explicitly human-approved fast-track preparation,
+use -f rerun_group=build-only to build and seal publication artifacts without
+running validation. This is not validated evidence and cannot publish without
+an exact fast-track request and npm-release environment approval. The removed release-checks aggregate and the direct
 child's manual qa aggregate are not accepted.`);
 }
 
@@ -1984,6 +1988,7 @@ export function releaseEvidenceVerificationArgs(
   verifierSourceSha: string,
   verifierSourceFile: string,
   trustedWorkflowRef = "main",
+  buildOnly = false,
 ) {
   if (!/^[1-9][0-9]*$/u.test(String(parentRunId))) {
     throw new Error("parent run ID must be a positive decimal");
@@ -1998,7 +2003,7 @@ export function releaseEvidenceVerificationArgs(
     throw new Error("trusted workflow ref must be main or a protected release-publish tag");
   }
   return [
-    "--validate-run",
+    buildOnly ? "--verify-build-only" : "--validate-run",
     String(parentRunId),
     "--trusted-workflow-ref",
     trustedWorkflowRef,
@@ -2099,6 +2104,7 @@ function verifyReleaseEvidence(
   parentRunId: string,
   workflowSha: string,
   trustedWorkflowRef: string,
+  buildOnly = false,
 ) {
   const verifierWorktree = mkdtempSync(join(tmpdir(), "openclaw-release-verifier-"));
   try {
@@ -2109,15 +2115,32 @@ function verifyReleaseEvidence(
     const evidence: unknown = JSON.parse(
       run(process.execPath, [
         verifier,
-        ...releaseEvidenceVerificationArgs(parentRunId, workflowSha, verifier, trustedWorkflowRef),
+        ...releaseEvidenceVerificationArgs(
+          parentRunId,
+          workflowSha,
+          verifier,
+          trustedWorkflowRef,
+          buildOnly,
+        ),
       ]),
     );
-    if (
-      !isJsonRecord(evidence) ||
-      evidence.valid !== true ||
-      !isJsonRecord(evidence.current) ||
-      !isJsonRecord(evidence.root)
-    ) {
+    if (!isJsonRecord(evidence) || !isJsonRecord(evidence.current)) {
+      throw new Error(`Release evidence has invalid identity for run ${parentRunId}.`);
+    }
+    if (buildOnly) {
+      if (
+        evidence.prepared !== true ||
+        evidence.valid !== false ||
+        evidence.publicationAuthorized !== false
+      ) {
+        throw new Error(`Build-only preparation evidence is invalid for run ${parentRunId}.`);
+      }
+      console.log(
+        `Build-only preparation verified for run ${displayValue(evidence.current.runId)}. Validation was skipped; npm-release environment approval is still required before publishing.`,
+      );
+      return;
+    }
+    if (evidence.valid !== true || !isJsonRecord(evidence.root)) {
       throw new Error(`Full Release Validation evidence is invalid for run ${parentRunId}.`);
     }
     console.log(
@@ -2627,6 +2650,7 @@ async function executeFrozenDispatch(options: {
           // Admission may have advanced P with main before its POST.
           record?.admission?.workflowSha ?? admissionWorkflowSha ?? workflowSha,
           candidateOwned ? args.admissionWorkflowRef : args.trustedWorkflowRef,
+          args.inputs.rerun_group === "build-only",
         );
         evidenceVerified = true;
       }

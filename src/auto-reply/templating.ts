@@ -2,6 +2,7 @@ import type {
   MediaUnderstandingDecision,
   MediaUnderstandingOutput,
 } from "../../packages/media-understanding-common/src/types.js";
+import type { TurnGrant } from "../agents/admitted-run-operator-authority.types.js";
 /** Shared inbound message context types used by prompt templating and reply dispatch. */
 import type { InboundEventKind } from "../channels/inbound-event/kind.js";
 import type { DmScope, ReplyToMode } from "../config/types.base.js";
@@ -382,6 +383,7 @@ export type MsgContext = Partial<CanonicalInboundText> & {
   AcpDispatchTailAfterReset?: boolean;
   /** Gateway client scopes when the message originates from the gateway. */
   GatewayClientScopes?: string[];
+  TurnGrant?: TurnGrant;
   /** Gateway client capabilities when the message originates from the gateway. */
   GatewayClientCaps?: string[];
   /** Server-bound requesting browser; never sourced from message text or rendered into prompts. */

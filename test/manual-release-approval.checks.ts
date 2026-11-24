@@ -253,23 +253,23 @@ it("prepares an exact local packet without credentials, network access or approv
   vi.stubGlobal("fetch", network);
   const output = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
   try {
-    await runReleasePublishPreflightCommand(["approval", "request", "--request", file]);
+    await runReleasePublishPreflightCommand(["fast-track", "request", "--request", file]);
     expect(JSON.parse(String(output.mock.calls.at(-1)?.[0]))).toMatchObject({
       requestId: value.requestId,
       digest: fastTrackRequestDigest(value),
       payload: serializeFastTrackRequest(value),
-      state: "awaiting-explicit-maintainer-approval",
+      state: "awaiting-npm-release-environment-approval",
       publicationAuthorized: false,
     });
     expect(network).not.toHaveBeenCalled();
     for (const operation of ["approve", "status", "reject"]) {
       await expect(
-        runReleasePublishPreflightCommand(["approval", operation, "--request", file]),
+        runReleasePublishPreflightCommand(["fast-track", operation, "--request", file]),
       ).rejects.toThrow(/no machine approval/u);
     }
     writeFileSync(file, JSON.stringify({ ...value, expiresAt: "2000-01-01T00:00:00.000Z" }));
     await expect(
-      runReleasePublishPreflightCommand(["approval", "request", "--request", file]),
+      runReleasePublishPreflightCommand(["fast-track", "request", "--request", file]),
     ).rejects.toThrow(/fresh expiry/u);
   } finally {
     output.mockRestore();

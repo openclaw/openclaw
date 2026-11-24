@@ -197,6 +197,13 @@ export function observeAdmissionFixture(fixture: AdmissionFixture) {
     .spyOn(attemptTools, "prepareEmbeddedAttemptToolBase")
     .mockImplementation(async (params) => {
       const c = fixture.current;
+      const replayed =
+        c?.original && params.attempt.sessionKey === c.sessionKey
+          ? readAdmittedRunOperatorAuthority(params.attempt.admittedRunContext)
+          : undefined;
+      if (replayed) {
+        c?.replayGrants.push(replayed.grant);
+      }
       if (
         c?.original &&
         (c.row.credential === "live-grant" ||

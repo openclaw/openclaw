@@ -202,8 +202,8 @@ const validatedReferenceSchema = z.strictObject({
 });
 
 /**
- * Eligibility only. The publisher must separately authenticate reference evidence, verify the
- * human decision for fastTrackRequestDigest(request), and retain package/publication gates.
+ * Eligibility only. The publisher must authenticate reference evidence and bind the request
+ * digest to the existing npm-release approval receipt, retaining package/publication gates.
  * A previous fast-track release is not valid reference evidence.
  */
 export function collectFastTrackEligibility(input: {

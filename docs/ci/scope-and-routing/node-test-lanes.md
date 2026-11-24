@@ -9,6 +9,12 @@ sidebarTitle: "Node test lanes"
 
 How the slowest Node test families are split, balanced, packed, and cached. Part of the [CI scope and routing](/ci/scope-and-routing) index.
 
+`scripts/lib/ci-test-runtime.mts` owns runtime selection. The `bun-all` policy
+keeps Node-required contracts on Node. This includes the Git release launcher
+suite, whose Windows/Bun guard remains valid; Linux CI must execute it on Node
+instead of reporting a successful skipped Bun run. Runtime-policy changes select
+that suite through the existing policy watch inventory.
+
 Node-worker process E2Es have an explicit owner map in
 `scripts/lib/ci-node-worker-e2e-inventory.mts`. Changes to worker environments,
 node hosts, worker processes, node RPCs, and their launch/transport inputs select
