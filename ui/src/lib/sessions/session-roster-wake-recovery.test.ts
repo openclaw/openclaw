@@ -290,3 +290,160 @@ it("does not replay a late rejected wake against the newly selected primary rost
   });
   expect([sidebar.mock.calls.length, other.mock.calls.length]).toEqual([2, 1]);
 });
+
+it.each(["primary", "observed"] as const)(
+  "recovers the late-joining %s owner after the first owner retires",
+  async (survivor) => {
+    vi.useFakeTimers();
+    const query = { ...owners[0], rowMode: "sidebar", includeDerivedTitles: true } as const;
+    const shared = createDeferred<SessionsListResult>();
+    const read = vi
+      .fn()
+      .mockReturnValueOnce(shared.promise)
+      .mockRejectedValueOnce(unavailable)
+      .mockReturnValue(restored);
+    const other = sessionsResult([sessionRow("agent:other:main")]);
+    const { sessions, watch, resolveOnCleanup, settle } = rosterReadFixture((params) =>
+      params.agentId === "other" ? other : read(),
+    );
+    resolveOnCleanup([shared, held]);
+    const delivered = vi.fn();
+    const observer = sessions.observeList(query, delivered);
+    watch(() => observer.dispose());
+    const primary = () => sessions.refresh({ ...query, force: true });
+    const first = survivor === "primary" ? observer.refresh() : primary();
+    const second = survivor === "primary" ? primary() : observer.refresh();
+    settle(() => Promise.allSettled([first, second]));
+    shared.resolve(held);
+    await Promise.all([first, second]);
+    expect(read).toHaveBeenCalledOnce();
+    if (survivor === "primary") {
+      observer.dispose();
+      delivered.mockClear();
+    } else {
+      await sessions.refresh({ ...query, agentId: "other", force: true });
+    }
+    const snapshot = () => (survivor === "primary" ? sessions.state : delivered.mock.lastCall?.[0]);
+    await advance(102);
+    expect(snapshot()).toMatchObject({ result: { sessions: held.sessions }, error: "Window busy" });
+    await advance(7_000);
+    expect(snapshot()).toMatchObject({ result: { sessions: restored.sessions }, error: null });
+    await advance(120_000);
+    expect(read).toHaveBeenCalledTimes(3);
+    if (survivor === "primary") {
+      expect(delivered).not.toHaveBeenCalled();
+    } else {
+      expect(sessions.state).toMatchObject({ agentId: "other", result: other, error: null });
+    }
+  },
+);
+
+it("does not lose the primary wake to an observed transport sampled before the cutoff", async () => {
+  vi.useFakeTimers();
+  const query = { ...owners[0], rowMode: "sidebar", includeDerivedTitles: true } as const;
+  const older = createDeferred<SessionsListResult>();
+  const read = vi
+    .fn()
+    .mockReturnValueOnce(held)
+    .mockReturnValueOnce(older.promise)
+    .mockReturnValue(restored);
+  const { sessions, watch, resolveOnCleanup } = rosterReadFixture(read);
+  resolveOnCleanup([older, held]);
+  await sessions.refresh(query);
+  await advance(50);
+  const observer = sessions.observeList(query, () => {});
+  watch(() => observer.dispose());
+  const membership = observer.refresh();
+  await advance(52);
+  older.resolve(held);
+  await membership;
+  observer.dispose(); // Its own wake cannot rescue a lost primary wake.
+  await advance(5_001);
+  expect(sessions.state.result?.sessions).toEqual(restored.sessions);
+  await advance(120_000);
+  expect(read).toHaveBeenCalledTimes(3);
+});
+
+it.each([
+  { tailTs: 10_097, repeatTorn: false },
+  { tailTs: 10_102, repeatTorn: false },
+  { tailTs: 10_102, repeatTorn: true },
+])(
+  "repairs a batched prefix at its earliest actual cutoff (tail $tailTs, repeated $repeatTorn)",
+  async ({ tailTs, repeatTorn }) => {
+    vi.useFakeTimers();
+    const query = { ...owners[1], limit: 4, pageSize: 2 };
+    const tail = sessionRow("agent:main:tail");
+    const fourth = sessionRow("agent:main:fourth");
+    const ordered = [saved, returning, recent, tail];
+    const pages: number[][] = [];
+    let batch = 0;
+    const { sessions, watch, listRows } = rosterReadFixture(({ offset = 0, limit }) => {
+      pages.push([offset, limit!]);
+      if (offset === 0) {
+        batch++;
+      }
+      const old = batch === 1 || (repeatTorn && batch === 2);
+      const ts = old ? (offset === 0 ? held.ts : tailTs) : 10_103;
+      const rows = ts <= held.activityExpiresAt ? [saved, recent, tail, fourth] : ordered;
+      return {
+        ...sessionsResult(rows.slice(offset, offset + limit!), ts),
+        ...(old ? { activityExpiresAt: offset === 0 ? held.activityExpiresAt : 20_000 } : {}),
+        hasMore: offset === 0,
+        nextOffset: offset === 0 ? 2 : null,
+        offset,
+      };
+    });
+    watch(query);
+    await sessions.refreshList(query);
+    const pair = [
+      [0, 2],
+      [2, 2],
+    ];
+    expect(pages).toEqual(pair);
+    if (tailTs < held.activityExpiresAt) {
+      await advance(held.activityExpiresAt - tailTs);
+      expect(pages).toEqual(pair); // Inclusive, sampled on the Gateway rather than the renderer.
+    }
+    await advance(2);
+    expect(pages).toEqual([...pair, ...pair]);
+    await advance(120_000);
+    expect(pages).toEqual([...pair, ...pair]);
+    if (repeatTorn) {
+      await sessions.refreshList({ ...query, force: true }); // A new explicit read is still admitted.
+    }
+    expect(listRows(query)).toEqual(ordered);
+  },
+);
+
+it("retries the signed-in primary's owner-first prefix after Load More", async () => {
+  vi.useFakeTimers();
+  const tail = sessionRow("agent:main:tail");
+  const repaired = sessionsResult([saved, returning, recent, tail], 17_103);
+  const read = vi
+    .fn()
+    .mockReturnValueOnce(held)
+    .mockReturnValueOnce({ ...sessionsResult([recent, tail], 10_050), offset: 2 })
+    .mockRejectedValueOnce(unavailable)
+    .mockReturnValue(repaired);
+  const { sessions } = rosterReadFixture(read, "viewer");
+  await sessions.refresh(owners[0]);
+  await sessions.refresh({ ...owners[0], append: true, offset: 2 });
+  await advance(102);
+  expect(sessions.state.error).toContain("Window busy");
+  await advance(7_000);
+  expect(sessions.state).toMatchObject({ result: repaired, error: null });
+  await advance(120_000);
+  expect(
+    read.mock.calls.map(([params]) => [
+      params.offset ?? 0,
+      params.limit,
+      Boolean(params.ownerFirst),
+    ]),
+  ).toEqual([
+    [0, 2, true],
+    [2, 2, false],
+    [0, 4, true],
+    [0, 4, true],
+  ]);
+});

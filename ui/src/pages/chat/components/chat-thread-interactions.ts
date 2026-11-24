@@ -60,6 +60,7 @@ import type { SidebarContent, SidebarFullMessageLoader } from "./chat-sidebar-co
 import { mountThreadMenu, type ThreadMenuAction } from "./chat-thread-menu.tsx";
 import { TranscriptSearchState } from "./chat-transcript-search-state.ts";
 import type { ChatWelcomeIdentityProps } from "./chat-welcome.tsx";
+import type { WidgetCommentEditorScope } from "./widget-comment-intent.ts";
 
 registerChatMessageMetadataEnglish();
 
@@ -155,7 +156,7 @@ export type ChatThreadProps = Omit<
     /** First-turn content was already shown by New Session; never replace it with history placeholders. */
     initialSubmission?: boolean;
     routeLoadingSkeleton?: boolean;
-    /** Older-history pagination: renders the auto-load sentinel plus the in-flow boundary row. */
+    /** Older-history pagination: renders the in-flow boundary row. */
     historyPagination?: ChatHistoryBoundaryProps;
     messages: unknown[];
     toolMessages: unknown[];
@@ -215,7 +216,6 @@ export type ChatThreadProps = Omit<
     onOpenSessionLink?: (target: SessionLinkTarget) => void;
     onNavigate?: ApplicationContext["navigate"];
     onHistoryIntent?: (event: Event) => void;
-    onHistorySentinelRef?: (element: HTMLElement) => void | (() => void);
     onTranscriptAnnouncementRef?: (element: HTMLElement) => void | (() => void);
     onSetReply?: (target: MessageReplyTarget) => void;
     replyMessageAccess?: ReplyMessageAccess;
@@ -224,7 +224,11 @@ export type ChatThreadProps = Omit<
     onFocusComposer?: () => void;
     commentAttachments?: readonly ChatAttachment[];
     commentsDisabled?: boolean;
-    onAddToChat?: (selection: ChatSelectionSource, anchorRect: DOMRect) => void;
+    onAddToChat?: (
+      selection: ChatSelectionSource,
+      anchorRect: DOMRect,
+      widget?: WidgetCommentEditorScope,
+    ) => void;
     onCompanionSelection?: (selection: ChatSelectionSource, anchorRect: DOMRect) => void;
     onNewSessionSelection?: (selection: ChatSelectionSource) => void;
     /** Shows one of the session's subagents. */

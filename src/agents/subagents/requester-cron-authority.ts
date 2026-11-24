@@ -111,15 +111,13 @@ function discard(authority: RequesterCronAuthority): void {
 function isCurrent(authority: RequesterCronAuthority): boolean {
   if (
     !authority.active ||
-    (authority.managementEntitlement?.source === "channel-owner" &&
-      !authority.managementEntitlement.isCurrent()) ||
     authority.lifecycleGeneration !== getAgentRunLifecycleGeneration() ||
     !state.bySession.get(authority.requesterSessionKey)?.has(authority)
   ) {
     return false;
   }
   if (authority.kind === "followup") {
-    if (!authority.isFollowupCurrent() || authority.requesterOwner?.isCurrent() !== true) {
+    if (!authority.isFollowupCurrent()) {
       return false;
     }
     const binding = authority.binding;

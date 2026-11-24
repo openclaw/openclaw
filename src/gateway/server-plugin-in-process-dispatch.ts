@@ -386,6 +386,7 @@ export async function dispatchGatewayMethodInProcessRaw(
     }
     return await dispatchGatewayRequestInProcessRaw(method, params, {
       client: resolved.client,
+      parentHttpRequestAuthority: resolved.parentHttpRequestAuthority,
       context: resolved.context,
       expectFinal: options?.expectFinal,
       isWebchatConnect: resolved.isWebchatConnect,

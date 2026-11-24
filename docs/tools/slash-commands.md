@@ -242,6 +242,14 @@ profile. Non-UI Gateway clients also retain application-ID matches such as
 `cli`; operator UI clients do not receive application-ID matches. Existing
 operator scopes and command enablement still apply.
 
+Control UI and other Gateway clients that sign in with the shared token or
+password have no user identity, so no sender entry under the `"*"` key matches
+them. To keep their commands available, list your channel senders under
+per-channel keys (for example `commands.allowFrom.telegram`) and omit the `"*"`
+key: Gateway clients then use their operator scopes. A denied Gateway client
+gets a refusal that names this policy, a denied native command gets a refusal,
+and a denied text command from a channel sender gets no reply.
+
 Session commands `/new` and `/reset` (including `/reset soft`) remain available
 to channel-authorized senders on channels that do not enforce owner-only
 commands, even when those senders are not in `commands.ownerAllowFrom`.

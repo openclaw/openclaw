@@ -21,6 +21,7 @@ import type { MediaFact } from "../../media/media-facts.js";
 import type { PromptImageOrderEntry } from "../../media/prompt-image-order.js";
 import type { CliBackendConfig } from "../../plugins/cli-backend.types.js";
 import { listRegisteredPluginAgentPromptGuidance } from "../../plugins/command-registry-state.js";
+import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.types.js";
 import type { BootstrapMode } from "../bootstrap-mode.js";
 import { formatCliImageTurnContext } from "../cli-image-turn-correlation.js";
 import type { EmbeddedContextFile } from "../embedded-agent-helpers/context-file.js";
@@ -321,12 +322,15 @@ type CliPromptImageInput = {
   imageOrder?: PromptImageOrderEntry[];
   mediaImageLayout?: MediaImageLayout;
   media?: MediaFact[];
+  /** Steered input: its recorded media facts own image hydration. */
+  userTurnTranscriptRecorder?: Pick<UserTurnTranscriptRecorder, "resolveMessage">;
 };
 
 export async function loadCliPromptImages(params: CliPromptImageInput): Promise<ImageContent[]> {
   const imagePrompt = params.imagePrompt ?? params.prompt;
   const needsHydration =
     params.imagePrompt !== undefined ||
+    params.userTurnTranscriptRecorder !== undefined ||
     Boolean(params.media?.length) ||
     Boolean(params.mediaImageLayout) ||
     (!params.images?.length && detectImageReferences(imagePrompt).length > 0);
@@ -339,6 +343,7 @@ export async function loadCliPromptImages(params: CliPromptImageInput): Promise<
         existingImages: params.images,
         imageOrder: params.imageOrder,
         mediaImageLayout: params.mediaImageLayout,
+        userTurnTranscriptRecorder: params.userTurnTranscriptRecorder,
         maxBytes: MAX_IMAGE_BYTES,
         localRoots: params.localRoots,
       })

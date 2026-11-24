@@ -124,6 +124,18 @@ it("stops collecting excludes at the separator", () => {
     cli.collectVitestExcludePatterns(["--exclude", "before", "--", "--exclude=after"]),
   ).toEqual(["before"]);
 });
+
+it.each([
+  [infraFile, ["run"], "", true],
+  [infraFile, ["run"], "src/infra", true],
+  [infraFile, ["run"], "ui", false],
+  [infraFile, ["run", "--exclude", "**/example.test.ts"], "src/infra", false],
+  [infraFile, ["run", "unrelated"], "src/infra", false],
+  ["src/infra/[example].test.ts", ["run"], "", false],
+])("preserves exact inventory selection for %s with %j", (file, args, dir, selected) => {
+  expect(cli.matchesVitestCliSelection(file, [file], args, dir, {}, [file])).toBe(selected);
+});
+
 it("keeps a large exclusion inventory within Node's compiled-pattern cache budget", () => {
   const candidates = Array.from({ length: 12 }, (_, index) => `src/keep-${index}.test.ts`);
   const exclude = Array.from({ length: 260 }, (_, index) => `src/excluded-${index}.test.ts`);

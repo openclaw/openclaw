@@ -562,8 +562,6 @@ export function materializeSessionRow(
       freshSessionTotalTokens: input.freshSessionTotalTokens,
       estimatedCostUsd: input.estimatedCostUsd,
       subagentRunInputs: input.subagentRunInputs,
-      lastMessagePreview: input.lastMessagePreview,
-      lastAssistantMessage: input.lastAssistantMessage,
       // The relation reader returns the previous frozen list when its child facts match.
       childLinks:
         input.childLinks === previous?.source.childLinks
@@ -579,12 +577,15 @@ export function replaceSessionRowFacts(
   row?: Partial<GatewaySessionRow>,
   source?: Partial<ReturnType<typeof materializeSessionRow>["source"]>,
 ): ReturnType<typeof materializeSessionRow> {
-  const nextSource = source ? { ...materialized.source, ...source } : materialized.source;
+  const nextRow = row ? freezeSessionRowPatch(materialized.row, row) : materialized.row;
+  if (!source && nextRow === materialized.row) {
+    return materialized;
+  }
   freezeTrustedJsonSnapshot(source?.childLinks);
   return Object.freeze({
     publicationIdentity: materialized.publicationIdentity,
-    row: row ? freezeSessionRowPatch(materialized.row, row) : materialized.row,
-    source: Object.freeze(nextSource),
+    row: nextRow,
+    source: source ? Object.freeze({ ...materialized.source, ...source }) : materialized.source,
   });
 }
 

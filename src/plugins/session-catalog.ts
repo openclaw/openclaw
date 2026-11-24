@@ -1,6 +1,8 @@
 import { createHash } from "node:crypto";
 import type {
   SessionCatalogHost,
+  SessionCatalogLocator,
+  SessionCatalogRouteMethods,
   SessionCatalogSourceProfileRelation,
   SessionCatalogShareRoute,
   SessionsCatalogArchiveParams,
@@ -32,6 +34,9 @@ export type SessionCatalogListProviderParams = {
   allowProcessHomeFallback?: boolean;
   /** Trimmed, non-empty search capped at 500 UTF-16 code units by the gateway. */
   search?: string;
+  /** Private host-owned export lookup. Return only a native row whose visibility
+   * and selected home can be verified without searching unrelated hosts. */
+  exportSource?: Pick<SessionCatalogLocator, "hostId" | "threadId" | "sourceHomeId">;
   limitPerHost?: number;
   hostIds?: string[];
   cursors?: Record<string, string>;
@@ -198,8 +203,19 @@ export type SessionCatalogProvider = {
   supportsProfileRelation?: true;
   /** Closed plugin-owned route contract; invalid or colliding declarations are not projected. */
   shareRoute?: SessionCatalogShareRoute;
+  /** Owned RPCs used when the caller lacks the shared operation's scope. The host verifies ownership. */
+  ownedRoute?: {
+    methods: Partial<SessionCatalogRouteMethods>;
+    /** Owning methods require the caller's live role-required policy from this plugin. */
+    requiredGrantPluginId?: string;
+  };
   /** Declares that every HOME-sensitive action honors the host isolation policy. */
   supportsProcessHomeIsolation?: true;
+  /** Local hosts this producer can enumerate without contacting peers or paired nodes. */
+  automaticExportHosts?: (params: {
+    agentId: string;
+    allowProcessHomeFallback: boolean;
+  }) => readonly string[] | Promise<readonly string[]>;
   /** Config-derived target; the Gateway memoizes it for one runtime-config object identity. */
   resolveCreateSession?: (params: {
     /** Agent whose model/runtime policy must authorize the catalog target. */

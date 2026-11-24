@@ -6,6 +6,7 @@ import { projectCallbackOwner } from "../lib/reactive/callback-owner.ts";
 import { useApplication } from "../lib/reactive/context.ts";
 import { registerEnglishCatalog, t } from "../lib/reactive/i18n.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../lib/solid-bridge.ts";
+import type { WidgetInspectionListener } from "./canvas-widget-inspection.ts";
 import { createCanvasWidget } from "./canvas-widget-view-owner.ts";
 import type { CanvasWidgetViewProps } from "./canvas-widget-view.types.ts";
 import { resolveSandboxHostUrl } from "./sandbox-host.ts";
@@ -15,6 +16,7 @@ registerEnglishCatalog(registerBoardEnglish);
 type CanvasWidgetViewContent = {
   readonly documentHtml: string | undefined;
   readonly previewFrame: HTMLIFrameElement | undefined;
+  startInspection: (listener: WidgetInspectionListener) => (() => void) | undefined;
 };
 export type OpenClawCanvasWidgetView = SolidBridgeElement<
   CanvasWidgetViewProps,

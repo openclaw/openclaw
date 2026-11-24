@@ -93,15 +93,15 @@ it.each<{
     checked: true,
     visible: true,
   },
-  { selected: "daybreak_blue", locked: false, on: true, checked: true, visible: true },
+  { selected: "daybreak_blue", locked: false, on: false, checked: false, visible: false },
   { locked: false, on: false, checked: false, visible: false },
   {
     programs: ["standard"],
     selected: "daybreak_blue",
     locked: false,
-    on: true,
-    checked: true,
-    visible: true,
+    on: false,
+    checked: false,
+    visible: false,
   },
   { programs: [], selected: "standard", locked: false, on: false, checked: false, visible: false },
 ])("resolves Daybreak with $programs and $selected", ({ programs, selected, ...state }) => {
@@ -111,8 +111,8 @@ it.each<{
 it.each<{
   current?: CyberAccessProgram;
   stored?: CyberAccessProgram;
-  next: readonly CyberAccessProgram[];
-  expected?: CyberAccessProgram;
+  next?: readonly CyberAccessProgram[];
+  expected?: CyberAccessProgram | null;
 }>([
   // Inherited from the previous model's configured default: store it so Daybreak stays on.
   { current: "daybreak_blue", next: mainline, expected: "daybreak_blue" },
@@ -121,7 +121,10 @@ it.each<{
   { current: "daybreak_red", stored: "daybreak_red", next: mainline, expected: "daybreak_blue" },
   { current: "standard", stored: "standard", next: cyber, expected: "daybreak_red" },
   { current: "standard", next: mainline },
-  { current: "daybreak_blue", stored: "daybreak_blue", next: ["standard"] },
+  { current: "daybreak_blue", stored: "daybreak_blue", next: ["standard"], expected: null },
+  { current: "daybreak_blue", stored: "daybreak_blue", expected: null },
+  { current: "daybreak_blue", stored: "daybreak_blue", next: [], expected: null },
+  { current: "daybreak_blue", next: ["standard"] },
 ])("keeps Daybreak across a switch from $current ($stored) to $next", (switch_) => {
   expect(resolveDaybreakModelSwitch(switch_.next, switch_.current, switch_.stored)).toBe(
     switch_.expected,
