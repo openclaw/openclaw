@@ -7,7 +7,12 @@ import { pathToFileURL } from "node:url";
 import { Command } from "commander";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { registerMaintenanceCommands } from "../cli/program/register.maintenance.js";
+import {
+  loadSessionEntry,
+  replaceSessionEntry,
+} from "../config/sessions/session-accessor.sqlite-entry.js";
 import { createNonExitingRuntime, defaultRuntime } from "../runtime.js";
+import { closeOpenClawAgentDatabaseByPathAsync } from "../state/openclaw-agent-db.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -290,6 +295,56 @@ describe("destructive cleanup with a live unmanaged state owner", () => {
       await expect(fs.access(state.configPath)).rejects.toMatchObject({ code: "ENOENT" });
     },
   );
+
+  it("preserves config, credentials, and sessions when combined reset cannot acquire ownership", async () => {
+    const state = await createOpenClawTestState({
+      prefix: "openclaw-combined-reset-live-state-",
+      layout: "split",
+      scenario: "minimal",
+      applyEnv: true,
+    });
+    testStates.add(state);
+    await state.writeConfig({});
+    const credentials = await state.writeText("credentials/fixture", "synthetic credentials");
+    const session = {
+      agentId: "main",
+      sessionKey: "agent:main:reset-fixture",
+      storePath: path.join(state.agentDir(), "openclaw-agent.sqlite"),
+    };
+    const entry = { sessionId: "reset-fixture", updatedAt: Date.now() };
+    await replaceSessionEntry(session, entry);
+    await closeOpenClawAgentDatabaseByPathAsync(session.storePath, session.agentId);
+    await fs.mkdir(state.statePath("state"), { recursive: true });
+    const owner = await startLiveStateOwner(state);
+    const paths = [state.configPath, credentials];
+    const bytes = await readFiles(paths);
+
+    vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
+    vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
+    vi.spyOn(defaultRuntime, "exit").mockImplementation(createNonExitingRuntime().exit);
+    const reset = () => {
+      const program = new Command();
+      registerMaintenanceCommands(program);
+      return program.parseAsync(
+        ["reset", "--scope", "config+creds+sessions", "--yes", "--non-interactive"],
+        { from: "user" },
+      );
+    };
+
+    await expect(reset()).rejects.toMatchObject({ name: "ExitError", code: 1 });
+    expect(defaultRuntime.error).toHaveBeenCalledWith(
+      expect.stringContaining("owns this state directory. Stop the Gateway and retry."),
+    );
+    expect(owner.exitCode).toBeNull();
+    expect(loadSessionEntry(session)).toMatchObject(entry);
+    await expect(readFiles(paths)).resolves.toEqual(bytes);
+
+    await stopLiveStateOwner(owner);
+    await reset();
+    await expect(fs.access(state.configPath)).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(fs.access(path.dirname(credentials))).rejects.toMatchObject({ code: "ENOENT" });
+    expect(loadSessionEntry(session)).toBeUndefined();
+  });
 
   it("preserves state when workspace configuration is invalid", async () => {
     const state = await createOpenClawTestState({

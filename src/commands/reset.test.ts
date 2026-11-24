@@ -4,7 +4,7 @@ import {
   cleanupCommandLogMessages,
   createCleanupCommandRuntime,
   gatewayService,
-  removeAgentSessions,
+  removeConfigCredentialsAndSessions,
   removePath,
   removeStateAndLinkedPaths,
   removeWorkspaceDirs,
@@ -110,26 +110,20 @@ describe("resetCommand", () => {
     );
   });
 
-  it.each([
-    { scope: "config" as const, failedRemoval: 0 },
-    { scope: "config+creds+sessions" as const, failedRemoval: 0 },
-    { scope: "config+creds+sessions" as const, failedRemoval: 1 },
-  ])("reports failed removal $failedRemoval for $scope", async ({ scope, failedRemoval }) => {
-    for (let index = 0; index < failedRemoval; index++) {
-      removePath.mockResolvedValueOnce({ ok: true });
-    }
-    removePath.mockResolvedValueOnce({ ok: false });
-
-    await expect(
-      resetCommand(runtime, { scope, yes: true, nonInteractive: true }),
-    ).rejects.toMatchObject({ name: "ExitError", code: 1 });
-
-    expect(removePath).toHaveBeenCalledTimes(scope === "config" ? 1 : 2);
-    expect(cleanupCommandLogMessages(runtime).some((message) => message.startsWith("Next:"))).toBe(
-      false,
-    );
-    expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("retry reset"));
-  });
+  it.each(["config", "config+creds+sessions"] as const)(
+    "reports incomplete %s reset",
+    async (scope) => {
+      if (scope === "config") {
+        removePath.mockResolvedValueOnce({ ok: false });
+      } else {
+        removeConfigCredentialsAndSessions.mockResolvedValueOnce(false);
+      }
+      await expect(
+        resetCommand(runtime, { scope, yes: true, nonInteractive: true }),
+      ).rejects.toMatchObject({ name: "ExitError", code: 1 });
+      expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("retry reset"));
+    },
+  );
 
   it("reports incomplete full reset when workspace cleanup fails", async () => {
     removeWorkspaceDirs.mockResolvedValueOnce(["/tmp/.openclaw/workspace"]);
@@ -143,8 +137,8 @@ describe("resetCommand", () => {
     );
   });
 
-  it("continues independent cleanup and reports incomplete reset when session cleanup fails", async () => {
-    removeAgentSessions.mockRejectedValueOnce(new Error("permission denied"));
+  it("reports an ownership refusal without attempting standalone config removal", async () => {
+    removeConfigCredentialsAndSessions.mockRejectedValueOnce(new Error("permission denied"));
 
     await expect(
       resetCommand(runtime, {
@@ -154,14 +148,8 @@ describe("resetCommand", () => {
       }),
     ).rejects.toMatchObject({ name: "ExitError", code: 1 });
 
-    expect(removePath.mock.calls.map(([target]) => target)).toEqual([
-      "/tmp/.openclaw/openclaw.json",
-      "/tmp/.openclaw/credentials",
-    ]);
-    expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("permission denied"));
-    expect(runtime.error).toHaveBeenLastCalledWith(
-      "Reset incomplete. Resolve the cleanup errors above, then retry reset.",
-    );
+    expect(removePath).not.toHaveBeenCalled();
+    expect(runtime.error).toHaveBeenCalledWith("permission denied");
     expect(cleanupCommandLogMessages(runtime).some((message) => message.startsWith("Next:"))).toBe(
       false,
     );
