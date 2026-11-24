@@ -2,9 +2,11 @@ import { parseDateStringTimestampMs } from "@openclaw/normalization-core/number-
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import type {
   SessionCatalogTranscriptItem,
+  SessionCatalogRouteMethods,
   SessionsCatalogReadResult,
 } from "../../../../packages/gateway-protocol/src/index.js";
 import { projectCatalogItemForDisplay } from "../../../../src/chat/session-catalog-display.js";
+import type { ApplicationGatewaySnapshot } from "../../app/gateway.ts";
 import { t } from "../../i18n/index.ts";
 import { registerChatSessionEnglish } from "../../i18n/locales/en-chat-session.ts";
 import { formatUiError } from "../../lib/format-error.ts";
@@ -13,9 +15,10 @@ import {
   parseCatalogSessionKey,
   type CatalogSessionKey,
 } from "../../lib/sessions/catalog-key.ts";
-import { catalogMethod } from "../../lib/sessions/catalog-read-method.ts";
+import { readCatalogRoute } from "../../lib/sessions/catalog-read-method.ts";
 import { releaseChatAttachmentPayloads } from "./attachment-payload-store.ts";
 import { catalogMessageId } from "./catalog-message-id.ts";
+import { projectChatFields } from "./chat-field-projection.ts";
 import { ChatPaneTaskSuggestions } from "./chat-pane-task-suggestions.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { resolveChatAgentId } from "./chat-state-route.ts";
@@ -28,6 +31,14 @@ function isOutboundSessionShare(key: CatalogSessionKey): boolean {
 }
 
 export abstract class ChatPaneCatalog extends ChatPaneTaskSuggestions {
+  protected readonly catalogAccess = projectChatFields<{
+    route?: {
+      catalogId: string;
+      hello: ApplicationGatewaySnapshot["hello"];
+      methods: SessionCatalogRouteMethods;
+    };
+  }>({ route: undefined });
+
   private catalogRead:
     | { controller: AbortController; older: boolean; refresh: boolean }
     | undefined;
@@ -64,6 +75,25 @@ export abstract class ChatPaneCatalog extends ChatPaneTaskSuggestions {
   }
 
   protected handleCatalogGatewayEvent(event: string): void {
+    if (event === "plugins.changed") {
+      const key = parseCatalogSessionKey(this.state?.sessionKey);
+      if (key) {
+        // A replacement can remove the caller's read grant. Retire the old read
+        // and transcript before a foreground or resumed lookup uses the new owner.
+        this.retireCatalogRead();
+        this.catalogAccess.route = undefined;
+        this.history.catalogMessages = [];
+        this.history.catalogHost = null;
+        this.history.catalogSession = null;
+        this.history.catalogCursor = undefined;
+        this.catalogReadPending = true;
+        this.catalogReadRefreshPending = false;
+        if (this.secondarySessionReadsReady()) {
+          this.resumeCatalogRead();
+        }
+      }
+      return;
+    }
     if (
       event !== "terminal.exit" ||
       this.history.catalogSession?.canContinue !== false ||
@@ -84,6 +114,7 @@ export abstract class ChatPaneCatalog extends ChatPaneTaskSuggestions {
     this.history.catalogCursor = undefined;
     this.history.catalogSession = null;
     this.history.catalogHost = null;
+    this.catalogAccess.route = undefined;
     // Payload-store entries and their object URLs are reclaimed only by
     // explicit release; clearing the array alone strands them for the tab.
     releaseChatAttachmentPayloads(state.chatAttachments);
@@ -159,6 +190,7 @@ export abstract class ChatPaneCatalog extends ChatPaneTaskSuggestions {
       return false;
     }
     const { state, client } = scope;
+    const snapshot = scope.context.gateway.snapshot;
     if (
       older &&
       (!this.history.catalogCursor || (isOutboundSessionShare(key) && !this.history.catalogSession))
@@ -178,6 +210,7 @@ export abstract class ChatPaneCatalog extends ChatPaneTaskSuggestions {
       this.catalogRead === read &&
       JSON.stringify(this.catalogProfileRelation) === relationKey &&
       this.isConnectionScopeCurrent(scope) &&
+      scope.context.gateway.snapshot.hello === snapshot.hello &&
       this.sessionKey === requestedSessionKey &&
       resolveChatAgentId(state) === agentId;
     if (!older && !metadataOnly && !refresh) {
@@ -188,6 +221,33 @@ export abstract class ChatPaneCatalog extends ChatPaneTaskSuggestions {
       this.transcriptScrollTop = null;
     }
     try {
+      const previous = this.catalogAccess.route;
+      const route =
+        previous?.catalogId === key.catalogId && previous.hello === snapshot.hello
+          ? previous
+          : await readCatalogRoute(
+              client,
+              snapshot,
+              { catalogId: key.catalogId },
+              read.controller.signal,
+            );
+      if (!isCurrent()) {
+        return false;
+      }
+      if (route && route !== previous) {
+        this.catalogAccess.route = {
+          catalogId: key.catalogId,
+          hello: snapshot.hello,
+          methods: route.methods,
+        };
+      }
+      if (!route?.methods.list || !route.methods.read) {
+        this.catalogAccess.route = undefined;
+        this.history.catalogSession = null;
+        this.history.catalogMessages = [];
+        state.lastError = t("chat.sessionRoute.catalogShareUnavailable");
+        return false;
+      }
       if (!older) {
         const lookup = await lookupCatalogSession({
           agentId,
@@ -196,7 +256,7 @@ export abstract class ChatPaneCatalog extends ChatPaneTaskSuggestions {
           profileRelation,
           isCurrent,
           signal: read.controller.signal,
-          listMethod: catalogMethod(scope.context.gateway.snapshot, key.catalogId, "list"),
+          listMethod: route.methods.list,
         });
         if (!lookup || !isCurrent()) {
           return false;
@@ -219,7 +279,7 @@ export abstract class ChatPaneCatalog extends ChatPaneTaskSuggestions {
       }
       const requestedOlderCursor = older ? this.history.catalogCursor : undefined;
       const page = await client.request<SessionsCatalogReadResult>(
-        catalogMethod(scope.context.gateway.snapshot, key.catalogId, "read"),
+        route.methods.read,
         {
           agentId,
           catalogId: key.catalogId,
