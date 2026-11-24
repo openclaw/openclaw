@@ -2047,7 +2047,7 @@ AFTER_CD
       "Upload sanitized upgrade survivor proof",
     );
     expect(survivorProof).toMatchObject({
-      if: `always() && ${baseline.if}`,
+      if: `always() && (${baseline.if} || contains(format(' {0} ', needs.preflight.outputs.docker_seed_lanes), ' release-update-survivor '))`,
       uses: UPLOAD_ARTIFACT_V7,
       with: { "include-hidden-files": true, "if-no-files-found": "warn" },
     });
@@ -2058,6 +2058,8 @@ AFTER_CD
       ".artifacts/docker-tests/20260920T000000Z/failures.json",
       ".artifacts/docker-tests/upgrade-survivor-baseline.123/failure.json",
       ".artifacts/docker-tests/upgrade-survivor-baseline.123/summary.json",
+      ".artifacts/upgrade-survivor/release-update-survivor/healthy/summary.json",
+      ".artifacts/upgrade-survivor/release-update-survivor/crash/crash-after-migration.json",
     ]) {
       expect(uploaded(file), file).toBe(true);
     }
