@@ -66,7 +66,7 @@ private actor ArchiveUndoQueryTransport: OpenClawChatSidebarTransport {
 
 @MainActor
 struct ChatSessionSidebarArchiveUndoTests {
-    private func row(_ key: String = "thread", pinned: Bool = true) throws -> OpenClawChatSessionEntry {
+    func row(_ key: String = "thread", pinned: Bool = true) throws -> OpenClawChatSessionEntry {
         try JSONDecoder().decode(OpenClawChatSessionEntry.self, from: JSONSerialization.data(withJSONObject: [
             "key": "agent:research:\(key)", "agentId": "research", "sessionId": "original-\(key)", "pinned": pinned,
             "updatedAt": 10,
@@ -74,12 +74,15 @@ struct ChatSessionSidebarArchiveUndoTests {
     }
 
     func connection(
+        capabilities: [String] = [],
         current: @escaping () -> Bool = { true },
         request: @escaping (OpenClawChatGatewayRequest) async throws -> Data) throws -> OpenClawSessionMenuConnection
     {
+        var features = ["methods": ["sessions.patch", "sessions.patchMany", "sessions.delete"]]
+        if !capabilities.isEmpty { features["capabilities"] = capabilities }
         let hello = try JSONDecoder().decode(HelloOk.self, from: JSONSerialization.data(withJSONObject: [
             "type": "hello-ok", "protocol": 3, "server": [:],
-            "features": ["methods": ["sessions.patch", "sessions.patchMany", "sessions.delete"]],
+            "features": features,
             "snapshot": ["presence": [], "health": [:], "stateVersion": ["presence": 0, "health": 0], "uptimeMs": 0],
             "auth": ["scopes": ["operator.admin"]], "policy": [:],
         ]))
@@ -92,14 +95,16 @@ struct ChatSessionSidebarArchiveUndoTests {
             openWindow: { _ in })
     }
 
-    private func acknowledgement(_ row: OpenClawChatSessionEntry, archived: Bool) throws -> Data {
+    func acknowledgement(_ row: OpenClawChatSessionEntry, archived: Bool, token: String? = nil) throws -> Data {
         var entry: [String: Any] = ["sessionId": row.sessionId!, "updatedAt": archived ? 20 : 30]
         if archived {
             entry["archivedAt"] = 20
         } else if row.pinned == true {
             entry["pinnedAt"] = 30
         }
-        return try JSONSerialization.data(withJSONObject: ["ok": true, "key": row.key, "entry": entry])
+        var reply: [String: Any] = ["ok": true, "key": row.key, "entry": entry]
+        reply["archiveUndoToken"] = token
+        return try JSONSerialization.data(withJSONObject: reply)
     }
 
     private func undo(_ batch: ChatSessionSidebarBatch, owner: OpenClawChatSessionSidebarData?) async {

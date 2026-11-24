@@ -7,6 +7,7 @@ struct ChatSidebarArchiveReceipt {
     let id = UUID()
     let rows: [OpenClawChatSessionEntry]
     let connection: OpenClawSessionMenuConnection
+    let archiveUndoTokens: [String: String]
     var remaining: Duration = .seconds(6)
     var deadline: ContinuousClock.Instant? = ContinuousClock.now + .seconds(6)
 
@@ -17,29 +18,29 @@ struct ChatSidebarArchiveReceipt {
 
     mutating func pause(_ paused: Bool, now: ContinuousClock.Instant) {
         // ui/src/lib/toast.ts:29,117: six seconds of unhovered, unfocused time.
-        if paused, let deadline = self.deadline {
+        if paused, let deadline {
             self.remaining = max(.zero, now.duration(to: deadline))
             self.deadline = nil
-        } else if !paused, self.deadline == nil {
-            self.deadline = now + self.remaining
+        } else if !paused, deadline == nil {
+            deadline = now + self.remaining
         }
     }
 }
 
 extension ChatSessionSidebarBatch {
-    private static func archiveIdentity(_ row: OpenClawChatSessionEntry) -> String {
+    static func archiveIdentity(_ row: OpenClawChatSessionEntry) -> String {
         "\(OpenClawChatSessionSidebarData.identity(row))\u{0}\(row.sessionId ?? "")"
     }
 
     func isArchiving(_ row: OpenClawChatSessionEntry) -> Bool {
-        self.pendingArchives[Self.archiveIdentity(row)] != nil
+        pendingArchives[Self.archiveIdentity(row)] != nil
     }
 
     func beginArchive(_ row: OpenClawChatSessionEntry) -> UUID? {
         let key = Self.archiveIdentity(row)
-        guard self.pendingArchives[key] == nil else { return nil }
+        guard pendingArchives[key] == nil else { return nil }
         let token = UUID()
-        self.pendingArchives[key] = token
+        pendingArchives[key] = token
         return token
     }
 
@@ -47,105 +48,135 @@ extension ChatSessionSidebarBatch {
         let key = Self.archiveIdentity(row)
         // ui/src/lib/sessions/session-archive-state.ts:215 prevents retired completions
         // from clearing a newer same-target operation after reconnect.
-        if self.pendingArchives[key] == token { self.pendingArchives[key] = nil }
+        if pendingArchives[key] == token {
+            pendingArchives[key] = nil
+        }
     }
 
     @discardableResult
     func offerArchiveUndo(
-        _ rows: [OpenClawChatSessionEntry], connection: OpenClawSessionMenuConnection) -> ChatSidebarArchiveReceipt?
+        _ rows: [OpenClawChatSessionEntry],
+        connection: OpenClawSessionMenuConnection,
+        tokens: [String: String] = [:]) -> ChatSidebarArchiveReceipt?
     {
-        guard !rows.isEmpty, connection.isCurrent() else { return nil }
-        self.archiveUndo = ChatSidebarArchiveReceipt(rows: rows, connection: connection)
-        return self.archiveUndo
+        // A personal pin flag never proves that this Archive cleared a shared pin.
+        let accepted = connection.supportsArchiveUndo ? tokens.filter { !$0.value.isEmpty } : [:]
+        let undoable = connection.supportsPersonalPins ? rows
+            .filter { accepted[Self.archiveIdentity($0)] != nil } : rows
+        guard !undoable.isEmpty, connection.isCurrent() else { return nil }
+        archiveUndo = ChatSidebarArchiveReceipt(rows: undoable, connection: connection, archiveUndoTokens: accepted)
+        return archiveUndo
     }
 
     func expireArchiveUndo(now: ContinuousClock.Instant = ContinuousClock.now) {
-        if let deadline = self.archiveUndo?.deadline, deadline <= now { self.archiveUndo = nil }
+        if let deadline = archiveUndo?.deadline, deadline <= now {
+            archiveUndo = nil
+        }
     }
 
     func archive(
         _ row: OpenClawChatSessionEntry,
         mainKey: String,
         connection: OpenClawSessionMenuConnection,
-        owner: OpenClawChatSessionSidebarData?) async -> ChatSidebarArchiveReceipt?
+        owner: OpenClawChatSessionSidebarData?,
+        onArchived: () -> Void = {}) async -> ChatSidebarArchiveReceipt?
     {
         guard ChatSessionSidebarEligibility.canArchive(row, mainSessionKey: mainKey),
-              let token = self.beginArchive(row) else { return nil }
+              let token = beginArchive(row) else { return nil }
         defer { self.finishArchive(row, token: token) }
-        self.errors = [:]
-        self.notices = []
-        guard await self.patchArchive(
+        errors = [:]
+        notices = []
+        guard let receipt = await patchArchive(
             row,
             archived: true,
             connection: connection,
             owner: owner) else { return nil }
-        return self.offerArchiveUndo([row], connection: connection)
+        onArchived()
+        let tokens = receipt.archiveUndoToken.map { [Self.archiveIdentity(row): $0] } ?? [:]
+        return self.offerArchiveUndo([row], connection: connection, tokens: tokens)
     }
 
     private func patchArchive(
         _ row: OpenClawChatSessionEntry,
         archived: Bool,
         pinned: Bool? = nil,
+        archiveUndoToken: String? = nil,
         connection: OpenClawSessionMenuConnection,
-        owner: OpenClawChatSessionSidebarData?) async -> Bool
+        owner: OpenClawChatSessionSidebarData?) async -> OpenClawChatSessionPatchReceipt?
     {
         guard ChatPayloadDecoding.trimmedNonEmptyString(row.sessionId) != nil,
               Self.allows(.archived(archived), rows: [row], connection: connection, method: "sessions.patch")
         else {
-            self.notices = [String(localized: "These threads cannot be archived or restored. Refresh and try again.")]
-            return false
+            notices = [String(localized: "These threads cannot be archived or restored. Refresh and try again.")]
+            return nil
         }
         let token = owner?.beginMutation(target: row, field: .archived) {
             $0.archived = archived
-            if !archived { $0.archivedAt = nil }
+            if !archived {
+                $0.archivedAt = nil
+            }
         }
         var receipt: OpenClawChatSessionPatchReceipt?
         defer { owner?.finishMutation(token, receipt: receipt) }
         do {
             var fields: [String: AnyCodable] = ["archived": .init(archived)]
-            if let pinned { fields["pinned"] = .init(pinned) }
+            if archived, connection.supportsArchiveUndo {
+                fields["requestArchiveUndo"] = .init(true)
+            }
+            if let archiveUndoToken {
+                fields["archiveUndoToken"] = .init(archiveUndoToken)
+            }
+            if let pinned {
+                fields["pinned"] = .init(pinned)
+            }
             let request = OpenClawChatGatewayRequests.sessionMenu("sessions.patch", session: row, fields: fields)
             let data = try await connection.request(.init(
                 method: request.method, params: request.params, timeoutMs: archived ? 600_000 : 15000))
             var confirmed = try JSONDecoder().decode(OpenClawChatSessionPatchReceipt.self, from: data)
             confirmed.agentID = OpenClawChatSessionKey.agentID(from: row.key) ?? row.agentId
-            guard confirmed.matches(row) else { throw CocoaError(.coderReadCorrupt) }
+            guard confirmed.matches(row),
+                  !connection.supportsArchiveUndo || (confirmed.entry.archivedAt != nil) == archived
+            else { throw CocoaError(.coderReadCorrupt) }
             receipt = confirmed
-            if pinned != nil { owner?.confirmFields(confirmed, target: row, fields: [.pinned]) }
-            return true
+            if pinned != nil {
+                owner?.confirmFields(confirmed, target: row, fields: [.pinned])
+            }
+            return confirmed
         } catch {
             if connection.isCurrent() {
-                self.errors[OpenClawChatSessionSidebarData.identity(row)] = error.localizedDescription
+                errors[OpenClawChatSessionSidebarData.identity(row)] = error.localizedDescription
             }
-            return false
+            return nil
         }
     }
 
     func takeArchiveUndo(id: UUID) -> ChatSidebarArchiveReceipt? {
         // An old click cannot consume a newer notification.
-        guard let receipt = self.archiveUndo, receipt.id == id else { return nil }
-        self.archiveUndo = nil
+        guard let receipt = archiveUndo, receipt.id == id else { return nil }
+        archiveUndo = nil
         return receipt
     }
 
     func undoArchive(_ receipt: ChatSidebarArchiveReceipt, owner: OpenClawChatSessionSidebarData?) async {
         let connection = receipt.connection
         guard connection.isCurrent() else {
-            self.notices = [String(localized: "The Gateway changed. Archive Undo is no longer available.")]
+            notices = [String(localized: "The Gateway changed. Archive Undo is no longer available.")]
             return
         }
         // ui/src/components/session-organizer-operations.runtime.ts:202,238: captured
         // identities outlive navigation; only successful restores regain their previous pins.
         _ = await ChatSessionBatchMutationRunner.run(
-            keys: receipt.rows.map(OpenClawChatSessionSidebarData.identity))
+            keys: receipt.rows.map(Self.archiveIdentity))
         { @MainActor identity in
-            guard let row = receipt.rows.first(where: { OpenClawChatSessionSidebarData.identity($0) == identity })
+            guard let row = receipt.rows.first(where: { Self.archiveIdentity($0) == identity })
             else { return }
-            // Each ACK carries authoritative fields; restore and repin commit together even in a batch.
+            let token = receipt.archiveUndoTokens[Self.archiveIdentity(row)]
+            guard !connection.supportsPersonalPins || token != nil else { return }
             _ = await self.patchArchive(
                 row,
                 archived: false,
-                pinned: row.pinned == true ? true : nil,
+                pinned: !connection.supportsPersonalPins && row.pinned == true ? true : nil,
+                archiveUndoToken: token,
                 connection: connection,
                 owner: owner)
         }
@@ -155,48 +186,50 @@ extension ChatSessionSidebarBatch {
 extension ChatSessionSidebar {
     func isCurrentArchiveTarget(_ row: OpenClawChatSessionEntry) -> Bool {
         // An old archive ACK cannot navigate away from an admitted replacement.
-        self.viewModel.sidebarData?.row(key: row.key, agentID: row.agentId)?.sessionId == row.sessionId &&
-            self.isCurrentInteractionRow(row)
+        viewModel.sidebarData?.row(key: row.key, agentID: row.agentId)?.sessionId == row.sessionId &&
+            isCurrentInteractionRow(row)
     }
 
     func archiveSidebarSession(_ session: OpenClawChatSessionEntry) async {
         if session.isArchived {
-            await self.viewModel.restoreSession(session)
+            await viewModel.restoreSession(session)
             return
         }
         var row = session
         row.agentId = OpenClawChatSessionKey.agentID(from: row.key) ??
-            self.viewModel.sessionMutationTarget(key: row.key, agentID: row.agentId).agentID
-        if self.viewModel.isAttachmentOwnerPinned,
-           self.isCurrentInteractionRow(row)
+            viewModel.sessionMutationTarget(key: row.key, agentID: row.agentId).agentID
+        if viewModel.isAttachmentOwnerPinned,
+           isCurrentInteractionRow(row)
         {
-            self.batch.notices = [ChatSessionBatchValidationError.attachmentOwnerPinned.localizedDescription]
+            batch.notices = [ChatSessionBatchValidationError.attachmentOwnerPinned.localizedDescription]
             return
         }
-        guard !self.batch.isArchiving(row) else { return }
-        guard let connection = self.menuActions.connection else {
-            self.batch.notices = [String(localized: "The Gateway connection is not ready. Try again.")]
+        guard !batch.isArchiving(row) else { return }
+        guard let connection = menuActions.connection else {
+            batch.notices = [String(localized: "The Gateway connection is not ready. Try again.")]
             return
         }
-        let receipt = await self.batch.archive(
+        _ = await batch.archive(
             row,
-            mainKey: self.viewModel.selectedAgentMainSessionKey,
+            mainKey: viewModel.selectedAgentMainSessionKey,
             connection: connection,
-            owner: self.viewModel.sidebarData)
-        guard connection.isCurrent() else { return }
-        if receipt != nil, self.isCurrentArchiveTarget(row) {
-            self.viewModel.switchSession(to: self.viewModel.selectedAgentMainSessionKey)
+            owner: viewModel.sidebarData)
+        {
+            if connection.isCurrent(), self.isCurrentArchiveTarget(row) {
+                self.viewModel.switchSession(to: self.viewModel.selectedAgentMainSessionKey)
+            }
         }
-        self.viewModel.refreshSessions(limit: 200)
-        self.viewModel.refreshSidebarData()
+        guard connection.isCurrent() else { return }
+        viewModel.refreshSessions(limit: 200)
+        viewModel.refreshSidebarData()
     }
 
     var archiveUndoNotice: some View {
-        ChatSidebarArchiveNotice(batch: self.batch, undo: self.undoSidebarArchive)
+        ChatSidebarArchiveNotice(batch: batch, undo: self.undoSidebarArchive)
     }
 
     func undoSidebarArchive(_ displayed: ChatSidebarArchiveReceipt) {
-        guard let receipt = self.batch.takeArchiveUndo(id: displayed.id) else { return }
+        guard let receipt = batch.takeArchiveUndo(id: displayed.id) else { return }
         Task { @MainActor in
             await self.batch.undoArchive(receipt, owner: self.viewModel.sidebarData)
             self.viewModel.refreshSessions(limit: 200)
@@ -213,7 +246,7 @@ private struct ChatSidebarArchiveNotice: View {
     private enum Focus { case undo, dismiss }
 
     var body: some View {
-        if let receipt = self.batch.archiveUndo {
+        if let receipt = batch.archiveUndo {
             HStack {
                 Text(receipt.message)
                 Spacer()

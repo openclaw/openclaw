@@ -56,6 +56,7 @@ const ADDITIVE_AGENT_TABLES = new Map([
 const derivedMigrationColumns = new Map<string, ReadonlySet<string>>(
   Object.entries({
     ...AGENT_JSON_PREDICATE_COLUMNS,
+    session_nodes: [...AGENT_JSON_PREDICATE_COLUMNS.session_nodes, "archive_undo_marker"],
     session_windows: ["row_transcript_json", "row_transcript_updated_at"],
     trajectory_runtime_events: ["event_utf8_bytes", "event_payload", "event_codec"],
     session_pending_inputs: ["end_cause", "origin_source_json"],
@@ -223,6 +224,10 @@ function captureTable(
       !(role === "agent" && table === "memory_entry_origins" && !withoutRowid && index === 0) &&
       migrationColumn(role, table, name),
   );
+  // A missing pre-v44 marker equals SQL NULL, never an issued occurrence. Keep any
+  // non-null value in the crossing digest so migration cannot create or replace it.
+  const markerIndex =
+    role === "agent" && table === "session_nodes" ? names.indexOf("archive_undo_marker") : -1;
   const sha256 = createHash("sha256").update(JSON.stringify(names));
   const migrationSha256 =
     retained.every(Boolean) && !registry
@@ -321,7 +326,10 @@ function captureTable(
       if (registryRowHash) {
         hashCell(registryRowHash, row[`type_${index}`], row[`value_${index}`]);
       }
-      if (retained[index] && migrationSha256) {
+      if (
+        migrationSha256 &&
+        (retained[index] || (index === markerIndex && row[`value_${index}`] !== null))
+      ) {
         if (
           migratingRegistration &&
           ["schema_version", "last_seen_at", "size_bytes"].includes(names[index]!)

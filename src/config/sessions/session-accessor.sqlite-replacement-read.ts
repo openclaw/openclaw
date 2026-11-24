@@ -14,6 +14,7 @@ import { getSessionKysely } from "./session-accessor.sqlite-scope-helpers.js";
 import { assertCanonicalSqliteSessionKeysCurrent } from "./session-canonical-key.js";
 
 export type SessionEntryReplacementSelection = {
+  includeArchiveUndoMarkers?: boolean;
   fieldPatch?: SessionEntryReplacementCommit["fieldPatch"];
   sessionKeys?: readonly string[];
   includeSessionWindowOwner?: string;
@@ -64,6 +65,19 @@ export function readSessionEntryReplacementState(
   const selected = selectedSessionKeys
     ? uniqueStrings([...selectedSessionKeys, ...labelOwnerKeys])
     : [...iterateSessionEntryKeys(database)];
+  const markers =
+    params.includeArchiveUndoMarkers && selected.length
+      ? new Map(
+          executeSqliteQuerySync(
+            database.db,
+            getSessionKysely(database.db)
+              .selectFrom("session_nodes")
+              .select(["session_key", "archive_undo_marker"])
+              .where("session_key", "in", selected)
+              .where("archive_undo_marker", "is not", null),
+          ).rows.map((row) => [row.session_key, row.archive_undo_marker]),
+        )
+      : undefined;
   const expectedRows = new Map<string, ResolvedSessionEntryRow>();
   const projection = params.fieldPatch?.snapshotFields ?? (params.fieldPatch ? "list" : "full");
   const readPrepared =
@@ -78,7 +92,14 @@ export function readSessionEntryReplacementState(
       return [];
     }
     expectedRows.set(sessionKey, row);
-    return [{ entry: structuredClone(row.entry), sessionKey }];
+    const marker = markers?.get(sessionKey);
+    return [
+      {
+        entry: structuredClone(row.entry),
+        sessionKey,
+        ...(marker ? { archiveUndoMarker: marker } : {}),
+      },
+    ];
   });
   return { entries, expectedRows, labelOwnerKeys, selectedSessionKeys };
 }

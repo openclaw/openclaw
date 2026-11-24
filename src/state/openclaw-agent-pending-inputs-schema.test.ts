@@ -38,6 +38,7 @@ import {
   assertOpenClawMigrationWitnessPreserved,
   captureOpenClawMigrationWitness,
 } from "./openclaw-migration-witness.js";
+import { OPENCLAW_AGENT_SCHEMA_VERSION } from "./openclaw-schema-versions.js";
 import {
   expectRow,
   expectRows,
@@ -116,6 +117,7 @@ describe("pending input additive schema", () => {
     database.exec(`
       ALTER TABLE session_pending_inputs DROP COLUMN end_cause;
       ALTER TABLE session_pending_inputs DROP COLUMN origin_source_json;
+      ALTER TABLE session_nodes DROP COLUMN archive_undo_marker;
       PRAGMA user_version = 42;
       UPDATE schema_meta SET schema_version = 42 WHERE meta_key = 'primary';
     `);
@@ -157,9 +159,11 @@ describe("pending input additive schema", () => {
     database.close();
     await migratePreviousDatabase(options, filename);
     const admitted = openOpenClawAgentDatabase(options).db;
-    expect(admitted.prepare("PRAGMA user_version").get()).toEqual({ user_version: 43 });
+    expect(admitted.prepare("PRAGMA user_version").get()).toEqual({
+      user_version: OPENCLAW_AGENT_SCHEMA_VERSION,
+    });
     expectRow(admitted, "SELECT schema_version FROM schema_meta WHERE meta_key = 'primary'", {
-      schema_version: 43,
+      schema_version: OPENCLAW_AGENT_SCHEMA_VERSION,
     });
     expect(
       admitted
@@ -200,15 +204,18 @@ describe("pending input additive schema", () => {
       using old = await previousDatabase(filename);
       old.exec(`
         DROP TABLE session_pending_inputs;
+        ALTER TABLE session_nodes DROP COLUMN archive_undo_marker;
         PRAGMA user_version = 42;
         UPDATE schema_meta SET schema_version = 42 WHERE meta_key = 'primary';
       `);
     }
     await migratePreviousDatabase(options, filename);
     const admitted = openOpenClawAgentDatabase(options).db;
-    expect(admitted.prepare("PRAGMA user_version").get()).toEqual({ user_version: 43 });
+    expect(admitted.prepare("PRAGMA user_version").get()).toEqual({
+      user_version: OPENCLAW_AGENT_SCHEMA_VERSION,
+    });
     expectRow(admitted, "SELECT schema_version FROM schema_meta WHERE meta_key = 'primary'", {
-      schema_version: 43,
+      schema_version: OPENCLAW_AGENT_SCHEMA_VERSION,
     });
     expect(tableExists(admitted, "session_pending_inputs")).toBe(false);
   });
@@ -416,6 +423,7 @@ describe("pending input additive schema", () => {
       old.exec(`
         ALTER TABLE session_pending_inputs DROP COLUMN end_cause;
         ALTER TABLE session_pending_inputs DROP COLUMN origin_source_json;
+        ALTER TABLE session_nodes DROP COLUMN archive_undo_marker;
         PRAGMA user_version = 42;
         UPDATE schema_meta SET schema_version = 42 WHERE meta_key = 'primary';
       `);

@@ -44,6 +44,8 @@ final class ChatSessionSidebarBatch {
         let key: String
         let ok: Bool
         let error: Failure?
+        let agentId: String?
+        let archiveUndoToken: String?
         struct Failure: Decodable { let message: String }
     }
 
@@ -176,10 +178,14 @@ final class ChatSessionSidebarBatch {
         let scope = self.scope
         self.writingPins = true
         // The preference belongs to the connection, not the current roster filter or selection.
-        defer { if self.scope == scope { self.writingPins = false } }
+        defer {
+            if self.scope == scope {
+                self.writingPins = false
+            }
+        }
         do {
             for attempt in 0..<2 {
-                let previous = try await self.pinEntries(connection)
+                let previous = try await pinEntries(connection)
                 guard self.scope == scope else { return }
                 do {
                     let next = try Self.movingPin(previous, key: key, target: target, after: after)
@@ -201,7 +207,7 @@ final class ChatSessionSidebarBatch {
                     throw error
                 }
                 // The write was acknowledged. A newer peer order can supersede it, but a failed read cannot.
-                if let latest = try? await self.pinEntries(connection), self.scope == scope {
+                if let latest = try? await pinEntries(connection), self.scope == scope {
                     self.sidebarEntries = latest.compactMap { $0.value as? String }
                 }
                 return
@@ -228,7 +234,9 @@ final class ChatSessionSidebarBatch {
                 "sessions.delete",
                 scope: rows.allSatisfy(\.isArchived) ? "operator.write" : "operator.admin")
         }
-        if connection.allows(method) { return true }
+        if connection.allows(method) {
+            return true
+        }
         // ui/src/lib/session-method-access.ts:32,81 preflights the entire scoped batch.
         if case .archived = action {
             return connection.allows(method, scope: "operator.sessions.write") &&
@@ -303,11 +311,21 @@ final class ChatSessionSidebarBatch {
         defer { for (row, token) in pending {
             self.finishArchive(row, token: token)
         } }
-        let successful = await self.patch(
+        var fields = action.patch
+        if action == .archived(true), connection.supportsArchiveUndo {
+            fields["requestArchiveUndo"] = .init(true)
+        }
+        var tokens: [String: String] = [:]
+        let successful = await patch(
             action == .archived(true) ? pending.map(\.0) : rows,
-            fields: action.patch,
+            fields: fields,
             connection: connection)
-        if action == .archived(true) { self.offerArchiveUndo(successful, connection: connection) }
+        { row, token in
+            tokens[Self.archiveIdentity(row)] = token
+        }
+        if action == .archived(true) {
+            offerArchiveUndo(successful, connection: connection, tokens: tokens)
+        }
         return successful
     }
 
@@ -341,7 +359,8 @@ final class ChatSessionSidebarBatch {
     func patch(
         _ rows: [OpenClawChatSessionEntry],
         fields: [String: AnyCodable],
-        connection: OpenClawSessionMenuConnection) async -> [OpenClawChatSessionEntry]
+        connection: OpenClawSessionMenuConnection,
+        archived: (OpenClawChatSessionEntry, String) -> Void = { _, _ in }) async -> [OpenClawChatSessionEntry]
     {
         struct Response: Decodable { let outcomes: [Outcome] }
         var successful: [OpenClawChatSessionEntry] = []
@@ -356,11 +375,25 @@ final class ChatSessionSidebarBatch {
                     chunk,
                     patch: fields))
                 let response = try JSONDecoder().decode(Response.self, from: data)
-                guard response.outcomes.map(\.key) == chunk.map(\.key) else {
+                guard response.outcomes.count == chunk.count,
+                      zip(chunk, response.outcomes).allSatisfy({ row, outcome in
+                          guard row.key == outcome.key else { return false }
+                          guard fields["requestArchiveUndo"] != nil else { return true }
+                          let expected = OpenClawChatSessionKey.agentID(from: row.key) ?? row.agentId
+                          return outcome
+                              .agentId == expected ||
+                              (outcome.agentId == nil && OpenClawChatSessionKey.agentID(from: row.key) != nil)
+                      })
+                else {
                     throw CocoaError(.coderReadCorrupt)
                 }
                 for (row, outcome) in zip(chunk, response.outcomes) {
-                    if outcome.ok { successful.append(row) } else {
+                    if outcome.ok {
+                        successful.append(row)
+                        if let token = outcome.archiveUndoToken, !token.isEmpty {
+                            archived(row, token)
+                        }
+                    } else {
                         errors[OpenClawChatSessionSidebarData.identity(row)] = outcome.error?
                             .message ?? String(localized: "The thread operation failed.")
                     }
@@ -398,9 +431,14 @@ final class ChatSessionSidebarBatch {
         if section == "pinned" {
             // ui/src/components/session-organizer.ts handleSidebarZoneDrop consumes self-drops before bubbling.
             if let target, OpenClawChatSessionSidebarData.identity(row) ==
-                OpenClawChatSessionSidebarData.identity(target) { return .selfDrop }
+                OpenClawChatSessionSidebarData.identity(target)
+            {
+                return .selfDrop
+            }
             guard ChatSessionSidebarEligibility.canPin(row) else { return nil }
-            if row.pinned == true { return .mutation(nil) }
+            if row.pinned == true {
+                return .mutation(nil)
+            }
             var patch: [String: AnyCodable] = ["pinned": .init(true)]
             if let target {
                 // A named insert is one guarded patch, never an append followed by a best-effort move.
@@ -416,7 +454,9 @@ final class ChatSessionSidebarBatch {
         if section.hasPrefix("group:") || section == "recent" {
             let category = section == "recent" ? nil : String(section.dropFirst(6))
             var patch = row.category == category ? [:] : Action.category(category).patch
-            if row.pinned == true { patch["pinned"] = .init(false) }
+            if row.pinned == true {
+                patch["pinned"] = .init(false)
+            }
             return patch.isEmpty ? nil : .mutation(patch)
         }
         return section == "list" && row.pinned == true ? .mutation(["pinned": .init(false)]) : nil
@@ -427,7 +467,9 @@ final class ChatSessionSidebarBatch {
     }
 
     nonisolated static func sectionToken(_ id: String) -> String {
-        if id.hasPrefix("group:") { return "category:" + id.dropFirst(6) }
+        if id.hasPrefix("group:") {
+            return "category:" + id.dropFirst(6)
+        }
         return id == "recent" ? "ungrouped" : id
     }
 
@@ -438,7 +480,9 @@ final class ChatSessionSidebarBatch {
         for token in stored where !order.contains(token) {
             if builtins.contains(token) || token.hasPrefix("catalog:") ||
                 (token.hasPrefix("category:") && groups.contains(String(token.dropFirst(9))))
-            { order.append(token) }
+            {
+                order.append(token)
+            }
         }
         for group in groups where !order.contains("category:\(group)") {
             order.insert("category:\(group)", at: order.firstIndex(where: { builtins.contains($0) }) ?? order.count)

@@ -11,6 +11,10 @@ public struct OpenClawSessionMenuConnection {
         self.hello.supportsServerCapability(.personalSessionPins)
     }
 
+    var supportsArchiveUndo: Bool {
+        self.supportsPersonalPins && self.hello.supportsServerCapability(.sessionArchiveUndo)
+    }
+
     public let local: Bool
     public var groupDefaultsBrowser: OpenClawGroupDefaultsBrowser?
     public let selfProfileID: String?
@@ -87,7 +91,7 @@ public struct OpenClawSessionMenuConnection {
     @discardableResult
     public func request(_ request: OpenClawChatGatewayRequest) async throws -> Data {
         guard self.isCurrent(), !Task.isCancelled else { throw CancellationError() }
-        let data = try await self.sendRequest(request)
+        let data = try await sendRequest(request)
         guard self.isCurrent(), !Task.isCancelled else { throw CancellationError() }
         return data
     }

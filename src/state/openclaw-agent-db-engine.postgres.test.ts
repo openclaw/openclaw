@@ -10,6 +10,7 @@ import { admitStoreSearch } from "../infra/database-engine/adapters.js";
 import { withEngineStoreAdmission } from "../infra/database-engine/admission-scope.js";
 import { withDatabaseEngineSelection } from "../infra/database-engine/context.js";
 import type { SearchSchema, StoreSchema } from "../infra/database-engine/contract.js";
+import { createPostgresEngineTestFixture } from "../infra/database-engine/engine-store.test-support.js";
 import { openEngineStore } from "../infra/database-engine/open.js";
 import { getPostgresPhysicalFacts } from "../infra/database-engine/physical-facts.js";
 import { resolveDatabaseFamilyEngines } from "../infra/database-engine/registry.js";
@@ -567,7 +568,7 @@ describe.skipIf(!connection)("PostgreSQL pending-input endings migration", () =>
             }
             db.close();
             publishSqliteDatabaseSchemaChange(anchor);
-            db = open(agentEngineSchema);
+            db = open({ ...agentEngineSchema, ...migration.schema, version: 43 });
             expect(getPostgresPhysicalFacts(db)?.version).toBe(43);
             expect(
               db
@@ -608,3 +609,54 @@ describe.skipIf(!connection)("PostgreSQL pending-input endings migration", () =>
     },
   );
 });
+
+it.skipIf(!connection)(
+  "upgrades a populated PostgreSQL v43 without rewriting nodes and refuses a v43 reopen",
+  () => {
+    withEngineStoreAdmission(() => {
+      const step = agentEngineSchema.postgresMigrations!.find(
+        (candidate) => candidate.version === 44,
+      )!;
+      const source = {
+        ...agentEngineSchema,
+        ...step.fromSchema,
+        version: 43,
+        postgresMigrations: [],
+      };
+      using fixture = createPostgresEngineTestFixture({
+        directory: dirs.make("pg-archive-undo-"),
+        connection: connection!,
+        schemaPrefix: "archive_undo_test",
+        schema: source,
+      });
+      const old = fixture.open();
+      old.exec(`INSERT INTO schema_meta VALUES ('primary', 'agent', 43, 'main', NULL, 1, 1);
+      INSERT INTO session_nodes (session_key, current_session_id, entry_json, updated_at, archived_at)
+      VALUES ('retained', 'one', '{ "sessionId": "one" }', 1, 1)`);
+      const retained = `SELECT xmin::text AS xmin, ctid::text AS ctid, entry_json, archived_at FROM session_nodes`;
+      const before = old.prepare(retained).all();
+      expect(() => old.prepare("SELECT archive_undo_marker FROM session_nodes").all()).toThrow(
+        /does not exist/iu,
+      );
+      old.close();
+      fixture.invalidate();
+      const db = fixture.open({ ...agentEngineSchema, ...step.schema, version: 44 });
+      expect(db.prepare("SELECT schema_version FROM schema_meta").get()).toEqual({
+        schema_version: 44,
+      });
+      expect(db.prepare(retained).all()).toEqual(before);
+      expect(db.prepare("SELECT archive_undo_marker FROM session_nodes").all()).toEqual([
+        { archive_undo_marker: null },
+      ]);
+      expect(
+        db
+          .prepare(
+            `SELECT data_type, is_nullable, column_default FROM information_schema.columns WHERE table_schema = ? AND table_name = 'session_nodes' AND column_name='archive_undo_marker'`,
+          )
+          .get(db.schema),
+      ).toEqual({ data_type: "text", is_nullable: "YES", column_default: null });
+      fixture.invalidate();
+      expect(() => fixture.open(source)).toThrow(/newer|version.*44/iu);
+    });
+  },
+);

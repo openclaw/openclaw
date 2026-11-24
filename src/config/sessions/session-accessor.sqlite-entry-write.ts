@@ -1,5 +1,3 @@
-import { sql } from "kysely";
-import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
 import {
   sqliteSessionIdWriteScope,
   withSqliteDatabaseWriteScope,
@@ -9,6 +7,7 @@ import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { readSessionActivitySummary } from "./activity-summary.js";
 import type { ConversationRouteContext } from "./conversation-route-context.js";
 import { prepareLegacyAcpMigrationSourcesForEntryWrite } from "./session-accessor.sqlite-acp-provenance.js";
+import { prepareSessionArchiveUndoWrite } from "./session-accessor.sqlite-archive-undo.js";
 import { conversationPublication } from "./session-accessor.sqlite-conversation-publication.js";
 import {
   linkSessionConversation,
@@ -29,9 +28,10 @@ import {
 } from "./session-accessor.sqlite-entry-read.js";
 import { captureSessionEntrySnapshot } from "./session-accessor.sqlite-entry-snapshot.js";
 import {
-  buildSessionEntryNodeUpsert,
-  buildSessionEntryWindowUpsert,
   getSessionEntryWriteQueries,
+  writeSessionEntryBatchRows,
+  type SessionNodeWriteRow,
+  type SessionWindowWriteRow,
 } from "./session-accessor.sqlite-entry-write-queries.js";
 import { advanceSessionEntryMaintenanceAgeFact } from "./session-accessor.sqlite-maintenance-age.js";
 import { clearSessionCollaborationForKey } from "./session-accessor.sqlite-node-artifacts.js";
@@ -44,6 +44,7 @@ import {
   readSessionActorTransactionState,
   replaceSessionActorStoredEntry,
 } from "./session-actor-transaction.js";
+import type { SessionArchiveUndoIntent } from "./session-archive-undo.js";
 import { markCanonicalSessionValidationPending } from "./session-canonical-key.js";
 import {
   assertCanonicalSessionEntryLineageWrite,
@@ -79,6 +80,7 @@ import { resolveDeliveryProvenCanonicalSessionKey } from "./store-entry.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
 
 type SessionEntryWriteOptions = {
+  archiveUndo?: SessionArchiveUndoIntent;
   allowStoredAliases?: boolean;
   /** Only the personal involvement owner may replace this logical-node state. */
   profileInvolvement?: SessionEntry["profileInvolvement"];
@@ -104,15 +106,8 @@ type SessionEntryWriteOptions = {
 
 type PreparedSessionEntryWrite = {
   sessionKey: string;
-  node:
-    | (ReturnType<typeof bindSessionNode> & { legacy_acp_migration_json?: string | null })
-    | undefined;
-  window:
-    | (Omit<ReturnType<typeof bindSessionRoot>, "primary_conversation_id"> & {
-        primary_conversation_id: string | null;
-        transcript_observed_at: number;
-      })
-    | undefined;
+  node: SessionNodeWriteRow | undefined;
+  window: SessionWindowWriteRow | undefined;
   windowPostimage: SessionEntryWindowRow;
   setWindowPostimage(postimage: SessionEntryWindowRow): void;
   batchable: boolean;
@@ -203,6 +198,17 @@ function prepareSessionEntryWrite(
     options,
   );
   normalizedEntry = normalized.entry;
+  const archiveUndo = prepareSessionArchiveUndoWrite({
+    database,
+    sessionKey,
+    previous: canonicalPreviousEntry,
+    next: normalizedEntry,
+    options,
+    actorPreparation: actorPreparation !== undefined,
+  });
+  if (archiveUndo === "requires-transaction") {
+    return undefined;
+  }
   // Public/plugin projections omit this server-owned field. Same-session replacements
   // retain publication; only an explicit field clear or a new session id revokes it.
   if (
@@ -664,29 +670,9 @@ export function writeArchivedSessionEntries(
         // Each conflict key occurs once, including shared physical transcript windows.
         const generation =
           nodes.size > 0 || windows.size > 0
-            ? trackSessionEntryCacheWrite(database, () => {
-                if (nodes.size > 0) {
-                  executeSqliteQuerySync(
-                    database.db,
-                    buildSessionEntryNodeUpsert(
-                      database.db,
-                      [...nodes.values()].map((node) =>
-                        Object.assign({}, node, {
-                          session_started_at: /* kysely-allow-raw: exact int64 bind matches the single-entry writer. */ sql<
-                            number | null
-                          >`${node.session_started_at}`,
-                        }),
-                      ),
-                    ),
-                  );
-                }
-                if (windows.size > 0) {
-                  executeSqliteQuerySync(
-                    database.db,
-                    buildSessionEntryWindowUpsert(database.db, [...windows.values()], true),
-                  );
-                }
-              })
+            ? trackSessionEntryCacheWrite(database, () =>
+                writeSessionEntryBatchRows(database.db, [...nodes.values()], [...windows.values()]),
+              )
             : undefined;
         for (const prepared of batch) {
           const window = windowPostimages.get(prepared.windowPostimage.session_id);

@@ -6,4 +6,5 @@
 # +24: actual embedded tool rejects an oversized pin layout without changing it; removing an old pin lets the same request succeed.
 # +10: compare real serialized rename receipts for personal and legacy clients without modifying the historical timestamp.
 # +5: keep the original authorized shared-pin and timestamp assertions alongside the negotiated personal-pin assertions.
-1335
+# +789: one signed Archive occurrence across legacy and personal profiles, SDK/Doctor same-value and replacement writes, retired checkout fences, v43 migration and rollback, and Mac multi-chunk partial receipts; no duplicate synthetic UI transport suites.
+2124
