@@ -121,7 +121,7 @@ it.each(["live", "revoked", "replaced child", "replaced Gateway"] as const)(
           params.isChildSessionEffectsAllowed?.(),
         ]).toEqual([false, false]);
       }
-      return ownerState === "replaced Gateway" ? "intentional_non_delivery" : "delivered";
+      return ownerState === "replaced Gateway" ? "undelivered" : "delivered";
     });
     let rejectAdmission: SubagentAdmissionRejection | undefined;
     try {

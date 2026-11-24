@@ -70,7 +70,7 @@ export function registerDeliveryMirrorCases({
         runSubagentAnnounceFlow: vi.fn<SubagentLifecycleOptions["runSubagentAnnounceFlow"]>(
           async ({ onDeliveryResult }) => {
             await onDeliveryResult?.({ delivered: false, path: "direct", error: failure });
-            return "retryable";
+            return "undelivered";
           },
         ),
       }).completeSubagentRun(

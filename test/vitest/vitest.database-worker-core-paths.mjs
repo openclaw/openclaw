@@ -625,8 +625,9 @@ export const databaseWorkerCoreTestFiles = [
   "src/agents/code-mode.tool-result-middleware.test.ts",
   "src/agents/code-mode.source-reply.loop.test.ts",
   "src/agents/command/attempt-execution.shared.test.ts",
-  "src/agents/command/session-store.snooze.test.ts",
   "src/agents/command/session-store.test.ts",
+  // The run end reads the transcript's newest visible reply through the agent database worker.
+  "src/shared/session-unread.test.ts",
   "src/agents/core-coding-tools.exec-workdir.test.ts",
   "src/agents/subagents/registry/subagent-registry-sweeper-recovery.test.ts",
   "src/agents/subagents/spawn/acp-spawn.authority.test.ts",

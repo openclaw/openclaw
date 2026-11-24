@@ -81,7 +81,6 @@ export const sweptContext = (entry: SubagentRunRecord) => ({
 });
 
 export const isSessionCleanupDeferred = (entry: SubagentRunRecord) =>
-  entry.delivery?.disposition === "retryable" ||
   ((entry.delivery?.status === "pending" || entry.delivery?.status === "in_progress") &&
     entry.delivery.disposition === "session_queued") ||
   entry.pauseReason === "sessions_yield" ||
