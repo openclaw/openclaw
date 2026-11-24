@@ -41,6 +41,7 @@ import {
   readExistingAgentSchemaMeta,
   assertExistingAgentSchemaOwner,
   assertCurrentAgentSchemaMetadata,
+  assertCanonicalAgentPersistenceVersion,
 } from "./openclaw-agent-db-schema-read.js";
 import {
   ensureSessionAdditiveColumns,
@@ -266,6 +267,7 @@ export function assertOpenClawAgentCurrentRuntimeSchema(
   options: { agentId: string; pathname: string; requireCanonicalIndexes?: boolean },
   readTable?: SqliteTableContractReader,
 ): void {
+  assertCanonicalAgentPersistenceVersion(database, options.pathname);
   const agentId = normalizeAgentId(options.agentId);
   const metadata = readExistingAgentSchemaMeta(database);
   assertCurrentAgentSchemaMetadata(metadata, agentId, options.pathname);
