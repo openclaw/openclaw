@@ -291,8 +291,7 @@ After the healthy case commits, `backward-read.json` reports whether the retaine
 old build can open an online SQLite backup of the new shared-state schema.
 The probe uses a fresh home/config, its own port, and bounded child processes;
 it never opens the live candidate state. Its `readable`, `refused`, or `unproven`
-result is observational and does not gate the update lane. The crash case does
-not run this probe.
+result is observational and does not gate the update lane.
 
 Schema-version or production migration changes also select a pre-ready
 downgrade check. T is built from the PR fork point; T+1 reuses the tested
