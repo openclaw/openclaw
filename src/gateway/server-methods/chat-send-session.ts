@@ -348,7 +348,7 @@ export async function prepareChatSendSession(params: {
   const { request, client } = params;
   const { p } = request;
   const { cfg, agentId, sessionKey, entry, legacyKey } = loadedValue;
-  if (p.expectedSessionId !== undefined && p.expectedSessionId !== entry?.sessionId) {
+  if (request.targetPrecondition?.matches(entry) === false) {
     return { ok: false as const, error: chatSendIncarnationChangedError() };
   }
   if (isIncognitoSessionKey(sessionKey) && !entry) {

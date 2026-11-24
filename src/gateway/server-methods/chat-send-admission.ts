@@ -318,7 +318,7 @@ export async function admitChatSend(params: ChatSendAdmissionParams) {
         const latestEntry = latestSession.entry;
         const latestSessionId = latestEntry?.sessionId;
         // A reset between preparation and write admission must leave the replacement untouched.
-        if (p.expectedSessionId !== undefined && latestSessionId !== p.expectedSessionId) {
+        if (request.targetPrecondition?.matches(latestEntry) === false) {
           throw new Error(SESSION_INCARNATION_CHANGED);
         }
         admittedSessionEntry = latestEntry;

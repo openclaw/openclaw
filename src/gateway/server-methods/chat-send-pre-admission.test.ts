@@ -43,6 +43,7 @@ import {
   respondChatSendRetry,
   runChatSendPreAdmission,
 } from "./chat-send-pre-admission.js";
+import { normalizeChatSendRequest } from "./chat-send-request.js";
 
 const submittedInput = vi.hoisted(() =>
   vi.fn<() => Promise<Awaited<ReturnType<typeof readSessionSubmittedInput>>>>(),
@@ -311,14 +312,18 @@ it.each([false, true])("scopes Stop by agent and optional session ID (%s)", (str
     await state.writeConfig(cfg);
     setRuntimeConfigSnapshot(cfg);
     params.context.getRuntimeConfig = () => cfg;
-    params.request.stopCommand = true;
-    params.request.p = {
-      sessionKey: "global",
-      agentId: "research",
-      idempotencyKey: params.session.clientRunId,
-      message: "/stop",
-      ...(strict ? { expectedSessionId: "selected-session" } : {}),
-    };
+    const normalized = await normalizeChatSendRequest({
+      client: params.client,
+      params: {
+        sessionKey: "global",
+        agentId: "research",
+        idempotencyKey: params.session.clientRunId,
+        message: "/stop",
+        ...(strict ? { expectedSessionId: "selected-session" } : {}),
+      },
+    });
+    if (!normalized.ok) throw new Error(normalized.error);
+    params.request = normalized.value;
     Object.assign(params.session, {
       cfg,
       sessionKey: "global",
