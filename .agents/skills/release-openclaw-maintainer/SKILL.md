@@ -115,14 +115,14 @@ Preserve any narrower scope the operator explicitly requested. Diagnostic run
 IDs belong in the PR/handoff, not in matching restrictions merely because they
 identify the original failure. See the [attempt-binding correction in #201694](https://github.com/openclaw/openclaw/pull/201694)
 and the [operator-directed release-wide default in #201769](https://github.com/openclaw/openclaw/pull/201769).
-For an approved whole-job cancellation or missing required job, set the exact
-observed state (`cancelled` or `missing`) and record `approvedBy` and the short reason.
-Use `jobName: "<workflow>"` only for a missing required child, with its exact role and
-no run/attempt binding. Preserve `waived-missing`/`waived-cancelled` separately from passes;
-never treat skipped jobs, incomplete dispatch identities, or missing receipts for
-known runs as absent work. See [#203832](https://github.com/openclaw/openclaw/pull/203832)
-for the earlier cancelled-step boundary and [FRV run 45303777043](https://github.com/openclaw/openclaw/actions/runs/45303777043)
-for the missing dispatch addressed in [#204382](https://github.com/openclaw/openclaw/pull/204382).
+For a job waiver, name the exact job and record the approver and short reason.
+A matching job need not run: do not constrain it by status or cancellation step.
+To waive all descendants of a child, use its exact role and parent job name
+(or `jobName: "<workflow>"`). Omit the attempt binding when no run is required.
+Record the waiver separately from a pass and keep raw outcomes unchanged. See
+[#204382](https://github.com/openclaw/openclaw/pull/204382), the missing dispatch
+in [FRV 45303777043](https://github.com/openclaw/openclaw/actions/runs/45303777043),
+and the cancelled descendants in [Performance 45327586533](https://github.com/openclaw/openclaw/actions/runs/45327586533).
 For grant-only edits, reuse the policy tests; add cases only for new matching or
 validation behavior. Keep new reasons to one sentence and authorization details
 in the release handoff, not public Q data or published docs ([#199776](https://github.com/openclaw/openclaw/pull/199776)).

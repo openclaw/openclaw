@@ -72,8 +72,9 @@ validation even when first published to beta.
   Windows packaged install/upgrade in Release Checks. All-group qualification
   includes all nine Gateway install/upgrade combinations.
 - Selected `openclaw/ci-gate` must succeed unless checked-in exact-job grants
-  cover every failed cause. Unwaived missing or cancelled coverage and skipped
-  required coverage block. A matching waiver records the exception, not a pass.
+  cover every failed cause. A matching job waiver applies regardless of outcome;
+  the job does not have to run. A parent waiver covers every descendant without
+  requiring a child run or receipt. Unwaived gaps still block. Waived is not passed.
   Exact failed live-provider/Telegram leaves and operator-accepted
   `2026.11.5-beta.3`/candidate-bound `2026.11.4` jobs may use that policy;
   candidate, job, version, and attempt restrictions still apply. **FRV must
@@ -230,8 +231,9 @@ Only authenticated direct admission qualifies evidence for publication.
 Unadmitted historical manifests, including v3, require new admitted
 qualification; ancestry alone is not admission. Use [receipt-only recovery](/reference/full-release-validation/evidence#receipt-backed-aggregate-recovery)
 to reseal existing qualification without rerunning any wave. A separately admitted,
-signed ledger can add waivers for exact retained attempts; recovery cannot
-replace missing receipts or qualify unwaived failures. C, Q, and P may remain independent.
+signed ledger can add waivers for exact retained attempts or explicitly waive a
+child with no receipt. Recovery cannot replace unwaived receipts or qualify unwaived
+failures. C, Q, and P may remain independent.
 
 ### Frozen qualification identity
 

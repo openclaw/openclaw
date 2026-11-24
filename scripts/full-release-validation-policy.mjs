@@ -745,7 +745,10 @@ export function composeReleaseAttemptJobs(attempts, expected = {}) {
   for (let index = 0; index < normalizedAttempts.length; index += 1) {
     const attempt = normalizedAttempts[index];
     const expectedAttempt = plannedRunAttempt + index;
-    if (attempt.runAttempt !== expectedAttempt || attempt.jobs.length === 0) {
+    if (
+      attempt.runAttempt !== expectedAttempt ||
+      (!expected.allowEmptyAttempts && attempt.jobs.length === 0)
+    ) {
       throw new Error("release child attempt evidence is gapped");
     }
     const identityNames = new Set();
@@ -805,9 +808,10 @@ export function composeReleaseAttemptJobs(attempts, expected = {}) {
   return { ...composite, sha256: releaseCompositeJobsSha256(composite) };
 }
 
-export function composeReleaseChildAttemptEvidence({ attempts, expected, run }) {
+export function composeReleaseChildAttemptEvidence({ attempts, expected, run, workflowWaived }) {
   const provenance = validateReleaseChildRunProvenance(run, expected);
   const composite = composeReleaseAttemptJobs(attempts, {
+    allowEmptyAttempts: workflowWaived && run.status === "completed",
     effectiveRunAttempt: provenance.effectiveRunAttempt,
     effectiveRunStatus: run.status,
     plannedRunAttempt: expected.plannedRunAttempt,
@@ -1674,14 +1678,19 @@ export function terminalPolicyPass(child, targetVersion, targetSha, waiverPolicy
 }
 
 function terminalChildPass(child, policy) {
+  if (child.status !== "completed") {
+    return false;
+  }
+  if (policy.workflowWaived) {
+    return true;
+  }
+  const permittedConclusion =
+    child.conclusion === "success" ||
+    (child.conclusion === "failure" && policy.advisoryJobs.some(isFailedJob)) ||
+    (["failure", "cancelled", "skipped"].includes(child.conclusion) && policy.waivedWorkDidNotPass);
   return (
-    child.status === "completed" &&
-    child.jobs.every((job) => job.status === "completed") &&
-    (child.conclusion === "success" ||
-      (child.conclusion === "failure" &&
-        (policy.waivers.length > 0 || policy.advisoryJobs.some(isFailedJob))) ||
-      (child.conclusion === "cancelled" &&
-        policy.waivers.some((waiver) => waiver.state === "cancelled"))) &&
+    permittedConclusion &&
+    child.jobs.every((job) => job.status === "completed" || policy.waivedJobNames.has(job.name)) &&
     policy.advisoryFailureAllowed &&
     policy.blockingJobs.length === 0
   );
@@ -1853,11 +1862,7 @@ export function classifyReleaseSnapshot({
   const rawBlockers = [
     ...localFailures,
     ...extraBlockers,
-    ...dispatchBlockers(selected).filter(
-      (issue) =>
-        issue.kind !== "dispatch_missing" ||
-        !policies.get(issue.child).waivedJobNames.has("<workflow>"),
-    ),
+    ...dispatchBlockers(selected).filter((issue) => !policies.get(issue.child).workflowWaived),
     ...selected.flatMap((child) =>
       policies.get(child.key).missingRequiredJobs.map((name) => ({
         child: child.key,

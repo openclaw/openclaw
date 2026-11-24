@@ -139,6 +139,7 @@ export function composeReleaseAttemptJobs(
     effectiveRunAttempt: number;
     effectiveRunStatus?: string;
     plannedRunAttempt: number;
+    allowEmptyAttempts?: boolean;
   },
 ): {
   effectiveRunAttempt: number;
@@ -150,6 +151,7 @@ export function composeReleaseChildAttemptEvidence(input: {
   attempts: Array<{ jobs: ReleaseRecord[]; runAttempt: number }>;
   expected: ReleaseRecord;
   run: ReleaseRecord;
+  workflowWaived?: boolean;
 }): ReleaseRecord;
 
 export function releaseChildAdvisories(child: ReleaseRecord): ReleaseRecord[];

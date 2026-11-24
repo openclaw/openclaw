@@ -113,6 +113,38 @@ describe("receipt-backed aggregate recovery", () => {
     ).rejects.toThrow("plugin-prerelease-suite");
   });
 
+  it("requires no child receipt when its admitted parent is waived", async () => {
+    const f = recoveryConsumptionFixture(true);
+    const children = { ...f.recovery.children };
+    Reflect.deleteProperty(children, "normalCi");
+    const request = { ...f.recovery, children };
+    const source = f.client.getWorkflowSource;
+    const grant = {
+      targetVersion: f.direct.admission.receipt.baselinePolicy.candidateVersion,
+      targetSha: f.direct.c,
+      childRole: "normalCi",
+      jobName: "Run normal full CI",
+      reason: "Synthetic parent waiver",
+      aggregates: [],
+    };
+    const reuse = vi.spyOn(f.client, "validateChildReuse");
+    const verified = verifyOriginalReceiptQualification;
+    await expect(verified(request, { client: f.client })).rejects.toThrow(
+      "exactly the admitted child roles",
+    );
+    vi.spyOn(f.client, "getWorkflowSource").mockImplementation((sha, path) =>
+      path === "scripts/lib/release-validation-waivers.json"
+        ? JSON.stringify({ schema: "openclaw.release-validation-waivers/v1", waivers: [grant] })
+        : source(sha, path),
+    );
+    const result = await verified(request, { client: f.client });
+    expect(result.children.find(({ role }) => role === "normalCi")).toMatchObject({
+      conclusion: "not-collected",
+      waivers: [{ jobName: grant.jobName }],
+    });
+    expect(reuse.mock.calls.map(([, input]) => input.role)).not.toContain("normalCi");
+  });
+
   it("rechecks a separately admitted ledger against the original failed receipts at publication", async () => {
     const policySha = "e".repeat(40);
     const f = recoveryConsumptionFixture(true, { waivedFailure: true, waiverPolicySha: policySha });

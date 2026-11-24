@@ -318,8 +318,14 @@ export async function readChild(child, previous, signal, options = {}) {
           }
         : partial;
     }
+    const { workflowWaived } = evaluateReleaseChildPolicy({
+      child: { ...child, jobs: [], runAttempt: currentAttempt },
+      targetVersion: options.targetVersion,
+      targetSha: options.targetSha,
+    });
     const evidence = composeReleaseChildAttemptEvidence({
       attempts,
+      workflowWaived,
       expected: {
         ...child,
         plannedRunAttempt: plannedAttempt,

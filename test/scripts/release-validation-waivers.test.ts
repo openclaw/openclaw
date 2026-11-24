@@ -162,9 +162,6 @@ it("matches release-wide grants and explicit candidate or execution restrictions
       expect.objectContaining({ evidence: pinned.evidence }),
     ]);
   }
-  for (const conclusion of ["cancelled", "timed_out", "skipped"]) {
-    expect(evaluate([grant], { ...child, jobs: [{ ...leaf, conclusion }] }).waivers).toEqual([]);
-  }
   expect(
     evaluate([grant], { ...child, jobs: [...child.jobs, { ...leaf, name: "unwaived" }] })
       .blockingJobs,
@@ -182,50 +179,70 @@ it("matches release-wide grants and explicit candidate or execution restrictions
   expect(child.jobs.every((job) => job.conclusion === "failure")).toBe(true);
 });
 
-it("accepts an explicitly waived cancelled step without accepting other incomplete work", async () => {
-  const cancelled = {
-    ...leaf,
+it("waives all descendants of a named parent without changing their raw outcomes", () => {
+  const jobs = [
+    { name: "OpenClaw source performance probes", status: "completed", conclusion: "cancelled" },
+    { name: "Verify artifact-only report mode", status: "completed", conclusion: "failure" },
+    { name: "Publish report", status: "completed", conclusion: "skipped" },
+  ];
+  const performance = {
+    key: "productPerformance",
+    status: "completed",
     conclusion: "cancelled",
-    steps: [{ name: "Swift test", conclusion: "cancelled" }],
+    jobs,
   };
-  const approved = { ...grant, cancelledStep: "Swift test", aggregates: [] };
-  const current = { ...child, status: "completed", conclusion: "failure", jobs: [cancelled] };
-  const policy = evaluateReleaseChildPolicy({
-    child: current,
+  const parent = {
     targetVersion,
-    waiverPolicy: [approved],
+    childRole: performance.key,
+    jobName: "Run product performance evidence",
+    reason: "Synthetic parent waiver",
+    aggregates: [],
+  };
+  const requiredJobs = [...jobs.map(({ name }) => name), "Verify Vitest pair isolation"];
+  expect(terminalPolicyPass(performance, targetVersion, targetSha, [], requiredJobs)).toBe(false);
+  const policy = evaluateReleaseChildPolicy({
+    child: performance,
+    targetVersion,
+    waiverPolicy: [parent],
+    requiredJobs,
   });
   expect(policy.blockingJobs).toEqual([]);
-  expect(terminalPolicyPass(current, targetVersion, targetSha, [approved])).toBe(true);
-  await expect(
-    validateReleaseWaiverAggregates({ policy, jobs: [cancelled], getJobLog: () => "" }),
-  ).resolves.toBeUndefined();
-  expect(cancelled.conclusion).toBe("cancelled");
-  for (const job of [
-    { ...cancelled, steps: [{ name: "Setup", conclusion: "cancelled" }] },
-    { ...cancelled, steps: [...cancelled.steps, { name: "Upload", conclusion: "failure" }] },
-    { ...cancelled, steps: undefined },
-  ]) {
+  expect(policy.missingRequiredJobs).toEqual([]);
+  expect(terminalPolicyPass(performance, targetVersion, targetSha, [parent], requiredJobs)).toBe(
+    true,
+  );
+  expect(jobs.map(({ conclusion }) => conclusion)).toEqual(["cancelled", "failure", "skipped"]);
+});
+
+it("waives a named required job regardless of whether it ran", async () => {
+  const approved = { ...grant, cancelledStep: "Legacy step", aggregates: [] };
+  const requiredJobs = [leaf.name];
+  expect(
+    terminalPolicyPass(
+      { ...child, status: "completed", conclusion: "failure", jobs: [] },
+      targetVersion,
+      targetSha,
+      [approved],
+    ),
+  ).toBe(false);
+  for (const conclusion of ["success", "cancelled", "failure", "skipped", "timed_out", "missing"]) {
+    const jobs = conclusion === "missing" ? [] : [{ ...leaf, conclusion, steps: [] }];
+    const current = { ...child, status: "completed", conclusion: "success", jobs };
+    const policy = evaluateReleaseChildPolicy({
+      child: current,
+      requiredJobs,
+      targetVersion,
+      waiverPolicy: [approved],
+    });
+    expect(policy.waivers).toHaveLength(1);
+    expect(policy.blockingJobs).toEqual([]);
+    expect(policy.missingRequiredJobs).toEqual([]);
     await expect(
-      validateReleaseWaiverAggregates({ policy, jobs: [job], getJobLog: () => "" }),
-    ).rejects.toThrow("non-policy cancellation");
-  }
-  for (const conclusion of ["failure", "timed_out", "action_required"]) {
-    const changed = { ...current, jobs: [{ ...cancelled, conclusion }] };
-    expect(
-      evaluateReleaseChildPolicy({ child: changed, targetVersion, waiverPolicy: [approved] })
-        .waivers,
-    ).toEqual([]);
-  }
-  for (const cancelledStep of ["", false]) {
-    expect(() =>
-      parseReleaseValidationWaivers(
-        JSON.stringify({
-          schema: "openclaw.release-validation-waivers/v1",
-          waivers: [{ ...approved, cancelledStep }],
-        }),
-      ),
-    ).toThrow();
+      validateReleaseWaiverAggregates({ policy, jobs, getJobLog: () => "" }),
+    ).resolves.toBeUndefined();
+    if (jobs.length) {
+      expect(jobs[0]?.conclusion).toBe(conclusion);
+    }
   }
 });
 

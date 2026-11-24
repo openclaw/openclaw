@@ -88,7 +88,7 @@ bypass. Follow the [release skill](../release-openclaw-maintainer/SKILL.md#fast-
 
 `continue --failed` retries eligible failed work and reseals the same parent using its original plan. **`recover` creates a separate receipt-backed aggregate**; it does not turn the original failed parent green. Use the [canonical recovery contract](../../../docs/reference/full-release-validation/evidence.md#receipt-backed-aggregate-recovery), including for originally admitted beta, stable, full, and extended-stable selections.
 
-1. Confirm the original parent and selected work are terminal; classify failures and preserve the original admission, attempts, receipts, artifact identities, and Q grants. Recovery cannot replace missing required coverage, waive failures, change Q, or repair invalid package bytes.
+1. Confirm the original parent and selected work are terminal; classify failures and preserve the original admission, attempts, receipts, artifact identities, and Q grants. Recovery cannot replace unwaived required coverage, grant its own waivers, change Q, or repair invalid package bytes.
 2. Select the exact current trusted-main P containing the reviewed recovery repair. Let the helper discover and authenticate the original evidence; never hand-reconstruct a plan or recovery request.
 3. Dispatch once with a new private request file:
 
@@ -402,7 +402,7 @@ pnpm ci:full-release \
 
 - Publish with `release_profile=from-validation` (sealed profile). Selected FRV must **succeed**; stable needs stable/full evidence, soak, blocking performance.
 - Decide blocker/flake for every failed test. Same-Release-SHA flakes: at most two reruns plus main fix-in-parallel issue/PR, never flake-only re-cut.
-- An exact failed leaf, cancelled job, missing required job, or missing required child may receive a reviewed [release-tooling grant](../../../docs/reference/full-release-validation/evidence.md#release-tooling-waivers). Use admitted P and frozen Q, and record `waived-missing`/`waived-cancelled` as exceptions, never passes. Publishers cannot grant waivers or accept failed FRV. Unwaived failures and missing/cancelled required coverage block, as do skipped/unknown required coverage and evidence-integrity failures. See [#203832](https://github.com/openclaw/openclaw/pull/203832) and the [missing-dispatch follow-up in #204382](https://github.com/openclaw/openclaw/pull/204382).
+- A reviewed [release-tooling waiver](../../../docs/reference/full-release-validation/evidence.md#release-tooling-waivers) removes the obligation to run the named job. A child parent-job or `<workflow>` waiver removes the obligation for every descendant: do not dispatch or require a reusable receipt. Use admitted P and frozen Q. Record exceptions, never passes; preserve raw outcomes and fail closed for unwaived coverage and invalid required evidence. See the [missing and cancelled child incidents in #204382](https://github.com/openclaw/openclaw/pull/204382).
 
 ### Publish children
 

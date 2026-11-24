@@ -56,6 +56,8 @@ export interface ReleasePolicyJob {
 }
 export interface ReleaseChildPolicy {
   waivers: ReleaseValidationWaiver[];
+  workflowWaived: boolean;
+  waivedWorkDidNotPass: boolean;
   aggregates: {
     jobName: string;
     stepName: string;

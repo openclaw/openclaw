@@ -133,8 +133,8 @@ explicitly limits the approval. Reserve attempt-specific waivers for
 exceptionally high-risk cases where only the reviewed execution is accepted;
 record the risk and the explicit limit in the PR or handoff. A diagnostic run
 ID is evidence of the original failure, not a reason to restrict an ordinary
-waiver to that attempt. This default does not broaden existing grants or waive
-other jobs, versions, required execution, or evidence-integrity checks.
+waiver to that attempt. A leaf grant does not waive its siblings, other release
+versions, or evidence-integrity checks.
 
 A `testFailures` entry additionally requires the sole failed step and the complete
 ordered set of exact test/error signatures from the native test-evidence parser.
@@ -142,23 +142,19 @@ The verifier reads the original leaf log and requires completed invocation
 evidence before accepting it. Changed or additional errors, incomplete logs, and
 setup failures remain blocking; aggregate causes are also checked exactly.
 
-An exact-step cancellation uses `cancelledStep` instead of
-`testFailures`. It matches only a completed job whose raw conclusion is
-`cancelled`; its only unsuccessful step must have that exact name and also be
-cancelled. It does not accept a different cancelled step, another failed step,
-a timed-out job, or a cancelled workflow. Ordinary failure grants never accept
-cancellation. The original job conclusion remains visible as cancelled, not passed.
+A named job waiver applies regardless of the recorded outcome. The job may pass,
+fail, be cancelled at any step or before steps start, be skipped, or never run.
+Do not set an outcome or step selector for an ordinary job waiver. Historical
+ledger entries may retain the old `state` or `cancelledStep` metadata; those fields do
+not require the job to produce that outcome or step.
 
-For a whole job, set `state: "cancelled"` and name the exact job; only a completed
-job with that raw conclusion matches. Set `state: "missing"` to waive an absent required
-job in a completed child's authenticated inventory. For a required child with no
-run, use `state: "missing"` and `jobName: "<workflow>"`, with the exact child role. This last
-form requires the dispatch slot to complete normally with no run ID or attempt;
-it cannot replace a partial tuple, a reuse selection, or a failed verifier. Use
-an empty `aggregates` array and omit `evidence` for a child with no run. Both new states
-require an `approvedBy` identifier and a short reason. Include `targetSha` only if the
-approval is candidate-bound. Results show `waived-cancelled` or `waived-missing`, never a
-test pass. A required job that exists but was skipped is not missing.
+Use the exact child role and either its FRV parent job name (for example,
+`Run product performance evidence`) or `jobName: "<workflow>"` to waive the entire
+child. That covers every descendant and does not require a dispatch, run ID,
+reuse selection, or receipt. For a no-run grant, omit `evidence` and supply an empty
+`aggregates` array. Preserve raw outcomes when evidence exists and record a waiver
+separately from passing tests. Unwaived coverage and supporting evidence still
+have to pass their normal identity and integrity checks.
 
 Plain-output native extension batches in CI retain separate invocation streams and emit a
 completion receipt only after every planned invocation and its descendants settle.

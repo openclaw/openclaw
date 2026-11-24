@@ -866,14 +866,13 @@ syncBuiltinESMExports();
 
   it("records a waived missing dispatch without fabricating child evidence", () => {
     const sealedPlan = executionPlan(
-      { children: { normalCi: { result: "success" } }, rerunGroup: "ci" },
+      { children: { normalCi: { result: "skipped" } }, rerunGroup: "ci" },
       { targetVersion: "2099.1.1" },
     );
     const grant = {
       targetVersion: sealedPlan.targetVersion,
       childRole: "normalCi",
-      jobName: "<workflow>",
-      state: "missing",
+      jobName: "Run normal full CI",
       approvedBy: "synthetic-approver",
       reason: "Synthetic dispatch absence",
       aggregates: [],
@@ -894,12 +893,10 @@ syncBuiltinESMExports();
     expect(observed).toMatchObject({
       blockers: [],
       state: "passed",
-      waivers: [
-        { jobName: grant.jobName, disposition: "waived-missing", runId: "", runAttempt: null },
-      ],
+      waivers: [{ jobName: grant.jobName, runId: "", runAttempt: null }],
     });
     expect(Object.keys(observed.children)).toEqual([]);
-    expect(observed.summary).toContain("waived-missing (not a test pass)");
+    expect(observed.summary).toContain("Waived (not a test pass)");
   });
 
   it("routes candidate acquisition for fresh qualified packages but not reused evidence", () => {

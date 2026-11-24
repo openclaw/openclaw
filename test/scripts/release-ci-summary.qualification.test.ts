@@ -205,13 +205,13 @@ describe("candidate-owned publish consumer chain", () => {
       "does not pass release policy",
     );
   });
-  it("authenticates a missing required dispatch only with an exact pinned-Q waiver", async () => {
+  it("authenticates a never-dispatched required child only with a pinned-Q parent waiver", async () => {
     const version = "2099.1.1-beta.1";
     const f = candidatePublicationFixture({ candidateVersion: version });
     const childRole = "normalCi";
     const planned = f.plan.children.find((child) => child.key === childRole);
     assert(planned);
-    Object.assign(planned, { runId: "", runAttempt: null, url: "" });
+    Object.assign(planned, { result: "skipped", runId: "", runAttempt: null, url: "" });
     f.plan.sha256 = releaseExecutionPlanSha256(f.plan);
     f.manifest.executionPlanSha256 = f.plan.sha256;
     f.manifest.childRuns.normalCi = "";
@@ -220,27 +220,15 @@ describe("candidate-owned publish consumer chain", () => {
       targetVersion: version,
       targetSha: f.c,
       childRole,
-      jobName: "<workflow>",
-      state: "missing",
+      jobName: "Run normal full CI",
       approvedBy: "synthetic-approver",
       reason: "Synthetic missing dispatch",
     };
     let waivers = [{ ...grant, aggregates: [] }];
-    const recorded = { ...grant, disposition: "waived-missing", runId: "", runAttempt: null };
+    const recorded = { ...grant, runId: "", runAttempt: null };
     Object.assign(f.manifest, { waivers: [recorded] });
     const client = {
       ...f.client,
-      getRunAttemptJobs: async (id: string) => {
-        const jobs = await f.client.getRunAttemptJobs(id);
-        if (id !== f.runId) {
-          return jobs;
-        }
-        const dispatch = (await f.client.getParentJobs(id)).find(
-          ({ name }) => name === "Run normal full CI",
-        );
-        assert(dispatch);
-        return [...jobs, dispatch];
-      },
       getWorkflowSource: (sha: string, path?: string) =>
         path === "scripts/lib/release-validation-waivers.json"
           ? JSON.stringify({ schema: "openclaw.release-validation-waivers/v1", waivers })

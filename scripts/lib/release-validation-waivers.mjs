@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { isDeepStrictEqual } from "node:util";
 import { compareAscii } from "./canonical-json.mjs";
 import { parseNodeFailureReport } from "./ci-node-test-evidence.mjs";
+import qualificationPolicy from "./release-qualification-coverage.json" with { type: "json" };
 import defaultWaiverPolicy from "./release-validation-waivers.json" with { type: "json" };
 
 export const RELEASE_VALIDATION_WAIVERS_PATH = "scripts/lib/release-validation-waivers.json";
@@ -151,6 +152,14 @@ export function validateQualificationExemptions(
   }
 }
 
+const PARENT_JOB_BY_ROLE = new Map(
+  qualificationPolicy.children.map(({ key, parentJobName }) => [key, parentJobName]),
+);
+
+function isWorkflowWaiver({ childRole, jobName }) {
+  return jobName === "<workflow>" || jobName === PARENT_JOB_BY_ROLE.get(childRole);
+}
+
 const SUCCESSFUL_CONCLUSIONS = new Set(["success", "skipped", "neutral"]);
 
 export function isFailedReleaseJob(job) {
@@ -199,32 +208,6 @@ export function releaseChildAdvisories(child) {
     .toSorted((left, right) => compareAscii(left.job, right.job));
 }
 
-function matchesWaiverState(waiver, child, requiredJobs) {
-  if (waiver.state === "missing") {
-    if (waiver.jobName === "<workflow>") {
-      // A failed dispatch verifier, partial tuple, or reuse is not absence.
-      return (
-        child.required &&
-        child.selected &&
-        child.source === "fresh" &&
-        child.result === "success" &&
-        child.runId === "" &&
-        child.runAttempt === null &&
-        child.status === "missing" &&
-        child.jobs.length === 0
-      );
-    }
-    return (
-      child.status === "completed" &&
-      requiredJobs.includes(waiver.jobName) &&
-      !child.jobs.some((job) => job.name === waiver.jobName)
-    );
-  }
-  const conclusion = waiver.state === "cancelled" || waiver.cancelledStep ? "cancelled" : "failure";
-  const jobs = child.jobs.filter((job) => job.name === waiver.jobName);
-  return jobs.length === 1 && jobs[0].status === "completed" && jobs[0].conclusion === conclusion;
-}
-
 // Raw leaf and workflow conclusions are never rewritten. The caller owns the
 // aggregate validation verdict and must also authenticate failed aggregate logs.
 export function evaluateReleaseChildPolicy({
@@ -242,10 +225,28 @@ export function evaluateReleaseChildPolicy({
       // A reviewed historical failure never grants leniency to a new execution.
       (!waiver.evidence ||
         releaseWaiverEvidenceMatches(waiver.evidence, child.runId, child.runAttempt)) &&
-      matchesWaiverState(waiver, child, requiredJobs),
+      !waiver.qualificationExemption &&
+      (!waiver.testFailures ||
+        child.jobs.some(
+          (job) =>
+            job.name === waiver.jobName &&
+            job.status === "completed" &&
+            job.conclusion === "failure",
+        )),
   );
+  const workflowWaived = matches.some(isWorkflowWaiver);
   const aggregates = new Map();
-  for (const waiver of matches) {
+  for (const waiver of workflowWaived ? [] : matches) {
+    // Aggregate exceptions authenticate fallout from a job that actually failed.
+    if (
+      !waiver.aggregates?.length ||
+      !child.jobs.some(
+        (job) =>
+          job.name === waiver.jobName && job.status === "completed" && job.conclusion === "failure",
+      )
+    ) {
+      continue;
+    }
     for (const aggregate of waiver.aggregates ?? []) {
       const existing = aggregates.get(aggregate.jobName);
       if (existing) {
@@ -263,6 +264,7 @@ export function evaluateReleaseChildPolicy({
   );
   const waivedJobNames = new Set([
     ...waivers.map((row) => row.jobName),
+    ...(workflowWaived ? [...requiredJobs, ...child.jobs.map(({ name }) => name)] : []),
     ...child.jobs
       .filter(
         (job) =>
@@ -274,6 +276,7 @@ export function evaluateReleaseChildPolicy({
   // Preview failures retain their raw conclusions. Stable compatibility and the
   // verifier must still pass; an existing tooling waiver keeps its own log checks.
   const advisoryFailureAllowed =
+    workflowWaived ||
     !advisoryJobs.some(isFailedReleaseJob) ||
     [WINDOWS_NODE_STABLE_JOB, "Verify release checks"].every((name) =>
       child.jobs.some(
@@ -285,12 +288,21 @@ export function evaluateReleaseChildPolicy({
     );
   return {
     waivers,
+    workflowWaived,
+    waivedWorkDidNotPass: matches.some(({ jobName }) => {
+      const job = child.jobs.find((entry) => entry.name === jobName);
+      return job
+        ? job.status !== "completed" || job.conclusion !== "success"
+        : requiredJobs.includes(jobName);
+    }),
     aggregates: [...aggregates.values()],
     waivedJobNames,
     missingRequiredJobs:
       child.status === "completed"
         ? requiredJobs.filter(
-            (name) => !waivedJobNames.has(name) && !child.jobs.some((job) => job.name === name),
+            (name) =>
+              !waivedJobNames.has(name) &&
+              !child.jobs.some((job) => job.name === name && job.conclusion !== "skipped"),
           )
         : [],
     advisoryJobs,
@@ -330,27 +342,10 @@ function exactAggregateCauses(log) {
 }
 
 export async function validateReleaseWaiverAggregates({ policy, jobs, getJobLog }) {
+  if (policy.workflowWaived) {
+    return;
+  }
   for (const waiver of policy.waivers) {
-    if (waiver.cancelledStep) {
-      const matches = jobs.filter((job) => job.name === waiver.jobName);
-      const job = matches[0];
-      const incompleteSteps = job?.steps?.filter(
-        (step) => !["success", "skipped"].includes(step.conclusion),
-      );
-      if (
-        matches.length !== 1 ||
-        job.status !== "completed" ||
-        job.conclusion !== "cancelled" ||
-        incompleteSteps?.length !== 1 ||
-        incompleteSteps[0].name !== waiver.cancelledStep ||
-        incompleteSteps[0].conclusion !== "cancelled"
-      ) {
-        throw new ReleaseAggregateValidationError(
-          `Release test job has a non-policy cancellation: ${waiver.jobName}`,
-        );
-      }
-      continue;
-    }
     if (!waiver.testFailures) {
       continue;
     }

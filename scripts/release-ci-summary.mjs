@@ -2496,6 +2496,8 @@ async function validateStrictChildRun({
   let jobs;
   let composite;
   let rawJobs;
+  const targetVersion = parentEvidence.manifest.validationInputs?.targetVersion;
+  const targetSha = parentEvidence.manifest.targetSha;
   if (plannedChild && childEvidence) {
     if (childEvidence.effectiveRunAttempt > effectiveRunAttempt) {
       throw new Error(`manifest child composite evidence mismatch: ${child.name}`);
@@ -2509,8 +2511,20 @@ async function validateStrictChildRun({
       const currentAttemptJobs = await client.getRunAttemptJobs(runId, runAttempt);
       attempts.push({ jobs: currentAttemptJobs, runAttempt });
     }
+    const { workflowWaived } = evaluateReleaseChildPolicy({
+      child: {
+        key: child.manifestKey,
+        jobs: [],
+        runId,
+        runAttempt: childEvidence.effectiveRunAttempt,
+      },
+      targetVersion,
+      targetSha,
+      waiverPolicy,
+    });
     const evidence = composeReleaseChildAttemptEvidence({
       attempts,
+      workflowWaived,
       expected: {
         ...plannedChild,
         plannedRunAttempt: plannedChild.runAttempt,
@@ -2562,8 +2576,6 @@ async function validateStrictChildRun({
     runAttempt: effectiveRunAttempt,
     status: run.status,
   };
-  const targetVersion = parentEvidence.manifest.validationInputs?.targetVersion;
-  const targetSha = parentEvidence.manifest.targetSha;
   const policy = evaluateReleaseChildPolicy({
     child: policyChild,
     targetVersion,
@@ -2586,7 +2598,7 @@ async function validateStrictChildRun({
   if (child.requiredJobs) {
     validateQualificationJobs(jobs, child.requiredJobs, child.name, policy.waivedJobNames);
   }
-  if (child.manifestKey === "productPerformance") {
+  if (child.manifestKey === "productPerformance" && !policy.workflowWaived) {
     // The authenticated composite selects the newest executed attempt per job,
     // including a carried guard or a newer failure that supersedes its success.
     validatePerformanceArtifactOnlyJobs(
@@ -2620,7 +2632,9 @@ async function validateStrictChildRun({
     status: run.status,
     url: run.html_url,
     workflowSha: run.head_sha,
-    ...(child.manifestKey === "productPerformance" ? { reportPublication: "artifact-only" } : {}),
+    ...(child.manifestKey === "productPerformance" && !policy.workflowWaived
+      ? { reportPublication: "artifact-only" }
+      : {}),
   };
 }
 
@@ -3234,20 +3248,21 @@ export async function validateReleaseRunEvidence(
     if (childRunId && child.plannedChild.runAttempt) {
       continue;
     }
-    const { waivers } = evaluateReleaseChildPolicy({
-      child: { ...child.plannedChild, jobs: [], status: "missing" },
+    const { waivers, workflowWaived } = evaluateReleaseChildPolicy({
+      child: { key: child.manifestKey, jobs: [] },
       targetVersion: executionPlan.targetVersion,
       targetSha: executionPlan.targetSha,
       waiverPolicy,
     });
     if (
-      waivers.length === 0 ||
+      !workflowWaived ||
+      childRunId ||
+      child.plannedChild.runAttempt ||
       executionPlan.childReuse?.[child.manifestKey] ||
       rootEvidence.manifest.childEvidence?.[child.manifestKey] !== undefined
     ) {
       throw new Error("execution plan omits required child: " + child.name);
     }
-    validateQualificationJobs(parentComposite.jobs, [child.parentJobName], "Qualification parent");
     missingChildren.set(child.manifestKey, {
       conclusion: "missing",
       role: child.manifestKey,
