@@ -2,6 +2,7 @@ import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { isAgentDeletionBlocked } from "../../agents/agent-lifecycle-registry.js";
 import { resolveConfiguredAgentId } from "../../agents/agent-scope-config.js";
 import { resolveAgentRunErrorLifecycleFields } from "../../agents/run-termination.js";
+import { runWithAgentWorkspaceReadiness } from "../../agents/workspace-readiness.js";
 import { getRuntimeConfigSnapshotMetadata } from "../../config/runtime-snapshot.js";
 import type { SessionEntryCreationOperation } from "../../config/sessions/session-accessor.sqlite-entry-cache.types.js";
 import { SessionWorkStartError } from "../../config/sessions/session-work-start.js";
@@ -63,6 +64,12 @@ const log = createSubsystemLogger("session-events");
 
 /** Policy publications an accepted occurrence may outlive before it settles as failed. */
 const MAX_CONFIG_READMISSION_ATTEMPTS = 2;
+
+function runOutsideSessionEventProducerScopes<T>(run: () => Promise<T>): Promise<T> {
+  return runWithAgentWorkspaceReadiness(undefined, () =>
+    runWithoutOwnedSessionTranscriptWrites(run),
+  );
+}
 
 /** Producer-owned occurrence; passive notices continue to use enqueueSystemEvent. */
 export function enqueueSessionEventForHost(
@@ -458,10 +465,11 @@ export function enqueueSessionEventForHost(
     }
   };
   signal.addEventListener("abort", onAbort, { once: true });
-  // Completion outlives the producer's request scope and transcript writer.
+  // Completion outlives the producer's request scope, workspace gate, and transcript writer.
+  // The event must admit against the current workspace, not the turn that started it.
   // Keep detached work through settlement; explicit request/Stop signals above
   // still cancel the occurrence and join its native execution owner.
-  void runWithoutOwnedSessionTranscriptWrites(() =>
+  void runOutsideSessionEventProducerScopes(() =>
     runWithGatewayDetachedWorkContinuation(async () => {
       admissionStarted = true;
       await readAgentDeletionJournalStatusInWorker(agentId, { env }, signal);

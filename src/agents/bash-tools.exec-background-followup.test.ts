@@ -23,6 +23,7 @@ import { createExecTool } from "./bash-tools.exec-run.js";
 import { createProcessTool } from "./bash-tools.process.js";
 import type { RunEmbeddedAgentParams } from "./embedded-agent-runner/run/params.js";
 import { runEmbeddedAgent } from "./embedded-agent.js";
+import { runWithAgentWorkspaceReadiness } from "./workspace-readiness.js";
 
 // mock-isolation: Keep model inference outside the real process and session-event ownership fixture.
 vi.mock("./embedded-agent-runner/run.js", () => ({ runEmbeddedAgent: vi.fn() }));
@@ -188,6 +189,55 @@ test("starts and notifies when identity enrichment fails, then resolves child id
       exitCode: 1,
     });
   }
+});
+
+test("wakes the session after the exec producer retires its workspace gate", async ({ signal }) => {
+  const sessionKey = "agent:main:dashboard:retired-workspace-gate";
+  await seedOrigin(sessionKey);
+  const exec = createExecTool({
+    config,
+    host: "gateway",
+    security: "full",
+    ask: "off",
+    sessionKey,
+    scopeKey: sessionKey,
+    notifyOnExit: true,
+    allowBackground: true,
+  });
+  const releasePath = path.join(state.stateDir, "release-retired-workspace-gate");
+  let retired = false;
+  try {
+    const started = await runWithAgentWorkspaceReadiness(
+      {
+        sessionKey,
+        isReady: () => true,
+        waitUntilReady: async () => {},
+        assertCurrent: () => {
+          if (retired) {
+            throw new Error("Producer workspace gate retired");
+          }
+        },
+      },
+      () =>
+        exec.execute("retired-gate", {
+          command: nodeCommand(
+            "const fs = require('node:fs'); const release = " +
+              JSON.stringify(releasePath) +
+              "; const timer = setInterval(() => { if (!fs.existsSync(release)) return; " +
+              "clearInterval(timer); process.stdout.write('RETIRED_GATE_EXEC_RESULT'); }, 20);",
+          ),
+          background: true,
+        }),
+    );
+    expect(started.details.status).toBe("running");
+  } finally {
+    retired = true;
+    await fs.writeFile(releasePath, "release");
+    await withinTest(waitForExecScope(sessionKey), signal);
+  }
+  await completion(signal);
+  expect(model).toHaveBeenCalledOnce();
+  expect(model.mock.calls[0]?.[0].prompt).toContain("RETIRED_GATE_EXEC_RESULT");
 });
 
 test("reports manual collection after destination capture fails, then recovers on the same tool", async ({
