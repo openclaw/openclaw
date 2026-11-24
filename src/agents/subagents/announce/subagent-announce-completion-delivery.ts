@@ -15,6 +15,10 @@ import { getGatewayRecoveryRuntime } from "../../../gateway/server-recovery-runt
 import { normalizeOutboundReplyPayloadCore } from "../../../infra/outbound/reply-payload-normalize.js";
 import { sourceDeliveryTargetsMatch } from "../../../infra/outbound/source-delivery-plan.js";
 import { splitMediaFromOutput } from "../../../media/parse.js";
+import {
+  getCanonicalGatewayContextResolver,
+  getGatewayContextLifetime,
+} from "../../../plugins/runtime/gateway-request-scope.js";
 import { shouldPreserveUserFacingSessionStateForInputProvenance } from "../../../sessions/input-provenance.js";
 import { deriveSessionChatTypeFromKey } from "../../../sessions/session-chat-type-shared.js";
 import { isNonTerminalAgentRunStatus } from "../../../shared/agent-run-status.js";
@@ -75,12 +79,17 @@ export async function runAnnounceAgentCall(params: {
   const deadline = new AbortController();
   const sourceLifecycle = new AbortController();
   const isSourceSessionAdmissionAllowed = params.isSourceSessionAdmissionAllowed;
-  const lifecycleSignal = params.signal
-    ? AbortSignal.any([params.signal, sourceLifecycle.signal])
-    : sourceLifecycle.signal;
+  const gatewayOwner =
+    params.resolveGatewayContext &&
+    getCanonicalGatewayContextResolver(params.resolveGatewayContext);
+  const lifecycleSignal = AbortSignal.any([
+    sourceLifecycle.signal,
+    ...(params.signal ? [params.signal] : []),
+    ...(gatewayOwner ? [getGatewayContextLifetime(gatewayOwner).signal] : []),
+  ]);
   const signal = AbortSignal.any([lifecycleSignal, deadline.signal]);
   // A private input stays owned by Gateway admission when an observer times out.
-  // Caller or source lifecycle cancellation still stops that underlying turn.
+  // Caller, source, or owning Gateway cancellation still stops the underlying turn.
   const executionSignal = params.privateCompletion ? lifecycleSignal : signal;
   const timer =
     params.timeoutMs === undefined

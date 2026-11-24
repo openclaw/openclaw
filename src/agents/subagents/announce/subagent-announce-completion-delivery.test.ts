@@ -1,5 +1,10 @@
 // Completion predicates read recorded facts, not rendered placeholder wording.
 import { describe, expect, it, vi } from "vitest";
+import {
+  bindGatewayContextResolver,
+  getGatewayContextLifetime,
+} from "../../../plugins/runtime/gateway-request-scope.js";
+import { createDeferredCore } from "../../../shared/deferred.js";
 import { hasFailedSubagentNoOutputCompletion } from "../../internal-event-contract.js";
 import { runAnnounceAgentCall } from "./subagent-announce-completion-delivery.js";
 import { setSubagentAnnounceDeliveryDepsForTest } from "./subagent-announce-overrides.test-support.js";
@@ -51,6 +56,41 @@ it("keeps genuine cancellation attached after requester execution starts", async
     caller.abort(new Error("requester stopped"));
     await expect(delivery).rejects.toThrow("requester stopped");
   } finally {
+    setSubagentAnnounceDeliveryDepsForTest();
+  }
+});
+
+it("cancels an accepted private reply when its canonical Gateway closes", async () => {
+  const owner = () => undefined;
+  const wrapper = () => undefined;
+  bindGatewayContextResolver(wrapper, owner);
+  const release = createDeferredCore<unknown>();
+  const accepted = vi.fn();
+  let executionSignal: AbortSignal | undefined;
+  setSubagentAnnounceDeliveryDepsForTest({
+    dispatchGatewayMethodInProcess: async (_method, _params, options) => {
+      executionSignal = options?.signal;
+      options?.onAccepted?.({});
+      return await release.promise;
+    },
+  });
+  const pending = runAnnounceAgentCall({
+    agentParams: {},
+    privateCompletion: true,
+    resolveGatewayContext: wrapper,
+    onAccepted: accepted,
+    isExecutionAllowed: () => true,
+  });
+  void pending.catch(() => {});
+  try {
+    expect(accepted).toHaveBeenCalledOnce();
+    const shutdown = new Error("owning Gateway closed");
+    getGatewayContextLifetime(owner).abort(shutdown);
+    expect(executionSignal?.reason).toBe(shutdown);
+    await expect(pending).rejects.toThrow("owning Gateway closed");
+  } finally {
+    release.resolve(undefined);
+    await Promise.allSettled([pending]);
     setSubagentAnnounceDeliveryDepsForTest();
   }
 });
