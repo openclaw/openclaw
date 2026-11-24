@@ -161,7 +161,7 @@ export function WizardSteps(props: {
           style={{ "justify-self": "start" }}
           type="button"
           disabled={props.actions.cancelling}
-          onClick={() => props.actions.cancel()}
+          onClick={() => void props.actions.cancel()}
         >
           {t("custodian.cancel")}
         </button>
@@ -368,7 +368,7 @@ export function ConnectAi(props: {
       style={{ "justify-self": "start" }}
       type="button"
       disabled={props.actions.cancelling}
-      onClick={back}
+      onClick={() => void back()}
     >
       <Icon name="chevronLeft" />
       {t("custodian.autoSetup.chooseAnother")}

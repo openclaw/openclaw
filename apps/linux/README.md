@@ -370,9 +370,9 @@ app version and runtime flavor instead of a release-channel picker, including
 development builds. Update the desktop app to change its bundled version. Builds
 without an embedded runtime retain the Stable, Beta, and Development choices.
 
-The custodian prepares available AI access and explains what was selected. Its
-**Use a different Gateway**, **Review permissions**, and **Open AI setup** actions
-open Manage Gateways, this computer's permissions, and Model Setup respectively.
+Custodian onboarding asks where the assistant should run and which AI to connect.
+From a local Gateway, **On another computer** opens Manage Gateways.
+**Review permissions** opens this computer's permissions.
 Existing configurations and saved remote connections keep their current startup
 behavior. If automatic setup fails, the app shows the error alongside the existing
 local and remote choices so you can retry or connect elsewhere. Windows uses

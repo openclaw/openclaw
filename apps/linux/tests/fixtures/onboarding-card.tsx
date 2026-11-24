@@ -1,6 +1,7 @@
 import { render } from "@solidjs/web";
 import type { GatewayBrowserClient } from "../../../../ui/src/api/gateway.ts";
 import type { ApplicationContext } from "../../../../ui/src/app/context.ts";
+import { registerPluginManagementEnglish } from "../../../../ui/src/i18n/locales/en-plugin-management.ts";
 import { ApplicationProvider } from "../../../../ui/src/lib/reactive/context.ts";
 import { createCustodianActions } from "../../../../ui/src/pages/custodian/custodian-actions.ts";
 import { CustodianSessionStore } from "../../../../ui/src/pages/custodian/custodian-session-store.ts";
@@ -10,20 +11,29 @@ import "../../../../ui/src/styles/components.css";
 import "../../../../ui/src/styles/custodian.css";
 import "./onboarding-card.css";
 
+registerPluginManagementEnglish();
+
 // Only setup results and surrounding navigation are synthetic. The card and
 // native capabilities are the production owners running in Tauri's WebKit.
 const capabilityAtBoot = document.documentElement.dataset.nativeSetupAtBoot === "true";
 window.dispatchEvent(new Event("openclaw:native-window-chrome-available"));
 const instance = crypto.randomUUID();
 const store = new CustodianSessionStore();
+const methods = [
+  "openclaw.setup.options",
+  "openclaw.setup.detect",
+  "openclaw.setup.activate.start",
+  "wizard.next",
+];
 const client = {
-  async request<T>(method: string): Promise<T> {
-    if (method !== "openclaw.setup.auto") {
-      throw new Error(`Unexpected fixture method: ${method}`);
-    }
-    const response = await fetch(`/fixture/setup${location.search}`);
+  async request<T>(method: string, params?: unknown): Promise<T> {
+    const response = await fetch(`/fixture/setup${location.search}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ method, params: params ?? {} }),
+    });
     if (!response.ok) {
-      throw new Error(`Fixture setup failed: ${response.status}`);
+      throw new Error(`Fixture setup failed for ${method}: ${response.status}`);
     }
     return response.json();
   },
@@ -31,10 +41,12 @@ const client = {
 const context = {
   gateway: {
     connection: { gatewayUrl: location.origin + "/fixture/" },
+    connectionRevision: 0,
+    subscribe: () => () => undefined,
     snapshot: {
       client,
       phase: "connected",
-      hello: { features: { methods: ["openclaw.setup.auto"] } },
+      hello: { features: { methods } },
     },
   },
   agents: { refreshList: async () => undefined },
@@ -50,19 +62,18 @@ function report() {
       path: location.pathname,
       capabilityAtBoot,
       currentGateway: window["__OPENCLAW_NATIVE_SETUP__"]?.currentGateway,
-      setupStatus: store.autoSetup.result?.status,
+      setupComplete: store.autoSetup.ready,
+      setupModel: store.autoSetup.connection?.modelRef,
     }),
   });
 }
 
 function title() {
-  return location.pathname.includes("model-setup")
-    ? "Local model setup"
-    : location.pathname.includes("device/permissions")
-      ? "Native permissions"
-      : location.pathname.startsWith("/fixture/")
-        ? "Custodian chat"
-        : "Sibling path";
+  return location.pathname.includes("device/permissions")
+    ? "Native permissions"
+    : location.pathname.startsWith("/fixture/")
+      ? "Custodian chat"
+      : "Sibling path";
 }
 
 function leaveGatewayBase() {
