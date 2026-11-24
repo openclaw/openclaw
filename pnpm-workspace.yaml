@@ -92,6 +92,14 @@ overrides:
   yauzl: 3.4.0
   protobufjs: 8.8.1
   uuid: 14.0.3
+  # GHSA-4528-x5: joi <18.3.1 quadratic email split DoS (IMAP via mailauth).
+  "mailauth@7.3.1>joi": 18.3.1
+  # undici <8.12.2: TLS option bypass, redirect cache poisoning, two DoS (IMAP via mailauth).
+  "mailauth@7.3.1>undici": 8.12.4
+  # GHSA-mrhx-c7xc-m3w5: zod <4.6.6 memory exhaustion (Copilot SDK).
+  "@github/copilot-sdk@1.0.25>zod": 4.6.7
+  # GHSA-gg6h-894w-4m9c: re2js <2.8.7 lookbehind DoS (QA Lab via crabline).
+  "@openclaw/crabline@0.2.0>re2js": 2.8.7
 
 allowBuilds:
   onnxruntime-node: false
