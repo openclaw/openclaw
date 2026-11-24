@@ -8,16 +8,14 @@ import { resolveConfigPath, resolveStateDir } from "../config/paths.js";
 import { resolveConfiguredAgentDatabaseTargets } from "../config/sessions/targets.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { readBackupEngine } from "../infra/database-engine/physical-store.js";
-import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { readSqliteUserVersion } from "../infra/sqlite-user-version.js";
 import { inspectPostgresUpgrade, preflightPostgresUpgrade } from "../snapshot/database-backup.js";
 import { readRetainedAgentDeletionIds } from "./agent-deletion-journal.snapshot.worker.js";
-import type { ConfigMachineStateDatabase } from "./config-machine-state-row.js";
 import { readOpenClawAgentDatabaseRegistryRows } from "./openclaw-agent-db-registry.read.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "./openclaw-schema-versions.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "./openclaw-state-db-contract.js";
-import { CONTENT_VERSION_KEY } from "./openclaw-state-db-schema-version.js";
+import { readStateSchemaContentVersionRow } from "./openclaw-state-db-schema-version.js";
 import { resolveOpenClawRegisteredAgentDatabasePath } from "./openclaw-state-db.paths.js";
 import { UPGRADE_WORK_PREFIX as WORK_PREFIX } from "./state-upgrade-receipts.js";
 import { isSqliteFile, withRecoveredSource } from "./state-upgrade-tree.js";
@@ -37,13 +35,7 @@ export function readVersion(db: DatabaseSync, kind: DatabaseTarget["kind"]): num
     return user;
   }
   try {
-    const row = executeSqliteQueryTakeFirstSync(
-      db,
-      getNodeSqliteKysely<ConfigMachineStateDatabase>(db)
-        .selectFrom("config_machine_state")
-        .select("value_json")
-        .where("state_key", "=", CONTENT_VERSION_KEY),
-    );
+    const row = readStateSchemaContentVersionRow(db);
     return Math.max(user, Number(row?.value_json ?? 0) || 0);
   } catch {
     return user;
