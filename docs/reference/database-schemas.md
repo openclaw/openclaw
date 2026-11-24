@@ -67,6 +67,12 @@ Gateway lease directly in a read-only worker instead of copying the shared
 database. Fresh or unverifiable owners still prevent startup; Doctor's schema
 repair admission keeps its private snapshot.
 
+Once Doctor completes its pre-repair backup boundary, ordinary and composite
+shared-state reads can use the exact database held by its maintenance scope.
+The scope drains its native readers before releasing custody. Pre-backup
+inspection, unrelated databases, and already selected private snapshots keep
+their artifact-preserving read paths.
+
 Borrowed worker transactions obtain their initial host grant before `BEGIN
 IMMEDIATE`; writes with domain or publication facts still revalidate those facts
 at commit. Transcript-index preflight and sweep instead admit one bounded derived

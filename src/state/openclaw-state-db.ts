@@ -38,6 +38,7 @@ import {
   observeOpenClawDatabaseMaintenanceResource,
 } from "./openclaw-state-db-async-lifecycle.js";
 import {
+  captureOpenClawStateDatabaseReadAdmission,
   closeOpenClawStateDatabaseByPathAsync,
   confirmCachedOpenClawStateDatabaseIntegrity,
   openClawStateDatabaseCache as stateDbCache,
@@ -62,7 +63,11 @@ import {
 import { openUnpublishedStateDatabase } from "./openclaw-state-db-open.js";
 import { ensureOpenClawStatePermissions } from "./openclaw-state-db-permissions.js";
 import { openOpenClawStateReadConnection } from "./openclaw-state-db-read-connection.js";
-import { withExistingOpenClawStateDatabaseReadOnly } from "./openclaw-state-db-readonly.js";
+import { ownMaintenanceStateReadConnection } from "./openclaw-state-db-readonly-reuse.js";
+import {
+  getActiveOpenClawStateDatabaseReadSnapshot,
+  withExistingOpenClawStateDatabaseReadOnly,
+} from "./openclaw-state-db-readonly.js";
 import { repairStateSchema } from "./openclaw-state-db-repair.js";
 import {
   assertOpenClawStateSchemaRepairAllowed,
@@ -80,6 +85,7 @@ import {
 } from "./openclaw-state-db-startup-checkpoint.js";
 import { runManagedStateTransaction } from "./openclaw-state-db-transaction.js";
 import { resolveDatabasePath } from "./openclaw-state-db.paths.js";
+import { getAdmittedMaintenanceLiveReadScope } from "./openclaw-state-maintenance-context.js";
 import {
   assertOpenClawStateWriteAllowed,
   assertOpenClawStateWriteAllowedAtPath,
@@ -269,7 +275,7 @@ export function initializeNativeOpenClawStateDatabase(
   );
 }
 
-/** Open existing shared state without creating, migrating, chmodding, or configuring it. */
+/** Open existing shared state read-only, without migrating or configuring it. */
 export async function openExistingOpenClawStateDatabaseReadOnly(
   options: OpenClawStateDatabaseOptions & { requireCanonicalSchema?: boolean } = {},
 ): Promise<OpenClawStateDatabase | undefined> {
@@ -279,8 +285,23 @@ export async function openExistingOpenClawStateDatabaseReadOnly(
     return undefined;
   }
   assertOpenClawStateDatabaseFreshOpenAllowed(options);
-  const prepared = isStatePostgres() ? pathname : await prepareSqliteReadOnlyLocation(pathname);
-  const connection = openOpenClawStateReadConnection(pathname, prepared);
+  const postgres = isStatePostgres();
+  const admitted = postgres ? undefined : getAdmittedMaintenanceLiveReadScope(pathname);
+  const inherited = admitted && getActiveOpenClawStateDatabaseReadSnapshot(options);
+  // An already selected private source never grants permission to open the native path.
+  const maintenance =
+    inherited && (inherited.cleanClose || inherited.location !== pathname) ? undefined : admitted;
+  maintenance?.assertReadAdmission();
+  const identity = maintenance
+    ? captureOpenClawStateDatabaseReadAdmission(pathname).identity
+    : undefined;
+  const prepared =
+    postgres || maintenance ? pathname : await prepareSqliteReadOnlyLocation(pathname);
+  const connection = openOpenClawStateReadConnection(pathname, prepared, identity?.key);
+  const close =
+    maintenance && identity
+      ? ownMaintenanceStateReadConnection(maintenance, connection, identity)
+      : connection.close;
   const { db } = connection.database;
   try {
     if (isPostgresSqlConnection(db)) {
@@ -296,13 +317,13 @@ export async function openExistingOpenClawStateDatabaseReadOnly(
     }
   } catch (error) {
     try {
-      connection.close();
+      close();
     } catch {
       // Preserve the verification failure that explains why the database was refused.
     }
     throw error;
   }
-  return readOnlyStateDatabase(connection.database, connection.close);
+  return readOnlyStateDatabase(connection.database, close);
 }
 
 function readOnlyStateDatabase(

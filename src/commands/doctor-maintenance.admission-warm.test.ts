@@ -13,7 +13,11 @@ import {
   closeOpenClawStateDatabaseAsync,
   isOpenClawStateDatabaseOpen,
 } from "../state/openclaw-state-db-cache.js";
-import { withOpenClawStateDatabaseReadSnapshot } from "../state/openclaw-state-db-readonly.js";
+import {
+  getActiveOpenClawStateDatabaseReadSnapshot,
+  withExistingOpenClawStateDatabaseArtifactPreservingReadOnly,
+  withOpenClawStateDatabaseReadSnapshot,
+} from "../state/openclaw-state-db-readonly.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { admitOpenClawMaintenanceLiveAuthorityReads } from "../state/openclaw-state-maintenance-context.js";
 import { resolveDoctorUpdateAdmission } from "./doctor-maintenance-admission.js";
@@ -313,6 +317,37 @@ it("does not borrow a retained discovery snapshot for current admission", async 
       { env },
     );
   } finally {
+    assertIsolation();
+  }
+});
+
+it("keeps an inherited frozen source for discovery after Doctor admits native reads", async () => {
+  const { env, database, admission, assertIsolation } = fixture();
+  const maintenance = maintenanceScope(admission, database);
+  try {
+    await withOpenClawStateDatabaseReadSnapshot(
+      async () => {
+        const frozen = getActiveOpenClawStateDatabaseReadSnapshot({ env })?.location;
+        expect(frozen).toBeDefined();
+        expect(frozen).not.toBe(database);
+        await maintenance.run(() =>
+          withOpenClawStateDatabaseReadSnapshot(
+            async () => {
+              expect(getActiveOpenClawStateDatabaseReadSnapshot({ env })?.location).toBe(frozen);
+              const readLocation = withExistingOpenClawStateDatabaseArtifactPreservingReadOnly(
+                ({ db }) => (db instanceof DatabaseSync ? db.location() : undefined),
+                { env },
+              );
+              expect(readLocation).toBe(frozen);
+            },
+            { env },
+          ),
+        );
+      },
+      { env },
+    );
+  } finally {
+    await maintenance.close();
     assertIsolation();
   }
 });

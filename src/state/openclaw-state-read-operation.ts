@@ -391,7 +391,7 @@ export function startOpenClawStateReadOperation(
   }
 
   function query() {
-    if ((!snapshot && !prepared) || snapshot?.cleanClose) {
+    if ((!snapshot && !prepared) || snapshot?.location === pathname) {
       expectedIdentity = context.admission.identity.key;
     }
     if (prepared) {

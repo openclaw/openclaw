@@ -62,6 +62,12 @@ export function allowsMaintenanceLiveAuthorityReads(
   return false;
 }
 
+/** Look up Doctor's existing post-backup grant; no other path borrows this custody. */
+export function getAdmittedMaintenanceLiveReadScope(pathname: string) {
+  const scope = getOpenClawDatabaseMaintenanceScope();
+  return scope && allowsMaintenanceLiveAuthorityReads(scope, pathname) ? scope : undefined;
+}
+
 /** Raw source descriptor closes are safe only before maintenance admits native source reads. */
 export function maintenanceOwnerHasSourceCustody(
   scope: OpenClawDatabaseMaintenanceScope | undefined,
