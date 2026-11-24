@@ -4,12 +4,13 @@ import { NOW, context, fakeGithub, pr, recordingCore } from "./pr-ci-sweeper.tes
 
 describe("runPrCiSweeper", () => {
   it("recovers a transient CI read and continues scanning without re-firing attached runs", async () => {
-    const attached = [21, 22].map((number) => ({
-      ...pr(),
-      number,
-      state: "open",
-      head: { sha: String(number).repeat(20) },
-    }));
+    const attached = [21, 22].map((number) =>
+      Object.assign(pr(), {
+        number,
+        state: "open",
+        head: { sha: String(number).repeat(20) },
+      }),
+    );
     const { github, calls } = fakeGithub({
       prs: attached,
       runsBySha: Object.fromEntries(
