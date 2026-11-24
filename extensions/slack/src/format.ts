@@ -1,6 +1,9 @@
+import type { KnownBlock } from "@slack/types";
 import { eastAsianWidthType } from "get-east-asian-width";
 import type { MarkdownTableMode } from "openclaw/plugin-sdk/config-contracts";
 import { resolveIntegerOption } from "openclaw/plugin-sdk/number-runtime";
+import { chunkMarkdownTextWithMode, type ChunkMode } from "openclaw/plugin-sdk/reply-chunking";
+import { resolveTextChunksWithFallback } from "openclaw/plugin-sdk/reply-payload";
 import {
   chunkTextForOutbound,
   FormatCapabilityProfile,
@@ -9,7 +12,9 @@ import {
   type MarkdownLinkSpan,
   renderMarkdownIRChunksWithinLimit,
   renderMarkdownWithMarkers,
+  sliceMarkdownIR,
 } from "openclaw/plugin-sdk/text-chunking";
+import { renderSlackMarkdownLists } from "./markdown-lists.js";
 import { escapeSlackMrkdwn } from "./monitor/mrkdwn.js";
 
 const SLACK_ANGLE_TOKEN_RE = /<[^>\n]+>/g;
@@ -508,25 +513,85 @@ export function markdownToSlackMrkdwnChunks(
   limit: number,
   options: SlackMarkdownOptions = {},
 ): string[] {
+  return renderSlackMarkdownChunks(prepareSlackMarkdownIR(markdown, options), limit, false).map(
+    ({ text }) => text,
+  );
+}
+
+export type SlackMarkdownMessage = { text: string; blocks?: KnownBlock[] };
+
+export function markdownToSlackMessages(
+  markdown: string,
+  limit: number,
+  options: SlackMarkdownOptions & { chunkMode?: ChunkMode } = {},
+): SlackMarkdownMessage[] {
   const ir = prepareSlackMarkdownIR(markdown, options);
+  if (options.chunkMode === "newline" && !ir.listItems?.length) {
+    const chunks = chunkMarkdownTextWithMode(markdown, limit, "newline");
+    if (chunks.length !== 1 || chunks[0] !== markdown) {
+      return chunks.flatMap((chunk) =>
+        renderSlackMarkdownChunks(prepareSlackMarkdownIR(chunk, options), limit, false),
+      );
+    }
+  }
+  // Keep list ancestry and numbering when a size boundary falls inside a list.
+  return renderSlackMarkdownChunks(ir, limit, true);
+}
+
+export function prepareSlackSendTextChunks(
+  text: string,
+  limit: number,
+  options: SlackMarkdownOptions & { literal?: boolean; mrkdwn?: boolean; chunkMode?: ChunkMode },
+): SlackMarkdownMessage[] {
+  if (!text) {
+    return [];
+  }
+  if (options.literal) {
+    return chunkTextForOutbound(text, limit, { preserveWhitespace: true }).map((chunk) => ({
+      text: chunk,
+    }));
+  }
+  if (options.mrkdwn) {
+    return resolveTextChunksWithFallback(text, chunkSlackMrkdwnText(text, limit)).map((chunk) => ({
+      text: chunk,
+    }));
+  }
+  const messages = markdownToSlackMessages(text, limit, options);
+  return messages.length ? messages : [{ text }];
+}
+
+function renderSlackMarkdownChunks(
+  ir: MarkdownIR,
+  limit: number,
+  nativeLists: boolean,
+): SlackMarkdownMessage[] {
   const renderOptions = buildSlackRenderOptions();
+  const render = (chunk: MarkdownIR) =>
+    renderMarkdownWithMarkers(chunk, renderOptions, SLACK_FORMAT_PROFILE);
   const normalizedLimit =
     limit === Number.POSITIVE_INFINITY ? limit : resolveIntegerOption(limit, 1, { min: 1 });
   return renderMarkdownIRChunksWithinLimit({
     ir,
     limit: normalizedLimit,
     renderChunk: (chunk) => {
-      const rendered = renderMarkdownWithMarkers(chunk, renderOptions, SLACK_FORMAT_PROFILE);
+      const rendered = render(chunk);
       // Protection only adds a prefix, so an oversized probe cannot become a fit.
       return rendered.length > normalizedLimit
         ? rendered
         : protectSlackAssistantTranscriptRoleHeaders(rendered);
     },
     measureRendered: (rendered) => rendered.length,
-  }).map(({ rendered }) =>
-    // Unsplittable safety fallbacks still need protection before leaving Slack.
-    rendered.length > normalizedLimit
-      ? protectSlackAssistantTranscriptRoleHeaders(rendered)
-      : rendered,
-  );
+  }).map(({ rendered, source }) => {
+    const text =
+      rendered.length > normalizedLimit
+        ? protectSlackAssistantTranscriptRoleHeaders(rendered)
+        : rendered;
+    const blocks =
+      nativeLists && source.listItems?.length
+        ? renderSlackMarkdownLists(source, (start, end) =>
+            protectSlackAssistantTranscriptRoleHeaders(render(sliceMarkdownIR(source, start, end))),
+          )
+        : undefined;
+    return blocks ? { text, blocks } : { text };
+  });
 }

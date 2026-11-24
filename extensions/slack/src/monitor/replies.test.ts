@@ -245,6 +245,16 @@ function rejectNativeBlocks() {
     response: { data: { error: "invalid_blocks" } },
   });
 }
+it("falls back to mrkdwn in the same ephemeral response when Slack rejects generated lists", async () => {
+  rejectNativeBlocks();
+  await deliverSlash([{ text: "- **One**\n  - Two" }]);
+
+  const [first, fallback] = slashMessages(2);
+  expect(blockTypes(first)).toEqual(["rich_text"]);
+  expect(fallback).toEqual({ response_type: "ephemeral", text: "• *One*\n  • Two" });
+  expect(first?.text).toBe(fallback?.text);
+});
+
 function readPlainSectionTexts(message: SlashTestMessage): string[] {
   return (message.blocks ?? []).flatMap((block) => {
     const text = block.text as { type?: unknown; text?: unknown } | undefined;

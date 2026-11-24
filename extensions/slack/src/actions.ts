@@ -33,7 +33,7 @@ import {
 } from "./conversation-open.js";
 import { assertSlackDetachedTargetAllowed } from "./detached-target-admission.js";
 import { buildSlackEditTextPayload } from "./edit-text.js";
-import { normalizeSlackOutboundText } from "./format.js";
+import { markdownToSlackMessages, normalizeSlackOutboundText } from "./format.js";
 import { SLACK_EDIT_TEXT_MAX_BYTES } from "./limits.js";
 import { hasSlackMessageTableBlock, resolveSlackMessageText } from "./monitor/block-text.js";
 import { resolveSlackMedia } from "./monitor/media.js";
@@ -415,8 +415,17 @@ export async function editSlackMessage(
   const accountId =
     opts.accountId ?? (opts.cfg ? resolveDefaultSlackAccountId(opts.cfg) : undefined);
   const tableMode = resolveMarkdownTableMode({ cfg: opts.cfg, channel: "slack", accountId });
-  const text = normalizeSlackOutboundText(content, { tableMode });
-  await editSlackRenderedMessage(channelId, messageId, text, opts);
+  const message =
+    opts.blocks !== undefined
+      ? undefined
+      : markdownToSlackMessages(content, Number.POSITIVE_INFINITY, { tableMode })[0];
+  const text = message?.text ?? normalizeSlackOutboundText(content, { tableMode });
+  await editSlackRenderedMessage(channelId, messageId, text, {
+    ...opts,
+    ...(message?.blocks && countSlackTextUtf8Bytes(text) <= SLACK_EDIT_TEXT_MAX_BYTES
+      ? { nativeListBlocks: message.blocks }
+      : {}),
+  });
 }
 
 function slackNativeEditLimitError(options?: ErrorOptions): Error {
@@ -431,7 +440,10 @@ export async function editSlackRenderedMessage(
   channelId: string,
   messageId: string,
   content: string,
-  opts: SlackActionClientOpts & { blocks?: (Block | KnownBlock)[] } = {},
+  opts: SlackActionClientOpts & {
+    blocks?: (Block | KnownBlock)[];
+    nativeListBlocks?: (Block | KnownBlock)[];
+  } = {},
 ) {
   const client = await getClient(opts, "write");
   const blocks = opts.blocks == null ? undefined : validateSlackBlocksArray(opts.blocks);
@@ -452,12 +464,19 @@ export async function editSlackRenderedMessage(
     channel: channelId,
     ts: messageId,
     text,
-    ...(blocks ? { blocks } : {}),
+    ...(blocks ? { blocks } : opts.nativeListBlocks ? { blocks: opts.nativeListBlocks } : {}),
   };
   try {
     await client.chat.update(update);
   } catch (error) {
-    if (!hasNativeData || !isSlackInvalidBlocksError(error)) {
+    if (!isSlackInvalidBlocksError(error)) {
+      throw error;
+    }
+    if (opts.nativeListBlocks) {
+      await client.chat.update({ ...update, blocks: [] });
+      return;
+    }
+    if (!hasNativeData) {
       throw error;
     }
     logVerbose("slack edit: native data block rejected, retrying with text fallback");

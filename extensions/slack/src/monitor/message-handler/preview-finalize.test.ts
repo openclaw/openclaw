@@ -87,6 +87,28 @@ describe("finalizeSlackPreviewEdit", () => {
     await expect(finalize(client)).rejects.toThrow("socket closed");
   });
 
+  it("recovers an applied generated list edit after Slack adds a block ID", async () => {
+    const blocks: NonNullable<FinalizeParams["nativeListBlocks"]> = [
+      {
+        type: "rich_text",
+        elements: [
+          {
+            type: "rich_text_list",
+            style: "bullet",
+            indent: 0,
+            elements: [{ type: "rich_text_section", elements: [{ type: "text", text: "Item" }] }],
+          },
+        ],
+      },
+    ];
+    const text = "• Item";
+    const { client } = createClient([
+      { ts: "171234.567", text, blocks: [{ ...blocks[0], block_id: "slack-generated" }] },
+    ]);
+
+    await expect(finalize(client, { text, nativeListBlocks: blocks })).resolves.toBeUndefined();
+  });
+
   it.each([true, false])(
     "accepts native-data fallback after an ambiguous response (blocks=%s)",
     async (withBlocks) => {

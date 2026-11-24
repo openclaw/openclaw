@@ -59,6 +59,39 @@ describe("sendMessageSlack NO_REPLY literal", () => {
   });
 });
 
+it("retries a generated native list with complete mrkdwn and the same delivery options", async () => {
+  client.chat.postMessage.mockImplementationOnce(({ blocks }) => {
+    if (blocks?.length) {
+      throw Object.assign(new Error("Slack rejected blocks"), {
+        data: { error: "invalid_blocks" },
+      });
+    }
+    return { ts: "171234.567" };
+  });
+  await send("Before\n\n- **Parent**\n  - Child\n\nAfter", {
+    threadTs: "171234.001",
+    replyBroadcast: true,
+  });
+  expect(posts()).toHaveLength(2);
+  expect(postedMessage()).toMatchObject({
+    text: "Before\n\n• *Parent*\n  • Child\n\nAfter",
+    blocks: [
+      { type: "section" },
+      {
+        type: "rich_text",
+        elements: [
+          { type: "rich_text_list", style: "bullet", indent: 0 },
+          { type: "rich_text_list", style: "bullet", indent: 1 },
+        ],
+      },
+      { type: "section" },
+    ],
+  });
+  const { blocks, ...fallback } = postedMessage();
+  expect(blocks).toBeDefined();
+  expect(postedMessage(1)).toEqual(fallback);
+});
+
 describe("sendMessageSlack chunking", () => {
   it.each([false, true])(
     "keeps emoji whole when plain text mode is %s",

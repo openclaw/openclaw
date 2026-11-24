@@ -2,6 +2,7 @@
 import { describe, expect, it } from "vitest";
 import {
   chunkSlackMrkdwnText,
+  markdownToSlackMessages,
   markdownToSlackMrkdwnChunks,
   normalizeSlackOutboundText,
 } from "./format.js";
@@ -327,5 +328,129 @@ describe("normalizeSlackOutboundText", () => {
 describe("escapeSlackMrkdwn", () => {
   it("escapes only Slack entities while preserving formatting markers and backslashes", () => {
     expect(escapeSlackMrkdwn("mode_*`~<&>\\")).toBe("mode_*`~&lt;&amp;&gt;\\");
+  });
+});
+
+describe("Slack Markdown message lists", () => {
+  const item = (text: string) => ({
+    type: "rich_text_section",
+    elements: [{ type: "text", text }],
+  });
+  const list = (style: "ordered" | "bullet", indent: number, ...items: string[]) => ({
+    type: "rich_text_list",
+    style,
+    indent,
+    elements: items.map(item),
+  });
+
+  it.each([
+    ["- Alpha\n- Beta", [list("bullet", 0, "Alpha", "Beta")]],
+    [
+      "- Alpha\n  - Beta\n    - Gamma\n- Delta",
+      [
+        list("bullet", 0, "Alpha"),
+        list("bullet", 1, "Beta"),
+        list("bullet", 2, "Gamma"),
+        list("bullet", 0, "Delta"),
+      ],
+    ],
+    [
+      "3. Alpha\n   - Beta\n     1. Gamma\n4. Delta",
+      [
+        { ...list("ordered", 0, "Alpha"), offset: 2 },
+        list("bullet", 1, "Beta"),
+        list("ordered", 2, "Gamma"),
+        { ...list("ordered", 0, "Delta"), offset: 3 },
+      ],
+    ],
+  ] as const)("renders list structure for %s", (markdown, elements) => {
+    expect(markdownToSlackMessages(markdown, 4000)[0]?.blocks).toEqual([
+      { type: "rich_text", elements },
+    ]);
+  });
+
+  it("maps inline styles, links, emoji and mentions without interpreting inline code", () => {
+    const [message] = markdownToSlackMessages(
+      "- **Bold** and *italic* [link](https://example.com) :sparkles: <@U123> <#C123|general> `<@U999> :wave:`",
+      4000,
+    );
+    expect(message?.blocks).toEqual([
+      {
+        type: "rich_text",
+        elements: [
+          {
+            type: "rich_text_list",
+            style: "bullet",
+            indent: 0,
+            elements: [
+              {
+                type: "rich_text_section",
+                elements: [
+                  { type: "text", text: "Bold", style: { bold: true } },
+                  { type: "text", text: " and " },
+                  { type: "text", text: "italic", style: { italic: true } },
+                  { type: "text", text: " " },
+                  { type: "link", text: "link", url: "https://example.com" },
+                  { type: "text", text: " " },
+                  { type: "emoji", name: "sparkles" },
+                  { type: "text", text: " " },
+                  { type: "user", user_id: "U123" },
+                  { type: "text", text: " " },
+                  { type: "channel", channel_id: "C123" },
+                  { type: "text", text: " " },
+                  { type: "text", text: "<@U999> :wave:", style: { code: true } },
+                ],
+              },
+            ],
+          },
+        ],
+      },
+    ]);
+  });
+
+  it("keeps the ordered list numbering across message chunks", () => {
+    const first = "A".repeat(100);
+    const second = "B".repeat(100);
+    const messages = markdownToSlackMessages(`7. ${first}\n8. ${second}`, 110);
+    expect(
+      messages
+        .map(({ text }) => text)
+        .join("")
+        .trim(),
+    ).toBe(`7. ${first}\n8. ${second}`);
+    expect(messages.map(({ blocks }) => blocks)).toEqual([
+      [{ type: "rich_text", elements: [{ ...list("ordered", 0, first), offset: 6 }] }],
+      [{ type: "rich_text", elements: [{ ...list("ordered", 0, second), offset: 7 }] }],
+    ]);
+  });
+
+  it("keeps deep nesting across newline-mode message boundaries", () => {
+    const first = "A".repeat(100);
+    const second = "B".repeat(80);
+    const messages = markdownToSlackMessages(`- ${first}\n  - Child\n    - ${second}`, 120, {
+      chunkMode: "newline",
+    });
+    expect(messages.map(({ blocks }) => blocks)).toEqual([
+      [{ type: "rich_text", elements: [list("bullet", 0, first), list("bullet", 1, "Child")] }],
+      [{ type: "rich_text", elements: [list("bullet", 2, second)] }],
+    ]);
+  });
+
+  it("keeps paragraphs and fenced code in mrkdwn around a native list", () => {
+    const [message] = markdownToSlackMessages(
+      "**Before**\n\n- List\n\n```text\n- code\n1. code\n```\n\nAfter",
+      4000,
+    );
+    expect(message?.blocks).toEqual([
+      { type: "section", text: { type: "mrkdwn", text: "*Before*" } },
+      { type: "rich_text", elements: [list("bullet", 0, "List")] },
+      {
+        type: "section",
+        text: { type: "mrkdwn", text: "```\n- code\n1. code\n```\nAfter" },
+      },
+    ]);
+    expect(markdownToSlackMessages("```\n- code\n```", 4000)).toEqual([
+      { text: "```\n- code\n```" },
+    ]);
   });
 });

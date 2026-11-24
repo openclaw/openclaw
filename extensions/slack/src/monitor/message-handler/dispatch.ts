@@ -18,7 +18,7 @@ import type { ReplyPayload, ReplyDispatchRuntimeInfo } from "openclaw/plugin-sdk
 import { danger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { resolveSlackMarkdownOptions } from "../../accounts.js";
 import { formatSlackError } from "../../errors.js";
-import { normalizeSlackOutboundText } from "../../format.js";
+import { markdownToSlackMessages, normalizeSlackOutboundText } from "../../format.js";
 import { SLACK_EDIT_TEXT_MAX_BYTES } from "../../limits.js";
 import { emitSlackMessageSentHooks } from "../../message-sent-hook.js";
 import { resolveSlackReplyRenderPlan } from "../../reply-blocks.js";
@@ -223,6 +223,14 @@ async function dispatchSlackMessageWithSetup(
       replyRenderPlan.mode === "single"
         ? replyRenderPlan.text.trim()
         : replyRenderPlan.fallbackText.trim();
+    const nativeListBlocks =
+      !slackBlocks?.length && !requiresSeparateFallbackDelivery && replySourceText
+        ? markdownToSlackMessages(
+            replySourceText.trim(),
+            Number.POSITIVE_INFINITY,
+            markdownOptions,
+          )[0]?.blocks
+        : undefined;
     const previewFinalText =
       replyRenderPlan.mode === "single" && replyRenderPlan.textIsSlackMrkdwn
         ? trimmedFinalText
@@ -267,6 +275,7 @@ async function dispatchSlackMessageWithSetup(
           return {
             text: previewFinalText,
             blocks: slackBlocks,
+            nativeListBlocks,
             threadTs,
           };
         },
@@ -283,6 +292,7 @@ async function dispatchSlackMessageWithSetup(
               messageId: preview.messageId,
               text: edit.text,
               ...(edit.blocks?.length ? { blocks: edit.blocks } : {}),
+              ...(edit.nativeListBlocks?.length ? { nativeListBlocks: edit.nativeListBlocks } : {}),
               threadTs: edit.threadTs,
             });
           });

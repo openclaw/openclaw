@@ -14,7 +14,7 @@ import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { getAgentScopedMediaLocalRoots } from "openclaw/plugin-sdk/media-runtime";
 import { resolveOutboundMediaAccessForConfig } from "openclaw/plugin-sdk/outbound-media";
 import { questionGatewayRuntime } from "openclaw/plugin-sdk/question-gateway-runtime";
-import { chunkMarkdownTextWithMode, type ChunkMode } from "openclaw/plugin-sdk/reply-chunking";
+import type { ChunkMode } from "openclaw/plugin-sdk/reply-chunking";
 import {
   deliverTextOrMediaReply,
   getReplyPayloadTtsSupplement,
@@ -26,7 +26,7 @@ import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { sanitizeAssistantVisibleText } from "openclaw/plugin-sdk/text-chunking";
 import { hasSlackNativeDataBlock } from "../blocks-fallback.js";
 import { SLACK_MAX_BLOCKS } from "../blocks-input.js";
-import { markdownToSlackMrkdwnChunks } from "../format.js";
+import { markdownToSlackMessages } from "../format.js";
 import { SLACK_MESSAGE_TEXT_HARD_LIMIT, SLACK_TEXT_LIMIT } from "../limits.js";
 import { emitSlackMessageSentHooks } from "../message-sent-hook.js";
 import {
@@ -390,7 +390,7 @@ export async function deliverSlackSlashReplies(params: {
   };
   type PlannedSlashReplyMessage = {
     message: SlashReplyMessage;
-    nativeFallback?: SlackFormattingDisabledMessage[];
+    nativeFallback?: SlashReplyMessage[];
     skipOriginalBlocks?: true;
   };
   type SlashReplyDelivery = {
@@ -485,18 +485,16 @@ export async function deliverSlackSlashReplies(params: {
     if (!combined) {
       continue;
     }
-    const chunkMode = params.chunkMode ?? "length";
-    const chunks = (
-      chunkMode === "newline"
-        ? chunkMarkdownTextWithMode(combined, chunkLimit, chunkMode)
-        : [combined]
-    ).flatMap((markdown) =>
-      markdownToSlackMrkdwnChunks(markdown, chunkLimit, { tableMode: params.tableMode }),
-    );
+    const messages = markdownToSlackMessages(combined, chunkLimit, {
+      tableMode: params.tableMode,
+      chunkMode: params.chunkMode,
+    });
     deliveries.push({
       replyIndex,
       hookContent: textRaw ?? resolveSlackMediaHookSpokenText(payload) ?? combined,
-      messages: (chunks.length > 0 ? chunks : [combined]).map((text) => ({ message: { text } })),
+      messages: (messages.length > 0 ? messages : [{ text: combined }]).map((message) =>
+        message.blocks ? { message, nativeFallback: [{ text: message.text }] } : { message },
+      ),
     });
   }
 
@@ -574,7 +572,7 @@ export async function deliverSlackSlashReplies(params: {
   }
 
   const deliverNativeFallback = async (
-    messages: readonly SlackFormattingDisabledMessage[],
+    messages: readonly SlashReplyMessage[],
     onVisible: () => void,
   ) => {
     for (const message of messages) {

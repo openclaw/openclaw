@@ -7,6 +7,7 @@ import { danger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { resolveSlackMarkdownOptions } from "../../accounts.js";
 import { trackSlackDraftMessage } from "../../draft-message-boundaries.js";
 import { formatSlackError } from "../../errors.js";
+import { markdownToSlackMessages } from "../../format.js";
 import { SLACK_EDIT_TEXT_MAX_BYTES } from "../../limits.js";
 import { emitSlackMessageSentHooks } from "../../message-sent-hook.js";
 import {
@@ -444,7 +445,11 @@ export function createSlackStreamingDeliveryRuntime(setup: SlackDispatchSetup) {
       !plannedBlocks?.length &&
       !resolveSlackReplyBlocks(payload)?.length &&
       reply.hasText &&
-      (!options?.maxTextBytes || countSlackTextUtf8Bytes(reply.trimmedText) <= options.maxTextBytes)
+      (!options?.maxTextBytes ||
+        countSlackTextUtf8Bytes(reply.trimmedText) <= options.maxTextBytes) &&
+      // Slack's streaming text chunks carry Markdown, while native lists require Block Kit.
+      !markdownToSlackMessages(reply.trimmedText, Number.POSITIVE_INFINITY, markdownOptions)[0]
+        ?.blocks
     );
   };
 

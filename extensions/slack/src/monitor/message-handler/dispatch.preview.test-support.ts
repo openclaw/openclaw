@@ -43,3 +43,11 @@ export function expectMockCallArgFields(
 ) {
   expectRecordFields(requireRecord(requireMockCall(mock, index, "call")[0], "params"), fields);
 }
+
+export function createSlackFormatMock(normalizeSlackOutboundText: (value: string) => string) {
+  return {
+    markdownToSlackMrkdwnChunks: (value: string) => [value],
+    markdownToSlackMessages: (value: string) => [{ text: value }],
+    normalizeSlackOutboundText,
+  };
+}

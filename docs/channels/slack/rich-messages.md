@@ -1,7 +1,7 @@
 ---
-summary: "Native Block Kit charts and tables, modal submissions, and approval buttons"
+summary: "Native lists, charts, tables, modal submissions, and approval buttons"
 read_when:
-  - Rendering charts or tables natively in Slack
+  - Rendering Markdown lists, charts, or tables natively in Slack
   - Handling a plugin-owned Slack modal submission
   - Approving exec or plugin requests from Slack
 title: "Slack charts, tables, and approvals"
@@ -15,6 +15,19 @@ avoids repeating text already represented by the rendered blocks. Authored
 Markdown uses the selected Slack account's formatting settings. Code whitespace
 and literal text remain distinct from styled text. Edits use the same comparison
 and preserve complete text when a presentation must fall back to one message.
+
+## Native lists
+
+OpenClaw renders ordered and unordered Markdown lists in replies using
+[Slack rich text lists](https://docs.slack.dev/reference/block-kit/blocks/rich-text-block/).
+Nested items show Slack's indentation and bullet styles. List items support bold
+and italic text, links, emoji shortcodes, inline code, and Slack mentions.
+Code fences retain their code formatting.
+
+Every message carries the complete mrkdwn text for notifications and clients
+that rely on the text field. If Slack rejects the generated blocks with
+`invalid_blocks`, OpenClaw retries with that text. List replies use the normal
+message path when Slack's native streaming API is active.
 
 ## Native charts
 

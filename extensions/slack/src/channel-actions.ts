@@ -355,10 +355,12 @@ export function createSlackActions(
             action: "editMessage",
             channelId: resolveChannelId(),
             messageId,
-            content: accessibleContent,
+            content: presentation ? accessibleContent : content,
             blocks,
           },
-          { ...ctx.toolContext, preparedEditText: accessibleContent },
+          presentation
+            ? { ...ctx.toolContext, preparedEditText: accessibleContent }
+            : ctx.toolContext,
         );
       }
 

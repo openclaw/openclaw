@@ -40,6 +40,14 @@ const toolStarts = (count: number, pad = "") =>
     toolStart({ command: `pnpm test --filter case-${index}${pad}` }, { itemId: `tool-${index}` }),
   );
 
+it("sends a final list through the block-capable sender in native progress mode", async () => {
+  const text = "- Parent\n  - Child";
+  await dispatchCardsScenario({ events: [], finalPayload: { text } });
+
+  expectDeliverReplyCall(0, text);
+  expect(collectNativeStreamTimeline().some(({ params }) => params.text === text)).toBe(false);
+});
+
 it("drains tool rows the compositor admitted past the budget before an error closeout", async () => {
   // 120 distinct tool rows inside one throttle window: the first message
   // and each continuation take a budget's worth, so a fresh opening still

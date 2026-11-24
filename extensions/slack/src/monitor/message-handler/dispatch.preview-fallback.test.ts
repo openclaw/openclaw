@@ -50,6 +50,7 @@ import {
   type TestDispatchSequenceEntry,
 } from "./dispatch.compact-progress.test-support.js";
 import {
+  createSlackFormatMock,
   createSlackPlatformError,
   expectMockCallArgFields,
   requireRecord,
@@ -516,10 +517,7 @@ vi.mock("../../actions.js", async (importOriginal) => ({
 // mock-isolation: Keep draft transport effects inside the per-test stream fixtures.
 vi.mock("../../draft-stream.js", () => ({ createSlackDraftStream: createSlackDraftStreamMock }));
 
-vi.mock("../../format.js", () => ({
-  markdownToSlackMrkdwnChunks: (value: string) => [value],
-  normalizeSlackOutboundText: normalizeSlackOutboundTextMock,
-}));
+vi.mock("../../format.js", () => createSlackFormatMock(normalizeSlackOutboundTextMock));
 
 // mock-isolation: Fixed limits keep split and rotation scenarios independent of runtime config.
 vi.mock("../../limits.js", () => ({ SLACK_TEXT_LIMIT: 4000, SLACK_EDIT_TEXT_MAX_BYTES: 4000 }));
