@@ -284,30 +284,33 @@ describe("renderAgents", () => {
   it("loads and renders the selected agent's 51st cron job when Load more is clicked", async () => {
     const snapshotRevision = "agents-view-cron-fixture";
     const jobs = Array.from({ length: 50 }, (_, index) =>
-      createCronJob(`main-${index}`, { agentId: "alpha" }),
+      createCronJob(`main-${String(index).padStart(2, "0")}`, {
+        agentId: "alpha",
+        state: { nextRunAtMs: index + 1 },
+      }),
     );
     const lastJob = createCronJob("main-50", {
       agentId: "alpha",
       name: "Fifty-first agent reminder",
+      state: { nextRunAtMs: 51 },
     });
-    const request = vi.fn(async () => ({
-      jobs: [lastJob],
-      snapshotRevision,
-      total: 51,
-      offset: 50,
-      limit: 50,
-      nextOffset: null,
-      hasMore: false,
-    }));
+    const request = vi.fn(async (method: string) =>
+      method === "cron.status"
+        ? { enabled: true, triggersEnabled: true, jobs: 80, nextWakeAtMs: null }
+        : {
+            jobs: [lastJob, ...jobs],
+            snapshotRevision,
+            total: 51,
+            offset: 0,
+            limit: 200,
+            nextOffset: null,
+            hasMore: false,
+          },
+    );
     const client = { request } as unknown as GatewayBrowserClient;
     const cronState = {
       ...createInitialCronState({ client, connected: true }),
       cronAgentId: "alpha",
-      cronJobs: jobs,
-      cronJobsSnapshotRevision: snapshotRevision,
-      cronJobsTotal: 51,
-      cronJobsHasMore: true,
-      cronJobsNextOffset: 50,
     };
     const container = document.createElement("div");
     const presenter = createAgentCronPresenter({
@@ -323,26 +326,24 @@ describe("renderAgents", () => {
           cron: {
             ...createProps().cron,
             read: presenter.read,
+            onRefresh: presenter.onRefresh,
             onLoadMore: presenter.onLoadMore,
           },
           readData: () => ({
             ...createProps().readData(),
             agentsPanel: "cron",
-            cron: {
-              ...cronState,
-              cronStatus: { enabled: true, triggersEnabled: true, jobs: 80, nextWakeAtMs: null },
-              cronScopedTotal: 51,
-              cronScopedNextWakeAtMs: null,
-            },
+            cron: cronState,
           }),
         },
         container,
       );
     };
-    renderCurrentPage();
+    presenter.onRefresh();
     await waitForSolid(() => expect(container.querySelector(".cron-load-more")).not.toBeNull());
 
     expect(container.textContent).not.toContain(lastJob.name);
+    expect(cronState.cronJobs).toEqual(jobs);
+    expect(cronState.cronJobsTotal).toBe(51);
 
     const loadMore = container.querySelector<HTMLButtonElement>(".cron-load-more");
     expect(loadMore?.textContent?.trim()).toBe(t("cron.list.loadMore"));
@@ -350,10 +351,8 @@ describe("renderAgents", () => {
     expect(container.querySelector<HTMLButtonElement>(".cron-load-more")?.disabled).toBe(true);
 
     await vi.waitFor(() => expect(container.textContent).toContain(lastJob.name));
-    expect(request).toHaveBeenCalledWith(
-      "cron.list",
-      expect.objectContaining({ agentId: "alpha", limit: 50, offset: 50 }),
-    );
+    expect(cronState.cronJobs).toEqual([...jobs, lastJob]);
+    expect(request.mock.calls.filter(([method]) => method === "cron.list")).toHaveLength(1);
     expect(container.querySelector(".cron-load-more")).toBeNull();
   });
 
