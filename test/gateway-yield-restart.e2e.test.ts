@@ -5,6 +5,7 @@ import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
+import { readTranscriptExportSnapshotReadOnlySync } from "../src/config/sessions/session-accessor.sqlite-export-read.js";
 import type { GatewayClient } from "../src/gateway/client.js";
 import type { OperatorScope } from "../src/gateway/operator-scopes.js";
 import { findSubagentSpawnReceipt } from "../src/gateway/server.subagent-stop-settlement.product.test-support.js";
@@ -57,6 +58,7 @@ it
         : "agent:main:main:thread:yield-restart";
     const rootPrompt = "YIELD_RESTART_REQUESTER";
     const childPrompt = "YIELD_RESTART_CHILD";
+    const readSavedChildPrompt = "READ_SAVED_CHILD_RESULT";
     const failed = createDeferred<never>();
     void failed.promise.catch(() => {});
     let childKey: string | undefined;
@@ -167,6 +169,11 @@ it
             return;
           }
           assert(text.includes(rootPrompt), "Unexpected synthetic requester input");
+          if (action === "policy-unavailable" && text.includes(readSavedChildPrompt)) {
+            expect(text).toContain("PARKED_CHILD_COMPLETED");
+            reply("REQUESTER_RECEIVED_CHILD_COMPLETION");
+            return;
+          }
           const spawned = input.find(
             (item) => isRecord(item) && item.type === "function_call_output",
           );
@@ -230,6 +237,7 @@ it
               return;
             }
             if (text.includes("PARKED_CHILD_COMPLETED")) {
+              expect(action).not.toBe("policy-unavailable");
               reply("REQUESTER_RECEIVED_CHILD_COMPLETION");
               return;
             }
@@ -712,19 +720,50 @@ it
             // Completion admission waits behind this turn; release it before injecting failure.
             assert(yieldRequester);
             yieldRequester();
+            const agentDir = instance.state.agentDir("main");
             await vi.waitFor(
               () => {
                 expect(instance.logs()).toContain("RECOVERY_POLICY_UNAVAILABLE_INJECTED");
                 expect(instance.logs()).toContain(
                   "Gateway access policy is unavailable; retry the operation.",
                 );
+                // A refused wake settles into model-visible history, not another requester turn.
+                const session = readRestartSession(agentDir, rootKey);
+                assert(typeof session?.sessionId === "string");
+                const transcript = readTranscriptExportSnapshotReadOnlySync({
+                  agentId: "main",
+                  sessionKey: rootKey,
+                  sessionId: session.sessionId,
+                  storePath: path.join(agentDir, "openclaw-agent.sqlite"),
+                  env: { ...process.env, OPENCLAW_STATE_DIR: instance.stateDir },
+                });
+                const statuses = transcript?.events.filter(
+                  (event) =>
+                    isRecord(event) &&
+                    event.type === "custom_message" &&
+                    event.customType === "subagent-completion",
+                );
+                expect(statuses).toEqual([
+                  expect.objectContaining({
+                    display: false,
+                    content: expect.stringContaining("PARKED_CHILD_COMPLETED"),
+                  }),
+                ]);
               },
               { timeout: 15_000 },
             );
+            phase = "requester reads saved child result";
+            await client.request("chat.send", {
+              sessionKey: rootKey,
+              message: readSavedChildPrompt,
+              idempotencyKey: randomUUID(),
+              deliver: false,
+            });
           }
         }
         await vi.waitFor(
           async () => {
+            await Promise.race([failed.promise, Promise.resolve()]);
             const history = await client!.request<{ messages: unknown[] }>("chat.history", {
               sessionKey: rootKey,
             });

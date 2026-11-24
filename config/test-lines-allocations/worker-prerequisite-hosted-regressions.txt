@@ -1,5 +1,6 @@
 # Exact excess on the hosted synthetic merge relative to its tested main parent.
 # Retains coverage across historical worker placement upgrades and rollback,
 # publication outcome recovery, and delayed App renewal with an installed grant.
-# These exercise distinct persistence and issuance boundaries; no global cap changes.
-127
+# Also covers independent wire/requester settlement and checking persisted child
+# completion before a fresh requester turn. These prove distinct boundaries.
+173
