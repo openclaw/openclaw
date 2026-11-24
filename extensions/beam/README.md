@@ -4,18 +4,23 @@ Share coding-session snapshots with trusted Gateway operators. Beam
 receives authenticated uploads and displays them in the Control UI's session
 catalog. Restricted guests with a verified profile and current Visitor invitation
 can publish, refresh, and view their own snapshots while their invitation is active,
-without access to other publishers' snapshots or the shared catalog. Operators can
-read a snapshot or copy its history into a separate conversation to continue the work.
+without access to other publishers' snapshots or the shared catalog. To hand off a
+conversation, the original verified publisher releases the snapshot. The first
+authorized continuation seeds one Team conversation. Reopening the Beam link
+returns to that conversation if the viewer still has access.
 
 ## Get started
 
-Enable Beam on the receiving Gateway:
+Beam ships with OpenClaw and is disabled by default. Enable it on the receiving
+Gateway:
 
 ```bash
 openclaw plugins enable beam
 ```
 
-The sender needs a reachable Gateway endpoint and permission to upload. Review the transcript before sending it: conversation text is preserved,
+If the Gateway is offline, start it after enabling Beam. The sender needs a
+reachable Gateway endpoint and permission to upload. Review the transcript
+before sending it. Conversation text is preserved,
 including any secrets it contains. Snapshots provide conversation context
 without access to the source computer or its tools.
 
