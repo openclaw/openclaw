@@ -222,6 +222,33 @@ it("reuses sealed format after final pool close and rejects a replacement file",
   });
 });
 
+it.each([
+  { raised: false, projected: false },
+  { raised: false, projected: true },
+  { raised: true, projected: false },
+  { raised: true, projected: true },
+])(
+  "checks the reader floor for newer auth stores ($raised, $projected)",
+  async ({ raised, projected }) => {
+    await withReaders((agentDir) => {
+      const pathname = databasePath(agentDir);
+      const version = OPENCLAW_AGENT_SCHEMA_VERSION + 1;
+      {
+        using writer = new DatabaseSync(pathname);
+        writer.exec(`ALTER TABLE schema_meta ADD COLUMN min_reader INTEGER;
+        UPDATE schema_meta SET schema_version = ${version}, min_reader = ${raised ? version : OPENCLAW_AGENT_SCHEMA_VERSION};
+        PRAGMA user_version = ${version}`);
+      }
+      const schema = projected
+        ? { userVersion: version, store: "table" as const, state: "table" as const }
+        : undefined;
+      expect(acquireAuthProfileReadDatabase(pathname, openReadonly, schema).status).toBe(
+        raised ? "unreadable" : "readable",
+      );
+    });
+  },
+);
+
 it("observes foreign commits through cached readers and retains them on snapshot replacement", async () => {
   await withReaders((agentDir, open) => {
     expect(loadStore(agentDir)).toMatchObject(apiKeyStore("qa-main"));
