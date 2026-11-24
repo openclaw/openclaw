@@ -391,7 +391,6 @@ it.each([
         .spyOn(sessionEvents, "enqueueSessionEventForHost")
         .mockImplementation((text, options) => {
           const input = prepareSessionEventInput(text, options);
-          input.operatorAuthority?.assertCurrent();
           resumed.push({
             profileId: input.operatorAuthority?.profileId,
             scopes: input.operatorAuthority?.scopes,
@@ -492,7 +491,6 @@ it.each([true, false])(
           );
           try {
             expect(restored.authority.scopes).toEqual(["operator.write"]);
-            restored.authority.assertCurrent();
             effect();
           } finally {
             restored.release();
@@ -550,9 +548,7 @@ it("recovers a current owner certificate independently of the linked profile's r
         expect(restored.authority.profileId).toBe(person.id);
         expect(restored.authority.rolePolicy).toBeUndefined();
         setUserProfileRole(person.id, null);
-        restored.authority.assertCurrent();
         setOpenClawIdTunnelPrincipalLookup(() => undefined);
-        expect(restored.authority.assertCurrent).not.toThrow();
         await expect(
           prepareSessionSystemTurnAuthority({
             context: fixture.context,

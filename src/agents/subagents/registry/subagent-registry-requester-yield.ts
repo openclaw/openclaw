@@ -81,10 +81,7 @@ export async function adoptSubagentRunForRequesterTurnInRuns(params: {
               entry.requesterSettleWake.batchRunIds[0] === entry.runId) &&
           (entry.requesterSettleWake?.requesterYieldBatch !== true ||
             entry.requesterSettleWake.rearmGeneration !== undefined) &&
-          (entry.delivery?.status === "pending" || entry.delivery?.status === "failed") &&
-          entry.delivery.disposition !== "permanent_failure" &&
-          (entry.delivery.disposition !== "intentional_non_delivery" ||
-            entry.requesterSettleWake !== undefined)
+          (entry.delivery?.status === "pending" || entry.delivery?.status === "failed")
         )
       ) {
         return { value: undefined };
@@ -564,14 +561,6 @@ export async function settleRequesterTurnAfterSessionSpawns(params: {
           const completionEnded = typeof entry.execution.endedAt === "number";
           // An in-progress delivery may already target the requester run being aborted.
           // Re-arm it like a delivered result so that completion cannot die with that turn.
-          if (completionEnded && entry.delivery?.status !== "delivered") {
-            // The persisted yielded batch now owns terminal delivery. Mark the old
-            // per-child attempt terminal so it cannot keep the batch unsettled.
-            entry.delivery = {
-              ...(entry.delivery ?? { status: "pending" }),
-              disposition: "intentional_non_delivery",
-            };
-          }
           entry.requesterSettleWake = {
             ...(existing?.pauseNotice ? { pauseNotice: existing.pauseNotice } : {}),
             status: "pending",

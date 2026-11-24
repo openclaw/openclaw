@@ -163,7 +163,6 @@ export async function executeTelegramPluginCommand(
     channel: "telegram",
     isAuthorizedSender: dispatch.commandAuthorized,
     senderIsOwner: dispatch.senderIsOwner,
-    assertOwnerCurrent: dispatch.assertOwnerCurrent,
     agentId: dispatch.route.agentId,
     sessionKey: dispatch.targetSessionKey,
     sessionId: transcriptContext.sessionId,

@@ -154,16 +154,29 @@ describe("native PDF final-effect authority", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it.each([
-    ["operator", "provider"],
-    ["credential", "provider"],
-    ["operator", "dns"],
-    ["credential", "dns"],
-  ] as const)("refuses %s retirement during %s preparation before HTTP", async (owner, stage) => {
-    const { outcome, retirementReached } = await runCase(owner, stage);
-    expect(retirementReached).toBe(true);
-    expect(fetchMock).not.toHaveBeenCalled();
-    expect(String(outcome.error)).toContain(`${owner} fixture retired`);
-    expect(complete).not.toHaveBeenCalled();
-  });
+  it.each(["provider", "dns"] as const)(
+    "applies updated operator policy at the next admission during %s preparation",
+    async (stage) => {
+      const admitted = await runCase("operator", stage);
+      expect(admitted.retirementReached).toBe(true);
+      expect(admitted.outcome.error).toBeUndefined();
+      expect(admitted.outcome.result?.details).toMatchObject({ native: true });
+      expect(fetchMock).toHaveBeenCalledOnce();
+      const next = await runCase("operator", "denied");
+      expect(next.outcome.error).toBeDefined();
+      expect(next.analyze).not.toHaveBeenCalled();
+      expect(fetchMock).toHaveBeenCalledOnce();
+    },
+  );
+
+  it.each(["provider", "dns"] as const)(
+    "refuses credential retirement during %s preparation before HTTP",
+    async (stage) => {
+      const { outcome, retirementReached } = await runCase("credential", stage);
+      expect(retirementReached).toBe(true);
+      expect(fetchMock).not.toHaveBeenCalled();
+      expect(String(outcome.error)).toContain("credential fixture retired");
+      expect(complete).not.toHaveBeenCalled();
+    },
+  );
 });

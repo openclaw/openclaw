@@ -1,4 +1,3 @@
-import fs from "node:fs/promises";
 import type { MediaKind } from "@openclaw/media-core/constants";
 import {
   asPositiveSafeInteger as parsePositiveInteger,
@@ -6,6 +5,7 @@ import {
 } from "@openclaw/normalization-core/number-coercion";
 import { asOptionalRecord as readRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
+import { openCommandStdinFile, type CommandStdinFile } from "../process/command-stdin-file.js";
 import { runFfprobe } from "./ffmpeg-exec.js";
 
 export type MediaProbeKind = Extract<MediaKind, "audio" | "video">;
@@ -127,13 +127,13 @@ function isMissingFdProtocolError(error: unknown): boolean {
 }
 
 async function probeMediaSource(
-  source: { stdinFileDescriptor: number } | { input: Buffer },
+  source: { stdinFile: CommandStdinFile } | { input: Buffer },
   kind: MediaProbeKind,
   options: {
     timeoutMs?: number;
   } = {},
 ): Promise<PlaybackMediaProbeResult | null> {
-  const isFileDescriptor = "stdinFileDescriptor" in source;
+  const isFileDescriptor = "stdinFile" in source;
   const runProbe = async (protocol: "fd" | "pipe") =>
     await runFfprobe(
       [
@@ -212,14 +212,10 @@ export async function probeMediaFilesWithinBudget(
     const batchResults = await Promise.all(
       batch.map(async ({ filePath, kind }) => {
         try {
-          const handle = await fs.open(filePath, "r");
-          try {
-            return toMediaProbeResult(
-              await probeMediaSource({ stdinFileDescriptor: handle.fd }, kind, { timeoutMs }),
-            );
-          } finally {
-            await handle.close().catch(() => {});
-          }
+          await using input = await openCommandStdinFile(filePath);
+          return toMediaProbeResult(
+            await probeMediaSource({ stdinFile: input.stdinFile }, kind, { timeoutMs }),
+          );
         } catch {
           return {};
         }
@@ -233,11 +229,11 @@ export async function probeMediaFilesWithinBudget(
 }
 
 /** Probes duration and first-stream codecs from an already validated local descriptor. */
-export async function probePlaybackMediaFileDescriptor(
-  fd: number,
+export async function probePlaybackMediaFile(
+  stdinFile: CommandStdinFile,
   kind: MediaProbeKind,
 ): Promise<PlaybackMediaProbeResult | null> {
-  return await probeMediaSource({ stdinFileDescriptor: fd }, kind);
+  return await probeMediaSource({ stdinFile }, kind);
 }
 
 type VideoDimensions = {

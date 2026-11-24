@@ -100,9 +100,7 @@ function sessionRowMaterializationMatches(
     row.derivedTitle === input.derivedTitle &&
     row.hasMessages === input.hasMessages &&
     row.lastMessagePreview === input.lastMessagePreview &&
-    source.lastMessagePreview === input.lastMessagePreview &&
     equal(row.lastAssistantMessage, input.lastAssistantMessage) &&
-    equal(source.lastAssistantMessage, input.lastAssistantMessage) &&
     equal(
       row.pluginExtensions,
       input.pluginExtensions.length ? input.pluginExtensions : undefined,

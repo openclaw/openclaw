@@ -109,9 +109,11 @@ for messages, a calendar clock for scheduled jobs, and an image for image genera
 Shared tools keep their semantic icons regardless of the provider. Tools owned by
 installed third-party plugins may show the plugin logo when the Gateway has
 confirmed a non-OpenClaw ClawHub publisher. Bundled and OpenClaw-published plugins
-keep their monochrome activity icons. Missing or unreadable logos fall back to
-the plugin activity icon, then the normal tool glyph; unknown tools use a puzzle
-icon. Unknown publisher metadata does not enable branding.
+keep their monochrome activity icons. When an installed, non-bundled plugin
+owns an MCP tool but provides no activity artwork for it, chat can use the
+plugin's icon instead, even for an OpenClaw-published service wrapper. Missing
+or unreadable artwork falls back to the normal tool glyph; unknown tools use a
+puzzle icon.
 
 Choose **View → Inline command trail (this browser)** in the session menu to show
 compact command, read, and search rows in conversation order while work is running.
@@ -124,8 +126,10 @@ and on to retry; the error’s details retain the technical failure.
 A tool stops showing **Running** when its completion arrives, even while the
 parent turn continues. If that completion does not establish success or failure,
 the row keeps the tool's known purpose and shows **Outcome unknown** separately.
-Reloading history preserves the recorded purpose. A saved call without a loaded
-result shows **No result available** rather than counting as an unknown outcome.
+Reloading history preserves the recorded purpose. In imported Claude CLI history,
+a tool result without an error flag counts as completed, just as it does live.
+A saved call without a loaded result shows **No result available** rather than
+counting as an unknown outcome.
 Live execution facts and the active run’s replay snapshot establish **Running**;
 the run being active alone does not. Refreshing the same session retains those
 facts until history records an outcome. Partial output alone does not finish a

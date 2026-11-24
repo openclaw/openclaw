@@ -252,7 +252,7 @@ export function currentOwnerDevicePrincipal(
 
 export class OpenClawIdPrincipalChangedError extends GatewayOperatorRecoveryAuthorizationError {
   constructor() {
-    super("OpenClaw ID membership authority changed");
+    super("OpenClaw ID membership changed. Reconnect before starting a request.");
   }
 }
 

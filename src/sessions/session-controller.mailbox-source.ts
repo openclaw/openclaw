@@ -33,7 +33,7 @@ export function bindSessionControllerSource(
   ) {
     throw new Error("Source binding no longer current");
   }
-  input.sourceAdapter?.authority?.assertCurrent();
+  input.sourceAdapter?.authority?.assertCurrent?.();
   input.sourceAdapter?.signal?.throwIfAborted();
   input.source = source;
   source.controllerInput = input;
@@ -173,7 +173,7 @@ export function beginSessionControllerSourceInjection(
           }
           return false;
         }
-        input.sourceAdapter?.authority?.assertCurrent();
+        input.sourceAdapter?.authority?.assertCurrent?.();
         input.abortSignal.throwIfAborted();
         started = true;
         pending.admitted = true;
@@ -227,7 +227,7 @@ export function updateSessionControllerSourcePolicy(
     input.abortSignal.throwIfAborted();
   };
   assertConfigurable();
-  input.sourceAdapter?.authority?.assertCurrent();
+  input.sourceAdapter?.authority?.assertCurrent?.();
   assertConfigurable();
   const wasInterrupt = input.policy.mode === "interrupt";
   input.policy = Object.freeze({ ...policy });

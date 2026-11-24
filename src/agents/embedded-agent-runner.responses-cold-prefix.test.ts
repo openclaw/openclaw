@@ -7,6 +7,7 @@ import { stableStringify } from "@openclaw/normalization-core";
 import { expect, it, vi } from "vitest";
 import {
   assertStableProviderPrefix,
+  omitResponsesReplayEnvelopes,
   snapshotProviderPrefix,
 } from "../../scripts/e2e/lib/anthropic-cache/prefix-stability.mts";
 import { setRuntimeConfigSnapshot } from "../config/io.js";
@@ -18,7 +19,7 @@ import { closeOpenClawAgentDatabasesAsync } from "../state/openclaw-agent-db.js"
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { prepareSystemAgentRunAdmission } from "./admitted-run-context.js";
 import { runEmbeddedAgent } from "./embedded-agent-runner.js";
-import { cacheRunnerConfig, omitWireFields } from "./embedded-agent-runner.wire.test-support.js";
+import { cacheRunnerConfig } from "./embedded-agent-runner.wire.test-support.js";
 import { clearEmbeddedSessionPromptStates } from "./embedded-agent-runner/session-prompt-state.js";
 import { prepareInternalSessionEffectsSession } from "./internal-session-effects.js";
 import { writeTempPlugin } from "./test-helpers/temp-plugin-extension-fixtures.js";
@@ -161,19 +162,15 @@ it.each([
               { status: 400 },
             );
           }
-          const comparable = effectiveInput.map((value) => {
-            const item = value as Record<string, unknown>;
-            // Provider item IDs render no tokens; cold replay omits unverifiable ones.
-            return item.type === "function_call" ||
-              item.type === "reasoning" ||
-              (item.type === "message" && item.role === "assistant")
-              ? omitWireFields(item, ["id", "status"])
-              : item;
-          });
           prefixes.push(
             snapshotProviderPrefix(
               "openai-responses",
-              JSON.parse(stableStringify({ ...payload, input: comparable })),
+              JSON.parse(
+                stableStringify({
+                  ...payload,
+                  input: omitResponsesReplayEnvelopes(effectiveInput),
+                }),
+              ),
             ),
           );
           const id = "response_" + requests.length;

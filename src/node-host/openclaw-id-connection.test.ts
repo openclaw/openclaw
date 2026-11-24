@@ -115,7 +115,7 @@ test("retires the connected server when a freshness probe discovers its replacem
     expect.any(Buffer),
     expect.any(Object),
   );
-  expect(close).toHaveBeenCalledWith(10, "server authority changed");
+  expect(close).toHaveBeenCalledWith(10, "server identity changed; reconnect");
 });
 
 test("does not dial after cancellation during authority refresh", async () => {

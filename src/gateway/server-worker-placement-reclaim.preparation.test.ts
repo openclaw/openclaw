@@ -4,8 +4,6 @@ import { observeHostDataSql } from "../../test/helpers/sqlite-statement-executio
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import { clearAgentRunContext } from "../infra/agent-run-registry.js";
-import * as operationAdmission from "../infra/sqlite-worker-operation-admission.js";
-import { sqliteWorkerOwnerProbe as probe } from "../infra/sqlite-worker-owner-probe.test-support.js";
 import { beginSessionEffect } from "../sessions/session-controller.lifecycle.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { createGatewayWorkerDispatchAdmission } from "./server-worker-placement-dispatch-admission.js";
@@ -639,69 +637,6 @@ it.each([
       cleaning.release.resolve();
       f.loaded.resolve();
       await Promise.all([moving, stopping]);
-      f.context.chatRunState.clear();
-    }
-  },
-);
-
-it.each(["transaction", "commit"] as const)(
-  "retains the abandoned Stop decision when the caller changes at %s completion admission",
-  async (stage) => {
-    let destroyed = false;
-    const f = await cancellationLoadFixture({
-      afterDestroy: () => {
-        destroyed = true;
-      },
-    });
-    const active = await f.coordinated.dispatch(REQUEST);
-    f.harness.markEnvironmentNodeDeviceId("device-1");
-    f.database.db
-      .prepare("UPDATE worker_environments SET profile_id = ? WHERE environment_id = ?")
-      .run("device:device-1", active.environmentId);
-    const begun = await f.placements.beginPlacementMove({
-      sessionId: active.sessionId,
-      source: source(active),
-      target: { kind: "gateway" },
-      abandonSource: true,
-    });
-    let allowed = true;
-    let admissionReached = false;
-    let connected = true;
-    const assertLifetime = () => {
-      if (!connected) {
-        throw new Error("Stop connection closed");
-      }
-    };
-    const assertCaller = () => {
-      assertLifetime();
-      if (!allowed) {
-        throw new Error("Stop caller revoked at completion");
-      }
-    };
-    const authorize = Object.assign(assertCaller, {
-      assertWorkerLifetime: assertLifetime,
-      assertWorkerGrant: assertCaller,
-    });
-    const admission = probe.admission(operationAdmission, (request, grant, admit) => {
-      if (destroyed && request.stage === stage) {
-        admissionReached = true;
-        allowed = false;
-      }
-      admit(request, grant);
-    });
-    try {
-      await expect(f.coordinated.reclaim(REQUEST, authorize)).rejects.toThrow(
-        "Stop caller revoked at completion",
-      );
-      expect(admissionReached).toBe(true);
-      expect(f.harness.environments.destroy).toHaveBeenCalledOnce();
-      expect(f.placements.get(REQUEST.sessionId)).toMatchObject({ state: "failed" });
-      expect((await f.placements.getPlacementMoveAsync(REQUEST.sessionId))?.operationId).toBe(
-        begun.intent.operationId,
-      );
-    } finally {
-      connected = false;
-      admission.mockRestore();
       f.context.chatRunState.clear();
     }
   },

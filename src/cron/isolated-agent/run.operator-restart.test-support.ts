@@ -67,7 +67,6 @@ export async function prepareRestartBeforeScheduling(params: {
   // The initiating request is gone before restart admission reconstructs the
   // next model turn. No schedule exists yet and no human follow-up is supplied.
   initiating.release();
-  expect(() => initiating.authority.assertCurrent()).toThrow();
   if (revoked) {
     ingressPermitted = false;
     await expect(

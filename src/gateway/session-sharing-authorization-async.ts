@@ -89,7 +89,6 @@ export async function prepareSessionPrincipalRunAuthority(
     return {
       authority: createAdmittedRunOperatorAuthority({
         ...original,
-        assertCurrent: source.assertCurrent,
         signal: source.signal,
       }),
       release: source.release,
@@ -179,7 +178,6 @@ async function prepareSessionPrincipalRunAccess(params: {
     if (params.recoveredOperatorAuthority) {
       const authority = params.recoveredOperatorAuthority;
       assertAdmittedRunOperatorAuthority(authority);
-      authority.assertCurrent();
       if (authority.profileId !== params.profileId) {
         throw new Error("Interrupted requester identity changed.");
       }
@@ -227,7 +225,7 @@ async function prepareSessionPrincipalRunAccess(params: {
       },
     };
     const assertPrincipalCurrent = composeSessionSourceAssertion(
-      [params.assertCurrent, recorded?.authority.assertCurrent],
+      [params.assertCurrent],
       undefined,
       { synchronousCheck: true },
     );

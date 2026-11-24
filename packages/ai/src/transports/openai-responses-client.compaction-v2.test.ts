@@ -114,8 +114,20 @@ describe.each([
     const result = await compact(context, hooked);
     const [normal, v2] = requests;
     assert(normal && v2, "Expected normal and compaction requests");
-    expect(normal.body.instructions).toBe("Stable instructions");
-    expect(JSON.stringify(normal.body.input)).not.toContain("Stable instructions");
+    if (_transportName === "native ChatGPT") {
+      expect(normal.body).not.toHaveProperty("instructions");
+      expect(normal.body.input).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            role: "developer",
+            content: [{ type: "input_text", text: "Stable instructions" }],
+          }),
+        ]),
+      );
+    } else {
+      expect(normal.body.instructions).toBe("Stable instructions");
+      expect(JSON.stringify(normal.body.input)).not.toContain("Stable instructions");
+    }
     expect(v2.url).toBe(normal.url);
     expect(v2.url.endsWith("/responses")).toBe(true);
     expect(v2.body).toEqual({

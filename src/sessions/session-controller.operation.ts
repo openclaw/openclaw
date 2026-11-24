@@ -549,7 +549,7 @@ export function createReplyOperation(params: CreateReplyOperationParams): ReplyO
         mailboxClaim?.mailbox.owner ?? getSessionControllerEntry(update.sessionKey, target);
       backendReady.resolve();
       backendReady = createDeferredCore();
-      backendReadyByOperation.set(operation, backendReady.promise);
+      backendReadyByOperation.set(operation, backendReady);
       currentSessionKey = update.sessionKey;
       owner = nextOwner;
       adoptReplyOperationController(operation, previousOwner, owner, target, mailboxClaim);
@@ -590,7 +590,7 @@ export function createReplyOperation(params: CreateReplyOperationParams): ReplyO
         backendReady.resolve();
         if (!ended() && !state.abortFrozen && !state.cleared) {
           backendReady = createDeferredCore();
-          backendReadyByOperation.set(operation, backendReady.promise);
+          backendReadyByOperation.set(operation, backendReady);
         }
         attachment.backend = undefined;
         if (!("handle" in attachment) && attachment.projectSessionActive === undefined) {
@@ -703,7 +703,7 @@ export function createReplyOperation(params: CreateReplyOperationParams): ReplyO
     }
   });
 
-  backendReadyByOperation.set(operation, backendReady.promise);
+  backendReadyByOperation.set(operation, backendReady);
   installReplyOperationAdmission(operation, admitted, params.mailboxClaim);
   installed = true;
   watchdog.start();

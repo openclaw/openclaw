@@ -594,10 +594,7 @@ export const environmentsHandlers: GatewayRequestHandlers = {
             provisionSource: captureQueuedOperatorRecoverySource(captured?.authority) ?? {
               kind: "unavailable",
             },
-            beforeProvision: () => {
-              invocation.assertCurrent();
-              captured?.authority.assertCurrent();
-            },
+            beforeProvision: () => invocation.assertCurrent(),
           }),
         );
       } finally {
