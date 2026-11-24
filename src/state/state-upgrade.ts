@@ -390,6 +390,7 @@ export async function upgradeStateDirectory(params: {
     const baseline = new Map<string, string | undefined>();
     const liveState = path.join(stateDir, "state", "openclaw.sqlite");
     const copyScope = await copyTree(stateDir, shadowRoot, skip, baseline, {
+      targets,
       log: params.log,
       additionalCopyBytes: configInside
         ? 0

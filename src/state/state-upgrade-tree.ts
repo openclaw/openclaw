@@ -19,6 +19,7 @@ import {
 } from "../infra/sqlite-wal-filesystem.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { retirePostgresUpgrade } from "../snapshot/database-backup.js";
+import type { DatabaseTarget } from "./state-upgrade-databases.js";
 
 export type UpgradeOp = {
   /** Live path to replace, create or retire. */
@@ -258,6 +259,7 @@ export async function copyTree(
   skip: (absolute: string) => boolean,
   baseline: Map<string, string | undefined>,
   options: {
+    targets?: readonly DatabaseTarget[];
     log?: { info: (message: string) => void };
     additionalCopyBytes?: number;
   } = {},
@@ -349,7 +351,7 @@ export async function copyTree(
     }
   };
   walk(live, new Set([fs.realpathSync(live)]));
-  for (const required of options.requiredSqlite ?? []) {
+  for (const { path: required } of options.targets ?? []) {
     if (fs.existsSync(required) && !files.some((file) => file.source === required)) {
       throw new Error(
         `State upgrade refused: database ${required} is outside the copy scope. Nothing live was changed. Run openclaw doctor --fix under offline maintenance, then start the Gateway again.`,
