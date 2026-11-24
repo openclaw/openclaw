@@ -1,6 +1,9 @@
 /* @vitest-environment jsdom */
 
 import { expect, it } from "vitest";
+import { jsonResult } from "../../../../../src/agents/tools/tool-results.js";
+import { projectToolResultDetails } from "../../../../../src/gateway/chat-display-projection.canvas.js";
+import { extractToolCardsCached } from "../../../lib/chat/tool-cards.ts";
 import { mountCard } from "./chat-tool-cards.test-support.tsx";
 
 const text = (container: ParentNode, selector: string) =>
@@ -201,6 +204,88 @@ it.each([
     expect(text(container, ".chat-tool-disclosure__content")).toBe(label);
   },
 );
+
+// Captured from createMediaGenerateDuplicateGuardResult for an already queued music task.
+const queuedMusic = {
+  action: "status",
+  duplicateGuard: true,
+  async: true,
+  active: true,
+  existingTask: true,
+  status: "queued",
+  task: { taskId: "task-active", runId: "run-active" },
+  taskKind: "music_generation",
+  progressSummary: "Queued music generation",
+  sourceId: "music_generate:fixture",
+  provider: "fixture",
+};
+const queuedMusicText =
+  "Music generation task task-active is already queued with fixture.\nProgress: Queued music generation.\nDo not call music_generate again for this request. Do not wait, poll, or yield for it: end this turn; the completion arrives as a later turn and sends the finished music here.";
+const reviewStart =
+  "Review-before-delivery is enabled. Produced candidates remain private until an exact-task delivery decision; do not send them automatically.\nBackground task started for image generation (task-new). Do not call image_generate again for this request.";
+
+it.each([
+  ["duplicate guard", "music_generate", queuedMusic, queuedMusicText, "Generate music"],
+  ["missing receipt", "image_generate", undefined, undefined, "Generate image"],
+  [
+    "generic count",
+    "music_generate",
+    { count: 2 },
+    "Generated 2 tracks.\nPrompt: Background task started for music generation (task-from-prompt).",
+    "Generate music",
+  ],
+  [
+    "review start",
+    "image_generate",
+    { async: true, status: "started", taskId: "task-new" },
+    reviewStart,
+    "Requested image generation",
+  ],
+  [
+    "generated attachment",
+    "music_generate",
+    { attachments: [{ type: "audio", path: "/fixture/track.mp3" }] },
+    "Generated 1 track with fixture/model.",
+    "Generated music",
+  ],
+] as const)(
+  "labels the %s in direct and historical media rows",
+  async (_case, name, details, outputText, label) => {
+    const args = { prompt: "Background task started for image generation (task-from-prompt)." };
+    const tool = { id: name, name, source: "openclaw" };
+    const content = outputText ? [{ type: "text", text: outputText }] : [];
+    const [history] = extractToolCardsCached({
+      role: "assistant",
+      content: [
+        { type: "toolcall", id: "media", name: "tool_call", arguments: { id: name, args } },
+        {
+          type: "toolresult",
+          id: "media",
+          name: "tool_call",
+          content: jsonResult({ tool, result: { content } }).content,
+          details: projectToolResultDetails({ tool, result: { content, details } }, 4_096, {
+            name: "tool_call",
+          }).details,
+        },
+      ],
+    });
+    for (const card of [{ id: name, name, args, details, outputText, completed: true }, history!]) {
+      const container = await mountCard(card, { expanded: false });
+      expect(text(container, ".chat-tool-row__title")).toBe(label);
+    }
+  },
+);
+
+it.each([
+  ["status", "Checked music generation"],
+  ["list", "Listed music models"],
+])("keeps an explicit media %s action", async (action, label) => {
+  const container = await mountCard(
+    { id: "music", name: "music_generate", args: { action }, completed: true },
+    { expanded: false },
+  );
+  expect(text(container, ".chat-tool-row__title")).toBe(label);
+});
 
 const stop = (details: object, args: object = {}) => ({
   name: "sessions",

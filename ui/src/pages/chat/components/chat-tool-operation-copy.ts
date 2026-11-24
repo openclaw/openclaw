@@ -94,19 +94,34 @@ function browserOperation(args: Record<string, unknown> | null, labels: object):
   return Object.hasOwn(labels, key) ? key : "act";
 }
 
-function hasGeneratedMedia(card: ToolCard): boolean {
+function completedMediaGenerationPhase(card: ToolCard, kind: string) {
   const details = asNullableRecord(card.details);
   const receipt = asNullableRecord(asNullableRecord(details?.result)?.details) ?? details;
-  if (receipt?.async === true) {
-    return false;
+  if (receipt?.action === "status" || receipt?.duplicateGuard === true) {
+    return "action";
+  }
+  if (receipt?.async === true && typeof receipt.status === "string") {
+    return receipt.status === "started" ? "requested" : "action";
   }
   if (Array.isArray(receipt?.attachments)) {
-    return receipt.attachments.length > 0;
+    return receipt.async !== true && receipt.attachments.length > 0 ? "done" : "action";
   }
-  // History and live dispatch can omit details but keep the count reported by the media tool.
-  return /^Generated [1-9]\d* (?:image|track|video)s? with /u.test(
-    unwrapToolResultTextForDisplay(card.outputText ?? ""),
-  );
+  // History may keep only the producer's opening sentence (after an optional review notice).
+  const output = unwrapToolResultTextForDisplay(card.outputText ?? "");
+  const startedKind =
+    /^(?:Review-before-delivery is enabled\.[^\n]*\n)?Background task started for (image|music|video) generation \([^\s()]+\)\./u.exec(
+      output,
+    )?.[1];
+  if (startedKind === kind) {
+    return "requested";
+  }
+  const generatedUnit =
+    /^Generated [1-9]\d* (image|track|video)s? with [^/\n]+\/[^\n]+\.(?:\r?\n|$)/u.exec(
+      output,
+    )?.[1];
+  return receipt?.async !== true && generatedUnit === (kind === "music" ? "track" : kind)
+    ? "done"
+    : "action";
 }
 
 export function catalogToolLabel(
@@ -167,8 +182,8 @@ export function catalogToolLabel(
       : outcome === "succeeded" && !(name === "message" && args?.dryRun === true)
         ? "done"
         : "action";
-  if (mediaGenerator && operation === "generate" && phase === "done" && !hasGeneratedMedia(card)) {
-    phase = "requested";
+  if (mediaGenerator && operation === "generate" && phase === "done") {
+    phase = completedMediaGenerationPhase(card, name.slice(0, -"_generate".length));
   }
   const label = t(`chat.toolCards.operationLabels.${name}.${operation}.${phase}`);
   const actionLabel = addressed?.name
