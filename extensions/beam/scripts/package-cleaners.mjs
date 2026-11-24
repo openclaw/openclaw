@@ -47,6 +47,16 @@ async function outputChild(parent, name) {
   return child;
 }
 
+async function assertExpectedChildren(dir, names) {
+  for (const child of await fs.readdir(dir)) {
+    if (!names.includes(child)) {
+      throw new Error(
+        `Unexpected Beam build output ${path.basename(dir)}/${child}. Rebuild from a clean dist directory.`,
+      );
+    }
+  }
+}
+
 async function readArchive(cache, entry, offline) {
   const file = path.join(cache, entry.archive);
   try {
@@ -113,6 +123,10 @@ async function main() {
     throw new Error("Expected an ordinary built Beam plugin directory");
   }
   const native = values.prefetch ? null : await outputChild(plugin, "native");
+  if (native) {
+    // Packing a previously staged dist must not publish stale, unpinned native assets.
+    await assertExpectedChildren(native, expected);
+  }
   const offline = values.offline || process.env.npm_config_offline === "true";
   for (const target of expected) {
     const entry = pin.platforms[target];
@@ -140,11 +154,9 @@ async function main() {
     }
     if (native) {
       const destination = await outputChild(native, target);
-      await writeAtomic(
-        path.join(destination, target.startsWith("win32-") ? "beam-clean.exe" : "beam-clean"),
-        executable,
-        0o755,
-      );
+      const filename = target.startsWith("win32-") ? "beam-clean.exe" : "beam-clean";
+      await assertExpectedChildren(destination, [filename]);
+      await writeAtomic(path.join(destination, filename), executable, 0o755);
     }
   }
 }

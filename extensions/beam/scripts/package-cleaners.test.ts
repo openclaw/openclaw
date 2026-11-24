@@ -62,6 +62,10 @@ it("stages the pinned offline platform matrix and refuses a corrupt or missing c
         pin.executableSha256,
       );
     }
+    const stale = path.join(built, "native", entries[0]![0], "old-cleaner");
+    writeFileSync(stale, "previous release");
+    expect(stage()).toMatchObject({ status: 1, stderr: expect.stringContaining("old-cleaner") });
+    rmSync(stale);
     const first = entries[0]![1];
     const archive = path.join(cache, first.archive);
     writeFileSync(archive, Buffer.alloc(first.bytes));
