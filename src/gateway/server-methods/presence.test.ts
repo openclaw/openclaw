@@ -70,7 +70,7 @@ function caller(profileId = "alex"): GatewayClient {
 
 function request(
   params: PresenceQueryParams = {},
-  options: { nodes?: NodeSession[]; client?: GatewayClient | null; current?: () => boolean } = {},
+  options: { nodes?: NodeSession[]; client?: GatewayClient | null } = {},
 ) {
   const respond = vi.fn();
   const nodeRegistry = new NodeRegistry();
@@ -83,7 +83,6 @@ function request(
     client: options.client === undefined ? caller() : options.client,
     respond,
     isWebchatConnect: () => false,
-    hasCurrentClientAuthority: options.current,
     context,
   });
   return { respond, run };
@@ -290,26 +289,14 @@ describe("presence.query", () => {
     );
   });
 
-  it("re-reads connections after lookup without rechecking the admitted caller", async () => {
+  it("re-reads connections after awaited location lookup", async () => {
     mocks.presence.mockReturnValue([row("tab", { ip: "203.0.113.2" })]);
-    const entered = createDeferred();
     const lookup = createDeferred<GatewayMethodDispatchResponse>();
-    mocks.lookup.mockImplementation(() => {
-      entered.resolve();
-      return lookup.promise;
-    });
-    let current = true;
-    const result = request({ include: ["location"] }, { current: () => current });
-    await Promise.race([entered.promise, result.run]);
-    expect(mocks.lookup).toHaveBeenCalledOnce();
+    mocks.lookup.mockReturnValue(lookup.promise);
+    const result = request({ include: ["location"] });
     mocks.presence.mockReturnValue([]);
-    current = false;
     lookup.resolve({ ok: false });
     await result.run;
-    expect(result.respond).toHaveBeenCalledWith(
-      true,
-      expect.objectContaining({ people: [], totalPeople: 0 }),
-      undefined,
-    );
+    expect(result.respond.mock.calls[0]?.[1]).toMatchObject({ people: [], totalPeople: 0 });
   });
 });

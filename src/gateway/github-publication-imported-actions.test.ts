@@ -447,28 +447,16 @@ describe("actions on the imported original PR", () => {
   );
 
   it.each([
-    ["edit", "requester"],
     ["edit", "head"],
     ["edit", "title"],
-    ["request_review", "requester"],
-    ["request_review", "requester and transport"],
     ["request_review", "head"],
     ["request_review", "closed"],
     ["request_review", "author"],
   ])("rechecks explicit %s target %s before the write", async (action, change) => {
     const f = await fixture(false, false, false);
-    const revokeRequester = change === "requester" || change === "requester and transport";
     let reads = 0;
-    let requesterRevoked = false;
     f.onRead(async (endpoint) => {
       if (endpoint.endsWith("/pulls/7") && ++reads === 2) {
-        if (revokeRequester) {
-          await f.revoke();
-          requesterRevoked = true;
-          if (change === "requester and transport") {
-            throw new Error("Synthetic GitHub read failure");
-          }
-        }
         if (change === "head") {
           f.state.head.sha = "f".repeat(40);
         }
@@ -489,17 +477,14 @@ describe("actions on the imported original PR", () => {
         ...(action === "edit" ? { title: "Requested title", expectedTitle: "Original title" } : {}),
       }),
     ).rejects.toThrow(
-      revokeRequester
-        ? /Authenticated profile verification is unavailable/
-        : change === "head"
-          ? /head changed/
-          : change === "closed"
-            ? /closed/
-            : change === "author"
-              ? /not authored/
-              : /metadata changed/,
+      change === "head"
+        ? /head changed/
+        : change === "closed"
+          ? /closed/
+          : change === "author"
+            ? /not authored/
+            : /metadata changed/,
     );
-    expect(requesterRevoked).toBe(revokeRequester);
     expect(f.writes).toEqual([]);
   });
 
@@ -687,7 +672,6 @@ describe("actions on the imported original PR", () => {
           },
         });
       }),
-    requester: (f) => f.onRead(() => f.revoke()),
   };
   it.each(Object.entries(changes))("denies changed %s before any effect", async (_name, change) => {
     const f = await fixture();

@@ -23,7 +23,6 @@ import { prepareUserProfileIdentity } from "../state/user-profile-list.js";
 import type { UserChannelAuthorizationReference } from "../state/user-profiles.types.js";
 import { isBrowserOperatorUiClient, isWebchatClient } from "../utils/message-channel.js";
 import {
-  bindGatewayDeviceRevocation,
   readGatewayDeviceSourceAuthority,
   readGatewayDeviceSourceIdentity,
   retainGatewayDeviceRevocation,
@@ -83,11 +82,9 @@ export function captureChannelOperatorRunAuthority(input: {
   scopes: readonly string[];
   gatewayAccessGrant: AdmittedRunOperatorAuthority["gatewayAccessGrant"];
   getRuntimeConfig: () => OpenClawConfig;
-  assertCurrent: () => void;
   signal?: AbortSignal;
 }): AdmittedRunOperatorAuthority {
   const params = { ...input };
-  params.assertCurrent();
   const initialConfig = params.getRuntimeConfig();
   const metadata = getProcessGatewayPluginMetadataSnapshot();
   const role = structuredClone(
@@ -116,7 +113,6 @@ export function captureChannelOperatorRunAuthority(input: {
     scopes: params.scopes,
     rolePolicy: prepareRunRolePolicy(sourceRolePolicy(role)),
     gatewayAccessGrant: params.gatewayAccessGrant,
-    assertCurrent: () => params.signal?.throwIfAborted(),
     signal: params.signal,
     readCurrentRoleFacts: () => ({
       assignedRole: params.assignedRole,
@@ -164,7 +160,7 @@ export async function prepareGatewayOperatorRunAuthority(
   const inherited = params.client?.internal?.operatorRunAuthority;
   if (inherited !== undefined) {
     assertAdmittedRunOperatorAuthority(inherited);
-    inherited.assertCurrent();
+    inherited.signal?.throwIfAborted();
     const scopes = intersectOperatorScopes(inherited.scopes, params.client?.connect.scopes ?? []);
     const authority = roleScopesAllow({
       role: "operator",
@@ -179,7 +175,6 @@ export async function prepareGatewayOperatorRunAuthority(
             return inherited.modelPolicy;
           },
         });
-    bindGatewayDeviceRevocation(authority.assertCurrent, inherited.assertCurrent);
     return { authority, release: inherited.retain?.() ?? (() => {}) };
   }
   const actor = resolveGatewayOperatorRoleActor(params.client);
@@ -270,7 +265,6 @@ export async function prepareGatewayOperatorRunAuthority(
       (params.hasCurrentClientAuthority ? {} : undefined),
     sourceAuthority,
     ingressPrincipal,
-    params.invocationAuthority,
     repositoryCredentialSource,
   ];
   let releaseSource: (() => void) | undefined;
@@ -357,7 +351,7 @@ export async function prepareGatewayOperatorRunAuthority(
         allowedScopes: client.connect.scopes ?? [],
       })
     ) {
-      throw new Error("Gateway caller authority is no longer active.");
+      throw new Error("Gateway request could not start. Reconnect and try again.");
     }
   };
   try {
@@ -406,7 +400,6 @@ export async function prepareGatewayOperatorRunAuthority(
       repositoryCredentialSource,
       scopes,
       gatewayAccessGrant: grant ? Object.freeze({ ...grant }) : grant,
-      assertCurrent,
     };
     const {
       snapshot: recoverySnapshot,
@@ -457,7 +450,6 @@ export async function prepareGatewayOperatorRunAuthority(
       },
       modelPolicy,
     });
-    bindGatewayDeviceRevocation(authority.assertCurrent, params.hasCurrentClientAuthority);
     if (
       authenticatedOwner &&
       client.usesSharedGatewayAuth === true &&

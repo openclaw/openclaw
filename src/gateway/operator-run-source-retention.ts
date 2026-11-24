@@ -9,7 +9,6 @@ export type OperatorSource = {
     device: object | undefined,
     access: object | null | undefined,
     ingress: object | undefined,
-    invocation: object | undefined,
     githubCredential: object | undefined,
   ];
   membership: string | undefined;

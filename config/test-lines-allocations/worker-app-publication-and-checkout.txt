@@ -1,0 +1,6 @@
+# Exact excess after consolidating 125 lines of existing worker fixtures.
+# Covers receipt-bound App recovery and preflight/execution revoke failures at accepted, rejected, and completed outcomes,
+# plus one integrated App-authenticated checkout that verifies branch, sanitized origin, upstream,
+# and fast-forward with a real local Git repository and synthetic provider credentials.
+# Pending and conflicted imported PRs still launch for coding without gaining publication readiness.
+417

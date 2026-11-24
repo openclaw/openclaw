@@ -40,9 +40,9 @@ vi.mock("../../plugins/runtime/gateway-request-scope.js", () => ({
 vi.mock("../../state/user-channel-identity-operations.js", () => ({
   prepareUserProfileRoleAuthority: mocks.profile,
 }));
+// mock-isolation: a fixed requester caller with no admitted run, so no tool-caller session source applies.
 vi.mock("./gateway-caller-context.js", () => ({
   getGatewayToolCallerIdentity: () => ({ agentId: "main", sessionKey: "agent:main:requester" }),
-  captureGatewayToolCallerAssertion: () => () => {},
   resolveGatewayToolOperatorSelection: () => ({
     operatorAuthority: undefined,
     assertCurrent: () => {},

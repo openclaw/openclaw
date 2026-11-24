@@ -7,6 +7,7 @@ import { createTestOperatorAuthority } from "../../agents/admitted-run-context.t
 import {
   GitHubIdentityError,
   installManagedGitHubProfile,
+  resolveManagedGitHubProfileDir,
   writeManagedGitHubProfileFiles,
   removeManagedGitHubProfile,
 } from "../../agents/github-tool-identity.js";
@@ -28,8 +29,13 @@ import { syncSessionRepositoryWorkspace } from "./repository-workspace-startup.j
 import type { WorkerTunnelHandle } from "./tunnel-contract.js";
 import { prepareGitHubPublicationFact } from "./worker-github-binding.js";
 import {
-  workerGitHubFixture,
-  createWorkerGitHubBindingFixture,
+  bindPreparedGrant,
+  profileId,
+  session,
+  token,
+  turnBindingInput,
+  verified,
+  worktree,
 } from "./worker-github-binding.test-support.js";
 import { bindWorkerGitHubTurn } from "./worker-turn-github-binding.js";
 
@@ -141,7 +147,7 @@ vi.mock("../../config/sessions/session-entry-read-facts.js", async (original) =>
       return {
         kind: "session-exact-entries",
         source: {
-          ...sessionReadSource,
+          agentId: session.agentId,
           path: database.path,
           databaseIdentity: "worker-github-binding-fixture",
         },
@@ -180,15 +186,28 @@ vi.mock("../../state/user-profile-list.js", async (original) => ({
 }));
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-const { profileId, token, session, sessionReadSource, worktree, verified } = workerGitHubFixture;
 let config: OpenClawConfig;
 
-const { installProfile, prepareGrant, bindPreparedGrant } = createWorkerGitHubBindingFixture({
-  session,
-  profileId,
-  token,
-  resetVerification: () => mocks.verify.mockClear(),
-});
+async function installProfile(scope: "agent" | "system" = "system") {
+  const profileDir = resolveManagedGitHubProfileDir({ agentId: session.agentId, scope, profileId });
+  await installManagedGitHubProfile({ profileDir, token, commitConfig: async () => {} });
+  mocks.verify.mockClear();
+  return profileDir;
+}
+
+async function prepareGrant(assertCurrent = () => {}, accessExpiresAtMs?: number) {
+  const fact = await prepareGitHubPublicationFact(session);
+  if (!fact?.github || !fact.identity || !fact.workspaceKey) {
+    throw new Error("Expected background identity");
+  }
+  mocks.verify.mockClear();
+  return bindPreparedGrant(
+    accessExpiresAtMs === undefined
+      ? fact
+      : { ...fact, identity: { ...fact.identity, accessExpiresAtMs } },
+    assertCurrent,
+  );
+}
 
 describe("worker GitHub launch binding", () => {
   beforeEach(() => {
@@ -329,28 +348,21 @@ describe("worker GitHub launch binding", () => {
     }
   });
 
-  it("retains and rechecks the admitted original operator independently of the turn owner", async () => {
+  it("retains the admitted original operator until the grant is revoked", async () => {
     await installProfile();
-    let current = true;
     const release = vi.fn();
     const retain = vi.fn(() => release);
     const operatorAuthority = createTestOperatorAuthority({
       profileId: "original-operator",
       scopes: ["operator.write"],
-      assertCurrent: () => {
-        if (!current) {
-          throw new Error("Original operator revoked");
-        }
-      },
       retain,
     });
     const fact = await prepareGitHubPublicationFact(session);
     const grant = await bindPreparedGrant(fact, () => undefined, operatorAuthority);
     try {
       expect(retain).toHaveBeenCalledOnce();
-      current = false;
-      expect(() => grant.assertCurrent()).toThrow("Original operator revoked");
-      await expect(grant.refresh()).rejects.toThrow();
+      grant.assertCurrent();
+      expect(grant.signal.aborted).toBe(false);
     } finally {
       await grant.revoke();
     }
@@ -546,26 +558,7 @@ describe("worker GitHub launch binding", () => {
       }
       mocks.verify.mockClear();
       await expect(
-        bindWorkerGitHubTurn({
-          session,
-          fact,
-          sessionTarget: { ...session, storePath: "/synthetic/admitted.sqlite" },
-          store: {
-            prepareTurnClaimAuthority: async () => {
-              throw new Error("older worker must not acquire a grant");
-            },
-          },
-          claim: {
-            sessionId: session.sessionId,
-            claimId: "old-worker-claim",
-            runId: "old-worker-run",
-            placementGeneration: 1,
-            owner: { kind: "worker", environmentId: "old-worker", ownerEpoch: 1 },
-          },
-          protocolFeatures: [],
-          signal: new AbortController().signal,
-          assertCurrent() {},
-        }),
+        bindWorkerGitHubTurn(turnBindingInput(fact, { protocolFeatures: [] })),
       ).rejects.toThrow("redispatch the session");
       expect(mocks.verify).not.toHaveBeenCalled();
     },
@@ -822,7 +815,6 @@ describe("same-bound integrated worker credential renewal", () => {
       repositoryCredentialSource: credentialSource,
       scopes: ["operator.write"],
       signal: controller.signal,
-      assertCurrent() {},
     });
     const grant = throughTurn
       ? await bindPreparedGrant(undefined, () => {}, operator)

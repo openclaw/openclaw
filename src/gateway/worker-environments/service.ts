@@ -593,6 +593,7 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
       return id ? options.resolveProvider(id)?.requiresNodeEnrollment === true : false;
     },
     get: environmentAccess.get,
+    resolveExecMemoryBoundary: environmentAccess.resolveExecMemoryBoundary,
     getDedicatedNodeLeaseSignal: providerLifecycle.getDedicatedNodeLeaseSignal,
     prepareProjectIntent: (...args: Parameters<typeof providerLifecycle.prepareIntent>) => {
       providerLifecycle.warmMachineShape(args[0]);

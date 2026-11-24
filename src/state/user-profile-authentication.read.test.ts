@@ -13,10 +13,19 @@ import { setUserProfileRole } from "./user-profile-writes.worker.js";
 import { ensureProfileForEmail, ensureProfileForTailscaleIdentity } from "./user-profiles.js";
 import { useUserStateFixture } from "./user-state.test-support.js";
 
-const fixture = useUserStateFixture("existing-profile-authentication-");
+const stateFixture = useUserStateFixture("existing-profile-authentication-");
+
+function fixture() {
+  const options = stateFixture();
+  return {
+    options,
+    read: (selector: Parameters<typeof prepareExistingUserProfileAuthentication>[0]) =>
+      prepareExistingUserProfileAuthentication(selector, options),
+  };
+}
 
 it("resolves exact provider subjects without using email lookalikes or creating missing profiles", async () => {
-  const options = fixture();
+  const { options, read } = fixture();
   const github = ensureProfileForTailscaleIdentity({ login: "person@github" }, options);
   const passkey = ensureProfileForTailscaleIdentity({ login: "person@passkey" }, options);
   const email = ensureProfileForEmail("person@github", options);
@@ -35,39 +44,27 @@ it("resolves exact provider subjects without using email lookalikes or creating 
       ["github", github],
       ["passkey", passkey],
     ] as const) {
-      const read = await prepareExistingUserProfileAuthentication(
-        { kind: "provider", provider, subject: "person" },
-        options,
-      );
-      expect(read.profile?.profileId).toBe(expected.id);
-      read.assertCurrent();
+      const prepared = await read({ kind: "provider", provider, subject: "person" });
+      expect(prepared.profile?.profileId).toBe(expected.id);
+      prepared.assertCurrent();
     }
-    const exactOcid = await prepareExistingUserProfileAuthentication(
-      { kind: "provider", provider: "openclaw.id", subject: "Opaque-Account-A" },
-      options,
-    );
+    const exactOcid = await read({
+      kind: "provider",
+      provider: "openclaw.id",
+      subject: "Opaque-Account-A",
+    });
     expect(exactOcid.profile?.profileId).toBe(ocid.id);
-    expect(
-      (
-        await prepareExistingUserProfileAuthentication(
-          { kind: "provider", provider: "openclaw.id", subject: "opaque-account-a" },
-          options,
-        )
-      ).profile,
-    ).toBeUndefined();
-    const missing = await prepareExistingUserProfileAuthentication(
-      { kind: "provider", provider: "other", subject: "person" },
-      options,
-    );
+    const wrongCase = await read({
+      kind: "provider",
+      provider: "openclaw.id",
+      subject: "opaque-account-a",
+    });
+    expect(wrongCase.profile).toBeUndefined();
+    const missing = await read({ kind: "provider", provider: "other", subject: "person" });
     expect(missing.profile).toBeUndefined();
-    expect(
-      (
-        await prepareExistingUserProfileAuthentication(
-          { kind: "email", email: "person@github" },
-          options,
-        )
-      ).profile?.profileId,
-    ).toBe(email.id);
+    expect((await read({ kind: "email", email: "person@github" })).profile?.profileId).toBe(
+      email.id,
+    );
   } finally {
     setDatabaseEngineReadOnlyAdmission(false, () => {});
   }
@@ -75,7 +72,7 @@ it("resolves exact provider subjects without using email lookalikes or creating 
 });
 
 it("requires the verified public account/email and exact Enterprise principal proof", async () => {
-  const options = fixture();
+  const { options, read } = fixture();
   const publicProfile = await syncCanonicalGitHubIdentity(
     {
       identity: { accountId: 123, login: "person" },
@@ -88,48 +85,30 @@ it("requires the verified public account/email and exact Enterprise principal pr
     login: "enterprise-person",
     email: "person@example.test",
   });
-  const read = (accountId: number) =>
-    prepareExistingUserProfileAuthentication(
-      { kind: "github", binding: { accountId, email: "person@example.test" } },
-      options,
-    );
-  expect((await read(123)).profile?.profileId).toBe(publicProfile.id);
-  expect((await read(999)).profile).toBeUndefined();
-  expect(
-    (
-      await prepareExistingUserProfileAuthentication(
-        {
-          kind: "enterprise-github",
-          principal,
-          login: "enterprise-person",
-          email: "person@example.test",
-        },
-        options,
-      )
-    ).profile?.profileId,
-  ).toBe(enterprise.id);
-  expect(
-    (
-      await prepareExistingUserProfileAuthentication(
-        { kind: "enterprise-github", principal, email: "different@example.test" },
-        options,
-      )
-    ).profile,
-  ).toBeUndefined();
+  const readPublic = (accountId: number) =>
+    read({ kind: "github", binding: { accountId, email: "person@example.test" } });
+  expect((await readPublic(123)).profile?.profileId).toBe(publicProfile.id);
+  expect((await readPublic(999)).profile).toBeUndefined();
+  const exactEnterprise = await read({
+    kind: "enterprise-github",
+    principal,
+    login: "enterprise-person",
+    email: "person@example.test",
+  });
+  expect(exactEnterprise.profile?.profileId).toBe(enterprise.id);
+  const wrongEmail = await read({
+    kind: "enterprise-github",
+    principal,
+    email: "different@example.test",
+  });
+  expect(wrongEmail.profile).toBeUndefined();
   const other = ensureProfileForEmail("other@example.test", options);
   await linkCanonicalUserProfileEmail(principal, other.id, options);
-  expect(
-    (
-      await prepareExistingUserProfileAuthentication(
-        { kind: "enterprise-github", principal },
-        options,
-      )
-    ).profile,
-  ).toBeUndefined();
+  expect((await read({ kind: "enterprise-github", principal })).profile).toBeUndefined();
 });
 
 it("rejects role changes during lookup and retires a returned identity after its alias moves", async () => {
-  const options = fixture();
+  const { options, read } = fixture();
   const profile = ensureProfileForTailscaleIdentity({ login: "person@passkey" }, options);
   const readOriginal = stateReads.executeExistingOpenClawStateRead;
   const delayed = vi
@@ -143,20 +122,14 @@ it("rejects role changes during lookup and retires a returned identity after its
     });
   try {
     await expect(
-      prepareExistingUserProfileAuthentication(
-        { kind: "provider", provider: "passkey", subject: "person" },
-        options,
-      ),
+      read({ kind: "provider", provider: "passkey", subject: "person" }),
     ).rejects.toThrow("Profile authentication binding changed");
   } finally {
     delayed.mockRestore();
   }
   const email = ensureProfileForEmail("person@example.test", options);
   const other = ensureProfileForEmail("other@example.test", options);
-  const held = await prepareExistingUserProfileAuthentication(
-    { kind: "email", email: "person@example.test" },
-    options,
-  );
+  const held = await read({ kind: "email", email: "person@example.test" });
   expect(held.profile?.profileId).toBe(email.id);
   await linkCanonicalUserProfileEmail("person@example.test", other.id, options);
   expect(held.assertCurrent).toThrow("Profile authentication binding changed");

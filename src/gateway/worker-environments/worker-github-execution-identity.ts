@@ -4,8 +4,10 @@ import {
 } from "../../agents/admitted-run-context.js";
 import { GitHubAppInstallationRetryableError } from "../../agents/github-app-installation.js";
 import { resolveGitHubApiBaseUrl } from "../../agents/github-host-runtime.js";
+import { githubRepositoryUrl } from "../../agents/github-host.js";
 import { resolveConfiguredGitHubToolIdentity } from "../../agents/github-tool-identity.js";
 import type { PreparedGitHubPublicationIdentity } from "../../agents/github-tool-identity.types.js";
+import type { AgentRunSessionTarget } from "../../agents/run-session-target.types.js";
 import { getGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller-context.js";
 import { registerConfigWriteListener } from "../../config/config.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
@@ -18,11 +20,15 @@ import { parseWorkerGitHubLaunchBinding } from "../../worker/launch-descriptor.j
 import {
   currentGitHubPublicationConfig,
   prepareGitHubPublicationSession,
+  prepareGitHubPublicationRepositoryIdentity,
+  prepareWorkerGitHubCheckoutOwner,
   repositoryPublicationPreflightCredential,
   matchesCurrentGitHubPublicationIdentity,
   prepareCurrentGitHubPublicationIdentity,
+  sameGitHubPublicationWorkspace,
 } from "../github-publication-availability.js";
 import { requirePublicationSessionOwner } from "../github-publication-worktree-owner.js";
+import { parseGitHubRemoteUrl } from "../github-remote.js";
 import type {
   WorkerGitHubBindingGrant,
   WorkerGitHubBindingRefresh,
@@ -36,6 +42,7 @@ export async function prepareWorkerGitHubExecutionGrant(params: {
   sessionId: string;
   sessionKey: string;
   agentId: string;
+  sessionTarget?: AgentRunSessionTarget;
   expectedProfileId?: string;
   signal?: AbortSignal;
   assertCurrent?: () => boolean;
@@ -70,7 +77,6 @@ export async function prepareWorkerGitHubExecutionGrant(params: {
   }
   if (operator) {
     assertAdmittedRunOperatorAuthority(operator);
-    operator.assertCurrent();
   }
   const controller = new AbortController();
   const signal = AbortSignal.any(
@@ -93,7 +99,6 @@ export async function prepareWorkerGitHubExecutionGrant(params: {
         throw new Error("Selected GitHub App changed; start a new turn");
       }
     }
-    operator?.assertCurrent();
     if (closed || params.assertCurrent?.() === false) {
       throw new Error("Worker GitHub execution authority closed");
     }
@@ -106,6 +111,7 @@ export async function prepareWorkerGitHubExecutionGrant(params: {
   let retained = false;
   const apiBaseUrl = resolveGitHubApiBaseUrl();
   let identity: Awaited<ReturnType<typeof prepareCurrentGitHubPublicationIdentity>> | undefined;
+  let checkoutOwner: Awaited<ReturnType<typeof prepareWorkerGitHubCheckoutOwner>> | undefined;
   try {
     const loaded = session.readCurrent();
     const owner = requirePublicationSessionOwner(
@@ -115,12 +121,30 @@ export async function prepareWorkerGitHubExecutionGrant(params: {
     );
     const lifecycleRevision = owner.entry.lifecycleRevision ?? null;
     const target = { ...params, sessionKey: owner.canonicalKey, lifecycleRevision };
+    // The integrated launch does not use background discovery's credential or checkout.
+    if (
+      repositoryIntegration &&
+      configuredIdentity?.kind === "app-installation" &&
+      params.sessionTarget &&
+      (owner.entry.repositoryWorkspaceId || owner.entry.worktree?.id)
+    ) {
+      checkoutOwner = await prepareWorkerGitHubCheckoutOwner(target, {
+        sessionTarget: params.sessionTarget,
+        assertCurrent: assertAuthority,
+      });
+    }
     const assertCurrent = () => {
       assertAuthority();
       if (resolveGitHubApiBaseUrl() !== apiBaseUrl) {
         throw new Error("Worker GitHub issuer changed");
       }
       requirePublicationSessionOwner(target, session.readCurrent(), true);
+      if (
+        checkoutOwner &&
+        !sameGitHubPublicationWorkspace(checkoutOwner.initial, checkoutOwner.current())
+      ) {
+        throw new Error("Worker GitHub workspace changed. Start a new turn.");
+      }
       if (
         identity &&
         (!matchesCurrentGitHubPublicationIdentity({ agentId: params.agentId, identity }) ||
@@ -147,6 +171,24 @@ export async function prepareWorkerGitHubExecutionGrant(params: {
         assertCurrent,
       }),
     );
+    const checkout = checkoutOwner?.initial;
+    const branch =
+      checkout?.kind === "repository" ? checkout.workspace.branch : checkout?.worktree.branch;
+    const origin =
+      checkout?.kind === "repository"
+        ? checkout.workspace.url
+        : checkout &&
+          (
+            await prepareGitHubPublicationRepositoryIdentity({
+              worktree: checkout.worktree,
+              assertCurrent,
+            })
+          ).originUrl;
+    const remote = origin && parseGitHubRemoteUrl(origin, identity.host);
+    const remoteUrl =
+      remote && /^[A-Za-z0-9_.-]+$/u.test(remote.owner) && /^[A-Za-z0-9_.-]+$/u.test(remote.repo)
+        ? githubRepositoryUrl(`${remote.owner}/${remote.repo}`, identity.host)
+        : undefined;
     assertCurrent();
     const scope =
       identity.source === "agent-override"
@@ -165,6 +207,8 @@ export async function prepareWorkerGitHubExecutionGrant(params: {
       token: identity.env.GH_TOKEN,
       host: identity.host,
       login: identity.account.login,
+      ...(branch ? { branch } : {}),
+      ...(remoteUrl ? { remoteUrl } : {}),
       ...(gitAuthor ? { gitAuthor } : {}),
     });
     if (!binding) {
@@ -188,6 +232,7 @@ export async function prepareWorkerGitHubExecutionGrant(params: {
         signal.removeEventListener("abort", onAbort);
         stops.splice(0).forEach((stop) => stop());
         controller.abort(new Error("Worker GitHub execution authority closed"));
+        checkoutOwner?.release();
         session.release();
         revocation = (async () => {
           // In-flight issuance owns its late-result cleanup before the grant can close.
@@ -341,6 +386,7 @@ export async function prepareWorkerGitHubExecutionGrant(params: {
     };
   } finally {
     if (!retained) {
+      checkoutOwner?.release();
       session.release();
       await identity?.revoke?.();
     }

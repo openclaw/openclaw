@@ -403,7 +403,7 @@ describe("worker launch descriptor", () => {
       }
     }
     const allowedToolNames = ["read"];
-    const exec = { host: "node", security: "full", ask: "off" };
+    const exec = { host: "node", security: "full", ask: "off", memoryBoundary: "sandbox" };
     for (const [authority, expected] of [
       [{ allowedToolNames, exec: undefined }, { allowedToolNames }],
       [

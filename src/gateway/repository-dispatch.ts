@@ -42,14 +42,9 @@ export function captureRepositoryClientActor(input: {
       !client ||
       (retainedSource
         ? !retainedSource()
-        : client.invalidated ||
-          client.connectionSignal?.aborted ||
-          input.hasCurrentClientAuthority?.() === false) ||
+        : client.invalidated || client.connectionSignal?.aborted) ||
       !client.connId ||
       client.connId !== connectionId ||
-      client.connect.role !== role ||
-      JSON.stringify(client.connect.scopes ?? []) !== JSON.stringify(scopes) ||
-      (client.internal?.authenticatedOperator === true) !== authenticatedOperator ||
       (!client.internal?.syntheticClient &&
         !client.internal?.agentRuntimeIdentity &&
         !client.internal?.agentToolCaller) !== directPerson ||
@@ -59,7 +54,7 @@ export function captureRepositoryClientActor(input: {
       client.authenticatedUserProfile?.profileId !== profileId ||
       client.authenticatedRepositoryCredentialSource !== credentialSource
     ) {
-      throw new Error("Repository caller authority changed");
+      throw new Error("Repository caller connection or identity changed. Reconnect and try again.");
     }
   };
   assertCurrent();

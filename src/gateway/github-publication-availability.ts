@@ -43,6 +43,7 @@ import type {
 } from "./github-publication-session.types.js";
 import {
   preparePublicationWorktreeRead,
+  prepareSessionWorktreeRead,
   requirePublicationSessionOwner,
   type ExpectedWorktree,
   type PublicationSessionOwner,
@@ -335,13 +336,15 @@ function resolveGitHubPublicationWorkspaceOwner(
   return { kind: "repository" as const, loaded, workspace };
 }
 
-export async function prepareGitHubPublicationWorkspaceOwner(
+type GitHubWorkspaceReadOptions = {
+  sessionTarget?: AgentRunSessionTarget;
+  assertCurrent?: () => void;
+};
+
+async function prepareGitHubWorkspaceOwner(
   params: PublicationSessionIdentity,
-  options: {
-    sessionTarget?: AgentRunSessionTarget;
-    assertCurrent?: () => void;
-    allowExistingPullRequest?: boolean;
-  } = {},
+  options: GitHubWorkspaceReadOptions,
+  prepareWorktreeRead: typeof prepareSessionWorktreeRead,
 ) {
   const context = captureOpenClawStateWorkerContext();
   const assertCurrent = () => {
@@ -391,13 +394,7 @@ export async function prepareGitHubPublicationWorkspaceOwner(
       throw new GitHubPublicationSessionChangedError();
     }
     const identity = { ...params, lifecycleRevision: loaded.entry.lifecycleRevision ?? null };
-    const readWorktree = preparePublicationWorktreeRead(
-      loaded,
-      context,
-      session.readCurrent,
-      undefined,
-      options.allowExistingPullRequest,
-    );
+    const readWorktree = prepareWorktreeRead(loaded, context, session.readCurrent);
     const prepared = workspaceId
       ? await getSessionRepositoryWorkspaceStore().prepare(workspaceId)
       : undefined;
@@ -445,6 +442,24 @@ export async function prepareGitHubPublicationWorkspaceOwner(
     session.release();
     throw error;
   }
+}
+
+export function prepareGitHubPublicationWorkspaceOwner(
+  params: PublicationSessionIdentity,
+  options: GitHubWorkspaceReadOptions & { allowExistingPullRequest?: boolean } = {},
+) {
+  const allowExisting = options.allowExistingPullRequest;
+  return prepareGitHubWorkspaceOwner(params, options, (loaded, context, readSession) =>
+    preparePublicationWorktreeRead(loaded, context, readSession, undefined, allowExisting),
+  );
+}
+
+/** Coding turns need custody of the admitted checkout even while PR preparation is pending. */
+export function prepareWorkerGitHubCheckoutOwner(
+  params: PublicationSessionIdentity,
+  options: { sessionTarget: AgentRunSessionTarget; assertCurrent: () => void },
+) {
+  return prepareGitHubWorkspaceOwner(params, options, prepareSessionWorktreeRead);
 }
 
 export async function hasGitHubPublicationRepositoryWorkspace(params: PublicationSessionIdentity) {

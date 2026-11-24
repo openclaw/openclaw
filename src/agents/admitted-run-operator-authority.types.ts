@@ -1,4 +1,3 @@
-import type { SessionSourceAssertion } from "../config/sessions/session-source-authority.js";
 import type { GatewayOperatorRoleDefinition } from "../config/types.gateway.js";
 import type { GatewayAuthPolicyFacts } from "../gateway/auth-policy.types.js";
 import type { RemoteIngressPrincipalIdentity } from "../gateway/server/client-identity-types.js";
@@ -47,7 +46,6 @@ export type AdmittedRunOperatorAuthority = Readonly<{
   requesterOwner?: boolean;
   /** Original access dependency; null is proven independent, undefined is unclassified. */
   gatewayAccessGrant?: GatewayAccessGrantRef | null;
-  assertCurrent: SessionSourceAssertion;
   signal?: AbortSignal;
   /** Opaque authenticated source identity, independent of per-invocation restrictions. */
   source?: object;
@@ -57,7 +55,7 @@ export type AdmittedRunOperatorAuthority = Readonly<{
   retain?: () => () => void;
   /** Assignment and verified login from one check of the original live profile authority. */
   readCurrentRoleFacts?: (this: void) => AdmittedRunOperatorRoleFacts;
-  /** Prepared role permissions; source-policy changes revoke the owning authority. */
+  /** Role permissions fixed at this run's start. */
   rolePolicy?: Readonly<{
     sessionAccessCap: GatewayOperatorRoleDefinition["sessions"]["others"];
     sandboxRequired: boolean;
@@ -69,6 +67,4 @@ export type AdmittedRunOperatorAuthority = Readonly<{
     }>;
   }>;
   modelPolicy?: PreparedOperatorModelPolicy;
-  /** Committed policy changes invalidate only executions using a removed model. */
-  onModelPolicyChanged?: (listener: () => void) => () => void;
 }>;

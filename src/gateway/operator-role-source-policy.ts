@@ -10,6 +10,7 @@ export function sourceRolePolicy(role: GatewayOperatorRoleDefinition | undefined
     return undefined;
   }
   // Keep the durable JSON shape while readers derive restrictions from current policy.
+  // Model policies and project grants are read live, so editing them retires no authority.
   return {
     sessions: role.sessions,
     agents: role.agents,
@@ -28,7 +29,7 @@ export function sourceRolePolicy(role: GatewayOperatorRoleDefinition | undefined
   };
 }
 
-export function sourceRolePolicies(roles: GatewayOperatorRolesConfig | undefined) {
+function sourceRolePolicies(roles: GatewayOperatorRolesConfig | undefined) {
   return roles
     ? {
         ...roles,

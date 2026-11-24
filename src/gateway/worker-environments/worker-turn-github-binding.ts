@@ -35,6 +35,7 @@ export async function bindWorkerGitHubTurn(params: {
     }
     const grant = await prepareWorkerGitHubExecutionGrant({
       ...params.session,
+      sessionTarget: params.sessionTarget,
       operatorAuthority: params.operatorAuthority,
       signal: params.signal,
       assertCurrent: () => {

@@ -1,11 +1,14 @@
 import { execFileSync } from "node:child_process";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { createServer } from "node:http";
 import path from "node:path";
 import type { Locator } from "playwright";
 import { expect, it } from "vitest";
 import type { SessionsDiffResult } from "../../../packages/gateway-protocol/src/schema/sessions.js";
 import { ensureGatewayOwnerProfile } from "../../../src/state/user-profiles.js";
+import { reserveTestPortListener } from "../../../src/test-utils/port-claims.js";
+import { writeOpenAiResponsesText } from "../../../test/helpers/openai-responses-sse.ts";
 import {
   createOpenClawTestInstance,
   type OpenClawTestInstance,
@@ -74,13 +77,43 @@ const suite = createControlUiE2eSuite({
     },
   },
   async startServer() {
+    // The session diff baseline is captured by the first turn, so the fixture needs a model.
+    const provider = await reserveTestPortListener({
+      offsets: [0],
+      createListener: () =>
+        createServer((request, response) => {
+          request.resume().once("end", () => {
+            if (request.method !== "POST" || request.url !== "/v1/responses") {
+              response.writeHead(404).end();
+              return;
+            }
+            writeOpenAiResponsesText(response, {
+              text: "Ready to fold.",
+              messageId: "folding-message",
+              responseId: "folding-response",
+            });
+          });
+        }),
+    });
+    const releaseProvider = () =>
+      runQaGatewayFixture(
+        async () => {
+          provider.listener.closeAllConnections();
+          await provider.releaseListener();
+        },
+        () => provider.claim.release(),
+      );
     const owner = await createOpenClawTestInstance({
       name: profile,
       entrypoint: ["scripts/run-node.mjs", "--profile", profile],
       env: { OPENCLAW_PROFILE: profile },
+    }).catch(async (error: unknown) => {
+      await releaseProvider();
+      throw error;
     });
     instance = owner;
     workspace = owner.state.path("workspace");
+    const cleanup = () => runQaGatewayFixture(() => owner.cleanup(), releaseProvider);
     try {
       await mkdir(workspace, { recursive: true });
       const git = (...args: string[]) =>
@@ -101,11 +134,21 @@ const suite = createControlUiE2eSuite({
       await writeSources(false);
       git("add", ".");
       git("commit", "-m", "Synthetic diff baseline");
-      await writeSources(true);
       await owner.state.writeConfig({
         agents: {
-          defaults: { workspace, skipBootstrap: true },
+          defaults: { workspace, skipBootstrap: true, model: "folding-fixture/echo" },
           entries: { main: { workspace, name: "Folding proof" } },
+        },
+        models: {
+          catalogRefresh: { enabled: false },
+          providers: {
+            "folding-fixture": {
+              api: "openai-responses",
+              apiKey: "synthetic-unused-key",
+              baseUrl: `http://127.0.0.1:${provider.claim.port}/v1`,
+              models: [{ id: "echo", name: "Echo" }],
+            },
+          },
         },
         gateway: {
           port: owner.port,
@@ -115,14 +158,11 @@ const suite = createControlUiE2eSuite({
       });
       ensureGatewayOwnerProfile("Synthetic Folding Viewer", { env: owner.env });
       await owner.startGateway();
-      return { baseUrl: "http://127.0.0.1:" + owner.port + "/", close: () => owner.cleanup() };
+      return { baseUrl: "http://127.0.0.1:" + owner.port + "/", close: cleanup };
     } catch (error) {
-      await runQaGatewayFixture(
-        async () => {
-          throw error;
-        },
-        () => owner.cleanup(),
-      );
+      await runQaGatewayFixture(async () => {
+        throw error;
+      }, cleanup);
       throw error;
     }
   },
@@ -141,6 +181,17 @@ suite.define(() => {
       cwd: workspace,
     });
     expect(created.ok).toBe(true);
+    // The first turn records the pre-session baseline; edits after it are this session's diff.
+    const runId = randomUUID();
+    await gateway.request("chat.send", {
+      sessionKey: key,
+      message: "Start the folding proof.",
+      idempotencyKey: runId,
+    });
+    expect(
+      await gateway.request("agent.wait", { runId, timeoutMs: 30_000 }, { timeoutMs: 40_000 }),
+    ).toMatchObject({ status: "ok" });
+    await writeSources(true);
     const diff = await gateway.request<SessionsDiffResult>("sessions.diff", { sessionKey: key });
     expect(diff.files.map((file: { path: string }) => file.path)).toEqual([
       "example.ts",

@@ -1,5 +1,8 @@
 import { createServer, request as httpRequest } from "node:http";
-import { registerPublicationCredentialFixture } from "./github-publication-credential.test-helpers.js";
+import {
+  registerAppCredentialFixture,
+  registerPublicationCredentialFixture,
+} from "./github-publication-credential.test-helpers.js";
 // Install shared transport mocks before publication owners enter the module cache.
 // oxfmt-ignore
 import {
@@ -157,7 +160,7 @@ describe("shared GitHub publication requester authority", () => {
         },
         session,
       ),
-    ).rejects.toThrow("no longer active");
+    ).rejects.toThrow("Operator execution ended.");
     expect(f.externalWrites).toEqual([]);
   });
 
@@ -801,10 +804,15 @@ describe("shared GitHub publication requester authority", () => {
     },
   );
 
-  it.each(backends)(
+  it.each([...backends, "app-worktree"] as const)(
     "keeps an accepted %s PR recoverable after revocation and an unavailable readback",
-    async (backend) => {
+    async (scenario) => {
+      const backend = scenario === "app-worktree" ? "local" : scenario;
       const f = await fixture(backend);
+      const admission = vi.fn<NonNullable<Parameters<typeof registerAppCredentialFixture>[1]>>();
+      if (scenario === "app-worktree") {
+        registerAppCredentialFixture(f, admission);
+      }
       const local = f.local;
       const writes: string[][] = [];
       let responseLost = false;
@@ -859,17 +867,50 @@ describe("shared GitHub publication requester authority", () => {
       expect(responseLost).toBe(true);
       expect(f.readReceipt(requestId)?.pull_request_url).toBeNull();
       const acceptedWrites = [...writes];
+      const lifecycleRevision = mocks.loadSession(f.session.sessionKey).entry.lifecycleRevision;
       await f.revoke();
       expect(f.guest.assertCurrent).not.toThrow();
       const restarted = f.restart();
       const readsBeforeRecovery = unavailableReads;
+      admission.mockClear();
       await expect(restarted.resumeSessionRequests()).rejects.toBeInstanceOf(AggregateError);
       const pending = f.readReceipt(requestId)!;
       expectPending(f, requestId);
       expect(pending.pull_request_url).toBeNull();
       expect(unavailableReads).toBeGreaterThan(readsBeforeRecovery);
       expect(writes).toEqual(acceptedWrites);
+      if (scenario === "app-worktree") {
+        const receipt = readGitHubPublicationRequest(f.database.db, { requestId })!;
+        expect(admission).toHaveBeenCalled();
+        for (const [context] of admission.mock.calls) {
+          expect(context.actor.profileId).toBe(f.guestProfile);
+          expect(context.actor.credentialSource).toBeUndefined();
+          expect(context.operation).toEqual({
+            purpose: "publication-execution",
+            binding: {
+              kind: "publication",
+              agentId: "main",
+              sessionId: f.session.sessionId,
+              sessionKey: f.session.sessionKey,
+              lifecycleRevision,
+              executionKind: "worktree",
+              requestId,
+              requestDigest: pending.request_digest,
+              ownerId: expect.stringMatching(
+                new RegExp("^" + receipt.gateway_instance_id + ":[a-f0-9-]{36}$", "u"),
+              ),
+            },
+          });
+        }
+      }
 
+      const executionRevoke = vi.fn().mockRejectedValue(new Error("synthetic recovery revocation"));
+      if (scenario === "app-worktree") {
+        mocks.prepareIdentity.mockResolvedValue({
+          ...(await mocks.prepareIdentity()),
+          revoke: executionRevoke,
+        });
+      }
       readbackAvailable = true;
       await restarted.resumeSessionRequests();
       await expectResult(restarted, requestId, {
@@ -878,6 +919,9 @@ describe("shared GitHub publication requester authority", () => {
       });
       expect(writes).toEqual(acceptedWrites);
       expect(f.publishedTitles).toEqual(["lost-pr-response"]);
+      if (scenario === "app-worktree") {
+        expect(executionRevoke).toHaveBeenCalled();
+      }
     },
   );
 });

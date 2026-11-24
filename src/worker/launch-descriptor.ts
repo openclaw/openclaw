@@ -93,7 +93,6 @@ const WorkspacePath = AbsoluteHostPath.refine(
   (value) => value.trim() === value && value.length <= 4_096 && !value.includes("\0"),
 );
 const ExecAuthorityFields = {
-  // This fact comes from the admitted provider lease, never model arguments or environment.
   memoryBoundary: z.literal("sandbox").optional(),
   mode: z.enum(["deny", "allowlist", "ask", "auto", "full"]).optional(),
   strictInlineEval: z.boolean().optional(),

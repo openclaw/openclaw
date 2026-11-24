@@ -13,10 +13,7 @@ import { ensureEmptyWorktreeSource } from "../agents/worktrees/empty-source.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { removeSessionMember } from "../config/sessions/session-sharing-store.js";
 import { closeOpenClawAgentDatabasesAsync } from "../state/openclaw-agent-db.js";
-import {
-  linkCanonicalUserProfileEmail,
-  setCanonicalUserProfileRole,
-} from "../state/user-profile-writes.js";
+import { linkCanonicalUserProfileEmail } from "../state/user-profile-writes.js";
 import {
   commandResult,
   installGitHubPublicationTestHarness,
@@ -208,26 +205,19 @@ describe("existing PR preparation through the registered agent action", () => {
     },
   );
 
-  it.each(["narrowed", "missing", "revoked"] as const)(
+  it.each(["narrowed", "missing"] as const)(
     "refuses a maintainer's %s selected authority before changing the guest workspace",
     async (condition) => {
       const f = await fixture();
       const before = f.readSession();
       const hostHead = await f.git("rev-parse", "HEAD");
       const guestHead = await f.guestGit("rev-parse", "HEAD");
-      if (condition === "revoked") {
-        // Revoke before admission: loss of the role does not cancel a started preparation.
-        await setCanonicalUserProfileRole(f.maintainerProfile, "revoked");
-      }
       await expect(
         f.invoke({}, f.sandbox, undefined, {
           requester: "maintainer",
-          caller:
-            condition === "missing" ? null : condition === "narrowed" ? "guest" : "maintainer",
+          caller: condition === "missing" ? null : "guest",
         }),
-      ).rejects.toThrow(
-        condition === "revoked" ? "Your operator role changed" : "Only the person who started",
-      );
+      ).rejects.toThrow("Only the person who started");
       expect(f.readSession().worktree).toEqual(before.worktree);
       expect(await f.git("rev-parse", "HEAD")).toBe(hostHead);
       expect(await f.guestGit("rev-parse", "HEAD")).toBe(guestHead);

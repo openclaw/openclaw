@@ -42,7 +42,6 @@ function clientAuthority(client: ReturnType<typeof sharingPolicyClient>) {
     operatorAuthority: createTestOperatorAuthority({
       profileId: "talk-requester",
       scopes: client.connect.scopes ?? [],
-      assertCurrent: () => {},
     }),
   };
 }

@@ -4,16 +4,13 @@ import {
   type SessionSourceAssertion,
 } from "../../config/sessions/session-source-authority.js";
 import { registerAgentEventLifecycleRotationHandler } from "../../infra/agent-events.js";
-import {
-  getAgentRunLifecycleGeneration,
-  type AgentRunDelegatedAuthority,
-} from "../../infra/agent-run-registry.js";
+import { getAgentRunLifecycleGeneration } from "../../infra/agent-run-registry.js";
 import type { ReplyTurnParticipants } from "../../sessions/session-controller.contracts.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import {
   assertAdmittedRunOperatorAuthority,
   bindOperatorModelExecution,
-  captureAdmittedRunActiveAssertion,
+  resolveAdmittedRunActiveAssertion,
   readAdmittedRunOperatorAuthority,
   type AdmittedRunContext,
   type AdmittedRunOperatorAuthority,
@@ -32,7 +29,6 @@ export function bindHarnessHostSourceAuthority(params: {
     sessionId?: string;
     sessionKey?: string;
   };
-  delegatedAuthority: AgentRunDelegatedAuthority;
   sourceCaller: ReturnType<typeof getGatewayToolCallerIdentity>;
   isActive: () => boolean;
   isGatewayCurrent: () => boolean;
@@ -40,10 +36,7 @@ export function bindHarnessHostSourceAuthority(params: {
 }) {
   const { attempt, sourceCaller, inactiveError } = params;
   const operationalRunInstance = attempt.admittedRunContext.operationalRunInstance;
-  const admittedSource = captureAdmittedRunActiveAssertion(
-    attempt.admittedRunContext,
-    params.delegatedAuthority,
-  );
+  const admittedSource = resolveAdmittedRunActiveAssertion(attempt.admittedRunContext);
   const checkAdmitted = (assertSource: () => void) => {
     if (
       !params.isActive() ||
@@ -164,16 +157,9 @@ export function retainHarnessSource(
     ? undefined
     : bindOperatorModelExecution(source, undefined);
   const release = nativeModelPolicySupported ? source.retain?.() : modelExecution?.release;
-  const assertSourceCurrent = () => {
-    if (nativeModelPolicySupported) {
-      source.assertCurrent();
-    } else {
-      modelExecution?.assertCurrent();
-    }
-  };
   try {
     assertActive();
-    assertSourceCurrent();
+    modelExecution?.assertCurrent();
     assertActive();
   } catch (error) {
     release?.();
@@ -195,7 +181,7 @@ export function retainHarnessSource(
   };
   const assertCurrent = () => {
     assertRetained();
-    assertSourceCurrent();
+    modelExecution?.assertCurrent();
     assertRetained();
   };
   return Object.freeze({
@@ -263,7 +249,6 @@ export function assertCompactionSource(
   source.assertActive();
   if (source.operatorAuthority !== undefined) {
     assertAdmittedRunOperatorAuthority(source.operatorAuthority);
-    source.operatorAuthority.assertCurrent();
   }
 }
 

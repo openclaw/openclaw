@@ -36,6 +36,7 @@ import {
   type GitHubPublicationClaimRequestV2,
   type GitHubPublicationSessionRequestV2,
 } from "./github-publication-coordinator-methods.js";
+import { gitHubPublicationPreflightLifetime } from "./github-publication-execution-identity.js";
 import {
   assertExpectedSharedGitHubPublisher,
   matchesGitHubPublicationIdentityRow,
@@ -275,7 +276,7 @@ export function createRepositoryGitHubPublicationCoordinator(params: {
             placement.sessionKey !== session.sessionKey ||
             !resolvePlacementTurnEnvironment(placement, claim)))
       ) {
-        throw new Error("GitHub publication session authority changed.");
+        throw new Error("GitHub publication session moved. Retry the publication.");
       }
     };
     assertCurrent();
@@ -328,12 +329,7 @@ export function createRepositoryGitHubPublicationCoordinator(params: {
         assertCurrent,
       }),
     );
-    await using identityLifetime = {
-      identity,
-      [Symbol.asyncDispose]: async () => {
-        await identity.revoke?.();
-      },
-    };
+    await using identityLifetime = gitHubPublicationPreflightLifetime(identity);
     assertCurrent();
     assertExpectedSharedGitHubPublisher(
       expected,

@@ -692,12 +692,15 @@ export async function validateReusableReleaseChild(selection, request, deps = {}
   const normalized = requestValue(request);
   const resolved = dependencies(request.repository, deps);
   if (request.policyTargetVersion) {
-    normalized.waiverPolicy = await readReleaseValidationWaiversAsync(async (sourcePath) =>
-      decodeReleaseValidationSource(
-        await resolved.github("contents/" + sourcePath + "?ref=" + request.workflowSha),
-        sourcePath,
-      ),
-    );
+    // Receipt recovery may supply the policy from its separately authenticated admission.
+    normalized.waiverPolicy =
+      deps.waiverPolicy ??
+      (await readReleaseValidationWaiversAsync(async (sourcePath) =>
+        decodeReleaseValidationSource(
+          await resolved.github("contents/" + sourcePath + "?ref=" + request.workflowSha),
+          sourcePath,
+        ),
+      ));
   }
   requireEvidence(/^[a-f0-9]{64}$/u.test(selection?.receiptSha256), "selection omitted its digest");
   return validateEvidence(selection, normalized, resolved);

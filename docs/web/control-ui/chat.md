@@ -124,8 +124,10 @@ and on to retry; the error’s details retain the technical failure.
 A tool stops showing **Running** when its completion arrives, even while the
 parent turn continues. If that completion does not establish success or failure,
 the row keeps the tool's known purpose and shows **Outcome unknown** separately.
-Reloading history preserves the recorded purpose. A saved call without a loaded
-result shows **No result available** rather than counting as an unknown outcome.
+Reloading history preserves the recorded purpose. In imported Claude CLI history,
+a tool result without an error flag counts as completed, just as it does live.
+A saved call without a loaded result shows **No result available** rather than
+counting as an unknown outcome.
 Live execution facts and the active run’s replay snapshot establish **Running**;
 the run being active alone does not. Refreshing the same session retains those
 facts until history records an outcome. Partial output alone does not finish a

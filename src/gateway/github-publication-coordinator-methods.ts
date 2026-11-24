@@ -20,6 +20,7 @@ import {
   readGitHubPublicationWorktreeOwner,
   prepareGitHubPublicationSession,
 } from "./github-publication-availability.js";
+import { gitHubPublicationPreflightLifetime } from "./github-publication-execution-identity.js";
 import { GitHubPublicationRecoveryPendingError } from "./github-publication-git-index.js";
 import { captureGitHubPublicationWorkspaceSnapshot } from "./github-publication-git-transport.js";
 import {
@@ -242,7 +243,7 @@ export function createGitHubPublicationCoordinatorMethods(params: {
           !current.turnClaim
         : current === undefined;
       if (!unchanged) {
-        throw new Error("GitHub publication session authority changed during snapshot.");
+        throw new Error("GitHub publication session moved during snapshot. Retry the publication.");
       }
     };
     const claim = placement ? exactClaimForPlacement(placement) : undefined;
@@ -351,12 +352,7 @@ export function createGitHubPublicationCoordinatorMethods(params: {
         assertCurrent: assertRequester,
       }),
     );
-    await using identityLifetime = {
-      identity,
-      [Symbol.asyncDispose]: async () => {
-        await identity.revoke?.();
-      },
-    };
+    await using identityLifetime = gitHubPublicationPreflightLifetime(identity);
     assertRequester();
     assertExpectedSharedGitHubPublisher(
       expected,

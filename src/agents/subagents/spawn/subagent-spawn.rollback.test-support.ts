@@ -245,7 +245,6 @@ export function registerOperatorSpawnRollbackCases(
               const childKey = expectDefined(childSessionKey, "registered child session");
               const runId = expectDefined(childRunId, "registered child run");
               const dispatch = expectDefined(cleanupDispatch, "bound cleanup dispatch observer");
-              expectDefined(source, "operator source").authority.assertCurrent();
               expect(
                 expectDefined(childExecution?.state.signal, "accepted child abort signal").aborted,
               ).toBe(true);

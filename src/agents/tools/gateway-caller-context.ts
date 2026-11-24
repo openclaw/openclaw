@@ -30,7 +30,7 @@ import type { SessionControllerWatchdogAttempt } from "../../sessions/session-co
 import { AsyncContext } from "../../shared/async-context.js";
 import { runWithAsyncStore } from "../../shared/async-store.js";
 import {
-  captureAdmittedRunActiveAssertion,
+  resolveAdmittedRunActiveAssertion,
   getAdmittedRunDelegatedAuthority,
   readAdmittedRunOperatorAuthority,
   type AdmittedRunOperatorAuthority,
@@ -203,10 +203,9 @@ export function createAdmittedGatewayToolCallerIdentity(
       getGatewayContextResolver(params.admittedRunContext),
     ),
     receiptAuthority: composeReceiptAuthority(
-      (delegatedAuthority &&
-        captureAdmittedRunActiveAssertion(params.admittedRunContext, delegatedAuthority)) ??
+      resolveAdmittedRunActiveAssertion(params.admittedRunContext) ??
         (() => {
-          throw new Error("agent tool caller authority is no longer active");
+          throw new Error("The agent run ended. Start a new turn to retry.");
         }),
       params.receiptAuthority,
     ),
@@ -275,10 +274,7 @@ export function resolveGatewayToolOperatorSelection(options?: {
         : selectedParticipant
           ? undefined
           : caller?.requesterOrigin,
-      assertCurrent: composeSessionSourceAssertion([
-        participant?.assertCurrent,
-        operatorAuthority?.assertCurrent,
-      ]),
+      assertCurrent: composeSessionSourceAssertion([participant?.assertCurrent]),
     });
     if (caller?.personalToolIdentityScoped) {
       caller.personalToolSelection = selection;
@@ -305,7 +301,6 @@ export function withGatewayToolOperatorContinuation<T>(
     return run();
   }
   const { operatorAuthority, requesterOrigin } = selection;
-  operatorAuthority?.assertCurrent();
   return runWithAsyncStore(
     gatewayToolCallerStorage,
     {
@@ -313,10 +308,11 @@ export function withGatewayToolOperatorContinuation<T>(
       personalToolParticipants: undefined,
       personalToolUser: undefined,
       personalToolIdentityScoped: true,
+      // The accepting collector holds this source; no participant is selected here.
       personalToolSelection: Object.freeze({
         operatorAuthority,
         requesterOrigin,
-        assertCurrent: composeSessionSourceAssertion([operatorAuthority?.assertCurrent]),
+        assertCurrent: composeSessionSourceAssertion([]),
       }),
     },
     run,
@@ -355,28 +351,6 @@ export function resolveGatewayPersonalToolParticipant(
   return undefined;
 }
 
-/** Admission checked authority; a started tool call only honors Stop and the session-store write fences. */
-export function captureGatewayToolCallerAssertion(
-  _boundMethod?: string,
-): ((method?: string) => void) | undefined {
-  const caller = getGatewayToolCallerIdentity();
-  if (!caller?.operationalRunInstance) {
-    return undefined;
-  }
-  const signals = caller.approvalSignals ?? [];
-  const assertNotStopped = () => {
-    for (const signal of signals) {
-      signal.throwIfAborted();
-    }
-  };
-  // Prepared writes still run the receipt's session fences; the synchronous call checks Stop only.
-  const fences = composeSessionSourceAssertion([caller.receiptAuthority], (assertSources) => {
-    assertNotStopped();
-    assertSources();
-  });
-  return Object.assign(assertNotStopped, fences);
-}
-
 /** Watch admission preserves opaque lifecycle assertions while moving registered row predicates. */
 export async function prepareGatewayToolCallerAssertion(): Promise<{
   assertCurrent?: () => void;
@@ -384,7 +358,7 @@ export async function prepareGatewayToolCallerAssertion(): Promise<{
   release(): void;
 }> {
   const caller = getGatewayToolCallerIdentity();
-  const assertion = captureGatewayToolCallerAssertion();
+  const stopSignals = caller?.operationalRunInstance ? caller.approvalSignals : undefined;
   const admissions = [...new Set(caller?.receiptAdmissions ?? [])];
   const prepared = await Promise.all(admissions.map((admission) => admission.prepare()));
   const predicates = new Map(
@@ -395,7 +369,9 @@ export async function prepareGatewayToolCallerAssertion(): Promise<{
     if (!active) {
       throw new Error("agent tool caller admission is no longer active");
     }
-    runWithAsyncStore(receiptAdmissionStorage, predicates, () => assertion?.());
+    runWithAsyncStore(receiptAdmissionStorage, predicates, () =>
+      stopSignals?.forEach((signal) => signal.throwIfAborted()),
+    );
   };
   assertCurrent();
   return {

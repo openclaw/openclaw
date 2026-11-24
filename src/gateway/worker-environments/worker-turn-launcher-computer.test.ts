@@ -1,9 +1,14 @@
-import { mkdir, realpath } from "node:fs/promises";
+import { generateKeyPairSync } from "node:crypto";
+import { mkdir, realpath, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { WORKER_GITHUB_REFRESH_PROTOCOL_FEATURE } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { WORKER_COMPUTER_PROTOCOL_FEATURE } from "../../../packages/gateway-protocol/src/schema/worker-computer.js";
 import { createSolidPngBuffer } from "../../../test/helpers/image-fixtures.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { prepareSystemAgentRunAdmission } from "../../agents/admitted-run-context.js";
+import { createTestOperatorAuthority } from "../../agents/admitted-run-context.test-support.js";
 import { runEmbeddedAgentEntry } from "../../agents/embedded-agent-runner/run-entry.js";
 import { abortable } from "../../agents/embedded-agent-runner/run/abortable.js";
 import type { EmbeddedAgentRunResult } from "../../agents/embedded-agent-runner/types.js";
@@ -11,16 +16,26 @@ import { FailoverError, resolveModelFallbackError } from "../../agents/failover-
 import { runWithModelFallback } from "../../agents/model-fallback-runner.js";
 import { createAgentRunDirectAbortError } from "../../agents/run-termination.js";
 import { installSessionPlacementAdmissionProvider } from "../../agents/session-placement-admission.js";
-import { loadSessionEntry } from "../../config/sessions/session-accessor.js";
+import { insertRegistryWorktree } from "../../agents/worktrees/registry.js";
+import { managedWorktrees } from "../../agents/worktrees/service.js";
+import { makeWorktreeRecord } from "../../agents/worktrees/service.test-support.js";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
+import { loadSessionEntry, patchSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import {
   attachErrorDiagnostic,
   formatErrorMessageForDisplay,
 } from "../../infra/error-diagnostics.js";
 import { saveMediaBuffer } from "../../media/store.js";
+import * as repositoryIntegration from "../../plugins/repository-integration-runtime.js";
 import { getPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
+import { getSessionRepositoryWorkspaceStore } from "../../state/session-repository-workspaces.js";
+import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
+import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
+import { prepareWorkerGitHubEnvironment } from "../../worker/github-binding.runtime.js";
 import type { WorkerGitHubLaunchBinding } from "../../worker/launch-descriptor.js";
+import { readGitHubPublicationWorktreeOwner } from "../github-publication-availability.js";
 import type { PreparedWorkerComputer } from "./computer-transport.js";
 import * as skillTransfer from "./skill-resource-transfer.js";
 import { WorkerRunnerCapacityError, type WorkerTunnelHandle } from "./tunnel-contract.js";
@@ -30,6 +45,7 @@ import {
   createLauncher,
   executeTurn,
   expectUncalled,
+  launchDescriptor,
   localResult as defaultLocalResult,
   runIdentity,
 } from "./worker-turn-launcher-flow.test-support.js";
@@ -164,6 +180,275 @@ describe("worker launch capabilities", () => {
       expect(tunnel.reconcileWorkspace).toHaveBeenCalledOnce();
     },
   );
+
+  const checkoutKinds = ["repository", "imported-pending", "imported-conflicted"] as const;
+  it.each(checkoutKinds)("App-authenticated checkout launch: %s", async (workspaceKind) => {
+    const branch = "openclaw/admitted-session";
+    const remoteUrl = "https://github.com/fixture/project.git";
+    const token = "synthetic-worker-app-token";
+    const origin = path.join(fx.root, "origin");
+    const checkout = path.join(fx.root, "checkout");
+    vi.stubEnv("GIT_CONFIG_GLOBAL", path.join(fx.root, "gitconfig"));
+    vi.stubEnv("GIT_CONFIG_NOSYSTEM", "1");
+    vi.stubEnv("GIT_CONFIG_COUNT", "0");
+    vi.stubEnv("GIT_ALLOW_PROTOCOL", "file");
+    const git = async (cwd: string, ...args: string[]) => {
+      const result = await runCommandWithTimeout(["git", ...args], { cwd, timeoutMs: 10_000 });
+      if (result.code !== 0) {
+        throw new Error(`git ${args[0]} failed: ${result.stderr}`);
+      }
+      return result.stdout.trim();
+    };
+    try {
+      await git(fx.root, "init", "--quiet", `--initial-branch=${branch}`, origin);
+      await git(origin, "config", "user.name", "Worker Fixture");
+      await git(origin, "config", "user.email", "worker@example.test");
+      await git(origin, "commit", "--quiet", "--allow-empty", "-m", "Base");
+      const base = await git(origin, "rev-parse", "HEAD");
+      const prBranch = "contributor-topic";
+      let prHead: string | undefined;
+      const conflicted = workspaceKind === "imported-conflicted";
+      if (workspaceKind !== "repository") {
+        await git(origin, "switch", "--quiet", "-c", prBranch);
+        await writeFile(path.join(origin, "conflict.txt"), "PR contents\n");
+        await git(origin, "add", "conflict.txt");
+        await git(origin, "commit", "--quiet", "-m", "Incoming PR");
+        prHead = await git(origin, "rev-parse", "HEAD");
+        await git(origin, "switch", "--quiet", branch);
+        await writeFile(path.join(origin, "conflict.txt"), "Saved workspace contents\n");
+        await git(origin, "add", "conflict.txt");
+      }
+      await git(origin, "commit", "--quiet", "--allow-empty", "-m", "Earlier worker");
+      const advancedHead = await git(origin, "rev-parse", "HEAD");
+      await git(fx.root, "clone", "--quiet", origin, checkout);
+      if (conflicted) {
+        await expect(
+          git(
+            checkout,
+            "-c",
+            "user.name=Fixture",
+            "-c",
+            "user.email=fixture@example.test",
+            "merge",
+            prHead!,
+          ),
+        ).rejects.toThrow();
+        expect(await git(checkout, "rev-parse", "MERGE_HEAD")).toBe(prHead);
+        expect(await git(checkout, "diff", "--name-only", "--diff-filter=U")).toBe("conflict.txt");
+      } else {
+        await git(checkout, "checkout", "--quiet", "--detach", base);
+      }
+      await git(checkout, "remote", "remove", "origin");
+      await git(
+        origin,
+        "config",
+        "--global",
+        `url.${pathToFileURL(origin).href}.insteadOf`,
+        remoteUrl,
+      );
+
+      if (prHead) {
+        await git(checkout, "remote", "add", "origin", remoteUrl);
+        const repository = await managedWorktrees.resolveRepositoryIdentity(checkout);
+        const record = makeWorktreeRecord(repository.repoRoot, "imported-workspace", {
+          branch,
+          repoFingerprint: repository.fingerprint,
+          path: repository.checkoutRoot,
+          ownerId: fx.sessionTarget.sessionKey,
+        });
+        await insertRegistryWorktree(process.env, record);
+        const head = {
+          repository: "fork/project",
+          repositoryId: 405,
+          branch: prBranch,
+          commit: prHead,
+        };
+        await patchSessionEntryCore(
+          fx.sessionTarget,
+          (entry) => ({
+            ...entry,
+            worktree: {
+              id: record.id,
+              branch,
+              repoRoot: record.repoRoot,
+              githubPullRequest: {
+                host: "github.com",
+                number: 7,
+                url: "https://github.com/fixture/project/pull/7",
+                origin: "external-pr",
+                base: { repository: "fixture/project", repositoryId: 404, branch, commit: base },
+                head,
+                ...(conflicted ? { preparedHeadCommit: base } : {}),
+              },
+            },
+          }),
+          { skipMaintenance: true },
+        );
+      } else {
+        const workspace = await getSessionRepositoryWorkspaceStore().create({
+          ...fx.sessionTarget,
+          branch,
+          url: remoteUrl,
+          assertCurrent() {},
+        });
+        await patchSessionEntryCore(
+          fx.sessionTarget,
+          (entry) => ({ ...entry, repositoryWorkspaceId: workspace.workspaceId }),
+          { skipMaintenance: true },
+        );
+      }
+      await fx.seedActivePlacement("worker-turn", checkout);
+      const operator = ensureProfileForEmail("worker-app-operator@example.test");
+      await prepareUserProfileCatalog();
+      const runId = "run-app-checkout";
+      const turn = fx.turn(runId);
+      const repositories = [{ id: 404, fullName: "fixture/project" }];
+      const config = {
+        ...turn.config,
+        session: { store: fx.sessionTarget.storePath },
+        tools: {
+          github: {
+            kind: "app-installation" as const,
+            profileId: "ghp_11111111111111111111111111111111",
+            app: {
+              appId: 101,
+              installationId: 202,
+              accountId: 303,
+              keyVersion: "test-v1",
+              privateKey: generateKeyPairSync("rsa", { modulusLength: 2048 }).privateKey.export({
+                format: "pem",
+                type: "pkcs8",
+              }),
+              repositories,
+              permissions: { contents: "write" as const },
+            },
+          },
+        },
+      };
+      setRuntimeConfigSnapshot(config);
+      const admission = vi.fn(async () => undefined);
+      using integration = vi.spyOn(repositoryIntegration, "getRepositoryIntegration");
+      integration.mockReturnValue({
+        version: 1,
+        preparedCapacity: "image",
+        resolveConnectionIdentity: () => undefined,
+        withIdentity: (context, run) =>
+          run({
+            env: context.env,
+            assertCurrent: context.assertCurrent,
+            readNativeCredential: admission,
+          }),
+      });
+      const permissions = { contents: "write", metadata: "read" };
+      const responses: Record<string, unknown> = {
+        "/app": { id: 101, slug: "fixture", permissions },
+        "/app/installations/202": {
+          id: 202,
+          app_id: 101,
+          account: { id: 303 },
+          suspended_at: null,
+          permissions,
+        },
+        "/app/installations/202/access_tokens": {
+          token,
+          expires_at: new Date(Date.now() + 3_600_000).toISOString(),
+          permissions,
+        },
+        "/users/fixture%5Bbot%5D": {
+          id: 505,
+          login: "fixture[bot]",
+          type: "Bot",
+          avatar_url: null,
+        },
+        "/installation/repositories?per_page=100": {
+          total_count: 1,
+          repositories: [{ id: 404, full_name: "fixture/project" }],
+        },
+      };
+      vi.stubGlobal("fetch", async (input: string, init?: RequestInit) => {
+        const url = new URL(input);
+        expect(url.origin).toBe("https://api.github.com");
+        return init?.method === "DELETE"
+          ? new Response(null, { status: 204 })
+          : Response.json(responses[url.pathname + url.search]);
+      });
+      const prepared = prepareSystemAgentRunAdmission(
+        config,
+        runId,
+        fx.sessionTarget.agentId,
+        "test.worker-app-launch",
+        undefined,
+        createTestOperatorAuthority({ profileId: operator.id, scopes: ["operator.write"] }),
+      );
+      const environment = fx.attachedEnvironment();
+      environment.bootstrapReceipt!.protocolFeatures.push(WORKER_GITHUB_REFRESH_PROTOCOL_FEATURE);
+      const stopAfterLaunch = new WorkerRunnerCapacityError();
+      const tunnel = fx.createWorkerTurnTunnel({
+        reconcileWorkspace: fx.reconcileUnchangedLocalWorkspace,
+        launchTurn: async ({ plan, assertCurrent }) => {
+          assertCurrent?.();
+          const { assignment } = launchDescriptor(plan);
+          const binding = assignment.github!;
+          expect(binding).toMatchObject({ token, branch, remoteUrl });
+          await prepareWorkerGitHubEnvironment({
+            binding,
+            stateDir: fx.root,
+            turnId: assignment.turnId,
+            cwd: assignment.workspaceDir,
+          });
+          expect(await git(checkout, "symbolic-ref", "--short", "HEAD")).toBe(branch);
+          expect(await git(checkout, "config", "remote.origin.url")).toBe(remoteUrl);
+          expect(await git(checkout, "rev-parse", "--abbrev-ref", "@{upstream}")).toBe(
+            `origin/${branch}`,
+          );
+          expect(await git(checkout, "rev-parse", "HEAD")).toBe(advancedHead);
+          if (conflicted) {
+            expect(await git(checkout, "rev-parse", "MERGE_HEAD")).toBe(prHead);
+            expect(await git(checkout, "diff", "--name-only", "--diff-filter=U")).toBe(
+              "conflict.txt",
+            );
+          }
+          throw stopAfterLaunch;
+        },
+      });
+      const launcher = createLauncher({
+        environments: environmentFor(tunnel, { get: () => environment }),
+      });
+      try {
+        const result = await launcher
+          .executeTurn(
+            runIdentity(runId),
+            {
+              ...turn,
+              config,
+              preparedRunAdmission: prepared,
+            },
+            defaultLocalResult,
+          )
+          .catch((error: unknown) => {
+            if (error !== stopAfterLaunch) {
+              throw error;
+            }
+            return stopAfterLaunch;
+          });
+        expect(result).toBe(stopAfterLaunch);
+        expect(admission).toHaveBeenCalledOnce();
+        if (prHead) {
+          await expect(
+            readGitHubPublicationWorktreeOwner({
+              ...fx.sessionTarget,
+              allowExistingPullRequest: true,
+            }),
+          ).rejects.toThrow("Finish preparing the original PR source before publication");
+        }
+      } finally {
+        prepared.close();
+      }
+    } finally {
+      vi.unstubAllEnvs();
+      vi.unstubAllGlobals();
+    }
+  });
 
   it.each([
     { missingFeature: undefined, modelHasVision: undefined, allowed: true },
@@ -443,7 +728,7 @@ describe("worker launch capabilities", () => {
                 }),
               ),
             ]) {
-              expect(() => assertCurrent!(changed)).toThrow("no longer current");
+              expect(() => assertCurrent!(changed)).toThrow("placement changed");
             }
             const original = environments.get(fx.ENVIRONMENT_ID)!;
             if (original.state !== "attached") {
@@ -455,7 +740,7 @@ describe("worker launch capabilities", () => {
             ]) {
               vi.mocked(environments.get).mockReturnValueOnce(changed);
               await Promise.resolve();
-              expect(retainedNodeAuthority).toThrow("no longer current");
+              expect(retainedNodeAuthority).toThrow("placement changed");
             }
           }
           if (primaryError) {
@@ -488,7 +773,7 @@ describe("worker launch capabilities", () => {
         if (resourceCleanup) {
           await resourceCleanup.entered.promise;
           expect(fx.placements.get(fx.SESSION_ID)?.turnClaim).not.toBeNull();
-          expect(retainedNodeAuthority).toThrow("no longer current");
+          expect(retainedNodeAuthority).toThrow("placement changed");
           expect(closeComputer).not.toHaveBeenCalled();
           resourceCleanup.release.resolve();
           await expect(operation).rejects.toBe(skillCleanupError);
@@ -619,7 +904,7 @@ describe("worker launch capabilities", () => {
       const placement = fx.placements.get(fx.SESSION_ID);
       expect([placement?.state, placement?.turnClaim]).toEqual(["active", null]);
       if (retainedNodeAuthority) {
-        expect(retainedNodeAuthority).toThrow("no longer current");
+        expect(retainedNodeAuthority).toThrow("placement changed");
       }
     },
   );

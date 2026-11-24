@@ -20,7 +20,6 @@ import { sessionChanges } from "../../../sessions/session-row-changes.js";
 import { closeOpenClawAgentDatabaseByPathAsync } from "../../../state/openclaw-agent-db-lifecycle.js";
 import { resolveOpenClawAgentSqlitePath } from "../../../state/openclaw-agent-db.paths.js";
 import { runOpenClawAgentWriteAdmission } from "../../../state/openclaw-agent-write-admission.js";
-import { observeMainThreadSql } from "../../../test-utils/main-thread-sql-spies.test-support.js";
 import { createOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
 import {
   bindWorkerToolPreparation,
@@ -150,9 +149,7 @@ it.each([
       return read(inputs, consume, options);
     });
   const consumed = vi.fn(() => "admitted");
-  const calls = observeMainThreadSql();
   cleanup.defer(() => delayed.mockRestore());
-  cleanup.defer(() => calls.restore());
   await using gate = bindingGate();
   const preparations = [preparation];
   if (refusal) {
@@ -173,12 +170,10 @@ it.each([
   }
   const outcome = gate.observe(authority.withPreparedCurrent!(consumed, preparations));
   await gate.wait(outcome, "Final admission was not reached");
-  calls.expectIdle();
   if (change === "policy" || change === "metadata") {
     await updateSessionEntry({ agentId: "policy", sessionKey: policyKey }, () =>
       change === "policy" ? { sandboxMode: undefined } : { label: "renamed" },
     );
-    calls.clear();
   } else if (change === "malformed") {
     await runOpenClawAgentWriteAdmission({ agentId: "policy", env }, ({ canonicalPath }) => {
       {
@@ -197,7 +192,6 @@ it.each([
         factsInvalidated: true,
       });
     });
-    calls.clear();
   } else if (change === "route") {
     await operation.bindToolAuthorityRouteAsync({
       provider: attempt.provider,
@@ -210,9 +204,6 @@ it.each([
   }
   gate.resume();
   const result = await outcome;
-  if (change !== "legacy-allowed") {
-    calls.expectIdle();
-  }
   if (change === "metadata" || change === "legacy-allowed") {
     expect(result).toBe("admitted");
     expect(consumed).toHaveBeenCalledOnce();

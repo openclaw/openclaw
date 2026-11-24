@@ -1,5 +1,4 @@
 import { randomUUID } from "node:crypto";
-import type { SessionGitHubPublicationResult } from "../../packages/gateway-protocol/src/schema/session-github-publication.js";
 import type { GitHubPublicationRow as PublicationRow } from "../state/github-publication-read.types.js";
 import {
   matchesCurrentGitHubPublicationIdentity,
@@ -9,10 +8,10 @@ import {
   readGitHubPublicationWorktreeOwner,
 } from "./github-publication-availability.js";
 import type { GitHubPublicationClaimRequestV2 } from "./github-publication-coordinator-methods.js";
+import { gitHubPublicationPreflightLifetime } from "./github-publication-execution-identity.js";
 import {
   assertExpectedSharedGitHubPublisher,
   digestGitHubPublicationRequest as digestRequest,
-  projectGitHubPublicationResult as publicationResult,
 } from "./github-publication-receipt.js";
 import { insertGitHubPublicationRequestAsync } from "./github-publication-request-async.js";
 import { bindGitHubPublicationSourceLifetime } from "./github-publication-source.js";
@@ -26,9 +25,7 @@ export function createGitHubPublicationClaimRequester(params: {
   signal: AbortSignal;
 }) {
   const { assertCurrent, signal } = params;
-  return async (
-    request: GitHubPublicationClaimRequestV2,
-  ): Promise<SessionGitHubPublicationResult> => {
+  return async (request: GitHubPublicationClaimRequestV2): Promise<PublicationRow> => {
     const assertRequester = request.requester.assertCurrent;
     const placement = await params.placements.getAsync(request.claim.sessionId);
     assertRequester();
@@ -61,12 +58,7 @@ export function createGitHubPublicationClaimRequester(params: {
         assertCurrent: assertRequester,
       }),
     );
-    await using identityLifetime = {
-      identity,
-      [Symbol.asyncDispose]: async () => {
-        await identity.revoke?.();
-      },
-    };
+    await using identityLifetime = gitHubPublicationPreflightLifetime(identity);
     assertRequester();
     const existing = await readGitHubPublicationRequestAsync({
       sessionId: request.claim.sessionId,
@@ -144,13 +136,15 @@ export function createGitHubPublicationClaimRequester(params: {
         assertCurrent();
         assertRequester();
         worktreeOwner.assertCurrent();
-        assertEffectCurrent();
+        if (!params.placements.validateTurnClaim(request.claim)) {
+          throw new Error("GitHub publication turn ended. Retry the publication.");
+        }
         bindGitHubPublicationSourceLifetime(source, signal);
         row = await insertGitHubPublicationRequestAsync(input, source);
       } finally {
         await source.release();
       }
     }
-    return publicationResult(row);
+    return row;
   };
 }

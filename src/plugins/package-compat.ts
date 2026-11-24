@@ -15,13 +15,13 @@ function normalizePartialComparableVersion(version: string): {
 }
 
 function normalizePluginApiVersionForComparator(version: string, target: string): string {
-  const normalizedCorrection = NUMERIC_RELEASE_CORRECTION_PATTERN.exec(version.trim())?.[1];
+  const normalizedCorrection = OPENCLAW_NUMERIC_CORRECTION_PATTERN.exec(version.trim())?.[1];
   if (normalizedCorrection) {
     return normalizedCorrection;
   }
   return parseSemverPrerelease(normalizePartialComparableVersion(target).version)
     ? version
-    : (RELEASE_PRERELEASE_SUFFIX_PATTERN.exec(version.trim())?.[1] ?? version);
+    : (OPENCLAW_RELEASE_SUFFIX_PATTERN.exec(version.trim())?.[1] ?? version);
 }
 
 function satisfiesComparator(version: string, token: string): boolean {
@@ -58,9 +58,9 @@ function satisfiesSemverRange(version: string, range: string): boolean {
   return tokens.every((token) => satisfiesComparator(version, token));
 }
 
-const RELEASE_PRERELEASE_SUFFIX_PATTERN =
+const OPENCLAW_RELEASE_SUFFIX_PATTERN =
   /^[vV]?(\d{4}\.[1-9]\d?\.[1-9]\d*)(?:-\d+|-(?:alpha|beta|rc)\.\d+)$/i;
-const NUMERIC_RELEASE_CORRECTION_PATTERN = /^[vV]?(\d{4}\.[1-9]\d?\.[1-9]\d*)-\d+$/;
+const OPENCLAW_NUMERIC_CORRECTION_PATTERN = /^[vV]?(\d{4}\.[1-9]\d?\.[1-9]\d*)-\d+$/;
 
 /** Result of reading package.json openclaw.compat.pluginApi metadata. */
 type PackagePluginApiRangeResult = { ok: true; range?: string } | { ok: false; error: string };

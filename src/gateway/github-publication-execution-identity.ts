@@ -4,6 +4,7 @@ import {
   resolveConfiguredGitHubToolIdentity,
   type PreparedGitHubPublicationIdentity,
 } from "../agents/github-tool-identity.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getRepositoryIntegration } from "../plugins/repository-integration-runtime.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import type { GitHubPublicationExecutionRow } from "../state/github-publication-read.types.js";
@@ -149,21 +150,10 @@ export function createGitHubPublicationExecutionIdentity(params: {
   const assertAuthority = () => {
     if (closed || !params.validateAuthority()) {
       throw new GitHubPublicationAuthorityLostError(
-        "GitHub publication session authority changed.",
+        "GitHub publication execution ended. Retry the publication.",
       );
     }
     params.assertWorkspace();
-    if (
-      active &&
-      !(params.identity
-        ? params.identity.isCurrent(active)
-        : matchesCurrentGitHubPublicationIdentity({
-            agentId: params.row.agent_id,
-            identity: active,
-          }))
-    ) {
-      throw new Error("GitHub publication identity changed.");
-    }
   };
   const assertCurrent = () => {
     assertAuthority();
@@ -179,7 +169,7 @@ export function createGitHubPublicationExecutionIdentity(params: {
       closed = true;
       const previous = active;
       active = undefined;
-      await previous?.revoke?.();
+      await revokePublicationIdentity(previous, "execution");
     },
     refreshIdentity: async (): Promise<PreparedGitHubPublicationIdentity> => {
       assertAuthority();
@@ -188,7 +178,10 @@ export function createGitHubPublicationExecutionIdentity(params: {
       let admitted = false;
       try {
         assertAuthority();
-        if (!matchesGitHubPublicationIdentityRow(params.row, identity)) {
+        if (
+          !matchesGitHubPublicationIdentityRow(params.row, identity) ||
+          (params.identity && !params.identity.isCurrent(identity))
+        ) {
           throw new Error("GitHub publication identity changed.");
         }
         const previous = active;
@@ -207,15 +200,42 @@ export function createGitHubPublicationExecutionIdentity(params: {
           if (active === identity) {
             active = undefined;
           }
-          await identity.revoke?.();
+          await revokePublicationIdentity(identity, "execution");
         }
       }
     },
   };
 }
 
+async function revokePublicationIdentity(
+  identity: PreparedGitHubPublicationIdentity | undefined,
+  phase: "preflight" | "execution",
+) {
+  try {
+    await identity?.revoke?.();
+  } catch {
+    try {
+      createSubsystemLogger("gateway/github-publication").warn(
+        phase === "execution"
+          ? "Failed to revoke GitHub publication execution credential"
+          : "Failed to revoke GitHub publication preflight credential",
+      );
+    } catch {
+      // Diagnostic failures must not replace the outcome either.
+    }
+  }
+}
+
+/** Revoke the preflight credential without replacing an accepted receipt or admission error. */
+export function gitHubPublicationPreflightLifetime(identity: PreparedGitHubPublicationIdentity) {
+  return {
+    identity,
+    [Symbol.asyncDispose]: () => revokePublicationIdentity(identity, "preflight"),
+  };
+}
+
 /** Original actor and accepted receipt facts accompany every fresh execution grant. */
-export async function prepareGitHubPublicationExecutionIdentity(params: {
+type GitHubPublicationExecutionIdentityParams = {
   row: Pick<
     GitHubPublicationExecutionRow,
     "agent_id" | "session_key" | "session_id" | "request_id" | "request_digest"
@@ -226,7 +246,11 @@ export async function prepareGitHubPublicationExecutionIdentity(params: {
   executionKind: "worktree" | "repository";
   ownerId: string;
   assertCurrent: () => void;
-}) {
+};
+
+export async function prepareGitHubPublicationExecutionIdentity(
+  params: GitHubPublicationExecutionIdentityParams,
+) {
   const { row, actor, assertCurrent } = params;
   const config = currentGitHubPublicationConfig();
   const selected =
@@ -275,11 +299,15 @@ export async function prepareGitHubPublicationExecutionIdentity(params: {
 
 /** Credential selection and currency use the same accepted publication agent. */
 export function createGitHubPublicationExecutionIdentityOwner(
-  readParams: () => Parameters<typeof prepareGitHubPublicationExecutionIdentity>[0],
+  row: GitHubPublicationExecutionIdentityParams["row"],
+  readParams: () =>
+    | Omit<GitHubPublicationExecutionIdentityParams, "row">
+    | Promise<Omit<GitHubPublicationExecutionIdentityParams, "row">>,
 ): GitHubPublicationIdentityOwner {
   return {
-    prepare: () => prepareGitHubPublicationExecutionIdentity(readParams()),
+    prepare: async () =>
+      prepareGitHubPublicationExecutionIdentity({ row, ...(await readParams()) }),
     isCurrent: (identity) =>
-      matchesCurrentGitHubPublicationIdentity({ agentId: readParams().row.agent_id, identity }),
+      matchesCurrentGitHubPublicationIdentity({ agentId: row.agent_id, identity }),
   };
 }

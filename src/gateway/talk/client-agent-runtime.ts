@@ -100,7 +100,7 @@ export function createTalkClientAgentRuntime(params: {
       ) {
         throw new Error("Talk consultation source registration is no longer current");
       }
-      source.adapter.authority?.assertCurrent();
+      source.adapter.authority?.assertCurrent?.();
     };
     params.assertCurrent?.();
     assertSourceCurrent();

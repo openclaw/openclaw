@@ -319,10 +319,7 @@ export async function copySessionCatalogToGateway(params: {
   };
   const captured = await operatorCapture.preparation;
   let destinationAuthority: SessionMutationAuthorization | undefined;
-  const assertSourceCurrent = () => {
-    params.commitGuard?.();
-    captured?.authority.assertCurrent();
-  };
+  const assertSourceCurrent = () => params.commitGuard?.();
   assertSourceCurrent();
   const gatewayCopy = await copyToGatewaySession({
     ...params.providerContinueParams,

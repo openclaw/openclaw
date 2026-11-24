@@ -10,11 +10,14 @@ import {
 } from "./github-publication.test-support.js";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { expect, it, vi } from "vitest";
+import { expect, it, onTestFinished, vi } from "vitest";
 import { withinTest } from "../../test/helpers/promise.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import * as sqliteQueries from "../infra/kysely-sync.js";
+import * as subsystemLogging from "../logging/subsystem.js";
 import * as stateReads from "../state/openclaw-state-db-readonly.js";
+import { registerAppCredentialFixture } from "./github-publication-credential.test-helpers.js";
+import { GitHubPublicationKnownFailure } from "./github-publication-failure.js";
 import { GitHubPublicationRecoveryPendingError } from "./github-publication-git-index.js";
 import {
   createRealPublicationWorkspace,
@@ -26,6 +29,7 @@ import {
   capturePublicationGuest,
   createRequesterPublicationFixture,
   holdWorkerTurn,
+  queueGuestPublication,
 } from "./github-publication-requester.test-support.js";
 import { readGitHubPublicationRequest } from "./github-publication-store.worker.js";
 
@@ -84,6 +88,72 @@ installGitHubPublicationTestHarness({
   sandbox: "required",
   realWorktree: true,
 });
+
+it.each([
+  { backend: "local", mode: "claim", status: "requested" },
+  { backend: "repository", mode: "claim", status: "requested" },
+  { backend: "local", mode: "session", status: "published" },
+  { backend: "local", mode: "execution", status: "published" },
+  { backend: "repository", mode: "session", status: "requested" },
+  { backend: "local", mode: "rejected", status: undefined },
+] as const)(
+  "keeps the $backend $mode outcome when App credential revocation fails",
+  async ({ backend, mode, status }) => {
+    const f = await fixture(backend, undefined, {
+      initialCheckpoint: backend !== "repository" || mode !== "session",
+    });
+    registerAppCredentialFixture(f);
+    const revoke = vi.fn().mockRejectedValue(new Error("synthetic App revocation failure"));
+    const identity = await mocks.prepareIdentity();
+    if (mode === "execution") {
+      mocks.prepareIdentity
+        .mockResolvedValue({ ...identity, revoke })
+        .mockResolvedValueOnce(identity);
+    } else {
+      mocks.prepareIdentity.mockResolvedValueOnce({ ...identity, revoke });
+    }
+    const logger = subsystemLogging.createSubsystemLogger("gateway/github-publication");
+    const warn = vi.spyOn(logger, "warn").mockImplementation(() => {});
+    const actual = subsystemLogging.createSubsystemLogger;
+    const createLogger = vi.spyOn(subsystemLogging, "createSubsystemLogger");
+    createLogger.mockImplementation((scope) =>
+      scope === "gateway/github-publication" ? logger : actual(scope),
+    );
+    onTestFinished(() => createLogger.mockRestore());
+
+    const key = "preflight-revocation-failure";
+    if (mode === "claim") {
+      const { claim, queued } = await queueGuestPublication(f, key, true);
+      await f.placements.releaseTurn(claim);
+      expect(f.readReceipt(queued.requestId)?.status).toBe(status);
+      expect(await f.coordinator.readAsync(queued.requestId)).toEqual(queued);
+    } else if (mode === "session" || mode === "execution") {
+      const result = await f.coordinator.requestForSessionV2(f.request(key, f.guest));
+      expect(result.status).toBe(status);
+      expect(await f.coordinator.readAsync(result.requestId)).toEqual(result);
+    } else {
+      await expect(
+        f.coordinator.requestForSessionV2({
+          ...f.request(key, f.guest),
+          selection: {
+            source: "shared",
+            expected: { source: "system-configured", accountId: 777, login: "different-account" },
+          },
+        }),
+      ).rejects.toBeInstanceOf(GitHubPublicationKnownFailure);
+      expect(
+        readGitHubPublicationRequest(f.database.db, {
+          sessionId: f.session.sessionId,
+          idempotencyKey: key,
+        }),
+      ).toBeUndefined();
+    }
+    expect(revoke).toHaveBeenCalledTimes(1);
+    expect(warn).toHaveBeenCalledWith(
+      `Failed to revoke GitHub publication ${mode === "execution" ? "execution" : "preflight"} credential`,
+    );
+  },
+);
 
 it("recovers independent worktrees while preserving each worktree's publication order", async ({
   signal,

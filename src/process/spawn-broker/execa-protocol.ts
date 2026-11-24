@@ -69,6 +69,20 @@ function decodeExecaMessage(encoded: EncodedExecaMessage, output: ExecaMessageOu
 
 export type BrokerOutputOption = "pipe" | "ignore" | "inherit" | { file: string };
 
+export function isBrokerOutputOption(value: unknown): value is BrokerOutputOption | undefined {
+  return (
+    value === undefined ||
+    value === "pipe" ||
+    value === "ignore" ||
+    value === "inherit" ||
+    (typeof value === "object" &&
+      value !== null &&
+      "file" in value &&
+      typeof value.file === "string" &&
+      Object.keys(value).length === 1)
+  );
+}
+
 export type BrokerExecaOptions = Omit<
   CommandSpawnOptions,
   | "cancelSignal"

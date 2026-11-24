@@ -209,7 +209,7 @@ export async function runExecProcess({
       ? AbortSignal.any([requestSignal, initialStartupSignal])
       : (requestSignal ?? initialStartupSignal);
   startupSignal?.throwIfAborted();
-  let operatorAuthority =
+  const operatorAuthority =
     opts.githubApp?.operatorAuthority ?? getGatewayToolCallerIdentity()?.operatorAuthority;
   const operatorSignal = operatorAuthority?.signal;
   let releaseOperatorAuthority: (() => void) | undefined;
@@ -524,12 +524,11 @@ export async function runExecProcess({
       target: diagnosticTarget,
     });
   const spawn = async (input: SpawnInput) => {
-    const assertOperatorCurrent = operatorAuthority?.assertCurrent;
     const assertRuntimeCurrent = assertSandboxCurrent;
     const assertHostPolicyCurrent = assertPolicyCurrent;
     const assertCurrent = () => {
       startupSignal?.throwIfAborted();
-      assertOperatorCurrent?.();
+      operatorSignal?.throwIfAborted();
       assertRuntimeCurrent?.();
       githubGrant?.assertCurrent();
     };
@@ -588,7 +587,6 @@ export async function runExecProcess({
     session.outputFile = openPrivateTempFileStream("openclaw-exec", EXEC_OUTPUT_FILE_MAX_BYTES);
   }
   try {
-    operatorAuthority?.assertCurrent();
     releaseOperatorAuthority = operatorAuthority?.retain?.();
     if (opts.githubApp) {
       if (opts.durable) {
@@ -610,7 +608,7 @@ export async function runExecProcess({
         expectedProfileId: opts.githubApp.profileId,
         signal: githubStartup.signal,
         assertCurrent: () => {
-          operatorAuthority?.assertCurrent();
+          operatorSignal?.throwIfAborted();
           assertPolicyCurrent?.();
           return true;
         },
@@ -707,7 +705,6 @@ export async function runExecProcess({
     startupSignal?.removeEventListener("abort", cancelGitHubStartup);
     launchLifecycle.dispose();
     assertPolicyCurrent = undefined;
-    operatorAuthority = undefined;
     assertSandboxCurrent = undefined;
     prepareSandboxCurrent = undefined;
   }

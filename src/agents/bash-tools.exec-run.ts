@@ -558,7 +558,6 @@ export function createExecTool(defaults?: ExecToolDefaults) {
 
         signal?.throwIfAborted();
         run = await runExecProcess({
-          workerMemoryBoundary: defaults?.workerMemoryBoundary,
           command: params.command,
           execCommand: execCommandOverride,
           workdir,
@@ -570,6 +569,7 @@ export function createExecTool(defaults?: ExecToolDefaults) {
           githubApp,
           pathPrepend: defaultPathPrepend,
           sandbox,
+          workerMemoryBoundary: defaults?.workerMemoryBoundary,
           containerWorkdir,
           usePty,
           warnings,

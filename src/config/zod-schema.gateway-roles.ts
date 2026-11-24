@@ -47,6 +47,10 @@ export const GatewayOperatorRoleDefinitionSchema = z.strictObject({
       .array(z.string().trim().min(1).refine(isValidAgentId, "Invalid agent id"))
       .transform((agents) => uniqueValues(agents.map(normalizeAgentId))),
   ]),
+  /** Registered project IDs this role may use beyond public repositories, or every project with "*". */
+  projects: z
+    .union([z.literal("*"), z.array(z.string().trim().min(1)).transform(uniqueValues)])
+    .optional(),
   /** Cloud profiles this role may explicitly dispatch its own sessions to. */
   workerProfiles: z.array(z.string().trim().min(1)).transform(uniqueValues).optional(),
   /** Grant read/write only to an authenticated verified identity within existing ceilings. */

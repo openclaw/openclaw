@@ -165,7 +165,6 @@ import { parseArgs } from "node:util";
 import { deserialize, getHeapStatistics } from "node:v8";
 import type { Worker } from "node:worker_threads";
 import { inflateRawSync, zstdDecompressSync } from "node:zlib";
-import { collectNestedErrorCandidates } from "@openclaw/normalization-core/error-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { transformSync } from "esbuild";
 import type { OpenClawConfig } from "../../src/config/types.openclaw.ts";
@@ -184,6 +183,7 @@ const { values } = parseArgs({
     "freeze-source": { type: "string" },
     "source-root": { type: "string" },
     "fixture-source": { type: "string" },
+    "filesystem-worker": { type: "string" },
     "serial-turns": { type: "boolean", default: false },
     "fingerprint-import": { type: "boolean", default: false },
     "source-authority": { type: "boolean", default: false },
@@ -607,8 +607,16 @@ const reusableSerial =
   !values["agent-db-fixture"] &&
   siblingWorktrees === 0;
 assert(
-  !fingerprintImport || reusableSerial || reconcile,
-  "Fingerprint counters require the simple serial fixture or reconcile mode",
+  !fingerprintImport ||
+    reusableSerial ||
+    reconcile ||
+    (serialTurns &&
+      values.acceleration &&
+      !values["owner-switch"] &&
+      !values["restart-stage"] &&
+      !values["fresh-only"] &&
+      !values["reuse-fixture"]),
+  "Fingerprint counters require serial reuse, fresh template reuse, or reconcile mode",
 );
 if (fingerprintImport) {
   const frozen = path.join(sourceRoot, "checkpoint-source.json");
@@ -1188,6 +1196,15 @@ registerHooks({
   load(url, context, nextLoad) {
     const relative = url.startsWith("file:") ? path.relative(root, fileURLToPath(url)) : "";
     let code = source.get(relative);
+    if (values["filesystem-worker"] && relative === "src/agents/worktrees/filesystem-native.ts") {
+      assert(code);
+      const anchor = "return resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.fsSafeCopy);";
+      assert(code.includes(anchor));
+      code = code.replace(
+        anchor,
+        `return new URL(${JSON.stringify(values["filesystem-worker"])});`,
+      );
+    }
     if (
       values["mutation-segments"] &&
       relative === "src/gateway/worker-environments/local-workspace-store.ts"
@@ -2303,7 +2320,6 @@ measurement: try {
       sessionKey,
       workspaceDir: canonical,
       sandbox,
-      assertCurrent: authority?.assertCurrent,
       signal: authority?.signal,
     });
     assert(prepared, "Preparation must resolve the selected session-owned workspace");
@@ -2323,54 +2339,6 @@ measurement: try {
       captured?.release();
     }
   };
-  let sourceAuthorityProof: unknown;
-  if (values["source-authority"]) {
-    const original = await captureSource();
-    let revoked = false;
-    const errors: string[] = [];
-    const recordRevocation = (error: unknown) => {
-      const causes = collectNestedErrorCandidates(error);
-      errors.push(...causes.map(String));
-      return (
-        original.authority.signal?.aborted === true &&
-        causes.includes(original.authority.signal.reason)
-      );
-    };
-    try {
-      await assert.rejects(
-        withDiagnosticsTimelineObserver(
-          (name) => {
-            if (!revoked && name === "attempt.setup.sandbox.workspace_selection.reuse.reconcile") {
-              revoked = true;
-              deviceRuntime!.invalidateGatewayDeviceRevocation(
-                authorityContext,
-                "synthetic-source",
-                "operator",
-              );
-            }
-            return undefined;
-          },
-          () => prepareWithAuthority(original.authority),
-        ),
-        recordRevocation,
-      );
-      assert(revoked, "Revocation must occur inside real workspace reconciliation");
-      for (let attempt = 0; attempt < 3; attempt++) {
-        assert.throws(original.authority.assertCurrent, recordRevocation);
-        await prepareWorkspace();
-      }
-      sourceAuthorityProof = {
-        revokedDuring: "attempt.setup.sandbox.workspace_selection.reuse.reconcile",
-        staleAssertionsRejected: 3,
-        freshPreparationsCompleted: 3,
-        errors,
-        abortReason: String(original.authority.signal?.reason),
-        boundary: "real operator/source and sandbox preparation owners; no WS or model",
-      };
-    } finally {
-      original.release();
-    }
-  }
   const runOne = (i: number) =>
     turnLoop
       ? runTurn!()
@@ -3013,6 +2981,7 @@ measurement: try {
         files: inventory.length,
         bytes: initialBytes,
         source: values["fixture-source"] ?? null,
+        filesystemWorker: values["filesystem-worker"] ?? null,
         agentDatabase: values["agent-db-fixture"] ?? null,
         siblingWorktrees,
         acceleration: values.acceleration,
@@ -3389,7 +3358,6 @@ measurement: try {
     reconcileTraffic: values["reconcile-traffic"] ? [...reconcileTraffic] : undefined,
     mutationSamples: mutationObserver ? [...mutationObserver.samples] : undefined,
     reconcilePhases: values["reconcile-traffic"] ? [...reconcilePhases] : undefined,
-    sourceAuthorityProof,
     operatorAdmissions: values["source-authority"] ? admissions : undefined,
     harnessSha256,
     turn: turnLoop

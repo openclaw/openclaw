@@ -213,7 +213,7 @@ export type ChatThreadProps = Omit<
     workspaceFileLinkScope?: string;
     onWorkspaceFileLinks?: (links: HTMLElement[]) => void;
     onOpenSessionLink?: (target: SessionLinkTarget) => void;
-    onNavigate?: (routeId: "cron", options: { search: string }) => void;
+    onNavigate?: ApplicationContext["navigate"];
     onHistoryIntent?: (event: Event) => void;
     onHistorySentinelRef?: (element: HTMLElement) => void | (() => void);
     onTranscriptAnnouncementRef?: (element: HTMLElement) => void | (() => void);
