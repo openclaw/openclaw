@@ -4701,7 +4701,8 @@ class NodeRuntime internal constructor(
     restoration.start()
     _pendingGatewayTrust.value = null
     val tls = connectionManager.resolveTlsParams(endpoint)
-    if (tls?.requireSystemTrust == true) {
+    // Basic auth requires platform trust, but an existing pin still needs explicit replacement.
+    if (tls?.requireSystemTrust == true && tls.expectedFingerprint.isNullOrBlank()) {
       registerGateway(endpoint)
       connectAfterTlsCheckLocked(endpoint = endpoint, auth = auth, connectAttemptId = connectAttemptId)
       return

@@ -521,11 +521,7 @@ private fun probeGatewayTlsSystemTrust(
 
 private fun X509Certificate.sha256Fingerprint(): String = encoded.toByteString().sha256().hex()
 
-// JVM tests cannot swap the platform trust store mid-process: TLS providers cache it.
-@Volatile internal var gatewayPlatformTrustOverrideForTests: X509TrustManager? = null
-
 private fun defaultTrustManager(): X509TrustManager {
-  gatewayPlatformTrustOverrideForTests?.let { return it }
   val factory = TrustManagerFactory.getInstance(TrustManagerFactory.getDefaultAlgorithm())
   factory.init(null as java.security.KeyStore?)
   val trust =

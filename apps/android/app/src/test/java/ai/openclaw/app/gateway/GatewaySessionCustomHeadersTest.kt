@@ -57,6 +57,8 @@ import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
 import org.robolectric.annotation.Config
+import org.robolectric.annotation.Implementation
+import org.robolectric.annotation.Implements
 import java.io.IOException
 import java.security.KeyPairGenerator
 import java.security.KeyStore
@@ -80,6 +82,19 @@ import javax.net.ssl.X509TrustManager
 private const val TEST_TIMEOUT_MS = 8_000L
 private const val CONNECT_CHALLENGE_FRAME =
   """{"type":"event","event":"connect.challenge","payload":{"nonce":"android-test-nonce","ts":1700000000123}}"""
+
+/** Substitute only CA discovery; the real builder enforces pins, chain trust, and hostnames. */
+@Implements(className = "ai.openclaw.app.gateway.GatewayTlsKt", isInAndroidSdk = false)
+class FixtureGatewayTls {
+  companion object {
+    var defaultTrust: X509TrustManager? = null
+
+    @JvmStatic
+    @Implementation
+    fun buildGatewayTlsConfig(params: GatewayTlsParams?): GatewayTlsConfig? =
+      params?.let { buildGatewayTlsConfig(it, requireNotNull(defaultTrust)) }
+  }
+}
 
 private class NoopDeviceAuthStore : DeviceAuthTokenStore {
   override fun loadEntry(
@@ -109,6 +124,7 @@ private class NoopDeviceAuthStore : DeviceAuthTokenStore {
 @Config(sdk = [34])
 class GatewaySessionCustomHeadersTest {
   @Test
+  @Config(instrumentedPackages = ["ai.openclaw.app.gateway.GatewayTlsKt"], shadows = [FixtureGatewayTls::class])
   fun basicProxyKeepsGatewayAuthSeparateAndEnforcesTlsAndRedirectBoundaries() =
     runBlocking {
       val trusted = sourceFaviconTls()
@@ -133,7 +149,7 @@ class GatewaySessionCustomHeadersTest {
               "ca" -> untrusted
               else -> trusted
             }
-          gatewayPlatformTrustOverrideForTests = if (scenario == "host") wrongHost.third else trusted.third
+          FixtureGatewayTls.defaultTrust = if (scenario == "host") wrongHost.third else trusted.third
           val connect = AtomicReference<JsonObject>()
           val server = startCapturingGatewayServer(tls = served.first, onConnect = connect::set) {}
           val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
@@ -176,14 +192,8 @@ class GatewaySessionCustomHeadersTest {
             }
             if (scenario == "ok") {
               val params = connect.get().getValue("params").jsonObject
-              assertEquals(
-                "gateway-token",
-                params
-                  .getValue("auth")
-                  .jsonObject
-                  .getValue("token")
-                  .jsonPrimitive.content,
-              )
+              val auth = params.getValue("auth").jsonObject
+              assertEquals("gateway-token", auth.getValue("token").jsonPrimitive.content)
               assertEquals("node", params.getValue("role").jsonPrimitive.content)
               val config = requireNotNull(resolveGatewaySourcePreviewConfig(JsonObject(emptyMap()), server.url("/").toString(), 1))
               val image = byteArrayOf(1, 2, 3, 4)
@@ -207,7 +217,7 @@ class GatewaySessionCustomHeadersTest {
           }
         }
       } finally {
-        gatewayPlatformTrustOverrideForTests = null
+        FixtureGatewayTls.defaultTrust = null
         foreign.shutdown()
       }
     }

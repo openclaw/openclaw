@@ -769,7 +769,12 @@ class GatewayBootstrapAuthTest {
     }
 
   @Test
-  fun connect_promptsBeforeReplacingChangedTlsFingerprint() =
+  fun connect_promptsBeforeReplacingChangedTlsFingerprint() = assertChangedTlsFingerprintRecovery(basicProxy = false)
+
+  @Test
+  fun connect_basicProxyPromptsBeforeReplacingChangedTlsFingerprint() = assertChangedTlsFingerprintRecovery(basicProxy = true)
+
+  private fun assertChangedTlsFingerprintRecovery(basicProxy: Boolean) =
     runBlocking {
       val (_, prefs, runtime) =
         gatewayFixture { _, _ -> GatewayTlsProbeResult(fingerprintSha256 = "bb".repeat(32), systemTrusted = true) }
@@ -779,6 +784,9 @@ class GatewayBootstrapAuthTest {
       neutralizeColdStartAutoConnect(runtime)
       prefs.gatewayRegistry.upsert(gatewayRegistryEntry(endpoint, null))
       prefs.saveGatewayTlsFingerprint(endpoint.stableId, oldFingerprint)
+      if (basicProxy) {
+        assertEquals(GatewayProxySaveResult.SAVED, prefs.saveGatewayProxyCredentials(endpoint, GatewayProxyCredentials("alice", "secret")))
+      }
 
       runtime.connect(
         endpoint,
@@ -816,6 +824,7 @@ class GatewayBootstrapAuthTest {
       val desired = waitForDesiredConnection(runtime, "nodeSession")
       val tls = readField<GatewayTlsParams>(desired, "tls")
       assertEquals(newFingerprint, tls.expectedFingerprint)
+      assertEquals(basicProxy, tls.requireSystemTrust)
       assertEquals(endpoint.stableId, readField<GatewayEndpoint>(desired, "endpoint").stableId)
       assertEquals("shared-token", readField<String?>(desired, "token"))
       assertEquals(newFingerprint, prefs.loadGatewayTlsFingerprint(endpoint.stableId))
@@ -845,7 +854,12 @@ class GatewayBootstrapAuthTest {
   }
 
   @Test
-  fun connect_systemTrustedChangedPinSwitchClearsPinAndUsesPlatformTrust() {
+  fun connect_systemTrustedChangedPinSwitchClearsPinAndUsesPlatformTrust() = assertChangedPinSystemTrustRecovery(basicProxy = false)
+
+  @Test
+  fun connect_basicProxyChangedPinSwitchClearsPinAndUsesPlatformTrust() = assertChangedPinSystemTrustRecovery(basicProxy = true)
+
+  private fun assertChangedPinSystemTrustRecovery(basicProxy: Boolean) {
     val oldFingerprint = "aa".repeat(32)
     val newFingerprint = "bb".repeat(32)
     val (_, prefs, runtime) =
@@ -854,6 +868,9 @@ class GatewayBootstrapAuthTest {
     neutralizeColdStartAutoConnect(runtime)
     prefs.gatewayRegistry.upsert(gatewayRegistryEntry(endpoint, null))
     prefs.saveGatewayTlsFingerprint(endpoint.stableId, oldFingerprint)
+    if (basicProxy) {
+      assertEquals(GatewayProxySaveResult.SAVED, prefs.saveGatewayProxyCredentials(endpoint, GatewayProxyCredentials("alice", "secret")))
+    }
 
     runtime.connect(
       endpoint,
@@ -871,6 +888,7 @@ class GatewayBootstrapAuthTest {
     val desired = waitForDesiredConnection(runtime, "nodeSession")
     val tls = readField<GatewayTlsParams>(desired, "tls")
     assertNull(tls.expectedFingerprint)
+    assertEquals(basicProxy, tls.requireSystemTrust)
     assertNull(prefs.loadGatewayTlsFingerprint(endpoint.stableId))
     assertTrue("System trust approval must preserve the selection waiting on this attempt", selection.isCurrent())
   }
