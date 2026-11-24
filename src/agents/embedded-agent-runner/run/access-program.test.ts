@@ -10,7 +10,10 @@ import type { OAuthCredential } from "../../auth-profiles/types.js";
 import type { ModelCatalogSnapshot } from "../../model-catalog.types.js";
 import { setPreparedModelFullCatalogAuth } from "../../prepared-model-runtime-auth.js";
 import { createPreparedAccountCatalogAccess } from "../../prepared-model-runtime.catalog-auth.js";
-import { prepareEmbeddedAccessProgramGuard } from "./access-program.js";
+import {
+  prepareAttemptAccessPrograms,
+  prepareEmbeddedAccessProgramGuard,
+} from "./access-program.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
 let provider: ProviderPlugin;
@@ -233,4 +236,39 @@ it("checks account authority for a configured default before final provider I/O"
     ),
   ).rejects.toMatchObject({ code: "OPENAI_ACCESS_PROGRAM_UNAVAILABLE" });
   expect(fetchImpl).not.toHaveBeenCalled();
+});
+
+it("reads a native runtime's own programs only when that runtime owns auth", async () => {
+  const snapshot: ModelCatalogSnapshot = {
+    entries: [],
+    routeVariants: [],
+    providerOutcomes: [],
+    nativeProviderOutcomes: {
+      codex: [
+        {
+          provider: "openai",
+          status: "ready",
+          modelAccessPrograms: [
+            { modelId: "synthetic-cyber", runtimeId: "codex", cyber: ["daybreak_red"] },
+          ],
+        },
+      ],
+    },
+  };
+  const read = async (selectedAuthMode: string) =>
+    (
+      await prepareAttemptAccessPrograms({
+        provider: "openai",
+        modelId: "synthetic-cyber",
+        runtimeId: "codex",
+        authProfileStore: { version: 1, profiles: {} },
+        auth: { providerForAuth: "openai", authProfileProviderForAuth: "openai", selectedAuthMode },
+        preparedModelRuntime: {
+          readFullModelCatalog: () => snapshot,
+          isCurrent: () => true,
+        } as unknown as EmbeddedRunAttemptParams["preparedModelRuntime"],
+      })
+    )();
+  expect(await read("native-command")).toEqual(["daybreak_red"]);
+  expect(await read("api-key")).toBeUndefined();
 });

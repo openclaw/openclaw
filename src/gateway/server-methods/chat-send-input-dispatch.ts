@@ -168,7 +168,6 @@ export async function handleChatSendWithStorage(
       !resolveSessionChildController(sessionKey, entry),
     ),
     client,
-    isCurrent: hasCurrentClientAuthority,
     inputProvenance: systemInputProvenance,
     hasExplicitOrigin: request.explicitOrigin !== undefined,
     hasRestoredCronContinuation: entry?.cronRunContinuation !== undefined,
