@@ -895,6 +895,13 @@
         }
       ],
       "cancelledStep": "Swift test"
+    },
+    {
+      "targetVersion": "2026.11.10",
+      "childRole": "productPerformance",
+      "jobName": "Kova mock provider performance",
+      "reason": "Operator risk acceptance on 2026-11-24 for 2026.11.10 Kova mock-provider threshold failures (stale RSS caps and CPU evidence gaps); artifact provenance, candidate identity and all other gates are not waived.",
+      "aggregates": []
     }
   ]
 }
