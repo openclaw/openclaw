@@ -337,25 +337,31 @@ it("keeps a fenced code block in one speech request", async () => {
   const sent = observeSend(h);
   h.utterance();
   await sent;
-  const fenced = 'Here is the code.\n\n```js\nconsole.log("Hello.");\nconsole.log("World.");\n```';
+  const fence = '```js\nconsole.log("Hello.");\nconsole.log("World.");\n```';
   h.emit("chat", {
     runId: h.getRunId(),
     state: "delta",
-    message: { role: "assistant", content: [{ type: "text", text: `${fenced}\n\nThat prints` }] },
+    message: {
+      role: "assistant",
+      content: [{ type: "text", text: `Here is the code.\n\n${fence}\n\nThat prints` }],
+    },
   });
   await vi.advanceTimersByTimeAsync(0);
-  h.answer(`${fenced}\n\nThat prints both lines.`);
+  const spoken = () =>
+    h.request.mock.calls.filter(([method]) => method === "tts.speak").map(([, params]) => params);
+  // Playback holds one clip ahead: the opening sentence and the whole code block.
+  expect(spoken()).toEqual([{ text: "Here is the code." }, { text: fence }]);
+  await speechStarted.promise;
+  h.answer(`Here is the code.\n\n${fence}\n\nThat prints both lines.`);
   await vi.advanceTimersByTimeAsync(0);
   const audio = expectDefined(audios[0], "speech playback");
   for (let i = 0; i < 3; i++) {
     audio.dispatchEvent(new Event("ended"));
     await vi.advanceTimersByTimeAsync(0);
   }
-  expect(
-    h.request.mock.calls.filter(([method]) => method === "tts.speak").map(([, params]) => params),
-  ).toEqual([
+  expect(spoken()).toEqual([
     { text: "Here is the code." },
-    { text: '```js\nconsole.log("Hello.");\nconsole.log("World.");\n```' },
+    { text: fence },
     { text: "That prints both lines." },
   ]);
   await h.nextCapture.promise;
