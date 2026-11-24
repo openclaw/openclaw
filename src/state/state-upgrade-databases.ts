@@ -40,7 +40,13 @@ import {
 } from "./state-upgrade-receipts.js";
 import { isSqliteFile, skipEntry, withRecoveredSource } from "./state-upgrade-tree.js";
 
-const UNRESTORABLE_DIRECTORIES = ["git-install", "npm", "node_modules", "tmp", "logs"];
+const UNRESTORABLE_DIRECTORIES: Record<string, true> = {
+  "git-install": true,
+  npm: true,
+  node_modules: true,
+  tmp: true,
+  logs: true,
+};
 // Real 1,077,460,992-byte Doctor chain: 78,100 ms; round its whole-chain rate down.
 // Qualification details: docs/install/updating.md#large-store-updates.
 const SQLITE_UPGRADE_BYTES_PER_MS = 13_000;
@@ -84,8 +90,8 @@ export async function discoverDatabases(
   let retainedAgentIds = new Set<string>();
   let registeredAgents: Array<{ agentId: string; path: string }> = [];
   let configuredAgents: Array<{ agentId: string; path: string }> = [];
-  const add = async (kind: DatabaseTarget["kind"], pathname: string, agentId?: string) => {
-    pathname = path.resolve(pathname);
+  const add = async (kind: DatabaseTarget["kind"], inputPath: string, agentId?: string) => {
+    const pathname = path.resolve(inputPath);
     if (targets.some((target) => target.path === pathname)) {
       return;
     }
@@ -314,7 +320,8 @@ export function stateUpgradeRefusal(
       parts.length > 5 ||
       parts.some(
         (part, index) =>
-          skipEntry(part) || (index < parts.length - 1 && UNRESTORABLE_DIRECTORIES.includes(part)),
+          skipEntry(part) ||
+          (index < parts.length - 1 && Object.hasOwn(UNRESTORABLE_DIRECTORIES, part)),
       ) ||
       path.relative(realStateDir, resolvePathViaExistingAncestorSync(target.path)) !== relative ||
       (stat !== undefined && stat.dev !== device) ||

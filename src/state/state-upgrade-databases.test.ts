@@ -79,7 +79,9 @@ it.each(["closed", "empty-wal", "live"])(
       writer.exec(`PRAGMA user_version = ${OPENCLAW_AGENT_SCHEMA_VERSION - 1}`);
       if (mode !== "live") {
         writer.close();
-        if (mode === "empty-wal") fs.writeFileSync(`${file}-wal`, "");
+        if (mode === "empty-wal") {
+          fs.writeFileSync(`${file}-wal`, "");
+        }
       }
       const artifacts = () =>
         Object.fromEntries(
@@ -105,7 +107,9 @@ it.each(["closed", "empty-wal", "live"])(
       );
       expect(artifacts()).toEqual(before);
     } finally {
-      if (mode === "live") writer.close();
+      if (mode === "live") {
+        writer.close();
+      }
     }
   },
 );

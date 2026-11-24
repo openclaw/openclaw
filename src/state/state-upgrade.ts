@@ -346,11 +346,11 @@ export async function upgradeStateDirectory(params: {
     }
     return resumed ? { status: "resumed" } : { status: "current" };
   }
-  const refusal = stateUpgradeRefusal(inventory, stateDir);
-  if (refusal) {
+  const upgradeRefusal = stateUpgradeRefusal(inventory, stateDir);
+  if (upgradeRefusal) {
     const trial = await readTrial(resolvePrefix(env));
     if (trial?.phase === "pending" || trial?.phase === "trial") {
-      return { status: "refused", reason: refusal };
+      return { status: "refused", reason: upgradeRefusal };
     }
     // Manual installs and plain restarts have no release to roll back. The existing
     // database-open/Doctor migration owner must still be able to bring them online.
