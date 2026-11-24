@@ -8,6 +8,14 @@ import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from "vite
 import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
 import { createEnteredGate } from "../agents/entered-gate.test-support.js";
 import { resolveStateDir } from "../config/paths.js";
+import {
+  resolveDaemonRuntimePinStorePath,
+  withDaemonRuntimePinStore,
+} from "../daemon/runtime-pin-store.js";
+import {
+  closeOpenClawAgentDatabaseByPathAsync,
+  openOpenClawAgentDatabase,
+} from "../state/openclaw-agent-db.js";
 import { getOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
 import { executeExistingOpenClawStateRead } from "../state/openclaw-state-db-readonly.js";
 import {
@@ -199,26 +207,52 @@ beforeEach(() => {
 
 afterAll(() => fixtureRootTracker.cleanup());
 
-it("releases every native shared-state reader and identity descriptor before handing off custody", async () => {
+it("releases shared, control, and agent identity descriptors before handing off custody", async () => {
   const env = await makeEnv();
   const lock = expectGatewayLock(
     await acquireForTest(env, { listenerMode: "foreground", port: 43823 }),
   );
   const database = lock.run(() => openOpenClawStateDatabase({ env }));
   try {
+    const descriptorFor = (location: string) => {
+      const admissions = captureSqliteDatabaseAdmissions(undefined, { location });
+      expect(admissions).toHaveLength(1);
+      return admissions[0]!.descriptor;
+    };
+    const controlPath = resolveDaemonRuntimePinStorePath(env);
+    const control = lock.run(() =>
+      withDaemonRuntimePinStore(env, true, (db) => ({
+        db,
+        descriptor: descriptorFor(controlPath),
+      })),
+    );
+    if (!control) {
+      throw new Error("Runtime pin store was not created.");
+    }
+    const agent = lock.run(() => openOpenClawAgentDatabase({ env, agentId: "custody" }));
+    const descriptors = [
+      [database.path, descriptorFor(database.path)],
+      [controlPath, control.descriptor],
+      [agent.path, descriptorFor(agent.path)],
+    ] as const;
+    await closeOpenClawAgentDatabaseByPathAsync(agent.path);
     await executeExistingOpenClawStateRead({ env }, { type: "backup.runs" });
     expect(database.db.isOpen).toBe(true);
-    expect([...captureSqliteDatabaseDescriptorCustodyLocations()]).toContain(database.path);
-    const admissions = captureSqliteDatabaseAdmissions(undefined, { location: database.path });
-    expect(admissions).toHaveLength(1);
-    const descriptor = admissions[0]!.descriptor;
-    expect(fsSync.fstatSync(descriptor).isFile()).toBe(true);
+    // Closed native scopes still retain physical identity custody until handoff.
+    expect(control.db.isOpen).toBe(false);
+    expect(agent.db.isOpen).toBe(false);
+    for (const [location, descriptor] of descriptors) {
+      expect([...captureSqliteDatabaseDescriptorCustodyLocations()]).toContain(location);
+      expect(fsSync.fstatSync(descriptor).isFile()).toBe(true);
+    }
     await lock.release();
     expect(database.db.isOpen).toBe(false);
-    expect(() => fsSync.fstatSync(descriptor)).toThrowError(
-      expect.objectContaining({ code: "EBADF" }),
-    );
-    expect([...captureSqliteDatabaseDescriptorCustodyLocations()]).not.toContain(database.path);
+    for (const [, descriptor] of descriptors) {
+      expect(() => fsSync.fstatSync(descriptor)).toThrowError(
+        expect.objectContaining({ code: "EBADF" }),
+      );
+    }
+    expect([...captureSqliteDatabaseDescriptorCustodyLocations()]).toEqual([]);
     const successor = expectGatewayLock(await acquireForTest(env, { databaseAccess: "none" }));
     await successor.release();
   } finally {

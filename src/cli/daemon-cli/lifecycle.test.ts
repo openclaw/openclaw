@@ -377,6 +377,12 @@ describe("runDaemonRestart health checks", () => {
       message: "Gateway service definition repaired and restarted.",
       loaded: true,
     });
+    waitForGatewayHealthyRestart.mockImplementation(async ({ service: observer }) => {
+      expect((await observer.readCommand(process.env))?.environment).toMatchObject({
+        OPENCLAW_STATE_DIR: "/tmp/openclaw-repaired-state",
+      });
+      return createHealthyRestartSnapshot();
+    });
     runServiceRestart.mockImplementation(async (params: RestartParams) => {
       loadConfig.mockReturnValue({ gateway: { auth: { token: "caller-after" } } });
       await params.repairLoadedService?.({

@@ -36,10 +36,7 @@ import {
 } from "../../infra/gateway-supervision.js";
 import { probePortUsage } from "../../infra/ports-probe.js";
 import type { GatewayRestartIntent } from "../../infra/restart-intent.js";
-import {
-  hasCommandProcessCleanupError,
-  ignoreNonCleanupCommandError,
-} from "../../process/exec-result.js";
+import { ignoreNonCleanupCommandError } from "../../process/exec-result.js";
 import { withCommandProcessScope } from "../../process/exec-spawn.js";
 import { defaultRuntime } from "../../runtime.js";
 import { getAsyncWorkSignal } from "../../shared/async-work-scope.js";
@@ -263,6 +260,7 @@ export async function runDaemonStart(opts: DaemonLifecycleOptions = {}) {
     return false;
   }
   const expectedPort = (await resolveGatewayConfigPorts()).explicit;
+  let context = await resolveGatewayLifecycleContext(service);
   await releaseOpenClawStateDatabaseCustody();
   return await runServiceStart({
     serviceNoun: "Gateway",
@@ -282,18 +280,23 @@ export async function runDaemonStart(opts: DaemonLifecycleOptions = {}) {
             return recovered;
           }
         : undefined,
-    repairLoadedService: async ({ json, stdout, warn, state, issues }) =>
-      await repairLoadedGatewayServiceForStart({
+    repairLoadedService: async ({ json, stdout, warn, state, issues }) => {
+      const result = await repairLoadedGatewayServiceForStart({
         service,
         json,
         stdout,
         warn,
         state,
         issues,
-      }),
+      });
+      if (result) {
+        // Repair does not publish its replacement command/config, so refresh here.
+        context = await resolveGatewayLifecycleContext(service);
+      }
+      return result;
+    },
     postStartCheck: async ({ fail, warnings }) => {
       const { deadlineMs } = resolveGatewayStartupTiming();
-      const context = await resolveGatewayLifecycleContext(service);
       const port = expectedPort ?? context.port;
       const deadlineAt = performance.now() + deadlineMs;
       const attempts = Math.ceil(deadlineMs / DEFAULT_RESTART_HEALTH_DELAY_MS);
@@ -305,7 +308,7 @@ export async function runDaemonStart(opts: DaemonLifecycleOptions = {}) {
         withCommandProcessScope(
           () =>
             waitForGatewayHealthyRestart({
-              service,
+              service: context.probeService,
               port,
               attempts,
               delayMs: DEFAULT_RESTART_HEALTH_DELAY_MS,
@@ -446,15 +449,8 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
   let unmanagedPreviousLockIdentity: GatewayLockIdentity | undefined;
   const restartIntent = resolveGatewayRestartIntentOptions(opts);
   let configPorts = await resolveGatewayConfigPorts();
-  const { explicit: configuredPort, fallback: fallbackPort } = configPorts;
-  let restartContext = await resolveGatewayLifecycleContext(service, preserveDefinition).catch(
-    (error: unknown) => {
-      if (hasCommandProcessCleanupError(error) || preserveDefinition) {
-        throw error;
-      }
-      return { port: fallbackPort, env: process.env, command: undefined, config: undefined };
-    },
-  );
+  const { explicit: configuredPort } = configPorts;
+  let restartContext = await resolveGatewayLifecycleContext(service, preserveDefinition);
   const preparedRunId = await tryAdoptManagedGatewayPackage(service, "restart", jsonOutput);
   if (typeof preparedRunId === "boolean") {
     return false;
@@ -649,7 +645,7 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
       }
       const waitForHealthy = async () =>
         await waitForGatewayHealthyRestart({
-          service,
+          service: restartContext.probeService,
           port: managedRestartPort,
           attempts: restartHealthAttempts,
           delayMs: DEFAULT_RESTART_HEALTH_DELAY_MS,

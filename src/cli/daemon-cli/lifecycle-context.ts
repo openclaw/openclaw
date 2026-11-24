@@ -1,7 +1,7 @@
 import { readBestEffortConfig, resolveGatewayPort } from "../../config/config.js";
 import { createConfigIO } from "../../config/io.js";
 import { mergeGatewayServiceEnv } from "../../daemon/service-env-merge.js";
-import { resolveGatewayService } from "../../daemon/service.js";
+import { resolveGatewayService, type GatewayService } from "../../daemon/service.js";
 import { createSqliteLifecycleAggregateError } from "../../infra/sqlite-lifecycle-errors.js";
 import { parseTcpPortFromArgs } from "../../infra/tcp-port.js";
 import {
@@ -35,7 +35,15 @@ export async function resolveGatewayLifecycleContext(
     .readBestEffortConfig()
     .catch(() => undefined);
   const port = parseTcpPortFromArgs(command?.programArguments) ?? resolveGatewayPort(config, env);
-  return { port, env, config, command };
+  // Observation must not reacquire database custody after the native handoff.
+  const commandInspection = command
+    ? ({ kind: "present", command } as const)
+    : ({ kind: "absent" } as const);
+  const probeService: Readonly<Pick<GatewayService, "readCommand" | "readRuntime">> = {
+    readCommand: async () => command ?? null,
+    readRuntime: (readEnv, opts) => service.readRuntime(readEnv, { ...opts, commandInspection }),
+  };
+  return { port, env, config, command, probeService };
 }
 
 export async function resolveGatewayConfigPorts() {
@@ -58,9 +66,11 @@ export async function waitForGatewayUpdateRecovery(
     throw new Error("Recovery Gateway version is unavailable.");
   }
   const service = resolveGatewayService();
-  const { port, env, config } = await resolveGatewayLifecycleContext(service, true);
+  const { port, env, config, probeService } = await releasingHelperStateReaders(() =>
+    resolveGatewayLifecycleContext(service, true),
+  );
   return await waitForGatewayHealthyRestart({
-    service,
+    service: probeService,
     port,
     env,
     config: config ?? {},

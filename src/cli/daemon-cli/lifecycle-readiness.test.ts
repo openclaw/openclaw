@@ -8,6 +8,7 @@ import { defaultRuntime } from "../../runtime.js";
 import { mockProcessPlatform } from "../../test-utils/vitest-spies.js";
 import type * as UpdateCli from "../../update/cli.js";
 import { resolvePrefix } from "../../update/store.js";
+import { waitForGatewayUpdateRecovery } from "./lifecycle-context.js";
 import { requireMockCallArg, type RestartParams } from "./lifecycle.test-helpers.js";
 import { createDaemonActionContext } from "./response.js";
 import { formatGatewayRestartFailure } from "./restart-health-diagnostics.js";
@@ -111,6 +112,47 @@ describe("Gateway service readiness", () => {
     vi.restoreAllMocks();
     vi.unstubAllEnvs();
   });
+
+  it.each(["start", "restart", "recovery"] as const)(
+    "keeps %s readiness on the command captured before activation",
+    async (action) => {
+      const command = {
+        programArguments: ["openclaw", "gateway", "--port", "18789"],
+        environment: {},
+      };
+      let activated = false;
+      service.readCommand.mockImplementation(async () => {
+        if (activated) {
+          throw new Error("Service command storage is no longer available after activation.");
+        }
+        return command;
+      });
+      runServiceStart.mockImplementation(async ({ postStartCheck }) => {
+        activated = true;
+        await postStartCheck({ warnings: [], fail: vi.fn() });
+      });
+      runServiceRestart.mockImplementation(async (params: RestartParams) => {
+        activated = true;
+        await params.postRestartCheck?.({
+          ...createDaemonActionContext({ action: "restart", json: true }),
+          activationAccepted: true,
+        });
+        return true;
+      });
+      waitForGatewayHealthyRestart.mockImplementation(async ({ service: observer }) => {
+        activated = true;
+        expect(await observer.readCommand(process.env)).toBe(command);
+        return { healthy: true };
+      });
+
+      if (action === "recovery") {
+        expect((await waitForGatewayUpdateRecovery("2026.11.8")).healthy).toBe(true);
+      } else {
+        await (action === "start" ? runDaemonStart : runDaemonRestart)({ json: true });
+      }
+      expect(waitForGatewayHealthyRestart).toHaveBeenCalledOnce();
+    },
+  );
 
   it.each(["custom-command", "remote-target"] as const)(
     "keeps ordinary managed restart for %s",
