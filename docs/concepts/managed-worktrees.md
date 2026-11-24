@@ -140,7 +140,10 @@ checkout recipes in memory for 24 hours, including source-only checkouts used by
 sandboxes. It discovers repositories serially, at most once per repository every
 two minutes, and defers for foreground work or host I/O pressure. Background
 preparation uses the ordinary template single flight and generation retention;
-a create arriving during preparation joins that build. Linux Git and native clone
+requests for the same new commit join that build. A startup send whose accepted
+base already has a ready generation uses that generation, even while a different
+commit is building. This applies to both managed and sandbox templates and keeps
+the session’s HEAD, index, and dependencies on its accepted base. Linux Git and native clone
 children use idle I/O priority, and macOS children use background task policy.
 Restarting the Gateway clears these recipes; the next successful create registers
 the repository again. Background work does not extend the 24-hour window.
@@ -811,7 +814,8 @@ the writer queue and rechecks the current session and permissions before committ
 Explicit unarchiving restores the original branch HEAD plus saved dirty and untracked files before admitting work. A restore failure leaves the session archived. An incoming message can reopen an archived session only while its workspace is available; a removed workspace requires explicit restoration first. If the original repository or its snapshot is missing, or the 30-day snapshot retention has expired, recover the original repository/snapshot or start a new task; OpenClaw does not substitute an empty checkout for saved work during unarchiving.
 
 If a conversation's worktree was removed by cleanup or deletion, the Control UI
-shows a warning above the composer's pickers and disables Send. Choose **Restore**
+shows a restore prompt in place of the message composer. Your chat history stays
+visible, and your draft returns with the composer. Choose **Restore workspace**
 to recover its snapshot, including saved uncommitted work. If the registry record
 has no snapshot, **Restore fresh checkout** recreates its recorded branch, or its
 recorded base if that branch is gone. Invalid saved snapshots report an error;

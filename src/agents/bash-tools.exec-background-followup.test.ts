@@ -33,10 +33,8 @@ import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
-import {
-  createAdmittedRunOperatorAuthority,
-  readAdmittedRunOperatorAuthority,
-} from "./admitted-run-context.js";
+import { readAdmittedRunOperatorAuthority } from "./admitted-run-context.js";
+import { createTestOperatorAuthority } from "./admitted-run-context.test-support.js";
 import { waitForExecScope } from "./bash-process-registry.js";
 import { resetProcessRegistryForTests } from "./bash-process-registry.test-support.js";
 import {
@@ -925,15 +923,10 @@ test.for(["completed", "revoked", "missing"] as const)(
     await seedOrigin(sessionKey);
     const revoked = new AbortController();
     let references = 1;
-    const authority = createAdmittedRunOperatorAuthority({
+    const authority = createTestOperatorAuthority({
       profileId: "original-guest",
       scopes: ["operator.write"],
       signal: revoked.signal,
-      assertCurrent() {
-        if (!references) {
-          throw new Error("original source released");
-        }
-      },
       retain() {
         references++;
         return () => {
@@ -945,10 +938,9 @@ test.for(["completed", "revoked", "missing"] as const)(
         allows: (ref) => ref.provider === "mock-openai" && ref.model === "gpt-5.6-luna",
       },
     });
-    const admin = createAdmittedRunOperatorAuthority({
+    const admin = createTestOperatorAuthority({
       profileId: "another-admin",
       scopes: ["operator.admin"],
-      assertCurrent() {},
     });
     const enqueueFromAdmin = await withGatewayToolCallerIdentity(
       { agentId: "main", sessionKey, operatorAuthority: admin },

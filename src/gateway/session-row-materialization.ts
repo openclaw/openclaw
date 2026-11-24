@@ -88,9 +88,9 @@ function sessionRowMaterializationMatches(
     equal(row.contextWindows, input.contextWindowProfile.contextWindows) &&
     row.contextWindowDefault === input.contextWindowProfile.contextWindowDefault &&
     row.contextTokens === input.contextTokens &&
-    row.effectiveFastMode === input.fastModeState.mode &&
-    row.effectiveFastModeSource === input.fastModeState.source &&
-    row.fastAutoOnSeconds === input.fastModeState.fastAutoOnSeconds &&
+    row.effectiveFastMode === input.fastModeState?.mode &&
+    row.effectiveFastModeSource === input.fastModeState?.source &&
+    row.fastAutoOnSeconds === input.fastModeState?.fastAutoOnSeconds &&
     row.permissionModePending === input.permissionModePending &&
     row.hasAutomation === input.hasAutomation &&
     equal(row.repository, input.repository) &&
@@ -100,9 +100,7 @@ function sessionRowMaterializationMatches(
     row.derivedTitle === input.derivedTitle &&
     row.hasMessages === input.hasMessages &&
     row.lastMessagePreview === input.lastMessagePreview &&
-    source.lastMessagePreview === input.lastMessagePreview &&
     equal(row.lastAssistantMessage, input.lastAssistantMessage) &&
-    equal(source.lastAssistantMessage, input.lastAssistantMessage) &&
     equal(
       row.pluginExtensions,
       input.pluginExtensions.length ? input.pluginExtensions : undefined,

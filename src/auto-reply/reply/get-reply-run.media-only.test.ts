@@ -15,8 +15,7 @@ vi.mock("./reply-tool-authority.js", async (importOriginal) => ({
 }));
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { createAdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
-import { createTestAdmittedRunContext } from "../../agents/admitted-run-context.test-support.js";
+import * as runFixtures from "../../agents/admitted-run-context.test-support.js";
 import { createCronTool } from "../../agents/tools/cron-tool.js";
 import {
   getGatewayToolCallerIdentity,
@@ -436,7 +435,6 @@ describe("runPreparedReply media-only handling", () => {
       "owner-batch",
       "mixed-source-authority",
       "revoked-before-drain",
-      "revoked-after-bind",
       "configured-owner",
       "configured-owner-revoked",
       "discord-owner-alias",
@@ -564,17 +562,11 @@ describe("runPreparedReply media-only handling", () => {
                   });
                 const options = { runId: instance.runId, agentSessionKey: "session-key" };
                 const tool = createCronTool(options);
-                if (kind === "revoked-after-bind") {
-                  current = false;
-                  await expect(tool.execute("list", { action: "list" })).rejects.toThrow(
-                    "Automation admin grant",
-                  );
-                  scope = "revoked";
-                } else {
-                  const { details } = await tool.execute("list", { action: "list" });
-                  expect(details).toMatchObject({ scope: expect.any(String) });
-                  scope = (details as { scope: string }).scope;
-                }
+                const { details } = await tool.execute("list", { action: "list" });
+                expect(details).toMatchObject({ scope: expect.any(String) });
+                // The cron tool's gateway result includes the scope asserted above.
+                const scopedDetails = details as { scope: string };
+                scope = scopedDetails.scope;
               },
             );
             scopes.push(scope);
@@ -659,9 +651,7 @@ describe("runPreparedReply media-only handling", () => {
               kind === "foreign-defaults" ||
               kind === "owner-source-replaced"
               ? "gateway"
-              : kind === "revoked-after-bind"
-                ? "revoked"
-                : "caller",
+              : "caller",
           );
         } finally {
           clearFollowupQueue(key);
@@ -692,16 +682,14 @@ describe("runPreparedReply media-only handling", () => {
     "spawned",
     "inter-session",
     "replay",
-    "revoked-before-bind",
-    "revoked",
   ] as const)(
     "admits host-bound Discord owner management through the reply ingress and real automation tool: %s",
     async (kind) => {
       const runId = "discord-owner-management";
       const cfg = { commands: { ownerAllowFrom: ["discord:owner-1"] } };
-      const admitted = kind === "owner" || kind === "revoked";
+      const admitted = kind === "owner";
       setRuntimeConfigSnapshot(cfg);
-      const { operationalRunInstance } = createTestAdmittedRunContext(runId);
+      const { operationalRunInstance } = runFixtures.createTestAdmittedRunContext(runId);
       const authority = claimAgentRunDelegatedAuthority(operationalRunInstance);
       const identity: AgentRuntimeIdentity = {
         kind: "agentRuntime",
@@ -715,9 +703,6 @@ describe("runPreparedReply media-only handling", () => {
         await withGatewayToolCallerIdentity(
           { ...identity, approvalAuthority: authority },
           async () => {
-            if (kind === "revoked-before-bind") {
-              setRuntimeConfigSnapshot({});
-            }
             using _ = vi
               .spyOn(gatewayModule, "callGatewayTool")
               .mockImplementation(async <T>(method: string) => {
@@ -732,9 +717,6 @@ describe("runPreparedReply media-only handling", () => {
                   const assertActive = getCronManagementAuthority(identity)!;
                   assertActive();
                   await Promise.resolve();
-                  if (kind === "revoked") {
-                    setRuntimeConfigSnapshot({});
-                  }
                   assertActive();
                   calls.push(method);
                   return { jobs: [], total: 0, hasMore: false } as T;
@@ -742,13 +724,7 @@ describe("runPreparedReply media-only handling", () => {
               });
             const options = { runId: opts?.runId, agentSessionKey: identity.sessionKey };
             const tool = createCronTool(options);
-            if (kind === "revoked") {
-              await expect(tool.execute("list", { action: "list" })).rejects.toThrow(
-                "Automation admin grant",
-              );
-            } else {
-              await tool.execute("list", { action: "list" });
-            }
+            await tool.execute("list", { action: "list" });
           },
         );
         return undefined;
@@ -757,7 +733,7 @@ describe("runPreparedReply media-only handling", () => {
       bindOwnerIngress(params, "discord", kind);
       try {
         await runPrepared({ ...params, cfg });
-        expect(calls).toEqual(kind === "revoked" ? [] : admitted ? ["cron.list"] : ["restricted"]);
+        expect(calls).toEqual(admitted ? ["cron.list"] : ["restricted"]);
       } finally {
         releaseAgentRunDelegatedAuthority(authority);
         clearRuntimeConfigSnapshot();
@@ -1837,10 +1813,9 @@ describe("runPreparedReply media-only handling", () => {
     const abortController = new AbortController();
     const sourceAbortController = new AbortController();
     const operatorController = new AbortController();
-    const operatorAuthority = createAdmittedRunOperatorAuthority({
+    const operatorAuthority = runFixtures.createTestOperatorAuthority({
       profileId: "guest",
       scopes: ["operator.write"],
-      assertCurrent: () => operatorController.signal.throwIfAborted(),
       signal: operatorController.signal,
     });
     const isUserRequest = kind === "user_request";

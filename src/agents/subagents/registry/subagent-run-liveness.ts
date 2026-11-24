@@ -72,12 +72,11 @@ export function isYieldedSubagentRun(entry: SubagentRunRecord): boolean {
   );
 }
 
-/** An ended message wait owns a continuation, not a finished result. */
-export function isEndedSubagentMessageWait(entry: SubagentRunRecord): boolean {
+/** A finished result a requester can receive; a yielded pause owns a continuation instead. */
+export function isRequesterSettleMemberReady(entry: SubagentRunRecord): boolean {
   return (
-    entry.execution.status === "terminal" &&
-    isYieldedSubagentRun(entry) &&
-    entry.waitForMessage === true &&
+    entry.execution.status !== "running" &&
+    entry.pauseReason !== "sessions_yield" &&
     hasSubagentRunEnded(entry)
   );
 }

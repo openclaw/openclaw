@@ -234,3 +234,16 @@ it("sorts each parent's children, including run-folded ones, with the root compa
     conversationKey,
   ]);
 });
+
+it("does not let failed hidden runs hold their parent's unread count", () => {
+  const parent = makeRow(conversationKey, { childSessions: [workerKey] });
+  const unreadChildren = (status: GatewaySessionRow["status"]) =>
+    project(
+      [parent],
+      [parent, makeRow(workerKey, { spawnedBy: conversationKey, status, unread: true })],
+    )[0]?.subagentSummary?.unreadChildCount;
+
+  expect(unreadChildren("done")).toBe(1);
+  expect(unreadChildren("failed")).toBe(0);
+  expect(unreadChildren("timeout")).toBe(0);
+});

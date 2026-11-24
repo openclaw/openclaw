@@ -35,18 +35,18 @@ following validation tiers. For deferred jobs, the preflight manifest emits fals
 selection flags and omits check-matrix rows, so `openclaw/ci-gate` accepts their
 expected absence. Import-cycle and Kysely guardrail checks remain blocking in the required guard rows.
 
-| Proof                               | Ordinary PR                           | Hourly main tier             | Full release validation       |
-| ----------------------------------- | ------------------------------------- | ---------------------------- | ----------------------------- |
-| Real-Gateway Control UI E2E         | Deferred                              | Existing inventory           | Existing inventory            |
-| Windows Node tests                  | Deferred                              | Existing five-row inventory  | Existing inventory            |
-| macOS Node and Swift jobs           | Deferred                              | Existing tests/packages      | Existing native phases        |
-| iOS build/simulator smoke           | Deferred                              | Existing tests phase         | Existing Release/tests phases |
-| Published-driver update             | Deferred, including update owners     | Existing managed update cell | Existing managed update cell  |
-| Dependency/dead-export scan (Knip)  | Deferred                              | Existing check               | Existing check                |
-| Import cycles (runtime and types)   | Parallel guard for TypeScript changes | Existing checks              | Existing checks               |
-| Kysely guardrails                   | Parallel guard for source TypeScript  | Existing check               | Existing check                |
-| Other runtime topology/architecture | Deferred                              | Existing check               | Existing check                |
-| Android screenshots                 | Deferred                              | Already excluded             | Existing capture proof        |
+| Proof                               | Ordinary PR                           | Hourly main tier             | Full release validation      |
+| ----------------------------------- | ------------------------------------- | ---------------------------- | ---------------------------- |
+| Real-Gateway Control UI E2E         | Deferred                              | Existing inventory           | Existing inventory           |
+| Windows Node tests                  | Deferred                              | Existing five-row inventory  | Existing inventory           |
+| macOS Node and Swift jobs           | Deferred                              | Existing tests/packages      | Existing native phases       |
+| iOS build/simulator smoke           | Deferred                              | Existing tests phase         | Excluded; app-release owned  |
+| Published-driver update             | Deferred, including update owners     | Existing managed update cell | Existing managed update cell |
+| Dependency/dead-export scan (Knip)  | Deferred                              | Existing check               | Existing check               |
+| Import cycles (runtime and types)   | Parallel guard for TypeScript changes | Existing checks              | Existing checks              |
+| Kysely guardrails                   | Parallel guard for source TypeScript  | Existing check               | Existing check               |
+| Other runtime topology/architecture | Deferred                              | Existing check               | Existing check               |
+| Android screenshots                 | Deferred                              | Already excluded             | Excluded; app-release owned  |
 
 Deleted paths retain bounded inventory coverage in the Node plan. The policy
 watch selects `extensions/qa-lab/src/scenario-catalog.test.ts` when a changed
@@ -152,6 +152,13 @@ the update runs against a private extraction. Only upstream main push,
 scheduled, and manual runs prepare and save missing seeds, before any candidate
 executes. A missing seed retains the ordinary published npm install path.
 
+For candidates at or above 2026.11.5 on non-frozen lines, a separate step in
+this job uses the same candidate tarball with the published 2026.11.5 npm
+updater and an isolated PostgreSQL 17 service. It measures both store schema
+versions before and after the update and reads the original transcript through
+the candidate Gateway. This step uses foreground Gateways and updates with
+`--no-restart`.
+
 The retained main and release cell initializes synthetic state with its initial
 Doctor repair pass. Readiness keeps its 100 ms interval, 30-second overall
 limit, and one-second per-request limit. Managed update, recorded-run, restart,
@@ -239,11 +246,13 @@ Smoke still omits Rust tests and the broader app/notification lifecycle and Watc
 
 ESP-specific tests do not run in mobile CI, including full manual/release validation and screenshot capture. The iOS app still builds its ESP feature, and its standalone ESP tests remain available for local execution. ESP-only test and vendored-library changes do not select simulator test groups.
 
-Hourly main-tier CI retains `ios-build (tests)`, including Rust, voice cleanup, native Access, and every focused app/notification lifecycle test, including its Watch messaging and activation coverage. Managed attachment UI/export proof, Watch operation simulator suites, and Watch delivery UI proof belong to full-tier manual/release validation; hourly runs also exclude screenshot capture. Main-tier and smoke builds use the selected simulator's native architecture without compiler indexing; voice and lifecycle tests retain logs and xcresult bundles without Xcode's verbose diagnostic collection. Only a canceled selected scheduled `ios-build` on upstream `main` can pass the aggregate with a coalescing notice; this delegates proof to a later job rather than validating the canceled revision. Other failures, unexpected skips, and cancellations remain failures. See [scheduled iOS aggregation](/ci/scheduled-workflows#hourly-main-ci).
+Hourly main-tier CI retains `ios-build (tests)`, including Rust, voice cleanup, native Access, and every focused app/notification lifecycle test, including its Watch messaging and activation coverage. Gateway validation does not add managed attachment UI/export proof, Watch operation simulator suites, or Watch delivery UI proof; hourly runs also exclude screenshot capture. Main-tier and smoke builds use the selected simulator's native architecture without compiler indexing; voice and lifecycle tests retain logs and xcresult bundles without Xcode's verbose diagnostic collection. Only a canceled selected scheduled `ios-build` on upstream `main` can pass the aggregate with a coalescing notice; this delegates proof to a later job rather than validating the canceled revision. Other failures, unexpected skips, and cancellations remain failures. See [scheduled iOS aggregation](/ci/scheduled-workflows#hourly-main-ci).
 
 Screenshot-input changes on pull requests, admitted pushes, and their exact-head `release_gate` fallbacks select `ios-screenshot-capture` and `ios-screenshot-evidence` through `shouldRunIosScreenshots`: iOS UI/resources/UI tests and Fastlane configuration, linked Swift sources, and capture/build tooling. Native unit-test-only Swift edits do not select screenshots.
 
-Full-tier manual CI (`workflow_dispatch` with `validation_tier=full`, `release_gate=false`, and `release_scope=full`), including full-scope release validation, retains separate Release device and Debug/native-test phases plus the combined iPhone, iPad, and Watch screenshot capture. The test phase keeps universal simulator builds, failure diagnostics, Rust, voice cleanup, native Access, lifecycle, managed attachment UI/export, Watch operation, and Watch delivery UI tests. Every case and assertion moved out of hourly CI remains in this phase. `ios-screenshot-capture` builds the Debug simulator products once, independently of `ios-build`, then captures iPhone, iPad, and Watch serially. A hosted reducer verifies the exact evidence union and provenance before publishing the release screenshot artifact. Provenance binds all three families to one capture invocation with the reducer’s run ID, target SHA, workflow SHA, and pinned tooling. A reducer-only rerun can reuse that successful capture from an earlier attempt of the same run; mixed-family attempts and future-attempt evidence are invalid. The reducer starts only after the capture job succeeds. The final gate requires both build phases, the combined screenshot capture, and the reducer. Frozen compatibility targets retain their existing Debug-only full-manual contract and screenshot exclusion; `npm-beta` and `npm-stable` still defer native qualification. All iOS build phases use Xcode 27 on GitHub-hosted `xcode-27`; screenshot capture uses `xcode-27-xlarge` on the same preview macOS 27 image. A pure iOS app change does not select macOS jobs by itself.
+Full-tier manual CI and Full Release Validation qualify the Gateway, not candidate-source mobile apps. They omit iOS/Android build, simulator, screenshot, and release-E2E jobs regardless of dispatch identity or release train. Ordinary PR, main-push, scheduled, and explicit main-tier app CI retain their existing scoped build/unit/lint coverage. Exact-head PR fallback dispatches also retain that ordinary coverage. Mobile release qualification belongs to the dedicated ios-store-release.yml and android-store-release.yml workflows and their release-E2E children, which remain independently dispatchable.
+
+For selected ordinary app screenshot inputs, ios-screenshot-capture builds the Debug simulator products once, independently of ios-build, then captures iPhone, iPad, and Watch serially. A hosted reducer verifies the exact evidence union and provenance before publishing the screenshot artifact. Provenance binds all three families to one capture invocation with the reducer's run ID, target SHA, workflow SHA, and pinned tooling. A reducer-only rerun can reuse a successful capture from an earlier attempt of the same run; mixed-family attempts and future-attempt evidence are invalid. The reducer starts only after the capture job succeeds. The final gate requires both capture and reducer. All iOS build phases use Xcode 27 on GitHub-hosted xcode-27; screenshot capture uses xcode-27-xlarge on the same preview macOS 27 image. A pure iOS app change does not select macOS jobs by itself.
 
 The combined capture job captures Watch from the Watch app compiled by its single screenshot build, after all four iPhone captures and all four iPad captures pass. It does not rebuild Watch or transfer simulator products between jobs. The standalone `watch_screenshot` lane still prepares and builds a fresh Watch app. A missing or invalid product fails capture without a rebuild fallback; completed iOS screenshots and result bundles remain available in the failure artifact.
 

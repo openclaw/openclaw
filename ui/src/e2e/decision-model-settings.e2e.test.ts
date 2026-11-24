@@ -44,6 +44,7 @@ suite.define(() => {
         },
       });
       await page.goto(`${suite.server.baseUrl}settings/model-providers`);
+      await page.locator("[data-models-more-settings]").click();
       const picker = page.locator("openclaw-select-picker:has(#model-providers-decision-model)");
       await expect.poll(() => pickerValue(picker)).toBe("");
       for (const value of ["typesafe/jev-latest", ""]) {
@@ -62,6 +63,10 @@ suite.define(() => {
           hash: `decision-${revision}`,
         });
         await page.reload();
+        // Cleared, the decision model folds back under More settings.
+        if (!value) {
+          await page.locator("[data-models-more-settings]").click();
+        }
         await expect.poll(() => pickerValue(picker)).toBe(value);
       }
     });

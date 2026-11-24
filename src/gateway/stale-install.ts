@@ -183,11 +183,11 @@ async function readInstallationMetadata(file: string): Promise<unknown> {
 /** The existing maintenance tick owns disk reads; requests only consume recorded facts. */
 export function checkGatewayInstallationReplacement(): Promise<void> {
   const observer = installationState.observer;
-  // A serving Gateway ends the trial of the Git release it runs; the launcher stops counting.
-  if (observer?.installationRoot && !observer.trialSettled) {
+  // The maintenance owner starts only after the Gateway listener is serving.
+  if (observer && !observer.trialSettled) {
     observer.trialSettled = true;
-    void import("../infra/git-release.js")
-      .then(({ settleGitReleaseTrial }) => settleGitReleaseTrial(observer.installationRoot))
+    void import("../update/gateway-trial.js")
+      .then(({ announceReady }) => announceReady(observer.running.buildId))
       .catch(() => {
         observer.trialSettled = false;
       });

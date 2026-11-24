@@ -167,6 +167,19 @@ the owned service PID. Listener ownership, the lock, and native service identity
 are rechecked before stopping. Missing listener attribution or an unrelated
 connection error keeps the normal drain path.
 
+Two layouts run the Gateway as the direct child of a launcher that is the
+service's main process: a release install, whose service runs
+`~/.openclaw/git-install/openclaw-launcher.mjs`, and a service whose Node fails
+the Gateway's runtime check, which OpenClaw reruns under a compatible Node it
+finds, such as its private runtime in `~/.openclaw/tools/cli-node`. Maintenance
+drain, which Doctor and `openclaw update repair` also use, accepts the child as
+the service's Gateway only when every listener on the Gateway port is that
+process and its parent is the service's main process. When no listener names
+its process, for example on a Linux host without `lsof` or `ss` or when `ss`
+cannot see the owner, the drain instead requires the kernel parent of the
+process the Gateway reports to be the service's main process. Stopping the
+service stops both.
+
 With `--no-restart`, the package is replaced under a running Gateway, and that
 Gateway restarts itself when its installation check sees the new files. On a
 Linux systemd service the restart can land while a maintenance stop, such as
@@ -810,8 +823,12 @@ ownership, restarts through the service owner, and verifies normal readiness.
 Successful recovery completes with a warning and retains package backups for
 `openclaw update repair`. Failed startup reports its concrete error and directs
 you to `openclaw update repair` and `openclaw gateway status --deep`.
-Only named data risks, such as unsettled Doctor writers or unverified migrated
-state, instruct you to keep the Gateway stopped.
+A named data risk, such as unverified migrated state, is reported as unverified:
+the report states whether the Gateway is running or stopped and which version is
+installed, and names `openclaw update repair`, which checks the state before it
+starts the Gateway (see
+[Recorded data risk](/cli/update/repair-and-recovery#recorded-data-risk)).
+Unsettled Doctor writers still require you to stop the recorded processes first.
 
 On Windows, recovery re-enables the Scheduled Task before starting the Gateway
 and retains that recovery handle until final readiness verification completes.
@@ -1943,11 +1960,34 @@ repair can settle the recovery, the message adds the reason and the command:
   build.** The message names the reason: no recorded activation, a commit or
   build that differs from it, or local changes. Run `openclaw update repair`.
 - **The recovery belongs to another installation.** Run `openclaw update repair`
-  from that installation.
+  from that installation. A pnpm install whose package directory was replaced is the exception below.
 - **A dry run** changes nothing. Run `openclaw update`.
 
 Recovery that `openclaw update repair` cannot settle either keeps the plain
 refusal without a command.
+
+pnpm gives each OpenClaw version its own package directory, and activation
+moves the previous one away. Plugin recovery left by an update that died after
+activating therefore names a directory that no longer exists. Both
+`openclaw update repair` and the next `openclaw update` settle it from the
+installation that replaced it when all of these hold:
+
+- the directory that update recorded no longer exists;
+- that update ran from this installation's path, which now resolves here;
+- every process that update recorded has exited;
+- that update recorded its candidate version serving.
+
+The plugin and configuration changes are then settled as for any verified
+candidate: usually kept, but a rollback that had already restored something is
+finished instead. A commit that update had already begun is finished even when
+a later build is installed, but not when the version from before that update
+was installed again. That update's run records a
+`warning:plugin-cohort:replaced-installation` entry naming both directories.
+The next update still needs the lease proof above. An updater that exited on its
+own, rather than being killed, released its lease, so that update stops and
+names `openclaw update repair`; run it once, then update again. When any of the
+four facts is missing, both commands refuse and say which one; while that
+update's process may still be running they say to wait for it.
 
 The updater does not settle the leftover when another updater still holds the
 installation, when the lease store is missing or was replaced, when the
@@ -2022,6 +2062,8 @@ the update keeps the new package and exits 0. It records a
 `package-backup-retention` warning that names the link and any launcher backups
 or database snapshots left beside it, because cleanup stops at the link.
 Historical package backups from earlier updates also wait for a later update.
+A database snapshot left this way is removed by update cleanup after a later
+update is verified successful.
 The link still names your checkout, which the updater does not modify. After
 checking the installation, remove the link itself and not what it names: use
 `rm <link>` without a trailing slash, or `rmdir <link>` on Windows, and never a

@@ -1,5 +1,5 @@
 /* Keep the Activity workspace within the shell; its session list owns scrolling. */
-main.content:where(.content--activity-page) {
+main.content--activity-page {
   --activity-inset: max(
     calc(var(--content-inline-padding) + var(--space-4)),
     calc((100% - 1088px) / 2)
@@ -7,9 +7,18 @@ main.content:where(.content--activity-page) {
 
   padding-inline: 0;
   overflow: hidden;
+
+  > openclaw-router-outlet {
+    margin-top: 0;
+  }
+
+  .content-header {
+    flex: 0 0 auto;
+    padding-inline: var(--activity-inset);
+  }
 }
 
-main.content:where(.content--activity-page) > openclaw-router-outlet,
+main.content--activity-page > openclaw-router-outlet,
 .activity-feed {
   display: flex;
   flex-direction: column;
@@ -18,17 +27,8 @@ main.content:where(.content--activity-page) > openclaw-router-outlet,
   min-height: 0;
 }
 
-main.content:where(.content--activity-page) > openclaw-router-outlet {
-  margin-top: 0;
-}
-
 openclaw-activity-page {
   display: contents;
-}
-
-main.content:where(.content--activity-page) .content-header {
-  flex: 0 0 auto;
-  padding-inline: var(--activity-inset);
 }
 
 /* Constrain the reading column, not the feed’s native scrolling surface. */
@@ -931,18 +931,38 @@ a.activity-current-work__row:hover {
 }
 
 @media (max-width: 768px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
-  main.content:where(.content--activity-page) {
-    overflow-y: auto;
+  /* Align the first tab’s label, not the edge of its padded hit target. */
+  .activity-mode-tabs {
+    margin-inline-start: calc(var(--activity-inset) - var(--space-2));
   }
 
-  main.content:where(.content--activity-page) > openclaw-router-outlet {
-    display: block;
-    width: auto;
-    height: auto;
+  main.content--activity-page {
+    overflow-y: auto;
+
+    > openclaw-router-outlet {
+      display: block;
+      width: auto;
+      height: auto;
+    }
   }
 }
 
 @media (max-width: 640px) {
+  /* The shell already supplies the phone gutter for the header and workspace. */
+  main.content--activity-page {
+    --activity-inset: 0px;
+  }
+
+  /* Center differently sized avatars on one column; labels start after it. */
+  .activity-feed__people-row {
+    display: grid;
+    grid-template-columns: var(--space-5) minmax(0, 1fr) auto;
+
+    > :first-child {
+      justify-self: center;
+    }
+  }
+
   /* Search and person share a row; the time range takes the full row below. */
   .activity-feed__search {
     flex: 1 1 0;
@@ -958,21 +978,18 @@ a.activity-current-work__row:hover {
   }
 
   .activity-feed__time-filter {
-    display: flex;
     flex: 1 0 100%;
     order: 1;
   }
 
   .activity-feed__time-filter > .settings-segmented__btn {
     flex: 1;
-    justify-content: center;
   }
 
   .activity-feed__people-trigger {
     width: var(--settings-control-height);
     min-width: 0;
     max-width: none;
-    height: var(--settings-control-height);
     padding: 0;
     justify-content: center;
   }
@@ -1005,10 +1022,6 @@ a.activity-current-work__row:hover {
     border-radius: var(--radius-md);
     background: var(--card);
     pointer-events: auto;
-  }
-
-  .activity-feed__toolbar {
-    padding-block: var(--space-3);
   }
 
   .activity-feed__main {

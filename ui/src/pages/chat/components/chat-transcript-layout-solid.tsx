@@ -121,8 +121,9 @@ function TranscriptRows(props: {
       <div style={{ height: `${props.snapshot.headerHeight}px`, "transition-property": "none" }}>
         {props.snapshot.header}
       </div>
+      {/* The history edge follows the header, not temporary shifts of the measured rows. */}
+      {props.snapshot.overlay}
       <div class="chat-virtual-sizer" ref={(element) => props.columnRef(element)}>
-        {props.snapshot.overlay}
         <div
           class="chat-virtual-block"
           style={{

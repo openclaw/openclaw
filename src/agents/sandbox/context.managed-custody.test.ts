@@ -220,7 +220,7 @@ it("keeps managed workspace custody through awaited sandbox skill synchronizatio
   using owner = custody.acquireOwner(state.root);
   const revocation = new AbortController();
   const releaseProjection = vi.fn();
-  const refusal = new Error("Local sandbox workspace authority changed");
+  const refusal = new Error("The local sandbox workspace was released. Start a new turn to retry.");
   const unexpected = () => assert.fail("Unexpected projection use after revoked skills sync");
   prepare.mockImplementationOnce(async (params) => {
     const assertCurrent = () => {

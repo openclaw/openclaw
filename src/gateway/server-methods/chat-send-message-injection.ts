@@ -137,11 +137,11 @@ export function createChatSendMessageInjectionStarter(params: {
     const assertCurrent = () => {
       params.abortSignal.throwIfAborted();
       params.assertCurrent?.();
-      params.operatorAuthority?.assertCurrent();
       assertSendNowCurrent?.();
     };
     const target = params.target;
-    if (!target || isInternalTextSlashCommandTurn) {
+    // Without a configured model, follow-up dispatch reports the missing model.
+    if (!target || isInternalTextSlashCommandTurn || !resolvedSessionModel) {
       return undefined;
     }
     using phase = params.diagnostics?.scope("detail.run_admission.steer_authority");

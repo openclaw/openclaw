@@ -137,6 +137,10 @@ export function renderMicrophonePickerSolid(props: MicrophonePickerProps) {
             props.onOpenTalkSettings?.();
           } else if (item.id === "capability:dictation") {
             props.onOpenDictationSettings?.();
+          } else if (item.id === "speech-api-key") {
+            props.onConfigureApiKey?.(undefined);
+          } else if (item.id.startsWith("api-key:")) {
+            props.onConfigureApiKey?.(item.id.slice("api-key:".length));
           }
         }}
       />

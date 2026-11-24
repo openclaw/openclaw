@@ -54,6 +54,22 @@
   justify-content: space-between;
   flex-wrap: wrap;
   gap: var(--space-2) var(--space-3);
+
+  /* In this row, scroll the tabs rather than pushing the settings page sideways. */
+  > .config-sections-hub-tabs {
+    flex-shrink: 1;
+
+    /* The strip clips outer shadows. Keep focus inside the tab and selection below it. */
+    .hub-tab:focus-visible {
+      box-shadow: inset 0 0 0 2px var(--ring);
+
+      &[active] {
+        box-shadow:
+          inset 0 0 0 2px var(--ring),
+          0 2px 0 var(--indicator-color);
+      }
+    }
+  }
 }
 
 .config-raw-actions {
@@ -111,22 +127,25 @@
 
 .config-diff__item {
   display: flex;
+  flex-wrap: wrap;
   align-items: baseline;
-  gap: 12px;
+  gap: 2px 12px;
+  min-width: 0;
+  overflow-wrap: anywhere;
   font-size: 11.5px;
   font-family: var(--mono);
 }
 
 .config-diff__path {
+  max-width: 100%;
   font-weight: 600;
   color: var(--text);
-  flex-shrink: 0;
 }
 
 .config-diff__values {
   display: flex;
   align-items: baseline;
-  gap: 10px;
+  gap: 2px 10px;
   min-width: 0;
   flex-wrap: wrap;
 }
@@ -210,6 +229,7 @@
   --theme-chip-ink: #fff;
 
   display: grid;
+  grid-template-rows: auto 1fr;
   gap: var(--space-2);
   min-width: 0;
   padding: 0;
@@ -304,12 +324,10 @@
 }
 
 .settings-theme-card__label {
-  overflow: hidden;
   font-size: var(--control-ui-text-sm);
   font-weight: 500;
   line-height: 1.35;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
 }
 
 .settings-theme-card--active .settings-theme-card__label {
@@ -738,6 +756,13 @@
 
 .config-content :is(input, textarea, select)[aria-invalid="true"] {
   border-color: var(--danger);
+}
+
+/* A saved provider absent from the catalog is still a selectable ID, not a short label. */
+.talk-provider-options > .settings-segmented__btn {
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  white-space: normal;
 }
 
 /* The curated rows and the schema editor read as one column of sections. */

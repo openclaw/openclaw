@@ -9,7 +9,10 @@ import {
   CronDeliveryAuthorityError,
   type CronCompletionDeliveryFence,
 } from "../delivery-attempt-fence.js";
-import type { CronRunReceiptHandle } from "../store/run-receipt.types.js";
+import {
+  CronRunReceiptRevisionError,
+  type CronRunReceiptHandle,
+} from "../store/run-receipt.types.js";
 import type { CronJob } from "../types.js";
 import { finishCronRun } from "./run-history.js";
 import { runCronRuntimeMutation } from "./runtime-mutation.js";
@@ -21,6 +24,8 @@ export function createCronCompletionDeliveryFence(params: {
   handle: CronRunReceiptHandle;
   activeJobMarker?: CronActiveJobMarker;
   signal: AbortSignal;
+  /** Keep the interrupted run's terminal notice within its retained shutdown owner. */
+  settlingRestart?: true;
 }): CronCompletionDeliveryFence {
   const { state, handle, activeJobMarker, signal } = params;
   const context = captureOpenClawStateWorkerContext();
@@ -43,7 +48,9 @@ export function createCronCompletionDeliveryFence(params: {
     }
     if (
       // A reload handover retires scheduling only; its runs still deliver.
-      (state.lifecycleGeneration !== generation && !state.handedOver) ||
+      (state.lifecycleGeneration !== generation &&
+        !state.handedOver &&
+        !(params.settlingRestart && state.stopped)) ||
       !isCronActiveJobMarkerCurrent(activeJobMarker) ||
       activeJobMarker?.cancellation?.kind === "requested" ||
       (activeJobMarker?.jobRemoved && !allowMissingJob()) ||
@@ -58,6 +65,16 @@ export function createCronCompletionDeliveryFence(params: {
     }
   };
   const fence: CronCompletionDeliveryFence = {
+    standingGrantAuthority: {
+      context,
+      handle,
+      assertCurrent: () => {
+        assertCurrent();
+        if (activeJobMarker?.jobRemoved) {
+          throw new CronRunReceiptRevisionError(handle.receiptId, "cron execution source removed");
+        }
+      },
+    },
     assertCurrent,
     async recordWithheld({ runId, sessionKey, error }) {
       // A continuation may outlive its completed occurrence. Keep that result and

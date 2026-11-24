@@ -1,11 +1,9 @@
 import path from "node:path";
 import { expect, vi } from "vitest";
 import type { ConfigFileSnapshot } from "../config/types.openclaw.js";
-import type { UpdateRunResult } from "../infra/update-runner-types.js";
 import * as mocks from "./update-cli-mocks.test-support.js";
 import * as update from "./update-cli-modules.test-support.js";
 import { createUpdateFixtureAssertions } from "./update-cli-shared-fixture.test-support.js";
-import { isLegacyUpdateDoctorCommand } from "./update-cli/update-command-transport.test-support.js";
 
 await vi.hoisted(() => import("./update-cli-mocks.test-support.js"));
 
@@ -16,12 +14,7 @@ export function requireValue<T>(value: T | undefined, label: string): T {
   return value;
 }
 
-export const expectUpdateCallChannel = (channel: string) => {
-  const call = vi.mocked(update.updateGitRelease).mock.calls[0]?.[0];
-  expect(call?.opts.channel).toBe(channel);
-  return call;
-};
-export const commandCalls = () =>
+const commandCalls = () =>
   vi.mocked(update.runCommandWithTimeout).mock.calls as unknown as Array<
     [string[], Record<string, unknown>]
   >;
@@ -55,12 +48,6 @@ const isNpmGitPackageSpec = (spec: string) => {
   }
 };
 
-export const doctorCommandCall = () =>
-  commandCalls().find(([argv]) => isLegacyUpdateDoctorCommand(argv));
-
-export const doctorCommandCallIndex = () =>
-  commandCalls().findIndex(([argv]) => isLegacyUpdateDoctorCommand(argv));
-
 export const freshRestartCalls = () =>
   vi
     .mocked(update.runCommandWithTimeout)
@@ -71,20 +58,11 @@ export const gatewayCommandCall = (entryPath: string, action: "install" | "resta
     ([argv]) => argv[1] === entryPath && argv[2] === "gateway" && argv[3] === action,
   );
 
-export const spawnCall = (index = 0) => {
-  const calls = mocks.spawn.mock.calls as unknown as Array<
-    [string, string[], { env?: NodeJS.ProcessEnv; stdio?: unknown }]
-  >;
-  return calls[index];
-};
-
 export const completionCommandCall = () =>
   commandCalls().find(([argv]) => argv[2] === "completion");
 
 export const {
   syncPluginCall,
-  npmPluginUpdateCall,
-  lastNpmPluginUpdateCall,
   replaceConfigCall,
   lastReplaceConfigCall,
   setupConfigMutationWithRetryMock,
@@ -120,13 +98,6 @@ export const expectNoSideEffects = (...effects: unknown[]) => {
     expect(effect).not.toHaveBeenCalled();
   }
 };
-
-export const gatewayHealthCall = (index = 0) => mocks.callGateway.mock.calls[index]?.[0];
-
-export const pluginWarning = (result?: UpdateRunResult) =>
-  result?.postUpdate?.plugins?.warnings?.[0];
-export const pluginOutcome = (result?: UpdateRunResult) =>
-  result?.postUpdate?.plugins?.npm.outcomes[0];
 
 export const expectPackageInstallSpec = (spec: string, staged = true) => {
   expect(update.updateGitRelease).not.toHaveBeenCalled();

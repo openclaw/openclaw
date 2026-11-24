@@ -310,7 +310,7 @@ suite.define(() => {
   });
 
   it("retries pending pairing and enters the app after approval without clicks", async () => {
-    const page = await newPage();
+    const page = await newPage({ viewport: { width: 390, height: 844 } });
     const gateway = await installMockGateway(page, { deferredMethods: ["connect"] });
     const pairingError = {
       code: "NOT_PAIRED",
@@ -330,9 +330,19 @@ suite.define(() => {
     const failure = page.locator('.login-gate__failure[data-kind="pairing-required"]');
     await failure.waitFor();
     await gateway.waitForRequest("connect", { after: 1 });
-    expect(await failure.textContent()).toContain(
+    const waiting = failure.getByText(
       "Waiting for approval… This page connects automatically once approved.",
+      { exact: true },
     );
+    const lineStarts = await waiting.evaluate(async (paragraph) => {
+      await document.fonts.ready;
+      const range = document.createRange();
+      const text = document.createTreeWalker(paragraph, NodeFilter.SHOW_TEXT).nextNode()!;
+      range.selectNodeContents(text);
+      return [...range.getClientRects()].map((line) => line.left);
+    });
+    expect(lineStarts.length).toBeGreaterThan(1);
+    expect(Math.max(...lineStarts) - Math.min(...lineStarts)).toBeLessThanOrEqual(1);
     expect(await failure.getByRole("button", { name: "Check now", exact: true }).isEnabled()).toBe(
       true,
     );

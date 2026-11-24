@@ -382,10 +382,10 @@ async function benchmarkRegisteredV1(evaluations: number, fixture: string, mode:
   setRuntimeConfigSnapshot(config);
   const lifetime = new AbortController();
   const authority = createAdmittedRunOperatorAuthority({
+    canonicalIdentity: null,
     profileId: "benchmark-operator",
     scopes: ["operator.write"],
     signal: lifetime.signal,
-    assertCurrent: () => lifetime.signal.throwIfAborted(),
     modelPolicy: prepareOperatorModelPolicy({
       cfg: config,
       policy: { sourceAgent: "main", allow: ["fixture/fixture-v1"] },
@@ -482,7 +482,7 @@ async function benchmarkRegisteredV1(evaluations: number, fixture: string, mode:
               rubricVersion: "1",
               timeoutMs: 10_000,
               signal: lifetime.signal,
-              assertCurrent: authority.assertCurrent,
+              assertCurrent: () => lifetime.signal.throwIfAborted(),
             },
             builder.registry,
             config,

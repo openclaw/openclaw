@@ -303,10 +303,13 @@ jobs:
             exit 1
           fi
           if ! release_manifest_run_json="$(jq -ce '
+            (if .recovery != null then .recovery.producer else . end) as $producer |
             if .workflowName == "Full Release Validation" and
-              (.runId | type == "string" and test("^[1-9][0-9]*$")) and
-              (.runAttempt | type == "string" and test("^[1-9][0-9]*$"))
-            then {id: .runId, runAttempt: .runAttempt}
+              (.recovery != null or ($producer.runId | type) == "string") and
+              (.recovery != null or ($producer.runAttempt | type) == "string") and
+              ($producer.runId | tostring | test("^[1-9][0-9]*$")) and
+              ($producer.runAttempt | tostring | test("^[1-9][0-9]*$"))
+            then {id: ($producer.runId | tostring), runAttempt: ($producer.runAttempt | tostring)}
             else empty
             end
           ' "$release_manifest_path")"; then
@@ -488,9 +491,10 @@ jobs:
             --arg tag_sha "$tag_sha" \
             --arg run_id "$FULL_RELEASE_VALIDATION_RUN_ID" \
             --arg run_attempt "$FULL_RELEASE_VALIDATION_RUN_ATTEMPT" '
+            (if .recovery != null then .recovery.producer else . end) as $producer |
             .workflowName == "Full Release Validation" and
-            .runId == $run_id and
-            .runAttempt == $run_attempt and
+            (if .recovery != null then ($producer.runId | tostring) else $producer.runId end) == $run_id and
+            (if .recovery != null then ($producer.runAttempt | tostring) else $producer.runAttempt end) == $run_attempt and
             .targetSha == $tag_sha
           ' "$manifest_dir/$manifest_asset" >/dev/null || {
             echo "Full Release Validation manifest does not contain the required stable release controls." >&2
@@ -501,8 +505,9 @@ jobs:
           import { createReleaseEvidenceClient, validateReleaseRunEvidence } from "./.closeout-tooling/scripts/release-ci-summary.mjs";
           const manifest = JSON.parse(readFileSync(process.argv[3], "utf8"));
           const run = JSON.parse(readFileSync(process.argv[2], "utf8"));
+          const recovery = manifest.receiptRecovery ?? manifest.recovery;
           for (const [key, expected] of [
-            ...(!manifest.receiptRecovery ? [["name", "Full Release Validation"]] : []),
+            ...(!recovery ? [["name", "Full Release Validation"]] : []),
             ["event", "workflow_dispatch"],
             ["status", "completed"],
             ["conclusion", "success"],
@@ -514,7 +519,7 @@ jobs:
           if (String(run.run_attempt ?? "") !== process.env.FULL_RELEASE_VALIDATION_RUN_ATTEMPT) {
             throw new Error(`Full Release Validation run attempt mismatch: expected ${process.env.FULL_RELEASE_VALIDATION_RUN_ATTEMPT}, got ${run.run_attempt ?? "<missing>"}.`);
           }
-          if (manifest.receiptRecovery) {
+          if (recovery) {
             // Recovery is a separate authenticated producer, never a renamed FRV.
             // The shared owner binds this published manifest to its exact artifact,
             // original C/Q receipts, successful seal, and current operator authority.
@@ -526,7 +531,7 @@ jobs:
               verifierSourceSha: process.env.CLOSEOUT_TOOLING_SHA,
             }, createReleaseEvidenceClient(process.env.GITHUB_REPOSITORY));
             if (String(evidence.current.runAttempt) !== process.env.FULL_RELEASE_VALIDATION_RUN_ATTEMPT) {
-              throw new Error("Receipt recovery current attempt differs from published evidence.");
+              throw new Error("Recovery current attempt differs from published evidence.");
             }
           }
           NODE

@@ -17,6 +17,7 @@ on:
           - vitest-pair
           - gateway-concurrency
           - gateway-memory-caps
+          - gateway-cold-turn-calibration
       target_ref:
         description: OpenClaw ref to benchmark; defaults to the workflow ref
         required: false
@@ -92,6 +93,7 @@ env:
   KOVA_REPOSITORY: openclaw/Kova
   KOVA_CANONICAL_CONFIG_REF: 7c162a3276a31fbbb60c362d94124b6cad5187ca
   KOVA_LEGACY_LIST_CONFIG_REF: d69b2209905195bea06980721a92ad8b70808c5d
+  KOVA_COLD_TURN_CALIBRATION_REF: 113b6b6f13689457f8ef47cb7c36ad73e5cc4ba7
   KOVA_TRUSTED_LIVE_REF: 7c162a3276a31fbbb60c362d94124b6cad5187ca
   PERFORMANCE_MODEL_ID: gpt-5.6-luna
   # Release matrices cold-build the candidate runtime before measurement.
@@ -102,7 +104,7 @@ jobs:
     name: Resolve target ref
     if: ${{ (github.event_name != 'schedule' || github.repository == 'openclaw/openclaw') && (github.event_name == 'schedule' || inputs.mode != 'vitest-pair') }}
     runs-on: &linux_runner_ubuntu >-
-      ${{ (github.event_name == 'workflow_dispatch' && startsWith(inputs.dispatch_id,
+      ${{ inputs.mode == 'gateway-cold-turn-calibration' && 'ubuntu-24.04' || (github.event_name == 'workflow_dispatch' && startsWith(inputs.dispatch_id,
       'full-release-validation-') && vars.OPENCLAW_RELEASE_RUNNER_GROUP || '') != '' &&
       fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON((github.event_name == 'workflow_dispatch' &&
       startsWith(inputs.dispatch_id, 'full-release-validation-') && vars.OPENCLAW_RELEASE_RUNNER_GROUP ||
@@ -226,6 +228,10 @@ jobs:
             fi
           fi
 
+          if [[ "${PERFORMANCE_MODE:-}" == gateway-cold-turn-calibration && -z "${KOVA_REF_INPUT:-}" ]]; then
+            kova_ref="$KOVA_COLD_TURN_CALIBRATION_REF"
+          fi
+
           echo "checkout_ref=$resolved_sha" >> "$GITHUB_OUTPUT"
           echo "tested_ref=$tested_ref" >> "$GITHUB_OUTPUT"
           echo "tested_sha=$resolved_sha" >> "$GITHUB_OUTPUT"
@@ -268,11 +274,11 @@ jobs:
   kova:
     name: ${{ matrix.title }}
     needs: resolve_target
-    if: ${{ github.event_name == 'schedule' || inputs.mode == 'kova' }}
+    if: ${{ github.event_name == 'schedule' || inputs.mode == 'kova' || inputs.mode == 'gateway-cold-turn-calibration' }}
     permissions:
       contents: read
     runs-on: &linux_runner_large >-
-      ${{ (github.event_name == 'workflow_dispatch' && startsWith(inputs.dispatch_id,
+      ${{ inputs.mode == 'gateway-cold-turn-calibration' && 'ubuntu-24.04' || (github.event_name == 'workflow_dispatch' && startsWith(inputs.dispatch_id,
       'full-release-validation-') && vars.OPENCLAW_RELEASE_RUNNER_GROUP || '') != '' &&
       fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON((github.event_name == 'workflow_dispatch' &&
       startsWith(inputs.dispatch_id, 'full-release-validation-') && vars.OPENCLAW_RELEASE_RUNNER_GROUP ||
@@ -320,6 +326,7 @@ jobs:
       BUNDLE_DIR: ${{ github.workspace }}/.artifacts/kova/bundles/${{ matrix.lane }}
       SUMMARY_DIR: ${{ github.workspace }}/.artifacts/kova/summaries
       LANE_ID: ${{ matrix.lane }}
+      PERFORMANCE_MODE: ${{ inputs.mode }}
       TARGET_REF: ${{ needs.resolve_target.outputs.tested_ref }}
       EXPECTED_TESTED_SHA: ${{ needs.resolve_target.outputs.tested_sha }}
       PROFILE: ${{ inputs.profile || 'diagnostic' }}
@@ -341,6 +348,11 @@ jobs:
           set -euo pipefail
           run_lane=true
           reason=""
+          if [[ "${PERFORMANCE_MODE:-}" == gateway-cold-turn-calibration ]]; then
+            [[ "$LANE_ID" == "mock-provider" ]] || run_lane=false
+            echo "run=$run_lane" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
           if [[ "$LANE_ID" == "mock-deep-profile" && "${{ github.event_name }}" != "schedule" && "${{ inputs.deep_profile || 'false' }}" != "true" ]]; then
             run_lane=false
             reason="deep_profile input is false"
@@ -511,7 +523,7 @@ jobs:
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
       - name: Kova version and plan sanity
-        if: steps.lane.outputs.run == 'true'
+        if: ${{ steps.lane.outputs.run == 'true' && inputs.mode != 'gateway-cold-turn-calibration' }}
         shell: bash
         run: |
           set -euo pipefail
@@ -586,7 +598,7 @@ jobs:
 
       - name: Run Kova
         id: kova
-        if: steps.lane.outputs.run == 'true'
+        if: ${{ steps.lane.outputs.run == 'true' && inputs.mode != 'gateway-cold-turn-calibration' }}
         env:
           OPENAI_API_KEY: ${{ matrix.live == 'true' && needs.resolve_target.outputs.secret_eligible == 'true' && secrets.OPENAI_API_KEY || '' }}
           OPENAI_BASE_URL: ${{ matrix.live == 'true' && needs.resolve_target.outputs.secret_eligible == 'true' && secrets.OPENAI_BASE_URL || '' }}
@@ -709,6 +721,55 @@ jobs:
           if [[ "$FAIL_ON_REGRESSION" == "true" && "$effective_status" != "0" ]]; then
             exit "$effective_status"
           fi
+
+      - name: Calibrate Gateway cold-turn resources
+        if: ${{ steps.lane.outputs.run == 'true' && inputs.mode == 'gateway-cold-turn-calibration' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          proof_root="$(mktemp -d /tmp/openclaw-calibration.XXXXXXXX)"
+          export OCM_HOME="$proof_root/ocm"
+          install -d -m 0700 "$OCM_HOME" "$OCM_HOME/envs" "$REPORT_DIR" "$BUNDLE_DIR" "$SUMMARY_DIR"
+
+          run_status=0
+          kova run --target "local-build:$GITHUB_WORKSPACE" \
+            --scenario gateway-cold-turn-calibration --state mock-openai-provider --auth mock \
+            --repeat "$REQUESTED_REPEAT" --resource-sample-interval-ms 250 \
+            --report-dir "$REPORT_DIR" --execute --json | tee "$BUNDLE_DIR/run.json" || run_status=$?
+          report_json="$(node "$PERFORMANCE_HELPER_DIR/scripts/lib/kova-report-selector.mjs" --report-dir "$REPORT_DIR")"
+          kova report bundle "$report_json" --output-dir "$BUNDLE_DIR" --json | tee "$BUNDLE_DIR/bundle.json"
+          if [[ "$run_status" != "0" ]]; then
+            exit "$run_status"
+          fi
+
+          build_info="$GITHUB_WORKSPACE/dist/build-info.json"
+          if ! jq -e --arg sha "$TESTED_SHA" '.commit == $sha' "$build_info" > /dev/null; then
+            echo "::error::OpenClaw build commit differs from the resolved calibration target."
+            exit 1
+          fi
+          cp "$build_info" "$BUNDLE_DIR/build-info.json"
+          if ! jq -e '.targetCleanup.status | IN("removed", "already-absent")' "$report_json" > /dev/null; then
+            echo "::error::The calibration runtime was not removed."
+            exit 1
+          fi
+          node "$KOVA_SRC/support/read-gateway-cold-turn-calibration.mjs" "$report_json" > "$proof_root/sample.json"
+          if ! jq -e --argjson count "$REQUESTED_REPEAT" \
+            '([.samples[].repeat] == [range(1; $count + 1)]) and all(.samples[]; .cleanup | IN("destroyed", "already-absent"))' \
+            "$proof_root/sample.json" > /dev/null; then
+            echo "::error::The calibration report does not contain every requested repeat and its cleanup."
+            exit 1
+          fi
+          kova_sha="$(python3 -I -S "$CI_GIT_OWNER" --git 0 -C "$KOVA_SRC" rev-parse HEAD)"
+          jq --arg testedSha "$TESTED_SHA" --arg workflowSha "$GITHUB_SHA" --arg kovaSha "$kova_sha" \
+            '. + {$testedSha, $workflowSha, $kovaSha}' "$proof_root/sample.json" > "$BUNDLE_DIR/gateway-cold-turn-calibration.json"
+          {
+            echo "### Gateway cold-turn calibration"
+            echo
+            echo "Tested SHA: $TESTED_SHA"
+            echo "Samples: $REQUESTED_REPEAT"
+            echo "The workflow artifact contains the measurement receipt, Kova report, and raw sample bundle."
+          } | tee "$SUMMARY_DIR/${LANE_ID}.md" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Validate Kova evidence
         if: ${{ always() && steps.lane.outputs.run == 'true' }}
@@ -1888,7 +1949,7 @@ jobs:
       - gateway_concurrency
       - vitest_pair
       - vitest_pair_guard
-    if: ${{ always() && !cancelled() && github.event_name == 'workflow_dispatch' && startsWith(inputs.dispatch_id, 'full-release-validation-') }}
+    if: ${{ always() && !cancelled() && github.event_name == 'workflow_dispatch' && inputs.mode != 'gateway-cold-turn-calibration' && startsWith(inputs.dispatch_id, 'full-release-validation-') }}
     permissions:
       contents: read
       actions: read

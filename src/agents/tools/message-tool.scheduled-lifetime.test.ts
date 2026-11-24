@@ -84,9 +84,7 @@ it.for([
         ? undefined
         : revokeAt === "action"
           ? "Message send aborted"
-          : viaGateway
-            ? "agent tool caller authority is no longer active"
-            : revokedError;
+          : revokedError;
     const registry = pluginRuntime.captureActivePluginRegistrySnapshot();
     const state = await createOpenClawTestState();
     const source = new AbortController();
@@ -104,9 +102,7 @@ it.for([
     const scheduledToolPolicy = { version: 1, mode: "trusted" } as const;
     const identity = { agentId: "main", runId, sessionId: runId };
     const runOptions = { ...identity, sessionKey, scheduledToolPolicy };
-    const marker = activeJobs.markCronJobActive(jobId, {
-      isMessageActionAuthorityCurrent: () => true,
-    });
+    const marker = activeJobs.markCronJobActive(jobId);
     const releaseCancellation = registerActiveCronTaskRun({
       runId,
       controller: source,
@@ -256,7 +252,10 @@ it.for([
       const prepareAdmission = () =>
         prepareCronRunAdmission({
           scheduledExecution: TEST_SCHEDULED_EXECUTION,
-          deliveryAttemptFence: { beforeAttempt: async () => {}, assertCurrent: () => {} },
+          deliveryAttemptFence: {
+            beforeAttempt: async () => {},
+            assertCurrent: () => source.signal.throwIfAborted(),
+          },
           cfg: config,
           ...runOptions,
           jobId,

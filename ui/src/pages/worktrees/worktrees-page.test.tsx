@@ -678,6 +678,24 @@ describe("WorktreesPage lifecycle", () => {
     expect(page.model.error).toBe("restore failed");
   });
 
+  it("does not offer list Retry after a delete confirmation replaces the refresh error", async () => {
+    const request = listRequest([worktree()]);
+    const page = await createWorktreesPage(request).ready();
+    request.mockRejectedValueOnce(new Error("Refresh unavailable"));
+    await page.model.load();
+    await waitForSolid(() => expect(page.button("Retry")).toBeDefined());
+
+    vi.mocked(showConfirmDialog).mockRejectedValueOnce(new Error("Confirmation unavailable"));
+    page.button("Delete").click();
+
+    await waitForSolid(() =>
+      expect(page.query('[role="alert"]')?.textContent).toContain("Confirmation unavailable"),
+    );
+    expect(page.button("Retry")).toBeUndefined();
+    expect(page.query('button[aria-label="Delete: worktree-1"]')).not.toBeNull();
+    expect(request.mock.calls.map(([method]) => method)).not.toContain("worktrees.remove");
+  });
+
   it("keeps an in-progress repository draft when the list refresh completes", async () => {
     const pendingList = deferred<unknown>();
     const request = vi.fn((method: string) =>

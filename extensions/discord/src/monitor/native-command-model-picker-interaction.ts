@@ -171,9 +171,13 @@ async function handleDiscordModelPickerInteraction(
   const parsedProvider = parsed.provider ?? splitDiscordModelRef(tokenModel ?? "")?.provider;
   const modelContext = { cfg, route, data: pickerData, sessionEntry };
   const currentModelRef = await resolveDiscordModelPickerCurrentModel(modelContext);
-  const currentModel = splitDiscordModelRef(currentModelRef);
+  const currentModel = currentModelRef ? splitDiscordModelRef(currentModelRef) : null;
   const browseProvider =
-    parsedProvider ?? currentModel?.provider ?? pickerData.resolvedDefault.provider;
+    parsedProvider ??
+    currentModel?.provider ??
+    pickerData.resolvedDefault?.provider ??
+    pickerData.providers[0] ??
+    "";
   const resolvePendingRuntime = (provider: string) =>
     parsed.runtime ??
     resolveRuntimeToken(getModelsRuntimeChoices(pickerData, provider), parsed.runtimeToken);
@@ -393,7 +397,8 @@ async function handleDiscordModelPickerInteraction(
   if (parsed.action === "submit" || parsed.action === "reset" || parsed.action === "quick") {
     const resolveSubmittedModelRef = (): string | null => {
       if (parsed.action === "reset") {
-        return `${pickerData.resolvedDefault.provider}/${pickerData.resolvedDefault.model}`;
+        const resolvedDefault = pickerData.resolvedDefault;
+        return resolvedDefault ? `${resolvedDefault.provider}/${resolvedDefault.model}` : null;
       }
       if (parsed.modelToken) {
         return resolveDiscordModelPickerModelRefByToken(pickerData, parsed.modelToken);
@@ -522,7 +527,7 @@ async function handleDiscordModelPickerInteraction(
         };
         const effectiveModelRef = await resolveDiscordModelPickerCurrentModel(currentContext);
         const effectiveRuntime = resolveDiscordModelPickerCurrentRuntime(currentContext);
-        const currentSelection = `Current selection: ${effectiveModelRef} with runtime ${effectiveRuntime}.`;
+        const currentSelection = `Current selection: ${effectiveModelRef ?? "no model"} with runtime ${effectiveRuntime}.`;
         if (hiddenFinalReply?.isError) {
           return `${hiddenFinalReply.text?.trim()}\n${currentSelection}`;
         }

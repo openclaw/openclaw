@@ -202,6 +202,7 @@ jobs:
       performance_exempt: ${{ steps.tooling_identity.outputs.performance_exempt }}
       extension_test_exclude_patterns_json: ${{ steps.publication_dispatch.outputs.extension_test_exclude_patterns_json }}
       qualification_baselines_json: ${{ steps.publication_dispatch.outputs.qualification_baselines_json }}
+      publication_artifact_source_json: ${{ steps.publication_dispatch.outputs.publication_artifact_source_json }}
       live_suite_filter: ${{ steps.filters.outputs.live_suite_filter }}
       cross_os_suite_filter: ${{ steps.filters.outputs.cross_os_suite_filter }}
       candidate_required: ${{ steps.candidate_request.outputs.required }}
@@ -1047,6 +1048,9 @@ jobs:
       evidence_policy: ${{ steps.find.outputs.evidence_policy }}
       changed_paths: ${{ steps.find.outputs.changed_paths }}
       publication_artifacts_reused: ${{ steps.artifacts.outputs.publication_artifacts_reused }}
+      publication_artifact_source: ${{ steps.artifacts.outputs.publication_artifact_source }}
+      candidate_binding_json: ${{ steps.artifacts.outputs.candidate_binding_json }}
+      candidate_artifact_json: ${{ steps.artifacts.outputs.candidate_artifact_json }}
       prepared_bundle_json: ${{ steps.artifacts.outputs.prepared_bundle_json }}
       qualified_preflight_bundle_json: ${{ steps.artifacts.outputs.qualified_preflight_bundle_json }}
       npm_run_id: ${{ steps.artifacts.outputs.npm_run_id }}
@@ -1122,6 +1126,7 @@ jobs:
 
       - name: Find reusable validation evidence
         id: find
+        if: needs.resolve_target.outputs.publication_artifact_source_json == ''
         env:
           GH_TOKEN: ${{ github.token }}
           OPENCLAW_RELEASE_CI_SUMMARY_VALIDATOR: ${{ needs.resolve_target.result == 'success' && fromJSON(needs.resolve_target.outputs.source_admission_json || '{}').qualificationAdmission != null && format('{0}/qualification-verifier/scripts/release-ci-summary.mjs', github.workspace) || format('{0}/workflow/scripts/release-ci-summary.mjs', github.workspace) }}
@@ -1242,8 +1247,9 @@ jobs:
 
       - name: Resolve original publication artifact receipts
         id: artifacts
-        if: steps.find.outputs.reuse == 'true'
+        if: steps.find.outputs.reuse == 'true' || needs.resolve_target.outputs.publication_artifact_source_json != ''
         env:
+          CANDIDATE_REQUEST_JSON: ${{ needs.resolve_target.outputs.candidate_request_json }}
           GH_TOKEN: ${{ github.token }}
           EVIDENCE_REUSE: ${{ steps.find.outputs.reuse }}
           EVIDENCE_POLICY: ${{ steps.find.outputs.evidence_policy }}
@@ -1257,7 +1263,8 @@ jobs:
           PLUGIN_NPM_REQUIRED: ${{ needs.resolve_target.outputs.plugin_npm_preflight_required }}
           OPENCLAW_RELEASE_CI_SUMMARY_VALIDATOR: ${{ needs.resolve_target.result == 'success' && fromJSON(needs.resolve_target.outputs.source_admission_json || '{}').qualificationAdmission != null && format('{0}/qualification-verifier/scripts/release-ci-summary.mjs', github.workspace) || format('{0}/workflow/scripts/release-ci-summary.mjs', github.workspace) }}
           OPENCLAW_RELEASE_WAIVERS_PATH: ${{ github.workspace }}/workflow/scripts/lib/release-validation-waivers.json
-        run: node workflow/scripts/full-release-artifacts.mjs reuse
+        # Use the admitted verifier checkout, where its dependency closure was installed.
+        run: node "${OPENCLAW_RELEASE_CI_SUMMARY_VALIDATOR%/*}/full-release-artifacts.mjs" reuse
 
       - name: Summarize evidence reuse
         env:
@@ -1531,9 +1538,7 @@ jobs:
               dispatch_id="full-release-validation-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-ci"
               dispatch_run_name="CI ${dispatch_id}"
               ci_release_scope="${CI_RELEASE_SCOPE:-full}"
-              include_android=true
-              if [[ "$ci_release_scope" == "npm-beta" || "$ci_release_scope" == "npm-stable" ]]; then include_android=false; fi
-              args=(-f target_ref="$TARGET_SHA" -f release_scope="$ci_release_scope" -f include_android="$include_android" -f dispatch_id="$dispatch_id")
+              args=(-f target_ref="$TARGET_SHA" -f release_scope="$ci_release_scope" -f dispatch_id="$dispatch_id")
               context_ref="${TARGET_CONTEXT_REF:-$TARGET_REF}"
               context_ref="${context_ref#refs/heads/}"
               context_ref="${context_ref#refs/tags/}"
@@ -2273,10 +2278,11 @@ jobs:
     runs-on: *linux_runner_ubuntu
     timeout-minutes: 360
     outputs:
-      state: ${{ steps.bundle.outputs.state }}
-      binding_json: ${{ steps.bundle.outputs.binding_json }}
-      candidate_artifact_json: ${{ steps.bundle.outputs.candidate_artifact_json }}
+      state: ${{ needs.evidence_reuse.outputs.candidate_binding_json != '' && 'ready' || steps.bundle.outputs.state }}
+      binding_json: ${{ needs.evidence_reuse.outputs.candidate_binding_json || steps.bundle.outputs.binding_json }}
+      candidate_artifact_json: ${{ needs.evidence_reuse.outputs.candidate_artifact_json || steps.bundle.outputs.candidate_artifact_json }}
     env:
+      PUBLICATION_ARTIFACTS_REUSED: ${{ needs.evidence_reuse.outputs.publication_artifacts_reused }}
       GH_TOKEN: ${{ github.token }}
       CHILD_WORKFLOW_KIND: artifact-candidate
       ARTIFACT_STAGE: candidate
@@ -2297,16 +2303,17 @@ jobs:
           package-manager-cache: false
 
       - name: Wait for candidate acquisition GitHub API quota
-        if: github.run_attempt == 1
+        if: github.run_attempt == 1 && env.PUBLICATION_ARTIFACTS_REUSED != 'true'
         run: node scripts/wait-for-github-api-quota.mjs --minimum-remaining 6 --max-wait-seconds 18000
       - name: Dispatch immutable validation candidate producer
         id: dispatch
-        if: github.run_attempt == 1
+        if: github.run_attempt == 1 && env.PUBLICATION_ARTIFACTS_REUSED != 'true'
         run: *full_release_child_dispatch
 
       - *artifact_producer_resolution
       - name: Wait for exact validation candidate
         id: bundle
+        if: env.PUBLICATION_ARTIFACTS_REUSED != 'true'
         env:
           ARTIFACT_RUN_ID: ${{ steps.producer.outputs.run_id }}
           ARTIFACT_RUN_ATTEMPT: ${{ steps.producer.outputs.run_attempt }}
@@ -2474,6 +2481,7 @@ jobs:
           RESOLVE_TARGET_RESULT: ${{ needs.resolve_target.result }}
           CANDIDATE_REQUIRED: ${{ needs.resolve_target.outputs.candidate_required }}
           CANDIDATE_ACQUISITION_RESULT: ${{ needs.candidate_acquisition.result }}
+          PUBLICATION_ARTIFACT_SOURCE_JSON: ${{ needs.evidence_reuse.outputs.publication_artifact_source || 'null' }}
           CANDIDATE_EVIDENCE_JSON: ${{ needs.candidate_acquisition.outputs.binding_json }}
           CANDIDATE_REQUEST_JSON: ${{ needs.resolve_target.outputs.candidate_request_json }}
           NPM_PREPARATION_RESULT: ${{ needs.prepare_npm_package.result }}
@@ -2514,6 +2522,7 @@ jobs:
               --arg resolveTargetResult "$RESOLVE_TARGET_RESULT" \
               --arg candidateRequired "$CANDIDATE_REQUIRED" \
               --arg candidateAcquisitionResult "$CANDIDATE_ACQUISITION_RESULT" \
+              --argjson publicationArtifactSource "$PUBLICATION_ARTIFACT_SOURCE_JSON" \
               --argjson candidateEvidence "${CANDIDATE_EVIDENCE_JSON:-null}" \
               --argjson candidateRequestInput "$CANDIDATE_REQUEST_JSON" \
               --arg npmPreparationResult "$NPM_PREPARATION_RESULT" \
@@ -2597,7 +2606,8 @@ jobs:
                   npmTelegram: {result: $npmTelegramResult, runId: $npmTelegramRunId, runAttempt: $npmTelegramRunAttempt, url: $npmTelegramUrl},
                   productPerformance: {result: $performanceResult, runId: $performanceRunId, runAttempt: $performanceRunAttempt, url: $performanceUrl}
                 }
-              } + (if $coveragePolicy == "" then {} else {coveragePolicy: $coveragePolicy} end)
+              } + (if $publicationArtifactSource == null then {} else {publicationArtifactSource: $publicationArtifactSource} end)
+              + (if $coveragePolicy == "" then {} else {coveragePolicy: $coveragePolicy} end)
               + ({normalCi: $normalCiReuse, pluginPrereleaseIndependent: $pluginPrereleaseIndependentReuse, pluginPrereleaseCandidate: $pluginPrereleaseCandidateReuse, releaseChecksIndependent: $releaseChecksIndependentReuse, releaseChecksCandidate: $releaseChecksCandidateReuse, npmTelegram: $npmTelegramReuse, productPerformance: $productPerformanceReuse} | with_entries(select(.value != null)) | if length == 0 then {} else {childReuse: .} end)'
             )"
           fi
@@ -2624,6 +2634,7 @@ jobs:
         id: plan
         env:
           GH_TOKEN: ${{ github.token }}
+          RELEASE_STATE_SCRIPT: ${{ needs.resolve_target.result == 'success' && fromJSON(needs.resolve_target.outputs.source_admission_json || '{}').qualificationAdmission != null && format('{0}/qualification-verifier/scripts/full-release-validation-state.mjs', github.workspace) || format('{0}/scripts/full-release-validation-state.mjs', github.workspace) }}
           OPENCLAW_RELEASE_CI_SUMMARY_VALIDATOR: ${{ needs.resolve_target.result == 'success' && fromJSON(needs.resolve_target.outputs.source_admission_json || '{}').qualificationAdmission != null && format('{0}/qualification-verifier/scripts/release-ci-summary.mjs', github.workspace) || format('{0}/scripts/release-ci-summary.mjs', github.workspace) }}
           OPENCLAW_RELEASE_WAIVERS_PATH: ${{ github.workspace }}/scripts/lib/release-validation-waivers.json
           SOURCE_ADMISSION_JSON: ${{ needs.resolve_target.outputs.source_admission_json }}
@@ -2646,7 +2657,7 @@ jobs:
               jq -c . "${GITHUB_WORKSPACE}/full-release-execution-plan-inputs/plan-inputs.json"
             )"
           fi
-          node scripts/full-release-validation-state.mjs plan
+          node "$RELEASE_STATE_SCRIPT" plan
 
       - name: Upload immutable release execution plan
         id: plan_upload
@@ -2678,73 +2689,10 @@ jobs:
           path: full-release-execution-plan
           key: full-release-execution-plan-v2-${{ github.run_id }}
 
-  boat_release_runners:
-    name: Provision Boat release runners
-    needs:
-      [
-        resolve_target,
-        prepare_npm_package,
-        qualify_npm_package,
-        prepare_plugin_npm,
-        prepare_docker_release,
-        release_execution_plan,
-      ]
-    if: always() && !cancelled() && vars.OPENCLAW_CI_RUNNER_BACKEND == 'boat' && needs.resolve_target.result == 'success'
-    runs-on: ubuntu-24.04
-    # Two sequential runners: each can take 15 minutes to provision and 10 to register.
-    timeout-minutes: 55
-    outputs:
-      decision_vm: ${{ steps.decision.outputs.vm }}
-      decision_runner: ${{ steps.decision.outputs.runner }}
-      decision_label: ${{ steps.decision.outputs.label }}
-      drain_vm: ${{ steps.drain.outputs.vm }}
-      drain_runner: ${{ steps.drain.outputs.runner }}
-      drain_label: ${{ steps.drain.outputs.label }}
-    permissions:
-      contents: read
-    steps:
-      - name: Checkout Boat runner tooling
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: ${{ github.sha }}
-          persist-credentials: false
-      - name: Setup Node environment
-        uses: ./.github/actions/setup-node-env
-        with:
-          cache-mode: restore
-          install-bun: "false"
-      - name: Setup Boat
-        uses: ./.github/actions/setup-boat
-      - name: Setup Crabbox
-        run: node --import ./scripts/tsx.mjs scripts/crabbox-setup.mts
-      - name: Provision decision runner
-        id: decision
-        uses: ./.github/actions/boat-release-runner
-        with:
-          operation: provision
-          role: decision
-          api-key: ${{ secrets.BOAT_API_KEY }}
-          boat-org: ${{ vars.BOAT_ORG }}
-          runner-group: ${{ vars.BOAT_RELEASE_RUNNER_GROUP }}
-          app-id: ${{ vars.BOAT_RUNNER_APP_ID }}
-          app-private-key: ${{ secrets.BOAT_RUNNER_APP_PRIVATE_KEY }}
-      - name: Provision drain runner
-        id: drain
-        uses: ./.github/actions/boat-release-runner
-        with:
-          operation: provision
-          role: drain
-          api-key: ${{ secrets.BOAT_API_KEY }}
-          boat-org: ${{ vars.BOAT_ORG }}
-          runner-group: ${{ vars.BOAT_RELEASE_RUNNER_GROUP }}
-          app-id: ${{ vars.BOAT_RUNNER_APP_ID }}
-          app-private-key: ${{ secrets.BOAT_RUNNER_APP_PRIVATE_KEY }}
-
   release_decision:
     name: Release Decision
     needs:
       [
-        boat_release_runners,
         resolve_target,
         prepare_npm_package,
         qualify_npm_package,
@@ -2752,11 +2700,11 @@ jobs:
         prepare_docker_release,
         release_execution_plan,
       ]
-    if: always() && (vars.OPENCLAW_CI_RUNNER_BACKEND != 'boat' || needs.boat_release_runners.result == 'success')
-    uses: openclaw/openclaw/.github/workflows/full-release-state-watcher.yml@b720fcdb58b62c90eaae10c2d1ba99ba813adb36
+    if: always()
+    uses: openclaw/openclaw/.github/workflows/full-release-state-watcher.yml@b5e0ed2fdd00553915067a258603606515236c58
     with:
       mode: decision
-      runner_label: ${{ needs.boat_release_runners.outputs.decision_label }}
+      runner_label: blacksmith-2vcpu-ubuntu-2404
       fail_fast: ${{ inputs.fail_fast }}
       release_profile: ${{ inputs.release_profile }}
       rerun_group: ${{ inputs.rerun_group }}
@@ -2771,7 +2719,6 @@ jobs:
     name: Diagnostic Drain
     needs:
       [
-        boat_release_runners,
         resolve_target,
         prepare_npm_package,
         qualify_npm_package,
@@ -2779,11 +2726,11 @@ jobs:
         prepare_docker_release,
         release_execution_plan,
       ]
-    if: always() && (vars.OPENCLAW_CI_RUNNER_BACKEND != 'boat' || needs.boat_release_runners.result == 'success')
-    uses: openclaw/openclaw/.github/workflows/full-release-state-watcher.yml@b720fcdb58b62c90eaae10c2d1ba99ba813adb36
+    if: always()
+    uses: openclaw/openclaw/.github/workflows/full-release-state-watcher.yml@b5e0ed2fdd00553915067a258603606515236c58
     with:
       mode: drain
-      runner_label: ${{ needs.boat_release_runners.outputs.drain_label }}
+      runner_label: blacksmith-2vcpu-ubuntu-2404
       fail_fast: ${{ inputs.fail_fast }}
       release_profile: ${{ inputs.release_profile }}
       rerun_group: ${{ inputs.rerun_group }}
@@ -3092,55 +3039,3 @@ jobs:
           path: ${{ runner.temp }}/full-release-validation
           if-no-files-found: error
           overwrite: true
-
-  cleanup_boat_release_runners:
-    name: Remove Boat release runners
-    needs: [boat_release_runners, release_decision, diagnostic_drain]
-    if: always() && vars.OPENCLAW_CI_RUNNER_BACKEND == 'boat'
-    runs-on: ubuntu-24.04
-    timeout-minutes: 15
-    permissions:
-      contents: read
-    steps:
-      - name: Checkout Boat runner tooling
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: ${{ github.sha }}
-          persist-credentials: false
-      - name: Setup Node environment
-        uses: ./.github/actions/setup-node-env
-        with:
-          cache-mode: restore
-          install-bun: "false"
-      - name: Setup Boat
-        uses: ./.github/actions/setup-boat
-      - name: Setup Crabbox
-        run: node --import ./scripts/tsx.mjs scripts/crabbox-setup.mts
-      - name: Cleanup decision runner
-        id: decision
-        if: always()
-        uses: ./.github/actions/boat-release-runner
-        with:
-          operation: cleanup
-          role: decision
-          api-key: ${{ secrets.BOAT_API_KEY }}
-          boat-org: ${{ vars.BOAT_ORG }}
-          runner-group: ${{ vars.BOAT_RELEASE_RUNNER_GROUP }}
-          app-id: ${{ vars.BOAT_RUNNER_APP_ID }}
-          app-private-key: ${{ secrets.BOAT_RUNNER_APP_PRIVATE_KEY }}
-          vm: ${{ needs.boat_release_runners.outputs.decision_vm }}
-          runner: ${{ needs.boat_release_runners.outputs.decision_runner }}
-      - name: Cleanup drain runner
-        id: drain
-        if: always()
-        uses: ./.github/actions/boat-release-runner
-        with:
-          operation: cleanup
-          role: drain
-          api-key: ${{ secrets.BOAT_API_KEY }}
-          boat-org: ${{ vars.BOAT_ORG }}
-          runner-group: ${{ vars.BOAT_RELEASE_RUNNER_GROUP }}
-          app-id: ${{ vars.BOAT_RUNNER_APP_ID }}
-          app-private-key: ${{ secrets.BOAT_RUNNER_APP_PRIVATE_KEY }}
-          vm: ${{ needs.boat_release_runners.outputs.drain_vm }}
-          runner: ${{ needs.boat_release_runners.outputs.drain_runner }}

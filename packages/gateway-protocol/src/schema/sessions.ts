@@ -1,6 +1,9 @@
 import type { Static } from "typebox";
 import { Type } from "typebox";
-import { SESSION_COMPANION_SELECTION_CONTEXT_MAX_CHARS } from "../session-companion-contract.js";
+import {
+  SESSION_COMPANION_MAX_EXCHANGE_BYTES,
+  SESSION_COMPANION_SELECTION_CONTEXT_MAX_CHARS,
+} from "../session-companion-contract.js";
 import { closedObject } from "./closed-object.js";
 import { ErrorShapeSchema } from "./error-shape.js";
 import { HumanMentionsSchema } from "./human-mentions.js";
@@ -122,14 +125,19 @@ export const SessionsObserverVisibilityResultSchema = closedObject({
 });
 
 /** One bounded question/answer exchange in the ephemeral session companion. */
+const SessionCompanionAnswerSchema = Type.String({
+  minLength: 1,
+  maxLength: SESSION_COMPANION_MAX_EXCHANGE_BYTES,
+});
 export const SessionCompanionExchangeSchema = closedObject({
   question: Type.String({ minLength: 1, maxLength: 400 }),
-  answer: Type.String({ minLength: 1, maxLength: 1200 }),
+  answer: SessionCompanionAnswerSchema,
   ts: Type.Integer({ minimum: 0 }),
 });
 
 /** Asks the read-only companion about one session and its workspace. */
 export const SessionsCompanionAskParamsSchema = closedObject({
+  askId: Type.Optional(NonEmptyString),
   sessionKey: NonEmptyString,
   agentId: Type.Optional(NonEmptyString),
   question: Type.String({ minLength: 1, maxLength: 400 }),
@@ -149,7 +157,7 @@ export const SessionsCompanionAskParamsSchema = closedObject({
 
 /** Companion answer returned only to the requesting operator. */
 export const SessionsCompanionAskResultSchema = closedObject({
-  answer: Type.String({ minLength: 1, maxLength: 1200 }),
+  answer: SessionCompanionAnswerSchema,
   ts: Type.Integer({ minimum: 0 }),
 });
 
@@ -165,10 +173,11 @@ export const SessionsCompanionStateResultSchema = closedObject({
   defaultModel: Type.Optional(NonEmptyString),
 });
 
-/** Selects the in-memory companion thread to clear. */
-export const SessionsCompanionResetParamsSchema = closedObject(
-  SessionsCompanionStateParamsSchema.properties,
-);
+/** Without cancelAskId clear the thread; with it stop only that question. */
+export const SessionsCompanionResetParamsSchema = closedObject({
+  ...SessionsCompanionStateParamsSchema.properties,
+  cancelAskId: Type.Optional(NonEmptyString),
+});
 
 export const SessionsCompanionResetResultSchema = closedObject({
   ok: Type.Literal(true),

@@ -407,6 +407,11 @@ export function isSkillsUpdateParams(
 ): value is import("typebox").Static<
   typeof import("../../schema-modules.js").SkillsUpdateParamsSchema
 >;
+export function isSkillsCategoriesParams(
+  value: unknown,
+): value is import("typebox").Static<
+  typeof import("../../schema-modules.js").SkillsCategoriesParamsSchema
+>;
 export function isSkillsSearchParams(
   value: unknown,
 ): value is import("typebox").Static<
@@ -1525,6 +1530,11 @@ export function isCronStatusParams(
 ): value is import("typebox").Static<
   typeof import("../../schema-modules.js").CronStatusParamsSchema
 >;
+export function isCronAcknowledgeFailureParams(
+  value: unknown,
+): value is import("typebox").Static<
+  typeof import("../../schema-modules.js").CronAcknowledgeFailureParamsSchema
+>;
 export function isCronGetParams(
   value: unknown,
 ): value is import("typebox").Static<typeof import("../../schema-modules.js").CronGetParamsSchema>;
@@ -2547,6 +2557,11 @@ export function isTemplatesDraftsSaveParams(
 ): value is import("typebox").Static<
   typeof import("../../schema-modules.js").TemplatesDraftsSaveParamsSchema
 >;
+export function isTemplatesDraftsSignInParams(
+  value: unknown,
+): value is import("typebox").Static<
+  typeof import("../../schema-modules.js").TemplatesDraftsSignInParamsSchema
+>;
 export function isTemplatesDraftsReviewParams(
   value: unknown,
 ): value is import("typebox").Static<
@@ -2666,6 +2681,21 @@ export function isProjectsRemoveParams(
   value: unknown,
 ): value is import("typebox").Static<
   typeof import("../../schema-modules.js").ProjectsRemoveParamsSchema
+>;
+export function isProjectsMoveSessionOptionsParams(
+  value: unknown,
+): value is import("typebox").Static<
+  typeof import("../../schema-modules.js").ProjectsMoveSessionOptionsParamsSchema
+>;
+export function isProjectsMoveSessionParams(
+  value: unknown,
+): value is import("typebox").Static<
+  typeof import("../../schema-modules.js").ProjectsMoveSessionParamsSchema
+>;
+export function isProjectsRenameParams(
+  value: unknown,
+): value is import("typebox").Static<
+  typeof import("../../schema-modules.js").ProjectsRenameParamsSchema
 >;
 export function isWorktreesListParams(
   value: unknown,

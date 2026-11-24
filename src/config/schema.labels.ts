@@ -315,6 +315,7 @@ export const FIELD_LABELS: Record<string, string> = {
     "OpenAI Chat Completions Image Timeout (ms)",
   "gateway.resources": "Gateway Resources",
   "gateway.resources.profile": "Resource Profile",
+  "gateway.resources.memoryBudgetMiB": "Worker Memory Budget (MiB)",
   "gateway.reload.mode": "Config Reload Mode",
   "gateway.nodes.browser.mode": "Gateway Node Browser Mode",
   "gateway.nodes.browser.node": "Gateway Node Browser Pin",

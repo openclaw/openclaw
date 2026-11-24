@@ -30,6 +30,7 @@ import { abortChatRunById, registerChatAbortController } from "../chat-abort.js"
 import { prepareGatewayRecipientProfile } from "../expected-profile.js";
 import { createGatewayBroadcaster } from "../server-broadcast.js";
 import { createChatRunState } from "../server-chat-state.js";
+import { gatewayConnect } from "../server/client-fixtures.test-support.js";
 import { GatewayClientRegistry } from "../server/client-registry.js";
 import type { GatewayWsClient } from "../server/ws-types.js";
 import { createSessionRowProjection } from "../session-row-projection.js";
@@ -117,7 +118,7 @@ async function sharingFixture(others: "none" | "suggest" | "invited" = "none") {
     updatedAt: user.updatedAt,
   });
   const client = {
-    connect: { scopes: ["operator.questions"] },
+    connect: { scopes: ["operator.questions"], client: { id: "test" } },
     authenticatedUserProfile: profile(guest),
   } as GatewayClient;
   return { owner, guest, cfg, client, profile };
@@ -199,10 +200,7 @@ it.each([
         const socket = { bufferedAmount: 0, close: vi.fn(), readyState: 1, send: vi.fn() };
         const client: GatewayWsClient = {
           socket: socket as unknown as GatewayWsClient["socket"],
-          connect: {
-            role: "operator",
-            scopes: ["operator.questions"],
-          } as GatewayWsClient["connect"],
+          connect: gatewayConnect(["operator.questions"]),
           connId,
           usesSharedGatewayAuth: false,
           authenticatedUserProfile: userProfile(profile),

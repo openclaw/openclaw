@@ -86,7 +86,9 @@ export class NodeMcpElicitationRegistry {
     try {
       const assertCurrent = async () => {
         if (!(await current())) {
-          throw new Error("MCP elicitation authority changed");
+          throw new Error(
+            "MCP elicitation connection or request changed. Retry from a fresh turn.",
+          );
         }
         signal.throwIfAborted();
       };

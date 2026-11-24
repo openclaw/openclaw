@@ -103,8 +103,14 @@ suite.define(() => {
   });
 
   it("exposes an assistant document download with its Unicode filename and ticketed URL", async () => {
-    const page = await newChatPage(suite);
-    const source = "/tmp/openclaw/测试 report.pdf";
+    const page = await newChatPage(suite, {
+      ...createControlUiE2eContextOptions(),
+      hasTouch: true,
+    });
+    // Each wrapped line must fit the 320 px title with or without CJK fonts installed;
+    // hosts differ in how wide they render these ideographs.
+    const filename = "测试 Q3 notes.pdf";
+    const source = `/tmp/openclaw/${filename}`;
     const mediaUrl = `/__openclaw__/assistant-media?source=${encodeURIComponent(source)}&mediaTicket=ticket-download`;
     await installMockGateway(page, {
       historyMessages: assistantHistory([
@@ -113,7 +119,7 @@ suite.define(() => {
           type: "attachment",
           attachment: {
             kind: "document",
-            label: "测试 report.pdf",
+            label: filename,
             mimeType: "application/pdf",
             url: mediaUrl,
           },
@@ -124,15 +130,68 @@ suite.define(() => {
     await page.goto(`${suite.server.baseUrl}chat`);
     const card = page
       .locator(".chat-assistant-attachment-card--compact")
-      .filter({ hasText: "测试 report.pdf" });
-    const link = card.locator(".chat-assistant-attachment-card__download");
+      .filter({ hasText: filename });
+    const link = card.getByRole("link", { name: `Download ${filename}`, exact: true });
     await link.waitFor({ state: "visible", timeout: 10_000 });
     expect(await link.getAttribute("href")).toBe(mediaUrl);
-    await card.hover();
-    const [download] = await Promise.all([page.waitForEvent("download"), link.click()]);
-    expect(await download.failure()).toBeNull();
+    await waitForControlUiProofSurface(card, [link]);
+    expect((await rectangle(card)).width).toBeCloseTo(400, 0);
 
-    expect(download.suggestedFilename()).toBe("测试 report.pdf");
+    const title = card.getByText(filename, { exact: true });
+    const open = card.getByRole("button", {
+      name: `Open ${filename} in the side panel`,
+      exact: true,
+    });
+    const attachments = page.locator(".chat-assistant-attachments").filter({ has: card });
+    expect(await link.getByText("Download", { exact: true }).isVisible()).toBe(true);
+    expect(await open.getByText("Open", { exact: true }).isVisible()).toBe(true);
+    const actionColor = (action: Locator) =>
+      action.evaluate(async (element) => {
+        await Promise.all(element.getAnimations().map((animation) => animation.finished));
+        return getComputedStyle(element).color;
+      });
+    expect(await actionColor(link)).toBe(await actionColor(open));
+
+    await open.hover();
+    const openHoverColor = await actionColor(open);
+    await link.hover();
+    expect(await actionColor(link)).toBe(openHoverColor);
+
+    await page.setViewportSize({ width: 640, height: 390 });
+    await waitForControlUiProofSurface(card, [title, link, open]);
+    expect((await rectangle(card)).width).toBeCloseTo((await rectangle(attachments)).width, 0);
+    expect((await rectangle(card)).width).toBeGreaterThan(400);
+
+    await page.setViewportSize({ width: 320, height: 852 });
+    await waitForControlUiProofSurface(card, [title, link, open]);
+    expect((await rectangle(card)).width).toBeCloseTo((await rectangle(attachments)).width, 0);
+    const filenameFits = await title.evaluate((element) => ({
+      wraps: element.clientHeight > Number.parseFloat(getComputedStyle(element).lineHeight),
+      fullyVisible:
+        element.clientHeight >= element.scrollHeight && element.clientWidth >= element.scrollWidth,
+    }));
+    expect(filenameFits).toEqual({ wraps: true, fullyVisible: true });
+    const bounds = await rectangle(card);
+    const titleBounds = await rectangle(title);
+    for (const [action, label] of [
+      [link, "Download"],
+      [open, "Open"],
+    ] as const) {
+      const button = await rectangle(action);
+      expect(await action.getByText(label, { exact: true }).isVisible()).toBe(false);
+      expect(await action.locator("svg").isVisible()).toBe(true);
+      expect(button.width).toBeGreaterThanOrEqual(44);
+      expect(button.height).toBeGreaterThanOrEqual(44);
+      expect(button.y).toBeLessThan(titleBounds.y + titleBounds.height);
+      expect(button.x).toBeGreaterThan(bounds.x);
+      expect(button.x + button.width).toBeLessThan(bounds.x + bounds.width);
+    }
+
+    const [download] = await Promise.all([page.waitForEvent("download"), link.tap()]);
+    expect(await download.failure()).toBeNull();
+    expect(download.suggestedFilename()).toBe(filename);
+    await open.tap();
+    await page.locator(".sidebar-attachment-preview").waitFor({ state: "visible" });
   });
 
   it("renders a direct tool-result image from Gateway history", async () => {
