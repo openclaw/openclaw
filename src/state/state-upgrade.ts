@@ -384,6 +384,7 @@ export async function upgradeStateDirectory(params: {
   const trialGenerations = new Set<string>();
   const trialAnchors: string[] = [];
   let planWritten = false;
+  const stagedConfigs = new Set<string>();
   try {
     fs.mkdirSync(workDir, { recursive: true, mode: 0o700 });
     params.log.info(
@@ -582,9 +583,7 @@ export async function upgradeStateDirectory(params: {
     ) {
       ops.push({ kind: "replace", live: liveState, next: toShadow(liveState) });
     }
-    // External config inputs may be on another filesystem. Stage every changed
-    // authored file beside its live destination, using the same durable swap plan.
-    const stagedConfigs = new Map<string, string>();
+    // Include changes participate in the same durable plan as the root config.
     const publishedConfigTargets = new Set<string>();
     if (mode === "fallback" || !configInside) {
       for (const [file, target] of configInputs) {
@@ -600,17 +599,8 @@ export async function upgradeStateDirectory(params: {
         if (publishedConfigTargets.has(destination)) {
           continue;
         }
-        const next = configInside
-          ? target
-          : path.join(
-              path.dirname(destination),
-              `.${path.basename(destination)}.upgrade-${VERSION}`,
-            );
-        if (!configInside) {
-          stagedConfigs.set(next, target);
-        }
         publishedConfigTargets.add(destination);
-        ops.push({ kind: original ? "replace" : "add", live: destination, next });
+        ops.push({ kind: original ? "replace" : "add", live: destination, next: target });
       }
     }
     for (let index = ops.length - 1; index >= 0; index--) {
@@ -665,14 +655,28 @@ export async function upgradeStateDirectory(params: {
     );
     checkpointShadowDatabases([toShadow(liveState)]);
     ops.push(...companionRemovals(ops));
+    // A workspace include can be on another filesystem even when the root is not.
+    // Stage its planned writes (including Doctor backups) beside their destinations.
+    const configDirectories = new Set(
+      [...configInputs.keys()].flatMap((file) => [
+        path.dirname(file),
+        path.dirname(configFiles.get(file)?.canonicalPath ?? file),
+      ]),
+    );
     for (const op of ops) {
+      if (op.next && configDirectories.has(path.dirname(op.live)) && !isSqliteFile(op.next)) {
+        const staged = path.join(
+          path.dirname(op.live),
+          `.${path.basename(op.live)}${path.basename(workDir)}`,
+        );
+        stagedConfigs.add(staged);
+        fs.cpSync(op.next, staged, { verbatimSymlinks: true });
+        op.next = staged;
+      }
       if (op.next && fs.statSync(op.next, { throwIfNoEntry: false })?.isFile()) {
         fsyncPath(op.next);
+        fsyncPath(path.dirname(op.next), true);
       }
-    }
-    for (const [staged, target] of stagedConfigs) {
-      fs.copyFileSync(target, staged);
-      fsyncPath(staged);
     }
     await params.beforeSwap?.();
     writePlan(workDir, { appVersion: generation(), ops });
@@ -725,6 +729,11 @@ export async function upgradeStateDirectory(params: {
     }
     throw error;
   } finally {
+    if (!planWritten) {
+      for (const staged of stagedConfigs) {
+        fs.rmSync(staged, { force: true });
+      }
+    }
     if (!planWritten && (await discardPrivatePostgres(workDir, stateDir, config, params.log))) {
       for (const anchor of trialAnchors) {
         fs.rmSync(anchor, { force: true });

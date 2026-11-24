@@ -458,7 +458,10 @@ includes still prevent publication. If a protected release trial needs to rewrit
 an include outside the launcher’s recovery paths, run `openclaw doctor --fix`
 first. This includes external includes, deeply nested workspace files, and files
 below excluded recovery directories such as `tmp` or `logs`. Ordinary first-start
-upgrades publish changed includes with the existing backed-up file swap.
+upgrades publish changed includes with the existing backed-up file swap. Changed
+config files and their Doctor backups are staged beside their destinations before
+the swap plan is published, including when an included file is on a separately
+mounted workspace and the root config is inside the state directory.
 
 During copy-and-swap upgrades, Doctor records carried-over scheduled jobs against
 credential databases at their eventual live paths. Reads and repairs remain on
