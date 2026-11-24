@@ -9,7 +9,6 @@ authoring dates (2026), not package publication dates.
 ## Unreleased
 
 - `agents.create` accepts an optional `locale` for its saved introduction and onboarding conversation. Additive; protocol stays v4.
-- `tts.speak` accepts an optional `sessionKey` and reads the text with the TTS settings of the agent that owns that session (`agents.entries.*.tts` over `tts`). Unknown or inaccessible sessions are rejected; without the field, synthesis is unchanged. Additive; protocol stays v4.
 
 - Add optional `source` to the `talk.catalog` `transcription` group: `streaming`, `streaming-auto`, `voice-model`, or `media-understanding`, naming the path Talk transcription uses, and optional `mediaProviders` with the `tools.media` audio providers' readiness when Talk uses another path. Additive; protocol stays v4.
 - **Breaking:** retire A2UI widgets and the generic registered-renderer API. Stored A2UI widgets are backed up and deleted by Doctor; recreate them as HTML widgets. The v4 registered-content wire declarations remain for parsing older messages and reporting the retired operation, not for rendering or persistence.
