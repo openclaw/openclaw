@@ -13,6 +13,11 @@ Catalog reference for provider plugins: shared live model discovery, catalog
 helpers, pricing normalization, and the narrower single-provider entry point.
 Part of the [Building provider plugins](/plugins/sdk-provider-plugins) guide.
 
+Every model row in a bundled manifest catalog needs a `name` a person would
+recognise, such as `"GPT-6 Luna"`. Leave the provider out of it: pickers and
+error messages show the provider's own name beside the model. A contract test
+fails when a row has no name, a name equal to its ID, or a name with "via".
+
 For lightweight model-reference normalization, use
 `openclaw/plugin-sdk/model-ref-parse`. Its `normalizeGooglePreviewModelId`
 and `normalizeAntigravityPreviewModelId` exports share the catalog's alias

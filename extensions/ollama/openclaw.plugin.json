@@ -93,6 +93,7 @@
         "models": [
           {
             "id": "kimi-k2.6",
+            "name": "Kimi K2.6",
             "reasoning": true,
             "input": ["text", "image"],
             "contextWindow": 262144,
@@ -104,6 +105,7 @@
           },
           {
             "id": "kimi-k2.7-code",
+            "name": "Kimi K2.7 Code",
             "reasoning": true,
             "input": ["text", "image"],
             "contextWindow": 262144,
@@ -115,6 +117,7 @@
           },
           {
             "id": "kimi-k3",
+            "name": "Kimi K3",
             "reasoning": true,
             "input": ["text", "image"],
             "cost": {
@@ -132,6 +135,7 @@
           },
           {
             "id": "deepseek-v4-pro",
+            "name": "DeepSeek V4 Pro",
             "reasoning": true,
             "input": ["text"],
             "contextWindow": 1048576,
@@ -144,6 +148,7 @@
           },
           {
             "id": "deepseek-v4-pro:0813",
+            "name": "DeepSeek V4 Pro 0813",
             "reasoning": true,
             "input": ["text"],
             "contextWindow": 1048576,
@@ -155,6 +160,7 @@
           },
           {
             "id": "gemma4",
+            "name": "Gemma 4",
             "reasoning": true,
             "input": ["text", "image"],
             "contextWindow": 262144,
@@ -166,6 +172,7 @@
           },
           {
             "id": "gemma4:31b",
+            "name": "Gemma 4 31B",
             "reasoning": true,
             "input": ["text", "image"],
             "contextWindow": 262144,
@@ -177,6 +184,7 @@
           },
           {
             "id": "glm-5.2",
+            "name": "GLM-5.2",
             "reasoning": true,
             "input": ["text"],
             "contextWindow": 1000000,
@@ -189,6 +197,7 @@
           },
           {
             "id": "gpt-oss:120b",
+            "name": "gpt-oss-120b",
             "reasoning": true,
             "input": ["text"],
             "contextWindow": 131072,
@@ -200,6 +209,7 @@
           },
           {
             "id": "gpt-oss:20b",
+            "name": "gpt-oss-20b",
             "reasoning": true,
             "input": ["text"],
             "contextWindow": 131072,
@@ -211,6 +221,7 @@
           },
           {
             "id": "minimax-m2.7",
+            "name": "MiniMax M2.7",
             "reasoning": true,
             "input": ["text"],
             "contextWindow": 196608,
@@ -222,6 +233,7 @@
           },
           {
             "id": "minimax-m3",
+            "name": "MiniMax M3",
             "reasoning": true,
             "input": ["text", "image"],
             "contextWindow": 524288,
@@ -233,6 +245,7 @@
           },
           {
             "id": "mistral-large-3:675b",
+            "name": "Mistral Large 3 675B",
             "reasoning": false,
             "input": ["text", "image"],
             "contextWindow": 262144,
@@ -244,6 +257,7 @@
           },
           {
             "id": "nemotron-3-nano:30b",
+            "name": "Nemotron 3 Nano 30B",
             "reasoning": true,
             "input": ["text"],
             "contextWindow": 262144,
@@ -255,6 +269,7 @@
           },
           {
             "id": "nemotron-3-super",
+            "name": "Nemotron 3 Super",
             "reasoning": true,
             "input": ["text"],
             "contextWindow": 262144,
@@ -266,6 +281,7 @@
           },
           {
             "id": "nemotron-3-ultra",
+            "name": "Nemotron 3 Ultra",
             "reasoning": true,
             "input": ["text"],
             "contextWindow": 262144,

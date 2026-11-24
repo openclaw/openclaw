@@ -38,7 +38,6 @@ import { assertProviderAuthReady } from "./model-auth-provider-admission.js";
 import * as authConfig from "./model-auth-provider-config.js";
 import { resolveModelProviderAuthConfig } from "./model-auth-provider-route.js";
 import { resolveManagedSecretRefRuntimeProviderAuth } from "./model-auth-runtime-config.js";
-import { resolveProviderDisplayName } from "./provider-display-name.js";
 import {
   assertProviderAuthSupportsHttp,
   ProviderAuthError,
@@ -46,6 +45,7 @@ import {
   type ResolvedProviderAuth,
 } from "./model-auth-runtime-shared.js";
 import { prepareSyntheticLocalProviderAuth } from "./model-auth-runtime.js";
+import { resolveProviderDisplayName } from "./provider-display-name.js";
 
 export type ProviderCredentialPrecedence = "profile-first" | "env-first";
 

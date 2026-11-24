@@ -81,7 +81,7 @@
         "models": [
           {
             "id": "deepseek-ai/DeepSeek-V3.2-TEE",
-            "name": "deepseek-ai/DeepSeek-V3.2-TEE",
+            "name": "DeepSeek V3.2 TEE",
             "reasoning": true,
             "input": ["text"],
             "contextWindow": 131072,
@@ -95,7 +95,7 @@
           },
           {
             "id": "moonshotai/Kimi-K2.6-TEE",
-            "name": "moonshotai/Kimi-K2.6-TEE",
+            "name": "Kimi K2.6 TEE",
             "reasoning": true,
             "input": ["text", "image"],
             "contextWindow": 262144,
@@ -109,7 +109,7 @@
           },
           {
             "id": "zai-org/GLM-5.2-TEE",
-            "name": "zai-org/GLM-5.2-TEE",
+            "name": "GLM-5.2 TEE",
             "reasoning": true,
             "input": ["text"],
             "contextWindow": 1048576,
@@ -123,7 +123,7 @@
           },
           {
             "id": "Qwen/Qwen3.6-27B-TEE",
-            "name": "Qwen/Qwen3.6-27B-TEE",
+            "name": "Qwen3.6 27B TEE",
             "reasoning": true,
             "input": ["text", "image"],
             "contextWindow": 262144,
@@ -137,7 +137,7 @@
           },
           {
             "id": "Qwen/Qwen3.5-397B-A17B-TEE",
-            "name": "Qwen/Qwen3.5-397B-A17B-TEE",
+            "name": "Qwen3.5 397B A17B TEE",
             "reasoning": true,
             "input": ["text", "image"],
             "contextWindow": 262144,

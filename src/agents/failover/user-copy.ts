@@ -744,9 +744,7 @@ export function renderAuthProfileFailoverCopy(params: AuthProfileFailureCopyPara
     ? AUTH_PROFILE_COOLDOWN_COPY[params.reason](provider)
     : AUTH_PROFILE_DIRECT_COPY[params.reason]?.(provider);
   const hint = AUTH_PROFILE_RECOVERY_REASONS.has(params.reason) ? params.recoveryHint : null;
-  return [description ?? authProfileUnavailableCopy(provider), hint]
-    .filter(Boolean)
-    .join(" ");
+  return [description ?? authProfileUnavailableCopy(provider), hint].filter(Boolean).join(" ");
 }
 
 export function renderControlUiAgentFailureCopy(): string {

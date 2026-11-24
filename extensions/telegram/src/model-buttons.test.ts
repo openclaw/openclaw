@@ -18,7 +18,8 @@ function keyboard(
 }
 
 it("labels provider buttons with the provider name and keeps the id in the callback", () => {
-  const [button] = buildProviderKeyboard([{ id: "openrouter", name: "OpenRouter", count: 3 }])[0] ?? [];
+  const [button] =
+    buildProviderKeyboard([{ id: "openrouter", name: "OpenRouter", count: 3 }])[0] ?? [];
   expect(button?.text).toBe("OpenRouter (3)");
   expect(button?.callback_data).toContain("openrouter");
 });

@@ -5,11 +5,11 @@ import {
   resolveModelAuthLabelAsync,
 } from "../../agents/model-auth-label.js";
 import { normalizeProviderId } from "../../agents/model-selection.js";
-import { resolveProviderDisplayName } from "../../agents/provider-display-name.js";
 import {
   PreparedModelRuntimeOwnerNotPublishedError,
   PreparedModelRuntimePublicationSupersededError,
 } from "../../agents/prepared-model-runtime.errors.js";
+import { resolveProviderDisplayName } from "../../agents/provider-display-name.js";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { warnPluginSdkDeprecation } from "../../plugins/sdk-deprecation.js";

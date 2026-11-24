@@ -95,7 +95,7 @@
         "models": [
           {
             "id": "openai/gpt-6-luna",
-            "name": "GPT-6 Luna via ClawRouter",
+            "name": "GPT-6 Luna",
             "compat": {
               "codeMode": "capable"
             },

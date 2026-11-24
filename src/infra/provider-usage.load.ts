@@ -45,7 +45,8 @@ export async function loadProviderUsageSummary(
   const descriptors: ProviderUsagePluginDescriptor[] = requestedProviders
     ? requestedProviders.map((provider) => ({
         provider,
-        displayName: providerUsageLabel(provider) ?? resolveProviderDisplayName(provider, { config }),
+        displayName:
+          providerUsageLabel(provider) ?? resolveProviderDisplayName(provider, { config }),
       }))
     : listProviderUsagePluginDescriptors({
         config,

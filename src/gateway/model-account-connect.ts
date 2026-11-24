@@ -10,12 +10,12 @@ import type {
   UsersUnlinkAuthProfileResult,
 } from "../../packages/gateway-protocol/src/schema/users.js";
 import { resolveSharedMainAuthAgentDir } from "../agents/auth-profiles/shared-main-dir.js";
-import { resolveProviderDisplayName } from "../agents/provider-display-name.js";
 import {
   ensureAuthProfileStoreWithoutExternalProfiles,
   ensureAuthProfileStoreWithoutExternalProfilesAsync,
 } from "../agents/auth-profiles/store-runtime.js";
 import type { AuthProfileCredential } from "../agents/auth-profiles/types.js";
+import { resolveProviderDisplayName } from "../agents/provider-display-name.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { registerSecretValueForRedaction } from "../logging/secret-redaction-registry.js";
 import { warnModelAccountConnectDeprecation } from "../plugins/compat/model-account-connect-deprecation.js";

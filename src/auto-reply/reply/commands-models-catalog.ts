@@ -32,10 +32,10 @@ import {
 } from "../../agents/model-selection.js";
 import { createModelVisibilityPolicy } from "../../agents/model-visibility-policy.js";
 import { resolveModelCatalogIdentityKey } from "../../agents/openai-model-routes.js";
-import { resolveProviderDisplayName } from "../../agents/provider-display-name.js";
 import { prepareOperatorModelPolicy } from "../../agents/operator-model-policy.js";
 import * as preparedModelCatalog from "../../agents/prepared-model-catalog.js";
 import { getPreparedModelRuntimeAuthStore } from "../../agents/prepared-model-runtime-auth.js";
+import { resolveProviderDisplayName } from "../../agents/provider-display-name.js";
 import { resolveDefaultAgentWorkspaceDir } from "../../agents/workspace.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";

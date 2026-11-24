@@ -146,6 +146,7 @@
         "models": [
           {
             "id": "qwen3.5-plus",
+            "name": "Qwen3.5 Plus",
             "reasoning": false,
             "input": ["text", "image"],
             "contextWindow": 1000000,
@@ -153,6 +154,7 @@
           },
           {
             "id": "qwen3.6-flash",
+            "name": "Qwen3.6 Flash",
             "reasoning": true,
             "input": ["text", "image"],
             "contextWindow": 1000000,
@@ -160,6 +162,7 @@
           },
           {
             "id": "qwen3.6-plus",
+            "name": "Qwen3.6 Plus",
             "reasoning": true,
             "input": ["text", "image"],
             "contextWindow": 1000000,
@@ -167,6 +170,7 @@
           },
           {
             "id": "qwen3.7-max",
+            "name": "Qwen3.7 Max",
             "reasoning": true,
             "input": ["text"],
             "contextWindow": 1000000,
@@ -174,6 +178,7 @@
           },
           {
             "id": "qwen3.7-plus",
+            "name": "Qwen3.7 Plus",
             "reasoning": true,
             "input": ["text", "image"],
             "contextWindow": 1000000,
@@ -181,6 +186,7 @@
           },
           {
             "id": "qwen3.8-max",
+            "name": "Qwen3.8 Max",
             "reasoning": true,
             "input": ["text", "image"],
             "contextWindow": 1000000,
@@ -207,6 +213,7 @@
           },
           {
             "id": "qwen3.8-flash",
+            "name": "Qwen3.8 Flash",
             "reasoning": true,
             "input": ["text", "image"],
             "contextWindow": 1000000,
@@ -232,6 +239,7 @@
           },
           {
             "id": "qwen3-max-2026-01-23",
+            "name": "Qwen3 Max 2026-01-23",
             "reasoning": false,
             "input": ["text"],
             "contextWindow": 262144,
@@ -239,6 +247,7 @@
           },
           {
             "id": "qwen3-coder-next",
+            "name": "Qwen3 Coder Next",
             "reasoning": false,
             "input": ["text"],
             "contextWindow": 262144,
@@ -246,6 +255,7 @@
           },
           {
             "id": "qwen3-coder-plus",
+            "name": "Qwen3 Coder Plus",
             "reasoning": false,
             "input": ["text"],
             "contextWindow": 1000000,
@@ -253,6 +263,7 @@
           },
           {
             "id": "MiniMax-M2.5",
+            "name": "MiniMax M2.5",
             "reasoning": true,
             "input": ["text"],
             "contextWindow": 1000000,
@@ -260,6 +271,7 @@
           },
           {
             "id": "glm-5",
+            "name": "GLM-5",
             "reasoning": false,
             "input": ["text"],
             "contextWindow": 202752,
@@ -267,6 +279,7 @@
           },
           {
             "id": "glm-4.7",
+            "name": "GLM-4.7",
             "reasoning": false,
             "input": ["text"],
             "contextWindow": 202752,
@@ -274,6 +287,7 @@
           },
           {
             "id": "kimi-k2.5",
+            "name": "Kimi K2.5",
             "reasoning": false,
             "input": ["text", "image"],
             "contextWindow": 262144,
@@ -287,7 +301,7 @@
         "models": [
           {
             "id": "qwen3.7-plus",
-            "name": "qwen3.7-plus",
+            "name": "Qwen3.7 Plus",
             "reasoning": true,
             "input": ["text", "image"],
             "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 },
@@ -296,7 +310,7 @@
           },
           {
             "id": "qwen3.8-max",
-            "name": "qwen3.8-max",
+            "name": "Qwen3.8 Max",
             "reasoning": true,
             "input": [
               "text",
@@ -332,7 +346,7 @@
           },
           {
             "id": "qwen3.8-flash",
-            "name": "qwen3.8-flash",
+            "name": "Qwen3.8 Flash",
             "reasoning": true,
             "input": [
               "text",
@@ -367,7 +381,7 @@
           },
           {
             "id": "qwen3.6-plus",
-            "name": "qwen3.6-plus",
+            "name": "Qwen3.6 Plus",
             "reasoning": true,
             "input": ["text", "image"],
             "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 },
@@ -376,7 +390,7 @@
           },
           {
             "id": "kimi-k2.5",
-            "name": "kimi-k2.5",
+            "name": "Kimi K2.5",
             "reasoning": true,
             "input": ["text", "image"],
             "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 },
@@ -385,7 +399,7 @@
           },
           {
             "id": "glm-5",
-            "name": "glm-5",
+            "name": "GLM-5",
             "reasoning": true,
             "input": ["text"],
             "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 },
@@ -394,7 +408,7 @@
           },
           {
             "id": "MiniMax-M2.5",
-            "name": "MiniMax-M2.5",
+            "name": "MiniMax M2.5",
             "reasoning": true,
             "input": ["text"],
             "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 },
