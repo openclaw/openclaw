@@ -84,6 +84,17 @@ describe("azure-openai-responses", () => {
     expect(requestUrl?.searchParams.get("api-version")).toBe("2026-07-01-preview");
   });
 
+  it("rejects a resource name that is not a DNS label before provider transport", async () => {
+    const requests = captureRequests();
+    vi.stubEnv("AZURE_OPENAI_BASE_URL", undefined);
+    const result = await streamAzureOpenAIResponses(azureResponsesModel, context, {
+      apiKey: "test-key",
+      azureResourceName: "test_resource",
+    }).result();
+    expect(requests).toHaveLength(0);
+    expect(result.errorMessage).toMatch(/Invalid Azure OpenAI resource name/);
+  });
+
   it("sends a case-insensitively resolved deployment name", async () => {
     const requests = captureRequests();
     vi.stubEnv("AZURE_OPENAI_DEPLOYMENT_NAME_MAP", "gpt-5.5=Deployment-GPT-5.5");

@@ -485,3 +485,14 @@ describe("workspace .env blocklist completeness", () => {
     });
   });
 });
+
+it("does not load the Azure resource name from a workspace dotenv file", async () => {
+  await withIsolatedEnvAndCwd(async () => {
+    await withDotEnvFixture(async ({ cwdDir }) => {
+      clearEnv(["AZURE_OPENAI_RESOURCE_NAME"]);
+      await writeEnvFile(path.join(cwdDir, ".env"), "AZURE_OPENAI_RESOURCE_NAME=test-resource\n");
+      loadWorkspaceDotEnvFile(path.join(cwdDir, ".env"), { quiet: true });
+      expect(process.env.AZURE_OPENAI_RESOURCE_NAME).toBeUndefined();
+    });
+  });
+});
