@@ -505,3 +505,53 @@ it.runIf(supportsPosix)("rejects symlinks inside a package artifact", async () =
   const options = startOptions(command);
   await expect(captureBefore(options)).rejects.toThrow("unsupported entry");
 });
+
+it.runIf(supportsPosix).each(["target bytes", "link removal"])(
+  "invalidates a standalone package binding after %s changes",
+  async (change) => {
+    const { root, command } = await packageArtifact();
+    const link = path.join(root, "codex");
+    await fs.symlink("bin/codex", link);
+    const { binding } = await captureBinding(startOptions(command));
+    await expect(validateArtifact(binding)).resolves.toBe(true);
+    if (change === "target bytes") {
+      await fs.writeFile(command, "native-v2");
+    } else {
+      await fs.unlink(link);
+    }
+    await expect(validateArtifact(binding)).resolves.toBe(false);
+  },
+);
+
+it.runIf(supportsPosix)(
+  "rejects replacing the standalone link while hashing its target",
+  async () => {
+    const { root, command } = await packageArtifact();
+    const link = path.join(root, "codex");
+    await fs.symlink("bin/codex", link);
+    const open = fs.open.bind(fs);
+    vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+      const handle = await open(...args);
+      if (args[0] === command && typeof args[1] === "number") {
+        await fs.rename(link, path.join(root, "old-link"));
+        await fs.symlink("bin/codex", link);
+        await fs.unlink(path.join(root, "old-link"));
+      }
+      return handle;
+    });
+    await expect(captureBefore(startOptions(command))).rejects.toThrow(
+      "package changed while reading",
+    );
+  },
+);
+
+it
+  .runIf(supportsPosix)
+  .each(["../outside", "/outside/codex", "bin", "codex", "missing", "./bin/codex"])(
+  "rejects a non-installer package link to %s",
+  async (target) => {
+    const { root, command } = await packageArtifact();
+    await fs.symlink(target, path.join(root, "codex"));
+    await expect(captureBefore(startOptions(command))).rejects.toThrow("unsupported entry");
+  },
+);

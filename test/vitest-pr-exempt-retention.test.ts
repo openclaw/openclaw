@@ -101,6 +101,7 @@ function createPrExemptCensus() {
     const release = mode === "release";
     const periodic = createNodeTestShardBundles({
       runnerBackend: "github",
+      mainValidation: !release,
       includeReleaseOnlyPluginShards: false,
       includeReleaseOnlyRuntimeTests: release,
       includePrExemptRuntimeTests: true,

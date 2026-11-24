@@ -301,7 +301,9 @@ it.each(["new content", "same-content WAL commit"] as const)(
     expect(wrote).toBe(true);
     expect(backup.sourceGenerations[f.shared]).toBeUndefined();
     expect(backup.warnings).toContainEqual(
-      expect.stringContaining("snapshot requires manual recovery"),
+      expect.stringContaining(
+        "Database write generation changed or could not be confirmed during capture (the running Gateway may have written to it); automatic rollback keeps the live database instead of this snapshot",
+      ),
     );
     using captured = new DatabaseSync(backup.databases[0]!.snapshotPath, { readOnly: true });
     expect(captured.prepare("SELECT value FROM payload").get()).toEqual({ value: "retained" });
@@ -349,7 +351,9 @@ it("keeps manual recovery after fresh after-capture observation fails without re
   expect(backup.warnings).toEqual(
     expect.arrayContaining([
       expect.stringContaining(failure.message),
-      expect.stringContaining("snapshot requires manual recovery"),
+      expect.stringContaining(
+        "Database write generation changed or could not be confirmed during capture (the running Gateway may have written to it); automatic rollback keeps the live database instead of this snapshot",
+      ),
     ]),
   );
   using snapshot = new DatabaseSync(backup.databases[0]!.snapshotPath, { readOnly: true });
@@ -471,7 +475,9 @@ it.each(["acquisition", "settlement"] as const)(
     expect(backup.warnings).toEqual(
       expect.arrayContaining([
         expect.stringContaining(failure.message),
-        expect.stringContaining("snapshot requires manual recovery"),
+        expect.stringContaining(
+          "Database write generation changed or could not be confirmed during capture (the running Gateway may have written to it); automatic rollback keeps the live database instead of this snapshot",
+        ),
       ]),
     );
     const entry = backup.databases[0]!;
@@ -489,7 +495,7 @@ it.each(["acquisition", "settlement"] as const)(
 
 it("keeps classification errors fatal, including the private image cleanup failure", async () => {
   const f = await fixture();
-  writePostgresAnchor(f.shared, "invalid-schema");
+  writePostgresAnchor(f.shared, "invalid.schema");
   const cleanupFailure = new Error("private image cleanup failed");
   f.generationImages.mockImplementationOnce((file, _staging, ...rest) => {
     const prepared = f.prepare(file, f.stagingRoot, ...rest);

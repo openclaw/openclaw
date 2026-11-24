@@ -53,7 +53,6 @@ export const handleDiagnosticsCommand: CommandHandler = defineAuthorizedTextComm
     label: DIAGNOSTICS_COMMAND,
     match: (body) => matchCommandPrefix(body.trim(), DIAGNOSTICS_COMMAND, { allowColon: true }),
     ownerOnly: true,
-    silentUnauthorized: true,
   },
   async (input, args) => {
     const params = { ...input, command: { ...input.command } };

@@ -17,18 +17,26 @@ availability is owned by Codex app-server, so the list can change when
 OpenClaw upgrades the bundled `@openai/codex` version, when OpenClaw selects a
 [newer installed Codex](/plugins/codex-harness-reference/app-server-transport#newer-installed-codex),
 or when a deployment points `appServer.command` at a different Codex binary.
-ChatGPT-login model discovery reports the selected binary's version as its
-`client_version`, so the list matches the binary that runs turns. Availability can also
-be account-scoped. Use `/codex models` on a running gateway to see the live
-catalog for that harness and account.
+Availability can also be account-scoped. Use `/codex models` on a running
+gateway to see the live catalog for that harness and account.
 
-New OpenAI models can require a newer Codex version than your OpenClaw release
-bundles. The reporter-supplied minimum for GPT-6.2 is Codex `0.166.0`.
-For the evidence limits and upgrades between OpenClaw releases, see
-[Newer installed Codex](/plugins/codex-harness-reference/app-server-transport#newer-installed-codex).
-With a ChatGPT/Codex login, select the **Codex** runtime for your session.
-Installing Codex alone does not fix automatic routing or grant account access
-to a model.
+The OpenAI provider's ChatGPT subscription list is separate. It sends the same
+OpenClaw version used by Responses requests as `client_version`. If that version
+is unavailable or is not a calendar version with a four-digit year of 2026 or
+later, it sends `99.0.0` instead.
+Only the numeric release is sent: `2026.11.5-beta.1` lists as `2026.11.5`. Labels
+such as `dev`, `beta`, and `unknown`, and `0.0.0`, use the fallback. Listing does
+not query npm or depend on the bundled or installed Codex version. An empty list
+from ChatGPT counts as a failed listing, so the last listed models stay.
+
+New OpenAI models can require a newer Codex version than the binary your
+Codex harness runs. For example, GPT-6.2 requires Codex `0.166.0`. A Codex-harness
+turn on such a model fails and tells you to update your global Codex with
+`npm i -g @openai/codex` and restart the Gateway; OpenClaw then
+[selects the newer installed Codex](/plugins/codex-harness-reference/app-server-transport#newer-installed-codex).
+In Control UI, **Start a new session** on that failure opens a session on the
+OpenClaw harness that asks the agent to run the update. The OpenClaw harness
+runs these models without a Codex update.
 
 Automatic discovery and hosted-search model selection use visible picker entries.
 Bounded turns with an explicit model selection, including image understanding,
@@ -38,10 +46,14 @@ and support the required input modalities. Listing does not prove account
 entitlement.
 
 Native discovery is demand-driven. Gateway startup publishes configured model
-hints without starting an app-server for each agent. Opening an agent's model
-picker or catalog, creating a Codex session, running a turn, or requesting native
-auth/status information starts that agent's client when needed. Before discovery,
-native account readiness is unknown; configured hints are not proof of sign-in.
+hints without starting an app-server for each agent. The default agent keeps its
+background catalog warmup when it has a configured primary model, an explicit
+runtime policy, or a prepared credential for its default provider. An empty
+installation's built-in fallback model does not trigger that warmup. Opening an
+agent's model picker or catalog, creating a Codex session, running a turn, or
+requesting native auth/status information starts that agent's client when needed.
+Before discovery, native account readiness is unknown; configured hints are not
+proof of sign-in.
 First use of an idle agent can take a few seconds for the cold start.
 
 Discovery reads `model/list` and `account/read` from the same scoped

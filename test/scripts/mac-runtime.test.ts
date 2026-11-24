@@ -262,6 +262,7 @@ async function materializationFixture(mac: MacScriptFixture, complete = false) {
 async function stagingFixture(
   mac: MacScriptFixture,
   architectures: readonly string[] = ["arm64", "x86_64"],
+  pluginIds: readonly string[] = [],
 ) {
   const root = realpathSync(mac.createTempDir("openclaw-runtime-materialization-"));
   const binaries = await compiledMacNativeFixtures(root, mac);
@@ -281,9 +282,10 @@ async function stagingFixture(
     "lib/desktop-runtime-prune.mjs",
     readFileSync("scripts/lib/desktop-runtime-prune.mjs"),
   );
+  const plan = { releaseTag: pluginIds.length ? null : "v2026.10.2", pluginIds, allPluginBytes: 0 };
   await script(
     "lib/desktop-runtime-plugins.mjs",
-    'if (process.argv[2] === "plan") console.log(JSON.stringify({releaseTag: "v2026.10.2", pluginIds: []}));',
+    `if (process.argv[2] === "plan") console.log(${JSON.stringify(JSON.stringify(plan))});`,
   );
   await cp(materializer, path.join(scripts, path.basename(materializer)));
   await script("lib/mac-native-inventory.py", readFileSync(inventory));
@@ -602,6 +604,87 @@ describe.skipIf(process.platform !== "darwin")("Mac runtime materialization", ()
         '{"os":["win32"]}',
       );
       expectRuntimeScratchCleaned(fixture);
+    },
+  );
+
+  cases.for(["source", "release"] as const)(
+    "stages the Codex runtime and prunes only bundled TUI voice (%s)",
+    async (kind, mac) => {
+      const bundled = kind === "source";
+      const architectures = bundled ? (["arm64", "x86_64"] as const) : (["arm64"] as const);
+      const fixture = await stagingFixture(mac, architectures, bundled ? ["codex"] : []);
+      const { auditMacRuntimePortability } =
+        await import("../../scripts/lib/mac-runtime-portability.mjs");
+      const binaries = await compiledMacNativeFixtures(fixture.root, mac);
+      const modulesPath = "lib/node_modules/openclaw/node_modules";
+      const canonical = path.join(fixture.root, "canonical", modulesPath);
+      const staged = path.join(fixture.destination, modulesPath);
+      const launcher = "@openai/codex/bin/codex.js";
+      const unrelated = "unrelated/codex-resources/voice/resource.txt";
+      await write(path.join(canonical, launcher), "// Codex launcher\n");
+      await write(path.join(canonical, unrelated), "unrelated resource\n");
+      const source = path.join(fixture.root, "voice.c");
+      await write(source, "int main(void) { return 0; }\n");
+      const vendorPaths = [];
+      for (const arch of architectures) {
+        const intel = arch === "x86_64";
+        const cpu = intel ? "x64" : "arm64";
+        const machine = intel ? "x86_64" : "aarch64";
+        // Exercise a hoisted arm64 package and an x64 optional package nested under the launcher.
+        const platform = `${intel ? "@openai/codex/node_modules/" : ""}@openai/codex-darwin-${cpu}`;
+        const vendor = `${platform}/vendor/${machine}-apple-darwin`;
+        vendorPaths.push({ arch, vendor });
+        await write(
+          path.join(canonical, platform, "package.json"),
+          JSON.stringify({ name: "@openai/codex", os: ["darwin"], cpu: [cpu] }),
+        );
+        await write(path.join(canonical, vendor, "bin/codex"), binaries[arch], 0o755);
+        await write(path.join(canonical, vendor, "codex-resources/nonvoice.txt"), "runtime data\n");
+        const voice = path.join(canonical, vendor, "codex-resources/voice");
+        await write(path.join(voice, "lib/resource.txt"), "voice data\n");
+        await mkdir(path.join(voice, "bin"));
+        await runMacFixtureTool(
+          "/usr/bin/xcrun",
+          [
+            "clang",
+            "-arch",
+            arch,
+            source,
+            `-Wl,-rpath,@loader_path/codex-voice-host.runfiles/_main/_solib_darwin_${cpu}/voice/native_link_macos_${machine}`,
+            "-Wl,-rpath,@loader_path/../lib",
+            "-o",
+            path.join(voice, "bin/codex-voice-host"),
+          ],
+          fixture.root,
+          mac,
+        );
+      }
+      const before = snapshot(canonical);
+      expectExit(await fixture.run("standard"));
+      expect(snapshot(canonical)).toEqual(before);
+      expect(readFileSync(path.join(staged, launcher), "utf8")).toBe("// Codex launcher\n");
+      expect(readFileSync(path.join(staged, unrelated), "utf8")).toBe("unrelated resource\n");
+      for (const { arch, vendor } of vendorPaths) {
+        const executable = path.join(staged, vendor, "bin/codex");
+        expect(readFileSync(executable)).toEqual(binaries[arch]);
+        const resources = path.join(staged, vendor, "codex-resources");
+        expect(readFileSync(path.join(resources, "nonvoice.txt"), "utf8")).toBe("runtime data\n");
+        if (bundled) {
+          expect(existsSync(path.join(resources, "voice"))).toBe(false);
+        } else {
+          const voiceHost = path.join(vendor, "codex-resources/voice/bin/codex-voice-host");
+          expect(readFileSync(path.join(staged, voiceHost))).toEqual(
+            readFileSync(path.join(canonical, voiceHost)),
+          );
+        }
+      }
+      const entrypoint = path.join(staged, vendorPaths[0]!.vendor, "bin/codex");
+      const audit = () => auditMacRuntimePortability(fixture.destination, entrypoint);
+      if (bundled) {
+        expect(audit()).toBeGreaterThan(0);
+      } else {
+        expect(audit).toThrow(/Nonportable LC_RPATH.*codex-voice-host\.runfiles/);
+      }
     },
   );
 

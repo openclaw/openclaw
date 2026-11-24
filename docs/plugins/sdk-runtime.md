@@ -46,6 +46,34 @@ surface and session root. Channels may use this capability to enable helper
 tools for restricted senders. Core remains responsible for authorization and
 containment. The same ID is advertised in Gateway `hello-ok.features.capabilities`.
 
+## Resource profile
+
+`openclaw/plugin-sdk/resource-profile` exposes the host's read-only resource
+policy as `ResourceProfile` (`"standard" | "lean"`):
+
+```typescript
+import { getResourceProfile, onResourceProfileChange } from "openclaw/plugin-sdk/resource-profile";
+
+const profile = getResourceProfile();
+const unsubscribe = onResourceProfileChange((nextProfile) => {
+  // Update plugin-owned resource policy; let admitted work settle first.
+  applyResourcePolicy(nextProfile);
+});
+api.lifecycle.onDispose(unsubscribe);
+```
+
+Reads return the Gateway owner's resolved decision, without inspecting config,
+memory or CPUs again. Before Gateway initialization and in standalone commands,
+the default is `standard`. The subscription observes future changes only; it
+does not immediately call the listener. Listeners run synchronously after the
+new value is visible, and one listener throwing does not stop the others.
+Unsubscribe on plugin disposal; Gateway shutdown also clears subscriptions.
+
+`gateway.resources.profile` still requires a Gateway restart. This signal does
+not enable hot configuration changes or grant execution authority. Plugins own
+their policy: lean can defer optional startup and retire idle resources, but
+must preserve watches, accepted operations and durable maintenance obligations.
+
 ## Settled agent lifecycle events
 
 Use `api.agent.events.registerAgentEventSubscription` with `streams: ["lifecycle"]`
@@ -60,6 +88,16 @@ by the host: `isAgentLifecycleYieldedWaiting(data)` identifies a parent still
 waiting, and `resolveAgentRunLifecycleTerminalFacts({ phase, data })` classifies
 success, failure, cancellation, and timeout. Match the event's session and run
 identity before updating plugin state. These helpers grant no execution authority.
+
+## Reply session initialization conflicts
+
+Use `isReplySessionInitConflictError(error)` from
+`openclaw/plugin-sdk/reply-runtime` to recognize an exhausted reply-session
+initialization conflict. Core owns classification, including errors serialized
+across runtime boundaries; plugins should not match the error text themselves.
+Channels can send a terminal busy notice or record intentional delivery-policy
+suppression before completing the inbound event. If notice delivery fails, keep
+the event retryable through the channel's durable ingress owner.
 
 ## Module loading and host identity
 
@@ -147,17 +185,19 @@ the session's cached prefix:
   the session's pinned system prompt and tool definitions.
 - The fork sends its rebuilt request instead of the replay when the parent sent
   an item the rebuilt context lacks, the parent request is a continuation that
-  carries only its delta, the fork may run a tool the parent request never
-  listed, or the fork may run tools and the parent request lists a
-  provider-hosted tool.
+  carries only its delta, or the fork may run a tool the parent request never
+  listed.
 
-Every tool the session lists stays in the request; the fork runs only the tools
-it was given. A call to any other tool returns a normal result such as
-`exec is not available in this background run.` A tool-free fork also sets tool
-choice to `none` on OpenAI Responses (including native ChatGPT), Chat
-Completions and Anthropic Messages, so provider-hosted tools cannot run. Other
-APIs keep the parent's tool choice; a tool-free fork whose request carries a
-provider-hosted tool on those APIs fails before it is sent.
+Every tool the session lists stays in the request, including provider-hosted
+tools such as web search, so the fork shares the session's cached tool list. The
+fork runs only the client tools it was given; a call to any other client tool
+returns a normal result such as `exec is not available in this background
+run.` A fork that runs tools may also use the session's provider-hosted tools,
+because the provider runs those before the fork's tool gate. A tool-free fork
+sets tool choice to `none` on OpenAI Responses (including native ChatGPT), Chat
+Completions and Anthropic Messages, so no tool runs. Other APIs keep the
+parent's tool choice; a tool-free fork whose request carries a provider-hosted
+tool on those APIs fails before it is sent.
 
 A fork uses the session's full model context with the model's own context
 window and compaction, not an excerpt. Thinking follows the session, because
@@ -178,8 +218,15 @@ bundled plugins). The caller must also have the target session's `sessions.get`
 read access. That authority, the Gateway binding and conversation access remain
 live through the run and its settlement. Tool policy is checked as the anchored
 turn's requester: the sender, owner flag, group and channel that the turn's
-stored user message recorded. Plugins cannot supply requester facts. CLI
-runtimes are not supported.
+stored user message recorded. Plugins cannot supply requester facts.
+
+A session whose model runs on a subscription login that a CLI backend owns (for
+example `claude-cli` with a Claude login or Claude subscription token) forks
+through that CLI, so the fork stays within the plan. The CLI starts a fresh
+session with the conversation as context, so the session's prompt cache is not
+reused, and only the fork's own tools are available to it. A fork that grants
+the plugin's own tools or sets `maxTokens` cannot run on the CLI and uses the
+direct provider route instead. API-key sessions keep the request replay above.
 
 Sandboxed managed-worktree forks prepare the same private workspace and selected
 working directory as an ordinary turn of the source session. The durable project
@@ -478,6 +525,10 @@ callback keeps its registry until its returned operation settles; detached async
 resources do not extend that lifetime. Access to a released registry fails instead
 of silently selecting the current generation. Admitted turns and explicitly
 retained consumers keep their selected generation until they settle.
+Queued channel replies retain their delivery and run-observer callbacks until
+source settlement, independently of the inbound turn's adoption lifecycle.
+An internal delivery-recovery turn takes its own callback hold; completing the
+original turn does not close the recovery's callbacks or reuse its cancellation identity.
 Registry-dependent runtime APIs re-enter their live plugin owner after adoption
 and preserve an explicitly prepared registry, including an empty selection.
 
@@ -752,6 +803,10 @@ The experimental mixed-mode configuration is described in
 
 External stores continue using `resolveDatabaseEngineInput(config)`, which follows
 `database.engine` independently of the built-in family overrides.
+For PostgreSQL stores, `openclaw database port` and the built-in backup and restore
+commands cover only the registered database families listed in the
+[PostgreSQL operator guide](/gateway/postgresql#support-matrix). Plugins using
+private PostgreSQL stores need their own migration, backup, and restore procedures.
 
 Engine-aware stores keep host secret resolution and operation settlement in
 `openclaw/plugin-sdk/database-engine-runtime`, and physical opens and transaction
@@ -1040,6 +1095,17 @@ Do not use this error for an ordinary upstream 401/403 or an unverified diagnost
 code. Those remain provider failures. A code string alone does not establish a
 deployment-policy denial.
 
+## Harness runtime updates
+
+A native harness whose own runtime is too old for the requested model can return
+`AgentHarnessRuntimeUpdateRequiredError` from
+`openclaw/plugin-sdk/agent-harness-runtime` as its prompt error. Its message must
+name the update. The host records the code `harness_update_required` in the
+run's failure notice, and Control UI then offers **Start a new session**, which
+starts a session on the OpenClaw harness that asks the agent to perform the
+update. OpenClaw never installs or updates the runtime itself. Preserve the
+Error object through terminal emission, as for request-policy denials.
+
 ## Harness execution identity
 
 The harness host's closure-bound `preparedEnvironment()` returns non-secret
@@ -1079,7 +1145,7 @@ Beyond `api.runtime`, the API object also provides:
   Scoped logger (`debug`, `info`, `warn`, `error`).
 </ParamField>
 <ParamField path="api.registrationMode" type="PluginRegistrationMode">
-  Current load mode: `"full"` (live activation), `"discovery"` / `"tool-discovery"` (read-only capability discovery), `"setup-only"` (lightweight setup entry), `"setup-runtime"` (setup flow that also needs the runtime channel entry), or `"cli-metadata"` (CLI command metadata collection).
+  Current load mode: `"full"` (live activation), `"discovery"` / `"tool-discovery"` (read-only capability discovery), `"setup-only"` (lightweight setup entry), `"setup-runtime"` (setup flow that also needs the runtime channel entry), `"cli-metadata"` (CLI command metadata collection), or `"memory-backend"` (passive memory backend for the slot owner).
 </ParamField>
 <ParamField path="api.resolvePath(input)" type="(string) => string">
   Resolve a path relative to the plugin root.

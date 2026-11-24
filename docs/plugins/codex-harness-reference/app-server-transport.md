@@ -88,29 +88,31 @@ or `Codex app-server: using bundled 0.169.0 (installed /usr/local/bin/codex 0.15
 If the selected Codex later fails to start, fails `initialize`, or reports
 another version (for example after an in-place upgrade), OpenClaw starts the
 shipped binary for that request before any thread or turn exists, logs one
-warning, and keeps using the shipped binary until the Gateway restarts. ChatGPT
-model discovery reports the selected binary's version as `client_version`, so
-the model list matches the binary that runs turns. A Gateway restart repeats the
-selection, which picks up Codex installs, upgrades, and removals.
+warning, and keeps using the shipped binary until the Gateway restarts. A
+Gateway restart repeats the selection, which picks up Codex installs, upgrades,
+and removals.
 
-The model list can briefly disagree with the binary after such a fallback. A
-fallback only happens after the installed binary already passed the selection
-handshake, so these windows are rare:
-
-- A model-list refresh that started before the fallback, including one still
-  queued for a catalog worker, finishes with the installed version's list.
-- A list fetched before the fallback stays cached until the ChatGPT model rows
-  expire (about a minute) and the next refresh runs. A model only the installed
-  version offers can be picked in that window, and its turn then runs on the
-  shipped binary.
-- `openclaw models list --refresh` without a running Gateway selects a binary
-  in its own process, so its list can differ from a Gateway started later, for
-  example after installing or upgrading Codex in between.
+The binary selection does not decide which OpenAI models the picker shows. The
+ChatGPT subscription model list reports the OpenClaw version, with a `99.0.0`
+fallback when it is unavailable or not a calendar version with a four-digit
+year of 2026 or later (see
+[Model discovery](/plugins/codex-harness-reference/model-discovery)), so it can
+list a model that the selected Codex binary is too old to run. A Codex-harness
+turn on such a model fails with a message that names the running Codex version
+and asks you to update your global Codex and restart the Gateway. OpenClaw does
+not switch that turn to another harness. In Control UI, the failure offers
+**Start a new session**: a new session on the OpenClaw harness, with the same
+agent and model, that asks the agent to update Codex for you. OpenClaw itself
+never installs or updates Codex.
 
 `appServer.command`, `OPENCLAW_CODEX_APP_SERVER_BIN`, and remote app-servers
-always win; discovery then keeps reporting the shipped version. Login-status
-checks, node exec-servers, and the Doctor package check always use the shipped
-binary.
+always win. Login-status checks, node exec-servers, and the Doctor package check
+always use the shipped binary.
+
+Verified setup and repair inference also fingerprints the selected local runtime.
+For standalone packages, this includes the installer-created `codex -> bin/codex`
+link and the regular target inside the same package. Other package symlinks remain
+unsupported, and a changed link or target invalidates the captured artifact.
 
 Ordinary managed turns with the default isolated agent home prefer this package
 selection even when a macOS desktop bundle is installed. When
@@ -120,8 +122,7 @@ the desktop app binary that owns the required macOS permissions. The same
 desktop-first rule applies when an isolated agent home's effective Codex config
 enables native Computer Use. If no desktop app bundle is installed, OpenClaw
 falls back to the package selection. A desktop-first start that finds the
-desktop app does not check `PATH`: the shipped binary is its fallback, and
-ChatGPT model discovery for that agent keeps reporting the shipped version.
+desktop app does not check `PATH`: the shipped binary is its fallback.
 
 Before cutting over a staged OpenClaw package, run the opt-in managed-binary
 check against the candidate installation:
@@ -199,6 +200,7 @@ managed stdio or the local Unix control socket for production workloads.
 | `args`                           | `["app-server", "--listen", "stdio://"]`               | Arguments for stdio transport.                                                                                                                                                                                                                                                                                                                                                                                                                                               |
 | `url`                            | unset                                                  | WebSocket App Server URL or `unix://` URL. An empty explicit Unix path selects the standard user-home control socket.                                                                                                                                                                                                                                                                                                                                                        |
 | `authToken`                      | unset                                                  | Bearer token for WebSocket transport. Accepts a literal string or SecretInput such as `${CODEX_APP_SERVER_TOKEN}`.                                                                                                                                                                                                                                                                                                                                                           |
+| `tlsPeerCertificate`             | unset                                                  | Exact PEM leaf certificate for a WSS endpoint. The client checks the certificate and hostname before sending the bearer or WebSocket frames. Supply the new certificate when admitting a replacement server.                                                                                                                                                                                                                                                                 |
 | `headers`                        | `{}`                                                   | Extra WebSocket headers. Header values accept literal strings or SecretInput values, for example `x-codex-client-session-token: "${CODEX_CLIENT_SESSION_TOKEN}"`.                                                                                                                                                                                                                                                                                                            |
 | `clearEnv`                       | `[]`                                                   | Extra environment variable names removed from the spawned stdio app-server process after OpenClaw builds its inherited environment.                                                                                                                                                                                                                                                                                                                                          |
 | `remoteWorkspaceRoot`            | unset                                                  | Remote Codex app-server workspace root. OpenClaw maps the local cwd into this root and transfers authoritative remote attachments over an output-capped, no-shell `command/exec` reader. Paths escaping either workspace, symbolic links, oversized files, and unbounded attachment batches are rejected; uploads retain the configured channel identity and app-server request timeout.                                                                                     |

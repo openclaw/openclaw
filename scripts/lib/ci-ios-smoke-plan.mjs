@@ -33,10 +33,11 @@ const voiceOwners = [
 ];
 
 const lifecycleOwners = [
+  /^apps\/ios\/UITests\/OpenClawSnapshotUITests\+Chat\.swift$/u,
   /^apps\/ios\/Tests\/QRScannerResultHandoffTests\.swift$/u,
   /^scripts\/ios-access-restart-proof\.py$/u,
   /^apps\/ios\/Tests\/(?:CloudflareAccessClientTests|CloudflareAccessBrowserPresenterTests|CloudflareAccessTransferTests|CloudflareAccessSessionStoreTests|CloudflareAccessTestTokens|ChatTypingFocusTests|ChatSendHydrationTests|SettingsHubTests|GatewayIngressControllerTests|GatewayIngressActivationTests|GatewayIngressWireTests|GatewayIngressLoginPreparationTests|GatewayAccessDeviceAuthBindingTests|GatewayAccessRestartTests|GatewayOperatorFleetTests|GatewayConnectionControllerTests|GatewayConnectionSecurityTests|GatewaySettingsStoreTests|IOSMediaArtifactLoaderTests|OpenClawTypographyTests)\.swift$/u,
-  /^apps\/shared\/OpenClawKit\/Tests\/OpenClawKitTests\/ChatComposerTextViewIOSTests\.swift$/u,
+  /^apps\/shared\/OpenClawKit\/Tests\/OpenClawKitTests\/(?:ChatComposerTextViewIOSTests|ChatSessionsCodingTests|ToolResultIngestionTransport)\.swift$/u,
 ];
 
 /** Select simulator execution only; the app and test products still compile. */

@@ -347,7 +347,9 @@ it("finishes CLI cleanup across moved HEADs, orphans, idle, active, leased and m
   expect(getRegistryWorktree(env, orphan!.id)?.removedAt).toBeGreaterThanOrEqual(now);
   expect(getRegistryWorktree(env, orphan!.id)?.removedAt).toBeLessThanOrEqual(Date.now());
   expect((await service.list()).some((record) => record.id === orphan!.id)).toBe(false);
-  await expect(service.restore({ id: orphan!.id })).rejects.toThrow("is not restorable");
+  await expect(service.restore({ id: orphan!.id })).rejects.toThrow(
+    "checkout preserved. Repair its Git metadata or create a new worktree before retrying",
+  );
   expect(await requireGit(repo, ["rev-parse", "--verify", orphan!.branch])).toBeTruthy();
   expect(getRegistryWorktree(env, moved!.id)?.removedAt).toBeUndefined();
   expect(await requireGit(repo, ["rev-parse", "--verify", moved!.branch])).toBeTruthy();

@@ -3276,7 +3276,6 @@
       "test/scripts/code-mode-matrix-data-tasks.test.ts": 1,
       "test/scripts/code-mode-matrix-fanout-tasks.test.ts": 1,
       "test/scripts/code-mode-matrix-gateway-fixtures.test.ts": 3,
-      "test/scripts/code-mode-matrix-gateway.test.ts": 1,
       "test/scripts/code-mode-matrix-recovery-tasks.test.ts": 1,
       "test/scripts/code-mode-matrix-usage.test.ts": 1,
       "test/scripts/code-mode-model-matrix.gateway-evidence.test.ts": 4,

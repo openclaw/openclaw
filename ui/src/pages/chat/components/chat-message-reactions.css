@@ -147,9 +147,11 @@ openclaw-message-reaction-picker .chat-reaction-tab {
   --chat-reaction-tab-surface: color-mix(in srgb, var(--text) 6%, var(--bg-content, var(--bg)));
   box-shadow: none;
 }
-/* Your own reaction reads as pressed: a deeper tone of the same surface. */
-.chat-message-reactions.chat-message-reactions--own .chat-reaction-tab {
+/* Only flat replies use a deeper fill for your reaction; attached tabs match the bubble. */
+:is(.chat-group-footer, .chat-message-actions-row) > .chat-message-reactions--own {
   --chat-reaction-tab-tone: 10%;
+}
+.chat-message-reactions--own .chat-reaction-tab {
   --chat-reaction-tab-ink: var(--accent);
   color: var(--accent);
 }

@@ -3,7 +3,6 @@ import { createMemo, createUniqueId, For, Show } from "solid-js";
 import { Icon } from "../../components/solid/icon.tsx";
 import { Popover, type PopoverHandle } from "../../components/solid/popover.tsx";
 import { i18n } from "../../i18n/index.ts";
-import type { CronFormState } from "../../lib/cron/types.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import {
   ALL_DAYS,
@@ -17,8 +16,6 @@ import {
   type SentenceFrequency,
 } from "./schedule-sentence.ts";
 import type { CronProps } from "./view-types.ts";
-
-type Kind = { value: CronFormState["scheduleKind"]; label: string; testId: string };
 
 const FREQUENCIES: SentenceFrequency[] = [
   "daily",
@@ -186,9 +183,9 @@ function NumberChoice(props: {
 /** The schedule as a sentence over the existing schedule fields; Custom keeps the expression. */
 export function ScheduleSentence(
   props: CronProps & {
-    frequency: SentenceFrequency;
+    frequency: SentenceFrequency | null;
     phoneLayout: boolean;
-    kinds: Kind[];
+    canChooseEvent: boolean;
     onFrequencyPreference: (mode: "custom" | "daily" | null) => void;
   },
 ) {
@@ -203,7 +200,18 @@ export function ScheduleSentence(
     }
     return parsed;
   });
-  const eventKind = () => props.kinds.find((kind) => kind.value === "event");
+  const frequencyLabel = () => {
+    if (props.frequency) {
+      return t(`cron.schedule.${props.frequency}`);
+    }
+    return t(
+      props.form.scheduleKind === "on-exit"
+        ? "cron.form.repeatOnExit"
+        : props.form.scheduleKind === "stream"
+          ? "cron.form.repeatStream"
+          : "cron.events.label",
+    );
+  };
   const writeCron = (next: CronSentence) =>
     props.onFormChange({ cronExpr: formatCronSentence(next) });
   const chooseFrequency = (frequency: SentenceFrequency) => {
@@ -255,7 +263,7 @@ export function ScheduleSentence(
       <Part
         id={`${id}-frequency`}
         label={t("cron.form.repeat")}
-        text={t(`cron.schedule.${props.frequency}`)}
+        text={frequencyLabel()}
         testId="cron-schedule-frequency"
       >
         {(close) => (
@@ -273,19 +281,24 @@ export function ScheduleSentence(
                 />
               )}
             </For>
-            <Show when={eventKind()}>
-              {(kind) => (
-                <Choice
-                  selected={false}
-                  label={kind().label}
-                  testId="cron-schedule-frequency-event"
-                  onSelect={() => {
+            <Show when={props.canChooseEvent}>
+              <Choice
+                selected={props.form.scheduleKind === "event"}
+                label={t("cron.events.label")}
+                testId="cron-schedule-frequency-event"
+                onSelect={() => {
+                  if (props.form.scheduleKind !== "event") {
                     props.onFrequencyPreference(null);
                     props.onFormChange(scheduleKindPatch(props.form, "event"));
-                    close();
-                  }}
-                />
-              )}
+                  }
+                  close();
+                }}
+              />
+            </Show>
+            <Show
+              when={props.form.scheduleKind === "on-exit" || props.form.scheduleKind === "stream"}
+            >
+              <Choice selected label={frequencyLabel()} onSelect={close} />
             </Show>
           </div>
         )}

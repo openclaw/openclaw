@@ -346,8 +346,16 @@ export function BrowserToolbar(
                   event.currentTarget.blur();
                 }
               } else if (event.key === "Escape") {
-                props.controller.resetUrlDraftFromView();
-                event.currentTarget.blur();
+                if (invalid() || props.controller.urlDraft !== activeUrl()) {
+                  // Cancel the address edit before the surrounding panel handles Escape.
+                  event.preventDefault();
+                  props.controller.resetUrlDraftFromView();
+                  setInvalid(false);
+                  const address = event.currentTarget;
+                  onSettled(() => address.select());
+                } else {
+                  event.currentTarget.blur();
+                }
               }
             }}
           />

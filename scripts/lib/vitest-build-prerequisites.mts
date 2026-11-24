@@ -220,7 +220,10 @@ const runtimeConsumers = [
     mode: "runtime",
     dir: "",
   },
-  ...startupCorpusTestFiles.map((file) => ({
+  ...[
+    ...startupCorpusTestFiles,
+    "src/config/sessions/session-transcript-reconcile.lifecycle-phases.test.ts",
+  ].map((file) => ({
     file,
     configs: ["test/vitest/vitest.runtime-config.config.ts"],
     mode: "runtime" as const,

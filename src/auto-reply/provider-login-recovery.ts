@@ -5,6 +5,10 @@ import {
 import type { FailoverReason } from "../agents/failover/signal.js";
 import type { ModelAuthRefreshOutcome } from "../commands/models/auth-refresh.js";
 import type { MessagePresentation } from "../interactive/payload.js";
+import {
+  readProviderAuthFailure,
+  type ProviderAuthFailure,
+} from "../plugins/provider-auth-failure.js";
 import type { ProviderChannelLoginChoice } from "../plugins/provider-login-options.js";
 import {
   ProviderAuthConfigApplyError,
@@ -30,6 +34,13 @@ export function formatProviderLoginCompletion(
   return sessionSwitchFailed ? `${message} ${sessionFailure}` : message;
 }
 
+/** Chat cannot collect typed input; the chat sign-in prompter throws this for any prompt. */
+export const PROVIDER_LOGIN_NEEDS_APP =
+  "This provider needs input that chat cannot collect. Open Models in the OpenClaw app and choose Sign in.";
+
+const OPEN_APP = "Open Models in the OpenClaw app and choose Sign in.";
+
+/** The chat renderer for a failed `/login`: never a terminal command. */
 export function formatProviderLoginFailure(
   choice: ProviderChannelLoginChoice,
   error: unknown,
@@ -40,11 +51,28 @@ export function formatProviderLoginFailure(
   if (error instanceof ProviderCredentialsSavedError) {
     return `Some ${choice.providerLabel} sign-in details were saved, but setup is incomplete. Open Models to review the saved connection and finish setup.`;
   }
-  return `${choice.providerLabel} login did not complete. Send \`${formatProviderLoginCommand(choice.command)}\` to try again.`;
+  if (error instanceof Error && error.message === PROVIDER_LOGIN_NEEDS_APP) {
+    return PROVIDER_LOGIN_NEEDS_APP;
+  }
+  const retry = `Send \`${formatProviderLoginCommand(choice.command)}\` to try again.`;
+  const failure = readProviderAuthFailure(error);
+  if (!failure) {
+    return `${choice.providerLabel} login did not complete. ${retry}`;
+  }
+  const next = {
+    retry,
+    restart: retry,
+    "fix-paste": OPEN_APP,
+    "open-settings": OPEN_APP,
+    wait: `Wait a few minutes, then ${retry.charAt(0).toLowerCase()}${retry.slice(1)}`,
+    admin: "Ask your administrator to allow this sign-in.",
+  }[failure.recovery];
+  return `${choice.providerLabel}: ${failure.message} ${next}`;
 }
 
 export type ProviderLoginRecoveryEvidence = {
   provider?: string;
+  providerAuthFailure?: ProviderAuthFailure;
   oauthReason?: OAuthRefreshFailureReason | null;
   failoverReason?: FailoverReason;
   authMode?: string;
@@ -65,8 +93,11 @@ const AUTH_PROFILE_LOGIN_REASONS = new Set<FailoverReason>([
 export function buildProviderLoginRecovery(
   evidence: ProviderLoginRecoveryEvidence,
 ): ProviderLoginRecovery | undefined {
+  const failureRecovery = evidence.providerAuthFailure?.recovery;
   const needsLogin =
-    evidence.oauthReason != null ||
+    failureRecovery === "restart" ||
+    failureRecovery === "retry" ||
+    (failureRecovery === undefined && evidence.oauthReason != null) ||
     (evidence.authMode === "oauth" &&
       evidence.failoverReason !== undefined &&
       AUTH_PROFILE_LOGIN_REASONS.has(evidence.failoverReason));
@@ -75,7 +106,8 @@ export function buildProviderLoginRecovery(
   }
   const command = buildOAuthRefreshFailureLoginCommand(evidence.provider, { surface: "chat" });
   return {
-    hint: `Your model provider needs a new login. Send \`${command}\` from a private chat or the OpenClaw app. Where shown, you can also select **Sign in**.`,
+    // Plain text: error surfaces show it verbatim; channels with buttons add the Sign in action.
+    hint: `Your model provider needs a new login. Send ${command} from a private chat or the OpenClaw app.`,
     presentation: {
       blocks: [
         {

@@ -1,22 +1,19 @@
 // Register shared transport mocks before production publication owners load.
 // oxfmt-ignore
 import {
-  githubPublicationTestMocks,
-  installGitHubPublicationTestHarness,
+    githubPublicationTestMocks,
+    installGitHubPublicationTestHarness,
 } from "./github-publication.test-support.js";
-import { afterEach, expect, it, onTestFinished, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import { setRuntimeConfigSnapshot } from "../config/config.js";
 import {
   loadSessionEntryReadOnly,
   upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
-import { getPluginRegistryState } from "../plugins/runtime-state.js";
-import { createDeferredCore } from "../shared/deferred.js";
 import {
   encodeGitHubPublicationRequester,
   matchesGitHubPublicationRequester,
 } from "../state/github-publication-requester.js";
-import * as stateWorker from "../state/openclaw-state-worker-store.js";
 import { getUserProfileListItem } from "../state/user-profile-list-item.test-support.js";
 import * as userProfileList from "../state/user-profile-list.js";
 import {
@@ -26,11 +23,7 @@ import {
   mergeCanonicalUserProfiles,
   setCanonicalUserProfileRole,
 } from "../state/user-profile-writes.js";
-import {
-  linkEmail,
-  setDisplayName,
-  setUserProfileRole,
-} from "../state/user-profile-writes.worker.js";
+import { setDisplayName } from "../state/user-profile-writes.worker.js";
 import { GitHubPublicationRequesterUnavailableError } from "./github-publication-failure.js";
 import {
   configurePublicationMember,
@@ -41,7 +34,6 @@ import {
 import {
   prepareGitHubPublicationRequesterV2,
   prepareGitHubPublicationTaskRequester,
-  restoreGitHubPublicationRequester,
 } from "./github-publication-requester.js";
 import {
   capturePublicationGuest as captureGuest,
@@ -57,8 +49,7 @@ import {
   startVisitorPublicationFixture as startVisitors,
 } from "./github-publication-requester.test-support.js";
 import { setOpenClawIdTunnelPrincipalLookup } from "./openclaw-id/tunnel-principal.js";
-import * as operatorAccessPolicy from "./operator-access-policy.js";
-import { invalidateOperatorRolePolicy } from "./operator-role-policy.js";
+import { GatewayOperatorAccessUnavailableError } from "./operator-access-policy.js";
 
 const mocks = githubPublicationTestMocks();
 const checkpoint = vi.hoisted(() => vi.fn());
@@ -100,87 +91,9 @@ installGitHubPublicationTestHarness({
   sandbox: "required",
   realWorktree: true,
 });
-
-it.each(["alias interruption", "role revocation"] as const)(
-  "uses current retained-grant profile facts without profile SQL and checks callback %s",
-  async (callbackChange) => {
-    const f = await createRequesterPolicyFixture();
-    const other = await ensureCanonicalUserProfileForEmail(recipient);
-    await linkCanonicalUserProfileEmail("publication-secondary@example.test", f.guestProfile);
-    await using visitors = await startVisitors(f);
-    void visitors;
-    const original = await captureGuest(f);
-    const policy = getPluginRegistryState()?.activeRegistry?.gatewayAccessPolicies.find(
-      (entry) => entry.pluginId === "visitor-access",
-    )?.policy;
-    if (!policy?.resume) {
-      throw new Error("Visitor policy did not register grant resumption");
-    }
-    const resume = policy.resume;
-    let interrupt: (() => void) | undefined;
-    vi.spyOn(policy, "resume").mockImplementation((context) => {
-      const authority = resume(context);
-      return (
-        authority && {
-          ...authority,
-          assertCurrent: () => {
-            authority.assertCurrent();
-            const callback = interrupt;
-            interrupt = undefined;
-            callback?.();
-          },
-        }
-      );
-    });
-    const restored = await restoreGitHubPublicationRequester(
-      JSON.stringify(original.requester.snapshot),
-      original.session,
-      original.context.getCommittedRuntimeConfig,
-    );
-    onTestFinished(restored.release);
-    original.release();
-    const observed = vi.spyOn(operatorAccessPolicy, "resumeGatewayOperatorAccessGrant");
-    const native = vi.spyOn(f.database.db, "prepare");
-    const assertWithoutProfileSql = () => {
-      native.mockClear();
-      restored.assertCurrent();
-      expect(
-        native.mock.calls.filter(([sql]) =>
-          /user_profiles|user_profile_emails|user_profile_identities/u.test(sql),
-        ),
-      ).toEqual([]);
-    };
-    invalidateOperatorRolePolicy(f.guestProfile);
-    assertWithoutProfileSql();
-    expect(observed.mock.lastCall?.[0]).toMatchObject({
-      profileId: f.guestProfile,
-      emails: [email, "publication-secondary@example.test"].toSorted(),
-      assignedRole: null,
-    });
-    setDisplayName(f.guestProfile, "Current name");
-    await linkCanonicalUserProfileEmail(later, f.guestProfile);
-    await setCanonicalUserProfileRole(f.guestProfile, "maintainer");
-    invalidateOperatorRolePolicy(f.guestProfile);
-    assertWithoutProfileSql();
-    expect(observed.mock.lastCall?.[0]).toMatchObject({
-      profileId: f.guestProfile,
-      emails: [email, "publication-secondary@example.test", later].toSorted(),
-      assignedRole: "maintainer",
-    });
-    await linkCanonicalUserProfileEmail(later, other.id);
-    assertWithoutProfileSql();
-    interrupt = () => {
-      if (callbackChange === "alias interruption") {
-        linkEmail(email, other.id);
-        linkEmail(email, f.guestProfile);
-      } else {
-        setUserProfileRole(f.guestProfile, "revoked");
-        invalidateOperatorRolePolicy(f.guestProfile);
-      }
-    };
-    expect(restored.assertCurrent).toThrow(GitHubPublicationRequesterUnavailableError);
-  },
-);
+beforeEach(async () => {
+  onTestFinished((await userProfileList.prepareUserProfileCatalog()).release);
+});
 
 it.each(forBackends(["captured alias", "later alias"] as const))(
   "binds queued $backend Visitor publication when $change changes",
@@ -203,10 +116,10 @@ it.each(forBackends(["captured alias", "later alias"] as const))(
     expect(JSON.stringify(f.readRequester(queued.requestId))).not.toContain(email);
     if (change === "captured alias") {
       await linkCanonicalUserProfileEmail(email, other.id);
-      expect(original.requester.signal.aborted).toBe(true);
-      expect(original.requester.assertCurrent).toThrow(GitHubPublicationRequesterUnavailableError);
+      expect(original.requester.signal.aborted).toBe(false);
+      expect(original.requester.assertCurrent).not.toThrow();
       await linkCanonicalUserProfileEmail(email, f.guestProfile);
-      expect(original.requester.assertCurrent).toThrow(GitHubPublicationRequesterUnavailableError);
+      expect(original.requester.assertCurrent).not.toThrow();
     } else {
       setDisplayName(f.guestProfile, "Updated publication guest");
       await linkCanonicalUserProfileEmail(later, f.guestProfile);
@@ -307,11 +220,9 @@ it.each(forBackends(["later alias removed", "request cancelled"] as const))(
   },
 );
 
-it.each(
-  forBackends(["profile preparation is unavailable", "a profile mutation is unsettled"] as const),
-)(
+it.each(forBackends(["profile preparation is unavailable"] as const))(
   "keeps an accepted $backend request pending when $change",
-  async ({ backend, change: availability }) => {
+  async ({ backend }) => {
     const f = await fixture(backend);
     await using visitors = await startVisitors(f);
     void visitors;
@@ -321,54 +232,10 @@ it.each(
     original.release();
     const restarted = f.restart();
     const preparation = vi.spyOn(userProfileList, "prepareUserProfileIdentity");
-    const releasePublication = createDeferredCore();
-    let mutation: Promise<unknown> | undefined;
     try {
-      if (availability === "profile preparation is unavailable") {
-        preparation.mockRejectedValueOnce(new Error("synthetic profile read unavailable"));
-      } else {
-        const prepare = mocks.prepareIdentity.getMockImplementation()!;
-        mocks.prepareIdentity.mockImplementationOnce(async (...args) => {
-          const identity = await prepare(...args);
-          expect(preparation).toHaveBeenCalledOnce();
-          const nativeSettlement = createDeferredCore<string>();
-          const execute = stateWorker.runOpenClawStateWorkerOperation;
-          const delivery = vi
-            .spyOn(stateWorker, "runOpenClawStateWorkerOperation")
-            .mockImplementationOnce((context, operation, options) => {
-              const admit = options?.createAdmission;
-              if (!admit) {
-                throw new Error("Expected the canonical profile write admission");
-              }
-              return execute(context, operation, {
-                ...options,
-                createAdmission: ({ settled }) =>
-                  admit({
-                    settled: settled.then(async (result) => {
-                      // Hold publication delivery after the real native transaction settles.
-                      nativeSettlement.resolve(result.kind);
-                      await releasePublication.promise;
-                      return result;
-                    }),
-                  }),
-              });
-            });
-          try {
-            mutation = linkCanonicalUserProfileEmail(later, f.guestProfile);
-            await expect(
-              Promise.race([nativeSettlement.promise, mutation.then(() => "delivered")]),
-            ).resolves.toBe("completed");
-          } finally {
-            delivery.mockRestore();
-          }
-          return identity;
-        });
-      }
+      preparation.mockRejectedValueOnce(new Error("synthetic profile read unavailable"));
       await expect(restarted.resumeSessionRequests()).rejects.toBeInstanceOf(AggregateError);
       expect(preparation).toHaveBeenCalledOnce();
-      if (availability === "a profile mutation is unsettled") {
-        expect(mutation).toBeDefined();
-      }
       expect(await restarted.readAsync(queued.requestId)).toMatchObject({
         status: backend === "local" ? "publishing" : "requested",
       });
@@ -378,8 +245,6 @@ it.each(
       expect(f.externalWrites).toEqual([]);
     } finally {
       preparation.mockRestore();
-      releasePublication.resolve();
-      await mutation;
     }
     await restarted.resumeSessionRequests();
     expect(await restarted.readAsync(queued.requestId)).toMatchObject({ status: "published" });
@@ -429,7 +294,7 @@ it("retains the winning repository request's bindings across concurrent alias-ad
 
 afterEach(() => setOpenClawIdTunnelPrincipalLookup(undefined));
 
-it("publishes under the member role with a null grant despite the visitor default, including task handoff and restoration", async () => {
+it("publishes under the assigned profile role with a null grant despite the visitor default, including task handoff and restoration", async () => {
   const f = await memberFixture();
   await using visitors = await startVisitors(f);
   void visitors;
@@ -444,9 +309,8 @@ it("publishes under the member role with a null grant despite the visitor defaul
   expect(matchesGitHubPublicationRequester(f.guest.snapshot, source.requester.snapshot)).toBe(
     false,
   );
-  await expect(restore(encodeGitHubPublicationRequester(historical), f)).rejects.toThrow(
-    GitHubPublicationRequesterUnavailableError,
-  );
+  const historicalRequester = await restore(encodeGitHubPublicationRequester(historical), f);
+  expect(historicalRequester.assertCurrent).not.toThrow();
   expect(matchesGitHubPublicationRequester(source.requester.snapshot, f.guest.snapshot)).toBe(
     false,
   );
@@ -459,6 +323,8 @@ it("publishes under the member role with a null grant despite the visitor defaul
       },
     }),
   ).toBe(false);
+  f.setMember({ ...f.principal, role: "stale-role-label" });
+  expect(source.requester.assertCurrent).not.toThrow();
   const restored = await restore(json, f);
   const parent = f.guestSource.session;
   const entry = loadSessionEntryReadOnly(parent)!;
@@ -488,7 +354,7 @@ it("publishes under the member role with a null grant despite the visitor defaul
 });
 
 it.each(["removed", "reassigned", "edited", "deleted"] as const)(
-  "refuses live and persisted member publication when membership is %s",
+  "retains admitted member publication and refuses the next start when membership or profile role is %s",
   async (change) => {
     const f = await memberFixture();
     const source = await f.capture();
@@ -503,21 +369,25 @@ it.each(["removed", "reassigned", "edited", "deleted"] as const)(
         agents: "*",
         sessions: { others: "view" },
       };
-      f.setMember({ ...f.principal, role: "viewer" });
+      await setCanonicalUserProfileRole(f.guestProfile, "viewer");
     } else if (change === "edited") {
       f.config.gateway!.roles!.definitions.operator!.scopes = ["operator.sessions.read"];
     } else {
       delete f.config.gateway!.roles!.definitions.operator;
     }
     setRuntimeConfigSnapshot(f.config);
-    expect(source.requester.assertCurrent).toThrow(GitHubPublicationRequesterUnavailableError);
-    expect(restored.assertCurrent).toThrow(GitHubPublicationRequesterUnavailableError);
-    await expect(restore(json, f)).rejects.toThrow(GitHubPublicationRequesterUnavailableError);
+    expect(source.requester.assertCurrent).not.toThrow();
+    expect(restored.assertCurrent).not.toThrow();
+    await expect(restore(json, f)).rejects.toThrow(
+      change === "deleted"
+        ? GatewayOperatorAccessUnavailableError
+        : GitHubPublicationRequesterUnavailableError,
+    );
     expect(f.externalWrites).toEqual([]);
   },
 );
 
-it("retains historical null-grant authorization and refusal without inferring membership", async () => {
+it("retains admitted historical null-grant authorization but refuses the next start without inferring membership", async () => {
   const f = await createRequesterPolicyFixture();
   const json = JSON.stringify({
     version: 1,
@@ -531,8 +401,8 @@ it("retains historical null-grant authorization and refusal without inferring me
   const restored = await restore(json, f);
   expect(restored.assertCurrent).not.toThrow();
   requireVisitorPublicationPolicy(f);
-  expect(restored.assertCurrent).toThrow(GitHubPublicationRequesterUnavailableError);
-  await expect(restore(json, f)).rejects.toThrow(GitHubPublicationRequesterUnavailableError);
+  expect(restored.assertCurrent).not.toThrow();
+  await expect(restore(json, f)).rejects.toThrow(GatewayOperatorAccessUnavailableError);
 });
 
 it.each([false, true])(
@@ -555,8 +425,9 @@ it.each([false, true])(
     const restored = await restore(json, f);
     expect(restored.assertCurrent).not.toThrow();
     await visitors.execute("visitor_revoke", { email });
-    expect(source.requester.assertCurrent).toThrow(GitHubPublicationRequesterUnavailableError);
-    expect(restored.assertCurrent).toThrow(GitHubPublicationRequesterUnavailableError);
+    expect(source.requester.assertCurrent).not.toThrow();
+    expect(restored.assertCurrent).not.toThrow();
+    await expect(restore(json, f)).rejects.toThrow(GitHubPublicationRequesterUnavailableError);
   },
 );
 
@@ -575,13 +446,14 @@ it.each([{}, { kind: "unknown" }, { kind: "member", peerKey: "invalid" }])(
 it.each(forBackends(["live grant", "revoked grant", "linked profile"] as const))(
   "retries a historical non-null-grant $backend request as a member with $change",
   async ({ backend, change }) => {
-    const f = configurePublicationMember(await fixture(backend));
-    await using visitors = await startVisitors(f);
+    const base = await fixture(backend);
+    await using visitors = await startVisitors(base);
     void visitors;
-    const { original, claim, input, queued } = await queueGuest(f, "historical-member-retry");
+    const { original, claim, input, queued } = await queueGuest(base, "historical-member-retry");
     expect(original.requester.snapshot.openclawIdPrincipal).toBeUndefined();
     expect(original.requester.snapshot.grant?.pluginId).toBe("visitor-access");
     const historical = { ...original.requester.snapshot, authenticationSource: undefined };
+    const f = await configurePublicationMember(base);
     f.replaceRequesterSnapshot(queued.requestId, encodeGitHubPublicationRequester(historical));
     if (change === "linked profile") {
       const linked = await ensureCanonicalUserProfileForOpenClawIdIdentity({
@@ -630,28 +502,37 @@ it.each(
     "member removed",
     "member downgraded",
   ] as const),
-)("refuses a $backend retry when the requester is $change", async ({ backend, change }) => {
-  const f = configurePublicationMember(await fixture(backend));
-  await using visitors = await startVisitors(f);
-  void visitors;
-  const original = change.startsWith("historical") ? await captureGuest(f) : await f.capture();
-  await holdWorkerTurn(f);
-  const input = f.request("revoked-member-retry", original.requester);
-  const queued = await f.coordinator.requestForSessionV2(input);
-  const retry = await f.capture();
-  if (change.endsWith("removed")) {
-    f.setMember(undefined);
-  } else {
-    f.config.gateway!.roles!.definitions.operator!.scopes = ["operator.sessions.read"];
-    setRuntimeConfigSnapshot(f.config);
-  }
-  expect(retry.requester.assertCurrent).toThrow(GitHubPublicationRequesterUnavailableError);
-  await expect(
-    f.coordinator.requestForSessionV2({ ...input, requester: retry.requester }),
-  ).rejects.toThrow(GitHubPublicationRequesterUnavailableError);
-  expect(f.readRequester(queued.requestId)).toEqual(original.requester.snapshot);
-  expect(f.externalWrites).toEqual([]);
-});
+)(
+  "retains an admitted $backend retry but refuses its next start when the requester is $change",
+  async ({ backend, change }) => {
+    const base = await fixture(backend);
+    await using visitors = await startVisitors(base);
+    void visitors;
+    const historical = change.startsWith("historical")
+      ? await queueGuest(base, "revoked-member-retry")
+      : undefined;
+    const f = await configurePublicationMember(base);
+    const original = historical?.original ?? (await f.capture());
+    if (!historical) {
+      await holdWorkerTurn(f);
+    }
+    const input = f.request("revoked-member-retry", original.requester);
+    const queued = historical?.queued ?? (await f.coordinator.requestForSessionV2(input));
+    const retry = await f.capture();
+    if (change.endsWith("removed")) {
+      f.setMember(undefined);
+    } else {
+      f.config.gateway!.roles!.definitions.operator!.scopes = ["operator.sessions.read"];
+      setRuntimeConfigSnapshot(f.config);
+    }
+    expect(retry.requester.assertCurrent).not.toThrow();
+    await expect(
+      restore(encodeGitHubPublicationRequester(retry.requester.snapshot), f),
+    ).rejects.toThrow(GitHubPublicationRequesterUnavailableError);
+    expect(f.readRequester(queued.requestId)).toEqual(original.requester.snapshot);
+    expect(f.externalWrites).toEqual([]);
+  },
+);
 
 it.each(memberRetryMismatchCases())(
   "does not normalize a retry with $change",

@@ -64,6 +64,29 @@ test("folder recents deduplicate normalized nodes without merging different runn
   expect([...usedSessions]).toEqual([0, 2, 3].map((index) => `agent:main:folder-${index}`));
 });
 
+test("folder recents skip agent-spawned helper sessions", async () => {
+  const candidates = [
+    {
+      key: "agent:main:subagent:helper",
+      agentId: "main",
+      entry: {
+        sessionId: "helper",
+        updatedAt: 2,
+        spawnedBy: "agent:main:dashboard:parent",
+        spawnedCwd: "/work/helper-worktree",
+      },
+    },
+    {
+      key: "agent:main:dashboard:parent",
+      agentId: "main",
+      entry: { sessionId: "parent", updatedAt: 1, spawnedCwd: "/work/app" },
+    },
+  ];
+  const usedSessions = new Set<string>();
+  expect(await listProjectRecents(candidates, [], usedSessions)).toEqual([folderRecent("app")]);
+  expect([...usedSessions]).toEqual(["agent:main:dashboard:parent"]);
+});
+
 test("projects.list returns only the caller's deterministic resolved recents", async () => {
   const state = await createOpenClawTestState({ layout: "state-only", prefix: "projects-rpc-" });
   const memoryLocation = {

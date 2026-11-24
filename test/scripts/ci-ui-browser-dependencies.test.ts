@@ -1,4 +1,11 @@
-import { mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
+import {
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, expect, it } from "vitest";
@@ -25,6 +32,10 @@ it.each([
     writeFileSync(local(file), content);
   };
   mkdirSync(local("bin"));
+  fixture(
+    ".ci-harness/.github/actions/setup-playwright-webkit/action.yml",
+    readFileSync(".github/actions/setup-playwright-webkit/action.yml", "utf8"),
+  );
   symlinkSync(path.resolve("node_modules"), local("node_modules"), "junction");
   for (const file of [suite, sibling]) {
     fixture(file, 'throw new Error("Discovery must not execute test bodies");\n');
@@ -95,4 +106,123 @@ export default { test: {
   writeFileSync(local("installs"), "");
   run(1, [sibling]);
   expect(read("installs")).toBe("");
+});
+
+it.each([
+  ["hosted recovery", "apt-mirrors.txt", 0],
+  ["hosted fallback failure", "apt-mirrors.txt", 43],
+  ["provider recovery", "blacksmith-ubuntu-mirrors.txt", 0],
+  ["provider fallback failure", "blacksmith-ubuntu-mirrors.txt", 43],
+] as const)("installs FRV WebKit through frozen Q: %s", (_scenario, mirrorFile, fallbackExit) => {
+  const root = tempDirs.make("openclaw-frv-webkit-");
+  const local = (file: string) => path.join(root, file);
+  const steps = workflow.readWorkflow(".github/workflows/openclaw-repo-e2e-reusable.yml").jobs.test
+    .steps as workflow.WorkflowStep[];
+  const checkout = workflow.requiredWorkflowStep(steps, "Checkout trusted artifact harness");
+  const install = workflow.requiredWorkflowStep(
+    steps,
+    "Install Playwright WebKit for Control UI E2E",
+  );
+  const actionPath = ".github/actions/setup-playwright-webkit/action.yml";
+  expect(checkout.with?.ref).toBe("${{ inputs.workflow_sha }}");
+  expect(checkout.with?.repository).toBe("${{ inputs.workflow_repository }}");
+  // Materialize only files admitted by Q's sparse checkout, not the selected target.
+  const sparse = String(checkout.with?.["sparse-checkout"]).trim().split("\n");
+  if (sparse.some((entry) => actionPath.startsWith(entry.slice(1)))) {
+    const destination = local(path.join(String(checkout.with?.path), actionPath));
+    mkdirSync(path.dirname(destination), { recursive: true });
+    copyFileSync(actionPath, destination);
+  }
+  mkdirSync(path.dirname(local(actionPath)), { recursive: true });
+  writeFileSync(
+    local(actionPath),
+    "runs:\n  using: composite\n  steps:\n    - name: Target must not own the installer\n      shell: bash\n      run: exit 99\n",
+  );
+  for (const [command, selected] of [
+    ["pnpm test:ui:e2e --shard=4/4", true],
+    ["pnpm test:e2e:gateway", false],
+  ] as const) {
+    expect(
+      workflow.evaluateWorkflowCondition(install.if!, {
+        eventName: "workflow_dispatch",
+        repository: "openclaw/openclaw",
+        runAttempt: 1,
+        matrix: { command },
+      }),
+    ).toBe(selected);
+  }
+  mkdirSync(local("bin"));
+  mkdirSync(local("apt/apt.conf.d"), { recursive: true });
+  mkdirSync(local("ui"));
+  const mirrors = "https://slow.invalid/ubuntu\thigh\nhttps://fallback.invalid/ubuntu\tlow\n";
+  const inactiveMirrors = "https://inactive.invalid/ubuntu\nhttps://unused.invalid/ubuntu\n";
+  const inactiveFile = mirrorFile === "apt-mirrors.txt" ? "unused.txt" : "apt-mirrors.txt";
+  writeFileSync(local(`apt/${mirrorFile}`), mirrors);
+  writeFileSync(local(`apt/${inactiveFile}`), inactiveMirrors);
+  writeFileSync(local("events"), "");
+  for (const [command, body] of [
+    ["id", "echo 1000"],
+    ["sudo", '[ "$1" = -n ]; shift; export ROOT_PHASE=1; exec "$@"'],
+    [
+      "apt-get",
+      'printf "%s\\n" "mirror+file:$CASE_ROOT/apt/$MIRROR_FILE/" "https://packages.invalid/" "mirror+file:$CASE_ROOT/apt/$MIRROR_FILE/"',
+    ],
+    [
+      "timeout",
+      '[ "$ROOT_PHASE" = 1 ]; [ "$1" = --kill-after=10s ]; shift; export DEADLINE="$1"; shift; exec "$@"',
+    ],
+    [
+      "pnpm",
+      '[ "${ROOT_PHASE:-0}" = 0 ]; [ "$PWD" = "$CASE_ROOT" ]; [ "$1 $2 $3" = "--dir ui exec" ]; shift 3; if [ "$*" = "which playwright" ]; then echo "$CASE_ROOT/ui/playwright"; else exec "$CASE_ROOT/ui/playwright" "${@:2}"; fi',
+    ],
+  ] as const) {
+    workflow.writeExecutable(local("bin/" + command), ["#!/bin/bash", "set -euo pipefail", body]);
+  }
+  workflow.writeExecutable(local("ui/playwright"), [
+    "#!/bin/bash",
+    "set -euo pipefail",
+    'config="$CASE_ROOT/apt/apt.conf.d/99openclaw-webkit-download-only"',
+    'first=$(head -n1 "$CASE_ROOT/apt/$MIRROR_FILE" | cut -f1)',
+    'case "$*" in',
+    '  "install-deps webkit")',
+    '    if [[ -f "$config" ]]; then',
+    '      grep -q \'APT::Get::Download-Only "true";\' "$config"',
+    '      echo "download $DEADLINE $first" >> "$CASE_ROOT/events"',
+    '      [[ "$first" != *slow.invalid* ]] || exit 124',
+    '      exit "$FALLBACK_EXIT"',
+    "    fi",
+    '    [[ -z "${DEADLINE:-}" ]]',
+    '    echo "install $first" >> "$CASE_ROOT/events" ;;',
+    '  "install webkit")',
+    '    [[ ! -f "$config" ]]',
+    '    [[ "$first" == https://slow.invalid/ubuntu ]]',
+    '    echo browser >> "$CASE_ROOT/events" ;;',
+    "  *) exit 86 ;;",
+    "esac",
+  ]);
+  // Relocate only apt's filesystem boundary; execute the routed Q installer unchanged.
+  const script = install.run ?? workflow.readPlaywrightWebkitInstall(install, root);
+  const result = workflow.runWorkflowShellScript(
+    script.replaceAll("/etc/apt/", local("apt") + path.sep),
+    {
+      cwd: root,
+      tempDir: root,
+      env: {
+        ...process.env,
+        PATH: local("bin") + path.delimiter + process.env.PATH,
+        CASE_ROOT: root,
+        MIRROR_FILE: mirrorFile,
+        FALLBACK_EXIT: String(fallbackExit),
+      },
+    },
+  );
+  expect(result.status, result.stdout + result.stderr).toBe(fallbackExit);
+  expect(readFileSync(local("events"), "utf8")).toBe(
+    "download 120s https://slow.invalid/ubuntu\n" +
+      "download 300s https://fallback.invalid/ubuntu\n" +
+      (fallbackExit === 0 ? "install https://fallback.invalid/ubuntu\nbrowser\n" : ""),
+  );
+  expect(readFileSync(local(`apt/${mirrorFile}`), "utf8")).toBe(mirrors);
+  expect(readFileSync(local(`apt/${inactiveFile}`), "utf8")).toBe(inactiveMirrors);
+  expect(existsSync(local("apt/apt.conf.d/99openclaw-webkit-download-only"))).toBe(false);
 });

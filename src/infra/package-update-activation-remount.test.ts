@@ -230,6 +230,27 @@ test.each([
   expect(fs.readFileSync(f.launcher)).toEqual(launcher);
 });
 
+test.each([
+  ["previous", "publication-not-started"],
+  ["candidate", "publication-settled-external-change"],
+] as const)(
+  "the next update settles a remounted publication with the %s installed",
+  async (installed, reason) => {
+    const f = await remounted(
+      installed === "previous" ? "different-files" : "equal-symlinks",
+      installed,
+    );
+    expect(() => assertNoPendingPackageActivation(f.packageRoot)).toThrow(
+      "device number changed only",
+    );
+    await expect(
+      settlePendingPackageActivation(f.packageRoot, undefined, undefined, { automatic: true }),
+    ).resolves.toMatchObject({ operationId: f.operationId, reason });
+    expect(fs.existsSync(f.journalPath)).toBe(false);
+    expect(() => assertNoPendingPackageActivation(f.packageRoot)).not.toThrow();
+  },
+);
+
 test("refuses separate-helper settlement without a remount", async () => {
   const f = await fixture.prepare();
   const journalPath = resolvePackageActivationJournalPath(f.anchor);
@@ -331,6 +352,39 @@ test.each(["settle", "archive-interrupted", "journal-mode"] as const)(
     expect(() => assertNoPendingPackageActivation(f.packageRoot)).not.toThrow();
   },
 );
+
+test("settles a remounted publication after brew cleanup pruned its launcher copies", async () => {
+  const f = await prepareRemountedPublication(
+    fixture,
+    root,
+    false,
+    "equal-symlinks",
+    "candidate",
+    true,
+  );
+  // Homebrew's prefix prune: unlink dangling symlinks, then remove empty directories.
+  const prune = (directory: string): boolean => {
+    for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+      const file = path.join(directory, entry.name);
+      if (entry.isSymbolicLink() && !fs.existsSync(file)) {
+        fs.unlinkSync(file);
+      } else if (entry.isDirectory() && prune(file)) {
+        fs.rmdirSync(file);
+      }
+    }
+    return fs.readdirSync(directory).length === 0;
+  };
+  expect(fs.existsSync(path.join(f.anchor, "launchers"))).toBe(true);
+  prune(f.anchor);
+  expect(fs.readdirSync(f.anchor)).toEqual(["previous"]);
+  const launcher = fs.readlinkSync(f.launcher);
+  await expect(settle(f)).resolves.toMatchObject({
+    reason: "publication-settled-external-change",
+  });
+  expect(fs.existsSync(f.journalPath)).toBe(false);
+  expect(fs.readlinkSync(f.launcher)).toBe(launcher);
+  expect(() => assertNoPendingPackageActivation(f.packageRoot)).not.toThrow();
+});
 
 test.each(["before-commit", "before-archive"] as const)(
   "refuses settlement after ownership reassignment: %s",

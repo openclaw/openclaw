@@ -414,8 +414,10 @@ export function recordOperationBackendRunId(operation: ReplyOperation, runId: st
   controllerStorage.backendRunIdsByOperation.set(operation, runIds);
 }
 
-export function hasOperationBackendRunId(operation: ReplyOperation, runId: string): boolean {
-  return controllerStorage.backendRunIdsByOperation.get(operation)?.has(runId) === true;
+export function getOperationBackendRunIds(
+  operation: ReplyOperation,
+): ReadonlySet<string> | undefined {
+  return controllerStorage.backendRunIdsByOperation.get(operation);
 }
 
 export function getAttachedBackendAttachment(operation: ReplyOperation) {
@@ -651,6 +653,11 @@ export {
   acknowledgeReplySessionTransition,
 } from "./session-controller.session-reader.js";
 
+/** Release backend waiters after the final attempt, without releasing finalization ownership. */
+export function finishReplyOperationBackend(operation: ReplyOperation): void {
+  controllerStorage.backendReadyByOperation.get(operation)?.resolve();
+}
+
 /** Await this exact owner's current backend generation, including recovery startup. */
 export async function waitForReplyOperationBackend(
   operation: ReplyOperation,
@@ -669,7 +676,7 @@ export async function waitForReplyOperationBackend(
   }
   const ready = controllerStorage.backendReadyByOperation.get(operation);
   if (ready) {
-    await racePromiseWithAbortSignal(ready, signal);
+    await racePromiseWithAbortSignal(ready.promise, signal);
   }
   return (
     controllerStorage.backendReadyByOperation.get(operation) === ready &&

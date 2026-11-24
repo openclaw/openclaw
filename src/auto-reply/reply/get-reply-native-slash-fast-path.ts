@@ -117,10 +117,10 @@ export async function maybeResolveNativeSlashCommandFastReply(params: {
   agentCfg: AgentDefaults;
   commandAuthorized: boolean;
   defaultProvider: string;
-  defaultModel: string;
+  defaultModel: string | undefined;
   aliasIndex: ModelAliasIndex;
   provider: string;
-  model: string;
+  model: string | undefined;
   workspaceDir: string;
   typing: ReturnType<typeof createTypingController>;
   preparedModelCatalog?: ModelCatalogSnapshot;
@@ -130,9 +130,11 @@ export async function maybeResolveNativeSlashCommandFastReply(params: {
   | { handled: true; reply: ReplyPayload | ReplyPayload[] | undefined }
   | { handled: false; queueModeOverride?: QueueMode }
 > {
-  if (!shouldRunNativeSlashCommandFastPath(params.ctx)) {
+  // Without any model, the main reply pipeline owns the missing-model reply.
+  if (!shouldRunNativeSlashCommandFastPath(params.ctx) || !params.model) {
     return { handled: false };
   }
+  const model = params.model;
 
   const sessionState = await initFastReplySessionState(params);
   if (params.commandAuthorized) {
@@ -195,7 +197,7 @@ export async function maybeResolveNativeSlashCommandFastReply(params: {
     const targetSessionEntry =
       sessionState.sessionStore[sessionState.sessionKey] ?? sessionState.sessionEntry;
     const canApplyStoredModel =
-      params.provider === params.defaultProvider && params.model === params.defaultModel;
+      params.provider === params.defaultProvider && model === params.defaultModel;
     const storedModelOverride = canApplyStoredModel
       ? await resolveStoredModelOverrideAsync({
           sessionEntry: targetSessionEntry,
@@ -245,8 +247,7 @@ export async function maybeResolveNativeSlashCommandFastReply(params: {
     // with status's selected/active-model owner, which also supplies thinking defaults.
     const statusProvider =
       resolvedInheritedModel?.provider ?? resolvedChannelModel?.ref.provider ?? params.provider;
-    const statusModel =
-      resolvedInheritedModel?.model ?? resolvedChannelModel?.ref.model ?? params.model;
+    const statusModel = resolvedInheritedModel?.model ?? resolvedChannelModel?.ref.model ?? model;
     const resolvedThinkLevel = normalizeThinkLevel(targetSessionEntry?.thinkingLevel);
     // This fast path has no model-state owner; prepare side-effect-free catalog facts directly.
     const thinkingCatalog = await readPreparedModelCatalog({
@@ -347,11 +348,11 @@ export async function maybeResolveNativeSlashCommandFastReply(params: {
         resolvedBlockStreamingBreak: "text_end",
         resolveDefaultThinkingLevel: async () => undefined,
         provider: params.provider,
-        model: params.model,
+        model,
         contextTokens: resolveContextTokens({
           cfg: params.cfg,
           provider: params.provider,
-          model: params.model,
+          model,
         }),
         ...createSkillCommandLoaders(skillCommandsRuntimeLoader.load, {
           workspaceDir: params.workspaceDir,
@@ -407,6 +408,7 @@ export async function maybeResolveNativeSlashCommandFastReply(params: {
 
   const directiveResult = await resolveReplyDirectives({
     ...params,
+    model,
     ...sessionState,
     conversation: prepareReplyConversation({
       ctx: sessionState.sessionCtx,
@@ -422,7 +424,7 @@ export async function maybeResolveNativeSlashCommandFastReply(params: {
             (sessionModelSelectionLocked ? params.defaultProvider : params.provider),
           model:
             selectedChannelModel?.ref.model ??
-            (sessionModelSelectionLocked ? params.defaultModel : params.model),
+            (sessionModelSelectionLocked ? (params.defaultModel ?? model) : model),
           primaryProvider: selectedChannelModel?.ref.provider ?? params.defaultProvider,
           primaryModel: selectedChannelModel?.ref.model ?? params.defaultModel,
           hasResolvedTurnModelOverride,

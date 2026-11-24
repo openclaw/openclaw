@@ -27,13 +27,12 @@ import {
   findLineHttpError,
   resolveLineNonDispatchRetryable,
 } from "./send-retry.js";
+import { pushMessagesLine, replyMessageLine } from "./send.js";
 import {
+  buildTemplateMessageFromPayload,
   createFlexMessage,
   createLocationMessage,
-  pushMessagesLine,
-  replyMessageLine,
-} from "./send.js";
-import { buildTemplateMessageFromPayload } from "./template-messages.js";
+} from "./template-messages.js";
 import type { LineChannelData, LineQuickReplyItem } from "./types.js";
 
 type LineAutoReplyDeliveryResult =

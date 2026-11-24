@@ -105,7 +105,7 @@ Bundled provider catalogs currently flag these models as `"preferred"`:
 | moonshot  | `kimi-k3`                                                                                                                                                                                                                   |
 | openai    | `gpt-5.6`, `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna`, `gpt-5.5`, `gpt-5.5-pro`                                                                                                                                         |
 | xiaomi    | `mimo-v2.6-pro`, `mimo-v2.6-flash`                                                                                                                                                                                          |
-| zai       | `glm-5.3`, `glm-5.2`, `glm-5.1`                                                                                                                                                                                             |
+| zai       | `glm-5.4`, `glm-5.3`, `glm-5.2`, `glm-5.1`                                                                                                                                                                                  |
 
 `claude-haiku-4-5` is marked `"capable"`: it remains available through an
 explicit `true` agent or model setting, but `"auto"` does not engage it.

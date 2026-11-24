@@ -11,7 +11,7 @@ import {
 } from "openclaw/plugin-sdk/sqlite-worker-runtime";
 import { Type } from "typebox";
 import { Value } from "typebox/value";
-import { isValidMemoryEmbedding } from "./manager-embedding-cache.js";
+import { isValidMemoryEmbedding } from "./manager-embedding-vectors.js";
 import type { MemoryIndexProviderIdentity } from "./manager-reindex-state.js";
 import { MEMORY_INDEX_META_KEY } from "./manager-retrieval-read.js";
 

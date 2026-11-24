@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { once } from "node:events";
-import { readFile } from "node:fs/promises";
+import { readFile, stat } from "node:fs/promises";
 import type { ServerResponse } from "node:http";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -14,6 +14,7 @@ import { readSessionQueuedInputPage } from "../src/config/sessions/session-pendi
 import type { GatewayClient } from "../src/gateway/client.js";
 import { buildMockOpenAiResponsesProvider } from "../src/gateway/test-openai-responses-model.js";
 import { writeGatewayRestartIntentSync } from "../src/infra/restart-intent.js";
+import { readSqliteCleanCloseSeal } from "../src/infra/sqlite-clean-close-seal.js";
 import { closeOpenClawAgentDatabasesAsync } from "../src/state/openclaw-agent-db.js";
 import { resolveOpenClawAgentSqlitePath } from "../src/state/openclaw-agent-db.paths.js";
 import { closeOpenClawStateDatabaseAsync } from "../src/state/openclaw-state-db.js";
@@ -101,6 +102,7 @@ async function providerFixture(signal: AbortSignal) {
   const summaries: Array<{ cycle: number; name: Case; ordinal: number }> = [];
   const issued = new Set<string>();
   const heldResumes = new Map<number, { response: ServerResponse; ordinal: number }>();
+  const releasedResumes = new Set<number>();
   let finalizer: ServerResponse | undefined;
   let finalizerAdmission: unknown;
   let ordinal = 0;
@@ -209,15 +211,20 @@ async function providerFixture(signal: AbortSignal) {
           };
           if (restarting) {
             if (hasNewResumeInput(body)) {
-              gate(`resume:${cycle}:${name}`).resolve();
               if (name === "stream") {
-                heldResumes.set(cycle, { response, ordinal: requestOrdinal });
-                return;
-              }
-              if (name === "compact" || name === "tool") {
-                issued.add(`gateway:${cycle}:${name}`);
-                tool("sessions_list", { limit: 20, search: `restart-resume-${cycle}-${name}` });
-                return;
+                // Compaction can replay this turn after the test releases its first request.
+                if (!releasedResumes.has(cycle)) {
+                  heldResumes.set(cycle, { response, ordinal: requestOrdinal });
+                  gate(`resume:${cycle}:${name}`).resolve();
+                  return;
+                }
+              } else {
+                gate(`resume:${cycle}:${name}`).resolve();
+                if (name === "compact" || name === "tool") {
+                  issued.add(`gateway:${cycle}:${name}`);
+                  tool("sessions_list", { limit: 20, search: `restart-resume-${cycle}-${name}` });
+                  return;
+                }
               }
               text(`RESUMED_${cycle}_${name}`);
             } else if (issued.delete(`gateway:${cycle}:${name}`)) {
@@ -321,6 +328,7 @@ async function providerFixture(signal: AbortSignal) {
     failed: failed.promise,
     wait: (name: string) => withinTest(Promise.race([gate(name).promise, failed.promise]), signal),
     restart: () => {
+      releasedResumes.clear();
       restarting = true;
     },
     prepare: () => {
@@ -329,6 +337,7 @@ async function providerFixture(signal: AbortSignal) {
     release: (cycle: number) => {
       const held = heldResumes.get(cycle);
       assert(held, "The resumed stream was never admitted");
+      releasedResumes.add(cycle);
       writeOpenAiResponsesText(held.response, {
         text: `RESUMED_${cycle}_stream`,
         messageId: `msg_${held.ordinal}`,
@@ -587,6 +596,92 @@ it.skipIf(process.platform === "win32")(
 );
 
 it.skipIf(process.platform === "win32")(
+  "leaves interrupted dashboard automation with cron while resuming operator work",
+  { timeout: 180_000 },
+  async ({ signal, onTestFailed }) => {
+    const provider = await providerFixture(signal);
+    const model = buildMockOpenAiResponsesProvider(provider.baseUrl);
+    const instance = await createOpenClawTestInstance({
+      name: "restart-automation-owner",
+      signal,
+      config: { ...restartResumeConfig(model), cron: { enabled: true } },
+      env: { ...restartEnv, OPENCLAW_NO_RESPAWN: "1", OPENCLAW_SKIP_CRON: "0" },
+    });
+    let client: Awaited<ReturnType<typeof connectRestartClient>> | undefined;
+    onTestFailed(() => {
+      process.stderr.write(`${instance.logs()}\n`);
+    });
+    await runQaGatewayFixture(
+      async () => {
+        await instance.startGateway();
+        client = await connectRestartClient(instance, {}, signal);
+        await client.request("sessions.create", { key: key(0, "stream"), agentId: "other" });
+        await client.request("cron.add", {
+          agentId: "other",
+          name: "Restart automation owner",
+          enabled: true,
+          schedule: { kind: "every", everyMs: 2_000 },
+          sessionTarget: `session:${key(0, "stream")}`,
+          wakeMode: "now",
+          idleOnly: false,
+          payload: { kind: "agentTurn", message: marker(0, "stream") },
+          delivery: { mode: "none" },
+        });
+        await provider.wait("ready:0:stream");
+        await client.request("chat.send", {
+          sessionKey: key(1, "stream"),
+          message: marker(1, "stream"),
+          idempotencyKey: randomUUID(),
+        });
+        await provider.wait("ready:1:stream");
+        const beforeRestart = provider.calls.at(-1)!.ordinal;
+        provider.restart();
+        await client.stopAndWait();
+        client = undefined;
+        await instance.stopGateway();
+        const scope = {
+          agentId: "other",
+          env: instance.env,
+          storePath: resolveOpenClawAgentSqlitePath({ agentId: "other", env: instance.env }),
+        };
+        const rows = await readSessionEntrySummariesInWorker(scope);
+        expect(
+          rows.find((row) => row.sessionKey === key(0, "stream"))?.entry.resumeAfterRestart,
+        ).toBeUndefined();
+        expect(
+          rows.find((row) => row.sessionKey === key(1, "stream"))?.entry.resumeAfterRestart,
+        ).toBeDefined();
+        await closeOpenClawAgentDatabasesAsync();
+        await instance.startGateway();
+        client = await connectRestartClient(instance, {}, signal);
+        await provider.wait("resume:1:stream");
+        provider.release(1);
+        await vi.waitFor(
+          async () => {
+            expect(
+              provider.calls.some((call) => call.cycle === 0 && call.ordinal > beforeRestart),
+            ).toBe(true);
+            const history = await client!.request<{ messages: unknown[] }>("chat.history", {
+              sessionKey: key(0, "stream"),
+            });
+            expect(JSON.stringify(history.messages)).toContain("HANDLED_NEW_INPUT");
+            expect(JSON.stringify(history.messages)).not.toContain("this run could not resume");
+          },
+          { timeout: 30_000 },
+        );
+        expect(provider.calls.filter((call) => call.resumeInput).map((call) => call.cycle)).toEqual(
+          [1],
+        );
+        expect(instance.logs()).not.toContain("Queued operator authority cannot be recovered");
+      },
+      () => client?.stopAndWait(),
+      () => instance.cleanup(),
+      provider.close,
+    );
+  },
+);
+
+it.skipIf(process.platform === "win32")(
   "records a visible outcome when a marked run loses requester authority before restart",
   { timeout: 180_000 },
   async ({ signal, onTestFailed }) => {
@@ -603,6 +698,22 @@ it.skipIf(process.platform === "win32")(
       config: {
         ...restartResumeConfig(model),
         gateway: {
+          // A role assignment narrows recovery only when named-role enforcement is enabled.
+          roles: {
+            default: "operator",
+            definitions: {
+              operator: {
+                scopes: ["operator.admin"],
+                agents: "*",
+                sessions: { others: "write" },
+              },
+              reader: {
+                scopes: ["operator.read"],
+                agents: "*",
+                sessions: { others: "view" },
+              },
+            },
+          },
           mode: "local",
           bind: "loopback",
           trustedProxies: ["127.0.0.1", "::1"],
@@ -711,7 +822,9 @@ it.skipIf(process.platform === "win32")(
           [1],
         );
         expect(instance.logs()).toContain(key(0, "stream"));
-        expect(instance.logs()).toContain("Restart recovery operator identity changed");
+        expect(instance.logs()).toContain(
+          "Your operator role no longer allows sending messages; ask an administrator to restore access.",
+        );
         assert(deniedRunId);
         expect(instance.logs()).toContain(deniedRunId);
         expect(instance.logs()).toContain('"admissionStage":"principal"');
@@ -1232,7 +1345,20 @@ it.skipIf(process.platform === "win32").for([true, false])(
             cleanCloseLine === undefined ? -1 : shutdownLogs.indexOf(cleanCloseLine);
           expect(markerSummary, shutdownLogs).toBeGreaterThan(-1);
           expect(cleanClose, shutdownLogs).toBeGreaterThan(markerSummary);
-          expect(shutdownLogs.slice(cleanClose).includes("[close-backfill-proof]")).toBe(false);
+          expect(
+            readSqliteCleanCloseSeal(sessionStore, await stat(sessionStore, { bigint: true })),
+          ).toBeDefined();
+          // Reservation observations cover every store and arrive after settlement.
+          const allDatabasesClosed = shutdownLogs.indexOf(
+            "restart trace: restart.close.agent-databases ",
+          );
+          expect(allDatabasesClosed, shutdownLogs).toBeGreaterThan(cleanClose);
+          expect(shutdownLogs).not.toMatch(
+            /shutdown failed in|agent-databases resources remain after grace/,
+          );
+          expect(shutdownLogs.slice(allDatabasesClosed).includes("[close-backfill-proof]")).toBe(
+            false,
+          );
           const markerAndAbortMs = shutdownLogs.match(
             /restart trace: restart.close.session-abort ([\d.]+)ms/,
           )?.[1];
@@ -1281,11 +1407,21 @@ it.skipIf(process.platform === "win32").for([true, false])(
           provider.release(cycle);
           const expectedReplies: Array<{ name: Case; text: string }> = [
             ...cases
-              .filter((name) => name !== "stream" && name !== "idle" && name !== "background")
+              .filter(
+                (name) =>
+                  name !== "stream" &&
+                  name !== "idle" &&
+                  name !== "background" &&
+                  name !== "parent",
+              )
               .map((name) => ({ name, text: `RESUMED_${cycle}_${name}` })),
             // The stopped background command is reported as its own input, not as a resume.
             ...(cases.includes("background")
               ? [{ name: "background" as const, text: "HANDLED_NEW_INPUT" }]
+              : []),
+            // A yielded parent receives its interrupted child's restored completion.
+            ...(cases.includes("parent")
+              ? [{ name: "parent" as const, text: "HANDLED_NEW_INPUT" }]
               : []),
             { name: "stream", text: "HANDLED_LITERAL_STOP" },
             { name: "stream", text: `HANDLED_${queued(cycle, 2)}` },
@@ -1330,10 +1466,17 @@ it.skipIf(process.platform === "win32").for([true, false])(
                 ),
               ).toBe(true);
             }
+            if (name === "parent") {
+              const completions = calls.filter((call) =>
+                call.current.includes("status: error: Gateway stopped"),
+              );
+              expect(completions).toHaveLength(1);
+              expect(completions[0]?.current).toContain(`restart_child_${cycle}`);
+            }
             expect(
               resumes,
               `${name}: ${JSON.stringify(calls.map((call) => call.current.slice(-4_000)))}`,
-            ).toHaveLength(name === "idle" || name === "background" ? 0 : 1);
+            ).toHaveLength(name === "idle" || name === "background" || name === "parent" ? 0 : 1);
             const result = await history(key(cycle, name));
             expectCleanHistory(result.messages);
             expect(
@@ -1417,8 +1560,11 @@ it.skipIf(process.platform === "win32").for([true, false])(
         await waitProvider("resume:2:stream");
         provider.release(2);
         await waitFinal(crashKey, `HANDLED_${queued(2, 1)}`);
+        // A replayed resume can carry the earlier queued input as compacted history.
         expect(
-          provider.calls.filter((call) => call.cycle === 2 && call.current.includes(CRASH_QUEUED)),
+          provider.calls.filter(
+            (call) => call.cycle === 2 && !call.resumeInput && call.current.includes(CRASH_QUEUED),
+          ),
         ).toHaveLength(1);
       },
       () => client?.stopAndWait(),

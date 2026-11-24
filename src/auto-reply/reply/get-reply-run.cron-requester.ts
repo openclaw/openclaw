@@ -1,7 +1,10 @@
 import { createCronCreatorAuthorityCapability } from "../../agents/cron-creator-authority-context.js";
 import { normalizeCronAuthenticatedChannelRequester } from "../../cron/tools-allow-provenance.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { normalizeAccountId } from "../../routing/account-id.js";
 import { getCommandOwnerAuthority } from "../command-owner-authority.js";
+
+const log = createSubsystemLogger("cron");
 
 /** Map fresh native ingress identity, not message text or stored delivery, to a requester. */
 export function resolveReplyCronChannelRequester(
@@ -31,7 +34,7 @@ export function resolveReplyCronChannelRequester(
   });
 }
 
-/** Capture the original source once; queued admission may refresh its live owner check. */
+/** Capture the original source once; a queued start checks its admitted owner once more. */
 export function createReplyCronAuthorityFactory(
   context: object,
   params: Parameters<typeof resolveReplyCronChannelRequester>[1] & {
@@ -49,12 +52,35 @@ export function createReplyCronAuthorityFactory(
     senderId: requester.senderId,
   };
   return (runId: string, isCurrentOwner = () => authority.isCurrent()) =>
-    createCronCreatorAuthorityCapability(
-      runId,
-      { kind: "external", channel: params.channel },
-      { source: "channel-owner", isCurrent: isCurrentOwner },
-      undefined,
-      requester,
-      { isCurrent: isCurrentOwner, ...owner },
-    );
+    isCurrentOwner()
+      ? createCronCreatorAuthorityCapability(
+          runId,
+          { kind: "external", channel: params.channel },
+          { source: "channel-owner" },
+          undefined,
+          requester,
+          owner,
+        )
+      : undefined;
+}
+
+/**
+ * A configured owner whose ingress identity the host did not bind keeps caller-scoped
+ * automations. Record why: the tool itself only reports "cron job not found".
+ */
+export function logReplyCronOwnerWithoutAuthority(
+  context: object,
+  params: { channel?: string; accountId?: string },
+): void {
+  const owner = getCommandOwnerAuthority(context);
+  const reason = !owner?.channelPrincipal
+    ? "ingress-identity-unbound"
+    : owner.isCurrent()
+      ? "ingress-identity-mismatch"
+      : "owner-revoked";
+  log.info("cron: owner turn without management authority", {
+    channel: params.channel,
+    accountId: normalizeAccountId(params.accountId),
+    reason,
+  });
 }

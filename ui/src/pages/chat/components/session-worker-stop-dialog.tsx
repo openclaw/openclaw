@@ -1,5 +1,6 @@
 import { action, createOptimistic } from "solid-js";
 import { withPromiseModalHost } from "../../../components/promise-modal-host.ts";
+import { DialogHeader } from "../../../components/solid/dialog-header.tsx";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { registerSessionMachineEnglish } from "../../../i18n/locales/en-session-machine.ts";
 import "./session-worker-stop-dialog.css";
@@ -27,21 +28,14 @@ function SessionWorkerStopDialog(props: {
         }
       }}
     >
-      <section class="session-worker-stop">
-        <header class="session-worker-stop__heading">
-          <h2>{props.title ?? t("sessionsView.workerStopTitle")}</h2>
-          <button
-            type="button"
-            class="session-worker-stop__close"
-            aria-label={t("common.close")}
-            disabled={props.pending}
-            onClick={() => props.onCancel()}
-          >
-            <Icon name="x" />
-          </button>
-        </header>
-        <p class="session-worker-stop__description">{props.description}</p>
-        <openclaw-modal-actions class="exec-approval-actions session-worker-stop__actions">
+      <section class="oc-dialog">
+        <DialogHeader
+          title={props.title ?? t("sessionsView.workerStopTitle")}
+          description={props.description}
+          closeDisabled={props.pending}
+          onClose={props.onCancel}
+        />
+        <openclaw-modal-actions class="oc-dialog__footer">
           <button
             type="button"
             class="btn"
@@ -72,7 +66,7 @@ function SessionWorkerStopDialog(props: {
               style={{ visibility: props.pending ? "visible" : "hidden" }}
               aria-hidden={props.pending ? "false" : "true"}
             >
-              <span class="session-worker-stop__spinner" />
+              <span class="btn__spinner" />
               {t("sessionsView.workerStopping")}
             </span>
           </button>

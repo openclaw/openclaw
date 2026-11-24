@@ -431,6 +431,7 @@ export function prepareProjectedSessionList(params: {
   projection: SessionRowProjection;
   opts: SessionsListParams;
   key?: string;
+  candidateKeys?: ReadonlySet<string>;
   context?: GatewayRequestContext;
   client?: GatewayClient | null;
   now: number;
@@ -457,6 +458,7 @@ export function prepareProjectedSessionList(params: {
   ).getPresentation();
   const prepared = prepareSessionRowSelection(projection, opts, {
     key: exactKey,
+    candidateKeys: params.candidateKeys,
     now,
     rowContext: presentation.rowContext,
     metadataPrepared: params.metadataPrepared,
@@ -465,8 +467,6 @@ export function prepareProjectedSessionList(params: {
       ? projectRun?.candidateSessionIdsOrKeys()
       : undefined,
   });
-  const { getTarget } = prepared;
-  const { active } = presentation;
   const identity = gatewayClientSessionCreator(client ?? null)?.id;
   // Invitations can change without replacing the entry retained across yields.
   const visibility = presentation.sharing.sessionCap === "invited" ? undefined : params.visibility;
@@ -478,7 +478,7 @@ export function prepareProjectedSessionList(params: {
     ownerFirstActorId: opts.ownerFirst ? identity : undefined,
     restrictProfileReferences: client !== undefined,
     viewerProfileId: identity,
-    projectActiveRun: context ? (key) => active(getTarget(key)!)! : undefined,
+    projectActiveRun: context ? (key) => presentation.active(prepared.getTarget(key)!)! : undefined,
     entryFilter:
       (client === undefined || !presentation.sharing.entryFilter) &&
       opts.hasBoard === undefined &&
@@ -497,7 +497,7 @@ export function prepareProjectedSessionList(params: {
                     presentation.sharing.sessionCap === "invited" &&
                     presentation.sharing.identity &&
                     projection.hasMembership(
-                      getTarget(key)!.storeTarget.storePath,
+                      prepared.getTarget(key)!.storeTarget.storePath,
                       storeKey,
                       presentation.sharing.identity.id,
                     ),
@@ -509,7 +509,7 @@ export function prepareProjectedSessionList(params: {
             return (
               visible &&
               (opts.hasBoard === undefined || row.hasBoard === opts.hasBoard) &&
-              (!opts.activeOnly || Boolean(active(getTarget(key)!)?.active))
+              (!opts.activeOnly || Boolean(presentation.active(prepared.getTarget(key)!)?.active))
             );
           },
   };

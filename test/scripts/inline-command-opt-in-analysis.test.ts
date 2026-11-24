@@ -1,10 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, expect, it } from "vitest";
-import {
-  comparisonPlanCells,
-  distribution,
-  inspectOptInFrames,
-} from "../../scripts/perf/inline-command-opt-in-analysis.mjs";
+import { comparisonPlanCells } from "../../scripts/perf/inline-command-opt-in-analysis.mjs";
 
 describe("inline command benchmark facts", () => {
   it("binds explicit contemporary comparisons without replacing the original control or candidate", () => {
@@ -82,34 +78,5 @@ describe("inline command benchmark facts", () => {
     expect(() => comparisonPlanCells(anchored, candidate)).toThrow(
       "Original control cannot be replaced",
     );
-  });
-
-  it("rejects nonfinite measurements and reports nearest-rank distributions", () => {
-    expect(() => distribution([1, Number.NaN])).toThrow();
-    expect(distribution([0, 2, 4, 6])).toMatchObject({ median: 3, p95: 6, spread: 6 });
-  });
-
-  it("keeps startup stalls and timestamp-only gaps separate from actual callback spacing", () => {
-    const result = inspectOptInFrames({
-      sendAt: 0,
-      warmStartAt: 100,
-      endAt: 142,
-      frameCallbacks: [
-        { timestamp: 10, callbackAt: 60, callbackEndAt: 61, warm: false },
-        { timestamp: 70, callbackAt: 80, callbackEndAt: 81, warm: false },
-        { timestamp: 100, callbackAt: 110, callbackEndAt: 111, warm: true },
-        { timestamp: 120, callbackAt: 130, callbackEndAt: 131, warm: true },
-      ],
-      tasks: [{ at: 1, duration: 55 }],
-    });
-    expect(result.actualTails).toEqual([
-      expect.objectContaining({ period: "startup-first-callback", actualMs: 60 }),
-    ]);
-    expect(result.animationTimestampTails).toEqual([
-      expect.objectContaining({ animationTimestampMs: 60, actualMs: 20 }),
-    ]);
-    expect(result.longTasks).toEqual([
-      expect.objectContaining({ period: "startup-or-boundary", duration: 55 }),
-    ]);
   });
 });

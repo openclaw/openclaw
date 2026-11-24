@@ -18,7 +18,10 @@ import {
   type ReplyOperation,
 } from "../../sessions/session-controller.js";
 import { canInjectReplyMessageTarget } from "../../sessions/session-controller.message-injection.js";
-import { prepareReplyMessageJoin } from "../../sessions/session-controller.message-join.js";
+import {
+  hasReplySteeringRequesterMismatch,
+  prepareReplyMessageJoin,
+} from "../../sessions/session-controller.message-join.js";
 import {
   getSessionControllerEntryForOperation,
   isCurrentSessionControllerOperation,
@@ -54,7 +57,8 @@ type ActiveReplySteerFallbackReason =
   | "admission-changed"
   | "reply-owner-ended"
   | "model-fallback-changed"
-  | "execution-settings-changed";
+  | "execution-settings-changed"
+  | "independent-request";
 
 type ActiveReplySteerParams = {
   steeringIntent?: RunReplyAgentParams["steeringIntent"];
@@ -135,7 +139,6 @@ export async function runActiveReplySteer(
   const assertReadCurrent = () => {
     resolveFollowupAbortSignal(followupRun)?.throwIfAborted();
     params.opts?.abortSignal?.throwIfAborted();
-    followupRun.operatorAuthority?.assertCurrent();
   };
   let delivery: ReturnType<typeof prepareSteeringDelivery> | undefined;
   let releaseToolAuthority: (() => void) | undefined;
@@ -234,6 +237,19 @@ export async function runActiveReplySteer(
       return await fallback("injection_unavailable");
     }
     assertReadCurrent();
+    // A different participant's ordinary guild message owns a separate task.
+    // Native acceptance consumes steering, so it cannot later be replayed if
+    // the model answers only the newest request. Keep custody in the FIFO queue.
+    if (
+      isInboundUserMessage &&
+      (followupRun.originatingChannel ?? followupRun.run.messageProvider) === "discord" &&
+      params.sessionCtx.ChatType === "channel" &&
+      resolveCommandTurnContext(params.sessionCtx).kind === "normal" &&
+      followupRun.run.config.messages?.queue?.allowCollaborativeSteering !== false &&
+      hasReplySteeringRequesterMismatch(followupRun, activeReplyOperation)
+    ) {
+      return await fallback("independent-request", injectionTarget.runId);
+    }
     delivery = prepareSteeringDelivery({
       agentId: followupRun.run.agentId,
       sessionKey,
@@ -343,14 +359,7 @@ export async function runActiveReplySteer(
         throw new Error("Automatic model fallback changed during steering admission");
       }
     };
-    const assertPolicy = (fingerprint: string) => {
-      assertSourceCurrent();
-      if (fingerprint !== steeringAuthority.toolAuthorityFingerprint) {
-        throw new Error("Steering tool authority changed");
-      }
-    };
     const text = followupRun.prompt;
-    const assertLegacyPolicyCurrent = () => assertPolicy(steeringAuthority.toolAuthority.read());
     const injectionAttempt = await beginReplyMessageInjectionTarget(injectionTarget, text, {
       currentInboundContext: followupRun.currentInboundContext,
       inboundAudio: followupRun.currentInboundAudio === true,
@@ -359,10 +368,9 @@ export async function runActiveReplySteer(
         bindWorkerToolPreparation({
           authorityKind: "source-bound" as const,
           assertCurrent: assertSourceCurrent,
-          compatAssertCurrent: assertLegacyPolicyCurrent,
+          compatAssertCurrent: assertSourceCurrent,
           prepareCurrent: async () => {
             await steeringAuthority.prepareCurrent();
-            assertPolicy(steeringAuthority.toolAuthority.read());
             await steeringDelivery.prepareCurrent();
             assertSourceCurrent();
           },

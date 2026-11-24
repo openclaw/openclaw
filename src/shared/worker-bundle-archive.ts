@@ -3,7 +3,7 @@ import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { pipeline } from "node:stream/promises";
-import * as tar from "tar";
+import * as tar from "tar/raw";
 import { sha256File } from "../infra/directory-durability.js";
 import { root as fsSafeRoot } from "../infra/fs-safe.js";
 import {

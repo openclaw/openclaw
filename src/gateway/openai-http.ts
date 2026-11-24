@@ -23,8 +23,7 @@ import {
   IMAGE_ONLY_USER_MESSAGE,
   renderConversationToolCall,
 } from "./agent-prompt.js";
-import { sendInvalidRequest, sendJson, sendUnauthorized, setSseHeaders } from "./http-common.js";
-import { assertGatewayHttpRequestCurrent } from "./http-request-authority.js";
+import { sendInvalidRequest, sendJson, setSseHeaders } from "./http-common.js";
 import { rejectDisabledGatewayUpload } from "./http-upload-policy.js";
 import {
   authorizeOpenAiCompatibleHttpSession,
@@ -494,13 +493,11 @@ export async function handleOpenAiHttpRequest(
   }
   let images: ImageContent[];
   try {
-    assertGatewayHttpRequestCurrent(handled.requestAuth);
     images = await resolveImagesForRequest(
       activeTurnContext,
       limits,
       abortController.signal,
       () => {
-        assertGatewayHttpRequestCurrent(handled.requestAuth);
         if (hasMedia && !areGatewayUploadsEnabled(getRuntimeConfig())) {
           throw new Error(GATEWAY_UPLOADS_DISABLED_MESSAGE);
         }
@@ -508,10 +505,6 @@ export async function handleOpenAiHttpRequest(
     );
   } catch (err) {
     if (abortController.signal.aborted) {
-      return true;
-    }
-    if (handled.requestAuth.hasCurrentClientAuthority?.() === false) {
-      sendUnauthorized(res);
       return true;
     }
     if (rejectDisabledGatewayUpload(res, hasMedia)) {

@@ -5,6 +5,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { i18n } from "../../i18n/index.ts";
 import { pt_BR } from "../../i18n/locales/pt-BR.ts";
 import { useVisiblePoll } from "../../lib/reactive/visible-poll.ts";
+import { createFrameClock } from "../../test-helpers/animation-frame-clock.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { installLogsViewport } from "./logs-layout.test-support.ts";
 import { LogsView, type LogsProps } from "./view.tsx";
@@ -351,9 +352,10 @@ it.each(["follow", "queued-follow", "reader"] as const)(
 );
 
 it("shows whether the stream is following as the reader leaves and returns to the end", () => {
-  vi.useFakeTimers({
-    toFake: ["requestAnimationFrame", "cancelAnimationFrame", "setTimeout", "clearTimeout"],
-  });
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  const clock = createFrameClock();
+  vi.stubGlobal("requestAnimationFrame", clock.request);
+  vi.stubGlobal("cancelAnimationFrame", clock.cancel);
   vi.spyOn(HTMLElement.prototype, "offsetHeight", "get").mockImplementation(function (
     this: HTMLElement,
   ) {
@@ -386,6 +388,7 @@ it("shows whether the stream is following as the reader leaves and returns to th
   const frames = (count = 4) => {
     for (let index = 0; index < count; index++) {
       vi.advanceTimersByTime(16);
+      clock.flush(performance.now());
       flush();
       stream.dispatchEvent(new Event("scroll"));
       flush();
@@ -402,6 +405,8 @@ it("shows whether the stream is following as the reader leaves and returns to th
   };
   const end = () => stream.scrollHeight - stream.clientHeight;
   const expired = () => {
+    clock.flush(performance.now());
+    stream.dispatchEvent(new Event("scrollend"));
     vi.advanceTimersByTime(250);
     flush();
   };
@@ -435,8 +440,10 @@ it("shows whether the stream is following as the reader leaves and returns to th
     expect(stream.scrollTop).toBe(readerTop);
     expect(toggle.checked).toBe(false);
 
-    // Returning to the end resumes.
-    wheelTo(end());
+    // Model the idle deadline passing before the first input frame and scroll.
+    stream.dispatchEvent(new WheelEvent("wheel", { deltaY: end() - stream.scrollTop }));
+    vi.advanceTimersByTime(250);
+    scrollTo(end());
     frames(1);
     expect(onToggleAutoFollow).toHaveBeenLastCalledWith(true);
     expect(toggle.checked).toBe(true);
@@ -472,6 +479,14 @@ it("shows whether the stream is following as the reader leaves and returns to th
     expect(toggle.checked).toBe(false);
     wheelTo(end());
     frames(1);
+    expect(toggle.checked).toBe(false);
+
+    // A mostly horizontal wheel in the interior may cause no vertical movement.
+    // A later programmatic return to the end must still leave the switch off.
+    scrollTo(end() - 200);
+    stream.dispatchEvent(new WheelEvent("wheel", { deltaX: 80, deltaY: 0.25 }));
+    expired();
+    scrollTo(end());
     expect(toggle.checked).toBe(false);
 
     // A native wheel offset can arrive before the browser's coalesced scroll event.
@@ -702,3 +717,96 @@ it("keeps one toolbar at phone width and moves page actions into a menu", async 
   });
   expect(onExport).toHaveBeenCalledWith([raw], "filtered");
 });
+
+it.each([
+  { input: "wheel", delayedScroll: "first" },
+  { input: "wheel", delayedScroll: "final" },
+  { input: "keyboard", delayedScroll: "final" },
+])(
+  "resumes following when $input delays the $delayedScroll scroll event beyond the idle window",
+  ({ input, delayedScroll }) => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const clock = createFrameClock();
+    vi.stubGlobal("requestAnimationFrame", clock.request);
+    vi.stubGlobal("cancelAnimationFrame", clock.cancel);
+    let rowHeight = 20;
+    vi.spyOn(HTMLElement.prototype, "offsetHeight", "get").mockImplementation(function (
+      this: HTMLElement,
+    ) {
+      return this.classList.contains("log-stream") ? 380 : rowHeight;
+    });
+    const lines = (count: number) =>
+      Array.from({ length: count }, (_, id) => ({ id, raw: `line ${id}` }));
+    const [autoFollow, setAutoFollow] = createSignal(true);
+    const onToggleAutoFollow = vi.fn(setAutoFollow);
+    let stream!: HTMLDivElement;
+    let jump!: () => void;
+    const view = mountSolid(() => (
+      <LogsView
+        {...createProps({
+          status: { error: null, hasLoaded: true, stale: false, awaitingGateway: false },
+          onToggleAutoFollow,
+          onStreamRef: (element, scroll) => {
+            stream = element;
+            jump = scroll;
+            installClampedLogsViewport(element, 378);
+          },
+        })}
+        autoFollow={autoFollow()}
+        entries={lines(500)}
+      />
+    ));
+    const frame = (scroll: boolean) => {
+      vi.advanceTimersByTime(16);
+      clock.flush(performance.now());
+      flush();
+      if (scroll) {
+        stream.dispatchEvent(new Event("scroll"));
+      }
+      flush();
+    };
+    const end = () => stream.scrollHeight - stream.clientHeight;
+    try {
+      flush();
+      jump();
+      for (let i = 0; i < 4; i++) {
+        frame(true);
+      }
+      stream.dispatchEvent(new WheelEvent("wheel", { deltaY: -4000 }));
+      stream.scrollTop = 2000;
+      stream.dispatchEvent(new Event("scroll"));
+      flush();
+      vi.advanceTimersByTime(300);
+      expect(onToggleAutoFollow).toHaveBeenLastCalledWith(false);
+
+      // Rows near the end render taller than the estimate. A busy main thread delivers the wheel's
+      // scroll event after the idle window; its measurements then carry the view to the end.
+      rowHeight = 23;
+      if (input === "keyboard") {
+        stream.dispatchEvent(new KeyboardEvent("keydown", { key: "PageDown", bubbles: true }));
+      } else {
+        stream.dispatchEvent(new WheelEvent("wheel", { deltaY: 1_000_000 }));
+      }
+      if (delayedScroll === "final") {
+        stream.scrollTop = end() - 500;
+        stream.dispatchEvent(new Event("scroll"));
+        flush();
+      }
+      stream.scrollTop = end();
+      for (let i = 0; i < 3; i++) {
+        frame(false);
+      }
+      vi.advanceTimersByTime(250);
+      stream.dispatchEvent(new Event("scroll"));
+      flush();
+      for (let i = 0; i < 6; i++) {
+        frame(true);
+      }
+
+      expect(end() - stream.scrollTop).toBeLessThan(2);
+      expect(onToggleAutoFollow).toHaveBeenLastCalledWith(true);
+    } finally {
+      view.unmount();
+    }
+  },
+);

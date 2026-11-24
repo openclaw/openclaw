@@ -35,7 +35,6 @@ type DirectOperatorAuthorityParams = {
   resolvedSessionKey?: string;
   spawnedBy?: string;
   client?: GatewayClient | null;
-  isCurrent?: () => boolean;
   inputProvenance?: InputProvenance;
   disallowed: boolean;
 };
@@ -105,7 +104,6 @@ function resolveDirectOperatorAuthority(
         ...(!isDirectOperator || internal?.isLocalClient !== true
           ? { callerScopedCreation: true as const }
           : {}),
-        ...(params.isCurrent ? { isCurrent: params.isCurrent } : {}),
       })
     : undefined;
 }
@@ -117,7 +115,6 @@ export function resolveGatewayCronCreatorAuthorityAdmission(params: {
   sessionId?: string;
   spawnedBy?: string;
   client?: GatewayClient | null;
-  isCurrent?: () => boolean;
   request: AgentRunRequest;
   inputProvenance?: InputProvenance;
   isOneShotModelRun: boolean;
@@ -208,47 +205,50 @@ type GatewayChatUserTurn = {
   resolvedSessionKey?: string;
   spawnedBy?: string;
   client?: GatewayClient | null;
-  isCurrent?: () => boolean;
   inputProvenance?: InputProvenance;
   hasExplicitOrigin: boolean;
   hasRestoredCronContinuation: boolean;
   isIncognito: boolean;
-  isReconnectResume: boolean;
   isSystemGenerated: boolean;
   turnKind: "btw" | "main";
   isDirectExternalUser: boolean;
 };
 
-/** Current external user input, independently of the permission being admitted. */
-export function isDirectGatewayChatUserTurn(params: GatewayChatUserTurn): boolean {
-  return isDirectGatewayUserTurn({
+function directChatUserSource(params: GatewayChatUserTurn): DirectOperatorAuthorityParams {
+  // A completed spawn is history, not the sender of fresh Control UI input.
+  const freshDashboardFollowup =
+    params.isUncontrolledDashboardChild &&
+    params.client?.internal?.authenticatedControlUi === true &&
+    !params.isIncognito;
+  return {
     ...params,
+    spawnedBy: freshDashboardFollowup ? undefined : params.spawnedBy,
     disallowed:
       !params.isDirectExternalUser ||
       params.hasExplicitOrigin ||
       params.hasRestoredCronContinuation ||
       params.isSystemGenerated ||
       params.turnKind !== "main",
-  });
+  };
+}
+
+/** Current external user input, independently of the permission being admitted. */
+export function isDirectGatewayChatUserTurn(params: GatewayChatUserTurn): boolean {
+  return isDirectGatewayUserTurn(directChatUserSource(params));
 }
 
 /** Mints the same authority for an admitted ordinary operator chat.send turn. */
 export function resolveGatewayChatCronCreatorAuthorityAdmission(
   params: GatewayChatUserTurn,
 ): GatewayCronCreatorAuthorityAdmission | undefined {
-  // A completed spawn is session history, not the sender of fresh Control UI input.
-  // Restore only the caller's own scheduling scope, never local or global management.
-  const childFollowup =
-    params.isUncontrolledDashboardChild === true &&
-    params.client?.internal?.authenticatedControlUi === true;
-  const source = childFollowup ? { ...params, spawnedBy: undefined } : params;
+  const source = directChatUserSource(params);
   return resolveDirectOperatorAuthority(
     {
       ...source,
-      disallowed:
-        source.isIncognito || source.isReconnectResume || !isDirectGatewayChatUserTurn(source),
+      disallowed: params.isIncognito || source.disallowed,
     },
-    childFollowup,
+    // Restoring direct input never gives a handed-off chat global cron management.
+    params.isUncontrolledDashboardChild === true,
   );
 }
 
@@ -272,7 +272,6 @@ export function resolveGatewayTemplateSetupCronAuthorityAdmission(
     inputProvenance: undefined,
     disallowed:
       params.isIncognitoEntry ||
-      params.isReconnectResume ||
       params.hasExplicitOrigin ||
       params.hasRestoredCronContinuation ||
       params.turnKind !== "main",

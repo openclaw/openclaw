@@ -87,7 +87,9 @@ on every channel. Native command menus and button selections on Discord and
 Telegram, Slack argument menus, and Mattermost model pickers are also retained after delivery.
 These exchanges appear in session history and later model context, except read-only
 `/status` replies: their command and reply remain visible in history but do not enter
-model context or interrupt an active turn.
+model context or interrupt an active turn. An exchange delivered while a turn is running
+is recorded after that turn settles, so the running answer is kept and the exchange still
+enters later model context.
 Login codes, pairing codes,
 login URLs, and sensitive `/config set` or `/debug set` values are redacted in the
 recorded copy; delivered instructions and command execution are unchanged.
@@ -239,6 +241,14 @@ does not grant this access. Internal synthetic callers cannot borrow a human's
 profile. Non-UI Gateway clients also retain application-ID matches such as
 `cli`; operator UI clients do not receive application-ID matches. Existing
 operator scopes and command enablement still apply.
+
+Control UI and other Gateway clients that sign in with the shared token or
+password have no user identity, so no sender entry under the `"*"` key matches
+them. To keep their commands available, list your channel senders under
+per-channel keys (for example `commands.allowFrom.telegram`) and omit the `"*"`
+key: Gateway clients then use their operator scopes. A denied Gateway client
+gets a refusal that names this policy, a denied native command gets a refusal,
+and a denied text command from a channel sender gets no reply.
 
 Session commands `/new` and `/reset` (including `/reset soft`) remain available
 to channel-authorized senders on channels that do not enforce owner-only

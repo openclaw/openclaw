@@ -6,6 +6,7 @@ import {
 import { withDiagnosticsTimelineObserver } from "../../../infra/diagnostics-timeline.js";
 import { setPluginToolMeta } from "../../../plugins/tool-metadata.js";
 import { withStateDirEnv } from "../../../test-helpers/state-dir-env.js";
+import { gateAgentToolExecution } from "../../agent-tool-availability.js";
 import { resolveConversationCapabilityProfile } from "../../conversation-capability-profile.js";
 import { createAgentCleanupScope } from "../../run-cleanup-timeout.js";
 import { createClientToolDefinition, createStubTool } from "../../test-helpers/agent-tool-stubs.js";
@@ -245,6 +246,34 @@ describe("prepareEmbeddedAttemptBundleTools", () => {
         expect(inherited.includes("message")).toBe(mode === "available");
       }),
   );
+
+  it("never delegates or captures a listed tool this turn refuses", async () =>
+    await withStateDirEnv("refused-tool-capture-", async () => {
+      const inherited = ["read", "exec"];
+      const exec = gateAgentToolExecution(createStubTool("exec"), "exec is refused");
+      const input = createInput(inherited, [createStubTool("read"), exec]);
+      input.preparedToolBase.cronCreatorToolAllowlist.push({ name: "read" }, { name: "exec" });
+      const result = await prepare(input);
+      expect(toolNames(result.uncompactedEffectiveTools)).toEqual(["read", "exec"]);
+      expect(inherited).toEqual(["read"]);
+      expect(
+        input.preparedToolBase.cronCreatorToolAllowlist.map((entry) =>
+          typeof entry === "string" ? entry : entry.name,
+        ),
+      ).toEqual(["read"]);
+    }));
+
+  it("keeps an unavailable message tool listed when the session lists one fixed set", async () => {
+    // A cron turn without a delivery route must not freeze a series without `message`.
+    const input = createInput([], [createStubTool("message")]);
+    input.preparedToolBase = {
+      ...input.preparedToolBase,
+      messageToolAvailable: false,
+      fixedListing: true,
+    } as typeof input.preparedToolBase;
+    const result = await prepare(input);
+    expect(toolNames(result.uncompactedEffectiveTools)).toContain("message");
+  });
 
   it.each([
     { runtime: undefined, publicationAllowed: true },

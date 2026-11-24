@@ -111,7 +111,7 @@ export function sidebarSessionListQuery(owner: SidebarSessionQueryOwner, agentId
     excludeDock: true,
     ownerId: involvingMe ? undefined : ownerId || undefined,
     involvingMe: involvingMe || undefined,
-    agentId: ownerId ? undefined : agentId,
+    agentId,
     archivedFilter: owner.sidebarSessionStatusFilter(),
     limit: SIDEBAR_SESSION_ROSTER_LIMIT,
     rowMode: "sidebar",

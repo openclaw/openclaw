@@ -3,6 +3,7 @@ import { maxTranscriptScrollOffset } from "./chat-transcript-geometry.ts";
 import type { TranscriptLayoutOwner } from "./chat-transcript-layout-owner.ts";
 import type { ChatTranscriptRenderer } from "./chat-transcript-layout-solid.tsx";
 import type { TranscriptOffsetState } from "./chat-transcript-offset-observer.ts";
+import type { TranscriptPrependAnchor } from "./chat-transcript-prepend-anchor.ts";
 import { focusedTranscriptRowKey } from "./chat-transcript-range.ts";
 
 type TranscriptVirtualizer = Virtualizer<HTMLDivElement, HTMLElement>;
@@ -13,7 +14,7 @@ type ReaderAnchorHost = {
   readonly offsetState: TranscriptOffsetState;
   readonly renderer: Pick<ChatTranscriptRenderer, "columnElement" | "queueAfterCommit">;
   readonly initialRange: { readonly pending: boolean };
-  readonly prependAnchor: { readonly messageKey: string | null };
+  readonly prependAnchor: Pick<TranscriptPrependAnchor, "messageKey" | "retainReader">;
   readonly headerHeight: number;
   readonly scrollElement: HTMLDivElement | null;
   readonly contentElement: HTMLDivElement | null;
@@ -78,9 +79,10 @@ export class TranscriptReaderAnchor {
   private columnShift = 0;
   private landedShift = 0;
   private owedScroll = 0;
+  private settleFrame: number | null = null;
   private observer: ResizeObserver | null = null;
   private readerContent: ReaderContent | null = null;
-  // A landed size before the flow moved its start, and scrollTop with it, this batch.
+  // A measured predecessor changed the virtual flow's start in this batch.
   private flowMoved = false;
   private animatedRow: HTMLElement | null = null;
 
@@ -134,11 +136,16 @@ export class TranscriptReaderAnchor {
     this.observer?.unobserve(row);
   }
 
-  /** Native writes can stop a gesture; hold the correction in the column until it ends. */
+  /**
+   * Native writes can stop a gesture; hold the correction in the column until it ends. Once the
+   * input has produced its own scrolling, only its own idle ends the hold, not virtual-core's
+   * debounced `isScrolling`, which can lapse between frames of a slow native smooth scroll.
+   */
   private holdsNativeOffset(): boolean {
+    const { nativeInputActive, inputAwaitingScroll, touchActive } = this.host.offsetState;
     return (
-      (this.host.virtualizer.isScrolling && this.host.offsetState.nativeInputActive) ||
-      this.host.offsetState.touchActive
+      (nativeInputActive && (this.host.virtualizer.isScrolling || !inputAwaitingScroll)) ||
+      touchActive
     );
   }
 
@@ -490,14 +497,22 @@ export class TranscriptReaderAnchor {
         return false;
       }
       if (moves && !owned && !held) {
-        // The flow moves in this frame; virtual-core would defer its write while iOS scrolls.
-        this.owedScroll += delta;
+        // Retained messages use committed geometry; other content keeps relative correction.
+        if (!this.host.prependAnchor.retainReader(this.host.scrollElement)) {
+          this.owedScroll += delta;
+        }
         return false;
       }
       if (!above || owned || !held) {
         // Prepend restores the measured bubble absolutely; relative compensation
         // can replay after its anchor retires during iOS's post-touch grace.
-        return above && this.host.prependAnchor.messageKey === null;
+        const adjust = above && this.host.prependAnchor.messageKey === null;
+        if (adjust) {
+          // Virtual-core writes its cached offset plus the delta; a reader scroll whose event
+          // has not arrived yet would be undone by that stale base.
+          this.host.offsetState.syncNativeOffset?.(true);
+        }
+        return adjust;
       }
       this.columnShift += delta;
       this.landedShift += delta;
@@ -515,9 +530,8 @@ export class TranscriptReaderAnchor {
   };
 
   /**
-   * Apply corrections collected while virtual-core landed a measurement batch. Returns whether a
-   * landed size moved the flow's start: its scroll adjustment is already written, so the flow
-   * must be redrawn in the same frame.
+   * Reconcile native corrections after virtual-core lands a measurement batch. Returns whether
+   * an out-of-flow predecessor changed the virtual flow's start and needs a geometry projection.
    */
   flush(): boolean {
     const flowMoved = this.flowMoved;
@@ -566,6 +580,19 @@ export class TranscriptReaderAnchor {
     // A held negative shift cannot be reached by native scrolling past zero.
     const reachesStart = shift < 0 && offset + shift <= 0;
     if (!force && this.holdsNativeOffset() && !reachesStart) {
+      // Virtual-core's idle flush can precede the input's own idle, and nothing else may flush
+      // after it. Recheck next frame: a continuing smooth scroll delivers its scroll event (and
+      // re-asserts the gesture) before animation-frame callbacks run; an ended one does not.
+      if (
+        !this.host.virtualizer.isScrolling &&
+        !this.host.offsetState.touchActive &&
+        this.settleFrame === null
+      ) {
+        this.settleFrame = requestAnimationFrame(() => {
+          this.settleFrame = null;
+          this.settle();
+        });
+      }
       return;
     }
     // A write during elastic overscroll snaps back and drops the correction; retry in range.
@@ -575,7 +602,11 @@ export class TranscriptReaderAnchor {
     this.columnShift = 0;
     this.shiftVirtual(-shift);
     this.syncColumn();
-    this.scrollBy(shift);
+    // Native zero is the reader's start: rows that grew above it while the offset was held are
+    // revealed, not scrolled past, so a reader who reached the top stays at the top.
+    if (shift < 0 || offset > 0) {
+      this.scrollBy(shift);
+    }
   }
 
   /** A moved pane keeps its mounted rows observed; only pending corrections are retired. */

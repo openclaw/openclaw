@@ -4,6 +4,7 @@ import type {
 } from "../../../src/shared/control-ui-link-reader.js";
 import { t } from "../i18n/index.ts";
 import { createDockPanelLayout } from "./dock-panel-layout.ts";
+import { nativeDockPanelCss } from "./dock-panel-styles.ts";
 import { iconData, type IconName } from "./icon-data.ts";
 import type { LinkReaderImages } from "./link-reader-images.ts";
 import type { LinkReaderPanelProps } from "./link-reader-panel-lifecycle.ts";
@@ -11,9 +12,8 @@ import type { LinkReaderMetadataUpdate } from "./link-reader-response.ts";
 import type { LinkReaderTarget } from "./link-reader-target.ts";
 import { createIconElement } from "./markdown-icon.ts";
 import type { PanelHostedTab } from "./panel-hosted-tabs.ts";
-import { panelTabStripCss } from "./panel-tab-strip-styles.ts";
+import { nativePanelTabStripCss } from "./panel-tab-strip-styles.ts";
 import sessionPanelRailStyles from "../styles/session-panel-rail.css?inline";
-import dockPanelStyles from "./dock-panel.css?inline";
 import linkReaderContentStyles from "./link-reader-content.css?inline";
 import linkReaderPanelStyles from "./link-reader-panel.css?inline";
 
@@ -27,13 +27,22 @@ export const linkReaderPanelLayout = createDockPanelLayout({
   defaultWidth: 560,
 });
 
-export const linkReaderViewStyles = [
-  panelTabStripCss,
-  dockPanelStyles,
-  sessionPanelRailStyles,
-  linkReaderPanelStyles,
-  linkReaderContentStyles,
-];
+// WebKit 26 can stop matching @scope rules inside native disclosure content.
+// Use the same host-selector nesting as the other docked panels.
+export const linkReaderViewStyles = `
+${nativePanelTabStripCss}
+${nativeDockPanelCss}
+:where(openclaw-link-reader-panel) {
+${sessionPanelRailStyles}
+${linkReaderPanelStyles}
+${linkReaderContentStyles}
+}
+@keyframes lr-loading-pulse {
+  50% {
+    opacity: 0.5;
+  }
+}
+`;
 
 export function readerIcon(name: string | undefined, ownerDocument: Document) {
   const icon =

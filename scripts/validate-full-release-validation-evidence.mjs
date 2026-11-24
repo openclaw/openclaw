@@ -11,6 +11,11 @@ import {
 } from "./full-release-publication-contract.mjs";
 import { sortJsonValueKeys } from "./lib/canonical-json.mjs";
 import { resolveReleaseContextIdentity } from "./lib/release-context.mjs";
+import {
+  releaseEvidenceProducerTuple,
+  retainedPublicationArtifactSource,
+  verifyReceiptRecoveryAuthority,
+} from "./lib/release-evidence-identity.mjs";
 import { resolveReleasePublishInputs } from "./lib/release-publish-inputs.mjs";
 import { createReleaseEvidenceClient, validateReleaseRunEvidence } from "./release-ci-summary.mjs";
 
@@ -54,6 +59,7 @@ function scalarString(value) {
  * @property {{ package?: { version?: unknown } }} [candidateBinding]
  * @property {{ coveragePolicy?: unknown, targetVersion?: unknown, targetContextRef?: unknown, knownFlakyJobsJson?: unknown }} [validationInputs]
  * @property {unknown} [qualificationCoverage]
+ * @property {unknown} [receiptRecovery]
  * @property {{ changedPaths?: unknown, evidenceSha?: unknown, policy?: unknown, runId?: unknown, selectedRunId?: unknown }} [evidenceReuse]
  */
 /**
@@ -197,7 +203,7 @@ function validatePublicationEvidence(options, evidence) {
   ) {
     throw new Error("Publication consumer differs from the authenticated release run.");
   }
-  if (current.conclusion !== "success") {
+  if (current.conclusion !== "success" && !evidence.fastTrack) {
     throw new Error("Required release validation evidence did not pass.");
   }
   if (manifest.version !== 4) {
@@ -290,7 +296,10 @@ function validatePublicationEvidence(options, evidence) {
         : expectedPublicationOperation,
     );
   }
-  const source = "candidate-owned-admission-v1";
+  const source =
+    evidence.qualification.kind === "recovery"
+      ? "receipt-backed-recovery-v1"
+      : "candidate-owned-admission-v1";
   return { run, source, coveragePolicy };
 }
 
@@ -299,6 +308,8 @@ function validatePublicationEvidence(options, evidence) {
  * @param {Omit<FullReleaseValidationEvidenceOptions, "manifest"> & {
  *   manifest?: FullReleaseValidationManifest,
  *   manifestPath?: string,
+ *   fastTrackApproval?: unknown,
+ *   fastTrackPublication?: import("./lib/release-fast-track-publication.mts").FastTrackPublication,
  *   verifierSourceSha?: string,
  *   verifierSourceContent?: string | Uint8Array,
  *   npmPreflightLineage?: { qualificationSha: string, producerRunId: string, producerRunAttempt: string },
@@ -311,6 +322,8 @@ export async function authenticateFullReleaseValidationEvidence(options, client)
   const evidence = await validateReleaseRunEvidence(
     {
       repository: options.expectedRepository,
+      fastTrackApproval: options.fastTrackApproval ?? process.env.FAST_TRACK_APPROVAL_JSON,
+      fastTrackPublication: options.fastTrackPublication,
       runId: String(options.expectedRunId),
       manifestPath: options.manifestPath,
       trustedWorkflowFullRef: options.expectedTrustedWorkflowFullRef,
@@ -322,7 +335,7 @@ export async function authenticateFullReleaseValidationEvidence(options, client)
     },
     evidenceClient,
   );
-  if (evidence.current.conclusion !== "success") {
+  if (evidence.current.conclusion !== "success" && !evidence.fastTrack) {
     throw new Error("Required release validation evidence did not pass.");
   }
   if (evidence.current.runAttempt !== run.runAttempt) {
@@ -399,14 +412,32 @@ function candidateArtifactAuthority(manifest, evidence, evidenceClient) {
 }
 
 function candidateArtifactAuthorityRecord(manifest, evidence) {
-  const descriptor = manifest?.sourceAdmission?.qualificationAdmission;
+  const descriptor =
+    manifest?.sourceAdmission?.qualificationAdmission ??
+    manifest?.receiptRecovery?.qualificationAdmission;
   if (!descriptor || !evidence.qualification.admission) {
     throw new Error("Authenticated candidate admission authority is missing");
+  }
+  const policyDescriptor = manifest?.receiptRecovery?.policyQualification?.admission;
+  if (policyDescriptor && !evidence.policyAdmission) {
+    throw new Error("Authenticated waiver policy admission authority is missing");
   }
   // Retain authenticated identities, not live permission or ref verdicts.
   return structuredClone({
     descriptor,
     admission: evidence.qualification.admission,
+    recoveryProducer: manifest.receiptRecovery
+      ? {
+          runId: String(manifest.runId),
+          runAttempt: Number(manifest.runAttempt),
+          fullRef: manifest.workflowFullRef,
+          sha: manifest.workflowSha,
+        }
+      : null,
+    // A later waiver admission is a second operator grant; later commands recheck it too.
+    policy: policyDescriptor
+      ? { descriptor: policyDescriptor, admission: evidence.policyAdmission }
+      : null,
   });
 }
 
@@ -415,16 +446,31 @@ function candidateArtifactAuthorityRecord(manifest, evidence) {
 export function revalidateCandidateArtifactAuthority(authority, evidenceClient) {
   if (authority) {
     evidenceClient.revalidateQualificationAdmissionAuthority(authority);
+    if (authority.policy) {
+      evidenceClient.revalidateQualificationAdmissionAuthority(authority.policy);
+    }
+    if (authority.recoveryProducer) {
+      if (evidenceClient.verifyReceiptRecoveryAuthority) {
+        evidenceClient.verifyReceiptRecoveryAuthority(authority.recoveryProducer);
+      } else {
+        verifyReceiptRecoveryAuthority(authority.descriptor.repository, authority.recoveryProducer);
+      }
+    }
   }
 }
 
 function validateCandidateOwnedArtifactBinding(manifest, candidateSha, qualificationSha, evidence) {
   const qualification = evidence.qualification;
+  const producer = releaseEvidenceProducerTuple(manifest);
   if (
     qualification.candidateSha !== candidateSha ||
-    qualification.qualificationSha !== qualificationSha ||
-    evidence.current.runAttempt !== Number(manifest.runAttempt) ||
-    evidence.current.conclusion !== "success" ||
+    qualification.qualificationSha !==
+      (manifest.publicationArtifactSource ? manifest.workflowSha : qualificationSha) ||
+    (manifest.publicationArtifactSource &&
+      retainedPublicationArtifactSource(manifest)?.workflow.sha !== qualificationSha) ||
+    String(evidence.current.runId) !== String(producer.runId) ||
+    evidence.current.runAttempt !== Number(producer.runAttempt) ||
+    (evidence.current.conclusion !== "success" && !evidence.fastTrack) ||
     !isDeepStrictEqual(evidence.current.manifest, sortJsonValueKeys(manifest))
   ) {
     throw new Error("Publication artifact is not bound to authenticated candidate qualification");
@@ -447,17 +493,21 @@ export async function authenticateCandidateOwnedArtifact({
   publisherSha,
   publisherFullRef = "refs/heads/main",
   client,
+  fastTrackApproval = process.env.FAST_TRACK_APPROVAL_JSON,
 }) {
-  if (!manifest?.sourceAdmission?.qualificationAdmission) {
+  const recovery = manifest?.receiptRecovery;
+  if (!manifest?.sourceAdmission?.qualificationAdmission && !recovery) {
     throw new Error(
       "Publication requires authenticated P admission; obtain new admitted qualification",
     );
   }
   const evidenceClient = client ?? createReleaseEvidenceClient(repository);
+  const producer = releaseEvidenceProducerTuple(manifest);
   const evidence = await validateReleaseRunEvidence(
     {
       repository,
-      runId: String(manifest.runId),
+      fastTrackApproval,
+      runId: String(producer.runId),
       trustedWorkflowFullRef: publisherFullRef,
       trustedWorkflowRef: publisherFullRef.replace(/^refs\/(?:heads|tags)\//u, ""),
       trustedWorkflowSha: publisherSha,
