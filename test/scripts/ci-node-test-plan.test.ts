@@ -1585,7 +1585,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     { runnerBackend: "github", compactMode: "pull-request" as const },
   ])(
     "bounds Gateway method files and workers without losing coverage ($runnerBackend/$compactMode)",
-    ({ runnerBackend, compactMode }) => {
+    async ({ runnerBackend, compactMode }) => {
       const owner = "agentic-gateway-methods";
       const configs = new Set([
         configPath("gateway-methods"),
@@ -1609,8 +1609,8 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
         expectEvery(groups, (group) => requiredPatterns(group).length <= 96);
       }
       expectSameEntries(groups.flatMap(optionalPatterns), [
-        ...listMatchedTestFiles(createGatewayMethodsVitestConfig({})),
-        ...listMatchedTestFiles(createGatewayMethodsIsolatedVitestConfig({})),
+        ...(await listMatchedTestFiles(createGatewayMethodsVitestConfig({}))),
+        ...(await listMatchedTestFiles(createGatewayMethodsIsolatedVitestConfig({}))),
       ]);
       for (const job of jobs) {
         expect(job.planConcurrency).toBe(1);
@@ -1997,12 +1997,12 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     { runnerBackend: "hybrid", slowerProfile: "blacksmith" },
   ])(
     "bounds $runnerBackend child groups by the slower $slowerProfile path",
-    ({ runnerBackend, slowerProfile }) => {
+    async ({ runnerBackend, slowerProfile }) => {
       // This lane still uses profile-specific group spans; tooling now prices
       // current per-file costs and has separate worker/longest-file coverage.
       const target = {
         ...planTests().find((shard) => shard.shardName === "core-runtime-config")!,
-        includePatterns: listMatchedTestFiles(createRuntimeConfigVitestConfig({})),
+        includePatterns: await listMatchedTestFiles(createRuntimeConfigVitestConfig({})),
       };
       const runtimeFiles = new Set(listVitestRuntimeConsumerFiles(target.configs));
       const runtimeConsumers = target.includePatterns.filter((file) => runtimeFiles.has(file));
@@ -2184,7 +2184,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     }
   });
 
-  it("keeps full-dispatch Gateway chunks off neighboring hosted rows", () => {
+  it("keeps full-dispatch Gateway chunks off neighboring hosted rows", async () => {
     const jobs = bundleTests({
       runnerBackend: "github",
       compactMode: "pull-request",
@@ -2210,8 +2210,8 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       }
     }
     expectSameEntries(gateway.flatMap(optionalPatterns), [
-      ...listMatchedTestFiles(createGatewayMethodsVitestConfig({})),
-      ...listMatchedTestFiles(createGatewayMethodsIsolatedVitestConfig({})),
+      ...(await listMatchedTestFiles(createGatewayMethodsVitestConfig({}))),
+      ...(await listMatchedTestFiles(createGatewayMethodsIsolatedVitestConfig({}))),
     ]);
   });
 
@@ -2660,7 +2660,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     },
   );
 
-  it("partitions whole-config runtime consumers from ordinary serial CLI work", () => {
+  it("partitions whole-config runtime consumers from ordinary serial CLI work", async () => {
     const config = configPath("cli-process");
     useFixtureProjects((candidate) => candidate === config);
 
@@ -2676,7 +2676,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     expect(runtimeJob!.groups).toHaveLength(1);
     const runtimeFiles = listVitestRuntimeConsumerFiles([config]).toSorted();
     expect(runtimeJob!.groups[0]!.includePatterns?.toSorted()).toEqual(runtimeFiles);
-    const catalogFiles = listMatchedTestFiles(createCliProcessVitestConfig({})).toSorted();
+    const catalogFiles = (await listMatchedTestFiles(createCliProcessVitestConfig({}))).toSorted();
     const ordinaryJobs = plan.filter((job) => !job.pretestBuildMode);
     expectPlanFiles(
       ordinaryJobs,
@@ -2756,7 +2756,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     }
   });
 
-  it("spends the hybrid CLI budget only on complete affordable non-build bins", () => {
+  it("spends the hybrid CLI budget only on complete affordable non-build bins", async () => {
     const originalProcessFiles = cliProcessTestFiles.slice();
     const configs = new Set([configPath("cli"), configPath("cli-process")]);
     const restore = selectFixtureProjects((config) => configs.has(config));
@@ -2786,7 +2786,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       );
       expectSameEntries(
         processGroups.flatMap(optionalPatterns),
-        listMatchedTestFiles(createCliProcessVitestConfig({})),
+        await listMatchedTestFiles(createCliProcessVitestConfig({})),
       );
       expectEvery(combined, (job) => job.predictedSeconds! <= 250 && job.planConcurrency === 1);
       for (const job of plan.filter((candidate) => candidate.pretestBuildMode)) {
@@ -2874,7 +2874,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     expect(planFiles(selected)).toEqual([fast]);
   });
 
-  it("retains recovery and feature transport contracts in their main, PR, and manual Node tiers", () => {
+  it("retains recovery and feature transport contracts in their main, PR, and manual Node tiers", async () => {
     const proofFiles = [
       "src/gateway/server.codex-failure-recovery.test.ts",
       "src/gateway/server.feature-session-actions.test.ts",
@@ -2904,11 +2904,12 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     );
     expect(isolated.configs).toContain(configPath("gateway-server-isolated"));
     expect(
-      isolated.includePatterns ?? listMatchedTestFiles(createGatewayServerIsolatedVitestConfig({})),
+      isolated.includePatterns ??
+        (await listMatchedTestFiles(createGatewayServerIsolatedVitestConfig({}))),
     ).toContain("src/gateway/server.chat-recovered-output.test.ts");
   });
 
-  it("defers exactly the runtime release inventory from automatic plans on github", () => {
+  it("defers exactly the runtime release inventory from automatic plans on github", async () => {
     const runnerBackend = "github";
 
     const reducedOwners = defaultShards
@@ -2928,7 +2929,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
         includeReleaseOnlyRuntimeTests: false,
         changedPaths: ["src/config/state-startup-corpus.test-support.ts"],
       });
-      expectRuntimeReleaseInventory({ before, after, reducedOwners, compactMode });
+      await expectRuntimeReleaseInventory({ before, after, reducedOwners, compactMode });
     }
   });
 
@@ -3836,7 +3837,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     }
   });
 
-  it("retains Gateway database consumers in the canonical worker plan", () => {
+  it("retains Gateway database consumers in the canonical worker plan", async () => {
     const worker = createGatewayDatabaseWorkersVitestConfig({});
     const core = createGatewayCoreVitestConfig({});
     const server = createGatewayServerVitestConfig({});
@@ -3847,7 +3848,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     for (const previous of [core, server, methods]) {
       expectInherited(worker.test, previous.test, "runner", "setupFiles");
     }
-    expect(listMatchedTestFiles(worker)).toEqual(
+    expect(await listMatchedTestFiles(worker)).toEqual(
       expect.arrayContaining([
         "src/gateway/github-publication-transcript.test.ts",
         "src/gateway/mcp-http.session-controls.test.ts",
@@ -3871,10 +3872,10 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     ).toHaveLength(1);
   });
 
-  it("retains host-owned database consumers in the canonical infra plan", () => {
+  it("retains host-owned database consumers in the canonical infra plan", async () => {
     const infra = createInfraVitestConfig({});
     expect(infra.test?.setupFiles).toEqual(createAgentsSupportVitestConfig({}).test?.setupFiles);
-    const admitted = new Set(listMatchedTestFiles(infra));
+    const admitted = new Set(await listMatchedTestFiles(infra));
     for (const file of [
       "src/agents/embedded-agent-runner/run.session-permissions.test.ts",
       "src/agents/embedded-agent-runner/run/attempt-bootstrap-prepare.test.ts",
@@ -3912,7 +3913,9 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     const includeFile = join(tempDirs.make("database-worker-routing-"), "include.json");
     writeFileSync(includeFile, JSON.stringify(selected));
     expectSameEntries(
-      listMatchedTestFiles(createInfraVitestConfig({ OPENCLAW_VITEST_INCLUDE_FILE: includeFile })),
+      await listMatchedTestFiles(
+        createInfraVitestConfig({ OPENCLAW_VITEST_INCLUDE_FILE: includeFile }),
+      ),
       selected,
     );
   });
@@ -3970,7 +3973,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     expectFields(owner.shard, { planConcurrency: 1, pretestBuildMode: "runtime" });
   });
 
-  it("keeps the complete tooling family in manual plans and omits it from product plans", () => {
+  it("keeps the complete tooling family in manual plans and omits it from product plans", async () => {
     const automatic = planTests({ includeReleaseOnlyToolingShards: false });
     const hasTooling = (shards: typeof automatic) =>
       shards.some((shard) => shard.shardName.startsWith("core-tooling-"));
@@ -3979,7 +3982,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     const files = automatic.flatMap(optionalPatterns);
     expectNone(files, (file) => file.startsWith("test/scripts/"));
     expect(automatic.flatMap((shard) => shard.configs)).toContain(configPath("boundary"));
-    expect(listMatchedTestFiles(createBoundaryVitestConfig({}, []))).toContain(
+    expect(await listMatchedTestFiles(createBoundaryVitestConfig({}, []))).toContain(
       "src/infra/home-dir.test.ts",
     );
   });
@@ -4164,25 +4167,25 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     },
   ])(
     "covers every $owner test exactly once across split shards",
-    ({ prefix, config, expectedFiles }) => {
+    async ({ prefix, config, expectedFiles }) => {
       const actual = defaultShards
         .filter((shard) => shard.shardName.startsWith(prefix))
         .filter((shard) => !config || shard.configs.includes(config))
         .flatMap(optionalPatterns)
         .toSorted((a, b) => a.localeCompare(b));
 
-      expect(actual).toEqual(expectedFiles().toSorted((a, b) => a.localeCompare(b)));
+      expect(actual).toEqual((await expectedFiles()).toSorted((a, b) => a.localeCompare(b)));
       expect(new Set(actual).size).toBe(actual.length);
     },
   );
 
-  it("covers every executable auto-reply reply test exactly once across split shards", () => {
+  it("covers every executable auto-reply reply test exactly once across split shards", async () => {
     const actual = defaultShards
       .filter((shard) => shard.shardName.startsWith("auto-reply-reply-"))
       .flatMap(optionalPatterns)
       .toSorted((a, b) => a.localeCompare(b));
 
-    expect(actual).toEqual(listMatchedTestFiles(createAutoReplyReplyVitestConfig({})));
+    expect(actual).toEqual(await listMatchedTestFiles(createAutoReplyReplyVitestConfig({})));
     expect(new Set(actual).size).toBe(actual.length);
   });
 });

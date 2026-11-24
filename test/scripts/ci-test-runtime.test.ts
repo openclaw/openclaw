@@ -23,11 +23,11 @@ const supportConfig = "test/vitest/vitest.agents-support.config.ts";
 describe("CI runtime job inventory", () => {
   it.each([timerConfig, supportConfig])(
     "reuses complete %s ownership for accounting without per-exception planning",
-    (ownerConfig) => {
+    async (ownerConfig) => {
       const inventory =
         ownerConfig === timerConfig
-          ? listMatchedTestFiles(createUnitFastFakeTimersVitestConfig({}, { argv: [] }))
-          : listMatchedTestFiles(createAgentsSupportVitestConfig({}));
+          ? await listMatchedTestFiles(createUnitFastFakeTimersVitestConfig({}, { argv: [] }))
+          : await listMatchedTestFiles(createAgentsSupportVitestConfig({}));
       expect(inventory.length).toBeGreaterThan(0);
       const planner = vi.spyOn(testProjects, "buildVitestRunPlans");
       onTestFinished(() => planner.mockRestore());
@@ -66,8 +66,10 @@ describe("CI runtime job inventory", () => {
     },
   );
 
-  it("retains fallback for an unresolved sibling of a qualified accounting owner", () => {
-    const inventory = listMatchedTestFiles(createUnitFastFakeTimersVitestConfig({}, { argv: [] }));
+  it("retains fallback for an unresolved sibling of a qualified accounting owner", async () => {
+    const inventory = await listMatchedTestFiles(
+      createUnitFastFakeTimersVitestConfig({}, { argv: [] }),
+    );
     const execution = { configs: [timerConfig, supportConfig] };
     const planner = vi.spyOn(testProjects, "buildVitestRunPlans");
     onTestFinished(() => planner.mockRestore());

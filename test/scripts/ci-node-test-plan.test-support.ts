@@ -1,6 +1,7 @@
 import { globSync } from "node:fs";
 import { isAbsolute, relative, resolve } from "node:path";
 import { expect } from "vitest";
+import { resolveConfig } from "vitest/node";
 import type { CompactNodeTestShard } from "../../scripts/lib/ci-node-test-plan.mts";
 import { isReleaseOnlyRuntimeTestFile } from "../../scripts/lib/ci-test-tier-policy.mts";
 import { parseCompactSplitTimingKey } from "../../scripts/lib/vitest-shard-metadata.mts";
@@ -35,8 +36,8 @@ export function listTestFiles(rootDir: string): string[] {
   return gitFiles!.filter((line) => line.endsWith(".test.ts"));
 }
 
-export function listMatchedTestFiles(config: VitestConfig): string[] {
-  const testConfig = config.test ?? {};
+export async function listMatchedTestFiles(config: VitestConfig): Promise<string[]> {
+  const { test: testConfig } = await resolveConfig({ config: false }, config);
   const cwd = testConfig.dir ? resolve(testConfig.dir) : process.cwd();
   const exclude = (testConfig.exclude ?? []).map((pattern) =>
     isAbsolute(pattern) ? toRepoPath(relative(cwd, pattern)) : toRepoPath(pattern),
@@ -52,7 +53,7 @@ export function listMatchedTestFiles(config: VitestConfig): string[] {
     .toSorted((a, b) => a.localeCompare(b));
 }
 
-export function expectRuntimeReleaseInventory({
+export async function expectRuntimeReleaseInventory({
   before,
   after,
   reducedOwners,
@@ -63,7 +64,7 @@ export function expectRuntimeReleaseInventory({
   reducedOwners: string[];
   compactMode: "push" | "pull-request";
 }) {
-  const cliFiles = listMatchedTestFiles(createCliVitestConfig({}));
+  const cliFiles = await listMatchedTestFiles(createCliVitestConfig({}));
   const groupFiles = (group: CompactNodeTestShard["groups"][number]) =>
     group.includePatterns ?? (group.shard_name === "agentic-cli" ? cliFiles : []);
   const beforeGroups = before.flatMap((shard) => shard.groups);

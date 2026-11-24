@@ -1,6 +1,7 @@
 // Covers the standalone Vitest E2E config shape.
 import { readdirSync } from "node:fs";
 import { describe, expect, it } from "vitest";
+import { resolveConfig } from "vitest/node";
 import {
   normalizeConfigPath,
   normalizeConfigPaths,
@@ -32,14 +33,15 @@ describe("e2e vitest config", () => {
     ]);
   });
 
-  it("keeps every terminal integration test exclusively in the serial PTY lane", () => {
+  it("keeps every terminal integration test exclusively in the serial PTY lane", async () => {
     const tuiPtyConfig = createTuiPtyVitestConfig({});
+    const resolvedTuiPtyConfig = await resolveConfig({ config: false }, tuiPtyConfig);
     const tuiPtyTests = readdirSync(resolveRepoRootPath("src/tui"))
       .filter((name) => name.endsWith(".e2e.test.ts"))
       .map((name) => `src/tui/${name}`);
 
     expect(e2eConfig.test?.exclude).toEqual(expect.arrayContaining(tuiPtyTests));
-    expect(tuiPtyConfig.test?.include?.toSorted()).toEqual(
+    expect(resolvedTuiPtyConfig.test?.include?.toSorted()).toEqual(
       tuiPtyTests
         .filter((target) => !target.endsWith("tui-pty-local.e2e.test.ts"))
         .map((target) => target.replace(/^src\//u, ""))

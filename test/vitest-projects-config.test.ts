@@ -65,10 +65,14 @@ function requireTestConfig<T extends { test?: unknown }>(config: T): NonNullable
   assert(config.test, "expected vitest test config");
   return config.test;
 }
-const configFor = (
+const configFor = async (
   create: typeof createGatewayMethodsVitestConfig,
   env: Record<string, string | undefined> = {},
-) => requireTestConfig(create(env));
+) => {
+  const config = create(env);
+  const { test } = await resolveConfig({ config: false }, config);
+  return { ...requireTestConfig(config), include: test.include, exclude: test.exclude };
+};
 const includeEnv = (files: readonly string[]) => ({
   OPENCLAW_VITEST_INCLUDE_FILE: patternFiles.writePatternFile("include.json", files),
 });
@@ -205,7 +209,7 @@ describe("projects vitest config", () => {
         "gateway-database-workers",
       ]);
       expect(projects.map((project) => project.pool)).toEqual(["forks", "forks"]);
-      const original = configFor(createGatewayVitestConfig, env);
+      const original = await configFor(createGatewayVitestConfig, env);
       expect(original.pool).toBe(defaultPool);
       for (const project of projects) {
         expect(project).toMatchObject({ runner: original.runner, setupFiles: original.setupFiles });
@@ -231,17 +235,17 @@ describe("projects vitest config", () => {
     },
   );
 
-  it("keeps Gateway tests needing native process state or module isolation in every aggregate", () => {
+  it("keeps Gateway tests needing native process state or module isolation in every aggregate", async () => {
     const methodsIsolatedProject = "test/vitest/vitest.gateway-methods-isolated.config.ts";
     const serverIsolatedProject = "test/vitest/vitest.gateway-server-isolated.config.ts";
     const agenticShard = fullSuiteVitestShards.find((shard) => shard.name === "agentic");
-    const methodsConfig = configFor(createGatewayMethodsVitestConfig);
-    const methodsIsolatedConfig = configFor(createGatewayMethodsIsolatedVitestConfig);
-    const serverIsolatedConfig = configFor(createGatewayServerIsolatedVitestConfig);
-    const serverConfig = configFor(createGatewayServerVitestConfig, {
+    const methodsConfig = await configFor(createGatewayMethodsVitestConfig);
+    const methodsIsolatedConfig = await configFor(createGatewayMethodsIsolatedVitestConfig);
+    const serverIsolatedConfig = await configFor(createGatewayServerIsolatedVitestConfig);
+    const serverConfig = await configFor(createGatewayServerVitestConfig, {
       OPENCLAW_VITEST_MAX_WORKERS: "2",
     });
-    const gatewayFallback = configFor(createGatewayVitestConfig, process.env);
+    const gatewayFallback = await configFor(createGatewayVitestConfig, process.env);
 
     for (const project of [methodsIsolatedProject, serverIsolatedProject]) {
       expect(rootVitestProjects).toContain(project);
@@ -252,7 +256,7 @@ describe("projects vitest config", () => {
     expect(methodsIsolatedConfig.include).toEqual(scopedGatewayMethodsIsolatedTestFiles);
     expect(serverConfig).toMatchObject({ pool: "forks", isolate: false, fileParallelism: true });
     expect(
-      configFor(createGatewayServerVitestConfig, { OPENCLAW_VITEST_MAX_WORKERS: "1" })
+      (await configFor(createGatewayServerVitestConfig, { OPENCLAW_VITEST_MAX_WORKERS: "1" }))
         .fileParallelism,
     ).toBe(false);
     expect(serverIsolatedConfig).toMatchObject({ isolate: true, pool: "forks", runner: undefined });
@@ -294,7 +298,7 @@ describe("projects vitest config", () => {
     ["fake-timer unit-fast", createUnitFastFakeTimersVitestConfig, ["src/utils.test.ts"]],
   ] as const)(
     "limits %s include files to the project's owned tests",
-    (_, createConfig, owned, expected?: readonly string[]) => {
+    async (_, createConfig, owned, expected?: readonly string[]) => {
       const unrelated = "src/gateway/worker-environments/workspace-sync-scripts.test.ts";
       const mixed = includeEnv([
         ...owned,
@@ -304,8 +308,8 @@ describe("projects vitest config", () => {
         "src/gateway/openresponses-http.test.ts",
         unrelated,
       ]);
-      expect(configFor(createConfig, mixed).include).toEqual(expected ?? owned);
-      expect(configFor(createConfig, includeEnv([unrelated])).include).toEqual([]);
+      expect((await configFor(createConfig, mixed)).include).toEqual(expected ?? owned);
+      expect((await configFor(createConfig, includeEnv([unrelated]))).include).toEqual([]);
     },
   );
 
@@ -469,7 +473,7 @@ describe("projects vitest config", () => {
     );
   });
 
-  it("keeps shared and isolated UI owners together in root and full runtime runs", () => {
+  it("keeps shared and isolated UI owners together in root and full runtime runs", async () => {
     for (const projects of [
       rootVitestProjects,
       fullSuiteVitestShards.find((shard) => shard.name === "core-runtime")?.projects ?? [],
@@ -482,7 +486,7 @@ describe("projects vitest config", () => {
         expect(projects.filter((project) => project === `test/vitest/${config}`)).toHaveLength(1);
       }
     }
-    const testConfig = configFor(createUiVitestConfig, process.env);
+    const testConfig = await configFor(createUiVitestConfig, process.env);
     expect(testConfig.exclude).toEqual(expect.arrayContaining(uiIsolatedTestFiles));
     expect(testConfig).toMatchObject({ environment: "jsdom", isolate: false });
     expect(normalizeConfigPath(testConfig.runner)).toBe("test/non-isolated-runner.ts");
@@ -501,9 +505,9 @@ describe("projects vitest config", () => {
 
   it.each(["logbook", "memory-core", "team-reports", "workboard"])(
     "runs %s database owners in main-thread hosts across focused and full suites",
-    (pluginId) => {
+    async (pluginId) => {
       const project = "test/vitest/vitest.extension-database-workers.config.ts";
-      const testConfig = configFor(createExtensionDatabaseWorkersVitestConfig);
+      const testConfig = await configFor(createExtensionDatabaseWorkersVitestConfig);
       expect(resolveExtensionTestConfig(`extensions/${pluginId}`)).toBe(project);
       expect(ownersFor(`extensions/${pluginId}/src/store.test.ts`)).toEqual([project]);
       expect(rootVitestProjects).toContain(project);
@@ -513,19 +517,19 @@ describe("projects vitest config", () => {
       expect(testConfig.pool).toBe(diagnosticForksPool);
       expect(testConfig.isolate).toBe(true);
       expect(testConfig.include).toContain(`${pluginId}/**/*.test.ts`);
-      expect(configFor(createExtensionsVitestConfig).exclude).toContain(`${pluginId}/**`);
+      expect((await configFor(createExtensionsVitestConfig)).exclude).toContain(`${pluginId}/**`);
     },
   );
 
   it.each(["extensions/google/research-gateway.test.ts"])(
     "routes %s through the host database owner exactly once",
-    (file) => {
+    async (file) => {
       const project = "test/vitest/vitest.extension-database-workers.config.ts";
       expect(buildVitestRunPlans([file]).map((plan) => plan.config)).toEqual([project]);
       expect(requireTestConfig(createExtensionDatabaseWorkersVitestConfig({})).pool).toBe(
         diagnosticForksPool,
       );
-      expect(requireTestConfig(createExtensionsVitestConfig({})).exclude).toContain(
+      expect((await configFor(createExtensionsVitestConfig)).exclude).toContain(
         file.slice("extensions/".length),
       );
     },
@@ -537,13 +541,13 @@ describe("projects vitest config", () => {
     "extensions/deep-research/src/jobs.control.test.ts",
     "extensions/deep-research/src/jobs.wake.test.ts",
     "extensions/google/research-gateway.test.ts",
-  ])("routes %s through the host database owner exactly once", (file) => {
+  ])("routes %s through the host database owner exactly once", async (file) => {
     const project = "test/vitest/vitest.extension-database-workers.config.ts";
     expect(buildVitestRunPlans([file]).map((plan) => plan.config)).toEqual([project]);
     expect(requireTestConfig(createExtensionDatabaseWorkersVitestConfig({})).pool).toBe(
       diagnosticForksPool,
     );
-    expect(requireTestConfig(createExtensionsVitestConfig({})).exclude).toContain(
+    expect((await configFor(createExtensionsVitestConfig)).exclude).toContain(
       file.slice("extensions/".length),
     );
   });
@@ -551,11 +555,11 @@ describe("projects vitest config", () => {
   it.each([
     "test/plugins/deep-research-routing.gateway.test.ts",
     "src/gateway/server/ws-connection/connect-role-catalog.test.ts",
-  ])("routes %s through the Gateway database owner exactly once", (file) => {
+  ])("routes %s through the Gateway database owner exactly once", async (file) => {
     const project = "test/vitest/vitest.gateway-database-workers.config.ts";
     expect(buildVitestRunPlans([file]).map((plan) => plan.config)).toEqual([project]);
     expect(requireTestConfig(createGatewayDatabaseWorkersVitestConfig({})).pool).toBe("forks");
-    expect(requireTestConfig(createGatewayMethodsVitestConfig({})).exclude).toContain(file);
+    expect((await configFor(createGatewayMethodsVitestConfig)).exclude).toContain(file);
   });
 
   it.each([
@@ -572,7 +576,7 @@ describe("projects vitest config", () => {
     { file: "send.test.ts", source: "send.ts", siblings: ["outbound-tool-trace-sanitize.test.ts"] },
   ])(
     "routes iMessage $file through its worker owner without moving sibling tests",
-    ({ file: basename, source, siblings }) => {
+    async ({ file: basename, source, siblings }) => {
       const file = `extensions/imessage/src/${basename}`;
       const project = "test/vitest/vitest.extension-database-workers.config.ts";
       const siblingProject = "test/vitest/vitest.extension-imessage.config.ts";
@@ -589,14 +593,16 @@ describe("projects vitest config", () => {
       for (const sibling of siblings) {
         expect(ownersFor(`extensions/imessage/src/${sibling}`)).toEqual([siblingProject]);
       }
-      const workerConfig = configFor(createExtensionDatabaseWorkersVitestConfig);
+      const workerConfig = await configFor(createExtensionDatabaseWorkersVitestConfig);
       expect(workerConfig.include).toContain(`imessage/src/${basename}`);
       expect(workerConfig.pool).toBe(diagnosticForksPool);
       expect(workerConfig.isolate).toBe(true);
-      expect(configFor(createExtensionImessageVitestConfig).exclude).toContain(
+      expect((await configFor(createExtensionImessageVitestConfig)).exclude).toContain(
         `imessage/src/${basename}`,
       );
-      expect(configFor(createExtensionsVitestConfig).exclude).toContain(`imessage/src/${basename}`);
+      expect((await configFor(createExtensionsVitestConfig)).exclude).toContain(
+        `imessage/src/${basename}`,
+      );
     },
   );
 
@@ -611,8 +617,8 @@ describe("projects vitest config", () => {
         runner: "test/non-isolated-runner.ts",
       },
     ],
-  ] as const)("keeps %s on its fork policy", (_, create, expected) => {
-    const config = configFor(create, process.env);
+  ] as const)("keeps %s on its fork policy", async (_, create, expected) => {
+    const config = await configFor(create, process.env);
     expect({ ...config, runner: normalizeConfigPath(config.runner) }).toMatchObject({
       pool: "forks",
       ...expected,

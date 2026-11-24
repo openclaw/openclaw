@@ -3,11 +3,14 @@ import { globSync } from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { globSync as nativeGlobSync } from "tinyglobby";
+import type { PluginOption } from "vite";
+import { resolveConfig } from "vitest/node";
 import { withEnvAsync } from "../src/test-utils/env.js";
 import { fullSuiteVitestShards } from "./vitest/vitest.test-shards.mjs";
 
 type VitestConfig = {
   root?: string;
+  plugins?: PluginOption[];
   test?: {
     dir?: string;
     exclude?: string[];
@@ -51,15 +54,15 @@ export async function listVitestConfigTestFiles(
           }
         })
       : configPath;
-  const testConfig = config.test ?? {};
-  if (testConfig.projects) {
+  if (config.test?.projects) {
     const projects = [];
-    for (const project of testConfig.projects) {
+    for (const project of config.test.projects) {
       projects.push(...(await listVitestConfigTestFiles(project, includeFile)));
     }
     return projects;
   }
-  const dir = path.resolve(config.root ?? process.cwd(), testConfig.dir ?? ".");
+  const { test: testConfig } = await resolveConfig({ config: false }, config);
+  const dir = path.resolve(testConfig.root, testConfig.dir ?? ".");
   const exclude = (testConfig.exclude ?? []).map((pattern) =>
     path.isAbsolute(pattern) ? toRepoPath(path.relative(dir, pattern)) : toRepoPath(pattern),
   );
