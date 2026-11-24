@@ -627,7 +627,7 @@ export async function executeWorkerTurn(
         );
       }
       if (!isAuthorized()) {
-        throw new Error("Worker turn authority changed while preparing its launch");
+        throw new Error("Worker turn ended while preparing its launch. Start a new turn.");
       }
       if (!workerAdmission) {
         recorder?.markSentToProvider?.();

@@ -24,6 +24,8 @@ export function createCronCompletionDeliveryFence(params: {
   handle: CronRunReceiptHandle;
   activeJobMarker?: CronActiveJobMarker;
   signal: AbortSignal;
+  /** Keep the interrupted run's terminal notice within its retained shutdown owner. */
+  settlingRestart?: true;
 }): CronCompletionDeliveryFence {
   const { state, handle, activeJobMarker, signal } = params;
   const context = captureOpenClawStateWorkerContext();
@@ -46,7 +48,9 @@ export function createCronCompletionDeliveryFence(params: {
     }
     if (
       // A reload handover retires scheduling only; its runs still deliver.
-      (state.lifecycleGeneration !== generation && !state.handedOver) ||
+      (state.lifecycleGeneration !== generation &&
+        !state.handedOver &&
+        !(params.settlingRestart && state.stopped)) ||
       !isCronActiveJobMarkerCurrent(activeJobMarker) ||
       activeJobMarker?.cancellation?.kind === "requested" ||
       (activeJobMarker?.jobRemoved && !allowMissingJob()) ||

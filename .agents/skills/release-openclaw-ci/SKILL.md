@@ -10,8 +10,8 @@ Use with `$release-openclaw-maintainer` and `$openclaw-testing` for candidate va
 ## Fast-track approval boundary
 
 Agents MUST NOT approve fast-track exceptions, even with a release manager's
-available token. Require explicit approval from another human in the normal
-release-managers group for the exact request/digest and skip or incomplete-FRV
+available token. Require explicit approval from a human in the normal
+release-managers group, which may be the requesting release manager, for the exact request/digest and skip or incomplete-FRV
 action; retain its permalink and original FRV results. Generic release authority
 is insufficient. Use the normal environment approval/receipt, not a separate
 Google/Firebase service. These request contracts do not yet enable a publisher
@@ -136,7 +136,7 @@ pnpm ci:full-release -- \
 5. Let the helper create Q transport and obtain immutable P admission. Never hand-construct either or select moving main.
 6. Reuse the exact successful parent through `pnpm release:candidate -- --full-release-validation-run-id <run> --skip-dispatch`, retaining original tag, P, route, scope, and other options. Checklist `--workflow-sha` means **P**; its fresh dispatch defaults Q=C. Avoid a second Q=C qualification.
 7. Reconciliation preserves original Q. Changing Q needs a new request, never an edited record.
-8. Reuse is neither automatic nor automatically invalid: preserve producer Q/run/attempt and authenticated receipt; require identical workload closure, exact C/inputs/candidate bindings, current artifacts, and policy acceptance. Executable shared-script changes invalidate all roles; the Q grant-ledger-only exception permits reevaluation, not reuse of an old verdict; non-normal-CI roles compare full workflow/root trees. Rerun invalid or unwaived failed work and reverify retained package/image payloads; never relabel a failed parent green.
+8. Reuse is neither automatic nor automatically invalid: preserve producer Q/run/attempt and authenticated receipt; require authenticated producer tooling, exact C/inputs/candidate bindings, current artifacts, and acceptance under current Q grants. Tooling changes alone do not invalidate execution; deliberately opt out of reuse when the new harness must run. Rerun invalid or unwaived failed work and reverify retained package/image payloads; never relabel a failed parent green.
 9. Require successful final verification before publication. Supplemental Telegram: retained admitted Q ref/harness, package C. Parallels: isolated Q checkout/dependencies, exact C tarballs. Never use moving main or P's harness.
 10. Record replacement tuple/evidence in handoff. This procedure grants no merge, dispatch, or publication authority.
 
@@ -318,19 +318,12 @@ With `reuse_evidence=true`:
 
 - Within **two minutes**, scan at most **100** recent runs, probe at most **40** target receipt inventories, and fully validate at most **five** matching receipts per role. Nonmatching inventories do not spend full-validation budget.
 - Empty-string inputs equal absent inputs (GitHub omits them from `github.event.inputs`); nonempty defaults and candidate descriptor bytes match exactly.
-- Raw successful children, or failed children accepted by current Q grants, may come from failed, cancelled, or active parents at the same Q, or across Q only with authenticated Git-tree proof of identical workload closure. Independent Q requires authenticated tooling lineage; missing/unsupported/changed closure fails closed.
-
-| Closure     | Exact contents                                                                                                                                                                                                                                                                           |
-| ----------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| All roles   | Owning/reusable workflows, local actions, complete scripts tree, root config/dependency files. Executable shared-script changes invalidate every child, regardless of control-only intent. Only `scripts/lib/release-validation-waivers.json` is excluded for Q grant-data reevaluation. |
-| Normal CI   | Also complete `config`, `packages`, `src`, `test` trees for Q-owned harness dependencies; even unrelated changes there invalidate reuse. Other product directories come from C and are excluded. Unrelated parent-workflow changes alone do not invalidate normal CI.                    |
-| Other roles | Conservatively all workflows and full root tree.                                                                                                                                                                                                                                         |
-
+- Raw successful children, or failed children accepted by current Q grants, may come from failed, cancelled, or active parents at the same Q or across Q. Independent Q requires authenticated tooling lineage; the original producer Q is not relabeled.
 - Logs identify reuse, evaluated rejections, skipped runs, and fresh dispatches. Current-parent adoption witness/immutable plan bind each selection.
 - Admitted P evaluates retained failures against pinned Q grants using the current candidate version; a matching waiver avoids redispatch after the required initial run. Frozen Q still supplies dispatch-input defaults.
-- Collectors/final verification recheck live attempt/conclusion, closure, tooling lineage, inputs, artifact identity/digest/expiry, and successful trusted seal/upload. A newer attempt invalidates reuse; never rerun an adopted child to repair collection.
+- Collectors/final verification recheck live attempt/conclusion, tooling lineage, inputs, artifact identity/digest/expiry, and successful trusted seal/upload. A newer attempt invalidates reuse; never rerun an adopted child to repair collection.
 - Current-parent source/publication admission, successful-parent changelog reuse, and artifact producers' sealed receipts are unchanged.
-- Cross-Q reuse retains original producer Q, exact C/role/effective inputs/defaults/candidate descriptor/receipt/artifact/live attempt. Green jobs or parent-only fixes do not establish eligibility; changed closure needs fresh children. Whole-parent authenticated reuse has a separate exact-Q contract with independently authenticated P. Never relabel failed FRV; eligible P-only repairs may use a separate [receipt-backed aggregate](#receipt-backed-aggregate-recovery), otherwise qualify through a new successful parent.
+- Cross-Q reuse retains original producer Q, exact C/role/effective inputs/defaults/candidate descriptor/receipt/artifact/live attempt. Green jobs alone do not establish eligibility. Set `reuse_evidence=false` when fresh execution under the new Q is required. Whole-parent authenticated reuse has a separate exact-Q contract with independently authenticated P. Never relabel failed FRV; eligible P-only repairs may use a separate [receipt-backed aggregate](#receipt-backed-aggregate-recovery), otherwise qualify through a new successful parent.
 
 ### Optional beta performance
 
@@ -403,7 +396,7 @@ pnpm ci:full-release \
 - Regular final qualification records SDK reports for `beta` and `latest`; review actual channel acknowledgement. Prepared descriptors live in `publicationArtifacts`. Release Prepare adopts the manifest's plugin npm descriptor and prepares only ClawHub; it never repacks plugin npm after FRV. Reusing product evidence never substitutes Code-SHA packages/images for Release-SHA bytes.
 - Failed independent npm qualification: `pnpm frv continue --failed` retries failed npm jobs on original run, carries successful preparation/diagnostic children, and verifies receipts in parent. Failure alone does not reject continuation. Frozen workflows retain original receipt logic; local controller upgrades do not retrofit it. Final verification owns recovery result.
 - SHA-pinned helper infers beta for matching beta candidates, stable for stable/correction versions, and passes C/Q/P. Canonical beta `all` without soak uses `npm-beta-v1`; main/non-beta targets cannot. Run deferred native, performance, Telegram, broad live QA/E2E postpublish against exact package with `run_release_soak=true` or explicit groups. Stable/full force soak. Native publication retains build/signing/notarization/promotion gates. After focused fixes use a narrow `rerun_group`, never automatic widening.
-- At seal, parent records SDK evidence digest from qualified npm receipt and resolves per-package npm plans against registry. Manifest `publishInputs` supplies publisher/preflight defaults. SDK API changes still need operator acknowledgement; evidence grants no authority. Mutation owners recheck live authority, selectors, immutable bytes.
+- At seal, parent records SDK evidence digest from qualified npm receipt and resolves per-package npm plans against registry. Manifest `publishInputs` supplies publisher/preflight defaults. SDK API changes still need acknowledgement: the release agent reviews and acknowledges them, stopping for the operator only if a change looks harmful. Evidence grants no authority. Mutation owners recheck live authority, selectors, immutable bytes.
 
 ### Publication requirements
 

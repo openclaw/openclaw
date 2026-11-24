@@ -84,7 +84,7 @@ describe("subagent registry sqlite store", () => {
         { status: "delivered", deliveredAt: 300 },
         { status: "suspended", suspendedAt: 300, suspendedReason: "permanent_failure" },
         { status: "discarded", discardedAt: 300, discardReason: "expired" },
-        { status: "failed", disposition: "permanent_failure", lastError: "requester deleted" },
+        { status: "failed", lastError: "requester deleted" },
       ] as const
     ).map((delivery) =>
       createRun({ runId: `removal-${delivery.status}`, requesterAgentId: "main", delivery }),

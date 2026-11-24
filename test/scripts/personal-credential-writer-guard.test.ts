@@ -869,6 +869,11 @@ it("permits the audited telemetry count operation without admitting an unreviewe
 
 it.each([
   [
+    "src/secrets/store/secret-store-clawhub-template.ts",
+    "savePersonalTemplateClawHubToken",
+    "templateClawHub.write",
+  ],
+  [
     "src/agents/auth-profiles/store-update.ts",
     "runPreparedAuthProfileStoreUpdate",
     "authProfiles.update",

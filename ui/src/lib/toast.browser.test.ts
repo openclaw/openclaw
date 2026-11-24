@@ -239,6 +239,11 @@ describe.skipIf(navigator.userAgent.toLowerCase().includes("jsdom"))("toast brow
     await renderToast({ message: "Worktrees: release/readiness-check — live run active" }, host);
     const { toast: front } = await renderToast(archived, host);
     await renderToast({ message: "Waiting" }, host);
+    // A reused browser page can leave its real pointer over the new toast lane.
+    const { page } = await import("vitest/browser");
+    await page.elementLocator(document.body).hover({ position: { x: 0, y: 0 } });
+    await waitForSolid(() => expect(lane.hasAttribute("data-open")).toBe(false));
+    await settleAnimations(host);
     const cards = [...lane.querySelectorAll<HTMLElement>(".app-toast")];
     expect(cards.map((card) => card.dataset.depth)).toEqual(["0", "1", "2", "3"]);
     expect(rect(lane).height).toBeCloseTo(rect(cards[0]!).height, 0);
@@ -322,7 +327,7 @@ describe.skipIf(navigator.userAgent.toLowerCase().includes("jsdom"))("toast brow
           ]),
         ),
       );
-      expect(occlusion.mock.calls).toEqual([[false]]);
+      expect(occlusion.mock.calls).toEqual([["live"]]);
       const { page } = await import("vitest/browser");
       await page.getByRole("button", { name: "Open session" }).click();
       expect(open).toHaveBeenCalledOnce();

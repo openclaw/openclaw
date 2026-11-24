@@ -3,6 +3,7 @@ import {
   capturePreparedTranscriptModelPromptProjection,
   rewritePreparedTranscriptMessageAtAnchor,
 } from "../config/sessions/session-message-rewrite.js";
+import { readPersistedMediaFacts } from "../media/media-facts.js";
 import type { PersistedUserTurnMessage } from "./user-turn-input.types.js";
 import {
   isUserMessage,
@@ -49,6 +50,78 @@ export async function confirmPersistedSteerTargetRunId(params: {
     messageSeq: admission.activeMessagePosition + 1,
   });
   return { admission, message: rewritten.message };
+}
+
+type AudioApiKeyFailure = { reference: string; provider: string };
+
+async function annotateAudioApiKeyFailures(
+  admission: UserTurnTranscriptAdmissionReceipt,
+  failures: readonly AudioApiKeyFailure[],
+) {
+  const rewritten = await rewritePreparedTranscriptMessageAtAnchor(admission, (message) => {
+    if (!isUserMessage(message) || message["__openclaw"]?.audioApiKeyRequired) {
+      return undefined;
+    }
+    const media = readPersistedMediaFacts(message);
+    const failure = failures.find(({ reference }) =>
+      media?.some(
+        (fact) => !fact.transcribed && (fact.url === reference || fact.path === reference),
+      ),
+    );
+    return failure
+      ? {
+          ...message,
+          __openclaw: { ...message["__openclaw"], audioApiKeyRequired: failure.provider },
+        }
+      : undefined;
+  });
+  if (!rewritten) {
+    return undefined;
+  }
+  const next = { ...admission, generation: rewritten.generation };
+  await publishTranscriptUpdate(next, {
+    message: rewritten.message,
+    messageId: next.entryId,
+    messageSeq: next.activeMessagePosition + 1,
+  });
+  return { admission: next, message: rewritten.message };
+}
+
+export function createAudioApiKeyFailureCapture(params: {
+  admission: () => UserTurnTranscriptAdmissionReceipt | undefined;
+  admitting: () => Promise<void> | undefined;
+  onCommitted: (
+    admission: UserTurnTranscriptAdmissionReceipt,
+    message: PersistedUserTurnMessage,
+  ) => void;
+  onError: (error: unknown) => void;
+}) {
+  let pending: readonly AudioApiKeyFailure[] | undefined;
+  const stamp = async () => {
+    const admission = params.admission();
+    if (!admission || !pending) {
+      return;
+    }
+    const failures = pending;
+    pending = undefined;
+    await annotateAudioApiKeyFailures(admission, failures).then(
+      (annotated) => annotated && params.onCommitted(annotated.admission, annotated.message),
+      params.onError,
+    );
+  };
+  return {
+    afterAdmission: async (published: void | Promise<void>) => {
+      await published;
+      await stamp();
+    },
+    record: async (failures: readonly AudioApiKeyFailure[]) => {
+      if (failures.length > 0) {
+        pending = failures;
+        await params.admitting();
+        await stamp();
+      }
+    },
+  };
 }
 
 type ModelPromptProjectionParams = {

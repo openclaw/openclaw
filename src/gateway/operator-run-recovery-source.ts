@@ -70,7 +70,7 @@ export async function captureGatewayOperatorRecoverySnapshot(params: {
   client: GatewayClient;
   authority: Pick<
     AdmittedRunOperatorAuthority,
-    "profileId" | "scopes" | "gatewayAccessGrant" | "assertCurrent" | "openclawIdPrincipal"
+    "profileId" | "scopes" | "gatewayAccessGrant" | "openclawIdPrincipal"
   >;
   modelPolicy: PreparedOperatorModelPolicy | undefined;
   identity: Awaited<ReturnType<typeof prepareUserProfileIdentity>>;
@@ -174,9 +174,6 @@ export async function captureGatewayOperatorRecoverySnapshot(params: {
   }
   if (sourceDevice && tokenDevice === undefined && !tokenlessIdentity) {
     return { device, authPolicy, sharedGeneration, unavailableReason: "device-no-token" };
-  }
-  if (sourceDevice && tokenlessIdentity && !device) {
-    return { authPolicy, sharedGeneration, unavailableReason: "device-no-token" };
   }
   if (client.usesSharedGatewayAuth && sharedGeneration === undefined) {
     return { device, authPolicy, sharedGeneration, unavailableReason: "shared-auth-no-generation" };

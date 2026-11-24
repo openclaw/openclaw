@@ -8,16 +8,14 @@ import { applySessionModelSelection } from "../plugin-sdk/model-session-runtime.
 import { withPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import {
   createModelSelectionInputs,
-  selectionMocks,
   useSelectionEffects,
 } from "./apply-session-model-selection.test-support.js";
 await vi.hoisted(() => import("./apply-session-model-selection.test-support.js"));
-const { prepareRuntime } = selectionMocks;
 const { expectNoSelectionEffects } = useSelectionEffects();
 const { createFixtureParams } = createModelSelectionInputs();
 const profile = { profileId: "limited", displayName: "Test", hasAvatar: false, updatedAt: 1 };
 
-function restrictedSelection(options: { empty?: boolean; assertCurrent?: () => void } = {}) {
+function restrictedSelection(options: { empty?: boolean } = {}) {
   const params = createFixtureParams(
     ["primary", "fallback", "manual"].map((id) => ({ provider: "fixture", id, name: id })),
     {
@@ -29,7 +27,6 @@ function restrictedSelection(options: { empty?: boolean; assertCurrent?: () => v
   const operatorAuthority = createTestOperatorAuthority({
     profileId: profile.profileId,
     scopes: ["operator.write"],
-    assertCurrent: options.assertCurrent ?? (() => {}),
     modelPolicy: prepareOperatorModelPolicy({
       cfg: params.cfg,
       policy: { allow: options.empty ? [] : ["fixture/fallback", "fixture/manual"] },
@@ -41,10 +38,7 @@ function restrictedSelection(options: { empty?: boolean; assertCurrent?: () => v
       expect(params.sessionEntry).toEqual(before);
       expectNoSelectionEffects();
     },
-    run: (
-      kind: "caller" | "profiled" | "unprofiled" | "unbound" | "request" = "caller",
-      assertCurrent?: () => void,
-    ) => {
+    run: (kind: "caller" | "profiled" | "unprofiled" | "unbound" | "request" = "caller") => {
       const run = () => applySessionModelSelection(params);
       if (kind === "caller") {
         return withGatewayToolCallerIdentity(
@@ -68,7 +62,6 @@ function restrictedSelection(options: { empty?: boolean; assertCurrent?: () => v
       return withOperatorToolGatewayAuthority(
         {
           scopes: ["operator.write"],
-          assertCurrent,
           ...(kind !== "unprofiled" ? { authenticatedUserProfile: profile } : {}),
           ...(kind === "profiled" ? { operatorRunAuthority: operatorAuthority } : {}),
         },
@@ -103,28 +96,6 @@ it.each([
     }
   },
 );
-
-it("rechecks caller authority after model preparation before mutation", async () => {
-  let current = true;
-  const assertCurrent = () => {
-    if (!current) {
-      throw new Error("operator policy changed");
-    }
-  };
-  const { params, run, expectUnchanged } = restrictedSelection({ assertCurrent });
-  params.request.runtime = { kind: "set", runtime: "openclaw" };
-  prepareRuntime.mockImplementationOnce(async () => {
-    current = false;
-    return { kind: "ready", runtimeId: "openclaw", validate: () => undefined };
-  });
-  const result = await run("caller", assertCurrent);
-  expect(result).toMatchObject({
-    status: "rejected",
-    reason: "not-allowed",
-    message: "operator policy changed",
-  });
-  expectUnchanged();
-});
 
 it.each(["request", "profiled", "unbound"] as const)(
   "the public SDK cannot omit operator model policy in %s context",
