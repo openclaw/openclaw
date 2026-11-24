@@ -34,6 +34,7 @@ vi.mock("./cleanup-plan.js", () => ({
   resolveCleanupPlanForRemoval,
 }));
 
+// mock-isolation: Never call real cleanup effects with the synthetic config, credentials, state, or workspace paths.
 vi.mock("./cleanup-utils.js", () => ({
   removePath,
   removeConfigCredentialsAndSessions,

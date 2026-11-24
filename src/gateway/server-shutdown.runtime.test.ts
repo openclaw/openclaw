@@ -99,9 +99,11 @@ vi.mock("../agents/subagents/registry/subagent-session-cleanup.js", () => ({
   loadSubagentSessionCleanupRuntime: async () => undefined,
 }));
 
+// mock-isolation: The fixture closes a synthetic broker, never a process-global SQLite worker owner.
 vi.mock("../infra/sqlite-worker-store.js", () => ({
   prepareSqliteWorkerBrokerClose: state.prepareSqliteWorkerBrokerClose,
 }));
+// mock-isolation: Test preloading and retirement with a synthetic supervisor, not live process owners.
 vi.mock("../process/supervisor/supervisor.js", () => ({
   loadSupervisorLogRuntime: state.prepareSupervisorLog,
 }));

@@ -290,6 +290,7 @@ vi.mock("../system-agent/setup-inference.js", () => ({ verifySetupInferenceConfi
 vi.mock("../config/config.js", async (importActual) => {
   const actual = await importActual<typeof import("../config/config.js")>();
   return {
+    ...actual,
     DEFAULT_GATEWAY_PORT: 18789,
     createConfigIO,
     readConfigFileSnapshot,

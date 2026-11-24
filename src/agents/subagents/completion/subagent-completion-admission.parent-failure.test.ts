@@ -15,6 +15,7 @@ import {
   withSubagentCompletionWorkerState,
 } from "./subagent-completion-admission.test-helpers.js";
 
+// mock-isolation: Keep the live registry and its process-wide run owners out of this durable-settlement fixture.
 vi.mock("../registry/subagent-registry.js", () => ({ resumeSubagentRun: vi.fn() }));
 
 describe("requester parent-delivery failure reports", () => {
