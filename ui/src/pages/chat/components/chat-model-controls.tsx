@@ -538,28 +538,25 @@ function createChatModelControls(props: ModelControlsViewProps): Accessor<{
       !props.modelSwitching
         ? accessProgramModel?.availableAccessPrograms?.cyber
         : undefined;
-    const accessSelection = props.requestedAccessProgram ?? effectiveAccessProgram;
-    const hasAccessSelection = accessSelection !== undefined;
-    const showAccessProgram =
-      Boolean(props.onAccessProgramSelect) &&
-      (hasAccessSelection || resolveDaybreakAccessProgram(accessPrograms, accessSelection).visible);
+    const daybreak = resolveDaybreakAccessProgram(
+      accessPrograms,
+      props.requestedAccessProgram ?? effectiveAccessProgram,
+    );
+    const showAccessProgram = Boolean(props.onAccessProgramSelect) && daybreak.visible;
     const accessProgramDisabled =
       commonDisabled || !hasResolvableModel || Boolean(props.accessProgramMutationDisabledReason);
     const effortDisabled =
       commonDisabled ||
-      (!(showAccessProgram && hasAccessSelection) &&
-        (!hasResolvableModel ||
-          ((effortMutationDisabled || (thinking.options.length === 0 && fastMode.disabled)) &&
-            (!showAccessProgram || accessProgramDisabled))));
+      !hasResolvableModel ||
+      ((effortMutationDisabled || (thinking.options.length === 0 && fastMode.disabled)) &&
+        (!showAccessProgram || accessProgramDisabled));
     // An empty catalog must not expose fallback speed controls for an unavailable model.
     const confirmedEmptyCatalog =
       catalogState.hasSnapshot &&
       modelOptions.length === 0 &&
       !catalogState.pendingProviders?.length;
-    const reserveEffortPicker = !hasResolvableModel && !(showAccessProgram && hasAccessSelection);
     return {
-      showEffort:
-        !setupRequired && (!confirmedEmptyCatalog || (showAccessProgram && hasAccessSelection)),
+      showEffort: !setupRequired && !confirmedEmptyCatalog,
       model: {
         modelAuthStatusResult: props.modelAuthStatusResult,
         authProfileId:
@@ -630,9 +627,7 @@ function createChatModelControls(props: ModelControlsViewProps): Accessor<{
         accessProgram:
           showAccessProgram && props.onAccessProgramSelect
             ? {
-                requested: props.requestedAccessProgram,
-                effectiveAccessProgram,
-                programs: accessPrograms,
+                daybreak,
                 disabled: accessProgramDisabled,
                 sessionKey: props.sessionKey,
                 onSelect: props.onAccessProgramSelect,
@@ -651,7 +646,7 @@ function createChatModelControls(props: ModelControlsViewProps): Accessor<{
           props.onFastModeSelect?.(next, targetSessionKey),
         onThinkingSelect: async (next, targetSessionKey) =>
           props.onThinkingSelect?.(next, targetSessionKey),
-        reserved: reserveEffortPicker,
+        reserved: !hasResolvableModel,
       },
     };
   });

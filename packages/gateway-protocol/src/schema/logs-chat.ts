@@ -418,6 +418,8 @@ export const ChatSendParamsSchema = closedObject({
   sessionKey: ChatSendSessionKeyString,
   agentId: Type.Optional(NonEmptyString),
   sessionId: Type.Optional(NonEmptyString),
+  // An explicit physical destination must still exist when a new send is admitted.
+  expectedSessionId: Type.Optional(NonEmptyString),
   message: Type.String(),
   mentions: Type.Optional(HumanMentionsSchema),
   appContext: Type.Optional(

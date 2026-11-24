@@ -104,6 +104,8 @@ export function beamTestBarrier() {
 
 export type BeamTestSession = {
   threadId: string;
+  sourceHomeId?: string;
+  exportPolicy?: SessionCatalogHost["sessions"][number]["exportPolicy"] | null;
   name?: string;
   modelProvider?: string;
   recencyAt: number;
@@ -131,8 +133,9 @@ export function createBeamTestCatalog(
     items?: SessionCatalogTranscriptItem[] | ((threadId: string) => SessionCatalogTranscriptItem[]);
     hostCursor?: string;
     hostKind?: SessionCatalogHost["kind"];
+    hostId?: string;
     onList?: () => unknown;
-    onRead?: (threadId: string) => unknown;
+    onRead?: (threadId: string, sourceHomeId?: string, agentId?: string) => unknown;
     processHomeFallbackAllowed?: boolean;
   } = {},
 ): sessionCatalogRuntime.ActiveSessionCatalog {
@@ -147,13 +150,22 @@ export function createBeamTestCatalog(
       const sessions = typeof params.sessions === "function" ? params.sessions() : params.sessions;
       return [
         {
-          hostId: "gateway:local",
+          hostId: params.hostId ?? "gateway:local",
           label: "Local",
           kind: params.hostKind ?? "gateway",
           connected: true,
           ...(params.hostCursor ? { nextCursor: params.hostCursor } : {}),
           sessions: (sessions ?? [{ threadId: "t1", recencyAt: beamTestNow }]).map((session) => ({
             threadId: session.threadId,
+            sourceHomeId: session.sourceHomeId,
+            exportPolicy:
+              session.exportPolicy === null
+                ? undefined
+                : (session.exportPolicy ?? {
+                    origin: "native-local",
+                    automatic: true,
+                    stableHostThreadIdentity: true,
+                  }),
             name: session.name,
             modelProvider: session.modelProvider,
             recencyAt: session.recencyAt,
@@ -165,8 +177,8 @@ export function createBeamTestCatalog(
         },
       ];
     },
-    read: async ({ hostId, threadId }) => {
-      await params.onRead?.(threadId);
+    read: async ({ hostId, threadId, sourceHomeId, agentId }) => {
+      await params.onRead?.(threadId, sourceHomeId, agentId);
       const items = typeof params.items === "function" ? params.items(threadId) : params.items;
       return {
         hostId,

@@ -23,7 +23,11 @@ import {
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
 import { createOpenClawCodingTools } from "./agent-tools.js";
-import { getFinishedSession, waitForExecScope } from "./bash-process-registry.js";
+import {
+  getFinishedSession,
+  processSessionInstanceId,
+  waitForExecScope,
+} from "./bash-process-registry.js";
 import { resetProcessRegistryForTests } from "./bash-process-registry.test-support.js";
 import * as supervisorExit from "./bash-tools.exec-runtime.test-support.js";
 import { createExecTool, createProcessTool } from "./bash-tools.js";
@@ -369,7 +373,8 @@ describe("background completion notifications", () => {
       }),
       isWin ? "$null" : ":",
     );
-    expect(getFinishedSession(id)).toMatchObject({ id, terminalStatus: "completed", exitCode: 0 });
+    const finished = expectDefined(getFinishedSession(id), "finished process");
+    expect(finished).toMatchObject({ id, terminalStatus: "completed", exitCode: 0 });
     expect(receipts).toHaveLength(emits ? 1 : 0);
     if (emits) {
       const receipt = expectDefined(receipts[0], "completion receipt");
@@ -377,7 +382,7 @@ describe("background completion notifications", () => {
       expect(peekSystemEventEntries(sessionKey)).toContainEqual(
         expect.objectContaining({
           id: receipt.id,
-          contextKey: `exec:${id}`,
+          contextKey: `exec:${processSessionInstanceId(finished)}`,
           deliveryContext: chat
             ? {
                 channel: "telegram",

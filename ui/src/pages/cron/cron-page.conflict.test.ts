@@ -68,7 +68,7 @@ it.each(["save", "toggle"] as const)(
       operation === "save"
         ? dom.testId("cron-submit")
         : '[data-test-id="cron-toggle-enabled"] input';
-    gateway.emitRetiredEvent({ type: "event", event: "cron", payload: {} });
+    gateway.emitRetiredEvent({ type: "event", event: "cron.inventory.changed", payload: {} });
     await harness.waitForCronPage(() => expect(page.cron.cronJobs).toEqual([]));
     await page.settle();
     expect(name.value).toBe("My stale edit");
@@ -82,6 +82,7 @@ it.each(["save", "toggle"] as const)(
     expect(request).toHaveBeenCalledWith(
       "cron.list",
       expect.objectContaining({ query: "missing from filtered results" }),
+      { signal: expect.any(AbortSignal) },
     );
     expect(request).toHaveBeenCalledWith("cron.get", { id: staleJob.id });
     expect(page.cron).toMatchObject({ cronJobs: [], cronJobsTotal: 0 });
