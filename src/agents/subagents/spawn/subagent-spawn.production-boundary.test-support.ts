@@ -109,7 +109,6 @@ export function createSpawnOperatorSource(
     gatewayAccessGrant: null,
     source: {},
     signal: revocation.signal,
-    assertCurrent,
     retain: () => {
       assertCurrent();
       holds += 1;

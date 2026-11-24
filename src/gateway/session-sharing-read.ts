@@ -313,7 +313,6 @@ export async function prepareSessionSharingProfiles(
     }
     if (runAuthority) {
       assertAdmittedRunOperatorAuthority(runAuthority);
-      runAuthority.assertCurrent();
     }
     return { profile: readProfile(), roleProfile: readRoleProfile() };
   };

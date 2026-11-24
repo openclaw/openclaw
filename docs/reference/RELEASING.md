@@ -227,11 +227,10 @@ changed bytes. This change authorizes no dispatch/publication.
 publication selection, including plugin subsets, and rechecks live authority.
 Only authenticated direct admission qualifies evidence for publication.
 Unadmitted historical manifests, including v3, require new admitted
-qualification; ancestry alone is not admission. Receipt-backed aggregate recovery
-is retired for every profile, including beta. Normal authenticated qualification
-and reuse remain available, and C, Q, and P may remain independent. Existing
-waiver, profile, soak, and performance rules apply. Historical manifest parsing
-remains available for diagnostic summaries, not qualification or publication.
+qualification; ancestry alone is not admission. Use [receipt-only recovery](/reference/full-release-validation/evidence#receipt-backed-aggregate-recovery)
+to reseal existing qualification without rerunning any wave. A separately admitted,
+signed ledger can add waivers for exact retained attempts, but missing evidence or
+unwaived failures still block publication. C, Q, and P may remain independent.
 
 ### Frozen qualification identity
 

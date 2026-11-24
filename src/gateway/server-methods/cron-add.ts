@@ -159,7 +159,6 @@ export const cronAddHandler: GatewayRequestHandler = async ({
     capture?.assertCurrent();
     creatorOptions?.assertInferenceSelectionCurrent?.();
     assertCronModelJobAllowed(client, cfg, jobCreate);
-    creatorOptions?.assertOperatorSourceCurrent?.();
     creator.assertCurrent();
     execPolicy?.assertCurrentSource?.();
   };
