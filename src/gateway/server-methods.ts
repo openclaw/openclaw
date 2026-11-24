@@ -11,6 +11,7 @@ import {
   getPluginRuntimeGatewayNodeAuthorities,
   withPluginRuntimeGatewayRequestScope,
 } from "../plugins/runtime/gateway-request-scope.js";
+import type { PluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.types.js";
 import {
   tryBeginGatewayPreparedRestartRootWorkAdmission,
   tryBeginGatewayRootWorkAdmission,
@@ -121,6 +122,7 @@ type GatewayRequestEnvelopeOptions<T> = Pick<
   GatewayRequestOptions,
   "context" | "isWebchatConnect" | "signal" | "hasCurrentClientAuthority"
 > & {
+  parentHttpRequestAuthority?: PluginRuntimeGatewayRequestScope["parentHttpRequestAuthority"];
   methodRegistry: GatewayMethodRegistryView;
   requestParams?: unknown;
   admission?: "continuation";
@@ -235,11 +237,7 @@ export async function runWithGatewayRequestEnvelope<T>(
           // Detached turn admission needs the live instance resolver, not a captured request context.
           resolveGatewayContext: options.context.resolveGatewayContext,
           client,
-          // HTTP route clients are unique per request. Only its exact in-process
-          // dispatch can inherit the active handler's lease; a sibling cannot.
-          ...(client && !client.internal?.authenticatedOperator && parentScope?.client === client
-            ? { parentHttpRequestAuthority: parentScope.readRequestAuthority }
-            : {}),
+          parentHttpRequestAuthority: options.parentHttpRequestAuthority,
           ...(interactiveStateRead
             ? { canUseInteractiveStateReadCapacity: () => interactiveStateRead }
             : {}),
@@ -279,6 +277,7 @@ export async function runWithGatewayRequestEnvelope<T>(
 /** Authorizes and dispatches one gateway JSON-RPC-style request. */
 export async function handleGatewayRequest(
   opts: GatewayRequestOptions & {
+    parentHttpRequestAuthority?: PluginRuntimeGatewayRequestScope["parentHttpRequestAuthority"];
     extraHandlers?: GatewayRequestHandlers;
     admission?: "continuation";
     requestEntry?: GatewayRequestEntry;
@@ -593,6 +592,7 @@ export async function handleGatewayRequest(
         isWebchatConnect,
         signal,
         hasCurrentClientAuthority,
+        parentHttpRequestAuthority: opts.parentHttpRequestAuthority,
         methodRegistry,
         requestParams: req.params,
         admission: opts.admission,

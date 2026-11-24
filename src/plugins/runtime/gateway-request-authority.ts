@@ -91,7 +91,8 @@ export async function withPluginGatewayRequestAuthority<T>(
       {
         ...scope,
         parentHttpRequestAuthority: undefined,
-        readRequestAuthority: () => (lease.current ? authority : undefined),
+        readRequestAuthority: (source) =>
+          lease.current && source === client ? authority : undefined,
       },
       run,
     );

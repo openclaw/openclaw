@@ -174,12 +174,20 @@ describe("registered plugin RPC authority through the real dispatcher", () => {
             },
             { scope: "operator.read", profileAccess: "independent" },
           );
+          api.registerGatewayMethod(
+            "authorityProof.forward",
+            async ({ respond }) => {
+              const result = await dispatchGatewayMethod("authorityProof.read", {});
+              respond(result.ok, result.payload, result.error);
+            },
+            { scope: "operator.read", profileAccess: "independent" },
+          );
           api.registerHttpRoute({
             path,
             match: "exact",
             auth: "gateway",
             async handler(_req, res) {
-              const nested = await dispatchGatewayMethod("authorityProof.read", {});
+              const nested = await dispatchGatewayMethod("authorityProof.forward", {});
               res.end(JSON.stringify(nested.payload));
               return true;
             },
