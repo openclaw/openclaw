@@ -514,6 +514,7 @@ export async function createOnlineReadOnlyBackup(
       source.exec(
         `PRAGMA busy_timeout = ${SQLITE_SOURCE_READ_BUSY_TIMEOUT_MS}; PRAGMA trusted_schema = OFF; BEGIN;`,
       );
+      // Keep only the native copy pinned: concurrent writes otherwise restart stepped backups.
       source.prepare("PRAGMA schema_version;").get();
       await retainSnapshotWork(backupNodeSqliteDatabase(source, snapshotPath, onProgress));
       source.exec("ROLLBACK;");
@@ -522,12 +523,9 @@ export async function createOnlineReadOnlyBackup(
         source.close();
       }
     }
-    const snapshot = openNodeSqliteDatabase(snapshotPath);
-    try {
-      snapshot.exec("PRAGMA journal_mode = DELETE;");
-    } finally {
-      snapshot.close();
-    }
+    // Keep the acquired pages raw. Journal normalization can rewrite FULL
+    // auto-vacuum pages, so mutable consumers must verify before normalizing.
+    // Native backup already placed every committed page in this standalone main file.
     syncPrivateSnapshot(snapshotPath);
     return publishPreparedCopy(tempDir);
   } catch (error) {
