@@ -298,16 +298,11 @@ extension ChatSessionSidebar {
 
     private func restoreSnapshotButton(_ recovery: ChatSidebarArchiveRecovery) -> some View {
         let title = ChatSessionSidebarModel.sidebarDisplayName(for: recovery.row)
-        return Button {
+        return Button(String(format: String(localized: "Restore “%@”"), title)) {
             Task { @MainActor in
                 await self.batch.restoreArchivedSnapshot(recovery, owner: self.viewModel.sidebarData)
                 self.viewModel.refreshSessions(limit: 200)
                 self.viewModel.refreshSidebarData()
-            }
-        } label: {
-            HStack {
-                Text(String(localized: "Restore"))
-                Text(verbatim: title)
             }
         }
     }
