@@ -2960,6 +2960,7 @@
     {"path":"apps/ios/WatchApp/Sources/WatchDirectNode.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.498aee3bbead969d","source":"Use iPhone Settings to enable direct connection."},
     {"path":"apps/ios/WatchApp/Sources/WatchDirectNode.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.b6c78c206b3f87e5","source":"Voice access requires a new setup from iPhone Settings."},
     {"path":"apps/ios/WatchApp/Sources/WatchDirectNode.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.1f995556efb61abf","source":"Voice setup was incomplete. Send voice setup again from iPhone."},
+    {"path":"apps/macos/Sources/OpenClaw/TalkModeController.swift","kind":"conditional-branch","surface":"apple","id":"native.apple.016a5f9dbac5ccf2","source":"Tink"},
     {"path":"apps/macos/Sources/OpenClaw/SessionMenuPreviewView.swift","kind":"conditional-branch","surface":"apple","id":"native.apple.cec469bca79a29dc","source":"Agent"},
     {"path":"apps/macos/Sources/OpenClaw/SessionMenuPreviewView.swift","kind":"conditional-branch","surface":"apple","id":"native.apple.eb95c9cc37254e9e","source":"Other"},
     {"path":"apps/macos/Sources/OpenClaw/SessionMenuPreviewView.swift","kind":"conditional-branch","surface":"apple","id":"native.apple.b6941600b58a6b43","source":"System"},
