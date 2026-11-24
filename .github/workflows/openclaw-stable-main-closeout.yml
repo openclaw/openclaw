@@ -704,6 +704,13 @@ jobs:
             -f 'inputs[site_url]=https://openclaw.ai/' --jq '.workflow_run_id')"
           [[ "$run_id" =~ ^[1-9][0-9]*$ ]] || { echo "Website dispatch did not return a run ID." >&2; exit 1; }
           echo "Website verification: https://github.com/openclaw/openclaw.ai/actions/runs/$run_id" >> "$GITHUB_STEP_SUMMARY"
+          # A just-dispatched run can briefly return 404 for its jobs, which
+          # makes `gh run watch` fail before the run starts (v2026.11.8).
+          for attempt in 1 2 3 4 5 6; do
+            gh api "repos/openclaw/openclaw.ai/actions/runs/$run_id/jobs" --silent && break
+            (( attempt < 6 )) || { echo "Website run $run_id jobs did not become readable." >&2; exit 1; }
+            sleep 10
+          done
           gh run watch "$run_id" --repo openclaw/openclaw.ai --exit-status --interval 15
 
       - name: Attach immutable closeout evidence
