@@ -22,6 +22,7 @@ import type {
   CronSchedulerResult,
 } from "../store/scheduler-actor.types.js";
 import { locked } from "./locked.js";
+import { watchCronProviderPushback } from "./provider-backoff.js";
 import { registerCronSchedulerRefresh } from "./run-queue-wake.js";
 import {
   adoptCronRunRequests,
@@ -126,6 +127,7 @@ async function publish(
 export async function startCronScheduler(
   state: CronServiceState,
   skipJobIds: ReadonlySet<string>,
+  waitForStartupRuns = true,
 ): Promise<void> {
   if (connections.has(state)) {
     return;
@@ -188,7 +190,8 @@ export async function startCronScheduler(
       state.deps.log.warn({ err: String(error) }, "cron: scheduling delayed; worker will retry");
     });
   });
-  connection.unsubscribe = sessionChanges.subscribe((change) => {
+  const stopPushbackWatch = watchCronProviderPushback();
+  const stopConfigWatch = sessionChanges.subscribe((change) => {
     if (
       !("all" in change) ||
       typeof change.scope !== "string" ||
@@ -198,6 +201,10 @@ export async function startCronScheduler(
     }
     refreshCronScheduler(state);
   });
+  connection.unsubscribe = () => {
+    stopConfigWatch();
+    stopPushbackWatch();
+  };
   let started = false;
   try {
     await lease?.ready;
@@ -228,6 +235,11 @@ export async function startCronScheduler(
     state.schedulerStarted = true;
     const publishedRevision = await publish(state, result, observedRevision);
     await locked(state, () => launchCronRunQueueResult(state, result, context, publishedRevision));
+    // The run queue owns accepted execution and shutdown settlement. Recovery must
+    // release its busy owner so another native loss can reconnect while jobs run.
+    if (!waitForStartupRuns) {
+      return;
+    }
     // Readiness observers keep queued custody without holding Gateway initialization.
     const preparingReceiptIds = new Set(
       result.preparing.map(({ runReceipt }) => runReceipt.receiptId),
@@ -237,7 +249,7 @@ export async function startCronScheduler(
         .filter((request) => !preparingReceiptIds.has(request.runReceipt.receiptId))
         .map((request) => request.completion),
     );
-    const failed = completed.find((completion) => completion.status === "rejected");
+    const failed = completed.find((outcome) => outcome.status === "rejected");
     if (failed?.status === "rejected") {
       throw failed.reason;
     }
@@ -284,7 +296,7 @@ function recoverCronScheduler(state: CronServiceState): void {
         lost.assertCurrent();
         connections.delete(state);
         try {
-          await startCronScheduler(state, new Set());
+          await startCronScheduler(state, new Set(), false);
         } catch (error) {
           // Failed startup removed its own connection; keep the lost slot for the next attempt.
           if (!connections.has(state)) {

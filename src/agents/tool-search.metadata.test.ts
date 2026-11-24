@@ -218,6 +218,40 @@ it("fits batch model text within 4000 characters after wrapping and token expans
   expect(result.details).toMatchObject({ truncated: true });
   expect(JSON.stringify(result.details)).toContain("<|endoftext|>");
 });
+
+it("keeps model-visible candidates when a remote batch exceeds the network budget", async () => {
+  const catalogRef = createToolSearchCatalogRef();
+  registerHeadlessToolSearchCatalog({
+    catalogRef,
+    tools: Array.from({ length: 5 }, (_, index) =>
+      mcpTool({
+        name: `remote_batch_${index}`,
+        serverName: "remote",
+        toolName: `batch_${index}`,
+        description: "Read remote batch records",
+        instructions: "Follow server guidance. ".repeat(24),
+      }),
+    ),
+  });
+  const search = expectDefined(
+    createToolSearchTools({ catalogRef, modelContextWindowTokens: 320_000 }).find(
+      (tool) => tool.name === TOOL_SEARCH_RAW_TOOL_NAME,
+    ),
+    "batch search control",
+  );
+  const result = await search.execute("remote-batch", {
+    queries: Array.from({ length: 10 }, () => ({ query: "remote batch", limit: 5 })),
+  });
+  const text = modelText(result);
+  const body = text.split("\n---\n")[1]!.split("\n<<<END_EXTERNAL_UNTRUSTED_CONTENT")[0]!;
+  const payload = JSON.parse(body);
+  expect(text.length).toBeLessThanOrEqual(4_000);
+  expect(payload.truncated).toBe(true);
+  expect(
+    payload.results.flatMap((group: { candidates: unknown[] }) => group.candidates).length,
+  ).toBeGreaterThan(0);
+  expect(payload).toEqual(result.details);
+});
 it("does not taint an independent native describe after remote discovery", async () => {
   const { catalogRef, execute, entry } = setup("client");
   const native = pluginTool("native_metadata", "Trusted local declaration");

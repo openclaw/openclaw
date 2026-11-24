@@ -1,0 +1,3 @@
+# Exact 20-line increase for advisor fork-boundary regression coverage: three pinned
+# Codex policy refusals produce visible skips; unexpected failures stay fork_failed.
+20

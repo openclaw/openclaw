@@ -1,4 +1,6 @@
 // Confirmed snapshot operations run only in the existing async read/write reconciliation boundary.
+import { safeParseJson } from "@openclaw/normalization-core/json-coercion";
+import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import type { ServerUiPrefs } from "./server-prefs-state.ts";
 import {
   LAST_SEEN_KEY,
@@ -30,7 +32,16 @@ export function publishConfirmedPrefs(
   scope: string,
   prefs: ServerUiPrefs,
 ): void {
-  const raw = serializeStoredPrefs(prefs);
+  // On rollback, older clients compare this baseline with the server before restoring
+  // browser-only sections. A missing baseline looks like a change and clears their layout.
+  const previous = owner.confirmedPrefsFallback;
+  const retiredSections =
+    previous?.scope === scope && previous.raw
+      ? asNullableRecord(safeParseJson(previous.raw))?.personalSessionGroups
+      : undefined;
+  const raw = serializeStoredPrefs(
+    retiredSections === undefined ? prefs : { ...prefs, personalSessionGroups: retiredSections },
+  );
   const persisted = writeStorage(LAST_SEEN_KEY, scope, raw);
   owner.confirmedPrefsFallback = {
     scope,

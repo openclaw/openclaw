@@ -125,13 +125,15 @@ export function createModelCatalogDecisions(params: ModelCatalogDecisionParams) 
     resolveNativeModelPrimary(params.cfg, params.agentId) ?? "",
   ).profile;
   const primary = resolveDefaultModelForAgent({ ...params, manifestPlugins: metadataSnapshot });
-  const primaryEntry = { provider: primary.provider, id: primary.model };
+  const primaryEntry = primary && { provider: primary.provider, id: primary.model };
   // This decision view owns one plugin metadata generation. Resolve each provider's
   // identity policy once for that view instead of reloading it for every catalog row.
   const modelKeyOf = createModelCatalogIdentityKeyResolver();
-  const primaryKey = modelKeyOf(primaryEntry);
+  const primaryKey = primaryEntry && modelKeyOf(primaryEntry);
   const configuredPinForEntry = (entry: Pick<ModelCatalogEntry, "provider" | "id">) =>
-    configuredProfileId !== undefined && modelKeyOf(entry) === primaryKey
+    configuredProfileId !== undefined &&
+    primaryKey !== undefined &&
+    modelKeyOf(entry) === primaryKey
       ? configuredProfileId
       : undefined;
   // Runtime choices are read after preparation; CLI backends belong to the owner's registry.
@@ -463,9 +465,13 @@ export function createModelCatalogDecisions(params: ModelCatalogDecisionParams) 
     if (selectedProfileId && profileProvider) {
       selections.set(selectedProfileId, normalizeProviderId(profileProvider));
     }
-    if (configuredProfileId && pinnedProfileForEntry(primaryEntry) === configuredProfileId) {
+    if (
+      configuredProfileId &&
+      primaryEntry &&
+      pinnedProfileForEntry(primaryEntry) === configuredProfileId
+    ) {
       // Automatic session preferences can still own siblings; retain both account inventories.
-      selections.set(configuredProfileId, normalizeProviderId(primary.provider));
+      selections.set(configuredProfileId, normalizeProviderId(primaryEntry.provider));
     }
     for (const [profileId, providerId] of selections) {
       const credential = await withCurrentReadAuthority(

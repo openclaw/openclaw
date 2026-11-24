@@ -1,9 +1,15 @@
 import "./sessions-spawn-tool.mocks.test-support.js";
+import { expectDefined } from "@openclaw/normalization-core";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { createAdmittedRunOperatorAuthority } from "../admitted-run-context.js";
+import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
+import { withPersonalToolTurn } from "../../auto-reply/reply/personal-tool-turn.test-support.js";
+import { createTestOperatorAuthority } from "../admitted-run-context.test-support.js";
 import { SANDBOX_DEFAULT_TOOL_ALLOW, type SandboxToolPolicy } from "../sandbox/types.js";
 import { supportedSpawnModelChoice } from "../subagents/spawn/subagent-spawn.test-helpers.js";
-import { withGatewayToolCallerIdentity } from "./gateway-caller-context.js";
+import {
+  resolveGatewayToolOperatorSelection,
+  withGatewayToolCallerIdentity,
+} from "./gateway-caller-context.js";
 import { prepareSandboxSessionTools } from "./sessions-operator-authority.js";
 
 const { hoisted } = await import("./sessions-spawn-tool.mocks.test-support.js");
@@ -13,14 +19,8 @@ function issueAuthority(
   scopes: readonly string[] = ["operator.sessions.write"],
   profileId = "create-requester",
 ) {
-  const controller = new AbortController();
-  const authority = createAdmittedRunOperatorAuthority({
-    profileId,
-    scopes,
-    signal: controller.signal,
-    assertCurrent: () => {},
-  });
-  return { authority, revoke: () => controller.abort(new Error("creation source revoked")) };
+  const authority = createTestOperatorAuthority({ profileId, scopes });
+  return { authority };
 }
 
 // A channel turn: a live agent caller with no admitted operator authority.
@@ -80,6 +80,46 @@ describe("sessions_create", () => {
     expect(registerRun).not.toHaveBeenCalled();
   });
 
+  it("keeps simultaneous Bob and Alice calls separate after collaborative steering", async () => {
+    const alice = { profileId: "alice", senderId: "alice", name: "Alice" };
+    const bob = { profileId: "bob", senderId: "bob", name: "Bob" };
+    const firstEntered = createDeferred();
+    const releaseFirst = createDeferred();
+    const requesters: string[] = [];
+    const tool = createSessionsCreateTool({
+      config,
+      agentSessionKey: "agent:main:personal-tools",
+      countActiveRuns: () => 0,
+    });
+    hoisted.inProcessCreationMock.mockImplementation(async (_method, params) => {
+      const before = resolveGatewayToolOperatorSelection().operatorAuthority?.profileId;
+      if (params.label === "Bob work") {
+        firstEntered.resolve();
+        await releaseFirst.promise;
+      }
+      const after = expectDefined(
+        resolveGatewayToolOperatorSelection().operatorAuthority?.profileId,
+        "selected requester",
+      );
+      expect(after).toBe(before);
+      requesters.push(after);
+      return { key: `agent:main:dashboard:${after}`, sessionId: after, runStarted: false };
+    });
+    await withPersonalToolTurn({ owner: alice, allowCollaborativeSteering: true }, async (turn) => {
+      expect(await turn.steer(bob)).toMatchObject({ status: "accepted" });
+      const bobCall = tool.execute("bob-create", { user: "bob", label: "Bob work" });
+      try {
+        await awaitGateBeforeSettlement(firstEntered.promise, bobCall, "Bob creation ended early");
+        const aliceResult = await tool.execute("alice-create", { label: "Alice work" });
+        expect(aliceResult.details).toMatchObject({ sessionKey: "agent:main:dashboard:alice" });
+      } finally {
+        releaseFirst.resolve();
+      }
+      expect((await bobCall).details).toMatchObject({ sessionKey: "agent:main:dashboard:bob" });
+      expect(requesters).toEqual(["alice", "bob"]);
+    });
+  });
+
   it("never creates a session less contained than the creating turn", async () => {
     await createFromChannel(
       {},
@@ -117,7 +157,7 @@ describe("sessions_create", () => {
 });
 
 describe("prepareSandboxSessionTools", () => {
-  it("projects only the captured operator grant, including its absence and revocation", async () => {
+  it("projects only the captured operator grant, including its absence", async () => {
     const allow = ["read"];
     const policy: SandboxToolPolicy = { allow, deny: [], [SANDBOX_DEFAULT_TOOL_ALLOW]: allow };
     const captured = issueAuthority();
@@ -140,8 +180,6 @@ describe("prepareSandboxSessionTools", () => {
           "sessions",
           "sessions_create",
         ]);
-        captured.revoke();
-        expect(() => prepareSandboxSessionTools(params)).toThrow("creation source revoked");
       },
     );
   });

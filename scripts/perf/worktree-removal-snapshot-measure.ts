@@ -3,6 +3,8 @@
  *   --output <new-owned-directory> --files 62000 --file-bytes 18432 --tracked 2388
  * Run two identical-code controls, then five serial interleaved baseline/candidate pairs.
  * OPENCLAW_BENCH_BASELINE_DIR selects a sparse pinned source overlay in every worker.
+ * --legacy-provisioning selects the historical baseline that snapshots dependencies;
+ * ordinary baseline overlays retain current preservation assertions.
  * Each process creates a fresh native Git repository and shared-state database, provisions
  * the dependency tree through service.create, then times the real service.remove boundary.
  * Setup, verification and worker drainage are outside the timed window. No remote/model,
@@ -51,7 +53,7 @@ import os from "node:os";
 import path from "node:path";
 import { monitorEventLoopDelay } from "node:perf_hooks";
 import { setTimeout as delay } from "node:timers/promises";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 import { GCProfiler, getHeapStatistics } from "node:v8";
 import { createGatewayBenchEnv } from "../lib/gateway-bench-runtime.js";
@@ -72,6 +74,7 @@ const { values } = parseArgs({
     clean: { type: "boolean", default: false },
     packed: { type: "boolean", default: false },
     "warm-index": { type: "boolean", default: false },
+    "legacy-provisioning": { type: "boolean", default: false },
     "retained-refs": { type: "string", default: "0" },
   },
 });
@@ -111,6 +114,8 @@ const sourceRoot = fileURLToPath(new URL("../../", import.meta.url));
 const fingerprint = createHash("sha256");
 for (const relative of [
   "src/agents/worktrees/removal.ts",
+  "src/agents/worktrees/removal-git.ts",
+  "src/agents/worktrees/retired-worktree-cleanup.worker.ts",
   "src/agents/worktrees/service.ts",
   "src/agents/worktrees/gc-protection.ts",
   "src/agents/worktrees/registry-retirement.ts",
@@ -224,6 +229,23 @@ Object.defineProperty(globalThis, key, {
 });
 const hooks = registerHooks({
   load(url, context, next) {
+    if (baseline && url.endsWith("/src/infra/runtime-worker-url.ts")) {
+      const worker = path.join(baseline, "src/agents/worktrees/retired-worktree-cleanup.worker.ts");
+      if (fs.existsSync(worker)) {
+        // Subprocesses do not inherit the worker-thread overlay loader.
+        const source = fs.readFileSync(new URL(url), "utf8");
+        const boundary = "  if (params.root !== undefined) {";
+        assert(source.includes(boundary), "Missing subprocess URL instrumentation boundary");
+        return {
+          format: "module-typescript",
+          shortCircuit: true,
+          source: source.replace(
+            boundary,
+            `  if (params.distWorkerPath === "agents/worktrees/retired-worktree-cleanup.worker.js") return new URL(${JSON.stringify(pathToFileURL(worker).href)});\n${boundary}`,
+          ),
+        };
+      }
+    }
     if (gcMode && url.endsWith("/src/agents/worktrees/service.ts")) {
       const relative = path.relative(sourceRoot, fileURLToPath(url));
       const original = baseline && path.join(baseline, relative);
@@ -798,7 +820,7 @@ try {
   );
   fs.writeFileSync(path.join(output, values.report), JSON.stringify(result, null, 2));
   console.log(JSON.stringify(result));
-  const legacyProvisioning = baseline && !values.clean;
+  const legacyProvisioning = values["legacy-provisioning"] && !values.clean;
   assert.equal(result.persistedDependencyFiles, legacyProvisioning ? files : 0);
   assert.equal(result.persistedProvisionedFiles, legacyProvisioning ? files + 1 : 1);
   assert.equal(

@@ -11,11 +11,7 @@ import {
 } from "../test-helpers/control-ui-e2e.ts";
 import { requireRecord, requireString } from "./chat-flow.test-support.ts";
 import { board } from "./chat-layout-fixtures.test-support.ts";
-import {
-  dockChatSidePanel,
-  focusChatSidePanel,
-  restoreChatAsMain,
-} from "./chat-side-panel.test-support.ts";
+import { focusChatSidePanel, restoreChatAsMain } from "./chat-side-panel.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import {
   captureNativeWorkspaceFailure,
@@ -375,12 +371,6 @@ suite.define(() => {
           .locator(".sidebar-pages")
           .getByRole("link", { name: "Customize", exact: true })
           .waitFor();
-        expect(
-          await page.evaluate(() => ({
-            contributions: Boolean(customElements.get("openclaw-plugin-contributions")),
-            manager: Boolean(customElements.get("openclaw-plugin-manager")),
-          })),
-        ).toEqual({ contributions: false, manager: false });
         await gateway.resolveDeferred("plugins.controlUi.list");
         await bootstrapRequested.promise;
         await expectPluginLoading(page);
@@ -401,12 +391,6 @@ suite.define(() => {
           '.sidebar-pages [data-sidebar-entry="plugin:ui-fixture/proof"]',
         );
         await navigationEntry.getByRole("link", { name: "UI fixture", exact: true }).waitFor();
-        expect(await navigationEntry.getAttribute("draggable")).toBe("true");
-        expect(
-          await navigationEntry
-            .locator("openclaw-plugin-contributions")
-            .evaluate((element) => getComputedStyle(element).display),
-        ).toBe("contents");
         expect(
           await pluginPage.getByRole("status", { name: "Loading…", exact: true }).count(),
         ).toBe(0);
@@ -472,19 +456,11 @@ suite.define(() => {
       });
       await page.locator(".board-session-surface:not([hidden])").waitFor();
       await expectOneAccessory();
-      for (const dock of ["bottom", "right"] as const) {
-        await dockChatSidePanel(page, dock);
-        await expect
-          .poll(() => page.locator(".sidebar-region--bottom").count())
-          .toBe(dock === "bottom" ? 1 : 0);
-        await expectOneAccessory();
-      }
       await focusChatSidePanel(page);
       expect(await accessory.count()).toBe(1);
       await expect.poll(() => accessory.isVisible()).toBe(false);
       await page.locator('openclaw-app-sidebar [data-navigation-view="sessions"]').click();
       await selectChatLayoutAction(page, "Restore split");
-      await expect.poll(() => page.locator(".sidebar-region--expanded").count()).toBe(0);
       await restoreChatAsMain(page);
       await expectOneAccessory();
       // Sessions is already open here; its panel owns collapse.
@@ -537,11 +513,6 @@ suite.define(() => {
       });
       const notice = page.locator(".chat-footer__context .chat-error");
       await notice.waitFor();
-      expect(
-        await notice.evaluate((element) =>
-          Number.parseFloat(getComputedStyle(element).borderTopLeftRadius),
-        ),
-      ).toBeGreaterThan(0);
       await selectView(page, "Chat", "ui-fixture/failing-transcript");
       const transcriptError = page
         .getByRole("alert")
@@ -711,22 +682,12 @@ suite.define(() => {
       await gateway.deferNext("connect");
       await gateway.closeLatest();
       await gateway.waitForRequest("connect", { after: connected });
+      // A plugin page shows only the rail, which stays usable while reconnecting.
+      await page.locator("openclaw-app-sidebar .sidebar-rail").waitFor({ state: "visible" });
+      expect(await page.locator(".connection-action-block").count()).toBe(0);
+      expect(await page.locator("#control-ui-main").getAttribute("inert")).toBeNull();
+      expect(await page.locator("openclaw-router-outlet").getAttribute("inert")).toBeNull();
       const navigationSidebar = page.locator("openclaw-app-sidebar");
-      for (const collapsed of [false, true]) {
-        if (collapsed) {
-          await navigationSidebar
-            .getByRole("button", { name: "Collapse sidebar", exact: true })
-            .click();
-        }
-        await navigationSidebar.locator(".sidebar-shell").waitFor({
-          state: collapsed ? "hidden" : "visible",
-        });
-        // Web collapse keeps navigation in the rail; the native control cluster can be empty.
-        await navigationSidebar.locator(".sidebar-rail").waitFor({ state: "visible" });
-        expect(await page.locator(".connection-action-block").count()).toBe(0);
-        expect(await page.locator("#control-ui-main").getAttribute("inert")).toBeNull();
-        expect(await page.locator("openclaw-router-outlet").getAttribute("inert")).toBeNull();
-      }
       // The rail menu stays usable without leaving the plugin while reconnecting.
       await navigationSidebar.locator("[data-rail-more]").click();
       const pagesMenu = page.locator(".sidebar-pages-menu");

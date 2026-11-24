@@ -1,11 +1,12 @@
 import type { JSX } from "@solidjs/web";
 import { Show, createMemo, createUniqueId } from "solid-js";
-import type { SessionsListResult } from "../../api/types.ts";
+import type { AgentsListResult, SessionsListResult } from "../../api/types.ts";
 import type { ApplicationGatewaySnapshot } from "../../app/context.ts";
 import { iconButtonClass } from "../../components/solid/icon-button.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import { Menu, type MenuEntry } from "../../components/solid/menu.tsx";
 import { renderSessionOwnerChip } from "../../components/solid/session-presentation.tsx";
+import { normalizeAgentLabel } from "../../lib/agents/display.ts";
 import { formatRelativeTimestamp } from "../../lib/format.ts";
 import { shouldHandleNavigationClick } from "../../lib/navigation-click.ts";
 import { t } from "../../lib/reactive/i18n.ts";
@@ -15,6 +16,7 @@ import {
   isSessionKeyAddressable,
   sessionNavigationTarget,
 } from "../../lib/sessions/route-navigation.ts";
+import { normalizeAgentId } from "../../lib/sessions/session-key.ts";
 import { HoverMarquee } from "../../lib/solid/hover-marquee.tsx";
 import { DashboardPreview } from "./dashboard-preview.tsx";
 import type {
@@ -25,10 +27,19 @@ import type {
 
 export type DashboardRow = SessionsListResult["sessions"][number];
 
-export function dashboardAuthor(row: DashboardRow, fallbackAgentId: string) {
+/** An agent author without a label of its own reads as the agent's name. */
+export function dashboardAuthor(
+  row: DashboardRow,
+  fallbackAgentId: string,
+  agents: AgentsListResult["agents"],
+) {
   const actor = row.createdActor ?? row.owner?.actor;
   const id = actor?.id?.trim() || row.agentId?.trim() || fallbackAgentId;
-  const label = actor?.label?.trim() || id;
+  const agent =
+    !actor?.id?.trim() || actor.type === "agent"
+      ? agents.find((entry) => normalizeAgentId(entry.id) === normalizeAgentId(id))
+      : undefined;
+  const label = actor?.label?.trim() || (agent ? normalizeAgentLabel(agent) : id);
   // Without an actor id the author is the session's agent, drawn with its agent avatar.
   const avatar: SessionCreatedActor = actor?.id?.trim()
     ? actor
@@ -72,7 +83,7 @@ export function dashboardGroups(
   if (group === "author") {
     const groups = new Map<string, DashboardGroup>();
     for (const row of rows) {
-      const author = dashboardAuthor(row, data.fallbackAgentId);
+      const author = dashboardAuthor(row, data.fallbackAgentId, data.agents);
       const known = groups.get(author.id);
       if (known) {
         known.rows.push(row);
@@ -155,7 +166,7 @@ export function DashboardEntry(props: DashboardEntryProps) {
         })
       : null,
   );
-  const author = () => dashboardAuthor(props.row, props.data.fallbackAgentId);
+  const author = () => dashboardAuthor(props.row, props.data.fallbackAgentId, props.data.agents);
   const authorName = () =>
     author().id === props.gatewaySnapshot?.selfUser?.id ? t("dashboardsPage.you") : author().label;
   const title = createMemo(() => resolveSessionDisplayName(props.row.key, props.row));

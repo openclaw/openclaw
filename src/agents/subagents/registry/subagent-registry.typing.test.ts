@@ -164,7 +164,9 @@ it.each(["terminal", "reset", "rebind", "already rebound", "revoked", "policy", 
           }
           release.resolve();
           await tick;
-          expect(sends.map(({ to }) => to)).toEqual(scenario === "revoked" ? [] : ["456"]);
+          expect(sends.map(({ to }) => to)).toEqual(
+            scenario === "revoked" ? ["-100123", "-100123", "456"] : ["456"],
+          );
           return;
         }
         for (const [runId, outcome] of [

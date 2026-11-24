@@ -163,6 +163,9 @@ describe("createSubsystemLogger().isEnabled", () => {
     const records = await readRecords(file);
     expect(records).toHaveLength(1);
     expect(records[0]._meta.logLevelName).toBe(level);
+    expect(records[0].message).toBe(
+      failurePhase === "bridge" ? "Code Mode bridge request failed" : "Code Mode execution failed",
+    );
   });
   it("records content-free Code Mode failure categories and correlation ids without a debug flag", async () => {
     const file = fileLogging("error");

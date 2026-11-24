@@ -66,6 +66,45 @@ describe("createMatrixRoomMessageHandler inbound body formatting", () => {
     });
   });
 
+  const fallback = "> <@alice:example.org> Bot help?\n\n";
+  const htmlFallback = `<mx-reply><blockquote><a href="https://matrix.to/#/@bot:example.org">Bot</a> help?</blockquote></mx-reply>`;
+  const botLink = '<a href="https://matrix.to/#/@bot:example.org">Bot</a>';
+  it.each([
+    { body: `${fallback}Solved.`, html: `${htmlFallback}Solved.`, turns: [] },
+    {
+      body: `${fallback}Bot, solved.`,
+      html: `${htmlFallback}${botLink}, solved.`,
+      turns: ["Bot, solved."],
+    },
+    {
+      body: "> Alice asked\n\nBot, agreed.",
+      html: `<blockquote>Alice asked</blockquote>${botLink}, agreed.`,
+      turns: ["> Alice asked\n\nBot, agreed."],
+    },
+  ])("uses only the current text of a rich reply %#", async ({ body, html, turns }) => {
+    const harness = createHarness({
+      isDirectMessage: false,
+      roomsConfig: { "*": { requireMention: true } },
+      getMemberDisplayName: async (_room, user) => names[user] ?? user,
+      client: {
+        getEvent: async () =>
+          textMessage({ eventId: "$alice", sender: "@alice:example.org", body: "Bot help?" }),
+      },
+    });
+    const event = textMessage({
+      eventId: "$bob",
+      sender: "@bob:example.org",
+      body,
+      relatesTo: { "m.in_reply_to": { event_id: "$alice" } },
+      mentions: { user_ids: [] },
+    });
+    Object.assign(event.content, { format: "org.matrix.custom.html", formatted_body: html });
+    await harness.handler(roomId, event);
+    expect(harness.runPrepared.mock.calls.map(([turn]) => turn.ctxPayload.BodyForAgent)).toEqual(
+      turns,
+    );
+  });
+
   it("keeps inbound content in the agent context, not verbose diagnostics", async () => {
     const diagnostics: string[] = [];
     const body = "private-matrix-message-contents";

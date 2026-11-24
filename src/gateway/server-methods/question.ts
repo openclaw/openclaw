@@ -18,6 +18,7 @@ import {
   handleQuestionChannelRequested,
   handleQuestionChannelResolved,
 } from "../../infra/question-channel-runtime.js";
+import { GatewayOperatorRecoveryAuthorizationError } from "../../infra/restart-recovery-errors.js";
 import { registerSecretValueForRedaction } from "../../logging/secret-redaction-registry.js";
 import {
   listSecretStoreEntries,
@@ -28,6 +29,7 @@ import { authorizeGatewaySessionCreation, hasOperatorBoundary } from "../operato
 import { canSelectQuestion, usesOwnRunQuestionAccess } from "../question-access.js";
 import { QuestionManager, type QuestionObservation } from "../question-manager.js";
 import {
+  prepareQuestionProducer,
   withQuestionSessionAccess,
   withPreparedQuestionSessions,
   type PreparedQuestionSession,
@@ -144,6 +146,7 @@ export function createQuestionHandlers(
       authority.assertCurrent();
       const narrow = usesOwnRunQuestionAccess(client);
       let sessionAccess: QuestionSessionAccess | undefined;
+      let producer: Awaited<ReturnType<typeof prepareQuestionProducer>>;
       let accepted = false;
       const requiresSharing = () =>
         !isGatewayAdmin(client) && hasOperatorBoundary(client, context.getRuntimeConfig());
@@ -178,7 +181,6 @@ export function createQuestionHandlers(
         requester && validateAuthority
           ? () => {
               try {
-                operatorAuthority?.assertCurrent();
                 sessionAccess?.assertSourceCurrent();
                 return validateAuthority(requester);
               } catch {
@@ -209,10 +211,6 @@ export function createQuestionHandlers(
         };
       }
       try {
-        const questions = await normalizeQuestions(request, authority.assertCurrent);
-        if (narrow && operatorAuthority) {
-          assertAdmittedRunOperatorAuthority(operatorAuthority);
-        }
         const requestedSession = request.sessionKey
           ? resolveRequestedSessionAgentId(
               context.getRuntimeConfig(),
@@ -224,11 +222,21 @@ export function createQuestionHandlers(
           respond(false, undefined, requestedSession.error);
           return;
         }
+        // Every question is a retained producer, including secret and sessionless prompts.
+        // Admission failures must not enter the optional session-facts fallback below.
+        producer = await prepareQuestionProducer(
+          options,
+          requestedSession?.ok ? requestedSession.agentId : request.agentId,
+        );
+        const questions = await normalizeQuestions(request, authority.assertCurrent);
+        if (narrow && operatorAuthority) {
+          assertAdmittedRunOperatorAuthority(operatorAuthority);
+        }
         if (narrow && requestedSession?.ok) {
           // Starting a prompt retains the admitted producer's agent ceiling.
           const agentError = authorizeGatewaySessionCreation({
             cfg: context.getRuntimeConfig(),
-            client,
+            ...(producer ? { authority: producer.authority } : { client }),
             agentId: requestedSession.agentId,
           });
           if (agentError) {
@@ -314,6 +322,10 @@ export function createQuestionHandlers(
             ...(request.runId ? { runId: request.runId } : {}),
             timeoutMs: request.timeoutMs ?? DEFAULT_QUESTION_TIMEOUT_MS,
             isRequesterActive,
+            requesterLifetime: producer && {
+              signal: producer.authority.signal,
+              release: producer.release,
+            },
             sessionAccess,
             requesterRun: requester?.operationalRunInstance,
             registerHumanInputWait:
@@ -394,6 +406,7 @@ export function createQuestionHandlers(
               },
               {
                 assertCurrent: authority.assertCurrent,
+                operatorAuthority: producer?.authority,
               },
             );
           } catch (error) {
@@ -408,6 +421,10 @@ export function createQuestionHandlers(
           create();
         }
       } catch (error) {
+        if (error instanceof GatewayOperatorRecoveryAuthorizationError) {
+          respondError(respond, ErrorCodes.FORBIDDEN, error.message);
+          return;
+        }
         if (error instanceof QuestionRequestValidationError) {
           respondError(respond, ErrorCodes.INVALID_REQUEST, error.message);
           return;
@@ -426,6 +443,7 @@ export function createQuestionHandlers(
       } finally {
         if (!accepted) {
           sessionAccess?.release();
+          producer?.release();
         }
       }
     },

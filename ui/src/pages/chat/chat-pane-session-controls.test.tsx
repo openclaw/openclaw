@@ -68,10 +68,10 @@ describe("chat account selection", () => {
             modelAuthStatusResult,
             owner: state,
             client: state.client,
+            ownsScope: () => current,
             selection: state.chatAccountSelection,
             model: "openai/gpt-5.5",
             disabled: false,
-            ownsSelection: () => current,
             onSelect,
             onManage,
           }),
@@ -193,7 +193,7 @@ describe("chat account selection", () => {
     expect(view.onManage).toHaveBeenCalledOnce();
   });
 
-  it("retries a failed inventory when the section is reopened", async () => {
+  it("retries a failed inventory explicitly after reopening the section", async () => {
     const request = vi
       .fn()
       .mockRejectedValueOnce(new Error("inventory offline"))
@@ -224,6 +224,12 @@ describe("chat account selection", () => {
     );
     view.open();
     view.open();
+    expect(request).toHaveBeenCalledOnce();
+    const retry = Array.from(view.container.querySelectorAll("button")).find(
+      (button) => button.textContent?.trim() === "Retry",
+    );
+    expect(retry).toBeDefined();
+    retry!.click();
     await vi.waitFor(() => expect(view.container.textContent).toContain("Work workspace"));
     expect(view.container.querySelector('[role="alert"]')).toBeNull();
     expect(request).toHaveBeenCalledTimes(2);

@@ -122,9 +122,6 @@ export async function requestMcpAppToolApproval(params: {
     throw new Error("MCP App tool approval is no longer available");
   }
   assertCurrent();
-  if (manager.projectDecisionIfActive(record.id, approved) !== approved) {
-    throw new Error("MCP App tool approval authority changed");
-  }
   if (approved === "allow-always" && view) {
     view.toolApprovalGrants ??= new Map();
     const grants = view.toolApprovalGrants.get(requesterId) ?? new Set<string>();

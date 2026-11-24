@@ -11,6 +11,7 @@ import {
   type createTrajectoryRuntimeRecorder,
   toTrajectoryToolDefinitions,
 } from "../../../trajectory/runtime.js";
+import { isAgentToolExecutionAvailable } from "../../agent-tool-availability.js";
 import { getToolDefinitionSource } from "../../agent-tool-definition-adapter.js";
 import type { createCacheTrace } from "../../cache-trace.js";
 import { createAgentHarnessPromptToolPolicy } from "../../harness/prompt-tool-policy.js";
@@ -170,7 +171,15 @@ export function applyPromptBuildToolsAllow<
 
   return {
     activeToolNames,
-    callableToolNames: promptPolicy.callableToolNames,
+    // Guidance names only tools this turn can run; a listed or cataloged tool it refuses is not
+    // one. The session's active set above keeps them, so the turn can still refuse the call.
+    callableToolNames: promptPolicy.callableToolNames.filter((name) => {
+      const definition = params.session.getToolDefinition(name);
+      const source = definition
+        ? (getToolDefinitionSource(definition) ?? definition)
+        : params.catalogRef?.current?.entries.find((entry) => entry.name === name)?.tool;
+      return !source || isAgentToolExecutionAvailable(source);
+    }),
     effectiveTools: params.effectiveTools,
     uncompactedEffectiveTools: allowedUncompactedTools,
     tools: allowedTools,

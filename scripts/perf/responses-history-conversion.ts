@@ -306,6 +306,7 @@ if (contextUsage) {
   }, undefined)(model, context, { ...initialOptions, ...identity });
   const assistant = messages.find((message) => message.role === "assistant");
   assert(assistant?.role === "assistant");
+  assert(assistant.usage.cost, "Synthetic live fixture has recorded cost");
   const checkpoint = { ...assistant, content: [] };
   captureOpenAIResponsesCompaction(
     checkpoint,
@@ -321,6 +322,7 @@ if (contextUsage) {
     content: [{ type: "text" as const, text: "Completed inspection" }],
     usage: {
       ...assistant.usage,
+      cost: assistant.usage.cost,
       contextUsage: { state: "available" as const, promptTokens: 100_000, totalTokens: 100_100 },
     },
   };

@@ -5,6 +5,7 @@ import * as sessionEvents from "../auto-reply/reply/session-event-handoff.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { loadExactSessionEntry } from "../config/sessions/session-accessor.js";
 import { replaceSessionEntrySync } from "../config/sessions/session-accessor.sqlite-entry.js";
+import { appendTranscriptMessage } from "../config/sessions/session-accessor.sqlite-transcript-write.js";
 import { readSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createContext } from "./server-plugin-in-process-dispatch.test-support.js";
@@ -20,6 +21,7 @@ it.for([
   "nested-message",
   "nested-retired-message",
   "nested-lost",
+  "lost",
   "stale-requester",
   "current-completed",
   "retired-completed",
@@ -34,7 +36,10 @@ it.for([
       sessionKey: "agent:main:dashboard:parked-root",
       sessionId: "parked-root",
     };
-    const runId = "parked-root-run";
+    const runId =
+      source === "message"
+        ? `announce:requester-settle:main:${target.sessionKey}:parked-child-run`
+        : "parked-root-run";
     const lifecycleRevision = "parked-root-revision";
     replaceSessionEntrySync(target, {
       sessionId: target.sessionId,
@@ -42,6 +47,17 @@ it.for([
       activeWriterRunId: runId,
       updatedAt: 100,
     });
+    if (source === "message") {
+      await appendTranscriptMessage(target, {
+        message: {
+          role: "user",
+          content: "Captured child result",
+          timestamp: 90,
+          idempotencyKey: `${runId}:user`,
+          provenance: { kind: "inter_session", sourceTool: "subagent_settle" },
+        },
+      });
+    }
     for (const event of [
       { ts: 100, data: { phase: "start", startedAt: 100 } },
       {
@@ -68,6 +84,7 @@ it.for([
       "retired-message",
       "nested-retired-message",
       "stopped",
+      "lost",
       "interrupted",
     ].includes(source);
     const completed = source === "current-completed" || source === "retired-completed";
@@ -141,9 +158,10 @@ it.for([
     });
     try {
       await persistRunningSessionsForRestart({ cfg });
-      expect(loadExactSessionEntry(target)?.entry.resumeAfterRestart).toEqual({
-        queuedInputIds: [],
-      });
+      expect(loadExactSessionEntry(target)?.entry.resumeAfterRestart).toEqual({});
+      if (source === "lost") {
+        subagentRuns.delete(childRunId);
+      }
       for (let boot = 0; boot < 2; boot++) {
         const warn = vi.fn();
         await resumeMarkedSessions({
@@ -153,27 +171,36 @@ it.for([
         });
         const parked = warn.mock.calls.filter(([message]) => message.includes("(yield-waiting)"));
         expect(parked).toEqual(
-          ["message", "nested-message", "current-completed"].includes(source)
+          [
+            "message",
+            "nested-message",
+            "nested-lost",
+            "stale-requester",
+            "current-completed",
+          ].includes(source)
             ? [[expect.stringContaining(target.sessionKey)]]
             : [],
         );
         const restored = (await readSessionEntryReadOnlyInWorker(target))!;
         expect(restored.resumeAfterRestart).toBeUndefined();
         expect(restored.activeWriterRunId).toBe(runId);
-        if (source === "message" || source === "nested-message" || source === "current-completed") {
-          expect(restored.lifecycleRunId).toBe(runId);
-          expect(restored.status).toBeUndefined();
-          expect(restored.endedAt).toBe(120);
-        } else if (recovery) {
+        if (recovery) {
           expect(restored.lifecycleRunId).toBeUndefined();
           expect(restored.status).toBe("killed");
         } else {
-          expect(restored.lifecycleRunId).toBeUndefined();
-          expect(restored.status).toBe("failed");
-          expect(restored.lastRunError).toMatch(/wait|child|restart/i);
+          expect(restored.lifecycleRunId).toBe(runId);
+          expect(restored.status).toBeUndefined();
+          expect(restored.endedAt).toBe(120);
         }
+        expect(restored.lastRunError).toBeUndefined();
       }
       expect(resume).toHaveBeenCalledTimes(recovery ? 1 : 0);
+      if (recovery) {
+        expect(resume.mock.calls[0]?.[1]).toMatchObject({
+          sessionKey: target.sessionKey,
+          source: "restart",
+        });
+      }
     } finally {
       resume.mockRestore();
       subagentRuns.delete(childRunId);

@@ -49,6 +49,11 @@ or starting model work. Start a new call to use the current route. Changing only
 the default Talk agent preserves an existing call's selected agent, and ending
 its audio transport does not cancel work already accepted by the Gateway.
 
+Each agent consultation checks the caller's authority when it starts. A role
+change or device revocation does not cancel an admitted consultation, including
+one awaiting tool approval; the next consultation must pass admission again.
+Explicit Stop still cancels the active run and its pending approval.
+
 Talk starts closing at the Gateway shutdown fence. On process exit, the shutdown
 plan's five-second prelude grace bounds the persistence join and reports unfinished
 cleanup. When the join has no outer deadline, including embedded close and

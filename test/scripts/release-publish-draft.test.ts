@@ -116,10 +116,12 @@ function publicationFixture(releaseVersion = "2026.9.4") {
   ]) {
     fs.copyFileSync(join(repository, source), join(root, ".release-harness", source));
   }
-  fs.symlinkSync(
-    join(repository, "scripts/full-release-validation-policy.mjs"),
-    join(root, ".release-harness/scripts/full-release-validation-policy.mjs"),
-  );
+  for (const source of [
+    "scripts/full-release-validation-policy.mjs",
+    "scripts/lib/release-manifest-waivers.mts",
+  ]) {
+    fs.symlinkSync(join(repository, source), join(root, ".release-harness", source));
+  }
   // Publication installs tooling in the harness, then links the frozen target cwd to it.
   fs.symlinkSync(
     join(repository, "node_modules"),

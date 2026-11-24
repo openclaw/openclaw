@@ -1,9 +1,10 @@
-import { For } from "solid-js";
+import { createSignal, For, Show } from "solid-js";
 import { isMobileNavLayout, mobileNavLayoutMediaQuery } from "../app/mobile-nav-layout.ts";
 import { createMediaQuery } from "../lib/reactive/platform.ts";
 import type { PickerFocusHandle } from "./select-picker-types.ts";
 import type { SidebarMenus } from "./sidebar-menus.tsx";
 import { SidebarSessionFilterPopover } from "./sidebar-session-filter-popover.tsx";
+import { Icon } from "./solid/icon.tsx";
 import { Picker } from "./solid/select-picker.tsx";
 
 export type SidebarSectionFilterPicker = {
@@ -21,17 +22,8 @@ export type SidebarSectionFilterPicker = {
 export function renderSidebarSectionFilterMenu(
   menus: SidebarMenus,
   menu: "automationsFilter",
-  options: {
-    label: string;
-    resetLabel: string;
-    pickers: () => readonly SidebarSectionFilterPicker[];
-    filtered: () => boolean;
-    onReset: () => void;
-  },
+  options: SectionFilterOptions,
 ) {
-  const pickers = new Map<string, PickerFocusHandle>();
-  let reset: HTMLButtonElement | undefined;
-  const sheet = createMediaQuery(mobileNavLayoutMediaQuery(), isMobileNavLayout());
   const position = menus[`${menu}MenuPosition`];
   const commit = (update: () => void) => {
     if (menus[`${menu}MenuPosition`] !== position) {
@@ -41,20 +33,87 @@ export function renderSidebarSectionFilterMenu(
     menus.closePositionedMenu(menu, { restoreFocus: true });
   };
   return (
+    <SectionFilterPopover
+      options={options}
+      anchor={menus.triggers.get(menu) ?? null}
+      onClose={menus.positionedMenuHandlers(menu).onClose}
+      commit={commit}
+    />
+  );
+}
+
+type SectionFilterOptions = {
+  label: string;
+  resetLabel: string;
+  pickers: () => readonly SidebarSectionFilterPicker[];
+  filtered: () => boolean;
+  onReset: () => void;
+};
+
+export function SectionFilter(props: { options: SectionFilterOptions }) {
+  const [open, setOpen] = createSignal(false);
+  let trigger: HTMLButtonElement | undefined;
+  const close = (restoreFocus: boolean) => {
+    setOpen(false);
+    if (restoreFocus) {
+      trigger?.focus({ preventScroll: true });
+    }
+  };
+  return (
+    <>
+      <button
+        ref={(element) => (trigger = element)}
+        type="button"
+        class={[
+          "sidebar-session-toolbar__button sidebar-session-sort",
+          { "sidebar-session-sort--filtered": props.options.filtered() },
+        ]}
+        aria-label={props.options.label}
+        aria-haspopup="dialog"
+        aria-expanded={open() ? "true" : "false"}
+        onClick={() => setOpen(!open())}
+      >
+        <Icon name="listFilter" />
+      </button>
+      <Show when={open()}>
+        <SectionFilterPopover
+          options={props.options}
+          anchor={trigger ?? null}
+          onClose={close}
+          commit={(update) => {
+            update();
+            close(true);
+          }}
+        />
+      </Show>
+    </>
+  );
+}
+
+function SectionFilterPopover(props: {
+  options: SectionFilterOptions;
+  anchor: HTMLElement | null;
+  onClose: (restoreFocus: boolean) => void;
+  commit: (update: () => void) => void;
+}) {
+  const pickers = new Map<string, PickerFocusHandle>();
+  let reset: HTMLButtonElement | undefined;
+  const sheet = createMediaQuery(mobileNavLayoutMediaQuery(), isMobileNavLayout());
+  return (
     <SidebarSessionFilterPopover
       class="sidebar-session-sort-menu sidebar-people-filter-menu"
-      anchor={menus.triggers.get(menu) ?? null}
-      label={options.label}
-      initialFocus={() => pickers.get(options.pickers()[0]?.id ?? "")?.trigger}
+      anchor={props.anchor}
+      label={props.options.label}
+      initialFocus={() => pickers.get(props.options.pickers()[0]?.id ?? "")?.trigger}
       focusTargets={() => [
         ...[...pickers.values()].flatMap((picker) => picker.elements()),
         ...(reset ? [reset] : []),
       ]}
-      onClose={menus.positionedMenuHandlers(menu).onClose}
+      onClose={(restore) => props.onClose(restore)}
       content={
         <>
           <div class="sidebar-session-menu-section">
-            <For each={options.pickers()}>
+            <For each={props.options.pickers()}>
               {(picker) => (
                 <Picker
                   focusRef={(handle) => pickers.set(picker.id, handle)}
@@ -65,20 +124,20 @@ export function renderSidebarSectionFilterMenu(
                   sheet={sheet()}
                   showOptionTooltips={false}
                   options={[...picker.options]}
-                  onChange={(value) => commit(() => picker.onChange(value))}
+                  onChange={(value) => props.commit(() => picker.onChange(value))}
                 />
               )}
             </For>
           </div>
-          {options.filtered() ? (
+          {props.options.filtered() ? (
             <footer class="sidebar-session-menu-footer">
               <button
                 ref={(element) => (reset = element)}
                 type="button"
                 class="sidebar-session-filter-footer"
-                onClick={() => commit(options.onReset)}
+                onClick={() => props.commit(props.options.onReset)}
               >
-                {options.resetLabel}
+                {props.options.resetLabel}
               </button>
             </footer>
           ) : undefined}

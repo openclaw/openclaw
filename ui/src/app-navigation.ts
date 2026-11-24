@@ -1,6 +1,11 @@
 import { isValidWorkboardBoardId } from "@openclaw/workboard-contract";
 import { parseSidebarSessionReference } from "../../packages/gateway-protocol/src/schema/ui-navigation-preferences.ts";
-import { pluginTabForLocation, type PluginTab, type RouteId } from "./app-route-paths.ts";
+import {
+  pluginTabForLocation,
+  type PluginTab,
+  type RouteId,
+  isSessionRouteId,
+} from "./app-route-paths.ts";
 import type {
   NativeDeviceSettingsCapability,
   NativeDeviceSettingsSnapshot,
@@ -9,8 +14,9 @@ import type { IconName } from "./components/icon-data.ts";
 import { t } from "./i18n/index.ts";
 
 export type NavigationRouteId = RouteId;
+export type ShellNavigationIntent = "sidebar-section";
 
-type NavigationPresentation = readonly [icon: IconName, titleKey: string, subtitleKey: string];
+type NavigationPresentation = readonly [icon: IconName, titleKey: string, subtitleKey?: string];
 
 // Pages derives its built-in catalog from these destinations. Personal rail
 // pins reference the catalog without changing its availability. Chat has the
@@ -50,6 +56,17 @@ export const USERS_SECTION_PLUGIN_PAGES: ReadonlySet<string> = new Set([
   "openclaw-id-access/access",
 ]);
 
+/** Every view the sidebar beside the rail can show; its boot snapshot saves each of them. */
+export const SIDEBAR_NAVIGATION_VIEWS = [
+  "dashboards",
+  "automations",
+  "customize",
+  "sessions",
+  "online",
+  "plugin",
+] as const;
+export type SidebarNavigationView = (typeof SIDEBAR_NAVIGATION_VIEWS)[number];
+
 /** Section pages own a sidebar of their own; other pages run full width. */
 export function sidebarSectionForRoute(
   route: NavigationRouteId,
@@ -61,6 +78,39 @@ export function sidebarSectionForRoute(
       : route === "activity"
         ? "online"
         : undefined;
+}
+
+/**
+ * The sidebar a page shows, decided by the page alone: its section's list, the Sessions list
+ * beside conversations, or none, leaving only the rail. The open plugin page's key places
+ * plugin pages that belong to a section; a plugin page whose navigation item has children
+ * (Workboard and its boards) lists them in a plugin sidebar.
+ */
+export function sidebarViewForPage(
+  route: NavigationRouteId,
+  pluginKey?: string,
+  pluginSection = false,
+): ReturnType<typeof sidebarSectionForRoute> | "sessions" | "plugin" {
+  const section =
+    sidebarSectionForRoute(route) ??
+    (route === "plugin" && pluginKey && USERS_SECTION_PLUGIN_PAGES.has(pluginKey)
+      ? "online"
+      : undefined);
+  if (section) {
+    return section;
+  }
+  if (pluginSection) {
+    return "plugin";
+  }
+  // Systems lists its machines in the Sessions view of the sidebar; the Sessions page sits
+  // beside the Sessions list it expands. A terminal is a conversation opened from that list.
+  return isSessionRouteId(route) ||
+    route === "new-session" ||
+    route === "terminal" ||
+    route === "systems" ||
+    isSessionsHubRoute(route)
+    ? "sessions"
+    : undefined;
 }
 
 // Worktrees renders as a tab of the Sessions hub; the sidebar highlights the
@@ -209,7 +259,8 @@ export type SettingsSearchBlock = {
 // Management surfaces (sessions, worktrees, activity, memory import) are
 // workspace destinations, not settings; model setup is a subpage of Models.
 const SETTINGS_NAVIGATION_GROUPS = [
-  { labelKey: null, routes: ["custodian", "profile", "appearance", "notifications"] },
+  { labelKey: null, routes: ["custodian"] },
+  { labelKey: "nav.settingsGroupPreferences", routes: ["profile", "appearance", "notifications"] },
   { labelKey: "nav.settingsGroupDevice", routes: ["device", "device-permissions"] },
   {
     labelKey: "nav.settingsGroupConnections",
@@ -306,8 +357,10 @@ export function deviceSettingsGroupLabelKey(
 export function visibleSettingsNavigationGroups(
   canAdmin: boolean,
   nativeDeviceSettings: NativeDeviceSettingsCapability | null = null,
-): readonly SettingsNavigationGroup[] {
+): readonly (SettingsNavigationGroup & { key: NavigationRouteId })[] {
   return SETTINGS_NAVIGATION_GROUPS.map((group) => ({
+    // Keep the group identity independent of permission filtering and device-specific labels.
+    key: group.routes[0],
     labelKey:
       group.labelKey === "nav.settingsGroupDevice"
         ? deviceSettingsGroupLabelKey(nativeDeviceSettings?.snapshot)
@@ -396,7 +449,7 @@ const NAVIGATION_PRESENTATION: Record<NavigationRouteId, NavigationPresentation>
   debug: navigationPresentation("bug", "debug"),
   logs: navigationPresentation("scrollText", "logs"),
   plugin: navigationPresentation("plug", "plugin"),
-  "new-session": ["plus", "newSession.title", "newSession.hint"],
+  "new-session": ["plus", "newSession.title"],
 };
 
 export function isSettingsNavigationRoute(routeId: NavigationRouteId): boolean {
@@ -457,5 +510,5 @@ export function formatDocumentTitle(options: {
 
 export function subtitleForRoute(routeId: NavigationRouteId, translate = t): string {
   const subtitleKey = NAVIGATION_PRESENTATION[routeId][2];
-  return translate(subtitleKey);
+  return subtitleKey ? translate(subtitleKey) : "";
 }

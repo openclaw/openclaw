@@ -131,6 +131,7 @@ export function createDiscordMessageDispatcher(
       ...params,
       ...policy,
       ...options,
+      readPolicy,
       isPolicyCurrent: policy.isCurrent,
       avatarResolver,
       ackReactionScope:

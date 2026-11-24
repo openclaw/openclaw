@@ -7,6 +7,7 @@ import * as sessionStores from "../config/sessions.js";
 import { loadSessionEntry, replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import * as targets from "../config/sessions/targets-runtime.js";
+import * as hostMemory from "../infra/host-memory.js";
 import { createWarnLogCapture } from "../logging/test-helpers/warn-log-capture.js";
 import { resetGatewayWorkAdmission } from "../process/gateway-work-admission.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
@@ -40,6 +41,7 @@ it.each([
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     resetGatewayWorkAdmission();
     setRuntimeConfigSnapshot({});
+    vi.spyOn(hostMemory, "isConstrainedProcessLowOnMemory").mockReturnValue(false);
     const now = Date.now();
     const clock = createGatewaySchedulerClock(now);
     const scheduler = createTestGatewayScheduler(clock.clock);

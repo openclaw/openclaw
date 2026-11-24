@@ -1,3 +1,4 @@
+import type { ApplicationContext } from "../app/context.ts";
 import { registerCronEnglish } from "../i18n/locales/en-cron.ts";
 import { listSelectableAgents, normalizeAgentLabel } from "../lib/agents/display.ts";
 import {
@@ -7,25 +8,60 @@ import {
   setAutomationsFilter,
   type AutomationsFilter,
 } from "../lib/cron/automations-filter.ts";
+import { useApplication } from "../lib/reactive/context.ts";
 import { registerEnglishCatalog, t } from "../lib/reactive/i18n.ts";
 import { resolveSessionNavigationAgentId } from "../lib/sessions/route-navigation.ts";
 import { normalizeAgentId } from "../lib/sessions/session-key.ts";
-import { renderSidebarSectionFilterMenu } from "./app-sidebar-section-filter.tsx";
+import {
+  renderSidebarSectionFilterMenu,
+  SectionFilter,
+  type SidebarSectionFilterPicker,
+} from "./app-sidebar-section-filter.tsx";
 import type { SidebarMenusOwner } from "./sidebar-menus-types.ts";
 import type { SidebarMenus } from "./sidebar-menus.tsx";
 
 registerEnglishCatalog(registerCronEnglish);
 
-const STATUSES = ["all", "active", "paused"] as const;
-const LAST_RUNS = ["all", "ok", "error"] as const;
-const SORTS = ["name", "nextRunAtMs", "updatedAtMs"] as const;
+type Choice = Exclude<keyof AutomationsFilter, "agentId">;
 
-/** The Automations sidebar filter: status, last activity and order. */
+/** One picker over a filter field, offering only that field's values. */
+function choice<K extends Choice>(
+  key: K,
+  label: string,
+  options: readonly { value: AutomationsFilter[K]; label: string }[],
+): SidebarSectionFilterPicker {
+  return {
+    id: `sidebar-automations-${key}`,
+    label,
+    value: automationsFilter()[key],
+    options,
+    onChange: (value) => {
+      const option = options.find((candidate) => candidate.value === value);
+      if (option) {
+        setAutomationsFilter({ ...automationsFilter(), [key]: option.value });
+      }
+    },
+  };
+}
+
+/** The Automations sidebar filter: the choices the Automations table offered, applied to the list. */
 export function renderSidebarAutomationsFilterMenuForMenus(
   menus: SidebarMenus,
   host: SidebarMenusOwner,
 ) {
-  const context = host.sessionDataContext;
+  return renderSidebarSectionFilterMenu(
+    menus,
+    "automationsFilter",
+    automationFilterOptions(host.sessionDataContext),
+  );
+}
+
+export function AutomationsFilter() {
+  const context = useApplication();
+  return <SectionFilter options={automationFilterOptions(context)} />;
+}
+
+function automationFilterOptions(context: ApplicationContext | undefined) {
   // Unset follows the agent selected now; the sidebar list resolves it the same way.
   const agentValue = () => {
     const agentId = automationsFilter().agentId;
@@ -38,9 +74,7 @@ export function renderSidebarAutomationsFilterMenuForMenus(
       value: normalizeAgentId(agent.id),
       label: normalizeAgentLabel(agent),
     }));
-  const set = (patch: Partial<AutomationsFilter>) =>
-    setAutomationsFilter({ ...automationsFilter(), ...patch });
-  return renderSidebarSectionFilterMenu(menus, "automationsFilter", {
+  return {
     label: t("cron.list.filters"),
     resetLabel: t("cron.jobs.reset"),
     filtered: automationsFiltered,
@@ -53,58 +87,46 @@ export function renderSidebarAutomationsFilterMenuForMenus(
               label: t("agentScope.label"),
               value: agentValue(),
               options: [{ value: "", label: t("agentScope.allAgents") }, ...agents()],
-              onChange: (value: string) => set({ agentId: value || null }),
+              onChange: (value: string) =>
+                setAutomationsFilter({ ...automationsFilter(), agentId: value || null }),
             },
           ]
         : []),
-      {
-        id: "sidebar-automations-status",
-        label: t("cron.runs.status"),
-        value: automationsFilter().status,
-        options: [
-          { value: "all", label: t("cron.tabs.all") },
-          { value: "active", label: t("cron.tabs.active") },
-          { value: "paused", label: t("cron.tabs.paused") },
-        ],
-        onChange: (value) => {
-          const status = STATUSES.find((candidate) => candidate === value);
-          if (status) {
-            set({ status });
-          }
-        },
-      },
-      {
-        id: "sidebar-automations-last-run",
-        label: t("cron.jobs.lastRun"),
-        value: automationsFilter().lastRun,
-        options: [
-          { value: "all", label: t("cron.jobs.all") },
-          { value: "ok", label: t("cron.runs.runStatusOk") },
-          { value: "error", label: t("cron.runs.runStatusError") },
-        ],
-        onChange: (value) => {
-          const lastRun = LAST_RUNS.find((candidate) => candidate === value);
-          if (lastRun) {
-            set({ lastRun });
-          }
-        },
-      },
-      {
-        id: "sidebar-automations-sort",
-        label: t("cron.jobs.sort"),
-        value: automationsFilter().sort,
-        options: [
-          { value: "name", label: t("cron.jobs.name") },
-          { value: "nextRunAtMs", label: t("cron.jobs.nextRun") },
-          { value: "updatedAtMs", label: t("cron.jobs.recentlyUpdated") },
-        ],
-        onChange: (value) => {
-          const sort = SORTS.find((candidate) => candidate === value);
-          if (sort) {
-            set({ sort });
-          }
-        },
-      },
+      choice("status", t("cron.runs.status"), [
+        { value: "all", label: t("cron.tabs.all") },
+        { value: "active", label: t("cron.tabs.active") },
+        { value: "paused", label: t("cron.tabs.paused") },
+      ]),
+      choice("scheduleKind", t("cron.jobs.schedule"), [
+        { value: "all", label: t("cron.jobs.all") },
+        { value: "at", label: t("cron.form.at") },
+        { value: "every", label: t("cron.form.every") },
+        { value: "cron", label: t("cron.form.cronOption") },
+        { value: "event", label: t("cron.events.label") },
+        { value: "on-exit", label: t("cron.form.repeatOnExit") },
+        { value: "stream", label: t("cron.form.repeatStream") },
+      ]),
+      choice("lastRun", t("cron.jobs.lastRun"), [
+        { value: "all", label: t("cron.jobs.all") },
+        { value: "ok", label: t("cron.runs.runStatusOk") },
+        { value: "error", label: t("cron.runs.runStatusError") },
+        { value: "skipped", label: t("cron.runs.runStatusSkipped") },
+        { value: "unknown", label: t("cron.runs.runStatusUnknown") },
+      ]),
+      choice("trigger", t("cron.jobs.condition"), [
+        { value: "all", label: t("cron.jobs.all") },
+        { value: "conditional", label: t("cron.jobs.conditional") },
+        { value: "unconditional", label: t("cron.jobs.unconditional") },
+      ]),
+      choice("sort", t("cron.jobs.sort"), [
+        { value: "name", label: t("cron.jobs.name") },
+        { value: "nextRunAtMs", label: t("cron.jobs.nextRun") },
+        { value: "updatedAtMs", label: t("cron.jobs.recentlyUpdated") },
+      ]),
+      choice("sortDir", t("cron.jobs.direction"), [
+        { value: "asc", label: t("cron.jobs.ascending") },
+        { value: "desc", label: t("cron.jobs.descending") },
+      ]),
     ],
-  });
+  };
 }

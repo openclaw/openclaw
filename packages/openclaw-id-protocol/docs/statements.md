@@ -84,6 +84,7 @@ additive change. v1-draft accepts only `ed25519`.
 | MembershipSnapshot | claw_id, seq, binding_seq, owner_devices[{device_pub, caps}], owner_peer_keys, members[], protocols, issued_at | K_gw of the verified binding             | n/a (a mirror of current state, never an authority)            |
 | InviteRedemption   | claw_id, invite_id, account_id, device_pub, peer_key, label, proof, requested_at                               | the invitee's own D_I (self-signed)      | n/a                                                            |
 | RootReset          | claw_id, new_root_pub, binding_seq, issued_at                                                                  | K_gw of the binding being replaced       | n/a (owner reset on the machine, enrollment.md)                |
+| ClawUnlink         | claw_id, binding_seq                                                                                           | K_gw of the current binding              | n/a (unlinking on the machine, enrollment.md)                  |
 
 `root_epoch` is the constant 1 (`ROOT_EPOCH`); any other value is `malformed`. There is no
 RootRotation statement and no root epoch: a root is replaced only by an owner reset on the
@@ -150,7 +151,10 @@ removing each other: the kit decides).
 
 Other verifiers: `verifyMembershipSnapshot` (signed by the binding's K_gw, same claw),
 `verifyInviteRedemptionSignature` (self-signed by device_pub), `verifyRootResetSignature`
-(signed by the binding's K_gw, same claw) and `verifyRootReset` (below).
+(signed by the binding's K_gw, same claw), `verifyRootReset` (below), `verifyClawUnlink`
+(signed by the current binding's K_gw, same claw, exactly the current binding_seq: lower is
+`rollback`, higher `not_yet_valid`) and `verifyClawUnlinkForPin` (signed by the pinned K_gw,
+pinned claw, binding_seq not below the pin's; enrollment.md, "Unlinking a claw").
 
 Failure codes (stable; callers match codes, never detail text): `malformed`,
 `bad_signature`, `wrong_signer`, `not_an_owner`, `missing_capability`, `caps_escalation`,
@@ -342,7 +346,10 @@ the vector claw's current owner devices (`owners`, the allowlist device signatur
 against), valid statements with their signing input in hex, invalid statements with the expected
 error code (and anchor when not the default), and pin checks (fresh pin, rollback,
 substitution, host mismatch, a new root, an owner reset vouched for by the pinned K_gw, one
-whose RootReset K_gw did not sign, and a genuine reset seen by a pin without `k_gw`).
+whose RootReset K_gw did not sign, and a genuine reset seen by a pin without `k_gw`), and
+unlink pin checks (`unlink_pins`: the pinned K_gw, a later binding, a forged signer, a pin
+without `k_gw`, another claw, an older binding, a bad signature, a signature under another
+type's domain).
 
 Regenerate after an intentional change:
 
@@ -373,6 +380,8 @@ node --import ./scripts/tsx.mjs -e 'const { buildStatementVectors } = await impo
   (process-model.md).
 - New statement type `RootReset`, signed by K_gw: owner reset on the machine replaces the
   spec's root rotation (enrollment.md, "Owner reset").
+- New statement type `ClawUnlink`, signed by K_gw: unlinking a claw on its machine
+  (enrollment.md, "Unlinking a claw").
 
 ## Node-only statements and membership
 

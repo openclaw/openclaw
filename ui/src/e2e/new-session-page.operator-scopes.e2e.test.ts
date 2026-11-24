@@ -240,7 +240,8 @@ suite.define(() => {
       await page.locator("#settings-appearance-background").scrollIntoViewIfNeeded();
       expect(await page.locator("[data-background-upload]").isDisabled()).toBe(true);
       await page
-        .getByText("You need permission to edit your profile to upload images.", { exact: true })
+        .locator("#settings-appearance-background .settings-background-note")
+        .filter({ hasText: "You need permission to edit your profile to upload images." })
         .waitFor();
       await captureUiProof(suite, page, "scoped-reader-background.png");
       if (captureUiProofEnabled) {

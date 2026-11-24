@@ -58,6 +58,7 @@ struct ChatFullMessageReader: View {
                             context: .assistant,
                             variant: self.markdownVariant,
                             textColor: OpenClawChatTheme.assistantText)
+                            .chatMarkdownFileLinks()
                             .textSelection(.enabled)
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .padding(20)

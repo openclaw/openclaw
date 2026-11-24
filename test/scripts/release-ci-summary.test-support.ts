@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { expectDefined } from "@openclaw/normalization-core";
 import { expect, vi } from "vitest";
 import { buildFullReleaseCandidateRequest } from "../../scripts/full-release-candidate-contract.mjs";
@@ -6,6 +7,7 @@ import {
   composeReleaseAttemptJobs,
   type ReleaseExecutionPlan,
 } from "../../scripts/full-release-validation-policy.mjs";
+import { verifyReceiptRecoveryAuthority } from "../../scripts/lib/release-evidence-identity.mjs";
 import { classifyReleaseTrain, parseReleaseVersion } from "../../scripts/lib/release-version.mjs";
 import { expectedChildDispatches } from "../../scripts/release-ci-summary.mjs";
 
@@ -217,20 +219,35 @@ export function trustedMainPackageFixture({
   };
   const client = {
     validateChildReuse: unsupported,
+    selectPublicationArtifactSource: unsupported,
+    verifyReleaseRecoveryProducer: unsupported,
     getRunAttempt: unsupported,
     getRunAttemptJobs: unsupported,
     loadExecutionPlan: unsupported,
+    verifyRetainedPublicationArtifacts: unsupported,
     downloadArtifactArchive: unsupported,
     getRunArtifacts: unsupported,
     getArtifact: unsupported,
+    getCommit: unsupported,
+    resolveQualificationAdmissionDescriptor: unsupported,
     loadExecutionPlanEvidence: unsupported,
     verifyQualificationAdmission: () => {
       throw new Error("historical fixture must not request candidate qualification admission");
     },
+    verifyReceiptRecoveryAuthority(producer: Parameters<typeof verifyReceiptRecoveryAuthority>[1]) {
+      return verifyReceiptRecoveryAuthority("openclaw/openclaw", producer);
+    },
     revalidateQualificationAdmissionAuthority: () => {
       throw new Error("historical fixture must not request candidate admission authority");
     },
-    getWorkflowSource: (_sha: string) => "name: Full Release Validation\n",
+    getCandidateFileNames: () => [],
+    getWorkflowSource: (_sha: string, path?: string) =>
+      path === "scripts/lib/release-validation-waivers.json"
+        ? readFileSync(
+            new URL("../../scripts/lib/release-validation-waivers.json", import.meta.url),
+            "utf8",
+          )
+        : "name: Full Release Validation\n",
     compareCommitLineage: compareCommits,
     compareCommits,
     getJobLog(jobId: number) {

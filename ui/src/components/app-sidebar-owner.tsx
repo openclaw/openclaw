@@ -10,10 +10,13 @@ import {
   catalogSessionKeyFromSearch,
 } from "../lib/sessions/catalog-key.ts";
 import type { CatalogProjectGrouping } from "../lib/sessions/catalog-project-grouping.ts";
+import { SidebarPluginSection } from "./app-sidebar-pages.tsx";
 import {
   SidebarAutomationsHeader,
   SidebarCustomizeHeader,
   SidebarOnlineHeader,
+  SidebarPageHeader,
+  SidebarPluginSectionHeader,
 } from "./app-sidebar-panel-headers.tsx";
 import "./sidebar-attention.tsx";
 import "./tooltip.ts";
@@ -568,6 +571,12 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
                   <Match when={this.navigationView === "online"}>
                     <SidebarOnlineHeader host={this} />
                   </Match>
+                  <Match when={this.navigationView === "plugin"}>
+                    <SidebarPluginSectionHeader host={this} />
+                  </Match>
+                  <Match when={this.navigationView === "sessions" && this.contextualSidebar}>
+                    {(sidebar) => <SidebarPageHeader host={this} route={sidebar().key} />}
+                  </Match>
                 </Switch>
                 <div
                   ref={scrollRef}
@@ -612,6 +621,12 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
                         <SidebarOnline host={this} />
                       </SidebarViewBoundary>
                     </Match>
+                    <Match when={this.navigationView === "plugin"}>
+                      <SidebarViewBoundary>
+                        <SidebarReady />
+                        <SidebarPluginSection host={this} />
+                      </SidebarViewBoundary>
+                    </Match>
                   </Switch>
                 </div>
                 <Show when={!this.contextualSidebar && this.sessionsStatusFilter !== "archived"}>
@@ -642,7 +657,8 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
             <Show
               when={
                 this.context.theme.branding.communityLinks &&
-                this.context.config.current.communityInvite
+                this.context.config.current.communityInvite &&
+                this.communityInviteAllowed
               }
             >
               <SidebarCommunityInvite

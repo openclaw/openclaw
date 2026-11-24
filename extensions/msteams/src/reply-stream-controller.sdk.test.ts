@@ -220,7 +220,8 @@ describe("Microsoft Teams SDK acknowledged stream fallback", () => {
       expect(stream.canceled).toBe(canceled);
       expect(scenarioRequests(scenario).map((request) => [request.type, request.status])).toEqual([
         ["typing", 201],
-        ["typing", 201],
+        // Progress already sent final metadata with its first rendered activity.
+        ...(mode === "partial" ? [["typing", 201]] : []),
         ["message", canceled ? 403 : 201],
       ]);
     },

@@ -6,10 +6,12 @@ import {
 } from "../../../../src/shared/immutable-data.js";
 import { makeTextToolResult } from "../../../../test/helpers/text-tool-result.js";
 import { createAiTransportHost, runWithAiTransportHost } from "../host.js";
+import { createOpenAIResponsesCompactionSourceReader as createCheckpointReader } from "./openai-responses-compaction-checkpoint.js";
 import {
   buildOpenAIResponsesCompactionReplayPlan,
   buildOpenAIResponsesReasoningReplayMetadata,
   captureOpenAIResponsesCompaction,
+  resolveNewestOpenAIResponsesCompactionReplay,
   CompactionReplayRefreshRequiredError,
   type OpenAIResponsesReplayMode,
 } from "./openai-responses-compaction-replay.js";
@@ -67,6 +69,28 @@ const convert = (context: Context, replayMode: OpenAIResponsesReplayMode = "chec
   });
 
 describe("Responses retained-user compaction replay", () => {
+  it("resolves immutable publication from the active host", () => {
+    const replay = freezeJsonSnapshot(compactionState("openai-responses-compaction"));
+    const owner = createAssistant("", replay);
+    const read = () => resolveNewestOpenAIResponsesCompactionReplay([owner], model, replayIdentity);
+    const before = read();
+    assert(before?.mode === "compacted-prefix");
+    expect(getResponsesCompactionInputIdentity(before.item)).toBeUndefined();
+    runWithAiTransportHost(
+      createAiTransportHost({ immutableData: { freezeJsonSnapshot, isDeeplyFrozenPlainData } }),
+      () => {
+        const during = read();
+        assert(during?.mode === "compacted-prefix");
+        expect(getResponsesCompactionInputIdentity(during.item)).toBeDefined();
+        expect(Object.isFrozen(during.item)).toBe(true);
+      },
+    );
+    const after = read();
+    assert(after?.mode === "compacted-prefix");
+    expect(getResponsesCompactionInputIdentity(after.item)).toBeUndefined();
+    expect(Object.isFrozen(after.item)).toBe(false);
+  });
+
   it.each([false, true])(
     "publishes detached immutable checkpoint input (complete window=%s)",
     (window) => {
@@ -107,6 +131,20 @@ describe("Responses retained-user compaction replay", () => {
           ).toBe(true);
           freezeJsonSnapshot(replay);
           const first = read();
+          const kernel = createCheckpointReader(model, replayIdentity, () => ({
+            freezeJsonSnapshot,
+            isDeeplyFrozenPlainData,
+          }))(replay, 0);
+          assert(kernel?.mode === "complete-window" || kernel?.mode === "compacted-prefix");
+          const kernelInput = kernel.mode === "complete-window" ? kernel.output : [kernel.item];
+          expect(kernelInput).toEqual(first);
+          for (const [index, kernelItem] of kernelInput.entries()) {
+            const transportItem = first[index];
+            assert(transportItem);
+            expect(getResponsesCompactionInputIdentity(kernelItem)).toBe(
+              getResponsesCompactionInputIdentity(transportItem),
+            );
+          }
           const second = read();
           const replaced = read(freezeJsonSnapshot({ ...replay }));
           expect(first).toHaveLength(window ? 3 : 1);

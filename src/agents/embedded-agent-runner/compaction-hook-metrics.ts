@@ -4,7 +4,7 @@ import type { CompactionRequestBudget } from "../sessions/compaction/preparation
 import { estimateCompactedRequestTokens } from "../sessions/compaction/request-budget.js";
 import type { BeforeCompactionHookMetrics } from "./compaction-hook-metrics.types.js";
 
-function estimateTokenCountSafe(
+export function estimateCompactionMessageTokens(
   messages: AgentMessage[],
   estimateTokensFn: (message: AgentMessage) => number,
 ): number | undefined {
@@ -28,31 +28,42 @@ export function buildBeforeCompactionHookMetrics(params: {
 }): BeforeCompactionHookMetrics {
   return {
     messageCountOriginal: params.originalMessages.length,
-    tokenCountOriginal: estimateTokenCountSafe(params.originalMessages, params.estimateTokensFn),
+    tokenCountOriginal: estimateCompactionMessageTokens(
+      params.originalMessages,
+      params.estimateTokensFn,
+    ),
     messageCountBefore: params.currentMessages.length,
     tokenCountBefore:
       params.observedTokenCount ??
-      estimateTokenCountSafe(params.currentMessages, params.estimateTokensFn),
+      estimateCompactionMessageTokens(params.currentMessages, params.estimateTokensFn),
   };
 }
 
 /** Estimates compacted-session token count and rejects impossible growth from stale estimates. */
-export function estimateTokensAfterCompaction(params: {
-  messagesAfter: AgentMessage[];
-  observedTokenCount?: number;
-  fullSessionTokensBefore: number;
-  estimateTokensFn: (message: AgentMessage) => number;
-  requestBudget?: CompactionRequestBudget;
-}) {
-  if (params.requestBudget) {
-    return estimateCompactedRequestTokens(params.messagesAfter, {
-      ...params.requestBudget,
-      pendingTokens: 0,
-    });
-  }
-  const tokensAfter = estimateTokenCountSafe(params.messagesAfter, params.estimateTokensFn);
-  if (tokensAfter === undefined) {
-    return undefined;
+export function estimateTokensAfterCompaction(
+  params: {
+    observedTokenCount?: number;
+    fullSessionTokensBefore: number;
+    requestBudget?: CompactionRequestBudget;
+  } & (
+    | {
+        messagesAfter: AgentMessage[];
+        estimateTokensFn: (message: AgentMessage) => number;
+      }
+    | { estimatedTokensAfter: number | undefined }
+  ),
+) {
+  const tokensAfter =
+    "estimatedTokensAfter" in params
+      ? params.estimatedTokensAfter
+      : params.requestBudget
+        ? estimateCompactedRequestTokens(params.messagesAfter, {
+            ...params.requestBudget,
+            pendingTokens: 0,
+          })
+        : estimateCompactionMessageTokens(params.messagesAfter, params.estimateTokensFn);
+  if (tokensAfter === undefined || params.requestBudget) {
+    return tokensAfter;
   }
   const sanityCheckBaseline = params.observedTokenCount ?? params.fullSessionTokensBefore;
   return sanityCheckBaseline > 0 &&

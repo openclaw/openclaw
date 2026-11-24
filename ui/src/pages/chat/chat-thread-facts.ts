@@ -19,7 +19,7 @@ export type ChatItemsFacts = ReplyAttributionFacts & {
   /** Display history after heartbeat/commentary filtering and composition. */
   history?: readonly unknown[];
   completionIds?: ReadonlySet<string>;
-  /** First history message owning each persisted canvas identity or inline view key. */
+  /** First source owning a persisted canvas, inline view, or automation plan/result key. */
   firsts: Map<string, unknown>;
   /** History messages whose divider key includes their transcript index. */
   indexedDividers: unknown[];

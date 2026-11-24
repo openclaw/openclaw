@@ -1,8 +1,10 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveCurrentSessionAgentRuntimeMetadata } from "../agents/agent-runtime-metadata.js";
+import { resolveModelContextTokenProjection } from "../agents/context.js";
 import { resolveEffectiveAgentRuntime } from "../agents/thinking-runtime.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { projectWorkerPlacementAgentRuntime } from "./worker-environments/placement-session-runtime.js";
 
 type RuntimeSelection = {
   agentId: string;
@@ -27,7 +29,43 @@ function selectionKey(params: RuntimeSelection) {
 export function createSessionRuntimeResolution(cfg: OpenClawConfig) {
   const metadata = new Map<string, ReturnType<typeof resolveCurrentSessionAgentRuntimeMetadata>>();
   const effective = new Map<string, string>();
+  const placement = new Map<string, ReturnType<typeof projectWorkerPlacementAgentRuntime>>();
+  const contexts = new Map<string, ReturnType<typeof resolveModelContextTokenProjection>>();
   return {
+    placement(this: void, runtime: Parameters<typeof projectWorkerPlacementAgentRuntime>[0]) {
+      const key = JSON.stringify(runtime);
+      let value = placement.get(key);
+      if (!value) {
+        value = projectWorkerPlacementAgentRuntime(runtime);
+        placement.set(key, value);
+      }
+      return value;
+    },
+    context(
+      this: void,
+      params: Pick<
+        Parameters<typeof resolveModelContextTokenProjection>[0],
+        "provider" | "model" | "modelContextTokens" | "modelContextWindow"
+      >,
+    ) {
+      const key = JSON.stringify([
+        params.provider,
+        params.model,
+        params.modelContextTokens,
+        params.modelContextWindow,
+      ]);
+      let value = contexts.get(key);
+      if (!value) {
+        value = resolveModelContextTokenProjection({
+          ...params,
+          cfg,
+          allowAsyncLoad: false,
+          allowCacheLookup: false,
+        });
+        contexts.set(key, value);
+      }
+      return value;
+    },
     metadata(params: RuntimeSelection & { preparedAcpMeta?: SessionEntry["acp"] | null }) {
       const acp = params.preparedAcpMeta;
       const key = JSON.stringify([...selectionKey(params), acp != null, acp?.backend]);

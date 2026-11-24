@@ -4,6 +4,12 @@ export type FullSuiteVitestShard = {
   projects: string[];
 };
 
+export const runtimeConfigTestOwner: {
+  root: string;
+  include: string[];
+  exclude: string[];
+};
+
 export const autoReplyCoreTestInclude: string[];
 export const autoReplyCoreTestExclude: string[];
 export const autoReplyTopLevelReplyTestInclude: string[];

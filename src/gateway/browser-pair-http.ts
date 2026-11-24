@@ -28,7 +28,6 @@ import {
 } from "./auth-rate-limit.js";
 import { readJsonBodyOrError, sendJson } from "./http-common.js";
 import { getHeader } from "./http-header-value.js";
-import { isNamedOperatorRoleEnforcementEnabled } from "./operator-role-enforcement.js";
 import { resolveAcceptedBrowserOrigin } from "./origin-check.js";
 import { withSerializedRateLimitAttempt } from "./rate-limit-attempt-serialization.js";
 
@@ -148,7 +147,7 @@ export async function handleBrowserPairHttpRequest(params: {
       }
       const context = captureOpenClawStateWorkerContext();
       if (action === "start") {
-        if (isNamedOperatorRoleEnforcementEnabled(params.config)) {
+        if (params.config.gateway?.roles?.default) {
           sendJson(res, 409, {
             error: "identity_required",
             message: BROWSER_PAIR_IDENTITY_REQUIRED_MESSAGE,

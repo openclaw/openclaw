@@ -39,7 +39,7 @@ vi.mock("../../../agents/model-auth-availability.js", async (importOriginal) => 
 }));
 vi.mock("../../../agents/auth-profiles/store-runtime.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../../agents/auth-profiles/store-runtime.js")>()),
-  loadAuthProfileStoreForSecretsRuntime: () => ({ version: 1, profiles: {} }),
+  loadAuthProfileStoreForSecretsRuntimeAsync: async () => ({ version: 1, profiles: {} }),
 }));
 
 const { collectModelBillingRouteMigrationWarnings } =
@@ -56,9 +56,9 @@ const withRuntime = (runtime: string): OpenClawConfig => ({
 });
 
 describe("collectModelBillingRouteMigrationWarnings with CLI runtimes", () => {
-  it("names a move from a CLI runtime's own credentials to a metered API key", () => {
+  it("names a move from a CLI runtime's own credentials to a metered API key", async () => {
     expect(
-      collectModelBillingRouteMigrationWarnings({
+      await collectModelBillingRouteMigrationWarnings({
         before: withRuntime("claude-cli"),
         after: withRuntime("openclaw"),
       }),
@@ -67,9 +67,9 @@ describe("collectModelBillingRouteMigrationWarnings with CLI runtimes", () => {
     );
   });
 
-  it("names the reverse move and stays quiet when the runtime is unchanged", () => {
+  it("names the reverse move and stays quiet when the runtime is unchanged", async () => {
     expect(
-      collectModelBillingRouteMigrationWarnings({
+      await collectModelBillingRouteMigrationWarnings({
         before: withRuntime("openclaw"),
         after: withRuntime("claude-cli"),
       }),
@@ -77,7 +77,7 @@ describe("collectModelBillingRouteMigrationWarnings with CLI runtimes", () => {
       "Billing route changed for agents.entries.main.model.primary (agent main): anthropic/claude-opus-4-6 via metered API-key profile anthropic:default -> anthropic/claude-opus-4-6 via claude-cli own credentials. Review its model and authentication settings.",
     );
     expect(
-      collectModelBillingRouteMigrationWarnings({
+      await collectModelBillingRouteMigrationWarnings({
         before: withRuntime("claude-cli"),
         after: withRuntime("claude-cli"),
       }),
@@ -85,12 +85,12 @@ describe("collectModelBillingRouteMigrationWarnings with CLI runtimes", () => {
   });
 });
 
-it("classifies AWS SDK credentials as metered", () => {
+it("classifies AWS SDK credentials as metered", async () => {
   const withProfile = (profile: string): OpenClawConfig => ({
     agents: { defaults: { model: `anthropic/claude-opus-4-6@${profile}` }, entries: { main: {} } },
   });
   expect(
-    collectModelBillingRouteMigrationWarnings({
+    await collectModelBillingRouteMigrationWarnings({
       before: withProfile("anthropic:sub"),
       after: withProfile("bedrock:sdk"),
     }),

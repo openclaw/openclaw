@@ -4,6 +4,7 @@ import type { RpcSourceRef } from "../../sessions/session-controller.rpc-sources
 // oxfmt-ignore
 import { useChatAbortRegistryFixture } from "./chat.abort-registry.test-support.js";
 import { expect, it, vi } from "vitest";
+import { withWorkerPreload } from "../../../test/helpers/runtime-preload.js";
 import * as subagentKill from "../../agents/subagents/registry/subagent-control-kill.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import {
@@ -49,14 +50,7 @@ vi.mock("../../infra/worker-cpu.js", async (importOriginal) => {
     createCpuTrackedWorker(
       ...[filename, options]: Parameters<typeof actual.createCpuTrackedWorker>
     ) {
-      return actual.createCpuTrackedWorker(filename, {
-        ...options,
-        execArgv: [
-          ...(options?.execArgv ?? []),
-          "--import",
-          `data:text/javascript,${encodeURIComponent(preload)}`,
-        ],
-      });
+      return actual.createCpuTrackedWorker(filename, withWorkerPreload(options, preload));
     },
   };
 });

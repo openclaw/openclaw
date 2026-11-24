@@ -44,6 +44,8 @@ export {
   isSessionReactionEvent,
   isSessionsCreateParams,
   isSessionsTitlePrepareParams,
+  isSessionsSteerTargetParams,
+  isSessionsSteerActiveParams,
   isSessionsSendParams,
   isSessionsReclaimParams,
   isSessionsReclaimResult,
@@ -91,5 +93,6 @@ export {
   isSessionGitHubStatusParams,
   isSessionGitHubConfirmParams,
   isSessionsFilesPreviewParams,
+  isSessionsFilesStatParams,
   isSessionsFilesPreviewReleaseParams,
 } from "./predicates.js";

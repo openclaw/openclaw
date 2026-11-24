@@ -28,9 +28,10 @@ export function presentSessionRowTranscriptFields(
   params: BackfillParams,
   fields: Pick<
     SessionRowTranscriptProjection,
-    "lastMessagePreview" | "lastAssistantMessage" | "terminalModel"
+    "hasMessages" | "lastMessagePreview" | "lastAssistantMessage" | "terminalModel"
   >,
 ): {
+  hasMessages?: boolean;
   lastMessagePreview?: string;
   lastAssistantMessage?: SessionRowAssistantMessage;
   fallbackModel?: { provider: string; model: string };
@@ -46,6 +47,7 @@ export function presentSessionRowTranscriptFields(
       terminalModel: terminal && terminal.runId === sessionEntry.lastRunId ? terminal : null,
     });
   return {
+    hasMessages: fields.hasMessages,
     ...(fields.lastMessagePreview !== null
       ? { lastMessagePreview: fields.lastMessagePreview }
       : {}),
@@ -103,4 +105,14 @@ export async function backfillSessionRowTranscriptFields(
       await acquired.value.release();
     }
   }
+}
+
+/**
+ * Unread follows the chat: a run end advances activity to its transcript's newest visible
+ * assistant row. Silent, heartbeat and hidden replies are not visible rows. The read is
+ * optional; on failure the run end leaves unread unchanged.
+ */
+export async function readVisibleSessionActivityAt(params: BackfillParams) {
+  const fields = await backfillSessionRowTranscriptFields(params).catch(() => undefined);
+  return fields?.lastAssistantMessage?.timestamp;
 }
