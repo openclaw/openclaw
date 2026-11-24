@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import type { ProviderPresentation } from "../../packages/gateway-protocol/src/schema/model-catalog.js";
+import { resolveProviderDisplayName } from "../agents/provider-display-name.js";
 import { resolveMergedModelProviderConfig } from "../config/model-provider-config.js";
 import type { ModelProviderConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -35,8 +36,10 @@ export function resolveProviderPresentation(
 ): ProviderPresentation {
   const provider = resolveMergedModelProviderConfig(cfg, providerId);
   const icon = provider?.icon;
+  const name = resolveProviderDisplayName(providerId, { config: cfg });
   return {
-    ...(provider?.name ? { providerName: provider.name } : {}),
+    // An operator-defined provider without a name has only its id; clients label it.
+    ...(name !== providerId ? { providerName: name } : {}),
     ...(icon
       ? {
           providerIcon:

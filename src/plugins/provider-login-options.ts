@@ -1,3 +1,4 @@
+import { resolveProviderDisplayName } from "../agents/provider-display-name.js";
 import type { PluginMetadataSnapshot } from "./plugin-metadata-snapshot.types.js";
 import { compareProviderAuthChoiceGroups } from "./provider-auth-choice-order.js";
 import {
@@ -154,15 +155,23 @@ function normalizeInput(value: string | undefined): string {
   return (value ?? "").trim().toLowerCase().replace(/_/gu, "-");
 }
 
-function projectChannelChoice(choice: ProviderAuthChoiceMetadata): ProviderChannelLoginChoice {
+function projectChannelChoice(
+  choice: ProviderAuthChoiceMetadata,
+  params?: Parameters<typeof resolveManifestDeclaredProviderAuthChoices>[0],
+): ProviderChannelLoginChoice {
   const kind = choice.credentialOnly === true ? loginKind(choice) : undefined;
+  const name = resolveProviderDisplayName(choice.providerId, {
+    config: params?.config,
+    owners: params?.metadataSnapshot?.owners,
+  });
   return {
     choiceId: choice.choiceId,
     pluginId: choice.pluginId,
     providerId: choice.providerId,
     methodId: choice.methodId,
     label: choice.choiceLabel,
-    providerLabel: choice.groupLabel ?? choice.choiceLabel,
+    // A third-party plugin without `providerNames` still has its sign-in group label.
+    providerLabel: name === choice.providerId ? (choice.groupLabel ?? name) : name,
     command: formatProviderLoginChoiceRef(choice),
     mode:
       choice.channelLogin && kind && choice.appGuidedAuth
@@ -180,11 +189,11 @@ export function resolveProviderChannelLoginChoice(
   params?: Parameters<typeof resolveManifestDeclaredProviderAuthChoices>[0],
 ): ProviderChannelLoginResolution {
   const metadata = resolveManifestDeclaredProviderAuthChoices(params).filter(isEligible);
-  const choices = metadata.map(projectChannelChoice);
+  const choices = metadata.map((choice) => projectChannelChoice(choice, params));
   const raw = input?.trim() ?? "";
   const normalized = normalizeInput(input);
   const select = (matches: ProviderAuthChoiceMetadata[]): ProviderChannelLoginResolution => {
-    const projected = matches.map(projectChannelChoice);
+    const projected = matches.map((choice) => projectChannelChoice(choice, params));
     return projected.length === 1
       ? { status: "resolved", choice: projected[0]! }
       : { status: "ambiguous", choices: projected };

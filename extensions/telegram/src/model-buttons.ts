@@ -27,6 +27,8 @@ export type ParsedModelCallback =
 
 export type ProviderInfo = {
   id: string;
+  /** Display name; callbacks keep carrying the id. */
+  name?: string;
   count: number;
 };
 
@@ -170,7 +172,7 @@ export function buildProviderKeyboard(providers: ProviderInfo[]): ButtonRow[] {
   const rows: ButtonRow[] = [];
   for (const [index, provider] of providers.entries()) {
     (rows[Math.floor(index / 2)] ??= []).push({
-      text: `${provider.id} (${provider.count})`,
+      text: `${provider.name ?? provider.id} (${provider.count})`,
       callback_data: buildProviderListCallbackData(provider.id, 1),
     });
   }

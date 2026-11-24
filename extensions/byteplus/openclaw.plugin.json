@@ -9,7 +9,7 @@
   "providers": ["byteplus", "byteplus-plan"],
   "providerNames": {
     "byteplus": "BytePlus",
-    "byteplus-plan": "BytePlus Plan"
+    "byteplus-plan": "BytePlus Coding Plan"
   },
   "setup": {
     "providers": [

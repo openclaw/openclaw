@@ -909,7 +909,7 @@ describe("tui-event-handlers: handleAgentEvent", () => {
       error:
         "Authentication failed with an HTML 403 response from the provider. Re-authenticate and verify your provider account access.",
       expected:
-        "auth or provider access failed for openai. Run /auth openai to refresh credentials; if you already re-authed, switch models/providers because this account may still be blocked for inference.",
+        "auth or provider access failed for OpenAI. Run /auth openai to refresh credentials; if you already re-authed, switch models/providers because this account may still be blocked for inference.",
     },
     {
       name: "billing",

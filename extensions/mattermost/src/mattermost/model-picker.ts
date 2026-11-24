@@ -251,7 +251,7 @@ export function renderMattermostProviderPickerView(params: {
     buildButton({
       action: "list",
       ownerUserId: params.ownerUserId,
-      text: `${provider} (${params.data.byProvider.get(provider)?.size ?? 0})`,
+      text: `${params.data.providerNames?.get(provider) ?? provider} (${params.data.byProvider.get(provider)?.size ?? 0})`,
       provider,
       page: 1,
       style: provider === currentProvider ? "primary" : "default",
@@ -349,7 +349,7 @@ export function renderMattermostModelsPickerView(params: {
 
   return {
     text: [
-      `Models (${provider}) - ${models.length} available`,
+      `Models (${params.data.providerNames?.get(provider) ?? provider}) - ${models.length} available`,
       formatCurrentModelLine(params.currentModel),
       `Page ${page}/${totalPages}`,
       "Select a model to switch immediately.",

@@ -1,4 +1,5 @@
 import { ensureAuthProfileStoreAsync, type AuthProfileStore } from "../agents/auth-profiles.js";
+import { resolveProviderDisplayName } from "../agents/provider-display-name.js";
 import { getRuntimeConfig, type OpenClawConfig } from "../config/config.js";
 import {
   listProviderUsagePluginDescriptors,
@@ -44,7 +45,7 @@ export async function loadProviderUsageSummary(
   const descriptors: ProviderUsagePluginDescriptor[] = requestedProviders
     ? requestedProviders.map((provider) => ({
         provider,
-        displayName: providerUsageLabel(provider) ?? provider,
+        displayName: providerUsageLabel(provider) ?? resolveProviderDisplayName(provider, { config }),
       }))
     : listProviderUsagePluginDescriptors({
         config,
@@ -56,7 +57,10 @@ export async function loadProviderUsageSummary(
   );
   const failureSnapshot = (provider: UsageProviderId, error: string): ProviderUsageSnapshot => ({
     provider,
-    displayName: displayNames.get(provider) ?? providerUsageLabel(provider) ?? provider,
+    displayName:
+      displayNames.get(provider) ??
+      providerUsageLabel(provider) ??
+      resolveProviderDisplayName(provider, { config }),
     windows: [],
     error,
   });
@@ -139,7 +143,9 @@ export async function loadProviderUsageSummary(
             ? { ...snapshot, authProfileId: auth.authProfileId }
             : {
                 provider: auth.provider,
-                displayName: providerUsageLabel(auth.provider) ?? auth.provider,
+                displayName:
+                  providerUsageLabel(auth.provider) ??
+                  resolveProviderDisplayName(auth.provider, { config }),
                 windows: [],
                 error: "Unsupported provider",
               };

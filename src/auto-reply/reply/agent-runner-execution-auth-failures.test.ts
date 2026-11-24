@@ -249,7 +249,7 @@ describe("executeAgentTurn: authentication failures", () => {
 
     expect(result.kind).toBe("final");
     if (result.kind === "final") {
-      expect(result.payload.text).toContain("Couldn't sign in to openai.");
+      expect(result.payload.text).toContain("Couldn't sign in to OpenAI.");
       // A chat reply names the app, never a terminal command.
       expect(result.payload.text).toContain("Open Models in the OpenClaw app to sign in again");
       expect(result.payload.text).not.toMatch(/openclaw (configure|models)/u);

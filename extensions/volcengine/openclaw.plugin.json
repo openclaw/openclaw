@@ -12,8 +12,8 @@
     "volcengine-plan"
   ],
   "providerNames": {
-    "volcengine": "Volcengine",
-    "volcengine-plan": "Volcengine Plan"
+    "volcengine": "Volcano Engine",
+    "volcengine-plan": "Volcano Engine Coding Plan"
   },
   "setup": {
     "providers": [

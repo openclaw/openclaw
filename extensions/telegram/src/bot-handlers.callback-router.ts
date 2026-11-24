@@ -447,9 +447,15 @@ export function createTelegramCallbackRouter({
             ].join("\n"),
           });
         };
-        const { byProvider, providers, resolvedDefault: activeResolvedDefault } = modelData;
+        const {
+          byProvider,
+          providers,
+          providerNames,
+          resolvedDefault: activeResolvedDefault,
+        } = modelData;
         const providerInfos: ProviderInfo[] = providers.map((provider) => ({
           id: provider,
+          name: providerNames?.get(provider),
           count: byProvider.get(provider)?.size ?? 0,
         }));
         const showChangedModelPicker = () =>

@@ -157,8 +157,26 @@ function catalogLoader(entries: Array<Record<string, unknown>>) {
   return vi.fn(async () => entries);
 }
 
+// Provider names are asserted in models-presentation.test.ts; these tests cover availability.
+function withoutProviderPresentation(call: unknown[] | undefined) {
+  const [ok, payload, error] = call ?? [];
+  const { providerPresentations: _presentations, ...result } = payload as {
+    models: Array<Record<string, unknown>>;
+    providerPresentations?: unknown;
+  };
+  return [
+    ok,
+    { ...result, models: result.models.map(({ providerName: _name, ...model }) => model) },
+    error,
+  ];
+}
+
 function expectModels(respond: ReturnType<typeof vi.fn>, models: unknown) {
-  expect(respond).toHaveBeenCalledWith(true, { models: withStatedRuntime(models) }, undefined);
+  expect(withoutProviderPresentation(respond.mock.calls[0])).toEqual([
+    true,
+    { models: withStatedRuntime(models) },
+    undefined,
+  ]);
 }
 
 async function expectModelsList(params: Parameters<typeof requestModelsList>[0], models: unknown) {
@@ -1136,12 +1154,12 @@ describe("models.list", () => {
         });
 
         expect
-          .soft(respond)
-          .toHaveBeenCalledWith(
+          .soft(withoutProviderPresentation(respond.mock.calls[0]))
+          .toEqual([
             true,
             { models: withStatedRuntime([{ ...LLAMA_SECURE, available: true }]) },
             undefined,
-          );
+          ]);
       }
     } finally {
       clearRuntimeConfigSnapshot();

@@ -7,9 +7,9 @@
   "enabledByDefault": true,
   "providers": ["kimi", "kimi-code", "kimi-coding"],
   "providerNames": {
-    "kimi": "Kimi Coding",
-    "kimi-code": "Kimi Coding",
-    "kimi-coding": "Kimi Coding"
+    "kimi": "Kimi Code",
+    "kimi-code": "Kimi Code",
+    "kimi-coding": "Kimi Code"
   },
   "modelIdNormalization": {
     "providers": {

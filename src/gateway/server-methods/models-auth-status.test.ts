@@ -858,6 +858,9 @@ describe("models.authStatus", () => {
               {
                 id: "anthropic",
                 origin: "bundled",
+                providers: ["anthropic"],
+                cliBackends: ["claude-cli"],
+                providerNames: { anthropic: "Anthropic", "claude-cli": "Claude CLI" },
                 providerAuthAliases: { "claude-cli": "anthropic" },
               },
             ],
@@ -883,7 +886,7 @@ describe("models.authStatus", () => {
       const refreshed = await readRefreshedUsage();
       expect(refreshed.usage).toEqual(expected);
       if (source === "claude-cli") {
-        expect(refreshed).toMatchObject({ displayName: "Claude", authProvider: "anthropic" });
+        expect(refreshed).toMatchObject({ displayName: "Claude CLI", authProvider: "anthropic" });
         const reader = createOptions({}, ["operator.read"]);
         await handler(reader);
         expect(firstRespondCall(reader)?.[1]?.providers[0]?.usage).not.toHaveProperty(
@@ -1053,6 +1056,18 @@ registerModelAuthLogoutTests({
 it.each([["operator.admin"], ["operator.read"]])(
   "projects prepared native billing metadata without a saved account (%s)",
   async (scope) => {
+    setPreparedMetadataSnapshot(
+      createPluginMetadataSnapshotFixture({
+        plugins: [
+          {
+            id: "anthropic",
+            origin: "bundled",
+            cliBackends: ["claude-cli"],
+            providerNames: { "claude-cli": "Claude CLI" },
+          },
+        ],
+      }),
+    );
     const snapshot = createPreparedOwnerSnapshot("main");
     mocks.readPreparedCatalog.mockResolvedValue({
       ...snapshot,
@@ -1076,7 +1091,7 @@ it.each([["operator.admin"], ["operator.read"]])(
         providers: [
           {
             provider: "claude-cli",
-            displayName: "Claude",
+            displayName: "Claude CLI",
             status: "ok",
             profiles: [],
             nativeAuth: { kind: "subscription", plan: "Max" },

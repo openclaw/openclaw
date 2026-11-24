@@ -4,6 +4,33 @@ import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { listModels } from "./models-list.test-support.js";
 
 describe("models.list provider presentation", () => {
+  it("names a bundled provider from its manifest and leaves an unnamed operator provider to the client", async () => {
+    await withOpenClawTestState({ prefix: "models-presentation-", scenario: "empty" }, async () => {
+      const respond = await listModels({
+        view: "all",
+        loadGatewayModelCatalog: vi.fn(async () => [
+          { id: "routed-model", name: "Routed model", provider: "openrouter" },
+          { id: "local-model", name: "Local model", provider: "workstation" },
+        ]),
+        runtimeConfig: {
+          models: {
+            providers: {
+              workstation: { baseUrl: "https://models.example.com/v1", auth: "none", models: [] },
+            },
+          },
+        },
+      });
+      const payload = respond.mock.calls[0]?.[1];
+      expect(payload).toMatchObject({
+        models: [
+          { provider: "openrouter", providerName: "OpenRouter" },
+          { provider: "workstation" },
+        ],
+      });
+      expect(payload?.models[1]).not.toHaveProperty("providerName");
+    });
+  });
+
   it("publishes authored mixed-case provider presentation without changing identity or leaking sources", async () => {
     await withOpenClawTestState({ prefix: "models-presentation-", scenario: "empty" }, async () => {
       const loadGatewayModelCatalog = vi.fn(async () => [

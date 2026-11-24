@@ -17,6 +17,12 @@ function keyboard(
   return buildModelsKeyboard({ provider, models, currentPage: 1, totalPages: 1, ...options });
 }
 
+it("labels provider buttons with the provider name and keeps the id in the callback", () => {
+  const [button] = buildProviderKeyboard([{ id: "openrouter", name: "OpenRouter", count: 3 }])[0] ?? [];
+  expect(button?.text).toBe("OpenRouter (3)");
+  expect(button?.callback_data).toContain("openrouter");
+});
+
 describe("model buttons", () => {
   it("returns null for unsupported callback variants", () => {
     const invalid = [

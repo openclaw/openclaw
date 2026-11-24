@@ -38,6 +38,7 @@ import { assertProviderAuthReady } from "./model-auth-provider-admission.js";
 import * as authConfig from "./model-auth-provider-config.js";
 import { resolveModelProviderAuthConfig } from "./model-auth-provider-route.js";
 import { resolveManagedSecretRefRuntimeProviderAuth } from "./model-auth-runtime-config.js";
+import { resolveProviderDisplayName } from "./provider-display-name.js";
 import {
   assertProviderAuthSupportsHttp,
   ProviderAuthError,
@@ -706,7 +707,7 @@ export async function resolveApiKeyForProviderCore(input: {
     throw new ProviderAuthError(
       "missing-provider-auth",
       provider,
-      `The ${provider} sign-in ${JSON.stringify(endedProfileId)} has ended or was rejected.`,
+      `The ${resolveProviderDisplayName(provider, { config: cfg })} sign-in ${JSON.stringify(endedProfileId)} has ended or was rejected.`,
       { providerGuidance: true, cause: failure },
     );
   }

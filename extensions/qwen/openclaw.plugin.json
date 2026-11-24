@@ -19,7 +19,7 @@
     "modelstudio": "Qwen Cloud",
     "dashscope": "Qwen Cloud",
     "qwen-token-plan": "Qwen Token Plan",
-    "bailian-token-plan": "Alibaba Token Plan"
+    "bailian-token-plan": "Alibaba Cloud Token Plan"
   },
   "providerEndpoints": [
     {

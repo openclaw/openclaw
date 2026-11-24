@@ -5,6 +5,7 @@ import {
   resolveModelAuthLabelAsync,
 } from "../../agents/model-auth-label.js";
 import { normalizeProviderId } from "../../agents/model-selection.js";
+import { resolveProviderDisplayName } from "../../agents/provider-display-name.js";
 import {
   PreparedModelRuntimeOwnerNotPublishedError,
   PreparedModelRuntimePublicationSupersededError,
@@ -101,15 +102,22 @@ type ProviderLabelParams = {
   sessionEntry?: ModelsCommandSessionEntry;
 };
 
-function formatProviderLabel(provider: string, authLabel: string | undefined): string {
+function formatProviderLabel(params: ProviderLabelParams, authLabel: string | undefined): string {
+  const name = resolveProviderDisplayName(params.provider, { config: params.cfg });
   if (!authLabel || authLabel === "unknown") {
-    return provider;
+    return name;
   }
-  return `${provider} · 🔑 ${authLabel}`;
+  return `${name} · 🔑 ${authLabel}`;
+}
+
+/** A provider list entry keeps the id people type in `/models <provider>` beside its name. */
+function formatProviderEntry(provider: string, name: string, count?: number): string {
+  const details = [name === provider ? undefined : provider, count?.toString()].filter(Boolean);
+  return details.length ? `${name} (${details.join(", ")})` : name;
 }
 
 async function resolveProviderLabelAsync(params: ProviderLabelParams): Promise<string> {
-  return formatProviderLabel(params.provider, await resolveModelAuthLabelAsync(params));
+  return formatProviderLabel(params, await resolveModelAuthLabelAsync(params));
 }
 
 /** @deprecated Use formatModelsAvailableHeaderAsync. Supported through 2026-12-31. Removal in the first January 2027 stable release. */
@@ -128,7 +136,7 @@ export function formatModelsAvailableHeader(params: {
     method: "formatModelsAvailableHeader",
     replacement: "formatModelsAvailableHeaderAsync",
   });
-  const providerLabel = formatProviderLabel(params.provider, resolveModelAuthLabel(params));
+  const providerLabel = formatProviderLabel(params, resolveModelAuthLabel(params));
   return formatModelsHeader(params, providerLabel);
 }
 
@@ -205,7 +213,8 @@ async function buildModelsCommandReply(
   parsed: ParsedModelsCommand,
   data: PreparedModelsProviderData,
 ): Promise<ReplyPayload & { text: string }> {
-  const { byProvider, providers } = data;
+  const { byProvider, providers, providerNames } = data;
+  const nameOf = (provider: string) => providerNames?.get(provider) ?? provider;
   const availability =
     parsed.action === "list" && parsed.provider
       ? data.modelMenu?.byProvider.get(parsed.provider)
@@ -222,12 +231,13 @@ async function buildModelsCommandReply(
     ?.filter(
       (provider) => parsed.action !== "list" || !parsed.provider || parsed.provider === provider,
     )
-    .map((provider) => `${provider}: checking models…`)
+    .map((provider) => `${nameOf(provider)}: checking models…`)
     .join("\n");
   const withAvailability = (text: string) => [text, notice, checking].filter(Boolean).join("\n\n");
   const commandPlugin = params.surface ? getChannelPlugin(params.surface) : null;
   const providerInfos = providers.map((provider) => ({
     id: provider,
+    name: nameOf(provider),
     count: byProvider.get(provider)?.size ?? 0,
   }));
 
@@ -249,7 +259,10 @@ async function buildModelsCommandReply(
       text: withAvailability(
         [
           "Providers:",
-          ...providers.map((provider) => `- ${provider} (${byProvider.get(provider)?.size ?? 0})`),
+          ...providers.map(
+            (provider) =>
+              `- ${formatProviderEntry(provider, nameOf(provider), byProvider.get(provider)?.size ?? 0)}`,
+          ),
           "",
           "Use: /models <provider>",
           "Switch: /model <provider/model>",
@@ -278,7 +291,7 @@ async function buildModelsCommandReply(
         `Unknown provider: ${provider}`,
         "",
         "Available providers:",
-        ...providers.map((entry) => `- ${entry}`),
+        ...providers.map((entry) => `- ${formatProviderEntry(entry, nameOf(entry))}`),
         "",
         "Use: /models <provider>",
       ].join("\n"),

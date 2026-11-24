@@ -17,9 +17,6 @@ const bundledPlugins = loadPluginManifestRegistryCore({
 }).plugins.filter((plugin) => plugin.origin === "bundled");
 const owners = buildPluginMetadataProviderFacts(bundledPlugins);
 
-// fal writes its brand in lower case, so its name is its id.
-const NAME_IS_ID = new Set(["fal"]);
-
 it("names every provider a bundled plugin declares", () => {
   const unnamed = bundledPlugins.flatMap((plugin) =>
     [
@@ -30,11 +27,7 @@ it("names every provider a bundled plugin declares", () => {
         ...(plugin.contracts?.decisionProviders ?? []),
       ]),
     ]
-      .filter((id) =>
-        NAME_IS_ID.has(id)
-          ? !owners.providerNames.has(id)
-          : resolveProviderDisplayName(id, { owners }) === id,
-      )
+      .filter((id) => resolveProviderDisplayName(id, { owners }) === id)
       .map((id) => `${plugin.id}: ${id}`),
   );
   expect(

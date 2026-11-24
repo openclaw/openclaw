@@ -7,7 +7,7 @@
   "enabledByDefault": true,
   "providers": ["fal"],
   "providerNames": {
-    "fal": "fal"
+    "fal": "fal.ai"
   },
   "setup": {
     "providers": [

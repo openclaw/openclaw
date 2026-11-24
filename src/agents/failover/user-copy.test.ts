@@ -6,13 +6,36 @@ import {
   renderBillingReplyCopy as billingCopy,
   renderCliTimeoutReplyCopy,
   renderFailoverCodeUserCopy as codeCopy,
+  renderAuthProfileFailoverCopy,
   renderMissingApiKeyReplyCopy as missingKeyCopy,
   renderRateLimitOrOverloadedCopy,
   renderRateLimitReplyCopy,
+  renderRateLimitResetCopy,
   renderSanitizedUserFacingText as sanitizedCopy,
 } from "./user-copy.js";
 
 describe("failover user copy", () => {
+  it("names the provider instead of showing its id", () => {
+    const login = (provider: string) =>
+      renderAuthProfileFailoverCopy({ reason: "rate_limit", provider, allInCooldown: true });
+    expect(login("claude-cli")).toMatch(/^Claude CLI is asking us to slow down/);
+    // An operator-defined provider without a name has only its id.
+    expect(login("workstation")).toMatch(/^workstation is asking us to slow down/);
+    expect(billingCopy({ provider: "openrouter", model: "kimi-k3", authMode: "oauth" })).toMatch(
+      /^⚠️ OpenRouter \(kimi-k3\) returned a billing error/,
+    );
+    expect(
+      renderRateLimitResetCopy({
+        provider: "google",
+        model: "gemini-3.8-flash",
+        rateLimitResetAt: Date.UTC(2026, 10, 25),
+        nowMs: Date.UTC(2026, 10, 24),
+        locale: "en",
+        timeZone: "UTC",
+      }),
+    ).toMatch(/^⚠️ Google AI Studio \(gemini-3\.8-flash\) is rate-limited\./);
+  });
+
   const retryCopy = "⚠️ The AI service needs a short break. Please try again in a few minutes.";
   const promptCopy =
     "⚠️ The provider rejected this request because the prompt exceeds its per-request limit. Shorten the prompt and try again, or choose a model with a larger limit.";

@@ -10,7 +10,7 @@
   "providers": ["minimax", "minimax-portal"],
   "providerNames": {
     "minimax": "MiniMax",
-    "minimax-portal": "MiniMax Portal"
+    "minimax-portal": "MiniMax Coding Plan"
   },
   "modelCatalog": {
     "discovery": {

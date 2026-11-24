@@ -10,6 +10,7 @@ import type {
   UsersUnlinkAuthProfileResult,
 } from "../../packages/gateway-protocol/src/schema/users.js";
 import { resolveSharedMainAuthAgentDir } from "../agents/auth-profiles/shared-main-dir.js";
+import { resolveProviderDisplayName } from "../agents/provider-display-name.js";
 import {
   ensureAuthProfileStoreWithoutExternalProfiles,
   ensureAuthProfileStoreWithoutExternalProfilesAsync,
@@ -437,9 +438,12 @@ export function createModelAccountConnectService(options: {
       for (const choice of listPersonalAccountAuthChoices(options.getConfig())) {
         let provider = providers.get(choice.providerId);
         if (!provider) {
+          const name = resolveProviderDisplayName(choice.providerId, {
+            config: options.getConfig(),
+          });
           provider = {
             id: choice.providerId,
-            label: choice.groupLabel ?? choice.providerId,
+            label: name === choice.providerId ? (choice.groupLabel ?? name) : name,
             methods: [],
           };
           providers.set(choice.providerId, provider);

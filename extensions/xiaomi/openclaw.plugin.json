@@ -8,8 +8,8 @@
   "enabledByDefault": true,
   "providers": ["xiaomi", "xiaomi-token-plan"],
   "providerNames": {
-    "xiaomi": "Xiaomi",
-    "xiaomi-token-plan": "Xiaomi Token Plan"
+    "xiaomi": "Xiaomi MiMo",
+    "xiaomi-token-plan": "Xiaomi MiMo Token Plan"
   },
   "autoEnableWhenConfiguredProviders": ["xiaomi", "xiaomi-token-plan"],
   "setup": {

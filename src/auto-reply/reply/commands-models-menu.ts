@@ -28,6 +28,7 @@ export type ModelsMenu = {
 
 export function buildModelsMenu(data: {
   byProvider: ReadonlyMap<string, ReadonlySet<string>>;
+  providerNames: ReadonlyMap<string, string>;
   modelNames: ReadonlyMap<string, string>;
   modelAvailability: ReadonlyMap<string, ModelReadiness>;
   loginProviders: ReadonlySet<string>;
@@ -97,7 +98,7 @@ export function buildModelsMenu(data: {
         }
       }
       modelNames.set(key, `${label} — ${modelNames.get(key) ?? model}`);
-      notices.add(`${id}: ${label}. ${recovery}`);
+      notices.add(`${data.providerNames.get(id) ?? id}: ${label}. ${recovery}`);
     }
     byProvider.set(id, { available, notice: [...notices].join("\n") });
   }

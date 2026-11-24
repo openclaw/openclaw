@@ -1,5 +1,6 @@
 import { classifyFailoverReasonCore } from "../agents/failover/classify-core.js";
 import { isAuthErrorMessage } from "../agents/failover/message-patterns.js";
+import { resolveProviderDisplayName } from "../agents/provider-display-name.js";
 import { formatRawAssistantErrorForUi } from "../shared/assistant-error-format.js";
 import type { SetTuiActivityStatus, TuiRunOutcome } from "./tui-activity-status.js";
 import { formatPrimitiveString } from "./tui-formatters.js";
@@ -171,7 +172,7 @@ export function createTuiRunLifecycle(context: TuiRunLifecycleContext) {
       return undefined;
     }
     return provider
-      ? `auth or provider access failed for ${provider}. Run /auth ${provider} to refresh credentials; if you already re-authed, switch models/providers because this account may still be blocked for inference.`
+      ? `auth or provider access failed for ${resolveProviderDisplayName(provider)}. Run /auth ${provider} to refresh credentials; if you already re-authed, switch models/providers because this account may still be blocked for inference.`
       : "auth or provider access failed for the current provider. Run /auth to refresh credentials; if you already re-authed, switch models/providers because this account may still be blocked for inference.";
   };
 

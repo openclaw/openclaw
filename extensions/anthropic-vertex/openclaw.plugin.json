@@ -9,7 +9,7 @@
   "enabledByDefault": true,
   "providers": ["anthropic-vertex"],
   "providerNames": {
-    "anthropic-vertex": "Anthropic Vertex"
+    "anthropic-vertex": "Claude on Vertex AI"
   },
   "providerCatalogEntry": "./provider-discovery.ts",
   "syntheticAuthRefs": ["anthropic-vertex"],

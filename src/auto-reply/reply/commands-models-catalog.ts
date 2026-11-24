@@ -32,6 +32,7 @@ import {
 } from "../../agents/model-selection.js";
 import { createModelVisibilityPolicy } from "../../agents/model-visibility-policy.js";
 import { resolveModelCatalogIdentityKey } from "../../agents/openai-model-routes.js";
+import { resolveProviderDisplayName } from "../../agents/provider-display-name.js";
 import { prepareOperatorModelPolicy } from "../../agents/operator-model-policy.js";
 import * as preparedModelCatalog from "../../agents/prepared-model-catalog.js";
 import { getPreparedModelRuntimeAuthStore } from "../../agents/prepared-model-runtime-auth.js";
@@ -65,6 +66,8 @@ export type ModelsProviderData = {
   byProvider: Map<string, Set<string>>;
   pendingProviders?: readonly string[];
   providers: string[];
+  /** Display name per listed provider id; the id stays what people type. */
+  providerNames?: ReadonlyMap<string, string>;
   /** Undefined when the agent has no configured model. */
   resolvedDefault?: { provider: string; model: string };
   modelNames: Map<string, string>;
@@ -503,6 +506,15 @@ export async function loadModelsProviderData(
   }
 
   const providers = [...byProvider.keys()].toSorted();
+  const providerNames = new Map(
+    providers.map((provider) => [
+      provider,
+      resolveProviderDisplayName(provider, {
+        config: cfg,
+        owners: owner.metadataSnapshot?.owners ?? {},
+      }),
+    ]),
+  );
   const loginProviders = new Set(
     providers.filter(
       (provider) =>
@@ -518,10 +530,12 @@ export async function loadModelsProviderData(
     byProvider,
     pendingProviders,
     providers,
+    providerNames,
     resolvedDefault,
     modelNames,
     modelMenu: buildModelsMenu({
       byProvider,
+      providerNames,
       modelNames,
       modelAvailability,
       loginProviders,

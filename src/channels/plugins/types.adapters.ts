@@ -382,7 +382,8 @@ export type ChannelCommandAdapter = {
     agentId?: string;
   }) => ReplyPayload["channelData"] | null;
   buildModelsMenuChannelData?: (params: {
-    providers: Array<{ id: string; count: number }>;
+    /** `name` is the provider's display name; `id` is what commands and callbacks carry. */
+    providers: Array<{ id: string; name?: string; count: number }>;
   }) => ReplyPayload["channelData"] | null;
   buildModelsProviderChannelData?: NonNullable<ChannelCommandAdapter["buildModelsMenuChannelData"]>;
   buildModelsAddProviderChannelData?: (params: {

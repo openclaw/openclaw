@@ -15,6 +15,7 @@ import {
   parseApiErrorPayload,
 } from "../../shared/assistant-error-format.js";
 import { formatExecDeniedUserMessage } from "../exec-approval-result.js";
+import { resolveProviderDisplayName } from "../provider-display-name.js";
 import {
   API_KEY_EXPIRED_ERROR_CODE,
   ERROR_DETAILS_HINT,
@@ -86,7 +87,7 @@ export function formatBillingErrorMessage(
   model?: string,
   authMode?: string,
 ): string {
-  const providerName = provider?.trim();
+  const providerName = provider?.trim() && resolveProviderDisplayName(provider.trim());
   const modelName = model?.trim();
   const providerLabel =
     providerName && modelName ? `${providerName} (${modelName})` : providerName || undefined;
@@ -200,7 +201,9 @@ export function renderRateLimitResetCopy(params: RateLimitResetContext): string 
     absolute = new Date(resetAt).toISOString();
     relative = new Intl.RelativeTimeFormat("en").format(Math.ceil(remainingMs / divisor), unit);
   }
-  const route = [params.provider, params.model].filter(Boolean).join("/") || "This model";
+  const provider = params.provider?.trim() && resolveProviderDisplayName(params.provider.trim());
+  const model = params.model?.trim();
+  const route = provider && model ? `${provider} (${model})` : provider || model || "This model";
   return `⚠️ ${route} is rate-limited. The provider says to retry ${relative} (${absolute}). Choose another model in the model picker, or configure Model fallbacks in Settings (\`agents.defaults.model.fallbacks\`).`;
 }
 
@@ -736,11 +739,12 @@ const AUTH_PROFILE_RECOVERY_REASONS = new Set<FailoverReason>([
 ]);
 
 export function renderAuthProfileFailoverCopy(params: AuthProfileFailureCopyParams): string {
+  const provider = resolveProviderDisplayName(params.provider);
   const description = params.allInCooldown
-    ? AUTH_PROFILE_COOLDOWN_COPY[params.reason](params.provider)
-    : AUTH_PROFILE_DIRECT_COPY[params.reason]?.(params.provider);
+    ? AUTH_PROFILE_COOLDOWN_COPY[params.reason](provider)
+    : AUTH_PROFILE_DIRECT_COPY[params.reason]?.(provider);
   const hint = AUTH_PROFILE_RECOVERY_REASONS.has(params.reason) ? params.recoveryHint : null;
-  return [description ?? authProfileUnavailableCopy(params.provider), hint]
+  return [description ?? authProfileUnavailableCopy(provider), hint]
     .filter(Boolean)
     .join(" ");
 }
