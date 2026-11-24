@@ -118,6 +118,7 @@ suite.define(() => {
           if (opening?.height && tool?.height) {
             return opening.top < tool.top ? "opening-first" : "tool-first";
           }
+          return false;
         }, prompt);
         if (captureUiProof) {
           await capture(page, createControlUiE2eArtifactDir("resumed-tool-order"), "transcript");
