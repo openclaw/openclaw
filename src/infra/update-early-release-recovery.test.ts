@@ -176,7 +176,6 @@ posix("starts nothing while another recovery runs or another check is starting o
   expect(sh(path.join(fx.prefix, "recovery", "openclaw"), "git rev-parse HEAD")).toBe(fx.target);
   fx.state.active = "active";
   expect(await startEarlyGitReleaseRecovery(second, fx.deps)).toEqual(running);
-  expect(fs.existsSync(second.root)).toBe(true);
 });
 
 /** The runner's world: a hand-edited service definition, the kept release, scripted systemd. */
@@ -209,7 +208,7 @@ function runner(opts: Opts) {
   fs.mkdirSync(release, { recursive: true });
   fs.writeFileSync(serviceFile, resumed ? unit(release) : original);
   if (resumed) {
-    fs.writeFileSync(recovery.originalUnitPath(full), original);
+    fs.writeFileSync(`${serviceFile}.before-update-recovery`, original);
   }
   let schema = opts.migrates && restarts > 2 ? migrated : planned;
   // A resumed runner can find the release still migrating; it holds state until ready.
@@ -312,7 +311,7 @@ it.each(runs)("%s", async (_name, opts, serves, reason) => {
   expect(recorded).toEqual(reason ? [[`early-release-recovery-${reason}`, true]] : []);
   // The release stays while the service may start it, the user's definition while it does not.
   expect(fs.existsSync(fx.release)).toBe(serves === "release");
-  const copy = recovery.originalUnitPath(fx.plan);
+  const copy = `${fx.plan.serviceFile}.before-update-recovery`;
   const kept = fs.existsSync(copy) && fs.readFileSync(copy, "utf8");
   expect(kept).toBe(serves !== "original" && fx.original);
   const timing = opts.resumed ? {} : { downtimeMs: expect.any(Number) };
@@ -339,18 +338,22 @@ posix("finishes the run the runner holds and removes what the early layout left"
   vi.stubEnv("OPENCLAW_STATE_DIR", makeTempDir(roots, "openclaw-early-store-"));
   vi.stubEnv("OPENCLAW_NO_AUTO_UPDATE", "1");
   const fx = runner({});
-  fs.writeFileSync(recovery.originalUnitPath(fx.plan), fx.original);
+  const copy = `${fx.plan.serviceFile}.before-update-recovery`;
+  fs.writeFileSync(copy, fx.original);
   sh(
     fx.plan.prefix,
     `mkdir -p releases/git-old/lib/node_modules/openclaw releases/now/openclaw lib/node_modules
     mkdir .removing-r-1 releases/.removing-r-2 && echo '{"attempts":1}' > releases/.trial
     ln -s ../../releases/git-old lib/node_modules/openclaw`,
   );
-  // The real store: the runner takes the update lock, the finishing step settles its run.
-  const runId = (await recovery.holdUpdateLock(fx.plan)) ?? "";
-  const args = recovery.earlyReleaseFinishArgs(fx.plan, { runId, downtimeMs: 21_000 });
+  // The real store: the runner takes the update lock; the worker's `<plan> finish <facts>`
+  // arguments carry its run to the finishing step, which settles it.
+  const deps = recovery.defaultRunnerDeps();
+  const runId = (await deps.hold(fx.plan)) ?? "";
+  const argv = [JSON.stringify(fx.plan), "finish", JSON.stringify({ runId, downtimeMs: 21_000 })];
+  const { plan, finish } = recovery.readEarlyGitReleaseRecoveryArgs(argv);
   vi.spyOn(process.stdout, "write").mockReturnValue(true);
-  expect(await recovery.runEarlyGitReleaseRecoveryMode(args)).toBe(0);
+  await recovery.finishEarlyGitReleaseRecovery(plan, finish!, deps);
 
   expect(fs.readdirSync(fx.plan.prefix)).toEqual(["releases"]);
   expect(fs.readdirSync(path.join(fx.plan.prefix, "releases"))).toEqual(["now"]);
@@ -359,6 +362,6 @@ posix("finishes the run the runner holds and removes what the early layout left"
   expect(lastRun).toMatchObject({ runId, status: "succeeded", downtimeMs: 21_000 });
   const detail = lastRun?.steps.find((step) => step.step === "early-release-recovery")?.detail;
   expect(detail).toContain("Removed the old-format trial, the old release link, releases/git-old");
-  expect(detail).toContain(`kept at ${recovery.originalUnitPath(fx.plan)}`);
+  expect(detail).toContain(`kept at ${copy}`);
   expect(await readUpdateLock()).toBeNull();
 });

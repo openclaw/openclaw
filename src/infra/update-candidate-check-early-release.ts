@@ -30,7 +30,7 @@ export type EarlyGitReleaseSchemaChange = {
 export type SchemaVersions = { state: number; agents: Record<string, number> };
 
 /** On-disk schema versions when this build would migrate them; null when current or unreadable. */
-export function readPendingSchemaChange(
+function readPendingSchemaChange(
   env: NodeJS.ProcessEnv = process.env,
 ): { state: number; agent: number | null } | null {
   const versions = readSchemaVersions(env);

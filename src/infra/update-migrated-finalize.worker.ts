@@ -94,8 +94,16 @@ async function finalizeMigratedUpdate(): Promise<void> {
   // This executable bypasses CLI bootstrap but owns the same one-shot database work.
   installDatabaseProcessRole("cli-oneshot");
   if (process.argv[2] === "--early-release-recovery") {
-    const { runEarlyGitReleaseRecoveryMode } = await import("./update-early-release-recovery.js");
-    process.exitCode = await runEarlyGitReleaseRecoveryMode(process.argv.slice(2));
+    const recovery = await import("./update-early-release-recovery.js");
+    const { plan, finish } = recovery.readEarlyGitReleaseRecoveryArgs(process.argv.slice(3));
+    const deps = recovery.defaultRunnerDeps();
+    if (finish) {
+      await recovery.finishEarlyGitReleaseRecovery(plan, finish, deps);
+    } else {
+      // On success the finishing step removed the release this process runs from; nothing more
+      // loads from it. A recovery that did not finish shows as failed in `systemctl --user status`.
+      process.exitCode = (await recovery.runEarlyGitReleaseRecovery(plan, deps)) ? 0 : 1;
+    }
     return;
   }
   const settlePluginCohort = process.argv[2] === "--settle-plugin-cohort";

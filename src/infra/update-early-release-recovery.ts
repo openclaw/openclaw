@@ -171,8 +171,7 @@ type RecoveryOutcome = {
 
 const REBUILD = "pnpm install --frozen-lockfile && pnpm build";
 /** The Gateway service's own definition before the recovery changed it, kept beside it. */
-export const originalUnitPath = (plan: RecoveryPlan) =>
-  `${plan.serviceFile}.before-update-recovery`;
+const originalUnitPath = (plan: RecoveryPlan) => `${plan.serviceFile}.before-update-recovery`;
 
 /**
  * The runner, started from the kept release. Every exit leaves a Gateway serving. Returns true
@@ -618,7 +617,7 @@ async function openRun(plan: RecoveryPlan): Promise<string> {
 }
 
 /** The release updater's lock, held by this runner's update run until its outcome is recorded. */
-export async function holdUpdateLock(plan: RecoveryPlan): Promise<string | null> {
+async function holdUpdateLock(plan: RecoveryPlan): Promise<string | null> {
   const [{ finishUpdateRunAsync }, store] = await Promise.all([
     import("./update-run-write.async.js"),
     import("../update/store.js"),
@@ -641,7 +640,7 @@ export async function holdUpdateLock(plan: RecoveryPlan): Promise<string | null>
 }
 
 /** The finishing step's arguments to `update-migrated-finalize.worker`. */
-export const earlyReleaseFinishArgs = (plan: RecoveryPlan, facts: FinishFacts) => [
+const earlyReleaseFinishArgs = (plan: RecoveryPlan, facts: FinishFacts) => [
   EARLY_RELEASE_RECOVERY_FLAG,
   JSON.stringify(plan),
   "finish",
@@ -649,21 +648,19 @@ export const earlyReleaseFinishArgs = (plan: RecoveryPlan, facts: FinishFacts) =
 ];
 
 /** `update-migrated-finalize.worker --early-release-recovery <plan> [finish <facts>]`. */
-export async function runEarlyGitReleaseRecoveryMode(argv: readonly string[]): Promise<number> {
+export function readEarlyGitReleaseRecoveryArgs(argv: readonly string[]) {
   // SAFETY: the plan is written by this same build (`--check` or the runner).
-  const plan = JSON.parse(argv[1] ?? "") as RecoveryPlan;
-  if (argv[2] !== "finish") {
-    // On success the finishing step removed the release this process runs from; nothing more
-    // loads from it. A recovery that did not finish shows as failed in `systemctl --user status`.
-    return (await runEarlyGitReleaseRecovery(plan)) ? 0 : 1;
+  const plan = JSON.parse(argv[0] ?? "") as RecoveryPlan;
+  if (argv[1] !== "finish") {
+    return { plan, finish: null };
   }
-  const facts = safeParseJsonRecord(argv[3] ?? "");
+  const facts = safeParseJsonRecord(argv[2] ?? "");
   const [runId, downtimeMs] = [facts?.runId, facts?.downtimeMs];
-  await finishEarlyGitReleaseRecovery(plan, {
+  const finish: FinishFacts = {
     ...(typeof runId === "string" ? { runId } : {}),
     ...(typeof downtimeMs === "number" ? { downtimeMs } : {}),
-  });
-  return 0;
+  };
+  return { plan, finish };
 }
 
 const log = (line: string) => process.stdout.write(`[openclaw update recovery] ${line}\n`);
@@ -675,7 +672,7 @@ const record = async (outcome: RecoveryOutcome) => {
   }
 };
 
-function defaultRunnerDeps(): RunnerDeps {
+export function defaultRunnerDeps(): RunnerDeps {
   return {
     run: runRecoveryCommand,
     log,
