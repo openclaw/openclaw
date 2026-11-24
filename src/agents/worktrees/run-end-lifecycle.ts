@@ -161,9 +161,7 @@ function createLifetime({ admission }: OpenClawStateWorkerContext) {
             (revision.version !== version && !ownChange) ||
             [...revision.pending].some((pending) => pending !== ownMutation)
           ) {
-            throw new Error(
-              "Managed worktree registry authority changed; prepare the operation again",
-            );
+            throw new Error("Managed worktree registry changed; prepare the operation again");
           }
         }
       };

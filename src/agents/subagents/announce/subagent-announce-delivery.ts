@@ -34,7 +34,6 @@ import { RUNTIME_EVENT_USER_PROMPT } from "../../internal-runtime-context.js";
 import { admitCorrelatedSubagentSessionDelivery } from "../completion/subagent-completion-delivery.js";
 import { getSubagentDepthFromSessionStore } from "../spawn/subagent-depth.js";
 import {
-  classifyAnnounceDeliveryError,
   resolveSubagentAnnounceTimeoutMs,
   summarizeDeliveryError,
 } from "./subagent-announce-delivery-retry.js";
@@ -44,10 +43,9 @@ import {
   withSubagentRequesterDelivery,
 } from "./subagent-announce-delivery.runtime.js";
 import { sendSubagentAnnounceDirectly } from "./subagent-announce-direct-delivery.js";
-import {
-  sourceOwnerChangedResult,
-  type SubagentAnnounceDeliveryResult,
-  type SubagentAnnounceDirectParams,
+import type {
+  SubagentAnnounceDeliveryResult,
+  SubagentAnnounceDirectParams,
 } from "./subagent-announce-dispatch.js";
 import {
   resolveCompletionDeliveryOrigins,
@@ -97,7 +95,7 @@ async function deliverSubagentAnnouncementBound(
     params.isSourceSessionEffectsAllowed?.() === false ||
     params.isSourceSessionAdmissionAllowed?.() === false;
   if (sourceOwnerChanged()) {
-    return sourceOwnerChangedResult();
+    return { delivered: false, path: "none", reason: "source_owner_changed" };
   }
   const expectedMedia = collectExpectedMediaFromInternalEvents(params.internalEvents);
   let internalEvents = params.internalEvents;
@@ -203,24 +201,16 @@ async function deliverSubagentAnnouncementBound(
         }));
       }
     } catch (error) {
-      if (error instanceof SessionDeliveryDeadLetteredError) {
-        return {
-          delivered: false,
-          path: "queued",
-          reason: "completion_handoff_unavailable",
-          error: error.message,
-          disposition: "permanent_failure",
-        };
+      if (!(error instanceof SessionDeliveryDeadLetteredError)) {
+        defaultRuntime.log(
+          `[warn] Generated media session handoff could not be persisted; refusing ambiguous fallback: ${summarizeDeliveryError(error)}`,
+        );
       }
-      defaultRuntime.log(
-        `[warn] Generated media session handoff could not be persisted; refusing ambiguous fallback: ${summarizeDeliveryError(error)}`,
-      );
       return {
         delivered: false,
-        path: "queued",
+        path: "none",
         reason: "completion_handoff_unavailable",
-        error: "generated media session handoff could not be persisted",
-        disposition: "retryable",
+        error: summarizeDeliveryError(error),
       };
     }
   }
@@ -240,7 +230,7 @@ async function deliverSubagentAnnouncementBound(
         `[warn] Generated media session handoff retry scheduling failed; durable recovery remains pending: ${summarizeDeliveryError(error)}`,
       );
     });
-    return { delivered: false, path: "queued", disposition: "session_queued" };
+    return { delivered: false, path: "queued" };
   }
 
   const runtimeContextFragments = buildAgentInternalEventContext(internalEvents);
@@ -293,14 +283,10 @@ async function deliverSubagentAnnouncementBound(
       });
   }
   if (sourceOwnerChanged()) {
-    return sourceOwnerChangedResult();
+    return { delivered: false, path: "none", reason: "source_owner_changed" };
   }
   if (params.signal?.aborted) {
-    return classifyAnnounceDeliveryError(params.signal.reason, {
-      path: "none",
-      interruption: "requester_aborted",
-      replaySafe: true,
-    });
+    return { delivered: false, path: "none", error: summarizeDeliveryError(params.signal.reason) };
   }
   let directError: unknown;
   const delivery = await sendSubagentAnnounceDirectly({

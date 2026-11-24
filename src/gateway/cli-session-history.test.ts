@@ -424,7 +424,10 @@ describe("cli session history", () => {
     expect(messages.map(readRecord).map(({ role, content }) => ({ role, content }))).toEqual([
       { role: "user", content: "current recovered ask" },
       { role: "user", content: "summary" },
-      { role: "user", content: [{ type: "tool_result", tool_use_id: "tool-1", content: "done" }] },
+      {
+        role: "user",
+        content: [{ type: "tool_result", tool_use_id: "tool-1", content: "done", is_error: false }],
+      },
       { role: "assistant", content: "response" },
       { role: "user", content: syntheticPrompt },
     ]);

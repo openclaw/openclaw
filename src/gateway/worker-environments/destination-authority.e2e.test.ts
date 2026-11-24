@@ -24,7 +24,6 @@ import {
   NODE_WORKER_ENVIRONMENT_STOP_COMMAND,
   NODE_WORKER_WORKSPACE_EXEC_COMMAND,
 } from "../../infra/node-commands.js";
-import * as operationAdmission from "../../infra/sqlite-worker-operation-admission.js";
 import { NodeWorkerWorkspaceRuntime } from "../../node-host/node-worker-workspace.js";
 import type { WorkerProvider } from "../../plugins/types.js";
 import * as projectClones from "../../projects/project-clone.js";
@@ -68,35 +67,6 @@ async function expectAcceptedFile(root: string) {
   expect(await fs.readFile(path.join(root, "result.txt"), "utf8")).toBe("accepted\n");
 }
 
-function trapPolicyAdmission(activate: () => void, mode: string) {
-  const original = operationAdmission.createSqliteWorkerOperationAdmission;
-  const spy = vi.spyOn(operationAdmission, "createSqliteWorkerOperationAdmission");
-  const stage = mode.endsWith("-transaction")
-    ? "transaction"
-    : mode.endsWith("-commit")
-      ? "commit"
-      : undefined;
-  let activated = false;
-  return {
-    arm() {
-      if (!stage) {
-        return;
-      }
-      spy.mockImplementationOnce((admit, attachment) =>
-        original((request, grant) => {
-          if (request.stage === stage) {
-            activate();
-            activated = true;
-          }
-          admit(request, grant);
-        }, attachment),
-      );
-    },
-    wasActivated: () => activated,
-    restore: () => spy.mockRestore(),
-  };
-}
-
 const authorityCases = [
   {
     contract: "destination preparation",
@@ -108,7 +78,7 @@ const authorityCases = [
   },
   {
     contract: "failed-placement recovery",
-    modes: ["failed-allowed", "failed-policy-transaction", "failed-policy-commit"],
+    modes: ["failed"],
   },
 ] as const;
 it.for(authorityCases)("enforces $contract", async ({ modes }, { signal }) => {
@@ -275,7 +245,7 @@ process.stdin.pipe(child.stdin);
               });
               let config: OpenClawConfig = {
                 agents: {
-                  defaults: { workspace: source },
+                  defaults: { workspace: source, model: { primary: "test-provider/test-model" } },
                   entries: { main: { workspace: source } },
                 },
                 cloudWorkers: {
@@ -460,7 +430,7 @@ process.stdin.pipe(child.stdin);
                 );
                 await expectAcceptedFile(active.remoteWorkspaceDir);
                 publishConfig();
-                if (mode.startsWith("failed-")) {
+                if (mode === "failed") {
                   const draining = await placements.startDrain(placementTransition(active));
                   await environments.destroy(active.environmentId);
                   const reconciling = await placements.startReconcile({
@@ -472,55 +442,35 @@ process.stdin.pipe(child.stdin);
                     expectedGeneration: reconciling.generation,
                     recoveryError: "Production proof worker disappeared",
                   });
-                  const admission = trapPolicyAdmission(() => publishConfig("development"), mode);
-                  const transition = placements.transition.bind(placements);
-                  const observation = vi
-                    .spyOn(placements, "transition")
-                    .mockImplementation((...args) => {
-                      if (
-                        args[0].sessionId === identity.sessionId &&
-                        args[0].from === "failed" &&
-                        args[0].to === "local"
-                      ) {
-                        admission.arm();
-                      }
-                      return transition(...args);
-                    });
-                  let refused = false;
-                  try {
-                    await runtime.dispatchService.reclaim({
-                      ...identity,
-                      recoverToGateway: { expectedGeneration: failed.generation },
-                    });
-                  } catch (error) {
-                    expect(String(error)).toContain("required worker profile policy");
-                    refused = true;
-                  } finally {
-                    observation.mockRestore();
-                    admission.restore();
-                  }
-                  expect(admission.wasActivated()).toBe(mode !== "failed-allowed");
-                  const placement = readPlacement();
-                  expect({ refused, state: placement?.state }).toEqual(
-                    mode === "failed-allowed"
-                      ? { refused: false, state: "local" }
-                      : { refused: true, state: "failed" },
+                  const recovery = {
+                    ...identity,
+                    recoverToGateway: { expectedGeneration: failed.generation },
+                  };
+                  publishConfig("development");
+                  await expect(runtime.dispatchService.reclaim(recovery)).rejects.toThrow(
+                    "required worker profile policy",
                   );
+                  expect(readPlacement()).toMatchObject({
+                    state: "failed",
+                    generation: failed.generation,
+                  });
+                  await expect(readWorktree()).resolves.toBeUndefined();
+                  await expect(
+                    placements.claimTurn({
+                      ...identity,
+                      owner: { kind: "local" },
+                      claimId: "failed-local-turn",
+                      runId: "failed-local-run",
+                    }),
+                  ).rejects.toThrow();
+
+                  publishConfig();
+                  await runtime.dispatchService.reclaim(recovery);
+                  expect(readPlacement()?.state).toBe("local");
                   await expectWorktree(false);
                   expect(await repositories.get(repository.workspaceId)).toMatchObject({
                     manifestHash: current.manifestRef,
                   });
-                  if (refused) {
-                    expect(placement?.generation).toBe(failed.generation);
-                    await expect(
-                      placements.claimTurn({
-                        ...identity,
-                        owner: { kind: "local" },
-                        claimId: `failed-${mode}`,
-                        runId: `failed-${mode}`,
-                      }),
-                    ).rejects.toThrow();
-                  }
                   expect(environments.get(active.environmentId)?.state).toBe("destroyed");
                   continue;
                 }

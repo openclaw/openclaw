@@ -4,6 +4,10 @@ run-name: "plugin-clawhub-release.yml [${{ inputs.release_tag || inputs.ref }}] 
 on:
   workflow_dispatch:
     inputs:
+      fast_track_approval:
+        description: Exact human-approved fast-track request and decision JSON; never an agent approval
+        required: false
+        type: string
       publish_scope:
         description: Publish the selected plugins or all ClawHub-publishable plugins from the workflow ref
         required: true
@@ -76,6 +80,7 @@ concurrency:
   cancel-in-progress: false
 
 env:
+  FAST_TRACK_APPROVAL_JSON: ${{ inputs.fast_track_approval }}
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
   NODE_VERSION: "24.22.1"
   CLAWHUB_REGISTRY: "https://clawhub.ai"

@@ -14,10 +14,6 @@ import {
 import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import {
-  captureGatewayDeviceRevocation,
-  invalidateGatewayDeviceRevocation,
-} from "../device-revocation.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { dispatchGatewayRequestInProcessRaw } from "../server-in-process-dispatch.js";
 import type { handleProviderReviewContinuationChat } from "./chat-send-handler.js";
@@ -34,8 +30,8 @@ vi.mock("./chat-send-handler.js", () => ({
 
 afterEach(() => vi.restoreAllMocks());
 
-it.each(["allowed", "read-only", "foreign-owner", "non-ui", "revoked-at-commit"] as const)(
-  "native provider-review continuation preserves final-effect authority: %s",
+it.each(["allowed", "read-only", "foreign-owner", "non-ui"] as const)(
+  "native provider-review continuation preserves admission authority: %s",
   async (scenario) => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       runtime.handoff.mockReset();
@@ -85,11 +81,6 @@ it.each(["allowed", "read-only", "foreign-owner", "non-ui", "revoked-at-commit"]
         version: "test",
       };
       client.internal = { authenticatedOperator: true };
-      const caller = captureGatewayDeviceRevocation(
-        context,
-        { deviceId: "review-device", role: "operator" },
-        () => true,
-      );
       let commitReached = false;
       runtime.handoff.mockImplementation(async (options, acknowledgment) => {
         const normalized = await normalizeChatSendRequest({
@@ -112,9 +103,6 @@ it.each(["allowed", "read-only", "foreign-owner", "non-ui", "revoked-at-commit"]
         const probe = sqliteWorkerOwnerProbe.admission(admission, (request, grant, admit) => {
           if (request.stage === "commit") {
             commitReached = true;
-            if (scenario === "revoked-at-commit") {
-              invalidateGatewayDeviceRevocation(context, "review-device", "operator");
-            }
           }
           return admit(request, grant);
         });
@@ -130,40 +118,31 @@ it.each(["allowed", "read-only", "foreign-owner", "non-ui", "revoked-at-commit"]
           retireProviderReviewAcknowledgment(acknowledgment);
         }
       });
-      try {
-        const response = await dispatchGatewayRequestInProcessRaw(
-          "sessions.providerReview.continue",
-          {
-            agentId: target.agentId,
-            sessionKey: target.sessionKey,
-            sessionId: target.sessionId,
-            reviewId: review.id,
-            idempotencyKey: "continued-run",
-          },
-          { client, context, hasCurrentClientAuthority: caller.isCurrent },
-        );
-        const after = loadSessionEntry(target);
-        if (scenario === "allowed") {
-          expect(response.ok).toBe(true);
-          expect(commitReached).toBe(true);
-          expect(after?.providerReview).toBeUndefined();
-          expect(after).toMatchObject({
-            sessionId: target.sessionId,
-            lifecycleRevision: target.lifecycleRevision,
-            createdActor: before?.createdActor,
-          });
-        } else {
-          expect(response.ok).toBe(false);
-          expect(after).toEqual(before);
-          if (scenario === "revoked-at-commit") {
-            expect(commitReached).toBe(true);
-            expect(caller.isCurrent()).toBe(false);
-          } else {
-            expect(runtime.handoff).not.toHaveBeenCalled();
-          }
-        }
-      } finally {
-        caller.release();
+      const response = await dispatchGatewayRequestInProcessRaw(
+        "sessions.providerReview.continue",
+        {
+          agentId: target.agentId,
+          sessionKey: target.sessionKey,
+          sessionId: target.sessionId,
+          reviewId: review.id,
+          idempotencyKey: "continued-run",
+        },
+        { client, context },
+      );
+      const after = loadSessionEntry(target);
+      if (scenario === "allowed") {
+        expect(response.ok).toBe(true);
+        expect(commitReached).toBe(true);
+        expect(after?.providerReview).toBeUndefined();
+        expect(after).toMatchObject({
+          sessionId: target.sessionId,
+          lifecycleRevision: target.lifecycleRevision,
+          createdActor: before?.createdActor,
+        });
+      } else {
+        expect(response.ok).toBe(false);
+        expect(after).toEqual(before);
+        expect(runtime.handoff).not.toHaveBeenCalled();
       }
     });
   },

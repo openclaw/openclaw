@@ -62,7 +62,6 @@ export function registerReplyPromotionTests() {
           scopes: ["operator.read", "operator.write"],
           gatewayAccessGrant: null,
           modelPolicy: prepareOperatorModelPolicy({ cfg: config, policy: {} }),
-          assertCurrent() {},
         });
       const admission = prepareAgentRunAdmission({
         cfg: {},

@@ -7,13 +7,15 @@
 }
 
 .cmd-palette__attachments {
-  --chat-composer-editor-inset-inline: 14px;
-  --chat-attachment-inset-block: 6px;
-  --chat-attachment-hit-slop: 12px;
+  --chat-composer-editor-inset-inline: var(--cmd-palette-inset);
   --chat-box-inset: 8px;
   flex: 0 0 auto;
   min-width: 0;
-  margin: 8px 8px 0;
+}
+
+/* The preview strip already leaves room below the files. */
+.cmd-palette__attachments + .cmd-palette__entry {
+  padding-block-start: 0;
 }
 
 .cmd-palette__search {

@@ -65,7 +65,6 @@ async function prepareCreation(request: GatewayRequestHandlerOptions) {
   const assertCurrent = () => {
     try {
       authority.assertCurrent();
-      operator?.assertCurrent();
       request.sessionMutationAuthorization?.assertCurrent();
     } catch {
       // The added preflight must keep creation's public authorization envelope,

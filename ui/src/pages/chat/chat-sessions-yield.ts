@@ -2,6 +2,7 @@ import { extractBalancedJsonPrefix } from "@openclaw/normalization-core";
 import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { readNodePermissionRequest } from "../../../../packages/gateway-protocol/src/node-permissions.js";
+import { readMcpConnectAction } from "../../../../src/agents/mcp-connect-action.js";
 import {
   isToolCallContentType,
   isToolResultContentType,
@@ -382,6 +383,13 @@ function scanSessionsYieldItems(
   return { items: projected.toReversed().flat(), pending };
 }
 
+export function toolCardNeedsUserAction(card: ToolCard): boolean {
+  return Boolean(
+    readNodePermissionRequest(asRecord(card.details)?.permissionMissing) ||
+    readMcpConnectAction(card),
+  );
+}
+
 /**
  * Keeps private yield calls out of tool details and separates a resumed run from the
  * run that handed off. A public acknowledgment becomes assistant text that stays
@@ -393,7 +401,7 @@ function scanSessionsYieldItems(
  * so working and waiting statuses are taken from there, not from the matching rows.
  */
 // Hidden tool calls keep assistant text, whose ordinary calls coalescing split
-// into their own rows. Only handoff and permission rows stay visible.
+// into their own rows. Handoffs and actionable results still feed the transcript.
 function keepsRowWithToolsHidden(item: ChatItem): boolean {
   if (item.kind !== "message") {
     return true;
@@ -417,7 +425,7 @@ function keepsRowWithToolsHidden(item: ChatItem): boolean {
     hasHandoffToolCall(item.message) ||
     // A resumed run's first row keeps its Resumed rule; its hidden tools render nothing.
     readProjectedContinuation(item.message) !== undefined ||
-    cards.some((card) => readNodePermissionRequest(asRecord(card.details)?.permissionMissing))
+    cards.some(toolCardNeedsUserAction)
   );
 }
 

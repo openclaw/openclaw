@@ -6,10 +6,6 @@ import {
   unwrapToolResultTextForDisplay,
 } from "../../../../../src/agents/tool-display-call.js";
 import { groupToolCalls } from "../../../../../src/chat/tool-call-grouping.js";
-import {
-  isToolCallContentType,
-  isToolResultContentType,
-} from "../../../../../src/chat/tool-content.js";
 import { readCollectionErrorCount } from "../../../../../src/shared/subagent-completion.js";
 import type { MessageGroup as MessageGroupData, ToolCard } from "../../../lib/chat/chat-types.ts";
 import {
@@ -17,10 +13,6 @@ import {
   normalizeMessage,
 } from "../../../lib/chat/message-normalizer.ts";
 import { resolveMessageVisibleContent } from "../../../lib/chat/message-visibility.ts";
-import {
-  readToolApprovalReviews,
-  readToolApprovalReviewOutcome,
-} from "../../../lib/chat/tool-approval-reviews.ts";
 import { readPreparedActivity } from "../../../lib/chat/tool-call-grouping.ts";
 import { extractToolCardsCached, resolveToolCardOutcome } from "../../../lib/chat/tool-cards.ts";
 import {
@@ -47,7 +39,6 @@ import {
   resolveFileLinkOwnerOptions,
   type NativeMessageGroupOptions,
 } from "./chat-message-group-options.ts";
-import { projectMessageMedia } from "./chat-message-media-projection.ts";
 
 function activityEntryGroupKey(
   group: MessageGroupData,
@@ -270,7 +261,6 @@ export function segmentActivityGroup<State extends ActivityStructure>(
     runId?: string;
     entries: ActivityEntry[];
     context: typeof context;
-    imageInspection?: boolean;
   }> = [];
   const append = (item: ActivityEntry, standalone: boolean, inline: boolean, key: string) => {
     const operation =
@@ -289,39 +279,18 @@ export function segmentActivityGroup<State extends ActivityStructure>(
           ? ("stop" as const)
           : undefined;
     const previous = result.at(-1);
-    const source = item.message?.group.messages[0]?.message;
-    const content = source ? normalizeMessage(source).content : undefined;
-    const media =
-      source &&
-      operation &&
-      !permission &&
-      operation.children.length === 0 &&
-      unwrapToolCallForDisplay(operation.card).name === "view_image" &&
-      outcome === "succeeded" &&
-      !readToolApprovalReviews(operation.card.details).length &&
-      !readToolApprovalReviewOutcome(operation.card.details) &&
-      content?.every(
-        (block) =>
-          block.type === "text" ||
-          block.type === "image" ||
-          isToolCallContentType(block.type) ||
-          isToolResultContentType(block.type),
-      )
-        ? projectMessageMedia(source, content)
-        : undefined;
-    const imageInspection = Boolean(media?.images.length && media.attachments.length === 0);
     const coalescible =
-      outcome === "running" ||
-      launch?.phase === "succeeded" ||
-      Boolean(operation && readSubagentCancellation(operation.card)?.stopped) ||
-      imageInspection;
+      (launch
+        ? launch.phase === "running" || launch.phase === "succeeded"
+        : outcome === "running") ||
+      Boolean(operation && readSubagentCancellation(operation.card)?.stopped);
     const action = operation && state.actionOrder.get(operation.card);
     const runId = operation && state.toolContexts.get(operation.card)?.runId;
     if (
-      (lifecycle || imageInspection) &&
+      lifecycle &&
       coalescible &&
       previous?.coalescible &&
-      (imageInspection ? previous.imageInspection : previous.lifecycle === lifecycle) &&
+      previous.lifecycle === lifecycle &&
       action !== undefined &&
       previous.lastAction === action - 1 &&
       previous.runId === runId
@@ -340,7 +309,6 @@ export function segmentActivityGroup<State extends ActivityStructure>(
         inline,
         lifecycle,
         coalescible,
-        imageInspection,
         lastAction: action,
         runId,
         entries: [item],
@@ -417,7 +385,7 @@ export function segmentActivityGroup<State extends ActivityStructure>(
       )) {
         append(
           { key: context.state.activityKeys.get(activity)!, activity },
-          isStandaloneActivity({ id: activity.itemId, name: activity.name ?? "" }),
+          isStandaloneActivity({ id: activity.itemId, name: activity.name ?? "", activity }),
           false,
           `${entry.key}:activity`,
         );

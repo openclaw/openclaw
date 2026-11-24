@@ -3,6 +3,7 @@ import { once } from "node:events";
 import { PassThrough } from "node:stream";
 import type {
   CliBackendExecuteContext,
+  CliBackendInputImage,
   CliBackendLiveSessionCapability,
   CliBackendLiveSessionHandle,
   CliBackendToolPermissionResult,
@@ -226,10 +227,24 @@ function createUserInput(
   text: string,
   uuid: string,
   hostGenerated = false,
+  images: readonly CliBackendInputImage[] = [],
 ) {
   return {
     type: "user",
-    message: { role: "user", content: text },
+    // Same-turn images go to the model as native content blocks; the first prompt uses @paths.
+    message: {
+      role: "user",
+      content: images.length
+        ? [
+            // Anthropic rejects empty text blocks; an image-only input sends just the images.
+            ...(text ? [{ type: "text", text }] : []),
+            ...images.map(({ data, mimeType }) => ({
+              type: "image",
+              source: { type: "base64", media_type: mimeType, data },
+            })),
+          ]
+        : text,
+    },
     parent_tool_use_id: null,
     uuid,
     // Claude saves synthetic input as a meta row: the model reads it, history never shows it.
@@ -253,7 +268,9 @@ async function injectInput(
   turn: ClaudeCliTurn,
   text: string,
   withCurrent: (submit: () => void) => Promise<void>,
-  options?: Pick<CliBackendExecuteContext, "promptOrigin" | "promptContext">,
+  options?: Pick<CliBackendExecuteContext, "promptOrigin" | "promptContext"> & {
+    images?: readonly CliBackendInputImage[];
+  },
 ) {
   const uuid = randomUUID();
   const started = createDeferred<void>();
@@ -268,7 +285,7 @@ async function injectInput(
     turn.injectedInputs.set(uuid, { text, started, promptContext: options?.promptContext });
     turn.submittedInputUuids.add(uuid);
     written = session.transport.send(
-      createUserInput(turn.context, text, uuid, options?.promptOrigin === "host"),
+      createUserInput(turn.context, text, uuid, options?.promptOrigin === "host", options?.images),
     );
     // Host admission cleanup may await after the synchronous write.
     void written.catch(() => {});
@@ -283,9 +300,8 @@ async function injectInput(
     throw error;
   }
   await started.promise;
-  return session.nativeSessionId
-    ? { cliSessionId: session.nativeSessionId, externalId: uuid }
-    : undefined;
+  const { nativeSessionId: cliSessionId } = session;
+  return cliSessionId ? { cliSessionId, externalId: uuid } : undefined;
 }
 
 function closeSession(session: ClaudeCliSession, error?: unknown) {
@@ -729,6 +745,7 @@ export async function* executeClaudeCli(
       await transport.send(createUserInput(context, context.prompt, turn.inputUuid, hostGenerated));
       context.registerMessageInjection?.({
         isAvailable: () => canInjectInput(session, turn),
+        acceptsImages: true,
         queueMessage: (text, withCurrent, options) =>
           injectInput(session, turn, text, withCurrent, options),
       });

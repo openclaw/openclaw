@@ -5,6 +5,21 @@ import { fileURLToPath } from "node:url";
 import { CLI_PARENT_BOUND_PRELOAD, CLI_RESPAWN_PARENT_ENV } from "./cli-parent-lifetime.mjs";
 import { hasNodeStartupHooks } from "./node-runtime-env.mjs";
 
+// The raw CLI loads this before dotenv; bundled copies must reuse that capture.
+const windowsNativeRedirectStartupKey = Symbol.for("openclaw.windowsNativeRedirectStartup");
+const windowsNativeRedirectStartup =
+  process.platform === "win32" && !process.versions.bun
+    ? (globalThis[windowsNativeRedirectStartupKey] ??= Object.freeze({
+        execArgv: Object.freeze([...process.execArgv]),
+        appRoot: process.env.OPENCLAW_NATIVE_APP_ROOT,
+        stagedRoot: process.env.OPENCLAW_NATIVE_STAGED_ROOT,
+      }))
+    : undefined;
+
+export function getWindowsNativeRedirectStartup() {
+  return windowsNativeRedirectStartup;
+}
+
 /** Packaging owns hashes; launch planning consumes only the artifact identity. */
 export function readStandaloneRuntimeManifest(executable = process.execPath) {
   return readStandaloneManifest({ executable });

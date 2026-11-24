@@ -3,12 +3,17 @@ import type { OpenClawPluginServiceV2 } from "openclaw/plugin-sdk/plugin-entry";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import { preparePluginStateGuard } from "openclaw/plugin-sdk/plugin-state-runtime";
 import type {
+  BeamPublicationOperations,
+  BeamPublishInput,
+  BeamReleaseInput,
+} from "../publication-operation-api.js";
+import type {
   BeamPublisher,
   BeamUploadOperations,
   BeamUploadResult,
 } from "../upload-operation-api.js";
 import type { BeamStoredSession, BeamUpload, BeamHandoff } from "./types.js";
-import { BEAM_MAX_SESSIONS, BEAM_RETENTION_MS } from "./types.js";
+import { BEAM_MAX_SESSIONS, BEAM_MAX_WRITE_RECEIPTS, BEAM_RETENTION_MS } from "./types.js";
 
 type BeamSessionSummary = Readonly<
   Pick<
@@ -61,7 +66,19 @@ export type BeamStore = {
   list: (handoffPrefix?: string) => Promise<BeamSessionSummary[]>;
 };
 
-export function createBeamStore(runtime: PluginRuntime): BeamStore {
+export type BeamPublication = { snapshot?: BeamStoredSession; ownership?: BeamHandoff };
+
+export function createBeamStore(runtime: PluginRuntime): BeamStore & {
+  readPublication: (beamId: string) => Promise<BeamPublication>;
+  releasePublication: (
+    input: BeamReleaseInput,
+    assertCurrent: () => void,
+  ) => Promise<BeamPublicationOperations["release"]["output"]>;
+  putSnapshot: (
+    input: BeamPublishInput,
+    assertCurrent: () => void,
+  ) => Promise<BeamPublicationOperations["publish"]["output"]>;
+} {
   const store = runtime.state.openKeyedStoreV2<BeamStoredSession>({
     namespace: "sessions",
     maxEntries: BEAM_MAX_SESSIONS,
@@ -73,6 +90,12 @@ export function createBeamStore(runtime: PluginRuntime): BeamStore {
   const handoffs = runtime.state.openKeyedStoreV2<BeamHandoff>({
     namespace: "handoffs",
     retention: "retained",
+  });
+  const writes = runtime.state.openKeyedStoreV2({
+    namespace: "publication-requests",
+    maxEntries: BEAM_MAX_WRITE_RECEIPTS,
+    overflowPolicy: "reject-new",
+    defaultTtlMs: BEAM_RETENTION_MS,
   });
   let inventory: Array<{ value: BeamSessionSummary; expiresAt?: number }> | undefined;
   let refreshing: Promise<void> | undefined;
@@ -153,6 +176,62 @@ export function createBeamStore(runtime: PluginRuntime): BeamStore {
         // Also invalidate uncertain writes; never retry a failed operation.
         invalidate();
       }
+    },
+    async putSnapshot(input, assertCurrent) {
+      if (!store.createOperation) {
+        throw new Error("Beam requires worker-owned plugin state operations");
+      }
+      const operation = store.createOperation<BeamPublicationOperations>(
+        [store, handoffs, writes],
+        {
+          moduleName: "publication-operation-api.js",
+          exportName: "executeBeamPublication",
+        },
+        { assertCurrent },
+      );
+      try {
+        return (
+          await operation.execute(
+            { type: "publish", input },
+            { writeStores: [0, 2], watchStores: [1] },
+          )
+        ).value;
+      } catch (error) {
+        if (
+          error instanceof Error &&
+          "code" in error &&
+          error.code === "PLUGIN_STATE_LIMIT_EXCEEDED"
+        ) {
+          return "rate_limited";
+        }
+        throw error;
+      } finally {
+        invalidate();
+      }
+    },
+    async releasePublication(input, assertCurrent) {
+      if (!store.createOperation) {
+        throw new Error("Beam requires worker-owned plugin state operations");
+      }
+      const operation = store.createOperation<BeamPublicationOperations>(
+        [store, handoffs],
+        {
+          moduleName: "publication-operation-api.js",
+          exportName: "executeBeamPublication",
+        },
+        { assertCurrent },
+      );
+      try {
+        return (await operation.execute({ type: "release", input }, { writeStores: [0, 1] })).value;
+      } finally {
+        invalidate();
+      }
+    },
+    async readPublication(beamId) {
+      const snapshot = await store.lookup(beamId);
+      // Release outlives transcript retention. A direct publication link can distinguish
+      // expiry for an authorized caller without making expired history readable.
+      return snapshot ? { snapshot } : { ownership: await handoffs.lookup(beamId) };
     },
     async get(beamId) {
       const snapshot = await store.lookup(beamId);
