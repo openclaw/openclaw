@@ -139,6 +139,23 @@ describe("anthropic provider replay hooks", () => {
     ).toBeUndefined();
   });
 
+  it("treats only the exact exhausted-credit detail as billing", async () => {
+    const provider = await registerSingleProviderPlugin(anthropicPlugin);
+    const classify = (errorMessage: string) =>
+      provider.classifyFailoverReason?.({
+        provider: "anthropic",
+        status: 429,
+        errorType: "rate_limit_error",
+        errorMessage,
+      });
+
+    expect(classify('429 {"error":{"details":{"error_code":"credits_required"}}}')).toBe("billing");
+    expect(classify('429 {"error":{"details":{"error_code":"credits_required_extra"}}}')).toBe(
+      "rate_limit",
+    );
+    expect(classify("The response mentions credits_required")).toBe("rate_limit");
+  });
+
   it.each([["Claude CLI provider", "claude-cli"]])(
     "defaults %s api through plugin config normalization",
     async (_label, providerId) => {
