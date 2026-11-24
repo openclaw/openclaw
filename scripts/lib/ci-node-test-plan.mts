@@ -88,14 +88,14 @@ import {
   type NodeTestVolume,
 } from "./ci-node-test-inventory.mts";
 import { resolvePolicyTestTargets } from "./ci-policy-test-watch.mts";
+import { rebalanceRuntimeTestJobs } from "./ci-runtime-test-placement.mts";
+import { resolveCiTestRuntimeInventory, type CiTestRuntimePolicy } from "./ci-test-runtime.mts";
 import {
   isCiProofTestFile,
   isPrExemptRuntimeTestFile,
   isReleaseOnlyRuntimeTestFile,
   RELEASE_ONLY_UI_TEST_FILES,
-} from "./ci-proof-test-inventory.mts";
-import { rebalanceRuntimeTestJobs } from "./ci-runtime-test-placement.mts";
-import { resolveCiTestRuntimeInventory, type CiTestRuntimePolicy } from "./ci-test-runtime.mts";
+} from "./ci-test-tier-policy.mts";
 import {
   NATIVE_SOLO_TIMING_PROFILE,
   createNativeSoloTimingKey,
