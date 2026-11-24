@@ -1210,6 +1210,18 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
         details: ["SHELLOPTS", "PS4"],
       },
       {
+        label: "blocked env -S payload assignment",
+        command: ["/usr/bin/env", "-SBASH_ENV=/tmp/evil-startup", "bash", "-c", "echo ok"],
+        message: "SYSTEM_RUN_DENIED: command env assignment rejected",
+        details: ["BASH_ENV"],
+      },
+      {
+        label: "blocked env --split-string payload assignment",
+        command: ["/usr/bin/env", "--split-string=ENV=/tmp/evil-startup sh", "-c", "echo ok"],
+        message: "SYSTEM_RUN_DENIED: command env assignment rejected",
+        details: ["ENV"],
+      },
+      {
         label: "invalid override key",
         env: { "BAD-KEY": "x" },
         message: "SYSTEM_RUN_DENIED: environment override rejected",
