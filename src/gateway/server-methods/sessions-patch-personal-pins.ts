@@ -6,7 +6,6 @@ import {
 } from "../../../packages/gateway-protocol/src/index.js";
 import {
   DEFAULT_RAIL_SHORTCUTS,
-  parseSidebarSessionReference,
   setPersonalSessionPins,
   UI_RAIL_SHORTCUTS_PREFERENCE_KEY as preferenceKey,
 } from "../../../packages/gateway-protocol/src/schema/ui-navigation-preferences.js";
@@ -18,7 +17,6 @@ import {
   setCanonicalUserPreferences,
 } from "../../state/user-preferences.js";
 import { SessionMutationAuthorizationChangedError } from "../session-mutation-authorization-error.js";
-import { usesLegacySessionPins } from "../session-pin-compatibility.js";
 import { resolvePluginSessionOwnershipError } from "../session-plugin-ownership.js";
 import type { SessionSharingTarget } from "../session-sharing-policy.js";
 import {
@@ -39,7 +37,6 @@ const pinFields = new Set([
   "key",
   "agentId",
   "pinned",
-  "pinPlacement",
   "expectedSessionId",
   "expectedLifecycleRevision",
   "expectedSidebarRoot",
@@ -56,19 +53,6 @@ export async function patchPersonalSessionPins(
   many: boolean,
 ) {
   const { respond, context } = options;
-  if (
-    patch.pinPlacement &&
-    (many ||
-      patch.pinned !== true ||
-      !patch.expectedSessionId ||
-      usesLegacySessionPins(options.client))
-  ) {
-    return respond(
-      false,
-      undefined,
-      reject("Pin placement requires a personal pinned:true patch with expectedSessionId."),
-    );
-  }
   const owner = sessionPinRequester(options);
   if (!owner) {
     return respond(
@@ -87,7 +71,10 @@ export async function patchPersonalSessionPins(
   const profiles = await prepareSessionSharingProfiles(options.client);
   const pinned = patch.pinned === true;
   const errors = new Map<number, ErrorShape>();
-  const accepted = new Map<string, { target: SessionSharingTarget; assertCurrent: () => void }>();
+  const accepted = new Map<
+    string,
+    { index: number; target: SessionSharingTarget; assertCurrent: () => void }
+  >();
   const releases: Array<() => void> = [];
   try {
     for (const [index, input] of targets.entries()) {
@@ -241,6 +228,7 @@ export async function patchPersonalSessionPins(
         return respond(false, undefined, reject("Duplicate target."));
       }
       accepted.set(initial.canonicalKey, {
+        index,
         target: initial,
         assertCurrent: () => {
           if (check(current())) {
@@ -252,15 +240,24 @@ export async function patchPersonalSessionPins(
     }
     if (accepted.size) {
       profiles.admit();
-      const assertCurrent = () => {
+      const recheck = () => {
         owner.assertCurrent();
         profiles.readCurrent();
-        for (const item of accepted.values()) {
-          item.assertCurrent();
+        let stale: SessionMutationAuthorizationChangedError | undefined;
+        for (const [key, item] of accepted) {
+          try {
+            item.assertCurrent();
+          } catch (error) {
+            if (!many || !(error instanceof SessionMutationAuthorizationChangedError)) throw error;
+            errors.set(item.index, error.error);
+            accepted.delete(key);
+            stale = error;
+          }
         }
+        return stale;
       };
       const prefs = await getCanonicalUserPreferences(owner.profileId, [preferenceKey]);
-      assertCurrent();
+      recheck();
       if (!prefs || prefs.profileId !== owner.profileId) {
         return respond(
           false,
@@ -277,33 +274,32 @@ export async function patchPersonalSessionPins(
         );
       }
       const entries: unknown[] = raw ?? DEFAULT_RAIL_SHORTCUTS;
-      const next = setPersonalSessionPins(entries, [...accepted.keys()], pinned);
-      if (patch.pinPlacement) {
-        const { relativeTo, side } = patch.pinPlacement;
-        // Only a session: entry is a named destination. A rail-only shortcut cannot stand in for it.
-        const anchor = entries.findIndex(
-          (entry) =>
-            typeof entry === "string" &&
-            entry.startsWith("session:") &&
-            parseSidebarSessionReference(entry) === relativeTo,
-        );
-        if (anchor < 0 || next.length === entries.length) {
-          return respond(
-            false,
-            undefined,
-            reject("Pin placement changed. Refresh the list and retry."),
+      while (accepted.size) {
+        const next = setPersonalSessionPins(entries, [...accepted.keys()], pinned);
+        if (next.length === entries.length) break;
+        let refused: SessionMutationAuthorizationChangedError | undefined;
+        let result: Awaited<ReturnType<typeof setCanonicalUserPreferences>>;
+        try {
+          result = await setCanonicalUserPreferences(
+            owner.profileId,
+            { [preferenceKey]: next },
+            {
+              expectedEntries: { [preferenceKey]: raw ?? null },
+              assertCurrent: () => {
+                const stale = recheck();
+                if (stale) {
+                  refused = stale;
+                  throw stale;
+                }
+              },
+            },
           );
+        } catch (error) {
+          // Only our own pre-write refusal permits a smaller batch with the original CAS.
+          // Never replay an uncertain write, preference conflict, or requester-wide refusal.
+          if (!refused || error !== refused) throw error;
+          continue;
         }
-        // A guarded placement is single-target and inserts only an initially unpinned row.
-        const added = next.pop();
-        next.splice(anchor + (side === "after" ? 1 : 0), 0, added);
-      }
-      if (next.length !== entries.length) {
-        const result = await setCanonicalUserPreferences(
-          owner.profileId,
-          { [preferenceKey]: next },
-          { expectedEntries: { [preferenceKey]: raw ?? null }, assertCurrent },
-        );
         if (!result?.ok) {
           if (result?.error.code === "value-too-large") {
             return respond(
@@ -325,6 +321,7 @@ export async function patchPersonalSessionPins(
           );
         }
         publishUserPreferencesChanged(context, result.value.profileId, [preferenceKey]);
+        break;
       }
     }
     if (many) {

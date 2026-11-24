@@ -123,10 +123,7 @@ function createSessionPatchHandler(
         patch = singlePatch;
         targets = [singlePatch];
       }
-      if (
-        (!request.many && request.params.pinPlacement) ||
-        (patch.pinned !== undefined && !usesLegacySessionPins(client))
-      ) {
+      if (patch.pinned !== undefined && !usesLegacySessionPins(client)) {
         return await patchPersonalSessionPins(options, targets, patch, request.many);
       }
       const assertCurrent = () => {

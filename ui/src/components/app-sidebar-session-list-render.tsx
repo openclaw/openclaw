@@ -8,6 +8,7 @@ import {
 } from "../lib/presence-users.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import { createIntersectionObserver } from "../lib/reactive/observers.ts";
+import { createTimeout } from "../lib/reactive/timers.ts";
 import { readVisibleTime } from "../lib/reactive/visible-clock.ts";
 import { nextSessionSnoozeWakeAt } from "../lib/sessions/session-snooze.ts";
 import { sidebarPinnedSessionRows } from "./app-sidebar-personal-navigation.ts";
@@ -168,6 +169,34 @@ export function renderSessionList(params: {
 }
 /** Personal pins keep their saved order in one section above every list section. */
 function PinnedSessionSection(params: { host: SidebarSessionListHost }) {
+  const pinWindow = createMemo(() => params.host.gatewayPinWindow);
+  const sampled = createMemo(() => ({ result: pinWindow(), at: performance.now() }));
+  // A filtered window (e.g. Archived) can omit a saved active row obtained by describe.
+  // Ask the same list for fresh Gateway time; never unhide it on the device clock.
+  createTimeout(
+    () => void params.host.sessionData.refreshSidebarSessions(),
+    () => {
+      const { result, at } = sampled();
+      if (!result) return undefined;
+      const zone = params.host.reconciledSidebarZone();
+      const listed = new Set(result.sessions.map((row) => row.key));
+      const outside = zone.entries.flatMap((entry) => {
+        const row =
+          entry.type === "session" &&
+          !entry.rail &&
+          !listed.has(entry.key) &&
+          zone.sessionRows.get(entry.key);
+        return row && !row.archived ? [row] : [];
+      });
+      const wake = nextSessionSnoozeWakeAt(outside, result.ts);
+      if (
+        wake === null ||
+        (result.activityExpiresAt !== undefined && result.activityExpiresAt + 1 <= wake)
+      )
+        return undefined;
+      return Math.min(2_147_483_647, Math.max(0, wake - result.ts - (performance.now() - at)));
+    },
+  );
   const section = createMemo((): RenderableSessionSection | undefined => {
     const host = params.host;
     const zone = host.reconciledSidebarZone();

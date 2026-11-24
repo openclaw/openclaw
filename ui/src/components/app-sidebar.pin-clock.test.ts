@@ -21,6 +21,7 @@ import {
 } from "../test-helpers/gateway-methods.ts";
 import { menuItemLabels } from "../test-helpers/session-menu.ts";
 import { storeSidebarSessionOwnerFilter } from "./app-sidebar-session-types.ts";
+import { setSessionsStatusFilter } from "./session-organizer-menu.runtime.ts";
 
 const wakeAt = 100_000;
 const row = (id: string, snoozedUntil?: number, agentId = "main") =>
@@ -164,6 +165,33 @@ it("wakes a cross-agent pin on the all-agent roster read, not a primary sidebar 
   await vi.advanceTimersByTimeAsync(2);
   await settleRoster(sidebar);
   expect(sessionKeys(sidebar)).toEqual([before.key, crossAgent.key, rosterAnchor.key]);
+});
+
+it("wakes a saved active reference outside the Archived query using its Gateway clock", async () => {
+  const { sidebar, sessions, result } = await mount(wakeAt + 60_000);
+  const archived = { ...row("archived"), archived: true };
+  let ts = wakeAt - 100;
+  sessions.list.mockImplementation(async (query) =>
+    query?.archivedFilter === "archived"
+      ? { ...result, ts, sessions: [archived], count: 1 }
+      : sessions.sessions.state.result,
+  );
+  setSessionsStatusFilter(sidebar.sessionOrganizer, "archived");
+  await vi.advanceTimersByTimeAsync(0);
+  await settleRoster(sidebar);
+  expect(sessionKeys(sidebar)).toContain(archived.key);
+  expect(pinnedKeys(sidebar)).not.toContain(target.key);
+  const reads = () =>
+    sessions.list.mock.calls.filter(([query]) => query?.archivedFilter === "archived").length;
+  const beforeWake = reads();
+  await vi.advanceTimersByTimeAsync(99);
+  expect(reads()).toBe(beforeWake);
+  ts = wakeAt;
+  await vi.advanceTimersByTimeAsync(2);
+  await settleRoster(sidebar);
+  expect(reads()).toBe(beforeWake + 1);
+  expect(pinnedKeys(sidebar)).toContain(target.key);
+  expect(sessionKeys(sidebar)).toContain(archived.key);
 });
 
 it.each([

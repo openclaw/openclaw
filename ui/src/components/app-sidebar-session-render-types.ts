@@ -1,7 +1,7 @@
 import type { JSX as SolidJSX } from "@solidjs/web";
 import type { SessionCatalogProfileRelation } from "../../../packages/gateway-protocol/src/index.ts";
 import type { SessionObserverDigest } from "../../../packages/gateway-protocol/src/schema/sessions.js";
-import type { GatewaySessionRow } from "../api/types.ts";
+import type { GatewaySessionRow, SessionsListResult } from "../api/types.ts";
 import type { NavigationRouteId, SidebarZoneEntry } from "../app-navigation.ts";
 import type { ApplicationContext, ApplicationNavigationOptions } from "../app/context.ts";
 import type { CatalogOpenTarget } from "../app/settings.ts";
@@ -52,6 +52,7 @@ export interface SessionListHost {
     | Pick<ApplicationContext, "gateway" | "agentSelection" | "agents" | "sessions">
     | undefined;
   readonly gatewayPinTime?: number;
+  readonly gatewayPinWindow?: SessionsListResult | null;
   readonly gatewayTimeForSavedPin: SidebarSavedPinTime;
   readonly sidebarLiveActivity: boolean;
   readonly sessionsShowCron: boolean;
@@ -75,6 +76,7 @@ export interface SessionListHost {
     | "presenceInstanceId"
     | "presencePayload"
     | "refreshSessionCatalogs"
+    | "refreshSidebarSessions"
     | "retryChildSessions"
     | "sessionCatalogRefreshStatus"
     | "sessionListError"

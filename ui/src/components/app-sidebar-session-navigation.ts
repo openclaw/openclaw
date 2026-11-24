@@ -686,16 +686,19 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarBase 
 
   // Chip and all-agent mode observe different windows. Their own list owners
   // reread at activityExpiresAt; never borrow the table or another agent's ts.
-  get gatewayPinTime(): number | undefined {
+  get gatewayPinWindow(): SessionsListResult | null | undefined {
     if (this.sidebarSnapshot || !usesGatewayTimedSessionPins(this.context.gateway.snapshot)) {
       return undefined;
     }
-    const result =
-      this.sidebarAgentsMode === "roster"
-        ? this.rosterSessionSource?.result
-        : this.selectedAgentSessionResult();
+    return this.sidebarAgentsMode === "roster"
+      ? (this.rosterSessionSource?.result ?? null)
+      : this.selectedAgentSessionResult();
+  }
+
+  get gatewayPinTime(): number | undefined {
+    const result = this.gatewayPinWindow;
     // A descriptor may arrive first. Keep a dated pin asleep until its window has a receipt.
-    return result?.ts ?? 0;
+    return result === undefined ? undefined : (result?.ts ?? 0);
   }
 
   readonly gatewayTimeForSavedPin = (row: Pick<GatewaySessionRow, "key" | "snoozedUntil">) =>
