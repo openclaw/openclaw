@@ -20,7 +20,8 @@ it("tts.speak reads a session's reply in the voice of the agent that owns it", a
     { label: "tts-speak-session", prepareProfileCatalog: true },
     async (state) => {
       const config: OpenClawConfig = {
-        ...rolePolicyConfig(),
+        // The write role may start sessions only for main, so reader's main stays unstartable to it.
+        ...rolePolicyConfig(["main"]),
         agents: {
           ownership: "explicit",
           entries: {
@@ -35,7 +36,8 @@ it("tts.speak reads a session's reply in the voice of the agent that owns it", a
       };
       await state.writeConfig(config);
       const client = roleClient("view", "listener");
-      const ownerId = roleClient("write", "session-owner").authenticatedUserProfile!.profileId;
+      const owner = roleClient("write", "session-owner");
+      const ownerId = owner.authenticatedUserProfile!.profileId;
       for (const [key, visibility] of [
         [sessionKey, "shared"],
         ["agent:reader:hidden", "draft"],
@@ -85,9 +87,9 @@ it("tts.speak reads a session's reply in the voice of the agent that owns it", a
             }),
           },
           async () => {
-            const call = (method: string, params: Record<string, unknown>) =>
+            const call = (method: string, params: Record<string, unknown>, caller = client) =>
               callGatewayHandler({ ...ttsHandlers, ...sessionReadHandlers }, method, params, {
-                client,
+                client: caller,
                 context,
               });
             for (const [params, voice] of [
@@ -124,6 +126,22 @@ it("tts.speak reads a session's reply in the voice of the agent that owns it", a
               expect(spoken.error).toEqual(resolved.error);
             }
             expect(clips).toBe(2);
+            // Before its first turn, main reads in its agent's voice only for a caller who may start it.
+            const main = { text: "Hello.", sessionKey: "agent:reader:main" };
+            expect(await call("tts.speak", main)).toMatchObject({
+              ok: true,
+              response: { audioBase64: Buffer.from("reader-voice").toString("base64") },
+            });
+            const refused = await call("tts.speak", main, owner);
+            expect(refused.error).toEqual(
+              (await call("sessions.resolve", { key: main.sessionKey, allowMissing: false }, owner))
+                .error,
+            );
+            expect(refused).toMatchObject({
+              ok: false,
+              error: { code: "INVALID_REQUEST", message: "No session found: agent:reader:main" },
+            });
+            expect(clips).toBe(3);
           },
         );
       } finally {
