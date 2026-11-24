@@ -216,6 +216,39 @@ fail closed. Keep the private request: reconciliation never redispatches an unce
 request. Recovery supports the originally admitted beta, stable, full, or extended-stable
 publication selection; ordinary qualification remains unchanged.
 
+### Recover with a later waiver ledger
+
+Use a separately admitted policy Q only when an authorized operator approved new
+waivers for the original candidate. It must be a signed direct child of the
+original Q that modifies only the waiver ledger, preserves existing entries, and
+appends grants bound to the original candidate, version, and selected receipt attempts.
+It cannot change coverage or excuse missing receipts.
+
+1. Generate the exact admission request without dispatching anything:
+
+   ```bash
+   pnpm frv recover --run <original> --workflow-sha <P> \
+     --prepare-policy-admission --policy-sha <policy-Q> --json
+   ```
+
+2. Review the emitted `qualificationRequest`. An authorized release operator
+   sends that object unchanged as `qualification_request` to the existing
+   Release Prepare workflow at trusted P with `operation=admit-qualification`.
+   Retain the successful admission run ID. The policy transport ref in this
+   request is a locator only; do not create it or dispatch validation at it.
+3. Pass both pins to receipt recovery:
+
+   ```bash
+   pnpm frv recover --run <original> --workflow-sha <P> \
+     --policy-sha <policy-Q> --policy-admission-run <admission-run> \
+     --request-file <private-request-path>
+   ```
+
+Recovery and publisher verification both authenticate the separate admission and
+reevaluate the original raw jobs and aggregate logs against exactly that ledger.
+Child attempts, workflow provenance, artifacts, and the failed original run
+remain unchanged. A missing, changed, or unwaived receipt still blocks recovery.
+
 ## Workflow files
 
 - `.github/workflows/full-release-validation.yml`
