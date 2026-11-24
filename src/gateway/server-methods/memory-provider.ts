@@ -124,10 +124,7 @@ async function captureMemoryReadAuthority(
     }
     return {
       scopes: captured.authority.scopes,
-      assertCurrent: () => {
-        assertRequestCurrent();
-        captured.authority.assertCurrent();
-      },
+      assertCurrent: assertRequestCurrent,
       release: captured.release,
     };
   }

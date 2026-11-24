@@ -7,7 +7,6 @@ import type { AdmittedRunOperatorAuthority } from "../agents/admitted-run-contex
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import { isTimeoutError, isFailoverError } from "../agents/failover/error.js";
 import type { SessionEntryCreateWithTranscriptOptions } from "../config/sessions/session-accessor.js";
-import { composeSessionSourceAssertion } from "../config/sessions/session-source-authority.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { isIncognitoSessionKey } from "../routing/session-key.js";
@@ -160,12 +159,7 @@ export function createSessionCompanionAskRuntime(params: SessionCompanionAskRunt
     if (!sessionKey || !agentId || !question || params.isDisposed() || request.signal?.aborted) {
       throw new SessionCompanionAskError("unavailable", "Side chat is unavailable.");
     }
-    const assertSourceCurrent = request.operatorAuthority
-      ? composeSessionSourceAssertion([
-          request.assertSourceCurrent,
-          request.operatorAuthority.assertCurrent,
-        ])
-      : request.assertSourceCurrent;
+    const assertSourceCurrent = request.assertSourceCurrent;
     assertSourceCurrent?.();
     const requestSignal = request.operatorAuthority?.signal
       ? request.signal

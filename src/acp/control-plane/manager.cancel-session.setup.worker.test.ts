@@ -34,7 +34,6 @@ it("preserves replacement metadata when a cancelled late handle fails its applie
     const authority = createTestOperatorAuthority({
       profileId: "fixture-operator",
       scopes: ["operator.write"],
-      assertCurrent: () => {},
       modelPolicy: prepareOperatorModelPolicy({
         cfg: f.target.cfg,
         policy: { allow: ["fixture/allowed"] },
