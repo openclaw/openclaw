@@ -330,6 +330,36 @@ describe("ordinary chat input admission", () => {
     },
   );
 
+  it("stamps a typed message with the model the session inherits from its parent", async () => {
+    await using fixture = await createBrowserFollowupFixture({
+      sessionKey: "agent:main:dashboard:inherit-child",
+    });
+    const parentKey = "agent:main:dashboard:inherit-parent";
+    replaceSessionEntrySync(
+      { ...fixture.scope, sessionKey: parentKey },
+      {
+        sessionId: "inherit-parent",
+        updatedAt: Date.now(),
+        providerOverride: "openai",
+        modelOverride: "parent-pick",
+        modelOverrideSource: "user",
+        modelOverrideRouteResolution: "resolved",
+      },
+    );
+    // No selection of its own: the session's turns run on the parent's pick.
+    await patchSessionEntryCore(fixture.scope, () => ({ parentSessionKey: parentKey }));
+    fixture.params.queueMode = "followup";
+
+    expectStarted(await fixture.send());
+    const recorder = await fixture.dispatchedRecorder;
+    const committed = await recorder.persistApproved();
+
+    const inherited = { provider: "openai", model: "parent-pick" };
+    expect(committed?.message["__openclaw"]).toMatchObject({ modelSelection: inherited });
+    expect(loadSessionEntry(fixture.scope)?.lastSubmittedModel).toEqual(inherited);
+    expect(loadSessionEntry(fixture.scope)).not.toHaveProperty("modelOverride");
+  });
+
   it.each([{ acp: false }, { acp: true }, { acp: true, restart: true }])(
     "keeps idle input custody with its runtime (%j)",
     async ({ acp, restart }) => {
