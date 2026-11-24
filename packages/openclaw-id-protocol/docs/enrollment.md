@@ -77,6 +77,50 @@ valid RootReset is still `root_mismatch`, the substitution warning.
 Trade-off: K_gw now vouches for a root change, so whoever holds K_gw (the machine) can reset
 the claw. Moving a claw to new machine keys is a separate operation, not designed yet.
 
+### Unlinking a claw (OCF-281)
+
+Unlinking ends a claw's link to OpenClaw ID for good. Like owner reset, the person at the
+machine wins: part 1 is offered only on the machine, `openclaw id unlink` and an Unlink item
+on a direct `local_operator` Control UI connection. Over the tunnel the Gateway refuses it with
+`not_local_operator` and the UI does not show it. Before anything happens the owner is shown how
+many people and devices lose access, that the address stops working at once and that the claw's
+name can never be used again, by any account.
+
+Unlinking needs Discovery to hold the current binding, because Discovery accepts a ClawUnlink
+only for the binding it stores. While a move to new keys or an owner reset is not yet published
+(the binding is newer than the one Discovery confirmed), the Gateway refuses with
+`binding_unpublished` and keeps everything; the owner publishes first (`openclaw id status`,
+`openclaw id publish`). A claw that was never registered at Discovery unlinks locally only.
+
+Unlinking:
+
+- signs `ClawUnlink { claw_id, binding_seq }` with the K_gw of the current binding;
+  `binding_seq` names that binding, so the statement cannot be replayed against a later one and
+  no older K_gw can sign one Discovery accepts;
+- removes every owner device, member, member device, node and invite, stops the tunnel child,
+  closes every tunnel session and invalidates every tunnel-bound token, and clears the link and
+  binding. Local access, conversations and other claw data stay;
+- sends the statement to Discovery (`unlinkClaw`, discovery.md "Unlinking"). If Discovery
+  cannot be reached, the Gateway has still unlinked locally; it keeps the signed statement as a
+  pending unlink and sends it when Discovery is next reachable. Discovery's `unlinked` answer to
+  a repeat means the earlier send arrived.
+
+Re-linking the machine later is a new claw: a new claw id and a new name, with no members.
+
+A pinned client that reads the claw gets `unlinked` from Discovery with the ClawUnlink. It runs
+`verifyClawUnlinkForPin`: signed by the K_gw the pin stored, for the pinned claw, not for an
+older binding than the pin has seen. A verified unlink is final: the client clears the pin,
+opens no socket, does not retry and shows "This claw was unlinked by its owner." An unlink that
+does not verify is not final; the client keeps its pin and treats the claw as unavailable.
+
+Part 2 (OCF-597) unlinks from OpenClaw ID home when the machine is lost. It reuses the same
+statement body and endpoint with another signer (the recovery kit's R, or an owner device). The
+body names no signer kind, so neither needs a new statement type. Accepting R needs only the
+pin's `root_fp`. Accepting an owner device is more than a new signer: part 2 must also define
+the evidence that the device was a current owner (for example the K_gw-signed snapshot
+Discovery stored), which Discovery keeps in its tombstone and serves with `unlinked`, and how a
+pinned client judges its freshness and a device's removal.
+
 Owner device certificates have **no expiry unless the person approving the device enters
 one** (`expires_at: null`). A device stops being an owner when its certificate expires or
 it is removed from the claw's allowlist.
@@ -209,6 +253,7 @@ person over a trusted channel. The owner signs the existing `add_member_device` 
 that comparison; the Gateway refuses an account that is no longer a member at commit time.
 The resulting device is an independent owner-approved root of the member device tree.
 Ordinary member self-approval has no `member_account_id` and stays unchanged.
+A saved member recovery kit can also restore a browser after losing every device (below).
 
 The device inherits its member's current role. R and owners with `manage_members` may also
 add one. Unknown accounts, full device lists, peer keys listed anywhere and signing keys
@@ -216,13 +261,75 @@ already used by an owner or member device are refused. A member cannot add to an
 A successful add publishes the snapshot and sends owners `member_device_added` with the
 new peer key's fingerprint. SnapshotMember is unchanged; device metadata stays at the Gateway.
 
-Members may sign only `add_member_device` and `revoke_device`, directly over the tunnel,
+Member browsing devices may sign only `add_member_device`, `set_member_recovery_kit` and `revoke_device`, directly over the tunnel,
 never through the mailbox. They may revoke another device of their own account, not the
 signing device. Removing a member peer key by any signer also removes every device of that
 member whose `approved_by: { kind: "member_device", device_fp }` chain leads to it,
 transitively, disconnecting and invalidating tokens for all removed peers. Invite and owner
 approvals (`{ kind: "owner", by: "root" | fp(D) }`) are independent roots of that member tree.
 `remove` and `set_role` keep their owner-only behavior.
+
+## Member recovery kit
+
+One optional `MemberRecord.recovery_kit.device_pub` lists a recovery-only member device.
+Its `saved_at` is the signed registration statement’s `issued_at` in Unix seconds, exposed
+through the existing member and owner membership projections for display.
+It has no peer key and is never admitted to the tunnel, included in relay snapshots or bound
+as a Discovery device. Its only authority is signing `add_member_device` for that same current
+account, including over the mailbox. Normal member-device approvals still require the tunnel.
+It cannot replace itself, revoke browsers, change roles, invite, or act for another account.
+
+An admitted member D signs `set_member_recovery_kit { account_id, device_pub }` directly for its
+own account. R and owners with `manage_members` may also manage the listing, but kit creation
+is a member-browser ceremony. `device_pub: null` removes it; a fresh key replaces it. A key
+already listed in another class or account is refused. The kit does not expire for inactivity.
+
+Browsers it admits inherit the member's current role and record
+`approved_by: { kind: "member_recovery_kit", device_fp }`. The verified kit takes effect
+immediately at the isolated `admitRecoveredMemberDevice` decision point. There is no owner
+approval gate. Each acceptance emits the existing `member_device_added` owner notice; the
+Gateway atomically retains an owner-only use record naming the member, browser and admission
+time. The owner Inbox displays that record even after browser/member removal. These display
+records are not published in snapshots and never grant authority. Replacing or deleting the kit
+invalidates its future approvals but keeps already admitted browsers. Remove those browsers
+through the existing device controls, whose member-device descendant cascade is unchanged.
+
+### Admission policy and owner evidence
+
+Immediate admission lets a member recover while the owner is unavailable. Possession of the kit
+and control of the same signed-in account are sufficient to add a browser. The owner receives a
+warning Inbox item that names the member, browser and Gateway-observed time. Dismissing the
+item on one browser does not erase the retained use record in Access → People. Refused or
+replayed statements do not create successful-use records.
+
+Requiring owner approval for every kit use is a separate design option. It prevents admission
+until an owner reviews the new browser, but makes recovery depend on owner availability. That
+option needs pending-request expiry, refusal, and revalidation of the account, kit and membership
+sequence when the owner approves. It is not implemented or exposed as a configuration flag.
+`admitRecoveredMemberDevice` is the decision point after key/account validation; the public
+owner-evidence record is independent of that policy choice.
+
+The Gateway stores each use in a separate `member-recovery-use:<seq>` row in its claw namespace,
+in the same transaction as membership. Records retain the display name at admission and survive
+kit replacement, browser revocation and member removal. Only the owner People response exposes
+them. No record contains a kit secret, and no record grants admission. History remains with the
+claw record; no age-based deletion policy is applied.
+Removing the member deletes the whole MemberRecord, including its kit; re-invitation creates
+no recovery key. A saved signature still needs the current membership sequence and listed key.
+
+`createMemberRecoveryKit` generates a 128-bit secret and derives an Ed25519 member key using
+HKDF-SHA-256 salt `openclaw/member-recovery/v1`, info `ed25519-seed`. It never derives R.
+The JSON export contains `kind: "openclaw-member-recovery-kit"`, `claw_id`, `account_id`,
+`hostname`, `root_fp` and a checksummed `OCM1-` code. OCM1 uses the OCK1 payload encoding,
+but its distinct prefix and derivation domain prevent an owner-kit interpretation.
+The whole artifact is required: its saved root pin authenticates the claw after site-data loss.
+The secret and signer exist only during creation/recovery, never on Gateway or Discovery.
+
+Recovery checks the signed-in account, claw and hostname against the artifact, verifies the
+binding under its root pin and the K_gw snapshot, then signs the new browser's D/W admission
+at snapshot seq + 1. `member_recovery` mail carries that single signed MembershipChange.
+The Gateway independently verifies the current recovery-key listing and same-account target.
+Mailbox receipt is not admission; the browser waits for its key in a verified snapshot.
 
 ## Kit enrollment (spec 6.2)
 

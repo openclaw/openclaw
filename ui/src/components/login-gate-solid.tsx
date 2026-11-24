@@ -340,7 +340,7 @@ function StatusBody(
         </p>
       )}
       {waiting() && (
-        <p class="login-gate__failure-summary">
+        <p class="login-gate__failure-summary login-gate__progress">
           <span class="session-run-spinner" aria-hidden="true" />
           {t("login.failure.pairing.waiting")}
         </p>

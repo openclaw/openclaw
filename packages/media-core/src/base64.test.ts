@@ -82,9 +82,23 @@ it("validates padded and unpadded terminal bits", () => {
   }
 });
 
-it.each([
-  ["SGV s bG8= \n", 5],
-  ["", 0],
-] as const)("estimates decoded bytes for %j", (input, expected) => {
-  expect(estimateBase64DecodedBytes(input)).toBe(expected);
+it("estimates canonical bytes exactly and bounds permissive decoding", () => {
+  for (const data of ["", "Zg==", "Zm8=", "Zm9v", "Zg", "Zm8"]) {
+    expect(estimateBase64DecodedBytes(data), data).toBe(Buffer.from(data, "base64").length);
+  }
+  // Invalid padding must never subtract bytes that the permissive decoder emits.
+  for (const data of [
+    "AAAA=",
+    "AAAA==",
+    "SGV s bG8= \n",
+    "AA= A",
+    "-_8=",
+    "QQ==QQ==",
+    " \t",
+    "Q!Q==",
+  ]) {
+    expect(estimateBase64DecodedBytes(data), data).toBeGreaterThanOrEqual(
+      Buffer.from(data, "base64").length,
+    );
+  }
 });

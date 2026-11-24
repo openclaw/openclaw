@@ -7,6 +7,8 @@ import {
   isRpcSourceQueued,
 } from "../../sessions/session-controller.rpc-sources.js";
 import type { GatewayRequestContext } from "../server-methods/types.js";
+import { pendingChatSendDedupeKey } from "../server-shared.js";
+import { getSessionRowProjection } from "../session-row-projection-access.js";
 import { resolveAgentWaitSource } from "./agent-dedupe.js";
 import {
   captureAgentJobSession,
@@ -14,11 +16,12 @@ import {
   projectAgentJobObservation,
   waitForAgentJob,
 } from "./agent-job.js";
+import type { AgentJobSession } from "./types.js";
 
 /** Capture an agent wait's initial session and defer its terminal or queued result. */
 export function prepareAgentWaitForTurn(
   context: Pick<GatewayRequestContext, "dedupe"> &
-    Partial<Pick<GatewayRequestContext, "resolveGatewayContext">>,
+    Partial<Pick<GatewayRequestContext, "resolveGatewayContext" | "sessionRowProjectionOwner">>,
   params: AgentWaitParams,
   // Turn waits preserve byte-exact protocol run IDs.
   options: { exactTurnSource?: boolean } = {},
@@ -51,7 +54,7 @@ export function prepareAgentWaitForTurn(
     queuedBeforeWait?.session ??
     getAgentJobSession(runId, source === "chat" ? "chat" : undefined) ??
     captureAgentJobSession(runContext);
-  const wait = async () => {
+  const wait = async (canReadRestoredSession?: (session: AgentJobSession) => Promise<boolean>) => {
     if (queuedBeforeWait) {
       return queuedBeforeWait;
     }
@@ -60,6 +63,30 @@ export function prepareAgentWaitForTurn(
       runId,
       timeoutMs,
       source,
+      canRestoreCompletion: () =>
+        canReadRestoredSession !== undefined &&
+        !source &&
+        !runContext &&
+        !getAgentRunContext(runId) &&
+        !resolveAgentWaitSource(context, runId) &&
+        !context.dedupe.has(pendingChatSendDedupeKey(runId)) &&
+        !context.dedupe.has(`chat:${runId}`) &&
+        !context.dedupe.has(`agent:${runId}`),
+      readRestoredCompletion: () =>
+        getSessionRowProjection(context)
+          ?.readRestoredCompletion(runId)
+          ?.then(async (entry) => {
+            const session = entry && captureAgentJobSession({ ...entry, lifecycleGeneration });
+            if (!session || !(await canReadRestoredSession?.(session))) {
+              return undefined;
+            }
+            return {
+              status: "ok" as const,
+              startedAt: entry.startedAt,
+              endedAt: entry.endedAt,
+              session,
+            };
+          }),
       stopWaiting: () => {
         queuedDuringWait = queuedResult();
         return queuedDuringWait !== undefined;

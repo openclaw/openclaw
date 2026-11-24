@@ -1476,7 +1476,7 @@ describe("test-projects build admission", () => {
     async (target, build, include) => {
       const args = [target];
       const workerCompiler =
-        args[0] === infraConfig
+        args[0] === infraConfig || (args[0] === toolingConfig && include === undefined)
           ? createControlledWorkerCompiler(tempDirs.make("private-qa-worker-"), process.env)
           : undefined;
       if (workerCompiler) {

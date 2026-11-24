@@ -3,6 +3,7 @@ import { expect, it, vi } from "vitest";
 import { UI_APPEARANCE_PREFERENCE_KEYS } from "../../../packages/gateway-protocol/src/schema/ui-appearance-preferences.ts";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { GatewayRequestError } from "../api/gateway-connect-errors.ts";
+import { DEFAULT_SIDEBAR_ENTRIES } from "../app-navigation.ts";
 import { createImportedCustomThemeFixture } from "../test-helpers/custom-theme.ts";
 import { waitForFast } from "../test-helpers/wait-for.ts";
 import { selectThemeSettings, resetServerUiPref } from "./server-prefs-controls.ts";
@@ -196,7 +197,7 @@ it.each([false, true])(
   },
 );
 
-it("publishes empty navigation without importing legacy profile entries or writing defaults", async () => {
+it("publishes the default rail without importing legacy profile entries or writing defaults", async () => {
   patchSettings({ sidebarEntries: ["route:usage"] });
   let published = loadSettings();
   const request = readRequest({ "ui.sidebarEntries": ["session:agent:main:legacy"] });
@@ -206,7 +207,7 @@ it("publishes empty navigation without importing legacy profile entries or writi
   });
   await refresh();
   expect(options.onApplied).toHaveBeenCalledOnce();
-  expect(published.sidebarEntries).toEqual([]);
+  expect(published.sidebarEntries).toEqual(DEFAULT_SIDEBAR_ENTRIES);
   expect(request.mock.calls.map(([method]) => method)).toEqual(["users.prefs.get"]);
 });
 

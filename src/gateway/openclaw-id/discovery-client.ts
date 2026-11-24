@@ -15,6 +15,7 @@ import {
   type SendMailResponse,
   type SignedStatement,
   type StatementSigner,
+  type UnlinkClawResponse,
 } from "../../../packages/openclaw-id-protocol/src/index.js";
 
 /** A Discovery error with its stable code (`error.code` in the body). */
@@ -148,6 +149,12 @@ export function createDiscoveryClient(params: {
       ),
     ackMail: (clawId: string, cursor: string) =>
       call<void>("ackMail", { claw_id: clawId }, { cursor }),
+    /**
+     * Unlinks a claw for good with its K_gw-signed ClawUnlink. The statement is the credential,
+     * so it can be sent after this computer cleared the claw's link.
+     */
+    unlinkClaw: (unlink: SignedStatement<"ClawUnlink">) =>
+      call<UnlinkClawResponse>("unlinkClaw", { claw_id: unlink.body.claw_id }, { unlink }),
     /** Mails a notice to every owner device (K_gw-signed, no bearer; notices are never authority). */
     sendOwnerNotice: (clawId: string, payload: Extract<MailboxPayload, { kind: "notice" }>) =>
       call<SendMailResponse>("sendMail", { claw_id: clawId }, { to: "owners", payload }),

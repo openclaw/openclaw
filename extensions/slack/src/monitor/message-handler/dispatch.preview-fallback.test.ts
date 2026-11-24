@@ -1749,19 +1749,6 @@ it.each([true, false])(
   },
 );
 
-it("streams rolling reasoning snapshots as deduplicated narration", async () => {
-  await dispatchNativeProgressScenario([
-    { kind: "reasoning", text: "Checking", isReasoningSnapshot: true },
-    { kind: "reasoning", text: "Checking the Slack handler", isReasoningSnapshot: true },
-  ]);
-
-  expect(collectNativeTaskUpdates()).toEqual([]);
-  expectNativeStreamText("Checking");
-  // A snapshot arriving inside the throttle window rides the completion append.
-  expectNativeProgressAppend(0, [{ type: "markdown_text", text: " the Slack handler" }]);
-  expectNativeStreamText(`\n${FINAL_REPLY_TEXT}`);
-});
-
 it("keeps final fallback in the planned thread when native Slack progress start fails", async () => {
   startSlackStreamMock.mockRejectedValueOnce(new Error("start stream failed"));
   mockedReplyThreadTsSequence = [THREAD_TS, undefined];

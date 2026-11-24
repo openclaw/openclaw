@@ -68,7 +68,7 @@ suite.define(() => {
             "usage.status": { updatedAt: 1, providers: [] },
           },
         });
-        await page.goto(`${suite.server.baseUrl}settings/model-providers`);
+        await page.goto(`${suite.server.baseUrl}settings/model-providers?provider=openai`);
         await waitForControlUiRoute(page, { routeId: "model-providers" });
         await page.locator(".model-providers__search input").waitFor();
         await page.evaluate(() => window.openclawControlUi!.navigate("usage"));

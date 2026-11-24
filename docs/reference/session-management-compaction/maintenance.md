@@ -192,12 +192,19 @@ to the process and resets when it restarts. Large transcript windows use ordered
 independently checksummed chunks. Each uncompressed JSONL file, including its
 restoration metadata, is bounded to 64 MiB. Reads and restores process one chunk
 at a time; the window leaves SQLite only after every chunk is durable and verified.
-Restore preparation verifies the chunk manifest and compressed hashes before write
-admission. The transaction decodes each chunk once, consuming one record at a time;
-invalid records or mismatched totals roll back the entire restoration. Restore
-requests share the existing archive-worker queue across agent stores.
-One large window can exceed the normal background byte budget because its removal
-is atomic; the worker yields between windows.
+Restore preparation verifies the chunk manifest and compressed hashes, then decodes
+and prepares each bounded batch before writer admission. Restoration retains the
+navigation rows and reuses their metadata, committing at most 256 archive records
+per transaction. Other sessions can write between batches. The cold marker remains
+until every record and chunk total is verified and committed, so readers continue
+using the complete archive. An interruption leaves the session cold; retrying
+replays the archive and rebuilds its search rows. Restore requests share the
+existing archive-worker queue across agent stores.
+One large window can exceed the normal background byte budget because its archive
+publication is atomic. Payload and search cleanup release the writer between
+units of at most 256 rows; embedded archive cleanup releases it after each chunk.
+Queued foreground writes can run between units. Interrupted cleanup resumes from
+the existing cold marker, and restoration cancels further cleanup.
 
 Selection reads window metadata and transcript endpoints. The worker checks event sizes
 only when preparation reaches that window within the pass's byte budget, outside the
@@ -217,8 +224,9 @@ events. An event whose encoded envelope and restore metadata cannot fit one chun
 also stays in SQLite. Existing single-file archives remain readable unchanged.
 
 The worker writes, syncs, and verifies an immutable archive before a guarded
-transaction records its location and removes the corresponding transcript
-rows. The archive preserves the original serialized events and their restore
+transaction records its location. Readers then use the complete archive while
+background cleanup clears the retained navigation rows' payloads and search index.
+The archive preserves the original serialized events and their restore
 metadata. A failed or interrupted preparation leaves the SQLite transcript
 intact. A file published before an uncommitted transaction may remain as an
 unreferenced archive.
@@ -232,6 +240,9 @@ it does not guarantee that total disk usage shrinks on every pass. Background
 maintenance checkpoints SQLite and reclaims free pages in bounded worker
 passes, including later passes with no new archive candidates. Physical
 database size therefore shrinks gradually; readers can delay reclamation.
+Archive-pruning free-page passes wait for queued foreground writes before
+reserving the writer. A pass that has already started finishes before the next
+write; slow storage commits and checkpoints can still delay that write.
 Use Doctor's offline `compact` operation when a full rewrite is needed.
 
 If any archive chunk is missing or its recorded size or hash does not match, reading

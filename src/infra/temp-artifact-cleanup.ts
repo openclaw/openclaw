@@ -5,6 +5,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { getFileLockProcessStartTime, isPidDefinitelyDead } from "../shared/pid-alive.js";
 import { hasErrnoCode } from "./errno.js";
 import { formatErrorMessage } from "./errors.js";
 import { runBestEffortCleanup } from "./non-fatal-cleanup.js";
@@ -55,6 +56,56 @@ export function resolveRetainedUpdateRuntimeParents(
     parents.push(parent);
   }
   return parents;
+}
+
+const retainedRuntimeOwnerFile = "owner.json";
+
+/** PIDs name a process only inside the namespace that recorded them. */
+async function readPidNamespace(): Promise<string | null> {
+  return process.platform === "linux"
+    ? await fs.readlink("/proc/self/ns/pid").catch(() => null)
+    : null;
+}
+
+/**
+ * Only the update command creates a runtime, and it loads code from it until it
+ * exits. Its recorded identity marks the directory for any installation and
+ * decides custody without guessing which host processes might be that updater.
+ */
+export async function recordRetainedUpdateRuntimeOwner(directory: string): Promise<void> {
+  await fs.writeFile(
+    path.join(directory, retainedRuntimeOwnerFile),
+    JSON.stringify({
+      name: "openclaw",
+      pid: process.pid,
+      startTime: getFileLockProcessStartTime(process.pid),
+      pidNamespace: await readPidNamespace(),
+    }),
+    { mode: 0o600, flag: "wx" },
+  );
+}
+
+/** Runtimes from builds that recorded no owner return undefined. */
+async function readRetainedRuntimeOwner(directory: string) {
+  const file = path.join(directory, retainedRuntimeOwnerFile);
+  if ((await fs.realpath(file).catch(() => undefined)) !== file) {
+    return undefined;
+  }
+  const value: unknown = JSON.parse(await fs.readFile(file, "utf8"));
+  if (
+    !isRecord(value) ||
+    value.name !== "openclaw" ||
+    typeof value.pid !== "number" ||
+    !Number.isSafeInteger(value.pid) ||
+    value.pid <= 0
+  ) {
+    return undefined;
+  }
+  return {
+    pid: value.pid,
+    startTime: typeof value.startTime === "number" ? value.startTime : null,
+    pidNamespace: typeof value.pidNamespace === "string" ? value.pidNamespace : null,
+  };
 }
 
 async function isRetainedRuntimeMarker(marker: string): Promise<boolean> {
@@ -141,8 +192,9 @@ export async function maintainRetainedUpdateRuntimes(params: {
           if (retainedRuntimes.has(directory)) {
             throw new Error("the creating update still owns this runtime");
           }
-          let marked = false;
-          for (const packageRoot of packages) {
+          const owner = await readRetainedRuntimeOwner(directory);
+          let marked = owner !== undefined;
+          for (const packageRoot of marked ? [] : packages) {
             if (await recognizesRetainedRuntime(directory, packageRoot)) {
               marked = true;
               break;
@@ -168,7 +220,25 @@ export async function maintainRetainedUpdateRuntimes(params: {
             throw new Error("directory identity or custody changed");
           }
           params.assertCurrent();
-          const census = inspectOtherOpenClawProcesses(directory);
+          let creatorExited = false;
+          if (owner && owner.pidNamespace === (await readPidNamespace())) {
+            const startTime = getFileLockProcessStartTime(owner.pid);
+            // An exited updater that its parent has not reaped still has a start time.
+            const dead = isPidDefinitelyDead(owner.pid);
+            // This process's registration above already settled its own runtimes.
+            if (
+              owner.pid !== process.pid &&
+              !dead &&
+              startTime !== null &&
+              startTime === owner.startTime
+            ) {
+              throw new Error(`the creating update (PID ${owner.pid}) is still running`);
+            }
+            // Accepted edge: a reboot that reuses both the PID and its start time.
+            creatorExited =
+              owner.pid === process.pid || dead || (startTime !== null && owner.startTime !== null);
+          }
+          const census = inspectOtherOpenClawProcesses(directory, { creatorExited });
           if ("error" in census) {
             throw new Error(census.error);
           }

@@ -78,11 +78,11 @@ it.each([false, true])(
         const events = await loadTranscriptEvents(target);
         expect(events).toEqual(manager.getPersistedEntries());
         if (collected) {
-          firstSource.finish("interrupted");
+          firstSource.finish("interrupted", "failed");
           await firstSource.settled?.();
           expect((await readForeign()).has(receipt.inputId)).toBe(true);
         }
-        receipt.finish("cancelled");
+        receipt.finish("cancelled", "failed");
         expect((await readForeign()).has(receipt.inputId)).toBe(false);
         await expect(
           withSessionPendingInputPersistence(receipt, () =>
@@ -133,9 +133,9 @@ it.each([false, true])(
         }
         expect(await loadTranscriptEvents(target)).toEqual(manager.getPersistedEntries());
       } finally {
-        receipt.finish("interrupted");
+        receipt.finish("interrupted", "failed");
         for (const source of sources) {
-          source.finish("interrupted");
+          source.finish("interrupted", "failed");
         }
       }
     }),

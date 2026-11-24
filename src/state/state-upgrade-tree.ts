@@ -8,6 +8,7 @@ import { copyFileDescriptorSync } from "@openclaw/fs-safe/advanced";
 import { decodeMountInfoPath } from "@openclaw/normalization-core/mountinfo-path";
 import { copyFileHandle } from "../infra/file-descriptor.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
+import { retireSqliteDatabaseAdmissionForPath } from "../infra/sqlite-database-admission.js";
 import {
   isSqlitePathOnBtrfs,
   setSqliteDirectoryNoCow,
@@ -23,6 +24,7 @@ export type UpgradeOp = {
   kind: "replace" | "add" | "remove";
 };
 
+/** `appVersion` names the generation: the writing build's ID, or its version before build IDs. */
 export type UpgradePlan = { appVersion: string; ops: UpgradeOp[] };
 
 const PLAN_FILE = "plan.json";
@@ -581,6 +583,12 @@ export function applyPlan(plan: UpgradePlan): void {
   ];
   for (const op of ordered) {
     directories.add(path.dirname(op.live));
+    if (op.next && isSqliteFile(op.next)) {
+      // Native close retains admission's identity descriptor. Windows cannot
+      // replace either file until the joined swap owner releases that custody.
+      retireSqliteDatabaseAdmissionForPath(op.live);
+      retireSqliteDatabaseAdmissionForPath(op.next);
+    }
     // Shared-memory and seal files are rebuilt on open; they carry no data.
     if (op.kind !== "add" && !/-shm$|\.seal$/u.test(op.live)) {
       preserve(op.live, `${op.live}.pre-${plan.appVersion}`);
@@ -609,7 +617,8 @@ export function pruneGenerations(
   const directories = new Set([...ownedFiles].map((file) => path.dirname(file)));
   for (const directory of directories) {
     for (const name of fs.readdirSync(directory)) {
-      const match = /^(.*)\.pre-(\d[^/]*)$/u.exec(name);
+      // A generation is a build ID (custom IDs may start with a letter) or, before build IDs, a version.
+      const match = /^(.*)\.pre-([^/]+)$/u.exec(name);
       if (!match || RETIRED_BACKUP_NAME.test(name)) {
         continue;
       }

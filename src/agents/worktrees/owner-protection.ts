@@ -4,7 +4,7 @@ import { isDeepStrictEqual } from "node:util";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import { readResolvedSessionStoreTargetsInWorker } from "../../config/sessions/session-accessor.entry-read-runtime.js";
 import type { ResolvedSessionEntryStoreTarget } from "../../config/sessions/session-accessor.types.js";
-import type { SessionEntry } from "../../config/sessions/types.js";
+import { isTerminalSessionStatus, type SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   resolveSessionWorkerPlacementContext,
@@ -68,6 +68,7 @@ export function createManagedWorktreeOwnerPolicy(
       const activityAt = Math.max(entry?.lastInteractionAt ?? 0, entry?.updatedAt ?? 0);
       if (
         entry?.archivedAt === undefined &&
+        !isTerminalSessionStatus(entry?.status) &&
         activityAt > 0 &&
         Date.now() - activityAt <= IDLE_GC_MS
       ) {
@@ -141,7 +142,7 @@ export function createManagedWorktreeOwnerPolicy(
         ),
       ];
       const states = new Map<string, ReturnType<typeof state>>();
-      const census: Pick<WorktreeCleanupOwnerPolicy, "readOwnerState"> = {
+      const census: Pick<WorktreeCleanupOwnerPolicy, "readOwnerState" | "readOwnerActivityAt"> = {
         readOwnerState: (kind, id) => (kind === "session" ? (states.get(id) ?? "active") : "other"),
       };
       if (ownerIds.length === 0) {
@@ -157,6 +158,10 @@ export function createManagedWorktreeOwnerPolicy(
           context.workerSessionPlacementService.listAsync(),
         ]);
         preparedOwners = targets;
+        census.readOwnerActivityAt = (id) => {
+          const entry = targets.get(id)?.entry;
+          return Math.max(entry?.lastInteractionAt ?? 0, entry?.updatedAt ?? 0);
+        };
         const placementsByKey = new Map<string, WorkerSessionPlacementRecord[]>();
         const placementsById = new Map<string, WorkerSessionPlacementRecord>();
         for (const placement of placements) {

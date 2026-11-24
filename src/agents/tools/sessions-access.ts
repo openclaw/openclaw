@@ -103,9 +103,7 @@ function recordAdmittedSessionDecision(params: {
     return false;
   }
   try {
-    if (caller.receiptAuthority() === false) {
-      return false;
-    }
+    caller.receiptAuthority();
   } catch {
     return false;
   }

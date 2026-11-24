@@ -281,23 +281,16 @@ describe("startup migration lease", () => {
       }
       const lease = await acquireLease({ now: () => 1000, owner: "first" });
 
-      const onActivity = vi.fn();
-      expect(hasActiveStartupMigrationLease({ env, nowMs: 1001, onActivity })).toBe(true);
+      expect(hasActiveStartupMigrationLease({ env, nowMs: 1001 })).toBe(true);
       lease.heartbeat({ nowMs: 300_000 });
-      expect(hasActiveStartupMigrationLease({ env, nowMs: 301_001, onActivity })).toBe(true);
-      expect(onActivity).toHaveBeenLastCalledWith({
-        owner: "first",
-        pid: process.pid,
-        heartbeatAt: 300_000,
-      });
+      expect(hasActiveStartupMigrationLease({ env, nowMs: 301_001 })).toBe(true);
 
       await expect(acquireLease({ now: () => 301_001, owner: "second" })).rejects.toThrow(
         "OpenClaw startup migrations are already running",
       );
 
       lease.release();
-      expect(hasActiveStartupMigrationLease({ env, nowMs: 301_002, onActivity })).toBe(false);
-      expect(onActivity).toHaveBeenCalledTimes(2);
+      expect(hasActiveStartupMigrationLease({ env, nowMs: 301_002 })).toBe(false);
     },
   );
 

@@ -7,7 +7,6 @@ import { ensureSandboxWorkspaceForSession } from "../sandbox/context.js";
 import type { RunCliAgentParams } from "./types.js";
 
 export async function resolveCliSkillsPrompt(params: {
-  assertCurrent: () => void;
   agentId: string;
   config: RunCliAgentParams["config"];
   sessionKey: string;
@@ -15,7 +14,6 @@ export async function resolveCliSkillsPrompt(params: {
   workspaceDir: string;
   executionWorkspaceDir: string;
 }): Promise<{ prompt: string; usagePaths?: SkillUsagePath[] }> {
-  params.assertCurrent();
   const agentWorkspaceDir = resolveAgentWorkspaceDir(params.config ?? {}, params.agentId);
   const executionWorkspace = resolveSessionSkillExecutionWorkspace(
     params.run.sessionEntry,
@@ -25,7 +23,6 @@ export async function resolveCliSkillsPrompt(params: {
     params.run.skillsSnapshot ??
     (
       await resolveReusableWorkspaceSkillSnapshot({
-        assertCurrent: params.assertCurrent,
         workspaceDir: agentWorkspaceDir,
         ...executionWorkspace,
         config: params.config ?? {},
@@ -33,7 +30,6 @@ export async function resolveCliSkillsPrompt(params: {
         watch: false,
       })
     ).snapshot;
-  params.assertCurrent();
   const sandboxWorkspace = await ensureSandboxWorkspaceForSession({
     skillsSnapshot,
     config: params.config,
@@ -41,12 +37,10 @@ export async function resolveCliSkillsPrompt(params: {
     sessionKey: params.sessionKey,
     workspaceDir: params.workspaceDir,
   });
-  params.assertCurrent();
   return resolveRuntimeSkillsPrompt({
     sandbox: sandboxWorkspace ? { ...sandboxWorkspace, enabled: true } : undefined,
     skillsAnchorWorkspace: sandboxWorkspace?.workspaceDir ?? agentWorkspaceDir,
     skillsSnapshot,
-    assertCurrent: params.assertCurrent,
     ...executionWorkspace,
     config: params.config,
     agentId: params.agentId,

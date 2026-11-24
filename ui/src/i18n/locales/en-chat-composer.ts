@@ -9,9 +9,33 @@ const catalog = {
     },
     composer: {
       composerInput: "Chat composer",
+      workspaceRemoved: "This conversation’s workspace was removed.",
       predictionHint: "Tab to complete",
       predictionAvailable:
         "Suggested message: {text}. Press Tab to use it, or Escape to dismiss. It won’t be sent automatically.",
+      proposal: {
+        use: "Use",
+        dismiss: "Dismiss",
+        dismissKey: "Esc",
+        useKey: "Tab",
+        undo: "Undo",
+        notSent: "not sent",
+        replacesDraft: "replaces your draft · not sent",
+        accepted: "Draft replaced",
+        available:
+          "{title}. Press Tab to use it, or Escape to dismiss. It won’t be sent automatically.",
+        unavailable:
+          "This composer can’t show suggested drafts. Switch back to the built-in composer and try again.",
+      },
+      task: {
+        cancel: "Cancel",
+        starting: "Starting",
+        failedTitle: "Couldn’t finish",
+        draftUnchanged: "your draft is unchanged",
+        retry: "Try again",
+        working: "{title}. Your draft won’t change until you choose.",
+        failed: "{title} couldn’t finish. Your draft is unchanged.",
+      },
       emojiSuggestions: "Emoji suggestions",
       placeholder: "Message {name}",
       emptyHint: "Type a message first.",
@@ -61,10 +85,6 @@ const catalog = {
         adminBlocked: "You need admin access to manage MCP servers.",
         savingBlocked: "Saving… Try again in a moment.",
       },
-      overrides: {
-        count: "{count} overrides",
-        countOne: "{count} override",
-      },
       contextUsage: {
         title: "Context usage details",
         percentUsed: "Context: {pct}% used",
@@ -75,6 +95,8 @@ const catalog = {
         inputShort: "In",
         outputShort: "Out",
         costShort: "Cost",
+        cacheShort: "Cache",
+        cacheHitRate: "Prompt tokens read from cache",
         sessionTotal: "Session total",
         unpriced: "Unpriced",
         quotaAccountUnknown: "Quota account unknown",
@@ -137,7 +159,7 @@ const catalog = {
       dictationInterruptedRecovery:
         "Captured text was inserted. Check your connection and try again.",
       dictationStartRecovery: "Check microphone access and transcription settings, then try again.",
-      dictationFinalizing: "Finishing dictation…",
+      dictationFinalizing: "Transcribing…",
       dictationListening: "Listening…",
       dictationStarting: "Starting microphone…",
       dictationStopAndKeep: "Stop and keep text",
@@ -327,6 +349,7 @@ const catalog = {
       failureFileTooLarge: "Too large to attach. Look for this file in Files.",
       findInFiles: "Find in Files",
       findInFilesFor: "Find {name} in Files",
+      showInChatFor: "Show {name} in chat",
       failureInvalidReference:
         "Use a public HTTPS URL without credentials or attach a local file by a safe path.",
       failureFileNotFound: "File not found. Check the path and try again.",

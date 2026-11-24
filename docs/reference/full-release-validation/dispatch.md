@@ -26,11 +26,11 @@ performance/soak gates remain.
 
 Record all identities with the request:
 
-| Identity | Ownership / selection                                                                                                                                                           |
-| -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| C        | Source, package bytes, version, baselines.                                                                                                                                      |
-| Q        | Complete qualification workflow closure; defaults to C. On `--trusted-workflow-ref candidate`, `--workflow-sha <Q>` selects an exact reviewed main ancestor, never moving main. |
-| P        | Independently trusted admission, aggregate policy, verification, publication. Authenticates C/Q, normalized inputs, and immutable Q transport before dispatch.                  |
+| Identity | Ownership / selection                                                                                                                                                                       |
+| -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| C        | Source, package bytes, version, baselines.                                                                                                                                                  |
+| Q        | Complete qualification workflow closure and grant ledger; defaults to C. `--workflow-sha <Q>` pins assessed executable tooling or its authorized ledger-only descendant, never moving main. |
+| P        | Independently trusted admission, aggregate policy, verification, publication. Authenticates C/Q, normalized inputs, and immutable Q transport before dispatch.                              |
 
 Invoking attests review of exact C/Q/coverage. `--trusted-workflow-ref main` and
 protected-tooling routes supply diagnostic/main-qualification/postpublish-confidence
@@ -85,8 +85,13 @@ compare actual operands: changing the command cannot turn normal admission into 
 
 ## Recover qualification tooling without changing the candidate
 
-Only for diagnosed qualification/orchestration defects—not product failures or
-unexplained red jobs. Local controller updates cannot retrofit frozen workflows.
+Use executable tooling recovery only for diagnosed qualification/orchestration
+defects—not product failures or unexplained red jobs. Local controller updates
+cannot retrofit frozen workflows. For an explicitly authorized failed-job grant,
+use the [Q-only ledger procedure](/reference/full-release-validation/evidence#release-tooling-waivers):
+commit directly to Q without a grant PR to `main` or a C change, then use a fresh
+request/admission with that exact Q. Its ledger-only delta permits eligible raw
+receipt reuse and reevaluation, not reuse of an earlier aggregate verdict.
 
 1. Preserve old request, C/Q/P, parent run/attempt, failed logs, and successful
    receipts. Reconcile uncertain writes and settle owned active trees before
@@ -104,7 +109,7 @@ unexplained red jobs. Local controller updates cannot retrofit frozen workflows.
 
 ```bash
 CANDIDATE_SHA="<unchanged-full-candidate-sha>"
-QUALIFICATION_SHA="<reviewed-full-main-ancestor-q-sha>"
+QUALIFICATION_SHA="<reviewed-full-q-sha>"
 PUBLISHER_SHA="<reviewed-full-main-p-sha>"
 PUBLICATION_SELECTION='<original-reviewed-publication-selection-json>'
 pnpm ci:full-release \
@@ -128,11 +133,11 @@ manually. `--dry-run` previews the tuple, not hosted admission or success.
 
 5. Record new admission and parent run/attempt; require fresh parent success and
    strict verification before publication. Whole-parent reuse keeps exact Q/P.
-   Cross-Q child reuse requires authenticated identical workload closure and exact
-   C, role, effective inputs, candidate descriptor, receipt, artifact, and live-attempt
-   checks; retain producer Q. Plan-cache-only repairs may qualify; filenames,
-   green jobs, or fix SHAs alone prove neither closure nor eligibility. Missing
-   evidence/changed closure requires fresh work, never relabeling.
+   [Cross-Q child reuse](/reference/full-release-validation/stages) keeps exact C,
+   role, effective inputs, candidate descriptor, receipt, artifact, live attempt,
+   and authenticated producer Q. Current Q grants are reevaluated. Tooling and
+   harness changes do not force reruns; set `reuse_evidence=false` to execute the
+   new harness. Missing or invalid evidence requires fresh work, never relabeling.
 
 ### November 2026 plan-cache restoration incident
 
@@ -163,11 +168,10 @@ at original Q=C and exact recorded inputs:
 | Candidate release checks      | `43747437691/1` | `14178081554`       |
 | Independent release checks    | `43744253043/2` | `14177235935`       |
 
-All five must rerun: independent-Q changes shared qualification scripts under
-current conservative closure policy. Original receipts remain historical, not
-cross-Q evidence; later parent-only changes may preserve eligible children after
-strict verification. Existing npm/Docker bytes/receipts are not a qualified new-Q
-bundle. Reacquire/qualify selected stages against unchanged C; preserve coverage,
+At the time, all five needed reruns under the former cross-Q closure rule.
+Under the current rule, assess each receipt against the new parent and reuse only
+if strict verification accepts it. Existing npm/Docker bytes/receipts are not a
+qualified new-Q bundle. Reacquire/qualify selected stages against unchanged C; preserve coverage,
 soak, platforms, and exact policy-grant scope. Rerun missing/failed required work.
 New P admission, successful FRV, immutable plan, and final verification are mandatory.
 

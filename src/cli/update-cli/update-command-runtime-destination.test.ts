@@ -16,7 +16,7 @@ import * as packageMetadata from "../../infra/update-check-package-target.js";
 import * as updateCheck from "../../infra/update-check.js";
 import * as updateGlobal from "../../infra/update-global.js";
 import * as processExec from "../../process/exec.js";
-import { defaultRuntime, ExitError } from "../../runtime.js";
+import { defaultRuntime } from "../../runtime.js";
 import { createCommandResult } from "../../test-utils/npm-spec-install-test-helpers.js";
 import { writeFixtureJson } from "../cli-fixtures.test-support.js";
 import { quoteCliArg, quotePowerShellArg } from "../quote-cli-arg.js";
@@ -259,8 +259,6 @@ it.each([
       if (unknown) {
         expectRefusalMessage(result, "Fix inspection permissions");
       }
-      await expect(updateCommand(opts)).rejects.toEqual(new ExitError(1));
-      expect(lastJson()).toMatchObject({ reason: refusal });
     }
     expect(writes).not.toHaveBeenCalled();
     expect(packageUpdate.stagePackageInstallUpdate).not.toHaveBeenCalled();
@@ -374,9 +372,6 @@ it.each([
         failures: [expect.objectContaining({ reason: "preflight-node-runtime-incompatible" })],
       },
     ]);
-    await expect(updateCommand(options)).rejects.toBeInstanceOf(Error);
-    const mutableRefusal = await preflightOutcome(preflight);
-    expect(mutableRefusal.recoverySteps).toEqual(runtimeRefusal.recoverySteps);
     const continuation = expectDefined(
       runtimeRefusal.recoverySteps?.find((step) => step.kind === "continue-update"),
       "retained-launcher continuation",

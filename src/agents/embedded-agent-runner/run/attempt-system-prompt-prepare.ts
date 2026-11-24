@@ -429,6 +429,7 @@ export async function prepareEmbeddedAttemptSystemPrompt(params: {
       config: attempt.config,
       preparedModelRuntime: attempt.preparedModelRuntime,
       preparedTtsPreferences,
+      prepareSessionProjectGuidance: attempt.prepareSessionProjectGuidance,
       agentId: params.setup.sessionAgentId,
       workspaceDir: params.setup.effectiveWorkspace,
       runtimeCwd: params.setup.effectiveCwd,

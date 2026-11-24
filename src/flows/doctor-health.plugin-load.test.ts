@@ -90,3 +90,44 @@ it.each([false, true])(
     });
   },
 );
+
+it("keeps an advisory plugin warning nonfatal", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    stubDoctorEnv({ OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" });
+    mocks.packageRoot.mockReturnValue(undefined);
+    mocks.outro.mockClear();
+    const id = "doctor-warning-fixture";
+    const root = state.statePath("plugin");
+    // An open object schema yields a warn-level load diagnostic; the plugin still loads.
+    await state.writeText(
+      "plugin/index.cjs",
+      `module.exports = { id: "${id}", register(api) {
+        api.registerTool({
+          name: "metadata",
+          label: "Metadata",
+          description: "Store metadata",
+          parameters: { type: "object", properties: { payload: { type: "object" } } },
+          execute: async () => ({ content: [{ type: "text", text: "ok" }], details: {} }),
+        });
+      } };`,
+    );
+    await state.writeJson("plugin/openclaw.plugin.json", {
+      id,
+      configSchema: { type: "object", properties: {} },
+      contracts: { tools: ["metadata"] },
+    });
+    const cfg = {
+      plugins: { allow: [id], load: { paths: [root] }, slots: { memory: "none" } },
+    };
+    mocks.config.mockReturnValue(cfg);
+    mocks.runContributions.mockImplementation(async () => {
+      const registry = loadPluginRegistryHandle({ config: cfg, cache: false });
+      expect(registry.diagnostics).toMatchObject([{ level: "warn", pluginId: id }]);
+      await disposePluginRegistryInstances(registry);
+    });
+    const runtime = createDoctorRuntime();
+    await doctorCommand(runtime, { nonInteractive: true });
+    expect([runtime.exit.mock.calls, runtime.error.mock.calls]).toEqual([[], []]);
+    expect(mocks.outro).toHaveBeenCalledWith("Doctor complete.");
+  });
+});

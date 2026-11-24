@@ -2,7 +2,6 @@ import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { acknowledgeInternalToolResult } from "../../packages/agent-core/src/internal-hooks.js";
 import { ToolInterruptedByUser } from "../../packages/agent-core/src/tool-interruption.js";
 import { resetDiagnosticSessionStateForTest } from "../logging/diagnostic-session-state.js";
-import { createAgentToolExecutionBudget } from "./agent-tool-source-execution-guard.js";
 import {
   addSession,
   appendOutput,
@@ -94,26 +93,6 @@ function writableSession() {
 
 const inputCall = (action: string, extra: Record<string, unknown> = {}) =>
   createProcessTool().execute(action, { action, sessionId: "input", ...extra });
-
-test("does not close stdin when requester authority is revoked during a write", async () => {
-  let current = true;
-  const controller = new AbortController();
-  const budget = createAgentToolExecutionBudget({
-    signal: controller.signal,
-    abort: (error) => controller.abort(error),
-    isCurrent: () => current,
-  });
-  const { stdin } = writableSession();
-  stdin.write.mockImplementation((_data, done) => {
-    current = false;
-    done?.(null);
-  });
-  await expect(
-    budget.run(() => inputCall("write", { data: "allowed input", eof: true })),
-  ).rejects.toThrow("execution scope is no longer active");
-  expect(stdin.write).toHaveBeenCalledOnce();
-  expect(stdin.end).not.toHaveBeenCalled();
-});
 
 test("exposes idle input controls only while stdin remains writable", async () => {
   const { session, stdin } = writableSession();

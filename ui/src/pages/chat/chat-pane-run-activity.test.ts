@@ -179,7 +179,7 @@ describe("composer run status", () => {
       await draw([], false);
       await waitForSolid(() =>
         expect(container.querySelector(".chat-working-indicator")?.textContent).toContain(
-          "Wait for subagents",
+          "Waiting for subagents",
         ),
       );
       await draw([child]);
@@ -195,13 +195,13 @@ describe("composer run status", () => {
       expect(container.querySelector(".chat-subagent-activity")).toBeNull();
       expect(container.querySelector("openclaw-working-phrase")).toBeNull();
       const wait = () => container.querySelector(".chat-working-indicator__status")?.textContent;
-      expect(wait()).toBe("Wait for subagents");
+      expect(wait()).toBe("Waiting for subagents");
       expect(container.querySelector(".chat-working-indicator openclaw-elapsed-time")).toBeNull();
       await draw([
         child,
         { ...child, key: "agent:main:subagent:frontend", label: "Frontend implementation" },
       ]);
-      expect(wait()).toBe("Wait for subagents");
+      expect(wait()).toBe("Waiting for subagents");
       expect(container.textContent).not.toContain("Frontend implementation");
       await draw([{ ...child, hasActiveRun: false }]);
       expect(container.querySelector(".chat-subagent-activity")).toBeNull();

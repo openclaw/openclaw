@@ -175,8 +175,9 @@ export class TranscriptInitialRange {
     const active = this.activeIndexes();
     const virtualizer = this.virtualizer();
     const keys = forecast.rowKeys(virtualizer, this.forecastViewport(), rows, this.preparedRowKeys);
-    // Arriving rows wait out of the flow only while the reader moves through laid-out content.
-    const arriving = this.reading && !this.preparingEnd ? active : [];
+    // After placement a disclosure can bring a predecessor into the viewport before the
+    // first scroll gesture. Measure it outside the flow just as for reader navigation.
+    const arriving = !this.pending && !this.preparingEnd ? active : [];
     this.hold = forecast.hold(virtualizer, arriving, keys, this.rowsMeasured);
     return {
       activeRowKeys: new Set([...active, ...this.endIndexes()].map((index) => rows[index]!.key)),

@@ -122,6 +122,8 @@ repair; current delivery fields and unrelated stored values keep their values.
 ## Legacy state migration
 
 Runtime uses `~/.openclaw/openclaw.json` unless you select explicit paths.
+Doctor resolves the default layout from the current `HOME` or `USERPROFILE`,
+falling back to the operating system home when neither is set.
 For a default-layout install with only `~/.clawdbot`, Doctor stops the managed
 Gateway and drains database work, then renames that directory to `~/.openclaw`.
 Config preflight renames `clawdbot.json` inside it to `openclaw.json` when the

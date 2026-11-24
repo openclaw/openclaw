@@ -316,7 +316,6 @@ export function BrowserToolbar(
             aria-label={t("browser.address")}
             aria-invalid={invalid() ? "true" : undefined}
             aria-describedby={invalid() ? hintId : undefined}
-            title={props.controller.urlDraft}
             disabled={Boolean(props.controller.host.fixedTab && !props.controller.activeTargetId)}
             placeholder={t("browser.urlPlaceholder")}
             value={props.controller.urlDraft}
@@ -347,8 +346,16 @@ export function BrowserToolbar(
                   event.currentTarget.blur();
                 }
               } else if (event.key === "Escape") {
-                props.controller.resetUrlDraftFromView();
-                event.currentTarget.blur();
+                if (invalid() || props.controller.urlDraft !== activeUrl()) {
+                  // Cancel the address edit before the surrounding panel handles Escape.
+                  event.preventDefault();
+                  props.controller.resetUrlDraftFromView();
+                  setInvalid(false);
+                  const address = event.currentTarget;
+                  onSettled(() => address.select());
+                } else {
+                  event.currentTarget.blur();
+                }
               }
             }}
           />

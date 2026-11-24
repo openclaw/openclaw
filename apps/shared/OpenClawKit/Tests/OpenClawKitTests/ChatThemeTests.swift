@@ -34,7 +34,7 @@ struct ChatThemeTests {
             for green in [0.0, 1.0] {
                 for blue in [0.0, 1.0] {
                     let accent = Color(.sRGB, red: red, green: green, blue: blue)
-                    let bubble = OpenClawChatTheme.desktopUserBubble(in: appearance, accent: accent)
+                    let bubble = OpenClawChatTheme.userBubbleSurface(in: appearance, accent: accent)
                     #expect(Self.contrast(text, bubble, in: environment) >= 7)
                 }
             }

@@ -49,6 +49,9 @@ final class IOSChatViewModelOwner {
             viewModel.syncSession(to: appModel.chatSessionKey)
             if !viewModel.isAttachmentOwnerPinned {
                 self.capturePresentationIdentity(appModel: appModel)
+            } else {
+                // Same owner and agent (guarded above): only the resolved name can have changed.
+                self.refreshPresentationName(appModel: appModel)
             }
             if let controlUIInputs { self.controlUIInputs = controlUIInputs }
             if reconnected { viewModel.refresh() }
@@ -70,6 +73,8 @@ final class IOSChatViewModelOwner {
         }
         // Resolving the default agent replaces its transport without changing the draft's owner.
         let draft = isDefaultAgentHydration ? self.viewModel?.input : nil
+        let previousPresentation = self.ownerID == ownerID && controlUIInputs != nil &&
+            self.controlUIInputs == controlUIInputs ? self.viewModel : nil
         // Initial route hydration changes transport, but the same draft keeps its native editor.
         if draft == nil { self.presentationID = UUID() }
         self.viewModel?.detachTransport()
@@ -95,19 +100,20 @@ final class IOSChatViewModelOwner {
             onSessionChanged: { [weak appModel] sessionKey in
                 appModel?.focusChatSession(sessionKey)
             },
-            onToolActivity: { id, name, isActive, toolSessionKey in
+            onToolActivity: { [weak self] id, name, isActive, toolSessionKey in
                 if isActive {
                     LiveActivityManager.shared.showTool(
                         id: id,
                         name: name,
-                        agentName: agentName,
-                        agentBadge: agentBadge,
+                        agentName: self?.presentationAgentName ?? agentName,
+                        agentBadge: self?.presentationAgentBadge ?? agentBadge,
                         sessionKey: toolSessionKey)
                 } else {
                     LiveActivityManager.shared.endTool(id: id, sessionKey: toolSessionKey)
                 }
             },
             diagnosticsLog: { message in GatewayDiagnostics.log(message) })
+        if let previousPresentation { viewModel.inheritTranscriptPresentation(from: previousPresentation) }
         self.viewModel = viewModel
         if let draft { viewModel.input = draft }
         self.hydratedComposerModel = draft != nil ? viewModel.composerModelResolver() : nil
@@ -151,14 +157,19 @@ final class IOSChatViewModelOwner {
     private func capturePresentationIdentity(appModel: NodeAppModel) {
         let agentID = appModel.chatAgentId.trimmingCharacters(in: .whitespacesAndNewlines)
         self.presentationAgentID = agentID.isEmpty ? "main" : agentID
+        self.refreshPresentationName(appModel: appModel)
+        self.presentationAgentAvatar = appModel.agentAvatarImage(for: self.presentationAgentID)
+        self.hasVerifiedOfflineRoutingIdentity = appModel.hasVerifiedChatOfflineRoutingIdentity
+    }
+
+    /// A pinned presentation keeps its agent and route, but its name follows that agent's identity
+    /// as it resolves, so the header, composer and Live Activity never keep a stale name.
+    private func refreshPresentationName(appModel: NodeAppModel) {
         let agent = appModel.gatewayAgents.first { $0.id == self.presentationAgentID }
-        let name = agent?.name?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        self.presentationAgentName = name.isEmpty ? appModel.chatAgentName : name
+        self.presentationAgentName = appModel.chatAgentDisplayName(for: self.presentationAgentID)
         self.presentationAgentBadge = AgentIdentityPresentation.badge(
             avatarText: agent?.identity?["emoji"]?.value as? String,
             displayName: self.presentationAgentName)
-        self.presentationAgentAvatar = appModel.agentAvatarImage(for: self.presentationAgentID)
-        self.hasVerifiedOfflineRoutingIdentity = appModel.hasVerifiedChatOfflineRoutingIdentity
     }
 
     nonisolated static func transportAgentID(_ value: String?) -> String {

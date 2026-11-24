@@ -7,7 +7,6 @@ import { formatErrorMessage, toErrorObject } from "../../../infra/errors.js";
 import { isTransientNetworkError } from "../../../infra/retryable-network-errors.js";
 import { isRetryableAssistantError, isTerminalAssistantError } from "../../../llm/utils/retry.js";
 import { projectAgentRunAttemptTerminal } from "../../agent-run-terminal-outcome.js";
-import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../../defaults.js";
 import { buildAssistantFailoverSignal } from "../../embedded-agent-helpers/assistant-message-failures.js";
 import {
   findCliTerminalStopError,
@@ -131,6 +130,10 @@ export async function recoverEmbeddedRunAttempt(input: {
   const midTurnPrecheck =
     promptErrorSource === "precheck" && attempt.preflightRecovery?.source === "mid-turn";
   const settledEvidence = resolveSettledToolBatchEvidence(attempt, { midTurn: midTurnPrecheck });
+  // The context-pressure owner stops for maintenance only at a boundary it proved
+  // continuable, and maintenance always continues the turn.
+  const boundaryMaintenance =
+    promptErrorSource === "precheck" && attempt.preflightRecovery?.pressure === "maintenance";
   // Project decisions at their existing return points; diagnostics never decide
   // replay safety or imply that recorded tool results prove settled side effects.
   const recordRecoveryDecision = (
@@ -148,6 +151,7 @@ export async function recoverEmbeddedRunAttempt(input: {
       | "harness_retry_unavailable"
       | "prompt_failure"
       | "prompt_recovery"
+      | "boundary_maintenance"
       | "no_recovery",
   ) => {
     emitDiagnosticsTimelineEvent(
@@ -304,8 +308,8 @@ export async function recoverEmbeddedRunAttempt(input: {
     sessionPersistence: params.sessionPersistence,
     sessionKey: runInput.resolvedSessionKey,
     agentId: params.agentId,
-    defaultProvider: DEFAULT_PROVIDER,
-    defaultModel: DEFAULT_MODEL,
+    defaultProvider: preparedRuntime.provider,
+    defaultModel: preparedRuntime.modelId,
     currentProvider: preparedRuntime.provider,
     currentModel: preparedRuntime.modelId,
     currentAgentRuntimeOverride: params.agentHarnessRuntimeOverride,
@@ -322,8 +326,8 @@ export async function recoverEmbeddedRunAttempt(input: {
       cfg: params.config,
       sessionKey: runInput.resolvedSessionKey,
       agentId: params.agentId,
-      defaultProvider: DEFAULT_PROVIDER,
-      defaultModel: DEFAULT_MODEL,
+      defaultProvider: preparedRuntime.provider,
+      defaultModel: preparedRuntime.modelId,
       expectedSelection: requestedSelection,
     });
     log.info(
@@ -478,6 +482,7 @@ export async function recoverEmbeddedRunAttempt(input: {
   // The finished attempt has released its tools. Continue its transcript, including
   // partial output and uncertain effects; never resubmit the original user request.
   if (
+    !boundaryMaintenance &&
     !externalAbort &&
     !terminalState.signalOwnedInterruption &&
     !timedOutByRunBudget &&
@@ -561,6 +566,7 @@ export async function recoverEmbeddedRunAttempt(input: {
     });
   }
   if (
+    !boundaryMaintenance &&
     !currentAttemptReplaySafe &&
     !canContinueSettledMidTurnOverflow &&
     !canRecoverSettledToolResults
@@ -595,7 +601,10 @@ export async function recoverEmbeddedRunAttempt(input: {
       }),
   });
   if (overflowRecovery.action === "retry") {
-    recordRecoveryDecision("accepted", "overflow_recovery");
+    recordRecoveryDecision(
+      "accepted",
+      boundaryMaintenance ? "boundary_maintenance" : "overflow_recovery",
+    );
     return retry();
   }
   if (overflowRecovery.action === "surface") {

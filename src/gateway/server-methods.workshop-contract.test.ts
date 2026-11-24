@@ -34,7 +34,6 @@ async function dispatch(
   method: string,
   params: Record<string, unknown> = {},
   scopes = ["operator.admin"],
-  hasCurrentClientAuthority?: () => boolean,
 ) {
   const respond = vi.fn<RequestOptions["respond"]>();
   await handleGatewayRequest({
@@ -54,7 +53,6 @@ async function dispatch(
       getRuntimeConfig: () => config,
       logGateway: { warn: vi.fn() },
     } as unknown as RequestOptions["context"],
-    hasCurrentClientAuthority,
     respond,
   });
   expect(respond).toHaveBeenCalledOnce();
@@ -359,29 +357,6 @@ describe("Workshop through Gateway authorization and dispatch", () => {
         code: "INVALID_REQUEST",
         message: `No skill changes recorded for review skill-workshop-review:${reviewId}.`,
       },
-    });
-  });
-
-  it("refuses file effects when requester authority changes during the snapshot", async () => {
-    let current = true;
-    const copy = fs.cp.bind(fs);
-    vi.spyOn(fs, "cp").mockImplementation(async (...args) => {
-      await copy(...args);
-      current = false;
-    });
-    await expect(
-      dispatch(
-        "skills.workshop.archive",
-        { agentId: "ops", name: "deploy-notes" },
-        ["operator.admin"],
-        () => current,
-      ),
-    ).rejects.toThrow("Gateway requester authority changed");
-    expect(await fs.readFile(path.join(root, "deploy-notes", "SKILL.md"), "utf8")).toBe(skill);
-    expect(await fs.readdir(path.join(root, ".archive", "deploy-notes"))).toEqual([]);
-    expect(await dispatch("skills.workshop.changes", { agentId: "ops" })).toMatchObject({
-      ok: true,
-      payload: { changes: [] },
     });
   });
 

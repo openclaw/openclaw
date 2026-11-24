@@ -1,4 +1,5 @@
 import { expect, it } from "vitest";
+import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import {
   pauseVirtualClock,
   type MockGatewayRequest,
@@ -19,6 +20,70 @@ const suite = createSessionManagementE2eSuite();
 const renameKey = "agent:main:rename-me";
 
 suite.define(() => {
+  it("keeps an unfinished inline rename in place until editing ends", () =>
+    suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
+      const now = Date.now();
+      const rows = ["Plan release", "Check examples", "Update the guide"].map((title, index) =>
+        sessionRow("agent:main:rename-order-" + index, title, now - index, {
+          createdAt: now - index,
+          lastActivityAt: now - index,
+        }),
+      );
+      const edited = rows[2]!;
+      const gateway = await installMockGateway(page, { sessions: rows, sessionKey: edited.key });
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, edited.key));
+      const list = page.locator("aside.sidebar .sidebar-recent-session");
+      await expect.poll(() => list.last().getAttribute("data-session-key")).toBe(edited.key);
+      await expect.poll(() => list.count()).toBe(3);
+      const row = list.filter({ hasText: edited.label });
+      await row.locator(".sidebar-recent-session__name").dblclick();
+      const field = page.locator(".sidebar-recent-session__rename-input");
+      await field.fill("Release notes draft");
+      // Select the last word without depending on OS word-navigation shortcuts.
+      for (const _ of "draft") {
+        await field.press("Shift+ArrowLeft");
+      }
+      const selection = () =>
+        field.evaluate((el: HTMLInputElement) => [el.selectionStart, el.selectionEnd]);
+      const selected = await selection();
+      expect(selected[0]).toBeLessThan(selected[1]!);
+      const changed = { ...edited, updatedAt: now + 1, lastActivityAt: now + 1 };
+      await gateway.setSessionsListResponse(sessionsListResponse([changed, ...rows.slice(0, 2)]));
+      await gateway.emitGatewayEvent("sessions.changed", {
+        key: edited.key,
+        sessionKey: edited.key,
+        sessionId: edited.sessionId,
+        agentId: "main",
+        reason: "agent.run.finished",
+        session: changed,
+        ancestorSessions: [],
+        ts: now + 1,
+      });
+      await expect
+        .poll(() =>
+          evaluateControlUiContext(
+            page,
+            ({ sessions }, key) =>
+              sessions.presentation.result?.sessions.find(
+                (matchingSession) => matchingSession.key === key,
+              )?.lastActivityAt,
+            edited.key,
+          ),
+        )
+        .toBe(changed.lastActivityAt);
+      expect(await list.last().getAttribute("data-session-key")).toBe(edited.key);
+      expect(await field.evaluate((el) => el === document.activeElement)).toBe(true);
+      expect(await selection()).toEqual(selected);
+      expect(await gateway.getRequests("sessions.patch")).toEqual([]);
+      await page.keyboard.type("review");
+      expect(await field.inputValue()).toBe("Release notes review");
+      await field.press("Tab");
+      await gateway.waitForRequest("sessions.patch", {
+        match: { key: edited.key, label: "Release notes review" },
+      });
+      expect(await gateway.getRequests("sessions.patch")).toHaveLength(1);
+      await expect.poll(() => list.first().getAttribute("data-session-key")).toBe(edited.key);
+    }));
   it.each([
     { width: 390, height: 844, mobile: true },
     { width: 1280, height: 900, mobile: false },
@@ -406,7 +471,7 @@ suite.define(() => {
       await expect.poll(() => name.locator("xpath=ancestor::a").count()).toBe(1);
       expect(await page.locator(".sidebar-recent-session input").count()).toBe(0);
       const opened = context.waitForEvent("page");
-      await name.click({ modifiers: ["Control"] });
+      await name.click({ modifiers: ["ControlOrMeta"] });
       const linked = await opened;
       await linked.waitForURL(/viewer/);
       await expect.poll(() => title.textContent()).toContain("Shared reference");

@@ -7,6 +7,7 @@ import {
 } from "./agent-tools.before-tool-call.state.js";
 import { projectPluginMessageDeliveryFact } from "./embedded-agent-message-delivery.js";
 import type { EmbeddedRunAttemptParams } from "./embedded-agent-runner/run/types.js";
+import { isToolCallDispatcherName, unwrapToolCallForDisplay } from "./tool-display-call.js";
 import { buildToolEffectReceipt, readToolEffectReceipt } from "./tool-effect-receipt.js";
 import type { ToolErrorSummary } from "./tool-error-summary.js";
 import { buildToolMutationState } from "./tool-mutation.js";
@@ -73,8 +74,14 @@ export function createToolTerminalObserver(
       const terminalDiagnostic =
         observation.failure?.terminalDiagnostic ??
         (executionStarted ? readTimeoutDiagnostic(observation.result) : undefined);
+      const dispatchedToolName = isToolCallDispatcherName(observation.toolName)
+        ? unwrapToolCallForDisplay({ name: observation.toolName, args: executedArguments }).name
+        : undefined;
       lastToolError = {
         toolName: observation.toolName,
+        ...(dispatchedToolName && dispatchedToolName !== observation.toolName
+          ? { dispatchedToolName }
+          : {}),
         ...(observation.meta ? { meta: observation.meta } : {}),
         ...observation.failure,
         ...(terminalDiagnostic ? { terminalDiagnostic } : {}),
@@ -84,8 +91,12 @@ export function createToolTerminalObserver(
     } else if (
       !preservesFailure &&
       lastToolError &&
-      normalizeLowercaseStringOrEmpty(lastToolError.toolName) ===
-        normalizeLowercaseStringOrEmpty(observation.toolName)
+      // A call to a missing tool did nothing and has no name a retry could reuse, so the
+      // next successful executed call recovers it. Otherwise only the same tool recovers.
+      (lastToolError.unknownTool
+        ? executionStarted
+        : normalizeLowercaseStringOrEmpty(lastToolError.toolName) ===
+          normalizeLowercaseStringOrEmpty(observation.toolName))
     ) {
       lastToolError = undefined;
     }

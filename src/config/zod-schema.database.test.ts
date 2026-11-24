@@ -58,6 +58,7 @@ describe("database config", () => {
     {},
     { engine: "sqlite" },
     { engine: "postgres" },
+    { engine: "postgres", postgres: { schemaPrefix: "pgopenclaw" } },
     { families: familyEngines(Array.from({ length: 5 }, () => "postgres")) },
     { families: {} },
     {
@@ -79,6 +80,21 @@ describe("database config", () => {
     },
   ])("preserves optional database config %j for runtime admission", (database) => {
     expect(OpenClawSchema.parse({ database }).database).toEqual(database);
+  });
+
+  it.each(["pg", "pg_openclaw"])("reports reserved PostgreSQL schema prefix %s", (schemaPrefix) => {
+    const result = validateConfigObjectRaw({
+      database: { engine: "postgres", postgres: { schemaPrefix } },
+    });
+    expect(result).toMatchObject({
+      ok: false,
+      issues: [
+        {
+          path: "database.postgres.schemaPrefix",
+          message: expect.stringContaining("reserved PostgreSQL schema names"),
+        },
+      ],
+    });
   });
 
   it.each([

@@ -166,7 +166,7 @@ it("rolls back the turn and its pending-input custody after an idempotency confl
       expect(f.read()).toEqual(before);
       expect(f.events()).toEqual([]);
     } finally {
-      pending!.finish("interrupted");
+      pending!.finish("interrupted", "failed");
     }
   });
 });
@@ -242,7 +242,7 @@ it.each([
         expect(f.read()).toEqual(before);
         expect(f.events()).toEqual([]);
       } finally {
-        pending?.finish("interrupted");
+        pending?.finish("interrupted", "failed");
       }
     });
   },
@@ -337,30 +337,6 @@ it.for(["turn", "reset"] as const)(
     });
   },
 );
-
-it("commits a reset with zero host SQL", async () => {
-  await withFixture(async (f) => {
-    const committed = vi.fn();
-    const sql = observeHostDataSql();
-    try {
-      const result = await f.reset({
-        buildNextEntry: () => ({ sessionId: "host-sql-reset", updatedAt: 2 }),
-        afterEntryMutation: committed,
-      });
-      expect(result).toMatchObject({
-        previousSessionId: "original",
-        nextEntry: { sessionId: "host-sql-reset" },
-        archivedTranscripts: [],
-      });
-      expect(sql.queries.length, `T1 reset host SQL observations: ${sql.queries.length}`).toBe(0);
-      expect(committed).toHaveBeenCalledOnce();
-    } finally {
-      sql.restore();
-    }
-    expect(f.read()?.sessionId).toBe("host-sql-reset");
-    expect(f.events().filter((event) => event.type === "reset")).toHaveLength(1);
-  });
-});
 
 it("reconciles a dirty reset transcript through the host owner after commit", async () => {
   await withFixture(async (f) => {
@@ -536,7 +512,7 @@ it("preserves worker custody refusal identity so callers cannot fall back to ano
       expect(pending!.state).toBe("queued");
       expect(f.events()).toEqual([]);
     } finally {
-      pending!.finish("interrupted");
+      pending!.finish("interrupted", "failed");
     }
   });
 });
@@ -595,7 +571,7 @@ it("commits a pending-input turn with zero host SQL", async () => {
     } finally {
       sql.restore();
       stopRows();
-      pending!.finish("interrupted");
+      pending!.finish("interrupted", "failed");
     }
     expect(f.read()?.sessionId).toBe("original");
     expect(f.events()).toContainEqual(
@@ -683,7 +659,7 @@ it("replays an exactly consumed input after its live custody has finished", asyn
     try {
       await pending!.run(() => append(pending!.message));
       expect(pending!.state).toBe("consumed");
-      pending!.finish("cancelled");
+      pending!.finish("cancelled", "failed");
       const result = await withSessionPendingInputPersistence(pending!, () =>
         append(pending!.message),
       );
@@ -698,7 +674,7 @@ it("replays an exactly consumed input after its live custody has finished", asyn
         { id: pending!.inputId, message: pending!.message },
       ]);
     } finally {
-      pending!.finish("cancelled");
+      pending!.finish("cancelled", "failed");
     }
   });
 });

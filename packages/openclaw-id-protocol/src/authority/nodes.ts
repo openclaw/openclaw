@@ -23,6 +23,7 @@ import { withoutSpentInvites } from "./invite-retention.js";
 import {
   applied,
   ownerLookup,
+  isMemberRecoveryKey,
   proofKeyHex,
   refuse,
   type AuthorityEvent,
@@ -190,6 +191,7 @@ export async function addNode(
 /** A raw key cannot have both node authority and human/root authority, even with a different prefix. */
 export function isHumanKey(state: AuthorityState, key: IrohEndpointKey): boolean {
   return (
+    isMemberRecoveryKey(state, key) ||
     formatIrohEndpointKey(rawPublicKey(state.anchor.root_pub)) === key ||
     Object.values(state.owner_devices).some(
       (record) =>
