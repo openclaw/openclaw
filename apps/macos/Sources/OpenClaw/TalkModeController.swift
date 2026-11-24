@@ -39,15 +39,6 @@ final class TalkModeController {
 
     func stopChime() {
         self.chimePlayer.stop()
-        self.listeningSoundCovered = false
-    }
-
-    /// A status chime is about to mark the next listening transition. Skip the built-in
-    /// listening sound for that one transition so the user hears a single cue.
-    @ObservationIgnored private var listeningSoundCovered = false
-
-    func coverNextListeningSound() {
-        self.listeningSoundCovered = true
     }
 
     private let logger = Logger(subsystem: "ai.openclaw", category: "talk.controller")
@@ -141,10 +132,8 @@ final class TalkModeController {
         }
         self.owners.overlay.updatePhase(phase)
 
-        let covered = self.listeningSoundCovered
-        self.listeningSoundCovered = false
-        if phase != previousPhase, !(covered && phase == .listening) {
-            self.playPhaseSound(phase, previousPhase: previousPhase)
+        if let soundName = Self.phaseSoundName(from: previousPhase, to: phase) {
+            self.playPhaseSound(named: soundName)
         }
         self.publishPhase()
     }
@@ -156,22 +145,16 @@ final class TalkModeController {
         Task { [publishTalk] in await publishTalk(enabled, effectivePhase) }
     }
 
-    private func playPhaseSound(_ phase: TalkModePhase, previousPhase: TalkModePhase) {
+    /// Only the thinking phase has a built-in sound. Listening and reply readiness are marked by
+    /// the Talk status chimes, and speech announces itself.
+    static func phaseSoundName(from previous: TalkModePhase, to phase: TalkModePhase) -> String? {
+        phase == .thinking && previous != .thinking ? "Tink" : nil
+    }
+
+    private func playPhaseSound(named soundName: String) {
         guard let state = self.state() else { return }
         guard !state.isPreview, state.talkPhaseSoundsEnabled else { return }
-        let soundName: String? = switch phase {
-        case .thinking:
-            "Tink"
-        case .speaking:
-            "Pop"
-        case .listening:
-            previousPhase == .speaking ? "Bottle" : "Submarine"
-        case .idle:
-            nil
-        }
-        if let soundName {
-            NSSound(named: NSSound.Name(soundName))?.play()
-        }
+        NSSound(named: NSSound.Name(soundName))?.play()
     }
 
     func updateLevel(_ level: Double) {

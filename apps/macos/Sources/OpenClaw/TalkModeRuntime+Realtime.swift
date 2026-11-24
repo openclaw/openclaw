@@ -127,11 +127,6 @@ extension TalkModeRuntime {
         let gate = optedIn ? OSAllocatedUnfairLock(initialState: true) : nil
         defer { gate?.withLock { $0 = false } }
         let recognitionStarted = await startRecognition(lifecycleGeneration: generation, chimeGate: gate)
-        var readyPreview = self.chimeLifecycle
-        if recognitionStarted, readyPreview.ready(enabled: optedIn) != nil {
-            // The wake chime marks this listening transition; skip the built-in listening sound.
-            await MainActor.run { self.controller()?.coverNextListeningSound() }
-        }
         guard await self.commitNativeFallback(
             recognitionStarted: recognitionStarted,
             lifecycleGeneration: generation,
@@ -259,7 +254,6 @@ extension TalkModeRuntime {
         _ = await self.projectRealtimeRelay(relayGeneration, session) {
             self.controller()?.updateActiveRoute(isRealtime: true)
             self.controller()?.updatePartialTranscript("")
-            if wakeCue != nil { self.controller()?.coverNextListeningSound() }
             self.controller()?.updatePhase(.listening)
         }
         logger.info(

@@ -699,8 +699,6 @@ extension TalkModeRuntime {
         if let cue {
             await self.playChime(cue)
             guard self.isCurrent(lifecycleGeneration), !self.isPaused else { return }
-            // The reply chime replaces the built-in listening sound for this transition.
-            await MainActor.run { self.controller()?.coverNextListeningSound() }
         }
         await self.startListening()
     }
