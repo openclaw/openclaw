@@ -1,4 +1,5 @@
 import { Buffer } from "node:buffer";
+import { createHash } from "node:crypto";
 import { convertToLlm } from "openclaw/plugin-sdk/agent-core";
 import {
   isTranscriptOnlyOpenClawAssistantMessage,
@@ -17,6 +18,11 @@ import { readUpstreamUserText } from "./upstream-prompt-provenance.js";
 const MAX_RESPONSE_ITEMS = 200;
 const MAX_PROJECTION_BYTES = 512 * 1024;
 const MAX_TEXT_BYTES = 64 * 1024;
+const MAX_WIRE_CALL_ID_LENGTH = 64;
+const WIRE_CALL_ID_PREFIX = "call_";
+const WIRE_CALL_ID_DIGEST_LENGTH = 16;
+const MAX_WIRE_CALL_ID_SLUG_LENGTH =
+  MAX_WIRE_CALL_ID_LENGTH - WIRE_CALL_ID_PREFIX.length - 1 - WIRE_CALL_ID_DIGEST_LENGTH;
 // Projected names replay as function_call history items, which Codex
 // thread/inject_items deserializes as free-form strings (ResponseItem::FunctionCall).
 // Codex records MCP and connector calls under dotted namespaced ids
@@ -45,9 +51,139 @@ function requireToolName(value: unknown): string {
   return name;
 }
 
+function formatShortCallId(rawId: string, attempt: number): string {
+  const body = rawId.startsWith(WIRE_CALL_ID_PREFIX)
+    ? rawId.slice(WIRE_CALL_ID_PREFIX.length)
+    : rawId;
+  const slug = body
+    .replace(/[^A-Za-z0-9_-]+/g, "_")
+    .replace(/^_+|_+$/g, "")
+    .slice(0, MAX_WIRE_CALL_ID_SLUG_LENGTH)
+    .replace(/_+$/g, "");
+  const digest = createHash("sha256")
+    .update(`codex-call-id:${attempt}:`)
+    .update(rawId)
+    .digest("base64url")
+    .slice(0, WIRE_CALL_ID_DIGEST_LENGTH);
+  return slug ? `${WIRE_CALL_ID_PREFIX}${slug}_${digest}` : `${WIRE_CALL_ID_PREFIX}${digest}`;
+}
+
+function replaceItemCallIds(items: JsonValue[], oldWireId: string, newWireId: string): void {
+  for (const item of items) {
+    if (
+      isRecord(item) &&
+      (item.type === "function_call" || item.type === "function_call_output") &&
+      item.call_id === oldWireId
+    ) {
+      item.call_id = newWireId;
+    }
+  }
+}
+
+function collectItemCallIds(items: readonly JsonValue[]): Set<string> {
+  const callIds = new Set<string>();
+  for (const item of items) {
+    if (
+      isRecord(item) &&
+      (item.type === "function_call" || item.type === "function_call_output") &&
+      typeof item.call_id === "string"
+    ) {
+      callIds.add(item.call_id);
+    }
+  }
+  return callIds;
+}
+
+class WireCallIdMap {
+  private readonly wireByRaw = new Map<string, string>();
+  private readonly rawByWire = new Map<string, string>();
+
+  constructor(
+    private readonly seenCallIds: ReadonlySet<string>,
+    private readonly onReassign: (oldWireId: string, newWireId: string) => void,
+  ) {}
+
+  private allocateWireId(rawId: string, excluded?: ReadonlySet<string>): string {
+    for (let attempt = 0; ; attempt += 1) {
+      const candidate = formatShortCallId(rawId, attempt);
+      if (
+        !this.seenCallIds.has(candidate) &&
+        !this.rawByWire.has(candidate) &&
+        !excluded?.has(candidate)
+      ) {
+        return candidate;
+      }
+    }
+  }
+
+  registerCall(rawId: string): string {
+    if (rawId.length <= MAX_WIRE_CALL_ID_LENGTH) {
+      const owner = this.rawByWire.get(rawId);
+      if (owner !== undefined) {
+        const replacement = this.allocateWireId(owner);
+        this.rawByWire.delete(rawId);
+        this.wireByRaw.set(owner, replacement);
+        this.rawByWire.set(replacement, owner);
+        this.onReassign(rawId, replacement);
+      }
+      return rawId;
+    }
+    const wireId = this.allocateWireId(rawId);
+    this.wireByRaw.set(rawId, wireId);
+    this.rawByWire.set(wireId, rawId);
+    return wireId;
+  }
+
+  resolveResult(rawId: string): string {
+    if (rawId.length <= MAX_WIRE_CALL_ID_LENGTH) {
+      return rawId;
+    }
+    const mapped = this.wireByRaw.get(rawId);
+    if (!mapped) {
+      throw new CodexHistoryRejection("invalid_pairing");
+    }
+    return mapped;
+  }
+
+  avoid(excluded: ReadonlySet<string>): void {
+    if (excluded.size === 0 || this.rawByWire.size === 0) {
+      return;
+    }
+    const snapshot = Array.from(this.rawByWire.entries());
+    for (const [wireId, rawId] of snapshot) {
+      if (excluded.has(wireId)) {
+        const replacement = this.allocateWireId(rawId, excluded);
+        this.rawByWire.delete(wireId);
+        this.wireByRaw.set(rawId, replacement);
+        this.rawByWire.set(replacement, rawId);
+        this.onReassign(wireId, replacement);
+      }
+    }
+  }
+
+  release(rawIds: readonly string[]): void {
+    for (const rawId of rawIds) {
+      const wireId = this.wireByRaw.get(rawId);
+      if (wireId !== undefined) {
+        this.wireByRaw.delete(rawId);
+        if (this.rawByWire.get(wireId) === rawId) {
+          this.rawByWire.delete(wireId);
+        }
+      }
+    }
+  }
+
+  clear(): void {
+    this.wireByRaw.clear();
+    this.rawByWire.clear();
+  }
+}
+
 class HistoryProjection {
   readonly items: JsonValue[] = [];
   readonly pending = new Map<string, string>();
+  readonly mappedOverlengthRawIds: string[] = [];
+  private readonly wireCallIds: WireCallIdMap;
   completedResults = 0;
   omitted = false;
   bytes = 0;
@@ -55,7 +191,14 @@ class HistoryProjection {
   constructor(
     private readonly seenCallIds: Set<string>,
     private readonly oversized: "reject" | "omit",
-  ) {}
+    wireCallIds?: WireCallIdMap,
+  ) {
+    this.wireCallIds =
+      wireCallIds ??
+      new WireCallIdMap(seenCallIds, (oldWireId, newWireId) => {
+        replaceItemCallIds(this.items, oldWireId, newWireId);
+      });
+  }
 
   private readBoundedText(value: unknown, maxBytes = MAX_TEXT_BYTES): string | undefined {
     if (typeof value !== "string" || !value.trim()) {
@@ -173,9 +316,16 @@ class HistoryProjection {
         const name = requireToolName(value.name ?? value.toolName);
         const args = this.serializeToolArguments(value.arguments ?? value.input);
         this.recordCall(id, name);
+        if (this.omitted) {
+          continue;
+        }
+        const wireId = this.wireCallIds.registerCall(id);
+        if (id.length > MAX_WIRE_CALL_ID_LENGTH) {
+          this.mappedOverlengthRawIds.push(id);
+        }
         this.appendItem({
           type: "function_call",
-          call_id: id,
+          call_id: wireId,
           name,
           arguments: args,
         });
@@ -251,7 +401,11 @@ class HistoryProjection {
         : MAX_TEXT_BYTES,
     );
     this.recordResult(id, name);
-    this.appendItem({ type: "function_call_output", call_id: id, output });
+    if (this.omitted) {
+      return;
+    }
+    const wireId = this.wireCallIds.resolveResult(id);
+    this.appendItem({ type: "function_call_output", call_id: wireId, output });
   }
 
   append(message: AgentMessage): void {
@@ -308,6 +462,8 @@ class HistoryProjection {
     this.omitted = true;
     this.items.length = 0;
     this.bytes = 0;
+    this.wireCallIds.release(this.mappedOverlengthRawIds);
+    this.mappedOverlengthRawIds.length = 0;
   }
 
   private appendItem(item: JsonValue): void {
@@ -367,19 +523,28 @@ const OMITTED_HISTORY: JsonValue = {
 export class SettledTurnPriorContext {
   private groups: HistoryProjection[] = [];
   private active: HistoryProjection;
+  private readonly wireCallIds: WireCallIdMap;
   private omitted = false;
   private count = 0;
   private bytes = 0;
 
   constructor(private readonly seenCallIds: Set<string>) {
-    this.active = new HistoryProjection(seenCallIds, "omit");
+    this.wireCallIds = new WireCallIdMap(seenCallIds, (oldWireId, newWireId) => {
+      for (const group of this.groups) {
+        replaceItemCallIds(group.items, oldWireId, newWireId);
+      }
+      if (this.groups.at(-1) !== this.active) {
+        replaceItemCallIds(this.active.items, oldWireId, newWireId);
+      }
+    });
+    this.active = new HistoryProjection(seenCallIds, "omit", this.wireCallIds);
   }
 
   append(message: AgentMessage): void {
     // A user message while a tool is in flight steers the same atomic group.
     if (message.role === "user" && this.active.pending.size === 0) {
       this.finishGroup();
-      this.active = new HistoryProjection(this.seenCallIds, "omit");
+      this.active = new HistoryProjection(this.seenCallIds, "omit", this.wireCallIds);
     }
     const wasOmitted = this.active.omitted;
     this.active.append(message);
@@ -387,6 +552,7 @@ export class SettledTurnPriorContext {
       // An oversized prior turn is omitted as a whole, not replayed as a partial
       // tool exchange. Older groups are no longer a contiguous context suffix.
       this.groups = [];
+      this.wireCallIds.clear();
       this.count = 0;
       this.bytes = 0;
       this.omitted = true;
@@ -415,6 +581,7 @@ export class SettledTurnPriorContext {
         // notice cannot fit; the finalizer instructions also warn about omissions.
         return false;
       }
+      this.wireCallIds.release(oldest.mappedOverlengthRawIds);
       this.count -= oldest.items.length;
       this.bytes -= oldest.bytes;
       this.omitted = true;
@@ -427,6 +594,7 @@ export class SettledTurnPriorContext {
       // The verified current turn is a safe boundary; earlier user steering was not.
       // An unfinished exchange leaves no contiguous, complete prior suffix to replay.
       this.groups = [];
+      this.wireCallIds.clear();
       this.count = 0;
       this.bytes = 0;
       this.omitted = true;
@@ -437,6 +605,7 @@ export class SettledTurnPriorContext {
       current.length,
       current.reduce<number>((bytes, item) => bytes + responseItemBytes(item), 0),
     );
+    this.wireCallIds.avoid(collectItemCallIds(current));
     return [
       ...(includeNotice ? [OMITTED_HISTORY] : []),
       ...this.groups.flatMap((group) => group.items),

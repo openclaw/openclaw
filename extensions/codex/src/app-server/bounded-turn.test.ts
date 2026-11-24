@@ -1,7 +1,11 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { AgentHarnessModelRequestPolicyError } from "openclaw/plugin-sdk/agent-harness-runtime";
+import {
+  AgentHarnessModelRequestPolicyError,
+  type AgentMessage,
+} from "openclaw/plugin-sdk/agent-harness-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { afterEach, expect, it, vi } from "vitest";
 import { runBoundedCodexAppServerTurn } from "./bounded-turn.js";
 import {
@@ -11,8 +15,10 @@ import {
   threadStartResult,
 } from "./bounded-turn.test-harness.js";
 import type { JsonValue } from "./protocol.js";
+import { projectVerifiedSettledCodexMessages } from "./settled-turn-evidence.js";
 import * as shared from "./shared-client.js";
 import { createClientHarness } from "./test-support.js";
+import { attachCodexMirrorIdentity } from "./upstream-prompt-provenance.js";
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -637,4 +643,45 @@ it("fails before history injection when the started thread exposes an MCP server
   );
   expect(fake.methods).not.toContain("thread/inject_items");
   expect(fake.methods).not.toContain("turn/start");
+});
+
+function settledExchange(turn: string, id: string): AgentMessage[] {
+  const wrap = (value: unknown, suffix: string) =>
+    attachCodexMirrorIdentity(value as AgentMessage, `${turn}:${suffix}`);
+  const content = [{ type: "toolCall", id, name: "message", arguments: {} }];
+  const text = [{ type: "text", text: "Delivered." }];
+  return [
+    wrap({ role: "user", content: `Prompt ${turn}.` }, "prompt"),
+    wrap({ role: "assistant", content }, "tool:call"),
+    wrap({ role: "toolResult", toolCallId: id, toolName: "message", content: text }, "tool:result"),
+  ];
+}
+
+function assertNormalizedInjectedCallIds(params: unknown): void {
+  const items = isRecord(params) && Array.isArray(params.items) ? params.items : [];
+  const callIds = items.flatMap((i) =>
+    isRecord(i) && typeof i.call_id === "string" ? [i.call_id] : [],
+  );
+  expect(callIds).toHaveLength(4);
+  for (const callId of callIds) {
+    expect(callId.length).toBeLessThanOrEqual(64);
+    expect(callId).toMatch(/^call_[A-Za-z0-9_-]{1,59}$/);
+  }
+  expect([callIds[0], callIds[2]]).toEqual([callIds[1], callIds[3]]);
+  expect(callIds[0]).not.toBe(callIds[2]);
+}
+
+it("injects normalized call IDs within 64 characters for overlength settled history", async () => {
+  const prior = settledExchange("prior", `call_${"p".repeat(36)}|fc_${"q".repeat(38)}`);
+  const current = settledExchange("current", `call_${"c".repeat(36)}|fc_${"d".repeat(38)}`);
+  const historyItems = projectVerifiedSettledCodexMessages([...prior, ...current], {
+    mirroredMessages: current,
+    settledMessages: current,
+    turnId: "current",
+  });
+  const fake = createClientFactory();
+  await expect(
+    runRestricted(fake, { taskLabel: "settled-turn finalization", historyItems }),
+  ).resolves.toMatchObject(success);
+  assertNormalizedInjectedCallIds(requestParams(fake, "thread/inject_items"));
 });

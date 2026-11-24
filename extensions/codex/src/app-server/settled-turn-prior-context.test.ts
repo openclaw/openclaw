@@ -1,4 +1,6 @@
+import { createHash } from "node:crypto";
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { expect, it } from "vitest";
 import { CodexHistoryRejection } from "./history-rejection.js";
 import { projectVerifiedSettledCodexMessages } from "./settled-turn-evidence.js";
@@ -135,6 +137,52 @@ it("omits a valid oversized tool exchange and retains the complete nearest suffi
     projectedText("user", "Check the result."),
     { type: "function_call", call_id: "current-call", name: "lookup", arguments: "{}" },
     { type: "function_call_output", call_id: "current-call", output: "Verified." },
+  ]);
+  expect(history).toEqual(before);
+});
+
+function readProjectedCallIds(items: readonly unknown[]): string[] {
+  const ids = items.flatMap((i) =>
+    isRecord(i) && typeof i.call_id === "string" ? [i.call_id] : [],
+  );
+  for (const callId of ids) {
+    expect(callId.length).toBeLessThanOrEqual(64);
+    expect(callId).toMatch(/^call_[A-Za-z0-9_-]{1,59}$/);
+  }
+  return ids;
+}
+
+it("normalizes overlength call IDs across verified turns without mutating inputs", () => {
+  const priorFirstId = `call_${"a".repeat(36)}|fc_${"b".repeat(38)}`;
+  const priorCollidingId = `call_prior_collide_${"p".repeat(64)}`;
+  const currentId = `call_${"c".repeat(36)}|fc_${"d".repeat(38)}`;
+  const digest = createHash("sha256")
+    .update(`codex-call-id:0:${priorCollidingId}`)
+    .digest("base64url")
+    .slice(0, 16);
+  const shortId = `call_${priorCollidingId.slice(5, 47)}_${digest}`;
+  const prior = [...exchange("p1", priorFirstId), ...exchange("p2", priorCollidingId)];
+  const current = [
+    ...exchange("current", shortId),
+    message(toolCall(currentId), "current:tool:long:call"),
+    message(toolResult(currentId), "current:tool:long:result"),
+  ];
+  const history = [...prior, ...current];
+  const before = structuredClone(history);
+  const ids = readProjectedCallIds(
+    projectVerifiedSettledCodexMessages(history, {
+      mirroredMessages: current,
+      settledMessages: current,
+      turnId: "current",
+    }),
+  );
+  expect([ids.length, new Set(ids).size]).toEqual([8, 4]);
+  expect([ids[0], ids[2], ids[4], ids[5], ids[6]]).toEqual([
+    ids[1],
+    ids[3],
+    shortId,
+    shortId,
+    ids[7],
   ]);
   expect(history).toEqual(before);
 });

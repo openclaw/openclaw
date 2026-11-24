@@ -1,8 +1,11 @@
+import { Buffer } from "node:buffer";
+import { createHash } from "node:crypto";
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { MEDIA_ONLY_USER_TEXT } from "openclaw/plugin-sdk/codex-session-transcript-runtime";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { describe, expect, it } from "vitest";
 import { CodexHistoryRejection } from "./history-rejection.js";
-import { projectSettledCodexMessages } from "./settled-turn-projection.js";
+import { projectSettledCodexMessages, SettledTurnPriorContext } from "./settled-turn-projection.js";
 import { attachUpstreamUserText } from "./upstream-prompt-provenance.js";
 
 function message(value: unknown): AgentMessage {
@@ -30,6 +33,24 @@ function toolResult(
     content,
   });
 }
+
+const WIRE_RE = /^call_[A-Za-z0-9_-]{1,59}$/;
+const exchange = (id: string): AgentMessage[] => [toolCall(id), toolResult(id)];
+const userMsg = (content: string) => message({ role: "user", content });
+const userItem = (text: string) => ({
+  type: "message",
+  role: "user",
+  content: [{ type: "input_text", text }],
+});
+const itemUtf8Bytes = (item: unknown) => Buffer.byteLength(JSON.stringify(item), "utf8");
+const callPairs = (items: readonly unknown[]) =>
+  items.flatMap((i) =>
+    isRecord(i) && typeof i.type === "string" && typeof i.call_id === "string"
+      ? [{ type: i.type, callId: i.call_id }]
+      : [],
+  );
+const projectIds = (msgs: readonly AgentMessage[]) =>
+  callPairs(projectSettledCodexMessages(msgs)).map((p) => p.callId);
 
 describe("projectSettledCodexMessages", () => {
   it("projects a canonical completed tool exchange without exposing reasoning", () => {
@@ -369,4 +390,192 @@ describe("projectSettledCodexMessages", () => {
       ]),
     ).toThrow("field_limit");
   });
+
+  it("deterministically normalizes an 83-character compound call_id", () => {
+    const overlongId = `call_${"a".repeat(36)}|fc_${"b".repeat(38)}`;
+    expect(overlongId).toHaveLength(83);
+    const input = [userMsg("Check status."), ...exchange(overlongId)];
+    const first = projectSettledCodexMessages(input);
+    expect(projectSettledCodexMessages(input)).toEqual(first);
+    const pairs = callPairs(first);
+    expect(pairs).toEqual([
+      { type: "function_call", callId: expect.stringMatching(WIRE_RE) },
+      { type: "function_call_output", callId: pairs[0]?.callId },
+    ]);
+    assertWireIds(pairs.map((pair) => pair.callId));
+  });
+
+  it("preserves <=64-character IDs verbatim while shortening 65-character IDs", () => {
+    const exact64 = `provider-${"x".repeat(55)}`;
+    const overlong65 = `provider-${"x".repeat(56)}`;
+    expect([exact64.length, overlong65.length]).toEqual([64, 65]);
+    const ids = projectIds([...exchange("call-1"), ...exchange(exact64), ...exchange(overlong65)]);
+    expect(ids).toEqual(["call-1", "call-1", exact64, exact64, ids[4], ids[4]]);
+    assertWireIds(ids.slice(4));
+  });
+
+  it("distinguishes 83-character IDs sharing an 82-character prefix", () => {
+    const prefix = `call_${"p".repeat(77)}`;
+    const ids = projectIds([...exchange(`${prefix}1`), ...exchange(`${prefix}2`)]);
+    assertWireIds(ids);
+    expect([ids[0], ids[2]]).toEqual([ids[1], ids[3]]);
+    expect(ids[0]).not.toBe(ids[2]);
+  });
+
+  it("normalizes non-ASCII and symbol-only overlength IDs into valid ASCII wire IDs", () => {
+    const ids = projectIds([
+      ...exchange("あ".repeat(80)),
+      ...exchange(`::||${"@#$%^&*".repeat(11)}::`),
+    ]);
+    assertWireIds(ids);
+    expect([ids[0], ids[2]]).toEqual([ids[1], ids[3]]);
+    expect(ids[0]).not.toBe(ids[2]);
+    expect(ids[0]?.length).toBeGreaterThanOrEqual(21);
+    expect(ids[2]?.length).toBeGreaterThanOrEqual(21);
+  });
+
+  it("avoids single-turn collisions in both orders including concurrent tool calls", () => {
+    const overlongId = `call_single_turn_${"q".repeat(66)}`;
+    const shortId = defaultWireId(overlongId);
+    const shortFirst = projectIds([...exchange(shortId), ...exchange(overlongId)]);
+    assertWireIds(shortFirst);
+    expect(shortFirst.slice(0, 3)).toEqual([shortId, shortId, shortFirst[3]]);
+    expect(shortFirst[2]).not.toBe(shortId);
+
+    const overFirst = projectIds([...exchange(overlongId), ...exchange(shortId)]);
+    assertWireIds(overFirst);
+    expect([overFirst[0], overFirst[2], overFirst[3]]).toEqual([overFirst[1], shortId, shortId]);
+    expect(overFirst[0]).not.toBe(shortId);
+
+    const calls = [
+      { type: "toolCall", id: overlongId, name: "message", arguments: { step: 1 } },
+      { type: "toolCall", id: shortId, name: "message", arguments: { step: 2 } },
+    ];
+    const concurrent = projectIds([
+      message({ role: "assistant", content: calls }),
+      toolResult(overlongId),
+      toolResult(shortId),
+    ]);
+    assertWireIds(concurrent);
+    expect(concurrent).toEqual([concurrent[2], shortId, concurrent[2], shortId]);
+    expect(concurrent[0]).not.toBe(shortId);
+  });
+
+  it("budgets prior-context trimming against normalized wire bytes", () => {
+    const c64 = "c".repeat(64);
+    const args = '{"action":"send"}';
+    const callItem = { type: "function_call", call_id: c64, name: "message", arguments: args };
+    const outItem = { type: "function_call_output", call_id: c64, output: "Message sent." };
+    const pairCost = itemUtf8Bytes(callItem) + itemUtf8Bytes(outItem);
+    const chunkCost = itemUtf8Bytes(userItem("x".repeat(60 * 1024)));
+    const fixed = itemUtf8Bytes(userItem("Earlier turn.")) + 3 * pairCost + 8 * chunkCost;
+    const filler = 512 * 1024 - fixed - itemUtf8Bytes(userItem(""));
+    const priorMsgs = [
+      userMsg("Earlier turn."),
+      ...exchange(`call_prior_first_${"a".repeat(230)}`),
+      ...exchange(`call_prior_second_${"b".repeat(229)}`),
+    ];
+    const currentMsgs = [
+      ...Array.from({ length: 8 }, () => userMsg("x".repeat(60 * 1024))),
+      userMsg("y".repeat(filler)),
+      ...exchange(`call_current_${"c".repeat(70)}`),
+    ];
+    const combined = projectCombined(priorMsgs, currentMsgs);
+    expect(combined[0]).toEqual(userItem("Earlier turn."));
+    const ids = callPairs(combined).map((pair) => pair.callId);
+    expect(ids).toHaveLength(6);
+    assertWireIds(ids);
+  });
+
+  it("releases evicted overlength mappings when sliding-window trim shifts older groups", () => {
+    const evictedId = `call_evicted_oldest_${"e".repeat(63)}`;
+    const evictedWireId = defaultWireId(evictedId);
+    const windowTurns = Array.from({ length: 70 }, (_, i) => [
+      userMsg(`Window turn ${i}.`),
+      ...exchange(`call_window_${String(i).padStart(3, "0")}_${"w".repeat(67)}`),
+    ]).flat();
+    const combined = projectCombined(
+      [userMsg("Evicted oldest group."), ...exchange(evictedId), ...windowTurns],
+      [userMsg("Current."), ...exchange(evictedWireId), ...exchange(`call_live_${"g".repeat(69)}`)],
+    );
+    expect(JSON.stringify(combined[0])).toContain("Earlier conversation was omitted");
+    expect(JSON.stringify(combined)).not.toContain("Evicted oldest group.");
+    const ids = callPairs(combined).map((pair) => pair.callId);
+    assertWireIds(ids);
+    const tail = ids.slice(-4);
+    expect(tail).toEqual([evictedWireId, evictedWireId, tail[3], tail[3]]);
+    expect(tail[2]).not.toBe(evictedWireId);
+  });
+
+  it("avoids cross-turn collisions between surviving prior and current turns", () => {
+    const priorLong = `call_cross_prior_${"m".repeat(66)}`;
+    const pri = defaultWireId(priorLong);
+    const currentLong = `call_cross_current_${"n".repeat(64)}`;
+    const cur = defaultWireId(currentLong);
+    const combined = projectCombined(
+      [userMsg("Prior."), ...exchange(priorLong), ...exchange(cur)],
+      [userMsg("Current."), ...exchange(pri), ...exchange(currentLong)],
+    );
+    const ids = callPairs(combined).map((pair) => pair.callId);
+    expect(new Set(ids).size).toBe(4);
+    assertWireIds(ids);
+    expect(ids).toEqual([ids[0], ids[0], cur, cur, pri, pri, ids[6], ids[6]]);
+  });
+
+  it("stops pulling lazy iterables upon hitting item_limit with overlength IDs", () => {
+    expect(() => projectSettledCodexMessages(overlengthLazyOverflowMessages())).toThrowError(
+      new CodexHistoryRejection("item_limit"),
+    );
+  });
+
+  const project = projectSettledCodexMessages;
+  const dup = exchange(`call_dup_${"d".repeat(74)}`);
+  const badId = `call_mismatch_${"k".repeat(69)}`;
+  const wrongTool = message({ role: "toolResult", toolCallId: badId, toolName: "x", content: [] });
+  it.each([
+    ["duplicate overlength raw ID", "invalid_pairing", () => projectCombined(dup, dup)],
+    ["orphan overlength result", "invalid_pairing", () => project([toolResult(badId)])],
+    ["tool-name mismatch", "invalid_pairing", () => project([toolCall(badId), wrongTool])],
+    ["missing overlength result", "incomplete_pairing", () => project([toolCall(badId)])],
+    ["blank call ID", "invalid_content", () => project(exchange("   "))],
+    ["257-char call ID", "invalid_content", () => project(exchange(`call_${"z".repeat(252)}`))],
+  ] as const)("preserves %s rejection (%s)", (_label, reason, run) => {
+    expect(run).toThrowError(new CodexHistoryRejection(reason));
+  });
 });
+
+function assertWireIds(ids: readonly string[]): void {
+  for (const callId of ids) {
+    expect(callId.length).toBeLessThanOrEqual(64);
+    expect(callId).toMatch(WIRE_RE);
+  }
+}
+
+function projectCombined(priorMessages: readonly AgentMessage[], currentMessages: AgentMessage[]) {
+  const seenCallIds = new Set<string>();
+  const prior = new SettledTurnPriorContext(seenCallIds);
+  priorMessages.forEach((item) => prior.append(item));
+  return prior.prependTo(projectSettledCodexMessages(currentMessages, seenCallIds));
+}
+
+function defaultWireId(rawId: string): string {
+  const body = rawId.startsWith("call_") ? rawId.slice(5) : rawId;
+  const slug = body
+    .replace(/[^A-Za-z0-9_-]+/g, "_")
+    .replace(/^_+|_+$/g, "")
+    .slice(0, 42);
+  const trimmed = slug.replace(/_+$/g, "");
+  const d = createHash("sha256")
+    .update(`codex-call-id:0:${rawId}`)
+    .digest("base64url")
+    .slice(0, 16);
+  return trimmed ? `call_${trimmed}_${d}` : `call_${d}`;
+}
+
+function* overlengthLazyOverflowMessages(): Generator<AgentMessage> {
+  for (let index = 0; index < 101; index += 1) {
+    yield userMsg(`Step ${index}.`);
+    yield* exchange(`call_stream_${String(index).padStart(3, "0")}_${"s".repeat(67)}`);
+  }
+  throw new Error("generator pulled after item_limit rejection");
+}

@@ -40,6 +40,29 @@ type NativePhase =
   | "health"
   | "patch";
 
+const CALL_ID_TYPES = new Set([
+  "function_call",
+  "function_call_output",
+  "custom_tool_call",
+  "custom_tool_call_output",
+]);
+
+function findOverlengthInputCallId(input: unknown): { index: number; length: number } | undefined {
+  const list = Array.isArray(input) ? input : [];
+  const index = list.findIndex(
+    (e) =>
+      isJsonObject(e) &&
+      typeof e.type === "string" &&
+      CALL_ID_TYPES.has(e.type) &&
+      typeof e.call_id === "string" &&
+      e.call_id.length > 64,
+  );
+  const hit = index >= 0 ? list[index] : undefined;
+  return isJsonObject(hit) && typeof hit.call_id === "string"
+    ? { index, length: hit.call_id.length }
+    : undefined;
+}
+
 function event(type: string, fields: JsonObject) {
   return `event: ${type}\ndata: ${JSON.stringify({ type, ...fields })}\n\n`;
 }
@@ -94,6 +117,18 @@ async function createNativeFixture(
       }
       if (parsed.model !== NATIVE_MODEL && parsed.model !== HOST_MODEL) {
         response.writeHead(400).end();
+        return;
+      }
+      const overlengthCallId = !live ? findOverlengthInputCallId(parsed.input) : undefined;
+      if (overlengthCallId) {
+        const param = `input[${overlengthCallId.index}].call_id`;
+        const message =
+          `Invalid '${param}': string too long. Expected a string with maximum length 64, ` +
+          `but got a string with length ${overlengthCallId.length} instead.`;
+        const error = { message, type: "invalid_request_error", param, code: "invalid_value" };
+        response
+          .writeHead(400, { "Content-Type": "application/json" })
+          .end(JSON.stringify({ error }));
         return;
       }
       const actionPhase = phase === "action" || phase === "action-reasoning" || phase === "side";
