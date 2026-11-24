@@ -241,7 +241,10 @@ export function applyHistoryRun(
     return;
   }
   const snapshotStartedAt = asFiniteNumber(run.startedAt);
-  const persisted = run.textFromMessage != null && extractText(messages?.[run.textFromMessage]);
+  const source = run.textFromMessage;
+  const persisted = Array.isArray(source)
+    ? source.map((index) => extractText(messages?.[index])).join("\n\n")
+    : source != null && extractText(messages?.[source]);
   const bufferedText = (persisted || "") + (run.text ?? "");
   const liveMessage = runProjectionsBeforeApply[inFlightRunId]?.message;
   const usesSnapshotText =

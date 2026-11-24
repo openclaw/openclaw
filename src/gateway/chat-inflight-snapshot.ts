@@ -5,8 +5,8 @@ import type { ChatRunPlanSnapshot, ChatRunState } from "./server-chat-state.js";
 export type InFlightRunSnapshot = {
   runId: string;
   text: string;
-  /** This delivered row owns the cumulative pre-tool prefix; text is the remaining suffix. */
-  textFromMessage?: number;
+  /** Delivered rows own the pre-tool prefix, joined by blank lines; text is the remaining suffix. */
+  textFromMessage?: number | number[];
   startedAt?: number;
   /**
    * True when the in-flight run is owned by a native controller attempt and can

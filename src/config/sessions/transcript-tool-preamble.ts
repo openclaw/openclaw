@@ -14,38 +14,42 @@ export function findTranscriptToolPreamble(
   readPage: () => readonly unknown[],
   source?: TranscriptPreambleSource,
 ) {
-  const start =
-    beforeEvent > 0 &&
-    run.events?.findLast((event, index) => {
-      const { stream, runId, data } = event;
-      const end = data.bufferEnd;
-      return (
-        index < beforeEvent &&
-        stream === "tool" &&
-        data.phase === "start" &&
-        !data.parentToolCallId &&
-        typeof data.toolCallId === "string" &&
-        runId === run.runId &&
-        (!source || (source.runId === runId && source.toolCallId === data.toolCallId)) &&
-        typeof end === "number" &&
-        Number.isSafeInteger(end) &&
-        end > 0 &&
-        end <= run.text.length
-      );
-    });
-  const end = start && start.data.bufferEnd;
-  const toolCallId = start && start.data.toolCallId;
-  if (!start || typeof end !== "number" || typeof toolCallId !== "string") {
+  if (source && source.runId !== run.runId) {
     return undefined;
   }
-  const prefix = run.text.slice(0, end);
+  const ends = new Map<string, number>();
+  for (const event of run.events?.slice(0, beforeEvent) ?? []) {
+    const { data } = event;
+    if (
+      event.runId === run.runId &&
+      event.stream === "tool" &&
+      data.phase === "start" &&
+      !data.parentToolCallId &&
+      typeof data.toolCallId === "string" &&
+      typeof data.bufferEnd === "number" &&
+      Number.isSafeInteger(data.bufferEnd) &&
+      data.bufferEnd > 0 &&
+      data.bufferEnd <= run.text.length
+    ) {
+      ends.set(data.toolCallId, data.bufferEnd);
+    }
+  }
+  // Keep worker pages opaque unless a root call actually marked this buffer.
+  if (!ends.size) {
+    return undefined;
+  }
   let anchored = Boolean(source);
-  let previous: { index: number; messageId: string | null } | undefined;
-  // Do not decode a worker page unless this run actually marked a root call.
+  let previous: { index: number; id: string | null; text: string } | undefined;
+  let end = 0;
+  let proof: TranscriptPreambleSource | undefined;
+  const indices: number[] = [];
   for (const [index, message] of readPage().entries()) {
     const row = asOptionalRecord(message);
     const identity = readSessionMessageIdentity(message);
     if (identity?.role === "user") {
+      if (indices.length) {
+        break;
+      }
       anchored = identity.runId === run.runId;
     }
     if (
@@ -58,25 +62,39 @@ export function findTranscriptToolPreamble(
       previous = undefined;
       continue;
     }
-    if (
-      previous &&
-      Array.isArray(row.content) &&
-      row.content.some((value) => {
+    if (previous && Array.isArray(row.content)) {
+      for (const value of row.content) {
         const block = asOptionalRecord(value);
-        return block && isToolCallContentType(block.type) && resolveToolUseId(block) === toolCallId;
-      })
-    ) {
-      const { index: messageIndex, messageId } = previous;
-      return {
-        messageIndex,
-        end,
-        source: messageId ? { runId: run.runId, toolCallId, messageId } : undefined,
-      };
+        const call = block && isToolCallContentType(block.type) && resolveToolUseId(block);
+        const next = call && ends.get(call);
+        if (
+          !call ||
+          !next ||
+          next <= end ||
+          (!end && source && (source.messageId !== previous.id || source.toolCallId !== call))
+        ) {
+          continue;
+        }
+        // Reconstruct only exact bytes, from a whole prefix or adjacent witnessed paragraphs.
+        if (next === previous.text.length && run.text.startsWith(previous.text)) {
+          indices.length = 0;
+        } else if (!end || run.text.slice(end, next) !== "\n\n" + previous.text) {
+          continue;
+        }
+        if (!indices.length) {
+          proof = previous.id
+            ? { runId: run.runId, messageId: previous.id, toolCallId: call }
+            : undefined;
+        }
+        indices.push(previous.index);
+        end = next;
+        break;
+      }
     }
-    previous =
-      (!source || identity.id === source.messageId) && extractAssistantPhaseText(message) === prefix
-        ? { index, messageId: identity.id }
-        : undefined;
+    const text = extractAssistantPhaseText(message);
+    previous = text ? { index, id: identity.id, text } : undefined;
   }
-  return undefined;
+  return indices.length
+    ? { messageIndex: indices.length === 1 ? indices[0] : indices, end, source: proof }
+    : undefined;
 }

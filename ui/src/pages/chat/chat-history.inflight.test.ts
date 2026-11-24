@@ -182,6 +182,51 @@ function swatchRows(...texts: string[]) {
   ];
 }
 
+it.each(["full", "bounded", "without input"])(
+  "restores both native tool boundaries on a %s page",
+  async (page) => {
+    const parts = [SWATCH_OPENING, "Cobalt marks the next swatch."];
+    const runId = SWATCH_RUN;
+    const chatRunState = createChatRunState();
+    const buffer = (text: string) =>
+      chatRunState.updateBuffer(runId, { itemId: "assistant", text });
+    for (const [i] of parts.entries()) {
+      buffer(parts.slice(0, i + 1).join("\n\n"));
+      const start = toolEvent("read-" + i);
+      start.seq += i;
+      start.data.textLengthBeforeTool = chatRunState.resolveBuffer(runId).text.length;
+      chatRunState.recordProgressEvent(runId, start);
+    }
+    const text = [...parts, "Final result."].join("\n\n");
+    buffer(text);
+    const snapshot = projectInFlightRunSnapshot({ chatRunState, runId, startedAtMs: 1000 });
+    const rows = swatchRows(...parts).slice(page === "without input" ? 1 : 0);
+    const maxBytes = jsonUtf8Bytes(rows) + jsonUtf8Bytes({ ...snapshot, events: [] });
+    const run =
+      page === "bounded"
+        ? boundInFlightRunSnapshotForChatHistory({ snapshot, messages: rows, maxBytes })
+        : snapshot;
+    if (page === "bounded") {
+      expect(run?.events).toEqual([]);
+      expect(jsonUtf8Bytes(rows) + jsonUtf8Bytes(run)).toBeLessThanOrEqual(maxBytes);
+    }
+    const state = createState({ ...activeHistory(runId), messages: rows, inFlightRun: run });
+    vi.stubGlobal("window", globalThis);
+    try {
+      await loadChatHistory(state);
+      expect(renderedText(state).filter(Boolean)).toEqual(
+        [page !== "without input" && "Read the swatches.", ...parts, "Final result."].filter(
+          Boolean,
+        ),
+      );
+      assistant(state, runId, text + "\n\n" + SWATCH_OPENING);
+      expect(tail(state)?.trim()).toBe("Final result.\n\n" + SWATCH_OPENING);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  },
+);
+
 it.each([
   ["cumulative", ""],
   ["cumulative", SWATCH_SUFFIX],
@@ -252,8 +297,9 @@ it.each([
 it.each([
   [SWATCH_OPENING + " New answer.", false],
   [SWATCH_OPENING + "\n\nCobalt.", true],
+  [SWATCH_OPENING + "\n\nCobalt.", false],
 ] as const)(
-  "keeps the full reply when only the opening matches or progress was evicted (%j)",
+  "keeps a reply that repeats imported text (reply %j, events evicted: %s)",
   async (reply, evicted) => {
     const history = activeSnapshot(SWATCH_RUN, reply, swatchRows(SWATCH_OPENING, "Cobalt."));
     if (evicted) {
@@ -264,14 +310,6 @@ it.each([
     expect(tail(state)).toBe(reply);
   },
 );
-
-it("keeps a reply that repeats two imported updates when history has no tool spans", async () => {
-  const reply = SWATCH_OPENING + "\n\nCobalt.";
-  const history = activeSnapshot(SWATCH_RUN, reply, swatchRows(SWATCH_OPENING, "Cobalt."));
-  const state = createState(history);
-  await loadChatHistory(state);
-  expect(tail(state)).toBe(reply);
-});
 
 it("does not apply a stale tool span to a newer live reply with the same opening", async () => {
   const history = activeSnapshot(SWATCH_RUN, SWATCH_OPENING, swatchRows(SWATCH_OPENING));

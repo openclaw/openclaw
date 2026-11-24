@@ -189,10 +189,10 @@ export async function hydrateChatHistory(
     const runResponse = response;
     const run = runResponse.inFlightRun;
     // Idle reads and evicted progress need no ordered replay code.
+    const { prepareCheckpointReplay } =
+      run && run.events?.length !== 0 ? await import("./chat-history-progress.ts") : {};
     const replayProgress =
-      run && run.events?.length !== 0
-        ? await (await import("./chat-history-progress.ts")).prepareCheckpointReplay(run)
-        : undefined;
+      run && prepareCheckpointReplay ? await prepareCheckpointReplay(run) : undefined;
     // First history has no held transcript to reconcile. Load recovery only
     // after other async prerequisites, before capturing the state it may retain.
     const { fillHeldHistoryGap, reconcileHistoryTail } =

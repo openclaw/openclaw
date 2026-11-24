@@ -23,14 +23,18 @@ function reconcileNativeToolPreambles(
   }
   const messages = state.chatMessages;
   const interval = knownStreamCausalInterval(messages, runId);
-  if (!interval) {
+  // A page can start mid-turn. Only an accepted root call can identify its native text there.
+  if (!interval && !starts?.size) {
     return;
   }
   const imported = new Map<string, string>();
   const preceding: string[] = [];
   let covered = 0;
-  for (const message of messages.slice(interval.start, interval.end)) {
+  for (const message of interval ? messages.slice(interval.start, interval.end) : messages) {
     const identity = readSessionMessageIdentity(message);
+    if (!interval && identity?.role === "user") {
+      break;
+    }
     if (
       asOptionalRecord(message)?.provider !== "claude-cli" ||
       !identity?.isImported ||
@@ -133,17 +137,19 @@ export async function prepareCheckpointReplay(run: NonNullable<ChatHistoryResult
     for (const event of events ?? []) {
       tools?.handleAgentEvent(state, event, "history");
       const { stream, data } = event;
-      if (stream === "tool" && data.phase === "start" && typeof data.toolCallId === "string") {
+      if (
+        stream === "tool" &&
+        data.phase === "start" &&
+        !data.parentToolCallId &&
+        typeof data.toolCallId === "string" &&
+        acceptsToolStreamSession(state, event)
+      ) {
         (starts ??= new Map()).set(
           data.toolCallId,
           typeof data.bufferEnd === "number" ? data.bufferEnd : 0,
         );
         // A previously admitted start can still own a span in the newly adopted snapshot.
-        if (
-          usesSnapshotText &&
-          typeof data.bufferEnd === "number" &&
-          acceptsToolStreamSession(state, event)
-        ) {
+        if (usesSnapshotText && typeof data.bufferEnd === "number") {
           const entry = state.toolStreamById.get(buildToolStreamIdentity(runId, data.toolCallId));
           if (entry && !entry.parentToolCallId) {
             bindTextBeforeRootTool(state, entry, data.bufferEnd);
