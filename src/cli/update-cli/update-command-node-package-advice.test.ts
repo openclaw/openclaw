@@ -64,9 +64,15 @@ it.each(["failure", "git", "uninspected"] as const)(
   "does not invent node activation after %s",
   (kind) => {
     const params = fixture();
-    if (kind === "failure") params.result.status = "error";
-    if (kind === "git") params.result.mode = "git";
-    if (kind === "uninspected") delete params.preManagedServiceStop;
+    if (kind === "failure") {
+      params.result.status = "error";
+    }
+    if (kind === "git") {
+      params.result.mode = "git";
+    }
+    if (kind === "uninspected") {
+      delete params.preManagedServiceStop;
+    }
     appendNodeOnlyPackageUpdateAdvice(params, params.result);
     expect(params.result.steps).toEqual([]);
   },

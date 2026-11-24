@@ -208,8 +208,11 @@ it.each(["service", "foreground"])(
     const other = path.join(home.home, "owner");
     await packageAt(other);
     facts.gateway = owner === "service";
-    if (owner === "service") facts.serviceRoot = other;
-    else facts.liveRoot = other;
+    if (owner === "service") {
+      facts.serviceRoot = other;
+    } else {
+      facts.liveRoot = other;
+    }
     await expect(checkUpdateInstallationSlot(facts.root)).rejects.toThrow(
       "not the invoking installation",
     );
