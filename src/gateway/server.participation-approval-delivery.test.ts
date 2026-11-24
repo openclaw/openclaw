@@ -5,6 +5,7 @@ import { ensureCanonicalUserProfileForEmail } from "../state/user-profile-writes
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { resolveApprovalSourceStreamKey } from "./approval-session-audience.js";
 import { createPreparedTestApprovalManager } from "./exec-approval-manager.test-support.js";
+import { matchesOperatorApprovalSelection } from "./operator-approval-reviewer-binding.js";
 import { createOperatorApprovalSessionEventRuntime } from "./operator-approval-session-events.js";
 import { createPendingRecord } from "./operator-approval-session-events.test-support.js";
 import * as approvalStore from "./operator-approval-store.js";
@@ -358,9 +359,12 @@ it("selects entitled exec records before unrelated reviewers can exhaust replay"
           outcome: "pending",
           isCurrent: () => true,
           records: rows
-            .filter(
-              (row) =>
-                input?.execApprovalIds === undefined || input.execApprovalIds.includes(row.id),
+            .filter((row) =>
+              matchesOperatorApprovalSelection(
+                row,
+                input?.reviewerDeviceId,
+                input?.execApprovalSelection,
+              ),
             )
             .slice(0, input?.limit),
         }),
@@ -371,6 +375,8 @@ it("selects entitled exec records before unrelated reviewers can exhaust replay"
         broadcastToConnIds: vi.fn(),
         getLiveManager: () => manager,
       });
+      // The session runtime learns participation bindings from the manager's lifecycle.
+      runtime.publish({ phase: "pending", record: rows.at(-1)! });
       for (const [client, id] of [
         [entries[0]!.client, participating.id],
         [entries[3]!.client, ordinary.id],
