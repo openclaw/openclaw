@@ -62,8 +62,9 @@ export async function openBeamMirrorEnrollment(params: {
     )
     .digest("hex");
   let row = await store.observe(key);
-  if (!row.value && params.confirmGeneration)
+  if (!row.value && params.confirmGeneration) {
     throw new Error("No enrollment exists for this receiver and native source");
+  }
   if (!row.value && params.explicit) {
     params.assertCurrent();
     const sourceSalt = randomUUID();
@@ -73,7 +74,9 @@ export async function openBeamMirrorEnrollment(params: {
     });
     row = await store.observe(key);
   }
-  if (!row.value) return;
+  if (!row.value) {
+    return;
+  }
   params.assertCurrent();
   const options = {
     endpoint,
@@ -108,10 +111,11 @@ export async function openBeamMirrorEnrollment(params: {
       (previous.head &&
         previous.head.revision !== seen.head.revision &&
         previous.pending?.intent.sha256 !== seen.head.sha256)
-    )
+    ) {
       throw new Error(
         "The new credential could not verify publisher authority on the enrolled generation",
       );
+    }
     await params.revalidate?.();
     params.assertCurrent();
     // Reauthorization changes the local credential only. A previously uncertain
@@ -122,11 +126,13 @@ export async function openBeamMirrorEnrollment(params: {
       action: "set",
       value,
     });
-    if (saved.status === "conflict")
+    if (saved.status === "conflict") {
       throw new Error("Enrollment changed during credential verification");
+    }
     row = await store.observe(key);
-    if (row.value?.credential !== credential)
+    if (row.value?.credential !== credential) {
       throw new Error("Enrollment changed after credential verification");
+    }
   }
   const binding = row.value;
   const describe = () => ({
@@ -140,8 +146,12 @@ export async function openBeamMirrorEnrollment(params: {
     fenced: binding.fenced,
     describe,
     async enroll(beamId: string, raw: Buffer, confirmGeneration?: string) {
-      if (!params.explicit) throw new Error("Explicit operator enrollment required");
-      if (binding.head || binding.fenced) return describe();
+      if (!params.explicit) {
+        throw new Error("Explicit operator enrollment required");
+      }
+      if (binding.head || binding.fenced) {
+        return describe();
+      }
       let observed = row;
       let initial = binding.initial;
       if (initial && !confirmGeneration) {
@@ -153,8 +163,9 @@ export async function openBeamMirrorEnrollment(params: {
             "Inspect the original receiver publication. To adopt its existing generation, repeat beam.mirror.enroll with confirmGeneration.",
         };
       }
-      if (!initial && confirmGeneration)
+      if (!initial && confirmGeneration) {
         throw new Error("There is no pending first publication to confirm");
+      }
       if (!initial) {
         initial = {
           beamId,
@@ -167,8 +178,9 @@ export async function openBeamMirrorEnrollment(params: {
           action: "set",
           value: { ...binding, initial },
         });
-        if (saved.status === "conflict")
+        if (saved.status === "conflict") {
           throw new Error("Another enrollment is in progress; inspect the existing publication");
+        }
         observed = await store.observe(key);
         if (
           observed.value?.initial?.requestId !== initial.requestId ||
@@ -205,10 +217,11 @@ export async function openBeamMirrorEnrollment(params: {
         action: "set",
         value: { ...binding, initial, head: result.head },
       });
-      if (saved.status === "conflict")
+      if (saved.status === "conflict") {
         throw new Error(
           "Another operation updated this enrollment. Inspect the existing publication.",
         );
+      }
       return { state: "published", beamId: initial.beamId, head: result.head };
     },
     async publish(beamId: string, raw: Buffer): Promise<boolean | "retired"> {
@@ -219,12 +232,17 @@ export async function openBeamMirrorEnrollment(params: {
         current.credential !== credential ||
         current.sourceSalt !== binding.sourceSalt ||
         current.initial?.beamId !== beamId
-      )
+      ) {
         return false;
-      if (current.fenced) return "retired";
+      }
+      if (current.fenced) {
+        return "retired";
+      }
       if (!current.pending) {
         const intent = prepareBeamMirrorV2Intent(raw, current.head);
-        if (current.head.sha256 === intent.sha256) return true;
+        if (current.head.sha256 === intent.sha256) {
+          return true;
+        }
         params.assertCurrent();
         const next = { ...current, pending: { beamId, raw: raw.toString("base64"), intent } };
         const saved = await store.compareAndApply(key, observed.comparison, {
@@ -232,7 +250,9 @@ export async function openBeamMirrorEnrollment(params: {
           action: "set",
           value: next,
         });
-        if (saved.status === "conflict") return false;
+        if (saved.status === "conflict") {
+          return false;
+        }
         observed = await store.observe(key);
         current = observed.value;
       }
@@ -243,8 +263,9 @@ export async function openBeamMirrorEnrollment(params: {
         current.fenced ||
         current.credential !== credential ||
         current.sourceSalt !== binding.sourceSalt
-      )
+      ) {
         return false;
+      }
       params.assertCurrent();
       const result = await publishBeamMirrorV2({
         ...options,
@@ -263,8 +284,12 @@ export async function openBeamMirrorEnrollment(params: {
         action: "set",
         value: next,
       });
-      if (saved.status === "conflict") return false;
-      if (result.state !== "published") return "retired";
+      if (saved.status === "conflict") {
+        return false;
+      }
+      if (result.state !== "published") {
+        return "retired";
+      }
       // Replaying an older pending write cannot acknowledge a later candidate.
       return pending.beamId === beamId && pending.raw === raw.toString("base64");
     },

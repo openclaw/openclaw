@@ -120,7 +120,9 @@ it("replays the exact pending bytes and precondition after restart before accept
 it("leaves an unacknowledged enrollment inactive when its operator loses authority during the request", async () => {
   let active = true;
   const binding = await open(true, undefined, undefined, () => {
-    if (!active) throw new Error("operator disconnected");
+    if (!active) {
+      throw new Error("operator disconnected");
+    }
   });
   vi.mocked(transport.enrollBeamMirrorV2).mockImplementationOnce(async () => {
     active = false;

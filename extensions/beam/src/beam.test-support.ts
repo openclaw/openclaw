@@ -149,7 +149,9 @@ export function createBeamTestCatalog(
     list: async ({ source }) => {
       await params.onList?.();
       const visible = typeof params.sessions === "function" ? params.sessions() : params.sessions;
-      for (const row of visible ?? []) catalogHistory.set(row.threadId, row);
+      for (const row of visible ?? []) {
+        catalogHistory.set(row.threadId, row);
+      }
       const known = source && catalogHistory.get(source.threadId);
       const sessions = source
         ? known &&

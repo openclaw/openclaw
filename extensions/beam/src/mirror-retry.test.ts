@@ -10,7 +10,7 @@ import {
   persistentBeamTestStore,
   type BeamTestSession,
 } from "./beam.test-support.js";
-import { beamMirrorId } from "./mirror.js";
+import { beamMirrorId } from "./mirror-candidate.js";
 import type { BeamStore } from "./store.js";
 import { BEAM_MAX_SESSIONS, BEAM_RETENTION_MS, type BeamUpload } from "./types.js";
 

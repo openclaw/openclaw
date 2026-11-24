@@ -82,21 +82,25 @@ it("recovers a lost update acknowledgement using the saved ID, precondition and 
         bytes: body,
         auth: req.headers.authorization,
       });
-      if (received.length === 1) res.destroy();
-      else res.end(JSON.stringify(receipt(head)));
+      if (received.length === 1) {
+        res.destroy();
+      } else {
+        res.end(JSON.stringify(receipt(head)));
+      }
     },
     async (endpoint) => {
       const params = { ...scope, endpoint, intent };
       await expect(publishBeamMirrorV2(params)).rejects.toThrow("saved request");
       expect(await publishBeamMirrorV2(params)).toEqual({ state: "published", head });
       expect(received).toHaveLength(2);
-      for (const entry of received)
+      for (const entry of received) {
         expect(entry).toEqual({
           key: intent.requestId,
           condition: prior.revision,
           bytes: raw,
           auth: "Bearer synthetic-mirror-token",
         });
+      }
     },
   );
 });
@@ -105,8 +109,9 @@ it("updates an enrolled generation only with its saved strong revision", async (
   const conditions: unknown[] = [];
   await serve(
     (req, res) => {
-      if (req.method === "GET") res.end(JSON.stringify(receipt(prior)));
-      else {
+      if (req.method === "GET") {
+        res.end(JSON.stringify(receipt(prior)));
+      } else {
         conditions.push(req.headers["if-match"]);
         res.end(JSON.stringify(receipt(head)));
       }
@@ -176,7 +181,9 @@ it("rechecks source consent before transmitting conversation bytes", async () =>
   let active = true;
   const methods: Array<string | undefined> = [];
   const assertCurrent = vi.fn(() => {
-    if (!active) throw new Error("enrollment ended");
+    if (!active) {
+      throw new Error("enrollment ended");
+    }
   });
   await serve(
     (req, res) => {
@@ -201,10 +208,13 @@ it.each([
   await serve(
     (req, res) => {
       methods.push(req.method);
-      if (methods.length === 1) res.end(JSON.stringify(receipt(prior)));
-      else if (req.method === "PUT") {
+      if (methods.length === 1) {
+        res.end(JSON.stringify(receipt(prior)));
+      } else if (req.method === "PUT") {
         res.writeHead(409).end(JSON.stringify({ error: { code: "released" } }));
-      } else res.end(JSON.stringify(receipt({ ...prior, publicationId }, "released")));
+      } else {
+        res.end(JSON.stringify(receipt({ ...prior, publicationId }, "released")));
+      }
     },
     async (endpoint) => {
       expect(

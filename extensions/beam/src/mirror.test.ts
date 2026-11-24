@@ -17,7 +17,9 @@ import {
   createScheduledBeamTestRunner,
   createBeamTestRuntime,
 } from "./beam.test-support.js";
-import { beamMirrorId, createBeamMirrorService, parseBeamMirrorConfig } from "./mirror.js";
+import { beamMirrorId } from "./mirror-candidate.js";
+import { parseBeamMirrorConfig } from "./mirror-config.js";
+import { createBeamMirrorService } from "./mirror-service.js";
 import { BEAM_MAX_ITEMS, parseBeamUpload } from "./types.js";
 
 let fixture: ReturnType<typeof beamMirrorTestFixture>;

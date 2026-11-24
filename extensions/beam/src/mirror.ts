@@ -2,8 +2,6 @@ import { createHash } from "node:crypto";
 import { resolveSessionAgentIdsStrict } from "openclaw/plugin-sdk/agent-scope-runtime";
 import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { getGatewayRequestAuthorityV1 } from "openclaw/plugin-sdk/gateway-request-authority";
-import type { OpenClawPluginApi, OpenClawPluginServiceV2 } from "openclaw/plugin-sdk/plugin-entry";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import type {
   PluginStateActionAuthority,
@@ -14,34 +12,30 @@ import type {
   CatalogExportItem,
   PluginServiceCatalogExports,
   PluginServiceExportCatalog,
-  SessionCatalogLocator,
 } from "openclaw/plugin-sdk/session-catalog";
 import {
   fetchWithSsrFGuard,
   GuardedFetchRedirectError,
   ssrfPolicyFromHttpBaseUrlAllowedOrigin,
 } from "openclaw/plugin-sdk/ssrf-runtime";
-import { asFiniteNumber, isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { clampNumber, truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { racePromiseWithAbortSignal } from "openclaw/plugin-sdk/time-runtime";
-import { cleanBeamCandidate, type BeamCleanCandidate } from "./cleaner.js";
+import { cleanBeamCandidate } from "./cleaner.js";
+import {
+  beamMirrorId,
+  buildBeamMirrorItems,
+  mirrorCandidateKey,
+  sourceModelForMirror,
+  type BeamMirrorCandidate,
+} from "./mirror-candidate.js";
+import { MIRROR_TOKEN_PATH, parseBeamMirrorConfig } from "./mirror-config.js";
 import {
   openBeamMirrorEnrollment,
   type BeamMirrorEnrollment,
   type MirrorPublicationStoreValue,
 } from "./mirror-publication.js";
-import {
-  BEAM_MAX_ITEMS,
-  BEAM_MAX_SESSIONS,
-  BEAM_RETENTION_MS,
-  type BeamSourceModel,
-  type BeamUpload,
-} from "./types.js";
+import { BEAM_MAX_ITEMS, BEAM_MAX_SESSIONS, BEAM_RETENTION_MS, type BeamUpload } from "./types.js";
 
-const MIRROR_CONFIG_PATH = "plugins.entries.beam.config.mirror";
-const MIRROR_TOKEN_PATH = `${MIRROR_CONFIG_PATH}.token`;
-const DEFAULT_POLL_SECONDS = 30;
-const DEFAULT_ACTIVE_WINDOW_MINUTES = 180;
 const MIRROR_LIST_LIMIT = 100;
 // Strictest transcript-read cap across catalog providers (the Claude Code
 // provider rejects limits above 50); asking for more fails the whole read.
@@ -56,165 +50,9 @@ const MIRROR_RETRY_CAP = 2 * BEAM_MAX_SESSIONS;
 const MIRROR_WARN_INTERVAL_MS = 5 * 60_000;
 const MIRROR_UPLOAD_TIMEOUT_MS = 15_000;
 
-function isLoopbackHostname(hostname: string): boolean {
-  const bare = hostname.replace(/^\[|\]$/g, "");
-  return bare === "localhost" || bare === "127.0.0.1" || bare === "::1";
-}
-
-const MIRROR_KEYS = new Set([
-  "endpoint",
-  "token",
-  "catalogs",
-  "pollSeconds",
-  "activeWindowMinutes",
-]);
-
 function resolveMirrorAgentId(config: ReturnType<PluginRuntime["config"]["current"]>): string {
   // Selection only reads the live snapshot. Both discovery and dispatch must resolve the same owner.
   return resolveSessionAgentIdsStrict({ config: config as OpenClawConfig }).defaultAgentId;
-}
-
-/** Returns the mirror config, undefined when mirroring is not configured, or an error string. */
-export function parseBeamMirrorConfig(config: ReturnType<PluginRuntime["config"]["current"]>) {
-  const mirror = config.plugins?.entries?.beam?.config?.mirror;
-  if (mirror === undefined) {
-    return undefined;
-  }
-  if (!isRecord(mirror) || !Object.keys(mirror).every((key) => MIRROR_KEYS.has(key))) {
-    return `${MIRROR_CONFIG_PATH} must be a closed object with endpoint/token/catalogs/pollSeconds/activeWindowMinutes`;
-  }
-  const endpoint = typeof mirror.endpoint === "string" ? mirror.endpoint.trim() : "";
-  const parsedEndpoint = URL.parse(endpoint);
-  if (!parsedEndpoint) {
-    return `${MIRROR_CONFIG_PATH}.endpoint must be an absolute URL`;
-  }
-  // Bearer credentials and transcripts must never cross the network in the
-  // clear; plaintext HTTP is a loopback-development affordance only.
-  if (parsedEndpoint.protocol === "http:") {
-    if (!isLoopbackHostname(parsedEndpoint.hostname)) {
-      return `${MIRROR_CONFIG_PATH}.endpoint must use https for non-loopback hosts`;
-    }
-  } else if (parsedEndpoint.protocol !== "https:") {
-    return `${MIRROR_CONFIG_PATH}.endpoint must use http(s)`;
-  }
-  // Explicit per-catalog consent: an omitted or empty list mirrors nothing,
-  // so one Beam setting can never silently export third-party catalogs.
-  if (
-    !Array.isArray(mirror.catalogs) ||
-    mirror.catalogs.length === 0 ||
-    !mirror.catalogs.every((id): id is string => typeof id === "string" && id.trim().length > 0)
-  ) {
-    return `${MIRROR_CONFIG_PATH}.catalogs must explicitly list the catalog ids to mirror`;
-  }
-  const normalizedPath = parsedEndpoint.pathname.replace(/\/$/, "");
-  const apiV2 = normalizedPath.endsWith("/api/v2/beam");
-  if (apiV2) {
-    if (
-      parsedEndpoint.username ||
-      parsedEndpoint.password ||
-      parsedEndpoint.search ||
-      parsedEndpoint.hash
-    )
-      return `${MIRROR_CONFIG_PATH}.endpoint must name the final v2 receiver without user info, query, or fragment`;
-    parsedEndpoint.pathname = normalizedPath;
-  }
-  // The Gateway materializes refs to strings and leaves unavailable refs as objects.
-  // null means configured but unavailable; undefined keeps tokenless receivers supported.
-  const token =
-    mirror.token === undefined
-      ? undefined
-      : typeof mirror.token === "string" && mirror.token.trim()
-        ? mirror.token.trim()
-        : null;
-  return {
-    endpoint: apiV2 ? parsedEndpoint.href : endpoint,
-    apiV2,
-    token,
-    catalogs: mirror.catalogs.map((id) => id.trim().toLowerCase()),
-    pollSeconds: clampNumber(asFiniteNumber(mirror.pollSeconds) ?? DEFAULT_POLL_SECONDS, 10, 3_600),
-    activeWindowMinutes: clampNumber(
-      asFiniteNumber(mirror.activeWindowMinutes) ?? DEFAULT_ACTIVE_WINDOW_MINUTES,
-      1,
-      10_080,
-    ),
-  };
-}
-
-export function beamMirrorId(catalogId: string, hostId: string, threadId: string): string {
-  return createHash("sha256")
-    .update(`${catalogId}\0${hostId}\0${threadId}`)
-    .digest("hex")
-    .slice(0, 32);
-}
-
-/**
- * Reduce newest-first catalog items to chronological Beam uploads. Only user/agent
- * message text crosses the wire; reasoning, tool calls, tool results, and raw
- * payloads collapse into compact counts.
- */
-function buildBeamMirrorItems(items: readonly CatalogExportItem[]) {
-  const out: BeamCleanCandidate["items"] = [];
-  const dropped = new Map<string, number>();
-  const truncated = items.some((item) => item.truncated);
-  const flush = () => {
-    if (dropped.size > 0) {
-      const counts = [...dropped].map(([kind, count]) => `${count} ${kind}`).join(", ");
-      out.push({ type: "other", text: `${counts}; raw content dropped` });
-      dropped.clear();
-    }
-  };
-  const labels: Partial<Record<CatalogExportItem["type"], string>> = {
-    toolCall: "tool calls",
-    toolResult: "tool results",
-    reasoning: "reasoning items",
-  };
-  for (const item of items.toReversed()) {
-    const text = item.text?.trim();
-    if ((item.type === "userMessage" || item.type === "agentMessage") && text) {
-      flush();
-      out.push({ type: item.type, text, ...(item.speakerId ? { speakerId: item.speakerId } : {}) });
-      continue;
-    }
-    const label = labels[item.type] ?? "other entries";
-    dropped.set(label, (dropped.get(label) ?? 0) + 1);
-  }
-  flush();
-  return { items: out, truncated };
-}
-
-type BeamMirrorCandidate = SessionCatalogLocator & {
-  agentId: string;
-  beamId: string;
-  modelProvider?: string;
-  title: string;
-  recencyAt: number;
-};
-
-function sourceModelForMirror(
-  providerValue: string | undefined,
-  items: readonly CatalogExportItem[],
-): BeamSourceModel | undefined {
-  const provider = providerValue?.trim().toLowerCase();
-  const rawModel = items.find((item) => item.type === "agentMessage" && item.model?.trim())?.model;
-  if (!provider || !/^[a-z0-9._-]+$/i.test(provider) || !rawModel) {
-    return undefined;
-  }
-  const prefixed = rawModel.trim();
-  const model = truncateUtf16Safe(
-    prefixed.startsWith(`${provider}/`) ? prefixed.slice(provider.length + 1) : prefixed,
-    256,
-  ).trim();
-  return model && /^\S+$/u.test(model) ? { provider, model } : undefined;
-}
-
-function mirrorCandidateKey(candidate: BeamMirrorCandidate): string {
-  return JSON.stringify([
-    candidate.catalogId,
-    candidate.hostId,
-    candidate.threadId,
-    candidate.agentId,
-    candidate.sourceHomeId ?? null,
-  ]);
 }
 
 type TrackedMirrorSession = {
@@ -413,8 +251,12 @@ export function createBeamMirrorRunner(params: {
         items.push(item);
       }
       cursor = transcript.nextCursor;
-      if (byteLimit || !cursor || items.length >= BEAM_MAX_ITEMS) break;
-      if (seen.has(cursor)) throw new Error("catalog returned a repeated history cursor");
+      if (byteLimit || !cursor || items.length >= BEAM_MAX_ITEMS) {
+        break;
+      }
+      if (seen.has(cursor)) {
+        throw new Error("catalog returned a repeated history cursor");
+      }
       seen.add(cursor);
     }
     const reduced = buildBeamMirrorItems(items);
@@ -455,8 +297,9 @@ export function createBeamMirrorRunner(params: {
       typeof config === "string" ||
       config.endpoint !== endpoint ||
       config.token === null
-    )
+    ) {
       return;
+    }
     const assertCurrent = () => {
       signal.throwIfAborted();
       catalog.assertCurrent(candidate);
@@ -473,7 +316,9 @@ export function createBeamMirrorRunner(params: {
     };
     let binding: Awaited<ReturnType<typeof openBeamMirrorEnrollment>>;
     if (config.apiV2) {
-      if (!candidate.sourceHomeId || !params.getPublicationStore) return;
+      if (!candidate.sourceHomeId || !params.getPublicationStore) {
+        return;
+      }
       binding = await openBeamMirrorEnrollment({
         store: params.getPublicationStore({ assertCurrent }),
         endpoint,
@@ -483,7 +328,9 @@ export function createBeamMirrorRunner(params: {
         assertCurrent,
       });
       if (!binding?.active || binding.fenced) {
-        if (binding?.fenced) return { fingerprint: "", retired: true };
+        if (binding?.fenced) {
+          return { fingerprint: "", retired: true };
+        }
         warnThrottled("beam mirror source is waiting for an explicit beam.mirror.enroll operation");
         return;
       }
@@ -505,7 +352,9 @@ export function createBeamMirrorRunner(params: {
       items: packet.items.map(({ type, text }) => ({ type, text })),
     };
     const fingerprint = mirrorFingerprint(legacy);
-    if (!binding && oldFingerprint === fingerprint) return;
+    if (!binding && oldFingerprint === fingerprint) {
+      return;
+    }
     const acknowledged = binding
       ? await binding.publish(packet.beamId, cleaned.raw)
       : await upload(legacy, candidate, catalog);
@@ -648,7 +497,9 @@ export function createBeamMirrorRunner(params: {
         try {
           const result = await deliver(catalog, candidate, false, trackedSource?.fingerprint);
           signal.throwIfAborted();
-          if (result) trackSuccessfulUpload(key, candidate, result.fingerprint, result.retired);
+          if (result) {
+            trackSuccessfulUpload(key, candidate, result.fingerprint, result.retired);
+          }
         } catch (error) {
           signal.throwIfAborted();
           warnThrottled(`beam mirror upload failed for ${candidate.catalogId}: ${String(error)}`);
@@ -761,7 +612,9 @@ export function createBeamMirrorRunner(params: {
     const catalog = params.catalogExports
       .listCatalogs()
       .find((entry) => entry.id === source.catalogId);
-    if (!catalog) throw new Error("The source catalog is unavailable for local export");
+    if (!catalog) {
+      throw new Error("The source catalog is unavailable for local export");
+    }
     const hosts = await raceCatalog(
       catalog.list({ agentId: source.agentId, limitPerHost: MIRROR_LIST_LIMIT, source }),
     );
@@ -770,8 +623,9 @@ export function createBeamMirrorRunner(params: {
       ?.sessions.find(
         (entry) => entry.threadId === source.threadId && entry.sourceHomeId === source.sourceHomeId,
       );
-    if (!row || row.exportPolicy?.origin !== "native-local" || !row.exportPolicy.automatic)
+    if (!row || row.exportPolicy?.origin !== "native-local" || !row.exportPolicy.automatic) {
       throw new Error("Select a listed native source with its exact owner and home");
+    }
     const assertCurrent = () => {
       authority.assertCurrent();
       signal.throwIfAborted();
@@ -805,8 +659,12 @@ export function createBeamMirrorRunner(params: {
       confirmGeneration,
       revalidate: () => authority.revalidate(),
     });
-    if (!binding) throw new Error("Beam enrollment unavailable");
-    if (binding.active || binding.fenced) return binding.describe();
+    if (!binding) {
+      throw new Error("Beam enrollment unavailable");
+    }
+    if (binding.active || binding.fenced) {
+      return binding.describe();
+    }
     const cleaned = await buildUpload(catalog, candidate, false, binding.sourceSalt);
     await authority.revalidate();
     return binding.enroll(cleaned.packet.beamId, cleaned.raw, confirmGeneration);
@@ -816,11 +674,14 @@ export function createBeamMirrorRunner(params: {
   let enrolling = false;
   return {
     async tick() {
-      if (!enrolling) await scan();
+      if (!enrolling) {
+        await scan();
+      }
     },
     async enroll(...args: Parameters<typeof enroll>) {
-      if (enrolling)
+      if (enrolling) {
         throw new Error("A Beam source enrollment is in progress. Retry after it completes.");
+      }
       enrolling = true;
       try {
         return await enroll(...args);
@@ -829,147 +690,4 @@ export function createBeamMirrorRunner(params: {
       }
     },
   };
-}
-
-export function createBeamMirrorService(params: {
-  runtime: PluginRuntime;
-  resolveExecutable: () => Promise<string>;
-  onRunner?: (runner: ReturnType<typeof createBeamMirrorRunner> | undefined) => void;
-}): OpenClawPluginServiceV2 {
-  return {
-    id: "beam-mirror",
-    apiVersion: 2,
-    catalogExports: { allowlistPath: ["mirror", "catalogs"] },
-    reload: { configPrefixes: [MIRROR_CONFIG_PATH] },
-    start(ctx) {
-      const mirror = parseBeamMirrorConfig(params.runtime.config.current());
-      if (mirror === undefined) {
-        return;
-      }
-      if (typeof mirror === "string") {
-        ctx.logger.warn(`beam mirror disabled: ${mirror}`);
-        return;
-      }
-      if (!ctx.catalogExports) {
-        ctx.logger.warn(
-          "beam mirror disabled: this Gateway does not provide background catalog export",
-        );
-        return;
-      }
-      const active = createBeamMirrorRunner({
-        catalogExports: ctx.catalogExports,
-        resolveExecutable: params.resolveExecutable,
-        // Bind each read and commit to the selected source and current caller.
-        // A module-scoped handle survives an operator disconnect or catalog removal.
-        getPublicationStore: (authority) =>
-          params.runtime.state.openKeyedStoreV2<MirrorPublicationStoreValue>(
-            { namespace: "mirror-publications", retention: "retained" },
-            authority,
-          ),
-        runtime: params.runtime,
-        logger: ctx.logger,
-        signal: ctx.scheduler.signal,
-      });
-      params.onRunner?.(active);
-      ctx.scheduler.signal.addEventListener("abort", () => params.onRunner?.(undefined), {
-        once: true,
-      });
-      ctx.scheduler.schedule({
-        id: "mirror",
-        delayMs: 0,
-        everyMs: mirror.pollSeconds * 1_000,
-        run: () => active.tick(),
-      });
-      if (mirror.token === null) {
-        ctx.logger.warn(
-          `beam mirror paused: ${MIRROR_TOKEN_PATH} credential unavailable; restore it and run openclaw secrets reload`,
-        );
-      } else {
-        ctx.logger.info(
-          `beam mirror active: ${mirror.catalogs.join(", ")} -> ${new URL(mirror.endpoint).origin}`,
-        );
-      }
-    },
-  };
-}
-
-export function registerBeamMirror(
-  api: OpenClawPluginApi,
-  resolveExecutable: () => Promise<string>,
-) {
-  let active: ReturnType<typeof createBeamMirrorRunner> | undefined;
-  api.registerService(
-    createBeamMirrorService({
-      runtime: api.runtime,
-      resolveExecutable,
-      onRunner: (runner) => {
-        active = runner;
-      },
-    }),
-  );
-  api.registerGatewayMethod(
-    "beam.mirror.enroll",
-    async ({ params, respond, assertHandlerCurrent }) => {
-      const authority = getGatewayRequestAuthorityV1();
-      if (!authority?.scopes.includes("operator.admin") || !active) {
-        respond(false, undefined, {
-          code: "UNAVAILABLE",
-          message: "Enable the Beam v2 mirror and connect as an administrator to enroll a source",
-        });
-        return;
-      }
-      const fields = ["catalogId", "hostId", "threadId", "agentId", "sourceHomeId"] as const;
-      if (
-        !isRecord(params) ||
-        !isRecord(params.source) ||
-        Object.keys(params).some((key) => key !== "source" && key !== "confirmGeneration")
-      ) {
-        respond(false, undefined, {
-          code: "INVALID_REQUEST",
-          message: "Supply the exact source catalog, host, thread, agent and source home",
-        });
-        return;
-      }
-      const source = params.source;
-      if (
-        Object.keys(source).length !== fields.length ||
-        !fields.every(
-          (f) => typeof source[f] === "string" && source[f].length > 0 && source[f].length <= 500,
-        ) ||
-        (params.confirmGeneration !== undefined &&
-          (typeof params.confirmGeneration !== "string" ||
-            !params.confirmGeneration ||
-            params.confirmGeneration.length > 256))
-      ) {
-        respond(false, undefined, {
-          code: "INVALID_REQUEST",
-          message: "Invalid Beam source locator or confirmed generation",
-        });
-        return;
-      }
-      try {
-        const result = await active.enroll(
-          source as BeamMirrorEnrollment,
-          {
-            revalidate: () => authority.revalidate(),
-            assertCurrent() {
-              assertHandlerCurrent?.();
-              authority.assertCurrent();
-            },
-          },
-          params.confirmGeneration as string | undefined,
-        );
-        await authority.revalidate();
-        authority.assertCurrent();
-        respond(true, result);
-      } catch {
-        respond(false, undefined, {
-          code: "UNAVAILABLE",
-          message:
-            "Beam enrollment did not complete. Verify the local source and original receiver. After token rotation, connect as the same publisher and repeat enrollment with its exact confirmGeneration.",
-        });
-      }
-    },
-    { scope: "operator.admin" },
-  );
 }
