@@ -7,6 +7,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { SecretProviderConfig, SecretRef, SecretRefSource } from "../config/types.secrets.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { FsSafeError, readSecureFile } from "../infra/fs-safe.js";
+import { retryAsync } from "../infra/retry.js";
 import { resolveUpdateRehearsalRoot } from "../infra/update-rehearsal-paths.js";
 import { getCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
 import {
@@ -190,12 +191,24 @@ async function resolveProviderRefs({
         );
         const maxBytes = normalizePositiveInt(providerConfig.maxBytes, DEFAULT_FILE_MAX_BYTES);
         try {
-          const { buffer: payload } = await readSecureFile({
-            filePath,
-            label: `secrets.providers.${providerName}.path`,
-            io: { maxBytes, timeoutMs },
-            permissions: { allowInsecure: false },
-          });
+          // Transient disk contention at startup can exceed the read timeout; retry reads a
+          // bounded number of times so a briefly busy disk does not fail startup permanently.
+          // Permanent failures (permissions, insecure paths, oversized files) are not retried.
+          const { buffer: payload } = await retryAsync(
+            () =>
+              readSecureFile({
+                filePath,
+                label: `secrets.providers.${providerName}.path`,
+                io: { maxBytes, timeoutMs },
+                permissions: { allowInsecure: false },
+              }),
+            {
+              attempts: 3,
+              minDelayMs: 250,
+              maxDelayMs: 1000,
+              shouldRetry: (error) => error instanceof FsSafeError && error.code === "timeout",
+            },
+          );
           const text = payload.toString("utf8").replace(/^\uFEFF/, "");
           if (providerConfig.mode === "singleValue") {
             return text.replace(/\r?\n$/, "");
