@@ -149,6 +149,23 @@ export function captureScopes(env: NodeJS.ProcessEnv): Map<string, Set<string>> 
   return scopes;
 }
 
+/**
+ * How a capture that cannot be projected differs from a damaged one: it was
+ * read, but belongs elsewhere ("foreign"), or its check could not finish and
+ * can be retried ("unverified").
+ */
+export type UpdateRecoveryCaptureFault = "foreign" | "unverified";
+
+class UpdateRecoveryCaptureFaultError extends Error {
+  constructor(
+    message: string,
+    readonly fault: UpdateRecoveryCaptureFault,
+    readonly recordedStateDir?: string,
+  ) {
+    super(message);
+  }
+}
+
 function assertManifestSelectedScope(
   manifest: UpdateRecoveryBackupManifest,
   scopes: Map<string, Set<string>>,
@@ -157,7 +174,11 @@ function assertManifestSelectedScope(
   const stateDir = resolvePathViaExistingAncestorSync(manifest.stateDir);
   const configPath = canonicalEntryPath(manifest.configPath);
   if (!scopes.get(stateDir)?.has(configPath)) {
-    throw new Error("Update recovery backup belongs to another selected state or configuration.");
+    throw new UpdateRecoveryCaptureFaultError(
+      "Update recovery backup belongs to another selected state or configuration",
+      "foreign",
+      manifest.stateDir,
+    );
   }
 }
 
@@ -178,7 +199,11 @@ function assertManifestLocation(
       ? path.join(captureDirectory(manifest.runId, manifest.stateDir), manifest.generation.kind)
       : captureDirectory(manifest.runId, manifest.stateDir))
   ) {
-    throw new Error("Update recovery backup belongs to another state directory or update run.");
+    throw new UpdateRecoveryCaptureFaultError(
+      "Update recovery backup belongs to another state directory or update run",
+      "foreign",
+      manifest.stateDir,
+    );
   }
 }
 
@@ -548,7 +573,13 @@ type UpdateRecoveryBackupRead =
       run: UpdateRunRecord | undefined;
     }
   | { kind: "incomplete"; directory: string }
-  | { kind: "unreadable"; directory: string; error: string };
+  | {
+      kind: "unreadable";
+      directory: string;
+      error: string;
+      fault?: UpdateRecoveryCaptureFault;
+      recordedStateDir?: string;
+    };
 
 export async function readUpdateRecoveryBackups(
   readRun: typeof getUpdateRunAsync,
@@ -581,7 +612,15 @@ export async function readUpdateRecoveryBackups(
       const ref = { directory, manifestPath, manifestSha256: sha256Hex(raw) };
       assertManifestLocation(ref, manifest);
       assertManifestSelectedScope(manifest, scopes);
-      const run = await readRun(manifest.runId);
+      let run: UpdateRunRecord | undefined;
+      try {
+        run = await readRun(manifest.runId);
+      } catch (error) {
+        throw new UpdateRecoveryCaptureFaultError(
+          `The update ledger could not be read: ${formatErrorMessage(error)}`,
+          "unverified",
+        );
+      }
       const capture = run?.origin.updateRecoveryCapture;
       if (capture && capture.manifestSha256 !== ref.manifestSha256) {
         throw new Error(
@@ -607,7 +646,14 @@ export async function readUpdateRecoveryBackups(
       result.push({ kind: "sealed", ref, manifest, outcome, run });
     } catch (error) {
       // A damaged marked capture remains evidence; it cannot hide verified neighbors.
-      result.push({ kind: "unreadable", directory, error: formatErrorMessage(error) });
+      result.push({
+        kind: "unreadable",
+        directory,
+        error: formatErrorMessage(error),
+        ...(error instanceof UpdateRecoveryCaptureFaultError
+          ? { fault: error.fault, recordedStateDir: error.recordedStateDir }
+          : {}),
+      });
     }
   }
   return result.toSorted((a, b) => {

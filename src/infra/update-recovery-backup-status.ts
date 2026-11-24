@@ -3,6 +3,7 @@ import { resolveStateDir } from "../config/paths.js";
 import { withOpenClawStateDatabaseReadSnapshot } from "../state/openclaw-state-db-readonly.js";
 import { formatErrorMessage } from "./errors.js";
 import {
+  type UpdateRecoveryCaptureFault,
   hasUpdateRecoveryForwardResolution,
   readUpdateRecoveryBackups,
 } from "./update-recovery-backup-reader.js";
@@ -27,13 +28,37 @@ function resolveUpdateRecoveryTerminalOutcome(
   return undefined;
 }
 
-function unreadableCapture(directory: string, error: string) {
+function unreadableCapture(
+  directory: string,
+  error: string,
+  fault?: UpdateRecoveryCaptureFault,
+  recordedStateDir?: string,
+) {
+  const reason = error.replace(/\.+$/u, "");
+  if (fault === "foreign") {
+    // The capture was read; it records another state directory or run, so it is not damaged.
+    return {
+      directory,
+      status: "foreign" as const,
+      nextAction: "openclaw update cleanup --dry-run",
+      message: `Update capture at ${directory} belongs to another state or update run${recordedStateDir ? ` (recorded state directory: ${recordedStateDir})` : ""}. It is not used for recovery here. \`openclaw update cleanup --dry-run\` shows whether cleanup would retire it and why; nothing is removed without confirmation.`,
+    };
+  }
+  if (fault === "unverified") {
+    // The check could not finish; the capture itself may be intact, so a retry is the first step.
+    return {
+      directory,
+      status: "unverified" as const,
+      nextAction: "openclaw update status",
+      message: `Update capture at ${directory} could not be verified: ${reason}. This may be temporary; run \`openclaw update status\` again. Retained files are unverified evidence for manual inspection.`,
+    };
+  }
   return {
     directory,
     status: "unreadable" as const,
     nextAction:
       "Preserve this capture and current state; inspect with openclaw update status --json before manual recovery.",
-    message: `Update capture at ${directory} is unreadable: ${error}. Retained files are unverified evidence for manual inspection.`,
+    message: `Update capture at ${directory} is unreadable: ${reason}. Retained files are unverified evidence for manual inspection.`,
   };
 }
 
@@ -67,7 +92,7 @@ export async function inspectUpdateRecoveryBackups(readRun = getUpdateRunAsync) 
   const classified = await Promise.all(
     evidence.map(async (entry) => {
       if (entry.kind === "unreadable") {
-        return unreadableCapture(entry.directory, entry.error);
+        return unreadableCapture(entry.directory, entry.error, entry.fault, entry.recordedStateDir);
       }
       const directory = entry.kind === "sealed" ? entry.ref.directory : entry.directory;
       const cleanup = captures.get(directory)!;

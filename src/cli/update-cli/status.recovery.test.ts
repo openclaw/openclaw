@@ -179,7 +179,7 @@ async function run(c: Capture) {
 it.each([
   ["absent", "warning"],
   ["failed", "unresolved"],
-  ["unavailable", "unreadable"],
+  ["unavailable", "unverified"],
 ] as const)("reuses one injected %s ledger observation", async (state, status) => {
   const c = await capture();
   const row = state === "failed" ? await run(c) : undefined;
@@ -396,7 +396,9 @@ it.each([
       expect.objectContaining({ manifestPath: healthy.manifestPath, status: "stale" }),
     );
     const unreadable = result().recoverySets.find(
-      (set: { status: string }) => set.status === "unreadable",
+      (set: { status: string }) =>
+        set.status ===
+        (fault === "foreign-state" || fault === "wrong-run-directory" ? "foreign" : "unreadable"),
     );
     expect(unreadable).toMatchObject({ directory, message: expect.stringMatching(/[\s\S]/) });
     for (const field of ["ref", "manifestPath", "manifestSha256", "runId"]) {
@@ -411,6 +413,30 @@ it.each([
   if (malformed) {
     expect(await text(c.manifestPath)).toBe("{");
   }
+});
+it("names a foreign capture's recorded state instead of calling it unreadable", async () => {
+  const c = await capture();
+  const foreignState = path.join(root, "foreign");
+  await writeJson(c.manifestPath, { ...c.manifest, stateDir: foreignState });
+  const [set] = (await inspect()).recoverySets;
+  expect(set).toMatchObject({ directory: c.directory, status: "foreign" });
+  expect(set.message).toContain(foreignState);
+  expect(set.message).not.toContain("unreadable");
+  expect(set.message).not.toContain("..");
+  expect(set.nextAction).toBe("openclaw update cleanup --dry-run");
+  expect(await text(c.manifestPath)).toBe(
+    JSON.stringify({ ...c.manifest, stateDir: foreignState }),
+  );
+});
+it("reports an unavailable ledger as transient and keeps the capture", async () => {
+  const c = await capture();
+  mocks.readRun.mockRejectedValue(new Error("selected state engine unavailable"));
+  const [set] = (await inspect()).recoverySets;
+  expect(set).toMatchObject({ directory: c.directory, status: "unverified" });
+  expect(set.message).toContain("selected state engine unavailable");
+  expect(set.message).not.toContain("unreadable");
+  expect(set.nextAction).toBe("openclaw update status");
+  expect(await text(c.manifestPath)).toBe(c.raw);
 });
 it.each(["unreadable", "orphan"] as const)(
   "keeps failed recovery ambiguous beside %s marked evidence",
