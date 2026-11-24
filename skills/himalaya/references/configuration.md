@@ -77,7 +77,7 @@ Generate the app-specific password at <https://appleid.apple.com>.
 
 ## NetEase 163 and 126
 
-Both refuse `AUTHENTICATE PLAIN`, and both answer `SELECT Unsafe Login` until the client sends an IMAP `ID` after authentication.
+Both refuse `AUTHENTICATE PLAIN`, both falsely advertise `SASL-IR` and reject the inline credentials with `BAD Request not ending with`, and both answer `SELECT Unsafe Login` until the client sends an IMAP `ID` after authentication. Set `imap.sasl-ir = false` so authentication waits for the server's continuation request, and keep the `imap.id` settings for the mailbox select.
 
 ```toml
 [accounts.net163]
@@ -85,6 +85,7 @@ email = "you@163.com"
 display-name = "Your Name"
 
 imap.server = "imaps://imap.163.com:993"
+imap.sasl-ir = false
 imap.sasl.login.username = "you@163.com"
 imap.sasl.login.password.command = "pass show netease/auth-code"
 imap.id.auto = true

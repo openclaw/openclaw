@@ -79,4 +79,4 @@ himalaya flag remove <id> --flag seen
 
 - Use `-a/--account` when several accounts exist.
 - Quote exact message ids in summaries.
-- 163/126 refuse every SELECT without an IMAP `ID`: set `imap.id.auto = true`, or mail reads fail with `Unsafe Login`.
+- 163/126 refuse every SELECT without an IMAP `ID`: set `imap.id.auto = true`, or mail reads fail with `Unsafe Login`. They also falsely advertise `SASL-IR`: set `imap.sasl-ir = false` to avoid `BAD Request not ending with` at login.

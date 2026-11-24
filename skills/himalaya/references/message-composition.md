@@ -1,8 +1,8 @@
 # Message Composition with MML (MIME Meta Language)
 
-> **Himalaya 2.x:** himalaya no longer parses MML itself. `message compose` and `message reply` emit RFC 5322 from flags, and MML handling belongs to a standalone composer such as `mml`, whose output pipes into `himalaya message send`. The syntax below describes that composer step.
+> **Himalaya 2.x:** himalaya no longer parses MML itself. `message compose`, `message reply` and `message forward` emit RFC 5322 from flags, and MML handling belongs to a standalone composer such as `mml`, whose output pipes into `himalaya message send`. The syntax below describes that composer step, not a himalaya subcommand.
 
-Himalaya uses MML for composing emails. MML is a simple XML-based syntax that compiles to MIME messages.
+MML is a simple XML-based syntax that compiles to MIME messages.
 
 ## Basic Message Structure
 
@@ -157,45 +157,41 @@ Defines a message part.
 
 ## Composing from CLI
 
-### Interactive compose
+Himalaya 2.x composes from flags, not from an editor. `message compose`, `reply` and `forward`
+write RFC 5322 bytes to stdout; add `--send` to send, `--save <mailbox>` to keep a copy, or both.
+Multipart and MML bodies come from a standalone composer piped into `message send`.
 
-Opens your `$EDITOR`:
+### New message
 
 ```bash
-himalaya message write
+himalaya message compose \
+  --to recipient@example.com \
+  --subject "Quick Message" \
+  --body "Message body here" \
+  --send
 ```
 
-### Reply (opens editor with quoted message)
+### Reply and forward
 
 ```bash
-himalaya message reply 42
-himalaya message reply 42 --all  # reply-all
+himalaya message reply 42 --body "Thanks, will look." --send
+himalaya message reply 42 --to team@example.com --body "Adding the team." --send
+himalaya message forward 42 --to recipient@example.com --body "See below." --send
 ```
 
-### Forward
+2.2.1 has no `--all` flag: pass the extra recipients with `--to` or `--cc`. The source message is
+fetched to fill `In-Reply-To`, `References` and the `Re:` subject, and its text body is quoted.
+
+### Send a prepared message
 
 ```bash
-himalaya message forward 42
-```
-
-### Send from stdin
-
-```bash
-cat message.txt | himalaya template send
-```
-
-### Prefill headers from CLI
-
-```bash
-himalaya message write \
-  -H "To:recipient@example.com" \
-  -H "Subject:Quick Message" \
-  "Message body here"
+cat message.eml | himalaya message send
+himalaya message send --save Sent /path/to/message.eml
 ```
 
 ## Tips
 
-- The editor opens with a template; fill in headers and body.
-- Save and exit the editor to send; exit without saving to cancel.
-- MML parts are compiled to proper MIME when sending.
-- Use `himalaya message export --full` to inspect the raw MIME structure of received emails.
+- `message compose`, `reply` and `forward` print the RFC 5322 message; `--send` sends it and `--save` stores a copy.
+- Pipe a standalone MML composer into `himalaya message send` for multipart bodies; himalaya itself does not compile MML.
+- MML parts are compiled to proper MIME by that composer.
+- Use `himalaya message read <id> --raw` to inspect the raw MIME structure of received emails.
