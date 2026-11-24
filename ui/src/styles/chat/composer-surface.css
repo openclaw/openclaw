@@ -798,9 +798,7 @@
   height: var(--chat-composer-icon-size);
 }
 
-.agent-chat__input
-  :is(.chat-send-btn--send, .new-session-page__start-submit)
-  > svg {
+.agent-chat__input :is(.chat-send-btn--send, .new-session-page__start-submit) > svg {
   width: var(--chat-composer-primary-icon-size);
   height: var(--chat-composer-primary-icon-size);
 }

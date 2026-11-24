@@ -3030,11 +3030,8 @@ openclaw-chat-ci-details {
 }
 @media (max-width: 560px) {
   .agent-chat__input--chat .chat-mobile-primary-action {
-    margin-inline-start: var(--chat-mobile-row-action-gap);
-  }
-
-  .agent-chat__input--chat .chat-mobile-primary-action {
     display: inline-flex;
+    margin-inline-start: var(--chat-mobile-row-action-gap);
   }
 
   .agent-chat__input--chat .chat-desktop-primary-action:not(.chat-mobile-primary-action) {
@@ -3053,9 +3050,7 @@ openclaw-chat-ci-details {
     stroke-width: var(--chat-mobile-row-permission-stroke);
   }
 
-  .agent-chat__input--chat
-    :is(.chat-send-btn--send, .chat-send-btn--stop)
-    > svg {
+  .agent-chat__input--chat :is(.chat-send-btn--send, .chat-send-btn--stop) > svg {
     width: var(--chat-mobile-row-icon-size);
     height: var(--chat-mobile-row-icon-size);
   }
