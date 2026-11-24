@@ -16,6 +16,7 @@ import {
 import { appendGitConfig, gitMaintenanceEnvironment } from "../../infra/git-maintenance-env.js";
 import { withGitRepositoryRepair } from "../../infra/git-repository-repair.js";
 import { hasGitWorkerContext, requestGitWorkerCommand } from "../../infra/git-worker-context.js";
+import { readCompatibleGitWorktreeList } from "../../infra/git-worktree-list.js";
 import { lstatIfExists } from "../../infra/path-existence.js";
 import { mergeProcessEnv, resolveEnvironmentValue } from "../../infra/process-env.js";
 import {
@@ -407,9 +408,9 @@ async function readGitWorktreeList(
   repoRoot: string,
   options: Parameters<typeof runGit>[2] = {},
 ): Promise<string> {
-  return requireGitCommandOutput(
-    "git worktree list",
-    await runGit(repoRoot, ["worktree", "list", "--porcelain", "-z"], options),
+  return await readCompatibleGitWorktreeList(
+    async (args) => await runGit(repoRoot, args, options),
+    requireGitCommandOutput,
   );
 }
 
