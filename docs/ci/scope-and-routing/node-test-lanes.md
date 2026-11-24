@@ -179,6 +179,9 @@ for a file directly in a package root such as `src/agents/`) and a declared beha
 set: `*prompt-cache*` and `*compaction*` tests under `src/` and `packages/`, plus the
 required-maintenance and session-context-accounting tests. Those behavior tests sit
 3 to 10 imports away (#204252); the full importer closure is nearly the whole suite.
+A change to `src/sessions/owed.ts` selects only its own declared set: the background
+exec completion tests in `src/agents/` that deliver owed rows (#204265 changed it with
+green PR CI while they failed on `main`).
 Ordinary `src/` module changes in packages and plugins retain direct package-specifier tests for
 resolved exports affected by the changed source, including re-export chains.
 Unrelated resolved subpaths stay unselected. Unresolved package bindings, package

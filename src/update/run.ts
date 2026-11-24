@@ -54,7 +54,7 @@ import {
 } from "./store.js";
 import { gitTargetSupportsReleaseUpdates, resolveTarget } from "./target.js";
 
-/** Covers fetch, dependencies and both builds; a run past it is "interrupted". */
+/** Covers fetch, dependencies and the release build; a run past it is "interrupted". */
 export const PREPARE_DEADLINE_MS = 45 * 60_000;
 const CHECK_RELEASE_TIMEOUT_MS = 3 * 60_000;
 
