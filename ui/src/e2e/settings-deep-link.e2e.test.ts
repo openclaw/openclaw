@@ -5,6 +5,7 @@ import { findControlUiSetting } from "../../../src/shared/control-ui-settings/in
 import { visibleSettingsNavigationGroups } from "../app-navigation.ts";
 import { pathForRoute } from "../app-route-paths.ts";
 import { sourceConfigSnapshot } from "../lib/config/config-snapshot.test-support.ts";
+import { emptyPairingSnapshot } from "../pages/channels/pairing.test-support.ts";
 import { configPageForSection } from "../pages/config/config-sections.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import {
@@ -336,4 +337,29 @@ suite.define(() => {
     });
     // Two passes over every Settings page; each visit is a full load against the mock Gateway.
   }, 600_000);
+
+  it("opens a plugin's setting from its link", async () => {
+    await withPage(async ({ page }) => {
+      await installMockGateway(page, {
+        ...gatewayScenario,
+        methodResponses: {
+          ...gatewayScenario.methodResponses,
+          "channels.status": {
+            ts: Date.now(),
+            channelOrder: ["whatsapp"],
+            channelLabels: { whatsapp: "WhatsApp" },
+            channels: { whatsapp: { configured: true, linked: true, running: true } },
+            channelAccounts: {},
+            channelDefaultAccountId: {},
+          },
+          "channels.pairing.list": emptyPairingSnapshot(),
+        },
+      });
+      // The WhatsApp plugin draws this row inside the channel's detail.
+      await page.goto(
+        `${suite.server.baseUrl}settings/channels?channel=whatsapp#plugin.whatsapp.linkedPhone`,
+      );
+      await expectArrival(page, settingRow(page, "plugin.whatsapp.linkedPhone"), "Linked");
+    });
+  });
 });
