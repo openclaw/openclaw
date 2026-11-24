@@ -36,6 +36,10 @@ struct OnboardingAIPicker {
     let localAuthOptions: [Model.AuthOption]
     /// Sign-in options no row owns, behind More providers.
     let moreAuthOptions: [Model.AuthOption]
+    /// Downloads for local model apps with no model found yet, beside Check again.
+    let localInstalls: [Model.RecommendedInstall]
+    /// The other downloads, behind More providers.
+    let otherInstalls: [Model.RecommendedInstall]
 
     /// The usual rows, shown before the Gateway answers so the page never starts empty.
     static let placeholderRows: [RowID] = [.chatGPT, .claude, .gemini, .apiKey, .localModel]
@@ -44,7 +48,8 @@ struct OnboardingAIPicker {
         candidates: [Model.Candidate],
         authOptions: [Model.AuthOption],
         manualProviders: [Model.ManualProvider],
-        prepareOptions: [Model.PrepareOption])
+        prepareOptions: [Model.PrepareOption],
+        recommendedInstalls: [Model.RecommendedInstall] = [])
     {
         let usable = candidates.filter { $0.credentials != false }
         let local = usable.filter { Self.isLocalModelRef($0.modelRef) }
@@ -81,7 +86,13 @@ struct OnboardingAIPicker {
         if !manualProviders.isEmpty {
             rows.append(Row(id: .apiKey, action: .apiKey(nil), detected: false))
         }
-        if !local.isEmpty || !localOptions.isEmpty || !prepareOptions.isEmpty {
+        // The Gateway already drops downloads for apps that are running; a found model means installed.
+        let localApps = Set(local.compactMap { $0.brandId?.lowercased() })
+        let localInstalls = recommendedInstalls.filter {
+            let id = ($0.brandId ?? $0.id).lowercased()
+            return Self.isLocalProvider(id) && !localApps.contains(id)
+        }
+        if !local.isEmpty || !localOptions.isEmpty || !prepareOptions.isEmpty || !localInstalls.isEmpty {
             rows.append(Row(id: .localModel, action: .localModel, detected: !local.isEmpty))
         }
         let found = usable.filter { !claimed.contains($0.kind) }.map {
@@ -91,6 +102,8 @@ struct OnboardingAIPicker {
         self.localCandidates = local
         self.localAuthOptions = localOptions
         self.moreAuthOptions = authOptions.filter { !usedOptions.contains($0.id) }
+        self.localInstalls = localInstalls
+        self.otherInstalls = recommendedInstalls.filter { !Self.isLocalProvider($0.brandId ?? $0.id) }
     }
 
     func row(for selection: Row, manualProviders: [Model.ManualProvider]) -> Row? {

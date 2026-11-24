@@ -216,7 +216,8 @@ struct OnboardingAISetupView: View {
             candidates: self.model.candidates,
             authOptions: self.model.authOptions,
             manualProviders: self.model.manualProviders,
-            prepareOptions: self.model.prepareOptions)
+            prepareOptions: self.model.prepareOptions,
+            recommendedInstalls: self.model.recommendedInstalls)
     }
 
     @ViewBuilder
@@ -557,7 +558,27 @@ struct OnboardingAISetupView: View {
             ForEach(picker.localAuthOptions) { option in
                 self.providerAuthRow(option)
             }
+            self.installCards(picker.localInstalls)
+            self.checkAgainButton
         }
+    }
+
+    @ViewBuilder
+    private func installCards(_ installs: [OnboardingAISetupModel.RecommendedInstall]) -> some View {
+        if !installs.isEmpty {
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: 230), spacing: 10)], spacing: 10) {
+                ForEach(installs) { install in
+                    OnboardingRecommendedInstallCard(install: install)
+                }
+            }
+        }
+    }
+
+    private var checkAgainButton: some View {
+        Button("Check again") { self.model.retryFromScratch() }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+            .disabled(self.model.isBusy)
     }
 
     private func moreProviders(_ picker: OnboardingAIPicker) -> some View {
@@ -578,17 +599,8 @@ struct OnboardingAISetupView: View {
             if !self.model.unavailableCandidates.isEmpty {
                 self.unavailableCandidatesSection
             }
-            if !self.model.recommendedInstalls.isEmpty {
-                LazyVGrid(columns: [GridItem(.adaptive(minimum: 230), spacing: 10)], spacing: 10) {
-                    ForEach(self.model.recommendedInstalls) { install in
-                        OnboardingRecommendedInstallCard(install: install)
-                    }
-                }
-            }
-            Button("Check again") { self.model.retryFromScratch() }
-                .buttonStyle(.bordered)
-                .controlSize(.small)
-                .disabled(self.model.isBusy)
+            self.installCards(picker.otherInstalls)
+            self.checkAgainButton
         }
         .padding(12)
         .frame(maxWidth: .infinity, alignment: .leading)

@@ -66,6 +66,36 @@ struct OnboardingAIPickerTests {
         ])
     }
 
+    @Test func `local downloads sit on the local model card until the app has a model`() throws {
+        // The Gateway's bundled install catalog (scripts/lib/recommended-tool-installs.json).
+        let installs: [Model.RecommendedInstall] = try Self.decode("""
+        [
+          {"id":"ollama","brandId":"ollama","label":"Ollama","hint":"Run open models locally","website":"https://ollama.com/download","icon":"https://cdn.simpleicons.org/ollama"},
+          {"id":"lmstudio","label":"LM Studio","hint":"Local model desktop app","website":"https://lmstudio.ai/download","icon":"https://cdn.simpleicons.org/lmstudio"},
+          {"id":"claude-code","brandId":"claude","label":"Claude Code","hint":"Anthropic's coding agent CLI","website":"https://code.claude.com/docs/en/quickstart","icon":"https://cdn.simpleicons.org/claudecode"}
+        ]
+        """)
+        // A real Gateway always offers both app-guided local setups.
+        let prepareOptions: [Model.PrepareOption] = try Self.decode("""
+        [{"id":"ollama","brandId":"ollama","label":"Ollama","actionLabel":"Choose connection"},
+         {"id":"lmstudio","brandId":"lmstudio","label":"LM Studio","actionLabel":"Connect server"}]
+        """)
+        let fresh = OnboardingAIPicker(
+            candidates: [], authOptions: [], manualProviders: [],
+            prepareOptions: prepareOptions, recommendedInstalls: installs)
+        #expect(fresh.rows.map(\.id) == [.localModel])
+        #expect(fresh.localInstalls.map(\.id) == ["ollama", "lmstudio"])
+        #expect(fresh.otherInstalls.map(\.id) == ["claude-code"])
+
+        let ollamaModel: [Model.Candidate] = try Self.decode("""
+        [{"kind":"ollama-auto","brandId":"ollama","label":"Ollama","detail":"available locally","modelRef":"ollama/llama3.2"}]
+        """)
+        let found = OnboardingAIPicker(
+            candidates: ollamaModel, authOptions: [], manualProviders: [],
+            prepareOptions: prepareOptions, recommendedInstalls: installs)
+        #expect(found.localInstalls.map(\.id) == ["lmstudio"])
+    }
+
     @Test func `late discovery keeps the selected Gemini key form available`() throws {
         let providers: [Model.ManualProvider] = try Self.decode(Self.manualProviders)
         let early = OnboardingAIPicker(candidates: [], authOptions: [], manualProviders: providers, prepareOptions: [])
