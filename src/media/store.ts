@@ -26,7 +26,7 @@ import { writeSiblingTempFile } from "../infra/sibling-temp-file.js";
 import { captureChannelReadScope } from "../shared/channel-read-authority.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { pruneGeneratedHtmlProvenance } from "./generated-html-provenance.js";
-import { getMediaDir } from "./store-path.js";
+import { getMediaDir, parseSavedMediaId } from "./store-path.js";
 import { MEDIA_FILE_MODE, SaveMediaSourceError } from "./store.shared.js";
 
 // Keep the public media-runtime SDK export on its existing store path.
@@ -126,17 +126,8 @@ export function extractOriginalFilename(filePath: string): string {
     return "file.bin";
   }
 
-  const ext = extnameFromAnyPath(basename);
-  const nameWithoutExt = path.basename(basename, ext);
-
-  const match = nameWithoutExt.match(
-    /^(.+)---[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i,
-  );
-  if (match?.[1]) {
-    return `${match[1]}${ext}`;
-  }
-
-  return basename;
+  const id = parseSavedMediaId(basename);
+  return id?.name ? `${id.name}${id.ext}` : basename;
 }
 
 /** Creates the configured media-store root with private directory permissions. */

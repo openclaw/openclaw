@@ -22,6 +22,7 @@ import {
   resolveCommittedPendingInputRequestHash,
   resolvePendingInputReplayRequest,
   matchesSessionPendingInputRequest,
+  matchRedeliveredSourceTurnMedia,
   type PendingInputRequest,
 } from "./session-accessor.pending-input-request.js";
 import {
@@ -386,13 +387,20 @@ async function stagePreparedPendingInput(
         );
       }
     };
-    const reclaimsCancelledSourceTurn =
+    const cancelledSourceTurn =
       options.reclaimCancelledSourceTurn === true &&
       !previous &&
       existing?.state === "cancelled" &&
       isRetryableSessionPendingInputEndCause(existing.end_cause) &&
-      existing.consumed_event_id == null &&
-      existing.request_hash === requestHash;
+      existing.consumed_event_id == null
+        ? existing
+        : undefined;
+    if (cancelledSourceTurn && cancelledSourceTurn.request_hash !== requestHash) {
+      // The reopened row keeps its accepted hash and bytes; only download locations differ.
+      requestHash =
+        matchRedeliveredSourceTurnMedia(message, cancelledSourceTurn, scope.env) ?? requestHash;
+    }
+    const reclaimsCancelledSourceTurn = cancelledSourceTurn?.request_hash === requestHash;
     // Explicit retries are caller-authorized; a recorded user Stop still wins.
     const reopensCancelled =
       existing?.state === "cancelled" &&
