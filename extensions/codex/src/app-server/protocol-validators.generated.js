@@ -335,12 +335,16 @@ var isCodexDynamicToolCallParams = (() => {
             (value === "contextWindowExceeded" ||
               value === "sessionBudgetExceeded" ||
               value === "usageLimitExceeded" ||
+              value === "apiKeySpendLimitExceeded" ||
+              value === "projectSpendLimitExceeded" ||
+              value === "organizationSpendLimitExceeded" ||
               value === "rateLimitExceeded" ||
               value === "flexUnavailable" ||
               value === "serverOverloaded" ||
               value === "modelNotFound" ||
               value === "policyCapacityUnavailable" ||
               value === "cyberPolicy" ||
+              value === "bioPolicy" ||
               value === "misalignmentPolicyViolation" ||
               value === "tooManyDenials" ||
               value === "internalServerError" ||
@@ -418,7 +422,7 @@ var isCodexDynamicToolCallParams = (() => {
           !("availableAccessPrograms" in value) ||
           check_3(value.availableAccessPrograms) ||
           value.availableAccessPrograms === null) &&
-        check_5(value.defaultReasoningEffort) &&
+        check_6(value.defaultReasoningEffort) &&
         (value.defaultServiceTier === void 0 ||
           !("defaultServiceTier" in value) ||
           typeof value.defaultServiceTier == "string" ||
@@ -430,7 +434,7 @@ var isCodexDynamicToolCallParams = (() => {
         (value.inputModalities === void 0 ||
           !("inputModalities" in value) ||
           (Array.isArray(value.inputModalities) &&
-            value.inputModalities.every((unique_3, index) => check_6(unique_3)))) &&
+            value.inputModalities.every((unique_3, index) => check_7(unique_3)))) &&
         typeof value.isDefault == "boolean" &&
         typeof value.model == "string" &&
         (value.modelSpecialty === void 0 ||
@@ -439,14 +443,14 @@ var isCodexDynamicToolCallParams = (() => {
           value.modelSpecialty === null) &&
         (value.multiAgentVersion === void 0 ||
           !("multiAgentVersion" in value) ||
-          check_7(value.multiAgentVersion) ||
+          check_8(value.multiAgentVersion) ||
           value.multiAgentVersion === null) &&
         (value.serviceTiers === void 0 ||
           !("serviceTiers" in value) ||
           (Array.isArray(value.serviceTiers) &&
-            value.serviceTiers.every((unique_5, index) => check_8(unique_5)))) &&
+            value.serviceTiers.every((unique_5, index) => check_9(unique_5)))) &&
         Array.isArray(value.supportedReasoningEfforts) &&
-        value.supportedReasoningEfforts.every((unique_6, index) => check_9(unique_6)) &&
+        value.supportedReasoningEfforts.every((unique_6, index) => check_10(unique_6)) &&
         (value.supportsPersonality === void 0 ||
           !("supportsPersonality" in value) ||
           typeof value.supportsPersonality == "boolean") &&
@@ -456,7 +460,7 @@ var isCodexDynamicToolCallParams = (() => {
           value.upgrade === null) &&
         (value.upgradeInfo === void 0 ||
           !("upgradeInfo" in value) ||
-          check_10(value.upgradeInfo) ||
+          check_11(value.upgradeInfo) ||
           value.upgradeInfo === null),
       check_2 = (value) =>
         typeof value == "object" &&
@@ -470,22 +474,31 @@ var isCodexDynamicToolCallParams = (() => {
         !Array.isArray(value) &&
         "cyber" in value &&
         Array.isArray(value.cyber) &&
-        value.cyber.every((unique_2, index) => check_4(unique_2)),
+        value.cyber.every((unique_2, index) => check_4(unique_2)) &&
+        (value.daybreakAvailability === void 0 ||
+          !("daybreakAvailability" in value) ||
+          check_5(value.daybreakAvailability)),
       check_4 = (value) =>
         typeof value == "string" &&
         (value === "standard" || value === "daybreakBlue" || value === "daybreakRed"),
       check_5 = (value) =>
         typeof value == "string" &&
-        (value.length >= 2 || (value.length >= 1 && CodePointCount(value) >= 1)),
+        (value === "available" ||
+          value === "enrollmentRequired" ||
+          value === "unavailableForModel" ||
+          value === "default"),
       check_6 = (value) =>
+        typeof value == "string" &&
+        (value.length >= 2 || (value.length >= 1 && CodePointCount(value) >= 1)),
+      check_7 = (value) =>
         [
           typeof value == "string" && value === "text",
           typeof value == "string" && value === "image",
           typeof value == "string" && value === "audio",
         ].reduce((result, unique_4, _) => (unique_4 === !0 ? ++result : result), 0) === 1,
-      check_7 = (value) =>
-        typeof value == "string" && (value === "disabled" || value === "v1" || value === "v2"),
       check_8 = (value) =>
+        typeof value == "string" && (value === "disabled" || value === "v1" || value === "v2"),
+      check_9 = (value) =>
         typeof value == "object" &&
         value !== null &&
         !Array.isArray(value) &&
@@ -495,15 +508,15 @@ var isCodexDynamicToolCallParams = (() => {
         typeof value.description == "string" &&
         typeof value.id == "string" &&
         typeof value.name == "string",
-      check_9 = (value) =>
+      check_10 = (value) =>
         typeof value == "object" &&
         value !== null &&
         !Array.isArray(value) &&
         "description" in value &&
         "reasoningEffort" in value &&
         typeof value.description == "string" &&
-        check_5(value.reasoningEffort),
-      check_10 = (value) =>
+        check_6(value.reasoningEffort),
+      check_11 = (value) =>
         typeof value == "object" &&
         value !== null &&
         !Array.isArray(value) &&
@@ -967,12 +980,16 @@ var isCodexDynamicToolCallParams = (() => {
             (value === "contextWindowExceeded" ||
               value === "sessionBudgetExceeded" ||
               value === "usageLimitExceeded" ||
+              value === "apiKeySpendLimitExceeded" ||
+              value === "projectSpendLimitExceeded" ||
+              value === "organizationSpendLimitExceeded" ||
               value === "rateLimitExceeded" ||
               value === "flexUnavailable" ||
               value === "serverOverloaded" ||
               value === "modelNotFound" ||
               value === "policyCapacityUnavailable" ||
               value === "cyberPolicy" ||
+              value === "bioPolicy" ||
               value === "misalignmentPolicyViolation" ||
               value === "tooManyDenials" ||
               value === "internalServerError" ||
@@ -1199,6 +1216,10 @@ var isCodexDynamicToolCallParams = (() => {
               !("durationMs" in value) ||
               (Number.isInteger(value.durationMs) && (typeof value.durationMs != "string" || !0)) ||
               (value.durationMs === null && (typeof value.durationMs != "string" || !0))) &&
+            (value.environmentId === void 0 ||
+              !("environmentId" in value) ||
+              typeof value.environmentId == "string" ||
+              value.environmentId === null) &&
             (value.error === void 0 ||
               !("error" in value) ||
               check_44(value.error) ||
@@ -2201,6 +2222,10 @@ var isCodexDynamicToolCallParams = (() => {
           !("daybreakEnabled" in value) ||
           typeof value.daybreakEnabled == "boolean" ||
           value.daybreakEnabled === null) &&
+        (value.daybreakProgramPropagationEnrolled === void 0 ||
+          !("daybreakProgramPropagationEnrolled" in value) ||
+          typeof value.daybreakProgramPropagationEnrolled == "boolean" ||
+          value.daybreakProgramPropagationEnrolled === null) &&
         (value.environments === void 0 ||
           !("environments" in value) ||
           (Array.isArray(value.environments) &&
@@ -2614,6 +2639,10 @@ var isCodexDynamicToolCallParams = (() => {
           !("daybreakEnabled" in value) ||
           typeof value.daybreakEnabled == "boolean" ||
           value.daybreakEnabled === null) &&
+        (value.daybreakProgramPropagationEnrolled === void 0 ||
+          !("daybreakProgramPropagationEnrolled" in value) ||
+          typeof value.daybreakProgramPropagationEnrolled == "boolean" ||
+          value.daybreakProgramPropagationEnrolled === null) &&
         (value.environments === void 0 ||
           !("environments" in value) ||
           (Array.isArray(value.environments) &&
@@ -3133,12 +3162,16 @@ var isCodexDynamicToolCallParams = (() => {
             (value === "contextWindowExceeded" ||
               value === "sessionBudgetExceeded" ||
               value === "usageLimitExceeded" ||
+              value === "apiKeySpendLimitExceeded" ||
+              value === "projectSpendLimitExceeded" ||
+              value === "organizationSpendLimitExceeded" ||
               value === "rateLimitExceeded" ||
               value === "flexUnavailable" ||
               value === "serverOverloaded" ||
               value === "modelNotFound" ||
               value === "policyCapacityUnavailable" ||
               value === "cyberPolicy" ||
+              value === "bioPolicy" ||
               value === "misalignmentPolicyViolation" ||
               value === "tooManyDenials" ||
               value === "internalServerError" ||
@@ -3365,6 +3398,10 @@ var isCodexDynamicToolCallParams = (() => {
               !("durationMs" in value) ||
               (Number.isInteger(value.durationMs) && (typeof value.durationMs != "string" || !0)) ||
               (value.durationMs === null && (typeof value.durationMs != "string" || !0))) &&
+            (value.environmentId === void 0 ||
+              !("environmentId" in value) ||
+              typeof value.environmentId == "string" ||
+              value.environmentId === null) &&
             (value.error === void 0 ||
               !("error" in value) ||
               check_57(value.error) ||
@@ -4576,12 +4613,16 @@ var isCodexDynamicToolCallParams = (() => {
             (value === "contextWindowExceeded" ||
               value === "sessionBudgetExceeded" ||
               value === "usageLimitExceeded" ||
+              value === "apiKeySpendLimitExceeded" ||
+              value === "projectSpendLimitExceeded" ||
+              value === "organizationSpendLimitExceeded" ||
               value === "rateLimitExceeded" ||
               value === "flexUnavailable" ||
               value === "serverOverloaded" ||
               value === "modelNotFound" ||
               value === "policyCapacityUnavailable" ||
               value === "cyberPolicy" ||
+              value === "bioPolicy" ||
               value === "misalignmentPolicyViolation" ||
               value === "tooManyDenials" ||
               value === "internalServerError" ||
@@ -4808,6 +4849,10 @@ var isCodexDynamicToolCallParams = (() => {
               !("durationMs" in value) ||
               (Number.isInteger(value.durationMs) && (typeof value.durationMs != "string" || !0)) ||
               (value.durationMs === null && (typeof value.durationMs != "string" || !0))) &&
+            (value.environmentId === void 0 ||
+              !("environmentId" in value) ||
+              typeof value.environmentId == "string" ||
+              value.environmentId === null) &&
             (value.error === void 0 ||
               !("error" in value) ||
               check_35(value.error) ||
@@ -6022,12 +6067,16 @@ var isCodexDynamicToolCallParams = (() => {
             (value === "contextWindowExceeded" ||
               value === "sessionBudgetExceeded" ||
               value === "usageLimitExceeded" ||
+              value === "apiKeySpendLimitExceeded" ||
+              value === "projectSpendLimitExceeded" ||
+              value === "organizationSpendLimitExceeded" ||
               value === "rateLimitExceeded" ||
               value === "flexUnavailable" ||
               value === "serverOverloaded" ||
               value === "modelNotFound" ||
               value === "policyCapacityUnavailable" ||
               value === "cyberPolicy" ||
+              value === "bioPolicy" ||
               value === "misalignmentPolicyViolation" ||
               value === "tooManyDenials" ||
               value === "internalServerError" ||
@@ -6254,6 +6303,10 @@ var isCodexDynamicToolCallParams = (() => {
               !("durationMs" in value) ||
               (Number.isInteger(value.durationMs) && (typeof value.durationMs != "string" || !0)) ||
               (value.durationMs === null && (typeof value.durationMs != "string" || !0))) &&
+            (value.environmentId === void 0 ||
+              !("environmentId" in value) ||
+              typeof value.environmentId == "string" ||
+              value.environmentId === null) &&
             (value.error === void 0 ||
               !("error" in value) ||
               check_35(value.error) ||
