@@ -17,6 +17,14 @@ const enChatToolOperations = {
       searchingTools: "Searching tools",
       searchedTools: "Searched tools",
       searchTools: "Search tools",
+      conversationDelivery: {
+        sent: "Sent to conversation",
+        queued: "Message queued",
+        suppressed: "Message not sent",
+        unknown: "Message delivery unconfirmed",
+        replied: "Sent message and received a reply",
+        timeout: "Sent message; reply timed out",
+      },
       operationLabels: {
         decision_evaluate: {
           default: {
@@ -75,14 +83,12 @@ const enChatToolOperations = {
           default: {
             action: "Send to conversation",
             running: "Sending to conversation",
-            done: "Sent to conversation",
           },
         },
         conversations_turn: {
           default: {
-            action: "Read conversation turn",
-            running: "Reading conversation turn",
-            done: "Read conversation turn",
+            action: "Send message and wait for a reply",
+            running: "Sending message and waiting for a reply",
           },
         },
         github_identity_status: {

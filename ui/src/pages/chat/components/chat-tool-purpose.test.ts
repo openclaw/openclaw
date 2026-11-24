@@ -202,6 +202,36 @@ it.each([
   },
 );
 
+it.each([
+  ["conversations_send", { details: { status: "sent" } }, "Sent to conversation"],
+  ["conversations_send", { outputText: '{"status":"queued"}' }, "Message queued"],
+  ["conversations_send", { details: { status: "suppressed" } }, "Message not sent"],
+  ["conversations_send", { details: { status: "unknown" } }, "Message delivery unconfirmed"],
+  ["conversations_send", {}, "Message delivery unconfirmed"],
+  [
+    "conversations_turn",
+    { live: true, completed: false },
+    "Sending message and waiting for a reply",
+  ],
+  ["conversations_turn", { details: { status: "replied" } }, "Sent message and received a reply"],
+  ["conversations_turn", { details: { status: "timeout" } }, "Sent message; reply timed out"],
+  [
+    "conversations_turn",
+    { details: { status: "sent", error: "No reply correlation" } },
+    "Sent to conversation",
+  ],
+  ["conversations_turn", { details: { status: "queued" } }, "Message queued"],
+] as const)(
+  "shows the conversation delivery receipt for %s: %j",
+  async (name, result, expected) => {
+    const container = await mountCard(
+      { id: "conversation", name, args: { message: "Hello" }, completed: true, ...result },
+      { expanded: false, runActive: true },
+    );
+    expect(text(container, ".chat-tool-disclosure__content")).toBe(expected);
+  },
+);
+
 const stop = (details: object, args: object = {}) => ({
   name: "sessions",
   args: { action: "stop", sessionKey: "agent:main:subagent:worker", runId: "run-secret", ...args },
