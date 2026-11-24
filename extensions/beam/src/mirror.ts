@@ -269,6 +269,7 @@ export function createBeamMirrorRunner(params: {
   const upload = async (
     payload: BeamUpload,
     candidate: BeamMirrorCandidate,
+    catalog: PluginServiceExportCatalog,
   ): Promise<boolean | "retired"> => {
     if (signal.aborted || redirectBlocked) {
       return false;
@@ -288,6 +289,7 @@ export function createBeamMirrorRunner(params: {
     ) {
       return false;
     }
+    catalog.assertCurrent(candidate);
     const token = current.token;
 
     let guarded: Awaited<ReturnType<typeof fetchWithSsrFGuard>>;
@@ -537,7 +539,7 @@ export function createBeamMirrorRunner(params: {
           if (tracked.get(key)?.fingerprint === fingerprint) {
             continue;
           }
-          const uploaded = await upload(payload, candidate);
+          const uploaded = await upload(payload, candidate, catalog);
           signal.throwIfAborted();
           if (uploaded) {
             trackSuccessfulUpload(key, candidate, fingerprint, uploaded === "retired");
@@ -591,7 +593,7 @@ export function createBeamMirrorRunner(params: {
           try {
             const payload = await buildUpload(catalog, entry.candidate, true);
             signal.throwIfAborted();
-            uploaded = (await upload(payload, entry.candidate)) !== false;
+            uploaded = (await upload(payload, entry.candidate, catalog)) !== false;
             signal.throwIfAborted();
           } catch {
             signal.throwIfAborted();

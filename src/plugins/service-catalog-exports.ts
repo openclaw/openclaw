@@ -34,6 +34,8 @@ export type CatalogExportItem = Pick<
 export type PluginServiceExportCatalog = {
   id: string;
   processHomeFallbackAllowed: boolean;
+  /** Revalidate the selected row immediately before a protected effect. */
+  assertCurrent(locator: Omit<SessionCatalogLocator, "catalogId">): void;
   list(params: { agentId?: string; limitPerHost?: number }): Promise<CatalogExportHost[]>;
   read(
     params: Omit<SessionCatalogLocator, "catalogId"> & { limit: number; cursor?: string },
@@ -132,10 +134,17 @@ export function createPluginServiceCatalogExports(params: {
         const key = (hostId: string, threadId: string, sourceHomeId?: string) =>
           JSON.stringify([hostId, threadId, sourceHomeId ?? null]);
         let latest = new Set<string>();
+        const assertSource = (locator: Omit<SessionCatalogLocator, "catalogId">) => {
+          assertCurrent(locator.agentId);
+          if (!latest.has(key(locator.hostId, locator.threadId, locator.sourceHomeId))) {
+            throw new Error("Select a listed local source");
+          }
+        };
         return [
           {
             id: provider.id,
             processHomeFallbackAllowed: allowProcessHomeFallback,
+            assertCurrent: assertSource,
             async list(request) {
               assertCurrent(request.agentId);
               // Publishing a newer list retires grants and pending reads from the preceding one.
@@ -208,15 +217,9 @@ export function createPluginServiceCatalogExports(params: {
               });
             },
             async read(request) {
-              assertCurrent(request.agentId);
+              assertSource(request);
               const granted = latest;
-              const permitted = key(request.hostId, request.threadId, request.sourceHomeId);
-              if (
-                !granted.has(permitted) ||
-                !Number.isInteger(request.limit) ||
-                request.limit < 1 ||
-                request.limit > 50
-              ) {
+              if (!Number.isInteger(request.limit) || request.limit < 1 || request.limit > 50) {
                 throw new Error("Select a listed local source and request at most 50 items");
               }
               const page = await provider.read({

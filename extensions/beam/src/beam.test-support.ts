@@ -143,6 +143,7 @@ export function createBeamTestCatalog(
   return {
     id,
     processHomeFallbackAllowed: params.processHomeFallbackAllowed ?? true,
+    assertCurrent: () => {},
     list: async () => {
       await params.onList?.();
       const sessions = typeof params.sessions === "function" ? params.sessions() : params.sessions;
