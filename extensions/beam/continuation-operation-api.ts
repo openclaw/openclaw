@@ -25,7 +25,7 @@ type Identity = { actor: string; fingerprint: string; sessionId: string };
 type Outcome = { state: BeamSendState; claim: string; startedAt: number };
 type SendCommand =
   | { op: "status"; lookup: Lookup }
-  | { op: "claim"; lookup: Lookup; fingerprint: string; claim: string }
+  | { op: "claim"; lookup: Lookup; fingerprint: string; claim: string; agent?: string }
   | { op: "settle"; lookup: Lookup; claim: string; state: "accepted" | "needs_reconciliation" };
 type SendDecision = BeamSendState | BeamSendRefusal | "claimed";
 export type BeamSendOperations = { request: { input: SendCommand; output: SendDecision } };
@@ -54,8 +54,7 @@ export const executeBeamSend: PluginStateOperationHandler<BeamSendOperations> = 
   const [identity] = tx.lookupMany<Identity>([{ store: 1, key: requestKey }]);
   const now = Date.now();
   if (identity) {
-    if (identity.actor !== actor.key)
-      return input.op === "claim" ? "request_identity_conflict" : "unavailable";
+    if (identity.actor !== actor.key) return "unavailable";
     if (input.op === "claim" && identity.fingerprint !== input.fingerprint)
       return "request_identity_conflict";
     if (identity.sessionId !== target.sessionId) return "needs_reconciliation";
@@ -76,7 +75,9 @@ export const executeBeamSend: PluginStateOperationHandler<BeamSendOperations> = 
       return "needs_reconciliation";
     return receipt.state;
   }
+  if (input.op === "status") return "unavailable";
   if (input.op !== "claim") return "needs_reconciliation";
+  if (input.agent && input.agent !== row.continuation.agentId) return "request_identity_conflict";
   const countKey = "count:" + beamId + "." + generation;
   const [count = 0] = tx.lookupMany<number>([{ store: 1, key: countKey }]);
   if (count >= BEAM_MAX_SENDS_PER_PUBLICATION) return "publication_send_limit";

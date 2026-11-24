@@ -209,13 +209,24 @@ it("adopts once and sends once under a durable identity, even across services an
   expect(await f.service().continue(source, { ...request, instruction: "changed" }, owner)).toBe(
     "request_identity_conflict",
   );
-  expect(await f.service().continue(source, request, staff)).toBe("request_identity_conflict");
+  expect(await f.service().continue(source, request, staff)).toBe("unavailable");
+  expect(await f.service().continue(source, { ...request, instruction: "changed" }, staff)).toBe(
+    "unavailable",
+  );
+  expect(await f.service().continue(source, { ...request, agent: "changed" }, staff)).toBe(
+    "unavailable",
+  );
   expect(await f.service().status(source, request.requestId, staff)).toBe("unavailable");
+  expect(await f.service().status(source, "never-submitted", staff)).toBe("unavailable");
+  const reader = { ...staff, personProfileId: owner.personProfileId, scopes: ["operator.read"] };
+  expect(await f.service().status(source, request.requestId, reader)).toEqual(replay);
+  expect(await f.service().continue(source, request, reader)).toBe("unavailable");
   expect(await f.service().continue(source, { ...request, agent: "changed" }, owner)).toBe(
     "request_identity_conflict",
   );
   f.deny();
   expect(await f.service().status(source, request.requestId, owner)).toBe("unavailable");
+  expect(await f.service().status(source, request.requestId, reader)).toBe("unavailable");
   expect(await f.service().continue(source, request, owner)).toBe("unavailable");
   expect(f.sends).toBe(1);
 });

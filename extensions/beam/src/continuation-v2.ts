@@ -25,8 +25,16 @@ export type BeamContinuationResult = PublicOutcome | BeamSendRefusal;
 function digest(...parts: (string | null)[]): string {
   return createHash("sha256").update(JSON.stringify(parts)).digest("hex");
 }
-function sendActor(auth: GatewayRequestAuthorityV1, row: BeamHandoff): BeamSendActor | undefined {
-  if (auth.scopes.includes("operator.admin") || auth.scopes.includes("operator.write")) {
+function sendActor(
+  auth: GatewayRequestAuthorityV1,
+  row: BeamHandoff,
+  readOnly: boolean,
+): BeamSendActor | undefined {
+  if (
+    auth.scopes.includes("operator.admin") ||
+    auth.scopes.includes("operator.write") ||
+    (readOnly && auth.scopes.includes("operator.read"))
+  ) {
     return {
       key: auth.personProfileId
         ? digest("person", auth.personProfileId)
@@ -78,7 +86,7 @@ export function createBeamContinuation(
       const publication = await store.readPublication(initial.beamId);
       const row = publication.snapshot ?? publication.ownership;
       if (!row || row.publicationId !== generation) return;
-      const actor = sendActor(auth, row);
+      const actor = sendActor(auth, row, !input);
       if (!actor) return;
       const destination = await readBeamDestination(
         row,
@@ -91,8 +99,6 @@ export function createBeamContinuation(
     let view = await current();
     if (!view) return "unavailable";
     if (typeof view.destination === "string") return view.destination;
-    if (input?.agent && view.row.continuation && input.agent !== view.row.continuation.agentId)
-      return "request_identity_conflict";
     if (input && view.destination.state === "released_unbound") {
       // The host owns authorization, one destination binding and crash reconciliation.
       // An adoption ACK is never a message-send ACK.
@@ -110,9 +116,8 @@ export function createBeamContinuation(
       if (!view) return "unavailable";
     }
     if (typeof view.destination === "string") return view.destination;
+    if (!input && view.destination.state === "released_unbound") return "unavailable";
     if (view.destination.state !== "ready") return { requestId, state: "needs_reconciliation" };
-    if (input?.agent && input.agent !== view.row.continuation?.agentId)
-      return "request_identity_conflict";
     const target = view.destination;
     const lookup = {
       beamId: initial.beamId,
@@ -160,6 +165,7 @@ export function createBeamContinuation(
             op: "claim",
             lookup,
             claim,
+            ...(input.agent ? { agent: input.agent } : {}),
             fingerprint: digest(input.instruction, input.agent ?? null),
           }
         : { op: "status", lookup },
