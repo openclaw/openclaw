@@ -14242,7 +14242,7 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
         "bash",
         ["--noprofile", "--norc", "-c", summaryReadiness.run ?? ""],
         {
-          env: { ...process.env, SOURCE_READINESS_RESULT: readiness },
+          env: { ...process.env, RERUN_GROUP: "all", SOURCE_READINESS_RESULT: readiness },
           encoding: "utf8",
         },
       );

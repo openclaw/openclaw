@@ -1,8 +1,8 @@
 import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
-import { expect, it, vi } from "vitest";
+import { expect, it } from "vitest";
 import { parse } from "yaml";
-import { createClient, loadPlan } from "../scripts/frv.mjs";
+import { loadPlan } from "../scripts/frv.mjs";
 import {
   parseArgs,
   releaseEvidenceVerificationArgs,
@@ -123,17 +123,6 @@ it("accepts build-only at the shell and dispatch boundaries without selecting re
   expect(args[0]).toBe("--verify-build-only");
   expect(args).not.toContain("--validate-run");
 });
-it("FRV verification uses preparation verification rather than validated evidence for build-only", async () => {
-  let captured: string[] = [];
-  const execute = vi.fn(async (_command: string, args: string[]) => {
-    captured = args;
-    return "{}";
-  });
-  const client = createClient("openclaw/openclaw", { execCommand: execute });
-  await client.verify("77", { rerunGroup: "build-only", trustedWorkflow: { sha: "a".repeat(40) } });
-  expect(captured).toContain("--verify-build-only");
-  expect(captured).not.toContain("--validate-run");
-});
 
 it("read-only FRV commands can load build-only plans, but continuation cannot widen them into full validation", async () => {
   const fixture = candidatePublicationFixture({ rerunGroup: "build-only" });
@@ -180,5 +169,26 @@ it("build-only always acquires the exact sealed candidate even when external val
     );
     expect(result.status, result.stderr).toBe(0);
     expect(result.stdout).toBe("true");
+  }
+});
+
+it("summary admits intentionally skipped build-only readiness but rejects readiness failures and normal skips", () => {
+  const readiness = workflow.jobs.summary.steps.find(
+    (step: { name: string }) => step.name === "Require successful source readiness",
+  );
+  const artifacts = workflow.jobs.summary.steps.find(
+    (step: { name: string }) => step.name === "Require qualified publication artifacts",
+  );
+  for (const mode of ["all", "build-only"]) {
+    expect(evaluateWorkflowCondition(artifacts.if, context(mode))).toBe(true);
+    for (const result of ["success", "skipped", "failure", "cancelled"]) {
+      const run = spawnSync("bash", ["-c", readiness.run], {
+        encoding: "utf8",
+        env: { ...process.env, RERUN_GROUP: mode, SOURCE_READINESS_RESULT: result },
+      });
+      expect(run.status, `${mode}/${result}: ${run.stderr}`).toBe(
+        result === "success" || (mode === "build-only" && result === "skipped") ? 0 : 1,
+      );
+    }
   }
 });
