@@ -2047,7 +2047,7 @@ AFTER_CD
       "Upload sanitized upgrade survivor proof",
     );
     expect(survivorProof).toMatchObject({
-      if: `always() && ${baseline.if}`,
+      if: `always() && (${baseline.if} || contains(format(' {0} ', needs.preflight.outputs.docker_seed_lanes), ' release-update-survivor '))`,
       uses: UPLOAD_ARTIFACT_V7,
       with: { "include-hidden-files": true, "if-no-files-found": "warn" },
     });
@@ -2058,12 +2058,19 @@ AFTER_CD
       ".artifacts/docker-tests/20260920T000000Z/failures.json",
       ".artifacts/docker-tests/upgrade-survivor-baseline.123/failure.json",
       ".artifacts/docker-tests/upgrade-survivor-baseline.123/summary.json",
+      ".artifacts/upgrade-survivor/release-update-survivor/healthy/summary.json",
+      ".artifacts/upgrade-survivor/release-update-survivor/healthy/trial.json",
+      ".artifacts/upgrade-survivor/release-update-survivor/healthy/rows-after.json",
+      ".artifacts/upgrade-survivor/release-update-survivor/healthy/update-runs.json",
+      ".artifacts/upgrade-survivor/release-update-survivor/healthy/gateway-launcher.log",
     ]) {
       expect(uploaded(file), file).toBe(true);
     }
     for (const file of [
       ".artifacts/upgrade-survivor/baseline/legacy-operator-baseline-turn.err",
       ".artifacts/upgrade-survivor/baseline/diagnostics/raw.json",
+      ".artifacts/upgrade-survivor/release-update-survivor/healthy/cli-env.json",
+      ".artifacts/upgrade-survivor/release-update-survivor/crash/summary.json",
       ".artifacts/docker-tests/run/published-upgrade-survivor.log",
       ".artifacts/docker-tests/20260920T000000Z/baseline-cache/package/summary.json",
       ".artifacts/docker-tests/20260920T000000Z/baseline-cache/package/failures.json",
