@@ -32,7 +32,10 @@ import {
   createAgentCreationWitnessSource as source,
   createAliasedAgentCreationWitnessFixture as aliasedFixture,
 } from "./openclaw-agent-execution.creation-fixture.test-support.js";
-import { captureOpenClawAgentDatabaseExecution } from "./openclaw-agent-execution.js";
+import {
+  captureOpenClawAgentDatabaseExecution,
+  prepareOpenClawAgentDatabaseExecution,
+} from "./openclaw-agent-execution.js";
 import { createOpenClawDatabaseMaintenanceScope } from "./openclaw-state-db-async-lifecycle.js";
 import { closeOpenClawStateDatabaseAsync, openOpenClawStateDatabase } from "./openclaw-state-db.js";
 
@@ -584,6 +587,21 @@ it.each(["fresh root", "existing agent"] as const)(
     expect(listOpenClawRegisteredAgentDatabases({ env: aliased.env })).toEqual([]);
   },
 );
+
+it("prepares a database through its retained unpublished creator", async () => {
+  const options = fixture();
+  const creator = captureOpenClawAgentDatabaseExecution(options, {
+    expectedCreationIdentity: readDatabasePathIdentitySync(options.path),
+  });
+  try {
+    expect(fs.existsSync(options.path)).toBe(false);
+    await prepareOpenClawAgentDatabaseExecution(options, () => {});
+    expect(creator.fileIdentity).toMatchObject({ kind: "file" });
+    await expect(creator.runExisting(source(), async () => "prepared")).resolves.toBe("prepared");
+  } finally {
+    await creator.release();
+  }
+});
 
 it("reserves schema-missing first birth against a sibling captured before its witness", async () => {
   const options = fixture();

@@ -83,12 +83,15 @@ export async function prepareOpenClawAgentDatabaseExecution(
   signal?: AbortSignal,
 ): Promise<void> {
   assertCurrent();
-  const execution = captureOpenClawAgentDatabaseExecution(options);
+  let execution: OpenClawAgentDatabaseExecution | undefined;
   try {
     await runOpenClawAgentWorkerWrite(
       options,
-      () =>
-        execution.prepare(
+      () => {
+        assertCurrent();
+        // Join unpublished creation only after entering the writer turn.
+        execution = captureOpenClawAgentDatabaseExecution(options, {}, true);
+        return execution.prepare(
           {
             assertCurrent,
             createAdmission: (binding) => () => ({
@@ -105,12 +108,13 @@ export async function prepareOpenClawAgentDatabaseExecution(
             }),
           },
           signal,
-        ),
+        );
+      },
       undefined,
       signal,
     );
   } finally {
-    await execution.release();
+    await execution?.release();
   }
 }
 
