@@ -1,7 +1,8 @@
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { asOptionalRecord as asRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import { sql } from "kysely";
 import { jsonNativeFieldsValid } from "../../infra/database-engine/json-values.js";
 import {
+  executeSqliteQueryTakeFirstSync,
   prepareSqliteQueryTakeFirstSync,
   iterateSqliteQuerySync,
 } from "../../infra/kysely-sync.js";
@@ -10,9 +11,14 @@ import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import type { TranscriptEvent } from "./session-accessor.sqlite-contract.js";
 import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
 import { readHotSessionTranscriptSnapshot } from "./session-cold-storage-state.js";
+import { isDegradedCompactionEvent } from "./session-message-cut-plan.js";
 import { projectTranscriptPayloadNavigationSql } from "./session-model-context-projection.js";
 import { transcriptEventReadBytesSql } from "./session-transcript-read-bytes.js";
-import { transcriptEventJsonSql, transcriptEventNavigationSql } from "./transcript-payload.js";
+import {
+  readTranscriptPayload,
+  transcriptEventJsonSql,
+  transcriptEventNavigationSql,
+} from "./transcript-payload.js";
 
 export const SESSION_MESSAGE_CUT_MAX_BYTES = 8 * 1024 * 1024;
 
@@ -68,14 +74,13 @@ export function readSessionMessageCut(
         );
       }
       let event: TranscriptEvent = JSON.parse(row.event_json);
-      // The header's lineage, the selected user's editor content, and compaction
-      // details are part of the result: fork planning derives the degraded-history
-      // flag from the copied prefix's compaction events, and navigation rows
-      // carry no details.
-      if (
-        isRecord(event) &&
-        (event.type === "session" || event.type === "compaction" || event.id === entryId)
-      ) {
+      // The header's lineage and the selected user's editor content are part of
+      // the result. Compaction payloads are not: fork planning copies only the
+      // selected prefix, so hydrating every compaction in the transcript would
+      // charge unrelated summaries to the navigation budget and retain them in
+      // the worker heap. The prefix's degradation is checked separately, one
+      // compaction at a time, through hasDegradedCompaction below.
+      if (isRecord(event) && (event.type === "session" || event.id === entryId)) {
         bytes += row.payload_bytes;
         if (bytes > SESSION_MESSAGE_CUT_MAX_BYTES) {
           throw new SqliteJsonlReadBudgetExceededError(
@@ -92,6 +97,47 @@ export function readSessionMessageCut(
     }
     return {
       events,
+      /**
+       * True when a compaction on the selected prefix marks history
+       * quality-degraded. Fork planning copies the prefix, so only its
+       * compactions can reach the new session: read those payloads one at a
+       * time, without retaining them and without charging the navigation budget.
+       * A payload that cannot be verified (missing, or over the per-event read
+       * budget) counts as not degraded.
+       */
+      hasDegradedCompaction(prefix: readonly TranscriptEvent[]): boolean {
+        const db = getSessionKysely(database.db);
+        for (const event of prefix) {
+          if (!isRecord(event) || event.type !== "compaction") {
+            continue;
+          }
+          const seq =
+            sequences.get(event) ??
+            (typeof event.id === "string" ? identities.get(event.id) : undefined);
+          if (seq === undefined) {
+            continue;
+          }
+          const payload = executeSqliteQueryTakeFirstSync(
+            database.db,
+            db
+              .selectFrom("transcript_events")
+              .select(["event_json", "event_zstd", "event_utf8_bytes"])
+              .where("session_id", "=", sessionId)
+              .where("seq", "=", seq),
+          );
+          if (
+            !payload ||
+            (payload.event_json === null && payload.event_zstd === null) ||
+            (payload.event_utf8_bytes ?? 0) > SESSION_MESSAGE_CUT_MAX_BYTES
+          ) {
+            continue;
+          }
+          if (isDegradedCompactionEvent(asRecord(JSON.parse(readTranscriptPayload(payload))))) {
+            return true;
+          }
+        }
+        return false;
+      },
       *hydrate(selected: readonly TranscriptEvent[]) {
         for (const event of selected) {
           const originalSeq = sequences.get(event);

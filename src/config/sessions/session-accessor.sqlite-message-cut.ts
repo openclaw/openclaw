@@ -481,6 +481,7 @@ export function mutateSqliteSessionAtMessageInTransaction(
     source?.events ?? [],
     { ...params, mode: "fork" },
     projection?.sourceRepositoryWorkspaceId,
+    source ? (prefix) => source.hasDegradedCompaction(prefix) : undefined,
   );
   if (plan.status !== "prepared") {
     return plan;

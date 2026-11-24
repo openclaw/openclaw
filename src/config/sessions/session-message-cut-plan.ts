@@ -181,6 +181,13 @@ export function planSessionMessageCut(
   events: readonly TranscriptEvent[],
   params: SessionMessageCutIntent & { mode: "fork" },
   sourceRepositoryWorkspaceId?: string,
+  /**
+   * Reads the degradation flag from the copied prefix's compaction payloads.
+   * SQLite readers supply this because navigation rows carry no details; when
+   * absent (memory transcripts already carry full payloads) the prefix is
+   * scanned directly.
+   */
+  hasDegradedCompaction?: (prefix: readonly TranscriptEvent[]) => boolean,
 ): SessionMessageCutPlan {
   const refusal = refuseUnselectableMessageCut(entry, params, sourceRepositoryWorkspaceId);
   if (refusal) {
@@ -222,7 +229,9 @@ export function planSessionMessageCut(
         params,
         nextSessionId,
         // The forked transcript is the prefix itself.
-        cut.prefix.some((event) => isDegradedCompactionEvent(event)),
+        hasDegradedCompaction
+          ? hasDegradedCompaction(cut.prefix)
+          : cut.prefix.some((event) => isDegradedCompactionEvent(event)),
       ),
       ...readMessageCutEditorFields(cut.message),
     },

@@ -12,6 +12,10 @@ import {
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
+import {
+  buildStatusMessageParts,
+  statusModelRefs,
+} from "../../status/status-message.test-support.js";
 import { deliveryContextFromSession } from "../../utils/delivery-context.read.js";
 import {
   appendTranscriptEvent as appendEvent,
@@ -28,6 +32,7 @@ import {
   updateSessionEntry as updateEntry,
   upsertSessionEntryCore as upsertEntry,
 } from "./session-accessor.js";
+import type { TranscriptEvent } from "./session-accessor.sqlite-contract.js";
 import {
   agentId,
   sessionKey,
@@ -38,6 +43,7 @@ import { recordSessionParticipant } from "./session-accessor.sqlite-participants
 import { resolveSqliteScope, toDatabaseOptions } from "./session-accessor.sqlite-scope.js";
 import { readTranscriptGenerationInTransaction } from "./session-accessor.sqlite-transcript-state.js";
 import { appendTranscriptEventsInTransaction } from "./session-accessor.sqlite-transcript-store.js";
+import { refuseInPlaceSessionMessageCutInDatabase } from "./session-message-cut-in-place.kernel.js";
 import { SESSION_MESSAGE_CUT_MAX_BYTES } from "./session-message-cut-read.js";
 import { waitForSessionTranscriptIndexReconcilesInStateDir } from "./session-transcript-reconcile.js";
 import type { InternalSessionEntry } from "./types.js";
@@ -101,9 +107,101 @@ async function seedDegradedCompaction(scope: Parameters<typeof appendEvent>[0], 
 }
 
 /**
- * Install one stored shape whose canonical navigation is not its raw chain, through
- * the append owner: no async writer produces these shapes today.
+ * Chain nine ~1 MiB non-degraded compactions after the fixture's active leaf:
+ * a fork cut before them copies a small prefix, so their summaries must never
+ * reach the fork read budget (9 MiB would exceed it).
  */
+async function seedLargeLaterCompactions(
+  scope: Parameters<typeof appendEvent>[0],
+  stateDir: string,
+) {
+  const at = (second: number) =>
+    new Date(Date.parse("2026-07-18T00:00:00Z") + second).toISOString();
+  let parentId = "assistant-2";
+  for (let index = 1; index <= 9; index++) {
+    const compactionId = `large-compaction-${index}`;
+    await appendEvent(scope, {
+      type: "compaction",
+      id: compactionId,
+      parentId,
+      timestamp: at(20 + index * 3),
+      details: { readFiles: [], modifiedFiles: [], summary: "x".repeat(1024 * 1024) },
+    });
+    await appendMessage(scope, {
+      eventId: `large-user-${index}`,
+      parentId: compactionId,
+      message: { role: "user", content: `after compaction ${index}` },
+      now: Date.parse("2026-07-18T00:00:00Z") + (20 + index * 3 + 1) * 1_000,
+    });
+    await appendMessage(scope, {
+      eventId: `large-assistant-${index}`,
+      parentId: `large-user-${index}`,
+      message: { role: "assistant", content: `answer ${index}` },
+      now: Date.parse("2026-07-18T00:00:00Z") + (20 + index * 3 + 2) * 1_000,
+    });
+    parentId = `large-assistant-${index}`;
+  }
+  await appendEvent(scope, {
+    type: "leaf",
+    id: "active-leaf-large",
+    parentId,
+    timestamp: at(20 + 9 * 3 + 3),
+    targetId: parentId,
+  });
+  await waitForSessionTranscriptIndexReconcilesInStateDir(stateDir);
+}
+
+/** Append a long off-path branch in one transaction: a full navigation scan would iterate it. */
+async function seedLongOffPathBranch(
+  scope: Parameters<typeof appendEvent>[0],
+  stateDir: string,
+  count = 240,
+) {
+  const at = (second: number) =>
+    new Date(Date.parse("2026-07-18T00:00:00Z") + second).toISOString();
+  const resolved = resolveSqliteScope(scope);
+  const events: TranscriptEvent[] = [];
+  let parentId: string | null = "assistant-2";
+  for (let index = 0; index < count; index++) {
+    const id = `filler-${index}`;
+    events.push({
+      type: "message",
+      id,
+      parentId,
+      timestamp: at(100 + index),
+      message: {
+        role: index % 2 === 0 ? "user" : "assistant",
+        content: `filler ${index}`,
+      },
+    });
+    parentId = id;
+  }
+  runOpenClawAgentWriteTransaction(
+    (database) =>
+      appendTranscriptEventsInTransaction(
+        database,
+        { ...resolved, sessionId: scope.sessionId },
+        events,
+      ),
+    toDatabaseOptions(resolved),
+  );
+  await waitForSessionTranscriptIndexReconcilesInStateDir(stateDir);
+}
+
+/** The shipped /status Compactions line for a stored entry, or null when it renders none. */
+function statusCompactionLine(entry: InternalSessionEntry | undefined): string | null {
+  const parts = buildStatusMessageParts({
+    sessionEntry: entry,
+    modelRefs: statusModelRefs({ provider: "openai", model: "proof-model" }),
+    agent: { model: "openai/proof-model" },
+    config: { agents: { defaults: { userTimezone: "UTC" } } },
+    sessionKey,
+    sessionScope: "per-sender",
+    queue: { mode: "steer", depth: 0 },
+    modelAuth: "api-key",
+  });
+  return parts.text.match(/🧹 Compactions: (.+)/)?.[1] ?? null;
+}
 async function seedLegacyNavigation(kind: "parentless" | "side-cursor" | "reset-boundary") {
   const stateDir = tempDirs.make(`openclaw-message-cut-${kind}-`);
   const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
@@ -487,6 +585,123 @@ it("forks degradation from the copied prefix only", async () => {
   });
   assert(clean.status === "created", `fork refused: ${clean.status}`);
   expect(clean.entry.compactionQualityDegraded).toBeUndefined();
+});
+
+// A fork cut before later compactions must not pay for their summaries: the fork
+// read charges only the copied prefix, so nine 1 MiB compactions after the fork
+// point cannot trip the 8 MiB navigation budget.
+it("forks before many large later compactions without charging them to the read budget", async () => {
+  const { env, scope, params } = await createSession();
+  await seedLargeLaterCompactions(scope, env.OPENCLAW_STATE_DIR as string);
+
+  const result = await fork({
+    ...params,
+    sessionKey: "agent:main:canonical-message-cut",
+    sessionStoreKey: sessionKey,
+    targetKey: "agent:main:dashboard:message-cut-large-later-fork",
+    entryId: "user-2",
+  });
+  assert(result.status === "created", `fork refused: ${result.status}`);
+  expect(result.entry.compactionQualityDegraded).toBeUndefined();
+});
+
+// An ordinary rewind answers from the active-path projection: the canonical
+// navigation scan (identity_count) must not run for a target already on the
+// active path with no later reset, however long the stored transcript is.
+it("rewinds a long transcript without scanning its navigation", async () => {
+  const { env, scope, params } = await createSession();
+  await seedDegradedCompaction(scope, env.OPENCLAW_STATE_DIR as string);
+  await seedLongOffPathBranch(scope, env.OPENCLAW_STATE_DIR as string);
+  const database = openOpenClawAgentDatabase({ agentId, env });
+  const entry = readEntry(scope);
+  assert(entry);
+
+  const sql = observeHostDataSql();
+  try {
+    const precheck = refuseInPlaceSessionMessageCutInDatabase(database, scope.sessionId, entry, {
+      canonicalSourceKey: sessionKey,
+      sourceKey: sessionKey,
+      targetKey: sessionKey,
+      entryId: "user-2",
+      mode: "rewind",
+      expectedState: sourceExpectedState,
+    });
+    expect(precheck).toBeUndefined();
+    expect(sql.queries.filter((query) => query.includes("identity_count"))).toEqual([]);
+  } finally {
+    sql.restore();
+  }
+
+  // The indexed path still answers the degradation question: the flag clears.
+  const result = await rewind(params);
+  assert(result.status === "created", `rewind refused: ${result.status}`);
+  expect(result.entry.compactionQualityDegraded).toBeUndefined();
+});
+
+// Behavior proof, end to end through the shipped entry points: the stored rows
+// are written by the production append owner (untouched by this change), so the
+// session below is latest-stable-shaped data; the real accessor cuts it and the
+// real /status renderer reports the flag at every step.
+it("proves /status clears and returns across navigation and fork", async () => {
+  const { env, scope, params } = await createSession();
+  await seedDegradedCompaction(scope, env.OPENCLAW_STATE_DIR as string);
+  const trace: string[] = [];
+  const record = (label: string, entry: InternalSessionEntry | undefined) => {
+    const line = statusCompactionLine(entry);
+    trace.push(`${label}: ${line === null ? "[no Compactions line]" : `Compactions: ${line}`}`);
+    return line;
+  };
+
+  // Pre-change stored shape: the entry still carries the flag and the count the
+  // old code wrote.
+  const stored = readEntry(scope);
+  expect(stored?.compactionQualityDegraded).toBe(true);
+  expect(stored?.compactionCount).toBe(2);
+  expect(record("/status before", stored)).toBe("2 · degraded history (details may be lost)");
+
+  const rewound = await rewind(params);
+  assert(rewound.status === "created", `rewind refused: ${rewound.status}`);
+  expect(record("/status after rewind", readEntry(scope))).toBeNull();
+
+  const back = await switchBranch({ agentId, env, sessionKey, leafEntryId: "assistant-3" });
+  assert(back.status === "created", `switch back refused: ${back.status}`);
+  expect(record("/status after branch switch", readEntry(scope))).toBe(
+    "0 · degraded history (details may be lost)",
+  );
+
+  const cleanFork = await fork({
+    ...params,
+    sessionKey: "agent:main:canonical-message-cut",
+    sessionStoreKey: sessionKey,
+    targetKey: "agent:main:dashboard:message-cut-proof-clean-fork",
+    entryId: "user-2",
+  });
+  assert(cleanFork.status === "created", `clean fork refused: ${cleanFork.status}`);
+  expect(
+    record(
+      "/status on clean fork",
+      readEntry({ ...params, sessionKey: "agent:main:dashboard:message-cut-proof-clean-fork" }),
+    ),
+  ).toBeNull();
+
+  const degradedFork = await fork({
+    ...params,
+    sessionKey: "agent:main:canonical-message-cut",
+    sessionStoreKey: sessionKey,
+    targetKey: "agent:main:dashboard:message-cut-proof-degraded-fork",
+    entryId: "user-3",
+  });
+  assert(degradedFork.status === "created", `degraded fork refused: ${degradedFork.status}`);
+  expect(
+    record(
+      "/status on degraded fork",
+      readEntry({
+        ...params,
+        sessionKey: "agent:main:dashboard:message-cut-proof-degraded-fork",
+      }),
+    ),
+  ).toBe("0 · degraded history (details may be lost)");
+  console.log(`\n/status behavior proof:\n${trace.join("\n")}`);
 });
 
 // Canonical navigation is neither the raw parent chain nor raw child links, and a
