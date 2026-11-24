@@ -146,7 +146,7 @@ it.for(["success", "child error", "owner revoked", "owner reassigned", "new user
       .spyOn(runWait, "waitForAgentRunReply")
       .mockImplementation((params) => {
         const pending = waitForReply(params);
-        if (params.timeoutMs === 1_000) {
+        if (!params.untilTerminal && params.timeoutMs > 0 && params.timeoutMs <= 1_000) {
           inlineWaitStarted.resolve();
         }
         return pending;
