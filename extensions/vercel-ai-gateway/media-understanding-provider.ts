@@ -90,6 +90,37 @@ async function assertTranscriptionModelAvailable(params: {
   }
 }
 
+// Rotation can move from the primary key to environment-configured keys on rate limits.
+// Every key admitted to rotation passes the same model check, so a scoped secondary key
+// never receives the upload and ends rotation with a model-scope 403. The primary key
+// must be eligible; ineligible or unreadable secondary keys are dropped.
+async function collectEligibleTranscriptionKeys(params: {
+  primaryApiKey: string;
+  model: string;
+  signal?: AbortSignal;
+}): Promise<{ ok: true; value: string[] } | { ok: false; error: unknown }> {
+  const candidates = collectProviderApiKeysForExecution({
+    provider: VERCEL_AI_GATEWAY_PROVIDER_ID,
+    primaryApiKey: params.primaryApiKey,
+  });
+  const eligible: string[] = [];
+  for (const apiKey of candidates) {
+    try {
+      await assertTranscriptionModelAvailable({
+        apiKey,
+        model: params.model,
+        ...(params.signal ? { signal: params.signal } : {}),
+      });
+      eligible.push(apiKey);
+    } catch (error) {
+      if (apiKey === params.primaryApiKey) {
+        return { ok: false, error };
+      }
+    }
+  }
+  return { ok: true, value: eligible };
+}
+
 // AI Gateway's native transcription endpoint, as called by @ai-sdk/gateway's
 // GatewayTranscriptionModel. The Gateway has no OpenAI-style /v1/audio/transcriptions route.
 export const vercelAiGatewayMediaUnderstandingProvider: MediaUnderstandingProvider = {
@@ -108,23 +139,19 @@ export const vercelAiGatewayMediaUnderstandingProvider: MediaUnderstandingProvid
     if (!prepared.ok) {
       return prepared;
     }
-    try {
-      await assertTranscriptionModelAvailable({
-        apiKey: prepared.value,
-        model,
-        ...(context.signal ? { signal: context.signal } : {}),
-      });
-    } catch (error) {
+    const eligibility = await collectEligibleTranscriptionKeys({
+      primaryApiKey: prepared.value,
+      model,
+      ...(context.signal ? { signal: context.signal } : {}),
+    });
+    if (!eligibility.ok) {
       // This result is exclusively a rejection before uploading audio. Upload and HTTP
       // failures below throw, so automatic selection never resends the file elsewhere.
-      return { ok: false, error };
+      return eligibility;
     }
     const value = await executeWithApiKeyRotation({
       provider: VERCEL_AI_GATEWAY_PROVIDER_ID,
-      apiKeys: collectProviderApiKeysForExecution({
-        provider: VERCEL_AI_GATEWAY_PROVIDER_ID,
-        primaryApiKey: prepared.value,
-      }),
+      apiKeys: eligibility.value,
       transientRetry: providerOperationRetryConfig("read"),
       execute: (apiKey) => transcribeVercelAiGatewayAudio({ ...context, model, apiKey }),
     });

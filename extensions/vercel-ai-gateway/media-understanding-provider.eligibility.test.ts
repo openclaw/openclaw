@@ -1,6 +1,7 @@
 import { beforeEach, expect, it, vi } from "vitest";
 
 const resolveApiKeyForProviderMock = vi.hoisted(() => vi.fn());
+const collectProviderApiKeysForExecutionMock = vi.hoisted(() => vi.fn());
 const getCachedLiveProviderModelRowsMock = vi.hoisted(() => vi.fn());
 const postJsonResponseMock = vi.hoisted(() => vi.fn());
 
@@ -9,6 +10,7 @@ const postJsonResponseMock = vi.hoisted(() => vi.fn());
 vi.mock("openclaw/plugin-sdk/provider-auth-runtime", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/provider-auth-runtime")>()),
   resolveApiKeyForProvider: resolveApiKeyForProviderMock,
+  collectProviderApiKeysForExecution: collectProviderApiKeysForExecutionMock,
 }));
 vi.mock("openclaw/plugin-sdk/provider-catalog-live-runtime", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/provider-catalog-live-runtime")>()),
@@ -29,6 +31,10 @@ beforeEach(() => {
     mode: "api-key",
     source: "env: AI_GATEWAY_API_KEY",
   });
+  collectProviderApiKeysForExecutionMock.mockReset();
+  collectProviderApiKeysForExecutionMock.mockImplementation(
+    ({ primaryApiKey }: { primaryApiKey: string }) => [primaryApiKey],
+  );
   getCachedLiveProviderModelRowsMock.mockReset();
   getCachedLiveProviderModelRowsMock.mockResolvedValue([
     { id: "anthropic/claude-opus-4.6", type: "language" },
@@ -83,6 +89,36 @@ it("rejects scoped keys before upload when the model is not in their list", asyn
   expect(String(!result.ok && result.error)).toContain(
     'cannot use transcription model "openai/gpt-transcribe"',
   );
+  expect(postJsonResponseMock).not.toHaveBeenCalled();
+});
+
+it("drops scoped rotation keys so a rate-limited upload rotates to the next eligible key", async () => {
+  // Primary is eligible, the first environment key is a Token Pass key, the last is eligible.
+  collectProviderApiKeysForExecutionMock.mockReturnValue(["vck_test", "vck_scoped", "vck_other"]);
+  getCachedLiveProviderModelRowsMock.mockImplementation(async ({ apiKey }: { apiKey: string }) =>
+    apiKey === "vck_scoped"
+      ? [{ id: "anthropic/claude-opus-4.6", type: "language" }]
+      : [{ id: "openai/gpt-transcribe", type: "transcription" }],
+  );
+  postJsonResponseMock
+    .mockRejectedValueOnce(new Error("HTTP 429: rate limit exceeded"))
+    .mockResolvedValueOnce({ text: "hello" });
+  await expect(transcribeWithContext()).resolves.toEqual({
+    ok: true,
+    value: { text: "hello", model: "openai/gpt-transcribe" },
+  });
+  const authHeaders = postJsonResponseMock.mock.calls.map(([request]) =>
+    request.headers.get("authorization"),
+  );
+  expect(authHeaders).toEqual(["Bearer vck_test", "Bearer vck_other"]);
+});
+
+it("rejects before upload when only the primary key is scoped", async () => {
+  collectProviderApiKeysForExecutionMock.mockReturnValue(["vck_test", "vck_other"]);
+  getCachedLiveProviderModelRowsMock.mockImplementation(async ({ apiKey }: { apiKey: string }) =>
+    apiKey === "vck_test" ? [] : [{ id: "openai/gpt-transcribe", type: "transcription" }],
+  );
+  expect((await transcribeWithContext()).ok).toBe(false);
   expect(postJsonResponseMock).not.toHaveBeenCalled();
 });
 
