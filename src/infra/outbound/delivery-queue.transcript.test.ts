@@ -320,7 +320,7 @@ describe("delivery-queue confirmed transcript recovery", () => {
         loadEntryCalls: 0,
         onEntryCalls: 0,
       };
-      const originalScan = recoveryCoordinator.scan;
+      const originalScan = recoveryCoordinator.scan.bind(recoveryCoordinator);
       const scan = vi.spyOn(recoveryCoordinator, "scan").mockImplementation(async (options) => {
         const startedAt = performance.now();
         const laneKey = options.laneKey;
@@ -338,9 +338,9 @@ describe("delivery-queue confirmed transcript recovery", () => {
                   recoveryTiming.laneKeyElapsedMs += performance.now() - laneStartedAt;
                 }
               }),
-            loadEntry: (id) => {
+            loadEntry: (entryId) => {
               recoveryTiming.loadEntryCalls += 1;
-              return options.loadEntry(id);
+              return options.loadEntry(entryId);
             },
             onEntry: (entry) => {
               recoveryTiming.onEntryCalls += 1;
