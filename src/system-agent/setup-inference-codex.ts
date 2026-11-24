@@ -209,10 +209,9 @@ export async function stageCodexCandidate(
       return prepared;
     }
     // Codex alone owns rotation of the native login; never import its OAuth tokens.
-    const config =
-      ctx.params.automaticSetup || ctx.params.shareCodexLogin
-        ? withCodexHomeScope(prepared.config, "user")
-        : prepared.config;
+    const config = ctx.params.automaticSetup
+      ? withCodexHomeScope(prepared.config, "user")
+      : prepared.config;
     const entry = config.plugins?.entries?.codex;
     const pluginConfig = entry?.config ?? {};
     const appServer = isRecord(pluginConfig.appServer) ? pluginConfig.appServer : {};

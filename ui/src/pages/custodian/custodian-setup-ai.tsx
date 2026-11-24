@@ -1,21 +1,19 @@
 import type { JSX } from "@solidjs/web";
 import { createMemo, createSignal, For, Show } from "solid-js";
-import type { SystemAgentSetupDetectResult as SetupDetection } from "../../api/types.ts";
-import { Icon, type IconName } from "../../components/solid/icon.tsx";
+import { resolveProviderIconName } from "../../components/provider-icon-data.ts";
+import { Icon } from "../../components/solid/icon.tsx";
 import { WizardStepControls } from "../../components/wizard-step-controls.tsx";
 import { copyToClipboard } from "../../lib/clipboard.ts";
 import { formatUiExternalText } from "../../lib/format-error.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { ModelProviderIcon } from "../../lib/reactive/provider-presentation.tsx";
 import type { CustodianSetupActions } from "./custodian-actions.ts";
-import type { CustodianAutoSetup, SetupAuthOption, SetupFailure } from "./custodian-auto-setup.ts";
-import {
-  PLACEHOLDER_ROWS,
-  ROW_COPY,
-  setupPicker,
-  type Row,
-  type RowId,
-} from "./custodian-setup-picker.ts";
+import type {
+  CustodianAutoSetup,
+  SetupAuthOption,
+  SetupFailure,
+  SetupManualProvider,
+} from "./custodian-auto-setup.ts";
 
 /** The Gateway's own error text, folded away as on the Mac. */
 function ErrorDetails(props: { text: string }) {
@@ -72,7 +70,7 @@ function SetupError(props: { failure: SetupFailure; retry?: () => void; disabled
 
 export function ChoiceRow(props: {
   icon: JSX.Element;
-  title: JSX.Element;
+  title: string;
   detail?: string;
   trailing: JSX.Element;
   selected?: boolean;
@@ -100,11 +98,7 @@ export function ChoiceRow(props: {
 }
 
 /** Progress, sign-in steps and the failure of the choice being worked on. */
-export function WizardSteps(props: {
-  setup: () => CustodianAutoSetup;
-  actions: CustodianSetupActions;
-  retry?: () => void;
-}) {
+function WizardSteps(props: { setup: () => CustodianAutoSetup; actions: CustodianSetupActions }) {
   const state = () => props.setup().wizard.state;
   const step = () => {
     const current = state();
@@ -116,14 +110,14 @@ export function WizardSteps(props: {
     <>
       <Show when={progress()}>
         {(text) => (
-          <p class="custodian-setup__row" role="status">
+          <p class="custodian-setup__row" style={{ "justify-content": "center" }} role="status">
             <span class="btn__spinner" aria-hidden="true" />
             {text()}
           </p>
         )}
       </Show>
       <Show when={props.setup().attemptFailure}>
-        {(failure) => <SetupError failure={failure()} retry={props.retry} />}
+        {(failure) => <SetupError failure={failure()} />}
       </Show>
       <Show when={step()}>
         {(current) => (
@@ -155,17 +149,6 @@ export function WizardSteps(props: {
           </div>
         )}
       </Show>
-      <Show when={props.setup().testing !== null}>
-        <button
-          class="btn btn--ghost"
-          style={{ "justify-self": "start" }}
-          type="button"
-          disabled={props.actions.cancelling}
-          onClick={() => void props.actions.cancel()}
-        >
-          {t("custodian.cancel")}
-        </button>
-      </Show>
     </>
   );
 }
@@ -183,105 +166,254 @@ function signInActionLabel(option: SetupAuthOption): string {
   }
 }
 
-/** The Mac's key form: a provider menu unless the row names one, a key, and Connect. */
-function KeyForm(props: {
-  providers: SetupDetection["manualProviders"];
-  providerId?: string;
+/**
+ * A key field, or a sign-in for providers that sign in instead. One choice hides the
+ * provider menu.
+ */
+function ProviderForm(props: {
+  keys: SetupManualProvider[];
+  signIns?: SetupAuthOption[];
   busy: boolean;
-  onConnect: (provider: SetupDetection["manualProviders"][number], key: string) => void;
+  onConnect: (provider: SetupManualProvider, key: string) => void;
+  onSignIn?: (option: SetupAuthOption) => void;
 }) {
-  const [chosenId, setChosenId] = createSignal<string>();
-  const provider = createMemo(() => {
-    const id = props.providerId ?? chosenId();
-    return props.providers.find((entry) => entry.id === id) ?? props.providers[0];
-  });
+  const choices = () => [
+    ...props.keys.map((provider) => ({ id: `key:${provider.id}`, provider })),
+    ...(props.signIns ?? []).map((option) => ({ id: `sign-in:${option.id}`, option })),
+  ];
+  const [selectedId, setSelectedId] = createSignal<string>();
+  const selected = () => choices().find((entry) => entry.id === selectedId()) ?? choices()[0];
   return (
     <form
       class="custodian-setup__stack"
       onSubmit={(event) => {
         event.preventDefault();
-        const input = event.currentTarget.elements.namedItem("key");
-        const current = provider();
-        if (!current || !(input instanceof HTMLInputElement) || input.disabled) {
+        const form = event.currentTarget;
+        const current = selected();
+        if (current && "option" in current) {
+          props.onSignIn?.(current.option);
           return;
         }
-        const key = input.value.trim();
-        if (key) {
-          input.value = "";
-          props.onConnect(current, key);
+        const value = new FormData(form).get("key");
+        const key = typeof value === "string" ? value.trim() : "";
+        if (current && key) {
+          props.onConnect(current.provider, key);
+          form.reset();
         }
       }}
     >
-      <Show when={!props.providerId}>
+      <Show when={choices().length > 1}>
         <label class="field">
           <span>{t("modelSetup.manual.provider")}</span>
           <select
             disabled={props.busy}
-            onChange={(event) => setChosenId(event.currentTarget.value)}
+            onChange={(event) => setSelectedId(event.currentTarget.value)}
           >
-            <For each={props.providers}>
-              {(entry) => (
-                <option value={entry.id} selected={entry.id === provider()?.id}>
-                  {entry.groupLabel ? `${entry.groupLabel}: ${entry.label}` : entry.label}
-                </option>
-              )}
+            <For each={choices()}>
+              {(entry) => {
+                const item = "option" in entry ? entry.option : entry.provider;
+                return (
+                  <option value={entry.id}>
+                    {item.groupLabel ? `${item.groupLabel}: ${item.label}` : item.label}
+                  </option>
+                );
+              }}
             </For>
           </select>
         </label>
       </Show>
-      <label class="field">
-        <span>{t("custodian.autoSetup.apiKey")}</span>
-        <input
-          name="key"
-          type="password"
-          autocomplete="off"
-          required
-          disabled={props.busy}
-          placeholder={t("modelSetup.manual.accessValuePlaceholder")}
-        />
-      </label>
+      <Show when={selected() && !("option" in selected()!)}>
+        <label class="field">
+          <span>
+            {t(
+              choices().length > 1 ? "modelSetup.manual.accessValue" : "custodian.autoSetup.apiKey",
+            )}
+          </span>
+          <input
+            name="key"
+            type="password"
+            autocomplete="off"
+            required
+            disabled={props.busy}
+            placeholder={t("modelSetup.manual.accessValuePlaceholder")}
+          />
+        </label>
+      </Show>
       <div class="custodian-setup__row" style={{ "justify-content": "space-between" }}>
         <span>
-          <Show when={provider()?.website}>
+          <Show
+            when={(() => {
+              const current = selected();
+              return current && "provider" in current ? current.provider.website : undefined;
+            })()}
+          >
             {(website) => (
               <a class="btn btn--ghost btn--sm" href={website()} target="_blank" rel="noreferrer">
-                {t("custodian.autoSetup.findKey")}
+                {t("custodian.autoSetup.getKey")}
                 <Icon name="arrowUpRight" />
               </a>
             )}
           </Show>
         </span>
         <button class="btn primary" type="submit" disabled={props.busy}>
-          {t("custodian.autoSetup.connect")}
+          {(() => {
+            const current = selected();
+            return current && "option" in current
+              ? signInActionLabel(current.option)
+              : t("custodian.autoSetup.connect");
+          })()}
         </button>
       </div>
     </form>
   );
 }
 
-/** The "Connect your AI" step: the Mac's provider list, and each pick on its own card. */
+/** One way to set a provider up on its card: use, connect, download, or a note. */
+type Way = {
+  title: string;
+  detail?: string;
+  action?: string;
+  icon: () => JSX.Element;
+  start?: () => void;
+  href?: string;
+};
+
+type ProviderId = "chatgpt" | "claude" | "local" | "other";
+
+/** The "Connect your AI" step: one row per provider, each set up on its own card. */
 export function ConnectAi(props: {
   setup: () => CustodianAutoSetup;
   actions: CustodianSetupActions;
   busy: () => boolean;
-  /** Detection runs on the Gateway host, which is not this computer for a remote Gateway. */
-  local: () => boolean;
-  /** A browser cannot open native setup; it names the CLI when nothing else can connect. */
-  native: () => boolean;
 }) {
-  const [openId, setOpenId] = createSignal<RowId | null>(null);
-  const [showMore, setShowMore] = createSignal(false);
+  const [focus, setFocus] = createSignal<ProviderId | null>(null);
   // The attempt that was current when the user last acted; only later results belong here.
   const [openedWith, setOpenedWith] = createSignal<unknown>(null);
-  const detection = createMemo(() => props.setup().detection);
-  const picker = createMemo(() => {
-    const current = detection();
-    return current ? setupPicker(current) : null;
-  });
-  const openRows = () => {
-    const openRow = picker()?.rows.find((row) => row.id === openId());
-    return openRow ? [openRow] : [];
+  const detection = () => props.setup().detection;
+  const brand = (id: string) => resolveProviderIconName(id) ?? id;
+  const logo = (id: string) => () => <ModelProviderIcon provider={id} />;
+  // Utility-only choices (a setup helper model, not the assistant's model) cannot finish
+  // first-run setup on their own, so the card leaves them to Model Setup.
+  const primary = <T extends { modelTarget?: "utility" }>(entries: T[] | undefined) =>
+    (entries ?? []).filter((entry) => entry.modelTarget !== "utility");
+  const candidates = () => primary(detection()?.candidates);
+  const authOptions = () => primary(detection()?.authOptions);
+  const manualProviders = () => primary(detection()?.manualProviders);
+  const prepareOptions = () => primary(detection()?.prepareOptions);
+  // ChatGPT works as on main: test a stored Codex login first, otherwise sign in with the
+  // Gateway's first ChatGPT sign-in.
+  const isChatgptSignIn = (option: SetupAuthOption) =>
+    option.brandId === "openai" && (option.kind === "oauth" || option.kind === "device-code");
+  const chatgptLogin = () =>
+    candidates().find(
+      (candidate) => candidate.kind === "codex-cli" && candidate.credentials === true,
+    );
+  const chatgptSignIn = () => authOptions().find(isChatgptSignIn);
+  // Claude is the easiest Claude setup there is: a Claude Code login the Gateway already
+  // has, otherwise a Claude API key.
+  const claudeCode = () => candidates().find((candidate) => candidate.kind === "claude-cli");
+  const claudeKey = () => {
+    const keys = manualProviders().filter(
+      (provider) => brand(provider.brandId ?? provider.id) === "claude",
+    );
+    return keys.find((provider) => /api.?key/i.test(provider.id)) ?? keys[0];
   };
+  // Local model apps: anything with a local setup, and downloads no sign-in claims.
+  const localBrands = () => {
+    const signInBrands = new Set(authOptions().map((option) => brand(option.brandId ?? option.id)));
+    signInBrands.add(brand("openai"));
+    signInBrands.add(brand("anthropic"));
+    return new Set(
+      [...prepareOptions(), ...(detection()?.recommendedInstalls ?? [])]
+        .map((entry) => brand(entry.brandId ?? entry.id))
+        .filter((id) => !signInBrands.has(id)),
+    );
+  };
+  const isLocal = (candidate: { brandId?: string; kind: string }) =>
+    localBrands().has(brand(candidate.brandId ?? candidate.kind));
+  const localWays = createMemo<Way[]>(() => {
+    const local = localBrands();
+    const found = candidates().filter(isLocal);
+    const usable = new Set(
+      [
+        ...found.map((candidate) => candidate.brandId ?? candidate.kind),
+        ...prepareOptions().map((option) => option.brandId ?? option.id),
+      ].map(brand),
+    );
+    return [
+      ...found.map((candidate) => ({
+        title: candidate.label,
+        detail: candidate.detail,
+        action: t("custodian.autoSetup.use"),
+        icon: logo(candidate.brandId ?? candidate.kind),
+        start: () => props.actions.activate(candidate),
+      })),
+      ...prepareOptions().map((option) => ({
+        title: option.label,
+        action: option.actionLabel ?? t("custodian.autoSetup.installAction"),
+        icon: logo(option.brandId ?? option.id),
+        start: () => props.actions.prepare(option),
+      })),
+      // No download for an app the card can already use or connect.
+      ...(detection()?.recommendedInstalls ?? [])
+        .filter((install) => {
+          const id = brand(install.brandId ?? install.id);
+          return local.has(id) && !usable.has(id);
+        })
+        .map((install) => ({
+          title: install.label,
+          action: t("custodian.autoSetup.download"),
+          icon: logo(install.brandId ?? install.id),
+          href: install.website,
+        })),
+      ...(detection()?.unavailableCandidates ?? [])
+        .filter((candidate) => local.has(brand(candidate.brandId ?? candidate.id)))
+        .map((candidate) => ({
+          title: candidate.label,
+          detail: candidate.reason,
+          icon: () => <Icon name="info" />,
+        })),
+    ];
+  });
+  // Everything else the Gateway offers: AI it already found, keys and other sign-ins.
+  const otherFound = () =>
+    candidates().filter(
+      (candidate) =>
+        candidate.kind !== "codex-cli" && candidate.kind !== "claude-cli" && !isLocal(candidate),
+    );
+  const otherKeys = () => manualProviders().filter((provider) => provider !== claudeKey());
+  const otherSignIns = () => authOptions().filter((option) => !isChatgptSignIn(option));
+  const providers = (): ProviderId[] => {
+    if (!detection()) {
+      return [];
+    }
+    return [
+      ...(chatgptLogin() || chatgptSignIn() ? (["chatgpt"] as const) : []),
+      ...(claudeCode() || claudeKey() ? (["claude"] as const) : []),
+      ...(localWays().length ? (["local"] as const) : []),
+      ...(otherFound().length || otherKeys().length || otherSignIns().length
+        ? (["other"] as const)
+        : []),
+    ];
+  };
+  const title = (id: ProviderId) =>
+    t(
+      {
+        chatgpt: "custodian.autoSetup.chatgpt",
+        claude: "custodian.autoSetup.claude",
+        local: "modelSetup.prepare.title",
+        other: "custodian.autoSetup.otherProvider",
+      }[id],
+    );
+  const icon = (id: ProviderId) =>
+    ({
+      chatgpt: <ModelProviderIcon provider="openai" />,
+      claude: <ModelProviderIcon provider="claude" />,
+      local: <Icon name="cpu" />,
+      other: <Icon name="key" />,
+    })[id];
+  // Results of attempts started before this point belong to an earlier choice.
+  // A second click while the first choice runs belongs to that same attempt.
   const mark = () => {
     if (props.setup().testing === null) {
       setOpenedWith(() => props.setup().attempt);
@@ -290,391 +422,293 @@ export function ConnectAi(props: {
   const ownAttempt = () => props.setup().attempt !== openedWith();
   const failure = () => (ownAttempt() ? props.setup().attemptFailure : null);
   const working = () => ownAttempt() && props.setup().testing !== null;
-
-  const title = (row: Row) => {
-    const copy = ROW_COPY[row.id];
-    if (copy) {
-      return t(`custodian.autoSetup.${copy.name}`);
+  // Plain, not a signal: a second click can land before the list is replaced, while a
+  // signal written by the first click still reads its old value.
+  let focused = false;
+  const open = (id: ProviderId) => {
+    if (focused) {
+      return;
     }
-    return row.action.type === "candidate" ? row.action.candidate.label : "";
-  };
-  const subtitle = (row: Row, open: boolean) => {
-    if (row.action.type === "candidate" && !ROW_COPY[row.id]) {
-      return row.action.candidate.detail;
-    }
-    const body =
-      row.id === "gemini" && row.action.type === "sign-in"
-        ? "geminiSignInBody"
-        : row.id === "api-key" && open
-          ? "apiKeyOpenBody"
-          : ROW_COPY[row.id]?.body;
-    return body ? t(`custodian.autoSetup.${body}`) : "";
-  };
-  const icon = (row: Row) => {
-    const brand =
-      ROW_COPY[row.id]?.brand ??
-      (row.action.type === "candidate"
-        ? (row.action.candidate.brandId ?? row.action.candidate.kind)
-        : undefined);
-    if (brand) {
-      return <ModelProviderIcon provider={brand} />;
-    }
-    return <Icon name={row.id === "api-key" ? "key" : "monitor"} />;
-  };
-  const badge = (row: Row) => (
-    <Show when={row.detected}>
-      {" "}
-      <span class="chip chip-ok custodian-setup__badge">
-        {t(props.local() ? "custodian.autoSetup.onThisComputer" : "custodian.autoSetup.onGateway")}
-      </span>
-    </Show>
-  );
-  const heading = (row: Row) => (
-    <>
-      {title(row)}
-      {badge(row)}
-    </>
-  );
-
-  const start = (row: Row) => {
+    focused = true;
     mark();
-    const label = title(row);
-    if (row.action.type === "candidate") {
-      props.actions.activate(row.action.candidate, label);
-    } else if (row.action.type === "sign-in") {
-      props.actions.signIn(row.action.option, label);
+    setFocus(id);
+    // As on main, picking ChatGPT tests a login the Gateway already has.
+    const login = chatgptLogin();
+    if (id === "chatgpt" && login) {
+      props.actions.activate(login);
     }
   };
-  // Plain, not a signal: a second click can land before the list is replaced.
-  let opening = false;
-  const open = (row: Row) => {
-    if (opening) {
-      return;
-    }
-    opening = true;
-    setOpenId(row.id);
-    start(row);
+  const backToList = () => {
+    focused = false;
+    setFocus(null);
   };
-  const back = async () => {
-    if (working() && !(await props.actions.cancel())) {
-      return;
-    }
-    setOpenedWith(() => props.setup().attempt);
-    opening = false;
-    setOpenId(null);
-  };
-  const backLink = () => (
+  const checkAgain = (label?: boolean) => (
     <button
       class="btn btn--ghost btn--sm"
-      style={{ "justify-self": "start" }}
       type="button"
-      disabled={props.actions.cancelling}
-      onClick={() => void back()}
-    >
-      <Icon name="chevronLeft" />
-      {t("custodian.autoSetup.chooseAnother")}
-    </button>
-  );
-  const checkAgain = () => (
-    <button
-      class="btn btn--sm"
-      style={{ "justify-self": "start" }}
-      type="button"
+      title={t("custodian.autoSetup.checkAgain")}
+      aria-label={t("custodian.autoSetup.checkAgain")}
       disabled={props.busy()}
       onClick={() => props.actions.retry()}
     >
-      {t("custodian.autoSetup.checkAgain")}
+      <Icon name="refresh" />
+      {label ? t("custodian.autoSetup.checkAgain") : null}
     </button>
   );
-  const optionRow = (
-    entry: { label: string; hint?: string; brandId?: string; id: string },
-    action: string,
-    run: () => void,
-    fallback: IconName,
-  ) => (
-    <ChoiceRow
-      icon={
-        entry.brandId ? <ModelProviderIcon provider={entry.brandId} /> : <Icon name={fallback} />
-      }
-      title={entry.label}
-      detail={entry.hint}
-      disabled={props.busy()}
-      trailing={<span class="option-card__description">{action}</span>}
-      onClick={() => {
-        mark();
-        run();
-      }}
-    />
-  );
-  const download = (install: { label: string; hint: string; website: string; id: string }) => (
-    <a class="option-card__choice" href={install.website} target="_blank" rel="noreferrer">
-      <ModelProviderIcon provider={install.id} />
-      <span class="option-card__choice-copy">
-        <strong>{install.label}</strong>
-        <span class="option-card__description">{install.hint}</span>
-      </span>
-      <span class="option-card__description">{t("custodian.autoSetup.download")} ↗</span>
-    </a>
-  );
-  const localCard = () => {
-    const current = picker()!;
+  const centered = { "justify-self": "center" } as const;
+  const chatgptCard = () => {
+    // After a failed sign-in, the button signs in again; after a failed login test, it
+    // offers the sign-in instead.
+    const signInFailed = () => failure()?.key === chatgptSignIn()?.id;
     return (
-      <>
-        <For each={current.local}>
-          {(candidate) =>
-            optionRow(
-              { id: candidate.kind, label: candidate.label, hint: candidate.detail },
-              t("custodian.autoSetup.use"),
-              () => props.actions.activate(candidate, candidate.label),
-              "monitor",
-            )
-          }
-        </For>
-        <For each={current.prepareOptions}>
-          {(option) =>
-            optionRow(
-              option,
-              option.actionLabel ?? t("custodian.autoSetup.installAction"),
-              () => props.actions.prepare(option),
-              "download",
-            )
-          }
-        </For>
-        <For each={current.localAuthOptions}>
-          {(option) =>
-            optionRow(option, signInActionLabel(option), () => props.actions.signIn(option), "key")
-          }
-        </For>
-        <For each={current.localDownloads}>{(install) => download(install)}</For>
-        {checkAgain()}
-      </>
+      <Show when={!working()}>
+        <Show when={!failure()}>
+          <p class="muted" style={{ "text-align": "center" }}>
+            {t("custodian.autoSetup.chatgptBody")}
+          </p>
+        </Show>
+        <button
+          class="btn primary"
+          style={centered}
+          type="button"
+          disabled={props.busy()}
+          onClick={() => {
+            const signIn = chatgptSignIn();
+            const login = chatgptLogin();
+            if (signIn) {
+              mark();
+              props.actions.signIn(signIn);
+            } else if (login) {
+              mark();
+              props.actions.activate(login);
+            }
+          }}
+        >
+          {t(
+            signInFailed() || !chatgptSignIn()
+              ? "custodian.autoSetup.tryAgain"
+              : "custodian.autoSetup.signInChatgpt",
+          )}
+        </button>
+      </Show>
     );
   };
-  function ProviderCard(card: { row: Row }) {
-    const action = () => card.row.action;
-    const apiKeyAction = () => {
-      const current = action();
-      return current.type === "api-key" ? current : undefined;
-    };
-    return (
-      <div class="callout custodian-setup__stack">
-        <div class="custodian-setup__row">
-          {icon(card.row)}
-          <span class="option-card__choice-copy">
-            <strong>{heading(card.row)}</strong>
-            <span
-              class="option-card__description"
-              style={{ color: failure() ? "var(--warn)" : undefined }}
-            >
-              {failure()
-                ? t("custodian.autoSetup.notConnected")
-                : working()
-                  ? t("custodian.autoSetup.connecting")
-                  : subtitle(card.row, true)}
-            </span>
-          </span>
-        </div>
-        <Show when={ownAttempt()}>
-          <WizardSteps
-            setup={props.setup}
-            actions={props.actions}
-            retry={
-              action().type === "candidate" || action().type === "sign-in"
-                ? () => start(card.row)
-                : undefined
-            }
-          />
-        </Show>
-        <Show when={apiKeyAction()}>
-          {(keyAction) => (
-            <KeyForm
-              providers={picker()?.manualProviders ?? []}
-              providerId={keyAction().providerId}
-              busy={props.busy()}
-              onConnect={(provider, key) => {
-                mark();
-                props.actions.connectKey(provider, key);
-              }}
-            />
+  const claudeCard = () => (
+    <Show
+      when={claudeCode()}
+      fallback={
+        <Show when={claudeKey()}>
+          {(provider) => (
+            <>
+              <p class="muted" style={{ "text-align": "center" }}>
+                {t("custodian.autoSetup.claudeKeyBody")}
+              </p>
+              <ProviderForm
+                keys={[provider()]}
+                busy={props.busy()}
+                onConnect={(entry, key) => {
+                  mark();
+                  props.actions.connectKey(entry, key);
+                }}
+              />
+            </>
           )}
         </Show>
-        <Show when={!working()}>
-          <Show when={action().type === "local"}>{localCard()}</Show>
-          <Show
-            when={
-              card.row.id === "chatgpt" &&
-              action().type === "candidate" &&
-              failure() &&
-              picker()?.chatgptSignIn
-            }
-          >
-            {(option) => (
-              <button
-                class="btn"
-                style={{ "justify-self": "start" }}
-                type="button"
-                disabled={props.busy()}
-                onClick={() => {
-                  mark();
-                  props.actions.signIn(option(), title(card.row));
-                }}
-              >
-                {t("custodian.autoSetup.signInChatgpt")}
-              </button>
-            )}
-          </Show>
-        </Show>
-      </div>
-    );
-  }
-  const moreProviders = () => {
-    const current = picker()!;
-    return (
-      <div class="callout custodian-setup__stack">
-        <For each={current.moreAuthOptions}>
-          {(option) =>
-            optionRow(option, signInActionLabel(option), () => props.actions.signIn(option), "key")
-          }
-        </For>
-        <Show
-          when={
-            !current.manualProviders.length &&
-            !current.moreAuthOptions.length &&
-            !current.rows.length
-          }
+      }
+    >
+      {(login) => (
+        <button
+          class="btn primary"
+          style={centered}
+          type="button"
+          disabled={props.busy()}
+          onClick={() => {
+            mark();
+            props.actions.activate(login());
+          }}
         >
-          <div class="custodian-setup__stack">
-            <strong>{t("custodian.autoSetup.noProvidersTitle")}</strong>
-            <p class="muted">{t("custodian.autoSetup.noProvidersBody")}</p>
-            {commandHint()}
-          </div>
-        </Show>
-        <Show when={detection()?.unavailableCandidates?.length}>
-          <strong class="muted">{t("custodian.autoSetup.notReady")}</strong>
-          <For each={detection()?.unavailableCandidates}>
-            {(candidate) => (
-              <div class="custodian-setup__row">
-                <Icon name="info" />
-                <span class="option-card__choice-copy">
-                  <strong>{candidate.label}</strong>
-                  <span class="option-card__description">{candidate.reason}</span>
-                </span>
-              </div>
-            )}
-          </For>
-        </Show>
-        <For each={current.otherInstalls}>{(install) => download(install)}</For>
-        {checkAgain()}
-      </div>
-    );
-  };
-  const commandHint = () => (
-    <Show when={!props.native()}>
-      <p class="muted">
-        {t("custodian.autoSetup.commandHint")} <code>openclaw onboard</code>
-      </p>
+          {t("custodian.autoSetup.claudeCodeLogin")}
+        </button>
+      )}
     </Show>
   );
-  // A sign-in from More providers has no row; its steps get a card of their own.
-  const unplaced = () => ownAttempt() && openId() === null && props.setup().attempt !== null;
-
-  return (
-    <>
-      <h2>{t("custodian.autoSetup.aiTitle")}</h2>
-      <div class="custodian-setup__stack">
-        <Show when={props.setup().error}>
-          {(error) => (
-            <>
-              <SetupError
-                failure={error()}
-                retry={() => props.actions.retry()}
-                disabled={props.busy()}
-              />
-              {commandHint()}
-            </>
-          )}
-        </Show>
-        <For
-          each={openRows()}
-          keyed={(row) => row.id}
-          fallback={
-            <Show
-              when={!unplaced()}
-              fallback={
-                <>
-                  {backLink()}
-                  <div class="callout custodian-setup__stack">
-                    <strong>{props.setup().attempt?.label}</strong>
-                    <WizardSteps setup={props.setup} actions={props.actions} />
-                  </div>
-                </>
-              }
-            >
-              <Show when={props.setup().pending}>
-                <p class="custodian-setup__row" role="status">
-                  <span class="btn__spinner" aria-hidden="true" />
-                  {t("custodian.autoSetup.detecting")}
-                </p>
-              </Show>
-              <div class="callout custodian-setup__list" style={{ padding: 0 }}>
-                <Show
-                  when={picker()}
-                  fallback={
-                    <For each={PLACEHOLDER_ROWS}>
-                      {(id) => {
-                        const row: Row = { id, action: { type: "local" }, detected: false };
-                        return (
-                          <ChoiceRow
-                            icon={icon(row)}
-                            title={title(row)}
-                            detail={subtitle(row, false)}
-                            disabled
-                            trailing={<Icon name="chevronRight" />}
-                          />
-                        );
-                      }}
-                    </For>
-                  }
-                >
-                  {(current) => (
-                    <For each={current().rows}>
-                      {(row) => (
-                        <ChoiceRow
-                          icon={icon(row)}
-                          title={heading(row)}
-                          detail={subtitle(row, false)}
-                          disabled={props.busy()}
-                          trailing={<Icon name="chevronRight" />}
-                          onClick={() => open(row)}
-                        />
-                      )}
-                    </For>
-                  )}
-                </Show>
-              </div>
-              <Show when={picker()}>
-                <button
-                  class="btn btn--ghost btn--sm"
-                  style={{ "justify-self": "end" }}
-                  type="button"
-                  aria-expanded={showMore() ? "true" : "false"}
-                  onClick={() => setShowMore((shown) => !shown)}
-                >
-                  {t("custodian.autoSetup.moreProviders")}
-                </button>
-                <Show when={showMore()}>{moreProviders()}</Show>
-              </Show>
-            </Show>
-          }
-        >
-          {(row) => (
-            <>
-              {backLink()}
-              <ProviderCard row={row()} />
-            </>
-          )}
-        </For>
+  const wayRow = (way: Way) =>
+    way.href ? (
+      <a class="option-card__choice" href={way.href} target="_blank" rel="noreferrer">
+        {way.icon()}
+        <span class="option-card__choice-copy">
+          <strong>{way.title}</strong>
+        </span>
+        <span class="option-card__description">{way.action} ↗</span>
+      </a>
+    ) : way.start ? (
+      <ChoiceRow
+        icon={way.icon()}
+        title={way.title}
+        detail={way.detail}
+        disabled={props.busy()}
+        trailing={<span class="option-card__description">{way.action}</span>}
+        onClick={() => {
+          mark();
+          way.start!();
+        }}
+      />
+    ) : (
+      <div class="custodian-setup__row">
+        {way.icon()}
+        <span class="option-card__choice-copy">
+          <strong>{way.title}</strong>
+          <span class="option-card__description">{way.detail}</span>
+        </span>
       </div>
+    );
+  const otherCard = () => (
+    <>
+      <For each={otherFound()}>
+        {(candidate) =>
+          wayRow({
+            title: candidate.label,
+            detail: candidate.detail,
+            action: t("custodian.autoSetup.use"),
+            icon: logo(candidate.brandId ?? candidate.kind),
+            start: () => props.actions.activate(candidate),
+          })
+        }
+      </For>
+      <Show when={otherKeys().length || otherSignIns().length}>
+        <ProviderForm
+          keys={otherKeys()}
+          signIns={otherSignIns()}
+          busy={props.busy()}
+          onConnect={(entry, key) => {
+            mark();
+            props.actions.connectKey(entry, key);
+          }}
+          onSignIn={(option) => {
+            mark();
+            props.actions.signIn(option);
+          }}
+        />
+      </Show>
     </>
+  );
+  const catalogs = () =>
+    detection()?.nativeSessionCatalogPreferenceRequired
+      ? (detection()?.nativeSessionCatalogs ?? [])
+      : [];
+  return (
+    <Show
+      when={focus()}
+      fallback={
+        <>
+          <h2>{t("custodian.autoSetup.aiTitle")}</h2>
+          <p class="muted">{t("custodian.autoSetup.aiBody")}</p>
+          <div class="custodian-setup__stack">
+            <Show when={props.setup().error}>
+              {(error) => (
+                <SetupError
+                  failure={error()}
+                  retry={() => props.actions.retry()}
+                  disabled={props.busy()}
+                />
+              )}
+            </Show>
+            <Show when={!detection() && props.setup().pending}>
+              <p class="custodian-setup__row" role="status">
+                <span class="btn__spinner" aria-hidden="true" />
+                {t("custodian.autoSetup.detecting")}
+              </p>
+            </Show>
+            <Show when={detection()}>
+              <span style={{ "justify-self": "end" }}>{checkAgain(true)}</span>
+            </Show>
+            <For each={providers()}>
+              {(id) => (
+                <ChoiceRow
+                  icon={icon(id)}
+                  title={title(id)}
+                  disabled={props.busy()}
+                  trailing={<Icon name="chevronRight" />}
+                  onClick={() => open(id)}
+                />
+              )}
+            </For>
+            <Show when={catalogs().length}>
+              <label class="custodian-setup__row">
+                <input
+                  type="checkbox"
+                  checked={props.setup().nativeSessionCatalogsEnabled}
+                  disabled={props.busy()}
+                  onChange={(event) =>
+                    props.setup().setNativeSessionCatalogs(event.currentTarget.checked)
+                  }
+                />
+                <span class="option-card__choice-copy">
+                  <strong>{t("modelSetup.nativeDiscovery.enable")}</strong>
+                  <span class="option-card__description">
+                    {catalogs()
+                      .map((catalog) => catalog.label)
+                      .join(", ")}
+                  </span>
+                </span>
+              </label>
+            </Show>
+          </div>
+        </>
+      }
+    >
+      {(id) => (
+        <>
+          <div
+            style={{
+              display: "grid",
+              "grid-template-columns": "1fr auto 1fr",
+              "align-items": "center",
+              width: "100%",
+            }}
+          >
+            <button
+              class="btn btn--ghost btn--sm"
+              style={{ "justify-self": "start" }}
+              type="button"
+              disabled={props.setup().testing !== null}
+              onClick={backToList}
+            >
+              <Icon name="chevronLeft" />
+              {t("custodian.autoSetup.allChoices")}
+            </button>
+            <h2 class="custodian-setup__row">
+              {icon(id())}
+              {title(id())}
+            </h2>
+            <span style={{ "justify-self": "end" }}>
+              <Show when={id() === "local"}>{checkAgain()}</Show>
+            </span>
+          </div>
+          <div class="custodian-setup__stack">
+            <Show when={id() === "local"}>
+              <For each={localWays()}>{(way) => wayRow(way)}</For>
+            </Show>
+            <Show when={id() === "other"}>{otherCard()}</Show>
+            <Show when={ownAttempt()}>
+              <WizardSteps setup={props.setup} actions={props.actions} />
+            </Show>
+            <Show when={working()}>
+              <button
+                class="btn btn--ghost"
+                style={centered}
+                type="button"
+                disabled={props.actions.cancelling}
+                onClick={() => props.actions.cancel()}
+              >
+                {t("custodian.cancel")}
+              </button>
+            </Show>
+            <Show when={id() === "chatgpt"}>{chatgptCard()}</Show>
+            <Show when={id() === "claude" && !working()}>{claudeCard()}</Show>
+          </div>
+        </>
+      )}
+    </Show>
   );
 }

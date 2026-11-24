@@ -155,38 +155,24 @@ You can return to **Settings → OpenClaw** later.
 ## AI connection options
 
 The dashboard's first-run setup uses the same steps as the Mac app: **Welcome to
-OpenClaw**, **Where should your assistant run?**, then **Connect your AI**.
+OpenClaw**, **Where should your assistant run?**, then **Connect your AI**. That
+page lists one row per provider, and each row opens its own card:
 
-**Where should your assistant run?** marks the Gateway the dashboard is
-connected to as **On this computer** or **On another computer**. Choosing the
-other one opens **Gateways** in the Mac app, or the dashboard's connection
-settings in a browser.
+- **ChatGPT** (first): uses an existing Codex login on the Gateway host when there
+  is one, and tests it right away; otherwise, or when that test fails, it offers
+  **Sign in with ChatGPT**.
+- **Claude**: uses an existing Claude Code login on the Gateway host, otherwise a
+  Claude API key.
+- **Run a model locally**: local models the Gateway found, local model servers
+  such as LM Studio, and download links for apps such as Ollama.
+- **Another provider**: every other sign-in and API key, plus any other AI the
+  Gateway found.
 
-**Connect your AI** lists the same entries as the Mac app: **ChatGPT**,
-**Claude**, **Gemini**, **API key**, and **A model on your own computer**, each
-shown when the Gateway offers it. Logins found on the Gateway host are tagged
-**On this computer**, or **On your Gateway** when it runs elsewhere; any other
-AI it found is listed first. Sign-ins and keys are usable while the Gateway is
-still looking for logins. Picking an entry replaces the list with its card:
-
-- A found login is tested right away. When a found ChatGPT login fails its
-  test, the card offers **Sign in with ChatGPT**.
-- A sign-in starts right away and shows its steps on the card.
-- **API key** shows the key form with a provider menu.
-- **A model on your own computer** lists local models the Gateway found, local
-  model servers such as LM Studio, downloads for Ollama or LM Studio, and
-  **Check again**.
-
-**Choose another AI** returns to the list. **More providers** lists every other
-sign-in, AI that was found but is not ready to use, other downloads, and
-**Check again**. In a browser with nothing to connect, the card points to
-`openclaw onboard`.
-
-Nothing is tested, installed or saved until you pick an entry; OpenClaw then
-asks it a real test question and saves it only when it answers. Errors show one
-short sentence with the Gateway's full message under **Show details**. When it
-answers, or when a model is already configured, **You're all set!** names the
-provider, model, and Gateway.
+**Check again** looks for newly installed apps and logins. Nothing is tested,
+installed or saved until you pick a provider; OpenClaw then asks it a real test
+question and saves it only when it answers. A configured model is kept and shown
+as **You're all set!**. Errors show one short sentence with the Gateway's full
+message under **Show details**.
 
 Change models later in the provider and model settings, or choose **Connection… →
 Gateways** to switch Gateways. AI setup always runs on the Gateway host, even when
@@ -202,11 +188,9 @@ Choose whether to share your existing Codex state:
 | **Reuse**    | Your existing Codex login, threads, and `config.toml` on the Gateway host. |
 | **Separate** | An OpenClaw-owned login and agent home.                                    |
 
-Picking **ChatGPT** with an existing Codex login uses **Reuse**, and the finished
-setup card says **Using your existing Codex login · sessions shared with Codex**.
-A new ChatGPT sign-in uses a separate home. To switch from **Reuse**, choose
-**Sign in separately** on that card, or sign in with ChatGPT or an OpenAI API key
-in **Models**. Completing that sign-in selects the isolated home.
+A new ChatGPT sign-in uses a separate home. To switch from **Reuse**, sign in
+with ChatGPT or an OpenAI API key in **Models**. Completing that sign-in selects
+the isolated home.
 
 Connecting AI never asks about native Claude Code or Codex conversations and
 does not show them in the sidebar. To browse them in place, turn them on in

@@ -1131,10 +1131,10 @@ var External = [
     /(^limit$)/u,
     /(^limit$|^beforeCursor$)/u,
     /(^modelTarget$|^agentId$)/u,
-    /(^modelTarget$|^agentId$|^kind$|^modelRef$|^authChoice$|^apiKey$|^workspace$|^nativeSessionCatalogsEnabled$|^shareCodexLogin$)/u,
+    /(^modelTarget$|^agentId$|^kind$|^modelRef$|^authChoice$|^apiKey$|^workspace$|^nativeSessionCatalogsEnabled$)/u,
     /^provider-auto:.+$/u,
     /^saved-auth:.+$/u,
-    /(^modelTarget$|^agentId$|^kind$|^modelRef$|^authChoice$|^apiKey$|^workspace$|^nativeSessionCatalogsEnabled$|^shareCodexLogin$|^sessionId$)/u,
+    /(^modelTarget$|^agentId$|^kind$|^modelRef$|^authChoice$|^apiKey$|^workspace$|^nativeSessionCatalogsEnabled$|^sessionId$)/u,
     /(^expectedOwnerId$|^modelTarget$|^sessionId$|^agentId$|^authChoice$|^selectModel$|^workspace$|^nativeSessionCatalogsEnabled$)/u,
     /(^sessionId$|^agentId$|^runtimeId$|^configPatch$)/u,
     /(^mode$|^workspace$|^installDaemon$|^flow$|^channel$)/u,
@@ -10488,10 +10488,7 @@ var External = [
     (value.workspace === void 0 || !("workspace" in value) || check_276(value.workspace)) &&
     (value.nativeSessionCatalogsEnabled === void 0 ||
       !("nativeSessionCatalogsEnabled" in value) ||
-      check_181(value.nativeSessionCatalogsEnabled)) &&
-    (value.shareCodexLogin === void 0 ||
-      !("shareCodexLogin" in value) ||
-      check_330(value.shareCodexLogin)),
+      check_181(value.nativeSessionCatalogsEnabled)),
   check_1541 = (value) => typeof value == "string" && value === "utility",
   check_1542 = (value) =>
     check_1543(value) ||
@@ -10532,9 +10529,6 @@ var External = [
     (value.nativeSessionCatalogsEnabled === void 0 ||
       !("nativeSessionCatalogsEnabled" in value) ||
       check_181(value.nativeSessionCatalogsEnabled)) &&
-    (value.shareCodexLogin === void 0 ||
-      !("shareCodexLogin" in value) ||
-      check_330(value.shareCodexLogin)) &&
     check_6(value.sessionId),
   check_1554 = (value) => check_1555(value),
   check_1555 = (value) =>

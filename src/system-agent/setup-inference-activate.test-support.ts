@@ -449,7 +449,6 @@ export async function fixture(
       | "modelTarget"
       | "modelRef"
       | "automaticSetup"
-      | "shareCodexLogin"
       | "assertCurrent"
     > = {},
   ) =>

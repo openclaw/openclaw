@@ -1,6 +1,5 @@
 import { parseProviderModelRef } from "@openclaw/model-catalog-core/model-catalog-refs";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { raceWithTimeout } from "../../packages/retry/src/index.js";
 import { normalizeOptionalAgentRuntimeId } from "../agents/agent-runtime-id.js";
 import { resolveAmbientOwnerAgentId } from "../agents/agent-scope-config.js";
@@ -54,29 +53,33 @@ function recommendSetupInferenceCandidate(
   return candidates.map((candidate) => ({ ...candidate, recommended: candidate === recommended }));
 }
 
-export function resolveConfiguredSetupRuntime(
+function resolveConfiguredCandidateKind(
   config: Parameters<typeof resolveModelRuntimePolicy>[0]["config"],
   modelRef: string | undefined,
-  agentId: string,
-): { kind?: SetupInferenceCandidate["kind"]; configuredModelSharedCodexLogin?: true } {
-  const ref = modelRef ? parseProviderModelRef(modelRef) : undefined;
+  agentId?: string,
+): SetupInferenceCandidate["kind"] | undefined {
+  if (!modelRef) {
+    return undefined;
+  }
+  const ref = parseProviderModelRef(modelRef);
   if (!ref) {
-    return {};
+    return undefined;
   }
-  const runtimeId = resolveModelRuntimePolicy({
-    config,
-    provider: ref.provider,
-    modelId: ref.model,
-    agentId,
-  }).policy?.id;
-  const runtime = normalizeOptionalAgentRuntimeId(runtimeId);
+  const runtime = normalizeOptionalAgentRuntimeId(
+    resolveModelRuntimePolicy({
+      config,
+      provider: ref.provider,
+      modelId: ref.model,
+      agentId: resolveAmbientOwnerAgentId(config ?? {}, agentId),
+    }).policy?.id,
+  );
   if (runtime === "codex") {
-    const appServer = config?.plugins?.entries?.codex?.config?.appServer;
-    return runtimeId === "codex" && isRecord(appServer) && appServer.homeScope === "user"
-      ? { kind: "codex-cli", configuredModelSharedCodexLogin: true }
-      : { kind: "codex-cli" };
+    return "codex-cli";
   }
-  return runtime === "claude-cli" ? { kind: "claude-cli" } : {};
+  if (runtime === "claude-cli") {
+    return "claude-cli";
+  }
+  return undefined;
 }
 
 async function prepareSetupInferenceOptions(agentId?: string) {
@@ -115,11 +118,8 @@ async function prepareSetupInferenceOptions(agentId?: string) {
   const disabledAuthChoices = supportedAuthChoices.filter(
     (choice) => !authChoices.includes(choice),
   );
-  const primaryModel = resolveConfiguredPrimaryModelForAgent({ cfg, agentId: targetAgentId });
-  const { configuredModelSharedCodexLogin } = resolveConfiguredSetupRuntime(
-    cfg,
-    primaryModel,
-    targetAgentId,
+  const setupComplete = Boolean(
+    resolveConfiguredPrimaryModelForAgent({ cfg, agentId: targetAgentId }),
   );
   const setupSelection = resolveConfiguredSetupModelForAgent({ cfg, agentId: targetAgentId });
   const utilitySetting = readUtilityModelSetting(cfg, targetAgentId);
@@ -182,9 +182,8 @@ async function prepareSetupInferenceOptions(agentId?: string) {
       catalogs: nativeSessionCatalogs,
     }),
     workspace,
-    ...(configuredModelSharedCodexLogin ? { configuredModelSharedCodexLogin } : {}),
     // Declining discovery must not turn an already configured install into fresh setup.
-    setupComplete: Boolean(primaryModel),
+    setupComplete,
   };
   return {
     cfg,
@@ -404,15 +403,11 @@ export async function detectSetupInference(agentId?: string): Promise<SetupInfer
         const configuredModel = detected.find(
           (candidate) => candidate.kind === "existing-model",
         )?.modelRef;
-        const { kind: configuredCandidateKind } = resolveConfiguredSetupRuntime(
+        const configuredCandidateKind = resolveConfiguredCandidateKind(
           cfg,
           configuredModel,
           targetAgentId,
         );
-        const configured = {
-          ...(configuredModel ? { configuredModel } : {}),
-          setupComplete: Boolean(configuredModel),
-        };
         const raw = detected.filter(
           (candidate) =>
             candidate.kind !== "gemini-cli" &&
@@ -446,7 +441,8 @@ export async function detectSetupInference(agentId?: string): Promise<SetupInfer
         partial = {
           ...initialDetection,
           candidates: recommendSetupInferenceCandidate(offeredCandidates),
-          ...configured,
+          ...(configuredModel ? { configuredModel } : {}),
+          setupComplete: Boolean(configuredModel),
         };
         const available = await appGuided;
         offeredCandidates.push(
@@ -467,7 +463,8 @@ export async function detectSetupInference(agentId?: string): Promise<SetupInfer
             (install) =>
               !idleProviders.some(({ brandId }) => brandId === (install.brandId ?? install.id)),
           ),
-          ...configured,
+          ...(configuredModel ? { configuredModel } : {}),
+          setupComplete: Boolean(configuredModel),
         };
       })().catch((error: unknown) => {
         // Probes run concurrently; one failure ends the detection, so stop its siblings.

@@ -4,7 +4,7 @@ import {
   findPreparedModelCandidate,
   listModelSetupPrepareOptions,
   preparedModelActivation,
-} from "./state.ts";
+} from "./prepare-options.ts";
 
 function detection(
   candidates: typeof emptyDetection.candidates,

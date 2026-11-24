@@ -20,6 +20,12 @@ openclaw-custodian-setup-card {
   margin: 0;
 }
 
+.custodian-setup__dismiss {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+}
+
 .custodian-setup__page {
   display: grid;
   justify-items: center;
@@ -61,6 +67,11 @@ openclaw-custodian-setup-card {
   height: 20px;
 }
 
+.custodian-setup__footer {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+}
+
 .custodian-setup__dots {
   display: flex;
   gap: 8px;
@@ -77,20 +88,4 @@ openclaw-custodian-setup-card {
 
 .custodian-setup__dots .is-current {
   background: var(--accent);
-}
-
-.custodian-setup__list > .option-card__choice {
-  border: 0;
-  border-radius: 0;
-  background: none;
-}
-
-.custodian-setup__list > .option-card__choice + .option-card__choice {
-  border-top: 1px solid var(--border);
-}
-
-.custodian-setup__badge {
-  margin-left: 2px;
-  padding: 1px 6px;
-  font-size: 11px;
 }

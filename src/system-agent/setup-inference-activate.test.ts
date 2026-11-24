@@ -178,13 +178,12 @@ describe("setup activation credentials and configuration", () => {
     );
     expect(setup.readProfile()?.[1].setup).toBeUndefined();
   });
-  it.each(["automatic", "shared", "configured"] as const)(
-    "reuses native Codex credentials without import (%s)",
-    async (mode) => {
-      const automatic = mode === "automatic";
+  it.each([false, true])(
+    "reuses native Codex credentials without import (automatic: %s)",
+    async (automatic) => {
       const setup = await fixture({
         codex: true,
-        homeScope: mode === "configured" ? "user" : "agent",
+        homeScope: automatic ? "agent" : "user",
         nativeCatalogEnabled: true,
       });
       vi.spyOn(cliCredentials, "readCodexCliCredentialsCached").mockImplementation(() => {
@@ -222,7 +221,6 @@ describe("setup activation credentials and configuration", () => {
       });
       const result = await setup.activate("codex-cli", automatic ? true : undefined, {
         automaticSetup: automatic ? true : undefined,
-        shareCodexLogin: mode === "shared" ? true : undefined,
       });
       expect(result).toMatchObject({ ok: true });
       expectCalls(setup, 0, 1);

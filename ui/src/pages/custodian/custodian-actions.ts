@@ -22,7 +22,7 @@ export function createCustodianActions(getStore: () => CustodianSessionStore) {
   onSettled(() => retire);
 
   type Kind = "verification" | "wizard" | "cancellation" | "session";
-  const present = action(function* (kind: Kind, pending: Promise<unknown>) {
+  const present = action(function* (kind: Kind, pending: Promise<unknown>, retired: Promise<void>) {
     if (kind === "verification") {
       setVerifying(true);
     } else if (kind === "wizard") {
@@ -32,10 +32,10 @@ export function createCustodianActions(getStore: () => CustodianSessionStore) {
     } else {
       setSending(true);
     }
-    yield pending;
+    yield Promise.race([pending, retired]);
   });
 
-  async function run<T>(kind: Kind, command: (source: CustodianSessionStore) => Promise<T>) {
+  async function run(kind: Kind, command: (source: CustodianSessionStore) => Promise<unknown>) {
     const source = getStore();
     const setup = source.autoSetup;
     // Admission stays synchronous, including reserving the sign-in window in the user gesture.
@@ -49,13 +49,13 @@ export function createCustodianActions(getStore: () => CustodianSessionStore) {
       if (kind === "session") {
         return source.sending;
       }
+      const phase = setup.wizard.state;
       if (kind === "verification") {
         return setup.pending;
       }
       if (kind === "cancellation") {
-        return true;
+        return phase.phase !== "idle";
       }
-      const phase = setup.wizard.state;
       return setup.pending || phase.phase === "starting" || (phase.phase === "step" && phase.busy);
     };
     const release = () => {
@@ -74,12 +74,11 @@ export function createCustodianActions(getStore: () => CustodianSessionStore) {
         })
       : Promise.resolve());
     try {
-      const settled = Promise.race([pending, lifetime.promise]);
       if (isCurrent() && isWorking()) {
-        await present(kind, settled);
+        await present(kind, pending, lifetime.promise);
+      } else {
+        await Promise.race([pending, lifetime.promise]);
       }
-      const outcome = await settled;
-      return isCurrent() ? outcome : undefined;
     } catch (error) {
       if (isCurrent()) {
         if (kind === "session") {
@@ -104,18 +103,18 @@ export function createCustodianActions(getStore: () => CustodianSessionStore) {
     get cancelling() {
       return cancelling();
     },
-    activate: (candidate: Parameters<CustodianAutoSetup["activate"]>[0], label: string) =>
-      void run("wizard", (source) => source.autoSetup.activate(candidate, label)),
+    activate: (candidate: Parameters<CustodianAutoSetup["activate"]>[0]) =>
+      void run("wizard", (source) => source.autoSetup.activate(candidate)),
     prepare: (option: SetupPrepareOption) =>
       void run("wizard", (source) => source.autoSetup.prepare(option)),
     connectKey: (provider: SetupManualProvider, apiKey: string) =>
       void run("wizard", (source) => source.autoSetup.connectKey(provider, apiKey)),
     retry: () => void run("verification", (source) => source.autoSetup.retry()),
-    signIn: (option: SetupAuthOption, label?: string) =>
-      void run("wizard", (source) => source.autoSetup.signIn(option, label)),
+    signIn: (option: SetupAuthOption) =>
+      void run("wizard", (source) => source.autoSetup.signIn(option)),
     answer: (value: unknown) =>
       void run("wizard", (source) => source.autoSetup.answerWizard(value)),
-    cancel: () => run("cancellation", (source) => source.autoSetup.cancelWizard()),
+    cancel: () => void run("cancellation", (source) => source.autoSetup.cancelWizard()),
   };
   const session = {
     get sending() {

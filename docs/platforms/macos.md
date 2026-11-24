@@ -90,11 +90,12 @@ replacing the configured route.
 
 The dashboard setup follows the same steps as native setup: **Welcome to
 OpenClaw**, **Where should your assistant run?** (the Gateway this dashboard is
-connected to), then **Connect your AI** with the same entries as native setup.
-Nothing is tested or saved until you pick one; OpenClaw then asks it a real test
-question and saves it only when it answers. **You're all set!** names the
-provider, model, and Gateway. Errors show one short sentence; the Gateway's full
-message stays under **Show details**. See [AI connection
+connected to), then **Connect your AI**. It lists one row per provider
+(ChatGPT first, then Claude, local models and other providers), and each opens
+its own card. Nothing is tested or saved until you pick one; OpenClaw then asks
+it a real test question and saves it only when it answers. A configured model is
+kept and shown as **You're all set!**. Errors show one short sentence; the
+Gateway's full message stays under **Show details**. See [AI connection
 options](/start/onboarding#ai-connection-options).
 
 For the CLI/Gateway setup path, use [Getting started](/start/getting-started).
