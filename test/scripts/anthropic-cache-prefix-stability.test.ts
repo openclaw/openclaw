@@ -189,4 +189,26 @@ it("compares a warm Responses continuation and its cold replay as the same prefi
   expect(() =>
     assertStableProviderPrefix(snapshot(warm), snapshot(changed), { label: "changed ciphertext" }),
   ).toThrow(/history\[1\]/);
+  // The projection strips envelopes only: call IDs, arguments and content still count.
+  for (const [index, item, label] of [
+    [
+      2,
+      { type: "function_call", call_id: "call_1", name: "read", arguments: '{"path":"other"}' },
+      "arguments",
+    ],
+    [2, { type: "function_call", call_id: "call_2", name: "read", arguments: "{}" }, "call_id"],
+    [
+      4,
+      {
+        type: "message",
+        role: "assistant",
+        content: [{ type: "output_text", text: "other answer", annotations: [] }],
+      },
+      "assistant content",
+    ],
+  ] as const) {
+    expect(() =>
+      assertStableProviderPrefix(snapshot(warm), snapshot(cold.with(index, item)), { label }),
+    ).toThrow(new RegExp(`history\\[${index}\\]`));
+  }
 });
