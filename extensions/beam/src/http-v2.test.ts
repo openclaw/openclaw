@@ -502,12 +502,13 @@ it("releases only the selected bytes for the original verified publisher and ret
 });
 
 it("exposes a bound destination only through a provenance-checked caller-authorized session incarnation", async () => {
+  const refresh = vi.fn(async () => {});
   const auth = {
     scopes: ["operator.sessions.write"],
     requiredGrantPluginId: "visitor-access",
     personProfileId: "publisher",
     assertCurrent() {},
-    async revalidate() {},
+    revalidate: refresh,
   };
   const binding = {
     id: "opaque-reference",
@@ -556,4 +557,89 @@ it("exposes a bound destination only through a provenance-checked caller-authori
   }
   dispatch.mockResolvedValueOnce({ ok: false, error: { code: "FORBIDDEN", message: "denied" } });
   expect(await readBeamDestination(row, true, auth, dispatch)).toBe("unavailable");
+  expect(refresh).not.toHaveBeenCalled();
+});
+
+it("routes only the authenticated publication and matching instruction identity to the send service", async () => {
+  const { store, close } = await persistentBeamTestStore();
+  let person = "visitor";
+  let scopes = ["operator.sessions.write"];
+  const refresh = vi.fn(async () => {});
+  const authority = () => ({
+    personProfileId: person,
+    scopes,
+    requiredGrantPluginId: "visitor-access",
+    assertCurrent() {},
+    revalidate: refresh,
+  });
+  const id = "12345678-1234-4123-abcd-000000000007";
+  const receipt = { requestId: id, state: "accepted" as const };
+  const continuation = { continue: vi.fn(async () => receipt), status: vi.fn(async () => receipt) };
+  const handler = createBeamV2Handler({
+    ...store,
+    currentAuthority: authority,
+    controlUiBasePath: () => undefined,
+    continuation,
+  });
+  await using server = http.createServer((req, res) => void handler(req, res));
+  try {
+    const origin = `http://127.0.0.1:${await listenOnLoopback(server)}`;
+    const v1 = sampleUpload();
+    await store.upload(v1, {
+      ...staffReceipt(Date.now()),
+      publisher: { kind: "guest", profileId: person },
+    });
+    const caps = await (await fetch(origin + "/api/v2/beam/capabilities")).json();
+    expect(caps.operations).toContain("continue");
+    expect(caps.sendReceiptRetentionSeconds).toBe(604800);
+    const target = origin + "/api/v2/beam/snapshots/" + v1.beamId + "/head";
+    const head = await (await fetch(target)).json();
+    const resource = new URL(head.apiUrl, target).href;
+    const post = (body: unknown) =>
+      fetch(resource + "/continue", {
+        method: "POST",
+        headers: { "content-type": "application/json", "idempotency-key": id },
+        body: JSON.stringify(body),
+      });
+    const body = {
+      requestId: id,
+      instruction: "continue from the reviewed packet",
+      agent: "_team",
+    };
+    expect(
+      (await post({ ...body, requestId: "12345678-1234-4123-abcd-000000000008" })).status,
+    ).toBe(400);
+    expect((await post({ ...body, instruction: "x".repeat(48 * 1024 + 1) })).status).toBe(400);
+    expect((await post({ ...body, agent: "../other" })).status).toBe(400);
+    const oversized = await post({ ...body, instruction: "x".repeat(BEAM_MAX_BODY_BYTES) });
+    expect(oversized.status).toBe(413);
+    expect(await oversized.json()).toMatchObject({
+      error: {
+        code: "too_large",
+        message: "The request body exceeds the size limit for this operation.",
+      },
+    });
+    expect(continuation.continue).not.toHaveBeenCalled();
+    expect(await (await post(body)).json()).toEqual(receipt);
+    expect(continuation.continue).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ beamId: v1.beamId }),
+      body,
+      expect.objectContaining({ personProfileId: "visitor" }),
+    );
+    expect(refresh).toHaveBeenCalled();
+    refresh.mockClear();
+    for (const role of [["operator.sessions.write"], ["operator.read"]]) {
+      scopes = role;
+      expect(await (await fetch(resource + "/requests/" + id)).json()).toEqual(receipt);
+    }
+    expect(refresh).not.toHaveBeenCalled();
+    scopes = ["operator.sessions.write"];
+    person = "foreign";
+    expect((await post(body)).status).toBe(404);
+    expect((await fetch(resource + "/requests/" + id)).status).toBe(404);
+    expect(continuation.status).toHaveBeenCalledTimes(2);
+    expect(continuation.continue).toHaveBeenCalledTimes(1);
+  } finally {
+    await close();
+  }
 });

@@ -184,6 +184,22 @@ release can create a destination while the snapshot is retained. A missing or ch
 destination requires reconciliation. A ready response contains an opaque reference
 after the Gateway verifies ordinary read access and the original catalog binding.
 
+### Send an instruction to the destination
+
+After release, send `POST {apiUrl}/continue` with a new UUID in both
+`Idempotency-Key` and `requestId`. Supply a nonempty `instruction` of up to
+48 KiB and an optional `agent` when choosing the initial destination. The entire
+request must fit the advertised HTTP body limit. Subsequent instructions use the
+original destination and the Gateway's ordinary send authorization.
+
+Read `GET {apiUrl}/requests/{requestId}` after a timeout. A `pending` receipt
+means a claim exists. `accepted` means the Gateway accepted the turn. A
+`needs_reconciliation` outcome requires inspecting the existing conversation.
+Keep the original UUID. Outcome receipts last seven days. Each publication can
+accept 2,048 distinct request IDs. Once full, open the bound Team conversation to
+send further messages. Shared Gateway credentials use one common replay domain.
+Verified person accounts have distinct replay domains.
+
 ## Continue on the Team Gateway
 
 Publishing alone shares a read-only snapshot. To move the logical conversation, use the updated Beam skill's `handoff` command with the exact source session. The sender durably retires that Beam identity before network dispatch, obtains the receiver's `publicationId`, and explicitly releases that generation with `handoffId`. Release requires the original verified publisher; shared-token and older ownerless snapshots cannot be claimed through this route. A lost acknowledgment can retry the same generation but cannot recreate an expired publication.

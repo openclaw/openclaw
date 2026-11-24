@@ -8,6 +8,7 @@ import {
   readRequestBodyWithLimit,
 } from "openclaw/plugin-sdk/webhook-ingress";
 import { sendHttpRequestRejection } from "openclaw/plugin-sdk/webhook-request-guards";
+import { BEAM_SEND_RETENTION_SECONDS } from "../continuation-operation-api.js";
 import { parseBeamPacket } from "../packet-contract/packet-v2.generated.js";
 import type {
   BeamPublishInput,
@@ -15,7 +16,9 @@ import type {
   BeamReleaseInput,
 } from "../publication-operation-api.js";
 import type { BeamPublisher } from "../upload-operation-api.js";
+import type { BeamContinueService } from "./continuation-v2.js";
 import { readBeamDestination } from "./destination-v2.js";
+import { handleBeamSendRequest } from "./http-v2-conversation.js";
 import { createBeamIngressLimits } from "./http.js";
 import { packetDigest, snapshotBytes } from "./packet-state.js";
 import { BEAM_V2_API, parsePublicationId, publicationHead } from "./publication.js";
@@ -32,7 +35,10 @@ function beamError(status: number, code: string, message: string) {
       retry:
         status === 503 || status === 429
           ? "same_request"
-          : status === 412 || code === "released"
+          : status === 412 ||
+              code === "released" ||
+              code === "source_owned" ||
+              code === "needs_reconciliation"
             ? "after_reconcile"
             : "never",
       message,
@@ -66,6 +72,7 @@ function publisherFor(auth: ReadAuthority): BeamPublisher | undefined {
 
 export function createBeamV2Handler(options: {
   limits?: ReturnType<typeof createBeamIngressLimits>;
+  continuation?: BeamContinueService;
   readPublication: (beamId: string) => Promise<BeamPublication>;
   putSnapshot: (
     input: BeamPublishInput,
@@ -78,8 +85,8 @@ export function createBeamV2Handler(options: {
   currentAuthority(): ReadAuthority | undefined;
   controlUiBasePath(): string | undefined;
 }) {
-  const { rateLimiter: rate, inFlightLimiter: inFlight } =
-    options.limits ?? createBeamIngressLimits();
+  const limits = options.limits ?? createBeamIngressLimits();
+  const { rateLimiter: rate, inFlightLimiter: inFlight } = limits;
   return async (req: IncomingMessage, res: ServerResponse): Promise<boolean> => {
     const admitted = options.currentAuthority();
     if (!admitted) {
@@ -127,6 +134,25 @@ export function createBeamV2Handler(options: {
       authority.assertCurrent(grant);
       const selected =
         path[0] === "publications" && path[1] ? parsePublicationId(path[1]) : undefined;
+      const send = req.method === "POST" && path.length === 3 && path[2] === "continue";
+      const requestStatus = req.method === "GET" && path.length === 4 && path[2] === "requests";
+      if (selected && (send || requestStatus) && options.continuation) {
+        await handleBeamSendRequest({
+          req,
+          res,
+          authority,
+          publication: selected,
+          service: options.continuation,
+          limits,
+          readPublication: options.readPublication,
+          canRead,
+          canWrite: Boolean(publisher),
+          requestId: requestStatus ? path[3] : undefined,
+          uuid: REQUEST_ID,
+          fail: (code, machine, message) => fail(res, code, machine, message),
+        });
+        return true;
+      }
       if (req.method === "POST" && path.length === 3 && selected && path[2] === "release") {
         if (!publisher?.profileId) {
           unavailable();
@@ -363,9 +389,10 @@ export function createBeamV2Handler(options: {
             ...(allowed ? ["read", "resolve"] : []),
             ...(publisher ? ["publish"] : []),
             ...(publisher?.profileId ? ["release"] : []),
+            ...(publisher && options.continuation ? ["continue"] : []),
           ],
           maxBodyBytes: BEAM_MAX_BODY_BYTES,
-          sendReceiptRetentionSeconds: 0,
+          sendReceiptRetentionSeconds: options.continuation ? BEAM_SEND_RETENTION_SECONDS : 0,
         });
         return true;
       }
