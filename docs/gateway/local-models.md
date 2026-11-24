@@ -410,10 +410,11 @@ Two details make the cost easy to miss:
 - `skipIfScratchEmpty` skips only an explicitly empty checklist. A job with no
   stored scratch runs every time.
 
-List the job and its last delivery status:
+List the job, then show its last delivery status and error:
 
 ```bash
 openclaw automations list --all
+openclaw automations show <job-id>
 ```
 
 Then choose what fits your setup:
@@ -432,10 +433,10 @@ openclaw automations edit <job-id> --every 2h
 openclaw automations edit <job-id> --model <provider/smaller-model>
 ```
 
-A checklist with only a heading counts as empty, so each run is recorded as
-skipped (`Automation scratch is explicitly empty`) without a model request. It
-still runs when the session has pending notices, and it starts calling the
-model again once you add items to the checklist.
+A checklist with only a heading counts as empty, so each run completes without
+a model request and run history records `Automation scratch is explicitly
+empty`. It still runs when the session has pending notices, and it starts
+calling the model again once you add items to the checklist.
 
 An isolated run (`--session isolated --light-context`) keeps each prompt small
 but drops the conversation context the check normally reviews. Give it a
