@@ -30,7 +30,9 @@ import type { WorkerTunnelHandle } from "./tunnel-contract.js";
 import { prepareGitHubPublicationFact } from "./worker-github-binding.js";
 import {
   bindPreparedGrant,
+  expectInstalledGrantExpiresWithoutRenewal,
   profileId,
+  publishWorkerGitHubBindingConfig,
   session,
   token,
   turnBindingInput,
@@ -901,6 +903,19 @@ describe("same-bound integrated worker credential renewal", () => {
       }
       expect(h.removed).toEqual(["Bearer synthetic-app-1", "Bearer synthetic-app-2"]);
       await expect(h.grant.refresh(1)).rejects.toThrow();
+    },
+  );
+
+  it.each(["before renewal", "while broker admission waits"] as const)(
+    "keeps the admitted App usable until expiry when GitHub selection changes %s",
+    async (timing) => {
+      const h = await fixture("engineering.ghe.com", "https://api.engineering.ghe.com");
+      await using _ = { [Symbol.asyncDispose]: h.grant.revoke };
+      await expectInstalledGrantExpiresWithoutRenewal(h, timing, () => {
+        config = structuredClone(config);
+        config.tools!.github!.profileId = "ghp_22222222222222222222222222222222";
+        publishWorkerGitHubBindingConfig(config);
+      });
     },
   );
 

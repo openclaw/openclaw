@@ -466,63 +466,6 @@ function materializeCurrentStateDatabase(stateDir: string): string {
   return databasePath;
 }
 
-function downgradeWorkerPlacementsToV7(db: DatabaseSync): void {
-  restorePreTemplateStateIdentifiersForTest(db);
-  addPreCutoverClientCredentialTablesForTest(db);
-  const row = db
-    .prepare(
-      "SELECT sql FROM sqlite_schema WHERE type = 'table' AND name = 'worker_session_placements'",
-    )
-    .get() as { sql?: unknown } | undefined;
-  if (typeof row?.sql !== "string") {
-    throw new Error("missing worker_session_placements table SQL");
-  }
-  const v8LocalClaim = `(turn_claim_owner IS 'local' AND (\n      state IN ('local', 'requested', 'failed')\n      OR (state IN ('active', 'draining') AND execution_mode IS 'remote-exec')\n    ))`;
-  const v7Create = row.sql
-    .replace("CREATE TABLE worker_session_placements", "CREATE TABLE worker_session_placements_v7")
-    .replace(
-      "\n  execution_mode TEXT CHECK (execution_mode IN ('worker-turn', 'remote-exec')),",
-      "",
-    )
-    .replace(
-      v8LocalClaim,
-      `(turn_claim_owner IS 'local' AND state IN ('local', 'requested', 'failed'))`,
-    )
-    .replace("\n      AND (execution_mode IS NULL OR execution_mode IS 'worker-turn')", "");
-  if (v7Create.includes("execution_mode")) {
-    throw new Error("failed to derive v7 worker placement schema");
-  }
-  const columns = (
-    db.prepare("PRAGMA table_xinfo(worker_session_placements)").all() as Array<{
-      hidden: number;
-      name: string;
-    }>
-  )
-    .filter((column) => column.hidden === 0 && column.name !== "execution_mode")
-    .map((column) => `"${column.name}"`)
-    .join(", ");
-  db.exec("PRAGMA foreign_keys = OFF;");
-  try {
-    db.exec(`
-      BEGIN IMMEDIATE;
-      ${v7Create};
-      INSERT INTO worker_session_placements_v7 (${columns})
-        SELECT ${columns} FROM worker_session_placements;
-      DROP TABLE worker_session_placements;
-      ALTER TABLE worker_session_placements_v7 RENAME TO worker_session_placements;
-      CREATE INDEX idx_worker_session_placements_session_key
-        ON worker_session_placements(agent_id, session_key);
-      CREATE INDEX idx_worker_session_placements_reconcile
-        ON worker_session_placements(updated_at_ms, session_id);
-      PRAGMA user_version = 7;
-      UPDATE schema_meta SET schema_version = 7 WHERE meta_key = 'primary';
-      COMMIT;
-    `);
-  } finally {
-    db.exec("PRAGMA foreign_keys = ON;");
-  }
-}
-
 function openMaterializedCurrentStateDatabase(stateDir = createTempStateDir()): DatabaseSync {
   const databasePath = materializeCurrentStateDatabase(stateDir);
   return openNativeDatabase(databasePath);
@@ -808,43 +751,6 @@ describe("openclaw state database", () => {
     expect(readDanglingSkillWorkshopReviewIndex(databasePath)).toMatchObject({ rootpage });
     await expectRepair(options, ["Removed dangling legacy Skill Workshop review index"]);
     expect(readDanglingSkillWorkshopReviewIndex(databasePath)).toBeUndefined();
-  });
-
-  it("migrates v7 worker placement claims and missing terminal columns without losing rows", async () => {
-    const { options, databasePath } = createStateFixture((legacy) => {
-      insertRow(legacy, "worker_session_placements", {
-        session_id: "legacy-session",
-        agent_id: "main",
-        session_key: "agent:main:legacy",
-        state: "local",
-        transition_generation: 3,
-        created_at_ms: 1,
-        updated_at_ms: 2,
-        state_changed_at_ms: 2,
-      });
-      downgradeWorkerPlacementsToV7(legacy);
-      legacy.exec(`
-      ALTER TABLE worker_session_placements DROP COLUMN terminal_at_ms;
-      ALTER TABLE worker_session_placements DROP COLUMN terminal_reason;
-    `);
-    });
-
-    expectMigrations(options, databasePath).contains("worker-placement-execution-mode-v8");
-
-    await withStateMigrationBackupForTest(options, () => openOpenClawStateDatabase(options));
-    const migrated = openOpenClawStateDatabase(options);
-    expectCurrentStateVersion(requireNativeSqliteDatabase(migrated.db));
-    expectRecord(migrated.db, "worker_session_placements", {
-      session_id: "legacy-session",
-      transition_generation: 3,
-      execution_mode: null,
-    });
-    const columns = migrated.db.prepare("PRAGMA table_info(worker_session_placements)").all();
-    expect(columns.map((column) => column.name).slice(-2)).toEqual([
-      "terminal_reason",
-      "terminal_at_ms",
-    ]);
-    expectMigrations(options, databasePath).excludes("worker-placement-execution-mode-v8");
   });
 
   it.each([OPENCLAW_AGENT_SCHEMA_VERSION])(

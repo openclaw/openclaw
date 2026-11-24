@@ -60,7 +60,9 @@ it.each([false, true])(
         expect(() => actor.assertCurrent()).not.toThrow();
         sourceCurrent = false;
       }
-      expect(() => actor.assertCurrent()).toThrow("Repository caller authority changed");
+      expect(() => actor.assertCurrent()).toThrow(
+        "Repository caller connection or identity changed. Reconnect and try again.",
+      );
     } finally {
       source.release();
     }

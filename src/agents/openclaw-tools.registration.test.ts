@@ -555,10 +555,15 @@ describe("gateway client capability tool filtering", () => {
       actions: { screen: ["github_identity_settings"] },
       expected: true,
     },
-  ])("uses manual reconnect guidance when $name", ({ allow, actions, expected }) => {
+  ])("gates reconnect guidance when $name", async ({ allow, actions, expected }) => {
+    using _ = vi.spyOn(inProcessGateway, "callInProcessGatewayTool").mockResolvedValue({
+      effective: { credentialState: "configured_unavailable", refreshState: "expired" },
+    });
     const tools = createTestOpenClawTools({
       githubPublicationAvailable: false,
       clientCaps: ["ui-commands", "ui-agent-github-settings"],
+      agentSessionKey: "agent:main:reconnect",
+      wrapBeforeToolCallHook: false,
       config: {
         tools: {
           gatewayPolicy: { allow, ...(actions ? { actions } : {}) },
@@ -566,12 +571,11 @@ describe("gateway client capability tool filtering", () => {
       },
     });
 
-    const description = expectToolNamed(tools, "github_identity_status").description;
-    if (expected) {
-      expect(description).toContain("github_identity_settings");
-    } else {
-      expect(description).not.toContain("github_identity_settings");
-    }
+    const status = expectToolNamed(tools, "github_identity_status");
+    expect(status.description.includes("github_identity_settings")).toBe(expected);
+    const result = JSON.stringify(await status.execute("policy-reconnect", {}));
+    expect(result.includes("github_identity_settings")).toBe(expected);
+    expect(result.includes("Settings → Profile → GitHub accounts")).toBe(!expected);
   });
 
   it.each([

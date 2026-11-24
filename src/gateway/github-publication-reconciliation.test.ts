@@ -94,6 +94,7 @@ it.each([
   { backend: "repository", mode: "claim", status: "requested" },
   { backend: "local", mode: "session", status: "published" },
   { backend: "local", mode: "execution", status: "published" },
+  { backend: "local", mode: "rotation", status: "published" },
   { backend: "repository", mode: "session", status: "requested" },
   { backend: "local", mode: "rejected", status: undefined },
 ] as const)(
@@ -105,10 +106,19 @@ it.each([
     registerAppCredentialFixture(f);
     const revoke = vi.fn().mockRejectedValue(new Error("synthetic App revocation failure"));
     const identity = await mocks.prepareIdentity();
+    const replacementToken = "synthetic-replacement-publication-token";
     if (mode === "execution") {
       mocks.prepareIdentity
         .mockResolvedValue({ ...identity, revoke })
         .mockResolvedValueOnce(identity);
+    } else if (mode === "rotation") {
+      mocks.prepareIdentity
+        .mockResolvedValue({
+          ...identity,
+          env: { ...identity.env, GH_TOKEN: replacementToken },
+        })
+        .mockResolvedValueOnce(identity)
+        .mockResolvedValueOnce({ ...identity, revoke });
     } else {
       mocks.prepareIdentity.mockResolvedValueOnce({ ...identity, revoke });
     }
@@ -127,10 +137,14 @@ it.each([
       await f.placements.releaseTurn(claim);
       expect(f.readReceipt(queued.requestId)?.status).toBe(status);
       expect(await f.coordinator.readAsync(queued.requestId)).toEqual(queued);
-    } else if (mode === "session" || mode === "execution") {
+    } else if (mode === "session" || mode === "execution" || mode === "rotation") {
       const result = await f.coordinator.requestForSessionV2(f.request(key, f.guest));
       expect(result.status).toBe(status);
       expect(await f.coordinator.readAsync(result.requestId)).toEqual(result);
+      if (mode === "rotation") {
+        const creation = mocks.runCommand.mock.calls.find(([argv]) => isPullCreation(argv));
+        expect(creation?.[1].env.GH_TOKEN).toBe(replacementToken);
+      }
     } else {
       await expect(
         f.coordinator.requestForSessionV2({
@@ -150,7 +164,7 @@ it.each([
     }
     expect(revoke).toHaveBeenCalledTimes(1);
     expect(warn).toHaveBeenCalledWith(
-      `Failed to revoke GitHub publication ${mode === "execution" ? "execution" : "preflight"} credential`,
+      `Failed to revoke GitHub publication ${mode === "execution" || mode === "rotation" ? "execution" : "preflight"} credential`,
     );
   },
 );

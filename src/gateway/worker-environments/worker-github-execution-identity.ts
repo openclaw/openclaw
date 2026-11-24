@@ -3,22 +3,22 @@ import {
   type AdmittedRunOperatorAuthority,
 } from "../../agents/admitted-run-context.js";
 import { GitHubAppInstallationRetryableError } from "../../agents/github-app-installation.js";
-import { resolveGitHubApiBaseUrl } from "../../agents/github-host-runtime.js";
+import { resolveGitHubApiBaseUrl, resolveGitHubHost } from "../../agents/github-host-runtime.js";
 import { githubRepositoryUrl } from "../../agents/github-host.js";
-import { resolveConfiguredGitHubToolIdentity } from "../../agents/github-tool-identity.js";
+import {
+  matchesPreparedGitHubPublicationIdentity,
+  resolveConfiguredGitHubToolIdentity,
+} from "../../agents/github-tool-identity.js";
 import type { PreparedGitHubPublicationIdentity } from "../../agents/github-tool-identity.types.js";
 import type { AgentRunSessionTarget } from "../../agents/run-session-target.types.js";
 import { getGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller-context.js";
 import { registerConfigWriteListener } from "../../config/config.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { getRepositoryIntegration } from "../../plugins/repository-integration-runtime.js";
-import {
-  onUserProfilesChanged,
-  onUserProfileEmailBindingChanged,
-} from "../../state/user-profile-events.js";
 import { parseWorkerGitHubLaunchBinding } from "../../worker/launch-descriptor.js";
 import {
   currentGitHubPublicationConfig,
+  publicationConfigSnapshot,
   prepareGitHubPublicationSession,
   prepareGitHubPublicationRepositoryIdentity,
   prepareWorkerGitHubCheckoutOwner,
@@ -85,9 +85,10 @@ export async function prepareWorkerGitHubExecutionGrant(params: {
     ),
   );
   let closed = false;
+  let retained = false;
   const assertAuthority = () => {
     signal.throwIfAborted();
-    if (params.expectedProfileId) {
+    if (!retained && params.expectedProfileId) {
       const config = currentGitHubPublicationConfig();
       const selected =
         resolveConfiguredGitHubToolIdentity({ config, agentId: params.agentId, scope: "agent" }) ??
@@ -108,7 +109,7 @@ export async function prepareWorkerGitHubExecutionGrant(params: {
     agentId: params.agentId,
     assertCurrent: assertAuthority,
   });
-  let retained = false;
+  const host = resolveGitHubHost();
   const apiBaseUrl = resolveGitHubApiBaseUrl();
   let identity: Awaited<ReturnType<typeof prepareCurrentGitHubPublicationIdentity>> | undefined;
   let checkoutOwner: Awaited<ReturnType<typeof prepareWorkerGitHubCheckoutOwner>> | undefined;
@@ -135,7 +136,7 @@ export async function prepareWorkerGitHubExecutionGrant(params: {
     }
     const assertCurrent = () => {
       assertAuthority();
-      if (resolveGitHubApiBaseUrl() !== apiBaseUrl) {
+      if (resolveGitHubHost() !== host || resolveGitHubApiBaseUrl() !== apiBaseUrl) {
         throw new Error("Worker GitHub issuer changed");
       }
       requirePublicationSessionOwner(target, session.readCurrent(), true);
@@ -145,12 +146,8 @@ export async function prepareWorkerGitHubExecutionGrant(params: {
       ) {
         throw new Error("Worker GitHub workspace changed. Start a new turn.");
       }
-      if (
-        identity &&
-        (!matchesCurrentGitHubPublicationIdentity({ agentId: params.agentId, identity }) ||
-          (identity.accessExpiresAtMs !== undefined && identity.accessExpiresAtMs <= Date.now()))
-      ) {
-        throw new Error("Worker GitHub credential expired or its selection changed");
+      if (identity?.accessExpiresAtMs !== undefined && identity.accessExpiresAtMs <= Date.now()) {
+        throw new Error("Worker GitHub credential expired");
       }
     };
     identity = await prepareCurrentGitHubPublicationIdentity(
@@ -190,6 +187,9 @@ export async function prepareWorkerGitHubExecutionGrant(params: {
         ? githubRepositoryUrl(`${remote.owner}/${remote.repo}`, identity.host)
         : undefined;
     assertCurrent();
+    if (!matchesCurrentGitHubPublicationIdentity({ agentId: params.agentId, identity })) {
+      throw new Error("Selected GitHub account changed; start a new turn");
+    }
     const scope =
       identity.source === "agent-override"
         ? "agent"
@@ -215,6 +215,14 @@ export async function prepareWorkerGitHubExecutionGrant(params: {
       throw new Error("Selected GitHub execution identity cannot be installed on this worker");
     }
     const selectedIdentity = identity;
+    const selection = { agentId: params.agentId, identity: selectedIdentity };
+    const renewalSelectionChanged = new Error("Selected GitHub account changed before renewal");
+    const assertRenewalCurrent = () => {
+      assertCurrent();
+      if (!matchesCurrentGitHubPublicationIdentity(selection)) {
+        throw renewalSelectionChanged;
+      }
+    };
     const credentials = new Set([identity]);
     let pending:
       | { identity: PreparedGitHubPublicationIdentity; update: WorkerGitHubBindingRefresh }
@@ -223,14 +231,13 @@ export async function prepareWorkerGitHubExecutionGrant(params: {
     let pendingWork: Promise<WorkerGitHubBindingRefresh | undefined> | undefined;
     let attemptedAt = Number.NEGATIVE_INFINITY;
     let revocation: Promise<void> | undefined;
-    const stops: (() => void)[] = [];
     let expiryTimer: ReturnType<typeof setTimeout> | undefined;
     const revoke = () => {
       if (!revocation) {
         closed = true;
         clearTimeout(expiryTimer);
         signal.removeEventListener("abort", onAbort);
-        stops.splice(0).forEach((stop) => stop());
+        stopWatchingConfig();
         controller.abort(new Error("Worker GitHub execution authority closed"));
         checkoutOwner?.release();
         session.release();
@@ -262,19 +269,14 @@ export async function prepareWorkerGitHubExecutionGrant(params: {
         expiryTimer.unref?.();
       }
     };
-    const changed = () => {
+    const stopWatchingConfig = registerConfigWriteListener(() => {
       try {
         assertCurrent();
       } catch {
         onAbort();
       }
-    };
+    });
     signal.addEventListener("abort", onAbort, { once: true });
-    stops.push(
-      registerConfigWriteListener(changed),
-      onUserProfilesChanged(changed),
-      onUserProfileEmailBindingChanged(changed),
-    );
     armExpiry();
     assertCurrent();
     retained = true;
@@ -305,6 +307,17 @@ export async function prepareWorkerGitHubExecutionGrant(params: {
             return undefined;
           }
           attemptedAt = Date.now();
+          const configSnapshot = publicationConfigSnapshot();
+          // An already installed grant stays live. Fresh issuance checks the
+          // selected identity through broker admission and the issuer call.
+          if (
+            !matchesPreparedGitHubPublicationIdentity({
+              ...selection,
+              config: configSnapshot.config,
+            })
+          ) {
+            return undefined;
+          }
           const replacement = await prepareCurrentGitHubPublicationIdentity(
             params.agentId,
             operator
@@ -312,9 +325,9 @@ export async function prepareWorkerGitHubExecutionGrant(params: {
                   profileId: operator.profileId,
                   credentialSource: operator.repositoryCredentialSource,
                   sessionKey: params.sessionKey,
-                  assertCurrent,
+                  assertCurrent: assertRenewalCurrent,
                 }
-              : assertCurrent,
+              : assertRenewalCurrent,
             repositoryPublicationPreflightCredential({
               agentId: params.agentId,
               sessionKey: params.sessionKey,
@@ -322,6 +335,8 @@ export async function prepareWorkerGitHubExecutionGrant(params: {
               lifecycleRevision,
               assertCurrent,
             }),
+            true,
+            configSnapshot,
           );
           const knownToken = [...credentials].some(
             (value) => value.env.GH_TOKEN === replacement.env.GH_TOKEN,
@@ -368,6 +383,9 @@ export async function prepareWorkerGitHubExecutionGrant(params: {
             } catch (authorityError) {
               onAbort();
               throw authorityError;
+            }
+            if (error === renewalSelectionChanged) {
+              return undefined;
             }
             if (error instanceof GitHubAppInstallationRetryableError) {
               log.warn(

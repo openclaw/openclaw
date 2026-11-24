@@ -5,65 +5,58 @@ import * as gateway from "./in-process-gateway.js";
 
 afterEach(() => vi.restoreAllMocks());
 
-describe("github_identity_status tool", () => {
-  it("returns status and an operator next action", async () => {
-    const callGatewayMock = vi.spyOn(gateway, "callInProcessGatewayTool").mockResolvedValue({
-      agentId: "main",
-      selectedScope: "agent" as const,
-      selected: { scope: "agent" as const, configured: false, identity: null },
-      effective: {
-        source: "system-configured" as const,
-        credentialKind: "managed-oauth" as const,
-        credentialState: "configured_unavailable" as const,
-        account: { login: "roboclaw-bot" },
-        gitAuthor: { name: "roboclaw-bot", email: null },
-        evidence: "none" as const,
-        accessExpiresAtMs: 1_900_000_000_000,
-        refreshState: "expired" as const,
-        oauthScopes: ["repo", "workflow"],
-        repositoryGrants: "unknown" as const,
-      },
-    });
-    const tool = createGitHubIdentityStatusTool({ clientCaps: ["ui-agent-github-settings"] });
+const expiredOAuth = {
+  credentialKind: "managed-oauth",
+  credentialState: "configured_unavailable",
+  refreshState: "expired",
+};
 
+describe("github_identity_status tool", () => {
+  it.each([
+    {
+      name: "returns status and an operator next action",
+      supportsSettings: true,
+      effective: expiredOAuth,
+      guidance: "github_identity_settings",
+    },
+    {
+      name: "gives manual guidance for an older Control UI",
+      supportsSettings: false,
+      effective: { ...expiredOAuth, refreshState: "unavailable" },
+      guidance: "Settings → Profile → GitHub accounts",
+    },
+    {
+      name: "keeps an unverified GitHub App on the verification path even when reconnect is available",
+      supportsSettings: true,
+      effective: {
+        credentialKind: "app-installation",
+        credentialState: "unverified",
+        refreshState: "not_applicable",
+      },
+      guidance: "verified during an authorized operation, including scheduled automation",
+    },
+  ])("$name", async ({ supportsSettings, effective, guidance }) => {
+    const callGatewayMock = vi.spyOn(gateway, "callInProcessGatewayTool").mockResolvedValue({
+      effective,
+    });
+    const tool = createGitHubIdentityStatusTool(
+      supportsSettings ? { clientCaps: ["ui-agent-github-settings"] } : {},
+    );
     const result = await withGatewayToolCallerIdentity(
       { agentId: "main", sessionKey: "agent:main:status" },
-      async () => await tool.execute("status-1", {}),
+      async () => await tool.execute("status", {}),
     );
 
     expect(callGatewayMock).toHaveBeenCalledWith("tools.github.status", {
       agentId: "main",
       selectedScope: "agent",
     });
-    expect(JSON.stringify(result)).toContain("github_identity_settings");
-  });
-
-  it("gives manual guidance for an older Control UI", async () => {
-    vi.spyOn(gateway, "callInProcessGatewayTool").mockResolvedValue({
-      agentId: "main",
-      selectedScope: "agent" as const,
-      selected: { scope: "agent" as const, configured: false, identity: null },
-      effective: {
-        source: "system-configured" as const,
-        credentialKind: "managed-oauth" as const,
-        credentialState: "configured_unavailable" as const,
-        account: null,
-        gitAuthor: null,
-        evidence: "none" as const,
-        accessExpiresAtMs: null,
-        refreshState: "unavailable" as const,
-        oauthScopes: [],
-        repositoryGrants: "unknown" as const,
-      },
+    expect(result.details).toMatchObject({
+      effective,
+      nextAction: expect.stringContaining(guidance),
     });
-    const tool = createGitHubIdentityStatusTool();
-
-    const result = await withGatewayToolCallerIdentity(
-      { agentId: "main", sessionKey: "agent:main:status" },
-      async () => await tool.execute("status-2", {}),
+    expect(JSON.stringify(result).includes("github_identity_settings")).toBe(
+      guidance === "github_identity_settings",
     );
-
-    expect(JSON.stringify(result)).toContain("Settings → Profile → GitHub accounts");
-    expect(JSON.stringify(result)).not.toContain("github_identity_settings");
   });
 });

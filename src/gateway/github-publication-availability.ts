@@ -70,7 +70,7 @@ const repositoryTargets = createStaleWhileRevalidateCache<boolean>({
   cacheable: (supported) => supported,
 });
 
-function publicationConfigSnapshot() {
+export function publicationConfigSnapshot() {
   const active = getActiveSecretsRuntimeConfigSnapshot();
   const config = active?.config ?? getRuntimeConfig();
   return active ?? { config, sourceConfig: config };
@@ -85,6 +85,7 @@ export async function prepareCurrentGitHubPublicationIdentity(
   actor?: RepositoryPublicationActor | (() => void),
   credentialOrBeforeRead?: RepositoryPublicationCredential | (() => void),
   allowAppInstallation = true,
+  configSnapshot?: ReturnType<typeof publicationConfigSnapshot>,
 ): Promise<PreparedGitHubPublicationIdentity> {
   const credential =
     typeof credentialOrBeforeRead === "function" ? undefined : credentialOrBeforeRead;
@@ -98,7 +99,7 @@ export async function prepareCurrentGitHubPublicationIdentity(
   }
   credential?.assertCurrent();
   return preparePublicationGitHubIdentity(
-    publicationConfigSnapshot(),
+    configSnapshot ?? publicationConfigSnapshot(),
     agentId,
     actor,
     credential,

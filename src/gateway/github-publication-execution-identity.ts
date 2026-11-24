@@ -191,7 +191,7 @@ export function createGitHubPublicationExecutionIdentity(params: {
         active = identity;
         admitted = true;
         if (previous !== identity) {
-          await previous?.revoke?.();
+          await revokePublicationIdentity(previous, "execution");
         }
         assertCurrent();
         return identity;
