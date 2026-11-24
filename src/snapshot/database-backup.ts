@@ -23,7 +23,7 @@ import { runtimeProcessEntrypoints } from "../infra/runtime-process-entrypoints.
 import { captureRuntimeWorkerSource } from "../infra/runtime-worker-generation.js";
 import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import type { SqliteSnapshotValidator } from "../infra/sqlite-snapshot.types.js";
-import { updateDoctorMigrationContext } from "../infra/update-doctor-migration-context.js";
+import { isPrivateDoctorPostgresStore } from "../infra/update-doctor-private-store.js";
 import { resolveDefaultSecretProviderAlias } from "../secrets/ref-contract.js";
 import type {
   BackupTask,
@@ -201,7 +201,7 @@ export async function createVerifiedDatabaseMigrationBackup(params: {
       validate: params.validate,
     });
   }
-  if (updateDoctorMigrationContext.getStore()?.stateUpgradeLiveStateDir !== undefined) {
+  if (isPrivateDoctorPostgresStore(params.sourcePath)) {
     // Startup already owns the original namespace; this pass only changes its private copy.
     return undefined;
   }

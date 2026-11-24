@@ -30,7 +30,10 @@ import { inspectSessionSqliteRecovery } from "./doctor-session-sqlite-recovery-i
 import { withDoctorSqliteMaintenanceLock } from "./doctor-sqlite-maintenance-lock.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.unstubAllEnvs();
+});
 const protectedArchive = (pathname: string) =>
   expect.objectContaining({
     path: pathname,
@@ -85,6 +88,22 @@ describe("Doctor PostgreSQL migration backup orchestration", () => {
     async (serverRecoveryCaptures) => {
       const stateDir = tempDirs.make("openclaw-doctor-private-pg-");
       const shared = path.join(stateDir, "state", "openclaw.sqlite");
+      const liveRoot = tempDirs.make("openclaw-doctor-original-pg-");
+      vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+      for (const [root, namespace] of [
+        [liveRoot, "original"],
+        [stateDir, "private"],
+      ] as const) {
+        const anchorPath = path.join(root, "state", "openclaw.sqlite");
+        fs.mkdirSync(path.dirname(anchorPath), { recursive: true });
+        using anchor = new DatabaseSync(anchorPath);
+        anchor.exec(
+          "CREATE TABLE openclaw_engine_anchor (store_id TEXT NOT NULL, engine TEXT NOT NULL, schema TEXT NOT NULL)",
+        );
+        anchor
+          .prepare("INSERT INTO openclaw_engine_anchor VALUES (?, 'postgres', ?)")
+          .run("aab8619b-f3ec-42fb-96cf-285b832152fc", namespace);
+      }
       const migration = {
         kind: "state" as const,
         path: shared,
@@ -116,7 +135,7 @@ describe("Doctor PostgreSQL migration backup orchestration", () => {
           const result = await runWithDoctorMigrationBackup(
             captureFreshDoctorMigrationTables,
             () => capture(params),
-            "/original-state",
+            liveRoot,
           );
           expect(result).toMatchObject({
             changes: [],
@@ -126,8 +145,21 @@ describe("Doctor PostgreSQL migration backup orchestration", () => {
           });
           expect(capturePostgres).not.toHaveBeenCalled();
           expect(prune).not.toHaveBeenCalled();
+          // A copied-but-uncloned anchor (including deep or external stores)
+          // still needs Doctor's ordinary capture, even in the private pass.
+          {
+            using anchor = new DatabaseSync(shared);
+            anchor.exec("UPDATE openclaw_engine_anchor SET schema = 'original'");
+          }
+          await expect(
+            runWithDoctorMigrationBackup(
+              captureFreshDoctorMigrationTables,
+              () => capture(params),
+              liveRoot,
+            ),
+          ).rejects.toBe(refusedCapture);
           await expect(capture(params)).rejects.toBe(refusedCapture);
-          expect(capturePostgres).toHaveBeenCalledOnce();
+          expect(capturePostgres).toHaveBeenCalledTimes(2);
         },
       );
     },
