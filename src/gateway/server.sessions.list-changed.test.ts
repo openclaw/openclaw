@@ -513,6 +513,13 @@ test("sessions.changed mutation events include session management metadata", asy
       }),
     },
   });
+  for (const color of ["purple", null]) {
+    const event = await expectManagementPatch({ color }, { color });
+    const wire: unknown = await Response.json(event).json();
+    for (const field of ["pinned", "pinnedAt", "session.pinned", "session.pinnedAt"]) {
+      expect(wire).not.toHaveProperty(field);
+    }
+  }
   for (const archived of [true, false]) {
     await expectManagementPatch(
       { expectedSessionId: "sess-dev", archived },
@@ -522,11 +529,6 @@ test("sessions.changed mutation events include session management metadata", asy
         ...(archived ? { unread: false, lastReadAt: 20, lastActivityAt: 5 } : {}),
       },
     );
-  }
-  for (const color of ["purple", null]) {
-    const event = await expectManagementPatch({ color }, { color });
-    expect(event).not.toHaveProperty("pinned");
-    expect(event).not.toHaveProperty("session.pinnedAt");
   }
   const markUnread = (expected: Record<string, unknown> = {}) =>
     expectManagementPatch(

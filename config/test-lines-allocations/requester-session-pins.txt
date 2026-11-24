@@ -1,2 +1,2 @@
-# Covers distinct requester isolation, CAS conflict preservation, mixed-version writes, partial batches, visibility before pagination, private event boundaries, scoped off-window preference and inclusive snooze-deadline invalidations, atomic named placement, and unsigned embedded tool behavior.
-447
+# Covers distinct requester isolation, CAS conflict preservation, mixed-version writes, partial batches, visibility before pagination, serialized top-level/nested event privacy, scoped off-window preference and inclusive snooze-deadline invalidations, atomic named placement, and unsigned embedded tool behavior.
+449
