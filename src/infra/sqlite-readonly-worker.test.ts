@@ -465,6 +465,26 @@ describe.each(["async", "sync"] as const)("SQLite read-only snapshot worker (%s)
     expectBudget(341_000);
   });
 
+  it.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
+    "copies a snapshot when the invoking cwd cannot be entered",
+    async () => {
+      const source = createDatabase(witnessSql("preserved"));
+      // Linux reports a cwd the user cannot enter, e.g. /root under runuser.
+      const inaccessibleCwd = tempDirs.make("openclaw-snapshot-inaccessible-cwd-");
+      fs.chmodSync(inaccessibleCwd, 0o000);
+      const cwd = vi.spyOn(process, "cwd").mockReturnValue(inaccessibleCwd);
+      try {
+        const snapshot = await run(source);
+        expect(readQueries(snapshot, "SELECT value FROM witness")).toEqual([
+          { value: "preserved" },
+        ]);
+      } finally {
+        cwd.mockRestore();
+        fs.chmodSync(inaccessibleCwd, 0o700);
+      }
+    },
+  );
+
   it("uses the base budget on stat failure and retains the child's source error", async () => {
     const source = path.join(tempDirs.make("openclaw-snapshot-budget-missing-"), "missing.sqlite");
     await expect(run(source)).rejects.toThrow(/SQLite read-only worker.*ENOENT/);
