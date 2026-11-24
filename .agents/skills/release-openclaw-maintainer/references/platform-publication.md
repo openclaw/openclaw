@@ -170,11 +170,15 @@ tag's full source SHA as `openclaw_ref`. Beta additionally sets
 `release_channel=beta` and the exact published `gateway_version`, rather than
 following a moving beta selector. Stable leaves `gateway_version` unset: that
 stable input selects an older compatibility payload, not the current release.
+Opted-in packaging preflight rejects a captured payload that differs from its
+release identity, including a stable selector that advanced before capture.
 
 Packaging owns source and artifact authorization, installed upgrade proof,
 protected Azure signing, and permanent x64, ARM64, and bundle assets. Stable
-publishes a GitHub release marked Latest; beta publishes a prerelease, never
-Latest. Both retain the separate unsigned Store bundle and attempt-bound witness.
+publishes a GitHub release eligible for Latest; beta publishes a prerelease, never
+Latest. Packaging serializes publication and compares Windows package versions
+against current Latest so a delayed older build cannot move it backward. Both
+retain the separate unsigned Store bundle and attempt-bound witness.
 
 Core finishes after recording the accepted build run. It does not poll the build
 or dispatch the central Store publisher. Packaging's completion-triggered adapter
