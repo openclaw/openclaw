@@ -56,6 +56,53 @@ it("preserves a newest tool turn using headroom when its final reply arrives", (
   }
 });
 
+it("keeps the current turn's request when its tool frames exceed the byte cap, never orphaning a result", () => {
+  const requests = [
+    request(0, { role: "user", content: "task", timestamp: 0 }),
+    ...[1, 3].flatMap((seq) => [
+      request(
+        seq,
+        makeAgentAssistantMessage({
+          content: [{ type: "toolCall", id: `call-${seq}`, name: "read", arguments: {} }],
+          stopReason: "toolUse",
+        }),
+      ),
+      request(seq + 1, {
+        role: "toolResult",
+        toolCallId: `call-${seq}`,
+        toolName: "read",
+        content: [{ type: "text", text: "screenshot" }],
+        timestamp: seq + 1,
+        isError: false,
+      }),
+    ]),
+    request(5, makeAgentAssistantMessage({ content: [{ type: "text", text: "failed" }] })),
+  ];
+  expect(
+    selectBoundedModelRequests(requests, sizing([100, 50, 600, 50, 600, 50]), {
+      maxBytes: 1000,
+      maxEvents: 100,
+    }).map(({ entry }) => entry.seq),
+  ).toEqual([0, 3, 4, 5]);
+  // A displaced result whose call precedes the request cannot ride along without that call.
+  const displaced = [
+    requests[0]!,
+    requests[1]!,
+    request(2, { role: "user", content: "current task", timestamp: 2 }),
+    {
+      ...requests[2]!,
+      entry: { ...requests[2]!.entry, seq: 3, id: "entry-3", parentId: "entry-2" },
+    },
+    request(4, makeAgentAssistantMessage({ content: [{ type: "text", text: "failed" }] })),
+  ];
+  expect(
+    selectBoundedModelRequests(displaced, sizing([100, 100, 100, 850, 50]), {
+      maxBytes: 1000,
+      maxEvents: 100,
+    }).map(({ entry }) => entry.seq),
+  ).toEqual([4]);
+});
+
 it("reserves the compaction event slot before deciding that history exceeds the byte cap", () => {
   const boundary: ModelContextRequest = {
     entry: {

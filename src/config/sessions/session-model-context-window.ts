@@ -163,22 +163,46 @@ export function selectBoundedModelRequests(
       "The latest messages exceed this session's context limit. Start a new session with a brief summary to continue.",
     );
   }
-  const selectedMessages = selected.flatMap(({ entry }) =>
-    entry.type === "message" ? [entry.message] : [],
-  );
   // Removing an older repeated ID must not turn an ambiguous result into a different call's result.
-  const selectedOwners = new Map<AgentMessage, AgentMessage>();
-  for (const frame of classifyToolUseResultPairing(selectedMessages).frames) {
-    for (const occurrence of frame.occurrences) {
-      if (occurrence.sourceResult) {
-        selectedOwners.set(occurrence.sourceResult, frame.assistant);
+  const keepsToolOwnership = (selection: readonly ModelContextRequest[]) => {
+    const selectionMessages = selection.flatMap(({ entry }) =>
+      entry.type === "message" ? [entry.message] : [],
+    );
+    const selectedOwners = new Map<AgentMessage, AgentMessage>();
+    for (const frame of classifyToolUseResultPairing(selectionMessages).frames) {
+      for (const occurrence of frame.occurrences) {
+        if (occurrence.sourceResult) {
+          selectedOwners.set(occurrence.sourceResult, frame.assistant);
+        }
+      }
+    }
+    return selectionMessages.every(
+      (message) =>
+        message.role !== "toolResult" || owners.get(message) === selectedOwners.get(message),
+    );
+  };
+  // An in-turn retry needs its request even when the latest tool frames exceed the cap.
+  if (latestTurnStart < candidates.length - selected.length) {
+    const turnRequest = candidates[latestTurnStart]!;
+    const requestBytes =
+      sizes.get(turnRequest.entry) ?? readSizes([turnRequest]).get(turnRequest.entry)!;
+    try {
+      const tail = selectBoundedModelRequests(candidates.slice(latestTurnStart + 1), readSizes, {
+        ...limits,
+        maxBytes: limits.maxBytes - requestBytes - (boundary ? sizes.get(boundary.entry)! : 0),
+        maxEvents: limits.maxEvents - (boundary ? 2 : 1),
+      });
+      if (keepsToolOwnership(tail)) {
+        return boundary ? [boundary, turnRequest, ...tail] : [turnRequest, ...tail];
+      }
+    } catch (error) {
+      if (!(error instanceof RangeError)) {
+        throw error;
       }
     }
   }
-  for (const message of selectedMessages) {
-    if (message.role === "toolResult" && owners.get(message) !== selectedOwners.get(message)) {
-      throw new RangeError("Session context limit would change tool-result ownership");
-    }
+  if (!keepsToolOwnership(selected)) {
+    throw new RangeError("Session context limit would change tool-result ownership");
   }
   return boundary ? [boundary, ...selected] : selected;
 }
