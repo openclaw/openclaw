@@ -2,6 +2,7 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import { fileURLToPath } from "node:url";
+import { isMainThread } from "node:worker_threads";
 import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import { createSuiteLogPathTracker } from "./log-test-helpers.js";
@@ -150,16 +151,30 @@ it.each(["async", "sync"])(
 it("rescues the unissued tail without replaying an in-flight batch", async () => {
   const [issued, release] = [createDeferred(), createDeferred()] as const;
   let issuedRecords = 0;
-  const write = fileLogIO.executeFileLogIO;
-  vi.spyOn(fileLogIO, "executeFileLogIO").mockImplementation(async (request) => {
-    const result = await write(request);
+  const holdAppend = async (request: fileLogIO.FileLogIORequest) => {
     if (request.type === "append" && request.file === logPath) {
       issuedRecords = request.payload.trim().split("\n").length;
       issued.resolve();
       await release.promise;
     }
-    return result;
-  });
+  };
+  // A forked Vitest worker uses the writer pool; a thread writes directly.
+  if (isMainThread) {
+    const fileLogWorker = await import("./logger-file-worker.js");
+    const write = fileLogWorker.runFileLogIOInWorker;
+    vi.spyOn(fileLogWorker, "runFileLogIOInWorker").mockImplementation(async (request, flush) => {
+      const result = await write(request, flush);
+      await holdAppend(request);
+      return result;
+    });
+  } else {
+    const write = fileLogIO.executeFileLogIO;
+    vi.spyOn(fileLogIO, "executeFileLogIO").mockImplementation(async (request) => {
+      const result = await write(request);
+      await holdAppend(request);
+      return result;
+    });
+  }
   const entries = Array.from({ length: 4 }, (_, index) =>
     entry(logPath, `${JSON.stringify({ index, text: "x".repeat(20_000) })}\n`),
   );

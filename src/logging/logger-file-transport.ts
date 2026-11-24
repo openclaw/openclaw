@@ -24,7 +24,7 @@ async function runFileLogIO<Request extends FileLogIORequest>(
   // Worker threads write directly: their first flush can follow SIGTERM,
   // after an update has replaced the old hashed chunks.
   if (!isMainThread) {
-    // The filesystem switch returns the result for this request discriminant.
+    // SAFETY: The filesystem switch returns the result for this request discriminant.
     return (await executeFileLogIO(request)) as FileLogIOResults[Request["type"]];
   }
   const { runFileLogIOInWorker } = await import("./logger-file-worker.js");
