@@ -53,12 +53,11 @@ import { applySessionMessagePayload } from "./session-message-apply.ts";
 import { readChatHistoryCursor, readChatHistoryState } from "./session-message-cache.ts";
 import { retainPersistedStreamPrefix } from "./stream-causal-boundary.ts";
 import {
-  hasVisibleStreamParts,
   historyReplacedVisibleStream,
+  visibleAssistantStreamParts,
   visibleCurrentAssistantStreamTail,
 } from "./stream-reconciliation.ts";
 import {
-  pruneHistoryReplacedStreamSegments,
   prunePersistedAssistantStreamSegments,
   prunePersistedToolStreamMessages,
 } from "./stream-segment-pruning.ts";
@@ -403,15 +402,12 @@ export async function hydrateChatHistory(
       for (const message of state.chatMessages) {
         prunePersistedAssistantStreamSegments(state, message);
       }
-      const hasVisibleStream = hasVisibleStreamParts(state, streamReconciliation);
+      const hasVisibleStream = visibleAssistantStreamParts(state, streamReconciliation).length > 0;
       // The live snapshot already excludes durable bytes. Equal text can be a
       // distinct new occurrence, so only item identity can retire its live copy.
       const historyReplacedStream =
         !res.inFlightRun &&
         historyReplacedVisibleStream(state.chatMessages, state, streamReconciliation);
-      if (!res.inFlightRun) {
-        pruneHistoryReplacedStreamSegments(state.chatMessages, state, streamReconciliation);
-      }
       const liveToolIds = state.toolStreamOrder ?? [];
       if (
         state.chatRunId &&
@@ -463,9 +459,6 @@ export async function hydrateChatHistory(
         }
         for (const message of state.chatMessages) {
           prunePersistedAssistantStreamSegments(state, message);
-        }
-        if (!res.inFlightRun) {
-          pruneHistoryReplacedStreamSegments(state.chatMessages, state, streamReconciliation);
         }
         reconcileToolStream(historyReplacedToolStream, true);
       }

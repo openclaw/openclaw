@@ -5,10 +5,8 @@ import {
   historyReplacedVisibleStream as historyReplaced,
   materializeVisibleStreamState,
   visibleAssistantStreamParts as visibleParts,
-  visibleCurrentAssistantStreamTail as currentTail,
 } from "./stream-reconciliation.ts";
 import {
-  pruneHistoryReplacedStreamSegments as pruneHistoryReplaced,
   prunePersistedAssistantStreamSegments as prunePersistedAssistant,
   prunePersistedToolStreamMessages as prunePersistedTools,
 } from "./stream-segment-pruning.ts";
@@ -217,24 +215,6 @@ it("does not prune keyed preambles by live tool index", () => {
   ]);
   expect(state).toMatchObject({ chatToolMessages: [], toolStreamOrder: [] });
   expect(state.toolStreamById.size).toBe(0);
-});
-
-it("retains the cumulative baseline after history replaces an earlier displayed prefix", () => {
-  const state = idle({
-    chatStreamSegments: [
-      streamSegment("Before steer.", 1, { runId: "active-run" }),
-      streamSegment("Before steer. After steer.", 2, { runId: "active-run" }),
-    ],
-  });
-  pruneHistoryReplaced(
-    [{ role: "assistant", content: "Before steer.", timestamp: 1 }],
-    state,
-    visibleStreamOptions,
-  );
-  expect(visibleParts(state, visibleStreamOptions)).toMatchObject([{ text: "After steer." }]);
-  expect(
-    currentTail({ ...state, chatStream: "Before steer. After steer. Continued." }, () => false),
-  ).toBe("Continued.");
 });
 
 it.each([true, false])(
