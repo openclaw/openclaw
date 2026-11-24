@@ -18,7 +18,7 @@ import {
   createServiceChildCleanupDeadline,
 } from "./service-child-cleanup-deadline.js";
 import { readServiceChildControl } from "./service-child-control-reader.js";
-import { isOwnedProcessGroupGone } from "./service-child-group-ownership.js";
+import { isOwnedProcessGroupGone, retireAnchor } from "./service-child-group-ownership.js";
 import { createOutputRelay } from "./service-child-output-relay.js";
 import {
   readServiceChildMessage,
@@ -241,7 +241,7 @@ export async function createServiceChildRelayAdapter(
   const cleanupDeadline = createServiceChildCleanupDeadline({
     enabled: () => !useWindowsJobAnchor && !completionSettled,
     expire: expireCleanup,
-    force: () => kill("SIGKILL"),
+    force: (hard) => (hard ? retireAnchor(child, anchorPid, state, loseIdentity) : kill("SIGKILL")),
   });
   const recordControlError = (error: unknown) => {
     // A broken write cannot replace the receipt and native extinction join.
