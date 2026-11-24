@@ -190,7 +190,7 @@ export async function assertRealGatewayWorkflowSelection(
 
 // Historical fallback for frozen targets predating prebuilt E2E config.
 // Intentionally independent of the current real-Gateway inventory.
-export const frozenRealGatewayFiles = [
+const frozenRealGatewayFiles = [
   "ui/src/e2e/mcp-app-conformance.e2e.test.ts",
   "ui/src/e2e/control-ui-auth-transports.e2e.test.ts",
   "ui/src/e2e/usage-sessions-owner-attribution.e2e.test.ts",
