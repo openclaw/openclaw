@@ -1,9 +1,12 @@
 import { createHash } from "node:crypto";
+import { createRequire } from "node:module";
 import { matchesGlob } from "node:path";
 import {
   agentVitestProjectOwners,
   embeddedAgentVitestProjectOwners,
 } from "../../test/vitest/vitest.agents-paths.mjs";
+import { BUNDLED_PLUGIN_E2E_TEST_GLOB } from "../../test/vitest/vitest.bundled-plugin-paths.ts";
+import { coreChannelTestInclude } from "../../test/vitest/vitest.channel-paths.mjs";
 import { getCliVitestProjectOwner } from "../../test/vitest/vitest.cli-paths.mjs";
 import { cliProcessTestFiles } from "../../test/vitest/vitest.cli-process-paths.mjs";
 import { commandsLightTestFiles } from "../../test/vitest/vitest.commands-light-paths.mjs";
@@ -28,7 +31,12 @@ import {
   isPlainRepoRelativePath,
 } from "../../test/vitest/vitest.include-patterns.ts";
 import { markdownTestFiles } from "../../test/vitest/vitest.markdown-paths.mjs";
-import { isSharedVitestExcludedPath } from "../../test/vitest/vitest.pattern-file.ts";
+import {
+  isSharedVitestExcludedPath,
+  sharedVitestExcludePatterns,
+  vitestE2eTestGlob,
+} from "../../test/vitest/vitest.pattern-file.ts";
+import { pluginSdkLightTestFiles } from "../../test/vitest/vitest.plugin-sdk-paths.mjs";
 import {
   autoReplyCoreTestInclude,
   autoReplyCoreTestExclude,
@@ -42,9 +50,17 @@ import {
   toolingTestExclude,
   toolingTestInclude,
 } from "../../test/vitest/vitest.tooling-paths.mjs";
+import { uiIsolatedTestFiles } from "../../test/vitest/vitest.ui-isolated-paths.mjs";
+import {
+  controlUiE2eTestGlobs,
+  isUiTestTarget,
+  uiE2eRealGatewayTestFiles,
+  uiTimingTestFiles,
+} from "../../test/vitest/vitest.ui-paths.mjs";
 import {
   getUnitFastTestFiles,
   getUnitFastIsolatedTestFiles,
+  getUnitFastTimerTestFiles,
 } from "../../test/vitest/vitest.unit-fast-paths.mjs";
 import {
   boundaryTestFiles,
@@ -129,7 +145,93 @@ const runtimeSharedProjectOwners = [
   },
 ];
 
-const CONFIG_FILE_OWNERS = new Map<string, Parameters<typeof listScopedOwnerTestFiles>[0]>([
+const CONFIG_FILE_OWNERS = new Map<
+  string,
+  Parameters<typeof listScopedOwnerTestFiles>[0] | (() => string[])
+>([
+  ...["media", "media-understanding", "wizard", "secrets", "logging", "process"].map(
+    (area): [string, Parameters<typeof listScopedOwnerTestFiles>[0]] => [
+      `test/vitest/vitest.${area}.config.ts`,
+      {
+        root: `src/${area}`,
+        include: [`src/${area}/**/*.test.ts`],
+        exclude: databaseWorkerCoreTestFiles,
+      },
+    ],
+  ),
+  [
+    "test/vitest/vitest.commands-light.config.ts",
+    { root: "src/commands", include: commandsLightTestFiles, exclude: databaseWorkerCoreTestFiles },
+  ],
+  [
+    "test/vitest/vitest.daemon.config.ts",
+    { root: "src/daemon", include: ["src/daemon/**/*.test.ts"], exclude: cliProcessTestFiles },
+  ],
+  [
+    "test/vitest/vitest.plugin-sdk-light.config.ts",
+    { root: "src/plugin-sdk", include: pluginSdkLightTestFiles, exclude: [] },
+  ],
+  [
+    "test/vitest/vitest.plugin-sdk.config.ts",
+    {
+      root: "src/plugin-sdk",
+      include: ["src/plugin-sdk/**/*.test.ts"],
+      exclude: [
+        ...pluginSdkLightTestFiles,
+        ...bundledPluginDependentUnitTestFiles,
+        ...databaseWorkerCoreTestFiles,
+      ],
+    },
+  ],
+  [
+    "test/vitest/vitest.channels.config.ts",
+    {
+      root: "src/channels",
+      include: coreChannelTestInclude,
+      exclude: [
+        "src/gateway/**",
+        "src/channels/plugins/contracts/**",
+        ...databaseWorkerCoreTestFiles,
+      ],
+    },
+  ],
+  [
+    "test/vitest/vitest.unit-fast-fake-timers.config.ts",
+    () => getUnitFastTimerTestFiles().filter((file) => !isSharedVitestExcludedPath(file)),
+  ],
+  ["test/vitest/vitest.ui-isolated.config.ts", () => uiIsolatedTestFiles],
+  ["test/vitest/vitest.ui-timing.config.ts", () => uiTimingTestFiles],
+  ["ui/vitest.config.ts", () => scheduledTrackedTestFiles().filter(isUiTestTarget)],
+  [
+    "test/vitest/vitest.ui-e2e.config.ts",
+    () =>
+      scheduledTrackedTestFiles().filter(
+        (file) =>
+          [...controlUiE2eTestGlobs, ...uiE2eRealGatewayTestFiles].some((pattern) =>
+            matchesGlob(file, pattern),
+          ) && !scheduledE2eExcludes().some((pattern) => matchesGlob(file, pattern)),
+      ),
+  ],
+  [
+    "test/vitest/vitest.e2e.config.ts",
+    () =>
+      scheduledTrackedTestFiles().filter(
+        (file) =>
+          [
+            "test/**/*.e2e.test.ts",
+            "src/**/*.e2e.test.ts",
+            "packages/**/*.e2e.test.ts",
+            "src/gateway/gateway.test.ts",
+            BUNDLED_PLUGIN_E2E_TEST_GLOB,
+          ].some((pattern) => matchesGlob(file, pattern)) &&
+          ![
+            ...scheduledE2eExcludes(),
+            ...tuiPtyTestFiles,
+            ...controlUiE2eTestGlobs,
+            ...uiE2eRealGatewayTestFiles,
+          ].some((pattern) => matchesGlob(file, pattern)),
+      ),
+  ],
   ...[...runtimeSharedProjectOwners, ...embeddedAgentVitestProjectOwners].map(
     (owner) => [owner.config, owner] as const,
   ),
@@ -214,7 +316,7 @@ export function listNodeTestConfigFiles(config: string): string[] | undefined {
   }
   let files = configFileCache.get(config);
   if (!files) {
-    files = listScopedOwnerTestFiles(owner);
+    files = typeof owner === "function" ? owner() : listScopedOwnerTestFiles(owner);
     configFileCache.set(config, files);
   }
   return files;
@@ -436,3 +538,80 @@ export function listWholeConfigSplitFiles(shardName: string): string[] | undefin
 export function canSplitWholeConfigGroup(shardName: string): boolean {
   return WHOLE_CONFIG_FILE_OWNERS.get(shardName)?.splitByFile !== false;
 }
+
+/** Git is authoritative: generated fixtures and non-Vitest suffixes still need an owner. */
+export function scheduledTrackedTestFiles(): string[] {
+  // Sparse preflight harnesses import this inventory without the source helpers.
+  // Coverage itself runs in a complete checkout; retain the existing Git owner.
+  const { listGitTrackedFiles }: typeof import("../../src/test-utils/repo-files.ts") =
+    createRequire(import.meta.url)("../../src/test-utils/repo-files.ts");
+  const files = listGitTrackedFiles({ pathspecs: "." });
+  if (!files) {
+    throw new Error("Scheduled test coverage requires git ls-files");
+  }
+  return files.filter((file) => /\.test\.(?:tsx?|mts|mjs|cjs|py)$/u.test(file));
+}
+
+function scheduledE2eExcludes(): string[] {
+  return sharedVitestExcludePatterns.filter((pattern) => pattern !== vitestE2eTestGlob);
+}
+
+export const SCHEDULED_COVERAGE_EXCEPTIONS: Array<{
+  pattern: string;
+  owner: string;
+  reason: string;
+}> = [
+  {
+    pattern: ".github/codeql/**/client-*.test.*",
+    owner: "@openclaw/openclaw-secops",
+    reason: "CodeQL query fixture inputs, not executable test suites.",
+  },
+  {
+    pattern: "test/fixtures/**/*.test.ts",
+    owner: "Developer tooling fixture owners",
+    reason:
+      "Source inputs for tooling regression suites; shared Vitest configuration deliberately excludes fixtures.",
+  },
+  {
+    pattern: ".agents/skills/update-team-server/controller/*.test.*",
+    owner: "Team server deployment controller",
+    reason:
+      "Standalone Node/Python controller self-tests use the operator skill's runner, not Vitest; no scheduled controller runner exists.",
+  },
+  {
+    pattern: ".agents/skills/plugin-sdk-impact/scripts/*.test.mjs",
+    owner: "Plugin SDK impact tooling",
+    reason:
+      "Standalone node:test skill self-tests have no scheduled runner and are not Vitest suites.",
+  },
+  {
+    pattern: "crates/openclaw-iroh-node/test/*.test.cjs",
+    owner: ".github/workflows/iroh-node.yml",
+    reason:
+      "Native binding node:test suites require the crate build; their owning workflow is path-triggered, not scheduled.",
+  },
+  {
+    pattern: "test/scripts/pr-darwin-process-identity.test.py",
+    owner: ".github/workflows/pr-tooling-darwin.yml",
+    reason:
+      "Darwin-only Python process identity proof runs in its path-triggered platform workflow, not the Linux Vitest runner.",
+  },
+  {
+    pattern: "packages/ai/**/*.live.test.ts",
+    owner: "AI provider live tests",
+    reason:
+      "Credentialed package live suites are outside test-live-shard discovery (src, test, extensions); the secretless every-file runner cannot supply provider credentials.",
+  },
+  {
+    pattern: "src/gateway/gateway-thinking-probe.live.test.ts",
+    owner: "Gateway live probe",
+    reason:
+      "test-live-shard explicitly excludes this operator-selected catalog probe, which refuses CI.",
+  },
+  {
+    pattern: "test/e2e/qa-lab/plugins/slack-crabline-roundtrip.candidate.e2e.test.mts",
+    owner: "QA Lab candidate proof",
+    reason:
+      "Requires operator-provided CRABLINE_CANDIDATE_ROOT, archive hashes and a private evidence directory for the candidate package, not the repository checkout.",
+  },
+];
