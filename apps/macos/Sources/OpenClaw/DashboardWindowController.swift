@@ -680,8 +680,8 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
     private var activeNavigationWebView: WKWebView {
         var responderView = window?.firstResponder as? NSView
         while let view = responderView {
-            if let webView = view as? WKWebView, self.nativeBrowser.owns(webView) {
-                return webView
+            if let tab = view as? DashboardBrowserTab, self.nativeBrowser.owns(tab.webView) {
+                return tab.webView
             }
             responderView = view.superview
         }
