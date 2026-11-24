@@ -5,6 +5,7 @@ import { formatUiError, formatUiExternalText } from "../../../lib/format-error.t
 import type { GatewaySpeechPlayback } from "../../../lib/speech-playback.ts";
 import type { ChatRealtimeState, stopChatRealtimeTalk } from "../chat-realtime.ts";
 import { persistedMessageEntryId } from "../chat-thread-items.ts";
+import type { TalkChimePreferences } from "./chimes.ts";
 import { orderRealtimeTalkConversation, updateRealtimeTalkConversation } from "./conversation.ts";
 import { discoverRealtimeTalkCameras, RealtimeTalkSelectedMicrophoneError } from "./input.ts";
 import { RealtimeTalkSession } from "./session.ts";
@@ -143,7 +144,7 @@ type RealtimeTalkStart = {
   split?: SplitTalkOptions;
   playback: GatewaySpeechPlayback;
   autoEnableCamera: boolean;
-  talkChimes?: boolean;
+  talkChimes?: TalkChimePreferences;
   itemPrefix: string;
   orderOffset: number;
   stopRealtimeTalk: typeof stopChatRealtimeTalk;

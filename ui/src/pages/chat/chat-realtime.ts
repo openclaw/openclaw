@@ -96,7 +96,10 @@ export function createInitialChatRealtimeState(): Pick<ChatRealtimeState, "realt
 
 export function stopChatRealtimeTalk(
   state: ChatRealtimeState,
-  options: RealtimeVoiceCloseOptions & { preserveConversation?: boolean } = {},
+  options: RealtimeVoiceCloseOptions & {
+    preserveConversation?: boolean;
+    userStopped?: boolean;
+  } = {},
 ) {
   const session = state.realtimeTalk.snapshot.realtimeTalkSession;
   const playback = state.realtimeTalk.snapshot.realtimeTalkPlayback;
@@ -125,7 +128,7 @@ export function stopChatRealtimeTalk(
   playback?.stop();
   void session?.stop(
     { disposition: options.disposition ?? "detach" },
-    options.disposition === "abort",
+    options.userStopped === true,
   );
 }
 
@@ -214,7 +217,12 @@ export function attachChatRealtimeActions(
       : 0;
     const videoDeviceId = talkSettings.realtimeTalkVideoDeviceId?.trim() || undefined;
     const autoEnableCamera = talkSettings.talkCameraAutoEnable === true;
-    const talkChimes = talkSettings.talkChimes === true;
+    const cues = {
+      wake: talkSettings.talkChimeStart === true,
+      bye: talkSettings.talkChimeEnd === true,
+      follow: talkSettings.talkChimeReply === true,
+    };
+    const talkChimes = cues.wake || cues.bye || cues.follow ? cues : undefined;
     if (talkChimes && !voiceChange) {
       prepareTalkChimes();
     }
@@ -320,7 +328,7 @@ export function attachChatRealtimeActions(
       state.realtimeTalk.snapshot.realtimeTalkSession ||
       state.realtimeTalk.snapshot.realtimeTalkActive
     ) {
-      stopChatRealtimeTalk(state, { disposition: "abort" });
+      stopChatRealtimeTalk(state, { disposition: "abort", userStopped: true });
       return;
     }
     await startRealtimeTalk();

@@ -6,6 +6,7 @@ import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import { GATEWAY_STARTUP_ADMISSION_WAIT_MS } from "../../../../../packages/gateway-protocol/src/startup-unavailable.js";
 import { createDeferred } from "../../../../../test/helpers/promise.js";
 import type { GatewayEventFrame } from "../../../api/gateway.ts";
+import { patchSettings } from "../../../app/settings.ts";
 import { createRuntimeConfigCapability } from "../../../lib/config/runtime-config-capability.ts";
 import { sessionsResult } from "../../../lib/sessions/session-capability.test-support.ts";
 import { GatewaySpeechPlayback } from "../../../lib/speech-playback.ts";
@@ -17,6 +18,7 @@ import { createStorageMock } from "../../../test-helpers/storage.ts";
 import { stopChatRealtimeTalk, type ChatRealtimeState } from "../chat-realtime.ts";
 import { createChatPageStateContext } from "../chat-state-context.test-support.ts";
 import { createPageState } from "../chat-state-page.ts";
+import { TalkChimes } from "./chimes.ts";
 
 type AudioProcessor = {
   onaudioprocess: ((event: { inputBuffer: { getChannelData: () => Float32Array } }) => void) | null;
@@ -82,7 +84,10 @@ beforeEach(() => {
   vi.stubGlobal("navigator", {
     mediaDevices: {
       getUserMedia: vi.fn(async () => {
-        const track = Object.assign(new EventTarget(), { stop: vi.fn() });
+        const track = Object.assign(new EventTarget(), {
+          stop: vi.fn(),
+          getSettings: () => ({ echoCancellation: true }),
+        });
         tracks.push(track);
         return { getTracks: () => [track], getAudioTracks: () => [track] };
       }),
@@ -294,6 +299,35 @@ it.each([
     await h.nextCapture.promise;
     expect(h.state.realtimeTalk.snapshot.realtimeTalkConversationState.entries).toEqual([]);
     await h.state.toggleRealtimeTalk();
+  },
+);
+
+it.each([false, true])(
+  "only signals reply readiness after playback and while active (stop: %s)",
+  async (stop) => {
+    patchSettings({ talkChimeReply: true });
+    const resumed = vi.spyOn(TalkChimes.prototype, "resumedSplitCapture");
+    const h = harness();
+    await h.state.toggleRealtimeTalk();
+    expect(resumed).not.toHaveBeenCalled();
+    const sent = observeSend(h);
+    h.utterance();
+    await sent;
+    h.answer("Reply");
+    await speechStarted.promise;
+    expect(resumed).not.toHaveBeenCalled();
+    if (stop) {
+      await h.state.toggleRealtimeTalk();
+    }
+    audios[0]?.dispatchEvent(new Event("ended"));
+    if (stop) {
+      await vi.advanceTimersByTimeAsync(0);
+      expect(resumed).not.toHaveBeenCalled();
+      expect(tracks).toHaveLength(1);
+    } else {
+      await vi.waitFor(() => expect(resumed).toHaveBeenCalledExactlyOnceWith(true));
+      await h.state.toggleRealtimeTalk();
+    }
   },
 );
 

@@ -222,6 +222,22 @@ it.each([false, true])("launches with persisted devices (blocked storage: %s)", 
   expect(startSpy).toHaveBeenCalledOnce();
 });
 
+it.each([true, false])(
+  "keeps abort separate from the end chime (user stop: %s)",
+  async (userStopped) => {
+    await start();
+    if (userStopped) {
+      await state.toggleRealtimeTalk();
+    } else {
+      stopChatRealtimeTalk(state, { disposition: "abort" });
+    }
+    expect(RealtimeTalkSession.prototype.stop).toHaveBeenCalledExactlyOnceWith(
+      { disposition: "abort" },
+      userStopped,
+    );
+  },
+);
+
 it("requires explicit one-shot consent and preserves the saved microphone for later calls", async () => {
   configure({ realtimeTalkInputDeviceId: "usb-mic" });
   startSpy.mockRejectedValueOnce(new RealtimeTalkSelectedMicrophoneError());

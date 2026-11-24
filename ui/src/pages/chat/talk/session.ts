@@ -11,7 +11,7 @@ import type { GatewayBrowserClient } from "../../../api/gateway.ts";
 import { t } from "../../../i18n/index.ts";
 import { formatUiError } from "../../../lib/format-error.ts";
 import type { GatewaySpeechPlayback } from "../../../lib/speech-playback.ts";
-import { TalkChimes } from "./chimes.ts";
+import { TalkChimes, type TalkChimePreferences } from "./chimes.ts";
 import { RealtimeTalkInputOwner } from "./input.ts";
 import type {
   RealtimeTalkCallbacks,
@@ -40,7 +40,7 @@ type RealtimeTalkLocalOptions = {
   videoDeviceId?: string;
   split?: SplitTalkOptions;
   playback?: GatewaySpeechPlayback;
-  talkChimes?: boolean;
+  talkChimes?: TalkChimePreferences;
 };
 
 const activeRealtimeTalkSessions = new Set<RealtimeTalkSession>();
@@ -114,7 +114,7 @@ export class RealtimeTalkSession {
       const lifecycleGeneration = this.lifecycleGeneration;
       this.chimes?.end(false);
       this.chimes = this.localOptions.talkChimes
-        ? new TalkChimes(Boolean(this.options.voiceChangeId))
+        ? new TalkChimes(this.localOptions.talkChimes, Boolean(this.options.voiceChangeId))
         : undefined;
       this.canPlayWake = undefined;
       this.closed = false;
@@ -130,6 +130,7 @@ export class RealtimeTalkSession {
           this.callbacks,
           this.localOptions.split,
           this.localOptions.inputDeviceId,
+          (echoCancellation) => this.chimes?.resumedSplitCapture(echoCancellation),
         );
         this.canPlayWake = () => transport.hasEchoCancellation();
         this.pendingStartup = transport;

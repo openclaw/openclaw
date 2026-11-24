@@ -112,6 +112,23 @@ async function readyTalk(options: TalkMutationHarnessOptions = {}) {
   return harness;
 }
 
+it("keeps Reply unchecked and disabled until split mode resolves without saving a preference", async () => {
+  const { page: connectedPage, runtimeConfig } = createTalkMutationHarness();
+  const page = mountTalkPage(connectedPage.context, {});
+  const reply = () => page.querySelector<HTMLInputElement>('input[aria-label="Ready for reply"]');
+  const setItem = vi.spyOn(Storage.prototype, "setItem");
+  await waitForSolid(() => expect(reply()).toMatchObject({ disabled: true, checked: false }));
+  reply()?.click();
+
+  setTalkRealtimeConfig(page, { mode: "stt-tts" });
+  await waitForSolid(() => expect(reply()).toMatchObject({ disabled: false, checked: true }));
+
+  setTalkRealtimeConfig(page, { mode: "realtime" });
+  await waitForSolid(() => expect(reply()).toMatchObject({ disabled: true, checked: false }));
+  expect(setItem).not.toHaveBeenCalled();
+  expect(runtimeConfig.patchForm).not.toHaveBeenCalled();
+});
+
 it("locks every curated picker while config is saving", async () => {
   const { page } = await readyTalk({ configSaving: true, speakerVoice: "marin" });
   expect(page.querySelector(".settings-segmented__input")?.hasAttribute("disabled")).toBe(true);

@@ -11,6 +11,7 @@ import type {
   NativeDeviceSettingsCapability,
 } from "../../app/native-device-settings.ts";
 import { loadSettings, patchSettings } from "../../app/settings.ts";
+import { Checkbox } from "../../components/solid/checkbox.tsx";
 import { ModelPicker } from "../../components/solid/model-picker.tsx";
 import {
   SettingsPage,
@@ -18,9 +19,9 @@ import {
   SettingsSection,
   SettingsSegmented,
   SettingsStatus,
-  SettingsToggleRow,
   SettingsValue,
 } from "../../components/solid/settings-ui.tsx";
+import { Tooltip } from "../../components/solid/tooltip.tsx";
 import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { t, registerEnglishCatalog } from "../../lib/reactive/i18n.ts";
@@ -370,7 +371,16 @@ function TalkCatalogRows(props: TalkViewProps) {
 }
 
 export function Talk(props: TalkViewProps) {
-  const [chimes, setChimes] = createSignal(loadSettings().talkChimes === true);
+  const [chimes, setChimes] = createSignal(loadSettings());
+  const splitMode = () => props.selection.mode === "stt-tts";
+  const updateChime = (
+    key: "talkChimeStart" | "talkChimeEnd" | "talkChimeReply",
+    enabled: boolean,
+  ) => {
+    const patch = { [key]: enabled };
+    patchSettings(patch);
+    setChimes((current) => ({ ...current, ...patch }));
+  };
   return (
     <section class="talk-page">
       <SettingsPage>
@@ -393,15 +403,6 @@ export function Talk(props: TalkViewProps) {
           title={t("talkPage.voiceSection.title")}
           description={t("talkPage.voiceSection.description")}
         >
-          <SettingsToggleRow
-            title={t("talkPage.chimes")}
-            description={t("talkPage.chimesHint")}
-            checked={chimes()}
-            onChange={(enabled) => {
-              patchSettings({ talkChimes: enabled });
-              setChimes(enabled);
-            }}
-          />
           <Errored
             fallback={(error) => (
               <TalkCatalogRows {...props} catalog={{ kind: "failed", error: error() }} />
@@ -427,6 +428,48 @@ export function Talk(props: TalkViewProps) {
             </Loading>
           </Errored>
         )}
+        <SettingsSection title={t("talkPage.chimesSection.title")}>
+          <div class="settings-row">
+            <div
+              class="talk-chime-options"
+              role="group"
+              aria-label={t("talkPage.chimesSection.title")}
+            >
+              <label class="settings-row__desc">
+                <Checkbox
+                  class="oc-checkbox--quiet"
+                  checked={chimes().talkChimeStart === true}
+                  onChange={(event) => updateChime("talkChimeStart", event.currentTarget.checked)}
+                />
+                {t("talkPage.chimeStart")}
+              </label>
+              <label class="settings-row__desc">
+                <Checkbox
+                  class="oc-checkbox--quiet"
+                  checked={chimes().talkChimeEnd === true}
+                  onChange={(event) => updateChime("talkChimeEnd", event.currentTarget.checked)}
+                />
+                {t("talkPage.chimeEnd")}
+              </label>
+              <Tooltip content={t("talkPage.chimeReplyLive")} disabled={splitMode()}>
+                <span tabIndex={splitMode() ? undefined : 0}>
+                  <label class="settings-row__desc">
+                    <Checkbox
+                      class="oc-checkbox--quiet"
+                      aria-label={t("talkPage.chimeReply")}
+                      checked={splitMode() && chimes().talkChimeReply === true}
+                      disabled={!splitMode()}
+                      onChange={(event) =>
+                        updateChime("talkChimeReply", event.currentTarget.checked)
+                      }
+                    />
+                    {splitMode() ? t("talkPage.chimeReply") : t("talkPage.chimeReplyLiveLabel")}
+                  </label>
+                </span>
+              </Tooltip>
+            </div>
+          </div>
+        </SettingsSection>
       </SettingsPage>
       {props.editor}
     </section>

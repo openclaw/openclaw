@@ -215,7 +215,9 @@ export type UiSettings = {
   composerHoldToRecord?: boolean;
   // Camera intent is device-local, not per-agent or synced through config ui.prefs.
   talkCameraAutoEnable?: boolean;
-  talkChimes?: boolean;
+  talkChimeStart?: boolean;
+  talkChimeEnd?: boolean;
+  talkChimeReply?: boolean;
   chatSplitLayout?: ChatSplitLayout;
   chatWorkspaceDock?: ChatWorkspaceDock; // Session workspace rail dock edge (default "right")
   boardSessionViews?: BoardSessionViews; // Per-device active dashboard tab and dock state

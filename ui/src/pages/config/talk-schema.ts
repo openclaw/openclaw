@@ -44,6 +44,7 @@ export function resolveTalkRealtimeSelection(configObject: Record<string, unknow
       readTrimmedString(realtime?.speakerVoice) ?? readTrimmedString(realtime?.speakerVoiceId),
     /** Raw configured `talk.realtime.transport`. */
     transport: readTrimmedString(realtime?.transport),
+    mode: readTrimmedString(realtime?.mode),
     /** Normalized configured `talk.realtime.consultRouting`. */
     consultRouting: readTrimmedString(realtime?.consultRouting)?.toLowerCase() ?? null,
     /** Per-provider fallback values keyed by the raw config map key. */
