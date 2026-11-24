@@ -236,7 +236,8 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
           contextWindowAccess: mutationAccess.contextWindow,
           permissionAccess: mutationAccess.permission,
           canSelectFull: hasOperatorAdminAccess(gatewaySnapshot.hello?.auth ?? null),
-          onModelSetup: () => this.context.navigate("model-setup"),
+          onModelSetup: (provider) =>
+            navigateToModelProvider(this.context, currentAgentId, provider, { connect: true }),
           onProviderSettings: (provider) =>
             navigateToModelProvider(this.context, currentAgentId, provider),
           onModelAccounts: () => this.context.navigate("profile"),
