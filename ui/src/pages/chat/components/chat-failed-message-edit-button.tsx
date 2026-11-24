@@ -22,7 +22,7 @@ export default function ChatFailedMessageEditButton(props: {
         >
           <button
             type="button"
-            class="btn btn--sm"
+            class="btn btn--ghost btn--sm"
             aria-label={label()}
             disabled={edit()?.disabled}
             onClick={(event) => {

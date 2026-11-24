@@ -193,7 +193,7 @@ export function ChatRunFailureNotice(props: {
                 {(provider) => (
                   <button
                     type="button"
-                    class="btn primary btn--sm chat-run-failure__retry"
+                    class="btn btn--ghost btn--sm chat-run-failure__retry"
                     onClick={() =>
                       app?.navigate("model-providers", {
                         search: `?provider=${encodeURIComponent(provider())}`,
@@ -207,7 +207,7 @@ export function ChatRunFailureNotice(props: {
               <Show when={startNewSession()}>
                 <button
                   type="button"
-                  class="btn primary btn--sm chat-run-failure__retry"
+                  class="btn btn--ghost btn--sm chat-run-failure__retry"
                   onClick={() => props.onStartNewSession?.()}
                 >
                   {t("chat.recovery.startNewSession")}
@@ -216,10 +216,7 @@ export function ChatRunFailureNotice(props: {
               <Show when={props.onRetry}>
                 <button
                   type="button"
-                  class={[
-                    "btn btn--sm chat-run-failure__retry",
-                    { primary: !openModels() && !startNewSession() },
-                  ]}
+                  class="btn btn--ghost btn--sm chat-run-failure__retry"
                   onClick={() => props.onRetry?.()}
                 >
                   <Icon name="refresh" />

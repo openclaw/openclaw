@@ -207,12 +207,8 @@ it("names a provider's billing problem with its declared label and sends its fix
   expect(part("billing-message")?.textContent).toBe(billingError.message);
   expect(part("billing")?.querySelector("a")).toBeNull();
   expect(part("title")?.textContent).toBe("Acme Cloud Plan reports a billing problem");
-  const [openModels, tryAgain] = container.querySelectorAll<HTMLButtonElement>(
-    ".chat-run-failure__retry",
-  );
+  const [openModels] = container.querySelectorAll<HTMLButtonElement>(".chat-run-failure__retry");
   expect(openModels?.textContent).toBe("Open Models");
-  expect(openModels?.classList.contains("primary")).toBe(true);
-  expect(tryAgain?.classList.contains("primary")).toBe(false);
   openModels?.click();
   expect(navigate).toHaveBeenCalledExactlyOnceWith("model-providers", {
     search: "?provider=acme",
@@ -224,7 +220,6 @@ it("names a provider's billing problem with its declared label and sends its fix
   draw("overloaded");
   expect(part("title")?.textContent).toBe("Couldn’t finish this reply");
   expect(container.querySelectorAll(".chat-run-failure__retry")).toHaveLength(1);
-  expect(query(".chat-run-failure__retry")?.classList.contains("primary")).toBe(true);
 });
 
 it("starts an OpenClaw update session only for a harness-update failure", async () => {
@@ -284,7 +279,6 @@ it("starts an OpenClaw update session only for a harness-update failure", async 
   drawNotice(updateItem, { failureActionsRunId: "run-a" });
   expect(start()).toBeUndefined();
   drawNotice(updateItem, recovery);
-  expect(start()?.classList.contains("primary")).toBe(true);
   start()?.click();
   await waitForSolid(() => expect(open).toHaveBeenCalledExactlyOnceWith("agent:cx:update-session"));
   expect(create).toHaveBeenCalledExactlyOnceWith(
