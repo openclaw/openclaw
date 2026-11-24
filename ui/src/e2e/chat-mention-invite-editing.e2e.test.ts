@@ -106,6 +106,9 @@ suite.define(() => {
           } else {
             await level.click();
           }
+          await expect
+            .poll(() => editor.evaluate((node) => document.activeElement === node))
+            .toBe(true);
           // Space activates a focused button; it must be typed into the retained editor instead.
           await page.keyboard.type(" after level");
           await expect.poll(() => raw.inputValue()).toBe("@Casey Vale after mention after level");
