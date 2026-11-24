@@ -1,16 +1,19 @@
 import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import type { ImageContent, UserMessage } from "../../../llm/types.js";
 import { isImageMediaFact, type MediaFact } from "../../../media/media-facts.js";
+import type { ImageSanitizationLimits } from "../../image-sanitization.js";
 import type { AgentRunSessionTarget } from "../../run-session-target.types.js";
 
-type ImageResolution = {
+export type ImageResolution = {
   images: ImageContent[];
   imageFactIndexes: (number | null)[];
+  /** Limits the returned images were sanitized under; absent when nothing was loaded. */
+  imageSanitization?: ImageSanitizationLimits;
   failedMediaCount: number;
 };
 type ImageDecision = {
   media: Map<number, MediaFact>;
-  /** Hashes of the sanitized images the model received, per media part. */
+  /** Sanitized images the model received, per media part. */
   hashes: Map<number | null, Set<string>>;
   includedCount: number;
   failedMediaCount: number;
@@ -105,7 +108,11 @@ export async function resolvePromptImageDecisions(params: {
   const imageFactIndexes: (number | null)[] = [];
   result.images.forEach((image, index) => {
     const part = result.imageFactIndexes[index] ?? null;
-    if (previous.hashes.get(part)?.has(imageHash(image))) {
+    // An inline block and the stored original re-sanitize to different bytes for the same
+    // image, so the pinned output hash cannot match. If the fact was included before and
+    // the image loaded again, keep it instead of reporting it as unavailable.
+    const wasIncluded = part !== null && previous.hashes.has(part);
+    if (wasIncluded || previous.hashes.get(part)?.has(imageHash(image))) {
       images.push(image);
       imageFactIndexes.push(part);
     }
@@ -123,6 +130,7 @@ export async function resolvePromptImageDecisions(params: {
   return {
     images,
     imageFactIndexes,
+    imageSanitization: result.imageSanitization,
     failedMediaCount:
       previous.failedMediaCount + Math.max(0, previous.includedCount - images.length),
   };

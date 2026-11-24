@@ -10,7 +10,7 @@ import {
 import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
 import { buildInboundMediaNoteProjection } from "../../../auto-reply/media-note.js";
 import { resolvePreferredOpenClawTmpDir } from "../../../infra/tmp-openclaw-dir.js";
-import type { UserMessage } from "../../../llm/types.js";
+import type { ImageContent, UserMessage } from "../../../llm/types.js";
 import * as mediaLocalRoots from "../../../media/local-roots.js";
 import {
   type MediaFact,
@@ -35,7 +35,7 @@ import {
   detectImageReferences,
   hydratePromptMediaMessages,
 } from "./images.js";
-import { promptImageSessionKey } from "./prompt-image-decisions.js";
+import { promptImageSessionKey, resolvePromptImageDecisions } from "./prompt-image-decisions.js";
 import type { MediaImageLayout } from "./prompt-image-metadata.js";
 import { prepareEmbeddedAttemptPromptExecution } from "./prompt-image-preparation.js";
 
@@ -820,6 +820,41 @@ describe("persisted image replay", () => {
       { type: "text", text: buildPromptImageFailureNotice(1) },
       expect.objectContaining({ type: "image" }),
     ]);
+  });
+  it("keeps a resent remix of an already included source", async () => {
+    // The channel can resend an image it first sent as different model bytes (re-encoded),
+    // but the fact it was included on still loaded. A replay should keep it, not report it
+    // as unavailable.
+    const firstBlock: ImageContent = {
+      type: "image",
+      data: "AAAA".repeat(100),
+      mimeType: "image/jpeg",
+    };
+    const resentBlock: ImageContent = {
+      type: "image",
+      data: "BBBB".repeat(100),
+      mimeType: "image/jpeg",
+    };
+    const media: MediaFact[] = [{ kind: "image" }];
+    const message = { role: "user", content: "inspect", timestamp: 1 } as UserMessage;
+    const loadWith = (block: ImageContent) => async () => ({
+      images: [block],
+      imageFactIndexes: [0],
+      failedMediaCount: 0,
+    });
+    const params = { sessionKey: "session-204387", message, messageIndex: 0, media };
+    await resolvePromptImageDecisions({
+      ...params,
+      existingImages: [firstBlock],
+      load: loadWith(firstBlock),
+    });
+    const replay = await resolvePromptImageDecisions({
+      ...params,
+      existingImages: [resentBlock],
+      load: loadWith(resentBlock),
+    });
+    expect(replay.images).toEqual([resentBlock]);
+    expect(replay.failedMediaCount).toBe(0);
   });
   it("keeps persisted facts and asks the active turn to resend an unreadable image", async () => {
     const media = mediaAt(path.join(workspaceDir, "missing.png"));
