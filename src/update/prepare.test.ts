@@ -6,6 +6,7 @@ import { describe, expect, it, vi } from "vitest";
 import * as runtimePaths from "../daemon/runtime-paths.js";
 import { createDoctorRuntimeProjection } from "../flows/doctor-health-contributions.test-support.js";
 import { readGatewayLockProcessNamespace } from "../infra/gateway-lock-payload.js";
+import { readGatewayLockProcessStartTime } from "../infra/gateway-lock-process.js";
 import { acquireGatewayStateOwner } from "../infra/gateway-state-owner.js";
 import * as processCensus from "../infra/openclaw-process-census.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
@@ -252,10 +253,15 @@ process.exit(result.status ?? 1);
         pid: process.pid,
         createdAt: new Date().toISOString(),
         configPath: path.join(root, "openclaw.json"),
+        port: 18789,
+        startTime:
+          readGatewayLockProcessStartTime(process.pid, process.platform, 1000) ?? undefined,
         processNamespace: readGatewayLockProcessNamespace(),
         role: "gateway",
       },
     });
+    const argv = process.argv;
+    process.argv = [node, path.join(checkout, "openclaw.mjs"), "gateway"];
     try {
       await owner.run(async () => {
         const run = await createUpdateRunAsync({
@@ -283,6 +289,7 @@ process.exit(result.status ?? 1);
         owner.assertCurrent();
       });
     } finally {
+      process.argv = argv;
       database.db.exec(`
         PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION};
         UPDATE schema_meta SET schema_version = ${OPENCLAW_STATE_SCHEMA_VERSION} WHERE meta_key = 'primary';

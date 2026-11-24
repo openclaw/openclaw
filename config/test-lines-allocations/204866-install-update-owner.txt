@@ -1,4 +1,4 @@
-# PR #204866: measured net +660 test lines minus the standard 400-line allowance = 260.
+# PR #204866: measured net +666 test lines minus the standard 400-line allowance = 266.
 # src/cli/update-cli/update-command-release-owner.test.ts: converted routing refusals, node-only package ownership without a trial, documented target controls, and first-conversion foreground/native root identity.
 # src/cli/update-cli/update-command-immutable-owner.test.ts: immutable activation and preview cannot replace a converted installation.
 # src/cli/update-cli/update-command-node-package-advice.test.ts: human/JSON package-result instructions and executable platform quoting, without service inspection or invented activation after failure.
@@ -10,4 +10,5 @@
 # src/daemon/schtasks-state-probe.test.ts: native process snapshots receive the default or explicit owner budget without a hidden five-second clamp.
 # src/daemon/schtasks-runtime-definition.test.ts: matching, mismatched and portless file custody never becomes false stopped/Scheduler ownership.
 # src/update/cli.test.ts: RPC can take over opaque foreground ownership; local-only preparation refuses before cleanup or run creation.
-260
+# src/update/prepare.test.ts: a verified serving Gateway defers plugin maintenance without losing its schema custody.
+266
