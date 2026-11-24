@@ -89,7 +89,13 @@ export function wrapOpenAIResponsesStream(ctx: ProviderWrapStreamFnContext) {
             return request;
           },
         };
-        return underlying(model, context, sharingOptions);
+        // SIWC's subscription backend uses session_id for affinity. The transport
+        // still honors caller headers, explicit model policy and disabled caching.
+        const sharingModel =
+          model.compat && "sendSessionIdHeader" in model.compat
+            ? model
+            : { ...model, compat: { ...model.compat, sendSessionIdHeader: true } };
+        return underlying(sharingModel, context, sharingOptions);
       },
     };
   }

@@ -1,3 +1,4 @@
+import { buildOpenAIClientHeaders } from "@openclaw/ai/transports";
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import { createAssistantMessageEventStream } from "openclaw/plugin-sdk/llm";
 import type { ProviderWrapStreamFnContext } from "openclaw/plugin-sdk/plugin-entry";
@@ -138,6 +139,38 @@ describe("token-sharing Responses stream", () => {
       } else {
         expect(result).toHaveProperty("max_output_tokens", 64);
       }
+    },
+  );
+
+  it.each([undefined, false])(
+    "uses default SIWC affinity unless explicitly configured as %s",
+    async (configured) => {
+      let observedModel: Parameters<StreamFn>[0] | undefined;
+      const streamFn: StreamFn = (selected) => {
+        observedModel = selected;
+        return createAssistantMessageEventStream();
+      };
+      const selectedModel =
+        configured === undefined
+          ? model
+          : { ...model, compat: { sendSessionIdHeader: configured } };
+      const stream = wrapOpenAIResponsesStream({
+        provider: "openai",
+        modelId: model.id,
+        model: selectedModel,
+        streamFn,
+        auth: { mode: "oauth", authFlow: TOKEN_SHARING_AUTH_FLOW },
+      });
+      await stream(selectedModel, { messages: [] }, {});
+      const headers = buildOpenAIClientHeaders(
+        observedModel!,
+        { messages: [] },
+        {},
+        undefined,
+        "siwc-session",
+        "short",
+      );
+      expect(headers.session_id).toBe(configured === false ? undefined : "siwc-session");
     },
   );
 
