@@ -597,6 +597,8 @@ export async function commitPluginInstallRecordsOnly(params: {
   previousInstallRecords?: Record<string, PluginInstallRecord>;
   nextInstallRecords: Record<string, PluginInstallRecord>;
   nextConfig: OpenClawConfig;
+  beforePersistentEffect?: () => void | Promise<void>;
+  assertConfigPathForWrite?: () => void;
   verifyConfigFresh?: () => Promise<void>;
 }): Promise<InstalledPluginIndexWriteReceipt> {
   const result = await commitPluginInstallRecordsWithWriter({
@@ -607,6 +609,8 @@ export async function commitPluginInstallRecordsOnly(params: {
       nextInstallRecords: params.nextInstallRecords,
     }),
     nextConfig: params.nextConfig,
+    beforePersistentEffect: params.beforePersistentEffect,
+    writeOptions: { assertConfigPathForWrite: params.assertConfigPathForWrite },
     commit: async () => {
       await params.verifyConfigFresh?.();
       return undefined;

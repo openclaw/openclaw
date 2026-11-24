@@ -58,6 +58,54 @@ function convergenceResult(config: OpenClawConfig) {
   };
 }
 
+it.each(["unchanged", "config-edit", "repointed"] as const)(
+  "publishes records against a provisioned config only when safe: %s",
+  async (scenario) => {
+    await withOpenClawTestState({ label: "updater-provisioned-config" }, async (state) => {
+      const prepared = await prepareUpdate(state, { plugins: { enabled: false } });
+      const original = state.path("provisioned.json");
+      const replacement = state.path("replacement.json");
+      await fs.rename(state.configPath, original);
+      const bytes = await fs.readFile(original, "utf8");
+      await fs.writeFile(replacement, JSON.stringify({ gateway: { port: 19003 } }));
+      await fs.symlink(original, state.configPath);
+      const planned = await readConfigFileSnapshotForWrite();
+      mocks.convergence.mockImplementationOnce(async ({ cfg }) => {
+        if (scenario === "repointed") {
+          await fs.unlink(state.configPath);
+          await fs.symlink(replacement, state.configPath);
+        }
+        return {
+          ...convergenceResult(
+            scenario === "config-edit" ? { ...cfg, gateway: { port: 19002 } } : cfg,
+          ),
+          changes: ["Installed fixture."],
+        };
+      });
+      const update = updatePluginsAfterCoreUpdate({
+        ...prepared,
+        configChanged: false,
+        configSnapshot: planned.snapshot,
+        configWriteOptions: planned.writeOptions,
+      });
+      if (scenario === "unchanged") {
+        await expect(update).resolves.toMatchObject({ status: "ok", changed: true });
+      } else {
+        await expect(update).rejects.toThrow(
+          scenario === "repointed" ? /config target changed/ : /is a symlink/,
+        );
+      }
+      expect(await fs.readlink(state.configPath)).toBe(
+        scenario === "repointed" ? replacement : original,
+      );
+      expect(await fs.readFile(original, "utf8")).toBe(bytes);
+      expect(
+        await readPersistedInstalledPluginIndexInstallRecordsAsync({ env: state.env }),
+      ).toEqual(scenario === "unchanged" ? { fixture: { source: "archive" } } : {});
+    });
+  },
+);
+
 describe("plugin final publication config rebase", () => {
   it.each([
     "unrelated",

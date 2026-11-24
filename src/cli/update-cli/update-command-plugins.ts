@@ -1,3 +1,4 @@
+import fs from "node:fs/promises";
 import { isDeepStrictEqual } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
@@ -15,6 +16,7 @@ import {
   setConfigValueAtPath,
   unsetConfigValueAtPath,
 } from "../../config/config-paths.js";
+import { NixModeConfigMutationError } from "../../config/config-write-guard.js";
 import { readConfigFileSnapshot, transformConfigFileWithRetry } from "../../config/config.js";
 import {
   getDeferredPluginMigrationConfigFacts,
@@ -23,13 +25,17 @@ import {
 import { collectChangedConfigPaths } from "../../config/include-write-boundary.js";
 import type { ConfigWriteOptions } from "../../config/io.js";
 import { ConfigMutationConflictError } from "../../config/mutation-conflict.js";
+import { resolveIsNixMode } from "../../config/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../../config/types.plugins.js";
 import { comparePackageUpdateVersions } from "../../infra/package-update-utils.js";
 import { resolveRegistryUpdateChannel, type UpdateChannel } from "../../infra/update-channels.js";
 import { getLogger } from "../../logging/logger.js";
 import type { PluginCapabilityConsentHandler } from "../../plugins/capability-consent.js";
-import { commitPluginInstallRecordsWithConfig } from "../../plugins/install-record-commit.js";
+import {
+  commitPluginInstallRecordsOnly,
+  commitPluginInstallRecordsWithConfig,
+} from "../../plugins/install-record-commit.js";
 import { resolvePluginInstallOwnerMigrations } from "../../plugins/install-transaction.js";
 import {
   loadInstalledPluginIndexInstallRecords,
@@ -130,6 +136,21 @@ async function updatePluginsAfterCoreUpdateWithLease(
   lease: PluginLifecycleLeaseContext,
 ): Promise<ProducedPluginUpdateResult> {
   params.assertCurrent?.();
+  const configPath = params.configSnapshot.path;
+  const readConfigLink = async () => {
+    if (!params.configSnapshot.exists || !(await fs.lstat(configPath)).isSymbolicLink()) {
+      return undefined;
+    }
+    return await fs.readlink(configPath);
+  };
+  const configLink = await readConfigLink();
+  const assertConfigTarget = async () => {
+    if ((await readConfigLink()) !== configLink) {
+      throw new ConfigMutationConflictError("config target changed since last load", {
+        retryable: false,
+      });
+    }
+  };
   const runtime = params.runtime ?? defaultRuntime;
   const referenceSource = prepareDoctorConfigReferenceSource(params.configSnapshot);
   const clawHubTrustNotices = new Set<string>();
@@ -472,77 +493,125 @@ async function updatePluginsAfterCoreUpdateWithLease(
       ? restoreDoctorConfigEnvRefs(baselineSource, baselineReferences)
       : baselineSource;
     const changedPaths = collectChangedConfigPaths(baseline, nextConfig).paths;
-    await transformConfigFileWithRetry({
-      writeOptions: {
-        ...mutationWriteOptions,
-        observe: false,
-        assertCurrent,
-        beforeCommit: async () => {
-          assertCurrent();
-          await params.configWriteOptions.beforeCommit?.();
-          assertCurrent();
-          await assertRecoveryCurrent();
-          assertCurrent();
-        },
-        inputBase: "source",
-        skipPluginValidation: true,
-      },
-      transform: (current, { snapshot }) => {
-        const currentReferences = prepareDoctorConfigReferenceSource(snapshot);
-        const currentConfig = currentReferences
-          ? restoreDoctorConfigEnvRefs(current, currentReferences)
-          : current;
-        const candidate = structuredClone(currentConfig);
-        for (const path of changedPaths) {
-          const changedPath = [...path];
-          const before = getConfigValueAtPath(baseline, changedPath);
-          const after = getConfigValueAtPath(nextConfig, changedPath);
-          const value = getConfigValueAtPath(currentConfig, changedPath);
-          const parentChanged = changedPath.slice(0, -1).some((_, index) => {
-            const parent = changedPath.slice(0, index + 1);
-            return (
-              isRecord(getConfigValueAtPath(baseline, parent)) &&
-              !isRecord(getConfigValueAtPath(currentConfig, parent))
-            );
-          });
-          if (
-            !isDeepStrictEqual(value, after) &&
-            (parentChanged || !isDeepStrictEqual(value, before))
-          ) {
-            throw new ConfigMutationConflictError(
-              "Plugin finalization conflicts with changed config field " + changedPath.join("."),
-              { retryable: false },
-            );
-          }
-          if (after === undefined) {
-            unsetConfigValueAtPath(candidate, [...changedPath]);
-          } else {
-            setConfigValueAtPath(candidate, changedPath, structuredClone(after));
-          }
-        }
-        setDeferredPluginMigrationConfigFacts(
-          candidate,
-          getDeferredPluginMigrationConfigFacts(nextConfig),
-        );
-        return { nextConfig: candidate };
-      },
-      commit: async ({ nextConfig: candidate, baseHash, writeOptions }) => {
-        const { configWrite } = await commitPluginInstallRecordsWithConfig({
-          beforePersistentEffect: assertCurrent,
-          previousInstallRecords: pluginInstallRecords,
-          nextInstallRecords,
-          nextConfig: candidate,
-          baseHash,
-          writeOptions,
+    const beforeCommit = async () => {
+      assertCurrent();
+      await params.configWriteOptions.beforeCommit?.();
+      assertCurrent();
+      await assertRecoveryCurrent();
+      await assertConfigTarget();
+      assertCurrent();
+    };
+    if (changedPaths.length === 0) {
+      await beforeCommit();
+      const readCurrentConfig = async () => {
+        const snapshot = await readConfigFileSnapshot({
+          observe: false,
+          deferredPluginMigrations: params.configWriteOptions.deferredPluginMigrations,
         });
-        return {
-          config: configWrite.nextConfig,
-          persistedHash: configWrite.persistedHash,
-          persistedSourceConfig: configWrite.persistedSourceConfig,
-          afterWrite: configWrite.afterWrite,
-        };
-      },
-    });
+        await assertConfigTarget();
+        guardedWriteOptions.assertConfigPathForWrite?.();
+        assertCurrent();
+        // Nix owns package updates as well as the config file.
+        if (resolveIsNixMode()) {
+          throw new NixModeConfigMutationError({ configPath });
+        }
+        if (!snapshot.valid || snapshot.path !== configPath) {
+          throw new ConfigMutationConflictError("config changed during plugin publication", {
+            retryable: false,
+          });
+        }
+        return snapshot;
+      };
+      const planned = await readCurrentConfig();
+      const verifyConfigFresh = async () => {
+        if ((await readCurrentConfig()).hash !== planned.hash) {
+          throw new ConfigMutationConflictError("config changed during plugin publication", {
+            retryable: false,
+          });
+        }
+      };
+      await commitPluginInstallRecordsOnly({
+        previousInstallRecords: pluginInstallRecords,
+        nextInstallRecords,
+        nextConfig: withoutPluginInstallRecords(planned.sourceConfig),
+        beforePersistentEffect: verifyConfigFresh,
+        verifyConfigFresh,
+        assertConfigPathForWrite: guardedWriteOptions.assertConfigPathForWrite,
+      });
+    } else {
+      await assertConfigTarget();
+      if (configLink !== undefined) {
+        throw new ConfigMutationConflictError(
+          "provisioned config is a symlink; update it at its source",
+          { retryable: false },
+        );
+      }
+      await transformConfigFileWithRetry({
+        writeOptions: {
+          ...mutationWriteOptions,
+          observe: false,
+          assertCurrent,
+          beforeCommit,
+          inputBase: "source",
+          skipPluginValidation: true,
+        },
+        transform: (current, { snapshot }) => {
+          const currentReferences = prepareDoctorConfigReferenceSource(snapshot);
+          const currentConfig = currentReferences
+            ? restoreDoctorConfigEnvRefs(current, currentReferences)
+            : current;
+          const candidate = structuredClone(currentConfig);
+          for (const path of changedPaths) {
+            const changedPath = [...path];
+            const before = getConfigValueAtPath(baseline, changedPath);
+            const after = getConfigValueAtPath(nextConfig, changedPath);
+            const value = getConfigValueAtPath(currentConfig, changedPath);
+            const parentChanged = changedPath.slice(0, -1).some((_, index) => {
+              const parent = changedPath.slice(0, index + 1);
+              return (
+                isRecord(getConfigValueAtPath(baseline, parent)) &&
+                !isRecord(getConfigValueAtPath(currentConfig, parent))
+              );
+            });
+            if (
+              !isDeepStrictEqual(value, after) &&
+              (parentChanged || !isDeepStrictEqual(value, before))
+            ) {
+              throw new ConfigMutationConflictError(
+                "Plugin finalization conflicts with changed config field " + changedPath.join("."),
+                { retryable: false },
+              );
+            }
+            if (after === undefined) {
+              unsetConfigValueAtPath(candidate, [...changedPath]);
+            } else {
+              setConfigValueAtPath(candidate, changedPath, structuredClone(after));
+            }
+          }
+          setDeferredPluginMigrationConfigFacts(
+            candidate,
+            getDeferredPluginMigrationConfigFacts(nextConfig),
+          );
+          return { nextConfig: candidate };
+        },
+        commit: async ({ nextConfig: candidate, baseHash, writeOptions }) => {
+          const { configWrite } = await commitPluginInstallRecordsWithConfig({
+            beforePersistentEffect: assertCurrent,
+            previousInstallRecords: pluginInstallRecords,
+            nextInstallRecords,
+            nextConfig: candidate,
+            baseHash,
+            writeOptions,
+          });
+          return {
+            config: configWrite.nextConfig,
+            persistedHash: configWrite.persistedHash,
+            persistedSourceConfig: configWrite.persistedSourceConfig,
+            afterWrite: configWrite.afterWrite,
+          };
+        },
+      });
+    }
     if (!params.json) {
       for (const change of convergence.configChanges) {
         runtime.log(theme.muted(change));
