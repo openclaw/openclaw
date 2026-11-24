@@ -454,7 +454,9 @@ async function recordOutcome(outcome: RecoveryOutcome) {
       ...(outcome.downtimeMs === undefined ? {} : { downtimeMs: outcome.downtimeMs }),
     });
   } finally {
-    if ((await store.readUpdateLock())?.runId === runId) {
+    // Held by this runner, or by the runner that started this finishing step.
+    const holder = (await store.readUpdateLock())?.pid;
+    if (holder === process.pid || holder === process.ppid) {
       await store.releaseUpdateLock();
     }
   }
