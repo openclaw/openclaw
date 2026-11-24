@@ -56,7 +56,7 @@ fs.writeFileSync(
   `
 import type { DatabaseSync } from "node:sqlite";
 export const fixtureUpdateMigration = {
-  version: ${schema}, tables: ["fixture_update_migration"], columns: [],
+  version: ${schema}, tables: ["fixture_update_migration", "mcp_oauth_stores"], columns: [],
   migrate(db: DatabaseSync, previousVersion: number): boolean {
     if (previousVersion >= ${schema}) return false;
     db.exec(${JSON.stringify(ddl)});

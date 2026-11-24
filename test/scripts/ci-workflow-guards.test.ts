@@ -2060,12 +2060,16 @@ AFTER_CD
       ".artifacts/docker-tests/upgrade-survivor-baseline.123/summary.json",
       ".artifacts/upgrade-survivor/release-update-survivor/healthy/summary.json",
       ".artifacts/upgrade-survivor/release-update-survivor/crash/crash-after-migration.json",
+      ".artifacts/upgrade-survivor/release-update-survivor/healthy/trial.json",
+      ".artifacts/upgrade-survivor/release-update-survivor/crash/rows-after.json",
     ]) {
       expect(uploaded(file), file).toBe(true);
     }
     for (const file of [
       ".artifacts/upgrade-survivor/baseline/legacy-operator-baseline-turn.err",
       ".artifacts/upgrade-survivor/baseline/diagnostics/raw.json",
+      ".artifacts/upgrade-survivor/release-update-survivor/healthy/cli-env.json",
+      ".artifacts/upgrade-survivor/release-update-survivor/crash/gateway-env.json",
       ".artifacts/docker-tests/run/published-upgrade-survivor.log",
       ".artifacts/docker-tests/20260920T000000Z/baseline-cache/package/summary.json",
       ".artifacts/docker-tests/20260920T000000Z/baseline-cache/package/failures.json",
