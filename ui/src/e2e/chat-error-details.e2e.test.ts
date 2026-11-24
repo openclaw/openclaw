@@ -229,18 +229,26 @@ suite.define(() => {
       expect(await alert.locator(".app-toast__message").textContent()).toBe(
         "Couldn't finish this reply.",
       );
-      expect(await alert.locator("summary").textContent()).not.toContain(skillPath);
-      expect(await alert.locator("summary").textContent()).not.toContain("INVALID_BUNDLE");
+      const toggle = alert.getByRole("button", { name: "Show details" });
+      expect(await toggle.getAttribute("aria-expanded")).toBe("false");
+      expect(await alert.getByRole("link", { name: "Report a bug" }).isVisible()).toBe(false);
       expect(await alert.locator(".lazy-view-error__detail").isVisible()).toBe(false);
       expect(await page.locator(".chat-thread").textContent()).toContain(prompt);
-      await alert.locator("summary").click();
+      await toggle.press("Enter");
       const details = alert.locator(".lazy-view-error__detail");
       await polledVisible(details).toBe(true);
       expect(await details.textContent()).toBe(safeError);
+      expect(await toggle.getAttribute("aria-expanded")).toBe("true");
+      const report = alert
+        .locator(".chat-error__details")
+        .getByRole("link", { name: "Report a bug" });
+      await polledVisible(report).toBe(true);
+      expect(await report.getAttribute("href")).toContain("template=bug_report.yml");
       await exactButton(alert, "Copy error").click();
       await polledClipboard(page).toBe(safeError);
       await expectMobileFit(page, alert);
-      await alert.locator("summary").click();
+      await toggle.press("Space");
+      await polledVisible(report).toBe(false);
       const input = page.locator(".agent-chat__input textarea");
       await input.fill("A newer draft stays here");
       const historyCount = (await gateway.getRequests("chat.history")).length;

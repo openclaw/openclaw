@@ -1,5 +1,5 @@
 import { createSignal } from "solid-js";
-import { expect, it, vi } from "vitest";
+import { expect, it, onTestFinished, vi } from "vitest";
 import { page } from "vitest/browser";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
@@ -82,7 +82,10 @@ it("keeps redacted diagnostics readable, stable across refreshes, and reset for 
   await waitForSolid(() => expect(view.container.querySelector("details")?.open).toBe(false));
 });
 
-it("keeps the recovery action beside the title with a visible dismiss", async () => {
+it("keeps desktop recovery beside the title with a visible dismiss", async () => {
+  const previous = { width: window.innerWidth, height: window.innerHeight };
+  await page.viewport(1280, previous.height);
+  onTestFinished(() => page.viewport(previous.width, previous.height));
   const dismiss = vi.fn();
   const view = mountSolid(() => (
     <ChatComposerNoticesContent
@@ -105,8 +108,11 @@ it("keeps the recovery action beside the title with a visible dismiss", async ()
     box(view.container, ".app-toast__message").top;
   const closed = offset();
   expect(Math.abs(closed)).toBeLessThan(8);
-  view.container.querySelector("details")!.open = true;
-  await waitForSolid(() => expect(offset()).toBe(closed));
+  view.container.querySelector<HTMLButtonElement>(".chat-error__toggle")!.click();
+  await waitForSolid(() => {
+    expect(view.container.querySelector<HTMLElement>(".chat-error__details")!.hidden).toBe(false);
+    expect(offset()).toBe(closed);
+  });
   const close = view.container.querySelector<HTMLButtonElement>(".app-toast__dismiss")!;
   expect(getComputedStyle(close).opacity).toBe("1");
   close.click();
@@ -129,6 +135,17 @@ it.each([300, 500])("keeps recovery and reporting clickable at %ipx", async (wid
         onRefresh={() => {}}
       />
     ));
+    await waitForSolid(() =>
+      expect(view.container.querySelector(".chat-error__toggle")).not.toBeNull(),
+    );
+    const toggle = view.container.querySelector<HTMLButtonElement>(".chat-error__toggle")!;
+    const reportLink = view.container.querySelector<HTMLAnchorElement>("a.report-issue-link")!;
+    expect(reportLink.checkVisibility()).toBe(false);
+    const toggleBounds = box(view.container, ".chat-error__toggle");
+    const refreshBounds = box(view.container, ".chat-error__refresh");
+    expect(toggleBounds.right).toBeLessThanOrEqual(refreshBounds.left);
+    expect(toggleBounds.top).toBe(refreshBounds.top);
+    toggle.click();
     await waitForSolid(() => {
       const recovery = view.container.querySelector<HTMLElement>(".chat-error__refresh")!;
       const report = view.container.querySelector<HTMLAnchorElement>("a.report-issue-link")!;

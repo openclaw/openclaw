@@ -1,5 +1,5 @@
 import type { JSX } from "@solidjs/web";
-import { For, Show, createMemo } from "solid-js";
+import { For, Show, createMemo, createSignal, createUniqueId } from "solid-js";
 import type {
   SessionPlacementDiskSpace,
   SessionPlacementWorkerRuntimeInstall,
@@ -303,6 +303,7 @@ function ChatErrorNotice(props: {
   detail?: unknown;
   action?: JSX.Element;
   displayError?: string;
+  replyActions?: boolean;
   tone?: "danger" | "warn";
   summary?: string;
   onDismiss?: () => void;
@@ -337,16 +338,55 @@ function ChatErrorNotice(props: {
         previous.severity === next.severity,
     },
   );
+  const detailsId = createUniqueId();
+  // Reset only for a different failure; history refreshes retain the disclosure.
+  const [expanded, setExpanded] = createSignal(() => {
+    toast();
+    return false;
+  });
+  const inlineDetails = () => props.replyActions && toast().detail !== undefined;
   // The toast reads its action for presence and rendering; retain one DOM slot.
   const actions = (
     <div class="stack chat-error__actions">
+      <Show when={inlineDetails()}>
+        <button
+          class="app-toast__action chat-error__toggle"
+          type="button"
+          aria-expanded={expanded() ? "true" : "false"}
+          aria-controls={detailsId}
+          onClick={() => setExpanded((value) => !value)}
+        >
+          {t("common.showDetails")}
+          <Icon name={expanded() ? "chevronUp" : "chevronDown"} />
+        </button>
+      </Show>
       {props.action}
-      <ReportIssueLink />
+      <Show when={!inlineDetails()}>
+        <ReportIssueLink />
+      </Show>
     </div>
+  );
+  const detailContent = (
+    <Show when={inlineDetails()}>
+      <div class="chat-error__details" id={detailsId} hidden={!expanded()}>
+        <div class="chat-error__details-header">
+          <span>{t("chat.errorDetails")}</span>
+          <CopyButton
+            text={formatUiErrorDetails(props.detail ?? props.error)}
+            idleLabel={t("chat.copyError")}
+            iconFeedback
+          />
+        </div>
+        <code class="lazy-view-error__detail" tabindex={0} aria-label={t("chat.errorDetails")}>
+          {formatUiErrorDetails(toast().detail)}
+        </code>
+        <ReportIssueLink />
+      </div>
+    </Show>
   );
   return (
     <ToastNotice
-      class="chat-error"
+      class={props.replyActions ? "chat-error chat-error--reply" : "chat-error"}
       toast={toast()}
       action={actions}
       onDismiss={props.onDismiss}
@@ -359,6 +399,7 @@ function ChatErrorNotice(props: {
           iconFeedback
         />
       }
+      detailContent={inlineDetails() ? detailContent : undefined}
       detailLabel={t("chat.errorDetails")}
     />
   );
@@ -427,6 +468,7 @@ export function ChatComposerNoticesContent(props: ChatComposerNoticesProps) {
           <>
             <ChatErrorNotice
               error={error().summary}
+              replyActions={error().kind !== "stop"}
               action={refresh}
               onDismiss={props.onDismissRunError}
               tone={contention() ? "warn" : "danger"}

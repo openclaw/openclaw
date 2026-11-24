@@ -69,12 +69,13 @@ it.each([false, true])("collapses a replacement diagnostic (mobile=%s)", async (
     mobile,
   );
   await vi.dynamicImportSettled();
-  const details = await waitForElement(container, "details", "first diagnostic");
-  details.setAttribute("open", "");
+  const toggle = await waitForElement(container, ".chat-error__toggle", "first diagnostic");
+  toggle.click();
+  await waitForSolid(() => expect(toggle.getAttribute("aria-expanded")).toBe("true"));
   publish({ messages: [], runError: { summary: "Second diagnostic" } });
   await waitForSolid(() => {
-    expect(container.querySelector("details")).not.toBe(details);
-    expect(container.querySelector("details")?.open).toBe(false);
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
+    expect(container.querySelector<HTMLElement>(".chat-error__details")?.hidden).toBe(true);
   });
 });
 it("preserves caller-owned recovery instructions in request notices", async () => {
@@ -201,8 +202,8 @@ it.each([
     expect(notice?.classList.contains("app-toast--warning")).toBe(true);
     expect(notice?.classList.contains("chat-composer-neighbor-card--danger")).toBe(false);
     expect(notice?.getAttribute("role")).toBe("status");
-    const details = notice?.querySelector("details");
-    expect(details).toMatchObject({ open: false });
+    const details = notice?.querySelector(".chat-error__details");
+    expect(details).toMatchObject({ hidden: true });
     expect(notice?.querySelector(".app-toast__message")?.textContent).toBe("OpenClaw is busy.");
     expect(notice?.querySelector(".app-toast__description")?.textContent).toBe(
       "Check status before trying again.",
@@ -232,14 +233,18 @@ it.each([
     placementStartup: kind === "placement" ? failedPlacement(diagnostic) : undefined,
   };
   const { container, publish } = publishedComposer(initial, mobile);
-  await waitForSolid(() => expect(container.querySelector("details")).not.toBeNull());
-  const details = container.querySelector("details")!;
-  const summary = details.querySelector("summary")!;
-  details.open = true;
+  const selector = kind === "run" ? ".chat-error__details" : "details";
+  await waitForSolid(() => expect(container.querySelector(selector)).not.toBeNull());
+  const details = container.querySelector<HTMLElement>(selector)!;
+  const summary = container.querySelector<HTMLElement>(
+    kind === "run" ? ".chat-error__toggle" : "summary",
+  )!;
+  summary.click();
+  flush();
   summary.focus();
   publishHistory(publish, initial, () => {
-    expect(container.querySelector("details")).toBe(details);
-    expect(details.open).toBe(true);
+    expect(container.querySelector(selector)).toBe(details);
+    expect(kind === "run" ? !details.hidden : details.hasAttribute("open")).toBe(true);
     expect(document.activeElement).toBe(summary);
     expect(details.querySelector(".lazy-view-error__detail")?.textContent).toBe(
       kind === "run" ? diagnostic : t("newSession.placementStartFailed", { error: diagnostic }),
@@ -356,8 +361,12 @@ describe("chat view notice integration", () => {
 
         const alert = await waitForElement(container, ".chat-error", "chat run error");
         expect(alert.getAttribute("role")).toBe("alert");
-        const details = requireElement(alert, "details", "error disclosure");
-        expect(details.hasAttribute("open")).toBe(false);
+        const details = requireElement(
+          alert,
+          source === "run" ? ".chat-error__details" : "details",
+          "error disclosure",
+        );
+        expect(source === "run" ? details.hidden : !details.hasAttribute("open")).toBe(true);
         const fullDiagnostic = requireElement(
           details,
           ".lazy-view-error__detail",
@@ -368,19 +377,26 @@ describe("chat view notice integration", () => {
         expect(alert.textContent).not.toMatch(/[⚠🛠]/u);
         expect(alert.textContent).toContain("🧭");
         expect(alert.querySelector("img")).toBeNull();
-        const summary = requireElement(details, "summary", "error header");
+        const summary = requireElement(
+          alert,
+          source === "run" ? ".chat-error__toggle" : "summary",
+          "error header",
+        );
         expect(summary.textContent).toContain("Show details");
         expect(summary.textContent).not.toContain("Error details");
         expect(alert.querySelectorAll(".chat-copy-btn")).toHaveLength(1);
         const copy = details.querySelector<HTMLButtonElement>('[aria-label="Copy error"]');
         expect(copy).not.toBeNull();
         for (const open of [false, true]) {
-          details.toggleAttribute("open", open);
+          if (open) {
+            summary.click();
+            flush();
+          }
           copy?.click();
           await waitForFast(() => expect(copy?.disabled).toBe(false));
           await waitForFast(() => expect(writeText).toHaveBeenCalledTimes(open ? 2 : 1));
           expect(writeText).toHaveBeenLastCalledWith(diagnostic);
-          expect(details.hasAttribute("open")).toBe(open);
+          expect(source === "run" ? !details.hidden : details.hasAttribute("open")).toBe(open);
         }
         (summary as HTMLElement).click();
         expect(onDismissError).not.toHaveBeenCalled();

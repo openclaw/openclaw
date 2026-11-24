@@ -11,9 +11,8 @@ openclaw-pending-session-create {
   align-self: center;
 }
 
-/* Persistent errors keep their recovery action beside the title in every
- * state: expanding details must not move it, and narrow panes must not strand
- * it on its own row. Details span the full width below. */
+/* Expanding details keeps recovery beside the title. On phones, reply actions
+ * move together below the message. Details span the full width below. */
 .chat-error .app-toast__content {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
@@ -42,8 +41,45 @@ openclaw-pending-session-create {
   margin-block-start: -4px;
 }
 
-/* The long discard label would squeeze the message into a sliver on phones. */
+.chat-error--reply .chat-error__actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.chat-error__toggle {
+  gap: 6px;
+}
+
+.chat-error__toggle svg {
+  width: 14px;
+  height: 14px;
+}
+
+.chat-error__details {
+  grid-column: 1 / -1;
+  margin-block-start: 10px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg);
+}
+
+.chat-error__details-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-block-end: 8px;
+  color: var(--muted);
+}
+
+.chat-error__details > .report-issue-link {
+  margin-block-start: 12px;
+}
+
+/* Keep paired reply actions and long discard labels below the message on phones. */
 @media (max-width: 560px) {
+  .chat-error--reply .chat-error__actions,
   .chat-error__actions:has(> .chat-error__discard) {
     grid-template-rows: none;
     grid-row: auto;
