@@ -576,8 +576,16 @@ export function resolveCiTestRuntimeInventory(
         runtime: selection.runtime,
         engine: "vitest" as const,
         args,
+        // Each candidate already belongs to this inventory; only runtime overrides can narrow it.
         files: files.filter((file) =>
-          matchesVitestCliSelection(file, [file], args, "", {}, selection.includePatterns ?? files),
+          matchesVitestCliSelection(
+            file,
+            [file],
+            args,
+            "",
+            {},
+            selection.includePatterns ?? [file],
+          ),
         ),
       };
     });

@@ -48,9 +48,16 @@ vi.mock("../auto-reply/reply/session-event-handoff.js", () => ({
     agentId,
     sessionKey,
     sessionId: sessionKey,
+    storePath: "/synthetic/sessions.json",
     generation: "test",
   }),
   enqueueSessionEventForHost: enqueueSessionEventMock,
+}));
+// mock-isolation: Owed-result storage has its own owner suite; these destinations have no store.
+vi.mock("../sessions/owed.js", () => ({
+  owe: async () => {},
+  readPendingOwed: async () => undefined,
+  withhold: async () => {},
 }));
 
 vi.mock("../infra/system-events.js", () => ({
