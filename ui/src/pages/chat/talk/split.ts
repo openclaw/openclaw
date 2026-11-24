@@ -20,6 +20,34 @@ export type SplitTalkOptions = {
 };
 
 const sentenceSegmenter = new Intl.Segmenter(undefined, { granularity: "sentence" });
+const fenceOpen = /^ {0,3}(`{3,}|~{3,})[^\n]*$/gm;
+
+/**
+ * Sentence segments of a Markdown reply. A fenced code block stays one segment,
+ * so the speech endpoint still sees the whole block and can apply its code-heavy fallback.
+ */
+function* segmentReply(text: string): Generator<{ index: number; segment: string }> {
+  let pos = 0;
+  while (pos < text.length) {
+    fenceOpen.lastIndex = pos;
+    const open = fenceOpen.exec(text);
+    const end = open ? open.index : text.length;
+    for (const part of sentenceSegmenter.segment(text.slice(pos, end))) {
+      yield { index: pos + part.index, segment: part.segment };
+    }
+    if (!open) {
+      return;
+    }
+    const marker = open[1] ?? "```";
+    const close = new RegExp(`^ {0,3}${marker[0]}{${marker.length},}[ \\t]*$`, "m");
+    const bodyStart = open.index + open[0].length;
+    const found = close.exec(text.slice(bodyStart));
+    // An unclosed fence runs to the end; the caller holds it back until the final reply.
+    const stop = found ? bodyStart + found.index + found[0].length : text.length;
+    yield { index: open.index, segment: text.slice(open.index, stop) };
+    pos = stop;
+  }
+}
 
 /** Split Talk uses the same capture, chat, and speech owners as the composer. */
 export class SplitTalkTransport implements RealtimeTalkTransport {
@@ -120,7 +148,7 @@ export class SplitTalkTransport implements RealtimeTalkTransport {
         }
         // Keep only the complete sentences that still agree with the final reply.
         let unchanged = 0;
-        for (const { index, segment } of sentenceSegmenter.segment(text)) {
+        for (const { index, segment } of segmentReply(text)) {
           if (prefix.slice(index, index + segment.length) !== segment) {
             break;
           }
@@ -129,7 +157,7 @@ export class SplitTalkTransport implements RealtimeTalkTransport {
         prefix = text.slice(0, unchanged);
       }
       const remainder = text.slice(prefix.length);
-      for (const { index, segment } of sentenceSegmenter.segment(remainder)) {
+      for (const { index, segment } of segmentReply(remainder)) {
         if (!final && index + segment.length === remainder.length) {
           break; // The next snapshot can still extend the trailing segment.
         }
