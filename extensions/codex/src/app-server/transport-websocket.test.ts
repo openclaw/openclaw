@@ -1,9 +1,15 @@
 import { once } from "node:events";
 import { mkdtemp, rm } from "node:fs/promises";
 import http from "node:http";
+import https from "node:https";
 import os from "node:os";
 import path from "node:path";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import {
+  PROXY_FIXTURE_CERTIFICATE,
+  PROXY_FIXTURE_KEY,
+  PROXY_FIXTURE_SERVER_CERTIFICATE,
+} from "openclaw/plugin-sdk/test-env";
 import { WebSocketServer } from "openclaw/plugin-sdk/websocket-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { rawDataToText } from "./client-websocket.test-support.js";
@@ -126,6 +132,54 @@ describe("Codex app-server websocket transport", () => {
     const [, request] = await connected;
     expect(request.headers.authorization).toBe("Bearer secret");
     expect(localRegistration).not.toHaveBeenCalled();
+  });
+
+  it("withholds the bearer and queued frames when the listener at the admitted address changes", async () => {
+    const tls = https.createServer({
+      key: PROXY_FIXTURE_KEY,
+      cert: PROXY_FIXTURE_SERVER_CERTIFICATE,
+    });
+    const server = new WebSocketServer({ server: tls });
+    servers.push(server);
+    httpServers.push(tls);
+    const upgrades: string[] = [];
+    const frames: string[] = [];
+    server.on("connection", (socket, request) => {
+      upgrades.push(request.headers.authorization ?? "");
+      socket.on("message", (data) => {
+        frames.push(rawDataToText(data));
+        socket.send("{}");
+      });
+    });
+    tls.listen(0, "127.0.0.1");
+    const url = (await websocketUrl(tls)).replace(/^ws:/, "wss:");
+    const dial = () => {
+      const transport = createWebSocketTransport({
+        transport: "websocket",
+        command: "codex",
+        args: [],
+        headers: {},
+        url,
+        authToken: "revision-test",
+        tlsPeerCertificate: PROXY_FIXTURE_SERVER_CERTIFICATE,
+      });
+      transports.push(transport);
+      transport.stdin.write('{"method":"initialize"}\n');
+      return transport;
+    };
+    const original = dial();
+    await once(original.stdout, "data");
+    original.kill?.();
+    // Both fixtures have the same key and loopback SAN, but the second leaf
+    // belongs to a different execution at the identical socket address.
+    tls.setSecureContext({ key: PROXY_FIXTURE_KEY, cert: PROXY_FIXTURE_CERTIFICATE });
+    const replacement = dial();
+    const error = await new Promise<unknown>((resolve) => {
+      replacement.once("error", resolve);
+    });
+    expect(error).toBeInstanceOf(Error);
+    expect(upgrades).toEqual(["Bearer revision-test"]);
+    expect(frames).toEqual(['{"method":"initialize"}']);
   });
 
   it("forces socket shutdown when the peer cannot finish the close handshake", async () => {

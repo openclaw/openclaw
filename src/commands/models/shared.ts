@@ -2,7 +2,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { asNonArrayRecord } from "@openclaw/normalization-core/record-coerce";
 import { resolveAmbientOwnerAgentId } from "../../agents/agent-scope-config.js";
 import { listAgentIds, resolveAgentDir, resolveSoleAgentId } from "../../agents/agent-scope.js";
-import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../../agents/defaults.js";
+import { DEFAULT_PROVIDER } from "../../agents/defaults.js";
 import {
   buildModelAliasIndex,
   legacyModelKey,
@@ -232,7 +232,7 @@ export function resolveModelsTargetAgent(
 ) {
   const requested = rawAgentId?.trim();
   if (rawAgentId !== undefined && !requested) {
-    throw new Error("--agent must not be blank");
+    throwExpectedCliError("--agent must not be blank");
   }
   const requestedAgentId = requested ? resolveKnownAgentId(cfg, requested) : undefined;
   const resolvedAgentId =
@@ -408,4 +408,4 @@ export async function updateDefaultModelPrimaryConfig(params: {
 }
 
 export { modelKey };
-export { DEFAULT_MODEL, DEFAULT_PROVIDER };
+export { DEFAULT_PROVIDER };

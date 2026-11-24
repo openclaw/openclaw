@@ -1,9 +1,5 @@
 import { buildModelCatalogRef } from "@openclaw/model-catalog-core/model-catalog-refs";
 import {
-  asNonNegativeFiniteNumber,
-  asPositiveFiniteNumber,
-} from "@openclaw/normalization-core/number-coercion";
-import {
   type FastMode,
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
@@ -63,10 +59,14 @@ import { formatFastModeStatusValue } from "../shared/fast-mode.js";
 import { resolveStatusTtsSnapshot } from "../tts/status-config.js";
 import type { PreparedTtsPreferences } from "../tts/tts-preferences.js";
 import { sessionDeliveryChannel, sessionDeliveryOrigin } from "../utils/delivery-context.read.js";
-import { formatTokenCount, formatUsd } from "../utils/usage-format.js";
+import { formatUsd } from "../utils/usage-format.js";
 import { resolveRuntimeServiceCommit, VERSION } from "../version.js";
 import { resolveAgentRuntimeLabel } from "./agent-runtime-label.js";
 import { resolveActiveFallbackState } from "./fallback-notice-state.js";
+import {
+  formatContextTokensValue,
+  formatEstimatedContextBudgetTokens,
+} from "./status-context-format.js";
 import { formatModelEndpointUrl } from "./status-model-endpoint.js";
 import {
   formatTokensPairValue,
@@ -172,39 +172,10 @@ function resolveExecutionLabel(
   return sandboxMode === "off" ? "direct" : `unknown/${sandboxMode}`;
 }
 
-const formatTokens = (total: number | null | undefined, contextTokens: number | null) => {
-  const ctxLabel = contextTokens ? formatTokenCount(contextTokens) : "?";
-  if (total == null) {
-    return `?/${ctxLabel}`;
-  }
-  const pct = contextTokens ? Math.min(999, Math.round((total / contextTokens) * 100)) : null;
-  const totalLabel = formatTokenCount(total);
-  return `${totalLabel}/${ctxLabel}${pct !== null ? ` (${pct}%)` : ""}`;
-};
-
-const formatEstimatedContextBudgetTokens = (
-  status: SessionEntry["contextBudgetStatus"] | undefined,
-  contextTokens: number | null | undefined,
-) => {
-  if (!status || status.source !== "pre-prompt-estimate") {
-    return null;
-  }
-  const estimate = asNonNegativeFiniteNumber(status.estimatedPromptTokens);
-  if (estimate === undefined) {
-    return null;
-  }
-  const estimatedPromptTokens = Math.floor(estimate);
-  const ctx = asPositiveFiniteNumber(contextTokens);
-  const pct = ctx ? Math.min(999, Math.round((estimatedPromptTokens / ctx) * 100)) : null;
-  const totalLabel = formatTokenCount(estimatedPromptTokens);
-  const ctxLabel = ctx ? formatTokenCount(ctx) : "?";
-  return `~${totalLabel}/${ctxLabel}${pct !== null ? ` (${pct}% est)` : " (est)"}`;
-};
-
 export const formatContextUsageShort = (
   total: number | null | undefined,
   contextTokens: number | null | undefined,
-) => `Context ${formatTokens(total, contextTokens ?? null)}`;
+) => `Context ${formatContextTokensValue(total, contextTokens ?? null)}`;
 
 const formatQueueDetails = (queue?: QueueStatus) => {
   if (!queue) {
@@ -569,8 +540,8 @@ export function buildStatusMessageParts(args: StatusArgs) {
   const contextUsageLabel =
     totalTokens == null || (totalTokens === 0 && usageReport?.state !== "available")
       ? (formatEstimatedContextBudgetTokens(contextBudgetStatus, contextTokens) ??
-        formatTokens(totalTokens, contextTokens ?? null))
-      : formatTokens(totalTokens, contextTokens ?? null);
+        formatContextTokensValue(totalTokens, contextTokens ?? null))
+      : formatContextTokensValue(totalTokens, contextTokens ?? null);
   const queueMode = args.queue?.mode ?? "unknown";
   const queueDetails = formatQueueDetails(args.queue);
   const verboseLabel =
@@ -724,6 +695,7 @@ export function buildStatusMessageParts(args: StatusArgs) {
     [versionLine, cronNow?.timeLine, uptimeLine],
     [
       `🧠 Model: ${modelValue}`,
+      entry?.cyberAccessProgram ? `🔐 Access: ${entry.cyberAccessProgram}` : null,
       `🌐 Endpoint: ${selectedEndpoint ?? "unknown"}`,
       selectedAuthLabelValue ? `🔑 Auth: ${selectedAuthLabelValue}` : null,
       configuredFallbacksLine,
@@ -765,6 +737,9 @@ export function buildStatusMessageParts(args: StatusArgs) {
     }
   };
   pushStatusRow("🧠 Model", modelValue);
+  if (entry?.cyberAccessProgram) {
+    pushStatusRow("🔐 Access", entry.cyberAccessProgram);
+  }
   pushStatusRow("🌐 Endpoint", selectedEndpoint ?? "unknown");
   pushStatusRow("🔑 Auth", selectedAuthLabelValue);
   pushStatusRow("🔄 Fallbacks", configuredFallbacks?.join(", "));

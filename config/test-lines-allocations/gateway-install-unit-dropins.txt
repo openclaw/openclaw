@@ -1,0 +1,4 @@
+# Regression for a first Linux gateway install with operator drop-ins already in <unit>.d:
+# they are admitted, while a drop-in that appears during publication still aborts.
+# Exact net growth for this change.
+12

@@ -112,7 +112,7 @@ describe("shared restart observation deadline", () => {
         service,
         port: 18789,
         deadline,
-        requirePluginHealth: false,
+        requireOwnedListener: true,
         waitForMissingService: phase === "legacy-owner" ? false : undefined,
       }).catch((error: unknown) => error);
       await entered.promise;
@@ -165,7 +165,7 @@ describe("shared restart observation deadline", () => {
         service,
         port: 18789,
         deadline,
-        requirePluginHealth: false,
+        requireOwnedListener: true,
       });
       expect(settled).toMatchObject({ healthy: true, waitOutcome: "healthy", elapsedMs: 0 });
       const entered = createDeferred();
@@ -231,7 +231,7 @@ describe("shared restart observation deadline", () => {
             deadlineOutcome: "snapshot",
             probeTimeoutMs: 5_000,
             requireRunningService: true,
-            requirePluginHealth: false,
+            requireOwnedListener: true,
           });
         } else {
           const observed = await observeUpdateGatewayReadiness({
@@ -307,4 +307,39 @@ describe("shared restart observation deadline", () => {
       }
     },
   );
+});
+
+describe("work excluded from the deadline", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  it("does not spend the budget on excluded work, then keeps counting", async () => {
+    let now = 0;
+    vi.spyOn(performance, "now").mockImplementation(() => now);
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const deadline = createGatewayRestartDeadline({ timeoutMs: 1_000 });
+    try {
+      now = 400;
+      // Five seconds of separately bounded work would have expired a 1 s budget.
+      const result = await deadline.exclude(async () => {
+        now = 5_400;
+        await vi.advanceTimersByTimeAsync(5_000);
+        return "copied";
+      });
+      expect(result).toBe("copied");
+      expect(deadline.signal.aborted).toBe(false);
+      expect(deadline.remainingMs()).toBe(600);
+      now = 6_000;
+      await vi.advanceTimersByTimeAsync(600);
+      expect(deadline.signal.aborted).toBe(true);
+      // An expired budget stays expired.
+      const late = vi.fn(async () => "late");
+      await expect(deadline.exclude(late)).rejects.toBeInstanceOf(GatewayRestartDeadlineError);
+      expect(late).not.toHaveBeenCalled();
+    } finally {
+      deadline.dispose();
+    }
+  });
 });

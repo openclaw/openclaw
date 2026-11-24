@@ -3,6 +3,7 @@ import { createRequire } from "node:module";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, expect, it } from "vitest";
+import { buildBenchmarkCommandEnv } from "../../scripts/lib/vitest-pair-benchmark.mts";
 import { spawnOwnedVitestProcess } from "../../scripts/lib/vitest-process.mts";
 import { createVitestResourceOwner } from "../../scripts/lib/vitest-resource-ownership.mts";
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
@@ -76,14 +77,16 @@ server.listen(socket, () => {
 );
 
 it.each([
-  ["hermetic", undefined],
-  ["live-aware", undefined],
-  ["tooling", undefined],
-  ["hermetic", "caller-cache"],
-  ["hermetic", ""],
+  ["hermetic", undefined, undefined],
+  ["live-aware", undefined, undefined],
+  ["tooling", undefined, undefined],
+  ["hermetic", "caller-cache", undefined],
+  ["hermetic", "", undefined],
+  ["hermetic", undefined, "disabled"],
+  ["hermetic", undefined, "seeded"],
 ] as const)(
-  "reuses owned source compiler caches (%s, Bun cache %s)",
-  async (homeMode, bunCache) => {
+  "reuses owned source compiler caches (%s, Bun cache %s, benchmark %s)",
+  async (homeMode, bunCache, treatment) => {
     const root = fs.realpathSync(tempDirs.make("oc-vt-source-cache-", shortTempRoot));
     const sourcePath = path.join(root, "source.mts");
     fs.writeFileSync(sourcePath, "export enum Value { Answer = 42 }\n");
@@ -101,23 +104,39 @@ const run = () => {
   if (result.status !== 0) throw new Error(result.stderr);
   return result.stdout;
 };
+const initiallyCached = entries().length > 0;
 const output = run();
 const first = entries();
 const again = run();
-console.log(JSON.stringify({ namespace, output, again, disabled: process.env.TSX_DISABLE_CACHE, cached: first.length > 0, reused: JSON.stringify(entries()) === JSON.stringify(first), bunCache: process.env.BUN_RUNTIME_TRANSPILER_CACHE_PATH }));
+console.log(JSON.stringify({ namespace, output, again, initiallyCached, disabled: process.env.TSX_DISABLE_CACHE, cached: first.length > 0, reused: JSON.stringify(entries()) === JSON.stringify(first), bunCache: process.env.BUN_RUNTIME_TRANSPILER_CACHE_PATH,
+  executable: process.execPath, nodeCache: process.env.NODE_COMPILE_CACHE, nodeDisabled: process.env.NODE_DISABLE_COMPILE_CACHE ?? null,
+  runtime: process.env.OPENCLAW_VITEST_RUNTIME, fsCache: process.env.OPENCLAW_VITEST_FS_MODULE_CACHE, workerCache: process.env.OPENCLAW_VITEST_WORKER_CACHE, workers: process.env.OPENCLAW_VITEST_MAX_WORKERS }));
 `;
-    const env = {
-      PATH: process.env.PATH,
-      HOME: root,
-      USERPROFILE: root,
-      TMPDIR: root,
-      TMP: root,
-      TEMP: root,
-      TSX_DISABLE_CACHE: "1",
-      NODE_DISABLE_COMPILE_CACHE: "1",
-      BUN_RUNTIME_TRANSPILER_CACHE_PATH: bunCache,
-      ESBUILD_WORKER_THREADS: "0",
-    };
+    const nodeCache = path.join(root, "node-compile");
+    const env = treatment
+      ? buildBenchmarkCommandEnv(
+          path.join(root, "home"),
+          path.join(root, "state"),
+          {
+            executable: testNodeExecPath,
+            resolvedExecutable: testNodeExecPath,
+            version: "fixture",
+          },
+          { PATH: process.env.PATH, TSX_DISABLE_CACHE: "poison" },
+          { kind: treatment, nodeCache },
+        )
+      : {
+          PATH: process.env.PATH,
+          HOME: root,
+          USERPROFILE: root,
+          TMPDIR: root,
+          TMP: root,
+          TEMP: root,
+          TSX_DISABLE_CACHE: "1",
+          NODE_DISABLE_COMPILE_CACHE: "1",
+          BUN_RUNTIME_TRANSPILER_CACHE_PATH: bunCache,
+          ESBUILD_WORKER_THREADS: "0",
+        };
     const { result, stdout, stderr } = await run({
       command: testNodeExecPath,
       args: ["--input-type=module", "-e", script],
@@ -129,6 +148,7 @@ console.log(JSON.stringify({ namespace, output, again, disabled: process.env.TSX
       groupJoined: process.platform !== "win32",
     });
     const observed = JSON.parse(stdout);
+    expect(observed.initiallyCached).toBe(false);
     expect([observed.output, observed.again, observed.reused]).toEqual(["42\n", "42\n", true]);
     expect(observed.disabled).toBe(homeMode === "tooling" ? "1" : undefined);
     expect(observed.cached, JSON.stringify(observed)).toBe(homeMode !== "tooling");
@@ -138,7 +158,24 @@ console.log(JSON.stringify({ namespace, output, again, disabled: process.env.TSX
           ? undefined
           : path.resolve(import.meta.dirname, "../../.cache/bun-transpiler")),
     );
-    expect(path.dirname(observed.namespace)).toBe(root);
+    if (treatment) {
+      expect(observed).toMatchObject({
+        nodeCache,
+        nodeDisabled: treatment === "disabled" ? "1" : null,
+        runtime: "node",
+        fsCache: "0",
+        workerCache: "0",
+        workers: "1",
+      });
+      expect(fs.realpathSync(observed.executable)).toBe(fs.realpathSync(testNodeExecPath));
+      expect(observed.namespace).not.toBe(env.TMPDIR);
+      // Long socket paths can relocate the owned namespace to the platform temp root.
+      expect([fs.realpathSync(env.TMPDIR!), shortTempRoot]).toContain(
+        path.dirname(observed.namespace),
+      );
+    } else {
+      expect(path.dirname(observed.namespace)).toBe(root);
+    }
     expect(fs.existsSync(observed.namespace)).toBe(process.platform === "win32");
   },
 );

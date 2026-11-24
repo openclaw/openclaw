@@ -580,7 +580,7 @@ export async function writeConfigFileFromContext(
       const offlineChangedPaths = new Set<string>();
       collectChangedPaths(
         priorSnapshotAuditRecord.fingerprintedAuthoredConfig,
-        fingerprintConfigSnapshotAuthoredConfig(snapshot.parsed, stateContext),
+        await fingerprintConfigSnapshotAuthoredConfig(snapshot.parsed, stateContext),
         "",
         offlineChangedPaths,
       );

@@ -1,7 +1,7 @@
 import { expressionBuilder, sql } from "kysely";
 import { jsonPathValue, jsonValid } from "../infra/database-engine/json-values.js";
 import { iterateSqliteQuerySync } from "../infra/kysely-sync.js";
-import type { EngineConnection } from "../infra/sql-connection.js";
+import { isPostgresSqlConnection, type EngineConnection } from "../infra/sql-connection.js";
 import type {
   OpenClawAgentDatabase,
   OpenClawAgentDatabaseOptions,
@@ -22,10 +22,21 @@ function voiceSessionField(
   // The sole writer uses JSON.stringify, so stored fields have unique object keys.
   // Literal JSON paths preserve the canonical partial-index expressions.
   const eb = expressionBuilder<DB, "cache_entries">();
+  const value = eb.ref("value_json");
+  if (isPostgresSqlConnection(db)) {
+    // Use the expression emitted by the agent schema generator so PostgreSQL
+    // can match both the open predicate and the indexed lookup keys.
+    const member = /* kysely-allow-raw: Fixed voice-session field from the canonical index. */ sql`(${value}::json -> ${sql.lit(field)})`;
+    return /* kysely-allow-raw: Match the generated PostgreSQL string extraction. */ sql<
+      string | null
+    >`CASE WHEN ${value} IS JSON THEN
+        CASE WHEN json_typeof(${member}) = 'string' THEN ${member} #>> '{}' END
+      END`;
+  }
   return eb
     .case()
-    .when(jsonValid(db, eb.ref("value_json")))
-    .then(jsonPathValue(db, eb.ref("value_json"), sql.lit(`$.${field}`)))
+    .when(jsonValid(db, value))
+    .then(jsonPathValue(db, value, sql.lit(`$.${field}`)))
     .end();
 }
 

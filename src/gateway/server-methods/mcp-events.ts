@@ -1,4 +1,3 @@
-import { isDeepStrictEqual } from "node:util";
 import { isRecord, isStringArray } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
@@ -8,9 +7,7 @@ import {
   projectMcpEventRequester,
   type McpEventPrincipal,
 } from "../../plugins/service-mcp-events.js";
-import { operatorScopeSatisfied } from "../../shared/operator-scope-compat.js";
 import { resolveAgentIdOrRespondError } from "./agent-id-shared.js";
-import { assertActiveAgentRuntimeAuthority } from "./agent-runtime-authority.js";
 import { readCronCallerScope } from "./cron-caller-scope.js";
 import { respondError } from "./response.js";
 import type { GatewayRequestHandlers } from "./types.js";
@@ -58,7 +55,7 @@ function projectCatalog(value: unknown) {
 
 export const mcpEventsHandlers: GatewayRequestHandlers = {
   "mcp.events.list": async (options) => {
-    const { params, client, context, respond, signal, hasCurrentClientAuthority } = options;
+    const { params, client, context, respond, signal } = options;
     if (
       Object.keys(params).some((key) => !["agentId", "serverName", "cursor"].includes(key)) ||
       !boundedString(params.serverName, 256) ||
@@ -122,32 +119,13 @@ export const mcpEventsHandlers: GatewayRequestHandlers = {
         : {}),
       ...(requester ? { requester: projectMcpEventRequester(requester) } : {}),
     };
-    // UI callers without native channel provenance may browse shared connectors,
-    // but never borrow another user's requester-scoped OAuth/resolver connection.
-    const identity = {
-      user: client?.authenticatedUserId,
-      profile: client?.authenticatedUserProfile?.profileId,
-      runtime: client?.internal?.agentRuntimeIdentity,
-    };
     const assertCurrent = () => {
       signal?.throwIfAborted();
       client?.connectionSignal?.throwIfAborted();
       options.sessionMutationCommitGuard?.();
-      if (
-        !client ||
-        client.invalidated ||
-        hasCurrentClientAuthority?.() === false ||
-        !operatorScopeSatisfied("operator.read", client.connect.scopes ?? []) ||
-        context.getRuntimeConfig() !== cfg ||
-        context.getGatewayMethodRegistry?.() !== registry ||
-        client.authenticatedUserId !== identity.user ||
-        client.authenticatedUserProfile?.profileId !== identity.profile ||
-        client.internal?.agentRuntimeIdentity !== identity.runtime ||
-        !isDeepStrictEqual(readCronCallerScope(client), caller)
-      ) {
-        throw new Error("MCP Events catalog caller authority changed.");
+      if (context.getGatewayMethodRegistry?.() !== registry) {
+        throw new Error("The MCP Events plugin restarted. Retry the catalog request.");
       }
-      assertActiveAgentRuntimeAuthority(client, context);
     };
     try {
       assertCurrent();

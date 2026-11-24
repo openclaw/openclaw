@@ -1,6 +1,5 @@
 import { extractDeliveryInfo } from "../config/sessions/delivery-info.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
-import type { SessionDeliveryGeneration } from "../config/sessions/session-delivery-generation.types.js";
 import { withSessionEntriesFromStoresInWorker } from "../config/sessions/session-entry-read-runtime.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { buildOutboundSessionContext } from "../infra/outbound/session-context.js";
@@ -10,9 +9,15 @@ import type { MessagePresentation } from "../interactive/payload.js";
 import type { PluginNotice } from "../shared/plugin-notice.js";
 import { PLUGIN_NOTICE_KIND } from "../shared/transcript-only-openclaw-assistant.js";
 import { isDeliverableMessageChannel, normalizeMessageChannel } from "../utils/message-channel.js";
+import { chatRef, type ChatRef } from "./chat-ref.js";
 
 /** The exact session incarnation a background producer observed; a reset or replacement ends it. */
-export type SessionGeneration = SessionDeliveryGeneration;
+export type SessionGeneration = Readonly<
+  Pick<ChatRef, "agentId" | "storePath" | "sessionKey"> & {
+    sessionId: string;
+    lifecycleRevision: string | null;
+  }
+>;
 
 // A completed send stays on record, so a retry with the same key finishes the transcript
 // without sending again.
@@ -189,7 +194,7 @@ export async function postSessionNotice(
         },
         undefined,
         undefined,
-        generation,
+        chatRef(generation),
       );
       if (send.status === "failed" || send.status === "partial_failed") {
         throw send.error;

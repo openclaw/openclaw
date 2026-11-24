@@ -9,7 +9,6 @@ import { resolveLaunchAgentPlistPath } from "../../daemon/launchd-service-files.
 import { gatewayHealthResponse } from "../../gateway/health-response.test-support.js";
 import {
   inspectPortUsage,
-  createStartupMigrationActivityProbe,
   makeGatewayService,
   monotonicClock,
   callGateway,
@@ -241,27 +240,32 @@ describe("restart health", () => {
     });
   });
 
-  it("accepts a launchd KeepAlive restart after the stopped-free grace window", async () => {
-    let runtimeReads = 0;
-    let portInspections = 0;
-    const service = makeGatewayService({ status: "stopped" });
-    vi.mocked(service.readRuntime).mockImplementation(async () =>
-      ++runtimeReads >= 27 ? { status: "running", pid: 8000 } : { status: "stopped" },
-    );
-    inspectPortUsage.mockImplementation(async () =>
-      portUsage(++portInspections >= 27 ? [{ pid: 8000, commandLine: "openclaw-gateway" }] : []),
-    );
-    serveHealth();
-
-    const snapshot = await waitForRunningGateway({
-      service,
-      attempts: 120,
-      delayMs: 500,
-      supervisorKeepsAlive: true,
-    });
-
-    expectWait(snapshot, "healthy", 13_000);
-  });
+  it.each([true, false])(
+    "waits for launchd KeepAlive without certifying a stop (successor=%s)",
+    async (arrives) => {
+      setPlatform("darwin");
+      const ready = () => arrives && monotonicClock.nowMs >= 13_000;
+      const service = makeGatewayService({ status: "stopped" });
+      vi.mocked(service.readRuntime).mockImplementation(async () =>
+        ready() ? { status: "running", pid: 8000 } : { status: "stopped" },
+      );
+      inspectPortUsage.mockImplementation(async () =>
+        portUsage(ready() ? [{ pid: 8000, commandLine: "openclaw-gateway" }] : []),
+      );
+      serveHealth();
+      const snapshot = await waitForRunningGateway({
+        service,
+        attempts: 120,
+        delayMs: 500,
+        supervisorKeepsAlive: true,
+      });
+      expectWait(snapshot, arrives ? "healthy" : "timeout", arrives ? 13_000 : 60_000);
+      if (!arrives) {
+        expect(snapshot.runtime.status).toBe("stopped");
+        expect(snapshot.portUsage.status).toBe("free");
+      }
+    },
+  );
 
   it("waits longer before stopped-free early exit on Windows", async () => {
     setPlatform("win32");
@@ -297,7 +301,7 @@ describe("restart health", () => {
       waitForRunningGateway({
         attempts: 1,
         delayMs: 60_000,
-        isStartupMigrationActive: createStartupMigrationActivityProbe(() => true),
+        isStartupMigrationActive: () => true,
         signal: controller.signal,
       }),
     ).rejects.toBe(aborted);

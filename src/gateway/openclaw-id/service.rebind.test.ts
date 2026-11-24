@@ -91,7 +91,7 @@ describe("re-bind lifetime", () => {
         "ServerBinding",
         {
           ...claw.authority.current()!.binding!.body,
-          k_gw: stageGatewayKey(claw.stateDir),
+          k_gw: await stageGatewayKey(claw.stateDir),
           k_srv: nextEndpoint,
           binding_seq: 2,
         },
@@ -124,7 +124,7 @@ describe("re-bind lifetime", () => {
       "ServerBinding",
       {
         ...claw.authority.current()!.binding!.body,
-        k_gw: stageGatewayKey(claw.stateDir),
+        k_gw: await stageGatewayKey(claw.stateDir),
         k_srv: nextEndpoint,
         binding_seq: 2,
       },
@@ -159,7 +159,7 @@ describe("re-bind committed settlement", () => {
         "ServerBinding",
         {
           ...claw.authority.current()!.binding!.body,
-          k_gw: stageGatewayKey(claw.stateDir),
+          k_gw: await stageGatewayKey(claw.stateDir),
           k_srv: nextEndpoint,
           binding_seq: 2,
         },
@@ -229,7 +229,7 @@ it("reports a committed move when the real service records a tunnel startup fail
     "ServerBinding",
     {
       ...claw.authority.current()!.binding!.body,
-      k_gw: stageGatewayKey(claw.stateDir),
+      k_gw: await stageGatewayKey(claw.stateDir),
       k_srv: nextEndpoint,
       binding_seq: 2,
     },

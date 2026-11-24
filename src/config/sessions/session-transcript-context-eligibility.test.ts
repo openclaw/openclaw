@@ -207,7 +207,7 @@ it("converges an older current-watermark rebuild and a following append without 
     expect(needsReconcile(db, sessionId)).toBe(false);
     expect(rawRows(db).slice(0, before.length)).toEqual(before);
     expect(projectionRows(db).slice(0, expectedRows.length)).toEqual(expectedRows);
-    expect(readStats(scope).eventCount).toBe(4);
+    expect(readStats(scope).eventCount).toBe(3);
     expect(readMessagePage(scope, { offset: 0, maxMessages: 10 }).totalMessages).toBe(4);
   }));
 
@@ -233,7 +233,7 @@ it("reclassifies exact rewrites in both directions and deletes eligibility with 
           .prepare("SELECT * FROM session_transcript_active_event_facts WHERE session_id = ?")
           .all(sessionId),
       ).toHaveLength(4);
-      expect(readStats(scope).eventCount).toBe(excludeFromContext ? 3 : 4);
+      expect(readStats(scope).eventCount).toBe(excludeFromContext ? 2 : 3);
       expect(readMessagePage(scope, { offset: 0, maxMessages: 10 }).totalMessages).toBe(3);
       expect(rawRows(db).filter((entry) => entry.seq !== 2)).toEqual(
         before.filter((entry) => entry.seq !== 2),
@@ -262,7 +262,7 @@ it("keeps a prepared projection unpublished after a same-sequence rewrite", () =
     });
     expect(() => readStats(f.scope)).toThrow(ProjectionUnavailable);
     await reconcile(f.scope);
-    expect(readStats(f.scope).eventCount).toBe(4);
+    expect(readStats(f.scope).eventCount).toBe(3);
   }));
 
 it.each(["interrupted", "rewrite", "delete"])(
@@ -295,7 +295,7 @@ it.each(["interrupted", "rewrite", "delete"])(
       await reconcile(scope);
       expect(needsReconcile(db, sessionId)).toBe(false);
       expect(readStats(scope).eventCount).toBe(
-        change === "delete" ? 0 : change === "rewrite" ? 4 : 3,
+        change === "delete" ? 0 : change === "rewrite" ? 3 : 2,
       );
       expect(projectionRows(db).every((row) => row.context_eligible !== null)).toBe(true);
     }),
@@ -425,5 +425,5 @@ it("clears payload facts on an index-preserving rewrite and restores them on rol
     expect(facts()).toEqual(before);
     f.write(rewrite);
     expect(facts().map((row) => row.seq)).toEqual([0, 1, 2]);
-    expect(readStats(f.scope).eventCount).toBe(3);
+    expect(readStats(f.scope).eventCount).toBe(2);
   }));

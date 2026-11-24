@@ -128,6 +128,7 @@ export async function reportGitHubPublicationTranscript(
           provider: "openclaw",
           model: "gateway-publication",
           responseId: `${GITHUB_PUBLICATION_RESPONSE_PREFIX}${params.result.requestId}`,
+          openclawGitHubPublicationStatus: params.result.status,
           usage: makeZeroUsageSnapshot(),
           stopReason: "stop",
           timestamp: Date.now(),

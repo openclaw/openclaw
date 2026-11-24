@@ -15,7 +15,6 @@ import {
   matcher,
   normalize,
   normalizeTextDeltas,
-  parseSplitCall,
   resolveTestFenceRanges,
   streamTextDelta as textEvent,
   textContent,
@@ -239,17 +238,6 @@ describe("normalizePlainTextToolCallStreamEvents", () => {
     const events = await normalize([finish("length", ...blocks)]);
     expect(events.at(-1)?.message).toMatchObject({ content: [] });
     expectHidden(events, "[read]");
-  });
-
-  it.each([
-    [
-      "<function=read><parameter=path> ",
-      "/tmp</parameter><parameter=content>literal </function> tail</parameter></function>",
-      { path: " \n/tmp", content: "literal </function> tail" },
-    ],
-    ["[read]", '  {"path":"/tmp"}[/read]', { path: "/tmp" }],
-  ])("repairs a boundary inside leading horizontal whitespace", (first, second, args) => {
-    expect(parseSplitCall([first, second])?.[0]).toMatchObject({ name: "read", arguments: args });
   });
 
   it.each([

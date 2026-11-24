@@ -15,7 +15,7 @@ test("serves local assistant media through scoped tickets over the gateway HTTP 
   if (!stateDir) {
     throw new Error("OPENCLAW_STATE_DIR is required for gateway e2e media fixtures");
   }
-  testState.gatewayAuth = { ...auth };
+  testState.gatewayAuth = { ...auth, rateLimit: { maxAttempts: 1 } };
   const mediaDir = path.join(stateDir, "media", "control-ui-assistant-media-e2e");
   await fs.mkdir(mediaDir, { recursive: true });
   const write = async (name: string, body: string) => {
@@ -28,6 +28,10 @@ test("serves local assistant media through scoped tickets over the gateway HTTP 
     async ({ port }) => {
       const route = `http://127.0.0.1:${port}/__openclaw__/assistant-media`;
       const url = (params: Record<string, string>) => `${route}?${new URLSearchParams(params)}`;
+      const preview = (token: string) => readHttp(url({ meta: "1", source: filePath, token }));
+      expect((await preview(auth.token)).status).toBe(200);
+      expect((await preview("retired-test-credential")).status).toBe(401);
+      expect((await preview(auth.token)).status).toBe(429);
       const metadata = await readHttp(url({ meta: "1", source: filePath }), authorized);
       expect(metadata.status).toBe(200);
       const payload = metadata.json() as {

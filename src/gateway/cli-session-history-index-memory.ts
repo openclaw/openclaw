@@ -2,6 +2,7 @@ import {
   orderCliHistoryRows,
   createCliHistoryRow,
   DEDUPE_TIMESTAMP_WINDOW_MS,
+  RESERVED_FOR_MEDIA_MATCH,
   mergeCliHistoryRow,
   type CliHistoryIndex,
   type CliHistoryMergeStore,
@@ -43,7 +44,7 @@ export class MemoryCliSessionHistoryIndex implements CliHistoryIndex {
 
   finish(): void {
     const external = new Map<string, HistoryRow>();
-    const images = new Map<string, HistoryRow[]>();
+    const media = new Map<string, HistoryRow[]>();
     const textGroups = new Map<string, HistoryRow[]>();
     const floors = new Map<string, number>();
     const key = (role: string | null, text: string) => JSON.stringify([role ?? "", text]);
@@ -55,8 +56,8 @@ export class MemoryCliSessionHistoryIndex implements CliHistoryIndex {
     this.order = [...this.messages.values()].toSorted((a, b) => a.id - b.id);
     for (const row of this.order) {
       registerExternal(row);
-      if (row.image_key) {
-        addToGroup(images, row.image_key, row);
+      if (row.media_key) {
+        addToGroup(media, row.media_key, row);
       }
       if (row.text && row.role) {
         addToGroup(textGroups, key(row.role, row.text), row);
@@ -67,6 +68,13 @@ export class MemoryCliSessionHistoryIndex implements CliHistoryIndex {
       const match = row.external_key ? external.get(row.external_key) : undefined;
       if (match) {
         match.consumed = 1;
+      }
+      if (row.media_key) {
+        for (const local of media.get(row.media_key) ?? []) {
+          if (local.consumed === 0) {
+            local.consumed = RESERVED_FOR_MEDIA_MATCH;
+          }
+        }
       }
     }
     const textMatchers = (withIdentity: boolean) => {
@@ -105,7 +113,8 @@ export class MemoryCliSessionHistoryIndex implements CliHistoryIndex {
     };
     const store: CliHistoryMergeStore = {
       matchExternal: (identity) => external.get(identity),
-      matchImage: (identity) => images.get(identity)?.find((row) => !row.consumed),
+      matchMedia: (identity) =>
+        media.get(identity)?.find((row) => row.consumed === RESERVED_FOR_MEDIA_MATCH),
       matchers: { withIdentity: textMatchers(true), withoutIdentity: textMatchers(false) },
       minimumOrder: (role, text) => floors.get(key(role, text)) ?? 0,
       advanceOrderFloor: ({ role, text, minimumOrder }) => {

@@ -67,7 +67,7 @@ const baseManifest = {
   automations: [
     {
       id: "weekday-triage",
-      name: "Weekday triage",
+      name: "a".repeat(200),
       schedule: { cron: "0 9 * * 1-5", timezone: "America/New_York" },
       session: "isolated",
       message: "Review new issues.",
@@ -128,7 +128,30 @@ describe("parseTemplateManifest", () => {
     });
   });
 
-  it.each(["model", "provider", "skills", "runtime", "bindings", "auth"])(
+  it.each(["anthropic/claude-sonnet-4-5", "openrouter/anthropic/claude-sonnet-4.5"])(
+    "accepts the portable model preference %s",
+    (model) => {
+      expect(parseTemplateManifest({ ...minimalManifest, agent: { id: "triage", model } }).ok).toBe(
+        true,
+      );
+    },
+  );
+
+  it.each([
+    "",
+    "sonnet",
+    "claude-sonnet-4-5",
+    "anthropic/model@work",
+    " anthropic/model",
+    "anthropic/",
+    "a/" + "m".repeat(199),
+  ])("rejects the non-portable model preference %s", (model) => {
+    expect(parseTemplateManifest({ ...minimalManifest, agent: { id: "triage", model } }).ok).toBe(
+      false,
+    );
+  });
+
+  it.each(["provider", "skills", "runtime", "bindings", "auth"])(
     "rejects operator-controlled agent field %s",
     (field) => {
       const result = parseTemplateManifest({
@@ -150,6 +173,18 @@ describe("parseTemplateManifest", () => {
         agent: { id: "worker", [field]: {} },
       }).ok,
     ).toBe(false);
+  });
+
+  it.each([
+    { exec: { mode: "full" } },
+    { message: { crossContext: { allowAcrossProviders: true } } },
+  ])("keeps operator-only tool authority out of Templates: %j", (authority) => {
+    const result = parseTemplateManifest({
+      ...minimalManifest,
+      agent: { id: "worker", tools: { profile: "full", allow: ["read"], ...authority } },
+    });
+
+    expect(result.ok).toBe(false);
   });
 
   it("rejects extra dependency fields and retired configuration with migration guidance", () => {
@@ -181,48 +216,41 @@ describe("parseTemplateManifest", () => {
     }
   });
 
-  it("rejects resolved MCP secrets", () => {
-    const result = parseTemplateManifest({
-      ...baseManifest,
-      mcpServers: {
-        github: { command: "npx", env: { GITHUB_TOKEN: "secret-value" } },
-      },
-    });
-
-    expect(result.ok).toBe(false);
-    expect(result.diagnostics[0]?.path).toBe("$.mcpServers.github.env.GITHUB_TOKEN");
-  });
-
+  const url = "https://mcp.linear.app/mcp";
   it("accepts credential-free remote MCP with local OAuth completion", () => {
     const linear = {
-      url: "https://mcp.linear.app/mcp",
+      url,
       transport: "streamable-http",
       auth: "oauth",
       toolFilter: { include: ["list_issues"] },
     };
-    const manifest = requireManifest({
-      ...baseManifest,
-      mcpServers: { linear },
-    });
-    expect(manifest.mcpServers.linear).toEqual(linear);
+    expect(requireManifest({ ...baseManifest, mcpServers: { linear } }).mcpServers.linear).toEqual(
+      linear,
+    );
   });
 
   it.each([
-    {
-      url: "https://example.com/mcp",
-      transport: "streamable-http",
-      headers: { Authorization: "secret" },
-    },
-    { url: "https://example.com/mcp", transport: "streamable-http", command: "npx" },
-    { url: "https://example.com/mcp", transport: "stdio" },
-  ])("rejects non-portable remote MCP config %#", (server) => {
-    const result = parseTemplateManifest({
-      ...baseManifest,
-      mcpServers: { unsafe: server },
-    });
-
+    [{ command: "npx", env: { GITHUB_TOKEN: "secret-value" } }, ".env.GITHUB_TOKEN", ""],
+    [{ url, transport: "streamable-http", headers: { Authorization: "secret" } }, null, ""],
+    [{ url, transport: "streamable-http", command: "npx" }, null, ""],
+    [{ url, transport: "stdio" }, null, ""],
+    [{ url }, ".transport", 'expected one of "sse"|"streamable-http"'],
+    [{ url, transport: "http" }, ".transport", 'expected one of "sse"|"streamable-http"'],
+    [{ command: "node", args: [8080] }, ".args[0]", "expected string, received number"],
+    [{}, ".command", "expected string, received undefined"],
+    [{ transport: "http" }, "", "Invalid input"],
+  ])("reports malformed MCP diagnostics for %j", (server, suffix, reason) => {
+    const result = parseTemplateManifest({ ...baseManifest, mcpServers: { server } });
     expect(result.ok).toBe(false);
-    expect(result.diagnostics[0]?.path).toMatch(/^\$\.mcpServers\.unsafe/);
+    expect(result.diagnostics).toContainEqual(
+      expect.objectContaining({
+        path:
+          suffix === null
+            ? expect.stringMatching(/^\$\.mcpServers\.server/)
+            : `$.mcpServers.server${suffix}`,
+        message: expect.stringContaining(reason),
+      }),
+    );
   });
 
   it("rejects workspace traversal and duplicate destinations", () => {
@@ -259,29 +287,27 @@ describe("parseTemplateManifest", () => {
     expect(duplicateCron.ok).toBe(false);
   });
 
-  it("rejects invalid heartbeat durations and cron expressions", () => {
-    const heartbeat = parseTemplateManifest({
-      schemaVersion: 1,
-      agent: { id: "worker", heartbeat: { every: "eventually" } },
+  it.each(["eventually", "104000000d", "100000000d"])("rejects invalid heartbeat %s", (every) => {
+    const result = parseTemplateManifest({
+      ...minimalManifest,
+      agent: { id: "worker", heartbeat: { every } },
     });
-    expect(heartbeat.ok).toBe(false);
-    expect(heartbeat.diagnostics).toContainEqual(
+    expect(result.ok).toBe(false);
+    expect(result.diagnostics).toContainEqual(
       expect.objectContaining({ path: "$.agent.heartbeat.every" }),
     );
+  });
 
-    const cron = parseTemplateManifest({
+  it.each([
+    [{ schedule: { cron: "invalid", timezone: "UTC" } }, "$.automations[0].schedule.cron"],
+    [{ name: "a".repeat(201) }, "$.automations[0].name"],
+  ])("rejects invalid automation %#", (override, path) => {
+    const result = parseTemplateManifest({
       ...baseManifest,
-      automations: [
-        {
-          ...baseManifest.automations[0],
-          schedule: { cron: "not a cron expression", timezone: "UTC" },
-        },
-      ],
+      automations: [{ ...baseManifest.automations[0], ...override }],
     });
-    expect(cron.ok).toBe(false);
-    expect(cron.diagnostics).toContainEqual(
-      expect.objectContaining({ path: "$.automations[0].schedule.cron" }),
-    );
+    expect(result.ok).toBe(false);
+    expect(result.diagnostics).toContainEqual(expect.objectContaining({ path }));
   });
 });
 

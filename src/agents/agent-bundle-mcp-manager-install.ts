@@ -111,7 +111,11 @@ export function createSessionMcpRuntimeManagerInstall(
       params.requesterConnect,
     );
     const hasServers = Object.keys(config.loaded.mcpServers).length > 0;
-    const { runtimeKey, configReloadAtAdmission, ...runtimeParams } = params;
+    const { runtimeKey, configReloadAtAdmission, ...input } = params;
+    const runtimeParams = {
+      ...input,
+      lastListedCatalogByServerIdentity: store.lastListedCatalogByServerIdentity,
+    };
     const catalogBinding = {
       sessionId: params.sessionId,
       sessionKey: params.sessionKey,

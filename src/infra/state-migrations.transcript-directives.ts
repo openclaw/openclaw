@@ -27,7 +27,7 @@ import {
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { isPostgresSqlConnection, type EngineConnection } from "./sql-connection.js";
 import { backupDoctorSqliteRepair } from "./sqlite-index-recovery.js";
-import { resolveSqliteInspectionSignal } from "./sqlite-readonly-worker.js";
+import { resolveSqliteInspectionSignal } from "./sqlite-readonly-worker-context.js";
 import { admitSqliteSchema } from "./sqlite-schema-facts.js";
 import { runSqliteImmediateTransactionSync } from "./sqlite-transaction.js";
 import { createMigrationDatabaseHandle } from "./state-migrations.agent-database.js";

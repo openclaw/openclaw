@@ -237,7 +237,8 @@ describe("createTelegramBot channel_post media", () => {
     ["fractional Bot API cap", 100022, 0.5, "512KB", true],
     ["non-binary-exact Bot API cap", 100023, 0.3, "307.20KB", true],
     ["permanent oversized media", 98077, undefined, "100MB", false],
-    ["retryable shutdown abort", 98076, undefined, undefined, false],
+    // Only an aborted owner replays; the media deadline also fails with an abort.
+    ["abort without an aborted owner", 98076, undefined, undefined, false],
   ] as const)(
     "reports and settles %s correctly (#98076)",
     async (_name, messageId, limit, reportedLimit, botApiCap) => {
@@ -251,7 +252,7 @@ describe("createTelegramBot channel_post media", () => {
       );
       const warning = reportedLimit
         ? `⚠️ File too large. Maximum size is ${reportedLimit}.`
-        : undefined;
+        : "⚠️ Failed to download media. Please try again.";
       await createTelegramBot();
       const update = { update_id: messageId };
       const ctx = createTelegramPrivateMediaContext({
@@ -277,22 +278,15 @@ describe("createTelegramBot channel_post media", () => {
           });
           return replay.value;
         });
-      expect(participantResult ?? frameResult).toEqual(
-        reportedLimit
-          ? { kind: "completed" }
-          : { kind: "failed-retryable", error: expect.any(MediaFetchError) },
+      expect(participantResult ?? frameResult).toEqual({ kind: "completed" });
+      expect(sendMessageSpy).toHaveBeenCalledOnce();
+      expect(replySpy).toHaveBeenCalledOnce();
+      expectTelegramDownloadWarning(messageId, warning);
+      expectUnavailableMediaPayload(
+        "document",
+        "",
+        `[media unavailable: ${reportedLimit ? `file exceeds ${reportedLimit} limit` : "download failed"}]`,
       );
-      const expectedWarnings = warning ? 1 : 0;
-      expect(sendMessageSpy).toHaveBeenCalledTimes(expectedWarnings);
-      expect(replySpy).toHaveBeenCalledTimes(expectedWarnings);
-      if (reportedLimit) {
-        expectTelegramDownloadWarning(messageId, warning);
-        expectUnavailableMediaPayload(
-          "document",
-          "",
-          `[media unavailable: file exceeds ${reportedLimit} limit]`,
-        );
-      }
       if (botApiCap) {
         expect(saveRemoteMedia).not.toHaveBeenCalled();
       }
@@ -482,7 +476,7 @@ describe("createTelegramBot channel_post media", () => {
   it.each([
     { failure: "shutdown aborts a download", shutdownAbort: true },
     { failure: "Telegram temporarily throttles a download", shutdownAbort: false },
-  ])("durably retries every spooled album update when $failure", async ({ shutdownAbort }) => {
+  ])("settles every spooled album update when $failure", async ({ shutdownAbort }) => {
     setOpenChannelPostConfig();
     const shutdown = new AbortController();
     saveRemoteMedia.mockImplementationOnce(async () => {
@@ -518,15 +512,23 @@ describe("createTelegramBot channel_post media", () => {
       );
       expect(runs.map(({ deferredWork }) => Boolean(deferredWork))).toEqual([true, true]);
       await flush(0);
-      expect(await Promise.all(runs.map(({ deferredWork }) => deferredWork!.task))).toEqual([
-        { kind: "failed-retryable", error: expect.any(MediaFetchError) },
-        { kind: "failed-retryable", error: expect.any(MediaFetchError) },
-      ]);
-      expectSilent();
+      const results = await Promise.all(runs.map(({ deferredWork }) => deferredWork!.task));
+      if (shutdownAbort) {
+        // The owner left mid-download: its successor replays the album.
+        expect(results).toEqual([
+          { kind: "failed-retryable", error: expect.any(MediaFetchError) },
+          { kind: "failed-retryable", error: expect.any(MediaFetchError) },
+        ]);
+        expectSilent();
+        return;
+      }
+      // A retry would hold the chat behind the album; deliver it without the photo.
+      expect(results).toEqual([{ kind: "completed" }, { kind: "completed" }]);
+      expect(replySpy).toHaveBeenCalledOnce();
     });
   });
 
-  it("drops the media group when a non-recoverable media error occurs", async () => {
+  it("delivers the media group without an attachment whose getFile returns no path", async () => {
     replySpy.mockReset();
     setOpenChannelPostConfig();
     saveRemoteMedia.mockResolvedValueOnce({
@@ -552,14 +554,9 @@ describe("createTelegramBot channel_post media", () => {
       expect(replySpy).not.toHaveBeenCalled();
       await flush(1_075);
 
-      expect(runtimeError).toHaveBeenCalledWith(
-        expect.stringContaining("media group handler failed"),
-      );
-      expect(runtimeError).toHaveBeenCalledWith(
-        expect.stringContaining("Telegram getFile returned no file_path"),
-      );
+      expect(runtimeError).not.toHaveBeenCalled();
       expect(saveRemoteMedia).toHaveBeenCalledTimes(1);
-      expect(replySpy).not.toHaveBeenCalled();
+      expect(replySpy).toHaveBeenCalledOnce();
     });
   });
 });

@@ -177,11 +177,6 @@ describe("node-host dispatch cancellation", () => {
       {
         scopes: ["operator.write", "operator.approvals"],
         signal: controller.signal,
-        dispatchAuthority: {
-          version: 2,
-          kind: "source-bound",
-          assertCurrent: expect.any(Function),
-        },
       },
     );
   });

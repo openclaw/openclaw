@@ -435,8 +435,8 @@ describe("guardSessionManager transcript updates", () => {
           message: { role: "user", content: "[approved] Unstaged source" },
         });
       } finally {
-        source.finishPendingInput?.("interrupted");
-        ambient.finishPendingInput?.("interrupted");
+        source.finishPendingInput?.("interrupted", "failed");
+        ambient.finishPendingInput?.("interrupted", "failed");
       }
     },
   );
@@ -609,35 +609,50 @@ describe("guardSessionManager transcript updates", () => {
     },
   );
 
-  it("broadcasts the committed SQLite owner when a callback rebinds the manager", async () => {
-    const updates = collectUpdates();
-    const {
-      sessionManager: sm,
-      target,
-      guard,
-    } = await openPersistedSessionManager("original-lifecycle");
-    const replacement = await openPersistedSessionManager("replacement-lifecycle");
-    const guarded = guard({
-      onMessagePersisted: () => {
-        sm.setSessionTarget(replacement.target);
-      },
-    });
-    const message = assistantText("hello from subagent");
-    guarded.appendMessage(message);
-    expect(updates).toStrictEqual([
-      {
-        agentId: "main",
-        lifecycleRevision: "original-lifecycle",
-        message,
-        messageId: expect.any(String),
-        messageSeq: 1,
-        sessionId: target.sessionId,
-        sessionKey: target.sessionKey,
+  it.each(["assistant", "image"] as const)(
+    "broadcasts committed %s to its SQLite owner when a callback rebinds the manager",
+    async (kind) => {
+      const updates = collectUpdates();
+      const {
+        sessionManager: sm,
         target,
-      },
-    ]);
-    expect(updates[0]?.messageId).not.toBe("");
-  });
+        guard,
+      } = await openPersistedSessionManager("original-lifecycle");
+      const replacement = await openPersistedSessionManager("replacement-lifecycle");
+      const guarded = guard({
+        runId: "owning-run",
+        onMessagePersisted: () => {
+          sm.setSessionTarget(replacement.target);
+        },
+      });
+      const message =
+        kind === "assistant"
+          ? assistantText("hello from subagent")
+          : {
+              role: "toolResult" as const,
+              toolCallId: "inspect",
+              toolName: "view_image",
+              content: [{ type: "image" as const, data: "cG5n", mimeType: "image/png" }],
+              isError: false,
+              timestamp: 1,
+            };
+      guarded.appendMessage(message);
+      expect(updates).toStrictEqual([
+        {
+          agentId: "main",
+          lifecycleRevision: "original-lifecycle",
+          ...(kind === "assistant" ? { runId: "owning-run" } : {}),
+          message,
+          messageId: expect.any(String),
+          messageSeq: 1,
+          sessionId: target.sessionId,
+          sessionKey: target.sessionKey,
+          target,
+        },
+      ]);
+      expect(updates[0]?.messageId).not.toBe("");
+    },
+  );
 
   it("refreshes run ownership and delivery preparation across reused managers", async () => {
     const updates = collectUpdates();

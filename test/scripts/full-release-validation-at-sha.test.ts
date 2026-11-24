@@ -46,7 +46,19 @@ function rejectArgs(args: string[], error: string) {
 }
 
 describe("full-release-validation-at-sha", () => {
-  it("reports patch-inequivalent main FRV tooling without changing Q=C", () => {
+  it("continues candidate dispatch after a tooling comparison fails", () => {
+    const fixture = createDispatchFixture({
+      candidateOwned: true,
+      toolingLagComparisonFailure: true,
+    });
+    const result = fixture.run();
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stderr).toContain("WARNING: candidate tooling lag is unavailable");
+    expect(fixture.dispatches()).toHaveLength(2);
+  });
+
+  it("reports patch-inequivalent main FRV tooling without changing frozen Q", () => {
     const candidateSha = "a".repeat(40);
     const mainSha = "b".repeat(40);
 
@@ -57,7 +69,7 @@ describe("full-release-validation-at-sha", () => {
       ]),
     ).toBe(
       [
-        `WARNING: candidate-owned Q=C tooling ${candidateSha} is 3508 non-merge commit(s) behind main ${mainSha}, with 28162 net changed path(s). Main cannot repair this candidate harness; review and port applicable release fixes before dispatch.`,
+        `WARNING: frozen qualification Q ${candidateSha} is 3508 non-merge commit(s) behind main ${mainSha}, with 28162 net changed path(s). Moving main cannot repair this harness; explicitly select and admit any replacement Q before dispatch.`,
         "Largest changed areas (share of net changed paths):",
         "14.8% extensions/",
         "1.3% scripts/",

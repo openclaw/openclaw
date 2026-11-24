@@ -9,7 +9,6 @@ import {
 import { initializeSessionReadContext } from "../../gateway/server-methods/sessions-read-cache.test-support.js";
 import { sessionSharingHandlers } from "../../gateway/server-methods/sessions-sharing.js";
 import {
-  identifiedClient,
   sessionSharingTestContext as context,
   soloClient,
 } from "../../gateway/server-methods/sessions-sharing.test-support.js";
@@ -67,6 +66,7 @@ import {
   addSessionMember,
   readSessionMembersInWorker,
   removeSessionMember,
+  setSessionMemberAccess,
 } from "./session-sharing-store.js";
 import { bindSqliteWorkerBackend } from "./session-sharing-store.worker.js";
 import { historyLane } from "./session-transcript-worker-resources.js";
@@ -219,26 +219,50 @@ async function call(
   return responses;
 }
 
-it("rechecks the current manager after the membership read yields", async () => {
+it("owns membership snapshot preconditions without a separate transcript pin", async () => {
   await withState(async () => {
     await captureRuntimeConfigAsyncReader()();
-    const scope = mainScope("member-reader-authority");
-    await upsertSessionEntryCore(scope, {
-      sessionId: "member-reader-authority",
+    const scope = mainScope("membership-precondition");
+    const entry = {
+      sessionId: "original",
       updatedAt: 1,
-      createdActor: { type: "human", source: "profile", id: "owner" },
+      createdActor: { type: "human" as const, source: "profile" as const, id: "owner" },
+    };
+    await upsertSessionEntryCore(scope, entry);
+    const precondition = {
+      sessionId: entry.sessionId,
+      createdActor: entry.createdActor,
+      visibility: undefined,
+      incognito: undefined,
+    };
+    await addSessionMember(scope, { ...memberRow("guest", 2), expectedEntry: precondition });
+    await setSessionMemberAccess(scope, {
+      identityId: "guest",
+      access: "send",
+      expectedEntry: precondition,
     });
-    await addSessionMember(scope, memberRow("guest", 2));
-    const client = identifiedClient("owner");
-    const requestContext = await readContext();
-    const pending = call(
-      "session.members.listEvidence",
-      { sessionKey: scope.sessionKey },
-      requestContext,
-      client,
-    );
-    client.authenticatedUserProfile = identifiedClient("other").authenticatedUserProfile;
-    await expect(pending).rejects.toThrow("session ownership changed before sharing read");
+    for (const changed of [
+      { sessionId: "different" },
+      { createdActor: { ...entry.createdActor, id: "other" } },
+      { visibility: "read-only" as const },
+      { incognito: true as const },
+    ]) {
+      const stale = { ...precondition, ...changed };
+      await expect(
+        addSessionMember(scope, {
+          ...memberRow("other", 3),
+          expectedEntry: stale,
+        }),
+      ).rejects.toThrow("session ownership changed before sharing mutation");
+      await expect(
+        setSessionMemberAccess(scope, {
+          identityId: "guest",
+          access: "read",
+          expectedEntry: stale,
+        }),
+      ).rejects.toThrow("session ownership changed before sharing mutation");
+    }
+    expect(await readMembers(scope)).toEqual([{ ...memberRow("guest", 2), access: "send" }]);
   });
 });
 
@@ -268,7 +292,7 @@ it("commits aliased worker membership and participant facts before publishing, a
       },
     };
     const authority = { assertCurrent() {}, assertReadable() {}, authorize() {} };
-    let actor: ReturnType<typeof captureDurableSessionActor> | undefined;
+    let actor: Awaited<ReturnType<typeof captureDurableSessionActor>> | undefined;
     const expectedEntry = {
       sessionId: entry.sessionId,
       createdActor: entry.createdActor,
@@ -304,7 +328,7 @@ it("commits aliased worker membership and participant facts before publishing, a
         kind: "participants",
         projection: { participants: [{ identity: peer }], participantCount: 1 },
       });
-      actor = captureDurableSessionActor({
+      actor = await captureDurableSessionActor({
         database: { agentId: "main", path: database.path },
         target: actorTarget,
         lifetime: authority,
@@ -498,7 +522,9 @@ it.each([
       const sharing = await prepareSessionMutationFacts({ cfg, ...scope });
       const unavailable = "Session access facts are unavailable";
       const expectUnavailable = () =>
-        expect(prepareSessionMutationFacts({ cfg, ...scope })).rejects.toThrow(unavailable);
+        expect(prepareSessionMutationFacts({ cfg, ...scope })).rejects.toThrow(
+          mutation === "category" ? unavailable : "restart the Gateway",
+        );
       const publishedMemberships: boolean[] = [];
       const stopPublic = sessionChanges.subscribe((change) => {
         if (

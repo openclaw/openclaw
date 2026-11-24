@@ -49,6 +49,7 @@ export type ToolStreamEntry = {
   exitCode?: number;
   /** True once a result event landed, even when the output text is empty. */
   resultReceived?: boolean;
+  resultTimestamp?: number;
   startedAt: number;
   receivedAt: number;
   /** Live-only placement; durable invocation positions supersede this boundary. */
@@ -117,7 +118,7 @@ export type ToolStreamHost = {
   compactionClearTimer?: number | null;
   fallbackStatus?: FallbackStatus | null;
   fallbackClearTimer?: number | null;
-  toolStreamSyncTimer: number | null;
+  toolStreamSyncTimer?: number | null;
   /** Monotonic time of the last publication; idle gaps count toward the next deadline. */
   toolStreamPublishedAt?: number;
   /** Pending publication includes membership or presentation beyond output text. */
@@ -140,4 +141,6 @@ export type ToolStreamState = Pick<
   | "knownAgentRunIds"
   | "waitingApprovalStatuses"
   | "toolStreamPublishedAt"
-> & { toolStreamSyncTimer?: number | null; toolStreamStructureChanged?: boolean };
+  | "toolStreamSyncTimer"
+  | "toolStreamStructureChanged"
+>;

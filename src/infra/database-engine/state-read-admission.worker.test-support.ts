@@ -7,13 +7,20 @@ import {
   ensureStatePostgresFragment,
   openExistingStatePostgresConnection,
 } from "../../state/openclaw-state-db-engine.js";
+import { openExistingOpenClawStateWriter } from "../../state/openclaw-state-db-existing-write.js";
 import { withOpenClawStateReadOnlyLocation } from "../../state/openclaw-state-db-read-connection.js";
+import {
+  tableExists,
+  readTableColumns,
+  tablePrimaryKeyColumns,
+} from "../../state/openclaw-state-db-schema-helpers.js";
 import { PostgresSchemaAdmissionUnavailableError } from "../../state/openclaw-state-db-schema-version.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../../state/openclaw-state-db.js";
+import { getOpenClawStateFeatureSchemaSql } from "../../state/openclaw-state-feature-schema.js";
 import { postgresStateReadSnapshot } from "../../state/openclaw-state-postgres-snapshot-context.js";
 import { ensureUserBackgroundSchema } from "../../state/user-background.store.js";
 import { isPostgresSqlConnection } from "../sql-connection.js";
@@ -44,7 +51,7 @@ const input = workerData as {
   admissionTimeoutMs?: number;
   observeRefresh?: boolean;
   cancellable?: boolean;
-  operation?: "open" | "ensure" | "raw-fragment";
+  operation?: "open" | "ensure" | "raw-fragment" | "write" | "schema-read" | "existing-write";
 };
 if (!parentPort) {
   throw new Error("State admission fixture requires a worker");
@@ -78,9 +85,11 @@ const listener = (message: unknown) => {
     transactions++;
   }
   const checkpoint =
-    input.operation === "raw-fragment"
+    input.operation === "raw-fragment" || input.operation === "schema-read"
       ? event.sql === "SELECT ? AS fixture_checkpoint"
-      : input.operation === "ensure"
+      : input.operation === "ensure" ||
+          input.operation === "write" ||
+          input.operation === "existing-write"
         ? event.sql?.startsWith("BEGIN ISOLATION LEVEL READ COMMITTED;")
         : !input.operation && event.sql === "BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY";
   if (!checkpoint) {
@@ -171,6 +180,35 @@ try {
                       .prepare("SELECT COUNT(*) AS count FROM user_background_images")
                       .get();
                   }
+                  if (input.operation === "existing-write") {
+                    const writer = openExistingOpenClawStateWriter(
+                      { path: input.path, env: input.environment },
+                      {
+                        schemaSql: getOpenClawStateFeatureSchemaSql("config_machine_state"),
+                        operationLabel: "fixture.existing-write",
+                      },
+                    );
+                    try {
+                      return writer.run(
+                        ({ db }) => {
+                          callbackCalls++;
+                          return { present: tableExists(db, "config_machine_state") };
+                        },
+                        { path: input.path, env: input.environment },
+                      );
+                    } finally {
+                      writer.close();
+                    }
+                  }
+                  if (input.operation === "write") {
+                    return runOpenClawStateWriteTransaction(
+                      ({ db }) => {
+                        callbackCalls++;
+                        return { present: tableExists(db, "config_machine_state") };
+                      },
+                      { database, env: input.environment },
+                    );
+                  }
                   return runOpenClawStateWriteTransaction(
                     ({ db }) => {
                       callbackCalls++;
@@ -178,7 +216,14 @@ try {
                       if (!isPostgresSqlConnection(db)) {
                         throw new Error("Fragment fixture requires PostgreSQL");
                       }
-                      ensureStatePostgresFragment(db, "user_background_images");
+                      if (input.operation === "schema-read") {
+                        return {
+                          present: tableExists(db, "config_machine_state"),
+                          column: readTableColumns(db, "config_machine_state").has("value_json"),
+                          key: tablePrimaryKeyColumns(db, "config_machine_state"),
+                        };
+                      }
+                      return ensureStatePostgresFragment(db, "user_background_images");
                     },
                     { database, env: input.environment },
                   );

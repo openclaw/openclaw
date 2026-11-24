@@ -78,13 +78,11 @@ export function disconnectDisallowedGatewayPolicyClients(
       try {
         const principal = client.internal?.openclawIdPrincipal;
         if (principal?.kind === "owner" && !isOpenClawIdTunnelPrincipalCurrent(principal)) {
-          throw new Error("OpenClaw ID owner authority changed");
+          throw new Error("OpenClaw ID owner connection changed. Reconnect and try again.");
         }
         // A linked owner device keeps the owner's grants under its person's profile.
-        currentRole = openclawIdSubjectRolePolicy(
-          principal?.kind === "owner" ? principal : undefined,
-          () =>
-            resolveOperatorRolePolicyForProfile(client.authenticatedUserProfile?.profileId, cfg),
+        currentRole = openclawIdSubjectRolePolicy(principal, () =>
+          resolveOperatorRolePolicyForProfile(client.authenticatedUserProfile?.profileId, cfg),
         );
         roleAuthorityRevoked =
           currentRole !== undefined &&

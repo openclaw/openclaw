@@ -5,16 +5,24 @@ import path from "node:path";
 import { collectNestedErrorCandidates } from "@openclaw/normalization-core/error-coercion";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
+import { readDeferredPluginMigrationsAsync } from "../infra/deferred-plugin-migrations.js";
+import { defaultPayload } from "../infra/gateway-state-owner-record.js";
+import { acquireGatewayStateOwner } from "../infra/gateway-state-owner.js";
+import { openNodeSqliteDatabase, requireNodeSqlite } from "../infra/node-sqlite.js";
 import { resolvePrivateSqliteSnapshotStagingRoot } from "../infra/sqlite-private-directory.js";
 import { cleanupSnapshotOperations } from "../infra/sqlite-readonly-location-cleanup.js";
+import { withSqliteSnapshotReuse } from "../infra/sqlite-snapshot-reuse.js";
 import * as snapshots from "../infra/sqlite-snapshot-source.js";
 import { readDatabasePathIdentitySync } from "../infra/sqlite-worker-identity.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { expectRows, settle } from "./openclaw-state-db-fixtures.test-support.js";
+import { settle } from "./openclaw-state-db-fixtures.test-support.js";
 import {
   executeExistingOpenClawStateRead as readExisting,
   withArtifactPreservingStateReads as preserveArtifacts,
+  withExistingOpenClawStateDatabaseArtifactPreservingReadOnly as readSync,
+  withExistingOpenClawStateDatabaseArtifactPreservingReadOnlyAsync as readAsync,
+  withSynchronousArtifactPreservingStateSnapshot as syncScope,
+  withOpenClawStateDatabaseReadSnapshot as frozenScope,
 } from "./openclaw-state-db-readonly.js";
 import {
   closeOpenClawStateDatabaseAsync as closeState,
@@ -130,56 +138,77 @@ it.runIf(process.platform === "darwin" && fs.existsSync("/usr/bin/SetFile"))(
   },
 );
 
-it("shares one online backup across concurrent snapshots of the live state owner", async () => {
-  const pathname = path.join(directories.make("openclaw-readonly-exclusion-"), "openclaw.sqlite");
-  for (const [eventKey, createdAt] of [
-    ["preserved", 1],
-    ["single-flight", 2],
-  ] as const) {
-    openState({ path: pathname })
-      .db.prepare(
-        "INSERT INTO diagnostic_events(scope,event_key,payload_json,created_at) VALUES(?,?,?,?)",
-      )
-      .run("readonly-exclusion", eventKey, "{}", createdAt);
-    if (createdAt === 1) {
-      resetState();
-    }
-  }
-  const sqlite = await import("../infra/node-sqlite.js").then((module) =>
-    module.requireNodeSqlite(),
+it("reads live-owned state directly while explicit snapshots retain private images", async () => {
+  const { options, seed } = sourceFixture();
+  seed(options.path, "live");
+  await closeState();
+  using writer = openNodeSqliteDatabase(options.path);
+  writer.exec(
+    "PRAGMA journal_mode=WAL; CREATE TABLE live_probe(value); INSERT INTO live_probe VALUES(1)",
   );
+  const owner = acquireGatewayStateOwner({
+    databasePath: options.path,
+    payload: { ...defaultPayload(options.path), role: "gateway" },
+  });
+  const copies = [
+    vi.spyOn(snapshots, "prepareSqliteReadOnlyLocationSync"),
+    vi.spyOn(snapshots, "prepareSqliteReadOnlyLocation"),
+    vi.spyOn(snapshots, "prepareSqliteReadOnlyLocationAwaited"),
+    vi.spyOn(snapshots, "startSqliteReadOnlyLocationAsync"),
+  ];
+  const probe: Parameters<typeof readSync>[0] = ({ db }) => {
+    expect(() => db.exec("INSERT INTO live_probe VALUES(2)")).toThrow(/readonly/);
+    return db.prepare("SELECT value FROM live_probe").get()?.value;
+  };
+  try {
+    const command = { type: "plugins.deferredMigrations.read", input: undefined } as const;
+    const readAwaited = () =>
+      readExisting(options, command, { snapshotPreparation: "awaited" }).then(
+        (reply) => reply?.pending,
+      );
+    await withSqliteSnapshotReuse(async () => {
+      expect(preserveArtifacts(() => syncScope(() => readSync(probe, options)))).toBe(1);
+      expect(await readAsync(probe, options)).toBe(1);
+      expect(await readDeferredPluginMigrationsAsync(options)).toEqual([]);
+      expect(await preserveArtifacts(readAwaited)).toEqual([]);
+    });
+    expect(await readDeferredPluginMigrationsAsync(options)).toEqual([]);
+    expect(copies.map((copy) => copy.mock.calls.length)).toEqual([0, 0, 0, 0]);
+    await preserveArtifacts(() =>
+      frozenScope(() => readDeferredPluginMigrationsAsync(options), options),
+    );
+    expect(copies.map((copy) => copy.mock.calls.length)).toEqual([0, 0, 0, 1]);
+  } finally {
+    owner.release();
+  }
+  // Explicit online snapshots still share one backup and keep it until the last reader closes.
+  openState(options);
+  const sqlite = requireNodeSqlite();
   const backup = sqlite.backup.bind(sqlite);
-  let backupCalls = 0;
   const started = createDeferredCore();
   const release = createDeferredCore();
-  vi.spyOn(sqlite, "backup").mockImplementation(async (...args) => {
-    backupCalls += 1;
+  const backups = vi.spyOn(sqlite, "backup").mockImplementation(async (...args) => {
     started.resolve();
     await release.promise;
     return await backup(...args);
   });
-
-  const firstSnapshot = snapshots.prepareSqliteReadOnlyLocation(pathname);
+  const firstSnapshot = snapshots.prepareSqliteReadOnlyLocation(options.path);
   await started.promise;
-  const secondSnapshot = snapshots.prepareSqliteReadOnlyLocation(pathname);
+  const secondSnapshot = snapshots.prepareSqliteReadOnlyLocation(options.path);
   release.resolve();
   const [first, second] = await Promise.all([firstSnapshot, secondSnapshot]);
   try {
-    expect(backupCalls).toBe(1);
+    expect(backups).toHaveBeenCalledOnce();
     expect(first.location).toBe(second.location);
     expect(first.cleanup()).toBe(true);
     expect(fs.existsSync(second.location)).toBe(true);
-    const snapshot = openNodeSqliteDatabase(second.location, { readOnly: true });
-    try {
-      expectRows(
-        snapshot,
-        "SELECT event_key FROM diagnostic_events WHERE scope = ? ORDER BY created_at",
-        [{ event_key: "preserved" }, { event_key: "single-flight" }],
-        "readonly-exclusion",
-      );
-    } finally {
-      snapshot.close();
-    }
+    using snapshot = openNodeSqliteDatabase(second.location, { readOnly: true });
+    expect(snapshot.prepare("SELECT value FROM live_probe").get()).toEqual({ value: 1 });
+    expect(
+      snapshot
+        .prepare("SELECT value_json FROM config_machine_state WHERE state_key = ?")
+        .get("readonly.identity.fixture"),
+    ).toEqual({ value_json: JSON.stringify({ source: "live" }) });
   } finally {
     await first.cleanupAsync();
     expect(await second.cleanupAsync()).toBe(true);

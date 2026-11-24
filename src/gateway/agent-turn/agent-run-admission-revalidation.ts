@@ -1,6 +1,5 @@
 import { ErrorCodes, type ErrorShape } from "../../../packages/gateway-protocol/src/index.js";
 import { PreparedModelRuntimePublicationSupersededError } from "../../agents/prepared-model-runtime.errors.js";
-import { isUserInitiatedAgentRunAbortReason } from "../../agents/run-termination.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { registerChatAbortController } from "../chat-abort.js";
@@ -38,8 +37,15 @@ export async function releaseFailedAgentRunAdmission(
   userTurn: PreparedAgentRunUserTurn,
   error: unknown,
   cleanupPreaccept: () => Promise<void>,
+  signal: AbortSignal,
+  accepted: boolean,
 ): Promise<never> {
-  const failure = await releasePreparedAgentRunUserTurnAfterFailure(userTurn, error);
+  const failure = await releasePreparedAgentRunUserTurnAfterFailure(
+    userTurn,
+    error,
+    signal,
+    accepted,
+  );
   try {
     await cleanupPreaccept();
   } catch (cleanupError) {
@@ -108,7 +114,11 @@ export function createAgentRunAdmissionRevalidator(options: {
     } catch (err) {
       return (async () => {
         const failure = userTurn
-          ? await releasePreparedAgentRunUserTurnAfterFailure(userTurn, err)
+          ? await releasePreparedAgentRunUserTurnAfterFailure(
+              userTurn,
+              err,
+              activeRunAbort.controller.signal,
+            )
           : err;
         if (failure === err) {
           publishAborted();
@@ -125,9 +135,9 @@ export function createAgentRunAdmissionRevalidator(options: {
           await releasePreparedAgentRunUserTurn(
             userTurn,
             "cancelled",
-            isUserInitiatedAgentRunAbortReason(activeRunAbort.controller.signal.reason)
-              ? true
-              : undefined,
+            activeRunAbort.controller.signal,
+            undefined,
+            false,
           );
         }
         // Abort replay must not publish before pending input has durably settled.

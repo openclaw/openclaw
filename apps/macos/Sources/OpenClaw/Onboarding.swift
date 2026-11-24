@@ -723,11 +723,16 @@ struct OnboardingView: View {
 
     static func pageOrder(
         for mode: AppState.ConnectionMode,
-        requiresCLIInstall: Bool) -> [Int]
+        requiresCLIInstall: Bool,
+        joinedClaw: Bool = false,
+        openClawIDEnabled: Bool = MacOpenClawIDFeature.isEnabled) -> [Int]
     {
-        switch mode {
+        // The OpenClaw ID claw owns its AI setup, which needs operator.admin a member key does
+        // not hold; there is no Gateway to find either.
+        if mode == .remote, joinedClaw { return [0, 1, 9] }
+        return switch mode {
         case .local:
-            requiresCLIInstall ? [0, 1, 2, 3, 5, 9] : [0, 1, 3, 5, 9]
+            (requiresCLIInstall ? [0, 1, 2, 3] : [0, 1, 3]) + (openClawIDEnabled ? [5, 9] : [9])
         case .remote:
             [0, 1, 4, 3, 9]
         case .unconfigured:
@@ -753,7 +758,13 @@ struct OnboardingView: View {
         if self.finishState.connectionCompletion != nil { return [0, 1, 4, 9] }
         return Self.pageOrder(
             for: self.selectedConnectionMode,
-            requiresCLIInstall: self.requiresLocalCLI && !self.cliInstalled)
+            requiresCLIInstall: self.requiresLocalCLI && !self.cliInstalled,
+            joinedClaw: self.primaryIsJoinedClaw)
+    }
+
+    var primaryIsJoinedClaw: Bool {
+        MacOpenClawIDJoinCompletion.primaryIsJoinedClaw(
+            mode: self.state.connectionMode, remoteUrl: self.state.remoteUrl)
     }
 
     var pageCount: Int {
@@ -905,7 +916,7 @@ struct OnboardingView: View {
         initialPage: OnboardingFirstRun.Page = .welcome,
         initialError: String? = nil,
         state: AppState = AppStateStore.shared,
-        openClawIDService: any OnboardingOpenClawIDService = OnboardingNodeInvitationService(),
+        openClawIDService: any OnboardingOpenClawIDService = OnboardingOpenClawIDSignInService(),
         discoveryModel: GatewayDiscoveryModel = GatewayDiscoveryModel(
             localDisplayName: InstanceIdentity.displayName,
             filterLocalGateways: false),

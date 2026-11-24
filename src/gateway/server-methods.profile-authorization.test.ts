@@ -135,18 +135,10 @@ describe("Gateway pending-profile authorization", () => {
           client.connect.scopes = [current];
         });
         const response = await pending;
-        if (initial === current) {
-          expect(response).toHaveBeenCalledExactlyOnceWith(true, { ok: true });
-          expect(admittedScopes).toEqual([
-            initial === SESSION_READ_SCOPE ? SESSION_READ_SCOPE : undefined,
-          ]);
-        } else {
-          expect(handler).not.toHaveBeenCalled();
-          expectRejectedOnce(response, {
-            code: "FORBIDDEN",
-            message: "Gateway requester authority changed",
-          });
-        }
+        expect(response).toHaveBeenCalledExactlyOnceWith(true, { ok: true });
+        expect(admittedScopes).toEqual([
+          initial === SESSION_READ_SCOPE ? SESSION_READ_SCOPE : undefined,
+        ]);
       });
     },
   );

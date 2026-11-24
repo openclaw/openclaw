@@ -351,6 +351,8 @@ class TdClient:
         self.lib.td_execute(json.dumps({"@type": "setLogVerbosityLevel", "new_verbosity_level": 0}).encode())
         self.client = self.lib.td_json_client_create()
         self.extra = 0
+        self.startup_phase = None
+        self.connection_state = "unknown"
         self.users = {}
         self.updates = []
         atexit.register(self.destroy)
@@ -395,6 +397,12 @@ class TdClient:
         if not raw:
             return None
         item = json.loads(raw.decode())
+        if item.get("@type") == "updateConnectionState":
+            state = (item.get("state") or {}).get("@type")
+            self.connection_state = state if state in (
+                "connectionStateWaitingForNetwork", "connectionStateConnectingToProxy",
+                "connectionStateConnecting", "connectionStateUpdating", "connectionStateReady",
+            ) else "unknown"
         if item.get("@type") == "updateUser":
             user = item.get("user") or {}
             self.users[int(user["id"])] = user
@@ -407,7 +415,26 @@ class TdClient:
         self.client = None
         self.lib.td_json_client_destroy(client)
 
+    def startup_diagnostic(self, **fields):
+        if getattr(self, "startup_phase", None):
+            # Only fixed phases/methods/classifications, never request or response payloads.
+            # The adapter retains the last 4096 stderr bytes, not an unbounded update log.
+            print(json.dumps({"type": "startup", "phase": self.startup_phase, **fields},
+                             separators=(",", ":")), file=sys.stderr, flush=True)
+
+    def set_startup_phase(self, phase):
+        self.startup_phase = phase
+        self.startup_diagnostic()
+
     def request(self, payload, timeout=20):
+        started = time.monotonic()
+        def diagnose(outcome):
+            if payload["@type"] in ("getChat", "loadChats"):
+                self.startup_diagnostic(
+                    method=payload["@type"], outcome=outcome,
+                    elapsedMs=round((time.monotonic() - started) * 1000),
+                    connectionState=getattr(self, "connection_state", "unknown"),
+                )
         extra = self.send(payload)
         deadline = time.time() + timeout
         while time.time() < deadline:
@@ -417,14 +444,21 @@ class TdClient:
             if item.get("@extra") == extra:
                 if item.get("@type") == "error":
                     message = item.get("message") or "TDLib error"
+                    diagnose(
+                        "chat-not-found" if payload["@type"] == "getChat"
+                        and item.get("code") == 400 and message == "Chat not found"
+                        else "error"
+                    )
                     raise TdRequestError(
                         f"{payload['@type']} failed ({item.get('code')}): {message}",
                         tdlib_code=item.get("code"),
                         tdlib_message=message,
                         tdlib_method=payload["@type"],
                     )
+                diagnose("ok")
                 return item
             self.updates.append(item)
+        diagnose("timeout")
         raise DriverError(
             f"Timed out waiting for {payload['@type']}",
             tdlib_method=payload["@type"],
@@ -1901,15 +1935,22 @@ def write_ndjson(payload):
 def command_serve(args):
     config, bot_config = load_config()
     driver = UserDriver(config, bot_config)
+    driver.client.set_startup_phase("authorize")
     driver.authorize(argparse.Namespace(timeout_ms=args.timeout_ms))
+    driver.client.set_startup_phase("selected-chat")
     chat_id = driver.resolve_chat(args.chat)
+    driver.client.set_startup_phase("identity")
     tester = driver.client.request({"@type": "getMe"})
+    driver.client.set_startup_phase("selected-chat-access")
     driver.check_group_write_access(chat_id, tester["id"])
     selected_chats = {chat_id}
     for target in getattr(args, "observe_chat", []):
+        driver.client.set_startup_phase("observer-chat")
         selected = driver.resolve_chat(target)
+        driver.client.set_startup_phase("observer-chat-access")
         driver.check_group_write_access(selected, tester["id"])
         selected_chats.add(selected)
+    driver.client.set_startup_phase(None)
     write_ndjson(
         {
             "type": "ready",

@@ -3,6 +3,7 @@ import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/st
 import { normalizePluginsConfig, type NormalizedPluginsConfig } from "../plugins/config-state.js";
 import { isManifestPluginAvailableForControlPlane } from "../plugins/manifest-contract-eligibility.js";
 import { resolveProviderAuthScope } from "../plugins/provider-auth-scope.js";
+import { createProviderModelRoutesResolver } from "../plugins/provider-model-routes.js";
 import { resolveProviderRefOwnership } from "../plugins/providers.js";
 import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
 import { getActiveSecretsRuntimeSnapshotRevisionState } from "../secrets/runtime-state.js";
@@ -124,13 +125,15 @@ export function createModelCatalogDecisions(params: ModelCatalogDecisionParams) 
     resolveNativeModelPrimary(params.cfg, params.agentId) ?? "",
   ).profile;
   const primary = resolveDefaultModelForAgent({ ...params, manifestPlugins: metadataSnapshot });
-  const primaryEntry = { provider: primary.provider, id: primary.model };
+  const primaryEntry = primary && { provider: primary.provider, id: primary.model };
   // This decision view owns one plugin metadata generation. Resolve each provider's
   // identity policy once for that view instead of reloading it for every catalog row.
   const modelKeyOf = createModelCatalogIdentityKeyResolver();
-  const primaryKey = modelKeyOf(primaryEntry);
+  const primaryKey = primaryEntry && modelKeyOf(primaryEntry);
   const configuredPinForEntry = (entry: Pick<ModelCatalogEntry, "provider" | "id">) =>
-    configuredProfileId !== undefined && modelKeyOf(entry) === primaryKey
+    configuredProfileId !== undefined &&
+    primaryKey !== undefined &&
+    modelKeyOf(entry) === primaryKey
       ? configuredProfileId
       : undefined;
   // Runtime choices are read after preparation; CLI backends belong to the owner's registry.
@@ -235,15 +238,25 @@ export function createModelCatalogDecisions(params: ModelCatalogDecisionParams) 
     get refreshFailed() {
       return statusSource.refreshFailed;
     },
+    get refreshFailures() {
+      return statusSource.refreshFailures;
+    },
     get pendingProviders() {
       return statusSource.pendingProviders;
     },
   };
+  // Share only stable provider/config indexes within this decision owner, never account decisions.
+  const resolveOpenAIProviderRoutes = createProviderModelRoutesResolver({
+    provider: "openai",
+    config: params.cfg,
+    env: process.env,
+  });
   const nativeEvaluator = prepareModelCatalogView({
     ...params,
     snapshot,
     workspaceDir,
     profileProvider,
+    resolveOpenAIProviderRoutes,
   }).evaluateNative;
   // A selected profile is host-owned auth, not evidence from the shared native
   // login; the harness evaluator already applies this rule to session pins.
@@ -302,6 +315,7 @@ export function createModelCatalogDecisions(params: ModelCatalogDecisionParams) 
     externalCliProviderIds: resolveExternalCliAuthScopeFromConfig(params.cfg)?.providerIds ?? [],
     preparedRuntimeAuthStore: authStore,
     routeResolverFactory: params.routeResolverFactory,
+    resolveOpenAIProviderRoutes,
     // Read at evaluation time: selected-account discovery replaces outcomes in place. Entitlement
     // is per account, so only the listing discovery made with this exact credential applies.
     accountListedModelIds: (provider, profileId) => {
@@ -451,9 +465,13 @@ export function createModelCatalogDecisions(params: ModelCatalogDecisionParams) 
     if (selectedProfileId && profileProvider) {
       selections.set(selectedProfileId, normalizeProviderId(profileProvider));
     }
-    if (configuredProfileId && pinnedProfileForEntry(primaryEntry) === configuredProfileId) {
+    if (
+      configuredProfileId &&
+      primaryEntry &&
+      pinnedProfileForEntry(primaryEntry) === configuredProfileId
+    ) {
       // Automatic session preferences can still own siblings; retain both account inventories.
-      selections.set(configuredProfileId, normalizeProviderId(primary.provider));
+      selections.set(configuredProfileId, normalizeProviderId(primaryEntry.provider));
     }
     for (const [profileId, providerId] of selections) {
       const credential = await withCurrentReadAuthority(
@@ -541,6 +559,7 @@ export function createModelCatalogDecisions(params: ModelCatalogDecisionParams) 
               entry,
               evaluation,
               pluginRegistry: params.pluginRegistry,
+              resolveOpenAIProviderRoutes,
             })?.id ?? "openclaw";
           const selected = selectModelCatalogRuntimeEntry({ entry, routeVariants, runtimeId });
           return view.project(selected.entry, evaluation, selected.variants).runtimeEntry;
@@ -557,6 +576,7 @@ export function createModelCatalogDecisions(params: ModelCatalogDecisionParams) 
       pinnedProfileForEntry(entry) !== undefined,
     evaluateEntry,
     evaluateNative,
+    resolveOpenAIProviderRoutes,
     snapshot,
     metadataSnapshot,
     authStore,
@@ -572,6 +592,7 @@ export function createModelCatalogDecisions(params: ModelCatalogDecisionParams) 
         entry,
         evaluation: initial,
         pluginRegistry: params.pluginRegistry,
+        resolveOpenAIProviderRoutes,
       });
       const candidates = new Set([
         selected?.id ?? "openclaw",
@@ -610,6 +631,7 @@ export function createModelCatalogDecisions(params: ModelCatalogDecisionParams) 
           modelApi: route?.api ?? entry.api,
           modelBaseUrl: route?.baseUrl ?? entry.baseUrl,
           requestTransportOverrides: route?.requestTransportOverrides,
+          resolveOpenAIProviderRoutes,
         });
         if (policy.forcedByEnvironment && policy.runtime !== runtimeId) {
           continue;

@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { gzipSync } from "node:zlib";
-import * as tar from "tar";
+import * as tar from "tar/raw";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { runCommandWithRuntime } from "../cli/cli-utils.js";
@@ -16,12 +16,12 @@ import * as backupVerifySpool from "./backup-verify-spool.js";
 import { backupVerifyCommand, verifyBackupArchive } from "./backup-verify.js";
 import { createTestRuntime } from "./test-runtime-config-helpers.js";
 
-vi.mock("tar", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("tar")>();
+vi.mock("tar/raw", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("tar/raw")>();
   return { ...actual, t: vi.fn(actual.t), x: vi.fn(actual.x) };
 });
 
-const actualTar = await vi.importActual<typeof import("tar")>("tar");
+const actualTar = await vi.importActual<typeof import("tar/raw")>("tar/raw");
 
 const TEST_ARCHIVE_ROOT = "2026-03-09T00-00-00.000Z-openclaw-backup";
 const STATE_ROOT = `${TEST_ARCHIVE_ROOT}/payload/posix/tmp/.openclaw`;
@@ -488,7 +488,16 @@ describe("backupVerifyCommand", () => {
       `Backup archive verification failed: ${archivePath}. Archive is not a valid OpenClaw backup. path is required. Choose another archive or create a new one with \`openclaw backup create\`.`,
     );
     expect(runtime.exit).toHaveBeenCalledWith(1);
-    expect(runtime.log).not.toHaveBeenCalled();
+    const progress = runtime.log.mock.calls.map(([line]) => {
+      if (typeof line !== "string") {
+        throw new Error("Backup progress must be a string");
+      }
+      return line;
+    });
+    expect(progress).toHaveLength(4);
+    expect(progress.every((line) => line.startsWith("Backup progress: "))).toBe(true);
+    expect(progress.some((line) => line.includes("phase=summary"))).toBe(true);
+    expect(progress.join("\n")).not.toContain(archivePath);
   });
 
   it("verifies the declared agent owner beneath a standalone agent asset", async () => {

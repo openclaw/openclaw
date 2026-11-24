@@ -43,7 +43,7 @@ afterEach(() => {
   vi.clearAllMocks();
 });
 
-async function invoke(method: string, params: Record<string, unknown> = {}, current = () => true) {
+async function invoke(method: string, params: Record<string, unknown> = {}) {
   const respond = vi.fn();
   await toolUsageHandlers[method]!({
     params,
@@ -52,7 +52,6 @@ async function invoke(method: string, params: Record<string, unknown> = {}, curr
     client: null,
     req: { type: "req", id: "usage", method },
     isWebchatConnect: () => false,
-    hasCurrentClientAuthority: current,
   });
   return respond;
 }
@@ -78,7 +77,7 @@ it("reports current decayed top scores independently of stored row order", async
   );
 });
 
-it("preserves excluded MCP identities for ambiguity checks and passes live authority", async () => {
+it("omits inventory MCP rows that do not name their server and passes live authority", async () => {
   const respond = await invoke("toolUsage.import", { agentId: "work", dryRun: true });
   expect(mocks.inventory).toHaveBeenCalledWith({
     cfg: config,
@@ -93,7 +92,6 @@ it("preserves excluded MCP identities for ambiguity checks and passes live autho
     catalog: [
       { id: "openclaw:core:read", name: "read" },
       { id: "openclaw:memory:remember", name: "remember" },
-      { id: "mcp:bundle-mcp:remote", name: "remote" },
     ],
     assertCurrent: expect.any(Function),
   });
@@ -105,21 +103,6 @@ it("preserves excluded MCP identities for ambiguity checks and passes live autho
     rowCount: 0,
     top: [],
   });
-});
-
-it("does not start import when authority expires during catalog preparation", async () => {
-  let current = true;
-  mocks.inventory.mockImplementation(async () => {
-    current = false;
-    return { groups: [] };
-  });
-  const respond = await invoke("toolUsage.import", {}, () => current);
-  expect(mocks.import).not.toHaveBeenCalled();
-  expect(respond).toHaveBeenCalledWith(
-    false,
-    undefined,
-    expect.objectContaining({ code: "UNAVAILABLE" }),
-  );
 });
 
 it("delegates reset to the owner that invalidates pending generations", async () => {

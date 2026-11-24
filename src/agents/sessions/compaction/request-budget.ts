@@ -1,8 +1,9 @@
 import {
   commitCompactionSummary,
   resolveSummaryFloorChars,
+  type PreparedCompactionFloor,
 } from "../../../../packages/agent-core/src/harness/compaction/compaction-floor.js";
-import { MAX_COMPACTION_SUMMARY_CHARS } from "../../../../packages/agent-core/src/harness/compaction/compaction.js";
+import { MAX_COMPACTION_SUMMARY_CHARS } from "../../../../packages/agent-core/src/harness/compaction/compaction-summary-budget.js";
 import { createSubsystemLogger } from "../../../logging/subsystem.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import type { PromptOptions } from "../agent-session-types.js";
@@ -13,29 +14,7 @@ import {
   estimateVariableRequestTokens,
   type FixedRequestTokenPressure,
 } from "../context-token-pressure.js";
-
-/** Ephemeral foreground facts; a separately routed summarizer cannot reconstruct these. */
-export type CompactionRequestBudget = Readonly<{
-  contextWindow: number;
-  reserveTokens: number;
-  fixedTokens: number;
-  pendingTokens: number;
-  /** Known queue reservation, replaced by the SDK's projected queue at submission. */
-  pendingQueuedContextTokens?: number;
-  /** Overlap credit applies only to the user body, never newly added context. */
-  pendingUserTokens?: number;
-  pendingUserIdempotencyKey?: string;
-}>;
-
-/** Input preservation exists before the foreground prompt can supply a token budget. */
-export type CompactionRequestConstraints = Readonly<{
-  requestBudget?: CompactionRequestBudget;
-  /** Source of the active run, including after its input has been processed. */
-  requestFromEntryId?: string;
-  pendingUserEntryId?: string;
-  /** The pending request cannot run until this compaction commits, such as a required preflight. */
-  requestRequiresCompaction?: true;
-}>;
+import type { CompactionRequestBudget } from "./preparation.types.js";
 
 const log = createSubsystemLogger("agents/session");
 const promptRequestBudgets = new WeakMap<PromptOptions, CompactionRequestBudget>();
@@ -155,7 +134,10 @@ export function estimateCompactedRequestTokens(
 export function replayTokenBudget(
   session: {
     agent: {
-      state: Pick<Parameters<typeof createCompactionRequestBudget>[0], "systemPrompt" | "tools">;
+      state: Pick<
+        Parameters<typeof createCompactionRequestBudget>[0],
+        "systemPrompt" | "tools" | "fixedTokenPressure"
+      >;
     };
   },
   model: { contextWindow?: number },
@@ -165,12 +147,13 @@ export function replayTokenBudget(
   if (!model.contextWindow || model.contextWindow <= 0) {
     return undefined;
   }
-  const { systemPrompt, tools } = session.agent.state;
+  const { systemPrompt, tools, fixedTokenPressure } = session.agent.state;
   const budget = createCompactionRequestBudget({
     contextWindow: 0,
     reserveTokens: 0,
     systemPrompt,
     tools,
+    fixedTokenPressure,
   });
   const remaining =
     model.contextWindow - settings.reserveTokens - estimateCompactedRequestTokens(messages, budget);
@@ -184,38 +167,49 @@ export function commitSessionCompactionSummary(
   preparation: Parameters<typeof commitCompactionSummary>[1],
   withoutSummary: boolean,
   replayBudget: () => number | undefined,
+  preparedFloor?: PreparedCompactionFloor,
 ): string {
-  return commitCompactionSummary(result, preparation, withoutSummary, replayBudget, (reduction) =>
-    log.warn(
-      `[compaction] summary floor ${reduction.keptChars ? "shrunk" : "dropped"} for the ` +
-        `${reduction.source} token budget: kept ${reduction.keptChars}/${reduction.floorChars} ` +
-        `floor chars; summaryTokenBudget=${reduction.tokenBudget}`,
-    ),
+  return commitCompactionSummary(
+    result,
+    preparation,
+    withoutSummary,
+    replayBudget,
+    (reduction) =>
+      log.warn(
+        `[compaction] summary floor ${reduction.keptChars ? "shrunk" : "dropped"} for the ` +
+          `${reduction.source} token budget: kept ${reduction.keptChars}/${reduction.floorChars} ` +
+          `floor chars; summaryTokenBudget=${reduction.tokenBudget}`,
+      ),
+    preparedFloor,
   );
 }
 
-export function assertCompactionRequestCanFit(
-  messages: AgentMessage[],
+/** Lazy scalar estimates preserve the public array estimator's short-circuit call order. */
+export function assertCompactionRequestCanFitFromTokens(
+  historyTokens: number | (() => number),
   budget: CompactionRequestBudget | undefined,
   hasCompactableHistory: boolean,
 ): void {
   // Try useful history reduction for pending input; only fixed overhead is unreclaimable here.
   if (budget && (!hasCompactableHistory || budget.fixedTokens > budget.contextWindow)) {
-    const requestTokens = estimateCompactedRequestTokens(messages, budget);
+    const requestTokens =
+      budget.fixedTokens +
+      budget.pendingTokens +
+      (typeof historyTokens === "function" ? historyTokens() : historyTokens);
     if (requestTokens > budget.contextWindow) {
-      const historyTokens = requestTokens - budget.fixedTokens - budget.pendingTokens;
+      const retainedTokens = requestTokens - budget.fixedTokens - budget.pendingTokens;
       throw new Error(
         `The estimated foreground request budget still exceeds the ${budget.contextWindow}-token model window ` +
-          `(fixed instructions and tools: ${budget.fixedTokens}; pending input: ${budget.pendingTokens}; retained history: ${historyTokens}). ` +
+          `(fixed instructions and tools: ${budget.fixedTokens}; pending input: ${budget.pendingTokens}; retained history: ${retainedTokens}). ` +
           "No further history compaction can make this request fit. Use /context detail to reduce fixed context, shorten the request, or select a larger-context model.",
       );
     }
   }
 }
 
-export function resolveCompactionRetentionBudget(
+export function resolveCompactionRetentionBudgetFromTokens(
   budget: CompactionRequestBudget,
-  messages: AgentMessage[],
+  historyTokens: number | (() => number),
   maxSummaryChars = MAX_COMPACTION_SUMMARY_CHARS,
 ) {
   const preferredTokens =
@@ -223,7 +217,9 @@ export function resolveCompactionRetentionBudget(
   // Fixed prompt and pending input cannot be reclaimed. An approximate reserve
   // target must not prevent useful history reduction for an accepted request.
   const maxTokens =
-    preferredTokens <= 0 ? estimateCompactionHistoryTokens(messages, budget) - 1 : preferredTokens;
+    preferredTokens <= 0
+      ? (typeof historyTokens === "function" ? historyTokens() : historyTokens) - 1
+      : preferredTokens;
   const summaryTokens = estimateCompactionHistoryTokens([
     {
       role: "compactionSummary",

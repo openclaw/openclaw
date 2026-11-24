@@ -1,13 +1,11 @@
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-import { CHAT_PENDING_INPUT_MESSAGE_PREFIX } from "../../../../packages/gateway-protocol/src/schema/chat-history-constants.js";
 import { stripInboundMetadata } from "../../../../src/auto-reply/reply/strip-inbound-meta.js";
 import { resolveToolUseId } from "../../../../src/chat/tool-content.js";
-import { fnv1aUtf16 } from "../../../../src/shared/fnv1a.js";
+import { messageSubagentCompletions } from "../../../../src/shared/subagent-completion.js";
 import { markdownVisibleText } from "../../components/markdown-visible-text.ts";
 import type { ChatItem, ChatQueueItem } from "../../lib/chat/chat-types.ts";
-import { readChatThreadMessageIdentity } from "../../lib/chat/history-message-identity.ts";
 import { prepareChatMessageRender } from "../../lib/chat/message-display.ts";
 import { extractTextCached, readTranscriptMediaEntries } from "../../lib/chat/message-extract.ts";
 import {
@@ -29,9 +27,17 @@ import {
   resolveFullMessageRecovery,
   type ChatMessageRecovery,
 } from "./chat-message-recovery.ts";
+import { subagentCompletionText } from "./chat-spawned-subagent.ts";
 import { chatItemStartsUserTurn, safeNormalizeMessage } from "./chat-turn-boundary.ts";
 import { copyLiveTerminalIdentity } from "./terminal-message-identity.ts";
 import { buildLocalUserMessage } from "./user-message-content.ts";
+
+export {
+  buildMessageItems,
+  isPendingSendMessage,
+  persistedMessageEntryId,
+  transcriptMessageSourceKey,
+} from "./chat-thread-item-identity.ts";
 
 export function appendCanvasBlockToAssistantMessage(
   message: unknown,
@@ -83,6 +89,14 @@ export function createChatSearchMatcher(
   const sourceMatches = (markdown: string | null) =>
     normalizeLowercaseStringOrEmpty(markdown).normalize("NFC").includes(normalizedQuery);
   return (message) => {
+    const completions = messageSubagentCompletions(message);
+    if (
+      completions.length &&
+      (sourceMatches(completions.map((entry) => entry.label ?? "").join("\n")) ||
+        sourceMatches(subagentCompletionText(completions)))
+    ) {
+      return true;
+    }
     const role = recovery ? normalizeRoleForGrouping(normalizeMessage(message).role) : "";
     const expansion = recovery
       ? resolveFullMessageRecovery(message, role, {
@@ -323,10 +337,6 @@ export function resolveToolBlockId(
   return resolveToolUseId(block) ?? resolveMessageToolUseId(message);
 }
 
-export function isPendingSendMessage(message: unknown): boolean {
-  return asRecord(asRecord(message)?.["__openclaw"])?.kind === "pending-send";
-}
-
 export function readPendingSendStatus(message: unknown): {
   error?: string;
   id: string;
@@ -360,87 +370,6 @@ export function readPendingSendStatus(message: unknown): {
     state,
     ...(typeof metadata.error === "string" ? { error: metadata.error } : {}),
   };
-}
-
-export function persistedMessageEntryId(message: unknown): string | null {
-  const id = readChatThreadMessageIdentity(message)?.id;
-  return isPendingSendMessage(message) || id?.startsWith(CHAT_PENDING_INPUT_MESSAGE_PREFIX)
-    ? null
-    : (id ?? null);
-}
-
-export function transcriptMessageSourceKey(message: unknown): string | null {
-  // Send identity outranks transcript ids: the same submit is re-projected with
-  // different id/seq metadata across the pending -> history handoff, and a key
-  // change there remounts the bubble (visible flicker).
-  const identity = readChatThreadMessageIdentity(message);
-  if (identity?.sendId) {
-    return `send:${identity.sendId}`;
-  }
-  if (identity?.isImported) {
-    if (identity.externalSource) {
-      return `import:${identity.externalSource}`;
-    }
-    return identity.sequence === null ? null : `import-seq:${identity.sequence}`;
-  }
-  if (identity?.id) {
-    return `id:${identity.id}`;
-  }
-  return identity?.sequence == null ? null : `seq:${identity.sequence}`;
-}
-
-const messageProjectionDigests = new WeakMap<object, string>();
-
-function messageProjectionDigest(message: unknown): string {
-  if (message && typeof message === "object") {
-    const cached = messageProjectionDigests.get(message);
-    if (cached) {
-      return cached;
-    }
-  }
-  const record = asRecord(message);
-  const source = [
-    typeof record?.role === "string" ? record.role : "",
-    typeof record?.toolCallId === "string" ? record.toolCallId : "",
-    record ? extractTextCached(message) : "",
-  ].join("\u0000");
-  const digest = `p${fnv1aUtf16(source).toString(36)}${source.length.toString(36)}`;
-  if (message && typeof message === "object") {
-    messageProjectionDigests.set(message, digest);
-  }
-  return digest;
-}
-
-export function buildMessageItems<Message>(
-  messages: Message[],
-  resolveSourceKey: (message: Message) => string | null = transcriptMessageSourceKey,
-): Array<Extract<ChatItem, { kind: "message" }> & { message: Message }> {
-  const sourceKeys = messages.map(resolveSourceKey);
-  const sourceCounts = new Map<string, number>();
-  for (const sourceKey of sourceKeys) {
-    if (sourceKey) {
-      sourceCounts.set(sourceKey, (sourceCounts.get(sourceKey) ?? 0) + 1);
-    }
-  }
-  const projectionOccurrences = new Map<string, number>();
-  return messages.map((message, index) => {
-    const sourceKey = sourceKeys[index];
-    const needsProjectionIdentity = sourceKey == null || (sourceCounts.get(sourceKey) ?? 0) > 1;
-    const projectionKey = needsProjectionIdentity
-      ? `${sourceKey ?? "legacy"}:projection:${messageProjectionDigest(message)}`
-      : (sourceKey ?? "legacy");
-    const occurrence = projectionOccurrences.get(projectionKey) ?? 0;
-    projectionOccurrences.set(projectionKey, occurrence + 1);
-    const record = asRecord(message);
-    const callId = typeof record?.toolCallId === "string" ? record.toolCallId : "";
-    const role = typeof record?.role === "string" ? record.role : "unknown";
-    const transcriptKey = `${projectionKey}:${occurrence}`;
-    return {
-      kind: "message",
-      key: callId ? `tool:${role}:${callId}:${transcriptKey}` : `msg:${transcriptKey}`,
-      message,
-    };
-  });
 }
 
 export function hasRenderableNormalizedMessage(
@@ -507,16 +436,14 @@ function chatItemTimestamp(item: ChatItem): number | null {
 }
 
 export function timestampAfterVisibleItems(items: ChatItem[], desiredTimestamp: number): number {
-  const latestTimestamp = items.reduce<number | null>((latest, item) => {
-    const timestamp = chatItemTimestamp(item);
-    if (timestamp == null) {
-      return latest;
+  let next = desiredTimestamp;
+  for (const item of items) {
+    const time = chatItemTimestamp(item);
+    if (time != null && time >= desiredTimestamp) {
+      next = Math.max(next, time + 1);
     }
-    return latest == null || timestamp > latest ? timestamp : latest;
-  }, null);
-  return latestTimestamp != null && desiredTimestamp <= latestTimestamp
-    ? latestTimestamp + 1
-    : desiredTimestamp;
+  }
+  return next;
 }
 
 // Insert live tool/stream items into an already-ordered list of stable chat rows
@@ -555,91 +482,63 @@ export function appendActiveRunItem(
 ): void {
   // Queued custody is a ceiling for the whole live response, not just its text.
   // Moving its working indicator past that ceiling splits and remeasures the run.
-  if (bounds) {
-    const { maximum } = insertionIndexesForBounds(items, bounds);
-    items.splice(maximum, 0, item);
-  } else {
-    items.push(item);
-  }
+  items.splice(insertionIndexesForBounds(items, bounds).maximum, 0, item);
 }
 
 export function insertChatItemsByTimestamp(items: ChatItem[], inserts: ChatProjection[]): void {
-  const timestampsByKey = new Map<string, number>();
-  const placementsByKey = new Map<string, Pick<ChatProjection, "bounds" | "predecessorKey">>();
-  for (const { item, bounds, predecessorKey } of inserts) {
+  // Repeated logical keys share the last supplied fact for each field. Keep each
+  // occurrence's own time, but never erase another occurrence's causal constraint.
+  type Placement = Pick<ChatProjection, "bounds" | "predecessorKey"> & { timestamp?: number };
+  const placements = new Map<string, Placement>();
+  const ordered = inserts.map(({ item, bounds, predecessorKey }) => {
+    const placement = placements.get(item.key) ?? {};
     const timestamp = chatItemTimestamp(item);
     if (timestamp != null) {
-      timestampsByKey.set(item.key, timestamp);
+      placement.timestamp = timestamp;
     }
-    // Repeated logical keys share the last supplied fact for each field;
-    // an unbounded projection must not erase an earlier causal constraint.
-    const placement = placementsByKey.get(item.key) ?? {};
     if (bounds) {
       placement.bounds = bounds;
     }
     if (predecessorKey) {
       placement.predecessorKey = predecessorKey;
     }
-    placementsByKey.set(item.key, placement);
-  }
-  // Sort inserts among themselves by timestamp, preserving the original index
-  // order for ties and honoring predecessor relationships so a stream segment
-  // stays before the tool card it introduced.
-  const sortedInserts = inserts
-    .map(({ item }, index) => {
-      const rawTimestamp = chatItemTimestamp(item);
-      const predecessorKey = placementsByKey.get(item.key)?.predecessorKey;
-      const predecessorTimestamp = predecessorKey ? timestampsByKey.get(predecessorKey) : null;
-      return {
-        item,
-        index,
-        predecessorKey,
-        effectiveTimestamp:
-          rawTimestamp != null && predecessorTimestamp != null
-            ? Math.max(rawTimestamp, predecessorTimestamp)
-            : rawTimestamp,
-      };
-    })
-    .toSorted((a, b) => {
-      if (a.effectiveTimestamp == null) {
-        return b.effectiveTimestamp == null ? a.index - b.index : 1;
-      }
-      if (b.effectiveTimestamp == null) {
-        return -1;
-      }
-      if (a.effectiveTimestamp !== b.effectiveTimestamp) {
-        return a.effectiveTimestamp - b.effectiveTimestamp;
-      }
-      if (a.predecessorKey === b.item.key) {
-        return 1;
-      }
-      if (b.predecessorKey === a.item.key) {
-        return -1;
-      }
-      return a.index - b.index;
-    });
-
-  for (const { item, effectiveTimestamp } of sortedInserts) {
-    const { minimum, maximum } = insertionIndexesForBounds(
-      items,
-      placementsByKey.get(item.key)?.bounds,
-    );
-    if (effectiveTimestamp == null) {
-      items.splice(maximum, 0, item);
-      continue;
+    placements.set(item.key, placement);
+    return { item, placement, timestamp };
+  });
+  for (const entry of ordered) {
+    const key = entry.placement.predecessorKey;
+    const predecessor = key ? placements.get(key)?.timestamp : undefined;
+    if (entry.timestamp != null && predecessor != null) {
+      entry.timestamp = Math.max(entry.timestamp, predecessor);
     }
-    const insertionIndex = items.findIndex((existing, index) => {
-      if (index < minimum || index >= maximum) {
-        return false;
+  }
+  // Array.sort is stable: only exact ties linked by a witnessed predecessor move.
+  ordered.sort((a, b) => {
+    if (a.timestamp == null || b.timestamp == null) {
+      return Number(a.timestamp == null) - Number(b.timestamp == null);
+    }
+    return (
+      a.timestamp - b.timestamp ||
+      (a.placement.predecessorKey === b.item.key
+        ? 1
+        : b.placement.predecessorKey === a.item.key
+          ? -1
+          : 0)
+    );
+  });
+  for (const { item, placement, timestamp } of ordered) {
+    const { minimum, maximum } = insertionIndexesForBounds(items, placement.bounds);
+    let index = maximum;
+    if (timestamp != null) {
+      for (let i = minimum; i < maximum; i++) {
+        const existing = items[i];
+        const existingTime = existing && chatItemTimestamp(existing);
+        if (existingTime == null || existingTime > timestamp) {
+          index = i;
+          break;
+        }
       }
-      const existingTimestamp = chatItemTimestamp(existing);
-      // Timestamped inserts render before stable items that lack a timestamp.
-      if (existingTimestamp == null) {
-        return true;
-      }
-      return existingTimestamp > effectiveTimestamp;
-    });
-
-    items.splice(insertionIndex === -1 ? maximum : insertionIndex, 0, item);
+    }
+    items.splice(index, 0, item);
   }
 }

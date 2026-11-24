@@ -1,4 +1,5 @@
-import type { Mock } from "vitest";
+import fs from "node:fs";
+import { vi, type Mock } from "vitest";
 
 /** Full-Chrome fixtures have no lockless headless-shell profile writers. */
 export function createChromeInternalProcessMock(
@@ -20,4 +21,20 @@ export function createChromeInternalProcessMock(
     execFileSync,
     spawn: (...args: unknown[]) => spawnMock(...args),
   };
+}
+
+export function stubBrowserExecutableAndPrefs(
+  preferences: "present" | "missing",
+  executablePath?: string,
+) {
+  vi.spyOn(fs, "existsSync").mockImplementation((p) => {
+    const value = String(p);
+    const isExecutable = executablePath
+      ? value === executablePath
+      : value.includes("Google Chrome") ||
+        value.includes("google-chrome") ||
+        value.includes("/usr/bin/chromium");
+    const isPreferences = value.endsWith("Local State") || value.endsWith("Preferences");
+    return isExecutable || (preferences === "present" && isPreferences);
+  });
 }

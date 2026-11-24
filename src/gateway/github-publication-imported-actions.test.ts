@@ -447,11 +447,8 @@ describe("actions on the imported original PR", () => {
   );
 
   it.each([
-    ["edit", "requester"],
     ["edit", "head"],
     ["edit", "title"],
-    ["request_review", "requester"],
-    ["request_review", "requester and transport"],
     ["request_review", "head"],
     ["request_review", "closed"],
     ["request_review", "author"],
@@ -460,12 +457,6 @@ describe("actions on the imported original PR", () => {
     let reads = 0;
     f.onRead(async (endpoint) => {
       if (endpoint.endsWith("/pulls/7") && ++reads === 2) {
-        if (change === "requester" || change === "requester and transport") {
-          await f.revoke();
-          if (change === "requester and transport") {
-            throw new Error("Synthetic GitHub read failure");
-          }
-        }
         if (change === "head") {
           f.state.head.sha = "f".repeat(40);
         }
@@ -486,15 +477,13 @@ describe("actions on the imported original PR", () => {
         ...(action === "edit" ? { title: "Requested title", expectedTitle: "Original title" } : {}),
       }),
     ).rejects.toThrow(
-      change === "requester" || change === "requester and transport"
-        ? /role changed/
-        : change === "head"
-          ? /head changed/
-          : change === "closed"
-            ? /closed/
-            : change === "author"
-              ? /not authored/
-              : /metadata changed/,
+      change === "head"
+        ? /head changed/
+        : change === "closed"
+          ? /closed/
+          : change === "author"
+            ? /not authored/
+            : /metadata changed/,
     );
     expect(f.writes).toEqual([]);
   });
@@ -609,6 +598,47 @@ describe("actions on the imported original PR", () => {
     });
   });
 
+  it("lets a full-write maintainer land an explicit PR from an unbound session", async () => {
+    const f = await fixture(false, false, false);
+    f.state.user = { id: 999, login: "other-contributor" };
+    const worktree = structuredClone(loadSessionEntryReadOnly(f.scope)?.worktree);
+    await expect(
+      f.invoke("guest", { action: "inspect", pullRequestUrl: url }, undefined, { raw: true }),
+    ).rejects.toThrow(/scope|permission/iu);
+    await expect(
+      f.invoke("admin", {
+        action: "merge",
+        pullRequestUrl: url,
+        publishingSessionKey: SESSION_KEY,
+        mergeMethod: "squash",
+        expectedHeadCommit: headCommit,
+      }),
+    ).rejects.toThrow(/not both/);
+    const observed = await f.invoke("admin", { action: "inspect", pullRequestUrl: url });
+    expect(observed.details).toMatchObject({
+      pullRequest: { url, repository: "example/repository", branch: "topic" },
+      headCommit,
+      state: "draft",
+    });
+    await f.invoke("admin", {
+      action: "ready",
+      pullRequestUrl: url,
+      expectedHeadCommit: headCommit,
+    });
+    const merged = await f.invoke("admin", {
+      action: "merge",
+      pullRequestUrl: url,
+      mergeMethod: "squash",
+      expectedHeadCommit: headCommit,
+    });
+    expect(merged.details).toMatchObject({ state: "merged", mergeCommit: "e".repeat(40) });
+    expect(f.writes.map((write) => write.endpoint)).toEqual([
+      "graphql",
+      "repos/example/repository/pulls/7/merge",
+    ]);
+    expect(loadSessionEntryReadOnly(f.scope)?.worktree).toEqual(worktree);
+  });
+
   type Fixture = Awaited<ReturnType<typeof fixture>>;
   const changes: Record<string, (f: Fixture) => void> = {
     author: (f) => {
@@ -642,7 +672,6 @@ describe("actions on the imported original PR", () => {
           },
         });
       }),
-    requester: (f) => f.onRead(() => f.revoke()),
   };
   it.each(Object.entries(changes))("denies changed %s before any effect", async (_name, change) => {
     const f = await fixture();

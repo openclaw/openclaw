@@ -1,5 +1,6 @@
 import type { JSX } from "@solidjs/web";
 import { createMemo, createSignal, For, onSettled, Show } from "solid-js";
+import { messageSubagentCompletions } from "../../../../../src/shared/subagent-completion.js";
 import { PersonName } from "../../../components/person-activity-link-solid.tsx";
 import { personActivityLink } from "../../../components/person-activity-link.ts";
 import type { MessageGroup as MessageGroupData } from "../../../lib/chat/chat-types.ts";
@@ -24,11 +25,13 @@ import { RewindButton } from "./chat-message-confirmation-view.tsx";
 import {
   type GroupMessage,
   type MessageGroupFrame,
-  type NativeMessageGroupOptions,
   prepareGroupMessage,
   prepareMessageGroupFrame,
-  resolveFileLinkOwnerOptions,
 } from "./chat-message-group-frame.ts";
+import {
+  resolveFileLinkOwnerOptions,
+  type NativeMessageGroupOptions,
+} from "./chat-message-group-options.ts";
 import {
   FULL_MESSAGE_RETRY_REVISION_LIMIT,
   hasMessageActionButtons,
@@ -50,9 +53,9 @@ import {
 import { ReplyLineView, ReplyLineConnector } from "./chat-reply-attribution.tsx";
 import type { ReplyConnectorElements } from "./chat-reply-connector.tsx";
 import { ChatSessionActivity } from "./chat-session-activity.solid.tsx";
-import { TurnRecapRow } from "./chat-turn-recap-view.tsx";
+import { ChatSubagentCompletion } from "./chat-subagent-completion.tsx";
 
-export type { NativeMessageGroupOptions } from "./chat-message-group-frame.ts";
+export type { NativeMessageGroupOptions } from "./chat-message-group-options.ts";
 
 function MessageActionsRow(props: {
   messageKey?: string;
@@ -134,25 +137,14 @@ function PreparedMessage(props: {
       };
     }
     const entryId = persistedMessageEntryId(props.item.message) ?? undefined;
-    const openFile = props.options.onOpenWorkspaceFile;
     return {
-      ...props.options,
+      ...resolveFileLinkOwnerOptions(props.group, props.options, entryId),
       firstBubbleKey:
         props.options.firstBubbleKey !== undefined
           ? props.options.firstBubbleKey
           : (props.group.messages.find((message) => message.hasVisibleContent)?.key ?? null),
       isStreaming: isStreaming(),
       entryId,
-      // Tool-row file links carry their message like rendered markdown links, so earlier
-      // messages keep reading their original source; sender-owned links stay session-scoped.
-      ...(entryId && openFile && !props.group.senderSession?.sessionKey
-        ? {
-            onOpenWorkspaceFile: (target: { path: string; line?: number | null }) => {
-              const owned = { ...target, messageEntryId: entryId };
-              openFile(owned);
-            },
-          }
-        : {}),
       showToolCalls: props.options.showToolCalls ?? true,
       assistantMessageDisclosure,
       messageActions: actionDetails,
@@ -166,22 +158,34 @@ function PreparedMessage(props: {
   });
   return (
     <>
-      <GroupedMessage
-        preparation={prepared().source}
-        messageKey={props.item.key}
-        options={options()}
-        onOpenSidebar={props.options.onOpenSidebar}
-        reactions={
-          <Show when={props.bubbleReactions !== false}>
-            <GroupMessageReactions
-              group={props.group}
-              actionDetails={prepared().actions}
-              isStreaming={isStreaming()}
-              options={props.options}
-            />
-          </Show>
+      <Show
+        when={messageSubagentCompletions(props.item.message).length > 0}
+        fallback={
+          <GroupedMessage
+            preparation={prepared().source}
+            messageKey={props.item.key}
+            options={options()}
+            onOpenSidebar={props.options.onOpenSidebar}
+            reactions={
+              <Show when={props.bubbleReactions !== false}>
+                <GroupMessageReactions
+                  group={props.group}
+                  actionDetails={prepared().actions}
+                  isStreaming={isStreaming()}
+                  options={props.options}
+                />
+              </Show>
+            }
+          />
         }
-      />
+      >
+        <ChatSubagentCompletion
+          completions={messageSubagentCompletions(props.item.message)}
+          onOpenSession={
+            props.options.subagents?.onOpenSession ?? props.options.subagents?.onOpenSubagent
+          }
+        />
+      </Show>
       <Show when={resumed()}>
         {(handoff) => (
           <ChatHandoffResume
@@ -531,14 +535,7 @@ function FramedMessageGroup(props: {
         >
           {options().frameContent}
         </Show>
-        <Show
-          when={Boolean(options().activeContinuation)}
-          fallback={
-            options().turnRecap ? (
-              <TurnRecapRow recap={options().turnRecap!} presentation="continuation" />
-            ) : undefined
-          }
-        >
+        <Show when={Boolean(options().activeContinuation)}>
           <StreamGroupParts
             parts={options().activeContinuation!.parts}
             options={options().activeContinuation!.options}

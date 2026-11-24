@@ -58,7 +58,7 @@ export type ResearchList = {
   version: 1;
   /** Actual admitted incarnation. A client must discard snapshots from a previous one. */
   sessionId: string;
-  /** Opaque sessionId + lifecycleRevision fence, including lifecycle-only replacements. */
+  /** Opaque job-store fence; message edits and resets keep it. */
   incarnation: string;
   jobs: Array<
     Pick<ResearchView, "jobId" | "title" | "state" | "phase" | "summary" | "createdAt" | "counts">

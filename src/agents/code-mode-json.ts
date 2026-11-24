@@ -270,6 +270,7 @@ export class CodeModeOutputState {
         const rendered = renderToolSearchControlText(
           serializeToolSearchControlResult({ ...metadata, ...candidate.channels }),
           networkContent,
+          { budget: this.modelBudget },
         );
         return !rendered.truncated && toolResultFitsBudget(rendered.text, this.modelBudget);
       };

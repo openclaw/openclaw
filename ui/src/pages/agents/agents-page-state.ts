@@ -11,10 +11,7 @@ import { resolveAgentSettingsAccess } from "../../lib/agents/settings-access.ts"
 import { createChannelCapability } from "../../lib/channels/index.ts";
 import { currentConfigObject } from "../../lib/config/config-state-model.ts";
 import { createInitialCronState } from "../../lib/cron/index.ts";
-import {
-  hasCronInventoryEvents,
-  isCronInventoryInvalidation,
-} from "../../lib/cron/inventory-connection.ts";
+import { isCronInventoryInvalidation } from "../../lib/cron/inventory-connection.ts";
 import {
   canCallGatewayMethod,
   canPresentGatewayMethod,
@@ -638,12 +635,10 @@ export function createAgentsPageState(
     let intentRevision = selection.intentRevision;
     const stops = [
       context.gateway.subscribeEvents((event) => {
-        if (hasCronInventoryEvents(context.gateway.snapshot)) {
-          if (isCronInventoryInvalidation(event, context.gateway.snapshot)) {
-            cron.onRefresh(false);
-          } else if (event.event === "cron") {
-            cron.onRuntime(event.payload);
-          }
+        if (isCronInventoryInvalidation(event)) {
+          cron.onRefresh(false);
+        } else if (event.event === "cron") {
+          cron.onRuntime(event.payload);
         }
       }),
       listen(document, "visibilitychange", () => {

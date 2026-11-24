@@ -144,9 +144,9 @@ struct ControlUIHubScreen: View {
         }
         .navigationTitle(self.page.title)
         .navigationBarTitleDisplayMode(.inline)
-        .toolbar(
-            self.usesNativeNavigationChrome || self.headerSidebarAction != nil ? .visible : .hidden,
-            for: .navigationBar)
+        .modifier(OpenClawSidebarRevealToolbarVisibility(action: self.headerSidebarAction) { isRevealShown in
+            self.usesNativeNavigationChrome || isRevealShown ? .visible : .hidden
+        })
         .toolbar {
             if self.usesNativeNavigationChrome, let gatewayAction {
                 ToolbarItem(placement: .topBarTrailing) {

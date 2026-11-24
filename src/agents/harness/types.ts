@@ -166,8 +166,8 @@ type AgentHarnessSettledTurnFinalizationParams<
   settledAttempt: AgentHarnessCanonicalAttemptResult;
 };
 export type AgentHarnessSettledTurnFinalizationResult = {
-  /** The single completed assistant answer produced by the isolated operation. */
-  assistant: import("../../llm/types.js").AssistantMessage;
+  /** Completed answer projected from the isolated attempt; stored usage may lack a price. */
+  assistant: import("../../llm/types.js").AssistantHistoryMessage;
   preparedTerminalReply?: PreparedAgentRunTerminalReply;
   /** Normalized usage for the finalization model call only. */
   usage?: import("../usage.js").NormalizedUsage;

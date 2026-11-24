@@ -135,7 +135,9 @@ export async function resolveExtensionBoundaryPreparation(
   const pluginOutput = boundary.assert(LOCAL_PLUGIN_ROOT);
   const producerIds = new Set<string>(BOUNDARY_PLUGIN_UNITS.map(([id]) => id));
   const sdkRoots = new Set<string>();
-  const pluginIds = new Set<string>();
+  // A selected public producer must emit its full config even when no selected
+  // packaged entry consumes its declarations. Discover its inputs in the same queue.
+  const pluginIds = new Set(extensionIds.filter((id) => producerIds.has(id)));
   const dependencies = new Map<string, Set<string>>();
   const within = (root: string, file: string) =>
     file === root || file.startsWith(`${root}${path.sep}`);
@@ -195,6 +197,9 @@ export async function resolveExtensionBoundaryPreparation(
     boundary.root,
     extensionIds,
   ).map(({ config }) => ({ config }));
+  for (const producerId of pluginIds) {
+    queue.push({ config: `extensions/${producerId}/tsconfig.json`, producerId });
+  }
   const visited = new Set<string>();
   for (const { config: candidate, producerId } of queue) {
     const config = boundary.assert(candidate);

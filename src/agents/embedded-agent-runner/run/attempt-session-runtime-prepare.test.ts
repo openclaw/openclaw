@@ -38,7 +38,9 @@ import {
   sessionManagerReadToolResultProjectionEntries,
   sessionManagerReadTranscriptBranch,
 } from "../../sessions/session-manager-view-types.js";
+import { createMcpStubTool, createStubTool } from "../../test-helpers/agent-tool-stubs.js";
 import { makeProviderModelFixture } from "../../test-helpers/provider-model-fixture.js";
+import { createToolSearchTools, applyToolSearchCatalog } from "../../tool-search.js";
 import { createGitHubPublishTool } from "../../tools/github-publish-tool.js";
 import { prepareEmbeddedAttemptClientTools } from "./attempt-client-tools.js";
 import { createAttemptSetupFixture } from "./attempt-setup.test-support.js";
@@ -60,10 +62,17 @@ const mocks = vi.hoisted(() => ({
   >(async () => "/tmp/trajectory.jsonl"),
   prepareTransport: vi.fn(),
   restoreProjections: vi.fn(),
+  readToolUsage: vi.fn<typeof import("../../../config/sessions/tool-usage.js").readAgentToolUsage>(
+    async () => [],
+  ),
 }));
 
 vi.mock("../../anthropic-payload-log.js", () => ({
   createAnthropicPayloadLogger: mocks.createAnthropicPayloadLogger,
+}));
+vi.mock("../../../config/sessions/tool-usage.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../config/sessions/tool-usage.js")>()),
+  readAgentToolUsage: mocks.readToolUsage,
 }));
 vi.mock("../../cache-trace.js", () => ({ createCacheTrace: mocks.createCacheTrace }));
 vi.mock("../session-prompt-state.js", async (importOriginal) => ({
@@ -480,6 +489,74 @@ describe("prepareEmbeddedAttemptSessionRuntime", () => {
       });
     },
   );
+  it.each([false, true])(
+    "reads learned MCP usage only with the lab on and keeps tool_search fixed (%s)",
+    async (enabled) => {
+      const fixture = createFixture();
+      const config = { tools: { toolSearch: { mode: "tools" as const } } };
+      const catalogRef = {};
+      const mcpTools = Array.from({ length: 400 }, (_, index) =>
+        createMcpStubTool("granola", `op_${index}`, "Reads meeting notes for the caller."),
+      );
+      const controls = createToolSearchTools({ config, runtimeConfig: config, catalogRef });
+      const { tools } = applyToolSearchCatalog({
+        tools: [...controls, ...mcpTools],
+        config,
+        catalogRef,
+      });
+      const searchDescription = (list: { name: string; description: string }[]) =>
+        list.find((tool) => tool.name === "tool_search")!.description;
+      // The MCP directory lives in the system prompt; tool_search stays the bare definition.
+      const description = searchDescription(controls);
+      expect(searchDescription(tools)).toBe(description);
+      const usage = (tool: string) => [{ toolId: `mcp:granola:${tool}`, score: 4, updatedAt: 1 }];
+      mocks.readToolUsage.mockReset().mockResolvedValueOnce(usage("granola__op_321"));
+      fixture.input.attempt.config = {
+        ...config,
+        agents: { defaults: { experimental: { usageRankedToolIndex: enabled } } },
+      };
+      Object.assign(fixture.input.toolBase, {
+        toolSearchCatalogRef: catalogRef,
+        fixedListing: true,
+      });
+      const refreshTools = vi.fn();
+      Object.assign(fixture.agentSession, { refreshTools });
+      const runtime = await fixture.prepare();
+      const { pinTools } = mocks.prepareAgentSession.mock.calls.at(-1)![0].clientToolPreparation;
+      const sent = searchDescription(pinTools(tools));
+      // A fixed listing never admits a tool a later turn builds (production admitNewTools wiring).
+      expect(
+        pinTools([...tools, createStubTool("late")]).some(
+          (t: { name: string }) => t.name === "late",
+        ),
+      ).toBe(false);
+      if (!enabled) {
+        expect(mocks.readToolUsage).not.toHaveBeenCalled();
+        expect(sent).toBe(description);
+        return;
+      }
+      expect(mocks.readToolUsage).toHaveBeenCalledOnce();
+      expect(sent).toBe(description);
+      Object.assign(fixture.sessionManager, {
+        getSessionTarget: () => undefined,
+        getSessionId: () => "history-session",
+        appendCustomEntryAsync: vi.fn(async () => "checkpoint"),
+      });
+      Object.assign(fixture.activeSession, { agent: { state: { messages: [] } } });
+      await runtime.prepareSystemPromptUpdate!("unchanged");
+      expect(refreshTools).not.toHaveBeenCalled();
+      // Committed compaction refreshes the snapshot; tools re-pin before the next request.
+      Object.assign(fixture.sessionManager, {
+        [sessionManagerReadTranscriptBranch]: () => [{ type: "compaction", id: "compacted" }],
+        getBoundaryCount: () => 1,
+      });
+      mocks.readToolUsage.mockResolvedValueOnce(usage("granola__op_399"));
+      await runtime.prepareSystemPromptUpdate!("unchanged");
+      expect(refreshTools).toHaveBeenCalledOnce();
+      expect(searchDescription(pinTools(tools))).toBe(description);
+    },
+  );
+
   it("passes the frozen ranking to renderers after disabling the lab without a boundary", async () => {
     const fixture = createFixture();
     const first = await fixture.prepare();
@@ -582,13 +659,15 @@ describe("prepareEmbeddedAttemptSessionRuntime", () => {
     }
   });
 
-  it("re-pins personal bootstrap when the selected profile changes between attempts", async () => {
+  it("re-pins personal bootstrap when the session's selected profile changes between attempts", async () => {
     const fixture = createHistoryFixture();
     mocks.retainSessionPromptState.mockImplementation(() => ({
       state: { toolResults: { projected: true } },
       [Symbol.dispose]: () => {},
     }));
     for (const profile of ["alice", "bob", undefined]) {
+      // The series follows the session's selected human; the turn's sender class does not key it.
+      fixture.input.attempt.sessionUserProfileId = profile;
       fixture.input.attempt.bootstrapUserProfileId = profile;
       const runtime = await fixture.prepare();
       const prompt = `## User\n${profile ?? "Shared"} guidance`;
@@ -614,6 +693,7 @@ describe("prepareEmbeddedAttemptSessionRuntime", () => {
       };
       const reader: SessionEntryCohortReader = {
         database: { agentId: target.agentId, path: target.storePath, env: target.env },
+        identity: { key: "file:1:1", canonicalPath: target.storePath },
         sessionKey: target.sessionKey,
         logicalAgentId: target.agentId,
         storePaths: [target.storePath],
@@ -928,7 +1008,7 @@ describe("trajectory preparation through the public runtime", () => {
         }
         return f.trajectoryRecorder;
       });
-      await expect(f.prepare()).rejects.toThrow("admitted run authority is no longer active");
+      await expect(f.prepare()).rejects.toThrow("This agent run is no longer active");
       expect(f.trajectoryRecorder.recordEvent).not.toHaveBeenCalled();
     },
   );

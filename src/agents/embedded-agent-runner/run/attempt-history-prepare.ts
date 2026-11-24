@@ -16,8 +16,10 @@ import { OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST } from "../../../context-engine/h
 import { freezeJsonSnapshot } from "../../../shared/immutable-data.js";
 import { shouldMergeConsecutiveTurns } from "../../embedded-agent-helpers/turns.js";
 import { prepareHarnessContextEnginePrompt } from "../../harness/context-engine-lifecycle.js";
+import { isLocalBaseUrl } from "../../model-catalog-route.js";
 import { getHistoryLimitFromSessionKey, limitHistoryTurns } from "../history.js";
 import { log } from "../logger.js";
+import { describePastProjectMoves } from "../project-move-replay.js";
 import { sanitizeSessionHistory, validateReplayTurns } from "../replay-history.js";
 import { bindToolResultPromptProjectionKeys } from "../tool-result-projection-key.js";
 import type { EmbeddedAttemptExecutionPhaseInput } from "./attempt-execution-types.js";
@@ -26,13 +28,16 @@ import type { EmbeddedRunAttemptInternalParams } from "./internal-params.js";
 import { resolveEmbeddedSessionContextLimits } from "./session-context-limits.js";
 
 function boundSettledFinalizationMessages(attempt: EmbeddedRunAttemptInternalParams) {
+  // Selection never reads entry timestamps, and these entries are neither persisted nor
+  // sent to the model. Context-engine messages may omit timestamps, so use a fixed value.
+  const timestamp = new Date(0).toISOString();
   const requests: ModelContextRequest[] = attempt.settledTurnFinalizationMessages!.map(
     (message, index) => ({
       entry: {
         type: "message",
         id: String(index),
         parentId: index ? String(index - 1) : null,
-        timestamp: new Date(message.timestamp).toISOString(),
+        timestamp,
         message,
         seq: index,
       },
@@ -119,7 +124,7 @@ export async function prepareEmbeddedAttemptHistory(
     cacheTrace?.recordStage("session:sanitized", { messages: prior });
     // Keep each keyed user row intact until prompt() has resolved the current turn.
     // The stream boundary merges projected rows for providers requiring alternation.
-    const validated = await validateReplayTurns({
+    let validated = await validateReplayTurns({
       ...replayContext(),
       messages: prior,
       preserveUserTurns: true,
@@ -139,6 +144,13 @@ export async function prepareEmbeddedAttemptHistory(
         assertActive,
       );
       assertActive();
+      if (
+        sessionEntry?.priorWorkspace &&
+        attempt.model.api === "openai-completions" &&
+        !isLocalBaseUrl(attempt.model.baseUrl)
+      ) {
+        validated = describePastProjectMoves(validated);
+      }
       const suspension = sessionEntry?.quotaSuspension;
       if (sessionEntry && suspension?.state === "resuming") {
         const entries = await readSessionEntrySummariesInWorker({
@@ -217,11 +229,16 @@ export async function prepareEmbeddedAttemptHistory(
         heartbeatFiltered,
         limitHistoryTurns(
           heartbeatFiltered,
-          getHistoryLimitFromSessionKey(attempt.sessionKey, attempt.config, {
-            accountId: attempt.agentAccountId,
-            peerId: attempt.conversationRoutePeerId,
-            chatType: attempt.chatType,
-          }),
+          // A fork runs under its own key but keeps its source conversation's history window.
+          getHistoryLimitFromSessionKey(
+            attempt.sandboxSessionKey ?? attempt.sessionKey,
+            attempt.config,
+            {
+              accountId: attempt.agentAccountId,
+              peerId: attempt.conversationRoutePeerId,
+              chatType: attempt.chatType,
+            },
+          ),
           {
             groupConsecutiveUserTurns:
               transcriptPolicy.validateAnthropicTurns &&
@@ -231,7 +248,6 @@ export async function prepareEmbeddedAttemptHistory(
         attempt.model,
         {
           sessionId: attempt.sessionId,
-          authProfileId: attempt.runtimePlan?.auth.forwardedAuthProfileId,
           enabled: compactionReplayEnabled,
         },
       );

@@ -12,6 +12,7 @@ import {
   type MessageReceipt,
   type LivePreviewDeliveryResult,
 } from "openclaw/plugin-sdk/channel-outbound";
+import { resolveOutboundMediaAccessForConfig } from "openclaw/plugin-sdk/outbound-media";
 import {
   buildTtsSupplementMediaPayload,
   getReplyPayloadTtsSupplement,
@@ -219,7 +220,12 @@ export function createMatrixReplyDispatcher(config: {
           client,
           cfg,
           ...(mediaUrl !== undefined
-            ? { mediaUrl, mediaLocalRoots, audioAsVoice: reply.audioAsVoice }
+            ? {
+                mediaUrl,
+                mediaLocalRoots,
+                mediaAccess: resolveOutboundMediaAccessForConfig(cfg),
+                audioAsVoice: reply.audioAsVoice,
+              }
             : {}),
           replyToId: replyToIdForReply,
           fallbackReplyToId,

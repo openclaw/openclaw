@@ -20,16 +20,16 @@ import {
 } from "../../infra/diagnostics-timeline.js";
 import { isProgressCardRefreshInputProvenance } from "../../sessions/input-provenance.js";
 import { getRpcSourceIdentity } from "../../sessions/session-controller.rpc-sources.js";
+import type {
+  UserTurnInput,
+  PersistedUserTurnMessage,
+} from "../../sessions/user-turn-input.types.js";
 import {
   buildRunUserTurnIdempotencyKey,
   createUserTurnTranscriptRecorder,
-  type UserTurnInput,
   type UserTurnTranscriptRecorder,
 } from "../../sessions/user-turn-transcript.js";
-import type {
-  PersistedUserTurnMessage,
-  UserTurnOriginalInputCommit,
-} from "../../sessions/user-turn-transcript.types.js";
+import type { UserTurnOriginalInputCommit } from "../../sessions/user-turn-transcript.types.js";
 import { extractTextFromChatContent } from "../../shared/chat-content.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
 import type { MentionInbox } from "../mention-inbox.types.js";
@@ -124,13 +124,18 @@ export function createGatewayChatUserTurnController(params: {
   });
   const mentionInbox = params.mentionInbox;
   const sourceId = buildRunUserTurnIdempotencyKey(session.clientRunId);
+  // Recovery has restored this exact human source and current operator authority.
+  // Its transport is synthetic; only the private admission may reuse human mention policy.
+  const mentionClient =
+    recoveredInput && params.client
+      ? { ...params.client, internal: { ...params.client.internal, syntheticClient: undefined } }
+      : params.client;
   const selectedMentions =
     recoveredInput?.target.message["__openclaw"]?.humanMentions ?? request.mentions;
-  const sourceClients =
-    !params.client?.internal?.syntheticClient &&
-    (!request.systemInputProvenance || request.systemInputProvenance.kind === "external_user")
-      ? normalizeMessageClientSources([request.clientInfo])
-      : [];
+  const humanInput =
+    !mentionClient?.internal?.syntheticClient &&
+    (!request.systemInputProvenance || request.systemInputProvenance.kind === "external_user");
+  const sourceClients = humanInput ? normalizeMessageClientSources([request.clientInfo]) : [];
   const baseInput: UserTurnInput = {
     ...params.transcript,
     ...(request.goalOperation?.action === "resume" ? { display: false } : {}),
@@ -145,7 +150,9 @@ export function createGatewayChatUserTurnController(params: {
     ...(request.p.replyToId ? { replyToId: request.p.replyToId } : {}),
     ...(sender ? { sender } : {}),
     ...(sourceClients.length ? { transport: { clients: sourceClients } } : {}),
-    ...(hasGatewayAdminScope(params.client) ? { senderIsOwner: true } : {}),
+    ...(admission.operatorAuthority?.grant.owner
+      ? { senderIsOwner: admission.operatorAuthority.grant.owner }
+      : {}),
     provenance:
       request.systemInputProvenance ??
       (params.client?.internal?.syntheticClient ? undefined : { kind: "external_user" }),
@@ -187,8 +194,33 @@ export function createGatewayChatUserTurnController(params: {
     });
   const prepareWorkerGoalSource = async () =>
     prepareSessionSourceAuthority(captureWorkerGoalSource());
+  const selectedCommittedMentions = (message: UserTurnOriginalInputCommit["message"]) => {
+    const stored = message["__openclaw"]?.humanMentions;
+    const text =
+      extractTextFromChatContent(message.content, {
+        joinWith: "\n",
+        normalizeText: (value) => value,
+      }) ?? "";
+    const retained = recoveredInput
+      ? (selectedMentions ?? [])
+      : (selectedMentions ?? []).filter(
+          (mention) =>
+            Array.isArray(stored) &&
+            stored.some((value) => {
+              const span = asOptionalRecord(value);
+              return (
+                span?.profileId === mention.profileId &&
+                span.start === mention.start &&
+                span.end === mention.end &&
+                text.slice(mention.start, mention.end) ===
+                  request.rawMessage.slice(mention.start, mention.end)
+              );
+            }),
+        );
+    return { retained, text };
+  };
   const workerGoalSource: SessionSourceAssertion | undefined =
-    admission.codexGoalAdmission === "worker"
+    admission.runtimeGoal === "worker"
       ? Object.assign(() => captureWorkerGoalSource()(), {
           prepareSessionSource: prepareWorkerGoalSource,
           prepareSessionSourceScope: prepareWorkerGoalSource,
@@ -196,6 +228,7 @@ export function createGatewayChatUserTurnController(params: {
       : undefined;
   const recorder: UserTurnTranscriptRecorder = createUserTurnTranscriptRecorder({
     onMessagePersisted: params.onMessagePersisted,
+    ...(request.activeSteer ? { trackInputCompletion: true } : {}),
     ...(recoveredInput ? { message: recoveredInput.target.message } : {}),
     // Attribution and submitted bytes survive reconnect; generated state does not.
     pendingInputRequestFingerprint:
@@ -208,6 +241,7 @@ export function createGatewayChatUserTurnController(params: {
                 ...request.p,
                 sessionId: getRpcSourceIdentity(admission.sourceRef).sessionId,
                 expectedLeafEntryId: undefined,
+                ...(request.activeSteer ? { activeSteer: request.activeSteer } : {}),
               },
               sender.identity ?? sender.id,
               hasGatewayAdminScope(params.client),
@@ -222,7 +256,7 @@ export function createGatewayChatUserTurnController(params: {
             runId: session.clientRunId,
             ...params.goalCommitGuard,
             assertCurrent:
-              admission.codexGoalAdmission === "worker"
+              admission.runtimeGoal === "worker"
                 ? composeSessionSourceAssertion([
                     params.goalCommitGuard?.assertCurrent,
                     workerGoalSource,
@@ -256,10 +290,7 @@ export function createGatewayChatUserTurnController(params: {
       ? { sessionLifecyclePatch: { lastInteractionAt: params.startedAt } }
       : {}),
     errorContext: "gateway chat user turn transcript",
-    assertOriginalInputCommit: composeSessionSourceAssertion([
-      params.assertOriginalInputCommit,
-      admission.operatorAuthority?.assertCurrent,
-    ]),
+    assertOriginalInputCommit: params.assertOriginalInputCommit,
     beforeMessageWrite: (event) => {
       if (recoveredInput) {
         return event.message;
@@ -269,6 +300,7 @@ export function createGatewayChatUserTurnController(params: {
       if (originalInput && next?.role === "user") {
         const userMessage: PersistedUserTurnMessage = next;
         const metadata = { ...asOptionalRecord(Reflect.get(next, "__openclaw")) };
+        delete metadata.activeSteer;
         delete metadata.chatRequestIdentity;
         delete metadata.suppressCommandInterpretation;
         delete metadata.chatSendDelivery;
@@ -285,6 +317,19 @@ export function createGatewayChatUserTurnController(params: {
           ...(contextFreeCommand ? { excludeFromContext: true } : {}),
           __openclaw: {
             ...metadata,
+            ...(request.activeSteer
+              ? {
+                  activeSteer: {
+                    ...request.activeSteer,
+                    sessionId: request.p.sessionId,
+                    textUnchanged:
+                      extractTextFromChatContent(next.content, {
+                        joinWith: "\n",
+                        normalizeText: (text) => text,
+                      }) === request.p.message,
+                  },
+                }
+              : {}),
             ...(request.requestIdentity ? { chatRequestIdentity: request.requestIdentity } : {}),
             ...(request.suppressCommandInterpretation
               ? { suppressCommandInterpretation: true }
@@ -323,51 +368,66 @@ export function createGatewayChatUserTurnController(params: {
     onPersistenceError,
     ...(selectedMentions && senderProfileId && mentionInbox
       ? {
+          ...(humanInput
+            ? {
+                prepareMentionInvitation: (message: UserTurnOriginalInputCommit["message"]) => {
+                  if (message.idempotencyKey !== sourceId) {
+                    return undefined;
+                  }
+                  const { retained, text } = selectedCommittedMentions(message);
+                  if (!retained.length) {
+                    return undefined;
+                  }
+                  return mentionInbox.prepareInvitation(
+                    mentionClient,
+                    {
+                      agentId: session.agentId,
+                      sessionKey: session.sessionKey,
+                      entry:
+                        admission.admittedSessionEntry ??
+                        admission.initialSessionEntry ??
+                        session.entry,
+                    },
+                    retained.map((mention) => ({
+                      profileId: mention.profileId,
+                      token: text.slice(mention.start, mention.end),
+                    })),
+                  );
+                },
+              }
+            : {}),
           onOriginalInputCommitted: ({ message, anchor }: UserTurnOriginalInputCommit) => {
-            const stored = message["__openclaw"]?.humanMentions;
-            const text =
-              extractTextFromChatContent(message.content, {
-                joinWith: "\n",
-                normalizeText: (value) => value,
-              }) ?? "";
-            const retained = recoveredInput
-              ? selectedMentions
-              : selectedMentions.filter(
-                  (mention) =>
-                    Array.isArray(stored) &&
-                    stored.some((value) => {
-                      const span = asOptionalRecord(value);
-                      return (
-                        span?.profileId === mention.profileId &&
-                        span.start === mention.start &&
-                        span.end === mention.end &&
-                        text.slice(mention.start, mention.end) ===
-                          request.rawMessage.slice(mention.start, mention.end)
-                      );
-                    }),
-                );
+            const { retained, text } = selectedCommittedMentions(message);
             if (!retained.length) {
               params.warn(
                 "Human mentions skipped because the committed text no longer contains the selected tokens.",
               );
               return;
             }
-            mentionCommit = mentionInbox.recordCommittedInputAsync({
-              sourceId,
-              committedSource: {
-                generation: anchor.generation,
-                sequence: anchor.rawSeq,
-                timestamp: message.timestamp,
-              },
-              agentId: anchor.agentId,
-              sessionKey: session.sessionKey,
-              sessionId: anchor.sessionId,
-              messageId: anchor.entryId,
-              senderProfileId,
-              recipientProfileIds: retained.map((mention) => mention.profileId),
-              excerpt: text,
-            });
-            void mentionCommit.catch(onPersistenceError);
+            mentionCommit = mentionInbox
+              .recordCommittedInputAsync(
+                {
+                  sourceId,
+                  committedSource: {
+                    generation: anchor.generation,
+                    sequence: anchor.rawSeq,
+                    timestamp: message.timestamp,
+                  },
+                  agentId: anchor.agentId,
+                  sessionKey: session.sessionKey,
+                  sessionId: anchor.sessionId,
+                  messageId: anchor.entryId,
+                  senderProfileId,
+                  recipientProfileIds: retained.map((mention) => mention.profileId),
+                  excerpt: text,
+                },
+                humanInput ? mentionClient : undefined,
+              )
+              .catch((error: unknown) => {
+                // The original message and invitation already committed. Inbox reports
+                // mentions.failed; notification delivery must not cancel agent dispatch.
+                params.warn(`gateway mention notification delivery failed: ${formatForLog(error)}`);
+              });
           },
         }
       : {}),
@@ -378,8 +438,8 @@ export function createGatewayChatUserTurnController(params: {
       contextFreeCommand = true;
     }
     // A setup/error fallback must not activate a Goal before placement admission.
-    // The selected native harness promotes staged input through persistApproved.
-    if (admission.codexGoalAdmission && !recorder.hasPersisted()) {
+    // The selected runtime promotes staged input through persistApproved.
+    if (admission.runtimeGoal && !recorder.hasPersisted()) {
       return undefined;
     }
     const persisted = await measureDiagnosticsTimelineSpan(
@@ -406,7 +466,7 @@ export function createGatewayChatUserTurnController(params: {
     getSessionInitializationOptions: () => ({
       requestedSessionId: session.requestedSessionId,
       resumeRequestedSession: request.reconnectResumeRequested,
-      ...(admission.localInputAdmission || admission.codexGoalAdmission
+      ...(admission.localInputAdmission || admission.runtimeGoal
         ? {
             expectedExistingSessionId: admission.admittedSessionId,
             pinExpectedExistingSession: true,

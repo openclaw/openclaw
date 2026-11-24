@@ -1,5 +1,6 @@
 import { getEventStreamCompletion } from "@openclaw/ai/internal/runtime";
 import { collectErrorGraphCandidates, formatErrorMessage } from "../../infra/errors.js";
+import type { AssistantMessage } from "../../llm/types.js";
 import { createAssistantMessageEventStream } from "../../llm/utils/event-stream.js";
 import { mapAssistantMessageStream } from "../../llm/utils/stream-wrapper.js";
 import { runPluginStreamConsumer } from "../../plugins/plugin-instance-scope.js";
@@ -9,9 +10,16 @@ import { isThinkingLikeBlock } from "../thinking-block.js";
 import { isAssistantMessageWithContent } from "../thinking-signatures.js";
 import { log } from "./logger.js";
 import { wrapStreamObjectSettlement } from "./run/stream-wrapper.js";
+import { stripAllThinkingBlocks } from "./thinking-replay.js";
+export {
+  dropReasoningFromHistory,
+  dropThinkingBlocks,
+  shouldPreserveLatestAssistantThinking,
+  stripInvalidThinkingSignatures,
+  stripThinkingBlocksFromMessage,
+} from "./thinking-replay.js";
 
 type AssistantContentBlock = Extract<AgentMessage, { role: "assistant" }>["content"][number];
-type AssistantMessage = Extract<AgentMessage, { role: "assistant" }>;
 type RecoveryAssessment = "valid" | "incomplete-thinking" | "incomplete-text";
 type RecoverySessionMeta = {
   id: string;
@@ -29,16 +37,6 @@ type ThinkingRecoveryRequest = {
 
 const THINKING_BLOCK_ERROR_PATTERN =
   /(?:thinking|redacted_thinking).*?\b(?:cannot be modified|signature|invalid|missing|empty|blank)\b|\b(?:signature|invalid|missing|empty|blank)\b.*?(?:thinking|redacted_thinking)/i;
-const OMITTED_ASSISTANT_REASONING_TEXT = "[assistant reasoning omitted]";
-
-function isToolCallBlock(block: AssistantContentBlock): boolean {
-  if (!block || typeof block !== "object") {
-    return false;
-  }
-  const type = (block as { type?: unknown }).type;
-  return type === "toolCall" || type === "tool_use" || type === "function_call";
-}
-
 function isSignedThinkingBlock(block: AssistantContentBlock): boolean {
   const record = block as {
     type?: unknown;
@@ -51,129 +49,6 @@ function isSignedThinkingBlock(block: AssistantContentBlock): boolean {
     record.signature != null ||
     record.thinkingSignature != null ||
     record.thought_signature != null
-  );
-}
-
-function mapAssistantMessages(
-  messages: AgentMessage[],
-  transform: (message: AssistantMessage, index: number) => AgentMessage,
-): AgentMessage[] {
-  let touched = false;
-  const out: AgentMessage[] = [];
-  for (const [index, message] of messages.entries()) {
-    const next = isAssistantMessageWithContent(message) ? transform(message, index) : message;
-    touched ||= next !== message;
-    out.push(next);
-  }
-  return touched ? out : messages;
-}
-
-function filterAssistantContent(
-  message: AssistantMessage,
-  keepBlock: (block: AssistantContentBlock) => boolean,
-): AssistantMessage {
-  const content = message.content.filter(keepBlock);
-  return content.length === message.content.length
-    ? message
-    : {
-        ...message,
-        // Provider converters drop blank blocks; preserve the assistant turn with nonempty text.
-        content:
-          content.length > 0 ? content : [{ type: "text", text: OMITTED_ASSISTANT_REASONING_TEXT }],
-      };
-}
-
-function hasReplayableThinkingSignature(block: AssistantContentBlock): boolean {
-  const record = block as {
-    data?: unknown;
-    signature?: unknown;
-    thinkingSignature?: unknown;
-    thought_signature?: unknown;
-  };
-  const candidates =
-    (block as { type?: unknown }).type === "redacted_thinking"
-      ? [record.data, record.signature, record.thinkingSignature, record.thought_signature]
-      : [record.signature, record.thinkingSignature, record.thought_signature];
-  return candidates.some(
-    (signature) => typeof signature === "string" && signature.trim().length > 0,
-  );
-}
-
-/**
- * Providers decide opaque signature validity; only missing or blank signatures are stripped.
- * Preserve the latest assistant turn for provider recovery unless the caller appends a user turn.
- */
-export function stripInvalidThinkingSignatures(
-  messages: AgentMessage[],
-  options: { preserveLatestAssistant?: boolean } = {},
-): AgentMessage[] {
-  const latestAssistantIndex =
-    (options.preserveLatestAssistant ?? true)
-      ? messages.findLastIndex(isAssistantMessageWithContent)
-      : -1;
-  return mapAssistantMessages(messages, (message, index) =>
-    index === latestAssistantIndex
-      ? message
-      : filterAssistantContent(
-          message,
-          (block) => !isThinkingLikeBlock(block) || hasReplayableThinkingSignature(block),
-        ),
-  );
-}
-
-/**
- * Keep the latest turn's replay signatures and preserve empty turns with placeholder text.
- * Unchanged history retains its original array identity.
- */
-export function dropThinkingBlocks(messages: AgentMessage[]): AgentMessage[] {
-  const latestAssistantIndex = messages.findLastIndex(isAssistantMessageWithContent);
-  return mapAssistantMessages(messages, (message, index) =>
-    index === latestAssistantIndex ? message : stripThinkingBlocksFromMessage(message),
-  );
-}
-
-function findCurrentToolTurnAssistantIndex(messages: AgentMessage[]): number {
-  const latestUserIndex = messages.findLastIndex((message) => message?.role === "user");
-  // Even an assistant without content ends the first-assistant eligibility window.
-  const index = messages.findIndex(
-    (message, candidateIndex) => candidateIndex > latestUserIndex && message?.role === "assistant",
-  );
-  const message = messages[index];
-  return message &&
-    isAssistantMessageWithContent(message) &&
-    message.content.some(isToolCallBlock) &&
-    messages.some(
-      (next, nextIndex) =>
-        nextIndex > index && next && typeof next === "object" && next.role === "toolResult",
-    )
-    ? index
-    : -1;
-}
-
-export function shouldPreserveLatestAssistantThinking(messages: AgentMessage[]): boolean {
-  const latestAssistantIndex = messages.findLastIndex(isAssistantMessageWithContent);
-  return (
-    latestAssistantIndex >= 0 &&
-    (latestAssistantIndex === messages.length - 1 ||
-      latestAssistantIndex === findCurrentToolTurnAssistantIndex(messages))
-  );
-}
-
-export function stripThinkingBlocksFromMessage(message: AgentMessage): AgentMessage {
-  if (!isAssistantMessageWithContent(message)) {
-    return message;
-  }
-  return filterAssistantContent(message, (block) => !isThinkingLikeBlock(block));
-}
-
-function stripAllThinkingBlocks(messages: AgentMessage[]): AgentMessage[] {
-  return mapAssistantMessages(messages, stripThinkingBlocksFromMessage);
-}
-
-export function dropReasoningFromHistory(messages: AgentMessage[]): AgentMessage[] {
-  const currentToolTurnAssistantIndex = findCurrentToolTurnAssistantIndex(messages);
-  return mapAssistantMessages(messages, (message, index) =>
-    index === currentToolTurnAssistantIndex ? message : stripThinkingBlocksFromMessage(message),
   );
 }
 

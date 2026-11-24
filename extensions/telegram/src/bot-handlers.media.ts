@@ -1,6 +1,5 @@
 import type { Message } from "grammy/types";
 import { MediaFetchError } from "openclaw/plugin-sdk/media-runtime";
-import { isRecoverableTelegramNetworkError } from "./network-errors.js";
 
 const TELEGRAM_BOT_API_FILE_DOWNLOAD_LIMIT_MB = 20;
 
@@ -23,31 +22,6 @@ export function isMediaSizeLimitError(err: unknown): boolean {
   }
   const errMsg = String(err);
   return errMsg.includes("exceeds") && errMsg.includes("MB limit");
-}
-
-export function isRecoverableMediaGroupError(err: unknown): boolean {
-  return err instanceof MediaFetchError || isMediaSizeLimitError(err);
-}
-
-function isAbortError(err: unknown): boolean {
-  if (!err || typeof err !== "object") {
-    return false;
-  }
-  if ("name" in err && err.name === "AbortError") {
-    return true;
-  }
-  return "message" in err && err.message === "This operation was aborted";
-}
-
-export function isDurablyRetryableInboundMediaError(err: unknown): boolean {
-  if (!(err instanceof MediaFetchError)) {
-    return false;
-  }
-  return err.code === "http_error"
-    ? typeof err.status === "number" &&
-        (err.status === 408 || err.status === 429 || err.status >= 500)
-    : err.code === "fetch_failed" &&
-        (isAbortError(err) || isAbortError(err.cause) || isRecoverableTelegramNetworkError(err));
 }
 
 export function hasInboundMedia(msg: Message): boolean {

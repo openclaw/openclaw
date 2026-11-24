@@ -1,6 +1,7 @@
 import { createDeferred } from "@solidjs/signals";
 import {
   createMemo,
+  createSignal,
   Errored,
   For,
   isPending,
@@ -9,12 +10,6 @@ import {
   Show,
   type Accessor,
 } from "solid-js";
-import {
-  pathForAgentPanel,
-  pathForPluginCatalogEntry,
-  pathForPluginSettings,
-  type RouteId,
-} from "../app-route-paths.ts";
 import { registerCommandPaletteEnglish } from "../i18n/locales/en-command-palette.ts";
 import { isMobileBrowserPlatform, keepMobileReturnNative } from "../lib/browser-platform.ts";
 import { MAX_HUMAN_MENTIONS } from "../lib/chat/human-mentions.ts";
@@ -25,12 +20,16 @@ import {
 import { elementRef } from "../lib/reactive/element-ref.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import { createParkedProjection } from "../lib/reactive/parked-projection.ts";
+import {
+  resolveSessionPreferredFace,
+  sessionNavigationTarget,
+} from "../lib/sessions/route-navigation.ts";
 import { resolveUiSessionRowAgentId } from "../lib/sessions/session-key.ts";
 import { paneDomId } from "../pages/chat/components/chat-composer-dom.ts";
 import { HumanMentionMenuView } from "../pages/chat/components/chat-composer-mention-menu.tsx";
 import { SelectedHumanMentions } from "../pages/chat/components/chat-composer-selected-mentions.tsx";
 import {
-  PaletteSessionAddMenu,
+  PaletteSessionModel,
   PaletteSessionAttachments,
   PaletteSessionControls,
   PaletteSessionAuxiliary,
@@ -54,17 +53,16 @@ import {
 } from "./command-palette-input.tsx";
 import { createCommandPaletteMatches } from "./command-palette-matches.ts";
 import { createModeGlide } from "./command-palette-mode-glide.ts";
+import { pageDestination, selectItem } from "./command-palette-navigation.ts";
 import { CommandPaletteResult } from "./command-palette-result.tsx";
-import { SESSION_ACTION_PREFIX } from "./command-palette-session-search.ts";
 import type { CommandPaletteState, PaletteFilter } from "./command-palette-state.ts";
-import {
-  CUSTODIAN_PANEL_TOGGLE_EVENT,
-  DESKTOP_PANEL_TOGGLE_EVENT,
-} from "./panel-toggle-contract.ts";
+import { ImageLightboxItemView } from "./image-lightbox.tsx";
+import type { ImageLightboxItem } from "./image-lightbox.types.ts";
 import { Icon } from "./solid/icon.tsx";
+import { Kbd, KeyboardShortcut, ShortcutHint } from "./solid/kbd.tsx";
 import "./modal-dialog.tsx";
 import "./tooltip.ts";
-import { Kbd, KeyboardShortcut, ShortcutHint, ShortcutText } from "./solid/kbd.tsx";
+import { PanelEmptyState } from "./solid/panel-empty-state.tsx";
 
 registerCommandPaletteEnglish();
 
@@ -81,46 +79,6 @@ function groupItems(items: CommandPaletteItem[]): Array<[string, CommandPaletteI
 }
 
 const paletteListboxId = "cmd-palette-listbox";
-
-function selectItem(item: CommandPaletteItem, props: CommandPaletteProps) {
-  if (props.draft.submitting || props.searchDebouncing) {
-    return;
-  }
-  if (item.action === "nav:new-session") {
-    props.onModeChange("compose");
-    return;
-  }
-  if (item.action.startsWith("nav:")) {
-    // SAFETY: the palette catalog builds every nav: action from a RouteId value.
-    const routeId = item.action.slice(4) as RouteId;
-    if (item.agentId) {
-      props.onNavigate?.(routeId, {
-        pathname: pathForAgentPanel(item.agentId, null, props.basePath),
-      });
-    } else if (item.catalogId) {
-      props.onNavigate?.(routeId, {
-        pathname: pathForPluginCatalogEntry(item.catalogId, props.basePath),
-      });
-    } else if (item.pluginId && routeId === "plugin-settings") {
-      props.onNavigate?.(routeId, {
-        pathname: pathForPluginSettings(item.pluginId, props.basePath),
-      });
-    } else if (item.search || item.hash) {
-      props.onNavigate?.(routeId, { search: item.search, hash: item.hash });
-    } else {
-      props.onNavigate?.(routeId);
-    }
-  } else if (item.action.startsWith(SESSION_ACTION_PREFIX)) {
-    props.onSelectSession?.(item.action.slice(SESSION_ACTION_PREFIX.length));
-  } else if (item.action === "panel:desktop") {
-    window.dispatchEvent(new CustomEvent(DESKTOP_PANEL_TOGGLE_EVENT, { detail: { open: true } }));
-  } else if (item.action === "panel:custodian") {
-    window.dispatchEvent(new CustomEvent(CUSTODIAN_PANEL_TOGGLE_EVENT, { detail: { open: true } }));
-  } else {
-    props.onSlashCommand?.(item.action);
-  }
-  props.onToggle();
-}
 
 function handleKeydown(
   event: KeyboardEvent,
@@ -172,9 +130,7 @@ function handleKeydown(
   if (matchesShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.modifiedEnter, event)) {
     event.preventDefault();
     event.stopPropagation();
-    if (props.mode === "compose") {
-      void props.draft.submit();
-    }
+    void props.draft.submit();
     return;
   }
   if (event.shiftKey || event.altKey || event.metaKey || event.ctrlKey) {
@@ -222,7 +178,8 @@ function getOptionId(index: number): string {
 }
 
 function matchesFilter(item: CommandPaletteItem, filter: PaletteFilter) {
-  return filter === "all" || item.category === (filter === "sessions" ? "chats" : "messages");
+  const category = item.category === "archived" ? "chats" : item.category;
+  return filter === "all" || category === (filter === "sessions" ? "chats" : "messages");
 }
 
 function resolvePaletteResults(snapshot: CommandPaletteProps, prepared?: CommandPaletteItem[]) {
@@ -262,7 +219,7 @@ function PaletteSearch(props: {
   sessionRead: Accessor<void | undefined>;
   catalogRead: Accessor<void | undefined>;
   modelRead: Accessor<unknown>;
-  optionElements: Map<string, HTMLDivElement>;
+  optionElements: Map<string, HTMLElement>;
 }) {
   const current = () => props.readProps();
   const sessionSearchPending = () => isPending(props.sessionRead);
@@ -292,12 +249,12 @@ function PaletteSearch(props: {
     Boolean(current().searchQuery.trim()) &&
     !sessionSearchPending() &&
     !catalogSearchPending() &&
+    !isPending(props.modelRead) &&
     !current().remoteSearchOffline &&
     !current().modelSearchError &&
     !current().sessionSearchFailed &&
     !current().sessionSearchPartial &&
-    !current().sessionSearchIndexing &&
-    current().archivedTranscriptsExcluded === 0;
+    !current().sessionSearchIndexing;
   return (
     <>
       {(latest(props.sessionRead), null)}
@@ -349,7 +306,7 @@ function PaletteSearch(props: {
               <For each={group()[1]} keyed={(item) => item.id}>
                 {(item) => {
                   const optionRef = (key: string) =>
-                    elementRef<HTMLDivElement>((element) => {
+                    elementRef<HTMLElement>((element) => {
                       props.optionElements.set(key, element);
                       return () => props.optionElements.delete(key);
                     });
@@ -363,8 +320,27 @@ function PaletteSearch(props: {
                     agentId()
                       ? (current().agents.find((row) => row.id === agentId()) ?? { id: agentId()! })
                       : undefined;
+                  const href = createMemo(() => {
+                    const row = item().session;
+                    const { basePath, defaultAgentId, mainKey } = current();
+                    return row
+                      ? row.key.isWellFormed() &&
+                          sessionNavigationTarget({
+                            face: resolveSessionPreferredFace(row),
+                            sessionKey: row.key,
+                            fallbackAgentId: defaultAgentId,
+                            row,
+                            mainKey,
+                            basePath,
+                            exactKey: true,
+                          }).href
+                      : pageDestination(item(), basePath)?.href;
+                  });
+                  const disabled = () => current().draft.submitting || current().searchDebouncing;
                   return (
-                    <div
+                    <a
+                      href={disabled() ? undefined : href() || undefined}
+                      tabindex={href() ? -1 : undefined}
                       ref={[optionRef(`${item().category}:${item().id}`)]}
                       id={getOptionId(index())}
                       class={[
@@ -376,13 +352,20 @@ function PaletteSearch(props: {
                       ]}
                       role="option"
                       aria-selected={active() ? "true" : "false"}
-                      aria-disabled={
-                        current().draft.submitting || current().searchDebouncing
-                          ? "true"
-                          : undefined
-                      }
-                      onClick={(event) => {
+                      aria-disabled={disabled() ? "true" : undefined}
+                      onClick={(event: MouseEvent) => {
                         event.stopPropagation();
+                        if (
+                          event.defaultPrevented ||
+                          event.button !== 0 ||
+                          event.metaKey ||
+                          event.ctrlKey ||
+                          event.shiftKey ||
+                          event.altKey
+                        ) {
+                          return;
+                        }
+                        event.preventDefault();
                         selectItem(item(), props.readCurrentProps());
                       }}
                       onMouseEnter={() => props.readCurrentProps().onActiveIdChange(item().id)}
@@ -396,7 +379,7 @@ function PaletteSearch(props: {
                         onPluginIconError={current().onPluginIconError}
                         registerPluginIcon={current().registerPluginIcon}
                       />
-                    </div>
+                    </a>
                   );
                 }}
               </For>
@@ -412,26 +395,14 @@ function PaletteSearch(props: {
         )}
       </For>
       <Show when={results().items.length === 0 && searchSettled()}>
-        <div class="cmd-palette__no-results" role="status">
-          <span class="cmd-palette__no-results-icon" aria-hidden="true">
-            <Icon name="messageSquarePlus" />
-          </span>
-          <h2>{t("palette.noResults")}</h2>
-          <Show when={!isMobileBrowserPlatform()}>
-            <p>
-              <ShortcutText
-                text={t("palette.noResultsStart", { shortcut: "{shortcut}" })}
-                shortcut={() => <Kbd keys="Tab" />}
-              />
-            </p>
-          </Show>
-        </div>
-      </Show>
-      <Show when={current().archivedTranscriptsExcluded > 0}>
-        <div class="cmd-palette__footer">
-          <span class="cmd-palette__archive-note" role="status">
-            {t("palette.archivedSessionsExcluded")}
-          </span>
+        <div class="cmd-palette__no-results">
+          <PanelEmptyState
+            icon={<Icon name="search" />}
+            heading={t("palette.noResults")}
+            description={
+              isMobileBrowserPlatform() ? "" : t("palette.noResultsStart", { shortcut: "Tab" })
+            }
+          />
         </div>
       </Show>
     </>
@@ -441,11 +412,12 @@ function PaletteSearch(props: {
 export function CommandPaletteView(props: { readProps: () => CommandPaletteProps }) {
   let initialInput!: HTMLTextAreaElement;
   let stack!: HTMLDivElement;
+  const [image, setImage] = createSignal<ImageLightboxItem | null>(null);
   // Share one presentation snapshot; event handlers retain synchronous owner reads.
   const current = createMemo(() => props.readProps());
   const readCurrent = () => props.readProps();
   const drop = PaletteSessionDraft.createDropHandlers(() => readCurrent().draft);
-  const error = createMemo(() => current().draft.error);
+  const error = createMemo(() => current().draft.error ?? current().draft.blockedSubmitNotice);
   const saving = createSubmissionAction(
     () => readCurrent().draft,
     current,
@@ -464,7 +436,7 @@ export function CommandPaletteView(props: { readProps: () => CommandPaletteProps
   const catalogRead = createDeferred(() => catalogRequest()?.promise);
   const modelRequest = createMemo(() => search().modelSearchRead);
   const modelRead = createDeferred(() => modelRequest()?.promise);
-  const optionElements = new Map<string, HTMLDivElement>();
+  const optionElements = new Map<string, HTMLElement>();
   const activeElement = () => {
     if (hideSearch()) {
       return undefined;
@@ -486,6 +458,7 @@ export function CommandPaletteView(props: { readProps: () => CommandPaletteProps
     <>
       <openclaw-modal-dialog
         prop:initialFocus={() => initialInput}
+        native-browser-backdrop
         class="cmd-palette-overlay palette"
         label={t("palette.placeholder")}
         style={COMMAND_PALETTE_DIALOG_STYLE}
@@ -516,9 +489,14 @@ export function CommandPaletteView(props: { readProps: () => CommandPaletteProps
             onDrop={drop.onDrop}
           >
             <Show when={current().mode === "compose"}>
-              <PaletteSessionAttachments draft={current().draft} revision={current()} />
+              <PaletteSessionAttachments
+                draft={current().draft}
+                revision={current()}
+                onOpenImage={setImage}
+              />
             </Show>
             <CommandPaletteInput
+              mode={current().mode}
               onAutofocusRef={(element) => {
                 initialInput = element;
               }}
@@ -530,7 +508,6 @@ export function CommandPaletteView(props: { readProps: () => CommandPaletteProps
                     : "palette.composePlaceholder"
                   : "palette.searchPlaceholder",
               )}
-              maxLines={hideSearch() ? 8 : 3}
               onInputRef={current().onInputRef}
               onValueChange={current().onQueryChange}
               onBeforeInput={current().onBeforeInput}
@@ -627,11 +604,11 @@ export function CommandPaletteView(props: { readProps: () => CommandPaletteProps
             <Show when={current().mode === "compose"}>
               <div class="agent-chat__composer-footer">
                 <div class="agent-chat__composer-lead">
-                  <PaletteSessionAddMenu draft={current().draft} revision={current()} />
+                  <PaletteSessionControls draft={current().draft} revision={current()} />
                 </div>
                 <div class="agent-chat__composer-trail">
                   <div class="agent-chat__composer-controls">
-                    <PaletteSessionControls draft={current().draft} revision={current()} />
+                    <PaletteSessionModel draft={current().draft} revision={current()} />
                   </div>
                   <div class="agent-chat__composer-actions">
                     <openclaw-tooltip prop:content={reason()} placement="bottom-end">
@@ -667,7 +644,7 @@ export function CommandPaletteView(props: { readProps: () => CommandPaletteProps
               </div>
             </Show>
           </div>
-          <Show when={current().mode === "compose" && error()}>
+          <Show when={error()}>
             <div
               class="cmd-palette__creation-error agent-chat__composer-status agent-chat__composer-status-band agent-chat__composer-status-band--wrap"
               data-tone="danger"
@@ -707,6 +684,7 @@ export function CommandPaletteView(props: { readProps: () => CommandPaletteProps
         </div>
       </openclaw-modal-dialog>
       <PaletteSessionAuxiliary draft={current().draft} revision={current()} />
+      <ImageLightboxItemView item={image()} onClose={() => setImage(null)} />
     </>
   );
 }

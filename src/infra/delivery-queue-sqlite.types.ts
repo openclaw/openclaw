@@ -103,6 +103,8 @@ export type DeliveryQueueEntryState = {
   platformSendAttemptId?: string;
   platformSendStartedAt?: number;
   recoveryState?: string;
+  /** Producer-specific durable attempt budget; an unconfirmed final-text replay caps it. */
+  maxRetries?: number;
 };
 
 export function resolveDeliveryQueueAttemptCount(

@@ -5,6 +5,7 @@ import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { captureSessionActorTranscriptRead } from "../config/sessions/session-actor-transcript-read.js";
 import type {
   PaginatedSessionHistory,
+  PendingTurnBoundary,
   SessionHistoryMessage,
   SessionHistoryReadParams,
   SessionHistorySnapshot,
@@ -119,7 +120,7 @@ export class SessionHistorySseState {
   private cursor: string | undefined;
   private sentHistory: PaginatedSessionHistory;
   private rawTranscriptSeq: number;
-  private turnBoundaryPending: boolean;
+  private turnBoundaryPending: PendingTurnBoundary;
   private assistantErrorPending: boolean;
   private transcriptPath: string | undefined;
 

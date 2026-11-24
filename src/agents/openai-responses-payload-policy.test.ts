@@ -168,6 +168,13 @@ it.each([
     expect(JSON.stringify(request.input)).toBe(before);
     apply(request, resolved);
     expect(request.store).toBe(store);
+    const preserved = { input, store: true, previous_response_id: "resp_stale" };
+    apply(
+      preserved,
+      resolve({ api: "openai-responses", provider, baseUrl }, { storeMode: "preserve" }),
+    );
+    expect(preserved.store).toBe(store);
+    expect(preserved.previous_response_id).toBe(store ? "resp_stale" : undefined);
     const ordinary = { input: [input[0]], store: true };
     apply(ordinary, resolved);
     expect(ordinary.store).toBe(true);

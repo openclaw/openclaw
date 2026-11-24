@@ -1,5 +1,4 @@
 import { ApplicationCommandOptionType } from "discord-api-types/v10";
-import { loadPreparedModelCatalog, resolveAgentDir } from "openclaw/plugin-sdk/agent-runtime";
 import { resolveDirectStatusReplyForSession } from "openclaw/plugin-sdk/command-status-runtime";
 import { ensureConfiguredBindingRouteReady } from "openclaw/plugin-sdk/conversation-binding-runtime";
 import { buildPairingReply } from "openclaw/plugin-sdk/conversation-runtime";
@@ -7,6 +6,7 @@ import { getAgentScopedMediaLocalRoots } from "openclaw/plugin-sdk/media-runtime
 import {
   buildCommandTextFromArgs,
   findCommandByNativeName,
+  loadCommandArgMenuModelCatalog,
   parseCommandArgs,
   resolveCommandArgMenuAsync,
   serializeCommandArgs,
@@ -37,7 +37,7 @@ import {
   resolveDiscordGuildNativeCommandAuthorized,
   resolveDiscordNativeAutocompleteAuthorized,
   resolveDiscordNativeCommandAccessContext,
-  createDiscordNativeCommandAuthority,
+  resolveDiscordNativeCommandAccess,
   resolveDiscordNativeGroupDmAccess,
   resolveDiscordNativePolicyReader,
 } from "./native-command-auth.js";
@@ -413,19 +413,18 @@ async function dispatchDiscordCommandInteraction(
   if (policy?.isCurrent() === false) {
     return reject("Access policy changed. Try this interaction again.", true);
   }
-  const authority = await createDiscordNativeCommandAuthority({
+  const authority = resolveDiscordNativeCommandAccess({
     cfg,
     ctx: ctxPayload,
     commandAuthorized,
     sender,
     allowNameMatching: channelAccess.allowNameMatching,
-    isPolicyCurrent: policy?.isCurrent,
     accountId,
     guildId: interaction.guild?.id,
     commandName,
     pluginCommand: params.pluginCommandDispatch.kind === "plugin",
   });
-  if (!authority.isAllowed()) {
+  if (!authority.allowed) {
     return reject("You are not authorized to use this command.", true);
   }
 
@@ -434,13 +433,8 @@ async function dispatchDiscordCommandInteraction(
       ? await ensureConfiguredBindingRouteReady({
           cfg,
           bindingResolution: routeState.configuredBinding,
-          assertActive: authority.assertActive,
         })
       : null;
-
-  if (!authority.isAllowed()) {
-    return reject("You are not authorized to use this command.", true);
-  }
 
   const isGuild = Boolean(interaction.guild);
   const channelId = rawChannelId || "unknown";
@@ -462,15 +456,9 @@ async function dispatchDiscordCommandInteraction(
   // Native /think must not wait on provider discovery; persisted rows retain its metadata.
   const menuModelCatalog =
     command.key === "think" && menuNeedsModelContext
-      ? await loadPreparedModelCatalog({
-          config: cfg,
-          ...(menuModelContext?.agentId
-            ? {
-                agentId: menuModelContext.agentId,
-                agentDir: resolveAgentDir(cfg, menuModelContext.agentId),
-              }
-            : {}),
-          readOnly: true,
+      ? await loadCommandArgMenuModelCatalog({
+          cfg,
+          ...(menuModelContext?.agentId ? { agentId: menuModelContext.agentId } : {}),
         })
       : undefined;
   // Normal dispatch owns the unavailable-binding reply; do not offer choices it cannot apply.
@@ -532,15 +520,12 @@ async function dispatchDiscordCommandInteraction(
       agentId: pluginCommandAgentId,
       sessionKey: effectiveRoute.sessionKey,
     });
-    authority.assertActive();
-    const senderIsOwner = authority.senderIsOwner();
     const pluginReply = await params.pluginCommandDispatch.execute({
       senderId: sender.id,
       channel: "discord",
       channelId,
       isAuthorizedSender: commandAuthorized,
-      senderIsOwner,
-      ...(senderIsOwner ? { assertOwnerCurrent: authority.assertOwnerCurrent } : {}),
+      senderIsOwner: authority.senderIsOwner,
       agentId: pluginCommandAgentId,
       sessionKey: effectiveRoute.sessionKey,
       authProfileId: targetSessionEntry?.authProfileOverride,
@@ -616,7 +601,7 @@ async function dispatchDiscordCommandInteraction(
     }
   }
 
-  const senderIsOwner = authority.senderIsOwner();
+  const { senderIsOwner } = authority;
   if (!suppressReplies && commandName === "status") {
     const statusReply = await resolveDirectStatusReplyForSession({
       cfg,
@@ -659,7 +644,6 @@ async function dispatchDiscordCommandInteraction(
   }
 
   const { dispatched, hiddenFinalReply } = await dispatchDiscordNativeAgentReply({
-    assertAuthority: authority.assertActive,
     cfg,
     discordConfig,
     accountId,

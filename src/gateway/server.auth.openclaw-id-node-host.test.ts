@@ -170,7 +170,7 @@ describe.skipIf(!hasBinding)("native OpenClaw ID node transport", () => {
       gatewayServer: () => upstream,
       log: { warn: () => {} },
     });
-    const nodeSigner = await ed25519SignerFromSeed(loadNodeTunnelKey(dir));
+    const nodeSigner = await ed25519SignerFromSeed(await loadNodeTunnelKey(dir));
     const peerKey = formatIrohEndpointKey(nodeSigner.publicKey);
     const principal = { kind: "owner" as const, peerKey };
     // Until the node-principal stack lands, use the existing test resolver; no Gateway auth changes.

@@ -94,6 +94,10 @@ function brokerFixture(ready = true) {
     },
   );
   Object.defineProperties(worker, {
+    stdin: { value: null },
+    stdout: { value: null },
+    stderr: { value: null },
+    stdio: { value: [null, null, null, null] },
     pid: { value: 41001 },
     connected: { get: () => connected },
     exitCode: { get: () => (exited ? 0 : null) },
