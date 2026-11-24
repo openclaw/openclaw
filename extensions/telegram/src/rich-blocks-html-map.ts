@@ -153,7 +153,9 @@ function listToBlock(
   // `<ol start="N">` numbers from N, matching the Markdown path's parsed markers.
   const start =
     node.name === "ol" ? strictNumber(parseHtmlAttrs(node.raw).get("start"), /^\d+$/u) : undefined;
-  const firstValue = start !== undefined && Number.isSafeInteger(start) ? start : 1;
+  // Telegram stores each label as int32; leave room for the last item too.
+  const firstValue =
+    start !== undefined && start <= 2 ** 31 - countChildren(node.children, "li") ? start : 1;
   for (const child of node.children) {
     if (child.kind !== "element") {
       continue;
