@@ -10,6 +10,16 @@ registerEnglishCatalog(registerChatToolOperationsEnglish);
 const catalog = registerChatToolOperationsEnglish.catalog.chat.toolCards.operationLabels;
 
 const operationIcons = new Map<string, IconName>([
+  ["x_search", "search"],
+  ["theme", "pipette"],
+  ["portal", "panelsTopLeft"],
+  ["canvas", "panelsTopLeft"],
+  ["show_widget", "layoutDashboard"],
+  ["deep_research", "search"],
+  ["firecrawl_search", "globe"],
+  ["firecrawl_scrape", "globe"],
+  ["tavily_search", "globe"],
+  ["tavily_extract", "globe"],
   ["code_execution", "search"],
   ["crabbox", "box"],
   ["diffs", "fileDiff"],
@@ -41,6 +51,15 @@ const operationIcons = new Map<string, IconName>([
 
 export function catalogToolIcon(name: string): IconName | undefined {
   return operationIcons.get(name.trim().toLowerCase());
+}
+
+function browserOperation(args: Record<string, unknown> | null): string {
+  const kind = asNullableRecord(args?.request)?.kind ?? args?.kind;
+  if (typeof kind !== "string") {
+    return "act";
+  }
+  const key = `act_${kind}`;
+  return Object.hasOwn(catalog.browser, key) ? key : "act";
 }
 
 export function catalogToolLabel(
@@ -82,7 +101,9 @@ export function catalogToolLabel(
   const key =
     name === "update_goal" && typeof args?.status === "string"
       ? `status_${args.status}`
-      : action?.replaceAll(".", "_");
+      : name === "browser" && action === "act"
+        ? browserOperation(args)
+        : action?.replaceAll(".", "_");
   const operation = key && Object.hasOwn(labels, key) ? key : "default";
   if (!Object.hasOwn(labels, operation)) {
     return undefined;
