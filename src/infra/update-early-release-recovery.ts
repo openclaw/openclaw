@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
+import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
 import { resolveStateDir } from "../config/paths.js";
 import { resolveGatewayProfileSuffix } from "../daemon/constants.js";
 import { resolveServiceEntrypointIndex } from "../daemon/service-layout.js";
@@ -144,18 +145,18 @@ function findDriver(): RecoveryPlan["driver"] | undefined {
   return undefined;
 }
 
-function buildCommit(root: string): string | null {
+/** A string field of a JSON file, or null when the file or field is missing. */
+function readJsonString(file: string, key: string): string | null {
   try {
-    const info = JSON.parse(
-      fs.readFileSync(path.join(root, "dist", "build-info.json"), "utf8"),
-    ) as {
-      commit?: unknown;
-    };
-    return typeof info.commit === "string" ? info.commit : null;
+    const value = safeParseJsonRecord(fs.readFileSync(file, "utf8"))?.[key];
+    return typeof value === "string" ? value : null;
   } catch {
     return null;
   }
 }
+
+const buildCommit = (root: string) =>
+  readJsonString(path.join(root, "dist", "build-info.json"), "commit");
 
 function findOnPath(command: string, env: NodeJS.ProcessEnv): string | null {
   for (const dir of (env.PATH ?? "").split(path.delimiter).filter(Boolean)) {
@@ -302,7 +303,7 @@ async function planRecovery(
   if (cli) {
     const version = await run([cli, "--version"]);
     const commit = /\(([0-9a-f]{7,40})\)/u.exec(version.output)?.[1];
-    const serving = [buildCommit(checkout), buildCommit(legacy)].filter(Boolean) as string[];
+    const serving = [buildCommit(checkout), buildCommit(legacy)].flatMap((sha) => sha ?? []);
     if (!commit || !serving.some((sha) => sha.startsWith(commit))) {
       return { reason: "the `openclaw` command on PATH runs another installation" };
     }
@@ -316,21 +317,10 @@ async function planRecovery(
       release: path.join(change.prefix, "recovery", "openclaw"),
       prefix: change.prefix,
       serviceFile: service.sourcePath,
-      fromVersion: version(checkout) ?? "unknown",
+      fromVersion: readJsonString(path.join(checkout, "package.json"), "version") ?? "unknown",
       driver,
     },
   };
-}
-
-function version(root: string): string | null {
-  try {
-    const pkg = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8")) as {
-      version?: unknown;
-    };
-    return typeof pkg.version === "string" ? pkg.version : null;
-  } catch {
-    return null;
-  }
 }
 
 function removeTree(dir: string) {
@@ -573,7 +563,8 @@ export async function finishEarlyGitReleaseRecovery(
   const releases = path.join(plan.prefix, "releases");
   const trial = path.join(releases, ".trial");
   try {
-    if (!("v" in (JSON.parse(fs.readFileSync(trial, "utf8")) as object))) {
+    const record = safeParseJsonRecord(fs.readFileSync(trial, "utf8"));
+    if (record && !("v" in record)) {
       fs.rmSync(trial);
       removed.push("the old-format trial");
     }
@@ -682,6 +673,7 @@ async function recordOutcome(outcome: RecoveryOutcome) {
 
 /** Entry for `update-migrated-finalize.worker --early-release-recovery <plan> [finish <facts>]`. */
 export async function runEarlyGitReleaseRecoveryEntry(argv: readonly string[]) {
+  // SAFETY: the plan and facts are written by this same build (`--check` or the runner).
   const plan = JSON.parse(argv[0] ?? "") as RecoveryPlan;
   const log = (line: string) => process.stdout.write(`[openclaw update recovery] ${line}\n`);
   const record = async (outcome: RecoveryOutcome) => {
@@ -692,11 +684,15 @@ export async function runEarlyGitReleaseRecoveryEntry(argv: readonly string[]) {
     }
   };
   if (argv[1] === "finish") {
-    await finishEarlyGitReleaseRecovery(plan, JSON.parse(argv[2] ?? "{}") as FinishFacts, {
-      run: runCommand,
-      log,
-      record,
-    });
+    await finishEarlyGitReleaseRecovery(
+      plan,
+      { downtimeMs: Number(safeParseJsonRecord(argv[2] ?? "")?.downtimeMs) || 0 },
+      {
+        run: runCommand,
+        log,
+        record,
+      },
+    );
     return false;
   }
   return runEarlyGitReleaseRecovery(plan, {

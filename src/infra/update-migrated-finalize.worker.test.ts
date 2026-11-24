@@ -477,8 +477,8 @@ it.each([
       ...(await importOriginal<typeof import("./openclaw-root.js")>()),
       resolveOpenClawPackageRootSync: () => root,
     }));
-    // mock-isolation: Starting the recovery needs Git, systemd and a service; its tests own that.
     const start = vi.fn(async () => recovery);
+    // mock-isolation: Starting the recovery needs Git, systemd and a service; its tests own that.
     vi.doMock("./update-early-release-recovery.js", () => ({
       startEarlyGitReleaseRecovery: start,
     }));
