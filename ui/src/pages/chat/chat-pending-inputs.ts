@@ -334,14 +334,12 @@ export async function loadOwnCancelledInputs(
     state.sessionKey === sessionKey &&
     state.currentSessionId === sessionId &&
     resolveUiSelectedSessionAgentId(state) === agentId;
-  let runtime: typeof import("./chat-pending-inputs.runtime.ts");
   try {
-    runtime = await import("./chat-pending-inputs.runtime.ts");
+    const { restoreOwnCancelledInputs } = await import("./chat-pending-inputs.runtime.ts");
+    if (current()) {
+      await restoreOwnCancelledInputs(state, current);
+    }
   } catch {
     // The caller still publishes its history failure; restoration is best effort.
-    return;
-  }
-  if (current()) {
-    await runtime.restoreOwnCancelledInputs(state, current);
   }
 }
