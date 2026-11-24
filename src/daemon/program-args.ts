@@ -5,6 +5,11 @@ import { resolveOpenClawCliInvocation } from "../../cli-invocation.mjs";
 import { SUPPORTED_NODE_VERSIONS } from "../../node-version.mjs";
 import type { GatewayDaemonRuntime } from "../commands/daemon-runtime.js";
 import { resolveBrewOpenClawPath } from "../infra/brew.js";
+import {
+  gitReleaseSlot,
+  resolveGitReleaseLauncherForEntrypoint,
+  resolveGitReleasePrefix,
+} from "../infra/git-release-paths.js";
 import { resolveRuntimeArgs } from "../infra/runtime-worker-url.js";
 import {
   buildGatewayDistEntrypointCandidates,
@@ -102,8 +107,6 @@ async function resolveCliEntrypointPathForService(
   const looksLikeDist = isGatewayDistEntrypointPath(resolvedPath);
   if (looksLikeDist && service === "gateway") {
     // A Git release install's service names its launcher, which counts trial starts.
-    const { resolveGitReleaseLauncherForEntrypoint } =
-      await import("../infra/git-release-paths.js");
     const launcher = resolveGitReleaseLauncherForEntrypoint(normalized);
     if (launcher && (await canAccessEntrypoint(launcher))) {
       return launcher;
@@ -269,10 +272,20 @@ async function resolveCliProgramArguments(params: {
     };
   }
 
+  // Service ownership belongs to the selected state, not an unmarked npm frontend.
+  // Keep source-entry planning independent so disposable CLIs can still plan their copy.
+  const residentLauncher =
+    params.service === "node"
+      ? null
+      : resolveGitReleaseLauncherForEntrypoint(
+          path.join(gitReleaseSlot(resolveGitReleasePrefix()), "dist", "index.js"),
+        );
   const cliEntrypointPath =
-    typeof params.cliEntrypoint === "object"
-      ? params.cliEntrypoint.planned
-      : await resolveCliEntrypointPathForService(params.cliEntrypoint, params.service);
+    residentLauncher && (await canAccessEntrypoint(residentLauncher))
+      ? residentLauncher
+      : typeof params.cliEntrypoint === "object"
+        ? params.cliEntrypoint.planned
+        : await resolveCliEntrypointPathForService(params.cliEntrypoint, params.service);
   return {
     programArguments: [
       runtimePath,

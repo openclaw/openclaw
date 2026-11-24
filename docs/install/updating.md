@@ -318,6 +318,13 @@ to activation, even when the npm entry could not be attached to the launcher.
 The installed resident updater must contain forwarding publication support.
 Git installation identity checks and Gateway RPC admission remain unchanged.
 
+On a converted install, `gateway install` keeps the service on the resident
+launcher selected by the state directory's verified release slot. This also
+applies when a separate npm install has no forwarding marker, including a
+read-only package tree. Reinstalling the service must not bypass trial activation
+or rollback by naming that npm tree. The CLI that installs the service must
+contain this repair; no new state or configuration is needed.
+
 Service reconciliation recognizes a deleted pnpm store generation only when it
 belongs to the same global root as a verified active pnpm install. This repairs
 older service definitions without adopting another global installation. The
