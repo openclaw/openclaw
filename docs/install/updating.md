@@ -191,6 +191,10 @@ unchanged. Store size is not an update-admission rule.
 Source access grants and schema-specific default privileges are copied and
 verified in the same transaction, so existing reporting and backup roles keep
 their permissions in the new namespace.
+The startup copy skips unreadable subdirectories such as an ext4 volume's
+`lost+found` with a warning, without changing their contents or permissions.
+An unreadable state root, other filesystem errors, or an uncopied required
+database still stops the upgrade.
 
 A failed private preparation uses the existing configuration refusal (exit 78).
 There is no portable-export or in-place trial fallback; restore missing copy

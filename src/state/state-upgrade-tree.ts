@@ -8,7 +8,7 @@ import { copyFileDescriptorSync } from "@openclaw/fs-safe/advanced";
 import { decodeMountInfoPath } from "@openclaw/normalization-core/mountinfo-path";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { readBackupEngine } from "../infra/database-engine/physical-store.js";
-import { formatErrorMessage } from "../infra/errors.js";
+import { formatErrorMessage, hasErrnoCode } from "../infra/errors.js";
 import { copyFileHandle } from "../infra/file-descriptor.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { retireSqliteDatabaseAdmissionForPath } from "../infra/sqlite-database-admission.js";
@@ -259,7 +259,7 @@ export async function copyTree(
   baseline: Map<string, string | undefined>,
   options: {
     targets?: readonly { path: string }[];
-    log?: { info: (message: string) => void };
+    log?: { info: (message: string) => void; warn: (message: string) => void };
     additionalCopyBytes?: number;
   } = {},
 ): Promise<UpgradeCopyScope> {
@@ -287,10 +287,22 @@ export async function copyTree(
   }
   let bytes = options.additionalCopyBytes ?? 0;
   const walk = (directory: string, visited: ReadonlySet<string>, retired = false) => {
+    let entries: fs.Dirent[];
+    try {
+      entries = fs.readdirSync(directory, { withFileTypes: true });
+    } catch (error) {
+      if (directory === live || (!hasErrnoCode(error, "EACCES") && !hasErrnoCode(error, "EPERM"))) {
+        throw error;
+      }
+      (options.log ?? createSubsystemLogger("state/upgrade")).warn(
+        `Skipping unreadable state upgrade directory ${directory}: ${formatErrorMessage(error)}`,
+      );
+      return;
+    }
     if (!retired) {
       scope.directories.add(directory);
     }
-    for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+    for (const entry of entries) {
       const source = path.join(directory, entry.name);
       if (skip(source)) {
         continue;
