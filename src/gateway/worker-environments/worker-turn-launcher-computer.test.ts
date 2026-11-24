@@ -91,7 +91,9 @@ describe("worker launch capabilities", () => {
     { label: "revoked before launch", available: true, revoked: true },
   ])(
     "carries only a current GitHub identity in the launch envelope ($label)",
+    { timeout: fx.WORKER_TURN_COLD_TEST_TIMEOUT_MS },
     async ({ available, revoked }) => {
+      await fx.allowColdWorkerTurnPublicationForTest();
       await fx.seedActivePlacement();
       const github: WorkerGitHubLaunchBinding = {
         token: "synthetic-turn-bound-github-token",

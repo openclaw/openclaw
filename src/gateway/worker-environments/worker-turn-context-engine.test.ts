@@ -34,6 +34,7 @@ afterEach(resetGlobalHookRunner);
 it.each(["direct", "outer"] as const)(
   "prepares and settles with %s ownership",
   async (owner) => {
+    await worker.allowColdWorkerTurnPublicationForTest();
     const events: string[] = [];
     const record = (event: string) => async () => void events.push(event);
     await worker.seedActivePlacement();
@@ -255,7 +256,7 @@ it.each(["direct", "outer"] as const)(
       input.preparedRunAdmission.close();
     }
   },
-  180_000,
+  worker.WORKER_TURN_COLD_TEST_TIMEOUT_MS,
 );
 
 it("retains plugin tool authority when a worker RPC enters from a separate async context", async () => {

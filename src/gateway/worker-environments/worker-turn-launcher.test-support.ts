@@ -7,6 +7,7 @@ import {
 } from "../../agents/admitted-run-context.js";
 import type { AgentRunTerminalReplySnapshot } from "../../agents/agent-run-terminal-reply.types.js";
 import * as elicitation from "../../agents/mcp-client-elicitation.js";
+import { setPreparedModelRuntimeBuildTimeoutForTest } from "../../agents/prepared-model-runtime.test-support.js";
 import type { SessionPlacementTurnParams } from "../../agents/session-placement-admission.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
 import { makeAgentAssistantMessage } from "../../agents/test-helpers/agent-message-fixtures.js";
@@ -78,6 +79,12 @@ export const SESSION_ID = "session-worker-turn";
 export const SESSION_KEY = "agent:main:worker-turn";
 export const ENVIRONMENT_ID = "environment-worker-turn";
 export const OWNER_EPOCH = 3;
+// Hosted Node first cases have taken 94–144s, including workspace plugin publication.
+// Leave assertion and settlement time after the publication deadline; warm cases finish early.
+export const WORKER_TURN_COLD_TEST_TIMEOUT_MS = 210_000;
+export async function allowColdWorkerTurnPublicationForTest(): Promise<void> {
+  onTestFinished(await setPreparedModelRuntimeBuildTimeoutForTest(180_000));
+}
 const BUNDLE_HASH = "a".repeat(64);
 export const MANIFEST_REF = `sha256:${"b".repeat(64)}`;
 

@@ -1,5 +1,6 @@
 type PreparedModelRuntimeTestApi = {
   resetPreparedModelRuntimeSnapshotsForTest(): Promise<void>;
+  setModelRuntimeBuildTimeoutMsForTest(timeoutMs: number): () => void;
 };
 
 type ModelCatalogTestApi = {
@@ -20,4 +21,15 @@ export async function resetPreparedModelCatalogStateForTest(): Promise<void> {
     Symbol.for("openclaw.modelCatalogTestApi")
   ] as ModelCatalogTestApi | undefined;
   api?.resetModelCatalogBuilderCacheForTest();
+}
+
+/** Scope an integration fixture's real publication deadline without resetting its owners. */
+export async function setPreparedModelRuntimeBuildTimeoutForTest(
+  timeoutMs: number,
+): Promise<() => void> {
+  await import("./prepared-model-runtime.js");
+  const api = (globalThis as Record<PropertyKey, unknown>)[
+    Symbol.for("openclaw.preparedModelRuntimeTestApi")
+  ] as PreparedModelRuntimeTestApi;
+  return api.setModelRuntimeBuildTimeoutMsForTest(timeoutMs);
 }

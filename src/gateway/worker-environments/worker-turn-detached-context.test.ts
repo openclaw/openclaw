@@ -36,6 +36,8 @@ import { releaseClaimIfOwned } from "./worker-turn-admission.js";
 import {
   SESSION_ID,
   SESSION_KEY,
+  WORKER_TURN_COLD_TEST_TIMEOUT_MS,
+  allowColdWorkerTurnPublicationForTest,
   attachedEnvironment,
   cleanupWorkerTurnLauncherTest,
   createWorkerSessionTurnPlacementProvider,
@@ -285,7 +287,9 @@ describe("worker detached model-context branch parity", () => {
     [true, "openclaw.system-update"],
   ] as const)(
     "commits a fallback after the failed candidate's own output (tool activity: %s; context: %s)",
+    { timeout: WORKER_TURN_COLD_TEST_TIMEOUT_MS },
     async (withToolActivity, customType) => {
+      await allowColdWorkerTurnPublicationForTest();
       const runId = "worker-model-fallback";
       const inputRecorder = recorder();
       const committer = createWorkerTranscriptCommitter({

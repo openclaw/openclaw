@@ -756,7 +756,11 @@ if (process.env.VITEST || process.env.NODE_ENV === "test") {
       resetPreparedModelRuntimeSnapshotsForTest,
       getPreparedModelRuntimeOwnerCountForTest: () => owners.size,
       setModelRuntimeBuildTimeoutMsForTest: (timeoutMs: number) => {
+        const previous = modelRuntimeBuildTimeoutMs;
         modelRuntimeBuildTimeoutMs = timeoutMs;
+        return () => {
+          modelRuntimeBuildTimeoutMs = previous;
+        };
       },
     };
 }
