@@ -564,7 +564,6 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/worker-environments/worker-turn-detached-context.test.ts",
   "src/gateway/worker-environments/worker-turn-early-final.test.ts",
   "src/gateway/worker-environments/worker-turn-execution.test.ts",
-  "src/gateway/worker-environments/worker-turn-execution.yield.test.ts",
   "src/gateway/worker-environments/worker-turn-launcher-build-recovery.test.ts",
   "src/gateway/worker-environments/worker-turn-launcher-claim-admission.test.ts",
   "src/gateway/worker-environments/worker-turn-launcher-computer.test.ts",
