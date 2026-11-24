@@ -147,7 +147,7 @@ it("streams a trusted owner webchat video over 16 MiB into managed storage and s
   expect(Buffer.concat(chunks)).toEqual(marker);
   expect(largestAllocation).toBeLessThan(size);
   expect(runFfprobe).toHaveBeenCalledWith(expect.any(Array), {
-    stdinFileDescriptor: expect.any(Number),
+    stdinFile: expect.any(Object),
   });
   expect(runFfmpeg).not.toHaveBeenCalled();
 });

@@ -377,9 +377,9 @@ it("reuses accepted blobs while preserving cumulative provenance, deletions and 
       command === "git" &&
       args.includes("fast-import") &&
       typeof options === "object" &&
-      options.stdinFileDescriptor !== undefined
+      options.stdinFile !== undefined
     ) {
-      importBytes.push(fstatSync(options.stdinFileDescriptor).size);
+      importBytes.push(fstatSync(options.stdinFile.fd).size);
     }
     return execute(command, args, options);
   });

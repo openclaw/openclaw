@@ -1936,6 +1936,7 @@ src/process/child-process.ts
 src/process/command-error.ts
 src/process/command-process-identity.ts
 src/process/command-reservation-census.ts
+src/process/command-stdin-file.ts
 src/process/darwin-process-inspection.ts
 src/process/exec-output.ts
 src/process/exec-result.ts
