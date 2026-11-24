@@ -23,7 +23,9 @@ export function createRelayEventRecorder() {
     connIds: string[];
     opts?: { dropIfSlow?: boolean };
   }> = [];
+  const warn = vi.fn<(message: string) => void>();
   const context = {
+    logGateway: { warn },
     broadcastToConnIds: (
       event: string,
       payload: unknown,
@@ -41,7 +43,7 @@ export function createRelayEventRecorder() {
       }
     },
   } as never;
-  return { events, context, closed: closed.promise };
+  return { events, context, closed: closed.promise, warn };
 }
 
 export function makeRelayTransport<Overrides extends Partial<RealtimeVoiceBridge> = object>(

@@ -1,4 +1,6 @@
 import { randomUUID } from "node:crypto";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { redactSensitiveText } from "../../../logging/redact.js";
 import { REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME } from "../../../talk/agent-consult-tool.js";
 import { buildRealtimeVoiceAgentCancelProviderResult } from "../../../talk/agent-run-control-shared.js";
 import { createClientVoiceTranscriptReadiness } from "../../../talk/client-voice-transcript-readiness.js";
@@ -67,6 +69,15 @@ const PROVIDER_CANCELLED_CONSULT_PROMPT = [
   "The earlier OpenClaw request was interrupted before it reported back, so its outcome is unknown; some steps may already have happened.",
   "Do not say it finished or that nothing happened. Check what was done before running it again.",
 ].join(" ");
+
+/** Provider messages can quote part of a rejected key; keep the reason, drop the token. */
+function formatRelayProviderError(error: unknown): string {
+  const name = error instanceof Error && error.name ? error.name : "Error";
+  const code = (error as { code?: unknown } | null | undefined)?.code;
+  const label = typeof code === "string" || typeof code === "number" ? `${name} ${code}` : name;
+  const message = error instanceof Error ? error.message : String(error);
+  return truncateUtf16Safe(redactSensitiveText(`${label}: ${message}`), 500);
+}
 
 /** Creates a realtime voice relay session and returns the browser audio contract. */
 export function createTalkRealtimeRelaySession(
@@ -566,7 +577,13 @@ export function createTalkRealtimeRelaySession(
         }
         return;
       }
-      const issue = realtimeRelayIssue(publicError(error).message, ready ? "stream" : "connect");
+      const phase = ready ? "stream" : "connect";
+      // The client only receives the bounded relay issue. The provider's own reason stays
+      // in the Gateway log, so an operator can tell a rejected key from an outage.
+      params.context.logGateway.warn(
+        `Realtime relay provider error during ${phase}: ${formatRelayProviderError(error)}`,
+      );
+      const issue = realtimeRelayIssue(publicError(error).message, phase);
       failureEmitted = true;
       emitError(issue);
     },
