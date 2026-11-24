@@ -171,6 +171,19 @@ Inspect the current head on a precondition failure. Packet-local speaker labels
 identify participants only within the imported packet and confer no Gateway identity.
 The bundled receiver uses the [standalone Beam packet schema and validator](https://github.com/openclaw/beam/tree/a4272c5bde4e52cdf87a1534447a6b98f3fb4a7b/schema).
 
+### Release the reviewed revision
+
+Only the verified original publisher with current write permission sees `canRelease: true`.
+Send `POST {apiUrl}/release` with the same strong `If-Match`, a fresh UUID in
+`Idempotency-Key`, and `{"digest":"sha256:…"}` for the accepted bytes. The receiver
+commits the release and its receipt together. Keep the operation UUID across timeouts.
+An authorized retry of the same release can recover its receipt after the snapshot expires.
+
+Read `GET {apiUrl}/destination` to inspect the bound conversation. An unbound
+release can create a destination while the snapshot is retained. A missing or changed
+destination requires reconciliation. A ready response contains an opaque reference
+after the Gateway verifies ordinary read access and the original catalog binding.
+
 ## Continue on the Team Gateway
 
 Publishing alone shares a read-only snapshot. To move the logical conversation, use the updated Beam skill's `handoff` command with the exact source session. The sender durably retires that Beam identity before network dispatch, obtains the receiver's `publicationId`, and explicitly releases that generation with `handoffId`. Release requires the original verified publisher; shared-token and older ownerless snapshots cannot be claimed through this route. A lost acknowledgment can retry the same generation but cannot recreate an expired publication.

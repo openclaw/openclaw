@@ -6,6 +6,7 @@
     "onCommands": ["beam"],
     "onConfigPaths": ["plugins.entries.beam"]
   },
+  "contracts": { "gatewayMethodDispatch": ["authenticated-request"] },
   "cliCommands": [
     {
       "name": "beam",
