@@ -57,9 +57,9 @@ extension OpenClawChatViewModel {
         self.refreshSidebarData(debounce: search != nil)
     }
 
-    func refreshSidebarData(debounce: Bool = false, coalescing: Bool = false) {
+    func refreshSidebarData(debounce: Bool = false, coalescing: Bool = false, afterRosterExpiry: Bool = false) {
         guard !self.isTransportDetached, self.healthOK, self.sidebarData?.isQueryEnabled == true else { return }
-        self.sidebarData?.scheduleLoad(debounce: debounce, coalescing: coalescing)
+        self.sidebarData?.scheduleLoad(debounce: debounce, coalescing: coalescing, afterRosterExpiry: afterRosterExpiry)
     }
 
     func rosterEntry(key: String, agentID: String?) -> OpenClawChatSessionEntry? {

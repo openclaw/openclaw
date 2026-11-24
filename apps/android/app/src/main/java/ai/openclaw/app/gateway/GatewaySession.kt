@@ -379,6 +379,7 @@ class GatewaySession(
     val message: String,
     val details: GatewayErrorDetails? = null,
     val retryable: Boolean = false,
+    val retryAfterMs: Int? = details?.retryAfterMs,
   ) {
     /** Only the method-bound startup refusal proves this chat send did no handler work. */
     fun startupRetryDelayMs(method: String): Long? {
@@ -2092,6 +2093,8 @@ class GatewaySession(
       val payloadJson = frame["payload"]?.toString()
       val error =
         response.error?.let { wireError ->
+          // retryAfterMs belongs to the error frame, independently of optional method details.
+          val retryAfterMs = wireError.retryAfterMs?.coerceIn(0, Int.MAX_VALUE.toLong())?.toInt()
           val detailObj = wireError.details.asObjectOrNull()
           val details =
             detailObj?.let {
@@ -2104,7 +2107,7 @@ class GatewaySession(
                 method = it["method"].asStringOrNull(),
                 requestId = normalizeGatewayApprovalRequestId(it["requestId"].asStringOrNull()),
                 retryable = it["retryable"].asBooleanOrNull() == true || wireError.retryable == true,
-                retryAfterMs = frame["error"].asObjectOrNull()?.get("retryAfterMs").asIntOrNull(),
+                retryAfterMs = retryAfterMs,
                 clientMinProtocol = it["clientMinProtocol"].asIntOrNull(),
                 clientMaxProtocol = it["clientMaxProtocol"].asIntOrNull(),
                 expectedProtocol = it["expectedProtocol"].asIntOrNull(),
@@ -2114,7 +2117,7 @@ class GatewaySession(
                 requiredScopes = it["requiredScopes"].asStringList(),
               )
             }
-          ErrorShape(wireError.code, wireError.message, details, retryable = wireError.retryable == true)
+          ErrorShape(wireError.code, wireError.message, details, retryable = wireError.retryable == true, retryAfterMs = retryAfterMs)
         }
       pending.remove(id)?.complete(RpcResult(response.ok, payloadJson, error))
     }

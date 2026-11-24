@@ -109,6 +109,38 @@ it("shares ordered sidebar pins with session RPCs, not rail-only shortcuts, lega
     await rpc(bob, "users.prefs.set", { entries: { [PREF]: [`session:${a}`] } });
     const list = (client: GatewayClient, params: Record<string, unknown>) =>
       rpc(client, "sessions.list", { agentId: "main", ...params });
+    // A restricted browser owns its layout locally. Select ordinary recency before
+    // each cutoff, not a profile-ranked page that the renderer can no longer repair.
+    const reader = { ...alice, connect: { ...alice.connect, scopes: ["operator.read"] } };
+    for (const rowMode of ["compact", "sidebar"]) {
+      const page = { rowMode, limit: 2 };
+      const first = await list(reader, page);
+      expect(first).toMatchObject({ nextOffset: 2, sessions: [{ key: nested }, { key: c }] });
+      expect(first.sessions[1]).not.toHaveProperty("pinned");
+      await expect(list(reader, { ...page, offset: 2 })).resolves.toMatchObject({
+        sessions: [{ key: b }, { key: a }],
+      });
+    }
+    const attributed = { source: "sessions-page", rowMode: "compact", limit: 1 };
+    for (const [client, query] of [
+      [alice, attributed],
+      [reader, { ...attributed, pinned: true }],
+      [reader, { limit: 1 }],
+      [
+        {
+          ...reader,
+          connect: {
+            ...reader.connect,
+            client: { ...reader.connect.client, id: "gateway-client" },
+          },
+        },
+        attributed,
+      ],
+    ] as const) {
+      await expect(list(client, query)).resolves.toMatchObject({
+        sessions: [{ key: b, pinned: true }],
+      });
+    }
     const oldMac: GatewayClient = {
       ...alice,
       connect: {

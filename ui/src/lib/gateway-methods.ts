@@ -1,4 +1,3 @@
-import { GATEWAY_SERVER_CAPS } from "../../../packages/gateway-protocol/src/server-capabilities.ts";
 import type { OperatorScope } from "../../../src/gateway/operator-scopes.js";
 import { roleScopesAllow } from "../../../src/shared/operator-scope-compat.js";
 import {
@@ -61,8 +60,9 @@ export function canCallGatewayMethod(
 export function usesGatewayTimedSessionPins(snapshot: ApplicationGatewaySnapshot): boolean {
   return (
     Boolean(snapshot?.selfUser?.id) &&
-    isGatewayCapabilityAdvertised(snapshot, GATEWAY_SERVER_CAPS.PERSONAL_SESSION_PINS) === true &&
-    canCallGatewayMethod(snapshot, "users.prefs.set", "operator.write")
+    canCallGatewayMethod(snapshot, "users.prefs.set", "operator.write", {
+      requireAdvertisement: false,
+    })
   );
 }
 

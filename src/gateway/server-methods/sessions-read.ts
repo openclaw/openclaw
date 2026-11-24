@@ -375,7 +375,7 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
         return undefined;
       }
       const projection = requireSessionRowProjection(context);
-      const pins = prepareSessionPinRead(args);
+      const pins = prepareSessionPinRead(args, params);
       if (!pins.canFilter && params.pinned !== undefined) {
         respondToCaller(
           false,

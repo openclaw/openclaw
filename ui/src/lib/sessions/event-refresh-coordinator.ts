@@ -5,6 +5,8 @@ import {
 } from "../../../../src/shared/monotonic-time.ts";
 import { scheduleAbsoluteDeadline } from "../../../../src/utils/absolute-deadline.ts";
 import type { SessionsListResult } from "../../api/types.ts";
+import { resolveGatewayReadRetryDelayMs } from "../gateway-availability.ts";
+import { isRetryableGatewayReadError } from "../gateway-errors.ts";
 
 const SESSION_EVENT_REFRESH_DEBOUNCE_MS = 5_000;
 
@@ -28,7 +30,12 @@ export function createSessionEventRefreshCoordinator({
   let retryAt: number | null = null;
   let fallback: ReturnType<typeof setTimeout> | undefined;
   let windowExpiry: number | undefined;
+  // Keep the cutoff's work distinct from events: a newer receipt can retire
+  // just this wake, including one waiting for background admission.
+  let windowWake: { queued: boolean; retryAt: number | null } | undefined;
+  let windowRead: object | undefined;
   let cancelWindowExpiry: (() => void) | undefined;
+  const needsRefresh = () => queued || (!windowRead && windowWake?.queued);
 
   const clearTimer = () => {
     clearTimeout(timer);
@@ -36,7 +43,7 @@ export function createSessionEventRefreshCoordinator({
   };
 
   const arm = (debounce = true) => {
-    if (!active || pending || !queued || timer) {
+    if (!active || pending || !needsRefresh() || timer) {
       return;
     }
     const delay = debounce ? SESSION_EVENT_REFRESH_DEBOUNCE_MS * (1 - 0.2 * Math.random()) : 0;
@@ -44,14 +51,19 @@ export function createSessionEventRefreshCoordinator({
       start,
       retryAt !== null
         ? Math.max(0, remainingMonotonicMs(retryAt))
-        : Math.max(delay, remainingMonotonicMs(nextAllowed)),
+        : Math.max(delay, remainingMonotonicMs(Math.max(nextAllowed, windowWake?.retryAt ?? 0))),
     );
   };
 
   const start = () => {
     clearTimer();
-    if (!active || pending || !queued) {
+    if (!active || pending || !needsRefresh()) {
       return;
+    }
+    const event = queued;
+    const wake = windowWake;
+    if (wake) {
+      wake.queued = false;
     }
     queued = false;
     retryAt = null;
@@ -59,7 +71,9 @@ export function createSessionEventRefreshCoordinator({
     pending = request;
     const started = monotonicNow();
     const requestRevision = revision;
-    void refresh(() => pending === request && requestRevision === revision)
+    void refresh(
+      () => pending === request && requestRevision === revision && (event || wake === windowWake),
+    )
       .catch(() => {})
       .finally(() => {
         if (pending !== request) {
@@ -82,6 +96,7 @@ export function createSessionEventRefreshCoordinator({
   };
   const acceptWindowExpiry = (
     result: Pick<SessionsListResult, "ts" | "activityExpiresAt"> | null,
+    append = false,
   ) => {
     const at = result?.activityExpiresAt;
     // The Gateway's last valid millisecond covers even candidates outside this page.
@@ -93,9 +108,13 @@ export function createSessionEventRefreshCoordinator({
       at >= result.ts
         ? at
         : undefined;
-    if (next === windowExpiry) {
-      return; // A repeated receipt cannot postpone or replay the same wake.
+    if (next === windowExpiry || (append && windowWake)) {
+      return; // Same cutoff cannot replay; an appended tail cannot settle a due prefix.
     }
+    if (windowWake && !queued) {
+      clearTimer();
+    }
+    windowWake = undefined;
     cancelWindowExpiry?.();
     cancelWindowExpiry = undefined;
     windowExpiry = next;
@@ -103,7 +122,7 @@ export function createSessionEventRefreshCoordinator({
       cancelWindowExpiry = scheduleAbsoluteDeadline(
         monotonicDeadlineAfter(next - result.ts + 1),
         () => {
-          queued = true;
+          windowWake = { queued: true, retryAt: null };
           arm(false);
         },
         monotonicNow,
@@ -113,12 +132,48 @@ export function createSessionEventRefreshCoordinator({
   const reset = () => {
     absorb();
     acceptWindowExpiry(null);
+    windowRead = undefined;
     pending = null;
     nextAllowed = 0;
   };
 
   return {
     acceptWindowExpiry,
+    async readWindow<T>(read: () => Promise<T>, isCurrent: () => boolean, append: boolean) {
+      const request = {};
+      windowRead = request;
+      // An append cannot replace the expired prefix. A read issued before expiry
+      // may likewise return its old cutoff; leave its trailing wake to acceptance.
+      const wake = append ? undefined : windowWake;
+      const cutoff = windowExpiry;
+      if (wake) {
+        windowWake = undefined;
+      }
+      try {
+        return await read();
+      } catch (error) {
+        if (
+          wake?.retryAt === null &&
+          windowRead === request &&
+          cutoff === windowExpiry &&
+          isCurrent() &&
+          isRetryableGatewayReadError(error, "sessions.list")
+        ) {
+          windowWake = {
+            queued: true,
+            retryAt: monotonicDeadlineAfter(resolveGatewayReadRetryDelayMs(error)),
+          };
+        }
+        throw error;
+      } finally {
+        if (windowRead === request) {
+          windowRead = undefined;
+          if (windowWake?.queued) {
+            arm(false);
+          }
+        }
+      }
+    },
     scheduleFallback() {
       fallback ??= setTimeout(() => {
         fallback = undefined;
@@ -142,7 +197,7 @@ export function createSessionEventRefreshCoordinator({
         arm(false);
         return;
       }
-      queued ||= markDirty || timer !== 0;
+      queued ||= markDirty;
       clearTimer();
     },
     absorb,

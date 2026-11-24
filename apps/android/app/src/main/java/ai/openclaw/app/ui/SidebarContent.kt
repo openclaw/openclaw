@@ -829,10 +829,12 @@ internal fun OpenClawSidebar(
       SessionSnooze.nextWake(sessions, sessionNowMs, windowWake),
       SessionSnooze.nextWake(searchState.entries, sessionNowMs, windowWake),
     ).minByOrNull { it.localMs }
-  LaunchedEffect(nextWake, personalPins, gatewayStableId) {
-    nextWake?.let {
-      sessionNowMs = awaitSessionStatusExpiry(it.localMs)
-      if (personalPins) viewModel.refreshChatSessionsAfterWake(it)
+  LaunchedEffect(nextWake, personalPins, gatewayStableId, visible, lifecycle) {
+    val wake = nextWake ?: return@LaunchedEffect
+    if (!visible) return@LaunchedEffect
+    lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
+      sessionNowMs = awaitSessionStatusExpiry(wake.localMs)
+      if (personalPins) viewModel.refreshChatSessionsAfterWake(wake)
     }
   }
   val searchResults =

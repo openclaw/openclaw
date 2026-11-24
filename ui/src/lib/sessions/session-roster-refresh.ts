@@ -183,12 +183,13 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
     }
     try {
       const issuedRevision = ++requestRevision;
-      const response = await requestSessionList(scope.client, requestOptions, isCurrent);
+      const read = () => requestSessionList(scope.client, requestOptions, isCurrent);
+      const response = await eventRefreshCoordinator.readWindow(read, isCurrent, append);
       if (!isCurrent()) {
         return null;
       }
       const result = host.reconcileList(response, issuedRevision, requestOptions.agentId);
-      eventRefreshCoordinator.acceptWindowExpiry(response);
+      eventRefreshCoordinator.acceptWindowExpiry(response, append);
       const currentState = host.readState();
       const mergeWithCurrent =
         !currentState.resultCached && append && requestOptions.offset !== undefined;

@@ -36,12 +36,13 @@ const target = row("target", wakeAt);
 const after = row("after");
 const ordinary = row("ordinary", wakeAt);
 const entries = (...rows: { key: string }[]) => rows.map(({ key }) => `session:${key}`);
-const legacy = gatewayHelloForMethods([...SESSION_MUTATION_TEST_METHODS, "users.prefs.set"]);
-const current = {
-  ...legacy,
-  features: { ...legacy.features, capabilities: ["personal-session-pins"] },
+// The paired browser follows its writable profile, not a native capability advertisement.
+const hello = gatewayHelloForMethods(SESSION_MUTATION_TEST_METHODS);
+const signed = { hello, selfUser: { id: "reader" } };
+const negotiated = {
+  ...hello,
+  features: { methods: ["users.prefs.set"], capabilities: ["personal-session-pins"] },
 };
-const signed = { hello: current, selfUser: { id: "reader" } };
 
 async function mount(deviceTime: number, connection: Partial<ApplicationGatewaySnapshot> = signed) {
   vi.useFakeTimers();
@@ -166,18 +167,24 @@ it("wakes a cross-agent pin on the all-agent roster read, not a primary sidebar 
 });
 
 it.each([
-  { name: "profileless", connection: { hello: current, selfUser: null } },
+  { name: "profileless", connection: { hello: negotiated, selfUser: null } },
   {
     name: "session-only writer",
     connection: {
       ...signed,
       hello: {
-        ...current,
+        ...negotiated,
         auth: { role: "operator", scopes: ["operator.read", "operator.sessions.write"] },
       },
     },
   },
-  { name: "legacy", connection: { ...signed, hello: legacy } },
+  {
+    name: "read-only",
+    connection: {
+      ...signed,
+      hello: { ...negotiated, auth: { role: "operator", scopes: ["operator.read"] } },
+    },
+  },
 ])("keeps $name saved pins on the device clock", async ({ connection }) => {
   const { sidebar, publish } = await mount(wakeAt - 1_000, connection);
   await publish(wakeAt);

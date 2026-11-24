@@ -1,8 +1,11 @@
+import { GATEWAY_CLIENT_IDS } from "../../../packages/gateway-protocol/src/client-info.js";
+import type { SessionsListParams } from "../../../packages/gateway-protocol/src/index.js";
 import { assertAdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
 import {
   getGatewayToolCallerIdentity,
   resolveGatewayPersonalToolParticipant,
 } from "../../agents/tools/gateway-caller-context.js";
+import { operatorScopeSatisfied } from "../../shared/operator-scope-compat.js";
 import { readProfileSidebarOrder } from "../../state/user-preferences.js";
 import {
   readResidentUserProfileAliases,
@@ -94,9 +97,22 @@ async function readRequesterSessionPins(
 }
 
 /** Capture negotiation once at admission. An empty personal view never imports shared metadata. */
-export function prepareSessionPinRead(options: GatewayRequestHandlerOptions) {
-  const legacy = usesLegacySessionPins(options.client);
-  const owner = legacy ? undefined : sessionPinRequester(options);
+export function prepareSessionPinRead(
+  options: GatewayRequestHandlerOptions,
+  list?: Pick<SessionsListParams, "pinned" | "rowMode">,
+) {
+  const { client } = options;
+  const legacy = usesLegacySessionPins(client);
+  // These browser views edit device-local navigation without profile write access.
+  // Select their ordinary window before pagination; explicit pin queries and tools
+  // still read the requester's layout. The diagnostic `source` is not a scope.
+  const deviceLocalRoster =
+    (list?.rowMode === "compact" || list?.rowMode === "sidebar") &&
+    list.pinned === undefined &&
+    client?.connect.client.id === GATEWAY_CLIENT_IDS.CONTROL_UI &&
+    !isSyntheticGatewayCaller(client) &&
+    !operatorScopeSatisfied("operator.write", client.connect.scopes ?? []);
+  const owner = legacy || deviceLocalRoster ? undefined : sessionPinRequester(options);
   return {
     canFilter: legacy || Boolean(owner),
     shareable: !owner,

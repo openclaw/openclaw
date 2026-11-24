@@ -18,10 +18,11 @@ const anchor = sessionRow("anchor", { label: "Anchor", updatedAt: 10, pinned: tr
 const entries = (...rows: { key: string }[]) => rows.map((row) => `session:${row.key}`);
 const result = (awake: boolean) =>
   sessionsResult([{ ...target, pinned: awake }, recent, anchor], awake ? deadline : deadline - 1);
-const legacy = gatewayHelloForMethods(["users.prefs.set"]);
-const signed = {
-  ...legacy,
-  features: { ...legacy.features, capabilities: ["personal-session-pins"] },
+// The paired browser follows its writable profile, not a native capability advertisement.
+const signed = gatewayHelloForMethods(["sessions.list"]);
+const negotiated = {
+  ...signed,
+  features: { methods: ["users.prefs.set"], capabilities: ["personal-session-pins"] },
 };
 const selfUser = { id: "reader" };
 
@@ -85,13 +86,17 @@ it("adopts a verified profile in place and keeps local edits live before the nex
 });
 
 it.each([
-  { name: "profileless", hello: signed, selfUser: null },
+  { name: "profileless", hello: negotiated, selfUser: null },
   {
     name: "session-only writer",
-    hello: { ...signed, auth: { role: "operator", scopes: ["operator.sessions.write"] } },
+    hello: { ...negotiated, auth: { role: "operator", scopes: ["operator.sessions.write"] } },
     selfUser,
   },
-  { name: "old Gateway", hello: legacy, selfUser },
+  {
+    name: "read-only",
+    hello: { ...negotiated, auth: { role: "operator", scopes: ["operator.read"] } },
+    selfUser,
+  },
 ])(
   "keeps $name pins on the device clock, even when the roster marks the row pinned",
   async ({ hello, selfUser: identity }) => {

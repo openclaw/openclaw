@@ -158,10 +158,10 @@ export function createSessionManagedListRefresh(
             isCurrent() &&
             (!requestParams.pageSize ||
               (generation === entry.readGeneration && isPageActive() && entry.listeners.size > 0));
-          const response = await requestSessionListParams(
-            scope.client,
-            requestParams,
+          const response = await entry.coordinator.readWindow(
+            () => requestSessionListParams(scope.client, requestParams, readIsCurrent),
             readIsCurrent,
+            next.append,
           );
           if (!isCurrent()) {
             return;
@@ -244,7 +244,7 @@ export function createSessionManagedListRefresh(
           entry.receivedKeys = receivedKeys;
           entry.connectionEpoch = scope.epoch;
           entry.startupRetryAttempt = 0;
-          entry.coordinator.acceptWindowExpiry(response);
+          entry.coordinator.acceptWindowExpiry(response, next.append);
           const snapshot: SessionListSnapshot = {
             readSucceeded: true,
             pagination,

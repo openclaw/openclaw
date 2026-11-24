@@ -226,12 +226,13 @@ struct ChatSessionSidebar: View {
             try await Task.sleep(for: .seconds(max(0, wake.timeIntervalSinceNow)))
             try Task.checkCancellation()
             self.lastSnoozeWake = max(wake, .now)
-            if let hint = clock.activityWake, hint.local <= self.lastSnoozeWake {
-                self.consumedRosterExpiry = hint.expiresAt
-            }
+            let newExpiry = clock.activityWake.map {
+                $0.local <= self.lastSnoozeWake && $0.expiresAt != self.consumedRosterExpiry
+            } ?? false
+            if newExpiry { self.consumedRosterExpiry = clock.activityWake?.expiresAt }
             if self.menuActions.connection?.supportsPersonalPins == true {
                 self.viewModel.refreshSessions(limit: 200)
-                self.viewModel.refreshSidebarData()
+                self.viewModel.refreshSidebarData(afterRosterExpiry: newExpiry)
             }
         } catch {}
     }

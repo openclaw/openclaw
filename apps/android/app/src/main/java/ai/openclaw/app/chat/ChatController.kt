@@ -865,7 +865,37 @@ class ChatController internal constructor(
   private val sessionRosterLoadMutex = Mutex()
   private val sessionWindowWakeMutable = MutableStateFlow<SessionWakeDeadline?>(null)
   internal val sessionWindowWake = sessionWindowWakeMutable.asStateFlow()
-  private var consumedWakeAt: Long? = null
+  private var loadedWindowWake: SessionWakeDeadline? = null
+
+  private data class RosterWakeRetry(
+    val deadline: SessionWakeDeadline,
+    val lease: GatewaySession.RequestLease,
+  )
+
+  private var retryWake: RosterWakeRetry? = null
+  private var claimedWakeAt: Long? = null
+  private var wakeOwner: SessionRosterOwner? = null
+
+  private data class SessionRosterOwner(
+    val cacheScope: ChatCacheScope?,
+    val agentId: String,
+    val defaultAgentRevision: Long?,
+    val operatorEpoch: Long,
+  )
+
+  private fun currentRosterOwner(): SessionRosterOwner? {
+    val key = _sessionKey.value
+    return SessionRosterOwner(
+      currentCacheScope(),
+      resolveAgentIdForSessionKey(key) ?: return null,
+      currentDefaultAgentRevision().takeIf { activeSessionTracksDefaultAgent(key) },
+      currentGatewayCatalogRevision(),
+    )
+  }
+
+  private fun publishWindowWake() {
+    sessionWindowWakeMutable.value = listOfNotNull(loadedWindowWake, retryWake?.deadline).minByOrNull { it.localMs }
+  }
 
   private fun clearSessionRosterPaging() {
     clearSessionWindowWake()
@@ -4833,19 +4863,15 @@ class ChatController internal constructor(
     offset: Int? = null,
     append: Boolean = false,
     preserveWindow: Boolean = false,
+    wake: SessionWakeDeadline? = null,
+    wakeLease: GatewaySession.RequestLease? = null,
+    owner: SessionRosterOwner? = currentRosterOwner(),
   ): Boolean {
-    val requestCacheScope = currentCacheScope()
+    val requestCacheScope = owner?.cacheScope
     val requestLimit = limit?.takeIf { it > 0 }
-    val requestTracksDefaultAgent = activeSessionTracksDefaultAgent(_sessionKey.value)
-    val requestDefaultAgentRevision = currentDefaultAgentRevision()
-    val requestAgentId = resolveAgentIdForSessionKey(_sessionKey.value) ?: return false
+    val requestAgentId = owner?.agentId ?: return false
 
-    fun requestOwnerIsCurrent(): Boolean {
-      val currentAgentId = resolveAgentIdForSessionKey(_sessionKey.value)
-      return requestCacheScope == currentCacheScope() &&
-        currentAgentId == requestAgentId &&
-        (!requestTracksDefaultAgent || currentDefaultAgentRevision() == requestDefaultAgentRevision)
-    }
+    fun requestOwnerIsCurrent(): Boolean = owner == currentRosterOwner() && (wake == null || wakeOwner == owner)
     val requestSequence = sessionsRequestSequence.incrementAndGet()
     val refresh = SessionSettingsRead(requestCacheScope, requestAgentId)
     synchronized(gatewayScopeApplyLock) { activeSessionReads.add(refresh) }
@@ -4862,20 +4888,30 @@ class ChatController internal constructor(
             settingsMutationRevision(requestCacheScope)
           }
         val params = sessionListParams(requestAgentId, requestLimit, archived, offset = offset)
-        val res = requestGateway("sessions.list", params.toString())
+        val res =
+          if (wakeLease == null) {
+            requestGateway("sessions.list", params.toString())
+          } else {
+            wakeLease.request("sessions.list", params.toString()) { enqueue ->
+              synchronized(gatewayScopeApplyLock) {
+                if (!requestOwnerIsCurrent()) throw GatewayRequestNotEnqueued("roster owner changed")
+                enqueue()
+              }
+            }
+          }
         val parsed = parseSessions(res, offset ?: 0)
         val entries = parsed.sessions
         val result = entries.map { session -> session.copy(ownerAgentId = requestAgentId) }
         var retainedSessionKey: String? = null
+        var settingsChanged = false
         val appliedSessions =
-          synchronized(gatewayScopeApplyLock) {
-            if (!requestOwnerIsCurrent()) return false
-            if (requestSequence != sessionsRequestSequence.get()) return false
+          publishGatewayState(wakeLease, { requestOwnerIsCurrent() && requestSequence == sessionsRequestSequence.get() }) {
             if (
               settingsRevision != settingsMutationRevision(requestCacheScope) ||
               pendingSettingsMutations.any { (key, lane) -> key.gatewayScope == requestCacheScope && !lane.tail.isCompleted } ||
               refresh.hasConflictingSettings(result)
             ) {
+              settingsChanged = true
               null
             } else {
               val activeSessionKey = _sessionKey.value
@@ -4888,9 +4924,9 @@ class ChatController internal constructor(
                   }?.takeIf { result.none { row -> row.key == activeSessionKey } }
               val page = if (append) mergeSessionRosterPages(_sessions.value, result) else result
               val sessions = if (selected == null || page.any { it.key == activeSessionKey }) page else page + selected
-              // A full refresh already invalidated mounted queries; appending a cursor page
-              // expands the Drawer, not a search or archive result.
+              // A wake refresh invalidates mounted queries at recovery; a cursor append never does.
               publishSessions(sessions, invalidateBrowser = false)
+              if (wake != null) sessionBrowserRevisionMutable.update { it + 1 }
               result.forEach { observeSessionSettings(it) }
               sessionsListArchived = archived
               if (!append && !preserveWindow) sessionsListLimit = requestLimit
@@ -4903,10 +4939,12 @@ class ChatController internal constructor(
               }
               // A cursor can introduce an earlier expiry but cannot retire the loaded prefix's.
               if (!archived) {
-                val wake = parsed.wake?.takeUnless { it.serverMs == consumedWakeAt }
-                if (!append || (wake != null && wake.serverMs < (sessionWindowWakeMutable.value?.serverMs ?: Long.MAX_VALUE))) {
-                  sessionWindowWakeMutable.value = wake
+                val nextWake = parsed.wake?.takeUnless { it.serverMs == claimedWakeAt && wakeOwner == owner }
+                if (!append || (nextWake != null && nextWake.serverMs < (loadedWindowWake?.serverMs ?: Long.MAX_VALUE))) {
+                  loadedWindowWake = nextWake
                 }
+                if (!append) retryWake = null // A full accepted page also satisfies a pending retry.
+                publishWindowWake()
               }
               val activeOutsideLocalWindow =
                 sessions
@@ -4918,7 +4956,8 @@ class ChatController internal constructor(
               sessions
             }
           }
-        if (appliedSessions == null) continue
+        if (settingsChanged) continue
+        if (appliedSessions == null) return false
         unreadPatchSessionKey?.let { trackedKey ->
           acknowledgeUnreadIfNeeded(
             key = trackedKey,
@@ -4933,8 +4972,24 @@ class ChatController internal constructor(
       }
     } catch (err: CancellationException) {
       throw err
-    } catch (_: Throwable) {
-      // best-effort
+    } catch (err: Throwable) {
+      if (wake != null && wakeLease != null) {
+        publishGatewayState(wakeLease, ::requestOwnerIsCurrent) {
+          val rejection = (err as? GatewayRequestRejected)?.gatewayError
+          if (!wake.isRetry && (err is GatewayRequestOutcomeUnknown || rejection?.code == "UNAVAILABLE")) {
+            // A failed read keeps one opportunity for a mounted view, on the same physical socket.
+            val delayMs = maxOf(recoveryHistoryRetryDelayMs, rejection?.retryAfterMs?.toLong() ?: 0L)
+            val retryAt = System.currentTimeMillis() + delayMs
+            if (retryAt > (retryWake?.deadline?.localMs ?: Long.MIN_VALUE)) {
+              retryWake = RosterWakeRetry(wake.copy(localMs = retryAt, isRetry = true), wakeLease)
+            }
+            publishWindowWake()
+          } else if (retryWake == null) {
+            // Even if this roster cannot recover, other scopes may be readable.
+            sessionBrowserRevisionMutable.update { it + 1 }
+          }
+        }
+      }
       return false
     } finally {
       synchronized(gatewayScopeApplyLock) {
@@ -5247,10 +5302,32 @@ class ChatController internal constructor(
   private suspend fun fetchSessionsForCurrentWindow(
     limit: Int? = null,
     archived: Boolean? = null,
+    wake: SessionWakeDeadline? = null,
+    wakeRequestOwner: SessionRosterOwner? = null,
+    wakeLease: GatewaySession.RequestLease? = null,
   ): Boolean =
     sessionRosterLoadMutex.withLock {
-      // Searches and the Archived view have their own rows, even when the active page stays equal.
-      sessionBrowserRevisionMutable.update { it + 1 }
+      val owner = currentRosterOwner()
+      if (wake != null) {
+        synchronized(gatewayScopeApplyLock) {
+          if (wake.isRetry && retryWake?.deadline === wake && (wakeOwner != owner || wakeLease?.isCurrent() != true)) clearSessionWindowWake()
+          if (owner == null || owner != wakeRequestOwner || wakeLease?.isCurrent() != true) return false
+          if (wake.isRetry) {
+            if (retryWake?.deadline !== wake) return false
+            retryWake = null
+          } else {
+            // A later deadline's full read covers earlier claimants; don't move this watermark back on retry.
+            if (wakeOwner == owner && (claimedWakeAt ?: Long.MIN_VALUE) >= wake.serverMs && loadedWindowWake?.serverMs != wake.serverMs) return false
+            if (wakeOwner != owner) retryWake = null
+            claimedWakeAt = wake.serverMs
+            wakeOwner = owner
+          }
+          if (loadedWindowWake?.serverMs == wake.serverMs) loadedWindowWake = null
+          publishWindowWake()
+        }
+      }
+      // Wake invalidation runs when the read settles, so mounted queries don't spend it during a transient refusal.
+      if (wake == null) sessionBrowserRevisionMutable.update { it + 1 }
       val requestArchived = archived ?: sessionsListArchived
       val pageSize = limit?.takeIf { it > 0 } ?: sessionsListLimit ?: SIDEBAR_SESSION_ROSTER_LIMIT.takeUnless { requestArchived }
       val loadedLimit =
@@ -5261,23 +5338,31 @@ class ChatController internal constructor(
         limit = loadedLimit?.let { maxOf(it, pageSize ?: it) } ?: pageSize,
         archived = requestArchived,
         preserveWindow = loadedLimit != null,
+        wake = wake,
+        wakeLease = wakeLease,
+        owner = owner,
       )
     }
 
   private fun clearSessionWindowWake() {
-    sessionWindowWakeMutable.value = null
-    consumedWakeAt = null
+    synchronized(gatewayScopeApplyLock) {
+      loadedWindowWake = null
+      retryWake = null
+      claimedWakeAt = null
+      wakeOwner = null
+      sessionWindowWakeMutable.value = null
+    }
   }
 
   internal fun refreshSessionsAfterWake(wake: SessionWakeDeadline) {
-    synchronized(gatewayScopeApplyLock) {
-      // The Drawer and Threads can both be mounted. Their wall-clock offsets may differ,
-      // but the same server deadline invalidates both scoped queries and the shared page once.
-      if (consumedWakeAt == wake.serverMs) return
-      consumedWakeAt = wake.serverMs
-      if (sessionWindowWakeMutable.value?.serverMs == wake.serverMs) sessionWindowWakeMutable.value = null
-    }
-    refreshSessionsForCurrentWindow()
+    val owner = currentRosterOwner() ?: return
+    val lease =
+      if (wake.isRetry) {
+        synchronized(gatewayScopeApplyLock) { retryWake?.takeIf { it.deadline === wake }?.lease }
+      } else {
+        captureRequestLease(owner.cacheScope)
+      } ?: return
+    scope.launch { fetchSessionsForCurrentWindow(wake = wake, wakeRequestOwner = owner, wakeLease = lease) }
   }
 
   internal fun refreshSessionsForCurrentWindow() {

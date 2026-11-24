@@ -85,6 +85,9 @@ import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.repeatOnLifecycle
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -180,8 +183,10 @@ internal fun SessionsScreen(
     }
   }
 
-  LaunchedEffect(nextAttentionExpiry, nextWake, personalPins, activeGatewayStableId, filter) {
-    nextAttentionExpiry?.let { expiry ->
+  val lifecycle = LocalLifecycleOwner.current.lifecycle
+  LaunchedEffect(nextAttentionExpiry, nextWake, personalPins, activeGatewayStableId, filter, lifecycle) {
+    val expiry = nextAttentionExpiry ?: return@LaunchedEffect
+    lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
       sessionStatusNowMs = awaitSessionStatusExpiry(expiry)
       if (personalPins && nextWake != null && nextWake.localMs <= sessionStatusNowMs) viewModel.refreshChatSessionsAfterWake(nextWake)
     }

@@ -15,6 +15,7 @@ import java.time.temporal.TemporalAdjusters
 internal data class SessionWakeDeadline(
   val serverMs: Long,
   val localMs: Long,
+  val isRetry: Boolean = false,
 )
 
 object SessionSnooze {

@@ -1,4 +1,5 @@
 import Foundation
+import struct OpenClawKit.GatewayResponseError
 import OpenClawProtocol
 
 extension OpenClawChatSidebarStatus {
@@ -201,9 +202,9 @@ extension OpenClawChatSessionSidebarData {
         self.invalidateQueryProjection()
     }
 
-    public func scheduleLoad(debounce: Bool = false, coalescing: Bool = false) {
+    public func scheduleLoad(debounce: Bool = false, coalescing: Bool = false, afterRosterExpiry: Bool = false) {
         self.refreshCoordinator.scheduleLoad(isLoading: self.isLoading, coalescing: coalescing) { [weak self] in
-            await self?.load(debounce: debounce)
+            await self?.load(debounce: debounce, afterRosterExpiry: afterRosterExpiry)
         }
     }
 
@@ -211,7 +212,7 @@ extension OpenClawChatSessionSidebarData {
         await self.load(append: self.queryState?.failedAppend == true)
     }
 
-    public func load(append: Bool = false, debounce: Bool = false) async {
+    public func load(append: Bool = false, debounce: Bool = false, afterRosterExpiry: Bool = false) async {
         guard let state = self.queryState, !append || (!state.loading && self.nextOffset != nil) else { return }
         self.queryState?.generation += 1
         let generation = self.queryState?.generation
@@ -291,6 +292,16 @@ extension OpenClawChatSessionSidebarData {
         } catch {
             guard generation == self.queryState?.generation, !Task.isCancelled else { return }
             self.queryState?.error = error.localizedDescription
+            // A failed expiry read leaves old page membership visible. Give it one paced replacement;
+            // a manual read, changed query, or disconnected route supersedes it.
+            if afterRosterExpiry, let response = error as? GatewayResponseError,
+               response.method == "sessions.list", response.code == "UNAVAILABLE", response.retryable != false
+            {
+                self.refreshCoordinator.scheduleLoad(isLoading: false, debounce: .seconds(1)) { [weak self] in
+                    guard let self, self.queryState?.generation == generation else { return }
+                    await self.load()
+                }
+            }
         }
     }
 
