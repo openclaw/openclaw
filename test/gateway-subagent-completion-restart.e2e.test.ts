@@ -530,7 +530,12 @@ it
               );
             }
             expect(readRun(capturedRunId!)).toMatchObject({ delivery: { status: "delivered" } });
-            if (busyRequester || retryingRequester || kind === "stale-settle-requester") {
+            if (
+              busyRequester ||
+              retryingRequester ||
+              kind === "captured" ||
+              kind === "stale-settle-requester"
+            ) {
               // A clear requester marker can be the gap before the stopped child is delivered.
               expect(readRun(childRunId!)).toMatchObject({ delivery: { status: "delivered" } });
             }
