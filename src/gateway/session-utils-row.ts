@@ -317,7 +317,11 @@ export function refreshSessionRowProfiles(materialized: ReturnType<typeof materi
 
 export function materializeSessionRow(
   input: ReturnType<typeof readSessionRowInputs>["inputs"],
-  previous?: { publicationIdentity: object; row: Readonly<GatewaySessionRow> },
+  previous?: {
+    publicationIdentity: object;
+    row: Readonly<GatewaySessionRow>;
+    source: { childLinks?: Readonly<ReturnType<typeof projectSessionRowChildLinks>> };
+  },
 ) {
   const { cfg, key, entry } = input;
   const observerDigest =
@@ -560,9 +564,11 @@ export function materializeSessionRow(
       subagentRunInputs: input.subagentRunInputs,
       lastMessagePreview: input.lastMessagePreview,
       lastAssistantMessage: input.lastAssistantMessage,
-      childLinks: freezeTrustedJsonSnapshot<
-        Readonly<ReturnType<typeof projectSessionRowChildLinks>>
-      >(projectSessionRowChildLinks(input.childLinks)),
+      // The relation reader returns the previous frozen list when its child facts match.
+      childLinks:
+        input.childLinks === previous?.source.childLinks
+          ? previous?.source.childLinks
+          : freezeTrustedJsonSnapshot(projectSessionRowChildLinks(input.childLinks)),
     }),
   });
 }
