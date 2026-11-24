@@ -37,6 +37,7 @@ import { isRpcSourceQueued } from "../../sessions/session-controller.rpc-sources
 import { rpcSourceTesting } from "../../sessions/session-lifecycle-admission.test-support.js";
 import { onSessionLifecycleEvent } from "../../sessions/session-lifecycle-events.js";
 import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.types.js";
+import { setUserProfileRole } from "../../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { resolvePreparedGatewayOperatorAccessAuthority } from "../operator-access-policy.js";
 import { broadcastFor, createBroadcastPeer } from "../server-broadcast.test-support.js";
@@ -440,6 +441,67 @@ it("quietly queues another requester and drains once with their current policy",
     steering.release.resolve();
     await withinTest(steering.settled.promise, signal);
     expect(runtime.execute).toHaveBeenCalledOnce();
+  } finally {
+    steering.release.resolve();
+    operation.complete();
+    clearFixtureQueues(fixture);
+  }
+});
+
+it("refuses a queued followup when its requester loses operator.write before it starts", async ({
+  signal,
+}) => {
+  const steering = await createHumanSteeringFixture("queued", signal);
+  const { fixture, operation, config } = steering;
+  config.gateway = {
+    ...config.gateway,
+    roles: {
+      default: "reader",
+      definitions: {
+        writer: {
+          scopes: ["operator.read", "operator.write"],
+          agents: "*",
+          sessions: { others: "write" },
+        },
+        reader: { scopes: ["operator.read"], agents: "*", sessions: { others: "write" } },
+      },
+    },
+  };
+  setRuntimeConfigSnapshot(config, config);
+  fixture.client.connect.scopes = ["operator.read", "operator.write"];
+  const bob = ensureProfileForEmail("queued-steer-bob@example.test");
+  setClientProfile(fixture.client, setUserProfileRole(bob.id, "writer"));
+  fixture.params.idempotencyKey = "demoted-steer-bob-input";
+  fixture.params.message = "Answer Bob's separate request.";
+  const dispatchActual = await loadRealChatDispatch();
+  const queued = createDeferred();
+  const dispatched = createDeferred();
+  steering.execute("Bob's separate answer.");
+  dispatchInboundMessageMock.mockImplementation(async (raw: unknown) => {
+    const params = raw as DispatchParams;
+    observeAdmission(params, queued, steering.settled);
+    return dispatchActual({ ...params, cfg: config }).finally(() => dispatched.resolve());
+  });
+  try {
+    await fixture.send();
+    await withinTest(dispatched.promise, signal);
+    await withinTest(queued.promise, signal);
+    setUserProfileRole(bob.id, "reader");
+    operation.complete();
+    await vi.waitFor(
+      async () =>
+        expect(await listSessionPendingInputs(fixture.scope)).toMatchObject({
+          items: [
+            {
+              runId: fixture.params.idempotencyKey,
+              state: "cancelled",
+              endCause: "policy-refused",
+            },
+          ],
+        }),
+      { timeout: 10_000 },
+    );
+    expect(runtime.execute).not.toHaveBeenCalled();
   } finally {
     steering.release.resolve();
     operation.complete();

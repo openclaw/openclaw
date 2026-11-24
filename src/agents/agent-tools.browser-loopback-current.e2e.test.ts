@@ -23,10 +23,7 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
 
 async function withPreparedBrowserLoopback(
   params: { runId: string; config: OpenClawConfig; abortSignal?: AbortSignal },
-  run: (prepared: {
-    assertCurrent: () => void;
-    publish: (security: "full" | "deny") => Promise<void>;
-  }) => Promise<void> | void,
+  run: (prepared: { assertCurrent: () => void }) => Promise<void> | void,
 ) {
   const stateDir = tempDirs.make("browser-loopback-policy-");
   const context = captureOpenClawStateWorkerContext({
@@ -71,7 +68,7 @@ async function withPreparedBrowserLoopback(
       if (!assertCurrent) {
         throw new Error("Missing prepared browser loopback assertion");
       }
-      await run({ assertCurrent, publish });
+      await run({ assertCurrent });
     } finally {
       plugins.mockRestore();
       closeHost();
@@ -79,19 +76,6 @@ async function withPreparedBrowserLoopback(
     }
   });
 }
-
-it("revokes an automatic preview when the execution-policy owner restricts host approvals", async () => {
-  await withPreparedBrowserLoopback(
-    { runId: "browser-loopback-approval-revocation", config: {} },
-    async ({ assertCurrent, publish }) => {
-      expect(assertCurrent).not.toThrow();
-      await publish("deny");
-      expect(assertCurrent).toThrow("current unrestricted local execution");
-      await publish("full");
-      expect(assertCurrent).not.toThrow();
-    },
-  );
-});
 
 it("revokes the native turn grant when its inner abort signal closes", async () => {
   const controller = new AbortController();

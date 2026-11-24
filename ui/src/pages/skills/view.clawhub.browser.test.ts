@@ -214,29 +214,28 @@ describe("ClawHub detail content", () => {
     await expect
       .element(page.getByRole("button", { name: "Add Guide", exact: true }))
       .toBeVisible();
-    const body = container.querySelector<HTMLElement>(".skill-reader-dialog__body")!;
-    // The Add action sits in the page header, outside the scroller.
-    const actions = container.querySelector<HTMLElement>(".skill-page__actions")!;
+    const body = container.querySelector<HTMLElement>(".skill-page .plugin-catalog-detail__main")!;
+    // The Add action sits in the page header, above the reading column.
+    const actions = container.querySelector<HTMLElement>(
+      ".skill-page .plugin-catalog-detail__actions",
+    )!;
     expect(body.contains(actions)).toBe(false);
-    await Promise.all(
-      actions
-        .closest("dialog")!
-        .getAnimations()
-        .map((animation) => animation.finished),
+    expect(actions.getBoundingClientRect().bottom).toBeLessThanOrEqual(
+      body.getBoundingClientRect().top,
     );
-    const actionsTop = actions.getBoundingClientRect().top;
-    body.scrollTop = body.scrollHeight;
-    await nextFrame();
-    expect(actions.getBoundingClientRect().top).toBe(actionsTop);
     expect(body.clientWidth).toBeGreaterThan(0);
     expect(body.scrollWidth).toBeLessThanOrEqual(body.clientWidth);
     for (const child of body.children) {
       expect(child.scrollWidth).toBeLessThanOrEqual(child.clientWidth);
     }
-    expect(body.querySelector("h1")?.textContent).toBe("Release notes");
-    expect(body.querySelector("article > p")?.textContent).toBe("First paragraph starts here.");
-    expect(body.querySelector("pre code")?.textContent).toBe(`${code}\n`);
-    const table = body.querySelector("table")!;
+    expect(document.documentElement.scrollWidth).toBeLessThanOrEqual(window.innerWidth);
+    const changelogBody = body.querySelector<HTMLElement>(".clawhub-skill-detail__changelog")!;
+    expect(changelogBody.querySelector("h1")?.textContent).toBe("Release notes");
+    expect(changelogBody.querySelector(":scope > p")?.textContent).toBe(
+      "First paragraph starts here.",
+    );
+    expect(changelogBody.querySelector("pre code")?.textContent).toBe(`${code}\n`);
+    const table = changelogBody.querySelector("table")!;
     expect(table.scrollWidth).toBeGreaterThan(table.clientWidth);
     table.scrollLeft = 100;
     expect(table.scrollLeft).toBeGreaterThan(0);

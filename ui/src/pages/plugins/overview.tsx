@@ -1,5 +1,5 @@
 import type { JSX } from "@solidjs/web";
-import { For } from "solid-js";
+import { For, Show } from "solid-js";
 import {
   PLUGIN_UI_CAPABILITIES,
   type PluginUiCapability,
@@ -162,17 +162,21 @@ export function renderPublisherIdentity(options: {
   name?: string;
   handle?: string;
   official?: boolean;
+  catalogOfficial?: boolean;
 }): JSX.Element | undefined {
-  const { name, handle, official } = options;
-  if (!name && !handle) {
+  const { name, handle, official, catalogOfficial } = options;
+  if (!name && !handle && !catalogOfficial) {
     return undefined;
   }
   return (
     <div class="plugin-catalog-detail__publisher">
-      <span class="plugin-catalog-detail__publisher-name">
-        {name ? <strong>{name}</strong> : renderPluginAuthor(handle)}
-        {official ? renderPluginOfficialBadge() : undefined}
-      </span>
+      {catalogOfficial ? renderPluginOfficialBadge() : undefined}
+      {name || handle ? (
+        <span class="plugin-catalog-detail__publisher-name">
+          {name ? <strong>{name}</strong> : renderPluginAuthor(handle)}
+          {official ? renderPluginOfficialBadge() : undefined}
+        </span>
+      ) : undefined}
       {name ? renderPluginAuthor(handle) : undefined}
     </div>
   );
@@ -457,7 +461,7 @@ export function renderPluginMetadata(
 
 type PluginCapabilityRow = {
   icon?: () => JSX.Element;
-  name: string;
+  name: JSX.Element;
   description?: string;
   onOpen?: () => void;
   trailing?: JSX.Element;
@@ -478,26 +482,29 @@ function PluginCapabilityRowText(props: { value: PluginCapabilityRow }) {
 }
 
 function PluginCapabilityRowControl(props: { value: PluginCapabilityRow; chevron: boolean }) {
-  return props.value.trailing || props.chevron ? (
-    <div class="settings-row__control oc-settings-row-control">
-      {props.value.trailing}
-      {props.chevron ? (
-        <span class="settings-row__chevron" aria-hidden="true">
-          <Icon name="chevronRight" />
-        </span>
-      ) : undefined}
-    </div>
-  ) : undefined;
+  return (
+    <Show when={props.chevron || props.value.trailing}>
+      <div class="settings-row__control oc-settings-row-control">
+        {props.value.trailing}
+        {props.chevron ? (
+          <span class="settings-row__chevron" aria-hidden="true">
+            <Icon name="chevronRight" />
+          </span>
+        ) : undefined}
+      </div>
+    </Show>
+  );
 }
 
 export function renderPluginCapabilitySection(
   title: string,
   values: PluginCapabilityRow[],
   icon?: () => JSX.Element,
+  description?: string,
 ): JSX.Element {
   return values.length ? (
     <div class="plugin-capabilities">
-      <SettingsSection title={title} carapace>
+      <SettingsSection title={title} description={description} carapace>
         <For each={values}>
           {(value) => {
             const content = (chevron: boolean) => (
@@ -639,7 +646,8 @@ export function renderPluginContentCapabilities(params: {
   uiCapabilities?: readonly PluginUiCapability[];
   skillsSection?: JSX.Element;
   skills: Array<{ name: string; description?: string }>;
-  tools: Array<{ name: string; description?: string; onOpen?: () => void }>;
+  tools: PluginCapabilityRow[];
+  toolsDescription?: string;
   mcpServers: readonly string[];
   mcpServerDetails?: PluginDiscoveryDetailResult["detail"]["mcpServerDetails"];
   mcpDescription?: string;
@@ -661,9 +669,14 @@ export function renderPluginContentCapabilities(params: {
         renderPluginCapabilitySection(t("pluginsPage.detailTabs.skills"), params.skills, () => (
           <Icon name="bookOpenText" />
         ))}
-      {renderPluginCapabilitySection(t("pluginsPage.detailTools"), params.tools, () => (
-        <Icon name="wrench" />
-      ))}
+      {renderPluginCapabilitySection(
+        t("pluginsPage.detailTools"),
+        params.tools,
+        () => (
+          <Icon name="wrench" />
+        ),
+        params.toolsDescription,
+      )}
       {renderPluginMcpServers(params.mcpServers, params.mcpServerDetails, params.mcpDescription)}
     </>
   );

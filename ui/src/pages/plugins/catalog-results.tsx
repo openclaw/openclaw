@@ -10,7 +10,6 @@ import {
 import { Icon } from "../../components/solid/icon.tsx";
 import { InlineAlert } from "../../components/solid/inline-alert.tsx";
 import { PanelEmptyState } from "../../components/solid/panel-empty-state.tsx";
-import { SettingsSection, SettingsUnavailable } from "../../components/solid/settings-ui.tsx";
 import { formatUiError, formatUiExternalText } from "../../lib/format-error.ts";
 import { handleNavigationClick } from "../../lib/navigation-click.ts";
 import type { PageReadResult } from "../../lib/page-request.ts";
@@ -22,7 +21,11 @@ import type {
 import { t } from "../../lib/reactive/i18n.ts";
 import { categoryIcon } from "./catalog-category-icon.tsx";
 import { PluginCatalogGrid } from "./catalog-grid.tsx";
-import { PluginCatalogSkeleton, renderCatalogGridSkeleton } from "./catalog-skeleton.tsx";
+import {
+  CatalogSkeletonCards,
+  PluginCatalogSkeleton,
+  renderCatalogGridSkeleton,
+} from "./catalog-skeleton.tsx";
 import { PluginInstallAction, type PluginInstallActionProps } from "./install-action.tsx";
 import type { PluginInstallProgress } from "./install-progress.ts";
 import {
@@ -32,6 +35,11 @@ import {
   renderPluginStateStatus,
 } from "./plugin-card.tsx";
 import type { PluginDiscoveryIntent, PluginDiscoveryState } from "./plugin-discovery.ts";
+import {
+  indexInstalledCatalog,
+  installedState,
+  PLUGIN_PREVIEW_SIZE,
+} from "./plugin-overview-previews.ts";
 import { renderPluginRowMessage, type PluginRowMessage } from "./plugin-row-message.tsx";
 import type { PluginMutationAction } from "./plugins-page-model.ts";
 import { PluginArtTile, resolvePluginCatalogIconUrl } from "./presentation.tsx";
@@ -65,28 +73,16 @@ export type PluginCatalogResultsProps = PluginDiscoveryState & {
 
 type CatalogResultsState = PluginCatalogResultsProps & {
   installedByCatalogId: ReadonlyMap<string, PluginCatalogItem>;
-  /** Result entries this selection lists; browsing omits installed plugins. */
+  /** Result entries visible in the current selection. */
   listed: readonly PluginDiscoveryEntry[];
 };
 
-const SECTION_SIZE = 8;
 const NO_ENTRIES: readonly PluginDiscoveryEntry[] = [];
 const sameEntries = (
   left: readonly PluginDiscoveryEntry[],
   right: readonly PluginDiscoveryEntry[],
 ) => left.length === right.length && left.every((entry, index) => entry === right[index]);
 
-function installedState(
-  plugin: PluginDiscoveryEntry,
-  installedByCatalogId: ReadonlyMap<string, PluginCatalogItem>,
-) {
-  // Inventory publishes local state before catalog pages are read again.
-  const entry = installedByCatalogId.get(plugin.id);
-  const state = entry?.state ?? plugin.local.state;
-  return (entry !== undefined || plugin.local.installed) && state !== "not-installed"
-    ? state
-    : null;
-}
 // Estimate the current registry footprint without duplicating its taxonomy.
 // The actual labels, ordering, and count still come only from ClawHub.
 const CATEGORY_SKELETON_COUNT = 22;
@@ -110,12 +106,12 @@ function CatalogIcon(props: {
   );
   return (
     <PluginArtTile
+      class="plugin-catalog-card__art"
       neutralFallback
       registerIcon={props.state.registerIcon}
       slug={props.plugin.local.pluginId ?? props.plugin.id}
       name={props.plugin.catalog.name}
       iconUrl={iconUrl() ?? undefined}
-      whiteBackground={props.plugin.catalog.official && Boolean(iconUrl())}
       loading={Boolean(
         (props.plugin.local.pluginId &&
           props.state.pluginIconLoading?.(props.plugin.local.pluginId)) ||
@@ -137,6 +133,7 @@ export function formatCompactCount(value: number): string {
 
 function CatalogCard(props: {
   plugin: PluginDiscoveryEntry;
+  showInstalledLabel?: boolean;
   state: CatalogResultsState;
   contentRef?: (element: HTMLDivElement) => void;
 }): JSX.Element {
@@ -162,13 +159,7 @@ function CatalogCard(props: {
       />
       <div class="plugin-catalog-card__content" ref={props.contentRef}>
         <div class="plugin-catalog-row__main">
-          <span
-            class="installed-plugins-card__art plugin-catalog-card__art"
-            aria-hidden="true"
-            data-plugin-icon-id={props.plugin.local.pluginId ?? undefined}
-          >
-            <CatalogIcon plugin={props.plugin} state={props.state} />
-          </span>
+          <CatalogIcon plugin={props.plugin} state={props.state} />
           <div class="plugin-catalog-row__text">
             <div class="plugin-card-title-row">
               <h3>{props.plugin.catalog.name}</h3>
@@ -181,7 +172,7 @@ function CatalogCard(props: {
           </div>
           <div class="plugin-catalog-card__action">
             {installed() ? (
-              renderPluginStateStatus(state()!, "plugin-catalog-card__status")
+              renderPluginStateStatus(state()!, props.showInstalledLabel)
             ) : (
               <PluginInstallAction
                 registerInstallAction={props.state.registerInstallAction}
@@ -255,12 +246,17 @@ function CatalogSection(params: {
   title: string;
   items: readonly PluginDiscoveryEntry[];
   loading?: boolean;
+  hasPreviewCursor?: boolean;
   onViewAll?: () => void;
   state: CatalogResultsState;
 }): JSX.Element {
+  const missing = () =>
+    params.hasPreviewCursor && params.state.continuablePreviews.includes(params.id)
+      ? Math.max(0, PLUGIN_PREVIEW_SIZE - params.items.length)
+      : 0;
   return (
     <>
-      {params.loading || params.items.length > 0 ? (
+      {params.loading || params.items.length > 0 || missing() > 0 ? (
         <CatalogDiscoverySection
           id={params.id}
           title={params.title}
@@ -268,12 +264,25 @@ function CatalogSection(params: {
           viewAllLabel={t("pluginsPage.viewAllInstalledPlugins")}
         >
           {params.loading ? (
-            renderCatalogGridSkeleton({ cards: SECTION_SIZE })
+            renderCatalogGridSkeleton({ cards: PLUGIN_PREVIEW_SIZE })
           ) : params.onViewAll ? (
-            <div class="plugin-catalog-grid">
-              <For each={params.items.slice(0, SECTION_SIZE)} keyed={(plugin) => plugin.id}>
-                {(plugin) => <CatalogCard plugin={plugin()} state={params.state} />}
+            <div
+              class={[
+                "plugin-catalog-grid",
+                { "plugin-catalog-grid--continuable": params.hasPreviewCursor },
+              ]}
+              aria-busy={missing() > 0 ? "true" : undefined}
+            >
+              <For each={params.items.slice(0, PLUGIN_PREVIEW_SIZE)} keyed={(plugin) => plugin.id}>
+                {(plugin) => (
+                  <CatalogCard
+                    plugin={plugin()}
+                    state={params.state}
+                    showInstalledLabel={params.id === "featured"}
+                  />
+                )}
               </For>
+              <CatalogSkeletonCards count={missing()} />
             </div>
           ) : (
             <PluginCatalogGrid items={params.items}>
@@ -341,7 +350,10 @@ function CategoryChips(props: PluginCatalogResultsProps): JSX.Element {
           </>
         )}
       >
-        <CatalogDiscoveryChips label={t("pluginsPage.categoriesLabel")}>
+        <CatalogDiscoveryChips
+          label={t("pluginsPage.categoriesLabel")}
+          revision={ready() ? categories() : undefined}
+        >
           <BuiltinCategoryChips {...props} />
           {ready() && (
             <For each={categories()} keyed={(item) => item.slug}>
@@ -428,11 +440,7 @@ function RawResults(props: CatalogResultsState): JSX.Element {
   const community = createMemo(() => items().filter((plugin) => !plugin.catalog.official));
   return (
     <>
-      {!props.connected ? (
-        <SettingsSection>
-          <SettingsUnavailable message={t("pluginsPage.discoveryOffline")} />
-        </SettingsSection>
-      ) : items().length === 0 && !props.result?.nextCursor ? (
+      {items().length === 0 && !props.result?.nextCursor ? (
         !props.remoteError && renderCatalogEmptyState(Boolean(props.result?.items.length))
       ) : (
         <>
@@ -454,7 +462,12 @@ function RawResults(props: CatalogResultsState): JSX.Element {
           ) : (
             <PluginCatalogGrid items={items()} results>
               {(plugin, contentRef) => (
-                <CatalogCard plugin={plugin()} state={props} contentRef={contentRef} />
+                <CatalogCard
+                  plugin={plugin()}
+                  state={props}
+                  contentRef={contentRef}
+                  showInstalledLabel={props.intent === "featured"}
+                />
               )}
             </PluginCatalogGrid>
           )}
@@ -479,7 +492,10 @@ function GroupedCatalog(props: CatalogResultsState & { loading?: boolean }): JSX
     ),
   );
   const hasAnySection = () =>
-    props.featured.length > 0 || props.trending.length > 0 || hasCategoryItems();
+    props.featured.length > 0 ||
+    props.trending.length > 0 ||
+    hasCategoryItems() ||
+    props.continuablePreviews.length > 0;
   return (
     <>
       {!hasAnySection() && !props.loading && !props.error && !props.remoteError ? (
@@ -503,6 +519,7 @@ function GroupedCatalog(props: CatalogResultsState & { loading?: boolean }): JSX
               <CatalogSection
                 id={category().slug}
                 title={category().label}
+                hasPreviewCursor={Boolean(category().previewCursor)}
                 items={items()
                   .filter((plugin) => plugin.catalog.categories.includes(category().slug))
                   .toSorted((left, right) =>
@@ -521,17 +538,7 @@ function GroupedCatalog(props: CatalogResultsState & { loading?: boolean }): JSX
 
 export function renderPluginCatalogResults(props: PluginCatalogResultsProps): JSX.Element {
   const inventory = createMemo(() => props.inventory);
-  const installedByCatalogId = createMemo(() => {
-    const entries = new Map<string, PluginCatalogItem>();
-    // Inventory order decides which installed copy supplies a catalog entry's state.
-    for (const plugin of inventory() ?? []) {
-      const catalogId = plugin.catalogId;
-      if (plugin.installed && catalogId !== undefined && !entries.has(catalogId)) {
-        entries.set(catalogId, plugin);
-      }
-    }
-    return entries;
-  });
+  const installedByCatalogId = createMemo(() => indexInstalledCatalog(inventory()));
   const recordedError = createMemo(() => props.error);
   const { ready, receipt } = createCatalogRead(() => props.reads.browse, recordedError);
   const resultAvailable = createMemo(() => props.result !== null);
@@ -539,9 +546,8 @@ export function renderPluginCatalogResults(props: PluginCatalogResultsProps): JS
   const intent = createMemo(() => props.intent);
   const category = createMemo(() => props.category);
   const connected = createMemo(() => props.connected);
-  // Installed plugins are listed in the Customize sidebar, so browsing lists only plugins
-  // to add; search still finds installed ones. A plugin installed from this view keeps its
-  // row until the selection changes, so a finished install never pulls it from under the pointer.
+  // Keep newly installed rows under the pointer until the selection changes, even on
+  // discovery shelves that normally list only plugins to add.
   const installedHere = createMemo<{ selection: string; ids: ReadonlySet<string> }>(
     (previous) => {
       const selection = JSON.stringify([intent(), category(), query()]);
@@ -567,12 +573,11 @@ export function renderPluginCatalogResults(props: PluginCatalogResultsProps): JS
   const listed = createMemo(
     () => {
       const items = props.result?.items ?? NO_ENTRIES;
-      return query() ? items : items.filter(listable);
+      return query() || intent() === "featured" ? items : items.filter(listable);
     },
     { equals: sameEntries },
   );
-  // Shelves hold every ranked overview entry; sections cap them after hiding installed ones.
-  const featured = createMemo(() => props.featured.filter(listable), { equals: sameEntries });
+  // Featured always keeps its curated lineup; Trending fills its preview with plugins to add.
   const trending = createMemo(() => props.trending.filter(listable), { equals: sameEntries });
   const grouped = () => !query() && intent() === "all" && category() === null;
   // Publisher headers must not repeat the virtualizer's scroll compensation.
@@ -604,7 +609,9 @@ export function renderPluginCatalogResults(props: PluginCatalogResultsProps): JS
       {/* First results enter below the settled categories; later reads keep their own boundaries. */}
       <Reveal collapsed>
         <CategoryChips {...props} />
-        {props.remoteError ? renderError(props.remoteError, props.onRetry, true) : undefined}
+        {connected() && props.remoteError
+          ? renderError(props.remoteError, props.onRetry, true)
+          : undefined}
         <Loading
           on={[
             query(),
@@ -624,7 +631,6 @@ export function renderPluginCatalogResults(props: PluginCatalogResultsProps): JS
                   {...props}
                   installedByCatalogId={installedByCatalogId()}
                   listed={listed()}
-                  featured={featured()}
                   trending={trending()}
                   loading={true}
                 />
@@ -638,22 +644,29 @@ export function renderPluginCatalogResults(props: PluginCatalogResultsProps): JS
             class="plugin-catalog-results__body"
             style={{ "overflow-anchor": windowed() ? "none" : undefined }}
           >
-            <Errored
-              fallback={(error, reset) =>
-                renderError(formatUiError(error()), () => {
-                  props.onRetry();
-                  reset();
-                })
-              }
-            >
-              {readCatalog()}
-            </Errored>
-            {grouped() ? (
+            {connected() && (
+              <Errored
+                fallback={(error, reset) =>
+                  renderError(formatUiError(error()), () => {
+                    props.onRetry();
+                    reset();
+                  })
+                }
+              >
+                {readCatalog()}
+              </Errored>
+            )}
+            {!connected() ? (
+              <PanelEmptyState
+                icon={<Icon name="plug" />}
+                heading={t("pluginsPage.discoveryDisconnectedTitle")}
+                description={t("pluginsPage.discoveryDisconnectedHint")}
+              />
+            ) : grouped() ? (
               <GroupedCatalog
                 {...props}
                 installedByCatalogId={installedByCatalogId()}
                 listed={listed()}
-                featured={featured()}
                 trending={trending()}
               />
             ) : props.hasCurrentResult || !recordedError() ? (

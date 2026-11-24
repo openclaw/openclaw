@@ -2,6 +2,10 @@ import assert from "node:assert/strict";
 import { afterEach, expect, it, vi } from "vitest";
 import type { PendingApprovalSnapshot } from "../../../packages/gateway-protocol/src/schema/approvals.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.js";
 import { createOperatorApprovalSessionEventRuntime } from "../operator-approval-session-events.js";
 import * as store from "../operator-approval-store.js";
@@ -16,6 +20,7 @@ import type {
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(async () => {
     vi.restoreAllMocks();
+    clearRuntimeConfigSnapshot();
     await closeOpenClawStateDatabaseAsync();
     vi.unstubAllEnvs();
     cleanup();
@@ -26,6 +31,8 @@ it("shares approval replay across 64 subscribers during unrelated approval activ
   const stateDir = tempDirs.make("subscribe-approval-perf-");
   vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
   const databaseOptions = { env: process.env };
+  const cfg = { agents: { entries: { main: {} } } };
+  setRuntimeConfigSnapshot(cfg);
   const sessionKey = "agent:main:perf";
   const expected: PendingApprovalSnapshot[] = [];
   let unrelatedApproval: store.OperatorApprovalRecord | undefined;
@@ -93,7 +100,7 @@ it("shares approval replay across 64 subscribers during unrelated approval activ
       return result;
     });
   const context = {
-    getRuntimeConfig: () => ({ agents: { entries: { main: {} } } }),
+    getRuntimeConfig: () => cfg,
     subscribeSessionMessageEvents: subscribers.subscribe,
     listSessionPendingApprovals: runtime.replay,
     logGateway: { error: vi.fn() },

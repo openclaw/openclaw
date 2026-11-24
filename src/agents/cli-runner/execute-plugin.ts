@@ -2,9 +2,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { stripSystemPromptCacheBoundary } from "@openclaw/ai/internal/shared";
 import { clampPositiveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { racePromiseWithAbortSignal } from "@openclaw/retry";
 import { resolveExecutablePath } from "../../infra/executable-path.js";
-import { mergePathPrepend } from "../../infra/path-prepend.js";
 import {
   resolveWindowsExecutablePath,
   resolveWindowsSpawnProgramCandidate,
@@ -28,23 +26,16 @@ import {
   runBeforeToolCallHook,
 } from "../agent-tools.before-tool-call.js";
 import type { CliTerminalInterruption } from "../cli-output-contracts.js";
-import { resolveExecDefaultsAsync } from "../exec-defaults.js";
 import { FailoverError, isSignalTimeoutReason } from "../failover-error.js";
 import { withAgentQuestionAnswerAuthority } from "../harness/host-private-capabilities.js";
 import { buildHarnessHostRequester } from "../harness/host-requester.js";
 import { runStructuredInput } from "../harness/structured-input-execution.js";
 import { compileStructuredInputQuestions } from "../harness/structured-input.js";
-import { resolveExecToolConfig } from "../lazy-exec-tool.js";
 import {
   restartCliLiveSession,
   createCliLiveSessionCapability,
   ensureCliLiveSessionMemory,
-  getCliLiveSessionApprovalGrants,
 } from "./cli-live-session-registry.js";
-import {
-  requestCliNativeToolApproval,
-  resolveCliNativeToolApprovalPlan,
-} from "./cli-native-tool-approval.js";
 import { createCliAbortError } from "./execute-node-claude.js";
 import { closePluginIterator, waitForIteratorValue } from "./execute-plugin-iterator.js";
 import { bindCliTurnStatus } from "./execute-plugin-status.js";
@@ -60,21 +51,14 @@ function denyTool(message: string): CliBackendToolPermissionResult {
   return { behavior: "deny", message };
 }
 
-async function createPluginToolPermissionHandler(params: {
+// OpenClaw answers Claude's permission requests, including for third-party MCP tools. It allows a
+// call that is available to this run and passes plugins' before_tool_call policy; exec policy and
+// approvals do not apply.
+function createPluginToolPermissionHandler(params: {
   context: PreparedCliRunContext;
   abortSignal: AbortSignal;
-  onPendingApproval: (delta: 1 | -1) => void;
-  env: NodeJS.ProcessEnv;
-}): Promise<(request: CliBackendToolPermissionRequest) => Promise<CliBackendToolPermissionResult>> {
+}): (request: CliBackendToolPermissionRequest) => Promise<CliBackendToolPermissionResult> {
   const run = params.context.params;
-  const permission = await resolveExecDefaultsAsync({
-    cfg: run.config,
-    sessionEntry: run.sessionEntry,
-    execOverrides: run.execOverrides,
-    agentId: run.agentId,
-    sessionKey: run.runtimePolicySessionKey ?? run.sessionKey,
-  });
-  const grants = new Set<string>();
 
   // Native tool requests belong to this already-admitted turn: authority was checked when the
   // turn started, and a revocation applies to the next turn. Only Stop ends the turn early.
@@ -201,62 +185,10 @@ async function createPluginToolPermissionHandler(params: {
 
     // Schema discovery has no file, shell, or remote execution authority. Tool calls
     // discovered this way still return through the MCP grant and normal tool policy.
-    if (discoveryOnly) {
-      return { behavior: "allow", updatedInput: toolInput };
-    }
-
-    const plan = resolveCliNativeToolApprovalPlan(permission);
-    if (plan === "deny") {
-      return denyTool(
-        `OpenClaw exec policy denied native tool use (security=${permission.security}, ask=${permission.ask}).`,
-      );
-    }
-    const currentGrants = getCliLiveSessionApprovalGrants(params.context) ?? grants;
-    if (plan === "allow" || (permission.ask !== "always" && currentGrants.has(toolName))) {
+    if (!discoveryOnly) {
       recordAdjustedParamsForToolCall(request.toolCallId, toolInput, run.runId);
-      return { behavior: "allow", updatedInput: toolInput };
     }
-
-    params.onPendingApproval(1);
-    let outcome: Awaited<ReturnType<typeof requestCliNativeToolApproval>>;
-    try {
-      outcome = await requestCliNativeToolApproval({
-        toolName,
-        toolInput,
-        pluginId: params.context.backendResolved.id,
-        sessionKey: run.sessionKey,
-        agentId: run.agentId,
-        toolCallId: request.toolCallId,
-        cwd: request.cwd,
-        fallbackCwd: params.context.cwd ?? params.context.workspaceDir,
-        bindingEnv: params.env,
-        env: {
-          ...params.env,
-          PATH: mergePathPrepend(
-            params.env.PATH,
-            resolveExecToolConfig({ cfg: run.config, agentId: run.agentId }).pathPrepend ?? [],
-          ),
-        },
-        abortSignal: signal,
-        ask: permission.ask,
-      });
-    } finally {
-      params.onPendingApproval(-1);
-    }
-    if (outcome.kind !== "allow") {
-      return denyTool(
-        outcome.message ??
-          (outcome.reason === "user"
-            ? `OpenClaw user denied native tool use (${toolName}).`
-            : `OpenClaw approval was not granted for native tool use (${toolName}).`),
-      );
-    }
-    if (outcome.grantAlways) {
-      currentGrants.add(toolName);
-    }
-    const updatedInput = outcome.updatedInput ?? toolInput;
-    recordAdjustedParamsForToolCall(request.toolCallId, updatedInput, run.runId);
-    return { behavior: "allow", updatedInput };
+    return { behavior: "allow", updatedInput: toolInput };
   };
 }
 
@@ -470,18 +402,10 @@ export async function executePluginOwnedProcess(params: {
   let liveSession: ReturnType<typeof createCliLiveSessionCapability> | undefined;
   let terminalResult: "none" | "success" | "error" = "none";
   try {
-    // Host policy preparation cannot produce CLI output; start execution clocks after it.
-    const requestToolPermission = await racePromiseWithAbortSignal(
-      () =>
-        createPluginToolPermissionHandler({
-          context: params.context,
-          abortSignal: signal,
-          onPendingApproval: updatePendingApproval,
-          env: params.env,
-        }),
-      signal,
-      createCliAbortError,
-    );
+    const requestToolPermission = createPluginToolPermissionHandler({
+      context: params.context,
+      abortSignal: signal,
+    });
     watchdog = createCliPluginWatchdog({
       provider: run.provider,
       model: params.context.modelId,

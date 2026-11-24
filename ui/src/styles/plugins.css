@@ -57,6 +57,7 @@
 }
 
 .installed-plugins-card__art,
+.plugin-catalog-card__art,
 .plugins-tile {
   width: 40px;
   height: 40px;
@@ -174,9 +175,10 @@
   max-height: 34px;
   aspect-ratio: 1;
   padding: 7px;
-  border-color: var(--border);
+  border-color: transparent;
   border-radius: var(--radius-sm);
   background: transparent;
+  box-shadow: none;
   color: var(--muted);
 }
 
@@ -1273,10 +1275,6 @@
 .plugin-catalog-detail__readme-section > h2 {
   margin-bottom: var(--space-3);
 }
-/* Headings stay left on a phone, where the shared header stacks and centers its copy. */
-.plugin-capabilities .settings-section__header.oc-settings-section-header {
-  align-items: stretch;
-}
 .plugin-capability__disclosure > summary {
   list-style: none;
 }
@@ -1448,7 +1446,8 @@
   }
 }
 
-.plugin-catalog-detail--loading .skeleton {
+.plugin-catalog-detail--loading .skeleton,
+.plugin-catalog-detail__loading-card {
   border-radius: var(--radius-md);
   background: var(--bg-elevated);
 }
@@ -1609,8 +1608,8 @@
     padding: 0;
   }
 
-  /* Refresh sits beside the page menu here, not at the end of the row. */
-  openclaw-skills-page .skill-library-search__action .refresh-button {
+  /* Center beside an inline menu; with the menu in the header, use the trailing refresh line. */
+  openclaw-skills-page .skill-library-search__action:not(:last-child) .refresh-button {
     justify-items: center;
   }
 
@@ -1943,17 +1942,18 @@
   min-width: 0;
 }
 
-.plugin-catalog-results--rows .installed-plugins-card__art {
+.agents-home__template-art,
+.plugin-catalog-card__art--fallback {
   border-radius: calc(10px * var(--openclaw-corner-radius-scale));
   background: var(--card);
   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--text) 6%, transparent);
 }
 
-.plugin-catalog-results--rows
-  .installed-plugins-card__art
-  .plugins-tile:not(.plugins-tile--fallback) {
-  padding: 9px;
-  background: transparent;
+.plugin-catalog-card__art > .plugins-icon {
+  width: 38px;
+  height: 38px;
+  border-radius: calc(11px * var(--openclaw-corner-radius-scale));
+  object-fit: contain;
 }
 
 .plugin-catalog-results--rows .plugin-card-title-row {
@@ -2066,16 +2066,11 @@
     gap: 2px;
   }
 
+  /* Row previews show six cards on tablets; the base grid already hides later cards. */
   .plugin-catalog-results--rows
     .plugin-catalog-section--expandable
-    .plugin-catalog-card:nth-child(n + 5) {
+    .plugin-catalog-card:nth-child(-n + 6) {
     display: grid;
-  }
-
-  .plugin-catalog-results--rows
-    .plugin-catalog-section--expandable
-    .plugin-catalog-card:nth-child(n + 7) {
-    display: none;
   }
 }
 
@@ -2083,12 +2078,6 @@
 @media (max-width: 640px) {
   .plugin-catalog-results--rows .plugin-catalog-results__body {
     gap: 26px;
-  }
-
-  .plugin-catalog-results--rows
-    .plugin-catalog-section--expandable
-    .plugin-catalog-card:nth-child(n + 3) {
-    display: grid;
   }
 
   .plugin-catalog-results--rows
@@ -2111,7 +2100,12 @@
     gap: 12px;
   }
 
-  .plugin-catalog-results--rows .installed-plugins-card__art {
+  /* Refillable phone rows reserve the title, its gap and both allowed summary lines. */
+  .plugin-catalog-grid--continuable .plugin-catalog-row__main {
+    min-height: calc(20px + 1px + 2.8 * var(--control-ui-text-md));
+  }
+
+  .plugin-catalog-results--rows .plugin-catalog-card__art {
     margin-top: 1px;
   }
 
@@ -2835,7 +2829,7 @@
 }
 
 /* Plugins without an icon: the same quiet tile as a skill without one, holding the plug glyph. */
-.plugin-catalog-results--rows .plugins-tile--fallback.plugins-tile--neutral,
+.plugin-catalog-card__art--fallback,
 .plugin-catalog-detail--rail
   .plugin-catalog-detail__icon
   > .plugins-tile--fallback.plugins-tile--neutral {

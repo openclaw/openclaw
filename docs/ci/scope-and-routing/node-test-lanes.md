@@ -172,6 +172,13 @@ in no PR job.
 Aggressive PR selection keeps changed tests and direct runtime import consumers,
 including package and SDK aliases. A changed module with fewer than 20 direct
 importers also selects tests at depth two; hubs stop at direct consumers.
+Changes under `src/agents/`, `src/auto-reply/reply/agent-runner*`,
+`packages/agent-core/src/harness/compaction/` and `packages/ai/src/transports/`
+also select every transitive importer test in the changed file's own directory (not
+for a file directly in a package root such as `src/agents/`) and a declared behavior
+set: `*prompt-cache*` and `*compaction*` tests under `src/` and `packages/`, plus the
+required-maintenance and session-context-accounting tests. Those behavior tests sit
+3 to 10 imports away (#204252); the full importer closure is nearly the whole suite.
 Ordinary `src/` module changes in packages and plugins retain direct package-specifier tests for
 resolved exports affected by the changed source, including re-export chains.
 Unrelated resolved subpaths stay unselected. Unresolved package bindings, package

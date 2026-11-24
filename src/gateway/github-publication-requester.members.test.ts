@@ -26,6 +26,7 @@ import {
   setOpenClawIdTunnelPrincipalLookup,
   type OpenClawIdTunnelPrincipal,
 } from "./openclaw-id/tunnel-principal.js";
+import { GatewayOperatorAccessUnavailableError } from "./operator-access-policy.js";
 
 const checkpoint = vi.hoisted(() => vi.fn());
 // mock-isolation: Repository checkpoints are external worker I/O; requester policy and storage are real.
@@ -166,22 +167,32 @@ describe("member publication authority", () => {
         setRuntimeConfigSnapshot(next);
       }
       if (change !== "allowed") {
-        expect(restored.assertCurrent).toThrow(GitHubPublicationRequesterUnavailableError);
+        expect(restored.assertCurrent).not.toThrow();
         await expect(
           restoreGitHubPublicationRequester(
             json,
             f.guestSource.session,
             f.guestSource.context.getCommittedRuntimeConfig,
           ),
-        ).rejects.toThrow(GitHubPublicationRequesterUnavailableError);
+        ).rejects.toThrow(
+          change === "policy required"
+            ? GatewayOperatorAccessUnavailableError
+            : GitHubPublicationRequesterUnavailableError,
+        );
       }
       await f.placements.releaseTurn(claim);
       const restarted = f.restart();
-      await restarted.resumeSessionRequests();
+      if (change === "policy required") {
+        await expect(restarted.resumeSessionRequests()).rejects.toBeInstanceOf(AggregateError);
+      } else {
+        await restarted.resumeSessionRequests();
+      }
       expect(await restarted.readAsync(accepted.requestId)).toMatchObject(
         change === "allowed"
           ? { status: "published" }
-          : { status: "failed", code: "identity_changed" },
+          : change === "policy required"
+            ? { status: "requested" }
+            : { status: "failed", code: "identity_changed" },
       );
       expect(f.publishedTitles).toEqual(change === "allowed" ? ["member-publication"] : []);
       if (change !== "allowed") {
@@ -190,7 +201,7 @@ describe("member publication authority", () => {
     },
   );
   it.each(forPublicationBackends(["member", "linked owner", "nonmember"] as const))(
-    "rechecks parent-format $change provenance at recovery and write ($backend)",
+    "rechecks parent-format $change provenance at recovery, not during admitted work ($backend)",
     async ({ backend, change }) => {
       const f = await createRequesterPublicationFixture(checkpoint, backend);
       const config = structuredClone(f.config);
@@ -243,7 +254,7 @@ describe("member publication authority", () => {
         );
         onTestFinished(knownNonmember.release);
         expect(knownNonmember.assertCurrent).not.toThrow();
-        expect(restored.assertCurrent).toThrow(GitHubPublicationRequesterUnavailableError);
+        expect(restored.assertCurrent).not.toThrow();
         await expect(
           restoreGitHubPublicationRequester(
             json,

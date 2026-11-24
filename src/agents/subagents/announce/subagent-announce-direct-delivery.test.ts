@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
 import { expect, it, onTestFinished, vi } from "vitest";
-import { GatewayClientRequestError } from "../../../../packages/gateway-client/src/request-error.js";
 import { awaitGateBeforeSettlement, withinTest } from "../../../../test/helpers/promise.js";
 import type { SessionEntry } from "../../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
@@ -44,7 +43,6 @@ const unconfirmedCommit = {
 const queued = {
   delivered: false,
   reason: "requester_turn_pending",
-  disposition: "session_queued",
 } as const;
 
 const sessionKey = "agent:main:requester-settle";
@@ -167,6 +165,21 @@ function steering(
   fixture.state.active = true;
   return { queueMessage, input, operation };
 }
+
+it.each(["rpc", "restart"])(
+  "settles a private completion interrupted by %s",
+  async (stopReason) => {
+    const fixture = setup("subagent_announce");
+    fixture.params.completionTarget = "parent";
+    const delivery = fixture.startDelivery();
+    await fixture.dispatchEntered.promise;
+    fixture.dispatchDone.resolve({ status: "timeout", stopReason });
+    expect(await delivery).toMatchObject({
+      delivered: false,
+    });
+    expect(fixture.send).not.toHaveBeenCalled();
+  },
+);
 
 function expectNoReplay(fixture: ReturnType<typeof setup>, dispatches = 1) {
   expect(fixture.dispatch).toHaveBeenCalledTimes(dispatches);
@@ -347,11 +360,14 @@ it("delivers a text fallback on the current generation after its producer releas
   }
 });
 
-it("preserves the direct completion phase without replacing controller custody", async () => {
+it.each([false, true])("preserves a committed direct completion (restart=%s)", async (restart) => {
   const fixture = setup("agent_harness_completion");
   const expected = { delivered: true, path: "direct" };
   const { queueMessage, input } = steering(fixture, vi.fn());
-  fixture.dispatchDone.resolve(response([{ text: "Completed directly" }], sentDeliveryStatus));
+  fixture.dispatchDone.resolve({
+    ...response([{ text: "Completed directly" }], sentDeliveryStatus),
+    ...(restart ? { status: "timeout", stopReason: "restart" } : {}),
+  });
   const result = await deliverSubagentAnnouncement({
     ...fixture.params,
     controllerInput: input,
@@ -436,8 +452,6 @@ it("reports no attempted completion phase when cancelled before dispatch", async
   await expect(fixture.startDelivery()).resolves.toMatchObject({
     delivered: false,
     path: "none",
-    reason: "requester_aborted",
-    disposition: "retryable",
   });
   expectNoReplay(fixture, 0);
 });
@@ -481,7 +495,6 @@ it.each([
           ? {
               delivered: false,
               path: "steered",
-              disposition: "ambiguous",
               error: "commit outcome unknown",
             }
           : { delivered: false, reason: "source_owner_changed" },
@@ -577,101 +590,9 @@ it.each([
   expect(sendTyping).toHaveBeenCalledTimes(count);
   expect(clearTyping).toHaveBeenCalledOnce();
 });
-it.each([
-  ["pending settle response", { status: "accepted", runId: "pending-requester" }, queued],
-  [
-    "cancelled requester turn",
-    { status: "timeout", stopReason: "rpc", replaySafe: true },
-    { disposition: "retryable", reason: "requester_aborted" },
-  ],
-  [
-    "cancelled requester with unknown effects",
-    { status: "timeout", stopReason: "rpc" },
-    { disposition: "permanent_failure", reason: "requester_aborted" },
-  ],
-  [
-    "effectful tool before cancellation",
-    {
-      status: "timeout",
-      result: { payloads: [], meta: { aborted: true, toolSummary: { calls: 1, tools: ["exec"] } } },
-    },
-    { disposition: "permanent_failure", reason: "requester_aborted" },
-  ],
-  [
-    "committed progress before cancellation",
-    {
-      status: "timeout",
-      result: {
-        payloads: [],
-        meta: { aborted: true },
-        messagingToolSentTargets: [
-          {
-            tool: "message",
-            provider: "slack",
-            accountId: "acct-1",
-            to: "channel:C123",
-            text: "Progress already sent",
-            sourceReplyFinal: false,
-          },
-        ],
-      },
-    },
-    { disposition: "permanent_failure", reason: "requester_aborted" },
-  ],
-  [
-    "saved-state conflict with intentional suppression",
-    {
-      status: "ok",
-      result: {
-        payloads: [],
-        meta: { error: { kind: "incomplete_turn", code: "item_conflict" } },
-        deliveryStatus: {
-          status: "suppressed",
-          reason: "cancelled_by_message_sending_hook",
-          resultCount: 0,
-        },
-      },
-    },
-    { disposition: "intentional_non_delivery", reason: "delivery_suppressed", terminal: true },
-  ],
-  [
-    "partial send failure",
-    Object.assign(new Error("send incomplete"), { sentBeforeError: true }),
-    { disposition: "ambiguous" },
-  ],
-  [
-    "archived requester",
-    'Session "agent:main:requester-settle" is archived. Restore it before starting new work.',
-    { disposition: "permanent_failure" },
-  ],
-  [
-    "pending workspace",
-    'Session "agent:main:requester-settle" workspace is not ready. Wait for setup to finish or retry in chat.',
-    { disposition: "retryable" },
-  ],
-] as const)("reports the direct outcome for %s without replay", async (_name, input, expected) => {
-  const fixture = setup(typeof input === "string" ? "image_generate" : "subagent_settle");
-  const resultInput =
-    typeof input === "string"
-      ? new GatewayClientRequestError({
-          code: "INVALID_REQUEST",
-          message: input,
-          // The Gateway marks transient work-start blocks, such as a pending workspace, retryable.
-          retryable: expected.disposition === "retryable",
-        })
-      : input;
-  const onDeliveryError = vi.fn();
-  fixture.params.onDeliveryError = onDeliveryError;
-  if (resultInput instanceof Error) {
-    fixture.dispatchDone.reject(resultInput);
-  } else {
-    fixture.dispatchDone.resolve(resultInput);
-  }
-  const result = await fixture.startDelivery();
-  const { disposition, ...fields } = expected;
-  expect(result).toMatchObject({ delivered: false, path: "direct", ...fields });
-  expect(result.disposition).toBe(disposition);
-  expect(onDeliveryError.mock.calls).toEqual(resultInput instanceof Error ? [[resultInput]] : []);
-  expect(result).toMatchObject(resultInput instanceof Error ? { error: resultInput.message } : {});
+it("reports queue custody for a pending settle response without replay", async () => {
+  const fixture = setup();
+  fixture.dispatchDone.resolve({ status: "accepted", runId: "pending-requester" });
+  expect(await fixture.startDelivery()).toMatchObject({ ...queued, path: "queued" });
   expectNoReplay(fixture);
 });

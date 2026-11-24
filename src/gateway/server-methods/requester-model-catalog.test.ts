@@ -4,7 +4,7 @@ import { GATEWAY_CLIENT_CAPS } from "../../../packages/gateway-protocol/src/clie
 import type { ModelsListResult } from "../../../packages/gateway-protocol/src/index.js";
 import { ModelsListResultSchema } from "../../../packages/gateway-protocol/src/schema/model-catalog.js";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
-import { createAdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
+import { createTestOperatorAuthority } from "../../agents/admitted-run-context.test-support.js";
 import * as ownership from "../../agents/harness/session-runtime-ownership.js";
 import { resolveOpenClawPluginToolsForOptions } from "../../agents/openclaw-plugin-tools.js";
 import { prepareOperatorModelPolicy } from "../../agents/operator-model-policy.js";
@@ -204,16 +204,10 @@ async function setup(missingAuth = false) {
         policy: { allow: ["openai/" + id] },
         manifestPlugins: owner.metadataSnapshot,
       });
-      let current = true;
-      const authority = createAdmittedRunOperatorAuthority({
+      const authority = createTestOperatorAuthority({
         profileId: person.id,
         scopes: ["operator.read"],
         modelPolicy: policy,
-        assertCurrent() {
-          if (!current) {
-            throw new Error("Requester revoked");
-          }
-        },
       });
       const readerParams = {
         config,
@@ -240,9 +234,6 @@ async function setup(missingAuth = false) {
         models,
         unpreparedModels,
         save,
-        revoke: () => {
-          current = false;
-        },
         async gateway() {
           const respond = await requestModelsList(
             context,
@@ -520,7 +511,7 @@ it("uses requester catalogs through the real command and agent tool assembly cal
             sessionId: requester.readerParams.sessionId,
             preparedModelRuntime: pluginOwner,
             pluginExecutionAuthority: admitted ? requester.readerParams.authority : undefined,
-            assertInvocationCurrent: requester.readerParams.authority.assertCurrent,
+            assertInvocationCurrent: () => {},
             pluginToolAllowlist: ["catalog_probe"],
           },
         });
@@ -550,7 +541,7 @@ it("returns pending with no admitted models when no prepared owner is published"
   });
 });
 
-it.each(["reset", "revocation", "retirement", "account publication"])(
+it.each(["reset", "retirement", "account publication"])(
   "does not publish after %s during an awaited native-owner read",
   async (change) => {
     await fixture(async ({ requesters, owner, accountCatalog, refreshAccount }) => {
@@ -562,9 +553,6 @@ it.each(["reset", "revocation", "retirement", "account publication"])(
       try {
         if (change === "reset") {
           await requester.save("replacement-session");
-        }
-        if (change === "revocation") {
-          requester.revoke();
         }
         if (change === "retirement") {
           isOwnerCurrent.mockReturnValue(false);
@@ -581,7 +569,6 @@ it.each(["reset", "revocation", "retirement", "account publication"])(
       }
       const reasons = {
         reset: "Session changed while preparing its metadata. Retry the request.",
-        revocation: "Requester revoked",
         retirement: "Requester catalog owner changed.",
         "account publication": "Requester account catalog changed.",
       };

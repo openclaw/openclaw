@@ -22,7 +22,7 @@ it("lists On and Available scribes with honest detection and a tab count", async
   const view = await render();
   expect([...view.querySelectorAll(".knowledge-eyebrow")].map((n) => n.textContent)).toEqual([
     "On · 1",
-    "Available · 3",
+    "Available · 4",
   ]);
   expect(view.textContent).toContain("148 active · 1,204 archived conversations on Main");
   expect(view.textContent).toContain("Found Memory on Main · MEMORY.md 8 KB");

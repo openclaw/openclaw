@@ -54,7 +54,10 @@ function validateReleaseAdvisoryJobs(value, expected = []) {
   return expected;
 }
 
-export function validateReleaseManifestAdvisoryJobs(manifest) {
+export function validateReleaseManifestAdvisoryJobs(
+  manifest,
+  { deferWaiverPolicy = false, waiverPolicy } = {},
+) {
   if (!manifest || typeof manifest !== "object" || Array.isArray(manifest)) {
     throw new Error("Release advisory manifest is invalid");
   }
@@ -72,10 +75,12 @@ export function validateReleaseManifestAdvisoryJobs(manifest) {
       throw new Error("Release advisory child evidence is invalid");
     }
     if (
+      !deferWaiverPolicy &&
       evaluateReleaseChildPolicy({
-        child: { ...normalCi, key: "normalCi" },
+        child: { ...normalCi, key: "normalCi", runAttempt: normalCi.effectiveRunAttempt },
         targetVersion: manifest.validationInputs?.targetVersion,
         targetSha: manifest.targetSha,
+        waiverPolicy,
       }).blockingJobs.length > 0
     ) {
       throw new Error("Release manifest contains failed selected job evidence");
@@ -1661,8 +1666,8 @@ function blockerIndex(issues) {
   return issues.map((issue) => jsonSha256(blockerEvidence(issue))).toSorted();
 }
 
-export function terminalPolicyPass(child, targetVersion, targetSha) {
-  const policy = evaluateReleaseChildPolicy({ child, targetVersion, targetSha });
+export function terminalPolicyPass(child, targetVersion, targetSha, waiverPolicy) {
+  const policy = evaluateReleaseChildPolicy({ child, targetVersion, targetSha, waiverPolicy });
   return (
     child.status === "completed" &&
     child.jobs.every((job) => job.status === "completed") &&
@@ -2047,7 +2052,7 @@ function validateExecutionPlanChildBindings(children, payload, expectedCoverage)
     for (const spec of coverage.children) {
       const child = children.find((entry) => entry.key === spec.key);
       // Reuse retains the original producer. Strict validation authenticates
-      // either its child workload closure or the whole-root changelog delta.
+      // either its sealed child evidence or the whole-root changelog delta.
       const producer =
         child.source === "reused"
           ? (payload.childReuse?.[spec.key] ?? reusedProducer ?? payload)

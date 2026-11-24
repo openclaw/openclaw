@@ -8,6 +8,7 @@ import * as transcript from "openclaw/plugin-sdk/session-transcript-runtime";
 import { afterEach, expect, it, vi } from "vitest";
 import sessionShare from "../../extensions/session-share/index.js";
 import { captureRuntimeConfigAsyncReader } from "../../src/config/config.js";
+import { setRuntimeConfigSnapshot } from "../../src/config/runtime-snapshot.js";
 import { replaceSessionEntry } from "../../src/config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../src/config/types.openclaw.js";
 import type { GatewayRequestHandlerOptions } from "../../src/gateway/server-methods/types.js";
@@ -35,6 +36,7 @@ import { createPluginRuntime } from "../../src/plugins/runtime/index.js";
 import { createDeferredCore } from "../../src/shared/deferred.js";
 import { openOpenClawStateDatabase } from "../../src/state/openclaw-state-db.js";
 import { mergeCanonicalUserProfiles } from "../../src/state/user-profile-writes.js";
+import { syncGitHubIdentity } from "../../src/state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../../src/state/user-profiles.js";
 import { acquireTestPortBlock } from "../../src/test-utils/port-claims.js";
 import { TEST_TLS_CERT_PEM, TEST_TLS_KEY_PEM } from "../helpers/tls-fixture.js";
@@ -55,6 +57,10 @@ it.each([false, true])(
     state.envVars.OPENCLAW_TEST_MINIMAL_GATEWAY = "1";
     state.applyEnv();
     const person = ensureProfileForEmail("publisher@example.test");
+    syncGitHubIdentity({
+      identity: { accountId: 25101, login: "synthetic-publisher" },
+      authenticationAlias: { kind: "email", email: "publisher@example.test" },
+    });
     const other = ensureProfileForEmail("other@example.test");
     const alias = ensureProfileForEmail("alias@example.test");
     await mergeCanonicalUserProfiles(alias.id, person.id);
@@ -120,7 +126,8 @@ it.each([false, true])(
     await state.writeConfig(cfg);
     await captureRuntimeConfigAsyncReader()();
     const runtime = createPluginRuntime();
-    runtime.config.current = () => cfg;
+    let currentConfig = cfg;
+    runtime.config.current = () => currentConfig;
     const registry = createRuntimeTestRegistry(runtime);
     sessionShare.register(
       registry.createApi(
@@ -259,7 +266,15 @@ it.each([false, true])(
     });
     cleanup.defer(() => gatewayClient.disconnectGatewayClient(client));
     expect(edgeHeadersSeen).toBe(true);
-    expect(advertised.toSorted()).toEqual(["session-share.list", "session-share.read"]);
+    expect(advertised.toSorted()).toEqual([
+      "session-share.catalog.list",
+      "session-share.catalog.read",
+      "session-share.list",
+      "session-share.read",
+    ]);
+    await expect(
+      client.request("session-share.catalog.list", { includeOriginalPath: false }),
+    ).rejects.toThrow("Session Share request denied or source unavailable");
     const list = () =>
       client.request<{ sessions: { threadId: string }[] }>("session-share.list", {});
     const read = (name = "shared") =>
@@ -274,18 +289,60 @@ it.each([false, true])(
       canOpenTerminal: false,
     });
     expect((await read()).items).toMatchObject([{ text: "SYNTHETIC_SHARED_MESSAGE" }]);
+    const profileRelation = {
+      relationship: "owned",
+      target: { type: "github-account", id: "25101" },
+    };
+    const filteredList = () =>
+      client.request<{ sessions: { threadId: string }[] }>("session-share.catalog.list", {
+        profileRelation,
+      });
+    expect((await filteredList()).sessions.map((row) => row.threadId)).toEqual([
+      "agent:main:shared",
+    ]);
+    expect(
+      await client.request("session-share.catalog.read", {
+        profileRelation,
+        threadId: "agent:main:shared",
+      }),
+    ).toMatchObject({ items: [{ text: "SYNTHETIC_SHARED_MESSAGE" }] });
+    Object.assign(share, { involvingProfileId: undefined });
+    await expect(list()).rejects.toThrow("Session Share request denied or source unavailable");
+    await expect(filteredList()).rejects.toThrow(
+      "Session Share request denied or source unavailable",
+    );
+    await expect(
+      client.request("session-share.catalog.read", {
+        profileRelation,
+        threadId: "agent:main:shared",
+      }),
+    ).rejects.toThrow("Session Share request denied or source unavailable");
+    share.involvingProfileId = alias.id;
+    await expect(
+      client.request("session-share.catalog.read", {
+        profileRelation,
+        threadId: "agent:main:other",
+      }),
+    ).rejects.toThrow("Session Share request denied or source unavailable");
+    expect(
+      (await client.request<{ sessions: unknown[] }>("session-share.catalog.list", {})).sessions,
+    ).toHaveLength(1);
     expect(admitted).toBeDefined();
     expect(admitted?.client?.authenticatedUserProfile).toBeUndefined();
     expect(admitted?.client?.preparedSessionProfile).toBeUndefined();
     for (const name of ["other", "private"]) {
-      await expect(read(name)).rejects.toThrow();
+      await expect(read(name)).rejects.toThrow(
+        "Session Share request denied or source unavailable",
+      );
     }
     for (const method of ["sessions.list", "chat.history", "config.get", "sessions.send"]) {
-      await expect(client.request(method, {})).rejects.toThrow();
+      await expect(client.request(method, {})).rejects.toThrow(
+        "publication transport method denied",
+      );
     }
     await expect(
       client.request("session-share.list", { involvingProfileId: other.id }),
-    ).rejects.toThrow();
+    ).rejects.toThrow("Session Share request denied or source unavailable");
     for (const patch of [
       { gateway: false },
       { gatewayDeviceIds: [] },
@@ -298,15 +355,19 @@ it.each([false, true])(
       const saved = { ...share };
       Object.assign(share, patch);
       try {
-        await expect(read()).rejects.toThrow();
+        await expect(read()).rejects.toThrow("Session Share request denied or source unavailable");
       } finally {
         Object.assign(share, saved);
       }
     }
     cfg.plugins!.entries!["session-share"]!.enabled = false;
-    await expect(read()).rejects.toThrow();
+    await expect(read()).rejects.toThrow("Session Share request denied or source unavailable");
     cfg.plugins!.entries!["session-share"]!.enabled = true;
-    const holdRead = async (mutate: () => void | Promise<unknown>) => {
+    const holdRead = async (
+      mutate: () => void | Promise<unknown>,
+      disclose = false,
+      rejection = "Session Share request denied or source unavailable",
+    ) => {
       const entered = createDeferredCore();
       const release = createDeferredCore();
       const original = transcript.readSessionTranscriptCatalogPage;
@@ -319,15 +380,32 @@ it.each([false, true])(
         },
       );
       const pending = read();
-      const rejected = expect(pending).rejects.toThrow();
+      const checked = disclose
+        ? expect(pending).resolves.toMatchObject({
+            items: [{ text: "SYNTHETIC_SHARED_MESSAGE" }],
+          })
+        : expect(pending).rejects.toThrow(rejection);
       try {
         await Promise.race([entered.promise, pending]);
         await mutate();
       } finally {
         release.resolve();
       }
-      await rejected;
+      await checked;
     };
+    const publishReaderEnabled = (enabled: boolean) => {
+      currentConfig = {
+        ...cfg,
+        gateway: { ...cfg.gateway, sessionControl: { publicationReadEnabled: enabled } },
+      };
+      setRuntimeConfigSnapshot(currentConfig);
+    };
+    await holdRead(() => {
+      publishReaderEnabled(false);
+    }, true);
+    await expect(read()).rejects.toThrow("publication transport method denied");
+    publishReaderEnabled(true);
+    expect((await read()).items).toMatchObject([{ text: "SYNTHETIC_SHARED_MESSAGE" }]);
     await holdRead(() => {
       share.gatewayDeviceIds = [];
     });
@@ -337,14 +415,18 @@ it.each([false, true])(
     });
     share.groups = ["Team"];
     let rotated!: Awaited<ReturnType<typeof rotateDeviceToken>>;
-    await holdRead(async () => {
-      rotated = await rotateDeviceToken({
-        deviceId: device.identity.deviceId,
-        role: "operator",
-        scopes: [scope],
-      });
-    });
-    await expect(list()).rejects.toThrow();
+    await holdRead(
+      async () => {
+        rotated = await rotateDeviceToken({
+          deviceId: device.identity.deviceId,
+          role: "operator",
+          scopes: [scope],
+        });
+      },
+      false,
+      "gateway closed (4001): Publication transport credentials changed. Reconnect and try again.",
+    );
+    await expect(list()).rejects.toThrow("gateway not connected");
     if (!rotated.ok) {
       throw new Error(`Fixture rotation refused: ${rotated.reason}`);
     }
@@ -365,6 +447,6 @@ it.each([false, true])(
     openOpenClawStateDatabase().db.prepare("DELETE FROM user_profiles WHERE id = ?").run(person.id);
     await expect(
       fresh.request("session-share.read", { threadId: "agent:main:shared" }),
-    ).rejects.toThrow();
+    ).rejects.toThrow("Session Share request denied or source unavailable");
   },
 );

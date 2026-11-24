@@ -14,12 +14,9 @@ import {
 } from "./launchd-service-files.js";
 import { stopLaunchAgent } from "./launchd-stop.js";
 import { assertNoSystemLaunchDaemonOwnership } from "./launchd-system.js";
-import {
-  readScheduledTaskDefinition,
-  restoreScheduledTaskDefinition,
-  setScheduledTaskXmlEnabled,
-} from "./schtasks-control.js";
+import { readScheduledTaskDefinition, restoreScheduledTaskDefinition } from "./schtasks-control.js";
 import { resolveTaskLauncherScriptPath, resolveTaskScriptPath } from "./schtasks-layout.js";
+import { scheduledTaskXmlPolicy, setScheduledTaskXmlEnabled } from "./schtasks-xml-enabled.js";
 import { auditScheduledTaskDefinition } from "./service-audit-schtasks.js";
 import type { ServiceDefinitionDrift } from "./service-audit-types.js";
 import {
@@ -54,7 +51,11 @@ type Context = {
 const backupPath = (file: string, id: string) => `${file}.reconcile-${id}.bak`;
 const taskBytes = (xml: string) =>
   Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from(xml, "utf16le")]);
+// Receipts cross updater/candidate versions; keep this producer format stable.
 const taskPolicy = (xml: string) => sha256Hex(setScheduledTaskXmlEnabled(xml, false));
+// Exports omit Enabled=true and place the updater's own disable in schema order.
+const matchesTaskPolicy = (xml: string, expected: string) =>
+  taskPolicy(xml) === expected || taskPolicy(scheduledTaskXmlPolicy(xml)) === expected;
 const receiptPath = (receipt: GatewayServiceDefinitionBackupReceipt) =>
   `${receipt.files[0]!.sourcePath}.reconcile-${receipt.id}.receipt.bak`;
 
@@ -203,9 +204,11 @@ function mutationHooks(
       guard.after = current;
     }
     if (receipt.task) {
-      const current = taskPolicy(await readScheduledTaskDefinition(params.env));
+      const previous = matchesTaskPolicy(
+        await readScheduledTaskDefinition(params.env),
+        receipt.task.afterPolicySha256,
+      );
       if (settlePrepared && receipt.task.preparedXml) {
-        const previous = current === receipt.task.afterPolicySha256;
         receipt.task.recoveredPolicy = previous ? "previous" : "prepared";
         if (previous) {
           delete receipt.task.preparedXml;
@@ -215,7 +218,7 @@ function mutationHooks(
         }
         return beforeWrite(false);
       }
-      if (current !== receipt.task.afterPolicySha256) {
+      if (!previous) {
         throw new Error("SERVICE_DEFINITION_UNKNOWN: Scheduled Task changed.");
       }
     }

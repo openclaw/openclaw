@@ -130,7 +130,11 @@ function mockSystemdManagerSnapshot(
     } else if (command === "systemctl" && args[0] === "--user" && args[1] === "show") {
       stdout =
         "After=network-online.target\nWants=network-online.target\nRestartUSec=5s\nKillMode=mixed\nLoadState=loaded\nTimeoutStopUSec=330s\nDelegate=yes\nDelegateSubgroup=gateway\n";
-    } else if (command === "systemctl" && args[0] === "--user" && args[1] === "status") {
+    } else if (
+      command === "systemctl" &&
+      args[0] === "--user" &&
+      (args[1] === "status" || args[1] === "daemon-reload")
+    ) {
       stdout = "";
     } else {
       throw new Error(`Unexpected native fixture request: ${command} ${args.join(" ")}`);

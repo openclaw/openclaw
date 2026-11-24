@@ -88,9 +88,13 @@ describe("UsagePage cache convergence", () => {
     vi.useFakeTimers();
     focusDocument();
   });
-  it.each([false, true])(
-    "retains committed totals and coalesces publications (hidden: %s)",
-    async (hidden) => {
+  it.each([
+    { hidden: false, providerExpired: false },
+    { hidden: true, providerExpired: false },
+    { hidden: true, providerExpired: true },
+  ])(
+    "retains committed totals and coalesces publications (hidden: $hidden, provider expired: $providerExpired)",
+    async ({ hidden, providerExpired }) => {
       const visibility = vi.spyOn(document, "visibilityState", "get");
       let snapshot = cacheSnapshot(hidden ? "fresh" : "stale");
       const request = usageRequest(() => snapshot.result);
@@ -116,7 +120,7 @@ describe("UsagePage cache convergence", () => {
       if (hidden) {
         publication.usageUpdatedAt += 1;
         context.publishUsage(publication);
-        await vi.advanceTimersByTimeAsync(35_000);
+        await vi.advanceTimersByTimeAsync(providerExpired ? 300_001 : 35_000);
         expect(usageCalls(request)).toHaveLength(1);
         visibility.mockReturnValue("visible");
         window.dispatchEvent(new Event("focus"));
@@ -125,6 +129,7 @@ describe("UsagePage cache convergence", () => {
 
       expect(page.querySelector(".usage-cache-warning")).toBeNull();
       expect(usageCalls(request)).toHaveLength(2);
+      expect(usageCalls(request, "usage.status")).toHaveLength(providerExpired ? 2 : 1);
       context.publishUsage(publication);
       await vi.advanceTimersByTimeAsync(35_000);
       expect(usageCalls(request)).toHaveLength(2);
@@ -216,6 +221,70 @@ describe("UsagePage cache convergence", () => {
     },
   );
 
+  it("replaces an unfinished date edit with one immediate preset read", async () => {
+    vi.setSystemTime(new Date("2026-08-07T12:00:00Z"));
+    const request = usageRequest(() => cacheSnapshot("fresh").result);
+    const { page } = await loadUsagePage(request);
+    changeUsageControl(
+      page.querySelector<HTMLInputElement>("input.usage-date-input")!,
+      "2026-08-01",
+    );
+    request.mockClear();
+    const sevenDays = [
+      ...page.element.querySelectorAll<HTMLButtonElement>(".usage-presets button"),
+    ].find((button) => button.textContent?.trim() === "7d")!;
+    sevenDays.click();
+    await settleUsageTimers(page);
+    expect(usageCalls(request).map(([, params]) => params)).toEqual([
+      expect.objectContaining({ startDate: "2026-08-01", endDate: "2026-08-07" }),
+    ]);
+    await settleUsageTimers(page, 400);
+    expect(request).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([false, true])(
+    "a preset covers older publications without dropping the provider poll (new publication: %s)",
+    async (newPublication) => {
+      vi.setSystemTime(new Date("2026-08-07T12:00:00Z"));
+      const fresh = cacheSnapshot("fresh").result;
+      const oldRead = deferred<SessionsUsageResult>();
+      const presetRead = deferred<SessionsUsageResult>();
+      let nextUsage: Promise<SessionsUsageResult> = Promise.resolve(fresh);
+      let providerRefreshing = true;
+      const request = usageRequest(
+        () => nextUsage,
+        () => ({ updatedAt: Date.now(), providers: [], refreshing: providerRefreshing }),
+      );
+      const { page, context } = await loadUsagePage(request);
+      nextUsage = oldRead.promise;
+      page.read().callbacks.filters.onSelectDay("2026-08-07", false, ["2026-08-07"]);
+      context.publishUsage({ usageUpdatedAt: 1 });
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(usageCalls(request, "usage.status")).toHaveLength(1);
+      request.mockClear();
+
+      nextUsage = presetRead.promise;
+      [...page.element.querySelectorAll<HTMLButtonElement>(".usage-presets button")]
+        .find((button) => button.textContent?.trim() === "7d")!
+        .click();
+      if (newPublication) {
+        context.publishUsage({ usageUpdatedAt: 2 });
+      }
+      nextUsage = Promise.resolve(fresh);
+      providerRefreshing = false;
+      oldRead.resolve(fresh);
+      presetRead.resolve(fresh);
+      await settleUsageTimers(page);
+      expect(usageCalls(request, "usage.status")).toHaveLength(1);
+      expect(usageCalls(request).map(([, params]) => params)).toEqual(
+        Array.from({ length: newPublication ? 2 : 1 }, () =>
+          expect.objectContaining({ startDate: "2026-08-01", endDate: "2026-08-07" }),
+        ),
+      );
+      expect(page.read().filters.selectedDays).toEqual([]);
+    },
+  );
+
   it("preserves failure until publication after changing the query's date", async () => {
     let snapshot = cacheSnapshot("partial");
     const request = usageRequest(() => ({
@@ -297,6 +366,8 @@ describe("UsagePage cache convergence", () => {
       }
       await settleUsageTimers(page);
       expect(usageCalls(request)).toHaveLength(3);
+      // The initial open and the manual refresh read provider plans; a rollup does not.
+      expect(usageCalls(request, "usage.status")).toHaveLength(2);
       expect(page.querySelector(".usage-cache-warning")).toBeNull();
       expect(page.read().data.error).toBeNull();
       context.publishUsage({ usageUpdatedAt: 2 });

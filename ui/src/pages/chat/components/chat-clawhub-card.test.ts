@@ -727,7 +727,8 @@ describe("ClawHub chat recommendations", () => {
       expectPublisher(card, skill.name);
       part(card, "listing")!.click();
       expect(context.navigate).toHaveBeenCalledWith("skills", {
-        search: "?clawhub=%40openclaw%2Fcalendar&agent=research",
+        pathname: "/skills/clawhub/@openclaw/calendar",
+        search: "?agent=research",
       });
       if (!installed) {
         expect(part(card, "dismiss")).toBeNull();
@@ -735,7 +736,8 @@ describe("ClawHub chat recommendations", () => {
         vi.mocked(context.navigate).mockClear();
         part(card, "install")!.click();
         expect(context.navigate).toHaveBeenCalledWith("skills", {
-          search: "?clawhub=%40openclaw%2Fcalendar&agent=research",
+          pathname: "/skills/clawhub/@openclaw/calendar",
+          search: "?agent=research",
         });
       }
     },

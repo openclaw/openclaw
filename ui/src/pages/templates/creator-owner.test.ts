@@ -123,11 +123,11 @@ it("keeps a pending review quiet without starting it before config is known", as
   expect(f.request).not.toHaveBeenCalled();
 });
 
-it.each(["Labs", "role"])(
+it.each(["configuration", "role"])(
   "explains a chat review blocked by %s without touching its draft",
   async (reason) => {
     const f = await fixture();
-    if (reason === "Labs") {
+    if (reason === "configuration") {
       Object.assign(f.context.runtimeConfig.state.configSnapshot!, {
         sourceConfig: { gateway: { controlUi: { experimental: { templates: false } } } },
       });
@@ -143,12 +143,11 @@ it.each(["Labs", "role"])(
     expect(f.owner.loading).toBe(false);
     expect(f.request).not.toHaveBeenCalled();
     const notice = toast.mock.calls[0]?.[0];
-    expect(notice?.message).toContain(reason === "Labs" ? "Settings → Labs" : "administrator");
+    expect(notice?.message).toContain(
+      reason === "configuration" ? "Gateway configuration" : "administrator",
+    );
     expect(notice?.message).toContain("private draft");
-    if (reason === "Labs") {
-      notice!.onAction!();
-      expect(f.context.navigate).toHaveBeenCalledWith("labs");
-    }
+    expect(notice?.onAction).toBeUndefined();
   },
 );
 

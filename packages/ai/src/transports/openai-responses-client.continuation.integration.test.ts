@@ -5,6 +5,9 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { assert, describe, expect, it, onTestFinished } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../../test/helpers/promise.js";
 import { makeTextToolResult } from "../../../../test/helpers/text-tool-result.js";
+import { writerState } from "../provider-state.test-support.js";
+import { PROVIDER_STATE_SCOPE } from "../provider-types.js";
+import { claimConversationProviderState } from "../session-resources.js";
 import { createOpenAIResponsesTransportStreamFn } from "./openai-responses-client.js";
 import type { OpenAIResponsesOptions } from "./openai-responses-contracts.js";
 import {
@@ -34,6 +37,48 @@ async function loopback(events: Parameters<typeof createResponsesLoopbackServer>
   onTestFinished(() => server.close());
   return server;
 }
+
+it("preserves the writer continuation when a scope-less caller shares its session affinity", async () => {
+  const server = await loopback((turn) => [
+    completedResponse(`resp_${turn}`, [wireMessage(`msg_${turn}`, `answer ${turn}`)]),
+  ]);
+  const sessionId = "writer-and-background-fork";
+  const options = {
+    apiKey: "synthetic-key",
+    sessionId,
+    transport: "sse" as const,
+    onPayload: (payload: unknown) => ({ ...(payload as Record<string, unknown>), store: true }),
+  };
+  const writerOptions = {
+    ...options,
+    [PROVIDER_STATE_SCOPE]: claimConversationProviderState(sessionId),
+  };
+  const stream = createOpenAIResponsesTransportStreamFn();
+  const firstUser = userMessage("writer question");
+  const first = await (
+    await stream(responsesLoopbackModel, { messages: [firstUser] }, writerOptions)
+  ).result();
+  expect(first.stopReason).toBe("stop");
+  const background = await (
+    await stream(
+      responsesLoopbackModel,
+      { messages: [userMessage("different background history")] },
+      options,
+    )
+  ).result();
+  expect(background.stopReason).toBe("stop");
+  const nextUser = userMessage("writer followup", 2);
+  const next = await (
+    await stream(responsesLoopbackModel, { messages: [firstUser, first, nextUser] }, writerOptions)
+  ).result();
+  expect(next.stopReason).toBe("stop");
+  expect(server.requests).toHaveLength(3);
+  expect(server.requests[1]).not.toHaveProperty("previous_response_id");
+  expect(server.requests[2]).toMatchObject({
+    previous_response_id: "resp_1",
+    input: [wireUser("writer followup")],
+  });
+});
 
 function reasoningItem(turn: number) {
   return {
@@ -101,6 +146,7 @@ it.each([true, false])(
         {
           apiKey: "synthetic-continuation-key",
           sessionId: `recorded-tool-loop-${store}`,
+          [PROVIDER_STATE_SCOPE]: claimConversationProviderState(`recorded-tool-loop-${store}`),
           transport: "sse",
           onPayload(payload) {
             const request = {
@@ -197,6 +243,7 @@ it("preserves reasoning controls in concurrent same-session SSE requests", async
     const options = {
       apiKey: "synthetic-continuation-key",
       sessionId: "parallel-reasoning",
+      [PROVIDER_STATE_SCOPE]: claimConversationProviderState("parallel-reasoning"),
       transport: "sse",
       reasoningEffort,
       onResponse,
@@ -258,6 +305,7 @@ it.each([
         {
           apiKey: "synthetic-continuation-key",
           sessionId: `wire-${transport}-${edited}`,
+          [PROVIDER_STATE_SCOPE]: claimConversationProviderState(`wire-${transport}-${edited}`),
           transport,
           onPayload: (payload) => ({ ...(payload as Record<string, unknown>), store: true }),
         },
@@ -328,6 +376,7 @@ it.each(["sse", "websocket-cached"] as const)(
         {
           apiKey: "synthetic-continuation-key",
           sessionId: `serialization-${transport}`,
+          [PROVIDER_STATE_SCOPE]: claimConversationProviderState(`serialization-${transport}`),
           transport,
           onPayload: (payload) => ({
             ...(payload as Record<string, unknown>),
@@ -424,6 +473,7 @@ describe("streamed argument conflicts", () => {
         {
           apiKey: "synthetic-key-a",
           sessionId: `${transport}-${identityConflict}`,
+          ...writerState(`${transport}-${identityConflict}`),
           cacheRetention: "none",
           transport,
         },
@@ -512,6 +562,9 @@ describe("tool changes and continuation identity", () => {
       respond(context, {
         apiKey: later && change === "key" ? "synthetic-key-b" : "synthetic-key-a",
         sessionId: `${transport}-${change}-${later && change === "session" ? "b" : "a"}`,
+        [PROVIDER_STATE_SCOPE]: claimConversationProviderState(
+          `${transport}-${change}-${later && change === "session" ? "b" : "a"}`,
+        ),
         cacheRetention: "none",
         transport,
         onPayload: (payload) => {

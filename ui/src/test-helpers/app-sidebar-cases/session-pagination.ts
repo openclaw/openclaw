@@ -12,6 +12,8 @@ import {
 } from "../app-sidebar.ts";
 import { waitForFast } from "../wait-for.ts";
 import "../../components/app-sidebar.tsx";
+// Load the lazy Show more module up front so paging loops see its buttons.
+import "../../components/app-sidebar-session-pagination.tsx";
 
 describe("AppSidebar gateway session pagination", () => {
   it("refreshes the archived sidebar once when another client changes sessions", async () => {

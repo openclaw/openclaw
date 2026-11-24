@@ -1,5 +1,11 @@
 export const MAX_RELEASE_ARTIFACT_BYTES: number;
-export function validateReleaseManifestAdvisoryJobs(manifest: unknown): ReleaseRecord[];
+export function validateReleaseManifestAdvisoryJobs(
+  manifest: unknown,
+  options?: {
+    deferWaiverPolicy?: boolean;
+    waiverPolicy?: import("./lib/release-validation-waivers.mjs").ReleaseValidationWaiver[];
+  },
+): ReleaseRecord[];
 export const SPLIT_CHANGELOG_EVIDENCE_REUSE_POLICY: "split-changelog-release-v1";
 export const GHOST_JOBS_ADVICE: string;
 export function isSplitChangelogEvidenceDelta(paths: unknown, version: unknown): boolean;
@@ -151,6 +157,7 @@ export function terminalPolicyPass(
   child: ReleaseRecord,
   targetVersion?: string,
   targetSha?: string,
+  waiverPolicy?: import("./lib/release-validation-waivers.mjs").ReleaseValidationWaiver[],
 ): boolean;
 
 export function classifyReleaseSnapshot(input: ReleaseRecord): ReleaseStateArtifact;

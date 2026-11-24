@@ -614,6 +614,12 @@ describe("requester yield ownership", () => {
       // Only an accepted yield arms the exit to resume this run.
       expect(onYield).toHaveBeenCalledTimes(expected === "yielded" ? 1 : 0);
       expect(process.resumesYieldedRun).toBe(expected === "yielded" ? true : undefined);
+      if (expected === "yielded") {
+        // The runner counts the armed exit wake as this turn's continuation source.
+        expect(onYield).toHaveBeenCalledWith("Turn yielded.", undefined, undefined, {
+          execWakeArmed: true,
+        });
+      }
     },
   );
 
@@ -630,6 +636,8 @@ describe("requester yield ownership", () => {
 
     await expectYield(tool, "yielded");
     expect(onYield).toHaveBeenCalledOnce();
+    // An unarmed background exec is not an exit wake for this yield.
+    expect(onYield).toHaveBeenCalledWith("Turn yielded.", undefined, undefined);
   });
 
   it("checks background exec after an awaited runtime completion claim", async () => {

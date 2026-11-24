@@ -33,6 +33,7 @@ Read only the references needed for the selected phase:
 - Backport discovery and porting: [candidate inventory and worker brief](references/backport-discovery.md). For extended-stable also read [backport preparation](references/extended-stable-backports.md); SDK/config changes need a visible maintenance-risk warning and maintainer decision.
 - Extended-stable `.33+` Gateway publication: [extended-stable publication](references/extended-stable-publish.md). Use the shared publisher with extended-stable inputs; its non-Latest GitHub Release carries evidence without native-app or ClawHub publication.
 - Validation selection or failed proof: [validation and confidence](references/validation.md), with `$release-openclaw-ci` for workflow execution and immutable manifests.
+- Failed validation sealing/collection after checks finish: assess [receipt-backed aggregate recovery](../release-openclaw-ci/SKILL.md#receipt-backed-aggregate-recovery) before replacing the FRV; this is distinct from same-parent continuation and publication recovery.
 - Interrupted publication or registry promotion: [publication recovery](references/publication-recovery.md).
 - Native assets: [platform publication](references/platform-publication.md), with `$release-openclaw-mac` for macOS operations.
 - Stable postpublish synchronization and the exact-SHA deployment handoff:
@@ -78,9 +79,29 @@ the same fix or adaptation before this release finishes. If access is
 unavailable, keep each pending update in local evidence and sync later. This is
 recommended bookkeeping, not another release gate.
 
+## Fast-track approval is human-only
+
+**NEVER approve your own or another agent's fast-track request. NEVER use an
+available maintainer token to impersonate human approval.** Obtain explicit
+approval from another human member of the normal release-managers group for the
+exact request/digest, candidate, artifacts, publication scope, run/attempt,
+expiry and explicit skip/incomplete-validation action. Preparation authority,
+generic publish authority, silence and previous approvals do not qualify.
+If approval is missing, rejected, expired or ambiguous, stop the fast-track path
+and ask that human. Changed contents require a new request and approval.
+
+Preserve the human decision's permalink, identity and timestamp with the exact
+request and original FRV results. Keep the normal `npm-release` environment
+approval and existing release receipt. Shared tokens make this a procedural
+rule, not a technical guarantee of human independence. There is no Google Chat
+app, Firebase service or alternate approval API. See
+[fast-track approval](../../../docs/reference/fast-track-release-approval.md).
+Request preparation does not enable skipping: until existing publishers support
+these policies, use the ordinary validation/waiver path below.
+
 ## Shared release boundaries
 
-FRV must conclude **success** under pinned P's
+FRV must conclude **success** with trusted P evaluating pinned Q’s
 [checked-in release-tooling policy](../../../docs/reference/full-release-validation/evidence.md#release-tooling-waivers).
 Apply only the exact exceptions in that policy, including its operator-authorized
 Kova grants; preserve each grant’s version, job, optional candidate SHA, and
@@ -96,8 +117,13 @@ identify the original failure. See the [attempt-binding correction in #201694](h
 and the [operator-directed release-wide default in #201769](https://github.com/openclaw/openclaw/pull/201769).
 For grant-only edits, reuse the policy tests; add cases only for new matching or
 validation behavior. Keep new reasons to one sentence and authorization details
-in the PR/handoff, not published docs ([#199776](https://github.com/openclaw/openclaw/pull/199776)).
-A failed-job grant is not permission to skip the job or change C/Q. All other
+in the release handoff, not public Q data or published docs ([#199776](https://github.com/openclaw/openclaw/pull/199776)).
+Commit authorized grants directly to Q’s `scripts/lib/release-validation-waivers.json`;
+no grant PR to `main`, no grant cherry-pick into C. Pin the new Q in a fresh
+request/admission, then reevaluate eligible raw successful/failed receipts under
+its grants. The ledger-only delta preserves workload identity; executable Q
+changes do not. Public Q branches are not private storage.
+A failed-job grant is not permission to skip the job or change C. All other
 required lanes must succeed: Windows
 and macOS Node and other normal CI jobs, install smoke, survivor
 lanes, `update-first-hop-compat*`, pack/npm qualification, package integrity,
@@ -121,7 +147,7 @@ blocker is a regression in shipped bytes or behavior, or an update/install/
 publish defect; fix it on the release branch. Rerun a flake on
 the same Release SHA with at most two recorded reruns by default, and file a
 fix-in-parallel issue or PR on `main` with the evidence. Never re-cut for a flake.
-A deliberate tooling-code waiver requires FRV validation under the new pinned P,
+A deliberate grant requires FRV validation under the new pinned Q,
 not a publisher override. An unwaived flake that remains red blocks publication.
 Main-only failures and infrastructure
 failures (runner outages, GitHub ghost jobs, hosted-runner offload) count as
@@ -168,7 +194,9 @@ verify their original admitted qualification identity (or historical trusted-mai
 workflow SHA) and current attempt. The sealed
 manifest supplies the SDK evidence digest and npm publication decisions; it
 never acknowledges SDK API changes, so supply
-`plugin_sdk_api_acknowledgement` whenever the SDK report contains changes. The
+`plugin_sdk_api_acknowledgement` whenever the SDK report contains changes.
+Review the diff and acknowledge it yourself; stop for the operator only if a
+change looks harmful. The
 publisher accepts only successful FRV and cannot grant a waiver. Explicit
 publisher inputs select publication scope; the candidate helper still validates its explicit
 SDK acknowledgement when needed.
@@ -213,7 +241,7 @@ matching record, and root index may use `split-changelog-release-v1`
 to reuse product proof while qualifying new publication bytes. Any other
 source delta, rename, or deletion returns to the Code SHA loop. Historical
 root-only receipts retain `changelog-only-release-v1`.
-New test qualification defaults to **Q=C**. An explicit reviewed main-ancestor
+New test qualification defaults to **Q=C**. An explicit assessed qualification
 **Q** may instead be admitted through the candidate route while **C** retains
 source, package bytes, version, and baselines. Keep independently trusted **P**
 (admission, aggregate decision, verifier, and publisher) separate. A Q repair
@@ -222,8 +250,13 @@ product source changes. Missing contracts need a deliberate Q repair or candidat
 backport, never a moving-main fallback. Follow the
 [qualification-tooling recovery procedure](../../../docs/reference/full-release-validation/dispatch.md#recover-qualification-tooling-without-changing-the-candidate)
 and the CI skill's [C ≠ Q decision and command guide](../release-openclaw-ci/SKILL.md#repair-release-tooling-without-changing-the-product-c--q).
-Use new Q for workflow/harness/collector repairs, P for admission/verifier/publisher
-repairs, and new C only for changed product bytes. Reuse the explicitly qualified
+Use new Q for changed qualification workflow/harness behavior, P for admission/aggregate/verifier/publisher
+repairs, and new C only for changed product bytes. For a drained FRV with a sealing/collector
+defect, first assess [receipt-backed aggregate recovery](../release-openclaw-ci/SKILL.md#receipt-backed-aggregate-recovery):
+a reviewed P-only repair may authenticate the original admission, C/Q, child receipts,
+and unchanged artifact bytes without a fresh test run, even when same-parent continuation
+cannot restore its plan. Require a successful authenticated recovery aggregate; never
+relabel the original failed parent or bypass publication verification. Reuse the explicitly qualified
 parent through the checklist's `--full-release-validation-run-id` and `--skip-dispatch`;
 its `--workflow-sha` still selects P, and its fresh qualification defaults to Q=C.
 
@@ -243,8 +276,8 @@ invalidated proof. A manager's opportunity notification is not that approval.
 All release channels, including extended-stable, backport applicable release
 tooling and validation changes regardless of product-hotfix severity. Release
 process improvements normally land on both branches, except independent
-qualification-only repairs as described below.
-Workflow, release-script, release-test, `RELEASING.md`, and release-skill changes
+qualification-only repairs and Q-only grant data as described below.
+Executable workflow, release-script, release-test, `RELEASING.md`, and release-skill changes
 normally merge to `main` first, then get cherry-picked (`-x`) directly onto the
 canonical release branch for the next candidate or patch, without a backport PR.
 Urgent release-first repairs follow [the new-fix route](#backports-and-new-fixes).

@@ -233,7 +233,11 @@ describe("SidebarUpdateCard", () => {
       ),
     });
     try {
-      element.action()!.click();
+      await element.expand();
+      const trigger = native
+        ? element.action()
+        : element.find<HTMLButtonElement>(".sidebar-issues-panel__action");
+      trigger!.click();
       // Bridge loss must happen before the preflight promise continues.
       if (bridgeLost) {
         Reflect.deleteProperty(window, "webkit");
@@ -283,9 +287,10 @@ describe("SidebarUpdateCard", () => {
               text: "Latest target unavailable.",
             },
           });
-          for (const selector of ['[role="alert"]', "summary"]) {
-            expect(element.find(selector)?.textContent).toContain("Latest target unavailable.");
-          }
+          expect(element.find('summary [role="alert"]')?.textContent).toContain(
+            "Latest target unavailable.",
+          );
+          expect(element.element.querySelectorAll('[role="alert"]')).toHaveLength(1);
         }
       }
       if (!bridgeLost) {
@@ -494,7 +499,10 @@ describe("SidebarUpdateCard", () => {
       const element = await mount(null, { compact, updateRun: createUpdateRunFixture() });
       expect(element.element.textContent).toContain("OpenClaw update in progress: staging");
       expect(element.element.textContent).toContain("phases complete");
-      const action = element.action()!;
+      const actionSelector = compact
+        ? ".sidebar-issues-panel__action"
+        : ".sidebar-update-card__action";
+      const action = element.find<HTMLButtonElement>(actionSelector)!;
       const details = element.find("details");
       if (details) {
         details.open = true;
@@ -507,7 +515,7 @@ describe("SidebarUpdateCard", () => {
         updateRun: createUpdateRunFixture({ phase: "verifying", updatedAtMs: 3 }),
       });
       expect(element.element.textContent).toContain("OpenClaw update in progress: verifying");
-      expect(element.find(".sidebar-update-card__action")).toBe(action);
+      expect(element.find(actionSelector)).toBe(action);
       expect(document.activeElement).toBe(action);
       if (details) {
         expect(element.find("details")).toBe(details);
@@ -521,12 +529,12 @@ describe("SidebarUpdateCard", () => {
       await element.update({ updateRun: completedRun });
       expect(element.element.textContent).toContain("OpenClaw updated to 2026.9.2");
       await element.update({ updateRunAcknowledged: true });
-      expect(element.find(".sidebar-update-card")).toBeNull();
+      expect(element.find(actionSelector)).toBeNull();
       await element.update({
         updateRunAcknowledged: false,
         updateRun: { ...completedRun, finishedAtMs: Date.now() - 24 * 60 * 60 * 1000 },
       });
-      expect(element.find(".sidebar-update-card")).toBeNull();
+      expect(element.find(actionSelector)).toBeNull();
     },
   );
 
@@ -815,13 +823,11 @@ describe("SidebarUpdateCard", () => {
     });
 
     expect(element.find(".sidebar-issues-panel__entity")?.textContent).toBe(
-      "✅ OpenClaw updated to 2026.9.2 (from 2026.9.1).",
+      "OpenClaw updated to 2026.9.2 (from 2026.9.1).",
     );
     await element.expand();
     expect(element.find("[role='timer']")).toBeNull();
-    expect(element.find(".sidebar-update-card__title")?.textContent).toBe(
-      "✅ OpenClaw updated to 2026.9.2 (from 2026.9.1).",
-    );
+    expect(element.find(".sidebar-issues-panel__action")?.textContent).toBe("View update details");
   });
 
   it("keeps a finishing countdown in view when opened beside a failed run", async () => {

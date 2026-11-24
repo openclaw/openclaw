@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { updateSkillEnabled, type SkillsState } from "../../lib/skills/index.ts";
-import { getRenderedModalDialog, installDialogPolyfill } from "../../test-helpers/modal-dialog.ts";
+import { installDialogPolyfill } from "../../test-helpers/modal-dialog.ts";
 import { cleanupSolid } from "../../test-helpers/mount-solid.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import { createSkillsMutationPresentation } from "./mutation-presentation.ts";
@@ -115,7 +115,6 @@ describe("Skills mutation presentation", () => {
         mounted.context.settingsAgentSelection.set("research");
         await waitForFast(() => {
           expect(mounted.page.textContent).not.toContain("Original inventory");
-          expect(mounted.page.querySelector(".skill-reader-dialog")).toBeNull();
         });
       } else {
         await mounted.router.navigate("skills", mounted.context);
@@ -141,7 +140,7 @@ describe("Skills mutation presentation", () => {
           expect(current?.checked).toBe(true);
           expect(current?.getAttribute("aria-disabled")).toBeNull();
         });
-        successorDialog = mounted.page.querySelector(".skill-reader-dialog");
+        successorDialog = mounted.page.querySelector(".skill-page");
       }
       if (change !== "agent") {
         pending.resolve({});
@@ -149,7 +148,7 @@ describe("Skills mutation presentation", () => {
       await pending.promise;
       if (change !== "route") {
         await waitForFast(() => {
-          expect(mounted.page.querySelector(".skill-reader-dialog")).toBe(successorDialog);
+          expect(mounted.page.querySelector(".skill-page")).toBe(successorDialog);
           const current = mounted.page.querySelector<HTMLInputElement>('input[role="switch"]');
           expect(current?.checked).toBe(true);
           expect(current?.getAttribute("aria-disabled")).toBeNull();
@@ -197,9 +196,11 @@ describe("Skills mutation presentation", () => {
         ).not.toBeNull(),
       );
       page.querySelector<HTMLButtonElement>(".plugins-item__detail-button")!.click();
-      await waitForFast(() => expect(page.querySelector(".skill-reader-dialog")).not.toBeNull());
-      const dialog = page.querySelector(".skill-reader-dialog")!;
-      const { dialog: nativeDialog } = await getRenderedModalDialog(page);
+      await waitForFast(() => expect(page.querySelector(".skill-page")).not.toBeNull());
+      await waitForFast(() =>
+        expect(page.querySelector('.skill-page input[role="switch"]')).not.toBeNull(),
+      );
+      const dialog = page.querySelector(".skill-page")!;
       const toggle = dialog.querySelector<HTMLInputElement>('input[role="switch"]')!;
       const disabledChanges: MutationRecord[] = [];
       const observer = new MutationObserver((records) => disabledChanges.push(...records));
@@ -213,7 +214,7 @@ describe("Skills mutation presentation", () => {
         expect(toggle.disabled).toBe(false);
         expect(document.activeElement).toBe(toggle);
         expect(toggle.parentElement!.parentElement!.textContent).toContain("Disabled");
-        expect(nativeDialog.open).toBe(true);
+        expect(page.querySelector(".skill-page")).toBe(dialog);
       });
       toggle.click();
       expect(request.mock.calls.filter(([method]) => method === "skills.update")).toHaveLength(1);
@@ -231,14 +232,14 @@ describe("Skills mutation presentation", () => {
         expect(toggle.disabled).toBe(false);
         expect(document.activeElement).toBe(toggle);
       });
-      expect(page.querySelector(".skill-reader-dialog")).toBe(dialog);
+      expect(page.querySelector(".skill-page")).toBe(dialog);
       disabledChanges.push(...observer.takeRecords());
       expect(disabledChanges).toHaveLength(0);
       expect(dialog.textContent).toContain(
         outcome === "success" ? "Skill disabled" : "Synthetic rejected skill update",
       );
       if (outcome === "success") {
-        nativeDialog.close();
+        page.querySelector<HTMLAnchorElement>(".plugins-settings-breadcrumb__parent")!.click();
         report = createReport([skill]);
         connection.publishEvent({ type: "event", event: "skills.changed" });
         await waitForFast(() =>
@@ -293,7 +294,7 @@ describe("Skills mutation presentation", () => {
           expect(page.querySelector(".plugins-item__detail-button")).not.toBeNull(),
         );
         page.querySelector<HTMLButtonElement>(".plugins-item__detail-button")!.click();
-        await waitForFast(() => expect(page.querySelector(".skill-reader-dialog")).not.toBeNull());
+        await waitForFast(() => expect(page.querySelector(".skill-page")).not.toBeNull());
         if (kind === "key") {
           const input = page.querySelector<HTMLInputElement>('input[type="password"]')!;
           input.value = "synthetic-replacement";
@@ -329,8 +330,8 @@ describe("Skills mutation presentation", () => {
   );
 });
 
-describe("Installed skill dialog", () => {
-  it("reads the skill card on open and when its revision changes in the open dialog", async () => {
+describe("Installed skill page", () => {
+  it("reads the skill card on open and when its revision changes on the open page", async () => {
     const report = createReport([
       createSkill({
         primaryEnv: undefined,
@@ -346,7 +347,7 @@ describe("Installed skill dialog", () => {
           skillKey: "repo-skill",
           path: "/tmp/skill/skill-card.md",
           sizeBytes: cardReads === 1 ? 12 : 24,
-          content: cardReads === 1 ? "# Card\n\nOpened with the dialog." : "# Updated skill card",
+          content: cardReads === 1 ? "# Card\n\nOpened with the page." : "# Updated skill card",
         };
       }
       if (method === "skills.status") {
@@ -365,12 +366,12 @@ describe("Installed skill dialog", () => {
     expect(request.mock.calls.some(([method]) => method === "skills.skillCard")).toBe(false);
     page.querySelector<HTMLButtonElement>(".plugins-item__detail-button")!.click();
     await waitForFast(() =>
-      expect(page.querySelector(".skill-reader-dialog .sidebar-markdown")?.textContent).toContain(
-        "Opened with the dialog.",
+      expect(page.querySelector(".skill-page .sidebar-markdown")?.textContent).toContain(
+        "Opened with the page.",
       ),
     );
     expect(cardReads).toBe(1);
-    const dialog = page.querySelector(".skill-reader-dialog");
+    const skillPage = page.querySelector(".skill-page");
     const refreshed = createReport([
       createSkill({
         primaryEnv: undefined,
@@ -379,11 +380,11 @@ describe("Installed skill dialog", () => {
     ]);
     publishRouteData({ report: refreshed });
     await waitForFast(() => {
-      expect(dialog?.querySelector(".sidebar-markdown")?.textContent ?? "").toContain(
+      expect(skillPage?.querySelector(".sidebar-markdown")?.textContent ?? "").toContain(
         "Updated skill card",
       );
     });
-    expect(page.querySelector(".skill-reader-dialog")).toBe(dialog);
+    expect(page.querySelector(".skill-page")).toBe(skillPage);
     expect(cardReads).toBe(2);
   });
 });

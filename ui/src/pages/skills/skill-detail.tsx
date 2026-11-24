@@ -14,7 +14,7 @@ import type { SkillStatusEntry } from "../../api/types.ts";
 import { handleMarkdownCodeBlockClick } from "../../components/markdown-code-blocks.ts";
 import { Icon } from "../../components/solid/icon.tsx";
 import { InlineAlert } from "../../components/solid/inline-alert.tsx";
-import { SettingsStatus, SettingsToggle } from "../../components/solid/settings-ui.tsx";
+import { SettingsStatus } from "../../components/solid/settings-ui.tsx";
 import { formatUiError, formatUiExternalText } from "../../lib/format-error.ts";
 import { resolveSafeExternalUrl } from "../../lib/open-external-url.ts";
 import { t } from "../../lib/reactive/i18n.ts";
@@ -25,16 +25,17 @@ import {
 } from "../../lib/skills/api-key-source.ts";
 import type { ClawHubSkillSecurityVerdict } from "../../lib/skills/index.ts";
 import { PluginReadmeWell } from "../plugins/detail-shell.tsx";
+import { MarkdownContent } from "./skill-markdown.tsx";
 import {
+  SkillEnabledSwitch,
   SkillLinkFact,
   SkillMonoFact,
   SkillPageSection,
   SkillSecurityFact,
-  SkillTile,
   type SkillSecurityTone,
 } from "./skill-page-parts.tsx";
-import { MarkdownContent, SkillReaderDialog } from "./skill-reader-dialog.tsx";
-import { verdictForSkill, verdictStatus } from "./skill-status.tsx";
+import { SkillPageShell } from "./skill-page-shell.tsx";
+import { SkillTile, verdictForSkill, verdictStatus } from "./skill-status.tsx";
 import type { SkillsProps } from "./view-types.ts";
 
 type BinRow = { kind: "bin"; names: string[]; missing: boolean; install: boolean };
@@ -111,14 +112,13 @@ function verdictTone(
       : "unknown";
 }
 
-export function SkillDetail(props: {
+export function InstalledSkillPage(props: {
   skill: SkillStatusEntry;
   view: SkillsProps;
   controlsLocked: boolean;
   installLocked: boolean;
 }) {
   const updateLocked = createMemo(() => props.controlsLocked || !props.view.canUpdate);
-  const toggleSaving = () => props.view.toggleSavingSkillKey === props.skill.skillKey;
   const active = () =>
     props.view.state.skillOperation?.kind === "skill" &&
     props.view.state.skillOperation.skillKey === props.skill.skillKey;
@@ -191,252 +191,224 @@ export function SkillDetail(props: {
     </div>
   );
   return (
-    <SkillReaderDialog
-      label={props.skill.name}
-      onClose={() => props.view.onDetailClose()}
-      width="960px"
-      page={{
-        icon: <SkillTile class="skill-page__tile" emoji={props.skill.emoji} />,
-        byline: (
-          <>
-            <span>{linkedOwner() ?? props.skill.source}</span>
-            <Show when={!props.skill.disabled}>
-              <SettingsStatus
-                kind={available() ? "ok" : "warn"}
-                label={t(available() ? "skillsPage.tabs.ready" : "skillsPage.tabs.needsSetup")}
-              />
-            </Show>
-          </>
-        ),
-        actions: (
-          <label class="plugin-catalog-detail__enabled">
-            <span aria-hidden="true">
-              {t(props.skill.disabled ? "skillsPage.disabled" : "skillsPage.enabled")}
-            </span>
-            <SettingsToggle
-              checked={!props.skill.disabled}
-              saving={toggleSaving()}
-              disabled={
-                !props.view.canUpdate ||
-                (props.view.toggleDisabled ?? props.view.loading) ||
-                (!toggleSaving() && props.controlsLocked)
-              }
-              ariaLabel={props.skill.name}
-              onChange={() => props.view.onToggle(props.skill.skillKey, props.skill.disabled)}
+    <SkillPageShell
+      view={props.view}
+      name={props.skill.name}
+      icon={<SkillTile class="skill-page__tile" emoji={props.skill.emoji} />}
+      identity={
+        <>
+          <span>{linkedOwner() ?? props.skill.source}</span>
+          <Show when={!props.skill.disabled}>
+            <SettingsStatus
+              kind={available() ? "ok" : "warn"}
+              label={t(available() ? "skillsPage.tabs.ready" : "skillsPage.tabs.needsSetup")}
             />
-          </label>
-        ),
-      }}
-      title={<span class="exec-approval-title">{props.skill.name}</span>}
-    >
-      <div class="oc-dialog__body skill-reader-dialog__body">
-        <div class="skill-page__columns">
-          <div class="skill-page__main">
-            <Show when={!props.view.canUpdate}>
-              <p class="skill-detail__note">{t("skillsPage.updateRequiresAdmin")}</p>
-            </Show>
-            <Show when={props.skill.clawhub?.status === "invalid" ? props.skill.clawhub : null}>
-              {(link) => (
-                <InlineAlert tone="danger">
-                  <div class="skill-detail__warning-title">{t("skillsPage.invalidLink")}</div>
-                  <div>{formatUiExternalText(link().reason)}</div>
-                </InlineAlert>
-              )}
-            </Show>
-            <Show when={reasons().length > 0}>
-              <p class="skill-detail__note">
-                {t("skillsPage.reason", { reasons: reasons().join(", ") })}
-              </p>
-            </Show>
-            <Show when={props.skill.description}>
-              <p class="skill-page__lead">{props.skill.description}</p>
-            </Show>
-            <Show when={rows().length > 0}>
-              <SkillPageSection title={t("skillsPage.requirements")}>
-                <div class="skill-requirements">
-                  <For each={rows()}>
-                    {(row) => (
-                      <Switch>
-                        <Match when={row.kind === "bin" ? row : null}>
-                          {(bin) => (
-                            <Requirement
-                              icon="terminal"
-                              mono
-                              title={bin().names.join(" / ")}
-                              detail={t("skillsPage.binary")}
-                              control={
-                                <Show
-                                  when={bin().install ? installOption() : null}
-                                  fallback={<RequirementState missing={bin().missing} />}
-                                >
-                                  {(option) => (
-                                    <button
-                                      type="button"
-                                      class="btn"
-                                      disabled={props.installLocked}
-                                      onClick={() =>
-                                        props.view.onInstall(
-                                          props.skill.skillKey,
-                                          props.skill.name,
-                                          option().id,
-                                        )
-                                      }
-                                    >
-                                      {active() ? t("skillsPage.installing") : option().label}
-                                    </button>
-                                  )}
-                                </Show>
-                              }
-                            />
-                          )}
-                        </Match>
-                        <Match when={row.kind === "key"}>
+          </Show>
+        </>
+      }
+      actions={<SkillEnabledSwitch skill={props.skill} view={props.view} />}
+      notices={
+        <>
+          <Show when={!props.view.canUpdate}>
+            <p class="skill-page__note">{t("skillsPage.updateRequiresAdmin")}</p>
+          </Show>
+          <Show when={props.skill.clawhub?.status === "invalid" ? props.skill.clawhub : null}>
+            {(link) => (
+              <InlineAlert tone="danger">
+                <div class="skill-page__warning-title">{t("skillsPage.invalidLink")}</div>
+                <div>{formatUiExternalText(link().reason)}</div>
+              </InlineAlert>
+            )}
+          </Show>
+          <Show when={reasons().length > 0}>
+            <p class="skill-page__note">
+              {t("skillsPage.reason", { reasons: reasons().join(", ") })}
+            </p>
+          </Show>
+        </>
+      }
+      summary={props.skill.description || undefined}
+      panel={
+        <>
+          <Show when={rows().length > 0}>
+            <SkillPageSection title={t("skillsPage.requirements")}>
+              <div class="skill-requirements">
+                <For each={rows()}>
+                  {(row) => (
+                    <Switch>
+                      <Match when={row.kind === "bin" ? row : null}>
+                        {(bin) => (
                           <Requirement
-                            icon="key"
-                            wide
-                            title={t("skillsPage.apiKey")}
-                            detail={
+                            icon="terminal"
+                            mono
+                            title={bin().names.join(" / ")}
+                            detail={t("skillsPage.binary")}
+                            control={
                               <Show
-                                when={homepageHref()}
-                                fallback={
-                                  <span class="skill-requirement__env">
-                                    {props.skill.primaryEnv}
-                                  </span>
-                                }
+                                when={bin().install ? installOption() : null}
+                                fallback={<RequirementState missing={bin().missing} />}
                               >
-                                {(href) => (
-                                  <a
-                                    class="skill-requirement__link"
-                                    href={href()}
-                                    target="_blank"
-                                    rel="noopener noreferrer"
+                                {(option) => (
+                                  <button
+                                    type="button"
+                                    class="btn"
+                                    disabled={props.installLocked}
+                                    onClick={() =>
+                                      props.view.onInstall(
+                                        props.skill.skillKey,
+                                        props.skill.name,
+                                        option().id,
+                                      )
+                                    }
                                   >
-                                    <span>{t("skillsPage.getYourKey")}</span>
-                                    <Icon name="arrowUpRight" />
-                                  </a>
+                                    {active() ? t("skillsPage.installing") : option().label}
+                                  </button>
                                 )}
                               </Show>
                             }
-                            control={
-                              <div class="skill-requirement__key">
-                                <input
-                                  class="settings-input"
-                                  type="password"
-                                  required
-                                  autocomplete="off"
-                                  aria-label={`${t("skillsPage.apiKey")} (${props.skill.primaryEnv})`}
-                                  disabled={updateLocked() || keyLocked()}
-                                  placeholder={keyPlaceholder()}
-                                  value={editValue()}
-                                  onInput={(event) =>
-                                    props.view.onEdit(
-                                      props.skill.skillKey,
-                                      event.currentTarget.value,
-                                    )
-                                  }
-                                />
-                                <button
-                                  type="button"
-                                  class="btn primary"
-                                  disabled={updateLocked() || keyLocked() || !editValue().trim()}
-                                  onClick={() =>
-                                    props.view.onSaveKey(
-                                      props.skill.skillKey,
-                                      skillApiKeyReplaceable,
-                                    )
-                                  }
-                                >
-                                  {t("skillsPage.saveKey")}
-                                </button>
-                              </div>
-                            }
                           />
-                        </Match>
-                        <Match when={row.kind !== "bin" && row.kind !== "key" ? row : null}>
-                          {(fact) => (
-                            <Requirement
-                              icon={REQUIREMENT_ICONS[fact().kind]}
-                              mono
-                              title={fact().name}
-                              detail={t(REQUIREMENT_LABELS[fact().kind])}
-                              control={<RequirementState missing={fact().missing} />}
-                            />
-                          )}
-                        </Match>
-                      </Switch>
-                    )}
-                  </For>
-                </div>
-                <Show when={keyLoadError()}>
-                  {(error) => (
-                    <InlineAlert
-                      tone="danger"
-                      action={
-                        <button
-                          type="button"
-                          class="btn btn--sm"
-                          onClick={() => props.view.apiKeyConfig.retry()}
-                        >
-                          {t("skillsPage.retry")}
-                        </button>
-                      }
-                    >
-                      {t("skillsPage.apiKeyConfigError", { error: formatUiExternalText(error()) })}
-                    </InlineAlert>
+                        )}
+                      </Match>
+                      <Match when={row.kind === "key"}>
+                        <Requirement
+                          icon="key"
+                          wide
+                          title={t("skillsPage.apiKey")}
+                          detail={
+                            <Show
+                              when={homepageHref()}
+                              fallback={
+                                <span class="skill-requirement__env">{props.skill.primaryEnv}</span>
+                              }
+                            >
+                              {(href) => (
+                                <a
+                                  class="skill-requirement__link"
+                                  href={href()}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                >
+                                  <span>{t("skillsPage.getYourKey")}</span>
+                                  <Icon name="arrowUpRight" />
+                                </a>
+                              )}
+                            </Show>
+                          }
+                          control={
+                            <div class="skill-requirement__key">
+                              <input
+                                class="settings-input"
+                                type="password"
+                                required
+                                autocomplete="off"
+                                aria-label={`${t("skillsPage.apiKey")} (${props.skill.primaryEnv})`}
+                                disabled={updateLocked() || keyLocked()}
+                                placeholder={keyPlaceholder()}
+                                value={editValue()}
+                                onInput={(event) =>
+                                  props.view.onEdit(props.skill.skillKey, event.currentTarget.value)
+                                }
+                              />
+                              <button
+                                type="button"
+                                class="btn primary"
+                                disabled={updateLocked() || keyLocked() || !editValue().trim()}
+                                onClick={() =>
+                                  props.view.onSaveKey(props.skill.skillKey, skillApiKeyReplaceable)
+                                }
+                              >
+                                {t("skillsPage.saveKey")}
+                              </button>
+                            </div>
+                          }
+                        />
+                      </Match>
+                      <Match when={row.kind !== "bin" && row.kind !== "key" ? row : null}>
+                        {(fact) => (
+                          <Requirement
+                            icon={REQUIREMENT_ICONS[fact().kind]}
+                            mono
+                            title={fact().name}
+                            detail={t(REQUIREMENT_LABELS[fact().kind])}
+                            control={<RequirementState missing={fact().missing} />}
+                          />
+                        )}
+                      </Match>
+                    </Switch>
                   )}
+                </For>
+              </div>
+              <Show when={keyLoadError()}>
+                {(error) => (
+                  <InlineAlert
+                    tone="danger"
+                    action={
+                      <button
+                        type="button"
+                        class="btn btn--sm"
+                        onClick={() => props.view.apiKeyConfig.retry()}
+                      >
+                        {t("skillsPage.retry")}
+                      </button>
+                    }
+                  >
+                    {t("skillsPage.apiKeyConfigError", { error: formatUiExternalText(error()) })}
+                  </InlineAlert>
+                )}
+              </Show>
+            </SkillPageSection>
+          </Show>
+          <Show when={message()}>
+            {(value) => (
+              <InlineAlert tone={value().kind === "error" ? "danger" : "success"}>
+                {formatUiExternalText(value().message)}
+              </InlineAlert>
+            )}
+          </Show>
+          <Show when={props.skill.skillCard?.present}>
+            <InstalledSkillCard skill={props.skill} view={props.view} />
+          </Show>
+        </>
+      }
+      facts={
+        <dl class="plugin-metadata__facts plugin-metadata__facts--rail skill-page__facts">
+          <InstalledSecurityFact skill={props.skill} view={props.view} verdict={verdict()} />
+          <Show when={props.skill.clawhub?.status === "linked" ? props.skill.clawhub : null}>
+            {(link) => (
+              <div class="skill-page__fact--wide">
+                <dt>{t("skillsPage.package")}</dt>
+                <dd>
+                  <SkillMonoFact
+                    value={`${link().ownerHandle ? `@${link().ownerHandle}/` : ""}${link().slug}@${link().installedVersion}`}
+                  />
+                </dd>
+              </div>
+            )}
+          </Show>
+          <div class="skill-page__fact--wide">
+            <dt>{t("skillsPage.source")}</dt>
+            <dd class="skill-page__fact-stack">
+              <span>
+                {props.skill.source}
+                <Show when={props.skill.bundled && props.skill.source !== "openclaw-bundled"}>
+                  {" · "}
+                  {t("skillStatus.bundled")}
                 </Show>
-              </SkillPageSection>
-            </Show>
-            <Show when={message()}>
-              {(value) => (
-                <InlineAlert tone={value().kind === "error" ? "danger" : "success"}>
-                  {formatUiExternalText(value().message)}
-                </InlineAlert>
-              )}
-            </Show>
-            <Show when={props.skill.skillCard?.present}>
-              <InstalledSkillCard skill={props.skill} view={props.view} />
-            </Show>
+              </span>
+              <SkillMonoFact value={props.skill.filePath} segments={2} />
+            </dd>
           </div>
-          <dl class="plugin-metadata__facts plugin-metadata__facts--rail skill-page__facts">
-            <InstalledSecurityFact skill={props.skill} view={props.view} verdict={verdict()} />
-            <Show when={props.skill.clawhub?.status === "linked" ? props.skill.clawhub : null}>
-              {(link) => (
-                <div class="skill-page__fact--wide">
-                  <dt>{t("skillsPage.package")}</dt>
-                  <dd>
-                    <SkillMonoFact
-                      value={`${link().ownerHandle ? `@${link().ownerHandle}/` : ""}${link().slug}@${link().installedVersion}`}
-                    />
-                  </dd>
-                </div>
-              )}
-            </Show>
-            <div class="skill-page__fact--wide">
-              <dt>{t("skillsPage.source")}</dt>
-              <dd class="skill-page__fact-stack">
-                <span>
-                  {props.skill.source}
-                  <Show when={props.skill.bundled && props.skill.source !== "openclaw-bundled"}>
-                    {" · "}
-                    {t("skillStatus.bundled")}
-                  </Show>
-                </span>
-                <SkillMonoFact value={props.skill.filePath} segments={2} />
-              </dd>
-            </div>
-            <Show when={homepageHref()}>
-              {(href) => (
-                <div class="skill-page__fact--wide">
-                  <dt>{t("skillsPage.homepage")}</dt>
-                  <SkillLinkFact href={href()} />
-                </div>
-              )}
-            </Show>
-          </dl>
-        </div>
-      </div>
-    </SkillReaderDialog>
+          <Show when={homepageHref()}>
+            {(href) => (
+              <div class="skill-page__fact--wide">
+                <dt>{t("skillsPage.homepage")}</dt>
+                <SkillLinkFact href={href()} />
+              </div>
+            )}
+          </Show>
+        </dl>
+      }
+    />
   );
 }
 
@@ -545,7 +517,7 @@ function InstalledSkillCard(props: { skill: SkillStatusEntry; view: SkillsProps 
       </Show>
     );
   };
-  // The dialog reads the card when it opens; the block keeps the clamped card's height meanwhile.
+  // The page reads the card when it opens; the block keeps the clamped card's height meanwhile.
   return (
     <SkillPageSection title={t("skillsPage.skillCard")}>
       <Loading
@@ -568,7 +540,7 @@ function InstalledSkillCard(props: { skill: SkillStatusEntry; view: SkillsProps 
                   <button
                     type="button"
                     class="btn btn--sm"
-                    onClick={() => props.view.onDetailTabChange("card")}
+                    onClick={() => props.view.onSkillCardRetry(props.skill.skillKey)}
                   >
                     {t("skillsPage.retry")}
                   </button>

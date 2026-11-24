@@ -39,13 +39,32 @@ export async function sendDm({
   return sendDmWithStory({ ...params, story: markdownToStory(text), kind: "text" });
 }
 
-export async function sendDmWithStory({
+export async function sendDmWithStory({ toShip, ...params }: SendStoryParams) {
+  return sendChatWithStory({ ...params, target: { kind: "dm", ship: toShip } });
+}
+
+type SendClubStoryParams = Omit<SendStoryParams, "toShip"> & { clubId: string };
+
+export async function sendClubMessage({
+  text,
+  ...params
+}: Omit<SendClubStoryParams, "story" | "kind"> & { text: string }) {
+  return sendClubMessageWithStory({ ...params, story: markdownToStory(text), kind: "text" });
+}
+
+export async function sendClubMessageWithStory({ clubId, ...params }: SendClubStoryParams) {
+  return sendChatWithStory({ ...params, target: { kind: "club", clubId } });
+}
+
+async function sendChatWithStory({
   api,
   fromShip,
-  toShip,
+  target,
   story,
   kind = "unknown",
-}: SendStoryParams) {
+}: Omit<SendStoryParams, "toShip"> & {
+  target: { kind: "dm"; ship: string } | { kind: "club"; clubId: string };
+}) {
   const sentAt = Date.now();
   const idUd = scot("ud", da.fromUnix(sentAt));
   const id = `${fromShip}/${idUd}`;
@@ -62,21 +81,22 @@ export async function sendDmWithStory({
     },
   };
 
-  const action = {
-    ship: toShip,
-    diff: { id, delta },
-  };
+  const diff = { id, delta };
+  const conversationId = target.kind === "dm" ? target.ship : `club:${target.clubId}`;
 
   await api.poke({
     app: "chat",
-    mark: "chat-dm-action",
-    json: action,
+    mark: target.kind === "dm" ? "chat-dm-action" : "chat-club-action",
+    json:
+      target.kind === "dm"
+        ? { ship: target.ship, diff }
+        : { id: target.clubId, diff: { uid: "0v0", delta: { writ: diff } } },
   });
 
   return {
     channel: "tlon",
     messageId: id,
-    receipt: createTlonSendReceipt({ messageId: id, conversationId: toShip, kind }),
+    receipt: createTlonSendReceipt({ messageId: id, conversationId, kind }),
   };
 }
 

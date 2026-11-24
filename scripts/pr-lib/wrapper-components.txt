@@ -666,6 +666,7 @@ src/config/gateway-portal-ingress.ts
 src/config/gateway-public-origin.ts
 src/config/github-identity-profile-id.ts
 src/config/implicit-agent-roster.ts
+src/config/implicit-primary-era.ts
 src/config/include-write-boundary.ts
 src/config/includes.ts
 src/config/io.audit.ts
@@ -749,6 +750,7 @@ src/config/redact-snapshot.raw.ts
 src/config/redact-snapshot.secret-ref.ts
 src/config/redact-snapshot.ts
 src/config/repository-branch-prefix.ts
+src/config/read-dependencies.ts
 src/config/resolution-facts.ts
 src/config/runtime-config-capture-state.ts
 src/config/runtime-config-publication.ts
@@ -924,6 +926,7 @@ src/config/zod-schema.session.ts
 src/config/zod-schema.storage.ts
 src/config/zod-schema.telemetry.ts
 src/config/zod-schema.ts
+src/config/zod-schema.tts-auto.ts
 src/cron/automation-result.ts
 src/cron/completion-status.ts
 src/cron/execution-error-constants.ts
@@ -1241,6 +1244,7 @@ src/infra/process-exit-cleanup.ts
 src/infra/prototype-keys.ts
 src/infra/resolve-system-bin.ts
 src/infra/restart-stale-pids.ts
+src/infra/restart-lifecycle.worker.ts
 src/infra/restart-recovery-errors.ts
 src/infra/retry-attempt-errors.ts
 src/infra/retry.ts
@@ -1256,6 +1260,7 @@ src/infra/runtime-process-url.ts
 src/infra/runtime-profile.ts
 src/infra/runtime-worker-generation.ts
 src/infra/runtime-worker-loader.mjs
+src/infra/runtime-worker-process-generation.ts
 src/infra/runtime-worker-url.ts
 src/infra/safe-cwd.ts
 src/infra/sealed-runtime-registry.ts
@@ -1525,6 +1530,7 @@ src/infra/windows-private-directory.ts
 src/infra/windows-process-census.ts
 src/infra/windows-process-start.ts
 src/infra/windows-user-sid.ts
+src/infra/worker-census.ts
 src/infra/worker-cpu.ts
 src/infra/worker-diagnostic-script.ts
 src/infra/worker-idle-gc.ts
@@ -1690,6 +1696,7 @@ src/plugins/doctor-contract-relevance.ts
 src/plugins/loader-channel-setup.ts
 src/plugins/doctor-session-route-state-owner-types.ts
 src/plugins/enable.ts
+src/plugins/git-source-spec.ts
 src/plugins/hardlink-policy.ts
 src/plugins/hook-policy-decisions.ts
 src/plugins/host-hook-cleanup-result.ts
@@ -1930,6 +1937,7 @@ src/process/child-process.ts
 src/process/command-error.ts
 src/process/command-process-identity.ts
 src/process/command-reservation-census.ts
+src/process/command-stdin-file.ts
 src/process/darwin-process-inspection.ts
 src/process/exec-output.ts
 src/process/exec-result.ts
@@ -2183,6 +2191,7 @@ src/state/openclaw-agent-db.ts
 src/state/openclaw-agent-db.wal.ts
 src/state/openclaw-agent-execution-authority.ts
 src/state/openclaw-agent-execution-cleanup.ts
+src/state/openclaw-agent-execution-cleanup.worker.ts
 src/state/openclaw-agent-execution-contract.ts
 src/state/openclaw-agent-execution-native.ts
 src/state/openclaw-agent-execution-owner.ts
@@ -2291,6 +2300,7 @@ src/state/openclaw-state-db-schema-v38-repository-disk.ts
 src/state/openclaw-state-db-schema-v39-worker-retention.ts
 src/state/openclaw-state-db-schema-v40-worker-provision-source.ts
 src/state/openclaw-state-db-schema-v40-lazy-additions.ts
+src/state/openclaw-state-db-schema-v41-approval-profile.ts
 src/state/openclaw-state-db-schema-v22-columns.ts
 src/state/openclaw-state-db-schema-v24-indexes.ts
 src/state/openclaw-state-db-schema-v26-layout.ts
@@ -2633,6 +2643,7 @@ packages/ai/src/transports/openai-responses-service-tier.ts
 packages/ai/src/transports/openai-responses-stream-errors.ts
 packages/ai/src/transports/transport-stream-shared.ts
 packages/ai/src/types.ts
+packages/ai/src/utils/compaction-threshold.ts
 packages/ai/src/utils/credential-redaction.ts
 packages/ai/src/utils/deferred-event-buffer.ts
 packages/ai/src/utils/diagnostics.ts
@@ -3069,3 +3080,12 @@ src/config/sessions/session-context-seed.ts
 src/agents/code-mode-session-store-replay.ts
 src/config/sessions/session-transcript-maintenance-suffix.ts
 src/state/user-channel-authorization-reference.ts
+src/infra/gateway-resource-profile.ts
+src/infra/shared-worker-host-endpoint.ts
+src/infra/shared-worker-host.ts
+src/infra/shared-worker-host.types.ts
+src/infra/shared-worker-host.worker.ts
+src/infra/sqlite-worker-backend-loader.ts
+packages/worker-runtime/src/worker-task-pool-memory.ts
+src/infra/worker-memory-budget-ledger.ts
+src/infra/worker-memory-budget.ts

@@ -186,6 +186,7 @@ export function modelOptionSearchRow(
       options.entry.presentation,
     ).toLocaleLowerCase(),
     reference: options.entry.value,
+    recommended: options.entry.recommended,
     selected,
     hasShortcut: !selected,
     disabled:

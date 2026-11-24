@@ -62,6 +62,8 @@ export async function continueSessionQueuedInputs(
     assertCurrent: () => void;
     /** Ends every row with this cause instead of replaying it. */
     endCause?: SessionPendingInputEndCause;
+    /** A recovered source owner, rather than human chat, resumes this exact input. */
+    ownsInput?: (row: SessionPendingInputRow) => boolean;
   },
 ): Promise<DeferredQueuedInputReplay | undefined> {
   const assertCurrent = () => {
@@ -88,6 +90,9 @@ export async function continueSessionQueuedInputs(
       if (readMessageClientSources(message).some(isBrowserCopilotClient)) {
         throw new Error("Browser-bound queued input requires a fresh browser send");
       }
+      if (options.ownsInput?.(row)) {
+        return undefined;
+      }
       if (sender?.type !== "profile") {
         throw new Error("Queued input sender has no current human principal");
       }
@@ -95,12 +100,12 @@ export async function continueSessionQueuedInputs(
         throw new Error("Queued input has no original operator source; submit a new request.");
       }
       admitted = await restoreGatewayQueuedOperatorRecovery({
+        agentId: target.agentId,
         context,
         source: decodeQueuedOperatorRecoverySource(JSON.parse(row.origin_source_json)),
         assertCurrent,
       });
       const { authority } = admitted;
-      authority.assertCurrent();
       if (authority.profileId !== sender.id) {
         throw new Error("Queued input operator source does not match its sender.");
       }
@@ -129,14 +134,7 @@ export async function continueSessionQueuedInputs(
             requesterProfile: {
               id: authority.profileId,
               displayName: profile.displayName,
-              isCurrent: () => {
-                try {
-                  authority.assertCurrent();
-                  return true;
-                } catch {
-                  return false;
-                }
-              },
+              isCurrent: () => true,
             },
           },
           () =>
@@ -171,12 +169,6 @@ export async function continueSessionQueuedInputs(
                 signal: options.signal,
                 onExecution: (pending) => {
                   execution = pending;
-                },
-                assertPreparationCurrent: authority.assertCurrent,
-                sessionMutationCommitGuard: authority.assertCurrent,
-                hasCurrentClientAuthority: () => {
-                  authority.assertCurrent();
-                  return true;
                 },
               },
             ),

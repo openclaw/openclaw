@@ -30,7 +30,6 @@ export type {
 } from "./view-shared.tsx";
 
 registerEnglishCatalog(registerSkillWorkshopEnglish);
-export { archivedWorkshopSkills, sortWorkshopSkills } from "./view-shared.tsx";
 
 export function SkillWorkshopView(props: { view: WorkshopView; reads: WorkshopReads }) {
   // Turning the plugin on replaces the focused button with the Workshop; keep focus in the panel.

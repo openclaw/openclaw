@@ -1125,6 +1125,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           OPENCLAW_RELEASE_CI_SUMMARY_VALIDATOR: ${{ needs.resolve_target.result == 'success' && fromJSON(needs.resolve_target.outputs.source_admission_json || '{}').qualificationAdmission != null && format('{0}/qualification-verifier/scripts/release-ci-summary.mjs', github.workspace) || format('{0}/workflow/scripts/release-ci-summary.mjs', github.workspace) }}
+          OPENCLAW_RELEASE_WAIVERS_PATH: ${{ github.workspace }}/workflow/scripts/lib/release-validation-waivers.json
           TARGET_SHA: ${{ needs.resolve_target.outputs.sha }}
           TARGET_VERSION: ${{ needs.resolve_target.outputs.target_version }}
           VALIDATION_PURPOSE: ${{ needs.resolve_target.outputs.validation_purpose }}
@@ -1255,6 +1256,7 @@ jobs:
           QUALIFICATION_INPUTS_JSON: ${{ toJSON(inputs) }}
           PLUGIN_NPM_REQUIRED: ${{ needs.resolve_target.outputs.plugin_npm_preflight_required }}
           OPENCLAW_RELEASE_CI_SUMMARY_VALIDATOR: ${{ needs.resolve_target.result == 'success' && fromJSON(needs.resolve_target.outputs.source_admission_json || '{}').qualificationAdmission != null && format('{0}/qualification-verifier/scripts/release-ci-summary.mjs', github.workspace) || format('{0}/workflow/scripts/release-ci-summary.mjs', github.workspace) }}
+          OPENCLAW_RELEASE_WAIVERS_PATH: ${{ github.workspace }}/workflow/scripts/lib/release-validation-waivers.json
         run: node workflow/scripts/full-release-artifacts.mjs reuse
 
       - name: Summarize evidence reuse
@@ -1529,9 +1531,7 @@ jobs:
               dispatch_id="full-release-validation-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-ci"
               dispatch_run_name="CI ${dispatch_id}"
               ci_release_scope="${CI_RELEASE_SCOPE:-full}"
-              include_android=true
-              if [[ "$ci_release_scope" == "npm-beta" || "$ci_release_scope" == "npm-stable" ]]; then include_android=false; fi
-              args=(-f target_ref="$TARGET_SHA" -f release_scope="$ci_release_scope" -f include_android="$include_android" -f dispatch_id="$dispatch_id")
+              args=(-f target_ref="$TARGET_SHA" -f release_scope="$ci_release_scope" -f dispatch_id="$dispatch_id")
               context_ref="${TARGET_CONTEXT_REF:-$TARGET_REF}"
               context_ref="${context_ref#refs/heads/}"
               context_ref="${context_ref#refs/tags/}"
@@ -2414,6 +2414,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           OPENCLAW_RELEASE_CI_SUMMARY_VALIDATOR: ${{ needs.resolve_target.result == 'success' && fromJSON(needs.resolve_target.outputs.source_admission_json || '{}').qualificationAdmission != null && format('{0}/qualification-verifier/scripts/release-ci-summary.mjs', github.workspace) || format('{0}/scripts/release-ci-summary.mjs', github.workspace) }}
+          OPENCLAW_RELEASE_WAIVERS_PATH: ${{ github.workspace }}/scripts/lib/release-validation-waivers.json
           SOURCE_ADMISSION_JSON: ${{ needs.resolve_target.outputs.source_admission_json }}
           TARGET_CONTEXT_REF: ${{ inputs.target_context_ref || inputs.ref }}
           RELEASE_PROFILE: ${{ inputs.release_profile }}
@@ -2621,7 +2622,9 @@ jobs:
         id: plan
         env:
           GH_TOKEN: ${{ github.token }}
+          RELEASE_STATE_SCRIPT: ${{ needs.resolve_target.result == 'success' && fromJSON(needs.resolve_target.outputs.source_admission_json || '{}').qualificationAdmission != null && format('{0}/qualification-verifier/scripts/full-release-validation-state.mjs', github.workspace) || format('{0}/scripts/full-release-validation-state.mjs', github.workspace) }}
           OPENCLAW_RELEASE_CI_SUMMARY_VALIDATOR: ${{ needs.resolve_target.result == 'success' && fromJSON(needs.resolve_target.outputs.source_admission_json || '{}').qualificationAdmission != null && format('{0}/qualification-verifier/scripts/release-ci-summary.mjs', github.workspace) || format('{0}/scripts/release-ci-summary.mjs', github.workspace) }}
+          OPENCLAW_RELEASE_WAIVERS_PATH: ${{ github.workspace }}/scripts/lib/release-validation-waivers.json
           SOURCE_ADMISSION_JSON: ${{ needs.resolve_target.outputs.source_admission_json }}
           TARGET_CONTEXT_REF: ${{ inputs.target_context_ref || inputs.ref }}
           RELEASE_PROFILE: ${{ inputs.release_profile }}
@@ -2642,7 +2645,7 @@ jobs:
               jq -c . "${GITHUB_WORKSPACE}/full-release-execution-plan-inputs/plan-inputs.json"
             )"
           fi
-          node scripts/full-release-validation-state.mjs plan
+          node "$RELEASE_STATE_SCRIPT" plan
 
       - name: Upload immutable release execution plan
         id: plan_upload
@@ -2674,73 +2677,10 @@ jobs:
           path: full-release-execution-plan
           key: full-release-execution-plan-v2-${{ github.run_id }}
 
-  boat_release_runners:
-    name: Provision Boat release runners
-    needs:
-      [
-        resolve_target,
-        prepare_npm_package,
-        qualify_npm_package,
-        prepare_plugin_npm,
-        prepare_docker_release,
-        release_execution_plan,
-      ]
-    if: always() && !cancelled() && vars.OPENCLAW_CI_RUNNER_BACKEND == 'boat' && needs.resolve_target.result == 'success'
-    runs-on: ubuntu-24.04
-    # Two sequential runners: each can take 15 minutes to provision and 10 to register.
-    timeout-minutes: 55
-    outputs:
-      decision_vm: ${{ steps.decision.outputs.vm }}
-      decision_runner: ${{ steps.decision.outputs.runner }}
-      decision_label: ${{ steps.decision.outputs.label }}
-      drain_vm: ${{ steps.drain.outputs.vm }}
-      drain_runner: ${{ steps.drain.outputs.runner }}
-      drain_label: ${{ steps.drain.outputs.label }}
-    permissions:
-      contents: read
-    steps:
-      - name: Checkout Boat runner tooling
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: ${{ github.sha }}
-          persist-credentials: false
-      - name: Setup Node environment
-        uses: ./.github/actions/setup-node-env
-        with:
-          cache-mode: restore
-          install-bun: "false"
-      - name: Setup Boat
-        uses: ./.github/actions/setup-boat
-      - name: Setup Crabbox
-        run: node --import ./scripts/tsx.mjs scripts/crabbox-setup.mts
-      - name: Provision decision runner
-        id: decision
-        uses: ./.github/actions/boat-release-runner
-        with:
-          operation: provision
-          role: decision
-          api-key: ${{ secrets.BOAT_API_KEY }}
-          boat-org: ${{ vars.BOAT_ORG }}
-          runner-group: ${{ vars.BOAT_RELEASE_RUNNER_GROUP }}
-          app-id: ${{ vars.BOAT_RUNNER_APP_ID }}
-          app-private-key: ${{ secrets.BOAT_RUNNER_APP_PRIVATE_KEY }}
-      - name: Provision drain runner
-        id: drain
-        uses: ./.github/actions/boat-release-runner
-        with:
-          operation: provision
-          role: drain
-          api-key: ${{ secrets.BOAT_API_KEY }}
-          boat-org: ${{ vars.BOAT_ORG }}
-          runner-group: ${{ vars.BOAT_RELEASE_RUNNER_GROUP }}
-          app-id: ${{ vars.BOAT_RUNNER_APP_ID }}
-          app-private-key: ${{ secrets.BOAT_RUNNER_APP_PRIVATE_KEY }}
-
   release_decision:
     name: Release Decision
     needs:
       [
-        boat_release_runners,
         resolve_target,
         prepare_npm_package,
         qualify_npm_package,
@@ -2748,11 +2688,11 @@ jobs:
         prepare_docker_release,
         release_execution_plan,
       ]
-    if: always() && (vars.OPENCLAW_CI_RUNNER_BACKEND != 'boat' || needs.boat_release_runners.result == 'success')
-    uses: openclaw/openclaw/.github/workflows/full-release-state-watcher.yml@2cc6988bc28bd24e07a52544dae2ca180631cb85
+    if: always()
+    uses: openclaw/openclaw/.github/workflows/full-release-state-watcher.yml@b5e0ed2fdd00553915067a258603606515236c58
     with:
       mode: decision
-      runner_label: ${{ needs.boat_release_runners.outputs.decision_label }}
+      runner_label: blacksmith-2vcpu-ubuntu-2404
       fail_fast: ${{ inputs.fail_fast }}
       release_profile: ${{ inputs.release_profile }}
       rerun_group: ${{ inputs.rerun_group }}
@@ -2767,7 +2707,6 @@ jobs:
     name: Diagnostic Drain
     needs:
       [
-        boat_release_runners,
         resolve_target,
         prepare_npm_package,
         qualify_npm_package,
@@ -2775,11 +2714,11 @@ jobs:
         prepare_docker_release,
         release_execution_plan,
       ]
-    if: always() && (vars.OPENCLAW_CI_RUNNER_BACKEND != 'boat' || needs.boat_release_runners.result == 'success')
-    uses: openclaw/openclaw/.github/workflows/full-release-state-watcher.yml@2cc6988bc28bd24e07a52544dae2ca180631cb85
+    if: always()
+    uses: openclaw/openclaw/.github/workflows/full-release-state-watcher.yml@b5e0ed2fdd00553915067a258603606515236c58
     with:
       mode: drain
-      runner_label: ${{ needs.boat_release_runners.outputs.drain_label }}
+      runner_label: blacksmith-2vcpu-ubuntu-2404
       fail_fast: ${{ inputs.fail_fast }}
       release_profile: ${{ inputs.release_profile }}
       rerun_group: ${{ inputs.rerun_group }}
@@ -2818,6 +2757,7 @@ jobs:
     timeout-minutes: 10
     env:
       RELEASE_STATE_SCRIPT: ${{ needs.resolve_target.result == 'success' && fromJSON(needs.resolve_target.outputs.source_admission_json || '{}').qualificationAdmission != null && format('{0}/qualification-verifier/scripts/full-release-validation-state.mjs', github.workspace) || format('{0}/scripts/full-release-validation-state.mjs', github.workspace) }}
+      OPENCLAW_RELEASE_WAIVERS_PATH: ${{ github.workspace }}/scripts/lib/release-validation-waivers.json
       NPM_PREPARATION_RESULT: ${{ needs.prepare_npm_package.result }}
       NPM_QUALIFICATION_RESULT: ${{ needs.qualify_npm_package.result }}
       PLUGIN_NPM_PREPARATION_RESULT: ${{ needs.prepare_plugin_npm.result }}
@@ -3027,6 +2967,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           OPENCLAW_RELEASE_CI_SUMMARY_VALIDATOR: ${{ needs.resolve_target.result == 'success' && fromJSON(needs.resolve_target.outputs.source_admission_json || '{}').qualificationAdmission != null && format('{0}/qualification-verifier/scripts/release-ci-summary.mjs', github.workspace) || format('{0}/scripts/release-ci-summary.mjs', github.workspace) }}
+          OPENCLAW_RELEASE_WAIVERS_PATH: ${{ github.workspace }}/scripts/lib/release-validation-waivers.json
           TARGET_REF: ${{ startsWith(github.ref, 'refs/heads/release-ci/') && needs.resolve_target.outputs.sha || inputs.ref }}
           TARGET_SHA: ${{ needs.resolve_target.outputs.sha }}
           RELEASE_PROFILE: ${{ inputs.release_profile }}
@@ -3086,55 +3027,3 @@ jobs:
           path: ${{ runner.temp }}/full-release-validation
           if-no-files-found: error
           overwrite: true
-
-  cleanup_boat_release_runners:
-    name: Remove Boat release runners
-    needs: [boat_release_runners, release_decision, diagnostic_drain]
-    if: always() && vars.OPENCLAW_CI_RUNNER_BACKEND == 'boat'
-    runs-on: ubuntu-24.04
-    timeout-minutes: 15
-    permissions:
-      contents: read
-    steps:
-      - name: Checkout Boat runner tooling
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: ${{ github.sha }}
-          persist-credentials: false
-      - name: Setup Node environment
-        uses: ./.github/actions/setup-node-env
-        with:
-          cache-mode: restore
-          install-bun: "false"
-      - name: Setup Boat
-        uses: ./.github/actions/setup-boat
-      - name: Setup Crabbox
-        run: node --import ./scripts/tsx.mjs scripts/crabbox-setup.mts
-      - name: Cleanup decision runner
-        id: decision
-        if: always()
-        uses: ./.github/actions/boat-release-runner
-        with:
-          operation: cleanup
-          role: decision
-          api-key: ${{ secrets.BOAT_API_KEY }}
-          boat-org: ${{ vars.BOAT_ORG }}
-          runner-group: ${{ vars.BOAT_RELEASE_RUNNER_GROUP }}
-          app-id: ${{ vars.BOAT_RUNNER_APP_ID }}
-          app-private-key: ${{ secrets.BOAT_RUNNER_APP_PRIVATE_KEY }}
-          vm: ${{ needs.boat_release_runners.outputs.decision_vm }}
-          runner: ${{ needs.boat_release_runners.outputs.decision_runner }}
-      - name: Cleanup drain runner
-        id: drain
-        if: always()
-        uses: ./.github/actions/boat-release-runner
-        with:
-          operation: cleanup
-          role: drain
-          api-key: ${{ secrets.BOAT_API_KEY }}
-          boat-org: ${{ vars.BOAT_ORG }}
-          runner-group: ${{ vars.BOAT_RELEASE_RUNNER_GROUP }}
-          app-id: ${{ vars.BOAT_RUNNER_APP_ID }}
-          app-private-key: ${{ secrets.BOAT_RUNNER_APP_PRIVATE_KEY }}
-          vm: ${{ needs.boat_release_runners.outputs.drain_vm }}
-          runner: ${{ needs.boat_release_runners.outputs.drain_runner }}
