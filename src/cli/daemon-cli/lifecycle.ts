@@ -348,31 +348,58 @@ export async function runDaemonStart(opts: DaemonLifecycleOptions = {}) {
         timeoutMs: deadlineMs,
         signal: getAsyncWorkSignal(),
       });
+      const asyncWorkSignal = getAsyncWorkSignal();
+      const readinessController = new AbortController();
+      const readinessSignal = asyncWorkSignal
+        ? AbortSignal.any([asyncWorkSignal, readinessController.signal])
+        : readinessController.signal;
+      let readinessCanceledWithHealth = false;
+      const readinessPromise = waitForGatewayHttpReadiness({
+        config: context.config,
+        port,
+        attempts,
+        deadlineAt,
+        delayMs: DEFAULT_RESTART_HEALTH_DELAY_MS,
+        signal: readinessSignal,
+      }).catch((error: unknown) => {
+        if (readinessCanceledWithHealth) {
+          return { healthz: null, readyz: null };
+        }
+        throw error;
+      });
+      const healthPromise = withCommandProcessScope(
+        () =>
+          waitForGatewayHealthyRestart({
+            service,
+            port,
+            attempts,
+            delayMs: DEFAULT_RESTART_HEALTH_DELAY_MS,
+            timeoutMs: deadlineMs,
+            deadline: healthDeadline,
+            deadlineOutcome: "snapshot",
+            env: context.env,
+            supervisorKeepsAlive: process.platform === "darwin",
+            signal: asyncWorkSignal,
+          }),
+        healthDeadline.signal,
+      ).finally(() => healthDeadline.dispose());
+      const healthWithReadinessCancellation = healthPromise.then(
+        (health) => {
+          if (health.waitOutcome === "stopped-free") {
+            readinessCanceledWithHealth = true;
+            readinessController.abort();
+          }
+          return health;
+        },
+        (error: unknown) => {
+          readinessCanceledWithHealth = true;
+          readinessController.abort(error);
+          throw error;
+        },
+      );
       const [health, readiness] = await Promise.all([
-        withCommandProcessScope(
-          () =>
-            waitForGatewayHealthyRestart({
-              service,
-              port,
-              attempts,
-              delayMs: DEFAULT_RESTART_HEALTH_DELAY_MS,
-              timeoutMs: deadlineMs,
-              deadline: healthDeadline,
-              deadlineOutcome: "snapshot",
-              env: context.env,
-              supervisorKeepsAlive: process.platform === "darwin",
-              signal: getAsyncWorkSignal(),
-            }),
-          healthDeadline.signal,
-        ).finally(() => healthDeadline.dispose()),
-        waitForGatewayHttpReadiness({
-          config: context.config,
-          port,
-          attempts,
-          deadlineAt,
-          delayMs: DEFAULT_RESTART_HEALTH_DELAY_MS,
-          signal: getAsyncWorkSignal(),
-        }),
+        healthWithReadinessCancellation,
+        readinessPromise,
       ]);
       if (health.healthy && readiness.healthz === 200 && readiness.readyz === 200) {
         return;
