@@ -22,7 +22,11 @@ import {
   getRpcSourceLifecycleGeneration,
   getRpcSourceStartedAt,
 } from "../../sessions/session-controller.rpc-sources.js";
-import { resolveStateContentionPresentation } from "../../sessions/session-run-error-presentation.js";
+import {
+  resolveChatRunErrorKind,
+  resolveStateContentionPresentation,
+  type ChatRunErrorKind,
+} from "../../sessions/session-run-error-presentation.js";
 import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { captureAgentJobSession, setGatewayDedupeEntry } from "../agent-turn/agent-job.js";
 import {
@@ -132,7 +136,7 @@ type PendingDispatchLifecycleError = {
   terminationFields: ReturnType<typeof resolveAgentRunErrorLifecycleFields>;
   endedAt: number;
   error: string;
-  errorKind?: "state_contention";
+  errorKind?: ChatRunErrorKind;
   notice?: string;
   desktopNotice?: string;
   sessionId: string;
@@ -207,7 +211,7 @@ export async function handleChatSendSetupError(params: {
     return;
   }
   const errorMessage = formatChatSendError(params.error);
-  const errorKind = resolveStateContentionPresentation(params.error)?.errorKind;
+  const errorKind = resolveChatRunErrorKind(params.error);
   const restart =
     resolveAgentRunErrorLifecycleFields(params.error, undefined).stopReason === "restart";
   // Before acknowledgment the browser still owns retry after an expected restart.
@@ -388,7 +392,7 @@ export function createChatSendDispatchErrorLifecycle(params: {
       err = new AggregateError([err, settlementError], "Refused input custody could not settle");
     }
     const errorMessage = formatChatSendError(err);
-    const errorKind = resolveStateContentionPresentation(err)?.errorKind;
+    const errorKind = resolveChatRunErrorKind(err);
     const desktopNotice = resolveDesktopChatSendErrorNotice(err);
     const queuedFollowupEnqueued = isQueuedFollowupEnqueued();
     if (queuedFollowupEnqueued) {

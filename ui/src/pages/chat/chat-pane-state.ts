@@ -101,10 +101,15 @@ export function createChatPaneRunRecoveryActions(
     latestFailedRunId: () => string | undefined;
     onRewindMessage?: ChatProps["onRewindMessage"];
     onStartNewSession?: (summary: string) => Promise<boolean>;
+    onStartRecoveryChat?: (runId: string) => Promise<boolean>;
   },
 ): Pick<
   ChatProps,
-  "onRetryRun" | "onStartNewSession" | "failedMessageEditSource" | "onDismissRunError"
+  | "onRetryRun"
+  | "onStartNewSession"
+  | "onStartRecoveryChat"
+  | "failedMessageEditSource"
+  | "onDismissRunError"
 > {
   const sessionKey = state.sessionKey;
   const ownsFailure = (runId: string) =>
@@ -141,6 +146,14 @@ export function createChatPaneRunRecoveryActions(
         ? (runId, summary) => {
             if (ownsFailure(runId)) {
               void options.onStartNewSession?.(summary);
+            }
+          }
+        : undefined,
+    onStartRecoveryChat:
+      options.canSend && options.onStartRecoveryChat
+        ? (runId) => {
+            if (ownsFailure(runId)) {
+              void options.onStartRecoveryChat?.(runId);
             }
           }
         : undefined,

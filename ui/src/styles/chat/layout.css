@@ -70,6 +70,7 @@ openclaw-pending-session-create {
 
 @media (max-width: 560px) {
   .chat-error__discard,
+  .chat-error__new-chat,
   .chat-error__refresh {
     white-space: normal;
     text-align: start;

@@ -1,3 +1,4 @@
+import { isIncognitoSessionKey } from "../../../../src/shared/incognito-session-key.js";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { pathForPluginSettings } from "../../app-route-paths.ts";
 import { isArchiveHeld, undoHeldArchive } from "../../components/session-archive-hold.ts";
@@ -24,12 +25,14 @@ import { isExpiredIncognitoSession, setChatError } from "./chat-history-state.ts
 import { createChatModelSetupBanner } from "./chat-model-setup.ts";
 import { resolveChatPaneParentSession } from "./chat-pane-header-identity.ts";
 import { ChatPaneRetainedPresentation } from "./chat-pane-retained-presentation.ts";
+import { preparePaneSessionHandoff } from "./chat-pane-shared.ts";
 import { createChatPaneRunRecoveryActions } from "./chat-pane-state.ts";
 import {
   canCreateChatSession,
   resolveChatAgentId,
   selectedChatSessionRow,
 } from "./chat-state-route.ts";
+import { requestRouteComposerFocus } from "./route-draft-focus-handoff.ts";
 
 registerSessionNavigationEnglish();
 
@@ -40,6 +43,7 @@ export abstract class ChatPaneSessionCreation extends ChatPaneRetainedPresentati
   readonly sessionCreation = { creatingIncognito: false, creatingHarnessUpdate: false };
 
   private activeCatalogContinuation: symbol | null = null;
+  private recoveryChatPending = false;
 
   protected async continueCatalogSession(key: CatalogSessionKey) {
     const scope = this.captureConnectionScope();
@@ -237,8 +241,71 @@ export abstract class ChatPaneSessionCreation extends ChatPaneRetainedPresentati
     return createChatPaneRunRecoveryActions(state, {
       ...options,
       onStartNewSession: (summary) => this.createSession(summary),
+      onStartRecoveryChat: (runId) => this.createRecoveryChat(runId),
     });
   }
+
+  /**
+   * Storage-memory recovery: a new conversation that never loads the failed one.
+   * The unsent message moves to its composer and is never sent automatically.
+   */
+  private readonly createRecoveryChat = async (runId: string): Promise<boolean> => {
+    const scope = this.captureConnectionScope();
+    if (!scope || this.recoveryChatPending) {
+      return false;
+    }
+    const { state } = scope;
+    const previousSessionKey = state.sessionKey;
+    const agentId =
+      scopedAgentParamsForSession(state, previousSessionKey).agentId ??
+      resolveAgentIdFromSessionKey(previousSessionKey);
+    // The failed input stays queued in the old conversation, so the empty-queue
+    // creation guard does not apply; its text moves to the new composer instead.
+    const isCurrent = () =>
+      this.isConnectionScopeCurrent(scope) &&
+      state.sessionKey === previousSessionKey &&
+      !state.chatSending &&
+      !state.chatRunId;
+    const access = readSessionMethodAccess(this.context.gateway.snapshot, {
+      method: "sessions.create",
+      params: { agentId },
+      sessionScope: true,
+    });
+    if (!access.allowed) {
+      setChatError(state, access.reason);
+      return false;
+    }
+    const unsent = state.chatQueue.find((item) => item.sendRunId === runId)?.text ?? "";
+    const draft = state.chatMessage.trim() ? state.chatMessage : unsent;
+    this.recoveryChatPending = true;
+    try {
+      // No parent or current-session reference: creation must not touch the failed actor.
+      const nextSessionKey = await this.context.sessions.create(
+        { agentId, ...(isIncognitoSessionKey(previousSessionKey) ? { incognito: true } : {}) },
+        { signal: this.headerSessionMutationAbortController.signal },
+      );
+      if (!nextSessionKey || !isCurrent()) {
+        return false;
+      }
+      // The clicked toast unmounts with this conversation; keyboard focus follows the draft.
+      requestRouteComposerFocus(nextSessionKey);
+      if (this.onPaneSessionChange?.(this.paneId, nextSessionKey) === false) {
+        return false;
+      }
+      preparePaneSessionHandoff(this.context, this.paneId, nextSessionKey, {
+        attachments: cloneChatAttachmentsForIndependentOwner(state.chatAttachments),
+        draft,
+      });
+      return true;
+    } catch (error) {
+      if (isCurrent()) {
+        setChatError(state, formatUiError(error));
+      }
+      return false;
+    } finally {
+      this.recoveryChatPending = false;
+    }
+  };
 
   protected readonly createSession = async (harnessUpdateSummary?: string): Promise<boolean> => {
     const state = this.state;

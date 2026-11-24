@@ -33,6 +33,19 @@ describe("chat gateway state contention", () => {
     },
   );
 
+  it("keeps the storage worker OOM kind so the notice offers a new chat", () => {
+    const state = createState({ chatMessage: "Unsent draft" });
+    handleChatGatewayEvent(state, {
+      sessionKey: "main",
+      runId: "run-oom",
+      state: "error",
+      errorKind: "storage_worker_memory",
+      errorMessage: "OpenClaw ran out of memory while loading this conversation.",
+    });
+    expect(state.chatRunError).toMatchObject({ runId: "run-oom", kind: "storage_worker_memory" });
+    expect(state.chatMessage).toBe("Unsent draft");
+  });
+
   it("keeps the same run during a quiet state contention wait", () => {
     const state = createState({ chatRunId: "run-1", chatMessage: "Unsent draft" });
     handleChatGatewayEvent(state, {

@@ -102,6 +102,68 @@ describe("handleChatSendSetupError", () => {
     }
   });
 
+  it("names a storage worker OOM and offers a new chat instead of a resend", async () => {
+    // Bun's native Worker error inherits its code from the error prototype.
+    class NativeWorkerError extends Error {}
+    Object.defineProperty(NativeWorkerError.prototype, "code", {
+      value: "ERR_WORKER_OUT_OF_MEMORY",
+    });
+    const nativeOom = new NativeWorkerError(
+      "Worker terminated due to reaching memory limit: JS heap out of memory",
+    );
+    const error = new SqliteWorkerError(
+      "SQLite worker stopped before its result was received",
+      "outcome-unknown",
+    );
+    error.cause = nativeOom;
+    const respond = vi.fn();
+    const broadcast = vi.fn();
+    const dedupe = new Map();
+    const runId = "setup-worker-oom";
+    const activeRunAbort = registerRpcSourceForTest({
+      runId,
+      sessionId: "sess-main",
+      sessionKey: "agent:main:main",
+      agentId: "main",
+    });
+    try {
+      await handleChatSendSetupError({
+        admission: {
+          activeRunAbort,
+          cleanupAdmittedRun: vi.fn(),
+          lifecycleGeneration: "test-generation",
+        },
+        context: createDirectChatContext({ broadcast, dedupe, getRuntimeConfig: () => ({}) }),
+        error,
+        respond,
+        session: { agentId: "main", clientRunId: runId, sessionKey: "agent:main:main" },
+      });
+      const refusal = respond.mock.calls[0]![2];
+      // The write stayed unconfirmed: no client or dedupe replay may resend it.
+      expect(refusal).toMatchObject({
+        code: "UNAVAILABLE",
+        retryable: false,
+        details: { code: "storage-worker-memory" },
+      });
+      expect(refusal.message).toMatch(/ran out of memory/u);
+      expect(refusal.message).toMatch(/Start a new chat/u);
+      expect(refusal.message).not.toMatch(/restart OpenClaw/u);
+      expect(dedupe.get(`chat:${runId}`)).toMatchObject({ ok: false, error: refusal });
+      expect(broadcast).toHaveBeenCalledWith(
+        "chat",
+        expect.objectContaining({
+          runId,
+          state: "error",
+          errorKind: "storage_worker_memory",
+          errorMessage: refusal.message,
+        }),
+        expect.anything(),
+      );
+    } finally {
+      activeRunAbort.cleanup();
+    }
+  });
+
   it.each([
     new GatewayDrainingError(),
     new SessionTranscriptProjectionUnavailableError("sess-main"),

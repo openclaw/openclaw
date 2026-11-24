@@ -16,7 +16,10 @@ import { classifyGatewayStorageFailure } from "../infra/sqlite-error-diagnostics
 import { isProviderRefusalNoticeText } from "../shared/assistant-error-format.js";
 import { HARNESS_UPDATE_REQUIRED_CODE, readRunFailureCause } from "../shared/run-failure-notice.js";
 import { sanitizeSessionRunError, truncateSessionRunError } from "./session-run-error-format.js";
-import { STATE_CONTENTION_SUMMARY } from "./session-run-error-presentation.js";
+import {
+  STATE_CONTENTION_SUMMARY,
+  type ChatRunErrorKind,
+} from "./session-run-error-presentation.js";
 
 const RUN_FAILED_BEFORE_REPLY_TRANSCRIPT_TYPE = "run-failed-before-reply";
 
@@ -24,7 +27,7 @@ type GatewaySessionRunFailure = {
   target: SessionTranscriptWriteScope & { sessionId: string };
   runId: string;
   error: unknown;
-  errorKind?: "state_contention";
+  errorKind?: ChatRunErrorKind;
   suppressErrorNotice?: boolean;
   /** Host-authored copy already shown to the requester; wins over error-derived copy. */
   notice?: string;

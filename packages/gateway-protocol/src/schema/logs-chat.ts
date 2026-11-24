@@ -502,6 +502,7 @@ const ChatEventErrorKindSchema = stringLiteralUnion([
   "rate_limit",
   "context_length",
   "state_contention",
+  "storage_worker_memory",
   "unknown",
 ]);
 

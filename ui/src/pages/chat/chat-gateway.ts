@@ -122,8 +122,9 @@ export function handleChatGatewayEvent(state: ChatState, incoming?: ChatEventPay
         ? "chatgpt_consumer_usage_limit"
         : undefined;
   const errorKind =
-    payload.state === "error" && payload.errorKind === "state_contention"
-      ? "state_contention"
+    payload.state === "error" &&
+    (payload.errorKind === "state_contention" || payload.errorKind === "storage_worker_memory")
+      ? payload.errorKind
       : payload.state === "error" && payload.stopReason === "aborted-partial-persistence-failed"
         ? "stop"
         : payload.errorDetail?.providerRuntimeFailureKind === "auth_refresh"

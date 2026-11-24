@@ -116,6 +116,29 @@ it("requires SQLite worker provenance for native worker OOM classification", () 
   );
 });
 
+it("names worker OOM for an unconfirmed write and still fences continuation", () => {
+  // Bun's native Worker error inherits its code, unlike an own-property fixture.
+  class NativeWorkerError extends Error {}
+  Object.defineProperty(NativeWorkerError.prototype, "code", { value: "ERR_WORKER_OUT_OF_MEMORY" });
+  const nativeOom = new NativeWorkerError("Worker terminated due to reaching memory limit");
+  const unconfirmed = new SqliteWorkerError(
+    "SQLite worker stopped before its result was received",
+    "outcome-unknown",
+  );
+  unconfirmed.cause = nativeOom;
+  // The session actor fences later commands with the original failure as cause.
+  const fenced = new Error("Session actor requires reconciliation before another command", {
+    cause: unconfirmed,
+  });
+  for (const failure of [unconfirmed, fenced]) {
+    expect(classifyGatewayStorageFailure(failure)).toBe("storage-worker-memory");
+    expect(isLocalStorageOutcomeError(failure)).toBe(true);
+  }
+  // Recorded rows keep only the code; it still refuses automatic continuation.
+  expect(isLocalStorageOutcomeError({ errorCode: "storage-worker-memory" })).toBe(true);
+  expect(classifyGatewayStorageFailure(unknownOutcome())).toBe("session_actor_reconciliation");
+});
+
 it.each([false, true])("ignores throwing metadata (native: %s)", (native) => {
   const unsafe = unsafeGetter();
   const failure = native

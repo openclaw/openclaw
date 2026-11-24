@@ -47,7 +47,7 @@ export const ERROR_DETAILS_HINT =
 
 const STORAGE_FAILURE_COPY: Record<GatewayStorageFailure, string> = {
   "storage-worker-memory":
-    "OpenClaw's storage worker ran out of memory. Ask the Gateway operator to check the logs and address memory or resource pressure before trying again. Restarting this session alone will not fix the underlying problem.",
+    "OpenClaw ran out of memory loading this conversation and couldn't confirm whether the last update was saved. Sending another message here will fail again, even after a restart. Start a new chat instead, and check this conversation before repeating anything. If it happens again, ask the Gateway operator to check the logs for memory pressure.",
   unavailable:
     "The database connection was lost. This operation was rolled back; nothing from it was saved. Please retry.",
   SQLITE_BUSY:

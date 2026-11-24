@@ -1551,6 +1551,7 @@ const startupEnglish = {
       failedRepeatCount: "{count} times",
       tryAgain: "Try again",
       startNewSession: "Start a new session",
+      startNewChat: "Start new chat",
       harnessUpdatePrompt:
         "My last message in another session failed with this error:\n\n{summary}\n\nDo the update it asks for on this machine, confirm the installed version, and tell me if I still need to restart the OpenClaw Gateway.",
       continuePrompt:
@@ -1558,6 +1559,8 @@ const startupEnglish = {
     },
     errorBusySummary: "OpenClaw is busy. Check status before trying again.",
     errorSignInSummary: "Couldn't sign in to the AI service. Sign in again under Models.",
+    errorStorageMemorySummary:
+      "OpenClaw ran out of memory loading this conversation. Sending here will keep failing.",
     errorStartSummary: "Couldn’t start this session. Try again.",
     checkStatus: "Check status",
     details: "Details",

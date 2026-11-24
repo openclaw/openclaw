@@ -128,6 +128,8 @@ export type ChatProps = Omit<
     workspaceConflict?: WorkspaceResultConflict;
     onDismissWorkspaceConflict?: () => void;
     onDismissRunError?: () => void;
+    /** Opens a new chat that does not load the failed conversation. */
+    onStartRecoveryChat?: (runId: string) => void;
     chatMessageMaxWidth?: string | null;
     showNewMessages?: boolean;
     onScrollToBottom?: (options?: { smooth?: boolean }) => void;

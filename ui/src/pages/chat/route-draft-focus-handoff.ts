@@ -11,7 +11,8 @@ const RETRY_MS = 250;
 type PendingHandoff = {
   expiresAt: number;
   sessionKey: string;
-  sourceData: SessionChatRouteData;
+  /** The route that requested focus; absent when an in-pane action opens another session. */
+  sourceData?: SessionChatRouteData;
 };
 
 let pendingHandoff: PendingHandoff | undefined;
@@ -28,6 +29,11 @@ function pendingMatches(sessionKey: string, data: SessionChatRouteData): boolean
     pendingHandoff.sourceData !== data &&
     areUiSessionKeysEquivalent(pendingHandoff.sessionKey, sessionKey)
   );
+}
+
+/** Focus the composer of a session the current pane is about to open, once it renders. */
+export function requestRouteComposerFocus(sessionKey: string): void {
+  pendingHandoff = { expiresAt: Date.now() + HANDOFF_TTL_MS, sessionKey };
 }
 
 export class RouteDraftComposerFocus {

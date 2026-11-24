@@ -392,6 +392,8 @@ export function ChatComposerNoticesContent(props: ChatComposerNoticesProps) {
       ),
     );
   const contention = () => props.runError?.kind === "state_contention";
+  // Refreshing or resending loads the conversation that exhausted storage memory again.
+  const storageMemory = () => props.runError?.kind === "storage_worker_memory";
   const usageLimit = (): "business" | "consumer" | undefined =>
     props.runError?.kind === "chatgpt_business_usage_limit"
       ? "business"
@@ -399,15 +401,33 @@ export function ChatComposerNoticesContent(props: ChatComposerNoticesProps) {
         ? "consumer"
         : undefined;
   const refresh = (
-    <Show when={props.onRefresh}>
-      <button
-        class="app-toast__action app-toast__action--primary chat-error__refresh"
-        type="button"
-        disabled={!props.connected}
-        onClick={() => props.onRefresh?.()}
-      >
-        {t(contention() ? "chat.checkStatus" : "common.refresh")}
-      </button>
+    <Show
+      when={storageMemory()}
+      fallback={
+        <Show when={props.onRefresh}>
+          <button
+            class="app-toast__action app-toast__action--primary chat-error__refresh"
+            type="button"
+            disabled={!props.connected}
+            onClick={() => props.onRefresh?.()}
+          >
+            {t(contention() ? "chat.checkStatus" : "common.refresh")}
+          </button>
+        </Show>
+      }
+    >
+      <Show when={props.onStartRecoveryChat && props.runError?.runId}>
+        {(runId) => (
+          <button
+            class="app-toast__action app-toast__action--primary chat-error__new-chat"
+            type="button"
+            disabled={!props.connected}
+            onClick={() => props.onStartRecoveryChat?.(runId())}
+          >
+            {t("chat.recovery.startNewChat")}
+          </button>
+        )}
+      </Show>
     </Show>
   );
   return (
@@ -436,9 +456,11 @@ export function ChatComposerNoticesContent(props: ChatComposerNoticesProps) {
                   : t(
                       contention()
                         ? "chat.errorBusySummary"
-                        : error().kind === "auth_refresh"
-                          ? "chat.errorSignInSummary"
-                          : "chat.errorReplySummary",
+                        : storageMemory()
+                          ? "chat.errorStorageMemorySummary"
+                          : error().kind === "auth_refresh"
+                            ? "chat.errorSignInSummary"
+                            : "chat.errorReplySummary",
                     )
               }
             />

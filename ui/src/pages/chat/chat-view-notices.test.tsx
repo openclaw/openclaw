@@ -220,6 +220,36 @@ it.each([
   }
 });
 
+it.each([true, false])(
+  "offers a new chat instead of refresh after a storage worker OOM (connected=%s)",
+  async (connected) => {
+    const onRefresh = vi.fn(),
+      onStartRecoveryChat = vi.fn();
+    const { container } = publishedComposer({
+      connected,
+      runError: { kind: "storage_worker_memory", runId: "run-oom", summary: "Synthetic OOM" },
+      onRefresh,
+      onStartRecoveryChat,
+    });
+    await waitForSolid(() => expect(container.querySelector(".chat-error")).not.toBeNull());
+    const notice = container.querySelector(".chat-error");
+    expect(notice?.querySelector(".app-toast__message")?.textContent).toBe(
+      "OpenClaw ran out of memory loading this conversation.",
+    );
+    // Refresh or resend loads the same conversation that exhausted the worker.
+    expect(notice?.querySelector(".chat-error__refresh")).toBeNull();
+    const action = notice?.querySelector<HTMLButtonElement>(".chat-error__new-chat");
+    expect(action).toMatchObject({ disabled: !connected });
+    expect(action?.textContent?.trim()).toBe("Start new chat");
+    action?.click();
+    expect(onStartRecoveryChat).toHaveBeenCalledTimes(connected ? 1 : 0);
+    if (connected) {
+      expect(onStartRecoveryChat).toHaveBeenCalledWith("run-oom");
+    }
+    expect(onRefresh).not.toHaveBeenCalled();
+  },
+);
+
 it.each([
   ["run", false],
   ["run", true],

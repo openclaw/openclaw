@@ -59,6 +59,7 @@ export type ChatRunError = {
   kind?:
     | "auth_refresh"
     | "state_contention"
+    | "storage_worker_memory"
     | "stop"
     | "chatgpt_business_usage_limit"
     | "chatgpt_consumer_usage_limit";

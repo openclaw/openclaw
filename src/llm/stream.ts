@@ -40,9 +40,12 @@ async function ensureTransportRuntimeHost(): Promise<void> {
 
 function createRuntimeHostErrorMessage(model: Model, error: unknown): AssistantMessage {
   // A message cannot retain the error graph, so preserve its strongest continuation fence.
-  const storageFailure = hasSqliteWorkerOutcomeUnknown(error)
-    ? "session_actor_reconciliation"
-    : classifyGatewayStorageFailure(error);
+  // A worker OOM code is an equally strong fence, and it keeps the cause visible.
+  const classified = classifyGatewayStorageFailure(error);
+  const storageFailure =
+    classified === "storage-worker-memory" || !hasSqliteWorkerOutcomeUnknown(error)
+      ? classified
+      : "session_actor_reconciliation";
   return {
     role: "assistant",
     content: [],

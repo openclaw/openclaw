@@ -70,7 +70,12 @@ export function isLocalStorageOutcomeError(error: unknown): boolean {
       return true;
     }
     const failure = classifyGatewayStorageFailure(error);
-    return failure === "session_actor_reconciliation" || failure === "57014";
+    // Rerunning a worker that ran out of memory repeats the load that exhausted it.
+    return (
+      failure === "session_actor_reconciliation" ||
+      failure === "storage-worker-memory" ||
+      failure === "57014"
+    );
   } catch {
     // Optional diagnostics must not replace an ordinary tool failure.
     return false;
@@ -105,11 +110,13 @@ export function classifyGatewayStorageFailure(error: unknown): GatewayStorageFai
     }
     current = cause;
   }
-  if (outcomeUnknown || hasSqliteWorkerOutcomeUnknown(primaryError)) {
-    return "session_actor_reconciliation";
-  }
+  // A worker OOM usually also leaves its write unconfirmed. Name the cause: the
+  // generic reconciliation advice repeats the load that exhausted the worker.
   if (hasStorageWorkerMemoryFailure(primaryError)) {
     return "storage-worker-memory";
+  }
+  if (outcomeUnknown || hasSqliteWorkerOutcomeUnknown(primaryError)) {
+    return "session_actor_reconciliation";
   }
   let cancellation: GatewayStorageFailure | undefined;
   let reconciliation: GatewayStorageFailure | undefined;
@@ -136,6 +143,21 @@ export function classifyGatewayStorageFailure(error: unknown): GatewayStorageFai
 
 function errorCode(value: object): unknown {
   return readOwnErrorDataProperty(value, "errorCode") ?? readOwnErrorDataProperty(value, "code");
+}
+
+/** Bun's native worker errors inherit `code`; read data descriptors only, never accessors. */
+function nativeErrorCode(value: object): unknown {
+  for (
+    let owner: object | null = value, depth = 0;
+    owner && !isProxy(owner) && depth < 8;
+    owner = Object.getPrototypeOf(owner), depth += 1
+  ) {
+    const descriptor = Object.getOwnPropertyDescriptor(owner, "code");
+    if (descriptor) {
+      return descriptor.value;
+    }
+  }
+  return undefined;
 }
 
 function hasStorageWorkerMemoryFailure(error: unknown): boolean {
@@ -167,7 +189,7 @@ function hasStorageWorkerMemoryFailure(error: unknown): boolean {
       nested = readOwnErrorDataProperty(nested, "cause")
     ) {
       nestedSeen.add(nested);
-      if (errorCode(nested) === "ERR_WORKER_OUT_OF_MEMORY") {
+      if (nativeErrorCode(nested) === "ERR_WORKER_OUT_OF_MEMORY") {
         return true;
       }
     }

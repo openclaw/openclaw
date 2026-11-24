@@ -34,6 +34,7 @@ export function errorShapeFromError(
     storageFailure === "unavailable" ||
     storageFailure === "SQLITE_FULL" ||
     storageFailure === "session_actor_reconciliation" ||
+    storageFailure === "storage-worker-memory" ||
     storageFailure === "57014"
       ? renderStorageFailureSummary(storageFailure)
       : undefined;

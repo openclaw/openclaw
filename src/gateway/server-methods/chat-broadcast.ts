@@ -4,6 +4,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { getAgentRunContext } from "../../infra/agent-run-registry.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
 import type { RpcSourceRef } from "../../sessions/session-controller.rpc-sources.js";
+import type { ChatRunErrorKind } from "../../sessions/session-run-error-presentation.js";
 import {
   captureChatAbortRegistrationGuard,
   markChatAbortTerminalOutcome,
@@ -114,7 +115,7 @@ type ChatTerminal =
       state: "error";
       errorMessage?: string;
       stopReason?: string;
-      errorKind?: "timeout" | "state_contention";
+      errorKind?: "timeout" | ChatRunErrorKind;
     };
 
 type ChatTerminalBroadcastParams = ChatBroadcastParams & {
