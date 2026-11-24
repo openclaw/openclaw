@@ -39,7 +39,7 @@ export type PluginServiceExportCatalog = {
   list(params: {
     agentId?: string;
     limitPerHost?: number;
-    threadId?: string;
+    source?: Pick<SessionCatalogLocator, "hostId" | "threadId">;
   }): Promise<CatalogExportHost[]>;
   read(
     params: Omit<SessionCatalogLocator, "catalogId"> & { limit: number; cursor?: string },
@@ -163,28 +163,52 @@ export function createPluginServiceCatalogExports(params: {
               // Publishing a newer list retires grants and pending reads from the preceding one.
               const selected = new Set<string>();
               latest = selected;
-              const hosts = new Set(await localHosts({ agentId, allowProcessHomeFallback }));
-              assertCurrent(request.agentId);
-              if (!hosts.size) {
-                return [];
-              }
-              if (
-                request.threadId !== undefined &&
-                (!request.threadId || request.threadId.length > 500)
-              )
-                throw new Error("Invalid catalog thread ID");
-              const listed = await provider.list({
-                ...(request.threadId !== undefined ? { search: request.threadId } : {}),
-                agentId,
-                allowProcessHomeFallback,
-                hostIds: [...hosts],
-                listNodes: async () => ({ nodes: [] }),
-                limitPerHost: Math.min(Math.max(1, request.limitPerHost ?? 50), 100),
-                signal: params.signal,
-              });
-              assertCurrent(request.agentId);
-              if (selected !== latest) {
-                throw new Error("Catalog listing superseded");
+              const source = request.source;
+              if (source && (!source.hostId || !source.threadId || source.threadId.length > 500))
+                throw new Error("Invalid catalog source locator");
+              const hosts = new Set(
+                (await localHosts({ agentId, allowProcessHomeFallback })).filter(
+                  (id) => !source || id === source.hostId,
+                ),
+              );
+              const assertListing = () => {
+                assertCurrent(request.agentId);
+                if (selected !== latest) throw new Error("Catalog listing superseded");
+              };
+              assertListing();
+              if (!hosts.size) return [];
+
+              // Free-text catalog search can match titles only. Walk the selected
+              // producer's listing so its visibility and native-origin rules still apply.
+              const seen = new Set<string>();
+              let cursor: string | undefined;
+              let listed: SessionCatalogHost[];
+              for (;;) {
+                listed = await provider.list({
+                  agentId,
+                  allowProcessHomeFallback,
+                  hostIds: [...hosts],
+                  ...(source && cursor ? { cursors: { [source.hostId]: cursor } } : {}),
+                  listNodes: async () => ({ nodes: [] }),
+                  limitPerHost: Math.min(Math.max(1, request.limitPerHost ?? 50), 100),
+                  signal: params.signal,
+                });
+                assertListing();
+                if (!source) break;
+                const host = listed.find((entry) => entry.hostId === source.hostId);
+                if (
+                  !host ||
+                  host.kind !== "gateway" ||
+                  !host.connected ||
+                  host.error ||
+                  host.sessions.some((entry) => entry.threadId === source.threadId)
+                )
+                  break;
+                cursor = host.nextCursor;
+                if (!cursor) break;
+                if (seen.has(cursor) || seen.size >= 99)
+                  throw new Error("Catalog source lookup exceeded its page limit");
+                seen.add(cursor);
               }
               return listed.flatMap((host): CatalogExportHost[] => {
                 if (
@@ -205,7 +229,7 @@ export function createPluginServiceCatalogExports(params: {
                 }
                 const sessions = host.sessions.flatMap((row): CatalogExportSession[] => {
                   if (
-                    (request.threadId !== undefined && request.threadId !== row.threadId) ||
+                    (source && source.threadId !== row.threadId) ||
                     collisions.has(row.threadId) ||
                     row.exportPolicy?.origin !== "native-local" ||
                     !row.exportPolicy.automatic

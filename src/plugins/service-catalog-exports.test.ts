@@ -116,6 +116,34 @@ describe("service-owned catalog exports", () => {
     );
   });
 
+  it("selects a native ID on a later page of its exact host when search matches titles only", async () => {
+    const f = fixture();
+    const [catalog] = f.exports.listCatalogs();
+    f.list.mockImplementation(async (query) => {
+      expect(query.search).toBeUndefined();
+      expect(query.hostIds).toEqual(["native"]);
+      const next = query.cursors?.native === "more";
+      return [
+        {
+          hostId: "native",
+          label: "Native",
+          kind: "gateway",
+          connected: true,
+          sessions: next ? f.rows : [],
+          ...(next ? {} : { nextCursor: "more" }),
+        },
+      ];
+    });
+    const source = { hostId: "native", threadId: "shown" };
+    expect((await catalog!.list({ source }))[0]?.sessions.map((row) => row.threadId)).toEqual([
+      "shown",
+    ]);
+    expect(f.list).toHaveBeenCalledTimes(2);
+    await expect(catalog!.read(f.request)).resolves.toMatchObject({ threadId: "shown" });
+    expect(await catalog!.list({ source: { ...source, hostId: "peer" } })).toEqual([]);
+    expect(f.list).toHaveBeenCalledTimes(2);
+  });
+
   it.each(["source replaced", "consent removed", "service stopped"] as const)(
     "discards pending bytes if %s",
     async (reason) => {
