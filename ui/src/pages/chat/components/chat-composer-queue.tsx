@@ -41,6 +41,7 @@ type ChatQueueProps = {
   onQueueClear?: () => void;
   queuedEdit?: ChatComposerProps["queuedEdit"];
   onQueueRemove: (id: string) => void;
+  onQueueCopy?: (id: string) => void;
 };
 
 /** Queue-level reorder facts: what the column shows, and what may move where. */
@@ -312,6 +313,9 @@ function ChatQueueItem(rowProps: {
     (rowProps.controls.offline === true ||
       isChatSendReconnecting(item().sendState, rowProps.controls.connected));
   const stateLabel = (): string | null => {
+    if (item().cancelled) {
+      return t("chat.queue.notSent");
+    }
     if (item().serverQueued) {
       return t("chat.queue.states.followup");
     }
@@ -601,6 +605,16 @@ function ChatQueueItem(rowProps: {
         </span>
       )}
       <span class="chat-queue__actions">
+        {item().cancelled ? (
+          <button
+            type="button"
+            class="chat-queue__action"
+            aria-label={t("common.copy")}
+            onClick={() => rowProps.controls.onQueueCopy?.(item().id)}
+          >
+            <Icon name="copy" />
+          </button>
+        ) : null}
         {failed() && !editing() && rowProps.controls.onQueueRetry
           ? renderDeliveryAction("retry")
           : null}
@@ -630,7 +644,8 @@ function ChatQueueItem(rowProps: {
             class="chat-queue__remove"
             type="button"
             disabled={
-              item().removing || (item().serverQueued && !rowProps.controls.canRemoveServerQueued)
+              item().removing ||
+              (item().serverQueued && !item().cancelled && !rowProps.controls.canRemoveServerQueued)
             }
             aria-busy={item().removing ? "true" : undefined}
             aria-label={t("chat.queue.removeQueuedMessage")}

@@ -19,6 +19,15 @@ registerChatComposerEnglish();
 
 const LARGE_PASTE_TEXT_THRESHOLD = 1000;
 
+function showAttachmentRefusal(props: ChatAttachmentControlsProps) {
+  showToast({
+    severity: "error",
+    message: props.suggestionComposer
+      ? t("chat.composer.textOnlySuggestions")
+      : uploadsDisabledMessage(),
+  });
+}
+
 function isFileDrag(dataTransfer: DataTransfer | null): boolean {
   return Array.from(dataTransfer?.types ?? []).includes("Files");
 }
@@ -99,8 +108,8 @@ export function appendChatAttachmentFiles(
   if (!props.onAttachmentsChange || candidates.length === 0 || props.readSignal?.aborted) {
     return 0;
   }
-  if (!uploadsEnabled(props.uploadConfig)) {
-    showToast({ severity: "error", message: uploadsDisabledMessage() });
+  if (props.suggestionComposer || !uploadsEnabled(props.uploadConfig)) {
+    showAttachmentRefusal(props);
     return 0;
   }
   const unsupported = props.imagesOnly
@@ -184,14 +193,14 @@ export function handleChatAttachmentPaste(
   if (!e.clipboardData || !props.onAttachmentsChange) {
     return;
   }
-  if (!uploadsEnabled(props.uploadConfig)) {
+  if (props.suggestionComposer || !uploadsEnabled(props.uploadConfig)) {
     const hasFiles = Array.from(e.clipboardData.items ?? []).some(
       (item) => item.kind === "file" || item.type.startsWith("image/"),
     );
     const text = e.clipboardData.getData("text/plain");
     if (hasFiles || /^data:image\//i.test(text.trim())) {
       e.preventDefault();
-      showToast({ severity: "error", message: uploadsDisabledMessage() });
+      showAttachmentRefusal(props);
       return;
     }
     // Large text remains ordinary native paste instead of becoming a file.
@@ -261,6 +270,7 @@ export function createChatAttachmentDropHandlers(props: ChatAttachmentDropProps)
     if (active) {
       if (
         !props.canCompose ||
+        props.suggestionComposer ||
         !uploadsEnabled(props.uploadConfig) ||
         !isFileDrag(event.dataTransfer)
       ) {
@@ -296,7 +306,9 @@ export function createChatAttachmentDropHandlers(props: ChatAttachmentDropProps)
       event.stopPropagation();
       if (event.dataTransfer) {
         event.dataTransfer.dropEffect =
-          props.canCompose && uploadsEnabled(props.uploadConfig) ? "copy" : "none";
+          props.canCompose && !props.suggestionComposer && uploadsEnabled(props.uploadConfig)
+            ? "copy"
+            : "none";
       }
     },
     onDrop: (event: DragEvent) => {
