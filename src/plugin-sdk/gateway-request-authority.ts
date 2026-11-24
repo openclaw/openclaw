@@ -1,5 +1,5 @@
 import { getPluginRuntimeExecutionFrame } from "../plugins/runtime/execution-frame.js";
-import type { GatewayRequestAuthorityV1 } from "../plugins/runtime/gateway-request-authority.js";
+import type { GatewayRequestAuthorityV1 } from "../plugins/runtime/gateway-request-scope.types.js";
 
 export type { GatewayRequestAuthorityV1 };
 

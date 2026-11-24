@@ -1,20 +1,9 @@
 import { GATEWAY_OWNER_PROFILE_ID } from "../../../packages/gateway-protocol/src/schema/user-profile-constants.js";
 import { withPluginRuntimeGatewayRequestScope } from "./gateway-request-scope.js";
-import type { PluginRuntimeGatewayRequestScope } from "./gateway-request-scope.types.js";
-
-/** Facts and guards from one admitted plugin handler invocation. */
-export type GatewayRequestAuthorityV1 = Readonly<{
-  scopes: readonly string[];
-  clientIp?: string;
-  /** Display attribution may identify the shared Gateway owner. */
-  attributionProfileId?: string;
-  /** Present only for an individually authenticated operator. */
-  personProfileId?: string;
-  /** Policy explicitly required by the admitted role and matched by its original grant. */
-  requiredGrantPluginId?: string;
-  assertCurrent(): void;
-  revalidate(): Promise<void>;
-}>;
+import type {
+  GatewayRequestAuthorityV1,
+  PluginRuntimeGatewayRequestScope,
+} from "./gateway-request-scope.types.js";
 
 type RequestGuards = { assertCurrent(): void; revalidate?: () => Promise<void> };
 type RequestLease = { current?: RequestGuards };

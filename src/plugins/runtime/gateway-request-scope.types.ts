@@ -7,7 +7,20 @@ import type { PluginOrigin } from "../plugin-origin.types.js";
 import type { DeclaredProviderOwnerIndex } from "../provider-owner-index.js";
 import type { PluginRegistry } from "../registry-types.js";
 import type { OpenClawPluginNodeWorkspace } from "../types.node-host.js";
-import type { GatewayRequestAuthorityV1 } from "./gateway-request-authority.js";
+
+/** Facts and guards from one admitted plugin handler invocation. */
+export type GatewayRequestAuthorityV1 = Readonly<{
+  scopes: readonly string[];
+  clientIp?: string;
+  /** Display attribution may identify the shared Gateway owner. */
+  attributionProfileId?: string;
+  /** Present only for an individually authenticated operator. */
+  personProfileId?: string;
+  /** Policy explicitly required by the admitted role and matched by its original grant. */
+  requiredGrantPluginId?: string;
+  assertCurrent(): void;
+  revalidate(): Promise<void>;
+}>;
 
 export type PluginRuntimeGatewayRequestScope = {
   readRequestAuthority?: () => GatewayRequestAuthorityV1 | undefined;
