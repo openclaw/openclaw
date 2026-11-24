@@ -267,6 +267,10 @@ it("makes room for a proven pre-tool prefix on a packed tail without losing back
     try {
       for (const cumulative of [false, true]) {
         context.chatRunState.clearRun(runId);
+        if (cumulative) {
+          context.chatRunState.updateBuffer(runId, { itemId: "assistant", text: "A" });
+          context.chatRunState.resolveBuffer(runId);
+        }
         context.chatRunState.recordProgressEvent(runId, {
           runId,
           seq: 1,

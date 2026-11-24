@@ -1,16 +1,17 @@
-import { readSessionMessageIdentity } from "@openclaw/gateway-client/browser";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   isToolCallContentType,
   isToolResultContentType,
   readToolErrorFlag,
-  resolveToolUseId,
 } from "../chat/tool-content.js";
 import { readTranscriptDisplayPosition } from "../chat/transcript-display-position.js";
+import {
+  findTranscriptToolPreamble,
+  type TranscriptPreambleSource,
+} from "../config/sessions/transcript-tool-preamble.js";
 import type { AgentHistoryActivity } from "../infra/agent-activity-events.js";
 import { jsonUtf8Bytes, jsonUtf8BytesOrInfinity } from "../infra/json-utf8-bytes.js";
 import { logLargePayload } from "../logging/diagnostic-payload.js";
-import { extractAssistantPhaseText } from "../shared/chat-message-content.js";
 import { mapChatDisplayMessages } from "./chat-display-projection.map.js";
 import type { InFlightRunSnapshot } from "./chat-inflight-snapshot.js";
 import { SerializedJsonArray } from "./serialized-json.js";
@@ -199,83 +200,24 @@ export function reportOmittedChatHistory(params: {
   return omittedCount;
 }
 
-/** Request-local proof for a smaller page whose current input may no longer be delivered. */
-export type ChatHistoryPreambleSource = { runId: string; toolCallId: string; messageId: string };
-
 function evictedPreamble(
   snapshot: InFlightRunSnapshot,
   retained: number,
   page: unknown[] | SerializedJsonArray,
-  source?: ChatHistoryPreambleSource,
+  source?: TranscriptPreambleSource,
 ) {
-  const dropped = (snapshot.events?.length ?? 0) - retained;
-  const start =
-    dropped &&
-    snapshot.events?.findLast(
-      ({ runId, stream, data }, index) =>
-        index < dropped &&
-        runId === snapshot.runId &&
-        stream === "tool" &&
-        data.phase === "start" &&
-        !data.parentToolCallId &&
-        typeof data.toolCallId === "string" &&
-        (!source || (source.runId === runId && source.toolCallId === data.toolCallId)) &&
-        typeof data.textLengthBeforeTool === "number" &&
-        Number.isSafeInteger(data.textLengthBeforeTool) &&
-        data.textLengthBeforeTool > 0 &&
-        data.textLengthBeforeTool <= snapshot.text.length,
-    );
-  const end = start && start.data.textLengthBeforeTool;
-  if (!start || typeof end !== "number" || typeof start.data.toolCallId !== "string") {
-    return undefined;
-  }
-  const prefix = snapshot.text.slice(0, end);
-  // Worker-encoded pages stay opaque on ordinary reads and on unmarked tool routes.
-  const messages = page instanceof SerializedJsonArray ? page.materialize() : page;
-  let anchored = Boolean(source);
-  let previous: number | undefined;
-  for (const [index, message] of messages.entries()) {
-    const row = asOptionalRecord(message);
-    const identity = readSessionMessageIdentity(message);
-    if (identity?.role === "user") {
-      anchored = identity.runId === snapshot.runId;
+  const match = findTranscriptToolPreamble(
+    snapshot,
+    (snapshot.events?.length ?? 0) - retained,
+    () => (page instanceof SerializedJsonArray ? page.materialize() : page),
+    source,
+  );
+  return (
+    match && {
+      wire: { textFromMessage: match.messageIndex, text: snapshot.text.slice(match.end) },
+      source: match.source,
     }
-    if (
-      !anchored ||
-      row?.provider !== "claude-cli" ||
-      identity?.role !== "assistant" ||
-      !identity.isImported ||
-      (identity.runId && identity.runId !== snapshot.runId)
-    ) {
-      previous = undefined;
-      continue;
-    }
-    if (
-      previous !== undefined &&
-      Array.isArray(row.content) &&
-      row.content.some((value) => {
-        const block = asOptionalRecord(value);
-        return (
-          block &&
-          isToolCallContentType(block.type) &&
-          resolveToolUseId(block) === start.data.toolCallId
-        );
-      })
-    ) {
-      const messageId = readChatHistoryMessageId(messages[previous]);
-      return {
-        wire: { textFromMessage: previous, text: snapshot.text.slice(end) },
-        source: messageId
-          ? { runId: snapshot.runId, toolCallId: start.data.toolCallId, messageId }
-          : undefined,
-      };
-    }
-    previous =
-      (!source || identity.id === source.messageId) && extractAssistantPhaseText(message) === prefix
-        ? index
-        : undefined;
-  }
-  return undefined;
+  );
 }
 
 export function boundInFlightRunSnapshotForChatHistory(params: {
@@ -283,8 +225,8 @@ export function boundInFlightRunSnapshotForChatHistory(params: {
   messages: unknown[] | SerializedJsonArray;
   getMessagesBytes?: () => number;
   maxBytes: number;
-  preambleSource?: ChatHistoryPreambleSource;
-  onPreambleBudgetMiss?: (minimumSnapshotBytes: number, source: ChatHistoryPreambleSource) => void;
+  preambleSource?: TranscriptPreambleSource;
+  onPreambleBudgetMiss?: (minimumSnapshotBytes: number, source: TranscriptPreambleSource) => void;
 }): InFlightRunSnapshot | undefined {
   if (!params.snapshot) {
     return undefined;

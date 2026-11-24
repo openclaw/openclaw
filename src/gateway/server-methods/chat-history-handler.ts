@@ -18,6 +18,7 @@ import {
   prepareOptionalSubagentSessionListReadCache,
 } from "../../agents/subagents/registry/subagent-registry-state.js";
 import { readSessionPendingInputReceiptsInWorker } from "../../config/sessions/session-pending-input-receipts.js";
+import type { TranscriptPreambleSource } from "../../config/sessions/transcript-tool-preamble.js";
 import {
   measureDiagnosticsTimelineSpan,
   measureDiagnosticsTimelineSpanSync,
@@ -27,7 +28,6 @@ import { createChannelMentionProjector } from "../chat-display-projection.channe
 import { resolveEffectiveChatHistoryMaxChars } from "../chat-display-projection.js";
 import {
   boundInFlightRunSnapshotForChatHistory,
-  type ChatHistoryPreambleSource,
   getMaxChatHistoryMessagesBytes,
   reportOmittedChatHistory,
 } from "../chat-history-budget.js";
@@ -182,8 +182,8 @@ export async function handleChatHistoryRequest({
           agentId: sessionAgentId,
         })
       : undefined;
-    const historyEntry =
-      requestedSessionId && requestedSessionId !== entry?.sessionId ? undefined : entry;
+    const isCurrentSession = sessionId === entry?.sessionId;
+    const historyEntry = isCurrentSession ? entry : undefined;
     const resolvedSessionModel = resolveSessionModelRef(cfg, entry, sessionAgentId, {
       allowPluginNormalization: false,
     });
@@ -193,7 +193,7 @@ export async function handleChatHistoryRequest({
     const maxResponseBytes = Math.min(maxBytes ?? 512 * 1024, maxHistoryBytes);
     const effectiveMaxChars = resolveEffectiveChatHistoryMaxChars(maxChars);
     const pendingInputs =
-      sessionId && sessionId === entry?.sessionId
+      sessionId && isCurrentSession
         ? await measureDiagnosticsTimelineSpan(`gateway.${method}.pending_inputs`, () =>
             readChatPendingInputs(
               { agentId: sessionAgentId, sessionKey: canonicalKey, sessionId, storePath },
@@ -211,7 +211,7 @@ export async function handleChatHistoryRequest({
         : { items: [], total: 0 };
     // Receipts belong to the currently selected physical session, never archived history.
     const inputReceipts = inputRunIds
-      ? !messageId && sessionId && sessionId === entry?.sessionId
+      ? !messageId && sessionId && isCurrentSession
         ? (
             await readSessionPendingInputReceiptsInWorker(
               { agentId: sessionAgentId, sessionKey: canonicalKey, sessionId, storePath },
@@ -313,7 +313,7 @@ export async function handleChatHistoryRequest({
         });
     type PreparedPage = NonNullable<Awaited<ReturnType<typeof readPage>>>;
     let preambleReserve = 0;
-    let preambleSource: ChatHistoryPreambleSource | undefined;
+    let preambleSource: TranscriptPreambleSource | undefined;
     const presentRead = (read: SessionRowReadView, { historyPage, responsePage }: PreparedPage) => {
       const { messages, messagesBytes, responseHistoryBytes, omission, ...responseFields } =
         responsePage;
@@ -564,7 +564,7 @@ export async function handleChatHistoryRequest({
           if (
             !messageId &&
             !offset &&
-            sessionId === entry?.sessionId &&
+            isCurrentSession &&
             responseHistoryBytes === maxResponseBytes &&
             bytes + 2 <= maxResponseBytes
           ) {

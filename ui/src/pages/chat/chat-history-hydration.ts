@@ -1,7 +1,5 @@
 import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
-import { isAssistantHeartbeatAckForDisplay } from "../../lib/chat/heartbeat-display.ts";
 import {
-  isHiddenAssistantStreamText,
   isVisibleChatHistoryMessage,
   visibleChatHistoryMessages,
 } from "../../lib/chat/message-visibility.ts";
@@ -34,11 +32,10 @@ import {
 } from "./chat-history-state.ts";
 import {
   materializeVisibleAssistantStreamMessages,
-  persistsChatCommentary,
+  historyStreamVisibility,
   readRunProjections,
   applyHistoryRun,
 } from "./chat-history-stream.ts";
-import { loadChatLiveTools } from "./chat-live-tools.ts";
 import { applyChatPendingInputs } from "./chat-pending-inputs.ts";
 import { isChatRunRecoveryStatus, reconcileChatRunStartup } from "./chat-run-startup.ts";
 import type { ChatHistoryHost, ChatHistorySessions, ChatState } from "./chat-state-contract.ts";
@@ -190,9 +187,12 @@ export async function hydrateChatHistory(
     }
     // The bounded run may refer to a row on this wire page. A held-gap fill can prepend rows.
     const runResponse = response;
-    const replayAgentEvent = response.inFlightRun?.events?.length
-      ? (await loadChatLiveTools()).handleAgentEvent
-      : undefined;
+    const run = runResponse.inFlightRun;
+    // Idle reads and evicted progress need no ordered replay code.
+    const replayProgress =
+      run && run.events?.length !== 0
+        ? await (await import("./chat-history-progress.ts")).prepareCheckpointReplay(run)
+        : undefined;
     // First history has no held transcript to reconcile. Load recovery only
     // after other async prerequisites, before capturing the state it may retain.
     const { fillHeldHistoryGap, reconcileHistoryTail } =
@@ -255,7 +255,7 @@ export async function hydrateChatHistory(
         runResponse,
         [previousRunProjections, runProjectionsBeforeApply, currentRunProjections],
         resetStream,
-        replayAgentEvent,
+        replayProgress,
         observedRunActivity,
       );
     const commitSnapshot = () =>
@@ -390,11 +390,10 @@ export async function hydrateChatHistory(
     );
     const resetStream = !state.chatRunId || state.chatRunId === previousRunId;
     if (resetStream) {
-      const streamReconciliation = {
-        persistCommentary: state.chatRunId ? true : persistsChatCommentary(state),
-        isHiddenAssistantMessage: isAssistantHeartbeatAckForDisplay,
-        isHiddenStreamText: isHiddenAssistantStreamText,
-      };
+      const streamReconciliation = historyStreamVisibility(
+        state,
+        state.chatRunId ? true : undefined,
+      );
       const pruneKeyed = () => {
         for (const message of state.chatMessages) {
           prunePersistedAssistantStreamSegments(state, message);
