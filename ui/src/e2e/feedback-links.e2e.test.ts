@@ -60,10 +60,32 @@ suite.define(() => {
         const toggle = notice.getByRole("button", { name: "Show details", exact: true });
         expect(await toggle.count()).toBe(1);
         expect(await toggle.getAttribute("aria-expanded")).toBe("false");
+        const labelStyle = await toggle.evaluate((element) => {
+          const style = getComputedStyle(element);
+          return {
+            background: style.backgroundColor,
+            border: style.borderWidth,
+            outline: style.outlineStyle,
+            color: style.color,
+            chevron: getComputedStyle(element.querySelector(".lazy-view-error__chevron")!).color,
+          };
+        });
+        expect.soft(labelStyle.background).toBe("rgba(0, 0, 0, 0)");
+        expect.soft(labelStyle.border).toBe("0px");
+        expect.soft(labelStyle.outline).toBe("none");
+        expect.soft(labelStyle.chevron).not.toBe(labelStyle.color);
+        await toggle.focus();
+        expect(await toggle.evaluate((element) => element === document.activeElement)).toBe(true);
+        expect
+          .soft(await toggle.evaluate((element) => getComputedStyle(element).textDecorationLine))
+          .toBe("underline");
         await toggle.press("Enter");
         await notice.getByLabel("Error details", { exact: true }).waitFor();
         await expect.poll(() => toggle.getAttribute("aria-expanded")).toBe("true");
         await report.waitFor();
+        expect
+          .soft(await notice.evaluate((element) => getComputedStyle(element).boxShadow))
+          .toBe("none");
         expect(await report.evaluate((element) => getComputedStyle(element).fontSize)).toBe(
           collapsed.fontSize,
         );

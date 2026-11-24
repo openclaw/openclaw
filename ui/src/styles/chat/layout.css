@@ -9,66 +9,76 @@ openclaw-pending-session-create {
   width: 100%;
   max-width: var(--chat-thread-max-width, 48rem);
   align-self: center;
+
+  /* Expanding details keeps recovery beside the title. On phones, reply actions
+   * move together below the message. Details span the full width below. */
+  .app-toast__content {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: start;
+    gap: 2px 12px;
+  }
+
+  .app-toast__body {
+    display: contents;
+
+    > span {
+      grid-column: 1;
+    }
+  }
+
+  .lazy-view-error__details {
+    grid-column: 1 / -1;
+  }
+
+  .chat-error__actions {
+    grid-area: 1 / 2 / 3;
+    gap: 2px 12px;
+    margin-block-start: -4px;
+  }
+
+  /* Persistent errors do not time out, so their dismiss control stays visible
+   * and sits inside the card: a corner badge would be clipped by scrolling
+   * composer containers on phones. */
+  > .app-toast__dismiss {
+    position: static;
+    flex: none;
+    margin: -1px -6px 0 -4px;
+    background: transparent;
+    box-shadow: none;
+    color: var(--muted);
+    opacity: 1;
+    scale: 1;
+  }
 }
 
-/* Expanding details keeps recovery beside the title. On phones, reply actions
- * move together below the message. Details span the full width below. */
-.chat-error .app-toast__content {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  align-items: start;
-  gap: 2px 12px;
+.chat-error--reply {
+  box-shadow: none;
 }
 
-.chat-error .app-toast__body {
-  display: contents;
-}
+.chat-error__toggle {
+  min-height: 28px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--text);
+  outline: none;
 
-.chat-error .app-toast__message,
-.chat-error .app-toast__description {
-  grid-column: 1;
-}
-
-.chat-error .lazy-view-error__details {
-  grid-column: 1 / -1;
-}
-
-.chat-error .chat-error__actions {
-  grid-template-rows: subgrid;
-  grid-row: 1 / span 2;
-  row-gap: 2px;
-  grid-column: 2;
-  margin-block-start: -4px;
+  &:is(:hover, :focus-visible) {
+    text-decoration: underline;
+  }
 }
 
 /* Keep paired reply actions and long discard labels below the message on phones. */
 @media (max-width: 560px) {
   .chat-error--reply .chat-error__actions,
   .chat-error__actions:has(> .chat-error__discard) {
-    grid-template-rows: none;
-    grid-row: auto;
+    grid-area: auto / 1 / auto / -1;
     gap: 12px;
-    grid-column: 1 / -1;
     justify-self: start;
     margin-block-start: 6px;
   }
-}
 
-/* Persistent errors do not time out, so their dismiss control stays visible
- * and sits inside the card: a corner badge would be clipped by scrolling
- * composer containers on phones. */
-.chat-error > .app-toast__dismiss {
-  position: static;
-  flex: none;
-  margin: -1px -6px 0 -4px;
-  background: transparent;
-  box-shadow: none;
-  color: var(--muted);
-  opacity: 1;
-  scale: 1;
-}
-
-@media (max-width: 560px) {
   .chat-error__discard,
   .chat-error__refresh {
     white-space: normal;

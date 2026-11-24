@@ -350,14 +350,17 @@ function ChatErrorNotice(props: {
     <div class={["chat-error__actions", props.replyActions ? "row" : "stack"]}>
       <Show when={inlineDetails()}>
         <button
-          class="app-toast__action row chat-error__toggle"
+          class="row chat-error__toggle"
           type="button"
           aria-expanded={expanded() ? "true" : "false"}
           aria-controls={detailsId}
           onClick={() => setExpanded((value) => !value)}
         >
           {t("common.showDetails")}
-          <Icon name={expanded() ? "chevronUp" : "chevronDown"} class="lazy-view-error__chevron" />
+          <Icon
+            name={expanded() ? "chevronUp" : "chevronDown"}
+            class="lazy-view-error__chevron muted"
+          />
         </button>
       </Show>
       {props.action}
