@@ -131,8 +131,6 @@ export function renderMicrophonePickerSolid(props: MicrophonePickerProps) {
             if (pointer) {
               queueMicrotask(() => handle?.overlay.trigger?.blur());
             }
-          } else if (item.id === "hold-to-dictate") {
-            props.onHoldToDictateChange?.(props.holdToDictate === false);
           } else if (item.id === "capability:realtime") {
             props.onOpenTalkSettings?.();
           } else if (item.id === "capability:dictation") {
@@ -152,88 +150,42 @@ export function renderMicrophonePickerSolid(props: MicrophonePickerProps) {
 type ComposerVoiceButtonProps = {
   connected: boolean;
   disabled?: boolean;
-  submitDisabledReason?: string | null;
   readDictation?: () => ComposerDictationOwner;
   microphonePicker?: JSX.Element;
   /** Dictation-only surfaces must not promise Talk. */
   idleLabel?: string;
-  onDictationPointerDown?: (event: PointerEvent) => void;
   onDirectDictationStart?: () => void;
-  onToggleVoice?: () => void;
 };
 
 export function renderComposerVoiceButtonSolid(props: ComposerVoiceButtonProps) {
   const active = () => props.readDictation?.()?.active === true;
-  const arming = () => props.readDictation?.()?.arming === true;
   const finalizing = () => props.readDictation?.()?.finalizing === true;
   const holding = () => props.readDictation?.()?.locksComposer === true;
-  const startsDictationDirectly = () =>
-    props.readDictation !== undefined && props.onToggleVoice === undefined;
   const label = () =>
     active()
       ? t("chat.composer.dictationStopAndKeep")
-      : (props.idleLabel ?? t("chat.composer.startVoiceInput"));
-  const tooltip = () =>
-    props.readDictation && !startsDictationDirectly() && !(active() || finalizing())
-      ? [props.submitDisabledReason, t("chat.composer.voiceGestureHint")]
-          .filter(Boolean)
-          .join(" · ")
-      : active()
-        ? label()
-        : (props.submitDisabledReason ?? label());
-  // This shape owns pointer capture. Keep it stable while dictation rerenders,
-  // or replacing the button releases capture and cancels the active hold.
+      : (props.idleLabel ?? t("chat.composer.dictationCapability"));
   return (
     <span
       class={["chat-talk-control", { "chat-talk-control--holding": holding() }]}
       style={microphoneHoverStyle}
     >
-      <openclaw-tooltip prop:content={tooltip()} prop:delay={MICROPHONE_HOVER_DELAY_MS}>
+      <openclaw-tooltip prop:content={label()} prop:delay={MICROPHONE_HOVER_DELAY_MS}>
         <button
-          class={[
-            "chat-send-btn",
-            active()
-              ? "chat-send-btn--dictating"
-              : [
-                  "chat-send-btn--voice",
-                  {
-                    "chat-send-btn--hold-enabled":
-                      props.readDictation && !startsDictationDirectly(),
-                    "chat-send-btn--dictation-arming": arming(),
-                  },
-                ],
-          ]}
+          class={["chat-send-btn", active() ? "chat-send-btn--dictating" : "chat-send-btn--voice"]}
           type="button"
-          onPointerDown={(event: PointerEvent) => props.onDictationPointerDown?.(event)}
           onClick={(event: MouseEvent) => {
+            event.preventDefault();
             if (active()) {
-              event.preventDefault();
-              // The controller owns hold suppression: releasing a latched hold
-              // also clicks this button, and that click must not mean Stop.
               if (!finalizing()) {
-                props.readDictation?.()?.handleClick(event);
+                void props.readDictation?.()?.finishActive();
               }
-              return;
-            }
-            if (startsDictationDirectly()) {
-              event.preventDefault();
+            } else {
               props.onDirectDictationStart?.();
               props.readDictation?.()?.startDirect();
-              return;
-            }
-            if (props.readDictation) {
-              props.readDictation().handleClick(event);
-            } else {
-              props.onToggleVoice?.();
             }
           }}
-          onContextMenu={(event: MouseEvent) => props.readDictation?.()?.handleContextMenu(event)}
-          disabled={
-            !active() &&
-            (!props.connected ||
-              props.disabled ||
-              (!props.readDictation && Boolean(props.submitDisabledReason)))
-          }
+          disabled={!active() && (!props.connected || props.disabled)}
           aria-disabled={finalizing() ? "true" : "false"}
           aria-label={label()}
         >
@@ -411,56 +363,18 @@ export function renderChatPrimaryActionsSolid(props: ChatRunControlsProps) {
       </button>
     </openclaw-tooltip>
   );
-  const TalkAction = (action: { camera?: boolean }) => (
-    <openclaw-tooltip
-      class={{ "chat-mobile-talk-action": !action.camera }}
-      prop:content={
-        action.camera
-          ? cameraLabel()
-          : (props.submitDisabledReason ?? t("chat.composer.realtimeTalkCapability"))
-      }
-    >
-      <button
-        class={[
-          "chat-send-btn",
-          action.camera ? "chat-send-btn--voice" : "chat-send-btn--talk-mode",
-        ]}
-        type={action.camera ? undefined : "button"}
-        ref={primaryPointerDownRef(() =>
-          action.camera ? undefined : props.onPrimaryActionPointerDown,
-        )}
-        onClick={() => {
-          if (action.camera) {
-            props.onToggleCamera?.();
-          } else {
-            props.onToggleVoice?.();
-          }
-        }}
-        disabled={
-          action.camera
-            ? props.voiceVideoPending ||
-              props.voiceStatus === "connecting" ||
-              props.voiceStatus === "error"
-            : !props.connected ||
-              props.sending ||
-              props.isBusy ||
-              Boolean(props.submitDisabledReason)
-        }
-        aria-label={action.camera ? cameraLabel() : t("chat.composer.realtimeTalkCapability")}
-        aria-pressed={action.camera ? (props.voiceVideoEnabled ? "true" : "false") : undefined}
-      >
-        <Icon
-          name={action.camera ? (props.voiceVideoEnabled ? "cameraOff" : "camera") : "audioLines"}
-        />
-        <span class="agent-chat__control-label">
-          {action.camera ? cameraLabel() : t("chat.composer.realtimeTalkCapability")}
-        </span>
-      </button>
-    </openclaw-tooltip>
-  );
+  const talkLabel = () =>
+    t(props.voiceActive ? "chat.composer.stopVoiceInput" : "chat.composer.realtimeTalkCapability");
+  const talkDisabled = () =>
+    !props.voiceActive &&
+    (!props.connected ||
+      props.sending ||
+      props.isBusy ||
+      Boolean(props.submitDisabledReason) ||
+      Boolean(props.readDictation?.()?.locksComposer));
   const AbortAction = renderChatAbortActionSolid;
   const VoiceButton = renderComposerVoiceButtonSolid;
-  const PrimaryAction = (placement: { mobile?: boolean }) => (
+  const PrimaryAction = () => (
     <>
       {props.readDictation?.()?.active ? (
         !props.submitDisabledReason || canSubmitBeforeChatHistory(props.draft) ? (
@@ -474,8 +388,6 @@ export function renderChatPrimaryActionsSolid(props: ChatRunControlsProps) {
         )
       ) : props.canAbort && !hasSendableContent() ? (
         <AbortAction {...props} />
-      ) : placement.mobile && !hasComposedContent() && props.onToggleVoice ? (
-        <TalkAction />
       ) : (
         <SendAction />
       )}
@@ -483,87 +395,81 @@ export function renderChatPrimaryActionsSolid(props: ChatRunControlsProps) {
   );
   return (
     <>
-      {props.voiceActive && props.onToggleVoice ? (
-        <>
-          <span class="chat-talk-control chat-talk-control--active" style={microphoneHoverStyle}>
-            <openclaw-tooltip
-              prop:content={t("chat.composer.stopVoiceInput")}
-              prop:delay={MICROPHONE_HOVER_DELAY_MS}
-            >
-              <button
-                class={[
-                  "chat-send-btn chat-send-btn--voice-live",
-                  { "chat-send-btn--voice-error": voiceErrored() },
-                ]}
-                onClick={() => props.onToggleVoice?.()}
-                aria-label={t("chat.composer.stopVoiceInput")}
-              >
-                {voiceErrored() ? null : (
+      <Show when={props.readDictation || props.microphonePicker}>
+        <VoiceButton
+          connected={props.connected}
+          readDictation={props.readDictation}
+          onDirectDictationStart={props.onDirectDictationStart}
+          microphonePicker={microphonePicker}
+          disabled={Boolean(props.voiceActive || !props.readDictation)}
+        />
+      </Show>
+      <Show when={props.onToggleVoice && (props.voiceActive || props.talkReady)}>
+        <openclaw-tooltip
+          prop:content={
+            props.voiceActive ? talkLabel() : (props.submitDisabledReason ?? talkLabel())
+          }
+        >
+          <button
+            class={[
+              "chat-send-btn",
+              props.voiceActive ? "chat-send-btn--voice-live" : "chat-send-btn--voice",
+              { "chat-send-btn--voice-error": voiceErrored() },
+            ]}
+            type="button"
+            onClick={() => props.onToggleVoice?.()}
+            disabled={talkDisabled()}
+            aria-label={talkLabel()}
+            aria-pressed={props.voiceActive ? "true" : "false"}
+          >
+            {props.voiceActive ? (
+              <>
+                <Show when={!voiceErrored()}>
                   <MicrophoneActivity
                     status={props.voiceStatus}
                     inputLevel={props.voiceInputLevel}
                   />
-                )}
+                </Show>
                 <span class="chat-send-btn__voice-stop-glyph">
                   <Icon name="stop" />
                 </span>
-              </button>
-            </openclaw-tooltip>
-            <ComposerContent>{microphonePicker}</ComposerContent>
-          </span>
-          {voiceErrored() || props.voiceStatus === "connecting" ? null : (
-            <span
-              class="sr-only agent-chat__voice-status"
-              role="status"
-              aria-live="polite"
-              aria-atomic="true"
-            >
-              {voiceStatusLabel(props.voiceStatus, props.voiceDetail)}
-            </span>
-          )}
-          {props.voiceVideoCapable && props.onToggleCamera ? <TalkAction camera /> : null}
-          <span class="chat-mobile-primary-action chat-desktop-primary-action">
-            <AbortAction {...props} />
-          </span>
-        </>
-      ) : (
-        <>
-          {props.readDictation || props.onToggleVoice ? (
-            <VoiceButton
-              {...props}
-              microphonePicker={microphonePicker}
-              disabled={!props.readDictation && (props.sending || props.isBusy)}
-            />
-          ) : null}
-          {props.readDictation ? (
-            <span class="chat-mobile-dictation-action">
-              <VoiceButton
-                connected={props.connected}
-                readDictation={props.readDictation}
-                idleLabel={t("chat.composer.dictationCapability")}
-                onDirectDictationStart={props.onDirectDictationStart}
-              />
-            </span>
-          ) : null}
-          {!props.readDictation?.()?.active &&
-          !(props.canAbort && !hasSendableContent()) &&
-          !hasComposedContent() &&
-          props.onToggleVoice ? (
-            <>
-              <span class="chat-mobile-primary-action">
-                <PrimaryAction mobile />
-              </span>
-              <span class="chat-desktop-primary-action">
-                <PrimaryAction />
-              </span>
-            </>
-          ) : (
-            <span class="chat-mobile-primary-action chat-desktop-primary-action">
-              <PrimaryAction />
-            </span>
-          )}
-        </>
-      )}
+              </>
+            ) : (
+              <Icon name="audioLines" />
+            )}
+          </button>
+        </openclaw-tooltip>
+      </Show>
+      <Show when={props.voiceActive && !voiceErrored() && props.voiceStatus !== "connecting"}>
+        <span
+          class="sr-only agent-chat__voice-status"
+          role="status"
+          aria-live="polite"
+          aria-atomic="true"
+        >
+          {voiceStatusLabel(props.voiceStatus, props.voiceDetail)}
+        </span>
+      </Show>
+      <Show when={props.voiceActive && props.voiceVideoCapable && props.onToggleCamera}>
+        <openclaw-tooltip prop:content={cameraLabel()}>
+          <button
+            class="chat-send-btn chat-send-btn--voice"
+            type="button"
+            onClick={() => props.onToggleCamera?.()}
+            disabled={
+              props.voiceVideoPending || props.voiceStatus === "connecting" || voiceErrored()
+            }
+            aria-label={cameraLabel()}
+            aria-pressed={props.voiceVideoEnabled ? "true" : "false"}
+          >
+            <Icon name={props.voiceVideoEnabled ? "cameraOff" : "camera"} />
+            <span class="agent-chat__control-label">{cameraLabel()}</span>
+          </button>
+        </openclaw-tooltip>
+      </Show>
+      <span class="chat-mobile-primary-action chat-desktop-primary-action">
+        {props.voiceActive ? <AbortAction {...props} /> : <PrimaryAction />}
+      </span>
     </>
   );
 }

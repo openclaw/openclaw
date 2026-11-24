@@ -156,10 +156,8 @@ it("persists microphone selection and preserves focused items across redraws", a
     "open",
   );
   focused.focus();
-  v.props.composerHoldToRecord = false;
   v.draw();
   await waitForSolid(() => {
-    expect(v.part("preference")?.getAttribute("aria-checked")).toBe("false");
     expect(v.root.querySelector('[value="studio-mic"]')).toBe(focused);
     expect(document.activeElement).toBe(focused);
   });
@@ -169,33 +167,6 @@ it("persists microphone selection and preserves focused items across redraws", a
   await v.open();
   await waitForSolid(() => expect(discover).toHaveBeenCalledTimes(2));
   expect(v.checked()).toEqual(["false", "false", "true"]);
-});
-
-it("keeps hold-to-dictate controlled without changing the selected microphone", async () => {
-  discover.mockResolvedValue(emptyDevices);
-  patchSettings({ realtimeTalkInputDeviceId: studio.deviceId });
-  const onComposerHoldToRecordChange = vi.fn((enabled: boolean) => {
-    v.props.composerHoldToRecord = patchSettings({
-      composerHoldToRecord: enabled,
-    }).composerHoldToRecord;
-    v.draw();
-  });
-  const v = await mountPicker({
-    composerHoldToRecord: true,
-    realtimeTalkInputDeviceId: studio.deviceId,
-    onComposerHoldToRecordChange,
-  });
-  await v.open();
-  const preference = () => v.part('preference[role="menuitemcheckbox"]');
-  expect(preference()?.getAttribute("aria-checked")).toBe("true");
-  preference()?.click();
-  await waitForSolid(() => expect(onComposerHoldToRecordChange).toHaveBeenCalledWith(false));
-  expect(loadSettings()).toMatchObject({
-    composerHoldToRecord: false,
-    realtimeTalkInputDeviceId: studio.deviceId,
-  });
-  expect(v.dropdown.hasAttribute("open")).toBe(true);
-  expect(preference()?.getAttribute("aria-checked")).toBe("false");
 });
 
 it.each([
@@ -227,11 +198,12 @@ it.each([
     );
     expect(v.dropdown.hasAttribute("open")).toBe(false);
     expect(v.dropdown.querySelector("[data-chat-talk-capability]")).toBeNull();
-    if (pending) {
-      button(v.root, copy("startVoiceInput")).click();
-    } else {
-      await v.open();
-    }
+    await waitForSolid(() =>
+      expect(
+        Boolean(v.root.querySelector('[aria-label="' + copy("realtimeTalkCapability") + '"]')),
+      ).toBe(realtime),
+    );
+    await v.open();
     await expectEventually(
       () => capabilities().map((entry) => entry.dataset.chatTalkCapability),
       unavailable,
@@ -243,11 +215,6 @@ it.each([
       () => v.all('[data-chat-talk-capability][data-status="unavailable"]').length,
       2,
     );
-    const tooltip = v.root.querySelector<HTMLElement & { content?: string }>(
-      ".chat-talk-control > openclaw-tooltip",
-    );
-    expect(v.root.querySelector(".chat-talk-control__capability-alert")).toBeNull();
-    expect(tooltip?.content).toBe(`${t("chat.thread.loading")} · ${copy("voiceGestureHint")}`);
     expect(
       v.all(
         '.chat-talk-input-picker__capability[data-status="unavailable"] .chat-talk-input-picker__capability-alert',
@@ -302,17 +269,6 @@ it("points a sign-in without voice to its provider's API key", async () => {
     onOpenDictationSettings: vi.fn(),
   });
   const voice = "Talk and Dictation need an OpenAI API key.";
-  const talk = "Talk needs an OpenAI API key.";
-  // Tapping Talk explains the missing key in place instead of opening the picker.
-  await waitForSolid(() => {
-    button(v.root, copy("startVoiceInput")).click();
-    expect(v.root.querySelector(".agent-chat__composer-alert")?.textContent ?? "").toContain(talk);
-  });
-  expect(v.dropdown.hasAttribute("open")).toBe(false);
-  v.root.querySelector<HTMLButtonElement>(".agent-chat__composer-alert .btn")!.click();
-  expect(onOpenModelProvider).toHaveBeenLastCalledWith(expect.anything(), "main", "openai");
-  // Talk and dictation miss the same key, so the picker names one fix.
-  onOpenModelProvider.mockClear();
   await v.open();
   const rows = await waitForSolid(() => {
     const found = v.all("[data-chat-talk-capability]");

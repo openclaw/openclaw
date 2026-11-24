@@ -366,7 +366,6 @@ describe("config appearance preferences", () => {
       camera: mediaDevice("camera-1", "Desk Camera"),
       onCameraSelect: vi.fn().mockResolvedValue(undefined),
       onCameraRefresh,
-      composerHoldToRecord: true,
     });
 
     const shortcutGroup = required(

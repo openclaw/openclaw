@@ -625,7 +625,6 @@ export function createConfigPage(
         ...mediaDevices.microphone,
         selectedDeviceId: settings().realtimeTalkInputDeviceId ?? "",
       },
-      composerHoldToRecord: settings().composerHoldToRecord !== false,
       onMicrophoneRefresh: () => void mediaDeviceOwner.refresh("microphone", true),
       onMicrophoneSelect: (deviceId: string) =>
         preferences.apply({ realtimeTalkInputDeviceId: deviceId.trim() || undefined }),

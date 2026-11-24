@@ -110,9 +110,6 @@ export class RealtimeTalkMediaStreamMeter {
       const source = context.createMediaStreamSource(media);
       this.source = source;
       const analyser = context.createAnalyser();
-      this.analyser = analyser;
-      analyser.fftSize = this.samples.length;
-      analyser.smoothingTimeConstant = 0;
       source.connect(analyser);
       this.releaseVisibility = listen(document, "visibilitychange", () => {
         // Shared contexts also capture audio. Only the decorative context may pause.
@@ -126,12 +123,19 @@ export class RealtimeTalkMediaStreamMeter {
       if (document.hidden && this.ownsContext) {
         void context.suspend().catch(() => {});
       }
-      this.updateSampling();
+      this.startAnalyser(analyser);
     } catch {
       // Metering is feedback only; capture must still work if Web Audio analysis
       // is unavailable in an otherwise functional WebRTC browser.
       this.stop();
     }
+  }
+
+  startAnalyser(analyser: AnalyserNode): void {
+    this.analyser = analyser;
+    analyser.fftSize = this.samples.length;
+    analyser.smoothingTimeConstant = 0;
+    this.updateSampling();
   }
 
   stop(notify = true): void {
@@ -173,7 +177,7 @@ export class RealtimeTalkMediaStreamMeter {
   }
 
   private publishCurrentLevel(): void {
-    if (!this.analyser) {
+    if (!this.analyser || document.hidden) {
       return;
     }
     this.analyser.getFloatTimeDomainData(this.samples);
@@ -215,14 +219,32 @@ export class RealtimeTalkPcmOutputQueue {
   private playhead = 0;
   private readonly sources = new Set<AudioBufferSourceNode>();
   private sourceListeners: AbortController | null = null;
+  private analyser: AnalyserNode | null = null;
+  private meter: RealtimeTalkMediaStreamMeter | null = null;
 
-  open(sampleRateHz: number): void {
+  open(sampleRateHz: number, onLevel?: (level: number) => void): void {
     this.context = new AudioContext({ sampleRate: sampleRateHz });
     this.sampleRateHz = sampleRateHz;
+    if (onLevel) {
+      try {
+        const analyser = this.context.createAnalyser();
+        analyser.connect(this.context.destination);
+        this.meter = new RealtimeTalkMediaStreamMeter(onLevel);
+        this.meter.startAnalyser(analyser);
+        this.analyser = analyser;
+      } catch {
+        // Decorative feedback must not prevent audio playback.
+        this.meter?.stop(false);
+        this.meter = null;
+      }
+    }
   }
 
   close(): void {
     this.stop();
+    this.meter?.stop();
+    this.meter = null;
+    this.analyser = null;
     void this.context?.close();
     this.context = null;
   }
@@ -286,7 +308,7 @@ export class RealtimeTalkPcmOutputQueue {
       signal: this.sourceListeners.signal,
     });
     source.buffer = buffer;
-    source.connect(outputContext.destination);
+    source.connect(this.analyser ?? outputContext.destination);
     source.start(startAt);
     this.playhead = nextPlayhead;
     return "queued";

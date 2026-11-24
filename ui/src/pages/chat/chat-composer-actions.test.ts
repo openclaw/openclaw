@@ -258,49 +258,34 @@ describe("renderChatComposer controls", () => {
     }
   });
 
-  it("keeps dictation available while Talk is held during an active turn", () => {
-    const { container } = renderComposer({
-      sending: true,
-      onToggleRealtimeTalk: vi.fn(),
+  it("toggles Talk separately from dictation without submitting the draft", async () => {
+    const request = vi.fn().mockResolvedValue({
+      realtime: { ready: true, providers: [] },
+      transcription: { ready: true, providers: [] },
     });
-
-    const mobileDictation = query(container, ".chat-mobile-dictation-action .chat-send-btn--voice");
-    expect(mobileDictation?.disabled).toBe(false);
-    expect(button(container, t("chat.composer.startVoiceInput")).disabled).toBe(false);
-    expect(query(container, ".chat-mobile-talk-action .chat-send-btn")?.disabled).toBe(true);
+    const onToggleRealtimeTalk = vi.fn();
+    const view = renderComposer({
+      draft: "keep this",
+      gatewayClient: createTestGatewayClient(request),
+      onToggleRealtimeTalk,
+    });
+    const { container, props } = view;
+    const talk = await vi.waitFor(() =>
+      button(container, t("chat.composer.realtimeTalkCapability")),
+    );
+    talk.click();
+    expect(onToggleRealtimeTalk).toHaveBeenCalledTimes(1);
+    expect(props.onSend).not.toHaveBeenCalled();
+    props.realtimeTalkActive = true;
+    renderComposerInto(container, props);
+    expect(button(container, t("chat.composer.dictationCapability")).disabled).toBe(true);
+    button(container, t("chat.composer.stopVoiceInput")).click();
+    expect(onToggleRealtimeTalk).toHaveBeenCalledTimes(2);
   });
-
-  it.each([true, false])(
-    "holds Talk during initial history while preserving draft input (hold-to-record=%s)",
-    async (composerHoldToRecord) => {
-      const request = vi.fn().mockResolvedValue({
-        realtime: { ready: true },
-        transcription: { ready: true },
-      });
-      const onToggleRealtimeTalk = vi.fn();
-      const { container } = renderComposer({
-        composerHoldToRecord,
-        gatewayClient: createTestGatewayClient(request),
-        onToggleRealtimeTalk,
-        submitDisabledReason: t("chat.thread.loading"),
-      });
-      await vi.waitFor(() =>
-        expect(request).toHaveBeenCalledWith("talk.catalog", { sessionKey: "main" }),
-      );
-      const microphone = button(container, t("chat.composer.startVoiceInput"));
-      const talk = button(container, t("chat.composer.realtimeTalkCapability"));
-      microphone.click();
-      talk.click();
-      expect(onToggleRealtimeTalk).not.toHaveBeenCalled();
-      expect(talk.disabled).toBe(true);
-      expect(microphone.disabled).toBe(!composerHoldToRecord);
-      expect(textarea(container).disabled).toBe(false);
-    },
-  );
 
   it("disables live voice offline", () => {
     const view = renderComposer({ connected: false, onToggleRealtimeTalk: vi.fn() });
-    expect(button(view.container, t("chat.composer.startVoiceInput")).disabled).toBe(true);
+    expect(button(view.container, t("chat.composer.dictationCapability")).disabled).toBe(true);
   });
 
   it("offers Steer only for eligible queued messages during an active run", async () => {

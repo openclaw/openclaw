@@ -176,8 +176,6 @@ function createButtonHarness() {
       return createComponent(renderComposerVoiceButtonSolid, {
         connected: true,
         readDictation: owner.read,
-        onDictationPointerDown: (event) => controller.handlePointerDown(event),
-        onToggleVoice: vi.fn(),
       });
     },
     { container },
@@ -922,16 +920,15 @@ describe("ComposerDictationOwner", () => {
 });
 
 describe("composer microphone button", () => {
-  it("keeps a latched hold recording after its release click until a separate tap", async () => {
+  it("starts dictation on one microphone tap and stops and keeps it on the next", async () => {
     const { controller, onCommit, onTap, target } = createButtonHarness();
-    await startHold(target);
+    click(target);
+    await waitForFast(() =>
+      expect(request).toHaveBeenCalledWith("talk.session.create", expect.anything()),
+    );
     transcript("keep recording");
-
-    await releaseLatched(target);
     expect(controller.active).toBe(true);
-    expect(request.mock.calls.map(([method]) => method)).not.toContain("talk.session.close");
     expect(onCommit).not.toHaveBeenCalled();
-
     click(target);
     await waitForFast(() => expectClosed());
     emit({ type: "close", reason: "completed" });
@@ -939,19 +936,6 @@ describe("composer microphone button", () => {
     expect(onCommit).toHaveBeenCalledExactlyOnceWith("keep recording", true);
     expect(controller.active).toBe(false);
     expect(onTap).not.toHaveBeenCalled();
-  });
-
-  it("keeps a quick tap as the tap action", async () => {
-    const { controller, onTap, target } = createButtonHarness();
-
-    target.dispatchEvent(pointer("pointerdown"));
-    document.dispatchEvent(pointer("pointerup"));
-    click(target);
-    await vi.advanceTimersByTimeAsync(300);
-
-    expect(onTap).toHaveBeenCalledOnce();
-    expect(request).not.toHaveBeenCalled();
-    expect(controller.locksComposer).toBe(false);
   });
 });
 

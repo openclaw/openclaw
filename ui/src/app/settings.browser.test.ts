@@ -30,7 +30,6 @@ it.each([false, true])("persists Gateway-scoped bubbles (legacy preferences=%s)"
     chatShowThinking: false,
     chatShowToolCalls: false,
     chatPersistCommentary: false,
-    composerHoldToRecord: false,
     navWidth: 300,
     chatMessageMaxWidth: "48rem",
   };

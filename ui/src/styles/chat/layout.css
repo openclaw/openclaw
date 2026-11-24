@@ -3033,12 +3033,6 @@ openclaw-chat-ci-details {
     margin-inline-start: var(--chat-mobile-row-action-gap);
   }
 
-  .agent-chat__input--chat
-    .agent-chat__composer-actions
-    > .chat-talk-control:not(.chat-talk-control--active) {
-    display: none;
-  }
-
   .agent-chat__input--chat :is(.chat-mobile-dictation-action, .chat-mobile-primary-action),
   .agent-chat__input--chat .chat-mobile-primary-action > .chat-mobile-talk-action {
     display: inline-flex;

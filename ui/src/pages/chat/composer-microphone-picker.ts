@@ -41,14 +41,12 @@ export type MicrophonePickerProps = {
   selectedDeviceId: string;
   voiceActive: boolean;
   issue: RealtimeTalkDeviceIssue | null;
-  holdToDictate?: boolean;
   showRealtimeCapability?: boolean;
   realtimeStatus: ComposerTalkCapabilityStatus;
   dictationStatus: ComposerTalkCapabilityStatus;
   onOpen: () => void;
   onClose: () => void;
   onSelect: (deviceId: string) => void;
-  onHoldToDictateChange?: (enabled: boolean) => void;
   onOpenTalkSettings?: () => void;
   onOpenDictationSettings?: () => void;
   apiKeyProviders?: VoiceApiKeyProviders;

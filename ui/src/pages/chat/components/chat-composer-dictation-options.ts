@@ -10,14 +10,13 @@ export function createComposerDictationOptions(
   state: ChatComposerState,
   devicePicker: ComposerMicrophoneOwner,
   setError: (error: string | null) => void,
-  onTap?: () => void,
 ) {
   return {
     client: props.gatewayClient ?? null,
     sessionKey: props.sessionKey,
     draftKey: composerDraftKey(props),
     connected: props.connected,
-    enabled: props.composerHoldToRecord !== false,
+    enabled: true,
     dictationAvailable: devicePicker.dictationStatus === "ready",
     realtimeTalkActive: props.realtimeTalkActive === true,
     onCommit: (transcript: string, late?: true, preservePreview?: true) => {
@@ -71,6 +70,5 @@ export function createComposerDictationOptions(
       setError(`${message} ${recovery}`);
     },
     onDictationUnavailable: devicePicker.handleOpen,
-    onTap,
   };
 }
