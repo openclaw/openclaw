@@ -332,7 +332,7 @@ struct OnboardingWelcomeStep: View {
                         Button(action: onShowNewUserGuide) {
                             Text("New to OpenClaw? Start here")
                                 .font(OpenClawType.subheadSemiBold)
-                                .foregroundStyle(OpenClawBrand.activationPrimaryAction)
+                                .foregroundStyle(.primary)
                                 .frame(maxWidth: .infinity, minHeight: 44)
                         }
                         .buttonStyle(.plain)

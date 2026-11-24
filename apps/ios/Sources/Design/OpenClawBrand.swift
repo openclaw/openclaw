@@ -323,7 +323,8 @@ struct OpenClawSecondaryActionButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .font(OpenClawType.subheadSemiBold)
-            .foregroundStyle(self.isEnabled ? OpenClawBrand.accent : Color.secondary)
+            // Neutral ink: the accent belongs to the one primary action on the screen.
+            .foregroundStyle(self.isEnabled ? Color.primary : Color.secondary)
             .multilineTextAlignment(.center)
             .lineLimit(2)
             .minimumScaleFactor(0.8)
