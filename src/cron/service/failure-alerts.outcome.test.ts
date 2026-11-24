@@ -25,7 +25,7 @@ import { applyJobResultAndDrainNotifications } from "./notification.test-helpers
 import { start as startCronService, stop as stopCronService } from "./ops-lifecycle.js";
 import { finishCronRun } from "./run-history.js";
 import { restoreFinalizedStartupRun } from "./startup-run-repair.js";
-import type { DeferredCronNotifications } from "./state.js";
+import type { CronServiceDeps, DeferredCronNotifications } from "./state.js";
 import { authorCronRunCompletion } from "./timer-job-runner.js";
 import { finalizeCompletedCronRunOutcomes } from "./timer-outcome-finalization.js";
 import { applyTriggerNoFireResult } from "./timer-outcomes.js";
@@ -52,6 +52,10 @@ describe("cron failure alert outcome write-back", () => {
       nowMs: () => endedAt,
       sendCronFailureAlert: params.sendCronFailureAlert,
     });
+    const enqueueSessionEvent = vi
+      .fn<NonNullable<CronServiceDeps["enqueueSessionEvent"]>>()
+      .mockResolvedValue({ ok: true });
+    state.deps.enqueueSessionEvent = enqueueSessionEvent;
     await finalizeAlertOutcome({
       state,
       job,
@@ -60,7 +64,7 @@ describe("cron failure alert outcome write-back", () => {
       startedAt: dueAt,
       endedAt,
     });
-    return { store, state, job };
+    return { store, state, job, enqueueSessionEvent };
   }
 
   it.each([
@@ -211,7 +215,7 @@ describe("cron failure alert outcome write-back", () => {
           statements.restore();
         }
       });
-      const { store, state } = await runFailure({
+      const { store, enqueueSessionEvent } = await runFailure({
         id: "alert-outcome-redacted-error",
         sendCronFailureAlert: send,
         privateFallback,
@@ -227,8 +231,7 @@ describe("cron failure alert outcome write-back", () => {
       expect(persisted).toHaveLength(1_000);
       expect(formatErrorMessage(err).length).toBeGreaterThan(1_000);
       expect(persisted).not.toContain("abcdefghijklmnopqrstuvwxyz123456");
-      const [fallbackMessage, target] =
-        vi.mocked(state.deps.enqueueSessionEvent).mock.calls[0] ?? [];
+      const [fallbackMessage, target] = enqueueSessionEvent.mock.calls[0] ?? [];
       expect(fallbackMessage).toContain("Failure alert delivery: not-delivered.");
       if (privateFallback) {
         expect(target).toMatchObject({ deliver: false });
