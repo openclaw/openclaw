@@ -18,6 +18,7 @@ import { resolveSqliteDatabaseFilePaths } from "../infra/sqlite-files.js";
 import * as integrity from "../infra/sqlite-integrity.js";
 import * as schemaContracts from "../infra/sqlite-schema-contract.js";
 import * as snapshots from "../infra/sqlite-snapshot-source.js";
+import { sqliteWorkerPreloadEnv } from "../infra/sqlite-worker-preload.test-support.js";
 import { VERSION } from "../version.js";
 import { readAgentDatabaseAdmissionRefusal } from "./agent-database-admission.js";
 import { withAgentDatabaseStartupAdmission } from "./agent-database-startup.js";
@@ -403,3 +404,68 @@ it("isolates a corrupt foreign secondary before reporting its integrity failure"
     writer.close();
   }
 });
+
+// Deny only the real registry SELECT, after format/schema admission has succeeded.
+function denyRegistryRead(sqlite: ReturnType<typeof requireNodeSqlite>) {
+  const { DatabaseSync, constants } = sqlite;
+  // oxlint-disable-next-line typescript/unbound-method -- Every call supplies the intercepted database receiver.
+  const prepare = DatabaseSync.prototype.prepare;
+  DatabaseSync.prototype.prepare = function (sql) {
+    if (!/from "agent_databases"/iu.test(sql)) {
+      return prepare.call(this, sql);
+    }
+    this.setAuthorizer((action, table) =>
+      action === constants.SQLITE_READ && table === "agent_databases"
+        ? constants.SQLITE_DENY
+        : constants.SQLITE_OK,
+    );
+    try {
+      return prepare.call(this, sql);
+    } finally {
+      this.setAuthorizer(null);
+    }
+  };
+  return () => {
+    DatabaseSync.prototype.prepare = prepare;
+  };
+}
+
+it.each(["gateway-startup", "doctor"] as const)(
+  "preserves the native registry-read failure during %s",
+  async (operation) => {
+    const dir = tempDirs.make("startup-registry-failure-");
+    const env = { OPENCLAW_STATE_DIR: dir };
+    const { path: statePath } = openOpenClawStateDatabase({ env });
+    await closeOpenClawStateDatabaseAsync();
+    const preload = path.join(dir, "deny-registry.cjs");
+    fs.writeFileSync(preload, "(" + denyRegistryRead.toString() + ")(require('node:sqlite'));");
+    for (const [key, value] of Object.entries(sqliteWorkerPreloadEnv(preload))) {
+      vi.stubEnv(key, value);
+    }
+    const restore = denyRegistryRead(requireNodeSqlite());
+    try {
+      const failure = {
+        code: "ERR_SQLITE_ERROR",
+        message: expect.stringContaining("prohibited"),
+      };
+      const admission =
+        operation === "doctor"
+          ? assertOpenClawDatabasesReady({ env, operation, configuredAgentDatabaseTargets: [] })
+          : assertOpenClawDatabasesReady({ env, operation, config: {} });
+      if (operation === "doctor") {
+        await expect(admission).rejects.toMatchObject({
+          message: expect.stringContaining("Doctor could not complete repair"),
+          cause: { errors: [expect.objectContaining(failure)] },
+        });
+      } else {
+        await expect(admission).rejects.toMatchObject(failure);
+        await expect(admission).rejects.toMatchObject({
+          message: expect.stringContaining(statePath),
+        });
+      }
+    } finally {
+      restore();
+      vi.unstubAllEnvs();
+    }
+  },
+);

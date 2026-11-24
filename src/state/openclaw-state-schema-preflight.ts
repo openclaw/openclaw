@@ -16,14 +16,20 @@ import type {
 } from "./agent-deletion-journal.types.js";
 import { readAgentDatabasePreflightTargets } from "./openclaw-agent-db-registry.read.js";
 import { describeDeferredStateSchemaPublication } from "./openclaw-database-preflight.messages.js";
-import type { OpenClawDatabaseSchemaPreflight } from "./openclaw-database-preflight.types.js";
+import type {
+  IndeterminateOpenClawDatabase,
+  OpenClawDatabaseSchemaPreflight,
+} from "./openclaw-database-preflight.types.js";
 import { getStateRuntimeSchemaAdmission } from "./openclaw-state-db-admission.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "./openclaw-state-db-contract.js";
 import {
   assertOpenClawStateDatabaseForMaintenance,
   openClawStateMigrationAssertions,
 } from "./openclaw-state-db-maintenance.js";
-import { normalizeOpenClawStateSchemaReadError } from "./openclaw-state-db-schema-migration-required.js";
+import {
+  annotateStartupStateInspectionFailure,
+  normalizeOpenClawStateSchemaReadError,
+} from "./openclaw-state-db-schema-migration-required.js";
 import { assertCanonicalStateSchemaShape } from "./openclaw-state-db-schema-repair.js";
 import { readStateSchemaContentVersion } from "./openclaw-state-db-schema-version.js";
 import { inspectOpenClawStateOwnershipFromDatabase } from "./openclaw-state-ownership.js";
@@ -46,8 +52,27 @@ export type StateSchemaInspection = {
   schemaContracts?: PreparedSqliteSchemaContract[];
   registeredDatabases?: { agentId: string; path: string }[];
   deletionJournal?: AgentDeletionJournalDisposition;
+  /** One original cause per schemas.indeterminate row, in the same order. */
   inspectionErrors: unknown[];
 };
+
+/** Retain typed causes without putting native errors in public readiness rows. */
+export function retainStateSchemaInspectionCauses(
+  inspection: StateSchemaInspection,
+  causes: WeakMap<IndeterminateOpenClawDatabase, unknown>,
+  pathname: string,
+  options: { requireStartupMigrationReadiness?: boolean; signal?: AbortSignal },
+): void {
+  inspection.schemas.indeterminate.forEach((row, index) => {
+    const error = inspection.inspectionErrors[index];
+    causes.set(
+      row,
+      options.requireStartupMigrationReadiness
+        ? annotateStartupStateInspectionFailure(error, pathname, options.signal)
+        : error,
+    );
+  });
+}
 
 const canonicalStateInspectionSchemas = [OPENCLAW_STATE_SCHEMA_SQL];
 

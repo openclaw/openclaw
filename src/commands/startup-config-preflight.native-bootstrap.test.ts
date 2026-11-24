@@ -5,6 +5,7 @@ import { expect, it } from "vitest";
 import { seedMacNodeWorkerProofState } from "../../scripts/lib/mac-node-worker-proof-state.mjs";
 import { runNodeScript } from "../../test/helpers/run-node-script.js";
 import { StateDatabaseOfflineMaintenanceError } from "../infra/gateway-state-owner-record.js";
+import { resolveRuntimeProcessEntrypointUrl } from "../infra/runtime-process-url.js";
 import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { readConfigMachineState } from "../state/config-machine-state.js";
 import { stateNativeProcessEntrypoints } from "../state/native-process-runtime.test-support.js";
@@ -13,6 +14,7 @@ import {
   closeOpenClawStateDatabaseAsync,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
+import { createStateReadPool } from "../state/openclaw-state-read-pool.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { runStartupConfigPreflight } from "./startup-config-preflight.js";
 
@@ -150,6 +152,50 @@ it.each(["invalid config", "rejected guard"] as const)(
         ).rejects.toThrow("selected config changed during startup");
       }
       expect(fs.readFileSync(databasePath)).toEqual(databaseBefore);
+    });
+  },
+);
+
+it.each(["schema-lease", "offline-maintenance"] as const)(
+  "handles foreign %s at fresh native worker admission",
+  async (holder) => {
+    await withOpenClawTestState({ label: "state-worker-handoff" }, async (state) => {
+      const databasePath = openOpenClawStateDatabase({ env: state.env }).path;
+      await closeOpenClawStateDatabaseAsync();
+      const pool = createStateReadPool(resolveRuntimeProcessEntrypointUrl("stateRead"));
+      const stop = new AbortController();
+      let foreignOwner: Promise<unknown> | undefined;
+      const request = {
+        context: { environment: state.env },
+        databasePath,
+        location: databasePath,
+        checkFreshAdmission: true,
+        command: { type: "admit" } as const,
+      };
+      const requestAdmission = async () => {
+        const task = pool.runTask(request, { inputBytes: 1024 });
+        try {
+          return await task.result;
+        } finally {
+          await task.close();
+        }
+      };
+      try {
+        // Warm the actual worker so it cannot miss the foreign owner's transient lease.
+        await expect(requestAdmission()).resolves.toMatchObject({ ok: true });
+        foreignOwner = (await holdForeignStateOwner(databasePath, holder, stop.signal)).exited;
+        const admitted = await requestAdmission();
+        if (holder === "schema-lease") {
+          expect(admitted).toMatchObject({ ok: true, type: "admit" });
+        } else {
+          expect(admitted).toMatchObject({ ok: false });
+          expect(JSON.stringify(admitted)).toContain("is undergoing offline maintenance");
+        }
+      } finally {
+        stop.abort();
+        await foreignOwner;
+        await pool.close();
+      }
     });
   },
 );

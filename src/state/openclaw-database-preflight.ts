@@ -69,6 +69,7 @@ import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
 import {
   captureStateSchemaInspectionContracts,
   inspectStateDatabaseSchema,
+  retainStateSchemaInspectionCauses,
   type StateSchemaInspectionInput,
 } from "./openclaw-state-schema-preflight.js";
 
@@ -334,6 +335,7 @@ export async function preflightOpenClawDatabaseSchemas(
       adoptSqliteSchemaContracts(inspection.schemaContracts ?? []);
       Object.assign(result, inspection.schemas);
       stateInspectionErrors.push(...inspection.inspectionErrors);
+      retainStateSchemaInspectionCauses(inspection, indeterminateCauses, statePath, options);
       if (
         startup &&
         inspection.inspectionErrors.length === 0 &&

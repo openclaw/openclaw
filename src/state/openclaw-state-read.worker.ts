@@ -1,11 +1,13 @@
 import { toStringifiedError } from "@openclaw/normalization-core/error-coercion";
 import { getSqliteRuntimeCapabilities } from "../infra/bun-sqlite-library.js";
+import { withStateDatabaseColdAdmission } from "../infra/gateway-state-owner.js";
 import { bunSqliteNativeCleanupPending } from "../infra/node-sqlite.js";
 import { withSqliteReaderOwner } from "../infra/sqlite-reader-lifecycle.js";
 import { runWithSqliteWorkerStateContext } from "../infra/sqlite-worker-state-context.js";
 import { serveOwnedWorkerTasks } from "../infra/worker-task-server.js";
 import { pluginMetadataReadOperations } from "../plugins/plugin-metadata-state.read.worker.js";
 import { openClawStateDatabaseCache } from "./openclaw-state-db-cache.js";
+import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "./openclaw-state-db-contract.js";
 import {
   closeRetainedOpenClawStateReadConnections,
   readOpenClawStateReadOnlyLocation,
@@ -41,14 +43,19 @@ serveOwnedWorkerTasks(
       }
       const executeRead = async (): Promise<OpenClawStateReadReply> => {
         if (input.checkFreshAdmission) {
-          openClawStateDatabaseCache.assertOpenClawStateDatabaseFreshOpenAllowedAtPath(
-            input.databasePath,
-            input.context.environment,
-            (error) => {
-              nativeCleanupFailure = {
-                error: encodeOpenClawStateWorkerError(error, { includeOrdinary: true }),
-              };
-            },
+          // Wait at native admission only. Neither offline custody nor a started read is retried.
+          withStateDatabaseColdAdmission(
+            { databasePath: input.databasePath, busyTimeoutMs: OPENCLAW_SQLITE_BUSY_TIMEOUT_MS },
+            () =>
+              openClawStateDatabaseCache.assertOpenClawStateDatabaseFreshOpenAllowedAtPath(
+                input.databasePath,
+                input.context.environment,
+                (error) => {
+                  nativeCleanupFailure = {
+                    error: encodeOpenClawStateWorkerError(error, { includeOrdinary: true }),
+                  };
+                },
+              ),
           );
         }
         const { command } = input;
