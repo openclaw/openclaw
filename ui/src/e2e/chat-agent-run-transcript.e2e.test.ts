@@ -97,16 +97,10 @@ suite.define(() => {
     await gateway.waitForRequest("chat.startup");
     await gateway.resolveDeferred("chat.startup");
     const failure = page.locator(".chat-run-failure");
-    await failure
-      .locator(".chat-run-failure__title")
-      .getByText(summary, { exact: true })
-      .waitFor({ state: "attached" });
+    await failure.getByText(summary, { exact: true }).waitFor({ state: "attached" });
     await flushSnapshot(page);
     await page.reload();
-    await failure
-      .locator(".chat-run-failure__title")
-      .getByText(summary, { exact: true })
-      .waitFor({ state: "attached" });
+    await failure.getByText(summary, { exact: true }).waitFor({ state: "attached" });
     await gateway.waitForRequest("chat.startup");
     const answer = "The check completed while you were away.";
     await gateway.resolveDeferred("chat.startup", {

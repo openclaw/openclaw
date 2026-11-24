@@ -5,6 +5,10 @@ import {
   type RunFailureCause,
 } from "../../../../../src/shared/run-failure-notice.js";
 import { formatWebUiIconErrorText } from "../../../components/error-presentation.ts";
+import {
+  providerDisplayLabel,
+  type ProviderPresentation,
+} from "../../../components/provider-icon-data.ts";
 import { ReportIssueLink } from "../../../components/report-issue-link.tsx";
 import { CopyButton } from "../../../components/solid/copy-button.tsx";
 import { Icon } from "../../../components/solid/icon.tsx";
@@ -15,7 +19,6 @@ import { listen } from "../../../lib/reactive/listener.ts";
 import { createScrollStateRef } from "../../../lib/reactive/scroll-state.ts";
 import { PluginSurface } from "../../../plugins/control-ui-view.solid.tsx";
 import type { FailedMessageEditSource } from "../failed-message-edit.ts";
-import { formatWebUiErrorSummary, shouldReportRunFailure } from "../run-failure-presentation.ts";
 import { openChatRewindConfirmation } from "./chat-message-confirmation-view.tsx";
 
 // Failure facts and continuation stay eager; only this optional action is deferred.
@@ -23,7 +26,11 @@ const ChatFailedMessageEditButton = lazy(() => import("./chat-failed-message-edi
 
 let nextPanelId = 0;
 // A rejected key or billing problem is fixed under Models, not by another attempt.
-const PROVIDER_SETTINGS_FAILURES = new Set(["auth", "auth_permanent", "billing"]);
+const FIX_TITLES = new Map([
+  ["auth", "credentialsRejected"],
+  ["auth_permanent", "credentialsRejected"],
+  ["billing", "billingProblem"],
+]);
 
 /** Details open away from the conversation's edges, so they never cover the composer. */
 function panelPlacement(line: HTMLElement, panel: HTMLElement): "bottom" | "top" {
@@ -40,6 +47,8 @@ export function ChatRunFailureNotice(props: {
   feedback?: ControlUiSurfaceProps["run-failure-feedback"];
   summary: string;
   cause?: RunFailureCause;
+  /** The cause provider's presentation from the chat's model catalog. */
+  presentation?: Pick<ProviderPresentation, "providerName">;
   repeatCount?: number;
   onRetry?: () => void;
   onStartNewSession?: () => void;
@@ -51,15 +60,22 @@ export function ChatRunFailureNotice(props: {
   const [open, setOpen] = createSignal(false);
   const [placement, setPlacement] = createSignal<"bottom" | "top">("bottom");
   let panel: PopoverHandle | undefined;
+  const fixTitle = () => props.cause && FIX_TITLES.get(props.cause.failoverReason!);
+  const title = () =>
+    t(`chat.recovery.${fixTitle() ?? "failedTitle"}`, {
+      provider: providerDisplayLabel(props.cause?.provider ?? "", props.presentation),
+    });
   const app = useOptionalApplication();
-  const openModels = () =>
-    app && PROVIDER_SETTINGS_FAILURES.has(props.cause?.failoverReason ?? "")
-      ? props.cause?.provider
-      : undefined;
+  const openModels = () => (app && fixTitle() ? props.cause?.provider : undefined);
   const startNewSession = () =>
     props.cause?.code === HARNESS_UPDATE_REQUIRED_CODE && props.onStartNewSession;
   const detail = createMemo(() => formatWebUiIconErrorText(props.summary).trim());
-  const title = createMemo(() => formatWebUiErrorSummary(props.summary));
+  const concise = createMemo(() => {
+    const firstLine = detail().split(/\r?\n/u)[0] ?? "";
+    return firstLine.length <= 240 ? firstLine : undefined;
+  });
+  // The well always holds the full error, so a one-line error is not repeated above it.
+  const lead = createMemo(() => (concise() === detail() ? undefined : concise()));
   const logRef = createScrollStateRef(
     (log, state) => {
       log.toggleAttribute("data-fade-top", !state.atStart);
@@ -91,19 +107,15 @@ export function ChatRunFailureNotice(props: {
               <span class="chat-run-failure__icon" aria-hidden="true">
                 <Icon name="circleX" />
               </span>
-              <span class="chat-run-failure__title">
-                <bdi>{title()}</bdi>
-              </span>
+              <span class="chat-run-failure__title">{title()}</span>
               <Show when={(props.repeatCount ?? 1) > 1}>
                 <span class="chat-run-failure__repeat">
                   · {t("chat.recovery.failedRepeatCount", { count: String(props.repeatCount) })}
                 </span>
               </Show>
-              {detail() !== title() && (
-                <span class="chat-run-failure__chevron" aria-hidden="true">
-                  <Icon name="chevronRight" />
-                </span>
-              )}
+              <span class="chat-run-failure__chevron" aria-hidden="true">
+                <Icon name="chevronRight" />
+              </span>
             </>
           }
           ref={(handle) => {
@@ -137,6 +149,11 @@ export function ChatRunFailureNotice(props: {
             setOpen(next);
           }}
         >
+          <Show when={lead()}>
+            <p class="chat-run-failure__summary">
+              <bdi>{lead()}</bdi>
+            </p>
+          </Show>
           {/* Logs are technical strings, so they stay left to right in every locale. */}
           <div class="chat-run-failure__well" dir="ltr">
             <pre
@@ -198,16 +215,14 @@ export function ChatRunFailureNotice(props: {
             {t("chat.recovery.tryAgain")}
           </button>
         </Show>
-        <Show when={shouldReportRunFailure(props.cause)}>
-          <Show when={props.feedback} fallback={<ReportIssueLink />}>
-            {(feedback) => (
-              <PluginSurface
-                surface="run-failure-feedback"
-                props={feedback()}
-                renderDefault={ReportIssueLink}
-              />
-            )}
-          </Show>
+        <Show when={props.feedback} fallback={<ReportIssueLink />}>
+          {(feedback) => (
+            <PluginSurface
+              surface="run-failure-feedback"
+              props={feedback()}
+              renderDefault={ReportIssueLink}
+            />
+          )}
         </Show>
       </div>
     </openclaw-chat-run-failure-notice>

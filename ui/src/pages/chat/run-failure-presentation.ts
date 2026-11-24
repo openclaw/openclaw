@@ -1,8 +1,6 @@
-import {
-  HARNESS_UPDATE_REQUIRED_CODE,
-  type RunFailureCause,
-} from "../../../../src/shared/run-failure-notice.js";
+import { HARNESS_UPDATE_REQUIRED_CODE } from "../../../../src/shared/run-failure-notice.js";
 import { formatWebUiIconErrorText } from "../../components/error-presentation.ts";
+import type { ChatRunError } from "./run-lifecycle.ts";
 
 export function formatWebUiErrorSummary(error: string): string {
   return (
@@ -41,7 +39,7 @@ const ROUTINE_FAILURES = new Set([
   "state_contention",
 ]);
 
-export function shouldReportRunFailure(cause: RunFailureCause | undefined): boolean {
+export function shouldReportRunFailure(cause: ChatRunError["cause"]): boolean {
   const kinds = [cause?.errorKind, cause?.failoverReason, cause?.providerRuntimeFailureKind].filter(
     (kind) => kind !== undefined,
   );

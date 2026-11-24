@@ -2,7 +2,6 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeNullableString,
 } from "@openclaw/normalization-core/string-coerce";
-import type { RunFailureCause } from "../../../../src/shared/run-failure-notice.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow, SessionRunStatus, SessionsListResult } from "../../api/types.ts";
 import { t } from "../../i18n/index.ts";
@@ -63,7 +62,13 @@ export type ChatRunError = {
     | "chatgpt_business_usage_limit"
     | "chatgpt_consumer_usage_limit";
   summary: string;
-  cause?: RunFailureCause;
+  cause?: {
+    failoverReason?: string;
+    providerRuntimeFailureKind?: string;
+    errorKind?: string;
+    stopReason?: string;
+    code?: string;
+  };
   /** Display ownership only; the session reducer retains each run's diagnostic. */
   runId?: string;
 };
@@ -216,7 +221,7 @@ export function setChatRunError(
   summary: string,
   runId?: string,
   kind?: ChatRunError["kind"],
-  cause?: RunFailureCause,
+  cause?: ChatRunError["cause"],
 ) {
   chatRunPresentation(state).batch(() => {
     setChatRunOwner(state, runId);

@@ -24,8 +24,7 @@ type GatewaySessionRunFailure = {
   target: SessionTranscriptWriteScope & { sessionId: string };
   runId: string;
   error: unknown;
-  errorKind?: string;
-  stopReason?: string;
+  errorKind?: "state_contention";
   suppressErrorNotice?: boolean;
   /** Host-authored copy already shown to the requester; wins over error-derived copy. */
   notice?: string;
@@ -44,12 +43,7 @@ export async function recordGatewaySessionRunFailure(
   const storageFailure = classifyGatewayStorageFailure(params.error);
   const sanitized = sanitizeSessionRunError(params.error) || "unknown error";
   const error = truncateSessionRunError(sanitized, 512);
-  const cause = readRunFailureCause({
-    ...(isRecord(params.errorObservation) ? params.errorObservation : {}),
-    ...(params.errorKind ? { errorKind: params.errorKind } : {}),
-    ...(params.stopReason ? { stopReason: params.stopReason } : {}),
-    ...(storageFailure ? { providerRuntimeFailureKind: "gateway_storage" } : {}),
-  });
+  const cause = readRunFailureCause(params.errorObservation);
   const report: CustomMessageReportAppend = {
     customType: RUN_FAILED_BEFORE_REPLY_TRANSCRIPT_TYPE,
     content:

@@ -1505,24 +1505,6 @@ describe("expansion-state render dependencies", () => {
 });
 
 describe("thread item cache", () => {
-  it("refreshes a failure notice when only its recorded cause changes", () => {
-    const summary = "Request timed out.";
-    const message = {
-      role: "custom",
-      content: summary,
-      timestamp: 1,
-      __openclaw: { id: "failure", seq: 1, runId: "run" },
-      openclawRunError: { runId: "run", summary, cause: { errorKind: "timeout" } },
-    };
-    const first = buildItems({ messages: [message] });
-    const cause = { providerRuntimeFailureKind: "schema" };
-    const refreshed = buildItems({
-      messages: [{ ...message, openclawRunError: { ...message.openclawRunError, cause } }],
-    });
-    expect(refreshed).toMatchObject([{ kind: "notice", runError: { cause } }]);
-    expect(refreshed[0]).not.toBe(first[0]);
-  });
-
   it("repositions an initial placement prompt when recovery identifies its existing queue row", () => {
     const queued = queuedSend("initial", "Original request", 10_000, "failed", {
       sendRunId: "initial",

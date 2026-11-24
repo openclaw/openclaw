@@ -916,7 +916,6 @@ describe("handleChatGatewayEvent", () => {
       runId: "run-1",
       summary,
       cause: {
-        provider: "openai",
         failoverReason: "refresh_token_reused",
         providerRuntimeFailureKind: "auth_refresh",
       },

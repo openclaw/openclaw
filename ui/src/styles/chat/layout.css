@@ -10,40 +10,28 @@ openclaw-pending-session-create {
   max-width: var(--chat-thread-max-width, 48rem);
   align-self: center;
 
-  /* Expanding details keeps recovery beside the title. On phones, reply actions
-   * move together below the message. Details span the full width below. */
   .app-toast__content {
     display: grid;
     grid-template-columns: minmax(0, 1fr) auto;
-    grid-template-rows: minmax(var(--app-toast-row), auto);
     gap: 2px 12px;
   }
 
   .app-toast__body {
     display: contents;
+  }
 
-    > span {
-      grid-column: 1;
-    }
+  .app-toast__message,
+  .app-toast__description {
+    grid-column: 1;
   }
 
   .lazy-view-error__details {
     grid-column: 1 / -1;
   }
 
-  .chat-error__actions {
-    grid-area: 1 / 2;
-    gap: 2px 12px;
-  }
-
-  /* Persistent errors do not time out, so their dismiss control stays visible
-   * and sits inside the card: a corner badge would be clipped by scrolling
-   * composer containers on phones. */
   > .app-toast__dismiss {
     position: static;
     flex: none;
-    height: var(--app-toast-row);
-    margin: 0 -6px 0 -4px;
     background: transparent;
     box-shadow: none;
     color: var(--muted);
@@ -52,8 +40,44 @@ openclaw-pending-session-create {
   }
 }
 
+.chat-error:where(:not(.chat-error--reply)) {
+  .app-toast__content {
+    align-items: start;
+  }
+
+  .chat-error__actions {
+    grid-template-rows: subgrid;
+    grid-row: 1 / span 2;
+    gap: 2px;
+    grid-column: 2;
+    margin-block-start: -4px;
+  }
+
+  > .app-toast__dismiss {
+    margin: -1px -6px 0 -4px;
+  }
+}
+
 .chat-error--reply {
   box-shadow: none;
+
+  .app-toast__content {
+    grid-template-rows: minmax(var(--app-toast-row), auto);
+  }
+
+  .chat-error__actions {
+    grid-area: 1 / 2;
+    gap: 2px 12px;
+  }
+
+  > .app-toast__dismiss {
+    height: var(--app-toast-row);
+    margin: 0 -6px 0 -4px;
+  }
+
+  .report-issue-link {
+    white-space: nowrap;
+  }
 }
 
 .chat-error__toggle {
@@ -73,7 +97,9 @@ openclaw-pending-session-create {
 @media (max-width: 560px) {
   .chat-error--reply .chat-error__actions,
   .chat-error__actions:has(> .chat-error__discard) {
+    grid-template-rows: none;
     grid-area: auto / 1 / auto / -1;
+    flex-wrap: wrap;
     gap: 12px;
     justify-self: start;
     margin-block-start: 6px;

@@ -200,7 +200,7 @@ suite.define(() => {
 
         const sent = chatRequests.length;
         await chat("Second message");
-        await page.locator(".chat-run-failure").waitFor({ timeout: 60_000 });
+        await page.getByText("Couldn’t finish this reply").waitFor({ timeout: 60_000 });
         expect(chatRequests.slice(sent)).toEqual([]);
         expect(chatRequests.every((request) => request.hasAuth)).toBe(true);
       },

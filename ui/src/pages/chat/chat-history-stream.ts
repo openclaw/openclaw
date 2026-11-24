@@ -1,9 +1,5 @@
 import { readSessionMessageIdentity } from "@openclaw/gateway-client/browser";
 import { asNullableRecord, asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import {
-  readRunFailureCause,
-  readRunFailureNotice,
-} from "../../../../src/shared/run-failure-notice.js";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { isAssistantHeartbeatAckForDisplay } from "../../lib/chat/heartbeat-display.ts";
 import { extractText } from "../../lib/chat/message-extract.ts";
@@ -174,14 +170,7 @@ export function applyHistoryRun(params: {
           asOptionalRecord(entry.message)?.customType === "run-failed-before-reply",
       );
       const failureDetails = asOptionalRecord(asOptionalRecord(failureNotice?.message)?.details);
-      const recordedCause = asOptionalRecord(failureDetails?.cause);
-      const failureCause =
-        readRunFailureNotice(failureNotice?.message)?.cause ??
-        readRunFailureCause({
-          ...recordedCause,
-          errorKind: recordedCause?.errorKind ?? failureDetails?.errorKind,
-        });
-      const failureKind = failureCause?.errorKind ?? failureDetails?.errorKind;
+      const failureKind = failureDetails?.errorKind;
       const errorKind = failureKind === "state_contention" ? failureKind : undefined;
       const failureText = extractText(failureNotice?.message);
       const failureMessage =
@@ -207,18 +196,12 @@ export function applyHistoryRun(params: {
       setChatRunOwner(state, terminalRunId);
       const terminal = projection.runs[terminalRunId];
       if (terminal?.errorMessage) {
-        if (
-          state.chatRunError?.runId !== terminalRunId ||
-          !knownRun?.errorMessage ||
-          failureCause
-        ) {
+        if (state.chatRunError?.runId !== terminalRunId || !knownRun?.errorMessage) {
           setChatRunError(
             state,
             terminal.errorMessage,
             terminalRunId,
             terminal.errorKind === "state_contention" ? terminal.errorKind : undefined,
-            failureCause ??
-              (state.chatRunError?.runId === terminalRunId ? state.chatRunError.cause : undefined),
           );
         }
       } else if (

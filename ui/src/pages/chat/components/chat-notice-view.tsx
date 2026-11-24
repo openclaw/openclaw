@@ -2,7 +2,7 @@ import { createMemo, Show } from "solid-js";
 import { ChatNoticeDetails, type ChatNoticeProps } from "./chat-divider.tsx";
 import { ChatRunFailureNotice } from "./chat-run-failure-notice.tsx";
 
-function FailureNotice(props: Pick<ChatNoticeProps, "item" | "recovery">) {
+function FailureNotice(props: ChatNoticeProps) {
   const failure = () => props.item.runError!;
   const feedback = () => {
     const recovery = props.recovery;
@@ -47,6 +47,9 @@ function FailureNotice(props: Pick<ChatNoticeProps, "item" | "recovery">) {
         feedback={feedback()}
         summary={failure().summary}
         cause={failure().cause}
+        presentation={props.modelCatalog?.find(
+          (model) => model.provider === failure().cause?.provider,
+        )}
         repeatCount={props.item.repeatCount}
         onRetry={actions()?.onRetry}
         onStartNewSession={actions()?.onStartNewSession}
@@ -60,7 +63,11 @@ function FailureNotice(props: Pick<ChatNoticeProps, "item" | "recovery">) {
 export function ChatNotice(props: ChatNoticeProps) {
   return (
     <Show when={props.item.runError?.runId} keyed fallback={<ChatNoticeDetails {...props} />}>
-      <FailureNotice item={props.item} recovery={props.recovery} />
+      <FailureNotice
+        item={props.item}
+        recovery={props.recovery}
+        modelCatalog={props.modelCatalog}
+      />
     </Show>
   );
 }

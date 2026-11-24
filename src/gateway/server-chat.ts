@@ -112,7 +112,6 @@ const CHAT_ERROR_KINDS = new Set<ChatErrorKind>([
   "timeout",
   "rate_limit",
   "context_length",
-  "state_contention",
   "unknown",
 ]);
 

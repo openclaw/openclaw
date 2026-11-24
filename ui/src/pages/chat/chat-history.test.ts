@@ -914,24 +914,4 @@ describe("chat history run errors", () => {
     });
     expect(state.chatMessages).toContainEqual(expect.objectContaining({ content: summary }));
   });
-
-  it("enriches the same failed run without discarding its live classification", async () => {
-    const summary = "Request timed out.";
-    let history: ChatHistoryResult = { messages: [], sessionInfo: row({ lastRunError: summary }) };
-    const state = host(() => history);
-    emit(state, "run", {
-      state: "error",
-      errorMessage: summary,
-      errorDetail: { failoverReason: "timeout" },
-    });
-    await loadChatHistory(state);
-    expect(state.chatRunError?.cause).toMatchObject({ failoverReason: "timeout" });
-    const cause = { failoverReason: "format", providerRuntimeFailureKind: "schema" };
-    history = {
-      messages: [{ ...notice(summary), openclawRunError: { runId: "run", summary, cause } }],
-      sessionInfo: row({ lastRunError: summary }),
-    };
-    await loadChatHistory(state);
-    expect(state.chatRunError).toMatchObject({ runId: "run", summary, cause });
-  });
 });

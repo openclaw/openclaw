@@ -3,10 +3,14 @@ import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Page, Locator } from "playwright";
 import { assert, expect, it } from "vitest";
-import { prepareChatHistoryFixture } from "../test-helpers/chat-activity-fixtures.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
-import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import {
+  controlUiBundledGatewayUrl,
+  controlUiBundledSettingsStorageKey,
+  controlUiSessionUrl,
+  installMockGateway,
+} from "../test-helpers/control-ui-e2e.ts";
 import { exactButton, polledClipboard, polledVisible } from "./chat-presentation.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -72,10 +76,21 @@ suite.define(() => {
       details: true,
     },
   ])(
-    "keeps $name reporting policy consistent after history reload",
+    "keeps $name composer diagnostics and reporting independent",
     async ({ name, message, visibleMessage, cause, report, details }) => {
-      await suite.withPage(diagnosticContext, async ({ page }) => {
+      await suite.withPage(diagnosticContext, async ({ page, context }) => {
         const gateway = await installMockGateway(page, { sessionKey, historyMessages: [] });
+        if (name === "unclassified") {
+          await page.setViewportSize({ width: 300, height: 900 });
+          await context.addInitScript(
+            ({ key, gatewayUrl }) =>
+              localStorage.setItem(key, JSON.stringify({ gatewayUrl, textScale: 140 })),
+            {
+              key: controlUiBundledSettingsStorageKey(suite.server.baseUrl),
+              gatewayUrl: controlUiBundledGatewayUrl(suite.server.baseUrl),
+            },
+          );
+        }
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
         const { runId } = await sendPrompt(page, gateway, "Check the example operation.");
         await gateway.emitGatewayEvent("chat", {
@@ -86,90 +101,63 @@ suite.define(() => {
           errorMessage: message,
           errorDetail: cause,
         });
-        for (const surface of ["live", "history"] as const) {
-          if (surface === "history") {
-            const session = {
-              key: sessionKey,
-              sessionId: `session:${sessionKey}`,
-              status: "failed",
-              hasActiveRun: false,
-              activeRunIds: [],
-              lastRunId: runId,
-              lastRunError: message,
-            };
-            await gateway.setSessionsListResponse({ sessions: [session] });
-            const messages = [
-              {
-                role: "user",
-                content: "Check the example operation.",
-                timestamp: 1,
-                __openclaw: { id: "failure-user", seq: 1, runId },
-              },
-              {
-                role: "custom",
-                customType: "run-failed-before-reply",
-                content: message,
-                timestamp: 2,
-                display: true,
-                openclawRunError: { runId, summary: message, cause },
-                __openclaw: { id: "failure-notice", seq: 2, runId },
-              },
-            ];
-            await gateway.setMethodResponse("chat.history", {
-              ...prepareChatHistoryFixture(messages),
-              sessionId: session.sessionId,
-              sessionInfo: session,
-            });
-            await page.reload();
-          }
-          const notice = page.locator(surface === "live" ? ".chat-error" : ".chat-run-failure");
-          const title = notice.locator(
-            surface === "live" ? ".app-toast__message" : ".chat-run-failure__title",
+        const notice = page.locator(".chat-error");
+        const title = notice.locator(".app-toast__message");
+        await title.waitFor();
+        await notice.getByRole("button", { name: "Refresh", exact: true }).waitFor();
+        if (name === "routine") {
+          const centers = await notice.evaluate((element) =>
+            [
+              element,
+              ...element.querySelectorAll(
+                ".app-toast__message, .chat-error__refresh, .app-toast__dismiss",
+              ),
+            ].map((node) => {
+              const bounds = node.getBoundingClientRect();
+              return bounds.y + bounds.height / 2;
+            }),
           );
-          await title.waitFor();
-          const recovery = notice.getByRole("button", {
-            name: surface === "live" ? "Refresh" : "Try again",
-            exact: true,
-          });
-          await recovery.waitFor();
-          if (surface === "live" && name === "routine") {
-            const centers = await notice.evaluate((element) =>
-              [
-                element,
-                ...element.querySelectorAll(
-                  ".app-toast__message, .chat-error__refresh, .app-toast__dismiss",
-                ),
-              ].map((node) => {
-                const bounds = node.getBoundingClientRect();
-                return bounds.y + bounds.height / 2;
-              }),
-            );
-            expect.soft(Math.max(...centers) - Math.min(...centers)).toBeLessThanOrEqual(0.5);
-          }
-          expect.soft(await title.textContent()).toContain(visibleMessage ?? message);
-          expect.soft(await notice.locator(".app-toast__description").count()).toBe(0);
-          expect
-            .soft(await notice.getByRole("link", { name: "Report a bug", exact: true }).count())
-            .toBe(report ? 1 : 0);
-          if (details) {
-            const toggle = notice.locator(
-              surface === "live" ? "button.chat-error__toggle" : "button.chat-run-failure__toggle",
-            );
-            expect.soft(await toggle.count()).toBe(1);
-            if ((await toggle.count()) === 1) {
-              await toggle.click();
-              const diagnostic = notice.getByLabel("Error details", { exact: true });
-              await diagnostic.waitFor();
-              expect(await diagnostic.textContent()).toBe(message);
-              await notice.getByRole("button", { name: "Copy error", exact: true }).click();
-              await polledClipboard(page).toBe(message);
-              expect(await notice.getByRole("link", { name: "Report a bug" }).count()).toBe(0);
-            }
-          } else if (!report) {
-            expect
-              .soft(await notice.getByRole("button", { name: "Show details", exact: true }).count())
-              .toBe(0);
-          }
+          expect.soft(Math.max(...centers) - Math.min(...centers)).toBeLessThanOrEqual(0.5);
+        }
+        expect.soft(await title.textContent()).toContain(visibleMessage ?? message);
+        expect.soft(await notice.locator(".app-toast__description").count()).toBe(0);
+        expect
+          .soft(await notice.getByRole("link", { name: "Report a bug", exact: true }).count())
+          .toBe(report ? 1 : 0);
+        if (report) {
+          const link = notice.getByRole("link", { name: "Report a bug", exact: true });
+          await link.waitFor();
+          expect(
+            await link.evaluate((element) => {
+              const label = [...element.childNodes].find(
+                (node) =>
+                  node.nodeType === Node.TEXT_NODE && node.textContent?.includes("Report a bug"),
+              );
+              if (!label) {
+                throw new Error("Report label missing");
+              }
+              const range = new Range();
+              range.selectNodeContents(label);
+              return range.getClientRects().length;
+            }),
+          ).toBe(1);
+          expect(
+            await notice.evaluate((element) => element.scrollWidth <= element.clientWidth),
+          ).toBe(true);
+        }
+        if (details) {
+          const toggle = notice.getByRole("button", { name: "Show details", exact: true });
+          await toggle.click();
+          const diagnostic = notice.getByLabel("Error details", { exact: true });
+          await diagnostic.waitFor();
+          expect(await diagnostic.textContent()).toBe(message);
+          await notice.getByRole("button", { name: "Copy error", exact: true }).click();
+          await polledClipboard(page).toBe(message);
+          expect(await notice.getByRole("link", { name: "Report a bug" }).count()).toBe(0);
+        } else if (!report) {
+          expect(
+            await notice.getByRole("button", { name: "Show details", exact: true }).count(),
+          ).toBe(0);
         }
       });
     },

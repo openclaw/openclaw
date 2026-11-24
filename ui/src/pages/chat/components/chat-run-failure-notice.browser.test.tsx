@@ -102,7 +102,7 @@ it("keeps the log left to right and isolates the error's sentence in a right-to-
   const log = part(".chat-run-failure__log");
   const well = part(".chat-run-failure__well").getBoundingClientRect();
   const copy = part(".chat-run-failure__copy").getBoundingClientRect();
-  const summary = part(".chat-run-failure__title");
+  const summary = part(".chat-run-failure__summary");
   expect(getComputedStyle(log).direction).toBe("ltr");
   expect(well.right - copy.right).toBeLessThan(copy.left - well.left);
   expect(getComputedStyle(summary).direction).toBe("rtl");

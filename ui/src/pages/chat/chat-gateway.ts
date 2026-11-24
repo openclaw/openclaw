@@ -7,7 +7,6 @@ import {
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { projectAssistantDisplayContent } from "../../../../src/shared/assistant-display-content.js";
 import { resolveAssistantMessagePhase } from "../../../../src/shared/chat-message-content.js";
-import { readRunFailureCause } from "../../../../src/shared/run-failure-notice.js";
 import { t } from "../../i18n/index.ts";
 import { isAssistantHeartbeatAckForDisplay } from "../../lib/chat/heartbeat-display.ts";
 import { extractText } from "../../lib/chat/message-extract.ts";
@@ -102,11 +101,16 @@ export function handleChatGatewayEvent(state: ChatState, incoming?: ChatEventPay
       : payload.state === "error" && payload.stopReason === "aborted-partial-persistence-failed"
         ? "stop"
         : chatgptUsageLimitKind;
-  const cause = readRunFailureCause({
-    ...payload.errorDetail,
-    errorKind: payload.errorKind,
-    stopReason: payload.stopReason,
-  });
+  const cause =
+    payload.errorDetail || payload.errorKind || payload.stopReason
+      ? {
+          failoverReason: payload.errorDetail?.failoverReason,
+          providerRuntimeFailureKind: payload.errorDetail?.providerRuntimeFailureKind,
+          code: payload.errorDetail?.providerErrorCode,
+          errorKind: payload.errorKind,
+          stopReason: payload.stopReason,
+        }
+      : undefined;
   const injectedMessageId =
     payload.state === "final" && payload.seq === 0 && payload.runId?.startsWith("inject-")
       ? payload.runId.slice("inject-".length)

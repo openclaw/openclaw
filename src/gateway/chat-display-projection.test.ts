@@ -686,24 +686,6 @@ it.each([undefined, "", "   ", "Desktop-specific failure details"])(
   },
 );
 
-it("keeps reporting classification through history sanitization and repeated projection", () => {
-  const cause = {
-    provider: "openai",
-    failoverReason: "timeout",
-    providerRuntimeFailureKind: "schema",
-    errorKind: "timeout",
-    stopReason: "aborted-partial-persistence-failed",
-  };
-  const receipt = {
-    ...terminal(),
-    details: { runId: "run-a", cause: { ...cause, rawErrorPreview: "PRIVATE_PROVIDER_BODY" } },
-  };
-  const [first] = projectChatDisplayMessages([receipt]);
-  const [reloaded] = projectChatDisplayMessages([first]);
-  expect(readRunFailureNotice(reloaded)?.cause).toEqual(cause);
-  expect(JSON.stringify(reloaded)).not.toContain("PRIVATE_PROVIDER_BODY");
-});
-
 const projectedIds = (messages: unknown[]) =>
   projectChatDisplayMessages(messages).map((message) => message["__openclaw"]);
 

@@ -486,19 +486,13 @@ function projectRunFailureNotices(
     if (message.role === "custom" && message.customType === "run-failed-before-reply") {
       const runId =
         readSessionTranscriptFailureRunId(message) ?? readSessionTranscriptRunId(message);
-      const notice = readRunFailureNotice(message);
-      const details = asOptionalRecord(message.details);
-      const recordedCause = asOptionalRecord(details?.cause);
       const summary =
-        notice?.summary ??
+        readRunFailureNotice(message)?.summary ??
         (typeof message.content === "string" ? message.content.trim() : undefined);
       const cause =
-        notice?.cause ??
-        readRunFailureCause({
-          ...recordedCause,
-          errorKind: recordedCause?.errorKind ?? details?.errorKind,
-        });
-      const desktopNotice = details?.desktopNotice;
+        readRunFailureNotice(message)?.cause ??
+        readRunFailureCause(asOptionalRecord(message.details)?.cause);
+      const desktopNotice = asOptionalRecord(message.details)?.desktopNotice;
       const desktopSummary =
         typeof desktopNotice === "string" && desktopNotice.trim() ? desktopNotice : undefined;
       return runId && summary

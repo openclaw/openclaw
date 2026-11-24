@@ -55,13 +55,6 @@ it("keeps only the latest identical failure across internal updates and interrup
 it.each([
   ["real user input", message("user", { role: "USER", content: "Try once more" })],
   ["a changed summary", failure("different", "Rate-limit recovery stopped ")],
-  [
-    "a changed classification",
-    {
-      ...failure("different"),
-      runError: { runId: "different", summary, cause: { errorKind: "timeout" } },
-    },
-  ],
 ] as const)("starts a new streak after %s", (_reason, boundary) => {
   const items = [failure("first"), boundary, failure("latest")];
   expect(projectRunFailureStreaks(items)).toEqual(items);

@@ -183,7 +183,7 @@ it.each(["bio", "cyber", "misalignment", "retryable"])(
       expect(proof).toEqual({
         visibleReplies: Array<string>(paused ? 0 : retryable ? 2 : 1).fill(LATER_TURN_TEXT),
         failureNotices: terminalFailureSummary
-          ? [{ runId: firstRunId, summary: terminalFailureSummary, cause: { stopReason: "error" } }]
+          ? [{ runId: firstRunId, summary: terminalFailureSummary }]
           : [],
         laterStatus: paused ? "blocked" : "ok",
         totalTurnStartCount: paused ? 1 : retryable ? 3 : 2,

@@ -202,8 +202,7 @@ function sameChatItem(previous: RenderChatItem, next: RenderChatItem): boolean {
       return (
         previous.kind === "notice" &&
         sameFields(previous, next, CHAT_ITEM_FIELDS.notice) &&
-        sameFields(previous.modelChange, next.modelChange, ["from", "to"]) &&
-        JSON.stringify(previous.runError) === JSON.stringify(next.runError)
+        sameFields(previous.modelChange, next.modelChange, ["from", "to"])
       );
     case "divider":
       return previous.kind === "divider" && sameFields(previous, next, CHAT_ITEM_FIELDS.divider);
