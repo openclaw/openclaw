@@ -205,12 +205,25 @@ export type ChatRunProgressSnapshot = {
 /** Materialize frozen replay events from the owner's immutable captured receipts. */
 export function readChatRunProgressEvents(
   snapshot: ChatRunProgressSnapshot | undefined,
+  toolTextAfterSeq?: number,
 ): AgentEventPayload[] | undefined {
-  return snapshot?.entries.map((entry) =>
-    entry.kind === "output"
-      ? freezeTrustedJsonSnapshot<AgentEventPayload>(JSON.parse(entry.json))
-      : entry.event,
-  );
+  return snapshot?.entries.map((entry) => {
+    if (entry.kind === "output") {
+      return freezeTrustedJsonSnapshot<AgentEventPayload>(JSON.parse(entry.json));
+    }
+    const { event } = entry;
+    if (
+      toolTextAfterSeq !== undefined &&
+      event.seq > toolTextAfterSeq &&
+      event.stream === "tool" &&
+      event.data.phase === "start" &&
+      typeof event.data.textLengthBeforeTool === "number"
+    ) {
+      const { textLengthBeforeTool: bufferEnd, ...data } = event.data;
+      return freezeTrustedJsonSnapshot({ ...event, data: { ...data, bufferEnd } });
+    }
+    return event;
+  });
 }
 
 export function updateChatRunProgressSnapshot(

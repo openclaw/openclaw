@@ -7,6 +7,7 @@ import {
   projectAgentHistoryActivity,
   projectAgentToolActivity,
 } from "../../../../src/infra/agent-activity-events.js";
+import { jsonUtf8Bytes } from "../../../../src/infra/json-utf8-bytes.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { extractText } from "../../lib/chat/message-extract.ts";
 import type { ChatHistoryResponse, ChatHistoryResult } from "./chat-history-snapshot.ts";
@@ -71,19 +72,15 @@ function activeSnapshot(
   runId = "active-run",
   text = "",
   messages: ChatHistoryResult["messages"] = [],
-) {
-  const result = activeHistory(runId);
-  result.inFlightRun!.text = text;
-  result.messages = messages;
-  return result;
+): ChatHistoryResult {
+  return { ...activeHistory(runId), messages, inFlightRun: { runId, text } };
 }
 
 it.each([
   ["waiting_for_model", "First result.", "slot"],
   ["waiting_for_state", "", undefined],
 ] as const)("restores %s without a retry or a new run", async (phase, text, waitReason) => {
-  const history = activeHistory("run-live");
-  history.inFlightRun!.text = text;
+  const history = activeSnapshot("run-live", text);
   history.inFlightRun!.events = [
     event(3, "run_status", { phase, ...(waitReason ? { reason: waitReason } : {}) }),
   ];
@@ -165,124 +162,112 @@ it("restores cleared activity alongside an owned run's current text", async () =
   });
 });
 
-const importedClaude = (id: string, content: unknown[]) => ({
-  role: "assistant",
-  provider: "claude-cli",
-  content,
-  __openclaw: { id, importedFrom: "claude-cli", cliSessionId: "swatches", externalId: id },
-});
+const SWATCH_RUN = "run-live";
+const SWATCH_OPENING = "Amber marks the first swatch.";
+const SWATCH_SUFFIX = " The tool returned amber.";
 
-it.each([
-  { when: "reopening during the tool", reply: "" },
-  { when: "reopening during the independent reply", reply: "Amber. This is the result." },
-])("renders each Claude occurrence once when $when", async ({ reply }) => {
-  const runId = "run-live";
-  const first = "Amber.";
-  const callId = "native-read";
-  const snapshot = activeSnapshot(runId, "", [
-    message("user", "Read the swatch.", { id: "input", seq: 1, idempotencyKey: runId + ":user" }),
-    importedClaude("first", [{ type: "text", text: first }]),
-    importedClaude("tool", [{ type: "toolcall", id: callId, name: "read", arguments: {} }]),
-  ]);
-  // In block mode the pre-tool sentence was an item, never part of the reply buffer.
-  const gateway = createChatRunState();
-  gateway.recordProgressEvent(
-    runId,
-    event(1, "item", {
-      kind: "preamble",
-      itemId: "commentary-1",
-      phase: "end",
-      progressText: first,
-    }),
-  );
-  gateway.recordProgressEvent(runId, toolEvent(callId));
-  if (reply) {
-    gateway.updateBuffer(runId, { itemId: "assistant", text: reply });
-  }
-  snapshot.inFlightRun = projectInFlightRunSnapshot({ chatRunState: gateway, runId });
-  const state = createState(snapshot);
-  await loadWithTools(state);
-  expect(renderedText(state).filter((text) => text?.startsWith(first))).toEqual(
-    reply ? [first, reply] : [first],
-  );
-  expect(tail(state)?.trim() ?? "").toBe(reply);
-});
-
-it.each([
-  { label: "only its opening matches", reply: "Amber. New answer.", evicted: false },
-  { label: "the progress receipts were evicted", reply: "Amber.\n\nCobalt.", evicted: true },
-])("keeps the full Claude reply when $label", async ({ reply, evicted }) => {
-  const runId = "run-live";
-  const snapshot = activeSnapshot(runId, reply, [
-    message("user", "Read the swatches.", { id: "input", seq: 1, idempotencyKey: runId + ":user" }),
-    ...["Amber.", "Cobalt."].flatMap((text, i) => [
-      importedClaude("text-" + i, [{ type: "text", text }]),
-      importedClaude("call-" + i, [
-        { type: "toolcall", id: "read-" + i, name: "read", arguments: {} },
-      ]),
+function swatchRows(...texts: string[]) {
+  const imported = (id: string, content: unknown[]) => ({
+    role: "assistant",
+    provider: "claude-cli",
+    content,
+    __openclaw: { id, importedFrom: "claude-cli", cliSessionId: "swatches", externalId: id },
+  });
+  return [
+    message("user", "Read the swatches.", { id: "input", idempotencyKey: SWATCH_RUN + ":user" }),
+    ...texts.flatMap((text, i) => [
+      imported("text-" + i, [{ type: "text", text }]),
+      imported("call-" + i, [{ type: "toolcall", id: "read-" + i, name: "read" }]),
     ]),
-  ]);
-  if (evicted) {
-    snapshot.inFlightRun!.events = [];
+  ];
+}
+
+it.each([
+  ["cumulative", ""],
+  ["cumulative", SWATCH_SUFFIX],
+  ["cold", SWATCH_OPENING + SWATCH_SUFFIX],
+  ["commentary", ""],
+  ["commentary", SWATCH_OPENING + SWATCH_SUFFIX],
+  ["independent", SWATCH_OPENING],
+  ["independent", SWATCH_OPENING + SWATCH_SUFFIX],
+  ["retired", SWATCH_OPENING],
+  ["retired", SWATCH_OPENING + SWATCH_SUFFIX],
+])("keeps each occurrence in full and bounded %s history with reply %j", async (mode, reply) => {
+  const rows = mode === "cold" ? swatchRows() : swatchRows(SWATCH_OPENING);
+  const chatRunState = createChatRunState();
+  const runId = SWATCH_RUN;
+  const buffer = (text: string) => chatRunState.updateBuffer(runId, { itemId: "assistant", text });
+  const start = toolEvent("read-0");
+  const cumulative = mode === "cumulative" || mode === "cold";
+  if (cumulative || mode === "retired") {
+    buffer(SWATCH_OPENING);
+    start.data.textLengthBeforeTool = chatRunState.resolveBuffer(runId).text.length;
+  } else if (mode === "commentary") {
+    chatRunState.recordProgressEvent(
+      runId,
+      event(1, "item", {
+        kind: "preamble",
+        itemId: "commentary-1",
+        phase: "end",
+        progressText: SWATCH_OPENING,
+      }),
+    );
   }
-  const state = createState(snapshot);
-  await loadChatHistory(state);
-  expect(tail(state)).toBe(reply);
+  chatRunState.recordProgressEvent(runId, start);
+  const raw = (cumulative ? SWATCH_OPENING : "") + reply;
+  if (mode === "retired") {
+    chatRunState.retireBuffer(runId, ["assistant"]);
+    chatRunState.updateBuffer(runId, { itemId: "later-reply", text: reply });
+  } else if (reply) {
+    buffer(raw);
+  }
+  const snapshot = projectInFlightRunSnapshot({ chatRunState, runId, startedAtMs: 1000 });
+  if (mode === "retired") {
+    expect(snapshot.text).toBe(reply);
+    expect(snapshot.events?.[0]?.data).toMatchObject({
+      textLengthBeforeTool: SWATCH_OPENING.length,
+    });
+    expect(snapshot.events?.[0]?.data.bufferEnd).toBeUndefined();
+  }
+  const maxBytes = jsonUtf8Bytes(rows) + jsonUtf8Bytes({ ...snapshot, events: [] });
+  const bounded = boundInFlightRunSnapshotForChatHistory({ snapshot, messages: rows, maxBytes });
+  expect(bounded?.events).toEqual([]);
+  expect(jsonUtf8Bytes(rows) + jsonUtf8Bytes(bounded)).toBeLessThanOrEqual(maxBytes);
+  for (const run of [snapshot, bounded]) {
+    const history = activeSnapshot(SWATCH_RUN, "", rows);
+    history.inFlightRun = run;
+    const state = createState(history);
+    await (run === snapshot ? loadWithTools(state) : loadChatHistory(state));
+    const hasOpening = mode !== "cold" || run === snapshot;
+    const visible = (hasOpening ? reply : raw).trim();
+    expect(renderedText(state).filter(Boolean)).toEqual(
+      ["Read the swatches.", hasOpening && SWATCH_OPENING, visible].filter(Boolean),
+    );
+    expect(tail(state)?.trim() ?? "").toBe(visible);
+    assistant(state, SWATCH_RUN, raw + "\n\nResult.");
+    expect(tail(state)?.trim()).toBe((visible + "\n\nResult.").trim());
+  }
 });
 
 it.each([
-  [true, ""],
-  [false, ""],
-  [true, " The tool returned amber."],
-  [false, " The tool returned amber."],
+  [SWATCH_OPENING + " New answer.", false],
+  [SWATCH_OPENING + "\n\nCobalt.", true],
 ] as const)(
-  "recovers a single tool after progress eviction (cumulative: %s, suffix: %j)",
-  async (cumulative, suffix) => {
-    const runId = "run-live";
-    const text = "Amber marks the first swatch.";
-    const callId = "native-read";
-    const messages = [
-      message("user", "Read the swatch.", { id: "input", idempotencyKey: runId + ":user" }),
-      importedClaude("preamble", [{ type: "text", text }]),
-      importedClaude("call", [{ type: "toolcall", id: callId, name: "read" }]),
-    ];
-    const run = createChatRunState();
-    const start = toolEvent(callId);
-    if (cumulative) {
-      run.updateBuffer(runId, { itemId: "assistant", text });
+  "keeps the full reply when only the opening matches or progress was evicted (%j)",
+  async (reply, evicted) => {
+    const history = activeSnapshot(SWATCH_RUN, reply, swatchRows(SWATCH_OPENING, "Cobalt."));
+    if (evicted) {
+      history.inFlightRun!.events = [];
     }
-    run.recordProgressEvent(
-      runId,
-      cumulative ? { ...start, data: { ...start.data, textLengthBeforeTool: text.length } } : start,
-    );
-    const raw = text + suffix;
-    if (!cumulative || suffix) {
-      run.updateBuffer(runId, { itemId: "assistant", text: raw });
-    }
-    const snapshot = projectInFlightRunSnapshot({ chatRunState: run, runId, startedAtMs: 1000 });
-    const bytes = (value: unknown) => Buffer.byteLength(JSON.stringify(value));
-    const maxBytes = bytes(messages) + bytes({ ...snapshot, events: [] });
-    const history = activeSnapshot(runId, "", messages);
-    history.inFlightRun = boundInFlightRunSnapshotForChatHistory({ snapshot, messages, maxBytes });
-    expect(history.inFlightRun?.events).toEqual([]);
-    expect(bytes(messages) + bytes(history.inFlightRun)).toBeLessThanOrEqual(maxBytes);
     const state = createState(history);
     await loadChatHistory(state);
-    const visible = cumulative ? suffix : raw;
-    expect(tail(state)?.trim() ?? "").toBe(visible.trim());
-    assistant(state, runId, raw + "\n\nResult.");
-    expect(tail(state)?.trim()).toBe((visible + "\n\nResult.").trim());
+    expect(tail(state)).toBe(reply);
   },
 );
 
 it("resolves a bounded prefix on its wire page before filling a held history gap", async () => {
-  const runId = "run-live";
-  const rows = [
-    message("user", "Read the swatch.", { idempotencyKey: runId + ":user" }),
-    importedClaude("text", [{ type: "text", text: "Amber." }]),
-    importedClaude("call", [{ type: "toolcall", id: "read", name: "read" }]),
-  ];
-  const history = activeSnapshot(runId, "", rows);
+  const rows = swatchRows(SWATCH_OPENING);
+  const history = activeSnapshot(SWATCH_RUN, "", rows);
   history.sessionInfo!.sessionId = "swatches";
   const earlier = message("assistant", "Earlier turn.", { id: "earlier", seq: 1 });
   const held = { messages: [earlier], sessionInfo: history.sessionInfo, totalMessages: 1 };
@@ -292,7 +277,7 @@ it("resolves a bounded prefix on its wire page before filling a held history gap
     .mockResolvedValueOnce({ kind: "reset" })
     .mockResolvedValueOnce({
       ...history,
-      inFlightRun: { runId, text: "", textFromMessage: 1, events: [] },
+      inFlightRun: { runId: SWATCH_RUN, text: "", textFromMessage: 1, events: [] },
       hasMore: true,
       nextOffset: rows.length,
       totalMessages: rows.length + 1,
@@ -302,7 +287,7 @@ it("resolves a bounded prefix on its wire page before filling a held history gap
   await loadChatHistory(state);
   await loadChatHistory(state);
   expect(state.chatMessages).toEqual([earlier, ...rows]);
-  assistant(state, runId, "Amber.\n\nResult.");
+  assistant(state, SWATCH_RUN, SWATCH_OPENING + "\n\nResult.");
   expect(tail(state)?.trim()).toBe("Result.");
 });
 
@@ -311,9 +296,8 @@ it("does not bind an earlier start to a later history buffer without an imported
   const reply = "Amber. New page.";
   const snapshot = activeSnapshot("run-live", reply);
   const start = toolEvent("native-read");
-  snapshot.inFlightRun!.events = [
-    { ...start, data: { ...start.data, textLengthBeforeTool: opening.length } },
-  ];
+  start.data.textLengthBeforeTool = opening.length;
+  snapshot.inFlightRun!.events = [start];
   const state = createState(snapshot);
   await loadWithTools(state);
   expect(tail(state)).toBe(reply);

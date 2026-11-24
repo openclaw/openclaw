@@ -28,7 +28,10 @@ export function projectInFlightRunSnapshot(params: {
   const run = params.chatRunState.runs.get(params.runId);
   const projected = params.chatRunState.resolveBuffer(params.runId);
   const plan = run?.planSnapshot;
-  const events = readChatRunProgressEvents(run?.progressSnapshot);
+  const events = readChatRunProgressEvents(
+    run?.progressSnapshot,
+    run?.assistantScope && !projected.suppress ? run.display?.toolTextAfterSeq : undefined,
+  );
   return {
     runId: params.runId,
     text: projected.suppress ? "" : projected.text,
