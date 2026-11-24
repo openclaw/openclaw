@@ -259,7 +259,6 @@ export async function patchSessionEntryInWorker(params: {
         !prepared.consumePendingReset &&
         !prepared.providerReviewMutation &&
         !prepared.shouldCommitIf &&
-        !prepared.cliHistory &&
         !prepared.conversation &&
         !prepared.ensureIdentitySource &&
         !sourceChecks.length &&

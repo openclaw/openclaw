@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { readImageMetadataFromHeader } from "../media/image-ops.js";
+import { readImageMetadataFromHeader } from "../media/image-header-metadata.js";
 
 const runExecMock = vi.hoisted(() => vi.fn());
 vi.mock("../process/exec.js", () => ({ runExec: runExecMock }));

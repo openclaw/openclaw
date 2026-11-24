@@ -42,11 +42,8 @@ import { drainGlobalSingletonLifecycleState } from "../../shared/global-singleto
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import * as routedReplies from "./route-reply.js";
-import * as sessionEventHandoff from "./session-event-handoff.js";
-import {
-  captureSessionEventTargetForHost,
-  enqueueSessionEventForHost,
-} from "./session-event-handoff.js";
+import * as handoff from "./session-event-handoff.js";
+import { captureSessionEventTargetForHost } from "./session-event-handoff.js";
 import {
   configureEventState,
   openEventToolHost,
@@ -72,18 +69,16 @@ await Promise.all([
   ),
 ]);
 
-type EventReceipt = ReturnType<typeof enqueueSessionEventForHost>;
+type EventReceipt = ReturnType<typeof handoff.enqueueSessionEventForHost>;
 function observeEnqueue(source: string | undefined, onReceipt: (receipt: EventReceipt) => void) {
-  const enqueue = sessionEventHandoff.enqueueSessionEventForHost;
-  return vi
-    .spyOn(sessionEventHandoff, "enqueueSessionEventForHost")
-    .mockImplementation((text, options) => {
-      const receipt = enqueue(text, options);
-      if (source === undefined || options.source === source) {
-        onReceipt(receipt);
-      }
-      return receipt;
-    });
+  const enqueue = handoff.enqueueSessionEventForHost;
+  return vi.spyOn(handoff, "enqueueSessionEventForHost").mockImplementation((text, options) => {
+    const receipt = enqueue(text, options);
+    if (source === undefined || options.source === source) {
+      onReceipt(receipt);
+    }
+    return receipt;
+  });
 }
 
 async function enqueueGuardedCliWatchdog(params: {
@@ -127,7 +122,7 @@ async function enqueueGuardedCliWatchdog(params: {
       },
     ],
   });
-  let receipt: ReturnType<typeof enqueueSessionEventForHost> | undefined;
+  let receipt: EventReceipt | undefined;
   const observer = observeEnqueue(undefined, (value) => {
     receipt = value;
   });
@@ -202,7 +197,7 @@ it.for([
       const scope = { agentId: "main", sessionKey: "agent:main:event-refusal" };
       await replaceSessionEntry(scope, { sessionId: "event-refusal", updatedAt: 1, ...entry });
       runEmbeddedAgentMock.mockReset();
-      const receipt = enqueueSessionEventForHost("Resume interrupted work", {
+      const receipt = handoff.enqueueSessionEventForHost("Resume interrupted work", {
         ...scope,
         source: "restart",
         abortSignal: signal,
@@ -396,7 +391,13 @@ it.for([
                 if (!retainedDowngrade) {
                   throw error;
                 }
-                expect(String(error)).toMatch(/authority|permission|active|configuration changed/i);
+                if (change === "retained-database-replacement") {
+                  expect(error).toMatchObject({ code: "SESSION_DELIVERY_GENERATION_UNAVAILABLE" });
+                } else {
+                  expect(String(error)).toMatch(
+                    /authority|permission|active|configuration changed/i,
+                  );
+                }
                 retainedWriteRejected = true;
               }
             }
@@ -430,8 +431,8 @@ it.for([
                 return result;
               })
           : undefined;
-      let outcome: Awaited<ReturnType<typeof enqueueSessionEventForHost>["settled"]>;
-      let accepted: Awaited<ReturnType<typeof enqueueSessionEventForHost>["accepted"]>;
+      let outcome: Awaited<EventReceipt["settled"]>;
+      let accepted: Awaited<EventReceipt["accepted"]>;
       const route = toolOnly
         ? vi
             .spyOn(routedReplies, "routePreparedReply")
@@ -455,7 +456,7 @@ it.for([
                 entry: expectDefined(loadSessionEntry(scope), "full-permission destination"),
                 signal,
               })
-            : enqueueSessionEventForHost(text, {
+            : handoff.enqueueSessionEventForHost(text, {
                 ...scope,
                 source: fresh ? "plugin" : "exec",
                 abortSignal: AbortSignal.any([signal, cancellation.signal]),
@@ -611,7 +612,7 @@ it.for([
             };
           });
         const target = await captureSessionEventTargetForHost(scope.agentId, scope.sessionKey);
-        const first = enqueueSessionEventForHost("First admitted work", {
+        const first = handoff.enqueueSessionEventForHost("First admitted work", {
           ...scope,
           source: "task",
           expectedTarget: target,
@@ -623,9 +624,9 @@ it.for([
         const enqueued = createDeferred();
         const notices: EventReceipt[] = [];
         let captures = 0;
-        const capture = sessionEventHandoff.captureSessionEventTargetForHost;
+        const capture = handoff.captureSessionEventTargetForHost;
         const captureSpy = vi
-          .spyOn(sessionEventHandoff, "captureSessionEventTargetForHost")
+          .spyOn(handoff, "captureSessionEventTargetForHost")
           .mockImplementation(async (...args) => {
             const result = await capture(...args);
             if (++captures === 1) {
@@ -695,7 +696,7 @@ it.for([
               }),
               "retained overflow occurrence",
             );
-            const rejected = enqueueSessionEventForHost(retainedOverflow.text, {
+            const rejected = handoff.enqueueSessionEventForHost(retainedOverflow.text, {
               ...scope,
               source: "hook",
               expectedTarget: target,
@@ -840,10 +841,10 @@ const ownerRequesterOutcomes = {
   owner: { owner: true, restart: { ok: true }, requester: "456", scheduled: 1 },
   guest: { owner: false, restart: { gated: true }, requester: undefined, scheduled: 0 },
   "revoked-before-admission": { owner: false, restart: { gated: true }, scheduled: 0 },
-  // Revoking publishes config, which retires the admitted turn's tool host before the call.
   "revoked-after-admission": {
     owner: true,
-    restart: "agent harness host capability is no longer active",
+    requester: "456",
+    restart: "Gateway maintenance requires a current owner principal.",
     scheduled: 0,
   },
 };
@@ -920,7 +921,7 @@ it.for(Object.keys(ownerRequesterOutcomes) as Array<keyof typeof ownerRequesterO
           .finally(close);
         return { payloads: [{ text: "Completion observed" }], meta: { durationMs: 1 } };
       });
-      const receipt = enqueueSessionEventForHost("Background command finished.", {
+      const receipt = handoff.enqueueSessionEventForHost("Background command finished.", {
         ...scope,
         source: "exec",
         expectedTarget: target,
@@ -1000,7 +1001,7 @@ it.for([
           }
           return { payloads: [{ text: "Completion observed" }], meta: { durationMs: 1 } };
         });
-      const receipt = enqueueSessionEventForHost("Process the event; record the result.", {
+      const receipt = handoff.enqueueSessionEventForHost("Process the event; record the result.", {
         ...scope,
         source: "exec",
         abortSignal: signal,

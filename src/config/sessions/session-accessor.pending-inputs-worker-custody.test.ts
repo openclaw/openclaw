@@ -21,7 +21,7 @@ import {
   captureSessionTarget,
 } from "../../sessions/session-controller.lifecycle.js";
 import { retireSessionControllerInput } from "../../sessions/session-controller.mailbox.js";
-import type { PersistedUserTurnMessage } from "../../sessions/user-turn-transcript.types.js";
+import type { PersistedUserTurnMessage } from "../../sessions/user-turn-input.types.js";
 import type { StoreWriterTiming } from "../../shared/store-writer-queue.js";
 import { invalidateOpenClawAgentDatabaseValidation } from "../../state/openclaw-agent-db-validation-cache.js";
 import {
@@ -63,7 +63,7 @@ function message(runId: string, content: string): PersistedUserTurnMessage {
   return { role: "user", content, timestamp: 100, idempotencyKey: `${runId}:user` };
 }
 async function finish(receipt: SessionPendingInputReceipt | undefined) {
-  receipt?.finish("interrupted");
+  receipt?.finish("interrupted", "failed");
   await receipt?.settled?.();
 }
 function authorizedInput(
@@ -229,7 +229,7 @@ describe("accepted input worker custody", () => {
         originalIdentity.ino,
       );
 
-      receipt.finish("cancelled");
+      receipt.finish("cancelled", "failed");
       expect(await readAlias()).toEqual(new Map());
       await receipt.settled?.();
       receipt = undefined;
@@ -299,7 +299,7 @@ describe("accepted input worker custody", () => {
           expect(await readForeign()).toEqual(
             new Map([[admitted.inputId, input.message.idempotencyKey]]),
           );
-          admitted.finish("cancelled");
+          admitted.finish("cancelled", "failed");
           expect(await readForeign()).toEqual(new Map());
           await admitted.settled?.();
           receipt = undefined;
@@ -369,7 +369,7 @@ it("refreshes every collected source after a non-revoking profile change", async
       expect(executed).toBe(1);
     } finally {
       for (const receipt of receipts) {
-        receipt.finish("interrupted");
+        receipt.finish("interrupted", "failed");
       }
       await Promise.all(
         receipts.flatMap((receipt) => (receipt.settled ? [receipt.settled()] : [])),
@@ -484,7 +484,7 @@ it.each(["turn", "locked"] as const)(
         );
         try {
           update.run("{", 1, scope.sessionKey);
-          unsettled.finish("interrupted");
+          unsettled.finish("interrupted", "failed");
           await unsettled.settled?.();
           expect(
             database.db
@@ -532,7 +532,7 @@ it("refuses a stale shared reader without orphaning its source settlement captur
         prepared(
           facts,
           () => {
-            invalidateOpenClawAgentDatabaseValidation(database);
+            invalidateOpenClawAgentDatabaseValidation(database, "a maintenance write");
             return consume();
           },
           assertCurrent,

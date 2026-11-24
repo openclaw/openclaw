@@ -28,6 +28,10 @@ menu); Home is where you talk to it. Sessions that fork off the main
 conversation appear under **Threads**, group chats under **Groups**, and
 coding/CLI sessions under **Coding**.
 
+**New Session** opens an independent chat, not a child of Home. Home can still
+receive the one-time creation notice below; it does not automatically watch the
+new chat for later activity.
+
 ### Talk to Home while working
 
 Select **Talk to your Home agent** in the sidebar footer (or press

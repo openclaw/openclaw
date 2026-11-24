@@ -5,6 +5,7 @@ import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { prepareAgentRunTerminalReply } from "../../agents/agent-run-terminal-reply.js";
+import { MISSING_REPLY_SIDE_EFFECT_NOTICE_TEXT } from "../../agents/reply-completion.js";
 import type { AgentWaitResult } from "../../agents/run-wait.types.js";
 import { readSubagentRunAnnounceResult } from "../../agents/subagents/announce/subagent-announce-output.js";
 import { writeSubagentSessionEntry } from "../../agents/subagents/registry/subagent-registry.persistence.test-support.js";
@@ -17,6 +18,7 @@ import {
   resetSubagentRegistryForTests,
   settleRequesterAfterSessionSpawns,
 } from "../../agents/subagents/registry/subagent-registry.test-helpers.js";
+import { recordAgentRunTerminalOutcome } from "../../channels/turn/agent-run-terminal-outcome.js";
 import {
   appendTranscriptMessage,
   replaceSessionEntry,
@@ -28,6 +30,8 @@ import { AsyncWorkScope } from "../../shared/async-work-scope.js";
 import { withTestDir } from "../../test-helpers/temp-dir.js";
 import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
 import { waitForAgentJob } from "../agent-turn/agent-job.js";
+import { dispatchAgentRunFromGateway } from "../agent-turn/agent-run-dispatch.js";
+import { createAgentTurnIo } from "../agent-turn/io.js";
 import {
   observeAgentSubagentCleanup,
   withPluginSubagentTestState,
@@ -94,6 +98,89 @@ export function registerSuccessfulAgentSettlementCase() {
           expect(rpcSourceTesting.has("gateway-agent-run")).toBe(false);
         });
       });
+    });
+  });
+}
+
+export function registerAgentTerminalDiagnosticCases(makeStateDir: () => string) {
+  it.each([
+    {
+      name: "resolved failure",
+      timeout: false,
+      recordedError: undefined,
+      expectedError: "Provider rejected this request.",
+      expectedWaitError: "failed",
+    },
+    {
+      name: "resolved timeout",
+      timeout: true,
+      recordedError: undefined,
+      expectedError: "Request timed out before a response was generated.",
+      expectedWaitError: "aborted",
+    },
+    {
+      name: "producer lifecycle guidance",
+      timeout: false,
+      recordedError: "Reconnect the selected provider, then try again.",
+      expectedError: "Reconnect the selected provider, then try again.",
+      expectedWaitError: "failed",
+    },
+    {
+      name: "missing reply after a tool action",
+      timeout: false,
+      recordedError: MISSING_REPLY_SIDE_EFFECT_NOTICE_TEXT,
+      expectedError: MISSING_REPLY_SIDE_EFFECT_NOTICE_TEXT,
+      expectedWaitError: MISSING_REPLY_SIDE_EFFECT_NOTICE_TEXT,
+    },
+  ])("retains the $name diagnostic on the terminal outcome", async (scenario) => {
+    useTestStateDir(makeStateDir());
+    primeMainAgentRun();
+    const runId = `task-diagnostic-${scenario.name}`;
+    mocks.agentCommand.mockResolvedValueOnce(
+      recordAgentRunTerminalOutcome(
+        {
+          payloads: [],
+          meta: {
+            durationMs: 1,
+            error: {
+              kind: "incomplete_turn",
+              message: scenario.recordedError ? "Agent run failed" : scenario.expectedError,
+            },
+            ...(scenario.timeout
+              ? { timeoutPhase: "provider", providerStarted: true }
+              : { stopReason: "error" }),
+          },
+        },
+        "failed",
+        scenario.recordedError,
+      ),
+    );
+    const onSettled = vi.fn(() => true);
+    await dispatchAgentRunFromGateway({
+      admittedRunEntry: undefined,
+      ingressOpts: {
+        message: "Run this request.",
+        sessionKey: "agent:main:main",
+        allowModelOverride: false,
+      },
+      runId,
+      dedupeKeys: [`agent:${runId}`],
+      abortController: new AbortController(),
+      cleanupAbortController: vi.fn(),
+      io: createAgentTurnIo(vi.fn()),
+      context: makeContext(),
+      onSettled,
+    });
+    expect(onSettled).toHaveBeenCalledWith(
+      expect.objectContaining({
+        terminalOutcome: expect.objectContaining({ error: scenario.expectedError }),
+      }),
+    );
+    // Only the host-authored notice crosses the public wait boundary. Other
+    // producer diagnostics remain internal; timeout retains its existing summary.
+    await expect(waitForAgentJob({ runId, source: "agent", timeoutMs: 0 })).resolves.toMatchObject({
+      status: scenario.timeout ? "timeout" : "error",
+      error: scenario.expectedWaitError,
     });
   });
 }

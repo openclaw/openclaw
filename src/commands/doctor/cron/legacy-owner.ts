@@ -81,7 +81,7 @@ export async function repairLegacyCronOwnersBeforeConfigWrite(params: {
   return result.changed > 0
     ? [
         `Preserved ownership for ${result.changed} legacy cron job(s); unassigned jobs retain ${legacyOwner}.`,
-        `Saved pre-repair cron backup: ${result.backupPath}`,
+        ...(result.backupPath ? [`Saved pre-repair cron backup: ${result.backupPath}`] : []),
       ]
     : [];
 }

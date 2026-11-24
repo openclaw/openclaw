@@ -172,6 +172,24 @@ describe("opt-in extension package boundaries", () => {
     ]);
   });
 
+  it("maps every public @openclaw/ai subpath to its declaration in the package boundary", () => {
+    // Plugin SDK sources import @openclaw/ai by package specifier (#204415). A public subpath
+    // without a boundary alias resolves to an error type inside every opt-in plugin.
+    const rootPaths = readJsonFile<TsConfigJson>("tsconfig.json").compilerOptions?.paths ?? {};
+    const boundaryPaths = readJsonFile<TsConfigJson>(PATHS_CONFIG).compilerOptions?.paths ?? {};
+    const publicAiAliases = Object.entries(rootPaths).filter(
+      ([specifier]) =>
+        (specifier === "@openclaw/ai" || specifier.startsWith("@openclaw/ai/")) &&
+        !specifier.startsWith("@openclaw/ai/internal/"),
+    );
+    expect(publicAiAliases.length).toBeGreaterThan(0);
+    for (const [specifier, [source]] of publicAiAliases) {
+      expect(boundaryPaths[specifier], specifier).toEqual([
+        `../packages/plugin-sdk/dist/${source!.replace(/^\.\//u, "").replace(/\.ts$/u, ".d.ts")}`,
+      ]);
+    }
+  });
+
   it("rejects package aliases that escape their declared declaration root", () => {
     for (const target of [
       "../dist/../src/gateway/auth.ts",

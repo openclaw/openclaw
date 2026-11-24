@@ -55,10 +55,10 @@ test.for(["new database", "interrupted empty database"])(
       path.join(root, "agents", agentId, "agent", "openclaw-agent.sqlite");
     const configuredDatabasePath = databaseAt(stateDir);
     const databasePath = databaseAt(await fs.realpath(stateDir));
+    const { ws } = await openClient();
     testState.sessionStorePath = storeAt("{agentId}");
     testState.agentsConfig = { ownership: "explicit", entries: { main: {}, [agentId]: {} } };
     setRuntimeConfigSnapshot(loadGatewayTestConfig());
-    const { ws } = await openClient();
     if (scenario === "interrupted empty database") {
       await fs.mkdir(path.dirname(databasePath), { recursive: true });
       await fs.writeFile(databasePath, "");

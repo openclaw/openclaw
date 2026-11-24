@@ -3,6 +3,8 @@ import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { Type } from "typebox";
 import { Value } from "typebox/value";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { listMessageActionDiscoveryChannels } from "../../channels/plugins/message-action-discovery.js";
+import * as preparedCatalogModule from "../../plugins/prepared-message-tool-catalog.js";
 
 const { readDeliveryMock, getChannelPluginMock, getBootstrapChannelPluginMock } = vi.hoisted(
   () => ({
@@ -39,11 +41,10 @@ import {
 } from "../../test-utils/channel-plugins.js";
 import {
   buildMessageToolDescription,
-  buildMessageToolSchema,
   hasMessageToolSourceConversation,
-  resolveMessageToolActionSchemaActions,
   resolveEffectiveCurrentChannelContextForRequest,
   resolveMessageToolDiscoveryAsync,
+  resolveMessageToolDiscovery,
   type MessageToolDiscoveryParams,
 } from "./message-tool-discovery.js";
 
@@ -77,8 +78,7 @@ function catalog(channels: PreparedMessageToolCatalog["channels"]): PreparedMess
   return { version: 1, channels, getChannel: (id) => channels.find((entry) => entry.id === id) };
 }
 function discover(params: MessageToolDiscoveryParams) {
-  const actions = resolveMessageToolActionSchemaActions(params);
-  const schema = buildMessageToolSchema(params, actions);
+  const { actions, schema } = resolveMessageToolDiscovery(params);
   return {
     actions,
     schema,
@@ -440,6 +440,17 @@ describe("scheduled account discovery", () => {
       });
 
       expect(scoped.actions).toContain("read");
+      expect(
+        Value.Check(scoped.schema, {
+          action: "read",
+          channel: "slack",
+          target: "channel:C123",
+          readAs: "bot",
+        }),
+      ).toBe(true);
+      if (currentChannelProvider === "telegram") {
+        expect(scoped.actions).not.toContain("channel-list");
+      }
       expect(baseline.actions).not.toContain("read");
       expect(scoped.actions).toContain("poll");
       expect(baseline.properties).toHaveProperty("foreignHint");
@@ -458,4 +469,35 @@ describe("scheduled account discovery", () => {
       ).toBe(true);
     },
   );
+});
+
+it("uses modern raw-plugin fallback and current configuration facts", () => {
+  let configured = true;
+  const plugin = {
+    ...createChannelTestPluginBase({
+      id: "fixture",
+      config: {
+        resolveAccount: () => ({ configured }),
+        isConfigured: (account) => account.configured,
+      },
+    }),
+    message: {
+      send: { text: async () => ({ receipt: { platformMessageIds: [], parts: [], sentAt: 1 } }) },
+    },
+  };
+  const registry = createTestRegistry([{ pluginId: "fixture", source: "test", plugin }]);
+  setActivePluginRegistry(registry);
+  const unprepared = vi
+    .spyOn(preparedCatalogModule, "getPreparedMessageToolCatalog")
+    .mockReturnValue(undefined);
+  try {
+    expect(listMessageActionDiscoveryChannels()[0]).toBe(plugin);
+    const params = { cfg: {}, agentId: "main" };
+    expect(resolveMessageToolDiscovery(params).available).toBe(true);
+    configured = false;
+    expect(resolveMessageToolDiscovery(params).available).toBe(false);
+  } finally {
+    unprepared.mockRestore();
+    resetPluginRuntimeStateForTest();
+  }
 });

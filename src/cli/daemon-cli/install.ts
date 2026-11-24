@@ -50,6 +50,7 @@ import {
 } from "../../daemon/service-update-authority.js";
 import { resolveGatewayService, type GatewayServiceCommandConfig } from "../../daemon/service.js";
 import { isNonFatalSystemdInstallProbeError } from "../../daemon/systemd-exec.js";
+import { installGatewayTerminalCli } from "../../daemon/terminal-cli.js";
 import { resolveGatewayAuth } from "../../gateway/auth.js";
 import {
   defaultGatewayBindMode,
@@ -643,6 +644,11 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
     service,
     successMessage,
     onVerified: async () => {
+      await installGatewayTerminalCli({
+        env: installEnv,
+        command: { programArguments, workingDirectory, environment },
+        warn,
+      });
       if (!json) {
         defaultRuntime.log(successMessage);
       }

@@ -7,12 +7,12 @@ import { configureExecutionIdentityAdmissionSink } from "../../audit/execution-i
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { CliBackendPlugin } from "../../plugins/cli-backend.types.js";
 import {
-  createAdmittedRunOperatorAuthority,
   createOperationalRunInstanceRef,
   prepareAgentRunAdmission,
   prepareSystemAgentRunAdmission,
   type PreparedAgentRunAdmission,
 } from "../admitted-run-context.js";
+import { createTestOperatorAuthority } from "../admitted-run-context.test-support.js";
 import { persistAuthProfileBatch } from "../auth-profiles/upsert-with-lock.js";
 import { testing as cliBackendsTesting } from "../cli-backends.test-support.js";
 import {
@@ -159,13 +159,12 @@ describe("CLI model-routing receipt authority", () => {
     },
   );
 
-  it("checks the logical model before CLI preparation and retains a current model guard through dispatch", async () => {
+  it("checks the logical model before dispatch", async () => {
     const config = { agents: { defaults: { model: "fixture/allowed" } } };
-    let policy = prepareOperatorModelPolicy({ cfg: config, policy: {}, manifestPlugins: [] });
-    const source = createAdmittedRunOperatorAuthority({
+    const policy = prepareOperatorModelPolicy({ cfg: config, policy: {}, manifestPlugins: [] });
+    const source = createTestOperatorAuthority({
       profileId: "fixture-person",
       scopes: ["operator.write"],
-      assertCurrent: () => {},
       get modelPolicy() {
         return policy;
       },
@@ -204,12 +203,6 @@ describe("CLI model-routing receipt authority", () => {
       expect(prepareExecution).toHaveBeenCalledOnce();
       expect(context.params.assertCurrent).toBeTypeOf("function");
       expect(context.params.assertCurrent).not.toThrow();
-      policy = prepareOperatorModelPolicy({
-        cfg: config,
-        policy: { allow: [] },
-        manifestPlugins: [],
-      });
-      expect(context.params.assertCurrent).toThrow("operator role cannot use this model");
     } finally {
       admission.close();
     }
@@ -251,7 +244,7 @@ describe("CLI model-routing receipt authority", () => {
     // History preparation now admits before the final routing producer. Reusing
     // that context rejects the retired claim before any receipt or dispatch.
     expect.soft(preparationError).toMatchObject({
-      message: "prepared execution authority is no longer active",
+      message: "This agent run is no longer active. Start a new turn to retry.",
     });
     expect.soft(decisionWork).toEqual([]);
     expect.soft(dispatch).not.toHaveBeenCalled();

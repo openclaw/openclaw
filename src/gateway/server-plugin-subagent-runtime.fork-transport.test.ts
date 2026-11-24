@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import { createServer } from "node:http";
 import path from "node:path";
@@ -7,9 +8,16 @@ import { bindSessionMcpRuntimeTestScheduler } from "../agents/agent-bundle-mcp-m
 import { providerResponse } from "../agents/embedded-agent-runner.wire.test-support.js";
 import { resetPreparedModelRuntimeSnapshotsForTest } from "../agents/prepared-model-runtime.test-support.js";
 import { closeProviderTransportDispatcherPool } from "../agents/provider-transport-dispatcher-pool.js";
+import { registerSandboxBackend } from "../agents/sandbox/backend.js";
 import { SessionManager } from "../agents/sessions/session-manager.js";
 import { makeAgentAssistantMessage } from "../agents/test-helpers/agent-message-fixtures.js";
 import { makeProviderModelFixture } from "../agents/test-helpers/provider-model-fixture.js";
+import { requireGit } from "../agents/worktrees/git.js";
+import { insertRegistryWorktree } from "../agents/worktrees/registry.js";
+import {
+  initializeManagedWorktreeTestRepository,
+  makeWorktreeRecord,
+} from "../agents/worktrees/service.test-support.js";
 import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../config/config.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -32,6 +40,7 @@ import {
   requestContext,
 } from "./server-methods/sessions-read-cache.test-support.js";
 import { createGatewaySubagentRuntime } from "./server-plugin-subagent-runtime.js";
+import { readLocalWorkspaceProjection } from "./worker-environments/local-workspace-store.test-support.js";
 
 const PLUGIN_ID = "test-session-fork-transport";
 const SESSION_ID = "fork-transport-parent";
@@ -44,7 +53,7 @@ type RecordedRequest = {
   body: unknown;
 };
 
-it("sends no request for another operator's session but forks for its owner at the parent's thinking level", async () => {
+it.each([false, true])("forks a managed worktree with sandbox=%s", async (required) => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const providerDir = state.path("provider");
     fs.mkdirSync(providerDir);
@@ -140,6 +149,12 @@ it("sends no request for another operator's session but forks for its owner at t
                 workspace: state.workspaceDir,
                 userTimezone: "UTC",
                 thinkingDefault: "high",
+                sandbox: {
+                  mode: "off",
+                  docker: { user: "1000:1000" },
+                  browser: { enabled: false },
+                  prune: { idleHours: 0, maxAgeDays: 0 },
+                },
                 models: {
                   [`${fixture.providerId}/fork-model`]: { agentRuntime: { id: "openclaw" } },
                 },
@@ -182,6 +197,27 @@ it("sends no request for another operator's session but forks for its owner at t
           setRuntimeConfigSnapshot(config);
           const owner = ensureProfileForEmail("fork-owner@example.test");
           const stranger = ensureProfileForEmail("fork-stranger@example.test");
+          const repoRoot = await initializeManagedWorktreeTestRepository(state.root);
+          const checkout = state.path("managed-checkout");
+          await requireGit(repoRoot, ["worktree", "add", "-b", "openclaw/fork", checkout]);
+          const worktree = makeWorktreeRecord(repoRoot, randomUUID(), {
+            path: checkout,
+            branch: "openclaw/fork",
+            ownerId: SESSION_KEY,
+          });
+          await insertRegistryWorktree(process.env, worktree, { provisionedPaths: [] });
+          const restoreBackend = registerSandboxBackend("docker", async ({ scopeKey }) => ({
+            id: "docker",
+            runtimeId: scopeKey,
+            runtimeLabel: "Synthetic fork sandbox",
+            workdir: "/workspace",
+            buildExecSpec: async () => {
+              throw new Error("unexpected exec");
+            },
+            runShellCommand: async () => {
+              throw new Error("unexpected shell");
+            },
+          }));
           await upsertSessionEntryCore(
             { agentId: "research", sessionKey: SESSION_KEY },
             {
@@ -189,6 +225,15 @@ it("sends no request for another operator's session but forks for its owner at t
               updatedAt: 1,
               visibility: "shared",
               createdActor: { type: "human", source: "profile", id: owner.id },
+              ...(required ? { sandbox: "required" as const } : {}),
+              spawnedCwd: checkout,
+              sessionRoot: checkout,
+              worktree: {
+                id: worktree.id,
+                branch: worktree.branch,
+                repoRoot,
+                canonicalWorkspaceDir: repoRoot,
+              },
             },
           );
           const context = requestContext(config);
@@ -261,6 +306,8 @@ it("sends no request for another operator's session but forks for its owner at t
             expect(requests).toHaveLength(0);
 
             await expect(forkAs(owner.id)).resolves.toMatchObject({ text: "fork-ok" });
+            const projection = await readLocalWorkspaceProjection(worktree.id);
+            expect(Boolean(projection)).toBe(required);
             expect(requests).toHaveLength(1);
             const sent = JSON.stringify(requests[0]?.body);
             expect(sent).not.toContain("DISCARDED_PRE_COMPACTION_1672");
@@ -301,6 +348,7 @@ it("sends no request for another operator's session but forks for its owner at t
               },
             });
           } finally {
+            restoreBackend();
             lifetime.abort();
             await disposeSessionReadContexts();
             await resetPreparedModelRuntimeSnapshotsForTest();

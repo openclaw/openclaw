@@ -22,9 +22,12 @@ export commands. To use a newer release, Add it as another agent. Agents enrolle
 by the earlier installed-Template lifecycle can be
 [released to ordinary agents](#agents-from-the-earlier-lifecycle).
 
-Enable **Templates** in **Settings → Labs** before adding one. On a headless installation, set
-`gateway.controlUi.experimental.templates` to `true` in OpenClaw config.
-Authoring and inspecting local Template packages do not require the Labs toggle.
+Templates are available by default, with no Labs or replacement settings switch.
+Open **Customize → Templates** to browse and review them. The historical
+`gateway.controlUi.experimental.templates` setting remains an advanced opt-out:
+an explicit `false` stays off on upgrade; unset or `true` permits discovery and Add.
+Set it to `true` or remove an existing `false` to enable Templates again.
+Authoring and inspecting local Template packages are independent of this setting.
 
 `templates add` accepts a ClawHub Template reference (`@publisher/slug`), a canonical
 local package directory, or `CLAW.md` with YAML frontmatter. The reference uses the
@@ -38,8 +41,66 @@ path whose filename is `CLAW.md`, such as `CLAW.md` or `nested/CLAW.md`. Local
 If inspection reports an encoding error, re-encode the source file as UTF-8 and retry;
 Add refuses it before creating an agent or workspace.
 Publishing and searching Templates through ClawHub use the separate registry
-surface. The Control UI can browse official and community Templates from **Pages → Templates** at `/templates`
-when **Templates** is enabled in **Settings → Labs**.
+surface. The Control UI can browse official and community Templates from **Customize → Templates** at `/templates`
+without a Labs opt-in.
+
+## Add an unpublished local project to a running Gateway
+
+```bash
+openclaw templates add ./incident-triage --json
+```
+
+When a local Gateway owns the state directory, Add forwards the canonical local
+project directory to that Gateway's existing installation owner. No publication
+or Gateway restart is required. The path must be accessible on the Gateway host;
+this is not a browser upload or a remote file transfer. Online Add requires
+operator-admin authority and a canonical project accepted by `templates validate`.
+Online Add selects the workspace on the Gateway and rejects `--workspace`.
+Offline Add retains its existing local-source behavior.
+
+The Gateway builds a snapshot containing only declared project files, reviews its
+exact artifact integrity, and retains that artifact before installation. A project
+changed between preview and apply must be reviewed again. Local content is not
+published to or scanned by ClawHub; dependencies still use their existing registry
+verification and consent checks. Online plugin installation requires
+`--accept-capabilities`; dependency trust warnings additionally require
+`--acknowledge-clawhub-risk`. Review dependencies before passing these flags.
+
+API clients can preview with `templates.add.plan` and apply with
+`templates.add.apply`, using `source: { kind: "local", path: "/absolute/project" }`.
+Pass the returned `planIntegrity` and any required dependency acknowledgements to
+apply. Paths refer to directories on the Gateway host, not the caller's machine.
+
+## Import a Template archive in the Control UI
+
+With Templates enabled, open **Customize → Templates**, click **+ Import** (the Import
+icon in the header on mobile), and select a `.tgz` built with
+`openclaw templates build`. The file is read from your
+browser's computer, not from a path on the Gateway. Uploads are limited to 1 MiB
+compressed, 8 MiB extracted, and 4,096 archive entries. Unsafe paths, links,
+malformed archives, and invalid projects are rejected before installation.
+
+The native file picker opens on your computer. After selecting an archive,
+review its proposed agent, workspace files, skills, plugins, MCP servers,
+automations, and required dependency consent in the shared Template card, then
+confirm **Import**. Use Back to return from an item, or Cancel to choose another
+archive. Choosing a file
+does not install it. The exact archive bytes bind the review to installation
+through the existing live Add owner; no publication or restart is needed. The
+origin and ClawHub scan status of a local file are unverified. Current operator-admin authority is required. Canceling,
+leaving the page, or changing the connection drops the browser's pending archive.
+After a successful import, the Control UI opens the new agent's chat. If the UI
+can't open it, choose **Retry opening chat** to try again without reinstalling.
+After an uncertain installation result, inspect the agent before uploading again.
+
+For API clients, the same `templates.add.plan` and `templates.add.apply` methods
+accept `source: { kind: "upload", archiveBase64: "..." }`. Reuse the exact payload
+and the returned `planIntegrity`, with the normal dependency acknowledgements,
+for apply. No permanent upload registry is created.
+
+Template Add logs record a correlation ID, operation stage, outcome, and duration
+without archive bytes or Template contents. Use the correlation ID when
+investigating an unsuccessful import.
 
 ## Create with an agent
 
@@ -48,16 +109,36 @@ Ask the agent, “create a new template from this agent.” The bundled
 review in that same conversation. No sidebar setup or special command is
 required. The agent proposes portable behavior with an input, job, output, and
 authority boundary; it does not publish, return a review link, or create or
-fork a session. Review requires Templates enabled in Labs, an active administrator
+fork a session. Review requires Templates availability, an active administrator
 Control UI connection, and a workspace on the Gateway host. If review is unavailable,
 the proposal stays private.
+
+The agent tells you when it starts, then checks its instructions, avatar, skills,
+plugins, and active scheduled automations together. Paused routines stay on the source agent. You'll see short messages as it
+chooses which skills and plugins to include and which routines belong in the
+Template. It writes the instructions a new owner needs, then opens the private
+review card. Nothing is published unless you choose **Publish**.
+
+You can also describe a Template that is not this agent, for example “create a
+new template that uses a video plugin and, each morning at 3am, makes a short
+video about the pull requests merged in a repository I choose.” The same skill
+drafts it in the same conversation and opens the same review card. It writes the
+instructions and automations from your description, so an automation does not
+have to exist on this agent, and it leaves out this agent's avatar, routines,
+and any skill or plugin you did not name. A plugin or skill you name is declared
+only with an exact published ClawHub release; if the agent cannot find one, it
+says so and leaves the dependency out. Details the Template needs from whoever
+adds it, such as a repository or their time zone, are asked by its first-run
+[`BOOTSTRAP.md`](/cli/templates#author-locally), which updates the declared automation and
+enables it after they agree.
 
 The optional **Create Template** action in the agent's left-sidebar row menu
 still invokes the same skill in that agent's existing main chat. Pinned agents
 keep this action in a focused row menu.
 
-The inline review card shows the exact archive files and declared skill, plugin,
-MCP, and automation requirements. Open an item to inspect its contents, or use
+The draft appears as a compact card in chat. Select **Preview** to inspect the
+exact archive files and declared skill, plugin, MCP, and automation requirements
+in the same review dialog used for imports. Open an item to inspect it, or use
 **View all** to inspect the archive files. Review is read-only. To change a name,
 description, file, or requirement, ask the agent to revise its private proposal
 in the same conversation, then inspect the fresh review. The agent's display
@@ -67,11 +148,37 @@ source workspace, memories, or raw conversations. Known private paths and
 credential-like text are rejected. Review the remaining text for personal facts
 and private context.
 
-Sign in with `clawhub login` on the Gateway host. **Publish** uploads the exact
-reviewed artifact using that account. An agent turn cannot authorize publication.
+The agent's avatar is the one exception to authored text. A proposal may name a
+single image in the agent's workspace, and review then shows that image on the
+card in place of the generic artwork. The image file itself is not copied.
+OpenClaw decodes it and writes a new PNG, at most 512 pixels on its longer side
+and 512 KiB, so metadata stored in the original file is not published. That PNG
+is the package's `assets/icon.png`, which ClawHub uses as the Template's listing
+icon, and the manifest maps it to `avatars/avatar.png` as the avatar of each
+agent created from the Template. It appears among the archive files without a
+text preview.
+
+The image must be a PNG, JPEG, GIF, WebP, or self-contained SVG file of at most
+2 MiB whose contents match its extension. Links and paths outside the workspace
+are refused. If the image is missing or unusable, review fails with the reason
+instead of falling back to the generic artwork. To publish without an avatar,
+ask the agent to remove it from the proposal. Changing the image after review
+requires a fresh review before **Publish**.
+
+If you are signed out of ClawHub, select **Sign in** on the private draft card.
+When the code appears, select **Copy & open ClawHub**, paste the code, and
+approve. The same conversation shows the unpublished draft when it is ready.
+Cancelling or letting sign-in expire leaves the draft private.
+
+**Preview** lets you inspect the reviewed artifact without uploading it. Select
+**Publish** on the card or in the preview dialog to upload that exact artifact.
+Neither signing in nor an agent turn authorizes publication.
+
 The card stays in the conversation and shows **Pending** while ClawHub checks
-the submission; **View submission** opens its ClawHub page. Once the registry
-confirms publication, the card shows **Published** and offers **Copy link**.
+the submission. Select **View submission** to follow its progress on ClawHub.
+While pending, the open card checks again 30 seconds after each response. Checks stop after
+ClawHub confirms publication or failure. On success, the card shows
+**Published** and offers **Copy link** for the public listing.
 Others can then discover the Template and Add it as an ordinary agent.
 
 ## Add through the setup helper
@@ -87,7 +194,7 @@ its result into later helper turns; users do not need to paste the review JSON.
 The host uses the requesting session's existing setup-change approval policy;
 an agent-supplied `approved: true` does not authorize installation. Trust warnings require exact human approval even under Full Access. Review and
 installation retain the original administrator connection, cancellation, and
-revocation checks and use the same installer as **Pages → Templates**. Templates
+revocation checks and use the same installer as **Customize → Templates**. Templates
 must already be enabled in **Settings → Labs**. The helper does not enable Labs,
 install local paths, publish Templates, or gain shell access.
 
@@ -103,8 +210,8 @@ continue its existing setup rather than adding another copy.
 proposal in that workspace and returns its unique `draftId` and path. It does
 not copy source files, start a model turn, contact ClawHub, or publish. Each
 invocation creates a distinct proposal; retain the returned ID instead of
-searching for a latest draft. The bundled skill uses this command when a chat
-request did not arrive with a UI-created draft.
+searching for a latest draft. The bundled skill runs this command during inventory when a chat request did not
+arrive with a UI-created draft; otherwise it reuses the supplied draft.
 
 Create a minimal project, validate its inputs, preview it without mutation,
 and build an immutable package artifact:
@@ -334,6 +441,35 @@ limited to 1 MiB, package metadata to 256 KiB, and workspace files have
 per-file and aggregate limits. Selected files become package content, so
 review them for secrets before building or publishing.
 
+### Welcome description and conversation starters
+
+A Template may set optional `agent.description` and `agent.recommendedPrompts`
+metadata for the installed agent’s main/new-chat welcome page:
+
+```yaml
+agent:
+  id: project-briefing
+  description: Follows your repositories and briefs you on meaningful changes.
+  recommendedPrompts:
+    - Set up a repository
+    - Brief me on recent changes
+    - Show my tracked projects
+```
+
+When no recent chats are available, a nonempty list replaces the default welcome
+prompts. An unset or empty list keeps the defaults. Recent chats, incognito,
+phone layout, and model setup keep their existing display rules. The Template
+page, Add flow, and bootstrap instructions are unchanged.
+
+Prompts use the shared metadata limits: at most three nonempty strings, each at
+most 128 Unicode code points after whitespace normalization. Declare them in
+`CLAW.md`, not in `profiles/openclaw.yml`.
+
+**Compatibility:** this field requires a build with agent welcome prompt support.
+OpenClaw 2026.11.4 and older reject it because Template agent schemas are strict.
+Keep `schemaVersion: 1`; omit `recommendedPrompts` when supporting those versions.
+See [agent welcome settings](/gateway/config-agents/entries-and-multi-agent#chat-welcome).
+
 <a id="inspect-and-preview"></a>
 
 ## Inspect and Add
@@ -386,6 +522,15 @@ personality/SOUL greeting, not a saved canned greeting or a message sent on your
 behalf. Later setup failure retains the exposed agent and conversation;
 completion does not replace an existing draft.
 
+Offline CLI Add checks model and sign-in availability before its optional greeting.
+If no usable model is available, it skips the greeting and prints a short note to
+stderr, including with `--json`. Dependency installation, automations, and
+first-run instruction files still finish normally; a successful Add exits `0`.
+Configure a model in **Settings → Models**, then open the new agent's chat.
+When a model is available, Add still runs the greeting. A failed model turn or
+failed setup step still reports `partial` and exits `1`; it is not treated as a
+skipped greeting.
+
 During a CLI Add, the installer shows a card for each newly installed plugin and
 an automation-created notice as each routine is added. Disabled routines remain
 disabled while their setup prerequisites are missing. Actual installation failures
@@ -437,14 +582,20 @@ stops agent creation. You choose installation or enabling afterwards.
 This path creates declared `automations` (`cronJobs` in older manifests); it
 does not convert legacy `agent.heartbeat` settings into a heartbeat automation.
 
-Intermediate text and card sends are non-final; the final reply closes setup.
+Intermediate text and card sends are non-final. A final reply alone does not
+finish setup: the Gateway checks that every declared automation exists under
+its declaration key and belongs to the new agent's conversation. It includes
+paused jobs and does not rewrite jobs you have already edited or enabled.
+If any are missing, **Retry setup** remains available in the same chat.
 Sending becomes available when setup finishes; a message typed earlier stays in
 the composer.
 
 If that first turn fails or is interrupted, **Retry setup** runs only that turn
 with a fresh run ID in the existing chat. It does not re-create the agent,
 rewrite its files, fetch the Template again, or reinstall dependencies. The
-ordinary session retains the creation report until the turn completes; a retry
+exception is a pending setup from an older Gateway that did not record the
+declared automation IDs: it reverifies the exact release once to recover them.
+The ordinary session retains the creation report until the turn completes; a retry
 cannot start a second setup while the first still owns the agent's setup lease.
 Retry explicitly targets the admitted agent. If setup completed while the client
 was disconnected, Retry reconciles that existing chat without adding another copy.
@@ -473,6 +624,13 @@ require their separate explicit acknowledgements.
 
 For `add` and `dev`, an explicitly empty `--agent-id` is invalid. Omit the option
 to use the default unused ID.
+
+For a new cron automation, Gateway Add uses the time zone reported by the device
+that adds the Template. For example, a 9 AM schedule added from Los Angeles
+runs at 9 AM Los Angeles time, even if the Gateway is in London. If the client
+does not report a valid time zone, Add uses the zone declared in the Template.
+Viewing the Template or retrying setup from another device does not move an
+existing job. Interval automations are unchanged.
 
 Gateway Add review responses describe schedules as either `{ cron, timezone }`
 or `{ everyMs }`, where `everyMs` is a positive integer in milliseconds. Delivery

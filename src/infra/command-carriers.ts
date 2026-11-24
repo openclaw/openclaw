@@ -151,7 +151,7 @@ function resolveEnvSplitPayload(
   payload: string,
   trailingArgv: string[],
   depth: number,
-): string[] | null {
+): { argv: string[]; assignmentKeys: string[] } | null {
   const innerArgv = splitShellArgs(payload);
   if (!innerArgv || innerArgv.length === 0) {
     return null;
@@ -159,7 +159,14 @@ function resolveEnvSplitPayload(
   const carriedArgv = [...innerArgv, ...trailingArgv];
   // env -S can recursively introduce another env wrapper; keep a bounded depth
   // so malicious argv cannot create unbounded parser work.
-  return resolveEnvCarriedArgv(["env", ...carriedArgv], depth + 1) ?? carriedArgv;
+  const innerEnvArgv = ["env", ...carriedArgv];
+  const inner = parseEnvInvocationPrelude(innerEnvArgv, depth + 1);
+  return inner
+    ? {
+        argv: inner.splitArgv ?? innerEnvArgv.slice(inner.commandIndex),
+        assignmentKeys: inner.assignmentKeys,
+      }
+    : { argv: carriedArgv, assignmentKeys: [] };
 }
 
 type ParsedEnvInvocationPrelude = {
@@ -205,15 +212,16 @@ export function parseEnvInvocationPrelude(
         const payloadIndex = splitStringOption.inlineValue === undefined ? index + 1 : index;
         const payload = splitStringOption.inlineValue ?? argv[payloadIndex];
         const trailingIndex = payloadIndex + 1;
-        const splitArgv =
+        const split =
           typeof payload === "string"
             ? resolveEnvSplitPayload(payload, argv.slice(trailingIndex), depth)
             : null;
-        return splitArgv
+        return split
           ? {
-              assignmentKeys,
+              // Keys assigned inside the -S payload are applied by env at runtime.
+              assignmentKeys: [...assignmentKeys, ...split.assignmentKeys],
               commandIndex: trailingIndex,
-              splitArgv,
+              splitArgv: split.argv,
               usesModifiers,
             }
           : null;

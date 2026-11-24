@@ -24,8 +24,8 @@ import {
   SessionTranscriptWriterClaimReboundError,
   withOwnedSessionTranscriptWrites,
 } from "../../../config/sessions/transcript-write-context.js";
+import type { PersistedUserTurnMessage } from "../../../sessions/user-turn-input.types.js";
 import { createUserTurnTranscriptRecorder } from "../../../sessions/user-turn-transcript.js";
-import type { PersistedUserTurnMessage } from "../../../sessions/user-turn-transcript.types.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
 import { createEnteredGate } from "../../entered-gate.test-support.js";
 import type { AgentMessage } from "../../runtime/index.js";

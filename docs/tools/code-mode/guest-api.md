@@ -157,6 +157,13 @@ is limited to 512 UTF-16 code units without splitting surrogate pairs; input and
 output hints remain absent. Returning or emitting MCP discovery metadata uses
 the normal untrusted-content wrapper, even if no MCP tool is called.
 
+An unused search result does not mark the cell as external content. Reading an
+MCP or client handle's metadata does, even if the program discards that text;
+returning or emitting the handle also exposes its metadata. Reading MCP API
+declarations and executing network tools retain their external-content marking.
+This marking taints the current turn, so later memory writes remain untrusted.
+The distinction does not restore trust to previously quarantined memory files.
+
 MCP handles invoke the existing namespace path with one object argument, including
 its input defaults, policy checks, approvals, and native MCP result projection.
 Their `describe()` returns the exact tool's `$api(method, { schema: true })`
@@ -261,6 +268,11 @@ not guest-visible.
 Native Gateway and sandbox exec workdir errors and foreground process failures
 include their concise diagnostic in `message`, with command output in `aggregated`. Returned failures
 remain values; thrown tool errors remain catchable.
+
+A successful foreground `exec` returns exactly what the command wrote in
+`aggregated`, so it is safe to parse. What OpenClaw has to say about the call is
+in `warningText`: for example, that the command left a process running, with the
+session ID to pass to `process`. The field is absent when there is nothing to report.
 
 The `ls`, `find`, and `grep` tools include their bounded listing or search text
 in `content`, including empty-result messages and truncation notices. Directory

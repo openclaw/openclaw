@@ -534,6 +534,9 @@ export function projectCatalogUserProfileIdentity(
   return (
     profile && {
       profileId: profile.id,
+      ...(profile.openclawIdAccountIds
+        ? { openclawIdAccountIds: profile.openclawIdAccountIds }
+        : {}),
       role: profile.role ?? null,
       githubLogin: profile.githubLogin ?? null,
       aliases: new Set(
@@ -606,6 +609,9 @@ export function bindPreparedUserProfileIdentity(
     const profile = assertCurrent(requiredEmailBindingIds, requiredGithubAccountIds);
     return {
       profileId,
+      ...(profile.openclawIdAccountIds
+        ? { openclawIdAccountIds: profile.openclawIdAccountIds }
+        : {}),
       assignedRole: profile.role || null,
       githubLogin: profile.githubLogin ?? null,
     };
@@ -635,6 +641,9 @@ export function bindPreparedUserProfileIdentity(
       return {
         profile: {
           profileId: profile.profileId,
+          ...(profile.openclawIdAccountIds
+            ? { openclawIdAccountIds: profile.openclawIdAccountIds }
+            : {}),
           emails: [...(bindings.emailsByProfile.get(profileId) ?? [])].toSorted(),
           ...projectUserProfileGitHubFacts(rows.get(profileId)),
           ...(rows.get(profileId)?.hasOpenClawIdIdentity ? { hasOpenClawIdIdentity: true } : {}),

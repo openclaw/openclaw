@@ -1,13 +1,118 @@
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
+import { waitForLayoutSettled } from "../pages/chat/chat-layout.browser.test-support.ts";
 import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { requireRecord, requireString } from "./chat-flow.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Control UI session composer size" });
 
 suite.define(() => {
+  it.each([360, 375])(
+    "keeps active-run text clear of actions in a %ipx-wide shortened phone viewport",
+    async (width) => {
+      await suite.withPage(
+        { viewport: { width, height: 240 }, isMobile: true, hasTouch: true },
+        async ({ page }) => {
+          const gateway = await installMockGateway(page);
+          await page.goto(`${suite.server.baseUrl}chat`);
+          const editor = page.locator(".agent-chat__composer-combobox textarea");
+          await editor.fill("Keep working while I draft a follow-up.");
+          await page.getByRole("button", { name: "Send message", exact: true }).click();
+          const send = requireRecord((await gateway.waitForRequest("chat.send")).params);
+          await gateway.emitGatewayEvent("chat", {
+            runId: requireString(send.idempotencyKey, "active run"),
+            sessionKey: requireString(send.sessionKey, "active session"),
+            state: "delta",
+            message: { role: "assistant", content: [{ type: "text", text: "Still working." }] },
+          });
+          await page.locator(".chat-bubble.streaming").waitFor();
+          await expect.poll(() => editor.inputValue()).toBe("");
+
+          const measure = async (label: string) => {
+            await waitForLayoutSettled(page, ".agent-chat__input");
+            const geometry = await page
+              .getByRole("button", { name: label, exact: true })
+              .evaluate((button) => {
+                const textarea = button.closest(".agent-chat__input")!.querySelector("textarea")!;
+                const text = textarea.getBoundingClientRect();
+                const action = button.getBoundingClientRect();
+                return {
+                  overlap:
+                    Math.max(
+                      0,
+                      Math.min(text.right, action.right) - Math.max(text.left, action.left),
+                    ) *
+                    Math.max(
+                      0,
+                      Math.min(text.bottom, action.bottom) - Math.max(text.top, action.top),
+                    ),
+                  text: { top: text.top, bottom: text.bottom, left: text.left, right: text.right },
+                  action: {
+                    top: action.top,
+                    bottom: action.bottom,
+                    left: action.left,
+                    right: action.right,
+                  },
+                  hit: button.contains(
+                    document.elementFromPoint(
+                      action.x + action.width / 2,
+                      action.y + action.height / 2,
+                    ),
+                  ),
+                  scrollHeight: textarea.scrollHeight,
+                  clientHeight: textarea.clientHeight,
+                  scrollWidth: textarea.scrollWidth,
+                  clientWidth: textarea.clientWidth,
+                  scrollTop: textarea.scrollTop,
+                };
+              });
+            expect.soft(geometry.overlap).toBe(0);
+            expect.soft(geometry.hit).toBe(true);
+            for (const box of [geometry.text, geometry.action]) {
+              expect.soft(box.top).toBeGreaterThanOrEqual(0);
+              expect.soft(box.bottom).toBeLessThanOrEqual(240);
+              expect.soft(box.left).toBeGreaterThanOrEqual(0);
+              expect.soft(box.right).toBeLessThanOrEqual(width);
+            }
+            return geometry;
+          };
+          await editor.focus();
+          await measure("Stop");
+          // An outside pointer action selects the one-line, side-by-side layout.
+          await page.mouse.click(100, 80);
+          await expect
+            .poll(() =>
+              editor.evaluate((element) =>
+                element
+                  .closest(".agent-chat__composer-shell")
+                  ?.getAttribute("data-composer-resting"),
+              ),
+            )
+            .toBe("true");
+          const resting = await measure("Stop");
+          expect(resting.text.right).toBeLessThanOrEqual(resting.action.left);
+
+          const draft =
+            "A long follow-up should wrap before the action button, without hiding text. ".repeat(
+              32,
+            );
+          await editor.fill(draft);
+          await editor.press("Control+Home");
+          const top = await measure("Send message");
+          expect(top.scrollHeight).toBeGreaterThan(top.clientHeight);
+          expect(top.scrollWidth).toBe(top.clientWidth);
+          await editor.press("Control+End");
+          const bottom = await measure("Send message");
+          expect(bottom.scrollTop).toBeGreaterThan(top.scrollTop);
+          expect(await editor.inputValue()).toBe(draft);
+        },
+      );
+    },
+  );
+
   it("only collapses an empty, unfocused composer at phone widths", async () => {
     await suite.withPage(
       { viewport: { width: 900, height: 1000 }, colorScheme: "light" },

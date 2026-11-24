@@ -46,14 +46,20 @@ import {
   isIndexedSessionEntry,
 } from "./session-entry-codec.js";
 import { extractSessionBranchHeadline } from "./session-message-cut-content.js";
-import { readSessionTranscriptAccountingTail } from "./session-transcript-accounting-policy.js";
+import {
+  readSessionTranscriptAccountingTail,
+  selectSessionTranscriptAccountingTail,
+} from "./session-transcript-accounting-policy.js";
 import { SQLITE_USAGE_TAIL_MAX_EVENTS } from "./session-transcript-accounting.types.js";
 import type {
   SessionTranscriptMaintenanceFacts,
   SessionTranscriptMaintenanceRead,
 } from "./session-transcript-hydration.types.js";
 import { selectTranscriptMaintenanceSuffix } from "./session-transcript-maintenance-suffix.js";
-import { transcriptEventContextEligibility } from "./session-transcript-projection-append.js";
+import {
+  transcriptEventChargesContextBytes,
+  transcriptEventContextEligibility,
+} from "./session-transcript-projection-append.js";
 import { projectSessionTranscriptReportFacts } from "./session-transcript-report-facts.js";
 import { TranscriptReportNavigation } from "./session-transcript-report-policy.js";
 import { projectAssistantTranscriptText } from "./transcript-assistant-delivery-read.js";
@@ -134,7 +140,7 @@ function contextAccountingRows(navigation: Navigation): SessionActorMemoryHistor
     ({ event }) => isRecord(event) && (event.type === "reset" || event.type === "compaction"),
   );
   if (!boundary || !isRecord(boundary.event)) {
-    return active.filter((row) => transcriptEventContextEligibility(row.event) === 1);
+    return active.filter((row) => transcriptEventChargesContextBytes(row.event));
   }
   const boundaryEvent = boundary.event;
   const firstKeptId = boundaryEvent.firstKeptEntryId;
@@ -160,7 +166,7 @@ function contextAccountingRows(navigation: Navigation): SessionActorMemoryHistor
     ...(boundary.event.type === "compaction" ? [boundary] : []),
     ...active
       .slice(boundary.activePosition + 1)
-      .filter((row) => transcriptEventContextEligibility(row.event) === 1),
+      .filter((row) => transcriptEventChargesContextBytes(row.event)),
   ];
 }
 
@@ -557,11 +563,13 @@ export function readSessionActorMemoryHistoryFacts(
             }
           : {}),
         ...(options.includeUsage || options.includeTurnTaint
-          ? readSessionTranscriptAccountingTail((visit) => {
-              for (let index = tail.length - 1; index >= 0; index -= 1) {
-                visit(tail[index]!.event);
-              }
-            }, options)
+          ? readSessionTranscriptAccountingTail(
+              selectSessionTranscriptAccountingTail(tail, (row) => row.event)
+                .toReversed()
+                .map((row) => row.event),
+              options,
+              tail.length,
+            )
           : {}),
       };
     }

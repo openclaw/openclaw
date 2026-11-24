@@ -16,7 +16,7 @@ import { heldWork } from "./server-plugin-reload.fixture-tools.test-support.js";
 import { loadGatewayPlugins } from "./server-plugins.js";
 
 it.each(["caller", "plugin", "gateway", "role"] as const)(
-  "keeps registered profile preparation bound to its original targets and %s lifetime",
+  "keeps registered profile preparation bound to its original targets through %s changes",
   (closedOwner) =>
     withOpenClawTestState({ scenario: "minimal" }, async () => {
       const fixture = await createFixture("operator.read");
@@ -140,8 +140,15 @@ it.each(["caller", "plugin", "gateway", "role"] as const)(
             plugins.rollbackPluginGlobalSideEffects(record.id, record);
           }
           gate.release();
-          await expect(pending).rejects.toThrow();
-          expect(applied).toBe(false);
+          if (closedOwner === "role" || closedOwner === "caller") {
+            await expect(pending).resolves.toBeUndefined();
+            expect(applied).toBe(true);
+            await expect(scoped(params, callback)).rejects.toThrow();
+            expect(callback).not.toHaveBeenCalled();
+          } else {
+            await expect(pending).rejects.toThrow();
+            expect(applied).toBe(false);
+          }
         } finally {
           gate.release();
           await pending.catch(() => undefined);

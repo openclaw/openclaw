@@ -1,7 +1,9 @@
 import { readSessionMessageIdentity } from "@openclaw/gateway-client/browser";
+import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { t } from "../../i18n/index.ts";
+import { registerChatComposerEnglish } from "../../i18n/locales/en-chat-composer.ts";
 import { registerChatSessionEnglish } from "../../i18n/locales/en-chat-session.ts";
 import { isChatControlCommand, isModelIndependentChatCommand } from "../../lib/chat/commands.ts";
 import {
@@ -9,6 +11,10 @@ import {
   resolveControlUiServerQueueMode,
 } from "../../lib/chat/follow-up-mode.ts";
 import { currentDisplayRuntimeConfig } from "../../lib/config/config-state-model.ts";
+import type {
+  SessionCapability,
+  SessionRowObservation,
+} from "../../lib/sessions/session-capability.ts";
 import { getChatHistoryLoadState } from "./chat-history-state.ts";
 import { chatSendPendingReason } from "./chat-send-support.ts";
 import type { ChatState } from "./chat-state-contract.ts";
@@ -17,6 +23,60 @@ import type { ChatProps } from "./chat-view.tsx";
 import { dismissChatRunError, hasDirectSessionRun, isChatBusy } from "./run-lifecycle.ts";
 
 registerChatSessionEnglish();
+registerChatComposerEnglish();
+
+export function createSessionObservationRefresh(
+  sessions: Pick<SessionCapability, "describe" | "canonicalListRevision">,
+  target: { key: string; agentId: string },
+  client: GatewayBrowserClient,
+  current: () => boolean,
+  observation: () => SessionRowObservation | null,
+  retryAfterList = false,
+) {
+  let reading: Promise<void> | null = null;
+  let pending = false;
+  let failedListRevision: number | undefined;
+  const refresh = () => {
+    if (!current()) {
+      return;
+    }
+    pending = true;
+    const selected = observation();
+    if (reading || !selected?.isCurrent()) {
+      return;
+    }
+    pending = false;
+    failedListRevision = undefined;
+    const reconcile = selected.captureReconcile();
+    reading = sessions
+      .describe(target, { client })
+      .then(({ session }) => {
+        if (current()) {
+          reconcile(session ?? undefined);
+        }
+      })
+      .catch(() => {
+        failedListRevision = sessions.canonicalListRevision;
+      })
+      .finally(() => {
+        reading = null;
+        if (pending) {
+          refresh();
+        }
+      });
+  };
+  return {
+    refresh,
+    retryFailedRead: () => {
+      if (
+        failedListRevision !== undefined &&
+        (!retryAfterList || sessions.canonicalListRevision > failedListRevision)
+      ) {
+        refresh();
+      }
+    },
+  };
+}
 
 export function createChatPaneRunRecoveryActions(
   state: Pick<
@@ -40,8 +100,12 @@ export function createChatPaneRunRecoveryActions(
     isCurrent: () => boolean;
     latestFailedRunId: () => string | undefined;
     onRewindMessage?: ChatProps["onRewindMessage"];
+    onStartNewSession?: (summary: string) => Promise<boolean>;
   },
-): Pick<ChatProps, "onRetryRun" | "failedMessageEditSource" | "onDismissRunError"> {
+): Pick<
+  ChatProps,
+  "onRetryRun" | "onStartNewSession" | "failedMessageEditSource" | "onDismissRunError"
+> {
   const sessionKey = state.sessionKey;
   const ownsFailure = (runId: string) =>
     options.isCurrent() &&
@@ -72,6 +136,14 @@ export function createChatPaneRunRecoveryActions(
           }
         }
       : undefined,
+    onStartNewSession:
+      options.canSend && options.onStartNewSession
+        ? (runId, summary) => {
+            if (ownsFailure(runId)) {
+              void options.onStartNewSession?.(summary);
+            }
+          }
+        : undefined,
     // Reply failures can be dismissed; placement failures keep their recovery action.
     onDismissRunError: state.chatRunError ? () => dismissChatRunError(state) : undefined,
   };
@@ -189,6 +261,7 @@ export function chatSubmitState(
   state: ChatState & Pick<ChatPageHost, "handleChatDraftChange" | "sessionsResult">,
   unavailable: boolean,
   nativeChat: boolean,
+  session?: GatewaySessionRow,
 ) {
   const historyLoad = getChatHistoryLoadState(state);
   const failure = unavailable && historyLoad.phase === "failed" ? historyLoad.message : null;
@@ -198,11 +271,22 @@ export function chatSubmitState(
     : null;
   const controlCommand = isChatControlCommand(state.chatMessage);
   const routePending = state.isRouteSessionPending?.() === true;
+  const workspaceRemoved = session?.worktreeState && session.worktreeState !== "ready";
   return {
+    initialSubmission:
+      nativeChat &&
+      state.chatMessages.length === 1 &&
+      Boolean(
+        state.chatSubmissions?.readInitial(state.sessionKey, state.client, state.currentSessionId),
+      ),
     goalResumeBusy: isChatBusy(state) || hasDirectSessionRun(state),
-    ...(routePending || (connectionPendingReason && !controlCommand) ? { canSend: false } : {}),
-    submitDisabledReason:
-      pendingReason ?? (routePending || unavailable ? (failure ?? t("chat.thread.loading")) : null),
+    ...(workspaceRemoved || routePending || (connectionPendingReason && !controlCommand)
+      ? { canSend: false }
+      : {}),
+    submitDisabledReason: workspaceRemoved
+      ? t("chat.composer.workspaceRemoved")
+      : (pendingReason ??
+        (routePending || unavailable ? (failure ?? t("chat.thread.loading")) : null)),
     submitPending:
       routePending || pendingReason !== null || (unavailable && historyLoad.phase !== "failed"),
     onDraftChange: (...args: Parameters<ChatPageHost["handleChatDraftChange"]>) => {

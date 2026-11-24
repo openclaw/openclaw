@@ -124,7 +124,7 @@ export function resolveReplyMessageInjectionFailure(
   } catch (sourceError) {
     return {
       status: "failed",
-      error: toErrorObject(sourceError, "Message source authority is no longer current"),
+      error: toErrorObject(sourceError, "The message source changed. Start a new turn to retry."),
     };
   }
   const targetUnavailable = candidates.findLast(

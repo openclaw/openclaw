@@ -122,6 +122,17 @@ unadmitted data. Losing the task channel is a transport
 failure, never an execution or cleanup receipt. Ordinary SDK workers keep their
 parent-port transport.
 
+When the task channel closes before its supervisor reports a failure, the pool
+retires the worker through that same native cleanup path before rejecting the
+active task. The failure preserves the supervisor's exception and cause, or the
+observed exit code when no exception arrived. Channel-only loss still fails; an
+exit code observed after requested retirement does not identify what closed the
+channel. A refused cleanup reports both failures without releasing custody or
+silently retrying the stop, including for synchronously serviced tasks. An owned
+task still preparing input instead rejects promptly with the failure already
+observed: its cleanup must join preparation before retirement. The input and
+admission remain owned until preparation and cleanup settle.
+
 Workers whose task failure leaves native state uncertain opt into
 `retireOnError`. The server revokes task admission without publishing a reusable
 failed-task response, rejects queued resource-close receipts, and joins those

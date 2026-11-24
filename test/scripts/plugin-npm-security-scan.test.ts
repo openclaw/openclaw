@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { gzipSync } from "node:zlib";
-import { Header } from "tar";
+import { Header } from "tar/raw";
 import { afterEach, expect, it } from "vitest";
 import { scanWithPublisherTooling } from "../../scripts/check-plugin-npm-security-scan.mts";
 import { scanPluginNpmArtifactSecurity } from "../../scripts/plugin-npm-security-scan.mts";

@@ -141,7 +141,7 @@ function evictHandle(databasePath: string) {
 
 function closeCold(f: ReturnType<typeof fixture>) {
   evictHandle(f.databasePath);
-  invalidateOpenClawAgentDatabaseValidation(f.databasePath);
+  invalidateOpenClawAgentDatabaseValidation(f.databasePath, "a maintenance write");
   revokeSqliteDatabaseAdmissionsForPath(f.databasePath);
 }
 
@@ -373,7 +373,7 @@ it("keeps the physical database owner for logical rows in a shared store", async
 it("retains FIFO, caller context and publication across cold admission", async () => {
   const f = fixture();
   closeOpenClawAgentDatabaseByPath(f.databasePath);
-  invalidateOpenClawAgentDatabaseValidation(f.databasePath);
+  invalidateOpenClawAgentDatabaseValidation(f.databasePath, "a maintenance write");
   revokeSqliteDatabaseAdmissionsForPath(f.databasePath);
   requireSchemaRepair(f.databasePath);
   const gate = holdWorkerValidation(f.databasePath);

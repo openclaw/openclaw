@@ -4,6 +4,7 @@ type MessageDerivations = {
   revision: string | undefined;
   normalized: NormalizedMessage | undefined;
   toolCards: ToolCard[] | undefined;
+  automationActivity?: boolean;
   completedSubagentItems?: Array<{ key: string; message: unknown }>;
   completedSubagentGroup?: { sources: unknown[]; completionsKey: string; message: unknown };
 };

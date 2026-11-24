@@ -416,7 +416,9 @@ it("retires a live row hidden by its history projection without dropping its ima
     await settleToolBridges(summaryContainer);
   };
   await draw(false);
-  expect(summaryContainer.textContent).toContain("Process");
+  expect(summaryContainer.querySelector(".chat-activity-group__summary")?.textContent).toContain(
+    "Using tools",
+  );
   for (const expanded of [false, true]) {
     await draw(true, expanded);
     expect(summaryContainer.querySelector(".chat-activity-group__summary")).toBeNull();

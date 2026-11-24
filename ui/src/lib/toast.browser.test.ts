@@ -4,6 +4,7 @@ import "../styles.css";
 import { i18n } from "../i18n/index.ts";
 import { waitForRenderedModalDialog } from "../test-helpers/modal-dialog.ts";
 import { waitForSolid } from "../test-helpers/solid-settle.ts";
+import { subscribeNativeOverlayOcclusion } from "./native-overlay-occlusion.ts";
 import { showToast, type ToastOptions } from "./toast.ts";
 import "./toast-host.tsx";
 
@@ -238,6 +239,11 @@ describe.skipIf(navigator.userAgent.toLowerCase().includes("jsdom"))("toast brow
     await renderToast({ message: "Worktrees: release/readiness-check — live run active" }, host);
     const { toast: front } = await renderToast(archived, host);
     await renderToast({ message: "Waiting" }, host);
+    // A reused browser page can leave its real pointer over the new toast lane.
+    const { page } = await import("vitest/browser");
+    await page.elementLocator(document.body).hover({ position: { x: 0, y: 0 } });
+    await waitForSolid(() => expect(lane.hasAttribute("data-open")).toBe(false));
+    await settleAnimations(host);
     const cards = [...lane.querySelectorAll<HTMLElement>(".app-toast")];
     expect(cards.map((card) => card.dataset.depth)).toEqual(["0", "1", "2", "3"]);
     expect(rect(lane).height).toBeCloseTo(rect(cards[0]!).height, 0);
@@ -293,6 +299,53 @@ describe.skipIf(navigator.userAgent.toLowerCase().includes("jsdom"))("toast brow
     replacement.finish();
     await settling;
     expect(rect(toast).top).toBeCloseTo(restingTop, 0);
+  });
+
+  it("keeps both toast lanes over a native tab without suspending it, then clears its cutouts", async () => {
+    await useViewport(1280);
+    const host = document.body.appendChild(document.createElement("openclaw-toast-host"));
+    const postMessage = vi.fn().mockResolvedValue({ ok: true });
+    vi.stubGlobal("webkit", { messageHandlers: { openclawBrowser: { postMessage } } });
+    vi.stubGlobal("__OPENCLAW_NATIVE_BROWSER_CUTOUTS__", true);
+    const occlusion = vi.fn();
+    const stop = subscribeNativeOverlayOcclusion(occlusion, () => new DOMRect(0, 36, 1280, 700));
+    try {
+      const open = vi.fn();
+      const center = await renderToast(
+        { message: "Session started", actionLabel: "Open session", onAction: open },
+        host,
+      );
+      const arrival = await renderToast({ message: "Review ready", placement: "top-right" }, host);
+      const lastCutouts = () => postMessage.mock.lastCall?.[0]?.cutouts;
+      const centerBox = { x: rect(center.toast).x, width: rect(center.toast).width };
+      const arrivalBox = { x: rect(arrival.toast).x, width: rect(arrival.toast).width };
+      await vi.waitFor(() =>
+        expect(lastCutouts()).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining(centerBox),
+            expect.objectContaining(arrivalBox),
+          ]),
+        ),
+      );
+      expect(occlusion.mock.calls).toEqual([["live"]]);
+      const { page } = await import("vitest/browser");
+      await page.getByRole("button", { name: "Open session" }).click();
+      expect(open).toHaveBeenCalledOnce();
+      await vi.waitFor(() => {
+        expect(lastCutouts()).toEqual(
+          expect.arrayContaining([expect.objectContaining(arrivalBox)]),
+        );
+        expect(lastCutouts()).not.toEqual(
+          expect.arrayContaining([expect.objectContaining(centerBox)]),
+        );
+      });
+      host.remove();
+      await vi.waitFor(() => expect(lastCutouts()).toEqual([]));
+    } finally {
+      stop();
+      host.remove();
+      vi.unstubAllGlobals();
+    }
   });
 
   it("keeps a toast usable inside a native modal and returns it to the shell on dismissal", async () => {

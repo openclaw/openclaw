@@ -40,6 +40,7 @@ export function captureCodexConfiguredConnection(
     args: [],
     url: unixSocketPath ? `unix://${path.resolve(unixSocketPath)}` : start.url,
     authToken: start.authToken,
+    tlsPeerCertificate: start.tlsPeerCertificate,
     headers: start.headers,
   });
   return {

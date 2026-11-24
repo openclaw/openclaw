@@ -86,7 +86,6 @@ export type DurableDraftModelSelection = {
   agentRuntime?: string;
   thinkingLevel: string;
   cyberAccessProgram?: CyberAccessProgram;
-  daybreakAccessProgram?: Exclude<CyberAccessProgram, "standard">;
 };
 
 export type DurableComposerDraft = {
@@ -409,6 +408,7 @@ export type MessageImageSource = {
 };
 
 export type MessageContentItem =
+  | import("./automation-creation-card.ts").AutomationCreationCardBlock
   | import("../../../../src/shared/plugin-inline-view.js").PluginInlineViewBlock
   | import("../../../../src/shared/template-install-notice.js").TemplatePluginInstallNotice
   | ClawHubRecommendation

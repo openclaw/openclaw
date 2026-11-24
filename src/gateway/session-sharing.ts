@@ -24,6 +24,7 @@ import type { SessionRowProjection } from "./session-row-projection.js";
 import {
   expectedSessionMutationTargetError,
   createSessionCreationAuthorizationRecorder,
+  bindSessionMutationSharingReader,
   assertSessionMutationProjectionCurrent,
   findPreparedSharingTarget,
   resolvePreparedTalkAuthorizationTarget,
@@ -481,7 +482,11 @@ export function resolveSessionMutationAuthorization(request: SessionMutationAuth
     if (!sameResolvedTarget) {
       throw targetChanged(targetRef.sessionKey);
     }
-    // Each boundary revalidates authority; unchanged facts retain the prepared policy.
+    if (!bindSessionIdentity) {
+      // Admitted work keeps its permissions; target, store and lifecycle fences above stay live.
+      return;
+    }
+    // Fresh input revalidates authority; unchanged facts retain the prepared policy.
     const policyConfig = params.context.getCommittedRuntimeConfig?.() ?? currentCfg;
     const policy = preparedPolicy(policyConfig, prepared?.members);
     const ownershipError = authorizeOwnSessionMutation({
@@ -507,18 +512,18 @@ export function resolveSessionMutationAuthorization(request: SessionMutationAuth
     if (error) {
       throw new SessionMutationAuthorizationChangedError(error);
     }
-    if (bindSessionIdentity) {
-      admittedInput.bindCurrentEffect();
-    }
+    admittedInput.bindCurrentEffect();
   };
   const chatTarget =
     params.method === "chat.send" && authorizedTargets.length === 1 && !talkSessionTarget
       ? authorizedTargets[0]
       : undefined;
+  if (chatTarget) {
+    params.preparedProfiles?.admit();
+  }
   const admittedInput = createAdmittedSessionSharingAuthority({
     target: chatTarget,
     request: params,
-    ownSessionProfileId,
     consumeSharing,
     assertTargetCurrent,
     changed: targetChanged,
@@ -657,7 +662,6 @@ export function resolveSessionMutationAuthorization(request: SessionMutationAuth
       targets: authorizedTargets,
       sourceConfig: getCfg(),
       request: params,
-      ownSessionProfileId,
       talk: talkInput,
       assertTalkTargetCurrent,
       assertTargetCurrent,
@@ -683,6 +687,7 @@ export function resolveSessionMutationAuthorization(request: SessionMutationAuth
       );
     },
   };
+  bindSessionMutationSharingReader(authorization, params, authorizedTargets);
   authorization.admittedInputAuthority = createSessionSharingInputAuthority(
     params,
     // Input custody requires full transaction facts; admission can use committed projections.

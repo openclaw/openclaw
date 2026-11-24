@@ -55,12 +55,13 @@ describe("web-guarded-fetch", () => {
     });
   });
 
-  it("uses private-network policy only for self-hosted web tools endpoints", async () => {
+  it("confines self-hosted private-network policy to the configured hostname", async () => {
     await withSelfHostedWebToolsEndpoint({ url: "http://127.0.0.1:8080" }, async () => undefined);
     expect(firstFetchCall()).toMatchObject({
       url: "http://127.0.0.1:8080",
       policy: {
         dangerouslyAllowPrivateNetwork: true,
+        hostnameAllowlist: ["127.0.0.1"],
         allowRfc2544BenchmarkRange: true,
         allowIpv6UniqueLocalRange: true,
       },

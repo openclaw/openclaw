@@ -7,6 +7,7 @@ import { clearRuntimeConfigSnapshot } from "../config/io.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { CronService } from "../cron/service.js";
 import type { PluginHookGatewayContext } from "../plugins/hook-gateway.types.js";
+import { createPluginCommandRuntime } from "../plugins/plugin-command-runtime.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import { bindPluginRuntimeArtifactSelection } from "../plugins/plugin-runtime-artifact-binding.js";
@@ -72,6 +73,7 @@ import {
 } from "./server-plugin-reload.memory.test-support.js";
 import {
   createRecoveryChannelManager,
+  waitForChannelAbort,
   createPluginReloadRecoveryFixture,
   verifyChannelReplacementContracts,
   verifyColdAccountReplacement,
@@ -506,6 +508,42 @@ it.each(["retry", "shutdown"] as const)(
 
 it("replaces channel command provenance while keeping webhook ingress retryable", () =>
   verifyChannelReplacementContracts(createRecoveryFixture));
+
+it("refreshes only native command channels when an unrelated plugin reloads", async () => {
+  const starts: string[] = [];
+  const context = { channel: "native", isAuthorizedSender: true, commandBody: "/go", config: {} };
+  let runRetained = async (): Promise<unknown> => undefined;
+  const fixture = await createRecoveryFixture({
+    abortOnCandidateStart: false,
+    register(api, owner) {
+      if (owner !== "sibling") {
+        return;
+      }
+      api.registerCommand({ name: "go", description: "k", handler: async () => ({ text: "ok" }) });
+      for (const id of ["native", "plain"]) {
+        const capabilities = { chatTypes: ["direct" as const], nativeCommands: id === "native" };
+        const startAccount = async ({ abortSignal }: { abortSignal: AbortSignal }) => {
+          const cmd = createPluginCommandRuntime().listNativeCandidates(id)[0]?.prepareDispatch();
+          assert(cmd?.kind === "plugin");
+          starts.push(id);
+          runRetained = () => cmd.execute(context);
+          await waitForChannelAbort(abortSignal);
+        };
+        const base = createChannelTestPluginBase({ id, capabilities });
+        api.registerChannel({ plugin: { ...base, gateway: { startAccount } } });
+      }
+    },
+  });
+  const manager = createRecoveryChannelManager(fixture);
+  fixture.runtime.channelManager = manager;
+  await manager.startChannel("plain");
+  await manager.startChannel("native");
+  await fixture.reload();
+  await Promise.all([manager.stopChannel("native"), manager.stopChannel("plain")]);
+  // Only the native command channel restarts, and its new handler runs the retained command.
+  expect(starts).toEqual(["plain", "native", "native"]);
+  await expect(runRetained()).resolves.toEqual({ text: "ok" });
+});
 
 it("keeps cold accounts isolated while replacing their plugin and healthy accounts", () =>
   verifyColdAccountReplacement(createRecoveryFixture));

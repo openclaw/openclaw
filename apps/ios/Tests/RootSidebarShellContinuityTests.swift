@@ -47,7 +47,7 @@ struct RootSidebarShellContinuityTests {
             RootSidebarShell(
                 sidebarWidth: 316,
                 isDrawerLayout: self.isDrawer,
-                isPresented: self.isPresented,
+                presentation: RootSidebarPresentation(isPresented: self.isPresented),
                 canOpenFromEdge: true,
                 reduceMotion: self.reduceMotion,
                 animation: nil,

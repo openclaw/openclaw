@@ -312,3 +312,35 @@ describe("Gateway install PATH preservation", () => {
     expect(plan.environment.PATH).toBe(testCase.expectedPath);
   });
 });
+
+describe("Gateway allocator startup environment", () => {
+  it.each([
+    ["linux", undefined, undefined, undefined, "2"],
+    ["linux", "4", undefined, undefined, "4"],
+    ["linux", "0", undefined, undefined, "0"],
+    ["linux", "", undefined, undefined, ""],
+    ["linux", undefined, "6", undefined, "6"],
+    ["linux", undefined, "2", "8", "8"],
+    ["darwin", undefined, undefined, undefined, undefined],
+    ["win32", undefined, undefined, undefined, undefined],
+  ] as const)(
+    "preserves allocator choices on %s (shell=%s, installed=%s, config=%s)",
+    async (platform, shell, installed, configured, expected) => {
+      const plan = await buildPlan({
+        env: { HOME: tmpDir, MALLOC_ARENA_MAX: shell },
+        platform,
+        existingEnvironment: { MALLOC_ARENA_MAX: installed },
+        config: configured === undefined ? {} : { env: { MALLOC_ARENA_MAX: configured } },
+      });
+      expect(plan.environment.MALLOC_ARENA_MAX).toBe(expected);
+    },
+  );
+
+  it("uses the durable dotenv allocator choice before the Linux default", async () => {
+    const stateDir = path.join(tmpDir, ".openclaw");
+    fs.mkdirSync(stateDir);
+    fs.writeFileSync(path.join(stateDir, ".env"), "MALLOC_ARENA_MAX=6\n");
+    const plan = await buildPlan({ env: { HOME: tmpDir }, platform: "linux" });
+    expect(plan.environment.MALLOC_ARENA_MAX).toBe("6");
+  });
+});

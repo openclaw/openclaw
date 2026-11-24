@@ -74,3 +74,48 @@ it("defers only native display pages and keeps their pagination until final enco
   expect(ordinary.encodedResponse).toBeDefined();
   expect(ordinary.messages).toEqual([]);
 });
+
+it("indexes exactly the policy-sensitive top-level assistant tuples while encoding", () => {
+  const hidden = { provider: "example", model: "hidden" };
+  const rows = [
+    { role: "user", ...hidden, content: "雪🦞" },
+    { role: "toolResult", ...hidden },
+    { role: "assistant", __openclaw: { nested: hidden } },
+    { role: "assistant", provider: null, model: null },
+    { role: "assistant", provider: "openclaw", model: "delivery-mirror" },
+    { role: "assistant", provider: "example", model: "allowed" },
+    { role: "assistant", ...hidden },
+    { role: "assistant", model: 42 },
+    { role: "assistant", provider: null, model: "hidden" },
+    { role: "assistant", provider: "example" },
+  ];
+  const page = encodeChatHistoryResponsePage(
+    { messages: rows },
+    {
+      encodeResponse: true,
+      entry: undefined,
+      provider: undefined,
+      sessionId: "indexed",
+      storePath: undefined,
+      sessionAgentId: "main",
+      canonicalKey: "agent:main:indexed",
+      max: 200,
+      maxHistoryBytes: 512 * 1024,
+      effectiveMaxChars: 20_000,
+      offset: undefined,
+      messageId: undefined,
+    },
+  );
+  const bytes = expectDefined(page.encodedResponse, "encoded page").messages;
+  const index = expectDefined(page.messageModelIndex, "model row index");
+  expect(index.rowCount).toBe(10);
+  expect(index.byteLength).toBe(bytes.byteLength);
+  const indexed = [];
+  for (let i = 0; i < index.ranges.length; i += 2) {
+    indexed.push(
+      JSON.parse(new TextDecoder().decode(bytes.subarray(index.ranges[i], index.ranges[i + 1]))),
+    );
+  }
+  expect(indexed).toEqual(rows.slice(5));
+  expect(JSON.parse(new TextDecoder().decode(bytes))).toEqual(rows);
+});

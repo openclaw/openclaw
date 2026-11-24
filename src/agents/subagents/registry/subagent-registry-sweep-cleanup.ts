@@ -11,12 +11,12 @@ import {
   resolveSubagentChildAgentId,
   resolveSubagentChildAuthority,
 } from "./subagent-child-owner-match.js";
+import { isDeliverySuspended } from "./subagent-delivery-state.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
 import {
   assertSubagentRegistryWriteSourceCurrent,
   mutateSubagentRuns,
 } from "./subagent-registry-persistence.js";
-import { isSuspendedPendingFinalDelivery } from "./subagent-registry-suspended-delivery.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import { isSameSubagentRunOwner } from "./subagent-run-generation.js";
 import { deleteSubagentSessionForCleanup } from "./subagent-session-cleanup.js";
@@ -81,7 +81,6 @@ export const sweptContext = (entry: SubagentRunRecord) => ({
 });
 
 export const isSessionCleanupDeferred = (entry: SubagentRunRecord) =>
-  entry.delivery?.disposition === "retryable" ||
   ((entry.delivery?.status === "pending" || entry.delivery?.status === "in_progress") &&
     entry.delivery.disposition === "session_queued") ||
   entry.pauseReason === "sessions_yield" ||
@@ -108,7 +107,7 @@ export function isCleanupCurrent(
     typeof current.execution.endedAt === "number" &&
     (subagentRuns.isCompletionAuthorityRetired(current) ||
       (!current.killIntent && !current.killReconciliation && !current.requesterSettleWake)) &&
-    !isSuspendedPendingFinalDelivery(current) &&
+    !isDeliverySuspended(current) &&
     !isSessionCleanupDeferred(current)
   );
 }
@@ -150,7 +149,7 @@ export function mutateCleanup(
   runs: Map<string, SubagentRunRecord>,
   entry: SubagentRunRecord,
   ready: (current: SubagentRunRecord) => boolean,
-  update: (draft: SubagentRunRecord) => void | null,
+  update: ((draft: SubagentRunRecord) => void) | null,
 ) {
   return mutateSubagentRuns(
     [entry.runId],
@@ -160,14 +159,16 @@ export function mutateCleanup(
         return { value: undefined };
       }
       // Cleanup changes only top-level bookkeeping and the frozen execution record.
-      const draft = { ...current, execution: { ...current.execution } };
-      const next = update(draft) === null ? null : draft;
+      const next = update ? { ...current, execution: { ...current.execution } } : null;
+      if (update && next) {
+        update(next);
+      }
       return {
         value: next,
         postimages: new Map([[entry.runId, next]]),
         removalReason: "retention",
       };
     },
-    { runs },
+    { runs, deleteOnly: update === null },
   );
 }
