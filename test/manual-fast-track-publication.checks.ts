@@ -20,7 +20,7 @@ import {
 } from "../scripts/lib/release-fast-track-contract.mts";
 import {
   authenticateFastTrackPolicy,
-  bindFastTrackApproval,
+  bindFastTrackPacket,
   fastTrackValidationSnapshot,
   releaseFastTrackDigest,
   type FastTrackJob,
@@ -159,11 +159,6 @@ async function partialPublication(rerun?: "bound" | "later") {
   const packet = {
     request,
     digest: fastTrackRequestDigest(request),
-    approval: {
-      approver: "synthetic-human-release-manager",
-      decidedAt: "2026-08-28T12:10:00.000Z",
-      url: "https://chat.google.com/room/synthetic/approval",
-    },
   };
   const options = {
     run: parent,
@@ -182,14 +177,14 @@ async function partialPublication(rerun?: "bound" | "later") {
   return { f, client, packet, options };
 }
 
-it("admits the explicitly approved partial FRV through the publisher owner without turning its failure into success", async () => {
+it("admits a partial-FRV request without a chat approval URL through the publisher owner without turning its failure into success", async () => {
   const { f, client, packet, options } = await partialPublication();
   const original = JSON.stringify(f.manifest);
   await expect(authenticateFullReleaseValidationEvidence(options, client)).rejects.toThrow(
     "not completed/success",
   );
   const result = await authenticateFullReleaseValidationEvidence(
-    { ...options, fastTrackApproval: packet },
+    { ...options, fastTrackRequest: packet },
     client,
   );
   expect(result.evidence.current.conclusion).toBe("failure");
@@ -204,9 +199,9 @@ it("admits the explicitly approved partial FRV through the publisher owner witho
   expect(JSON.stringify(f.manifest)).toBe(original);
 });
 
-it("carries an explicit local approval through npm lineage without relying on workflow environment", async () => {
+it("carries a local exception request through npm lineage without relying on workflow environment", async () => {
   const { f, client, packet } = await partialPublication();
-  vi.stubEnv("FAST_TRACK_APPROVAL_JSON", "");
+  vi.stubEnv("FAST_TRACK_REQUEST_JSON", "");
   const operation = {
     manifest: f.manifest,
     repository: f.repository,
@@ -223,12 +218,12 @@ it("carries an explicit local approval through npm lineage without relying on wo
   );
   const qualified = await verifyNpmPreflightPublicationLineage({
     ...operation,
-    fastTrackApproval: packet,
+    fastTrackRequest: packet,
   });
   expect(qualified.producer.runId).toBe(f.npmQualified.producer.runId);
 });
 
-it("requires fresh approval when candidate, scope, artifact bytes, run attempt or expiry changes", async () => {
+it("requires a fresh request when candidate, scope, artifact bytes, run attempt or expiry changes", async () => {
   const { f, packet } = await partialPublication();
   for (const change of [
     { candidateSha: "b".repeat(40) },
@@ -239,18 +234,18 @@ it("requires fresh approval when candidate, scope, artifact bytes, run attempt o
   ]) {
     const request = { ...packet.request, ...change };
     expect(() =>
-      bindFastTrackApproval(
+      bindFastTrackPacket(
         { ...packet, request, digest: fastTrackRequestDigest(request) },
         f.manifest,
       ),
     ).toThrow();
   }
   expect(() =>
-    bindFastTrackApproval({ ...packet, digest: `sha256:${"0".repeat(64)}` }, f.manifest),
+    bindFastTrackPacket({ ...packet, digest: `sha256:${"0".repeat(64)}` }, f.manifest),
   ).toThrow("digest mismatch");
 });
 
-it("rejects partial approval that omits an observed validation failure", async () => {
+it("rejects a partial request that omits an observed validation failure", async () => {
   const { client, packet, options } = await partialPublication();
   const request = {
     ...packet.request,
@@ -266,14 +261,14 @@ it("rejects partial approval that omits an observed validation failure", async (
     authenticateFullReleaseValidationEvidence(
       {
         ...options,
-        fastTrackApproval: { ...packet, request, digest: fastTrackRequestDigest(request) },
+        fastTrackRequest: { ...packet, request, digest: fastTrackRequestDigest(request) },
       },
       client,
     ),
   ).rejects.toThrow("all outstanding jobs");
 });
 
-it("does not make an unsealed publication artifact eligible, even with a matching human packet", async () => {
+it("does not make an unsealed publication artifact eligible, even with a matching exception packet", async () => {
   const { f, packet } = await partialPublication();
   const manifest = { ...f.manifest, publicationArtifacts: {} };
   const request = {
@@ -286,16 +281,13 @@ it("does not make an unsealed publication artifact eligible, even with a matchin
     ],
   };
   expect(() =>
-    bindFastTrackApproval(
-      { ...packet, request, digest: fastTrackRequestDigest(request) },
-      manifest,
-    ),
+    bindFastTrackPacket({ ...packet, request, digest: fastTrackRequestDigest(request) }, manifest),
   ).toThrow("npmPreflight");
 });
 
 it("reuses successfully sealed Docker bytes from an approved failed FRV but never a failed Docker seal", async () => {
   const { f, client, packet, options } = await partialPublication();
-  vi.stubEnv("FAST_TRACK_APPROVAL_JSON", JSON.stringify(packet));
+  vi.stubEnv("FAST_TRACK_REQUEST_JSON", JSON.stringify(packet));
   const docker = validateDockerReleaseManifest(f.docker, {
     tag: f.docker.tag,
     sourceSha: f.c,
@@ -342,10 +334,10 @@ it("does not allow a valid packet to bypass a different actual publisher tag or 
         npmDistTag: "beta",
         consumer: "publisher",
         expectedSha: f.c,
-        fastTrack: bindFastTrackApproval(packet, f.manifest),
+        fastTrack: bindFastTrackPacket(packet, f.manifest),
         ...changedInput,
       }),
-    ).toThrow("Fast-track approval does not cover");
+    ).toThrow("Fast-track request does not cover");
   }
 });
 
@@ -405,11 +397,6 @@ it("recomputes the bounded delta against a matching published fully validated ba
   const packet = {
     request,
     digest: fastTrackRequestDigest(request),
-    approval: {
-      approver: "synthetic-human-release-manager",
-      decidedAt: "2026-08-28T12:10:00.000Z",
-      url: "https://chat.google.com/room/synthetic/approval",
-    },
     referenceRunId: "99",
     referenceRunAttempt: "1",
   };
@@ -579,7 +566,7 @@ it("generates truthful failed-decision evidence and validates it without passing
 it("requires and accepts the complete partial-rerun snapshot with original attempt identity", async () => {
   const { f, client, packet, options } = await partialPublication("bound");
   await expect(
-    authenticateFullReleaseValidationEvidence({ ...options, fastTrackApproval: packet }, client),
+    authenticateFullReleaseValidationEvidence({ ...options, fastTrackRequest: packet }, client),
   ).rejects.toThrow("all outstanding jobs");
   assert(packet.request.policy === "approved-partial-frv-v1");
   const snapshot = packet.request.validationSnapshot;
@@ -602,14 +589,14 @@ it("requires and accepts the complete partial-rerun snapshot with original attem
   };
   const complete = { ...packet, request, digest: fastTrackRequestDigest(request) };
   await expect(
-    authenticateFullReleaseValidationEvidence({ ...options, fastTrackApproval: complete }, client),
+    authenticateFullReleaseValidationEvidence({ ...options, fastTrackRequest: complete }, client),
   ).resolves.toMatchObject({ evidence: { fastTrack: { digest: complete.digest } } });
 });
 
 it("authenticates the frozen child attempt after a later rerun", async () => {
   const { client, packet, options } = await partialPublication("later");
   await expect(
-    authenticateFullReleaseValidationEvidence({ ...options, fastTrackApproval: packet }, client),
+    authenticateFullReleaseValidationEvidence({ ...options, fastTrackRequest: packet }, client),
   ).resolves.toMatchObject({ evidence: { fastTrack: { digest: packet.digest } } });
 });
 
@@ -638,7 +625,7 @@ it("resolves sealed inline npm bytes from failed FRV only for downstream fast-tr
   expect(
     resolveFullReleaseNpmPreflight({
       ...operation,
-      fastTrackApproval: "transport only; owner authenticates separately",
+      fastTrackRequest: "transport only; owner authenticates separately",
     }).producer.runId,
   ).toBe(f.runId);
   const failedSeal = (args: string[]) => {
@@ -653,7 +640,7 @@ it("resolves sealed inline npm bytes from failed FRV only for downstream fast-tr
   expect(() =>
     resolveFullReleaseNpmPreflight({
       ...operation,
-      fastTrackApproval: "transport only",
+      fastTrackRequest: "transport only",
       runGh: failedSeal,
     }),
   ).toThrow("completed producer job");

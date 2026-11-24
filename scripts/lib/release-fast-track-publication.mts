@@ -14,28 +14,17 @@ const runId = z.string().regex(/^[1-9][0-9]*$/u);
 const packetSchema = z.strictObject({
   request: z.unknown(),
   digest: z.string().regex(/^sha256:[a-f0-9]{64}$/u),
-  approval: z.strictObject({
-    approver: z.string().min(1).max(200),
-    decidedAt: z.string().datetime(),
-    url: z.url().refine((value) => new URL(value).protocol === "https:"),
-  }),
   referenceRunId: runId.optional(),
   referenceRunAttempt: runId.optional(),
 });
 export function releaseFastTrackDigest(value: unknown): string {
   return `sha256:${createHash("sha256").update(publicationSourceJson(value)).digest("hex")}`;
 }
-export function parseFastTrackApproval(value: unknown) {
+export function parseFastTrackPacket(value: unknown) {
   const packet = packetSchema.parse(typeof value === "string" ? JSON.parse(value) : value);
   const request = parseFastTrackRequest(packet.request);
   if (packet.digest !== fastTrackRequestDigest(request)) {
-    throw new Error("Fast-track approval request digest mismatch.");
-  }
-  if (
-    Date.parse(packet.approval.decidedAt) >= Date.parse(request.expiresAt) ||
-    Date.parse(packet.approval.decidedAt) > Date.now()
-  ) {
-    throw new Error("Fast-track approval must precede expiry and cannot be in the future.");
+    throw new Error("Fast-track request digest mismatch.");
   }
   return { ...packet, request };
 }
@@ -57,7 +46,7 @@ const manifestBindingSchema = z
   })
   .passthrough();
 
-/** Checks the reviewed operands, not whether a human actually wrote the decision. Skills own that procedural boundary. */
+/** Binds exception evidence. Publication authority comes only from the npm-release receipt. */
 export type FastTrackManifest = {
   targetSha: string;
   runId: string;
@@ -70,11 +59,13 @@ export type FastTrackReference = {
   current: { targetSha: string; manifest: FastTrackManifest };
   fastTrack?: unknown;
 };
-export function bindFastTrackApproval(value: unknown, inputManifest: unknown, now = Date.now()) {
-  const packet = parseFastTrackApproval(value);
+export function bindFastTrackPacket(value: unknown, inputManifest: unknown, now = Date.now()) {
+  const packet = parseFastTrackPacket(value);
   const { request } = packet;
   if (Date.parse(request.expiresAt) <= now) {
-    throw new Error("Fast-track request expired. Obtain fresh explicit approval.");
+    throw new Error(
+      "Fast-track request expired. Prepare a fresh request for npm-release approval.",
+    );
   }
   const manifest = manifestBindingSchema.parse(inputManifest);
   const source = manifest.sourceAdmission;
@@ -87,7 +78,7 @@ export function bindFastTrackApproval(value: unknown, inputManifest: unknown, no
     request.run.attempt !== String(manifest.runAttempt)
   ) {
     throw new Error(
-      "Fast-track approval does not bind the publication candidate, channel or original FRV attempt.",
+      "Fast-track request does not bind the publication candidate, channel or original FRV attempt.",
     );
   }
   const artifacts = [
@@ -102,7 +93,7 @@ export function bindFastTrackApproval(value: unknown, inputManifest: unknown, no
     publicationSourceJson(request.publicationScope) !== publicationSourceJson(scope)
   ) {
     throw new Error(
-      "Fast-track artifact digests or publication scope differ from the approved request.",
+      "Fast-track artifact digests or publication scope differ from the selected request.",
     );
   }
   if (!manifest.publicationArtifacts?.npmPreflight || !manifest.publicationAdmission) {
@@ -150,7 +141,7 @@ export async function authenticateFastTrackPolicy(input: {
     fastTracked?: boolean;
   };
 }) {
-  const packet = bindFastTrackApproval(
+  const packet = bindFastTrackPacket(
     input.packet,
     input.manifest,
     await fastTrackAdmissionTime(input.packet, input.publication),
@@ -207,7 +198,7 @@ export async function authenticateFastTrackPolicy(input: {
       ) !== publicationSourceJson(actual.outstandingChecks)
     ) {
       throw new Error(
-        "Partial-FRV approval does not match original evidence and all outstanding jobs. Prepare a fresh snapshot.",
+        "Partial-FRV request does not match original evidence and all outstanding jobs. Prepare a fresh snapshot.",
       );
     }
   }
@@ -223,7 +214,7 @@ export async function fastTrackAdmissionTime(
   value: unknown,
   publication?: FastTrackPublication,
 ): Promise<number> {
-  const packet = parseFastTrackApproval(value);
+  const packet = parseFastTrackPacket(value);
   const now = Date.now();
   if (Date.parse(packet.request.expiresAt) > now) {
     return now;
@@ -241,7 +232,9 @@ export async function fastTrackAdmissionTime(
     !parentRunAttempt ||
     ![parentRunId, parentRunAttempt].every((part) => /^[1-9][0-9]*$/u.test(part))
   ) {
-    throw new Error("Fast-track request expired. Obtain fresh explicit approval.");
+    throw new Error(
+      "Fast-track request expired. Prepare a fresh request for npm-release approval.",
+    );
   }
   const { runReleaseToolingGh } = await import("../release-tooling-identity.mjs");
   const { downloadReleaseApprovalReceipt } = await import("../release-approval-receipt.mjs");
@@ -267,18 +260,14 @@ export async function fastTrackAdmissionTime(
       releaseTag: packet.request.releaseTag,
       targetSha: packet.request.candidateSha,
       npmDistTag: packet.request.channel,
-      fastTrackApproval: packet,
+      fastTrackRequest: packet,
       parentStatePolicy: run.status === "completed" ? "manual-recovery" : "active",
     },
     token: process.env.GH_TOKEN,
   });
   const admittedAt = Date.parse(result.approvedAt ?? "");
-  if (
-    !Number.isFinite(admittedAt) ||
-    admittedAt < Date.parse(packet.approval.decidedAt) ||
-    admittedAt >= Date.parse(packet.request.expiresAt)
-  ) {
-    throw new Error("Original publisher did not admit this exact approval before expiry.");
+  if (!Number.isFinite(admittedAt) || admittedAt >= Date.parse(packet.request.expiresAt)) {
+    throw new Error("Original publisher did not admit this exact request before expiry.");
   }
   return admittedAt;
 }

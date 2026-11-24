@@ -251,7 +251,7 @@ async function authenticatePreparedNpmArtifactEvidence(params, revalidateOnRetur
     {
       run: await client.getRunAttempt(runId, runAttempt),
       manifest,
-      fastTrackApproval: params.fastTrackApproval,
+      fastTrackRequest: params.fastTrackRequest,
       fastTrackPublication: params.fastTrackPublication,
       expectedRepository: repository,
       expectedRunId: runId,

@@ -101,11 +101,6 @@ async function approvedBuildOnly(f: ReturnType<typeof candidatePublicationFixtur
   return {
     request,
     digest: fastTrackRequestDigest(request),
-    approval: {
-      approver: "synthetic-human-release-manager",
-      decidedAt: "2026-08-28T12:10:00.000Z",
-      url: "https://chat.google.com/room/synthetic/approval",
-    },
   };
 }
 
@@ -251,11 +246,11 @@ it.each(["failed-seal", "missing-seal", "failed-parent", "missing-descriptor"])(
   },
 );
 
-it("admits build-only publication only with an exact explicit approval while retaining all skipped validation", async () => {
+it("admits build-only publication only with an exact exception request while retaining all skipped validation", async () => {
   const f = candidatePublicationFixture({ rerunGroup: "build-only" });
   const packet = await approvedBuildOnly(f);
   const evidence = await validateReleaseRunEvidence(
-    { ...evidenceOptions(f), fastTrackApproval: packet },
+    { ...evidenceOptions(f), fastTrackRequest: packet },
     f.client,
   );
   expect(evidence).toMatchObject({
@@ -277,7 +272,7 @@ it("admits build-only publication only with an exact explicit approval while ret
     producerRunId: f.npmQualified.producer.runId,
     producerRunAttempt: f.npmQualified.producer.runAttempt,
     evidenceClient: f.client,
-    fastTrackApproval: packet,
+    fastTrackRequest: packet,
   };
   expect(await verifyNpmPreflightPublicationLineage(operation)).toEqual(f.npmQualified);
   const directory = mkdtempSync(join(tmpdir(), "build-only-download-"));
@@ -292,7 +287,7 @@ it("admits build-only publication only with an exact explicit approval while ret
       toolingSha: f.q,
       runId: f.runId,
       runAttempt: 1,
-      fastTrackApproval: packet,
+      fastTrackRequest: packet,
       runGh: f.runGh,
       token: "fixture-token",
       fetchImpl: async (input) => {

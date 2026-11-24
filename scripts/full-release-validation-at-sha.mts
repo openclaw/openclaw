@@ -255,7 +255,7 @@ The release profile defaults to beta for beta candidates and stable otherwise; p
 one controller rerun_group. For explicitly human-approved fast-track preparation,
 use -f rerun_group=build-only to build and seal publication artifacts without
 running validation. This is not validated evidence and cannot publish without
-an exact fast-track approval packet. The removed release-checks aggregate and the direct
+an exact fast-track request and npm-release environment approval. The removed release-checks aggregate and the direct
 child's manual qa aggregate are not accepted.`);
 }
 
@@ -2136,7 +2136,7 @@ function verifyReleaseEvidence(
         throw new Error(`Build-only preparation evidence is invalid for run ${parentRunId}.`);
       }
       console.log(
-        `Build-only preparation verified for run ${displayValue(evidence.current.runId)}. Validation was skipped; exact fast-track approval is still required before publishing.`,
+        `Build-only preparation verified for run ${displayValue(evidence.current.runId)}. Validation was skipped; npm-release environment approval is still required before publishing.`,
       );
       return;
     }
