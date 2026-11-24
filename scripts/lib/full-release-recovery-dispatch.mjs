@@ -27,6 +27,7 @@ import {
   validateReleaseChildDispatchBinding,
 } from "../full-release-validation-policy.mjs";
 import { restoreOriginalPublicationAdmission } from "../release-ci-summary.mjs";
+import { QUALIFICATION_ADMISSION_FILE } from "../release-qualification-admission.mjs";
 import { readBoundedRegularFile } from "./actions-artifact-archive.mjs";
 import { assertRequestPath } from "./full-release-dispatch-request.mts";
 import {
@@ -46,6 +47,13 @@ function requireValue(value, message) {
     throw new Error("Receipt recovery: " + message);
   }
 }
+function assertPolicySha(expected, actual) {
+  requireValue(
+    expected === undefined || expected === actual,
+    `--policy-sha ${expected} does not match policy Q ${actual} from --policy-admission-run`,
+  );
+}
+
 export function parseReceiptRecoveryArgs(args) {
   const options = { command: "recover", repository: REPOSITORY, runId: "", json: false };
   const names = {
@@ -92,14 +100,18 @@ export function parseReceiptRecoveryArgs(args) {
         (options.preparePolicyAdmission ? !options.requestFile : options.requestFile),
       "recover requires --run ORIGINAL --workflow-sha P and a request file unless preparing policy admission",
     );
-    requireValue(
-      options.preparePolicyAdmission
-        ? /^[a-f0-9]{40}$/u.test(options.policySha ?? "") && !options.policyAdmissionRun
-        : (!options.policySha && !options.policyAdmissionRun) ||
-            (/^[a-f0-9]{40}$/u.test(options.policySha ?? "") &&
-              /^[1-9][0-9]*$/u.test(options.policyAdmissionRun ?? "")),
-      "policy recovery requires --policy-sha Q and --policy-admission-run ID (or --prepare-policy-admission)",
-    );
+    if (options.preparePolicyAdmission) {
+      requireValue(
+        /^[a-f0-9]{40}$/u.test(options.policySha ?? "") && !options.policyAdmissionRun,
+        "--prepare-policy-admission requires --policy-sha Q without --policy-admission-run",
+      );
+    } else if (options.policyAdmissionRun || options.policySha) {
+      requireValue(
+        /^[1-9][0-9]*$/u.test(options.policyAdmissionRun ?? "") &&
+          (options.policySha === undefined || /^[a-f0-9]{40}$/u.test(options.policySha)),
+        "policy recovery requires --policy-admission-run ID; optional --policy-sha must be a full Q SHA",
+      );
+    }
   }
   return options;
 }
@@ -241,16 +253,27 @@ export async function discoverReceiptRecoveryRequest(
       Number.isSafeInteger(admissionRunId) && run.id === admissionRunId && run.run_attempt === 1,
       "waiver policy admission must identify its current first attempt",
     );
-    policyQualification = {
-      sha: policyOptions.policySha,
-      admission: client.resolveQualificationAdmissionDescriptor({
-        repository: REPOSITORY,
-        runId: admissionRunId,
-        runAttempt: 1,
-        workflowRef: run.head_branch,
-        workflowSha: run.head_sha,
-      }),
-    };
+    const descriptor = client.resolveQualificationAdmissionDescriptor({
+      repository: REPOSITORY,
+      runId: admissionRunId,
+      runAttempt: 1,
+      workflowRef: run.head_branch,
+      workflowSha: run.head_sha,
+    });
+    // The archive locates Q; the verifier below authenticates the exact admission and policy.
+    const { value } = await artifactJson(
+      client,
+      run,
+      descriptor.artifactName,
+      QUALIFICATION_ADMISSION_FILE,
+    );
+    const sha = value?.request?.qualificationSha;
+    requireValue(
+      typeof sha === "string" && /^[a-f0-9]{40}$/u.test(sha),
+      "policy admission receipt is missing a full qualification SHA",
+    );
+    assertPolicySha(policyOptions.policySha, sha);
+    policyQualification = { sha, admission: descriptor };
   }
   const policy = await verifyReceiptRecoveryPolicy(
     { requestId, policyQualification },
@@ -563,11 +586,11 @@ export async function dispatchReceiptRecovery(options, client) {
     requireValue(
       retained.request.originalParent.runId === options.runId &&
         retained.request.workflowSha === options.workflowSha &&
-        retained.request.policyQualification?.sha === options.policySha &&
         retained.request.policyQualification?.admission.runId ===
           (options.policyAdmissionRun ? Number(options.policyAdmissionRun) : undefined),
       "existing request differs from requested original run, P or policy admission",
     );
+    assertPolicySha(options.policySha, retained.request.policyQualification?.sha);
     return reconcileReceiptRecovery(options.requestFile, client);
   }
   const request = await discoverReceiptRecoveryRequest(

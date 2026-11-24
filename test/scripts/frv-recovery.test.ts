@@ -1,8 +1,9 @@
 import { createHash } from "node:crypto";
-import { mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { receiptRecoveryPolicyRequest } from "../../scripts/full-release-receipt-recovery.mjs";
 import { releaseChildSpec } from "../../scripts/full-release-validation-policy.mjs";
 import { releaseChildReuseSha256 } from "../../scripts/lib/full-release-child-request.mjs";
 import {
@@ -11,9 +12,11 @@ import {
   parseReceiptRecoveryArgs,
   reconcileReceiptRecovery,
 } from "../../scripts/lib/full-release-recovery-dispatch.mjs";
+import { isRecord } from "../../scripts/lib/record-shared.mjs";
 import { makeStoredZip } from "./actions-artifact-zip.test-support.js";
 import { candidatePublicationFixture } from "./candidate-publication.test-support.js";
 import { recoveryConsumptionFixture } from "./release-evidence-consumption.test-support.js";
+import { fixture as admissionFixture } from "./release-qualification-admission.test-support.js";
 
 const P = "c".repeat(40);
 const Q = "a".repeat(40);
@@ -206,7 +209,89 @@ function fixture(candidateSha = Q) {
   };
 }
 
+function policyFixture() {
+  const f = fixture();
+  const original = admissionFixture().receipt;
+  const policySha = "e".repeat(40);
+  const policy = admissionFixture(false, {
+    publisherSha: P,
+    selectedRequest: receiptRecoveryPolicyRequest(
+      original,
+      policySha,
+      "00000000-1234-4123-8123-123456789abc",
+    ),
+  });
+  f.runs.set(policy.run.id, { ...policy.run, status: "completed", conclusion: "success" });
+  f.artifact(policy.run.id, policy.metadata.name, "qualification-admission.json", policy.receipt);
+  const ledger = "scripts/lib/release-validation-waivers.json";
+  const grant = { targetVersion: "2026.11.1", targetSha: Q, childRole: "normalCi", reason: "test" };
+  const source = f.client.getWorkflowSource;
+  const shared = {
+    baselinePolicy: { candidateVersion: grant.targetVersion },
+    coverage: { children: roles.map((key) => ({ key, parentJobName: key })) },
+  };
+  const client = {
+    ...f.client,
+    getWorkflowSource: (sha: string, path?: string) =>
+      sha === policySha && path === ledger
+        ? JSON.stringify({ schema: "openclaw.release-validation-waivers/v1", waivers: [grant] })
+        : source(sha, path),
+    getCommit: async () => ({
+      sha: policySha,
+      parents: [{ sha: Q }],
+      commit: { verification: { verified: true } },
+      files: [{ filename: ledger, status: "modified" }],
+    }),
+    resolveQualificationAdmissionDescriptor: () => policy.descriptor,
+    verifyQualificationAdmission: async (
+      params: Parameters<typeof f.client.verifyQualificationAdmission>[0],
+    ) => {
+      if (isRecord(params.descriptor) && params.descriptor.runId === policy.run.id) {
+        expect(params.qualificationSha).toBe(policySha);
+        return { ...policy.receipt, ...shared };
+      }
+      return { ...original, ...shared };
+    },
+    revalidateQualificationAdmissionAuthority: () => {},
+  };
+  const args = [
+    "--run",
+    "10",
+    "--workflow-sha",
+    P,
+    "--request-file",
+    f.path,
+    "--policy-admission-run",
+    String(policy.run.id),
+  ];
+  return { ...f, args, client, policySha };
+}
+
 describe("retained receipt recovery operator", () => {
+  it("dispatches the admitted policy Q without a SHA override and reconciles the retained request", async () => {
+    const f = policyFixture();
+    const options = parseReceiptRecoveryArgs(f.args);
+    await dispatchReceiptRecovery(options, f.client);
+    const { request } = f.observeRecovery();
+    const wire = JSON.parse(f.client.postRecovery.mock.calls[0]![0]);
+    expect(JSON.parse(wire.inputs.request).policyQualification.sha).toBe(f.policySha);
+    expect(request.children).not.toHaveProperty("normalCi");
+    await expect(dispatchReceiptRecovery(options, f.client)).resolves.toMatchObject({
+      runId: "99",
+    });
+    expect(f.client.postRecovery).toHaveBeenCalledTimes(1);
+  });
+
+  it("explains when the supplied policy SHA is the admission workflow P, not policy Q", async () => {
+    const f = policyFixture();
+    const options = parseReceiptRecoveryArgs([...f.args, "--policy-sha", P]);
+    await expect(dispatchReceiptRecovery(options, f.client)).rejects.toThrow(
+      `--policy-sha ${P} does not match policy Q ${f.policySha}`,
+    );
+    expect(existsSync(f.path)).toBe(false);
+    expect(f.client.postRecovery).not.toHaveBeenCalled();
+  });
+
   it.each([false, true])(
     "recovers missing parent source from authenticated inputs (changed=%s)",
     async (changed) => {
