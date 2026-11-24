@@ -142,12 +142,12 @@ describe("version resolution", () => {
       () => {
         expect(resolveCompatibilityHostVersion()).toBe("2026.11.4");
         expect(resolveRuntimeServiceVersion()).toBe("2026.3.25");
-        expect(VERSION).toBe("2026.10.33");
+        expect(VERSION).toBe("2026.10.34");
       },
     );
   });
 
-  it.each(["2026.10.32", "2026.10.34", "2026.11.5"])(
+  it.each(["2026.10.32", "2026.10.35", "2026.11.5"])(
     "does not infer baseline compatibility for an arbitrary version %s",
     (version) => {
       expect(resolveCompatibilityHostVersion({ OPENCLAW_VERSION: version })).toBe(version);
