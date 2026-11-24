@@ -584,28 +584,23 @@ export const createExtensionTestShards = () => [{
     const manifestStep = workflow.jobs.preflight.steps.find(
       (step: WorkflowStep) => step.id === "manifest",
     );
-    expect(manifestStep.env.OPENCLAW_CI_RUNNER_BACKEND).toBe(
-      "${{ vars.OPENCLAW_CI_RUNNER_BACKEND }}",
-    );
+    expect(manifestStep.env.OPENCLAW_CI_RUNNER_BACKEND).toBeUndefined();
     const physicalRows = JSON.parse(
       expectDefined(selected.plugin_prerelease_extension_matrix, "hourly extension matrix"),
     ).include;
     const boatRows = JSON.parse(
       expectDefined(outputs(boatHourly.output).plugin_prerelease_extension_matrix, "Boat matrix"),
     ).include;
-    expect(boatRows).toEqual(
-      physicalRows.map((row: Record<string, unknown>) =>
-        Object.assign({}, row, {
-          runner_label: row.runner_label === "blacksmith-4vcpu-ubuntu-2404" ? "boat-large" : "boat",
-        }),
-      ),
+    expect(boatRows).toEqual(physicalRows);
+    const pinnedLabels = new Set(
+      physicalRows.map((row: Record<string, unknown>) => row.runner_label),
     );
-    const boatLabels = new Set(boatRows.map((row: Record<string, unknown>) => row.runner_label));
-    expect(boatLabels).toEqual(new Set(["boat", "boat-large"]));
-    for (const runner_label of boatLabels) {
+    expect(pinnedLabels).toEqual(
+      new Set(["blacksmith-2vcpu-ubuntu-2404", "blacksmith-4vcpu-ubuntu-2404"]),
+    );
+    for (const runner_label of pinnedLabels) {
       for (const releaseRunnerGroup of ["", "release-runners"]) {
         for (const eventName of ["schedule", "workflow_dispatch"] as const) {
-          const labels = eventName === "schedule" ? runner_label : "ubuntu-24.04";
           expect(
             evaluateWorkflowRunner(workflow.jobs["plugin-prerelease-extension-shard"]["runs-on"], {
               ...context,
@@ -613,7 +608,9 @@ export const createExtensionTestShards = () => [{
               releaseRunnerGroup,
               matrix: { runner_label },
             }),
-          ).toEqual(releaseRunnerGroup ? { group: releaseRunnerGroup, labels } : labels);
+          ).toEqual(
+            releaseRunnerGroup ? { group: releaseRunnerGroup, labels: runner_label } : runner_label,
+          );
         }
       }
     }

@@ -427,7 +427,7 @@ function runnerSandbox(context: Record<string, unknown>) {
 }
 
 describe("release validation no-push transport", () => {
-  it.each(["github", "hybrid", ""])(
+  it.each(["github", "hybrid", "boat", ""])(
     "keeps the QA Lab runtime-pair lane on Blacksmith when the backend is %j",
     (backend) => {
       const release = readWorkflow(RELEASE_CHECKS);
@@ -444,8 +444,8 @@ describe("release validation no-push transport", () => {
       const notice = job(release, "resolve_target").steps?.find(
         (candidate) => candidate.name === "Report release runner routing",
       );
-      expect(notice?.if).toBe("vars.OPENCLAW_CI_RUNNER_BACKEND == 'github'");
-      expect(notice?.run).toContain("QA Lab runtime-pair stays on its dedicated runtime backend");
+      expect(notice?.if).toBeUndefined();
+      expect(notice?.run).toContain("pins Linux release lanes to Blacksmith");
     },
   );
 
