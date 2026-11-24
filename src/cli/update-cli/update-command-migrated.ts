@@ -9,7 +9,6 @@ import {
 import { resolveStateDir } from "../../config/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import { resolveUserPath } from "../../infra/home-dir.js";
 import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
 import {
   resolveRuntimeWorkerArgv,
@@ -17,7 +16,9 @@ import {
 } from "../../infra/runtime-worker-url.js";
 import { readUpdateStateSchemaVersions } from "../../infra/update-candidate-state.js";
 import {
-  resolveUpdateStateContentVersion,
+  addAgentInventoryPaths,
+  listIncompleteUpdateMigrations,
+  resolveAgentDirOverrideDatabasePaths,
   updateStateSchemaVersionsMatch,
 } from "../../infra/update-candidate-state.versions.js";
 import { resolveUpdateFinalizationTimeoutMs } from "../../infra/update-finalization-budget.js";
@@ -84,13 +85,7 @@ export async function inspectActivatedUpdateState(
     return undefined;
   }
   const gitRelease = params.gitRelease === true;
-  const agentPaths = new Set(
-    [env.OPENCLAW_AGENT_DIR, env.PI_CODING_AGENT_DIR].flatMap((directory) =>
-      directory?.trim()
-        ? [path.join(resolveUserPath(directory, env), "openclaw-agent.sqlite")]
-        : [],
-    ),
-  );
+  const agentPaths = new Set(resolveAgentDirOverrideDatabasePaths(env));
   let blocked: FinishUpdateParams["rollbackBlockedReason"];
   try {
     const current = await readUpdateStateSchemaVersions({
@@ -104,34 +99,17 @@ export async function inspectActivatedUpdateState(
       // Preserved artifacts keep the final Doctor's captured generation valid. A Git
       // release captures none, and a full copy of a live store never stabilizes.
       preserveSourceArtifacts: !gitRelease,
-      onInventory: (files) => {
-        for (const database of files.values()) {
-          if (
-            database.owners?.some(({ role }) => role === "agent") ||
-            database.registeredPaths?.length
-          ) {
-            database.spellings.forEach((pathname) => agentPaths.add(pathname));
-          }
-        }
-      },
+      onInventory: (files) => addAgentInventoryPaths(agentPaths, files),
     });
-    const shared = current.find((entry) => entry.path === resolveOpenClawStateSqlitePath(env));
-    const sharedVersion = shared ? resolveUpdateStateContentVersion(shared) : undefined;
-    const incompleteAgents = candidateSchemaVersions
-      ? current.filter(
-          (entry) =>
-            agentPaths.has(entry.path) &&
-            !shared?.retainedAgentPaths?.includes(entry.path) &&
-            entry.userVersion !== null &&
-            entry.userVersion !== candidateSchemaVersions.agent,
-        )
+    const sharedPath = resolveOpenClawStateSqlitePath(env);
+    const incomplete = candidateSchemaVersions
+      ? listIncompleteUpdateMigrations(current, {
+          sharedPath,
+          agentPaths,
+          candidateSchemaVersions,
+        })
       : [];
-    if (
-      result.status === "ok" &&
-      !gitRelease &&
-      candidateSchemaVersions &&
-      (sharedVersion !== candidateSchemaVersions.state || incompleteAgents.length > 0)
-    ) {
+    if (result.status === "ok" && !gitRelease && incomplete.length > 0) {
       // Doctor can warn without failing. Require applied content so startup
       // cannot migrate late; deferred publication alone is already ready.
       result.status = "error";
@@ -142,17 +120,13 @@ export async function inspectActivatedUpdateState(
         cwd: result.root ?? root,
         durationMs: 0,
         exitCode: 1,
-        stderrTail: [
-          ...(sharedVersion !== candidateSchemaVersions.state
-            ? [
-                `Shared state migration did not finish: expected schema ${candidateSchemaVersions.state}, found ${sharedVersion ?? "missing"}.`,
-              ]
-            : []),
-          ...incompleteAgents.map(
-            (entry) =>
-              `Agent database migration did not finish: ${entry.path}; expected schema ${candidateSchemaVersions.agent}, found ${entry.userVersion}.`,
-          ),
-        ].join("\n"),
+        stderrTail: incomplete
+          .map(({ path: file, expected, found }) =>
+            file === sharedPath
+              ? `Shared state migration did not finish: expected schema ${expected}, found ${found ?? "missing"}.`
+              : `Agent database migration did not finish: ${file}; expected schema ${expected}, found ${found}.`,
+          )
+          .join("\n"),
       });
     }
     blocked = updateStateSchemaVersionsMatch(schemaVersions, current, {

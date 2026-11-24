@@ -13,6 +13,7 @@ import {
   CONTROL_UI_CLIENT,
   installGatewayTestHooks,
   openWs,
+  rpcReq,
   TEST_OPERATOR_CLIENT,
   testState,
   withGatewayServer,
@@ -151,6 +152,7 @@ test("keeps a session-only Access guest connected when no named role is configur
         // Hello already names the guest's own profile, so attaching it changes nothing.
         const helloAuth = (hello.payload as { auth?: { profileActivityViewerId?: unknown } }).auth;
         expect(helloAuth?.profileActivityViewerId).toEqual(expect.any(String));
+        expect((await rpcReq(socket, "sessions.list", {})).ok).toBe(true);
       } finally {
         socket.close();
         transport.mockRestore();

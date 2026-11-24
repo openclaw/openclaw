@@ -9,6 +9,7 @@ import {
 } from "../../daemon/service.test-helpers.js";
 import * as portsProbe from "../../infra/ports-probe.js";
 import * as temporaryRoot from "../../infra/tmp-openclaw-dir.js";
+import * as dataAtRisk from "../../infra/update-data-at-risk.js";
 import { createManagedHandoffLeaseStore } from "../../infra/update-managed-service-handoff-lease.js";
 import { createManagedHandoffRecoveryFixture } from "../../infra/update-managed-service-handoff-recovery.test-support.js";
 import {
@@ -21,8 +22,12 @@ import {
   recordUpdateRunVerification,
 } from "../../infra/update-run-ledger.js";
 import { defaultRuntime } from "../../runtime.js";
+import * as registryListing from "../../state/openclaw-agent-db-registry-listing.js";
+import * as databasePreflight from "../../state/openclaw-database-preflight.js";
 import { runRegisteredCli } from "../../test-utils/command-runner.js";
 import type { OpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { VERSION } from "../../version.js";
+import * as probeApi from "../daemon-cli/restart-health-probe.js";
 import * as healthApi from "../daemon-cli/restart-health.js";
 import { withCliProcessScope } from "../runtime-cleanup-scope.js";
 import { registerUpdateCli } from "../update-cli.js";
@@ -265,23 +270,14 @@ it.each([
   "recorded running Gateway",
   "completed managed restart",
   "later settled run",
-  "named data risk",
 ])("does not start a Gateway after %s", async (reason) => {
   seed(
     reason !== "operator stop",
-    reason === "named data risk"
-      ? {
-          recovery: {
-            serviceRestartSafe: false,
-            reason: "state-migration-started",
-            dataAtRisk: "session migration is incomplete",
-          },
-        }
-      : reason === "successful restart"
-        ? { serviceRunning: true, settled: true }
-        : reason === "recorded running Gateway"
-          ? { serviceRunning: true }
-          : {},
+    reason === "successful restart"
+      ? { serviceRunning: true, settled: true }
+      : reason === "recorded running Gateway"
+        ? { serviceRunning: true }
+        : {},
     reason !== "operator stop",
     reason === "completed managed restart",
   );
@@ -306,18 +302,282 @@ it.each([
       status: "warning",
       postUpdate: expect.objectContaining({
         doctor: expect.objectContaining({
-          warnings: [
-            expect.stringContaining(
-              reason === "named data risk"
-                ? "Gateway remains stopped: session migration is incomplete"
-                : "openclaw gateway start",
-            ),
-          ],
+          warnings: [expect.stringContaining("openclaw gateway start")],
         }),
       }),
     }),
   );
 });
+
+const markedRisk = {
+  recovery: {
+    serviceRestartSafe: false,
+    reason: "state-migration-started",
+    dataAtRisk: "rollback-state-unverified",
+  },
+} as const;
+
+it.each(["stopped", "running"] as const)(
+  "verifies a recorded data-at-risk mark against current state and restores the %s Gateway",
+  async (gateway) => {
+    const original = seed(true, markedRisk);
+    if (gateway === "running") {
+      vi.mocked(service.readRuntime).mockResolvedValue({ status: "running", pid: 4242 });
+    }
+
+    await repair(false);
+
+    expect(events).toEqual(
+      gateway === "stopped" ? ["finalized", "start", "verified"] : ["finalized", "verified"],
+    );
+    const repairRun = listUpdateRuns()[0]!;
+    expect(repairRun.status).toBe("succeeded");
+    expect(repairRun.steps).toContainEqual(
+      expect.objectContaining({
+        step: `finalize:data-at-risk-verified:${original}`,
+        status: "completed",
+      }),
+    );
+    // History is not rewritten: the original run keeps its recorded mark.
+    expect(getUpdateRun(original)?.verification.recovery).toMatchObject({
+      dataAtRisk: "rollback-state-unverified",
+    });
+    expect(defaultRuntime.log).toHaveBeenCalledWith(
+      `Update ${original} recorded data at risk (rollback-state-unverified); verification found the state schemas match installed OpenClaw ${VERSION} and no migration or restore is unfinished, so that mark is resolved.`,
+    );
+  },
+);
+
+it("verifies a mark on an update that never stopped the Gateway without starting it", async () => {
+  // A Git release update or a refusal before mutation leaves the Gateway serving.
+  const original = seed(false, markedRisk);
+  vi.mocked(service.readRuntime).mockResolvedValue({ status: "running", pid: 4242 });
+  // Repair's healthy-Gateway shortcut must not reach a real local Gateway.
+  vi.spyOn(probeApi, "confirmGatewayReachable").mockResolvedValue({
+    reachable: false,
+    gatewayVersion: null,
+    gatewayBuildId: undefined,
+    activatedPluginErrors: [],
+    unavailablePlugins: [],
+    channelProbeErrors: [],
+  });
+
+  await repair(false);
+
+  expect(service.start).not.toHaveBeenCalled();
+  const repairRun = listUpdateRuns()[0]!;
+  expect(repairRun.status).toBe("succeeded");
+  expect(repairRun.steps).toContainEqual(
+    expect.objectContaining({
+      step: `finalize:data-at-risk-verified:${original}`,
+      status: "completed",
+    }),
+  );
+  expect(defaultRuntime.log).toHaveBeenCalledWith(
+    expect.stringContaining(
+      `Update ${original} recorded data at risk (rollback-state-unverified); verification found`,
+    ),
+  );
+  // The receipt resolves the mark: a later repair has nothing left to verify.
+  vi.mocked(defaultRuntime.log).mockClear();
+  await repair(false);
+  expect(defaultRuntime.log).not.toHaveBeenCalledWith(
+    expect.stringContaining("recorded data at risk"),
+  );
+});
+
+// Refusals happen before Doctor runs, so Doctor never parks or restarts the Gateway.
+function expectRefusedBeforeDoctor(refusal: string) {
+  expect(mocks.doctor).not.toHaveBeenCalled();
+  expect(service.start).not.toHaveBeenCalled();
+  expect(service.stop).not.toHaveBeenCalled();
+  expect(healthApi.waitForGatewayHealthyRestart).not.toHaveBeenCalled();
+  expect(defaultRuntime.error).toHaveBeenCalledWith(expect.stringContaining(refusal));
+  const repairRun = listUpdateRuns()[0]!;
+  expect(repairRun.status).toBe("failed");
+  expect(
+    repairRun.steps.some((step) => step.step.startsWith("finalize:data-at-risk-verified:")),
+  ).toBe(false);
+}
+
+it.each([
+  {
+    status: "inconsistent",
+    // A realistic path and writer: the next steps lead, so a length cap keeps them.
+    detail:
+      "the state database /Users/alice/.openclaw/state/openclaw.sqlite is at schema 41 (written by OpenClaw 2026.11.9), newer than 40 supported by installed OpenClaw 2026.11.6",
+    nextAction:
+      "run `openclaw update` to a version that supports it, or restore the pre-update backup.",
+    finding: "Found:",
+  },
+  {
+    status: "unverifiable",
+    detail: "the state databases could not be inspected: database is locked",
+    nextAction: "retry `openclaw update repair` once that reason is cleared.",
+    finding: "Could not verify:",
+  },
+] as const)(
+  "keeps the Gateway as it was when a recorded mark is $status",
+  async ({ finding, ...verification }) => {
+    const original = seed(true, markedRisk);
+    vi.spyOn(dataAtRisk, "verifyUpdateStateConsistency").mockResolvedValue(verification);
+
+    await repair();
+
+    expectRefusedBeforeDoctor(
+      `Update ${original} recorded data at risk (rollback-state-unverified). The Gateway is stopped. Repair left the Gateway as it was. ${triageLead}${verification.nextAction} ${finding} ${verification.detail}.`,
+    );
+  },
+);
+
+it("keeps a Gateway another update stopped down when a later mark is inconsistent", async () => {
+  // The stopping run carries no mark; a later Git release or pre-mutation run does.
+  seed(true);
+  const marked = seed(false, markedRisk, false, false, "rollback-state-unverified");
+  vi.spyOn(dataAtRisk, "verifyUpdateStateConsistency").mockResolvedValue({
+    status: "inconsistent",
+    detail: "the state database is at schema 39 behind a leftover rollback",
+    nextAction: "keep that file and the backup.",
+  });
+
+  await repair();
+
+  expectRefusedBeforeDoctor(`Update ${marked} recorded data at risk`);
+});
+
+it("lets Doctor finish an unfinished migration before the mark is checked again", async () => {
+  const original = seed(true, markedRisk);
+  const verify = vi.spyOn(dataAtRisk, "verifyUpdateStateConsistency");
+  verify.mockResolvedValueOnce({
+    status: "inconsistent",
+    finishable: true,
+    detail: "the state database is at schema 39",
+    nextAction: "run `openclaw doctor --fix` to finish the migration.",
+  });
+
+  await repair(false);
+
+  // Doctor ran, then the second check found the migrated state consistent.
+  expect(mocks.doctor).toHaveBeenCalled();
+  expect(verify).toHaveBeenCalledTimes(2);
+  expect(events).toEqual(["finalized", "start", "verified"]);
+  expect(listUpdateRuns()[0]?.steps).toContainEqual(
+    expect.objectContaining({ step: `finalize:data-at-risk-verified:${original}` }),
+  );
+});
+
+it("fails repair and leaves recovery open when the mark is still refused after Doctor", async () => {
+  const original = seed(true, markedRisk);
+  const behind = {
+    status: "inconsistent",
+    finishable: true,
+    detail: "the state database is at schema 39",
+    nextAction: "run `openclaw doctor --fix` to finish the migration.",
+  } as const;
+  vi.spyOn(dataAtRisk, "verifyUpdateStateConsistency")
+    .mockResolvedValueOnce(behind)
+    .mockResolvedValueOnce({ ...behind, detail: "the state database is still at schema 39" });
+
+  await repair();
+
+  expect(mocks.doctor).toHaveBeenCalled();
+  expect(service.start).not.toHaveBeenCalled();
+  expect(listUpdateRuns()[0]?.status).toBe("failed");
+  expect(defaultRuntime.error).toHaveBeenCalledWith(
+    // Doctor's maintenance may have parked and restored it, so no "left as it was" claim.
+    expect.stringContaining(
+      "Repair did not start or restart the Gateway after this check. Run `openclaw triage`",
+    ),
+  );
+  expect(defaultRuntime.error).toHaveBeenCalledWith(
+    expect.stringContaining("Found: the state database is still at schema 39."),
+  );
+  // Recovery stays open: once the state is consistent, the next repair starts the Gateway.
+  await repair(false);
+  expect(events).toEqual(["finalized", "finalized", "start", "verified"]);
+  expect(listUpdateRuns()[0]?.steps).toContainEqual(
+    expect.objectContaining({ step: `finalize:data-at-risk-verified:${original}` }),
+  );
+});
+
+it("refuses before Doctor when an unfinished migration comes with unchecked agent leftovers", async () => {
+  const original = seed(true, markedRisk);
+  // The agent registry cannot be read, so rollback leftovers beside agent databases are unknown.
+  vi.spyOn(registryListing, "readRegisteredAgentDatabases").mockImplementation(() => {
+    throw new Error("registry locked");
+  });
+  const preflight = databasePreflight.preflightOpenClawDatabaseSchemas;
+  vi.spyOn(databasePreflight, "preflightOpenClawDatabaseSchemas").mockImplementation(
+    async (params, purpose) =>
+      purpose === "runtime" && params?.preserveSourceArtifacts === false
+        ? {
+            incompatible: [],
+            indeterminate: [],
+            pendingMigrations: [
+              {
+                kind: "state",
+                path: "/state/openclaw.sqlite",
+                foundVersion: 39,
+                supportedVersion: 40,
+              },
+            ],
+          }
+        : await preflight(params, purpose),
+  );
+
+  await repair();
+
+  expectRefusedBeforeDoctor(
+    `Update ${original} recorded data at risk (rollback-state-unverified). The Gateway is stopped. Repair left the Gateway as it was. ${triageLead}retry \`openclaw update repair\` once that reason is cleared. Then: run \`openclaw doctor --fix\` to finish the migration. Could not verify: the agent database registry could not be read, so database rollback leftovers beside agent databases are unchecked; and the state database /state/openclaw.sqlite is at schema 39;`,
+  );
+});
+
+it("resolves a live-writer mark once Doctor has held the state, without a second repair", async () => {
+  const original = seed(true, {
+    recovery: { ...markedRisk.recovery, dataAtRisk: "active-mutation" },
+  });
+  const verify = vi.spyOn(dataAtRisk, "verifyUpdateStateConsistency");
+
+  await repair(false);
+
+  // Before Doctor the mark is deferred to it; after Doctor's exclusive admission the
+  // writers it named cannot hold the state, so the schema check decides.
+  expect(mocks.doctor).toHaveBeenCalled();
+  expect(verify.mock.calls.map(([params]) => params.writersExcluded)).toEqual([undefined, true]);
+  expect(events).toEqual(["finalized", "start", "verified"]);
+  expect(listUpdateRuns()[0]?.steps).toContainEqual(
+    expect.objectContaining({ step: `finalize:data-at-risk-verified:${original}` }),
+  );
+});
+
+it("reports a serving Gateway as running when a recorded mark is inconsistent", async () => {
+  const original = seed(false, markedRisk);
+  vi.mocked(service.readRuntime).mockResolvedValue({ status: "running", pid: 4242 });
+  // The guidance probe must not reach a real local Gateway.
+  vi.spyOn(probeApi, "confirmGatewayReachable").mockResolvedValue({
+    reachable: true,
+    gatewayVersion: "1.0.0",
+    gatewayBuildId: undefined,
+    activatedPluginErrors: [],
+    unavailablePlugins: [],
+    channelProbeErrors: [],
+  });
+  vi.spyOn(dataAtRisk, "verifyUpdateStateConsistency").mockResolvedValue({
+    status: "inconsistent",
+    newerState: true,
+    detail: "the state database is at schema 99",
+    nextAction:
+      "run `openclaw update` to a version that supports it, or restore the pre-update backup.",
+  });
+
+  await repair();
+
+  expectRefusedBeforeDoctor(
+    `Update ${original} recorded data at risk (rollback-state-unverified). The Gateway is running and serving OpenClaw 1.0.0. Repair left the Gateway as it was. ${triageLead}run \`openclaw update\` to a version that supports it, or restore the pre-update backup. Found: the state database is at schema 99.`,
+  );
+});
+
+const triageLead = "Run `openclaw triage` for an agent with the recorded facts, or by hand: ";
 
 // #188303: a refused recovery after migrated state leaves the managed service stopped
 // (launchd boots it out); without named data risk, repair restarts it on the installed package.

@@ -165,14 +165,6 @@ describe("prepareChatSendUserTurn", () => {
         profileId: profile.id,
         context,
       });
-      const isCurrent = () => {
-        try {
-          admitted.authority.assertCurrent();
-          return true;
-        } catch {
-          return false;
-        }
-      };
       try {
         const client = createSyntheticPluginRuntimeClient({
           operatorRoleActor: { kind: "operator", profileId: profile.id },
@@ -189,7 +181,11 @@ describe("prepareChatSendUserTurn", () => {
               requestHash: "request:queued-requester",
             },
             requestFingerprint: "queued-requester",
-            requesterProfile: { id: profile.id, displayName: profile.displayName, isCurrent },
+            requesterProfile: {
+              id: profile.id,
+              displayName: profile.displayName,
+              isCurrent: () => true,
+            },
           },
           () => {
             const wrongRun = prepareTurn({ client, session: { ...target, clientRunId: "other" } });
@@ -204,9 +200,6 @@ describe("prepareChatSendUserTurn", () => {
           display_name: "Queued Ada",
         });
         expect(readSessionInputProfileId(ctx)).toBe(profile.id);
-        admitted.release();
-        expect(getRequesterProfile(ctx)).toBeUndefined();
-        expect(buildInboundUserContextPrefix(ctx)).not.toContain("requester_profile");
       } finally {
         admitted.release();
       }

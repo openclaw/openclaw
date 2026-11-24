@@ -120,7 +120,7 @@ function CatalogDetailContent(props: {
   };
   return (
     <PluginDetailShell
-      registerRemovalHeading={props.state.registerRemovalHeading}
+      registerHeading={props.state.registerRemovalHeading}
       id="plugin-catalog-detail"
       name={catalog().name}
       summary={catalog().summary}

@@ -65,7 +65,7 @@ describe("config validation allowed-values metadata", () => {
   it("selects the matching ACP union branch at bindings.0.acp", () => {
     const binding = {
       type: "acp",
-      agentId: "test",
+      agentId: "main",
       match: { channel: "discord", peer: { kind: "direct", id: "123" } },
       acp: { agent: "claude" },
     };

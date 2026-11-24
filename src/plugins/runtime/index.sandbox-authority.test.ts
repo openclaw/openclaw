@@ -95,7 +95,7 @@ it.each(["custom store without global config", "concurrent rename", "revoked pol
       workspaceDir: state.workspaceDir,
       ...(!custom ? { storePath: scope.storePath } : {}),
     });
-    const changedError = "Session workspace authority changed during sandbox preparation";
+    const changedError = "Session workspace preparation ended. Retry the action.";
     const result = revoked
       ? expect(preparation).rejects.toThrow(changedError)
       : expect(preparation).resolves.toEqual({ sandboxed: !custom, workspaceAccess: "rw" });

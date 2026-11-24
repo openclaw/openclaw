@@ -19,6 +19,7 @@ import {
 import { SessionManagerCore } from "./session-manager-core.js";
 import { sessionManagerReadInitialContext } from "./session-manager-current-turn.js";
 import type { SessionEntry, SessionMessageEntry } from "./session-manager-types.js";
+import { sessionManagerReadTranscriptBranch } from "./session-manager-view-types.js";
 import { CURRENT_SESSION_VERSION, SessionManager } from "./session-manager.js";
 import { toolResult as makeToolResult } from "./session-message-fixtures.test-support.js";
 
@@ -85,7 +86,11 @@ describe("session manager codec compatibility", () => {
   );
 
   it.each([true, false])("loads history after freezer memo rotation (owner-sealed=%s)", (owned) => {
-    const entry = messageEntry(makeToolResult("retained"));
+    const details = { evidence: [{ path: "synthetic.ts", lines: [1, 2] }] };
+    const entry = messageEntry({
+      ...makeToolResult("retained"),
+      details,
+    });
     const snapshot = {
       events: [sessionHeader("owned-history"), entry],
       version: { generation: "owned", rawSeq: 1, updatedAt: 1 },
@@ -101,11 +106,13 @@ describe("session manager codec compatibility", () => {
     const inspect = vi.spyOn(Reflect, "ownKeys");
     let first: SessionManagerCore;
     let second: SessionManagerCore;
+    let context: SessionEntry[];
     try {
       first = new SessionManagerCore("/tmp", undefined, snapshot.events);
       second = new SessionManagerCore("/tmp", undefined, snapshot.events);
-      const inspections = inspect.mock.calls.filter(([value]) =>
-        snapshot.events.some((event) => event === value),
+      context = projectSessionModelContextEntries(first[sessionManagerReadTranscriptBranch]());
+      const inspections = inspect.mock.calls.filter(
+        ([value]) => details === value || snapshot.events.some((event) => event === value),
       );
       expect(inspections.length === 0).toBe(owned);
     } finally {
@@ -117,6 +124,11 @@ describe("session manager codec compatibility", () => {
     writable.parentId = "caller-parent";
     expect(second.getEntry("entry")).toEqual(entry);
     expect(JSON.stringify(snapshot)).toBe(before);
+    expect(context).toEqual([messageEntry(makeToolResult("retained"))]);
+    const projected = context[0];
+    assert(projected?.type === "message" && projected.message.role === "toolResult");
+    const content = projected.message.content;
+    expect(() => content.push({ type: "text", text: "shared edit" })).toThrow(TypeError);
   });
 
   it("selects the new projection only for a genuinely new session", () => {

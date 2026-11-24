@@ -178,8 +178,11 @@ Snapshots whose source write generations could not be sealed remain available
 for manual recovery even after successful activation. Rollback, failed or
 unverified completion, and refused restoration also retain snapshots.
 If cleanup cannot finish, the update reports a maintenance warning with the
-retained path. Older snapshot directories are not automatically removed: their
-ownership and successful outcome cannot be proven from existing receipts.
+retained path. A retained snapshot directory is removed by
+[update cleanup](/cli/update/repair-and-recovery#what-automatic-cleanup-deletes),
+automatically after a later update is verified successful, when update history
+records that directory for an update that finished before the verified one
+started. Snapshot directories that no listed update recorded are not removed.
 Doctor reports older npm snapshot directories with their size and removal command.
 Confirm no update is in progress and inspect the corresponding update report and
 recovery state before manual cleanup.

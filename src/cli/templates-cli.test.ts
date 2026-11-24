@@ -7,7 +7,7 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import * as cliTestHelpers from "./templates-cli.test-helpers.js";
 
-const enabledTemplatesLabsConfig = {
+const enabledTemplatesConfig = {
   gateway: { controlUi: { experimental: { templates: true } } },
 };
 
@@ -128,8 +128,8 @@ const logLines = () => mocks.runtime.log.mock.calls.map(([line]) => String(line)
 describe("templates cli", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mocks.loadConfig.mockReset().mockReturnValue(enabledTemplatesLabsConfig);
-    mocks.readCurrentConfigForPolicyCheck.mockReset().mockReturnValue(enabledTemplatesLabsConfig);
+    mocks.loadConfig.mockReset().mockReturnValue(enabledTemplatesConfig);
+    mocks.readCurrentConfigForPolicyCheck.mockReset().mockReturnValue(enabledTemplatesConfig);
     mocks.listConfiguredMcpServers.mockReset().mockResolvedValue({
       ok: true,
       mcpServers: {},
@@ -163,9 +163,13 @@ describe("templates cli", () => {
     vi.restoreAllMocks();
   });
 
-  it("blocks local Add while Templates Labs is off", async () => {
-    mocks.loadConfig.mockReturnValue({});
-    mocks.readCurrentConfigForPolicyCheck.mockReturnValue({});
+  it("blocks local Add while Templates is off", async () => {
+    mocks.loadConfig.mockReturnValue({
+      gateway: { controlUi: { experimental: { templates: false } } },
+    });
+    mocks.readCurrentConfigForPolicyCheck.mockReturnValue({
+      gateway: { controlUi: { experimental: { templates: false } } },
+    });
     expect(await add(["--dry-run", "--json"])).toMatchObject({
       ok: false,
       error: { code: "templates_labs_disabled" },
@@ -285,7 +289,7 @@ describe("templates cli", () => {
     const expectedWorkspace = await cliTestHelpers.canonicalFuturePath(workspace);
     if (agentId) {
       mocks.loadConfig.mockReturnValue({
-        ...enabledTemplatesLabsConfig,
+        ...enabledTemplatesConfig,
         agents: { entries: { "demo-agent": {} } },
       });
     }
@@ -375,8 +379,10 @@ describe("templates cli", () => {
     });
   });
 
-  it("does not Add when Labs was switched off after planning", async () => {
-    mocks.readCurrentConfigForPolicyCheck.mockReturnValue({});
+  it("does not Add when Templates was disabled after planning", async () => {
+    mocks.readCurrentConfigForPolicyCheck.mockReturnValue({
+      gateway: { controlUi: { experimental: { templates: false } } },
+    });
     expect(await add(["--json"])).toMatchObject({
       status: "failed",
       error: { code: "templates_labs_disabled" },
@@ -384,11 +390,13 @@ describe("templates cli", () => {
     expect(mocks.applyTemplateAddPlanStateless).not.toHaveBeenCalled();
   });
 
-  it("stops Add effects when Labs turns off after apply begins", async () => {
+  it("stops Add effects when Templates is disabled after apply begins", async () => {
     const commitEffect = vi.fn();
     mocks.applyTemplateAddPlanStateless.mockImplementationOnce(async (_plan, options) => {
       await Promise.resolve();
-      mocks.readCurrentConfigForPolicyCheck.mockReturnValue({});
+      mocks.readCurrentConfigForPolicyCheck.mockReturnValue({
+        gateway: { controlUi: { experimental: { templates: false } } },
+      });
       options.assertForwardCurrent?.();
       commitEffect();
     });

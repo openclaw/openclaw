@@ -3,9 +3,11 @@
 // include a steer into a running tool call, a scheduled job that comes due in the chat, and an
 // unrelated chat that overflows its window and compacts while the target runs. Its hidden
 // subagent, which later receives a parent turn, must stay append-only too.
+import { randomBytes } from "node:crypto";
 import fs from "node:fs/promises";
 import { createServer } from "node:http";
 import path from "node:path";
+import { crc32, deflateSync } from "node:zlib";
 import { afterEach, beforeEach, expect } from "vitest";
 import { startGatewayWithClient } from "../src/gateway/test-helpers.e2e.js";
 import { waitForGatewayActiveWork } from "../src/infra/gateway-active-work.js";
@@ -23,11 +25,13 @@ import {
   type FakeTransport as Api,
   type WireRequest,
 } from "./helpers/fake-model-transports.js";
+import { FORK_PLUGIN_ID, FORK_PROBE, writeForkProofPlugin } from "./helpers/fork-proof-plugin.js";
 import { listenProofProvider, useRuntimeProofFixture } from "./runtime-proof.test-support.js";
 
 const TOKEN = "prefix-stability-token";
 const TARGET = "agent:main:prefix-stability-target";
 const SENDER = "agent:main:prefix-stability-sender";
+const HOSTED_SEARCH = "agent:hosted:prefix-stability-hosted-search";
 // An unrelated chat on a small context window: its tool results overflow, then it compacts
 // while the target runs.
 const OTHER = "agent:other:prefix-stability-other";
@@ -35,6 +39,37 @@ const OTHER = "agent:other:prefix-stability-other";
 const CRON_FIRST = "agent:main:prefix-stability-cron-first";
 const OVERFLOW_CHUNKS = 24;
 const OVERFLOW_CHUNK_CHARS = 8_000;
+// A chat on the small window whose screenshots pass eight bytes per window token (the old
+// hydration cut) while their token estimate stays far below compaction. Every later turn
+// re-hydrates it and must keep the oldest turn.
+const WIDE = "agent:wide:prefix-stability-wide";
+const WIDE_IMAGES = 4;
+const WIDE_IMAGE_SIDE = 220;
+
+/** An incompressible PNG, so its transcript bytes stay near its pixel bytes. */
+function noisePng(side: number): Buffer {
+  const chunk = (type: string, data: Buffer) => {
+    const body = Buffer.concat([Buffer.from(type, "latin1"), data]);
+    const out = Buffer.alloc(body.length + 8);
+    out.writeUInt32BE(data.length, 0);
+    body.copy(out, 4);
+    out.writeUInt32BE(crc32(body), body.length + 4);
+    return out;
+  };
+  const header = Buffer.alloc(13);
+  header.writeUInt32BE(side, 0);
+  header.writeUInt32BE(side, 4);
+  header.set([8, 2, 0, 0, 0], 8);
+  const rows = Array.from({ length: side }, () =>
+    Buffer.concat([Buffer.from([0]), randomBytes(side * 3)]),
+  );
+  return Buffer.concat([
+    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+    chunk("IHDR", header),
+    chunk("IDAT", deflateSync(Buffer.concat(rows))),
+    chunk("IEND", Buffer.alloc(0)),
+  ]);
+}
 
 /** True when `current` is `previous` with each changed message passing `changed`, plus new ones. */
 function onlyMessagesChanged(
@@ -150,6 +185,10 @@ export function usePrefixStabilityJourney() {
     // Cron stays on: a scheduled job runs into the target chat when it comes due.
     const fixture = await createFixture(`openclaw-prefix-stability-${api}-`, TOKEN, "0");
     const targetRequests: WireRequest[] = [];
+    const forkRequests: WireRequest[] = [];
+    const hostedSearchRequests: WireRequest[] = [];
+    const targetResponses: Array<{ id?: string; previousResponseId?: string }> = [];
+    const storedResponses = new Map<string, { input: unknown[]; output: unknown[] }>();
     // The hidden subagent: its spawn task turn has no inter-session provenance, later turns do.
     const childRequests: WireRequest[] = [];
     // The journey step that was active when each target request arrived, for failure reports.
@@ -158,6 +197,8 @@ export function usePrefixStabilityJourney() {
     const slowSteps = new Set<string>();
     const otherRequests: WireRequest[] = [];
     const cronFirstRequests: WireRequest[] = [];
+    const wideRequests: WireRequest[] = [];
+    let wideBytes = 0;
     let childKey: string | undefined;
     const seen: string[] = [];
     let ordinal = 0;
@@ -184,6 +225,13 @@ export function usePrefixStabilityJourney() {
         }
         return { text: `other ${otherRequests.length}` };
       }
+      if (session === WIDE) {
+        wideRequests.push(request);
+        const image = /WIDE-IMAGE (\d+)/.exec(latest)?.[1];
+        return image && !hasToolResult
+          ? { tool: "read", args: { path: `wide-${image}.png` } }
+          : { text: `wide ${wideRequests.length}` };
+      }
       if (session === CRON_FIRST) {
         cronFirstRequests.push(request);
         return { text: "ok" };
@@ -204,9 +252,17 @@ export function usePrefixStabilityJourney() {
         }
         return { text: "child-done" };
       }
+      if (session === HOSTED_SEARCH) {
+        hostedSearchRequests.push(request);
+        return { text: latest.includes(FORK_PROBE) ? "fork-done" : "hosted-parent-done" };
+      }
       if (session !== TARGET) {
         unclassified.push(session);
         return { text: "child-done" };
+      }
+      if (latest.includes(FORK_PROBE)) {
+        forkRequests.push(request);
+        return { text: "fork-done" };
       }
       targetRequests.push(request);
       targetSteps.push(step);
@@ -229,7 +285,9 @@ export function usePrefixStabilityJourney() {
         slowSteps.add(slow);
         return {
           tool: "exec",
-          args: { command: `until [ -f '${gate}' ]; do sleep 0.1; done; echo slow-finished` },
+          args: {
+            command: `touch '${gate}.entered'; until [ -f '${gate}' ]; do sleep 0.1; done; echo slow-finished`,
+          },
         };
       }
       if (latest.includes("STEP-EXEC")) {
@@ -250,6 +308,12 @@ export function usePrefixStabilityJourney() {
       return { text: `ok ${targetRequests.length}` };
     };
     const server = createServer((request, response) => {
+      if (request.method === "GET" && request.url === "/v1/catalog") {
+        // Discovery may refresh the router catalog; this fixture uses explicit model rows.
+        response.writeHead(200, { "Content-Type": "application/json" });
+        response.end(JSON.stringify({ providers: [] }));
+        return;
+      }
       let body = "";
       request.setEncoding("utf8");
       request.on("data", (chunk) => {
@@ -257,17 +321,62 @@ export function usePrefixStabilityJourney() {
       });
       request.on("end", () => {
         const json = JSON.parse(body) as Record<string, unknown>;
+        const previousResponseId =
+          typeof json.previous_response_id === "string" ? json.previous_response_id : undefined;
+        if (api === "openai-responses" && previousResponseId) {
+          const previous = storedResponses.get(previousResponseId);
+          if (!previous) {
+            response.writeHead(400).end(`Unknown response: ${previousResponseId}`);
+            return;
+          }
+          json.input = [...previous.input, ...previous.output, ...(json.input as unknown[])];
+        }
         const wire = readWireRequest(api, json);
         const reply = script(wire);
         const session = /session=(\S+)/.exec(wire.text)?.[1] ?? "?";
         seen.push(
           `${session} bytes=${body.length} last=${lastMessage(wire).slice(-300)} -> ${JSON.stringify(reply)}`,
         );
-        writeReply(api, response, reply, ++ordinal, {
-          inputTokens: Math.ceil(body.length / 4),
+        // Continued Responses requests count their expanded history, like a full request.
+        const sent = JSON.stringify(json);
+        const wide = requestSession(wire) === WIDE;
+        if (wide) {
+          wideBytes = Math.max(wideBytes, sent.length);
+        }
+        const result = writeReply(api, response, reply, ++ordinal, {
+          // A provider counts an image as a fixed token cost, not its base64 length.
+          inputTokens: Math.ceil(
+            (wide ? sent.replace(/[A-Za-z0-9+/]{4096,}={0,2}/g, "") : sent).length / 4,
+          ),
           listed: toolNames(wire.tools),
           ...(typeof json.model === "string" ? { model: json.model } : {}),
         });
+        if (result) {
+          // Replay omits provider item IDs. Keep the same shape and field order as the client.
+          const output = result.output.map((item) => {
+            if ("role" in item) {
+              return {
+                type: item.type,
+                role: item.role,
+                content: item.content,
+                status: item.status,
+              };
+            }
+            if ("call_id" in item) {
+              return {
+                type: item.type,
+                call_id: item.call_id,
+                name: item.name,
+                arguments: item.arguments,
+              };
+            }
+            return item;
+          });
+          storedResponses.set(result.id, { input: json.input as unknown[], output });
+        }
+        if (targetRequests.at(-1) === wire) {
+          targetResponses.push({ id: result?.id, previousResponseId });
+        }
       });
     });
     let gateway: Awaited<ReturnType<typeof startGatewayWithClient>> | undefined;
@@ -275,8 +384,12 @@ export function usePrefixStabilityJourney() {
     let steersTaken = 0;
     let transportEnv: ReturnType<typeof captureEnv> | undefined;
     try {
-      const provider = buildFakeProvider(api, await listenProofProvider(server));
-      const runtime = fakeTransportRuntime(api);
+      const origin = await listenProofProvider(server);
+      const provider = buildFakeProvider(api, origin, { continuation: true });
+      const runtime =
+        api === "openai-responses"
+          ? { pluginId: "clawrouter", env: {} }
+          : fakeTransportRuntime(api);
       transportEnv = captureEnv(Object.keys(runtime.env));
       for (const [key, value] of Object.entries(runtime.env)) {
         setTestEnvValue(key, value);
@@ -287,6 +400,7 @@ export function usePrefixStabilityJourney() {
         deleteTestEnvValue("OPENCLAW_BUNDLED_PLUGINS_DIR");
       }
       await fs.writeFile(path.join(fixture.workspaceDir, "AGENTS.md"), "# Rules\n- Be brief.\n");
+      const forkPlugin = await writeForkProofPlugin(fixture.stateDir);
       const cfg = fixture.config(
         provider,
         {
@@ -299,13 +413,15 @@ export function usePrefixStabilityJourney() {
         },
         {
           diagnostics: { cacheTrace: { enabled: true } },
-          plugins: runtime.pluginId
-            ? {
-                allow: [runtime.pluginId],
-                entries: { [runtime.pluginId]: { enabled: true } },
-                slots: { memory: "none" },
-              }
-            : { enabled: false },
+          plugins: {
+            allow: [FORK_PLUGIN_ID, ...(runtime.pluginId ? [runtime.pluginId] : [])],
+            load: { paths: [forkPlugin] },
+            entries: {
+              [FORK_PLUGIN_ID]: { enabled: true, hooks: { allowConversationAccess: true } },
+              ...(runtime.pluginId ? { [runtime.pluginId]: { enabled: true } } : {}),
+            },
+            slots: { memory: "none" },
+          },
           tools: {
             // The default surface: Tool Search on.
             codeMode: { enabled: false },
@@ -313,12 +429,33 @@ export function usePrefixStabilityJourney() {
           },
         },
       );
+      if (api === "openai-responses") {
+        // Keep the router's hosted-tool route separate from the fake native provider whose
+        // Responses continuation is exercised by the main journey.
+        const hosted = buildFakeProvider(api, origin, { hostedSearch: true });
+        cfg.models!.providers![hosted.providerId] = hosted.config;
+        cfg.agents!.entries!.hosted = { model: { primary: hosted.modelRef } };
+      }
       // The unrelated chat belongs to an exec-only agent on a small window, so a few large
       // tool results reach the pressure check.
       cfg.agents!.ownership = "explicit";
       cfg.agents!.entries!.other = {
         model: { primary: provider.smallModelRef },
         tools: { allow: ["exec"] },
+      };
+      // The screenshot chat shares the small window but reads images instead of text.
+      const wideWorkspace = `${fixture.workspaceDir}-wide`;
+      await fs.mkdir(wideWorkspace, { recursive: true });
+      for (let image = 1; image <= WIDE_IMAGES; image++) {
+        await fs.writeFile(
+          path.join(wideWorkspace, `wide-${image}.png`),
+          noisePng(WIDE_IMAGE_SIDE),
+        );
+      }
+      cfg.agents!.entries!.wide = {
+        model: { primary: provider.smallModelRef },
+        workspace: wideWorkspace,
+        tools: { allow: ["read"] },
       };
       gateway = await startGatewayWithClient({
         cfg,
@@ -348,11 +485,17 @@ export function usePrefixStabilityJourney() {
           });
         }
       };
-      const start = (sessionKey: string, message: string, queueMode?: "steer") =>
+      const start = (
+        sessionKey: string,
+        message: string,
+        queueMode?: "steer",
+        attachments?: Array<Record<string, string>>,
+      ) =>
         client.request<{ runId?: string }>("chat.send", {
           sessionKey,
           message,
           ...(queueMode ? { queueMode } : {}),
+          ...(attachments ? { attachments } : {}),
           deliver: false,
           idempotencyKey: `prefix-stability-${api}-${++ordinal}`,
         });
@@ -368,9 +511,9 @@ export function usePrefixStabilityJourney() {
         await wait(`${sessionKey} ${message}`, await start(sessionKey, message));
         await settle();
       };
-      const reached = async (predicate: () => boolean) => {
+      const reached = async (predicate: () => boolean | Promise<boolean>) => {
         const deadline = Date.now() + 60_000;
-        while (!predicate()) {
+        while (!(await predicate())) {
           expect(Date.now(), seen.join("\n")).toBeLessThan(deadline);
           await new Promise((resolve) => {
             setTimeout(resolve, 100);
@@ -384,7 +527,90 @@ export function usePrefixStabilityJourney() {
       const sentToTarget = (marker: string) => targetRequests.some((r) => r.text.includes(marker));
 
       try {
+        // Only Responses carries provider-hosted web_search (here through the router's hosted
+        // route), so this step runs on that lane; the forks below stay tool-free on every lane.
+        if (api === "openai-responses") {
+          step = "fork of a parent that lists hosted web_search";
+          await send(HOSTED_SEARCH, "TARGET parent with hosted search");
+          const parent = hostedSearchRequests.at(-1)!;
+          expect(JSON.parse(parent.tools), "The parent must list hosted web_search").toContainEqual(
+            {
+              type: "web_search",
+            },
+          );
+          const forkAt = hostedSearchRequests.length;
+          const fork = await client.request<{ status: string; value?: unknown }>(
+            "prefixfork.run",
+            // Like the skill review: the fork runs its own client tool.
+            { sessionKey: HOSTED_SEARCH, tools: ["prefix_fork_note"] },
+            { timeoutMs: 65_000 },
+          );
+          expect(fork).toMatchObject({ status: "settled", value: "fork-settled" });
+          expect(hostedSearchRequests.length).toBeGreaterThan(forkAt);
+          const request = hostedSearchRequests[forkAt]!;
+          expect(
+            request.tools,
+            "A fork with a granted client tool must preserve the parent's hosted web_search tool bytes",
+          ).toBe(parent.tools);
+          expect(JSON.parse(request.tools)).toContainEqual({ type: "web_search" });
+        }
+        step = "mid-turn fork";
+        const midTurn = await start(TARGET, "STEP-SLOW mid turn fork");
+        const midTurnGate = path.join(fixture.workspaceDir, "release-0");
+        await reached(() =>
+          fs.access(`${midTurnGate}.entered`).then(
+            () => true,
+            () => false,
+          ),
+        );
+        const liveParentRequest = targetRequests.at(-1)!;
+        const midTurnForkAt = forkRequests.length;
+        try {
+          const midTurnFork = await client.request<{ status: string; value?: unknown }>(
+            "prefixfork.run",
+            { sessionKey: TARGET, latest: true },
+            { timeoutMs: 65_000 },
+          );
+          expect(midTurnFork).toMatchObject({ status: "settled", value: "fork-settled" });
+          expect(forkRequests.length).toBeGreaterThan(midTurnForkAt);
+          const forkRequest = forkRequests[midTurnForkAt]!;
+          expect(forkRequest.system).toBe(liveParentRequest.system);
+          expect(forkRequest.tools).toBe(liveParentRequest.tools);
+          expect(
+            forkRequest.messages.slice(0, liveParentRequest.messages.length),
+            JSON.stringify(prefixBreaks([liveParentRequest, forkRequest]), null, 2),
+          ).toEqual(liveParentRequest.messages);
+          expect(targetRequests.at(-1)).toBe(liveParentRequest);
+        } finally {
+          await fs.writeFile(midTurnGate, "");
+        }
+        await wait("mid-turn fork parent", midTurn);
+        await settle();
+        step = "first turn";
         await send(TARGET, "TARGET first user turn");
+        step = "background fork between two parent turns";
+        const beforeFork = targetRequests.at(-1)!;
+        const parentResponseId = targetResponses.at(-1)!.id;
+        const fork = await client.request<{ status: string; value?: unknown }>(
+          "prefixfork.run",
+          { sessionKey: TARGET },
+          { timeoutMs: 65_000 },
+        );
+        expect(fork).toMatchObject({ status: "settled", value: "fork-settled" });
+        expect(forkRequests.length).toBeGreaterThan(0);
+        for (const request of forkRequests) {
+          expect(request.system).toBe(beforeFork.system);
+          expect(request.tools).toBe(beforeFork.tools);
+        }
+        const afterForkAt = targetRequests.length;
+        await send(TARGET, "TARGET after fork");
+        if (api === "openai-responses") {
+          expect(parentResponseId).toBeDefined();
+          expect(
+            targetResponses[afterForkAt]!.previousResponseId,
+            "The parent must continue from its own response, not the background fork.",
+          ).toBe(parentResponseId);
+        }
         // Exec completion wakes the session with a host system turn.
         await send(TARGET, "STEP-EXEC run the probe in the background");
         await until(() => targetRequests.some((r) => lastMessage(r).includes("exec-finished")));
@@ -402,15 +628,26 @@ export function usePrefixStabilityJourney() {
         await client.request("sessions.subscribe", {});
         const steered = await start(TARGET, "STEP-SLOW steer target");
         await reached(() => sentToTarget("STEP-SLOW steer target"));
-        // A steer from the chat composer; the tool is held until the run has taken it.
-        await start(TARGET, "STEER-INPUT arrives mid tool call", "steer");
+        // A steer from the chat composer with a document; the tool is held until the run has
+        // taken it. Later runs must replay the document text the model saw, not drop it.
+        await start(TARGET, "STEER-INPUT arrives mid tool call", "steer", [
+          {
+            type: "file",
+            mimeType: "text/plain",
+            fileName: "steer-notes.txt",
+            content: Buffer.from("STEER-DOC-BODY notes for the steered run").toString("base64"),
+          },
+        ]);
         await reached(() => steersTaken > 0);
-        await fs.writeFile(path.join(fixture.workspaceDir, "release-0"), "");
+        await fs.writeFile(path.join(fixture.workspaceDir, "release-1"), "");
         await wait("steer", steered);
         await until(() => sentToTarget("STEER-INPUT"));
-        // The steered input joins the same run, right after the tool result it waited for.
+        // The steered input joins the same run, right after the tool result it waited for, with
+        // its document text.
         expect(
-          targetRequests.some((r) => /slow-finished[\s\S]*STEER-INPUT/.test(lastMessage(r))),
+          targetRequests.some((r) =>
+            /slow-finished[\s\S]*STEER-INPUT[\s\S]*STEER-DOC-BODY/.test(lastMessage(r)),
+          ),
         ).toBe(true);
         step = "cron";
         const cronJob = {
@@ -478,11 +715,23 @@ export function usePrefixStabilityJourney() {
         await client.request("sessions.compact", { key: OTHER }, { timeoutMs: 65_000 });
         // The target tool call is still held open.
         expect(targetRequests.length).toBe(busyAt);
-        await fs.writeFile(path.join(fixture.workspaceDir, "release-1"), "");
+        await fs.writeFile(path.join(fixture.workspaceDir, "release-2"), "");
         await wait("busy", busy);
         await settle();
         const otherCompactionAt = otherRequests.length;
         await send(OTHER, "OTHER after compaction");
+        // Screenshots fill the small window's old byte cut while their tokens stay small; each
+        // later turn is a new attempt that re-hydrates the chat and must keep its oldest turn.
+        step = "screenshot chat over the byte cut";
+        for (let image = 1; image <= WIDE_IMAGES; image++) {
+          await send(WIDE, `WIDE-IMAGE ${image} view it`);
+        }
+        await send(WIDE, "WIDE plain turn");
+        await send(WIDE, "WIDE second plain turn");
+        // The small window's old cut was eight bytes per token.
+        expect(wideBytes).toBeGreaterThan(64_000 * 8);
+        const wideBreaks = prefixBreaks(wideRequests);
+        expect(wideBreaks, JSON.stringify(wideBreaks, null, 2)).toEqual([]);
         // A skill appears and a workspace bootstrap file changes mid-session.
         step = "skill and workspace edit";
         const skillDir = path.join(fixture.workspaceDir, "skills", "probe-skill");

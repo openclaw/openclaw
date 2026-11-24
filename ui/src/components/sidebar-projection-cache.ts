@@ -83,7 +83,6 @@ export function sameSidebarPresentation(a: unknown, b: unknown, omit?: string): 
 
 /** Formatting belongs to a row's lifetime, not the lifetime of a list publication. */
 export class SidebarSessionRowProjection {
-  readonly runtimeSampledAtByRow = new WeakMap<GatewaySessionRow, number>();
   readonly #rows = new WeakMap<
     GatewaySessionRow,
     [SidebarProjectionMemo<SidebarRecentSession>, SidebarProjectionMemo<SidebarRecentSession>]

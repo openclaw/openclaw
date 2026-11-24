@@ -59,7 +59,7 @@ it("passes prepared executable schemas through compaction-triggered Responses re
 
   void streamFn(model, { systemPrompt: "system", messages: [], tools } as never, {});
 
-  expect(payload?.context_management).toEqual([{ type: "compaction", compact_threshold: 140_000 }]);
+  expect(payload?.context_management).toEqual([{ type: "compaction", compact_threshold: 170_000 }]);
   expect(payload?.tools?.[0]?.strict).toBe(true);
   expect(payload?.tools?.[0]?.parameters).toEqual(emptySchema());
 });

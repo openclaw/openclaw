@@ -6,7 +6,11 @@ import type {
   CliBackendLiveSessionCloseReason,
   CliBackendLiveSessionHandle,
 } from "../../plugins/cli-backend.types.js";
-import { CLI_LIVE_SESSION_HOST_MEMORY_ERROR_CODE } from "../failover/error.js";
+import {
+  CLI_LIVE_SESSION_HOST_MEMORY_ERROR_CODE,
+  CLI_LIVE_SESSION_LIMIT_ERROR_CODE,
+  FailoverError,
+} from "../failover/error.js";
 import { runCliCleanup } from "./cleanup.js";
 import { createCliFailoverError } from "./exit-error.js";
 import { cliBackendLog } from "./log.js";
@@ -151,18 +155,20 @@ function retainCleanup(context: PreparedCliRunContext, record: CliLiveSessionRec
   };
 }
 
-function createCapacityError(context: PreparedCliRunContext, message: string, code?: string) {
-  return createCliFailoverError(
-    message,
-    "rate_limit",
-    {
-      provider: context.params.provider,
-      model: context.modelId,
-      sessionId: context.params.sessionId,
-      lane: context.params.lane,
-    },
-    code ? { code } : undefined,
-  );
+/**
+ * The host, not the provider, refused this turn before any request was sent. It carries no
+ * HTTP status and is not a rate limit, so it never cools the saved login down or pins the
+ * session to a fallback; the turn can still fail over to another model.
+ */
+function createCapacityError(context: PreparedCliRunContext, message: string, code: string) {
+  return new FailoverError(message, {
+    reason: "overloaded",
+    code,
+    provider: context.params.provider,
+    model: context.modelId,
+    sessionId: context.params.sessionId,
+    lane: context.params.lane,
+  });
 }
 
 function ensureCliLiveSessionCapacity(context: PreparedCliRunContext): void {
@@ -175,7 +181,11 @@ function ensureCliLiveSessionCapacity(context: PreparedCliRunContext): void {
       return;
     }
   }
-  throw createCapacityError(context, "Too many CLI live sessions are active.");
+  throw createCapacityError(
+    context,
+    "Too many CLI live sessions are active.",
+    CLI_LIVE_SESSION_LIMIT_ERROR_CODE,
+  );
 }
 
 /**

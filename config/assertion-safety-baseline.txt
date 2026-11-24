@@ -246,7 +246,6 @@ extensions/exa/src/exa-web-search-provider.runtime.ts	1
 extensions/fal/video-generation-provider.ts	3
 extensions/feishu/src/accounts.ts	2
 extensions/feishu/src/bitable.ts	1
-extensions/feishu/src/bot-content.ts	1
 extensions/feishu/src/bot.ts	6
 extensions/feishu/src/card-action.ts	1
 extensions/feishu/src/card-interaction.ts	1
@@ -630,7 +629,7 @@ extensions/qa-lab/src/providers/mock-openai/mock-openai-directives.ts	3
 extensions/qa-lab/src/providers/mock-openai/mock-openai-events.ts	1
 extensions/qa-lab/src/providers/mock-openai/mock-openai-input.ts	5
 extensions/qa-lab/src/providers/mock-openai/mock-openai-responses-websocket.ts	1
-extensions/qa-lab/src/providers/mock-openai/server.ts	4
+extensions/qa-lab/src/providers/mock-openai/server.ts	3
 extensions/qa-lab/src/qa-transport.ts	1
 extensions/qa-lab/src/run-config.ts	1
 extensions/qa-lab/src/runtime-parity.ts	1
@@ -799,7 +798,7 @@ extensions/tlon/src/monitor/authorization.ts	1
 extensions/tlon/src/monitor/discovery.ts	1
 extensions/tlon/src/monitor/history.ts	2
 extensions/tlon/src/monitor/index.ts	5
-extensions/tlon/src/settings.ts	7
+extensions/tlon/src/settings.ts	5
 extensions/tlon/src/setup-core.ts	3
 extensions/tlon/src/tlon-api.ts	2
 extensions/tlon/src/types.ts	1
@@ -974,7 +973,6 @@ packages/memory-host-sdk/src/host/sqlite.ts	1
 packages/model-catalog-core/src/model-catalog-normalize.ts	5
 packages/model-catalog-core/src/model-catalog-types.ts	1
 packages/model-catalog-core/src/remote-catalog-bundle.ts	2
-packages/net-policy/src/ip.ts	1
 packages/normalization-core/src/error-coercion.ts	1
 packages/normalization-core/src/json-schema.ts	1
 packages/normalization-core/src/promise-like.ts	1
@@ -1103,7 +1101,6 @@ src/agents/embedded-agent-runner/run/attempt-session-prepare.ts	1
 src/agents/embedded-agent-runner/run/attempt-sessions-yield.ts	1
 src/agents/embedded-agent-runner/run/attempt-setup.ts	1
 src/agents/embedded-agent-runner/run/attempt-stop-reason-recovery.ts	1
-src/agents/embedded-agent-runner/run/attempt-stream-prepare.ts	1
 src/agents/embedded-agent-runner/run/attempt-stream.ts	3
 src/agents/embedded-agent-runner/run/attempt-tool-call-replay-sanitization.ts	1
 src/agents/embedded-agent-runner/run/attempt-tool-call-stream-normalization.ts	2
@@ -1846,7 +1843,6 @@ src/infra/npm-managed-root.ts	3
 src/infra/openclaw-root.ts	1
 src/infra/outbound/agent-delivery.ts	2
 src/infra/outbound/deliver-channel.ts	3
-src/infra/outbound/deliver-payload.ts	1
 src/infra/outbound/deliver-prepare.ts	1
 src/infra/outbound/delivery-queue-storage.ts	3
 src/infra/outbound/message-account-selection.ts	1
@@ -2007,7 +2003,6 @@ src/plugin-sdk/memory-host-core.ts	2
 src/plugin-sdk/migration-runtime.ts	1
 src/plugin-sdk/migration.ts	7
 src/plugin-sdk/plugin-test-api.ts	1
-src/plugin-sdk/provider-auth-login-flow-runtime.ts	2
 src/plugin-sdk/provider-auth-result.ts	2
 src/plugin-sdk/provider-entry.ts	1
 src/plugin-sdk/provider-stream-shared.ts	4
@@ -2217,7 +2212,7 @@ src/templates/project-build.ts	3
 src/templates/project.ts	2
 src/templates/reader.ts	3
 src/templates/schema.ts	1
-src/trajectory/export.ts	7
+src/trajectory/export.ts	6
 src/trajectory/runtime-store.sqlite.ts	1
 src/trajectory/runtime.ts	2
 src/transcripts/config.ts	2
@@ -2246,7 +2241,6 @@ src/tui/tui.ts	2
 src/utils.ts	1
 src/utils/delivery-context.shared.ts	1
 src/utils/string-readers.ts	2
-src/utils/usage-format.ts	1
 src/version.ts	4
 src/web-fetch/runtime.ts	2
 src/web-search/runtime.ts	1

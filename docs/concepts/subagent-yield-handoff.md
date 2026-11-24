@@ -42,6 +42,13 @@ ownership, then the handoff result resumes the conversation.
 Completion inputs already committed to the requester transcript remain consumed
 when its announcing turn produces no reply; they are not recorded as failed child
 deliveries or replayed. Results not yet consumed remain owed to the requester.
+A descendant whose delivery has settled cannot hold a later completion behind
+unfinished cleanup. Session deletion still waits for that cleanup.
+Committed child-row removal also retires its accepted completion receipt, so a
+later requester yield transfers the remaining cohort without requiring deleted
+rows. An unknown missing child still fails the complete-cohort check. Tracking
+the spawning turn for receipt cleanup does not claim a session-bound message wait;
+only an explicit watched continuation binds that wait to requester completion.
 This does not claim that a channel received an answer: ambiguous outbound delivery
 keeps its separate outcome, and private child input stays private.
 
@@ -68,6 +75,10 @@ The implementation owners are `subagent-registry-requester-yield.ts`,
 registry replacement operation; it does not create a second delegated task.
 Adoption clears a child-only pause notice instead of carrying it into completion.
 Actual requester completion batches keep their frozen membership and generation.
+Each ready member wakes the requester without waiting for siblings that are still
+working; those siblings keep the same generation and wake it again later. A
+followup caller that awaits one reply, and a Goal return, continue on the
+partition that leaves no member pending; earlier partitions are ordinary settle turns.
 
 Background commands belong to the session that started them, not to a run. A
 yield awaits every wake-armed command that is still running in the session,

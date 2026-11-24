@@ -89,12 +89,15 @@ describe("re-login identity boundaries", () => {
     });
     expect(result.validateCurrentCredential).toBeTypeOf("function");
     expect(() => result.validateCurrentCredential?.("fixture:new", undefined)).not.toThrow();
+    // The Control UI shows this too, so it names no CLI-only flag.
+    const collision =
+      "A different account is already saved under this sign-in's profile. Remove that account, then sign in again.";
     expect(() => result.validateCurrentCredential?.("fixture:new", credential("b"))).toThrow(
-      "already in use",
+      collision,
     );
     expect(() =>
       result.validateCurrentCredential?.("fixture:new", { ...credential("a"), provider: "other" }),
-    ).toThrow("already in use");
+    ).toThrow(collision);
   });
 
   it("rejects a vanished identity unless the login explicitly purged it", () => {

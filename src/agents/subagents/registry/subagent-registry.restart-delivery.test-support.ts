@@ -1,8 +1,8 @@
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, onTestFinished, vi, type Mock } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import * as sessionEvents from "../../../auto-reply/reply/session-event-handoff.js";
-import * as sessionAccessor from "../../../config/sessions/session-accessor.js";
 import {
   appendSessionTranscriptReport,
   loadExactSessionEntryReadOnly,
@@ -12,6 +12,10 @@ import { persistGatewaySessionLifecycleEvent } from "../../../gateway/session-li
 import { resumeMarkedSessions } from "../../../gateway/session-restart-resume.js";
 import { claimAgentRunContext, releaseAgentRunContext } from "../../../infra/agent-run-registry.js";
 import { bindGatewayContextResolver } from "../../../plugins/runtime/gateway-request-scope.js";
+import {
+  markGatewayRestartDraining,
+  resetGatewayWorkAdmission,
+} from "../../../process/gateway-work-admission.js";
 import { sessionControllerMailboxes } from "../../../sessions/session-controller.mailbox.js";
 import { createSubagentRunParams } from "../../subagent-test-fixtures.test-helpers.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
@@ -49,7 +53,136 @@ export function registerRequesterRestartDeliveryTests<Response>({
   | "createGatewayContext"
   | "getLifecycleHandler"
 > & { callGatewayMock: Mock<(request: GatewayRequest) => Promise<Response>> }): void {
-  it("shows every consumed result when a frozen batch settles in separate owner partitions", async () => {
+  it.each([false, true])(
+    "settles an ended child's restart-aborted delivery without replay (consumed=%s)",
+    async (consumed) => {
+      const context = createGatewayContext();
+      await registry.initSubagentRegistry();
+      await registry.activateSubagentRegistry(() => context);
+      const child = visibleChild("ended-before-shutdown");
+      const sessionEntry = await prepareChildSession(child.childSessionKey, "sess-ended-child");
+      const requester = {
+        agentId: "main",
+        sessionKey: requesterSessionKey,
+        storePath: getFixture().sessionStorePath,
+        sessionId: getFixture().sessionStore[requesterSessionKey]!.sessionId,
+      };
+      const entered = createDeferred();
+      const aborted = createDeferred();
+      const dispatch = callGatewayMock.getMockImplementation()!;
+      let attempts = 0;
+      let deliveries = 0;
+      callGatewayMock.mockImplementation(async (request) => {
+        if (request.method !== "agent") {
+          return dispatch(request);
+        }
+        attempts++;
+        if (consumed) {
+          const committed = await appendSessionTranscriptReport(requester, {
+            kind: "custom",
+            customTypes: ["synthetic-child-input"],
+            selectReport: () => ({
+              customType: "synthetic-child-input",
+              content: [
+                String(request.params?.message),
+                JSON.stringify(request.params?.internalEvents ?? []),
+              ].join("\n"),
+              display: false,
+            }),
+          });
+          expect(committed.ok).toBe(true);
+          const runId = request.params?.idempotencyKey;
+          const input = [...sessionControllerMailboxes()]
+            .flatMap((mailbox) => mailbox.entries)
+            .find((entry) => entry.protocolRunId === runId);
+          await expectDefined(input?.onTranscriptCommitted, "input commit callback")(String(runId));
+          deliveries++;
+        }
+        entered.resolve();
+        await aborted.promise;
+        return { status: "timeout", stopReason: "restart" } as Response;
+      });
+      onTestFinished(() => {
+        aborted.resolve();
+        resetGatewayWorkAdmission();
+        callGatewayMock.mockImplementation(dispatch);
+      });
+      await registry.registerSubagentRun(
+        createSubagentRunParams({
+          ...child,
+          sessionEntry,
+          requesterSessionKey,
+          requesterAgentId: "main",
+          cleanup: "keep",
+          gatewayContextResolver: context.resolveGatewayContext,
+        }),
+      );
+      getLifecycleHandler()!({
+        stream: "lifecycle",
+        runId: child.runId,
+        seq: 1,
+        ts: Date.now(),
+        sessionKey: child.childSessionKey,
+        data: {
+          phase: "end",
+          endedAt: Date.now(),
+          terminalReply: {
+            disposition: "visible",
+            text: "SAVED_COMPLETED_CHILD_RESULT",
+          },
+        },
+      });
+      await entered.promise;
+      expect(loadSubagentRegistryFromSqlite().get(child.runId)?.completion?.resultText).toBe(
+        "SAVED_COMPLETED_CHILD_RESULT",
+      );
+      markGatewayRestartDraining();
+      aborted.resolve();
+      await flushOwnedWork();
+      expect(loadSubagentRegistryFromSqlite().get(child.runId)?.delivery?.status).toBe("delivered");
+      await registry.resetSubagentRegistryForTests({ persist: false });
+      resetGatewayWorkAdmission();
+      const restarted = createGatewayContext();
+      await registry.initSubagentRegistry();
+      await registry.activateSubagentRegistry(() => restarted);
+      await resumeMarkedSessions({
+        context: restarted,
+        signal: new AbortController().signal,
+        log: { warn: vi.fn() },
+      });
+      await vi.advanceTimersByTimeAsync(30_000);
+      await registry.testing.sweepOnceForTests();
+      await flushOwnedWork();
+      expect(loadSubagentRegistryFromSqlite().get(child.runId)?.delivery?.status).toBe("delivered");
+      await registry.testing.sweepOnceForTests();
+      await flushOwnedWork();
+      expect(deliveries).toBe(consumed ? 1 : 0);
+      expect(attempts).toBe(1);
+      const events = await loadTranscriptEvents(requester);
+      expect(
+        events.filter((event) => isRecord(event) && event.customType === "synthetic-child-input"),
+      ).toHaveLength(consumed ? 1 : 0);
+      const statuses = events.filter(
+        (event) => isRecord(event) && event.customType === "subagent-completion",
+      );
+      expect(statuses).toEqual(
+        consumed
+          ? []
+          : [
+              expect.objectContaining({
+                display: false,
+                content: expect.stringContaining("SAVED_COMPLETED_CHILD_RESULT"),
+                details: expect.objectContaining({ childRunIds: [child.runId] }),
+              }),
+            ],
+      );
+      if (!consumed) {
+        expect(statuses[0]).not.toHaveProperty("excludeFromContext");
+      }
+    },
+  );
+
+  it("settles consumed results across separate owner partitions without replay", async () => {
     const contexts = [createGatewayContext(), createGatewayContext()];
     await registry.initSubagentRegistry();
     await registry.activateSubagentRegistry(() => contexts[0]!);
@@ -98,26 +231,13 @@ export function registerRequesterRestartDeliveryTests<Response>({
       sessionId: getFixture().sessionStore[requesterSessionKey]!.sessionId,
     });
     const reports = events.filter(
-      (event) => isRecord(event) && event.customType === "subagent-completion" && event.display,
+      (event) => isRecord(event) && event.customType === "subagent-completion",
     );
-    expect(reports).toHaveLength(2);
-    for (const runId of batchRunIds) {
-      expect(
-        reports.some(
-          (event) =>
-            isRecord(event) && String(event.content).includes(`Saved answer from ${runId}`),
-        ),
-      ).toBe(true);
-    }
+    expect(reports).toEqual([]);
   });
 
-  it.each([
-    "yielded settle",
-    "aborted announce",
-    "aborted consumed announce",
-    "fallback write failure",
-  ] as const)(
-    "preserves a visible child outcome through spawn, drain, restart and %s",
+  it.each(["yielded settle", "aborted announce", "aborted consumed announce"] as const)(
+    "preserves a child outcome in model-visible history through spawn, drain, restart and %s",
     async (shape) => {
       const child = visibleChild(`drain-${shape.replaceAll(" ", "-")}`);
       const yielded = !shape.startsWith("aborted");
@@ -178,15 +298,19 @@ export function registerRequesterRestartDeliveryTests<Response>({
           .flatMap((mailbox) => mailbox.entries)
           .find((entry) => entry.protocolRunId === runId);
         if (yielded || shape === "aborted consumed announce") {
-          expect(request.params?.inputProvenance?.sourceTool).toBe(
-            yielded ? "subagent_settle" : "subagent_announce",
-          );
+          expect(request.params?.inputProvenance).toMatchObject({
+            sourceTool: yielded ? "subagent_settle" : "subagent_announce",
+            sourceSessionKey: child.childSessionKey,
+          });
           const committed = await appendSessionTranscriptReport(requester, {
             kind: "custom",
             customTypes: ["synthetic-child-input"],
             selectReport: () => ({
               customType: "synthetic-child-input",
-              content: String(request.params?.message),
+              content: [
+                String(request.params?.message),
+                JSON.stringify(request.params?.internalEvents ?? []),
+              ].join("\n"),
               display: false,
             }),
           });
@@ -204,21 +328,6 @@ export function registerRequesterRestartDeliveryTests<Response>({
           },
         } as Response;
       });
-      const appendReport = sessionAccessor.appendSessionTranscriptReport;
-      let failFallback = shape === "fallback write failure";
-      const append = vi
-        .spyOn(sessionAccessor, "appendSessionTranscriptReport")
-        .mockImplementation(async (...args) => {
-          if (
-            failFallback &&
-            args[1].kind === "custom" &&
-            args[1].customTypes.includes("subagent-completion")
-          ) {
-            throw new Error("synthetic fallback write failure");
-          }
-          return appendReport(...args);
-        });
-      onTestFinished(() => append.mockRestore());
       const restarted = createGatewayContext();
       await registry.initSubagentRegistry();
       await registry.activateSubagentRegistry(() => restarted);
@@ -230,33 +339,25 @@ export function registerRequesterRestartDeliveryTests<Response>({
       await registry.testing.sweepOnceForTests();
       await flushOwnedWork();
       expect(dispatchCount).toBeGreaterThan(0);
-      if (failFallback) {
-        const retained = loadSubagentRegistryFromSqlite().get(child.runId);
-        expect(retained?.delivery?.status).not.toBe("delivered");
-        expect(retained?.requesterSettleWake).toBeDefined();
-        failFallback = false;
-        await registry.resetSubagentRegistryForTests({ persist: false });
-        await registry.initSubagentRegistry();
-        const retried = createGatewayContext();
-        await registry.activateSubagentRegistry(() => retried);
-        await resumeMarkedSessions({
-          context: retried,
-          signal: new AbortController().signal,
-          log: { warn: vi.fn() },
-        });
-        await registry.testing.sweepOnceForTests();
-        await flushOwnedWork();
-      }
       const events = await loadTranscriptEvents(requester);
-      const visible = events.filter(
-        (event) => isRecord(event) && event.type === "custom_message" && event.display === true,
+      const statuses = events.filter(
+        (event) => isRecord(event) && event.customType === "subagent-completion",
       );
-      const visibleContent = visible
-        .map((event) => (isRecord(event) ? event.content : ""))
-        .join("\n");
-      expect(visibleContent).toContain(child.childSessionKey);
-      expect(visibleContent).toContain(child.runId);
-      expect(visibleContent).toMatch(/Gateway stopped|Gateway restart/);
+      const inputs = events.filter(
+        (event) => isRecord(event) && event.customType === "synthetic-child-input",
+      );
+      const consumed = yielded || shape === "aborted consumed announce";
+      expect(statuses).toHaveLength(consumed ? 0 : 1);
+      expect(inputs).toHaveLength(consumed ? 1 : 0);
+      const history = consumed ? inputs : statuses;
+      expect(history[0]).toMatchObject({ type: "custom_message", display: false });
+      expect(history[0]).not.toHaveProperty("excludeFromContext");
+      const content = history.map((event) => (isRecord(event) ? event.content : "")).join("\n");
+      if (!consumed) {
+        expect(content).toContain(child.childSessionKey);
+      }
+      expect(content).toContain(child.runId);
+      expect(content).toMatch(/Gateway stopped|Gateway restart/);
     },
   );
 

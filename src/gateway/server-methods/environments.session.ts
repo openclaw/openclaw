@@ -6,7 +6,6 @@ import {
   validateEnvironmentsSessionStatusParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import {
-  captureGatewayToolCallerAssertion,
   getGatewayToolCallerIdentity,
   resolveGatewayPersonalToolParticipant,
 } from "../../agents/tools/gateway-caller-context.js";
@@ -39,8 +38,7 @@ export async function resolveSessionEnvironmentCaller(
   const tool = client?.internal?.agentToolCaller;
   const runtime = client?.internal?.agentRuntimeIdentity;
   const ambient = client?.internal?.syntheticClient ? getGatewayToolCallerIdentity() : undefined;
-  const assertAmbient = ambient ? captureGatewayToolCallerAssertion() : undefined;
-  const owner = tool ?? runtime ?? (assertAmbient ? ambient : undefined);
+  const owner = tool ?? runtime ?? (ambient?.operationalRunInstance ? ambient : undefined);
   if (!client || (client.internal?.syntheticClient && !owner)) {
     throw new Error(
       "Conversation environments require an authenticated operator or admitted agent run",
@@ -112,16 +110,12 @@ export async function resolveSessionEnvironmentCaller(
         throw new Error("Conversation environment requester is no longer active");
       }
       tool?.assertCurrent?.();
-      if (ambient) {
-        if (
-          !assertAmbient ||
-          (ambient.gatewayContextResolver && ambient.gatewayContextResolver() !== context)
-        ) {
-          throw new Error(
-            "Conversation environment tool belongs to a different or retired Gateway",
-          );
-        }
-        assertAmbient();
+      if (
+        ambient &&
+        (!ambient.operationalRunInstance ||
+          (ambient.gatewayContextResolver && ambient.gatewayContextResolver() !== context))
+      ) {
+        throw new Error("Conversation environment tool belongs to a different or retired Gateway");
       }
       const cfg = context.getRuntimeConfig();
       const facts = read.readCurrent(cfg);

@@ -3,6 +3,153 @@ import { escapeHtml } from "../shared/html-escape.js";
 import { WIDGET_MEDIA_SOURCES } from "../shared/widget-media.js";
 import { WIDGET_THEME_MESSAGE_TYPE, WIDGET_THEME_TOKENS } from "../shared/widget-theme.js";
 
+// Serialized into the trusted wrapper before any widget-authored script runs.
+// Geometry and bounded DOM labels only; this channel cannot save a comment.
+const WIDGET_INSPECTOR_SCRIPT = String.raw`(function installWidgetInspector(port             ) {
+  if (typeof document.elementFromPoint !== "function") {
+    return;
+  }
+  const listen = window.addEventListener.bind(window);
+  const post = port.postMessage.bind(port);
+  const call = Function.prototype.call.bind(Function.prototype.call);
+  const dataOf = Object.getOwnPropertyDescriptor(MessageEvent.prototype, "data") .get ;
+  const targetAt = document.elementFromPoint.bind(document);
+  const boundsOf = Element.prototype.getBoundingClientRect;
+  const attr = Element.prototype.getAttribute;
+  const tagOf = Object.getOwnPropertyDescriptor(Element.prototype, "localName") .get ;
+  const textOf = Object.getOwnPropertyDescriptor(Node.prototype, "textContent") .get ;
+  const slice = String.prototype.slice;
+  const stop = Event.prototype.stopImmediatePropagation;
+  const prevent = Event.prototype.preventDefault;
+  const raf = window.requestAnimationFrame.bind(window);
+  let inspection = 0;
+  let pointer                                      ;
+  let pending = false;
+  let lastHover = "";
+  const stringify = JSON.stringify;
+  const rectValues = ["left", "top", "right", "bottom"].map(
+    (key) => Object.getOwnPropertyDescriptor(DOMRectReadOnly.prototype, key) .get ,
+  );
+  const target = () => {
+    const element = pointer && targetAt(pointer.x, pointer.y);
+    if (!element) return;
+    const tag         = call(tagOf, element);
+    if (tag === "html" || tag === "body" || tag === "iframe") return;
+    const rect = call(boundsOf, element);
+    return {
+      element,
+      tag,
+      left: call(rectValues[0], rect),
+      top: call(rectValues[1], rect),
+      right: call(rectValues[2], rect),
+      bottom: call(rectValues[3], rect),
+    };
+  };
+  const hover = () => {
+    if (!inspection || pending) return;
+    pending = true;
+    raf(() => {
+      pending = false;
+      if (!inspection) return;
+      const hit = target();
+      const rect = hit && { left: hit.left, top: hit.top, right: hit.right, bottom: hit.bottom };
+      const next = stringify(rect ?? null);
+      if (next !== lastHover) {
+        lastHover = next;
+        post({ type: "openclaw:widget-inspect-hover", inspection, rect });
+      }
+    });
+  };
+  const end = () => {
+    post({ type: "openclaw:widget-inspect-cancel", inspection });
+    inspection = 0;
+    pointer = undefined;
+  };
+  port.addEventListener("message", (event) => {
+    const data = call(dataOf, event);
+    if (data?.type === "openclaw:widget-prompt-host-ready") {
+      post({ type: "openclaw:widget-inspect-ready" });
+    } else if (
+      data?.type === "openclaw:widget-inspect-mode" &&
+      typeof data.inspection === "number"
+    ) {
+      inspection = data.inspection;
+      pointer = undefined;
+      lastHover = "";
+    }
+  });
+  listen(
+    "pointermove",
+    (event) => {
+      if (inspection && event.isTrusted) {
+        pointer = { x: event.clientX, y: event.clientY };
+        hover();
+      }
+    },
+    true,
+  );
+  listen(
+    "pointerout",
+    (event) => {
+      if (event.isTrusted && !event.relatedTarget) {
+        pointer = undefined;
+        hover();
+      }
+    },
+    true,
+  );
+  listen("scroll", hover, true);
+  listen("resize", hover);
+  const intercept = (event       ) => {
+    if (!inspection || !event.isTrusted) return;
+    call(prevent, event);
+    call(stop, event);
+  };
+  listen("pointerdown", intercept, true);
+  listen("pointerup", intercept, true);
+  listen("auxclick", intercept, true);
+  listen("contextmenu", intercept, true);
+  listen(
+    "click",
+    (event) => {
+      if (!inspection || !event.isTrusted) return;
+      intercept(event);
+      if (event.button !== 0 || event.detail === 0) return;
+      pointer = { x: event.clientX, y: event.clientY };
+      const hit = target();
+      if (!hit) return;
+      const { element, tag, ...rect } = hit;
+      const id = call(slice, call(attr, element, "id") ?? "", 0, 80);
+      const text = call(
+        slice,
+        call(attr, element, "aria-label") ||
+          call(attr, element, "alt") ||
+          call(attr, element, "title") ||
+          call(textOf, element) ||
+          "",
+        0,
+        240,
+      );
+      post({ type: "openclaw:widget-inspect-pick", inspection, rect, tag, id, text });
+      // Remain armed until the host retires this mode; a double-click must not activate the widget.
+    },
+    true,
+  );
+  listen(
+    "keydown",
+    (event) => {
+      if (!inspection || !event.isTrusted) return;
+      if (event.key === "Escape") {
+        intercept(event);
+        end();
+      } else if (event.key === "Enter" || event.key === " ") {
+        intercept(event);
+      }
+    },
+    true,
+  );
+})(c.port1);`;
+
 const WIDGET_BODY_HEIGHT =
   "Math.ceil(Math.max(b.scrollHeight,b.offsetHeight,b.getBoundingClientRect().height))";
 // The existing post-render chat-host message confirms geometry in saved documents, too.
@@ -119,6 +266,7 @@ export function buildWidgetDocument(
     'const apply=Reflect.apply;const dataOf=Object.getOwnPropertyDescriptor(MessageEvent.prototype,"data").get;' +
     "const c=new MessageChannel();" +
     "const promptPost=c.port1.postMessage.bind(c.port1);" +
+    WIDGET_INSPECTOR_SCRIPT +
     "const b=new MessageChannel();const bridgePost=b.port1.postMessage.bind(b.port1);" +
     "const promptWaiting=[];let inlinePromptReady=false;" +
     'c.port1.addEventListener("message",event=>{if(apply(dataOf,event,[])?.type!=="openclaw:widget-prompt-host-ready"||inlinePromptReady)return;' +

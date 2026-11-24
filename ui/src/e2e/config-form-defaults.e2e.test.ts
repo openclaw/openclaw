@@ -43,6 +43,44 @@ async function expectApplyChanges(page: Page) {
 }
 
 suite.define(() => {
+  it.each([
+    { width: 390, height: 844 },
+    { width: 820, height: 1180 },
+  ])("keeps the Automation section help aligned and tappable at $width px", async (viewport) => {
+    const { buildConfigSchemaCore } = await import("../../../src/config/schema.ts");
+    await suite.withPage(
+      { ...settingsPageOptions, viewport, hasTouch: true, isMobile: true },
+      async ({ page }) => {
+        await installMockGateway(page, {
+          methodResponses: {
+            "config.get": configSnapshot({}, "section-help"),
+            "config.schema": buildConfigSchemaCore(),
+          },
+        });
+        await page.goto(suite.server.baseUrl + "settings/automation");
+        const header = page.locator("#config-section-commands > .settings-section__header");
+        const button = header.getByRole("button", { name: "Help for Commands" });
+        await button.waitFor();
+        await page.evaluate(() => document.fonts.ready);
+        const line = await header.locator(".settings-section__desc").evaluate((p) => {
+          const range = document.createRange();
+          range.selectNodeContents(p);
+          const { top, height } = range.getBoundingClientRect();
+          return top + height / 2;
+        });
+        const glyph = await button.locator("svg").evaluate((e) => {
+          const { top, height } = e.getBoundingClientRect();
+          return top + height / 2;
+        });
+        expect(Math.abs(glyph - line)).toBeLessThanOrEqual(2);
+        await button.tap({ position: { x: 12, y: 2 } });
+        await page.getByRole("dialog", { name: "Help for Commands" }).waitFor();
+        await page.keyboard.press("Escape");
+        await page.getByRole("dialog", { name: "Help for Commands" }).waitFor({ state: "hidden" });
+      },
+    );
+  });
+
   it("shows omitted automation triggers as enabled and persists explicit overrides", async () => {
     const { buildConfigSchemaCore } = await import("../../../src/config/schema.ts");
     const schema = buildConfigSchemaCore();

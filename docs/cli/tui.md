@@ -84,10 +84,15 @@ Aliases: `openclaw chat` and `openclaw terminal` invoke this command with
   within that grant instead of requesting the default operator scopes. Until
   the grant is stored, the first request is refused with a scope-upgrade
   request that reports the approved scopes, and the TUI reconnects within
-  them. The TUI stores the grant with the device token the Gateway returns; a
-  trusted-proxy Gateway returns none to the TUI, so there every start is
-  refused once. The command list and pending approvals need `operator.read`
-  and `operator.approvals` and stay empty.
+  them. The TUI stores the grant with the device token the Gateway returns; by
+  default a trusted-proxy Gateway returns none to the TUI, so there every start
+  is refused once. With
+  [`gateway.auth.trustedProxy.narrowToDeviceGrant`](/gateway/trusted-proxy-auth#approved-cli-and-tui-grants)
+  on, that Gateway connects the TUI within its grant from the first start; that
+  section says when the TUI then keeps a device token. This needs no named
+  operator role (`gateway.roles.default`). The command list and
+  pending approvals need `operator.read` and `operator.approvals` and stay
+  empty.
 - With no explicit URL or port, `tui` follows the active local Gateway port
   recorded by the running Gateway. Explicit `--url`, `OPENCLAW_GATEWAY_URL`,
   `OPENCLAW_GATEWAY_PORT`, and remote Gateway config keep precedence.

@@ -77,6 +77,7 @@ export type EmbeddedAttemptExecutionPhaseInput = {
       yieldMessage: string | null;
       yieldAcknowledgment?: string;
       yieldMessageWaitRegistered?: boolean;
+      yieldExecWakeArmed?: boolean;
     };
     setToolSearchCatalogExecutor: (
       executor: ReturnType<typeof prepareEmbeddedAttemptStream>["toolSearchCatalogExecutor"],

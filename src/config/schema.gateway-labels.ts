@@ -72,6 +72,7 @@ export const GATEWAY_FIELD_LABELS: Record<string, string> = {
   "gateway.auth.trustedProxy.deviceAutoApprove.enabled":
     "Trusted Proxy Device Auto-Approval Enabled",
   "gateway.auth.trustedProxy.deviceAutoApprove.scopes": "Trusted Proxy Device Auto-Approval Scopes",
+  "gateway.auth.trustedProxy.narrowToDeviceGrant": "Trusted Proxy Narrow To Device Grant",
   "gateway.roles": "Gateway Operator Roles",
   "gateway.roles.default": "Default Operator Role",
   "gateway.roles.assignments": "Operator Role Assignments",
@@ -88,6 +89,7 @@ export const GATEWAY_FIELD_LABELS: Record<string, string> = {
   "gateway.roles.definitions.*.modelPolicy.allow": "Operator Role Allowed Models",
   "gateway.roles.definitions.*.modelPolicy.deny": "Operator Role Excluded Models",
   "gateway.roles.definitions.*.scopes": "Operator Role Scope Ceiling",
+  "gateway.roles.definitions.*.projects": "Operator Role Projects",
   "gateway.roles.definitions.*.workerProfiles": "Operator Role Worker Profiles",
   "gateway.roles.definitions.*.accessPolicyPlugin": "Operator Role Access Policy Plugin",
   "gateway.trustedProxies": "Gateway Trusted Proxy CIDRs",

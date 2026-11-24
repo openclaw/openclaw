@@ -30,6 +30,7 @@ import type {
 import { resolveSessionSelectedModelRef } from "./session-utils-model-selection.js";
 import {
   resolveGatewaySessionThinkingProjectionInternal,
+  resolveGatewaySessionUnconfiguredThinkingProjection,
   resolveSessionDisplayModelIdentityRefCached,
 } from "./session-utils-model.js";
 import type { SessionListModelCatalog } from "./session-utils.types.js";
@@ -150,7 +151,7 @@ export function prepareSessionRowModelSearch(
     );
     runtime(row.preparedAcpMeta?.backend);
     const source = row.materialized?.source;
-    ref(source?.selectedModel.provider, source?.selectedModel.model);
+    ref(source?.selectedModel?.provider, source?.selectedModel?.model);
     ref(source?.rowModelIdentity.provider, source?.rowModelIdentity.model);
     if (source) {
       runtime(source.thinkingProjection.agentRuntime.id);
@@ -168,8 +169,10 @@ export function prepareSessionRowModelSearch(
         manifestPlugins: snapshot ?? [],
         configuredDefaultModelByAgent: params.rowContext.configuredDefaultModelByAgent,
       });
-      defaults.add(selected.provider);
-      ref(selected.provider, selected.model);
+      if (selected) {
+        defaults.add(selected.provider);
+        ref(selected.provider, selected.model);
+      }
     }
     for (const [id, model] of Object.entries(params.cfg.agents?.entries?.[agentId]?.models ?? {})) {
       ref(undefined, id);
@@ -282,6 +285,8 @@ export function prepareSessionRowModelSearch(
   };
 }
 
+const NO_ROW_MODEL_IDENTITY: { provider?: string; model?: string } = {};
+
 /** Search and row presentation share model policy without preparing unrelated row fields. */
 export function readSessionRowModelFacts(params: {
   cfg: OpenClawConfig;
@@ -315,6 +320,20 @@ export function readSessionRowModelFacts(params: {
     allowPluginNormalization: !lightweight,
     manifestPlugins: metadataSnapshot === null ? [] : metadataSnapshot,
   });
+  if (!selectedModel) {
+    return {
+      selectedModel: undefined,
+      rowModelIdentity: NO_ROW_MODEL_IDENTITY,
+      thinkingProjection: resolveGatewaySessionUnconfiguredThinkingProjection({
+        cfg,
+        agentId,
+        sessionKey: key,
+        entry: params.entry,
+        preparedAcpMeta: params.preparedAcpMeta,
+      }),
+      catalogEntry: undefined,
+    };
+  }
   const { provider, model } = selectedModel;
   const rowModelIdentity = resolveSessionDisplayModelIdentityRefCached({
     cfg,
@@ -364,7 +383,7 @@ export function resolveGatewaySessionActiveModel(params: {
   sessionId?: string;
   sessionKey: string;
   projectedAgentRuns: ProjectedAgentRunIndex;
-  selectedModel: { provider: string; model: string };
+  selectedModel?: { provider: string; model: string };
   entry?: InternalSessionEntry;
   storePath: string;
 }): { provider: string; model: string } | undefined {
@@ -376,10 +395,10 @@ export function resolveGatewaySessionActiveModel(params: {
   if (params.active ?? liveModel !== undefined) {
     return liveModel ?? undefined;
   }
-  if (!params.entry?.fallbackNotice) {
+  const { selectedModel } = params;
+  if (!params.entry?.fallbackNotice || !selectedModel) {
     return undefined;
   }
-  const { selectedModel } = params;
 
   const fallbackEntry =
     params.activeModel === undefined

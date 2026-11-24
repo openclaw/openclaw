@@ -135,7 +135,6 @@ export function createPageState(
   );
   const presentedFields = {
     settings,
-    accessPreferenceRevision: 0,
     assistantName: assistantIdentity.name,
     assistantAvatar: assistantIdentity.avatar,
     assistantAvatarStatus: assistantIdentity.avatarStatus ?? null,
@@ -324,9 +323,7 @@ export function createPageState(
       return resolveSpeechTextLimit(config);
     },
   );
-  state.accessPreferences = DraftPreferenceState.forChat(context, () => {
-    state.accessPreferenceRevision = (state.accessPreferenceRevision ?? 0) + 1;
-  });
+  state.accessPreferences = DraftPreferenceState.forChat(context);
   state.loadAssistantIdentity = () => {
     if (!state.connected) {
       const cachedIdentity = cachedChatAssistantIdentity(state, context);

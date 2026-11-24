@@ -83,7 +83,11 @@ describe("native attempt queued automation admission", () => {
               agentId: "main",
               sessionKey,
               operationalRunInstance: options.operationalRunInstance,
-              receiptAuthority: () => current,
+              receiptAuthority: () => {
+                if (!current) {
+                  throw new Error("agent tool caller authority is no longer active");
+                }
+              },
               approvalSignals: options.abortSignal ? [options.abortSignal] : [],
               gatewayContextResolver: () => context,
             }),

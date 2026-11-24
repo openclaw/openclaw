@@ -252,11 +252,11 @@ goal remains an explicit operator action, not something the continuation does.
 Each settled automatic Goal turn increments `continuationTurns` once, including
 the turn that completes the Goal. Human Start and Resume turns do not increment it.
 
-Automatic nudges apply to built-in chat/auto-reply execution and supported local
-and cloud-worker Codex sessions, not other external runtimes, heartbeat turns, or independent
-scheduled work. They
-use the existing queue and run lifecycle rather than a periodic background
-scanner. A saved active goal alone does not start a new process or create a
+Automatic nudges apply to built-in chat/auto-reply execution, including OpenClaw
+cloud-worker turns, and supported local and cloud-worker Codex sessions. They use
+the existing queue and run lifecycle rather than a periodic background scanner.
+Other external runtimes, heartbeat turns, and independent scheduled work do not
+start automatic Goal turns. A saved active goal alone does not start a new process or create a
 schedule after shutdown; normal session recovery or another admitted turn
 provides the next execution opportunity.
 
@@ -294,10 +294,12 @@ Starting a Goal saves the Goal and its user turn together with the operation
 receipt before acknowledging Send. A failed admission leaves the draft intact and
 does not create a Goal. A failed older chat send stays separate from a newly opened
 Goal draft instead of filling its empty objective. Start and Resume require an idle
-built-in local session with recoverable history, or an idle existing Codex session
-running locally or on a cloud worker with remote execution. Codex input must pass
-native admission before the runtime commits the Goal and its operation receipt.
-Cloud-worker sessions also require worker setup to admit that input. Other external
+built-in OpenClaw session with recoverable history running locally or on a cloud
+worker in `worker-turn` mode, or an idle existing Codex session running locally or
+on a cloud worker with remote execution. Runtime-admitted input must pass the
+selected runtime's admission before the Gateway commits the Goal, input turn, and
+operation receipt together. Cloud-worker setup and the current placement claim
+must admit that input; a setup failure leaves the Goal unchanged. Other external
 runtimes remain unsupported. Goals are not queued or steered into another run.
 The UI reports unsupported or busy sessions rather than creating an inactive Goal.
 

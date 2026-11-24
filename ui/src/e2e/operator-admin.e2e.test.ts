@@ -256,6 +256,9 @@ suite.define(() => {
       await page.getByText("tightened the review step").waitFor();
       expect(await page.getByRole("button", { name: "Undo", exact: true }).count()).toBe(0);
       await page.getByRole("button", { name: "read-only-skill" }).first().click();
+      await page.locator(".sw-timeline").getByText("tightened the review step").waitFor();
+      expect(await page.getByRole("button", { name: "Undo", exact: true }).count()).toBe(0);
+      await page.getByRole("button", { name: "Instructions", exact: true }).click();
       await gateway.waitForRequest("skills.workshop.read");
       await expect
         .poll(() => page.locator(".sw-markdown").textContent())

@@ -90,7 +90,6 @@ function createOriginatingRun(currentChat = CURRENT) {
     },
     toolContext,
     revokeTurn: () => revokeMessageActionTurnCapability(turnCapability),
-    releaseClaim: () => releaseAgentRunDelegatedAuthority(delegatedAuthority),
     createTool: (config: OpenClawConfig) =>
       wrapToolWithGatewayCallerIdentity(
         createMessageTool({
@@ -106,7 +105,11 @@ function createOriginatingRun(currentChat = CURRENT) {
           agentId: "main",
           sessionKey,
           operationalRunInstance,
-          receiptAuthority: () => validateAgentRunDelegatedAuthority(delegatedAuthority),
+          receiptAuthority: () => {
+            if (!validateAgentRunDelegatedAuthority(delegatedAuthority)) {
+              throw new Error("agent tool caller authority is no longer active");
+            }
+          },
         },
       ),
     dispose: () => {
@@ -478,7 +481,7 @@ it("stops live peer pagination when the plugin retires between pages", async () 
 
   await expect(
     fixture.dispatch("channel-list", { scope: "peers", query: "Other", limit: 1 }),
-  ).rejects.toThrow("no longer active");
+  ).rejects.toThrow("Plugin feishu was reloaded during the read. Retry the action.");
   expect(contentRequests()).toEqual([PEERS_PATH]);
 });
 
@@ -580,7 +583,9 @@ it.each([
     }
   };
   await expect(fixture.dispatch("list-pins", { chatId: ALLOWED })).rejects.toThrow(
-    "no longer active",
+    owner === "plugin"
+      ? "Plugin feishu was reloaded during the read. Retry the action."
+      : "Message-read turn authority is no longer active",
   );
   expect(contentRequests()).toEqual(phase === "metadata" ? [CHAT_PATH] : [CHAT_PATH, PINS_PATH]);
 });
@@ -600,7 +605,11 @@ it.each(["channel-list", "member-info"] as const)(
     };
     await expect(
       fixture.dispatch(action, action === "member-info" ? { chatId: DIRECT } : {}),
-    ).rejects.toThrow("no longer active");
+    ).rejects.toThrow(
+      action === "channel-list"
+        ? "Plugin feishu was reloaded during the read. Retry the action."
+        : "Message-read turn authority is no longer active",
+    );
     if (action === "channel-list") {
       expectResult(observed ?? null, { groups: [{ id: ALLOWED }], peers: [{ id: SELF }] });
     } else {
@@ -612,39 +621,33 @@ it.each(["channel-list", "member-info"] as const)(
   },
 );
 
-it.each(["allowed", "turn", "claim"] as const)(
-  "uses the normal local message tool (%s)",
-  async (mode) => {
-    const fixture = createFixture();
-    setRuntimeConfigSnapshot(fixture.cfg, fixture.cfg);
-    const tool = fixture.run.createTool(fixture.cfg);
-    beforeReply = (request) => {
-      if (request.path !== CHAT_PATH) {
-        return;
-      }
-      if (mode === "turn") {
-        fixture.run.revokeTurn();
-      }
-      if (mode === "claim") {
-        fixture.run.releaseClaim();
-      }
-    };
-    const result = track(
-      tool.execute("feishu-read", {
-        action: "read",
-        channel: "feishu",
-        target: `chat:${ALLOWED}`,
-        messageId: MESSAGE,
-      }),
-    );
-    if (mode === "allowed") {
-      expectResult(await result, { message: { messageId: MESSAGE, content: "allowed context" } });
-    } else {
-      await expect(result).rejects.toThrow("no longer active");
+it.each(["allowed", "turn"] as const)("uses the normal local message tool (%s)", async (mode) => {
+  const fixture = createFixture();
+  setRuntimeConfigSnapshot(fixture.cfg, fixture.cfg);
+  const tool = fixture.run.createTool(fixture.cfg);
+  beforeReply = (request) => {
+    if (request.path !== CHAT_PATH) {
+      return;
     }
-    expect(contentRequests()).toEqual([MESSAGE_PATH, CHAT_PATH]);
-  },
-);
+    if (mode === "turn") {
+      fixture.run.revokeTurn();
+    }
+  };
+  const result = track(
+    tool.execute("feishu-read", {
+      action: "read",
+      channel: "feishu",
+      target: `chat:${ALLOWED}`,
+      messageId: MESSAGE,
+    }),
+  );
+  if (mode === "allowed") {
+    expectResult(await result, { message: { messageId: MESSAGE, content: "allowed context" } });
+  } else {
+    await expect(result).rejects.toThrow("message action turn capability is no longer active");
+  }
+  expect(contentRequests()).toEqual([MESSAGE_PATH, CHAT_PATH]);
+});
 
 it("rejects a configured account disabled after local message-tool creation", async () => {
   const fixture = createFixture();

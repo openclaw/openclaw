@@ -45,7 +45,7 @@ vi.mock("@openclaw/fs-safe/temp", async (importOriginal) => {
 vi.mock("./ffmpeg-exec.js", () => ({ runFfmpeg }));
 vi.mock("./media-probe.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./media-probe.js")>()),
-  probePlaybackMediaFileDescriptor: vi.fn(async () => ({
+  probePlaybackMediaFile: vi.fn(async () => ({
     durationMs: 1000,
     audioCodec: "pcm_s16le",
     audioStreamIndex: 0,

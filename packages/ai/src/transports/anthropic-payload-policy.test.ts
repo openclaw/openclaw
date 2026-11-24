@@ -127,7 +127,7 @@ it("triggers inside a configured input cap", () => {
       {},
       "test-api-key",
     ),
-  ).toEqual({ enabled: true, threshold: 140_000 });
+  ).toEqual({ enabled: true, threshold: 170_000 });
 });
 it("requires resolved authentication before disabling client pruning", () => {
   expect(isAnthropicServerToolClearingEnabled(model, "  ")).toBe(false);

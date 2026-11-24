@@ -1,13 +1,18 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { wakeOwedExec } from "../agents/bash-tools.exec-notify.js";
 import { readMessageClientSources } from "../chat/message-client-source.js";
 import { readTranscriptSenderIdentity } from "../chat/sender-identity.js";
 import type { SessionPendingInputEndCause } from "../config/sessions/session-pending-input-end-cause.types.js";
 import { readSessionQueuedInputPage } from "../config/sessions/session-pending-input-history.js";
 import { preparePendingInputStore } from "../config/sessions/session-pending-input-store.js";
-import { parseSessionPendingInputMessage } from "../config/sessions/session-pending-input-value.js";
+import {
+  parseSessionPendingInputMessage,
+  readOwedKind,
+} from "../config/sessions/session-pending-input-value.js";
 import type { SessionPendingInputRow } from "../config/sessions/session-pending-input.types.js";
 import { withPluginRuntimeGatewayContextResolver } from "../plugins/runtime/gateway-request-scope.js";
 import { runWithGatewayIndependentRootWorkAdmission } from "../process/gateway-work-admission.js";
+import { chatRef } from "../sessions/chat-ref.js";
 import { MEDIA_ONLY_USER_TEXT } from "../sessions/user-turn-media.js";
 import { resolvePendingInputEndCause } from "../sessions/user-turn-transcript-processing.js";
 import { extractTextFromChatContent } from "../shared/chat-content.js";
@@ -62,6 +67,8 @@ export async function continueSessionQueuedInputs(
     assertCurrent: () => void;
     /** Ends every row with this cause instead of replaying it. */
     endCause?: SessionPendingInputEndCause;
+    /** A recovered source owner, rather than human chat, resumes this exact input. */
+    ownsInput?: (row: SessionPendingInputRow) => boolean;
   },
 ): Promise<DeferredQueuedInputReplay | undefined> {
   const assertCurrent = () => {
@@ -78,6 +85,22 @@ export async function continueSessionQueuedInputs(
     let dispatchAttempted = false;
     try {
       const message = parseSessionPendingInputMessage(row.message_json);
+      const owedKind = readOwedKind(row.message_json);
+      const owedText = message.content;
+      if (owedKind && typeof owedText === "string") {
+        // A result owed to this chat wakes its turn from the stored row; that turn appends it once.
+        // Like the live wake, one failed attempt gets one retry from the stored row.
+        const owed = {
+          id: row.idempotency_key,
+          to: chatRef(target),
+          kind: owedKind,
+          text: owedText,
+        };
+        withPluginRuntimeGatewayContextResolver(context.resolveGatewayContext, () =>
+          wakeOwedExec(owed, {}, undefined, 1),
+        );
+        return undefined;
+      }
       if (message["__openclaw"]?.activeSteer) {
         // Native delivery may have succeeded before a crash. Never replay into any run.
         await failQueuedInput(target, row, assertCurrent, "restart-unrecoverable");
@@ -88,6 +111,9 @@ export async function continueSessionQueuedInputs(
       if (readMessageClientSources(message).some(isBrowserCopilotClient)) {
         throw new Error("Browser-bound queued input requires a fresh browser send");
       }
+      if (options.ownsInput?.(row)) {
+        return undefined;
+      }
       if (sender?.type !== "profile") {
         throw new Error("Queued input sender has no current human principal");
       }
@@ -95,12 +121,12 @@ export async function continueSessionQueuedInputs(
         throw new Error("Queued input has no original operator source; submit a new request.");
       }
       admitted = await restoreGatewayQueuedOperatorRecovery({
+        agentId: target.agentId,
         context,
         source: decodeQueuedOperatorRecoverySource(JSON.parse(row.origin_source_json)),
         assertCurrent,
       });
       const { authority } = admitted;
-      authority.assertCurrent();
       if (authority.profileId !== sender.id) {
         throw new Error("Queued input operator source does not match its sender.");
       }
@@ -129,14 +155,7 @@ export async function continueSessionQueuedInputs(
             requesterProfile: {
               id: authority.profileId,
               displayName: profile.displayName,
-              isCurrent: () => {
-                try {
-                  authority.assertCurrent();
-                  return true;
-                } catch {
-                  return false;
-                }
-              },
+              isCurrent: () => true,
             },
           },
           () =>
@@ -171,12 +190,6 @@ export async function continueSessionQueuedInputs(
                 signal: options.signal,
                 onExecution: (pending) => {
                   execution = pending;
-                },
-                assertPreparationCurrent: authority.assertCurrent,
-                sessionMutationCommitGuard: authority.assertCurrent,
-                hasCurrentClientAuthority: () => {
-                  authority.assertCurrent();
-                  return true;
                 },
               },
             ),

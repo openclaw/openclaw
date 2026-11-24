@@ -78,8 +78,9 @@ describe.runIf(process.platform !== "win32")("extension install ownership policy
     const packageRoot = path.join(value.root, "package");
     const canonicalNodePath = await fs.realpath(value.deps.nodePath);
     const realLstat = fs.lstat.bind(fs);
-    vi.spyOn(fs, "lstat").mockImplementation(async (target) => {
-      const info = await realLstat(target);
+    // fs-safe verifies identity with bigint stats; keep the caller's options.
+    vi.spyOn(fs, "lstat").mockImplementation(async (target, options) => {
+      const info = await realLstat(target, options);
       const resolved = path.resolve(String(target));
       const rootOwned =
         resolved.startsWith(`${packageRoot}${path.sep}`) || resolved === canonicalNodePath;
@@ -288,8 +289,8 @@ describe("Chrome preferences discovery", () => {
         await fs.chmod(unsafe, failure === "locked" ? 0o000 : 0o662);
       } else if (failure === "foreign-owner") {
         const realLstat = fs.lstat.bind(fs);
-        vi.spyOn(fs, "lstat").mockImplementation(async (target) => {
-          const info = await realLstat(target);
+        vi.spyOn(fs, "lstat").mockImplementation(async (target, options) => {
+          const info = await realLstat(target, options);
           return String(target) === unsafe
             ? statsWithUid(info, (process.getuid?.() ?? 0) + 1)
             : info;

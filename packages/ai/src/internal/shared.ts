@@ -10,6 +10,7 @@ export {
   projectPreparedDiagnosticValue,
   isCredentialFieldName,
 } from "../utils/credential-redaction.js";
+export { resolveCompactionThreshold } from "../utils/compaction-threshold.js";
 export { projectProviderError } from "../utils/provider-error.js";
 export { matchesContextOverflowMessage } from "../utils/overflow.js";
 export * from "../utils/prompt-cache-stability.js";

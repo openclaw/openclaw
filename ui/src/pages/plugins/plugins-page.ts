@@ -150,6 +150,7 @@ export function createPluginsPage(options: {
     {
       getClient: () => gateway.client,
       isConnected: () => gateway.connected,
+      inventory: () => state.result?.plugins,
     },
     publish,
   );
@@ -505,8 +506,8 @@ export function createPluginsPage(options: {
     } else {
       icons.installed.reset();
     }
-    setState({ messages: consent.reconcileInstallMessages(result) });
-    setState({ result });
+    setState({ result, messages: consent.reconcileInstallMessages(result) });
+    discovery.inventoryChanged();
     // Installed identity needs reconciliation; an uninstalled catalog read stays independent.
     const catalogId = surface === "discovery" ? activeRoutePluginId() : null;
     if (

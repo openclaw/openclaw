@@ -33,18 +33,18 @@ import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.
 import { createDeferredCore } from "../shared/deferred.js";
 import { StateDatabaseReadAdmissionInvalidatedError } from "../state/openclaw-state-db-async-lifecycle.js";
 import { buildStatusMessageParts, statusModelRefs } from "../status/status-message.test-support.js";
-import {
-  captureModelCostPricing,
-  estimateAggregateUsageCost,
-  resolveModelCostConfig,
-  resolveModelCostConfigFingerprint,
-} from "../utils/usage-format.js";
+import { estimateAggregateUsageCost } from "../utils/usage-format.js";
 import { prepareModelPricingContext, resolveModelPricing } from "./pricing.js";
 import {
   prepareRemoteModelCatalogStartupSnapshot,
   getRemoteModelCatalogProviderOverlay,
 } from "./remote-overlay.js";
 import { setRemoteModelCatalogOverlaySourcesForTest } from "./remote-overlay.test-support.js";
+import {
+  captureModelCostPricing,
+  resolveModelCostConfig,
+  resolveModelCostConfigFingerprint,
+} from "./usage-pricing.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const hostedUrl = "https://api.openai.com/v1";

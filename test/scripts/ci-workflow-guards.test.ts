@@ -2292,7 +2292,7 @@ require("node:fs").writeFileSync("scheduler-restart", process.env.OPENCLAW_UPGRA
       expect(runInNewContext(String(reserve.if), { runner: { os, environment } })).toBe(expected);
     }
     expect(reserve.run?.match(/^\s*sudo .*$/gm)).toEqual(["sudo rm -rf -- /usr/share/dotnet"]);
-    for (const name of ["Setup Java", "Setup Gradle cache", "Restore Android SDK cache"]) {
+    for (const name of ["Setup Java", "Setup Gradle", "Restore Android SDK cache"]) {
       expect(steps.indexOf(reserve)).toBeLessThan(steps.indexOf(requiredWorkflowStep(steps, name)));
     }
   });
@@ -2320,7 +2320,11 @@ require("node:fs").writeFileSync("scheduler-restart", process.env.OPENCLAW_UPGRA
 
     const sdkRestoreStep = requiredWorkflowStep(action.runs.steps, "Restore Android SDK cache");
     const sdkSaveStep = requiredWorkflowStep(action.runs.steps, "Save Android SDK cache");
-    const gradleCacheStep = requiredWorkflowStep(action.runs.steps, "Setup Gradle cache");
+    const gradleStep = requiredWorkflowStep(action.runs.steps, "Setup Gradle");
+    const gradleCacheStep = requiredWorkflowStep(
+      action.runs.steps,
+      "Restore and save Gradle dependency cache",
+    );
     const javaStep = requiredWorkflowStep(action.runs.steps, "Setup Java");
     const installStep = requiredWorkflowStep(action.runs.steps, "Install Android SDK packages");
 
@@ -2354,13 +2358,18 @@ require("node:fs").writeFileSync("scheduler-restart", process.env.OPENCLAW_UPGRA
     ]);
     expect(sdkSaveStep.uses).toBe(CACHE_SAVE_V5);
     expect(sdkSaveStep.with?.key).toBe("${{ steps.android-sdk-cache.outputs.cache-primary-key }}");
-    expect(gradleCacheStep).toMatchObject({
+    expect(gradleStep).toMatchObject({
       uses: SETUP_GRADLE_V6,
-      with: {
-        "add-job-summary": "never",
-        "cache-provider": "basic",
-      },
+      with: { "add-job-summary": "never", "cache-disabled": true },
     });
+    // setup-gradle's basic key matched root-relative patterns and missed the Android version
+    // catalog, so a Kotlin bump restored an entry without the new compose plugin forever.
+    expectIncludes(gradleCacheStep.with?.key, [
+      "inputs.gradle-cache-key",
+      "'apps/android/gradle/libs.versions.toml'",
+      "'apps/android/gradle/wrapper/gradle-wrapper.properties'",
+      "'apps/android/**/*.gradle.kts'",
+    ]);
     expect(installStep.run).toContain(`"${packageId}"`);
     expect(installStep.run).toContain(
       'yes | sdkmanager --sdk_root="${ANDROID_SDK_ROOT}" --licenses >/dev/null || [[ "${PIPESTATUS[1]}" -eq 0 ]]',
@@ -2388,25 +2397,27 @@ require("node:fs").writeFileSync("scheduler-restart", process.env.OPENCLAW_UPGRA
 
   it("restores release Gradle inputs without SDK caches or cache writes", () => {
     const steps = readAndroidToolchainAction().runs.steps;
-    const gradle = requiredWorkflowStep(steps, "Setup Gradle cache");
+    const save = requiredWorkflowStep(steps, "Restore and save Gradle dependency cache");
+    const restore = requiredWorkflowStep(steps, "Restore Gradle dependency cache");
     const sdk = requiredWorkflowStep(steps, "Restore Android SDK cache");
     const release = requiredWorkflowStep(
       readWorkflow(".github/workflows/android-store-release.yml").jobs.release.steps,
       "Setup Android toolchain",
     );
     expect(release.with).toMatchObject({ "cache-mode": "off", "gradle-cache-mode": "restore" });
-    for (const [inputs, restoreGradle, restoreSdk, readOnly] of [
-      [release.with, true, false, true],
-      [{ "cache-mode": "off" }, false, false, true],
-      [{ "cache-mode": "restore" }, true, true, true],
-      [{ "cache-mode": "read-write" }, true, true, false],
-      [{ "cache-mode": "read-write", "gradle-cache-mode": "off" }, false, true, true],
+    expect(save.uses).toBe(CACHE_V5.replace("actions/cache/restore@", "actions/cache@"));
+    expect(restore.uses).toBe(CACHE_V5);
+    expect(restore.with).toEqual(save.with);
+    for (const [inputs, restoreGradle, saveGradle, restoreSdk] of [
+      [release.with, true, false, false],
+      [{ "cache-mode": "off" }, false, false, false],
+      [{ "cache-mode": "restore" }, true, false, true],
+      [{ "cache-mode": "read-write" }, false, true, true],
+      [{ "cache-mode": "read-write", "gradle-cache-mode": "off" }, false, false, true],
     ] as const) {
-      expect(evaluateWorkflowExpression(`\${{ ${gradle.if} }}`, { inputs })).toBe(restoreGradle);
+      expect(evaluateWorkflowExpression(`\${{ ${restore.if} }}`, { inputs })).toBe(restoreGradle);
+      expect(evaluateWorkflowExpression(`\${{ ${save.if} }}`, { inputs })).toBe(saveGradle);
       expect(evaluateWorkflowExpression(`\${{ ${sdk.if} }}`, { inputs })).toBe(restoreSdk);
-      expect(evaluateWorkflowExpression(gradle.with?.["cache-read-only"], { inputs })).toBe(
-        readOnly,
-      );
     }
   });
 
@@ -2811,12 +2822,17 @@ require("node:fs").writeFileSync("scheduler-restart", process.env.OPENCLAW_UPGRA
     }
   });
 
+  it("keeps release decision and drain on Blacksmith independently of global CI routing", () => {
+    const watcher = readWorkflow(".github/workflows/full-release-state-watcher.yml");
+    expect(watcher.jobs.watch["runs-on"]).toBe("blacksmith-2vcpu-ubuntu-2404");
+    expect(watcher.jobs.watch["timeout-minutes"]).toBe(720);
+    expect(watcher.on.workflow_call.inputs.runner_label).toEqual({
+      type: "string",
+      required: true,
+    });
+  });
+
   it.each([
-    {
-      file: "full-release-state-watcher.yml",
-      runner: "blacksmith-2vcpu-ubuntu-2404",
-      job: "watch",
-    },
     {
       file: "openclaw-npm-preflight.yml",
       runner: "blacksmith-8vcpu-ubuntu-2404",
@@ -6206,6 +6222,20 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       policy: "dual-all",
       shards: [1, 2, 3],
     },
+    {
+      label: "native-shard capable compatibility",
+      frozenTarget: true,
+      compatibilityTarget: true,
+      policy: "node",
+      shards: [1, 2, 3],
+    },
+    {
+      label: "unknown compatibility",
+      frozenTarget: true,
+      compatibilityTarget: true,
+      policy: "node",
+      shards: [1],
+    },
   ])("executes the $label standalone UI envelope", (scenario) => {
     const workflow = readCiWorkflow();
     expect(workflow.env?.BUN_JSC_useFTLJIT).toBeUndefined();
@@ -6315,7 +6345,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
           String(evaluateWorkflowExpression(expression, rowContext)),
         );
       expect(resolveValue(ui.name)).toBe(
-        scenario.compatibilityTarget
+        scenario.shards.length === 1
           ? "checks-ui"
           : `checks-ui (${shard}/${scenario.shards.length})`,
       );
@@ -6366,7 +6396,10 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(calls.filter((call) => call === "pnpm lint:ui:no-raw-window-open")).toHaveLength(1);
     expect(calls.filter((call) => call !== "pnpm lint:ui:no-raw-window-open")).toEqual(
       scenario.compatibilityTarget
-        ? ["pnpm --dir ui test --testTimeout=30000 --isolate"]
+        ? scenario.shards.map(
+            (shard) =>
+              `pnpm --dir ui test --testTimeout=30000 --isolate${scenario.shards.length > 1 ? ` --shard=${shard}/${scenario.shards.length}` : ""}`,
+          )
         : scenario.shards.map(() => "node --import tsx scripts/ci-run-node-test-shard.mts"),
     );
   });
