@@ -45,6 +45,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.async
@@ -858,8 +859,8 @@ class ChatController internal constructor(
   // Handset minus Gateway clock from the last accepted roster page, for live rows on the same connection.
   @Volatile private var gatewayClockSample: Pair<ChatCacheScope, Long>? = null
 
-  // Counts personal pin preference pushes, so a pin acknowledgement can tell its push already refreshed.
-  private val personalPinPreferenceChanges = AtomicLong(0)
+  // The roster read started by the latest personal pin preference push, so a pin acknowledgement can reuse it.
+  @Volatile private var personalPinPushRead: Deferred<Boolean>? = null
   private var sessionRosterLoadedLimit: Int? = null
   private val sessionBrowserRevisionMutable = MutableStateFlow(0L)
   internal val sessionBrowserRevision = sessionBrowserRevisionMutable.asStateFlow()
@@ -1393,7 +1394,13 @@ class ChatController internal constructor(
           listOf(
             "label" to if (clearLabel) JsonNull else label?.let(::JsonPrimitive),
             "category" to if (clearCategory) JsonNull else category?.let(::JsonPrimitive),
-            "snoozedUntil" to if (clearSnooze) JsonNull else snoozedUntil?.let(::JsonPrimitive),
+            // The menu chooses handset time; the Gateway compares its own clock.
+            "snoozedUntil" to
+              if (clearSnooze) {
+                JsonNull
+              } else {
+                snoozedUntil?.let { JsonPrimitive(it - (gatewayClockSample?.takeIf { sample -> sample.first == requestCacheScope }?.second ?: 0L)) }
+              },
             "color" to if (clearColor) JsonNull else color?.let(::JsonPrimitive),
           ).forEach { (key, value) ->
             if (value != null) put(key, value)
@@ -1470,10 +1477,11 @@ class ChatController internal constructor(
             updateErrorText("Update the Gateway to change personal session pins.")
             return@with false
           }
-          val preferenceChanges = personalPinPreferenceChanges.get()
+          val pushBefore = personalPinPushRead
           lease.request("sessions.patch", params.toString())
-          // The Gateway pushes users.prefs.changed before this ack; that push already queued the roster read.
-          if (personalPinPreferenceChanges.get() != preferenceChanges) return@with true
+          // The Gateway pushes users.prefs.changed before this ack. Reuse that read; read again only if it failed.
+          val pushRead = personalPinPushRead
+          if (pushRead != null && pushRead !== pushBefore && !pushRead.isCancelled && pushRead.await()) return@with true
         } else {
           requestGateway("sessions.patch", params.toString())
         }
@@ -3900,8 +3908,7 @@ class ChatController internal constructor(
             }.getOrNull()
           }
         if (keys?.any { it.asStringOrNull() == "ui.railShortcuts" } == true) {
-          personalPinPreferenceChanges.incrementAndGet()
-          refreshSessionsForCurrentWindow()
+          personalPinPushRead = scope.async { fetchSessionsForCurrentWindow() }
         }
       }
 

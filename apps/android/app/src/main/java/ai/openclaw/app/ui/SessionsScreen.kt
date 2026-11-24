@@ -365,6 +365,8 @@ internal fun SessionsScreen(
                 ClawEmptyState(
                   title = nativeString("Threads unavailable"),
                   body = nativeString("Check the Gateway connection and try again."),
+                  // A window refresh advances the browser revision, which reruns this query.
+                  action = { ClawPrimaryButton(text = nativeString("Retry"), onClick = viewModel::refreshCurrentChatSessionWindow) },
                 )
               }
 

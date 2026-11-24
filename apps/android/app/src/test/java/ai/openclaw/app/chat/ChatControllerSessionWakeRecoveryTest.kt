@@ -105,6 +105,30 @@ class ChatControllerSessionWakeRecoveryTest {
     }
 
   @Test
+  fun menuSnoozeSavesTheChosenHandsetTimeInGatewayTime() =
+    runTest {
+      val before = System.currentTimeMillis()
+      val serverNow = before - 300_000L
+      val controller = loadPage(serverNow)
+      val after = System.currentTimeMillis()
+      gateway.respondWith("sessions.patch", "{}")
+      val chosen = after + 3_600_000L
+      assertTrue(controller.patchSession(ChatSessionPatch(key = "recent", ownerAgentId = "main", expectedSessionId = "recent-id", snoozedUntil = chosen)))
+      val patch = json.parseToJsonElement(requireNotNull(gateway.calls.last { it.method == "sessions.patch" }.paramsJson)).jsonObject
+      val sent = requireNotNull(patch["snoozedUntil"]?.toString()?.toLong())
+      // The handset is five minutes fast, so the Gateway deadline is five minutes earlier.
+      assertTrue(sent in (chosen - (after - serverNow))..(chosen - (before - serverNow)))
+      controller.handleGatewayEvent("sessions.changed", """{"agentId":"main","session":{"key":"recent","snoozedUntil":$sent}}""")
+      val wake =
+        requireNotNull(
+          controller.sessions.value
+            .single { it.key == "recent" }
+            .localSnoozeWakeMs,
+        )
+      assertTrue("the label shows the chosen time", wake in (chosen - (after - before))..(chosen + (after - before)))
+    }
+
+  @Test
   fun twoVisibleClaimantsShareOneHintedRetryOfTheLoadedPrefix() =
     runTest {
       val controller = loadPage()

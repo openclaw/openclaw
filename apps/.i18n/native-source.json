@@ -233,6 +233,7 @@
     {"path":"apps/android/app/src/main/java/ai/openclaw/app/ui/SessionsScreen.kt","kind":"ui-call","surface":"android","id":"native.android.1963d6417f3c8c15","source":"Rename group…"},
     {"path":"apps/android/app/src/main/java/ai/openclaw/app/ui/SessionsScreen.kt","kind":"ui-call","surface":"android","id":"native.android.9612ad9ba11ff496","source":"Rename thread"},
     {"path":"apps/android/app/src/main/java/ai/openclaw/app/ui/SessionsScreen.kt","kind":"ui-call","surface":"android","id":"native.android.3d4c786a63a8b18b","source":"Rename…"},
+    {"path":"apps/android/app/src/main/java/ai/openclaw/app/ui/SessionsScreen.kt","kind":"ui-call","surface":"android","id":"native.android.f48f5f2e61a7282d","source":"Retry"},
     {"path":"apps/android/app/src/main/java/ai/openclaw/app/ui/SessionsScreen.kt","kind":"ui-call","surface":"android","id":"native.android.89a2d1d8de63a6cc","source":"Running"},
     {"path":"apps/android/app/src/main/java/ai/openclaw/app/ui/SessionsScreen.kt","kind":"ui-call","surface":"android","id":"native.android.2bc3c63fb7741c82","source":"Search threads"},
     {"path":"apps/android/app/src/main/java/ai/openclaw/app/ui/SessionsScreen.kt","kind":"ui-call","surface":"android","id":"native.android.1f09d9e9f3a237c1","source":"Searching threads"},

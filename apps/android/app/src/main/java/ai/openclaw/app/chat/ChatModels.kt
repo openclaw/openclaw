@@ -560,6 +560,7 @@ internal data class ChatSessionPatch(
   val clearLabel: Boolean = false,
   val category: String? = null,
   val clearCategory: Boolean = false,
+  /** Handset-clock wake time; the controller converts it with the connection's Gateway clock sample. */
   val snoozedUntil: Long? = null,
   val clearSnooze: Boolean = false,
   val color: String? = null,

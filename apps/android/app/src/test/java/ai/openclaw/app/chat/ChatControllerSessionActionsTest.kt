@@ -131,13 +131,22 @@ class ChatControllerSessionActionsTest {
     }
 
   @Test
-  fun aPinPushBeforeItsAcknowledgementLoadsTheRosterOnce() =
+  fun aPinAcknowledgementReusesItsPushReadAndReadsAgainOnlyWhenThatReadFails() =
     runTest {
       val gateway = ScriptedGateway(json)
-      gateway.respondWith("sessions.list", """{"sessions":[]}""")
+      var pinned = false
+      var failNextRead = false
+      gateway.respond("sessions.list") {
+        if (failNextRead) {
+          failNextRead = false
+          error("roster read failed")
+        }
+        """{"sessions":[{"key":"thread","sessionId":"thread-id","pinned":$pinned}]}"""
+      }
       var pushBeforeAck = true
       lateinit var controller: ChatController
       gateway.respond("sessions.patch") {
+        pinned = !pinned
         if (pushBeforeAck) controller.handleGatewayEvent("users.prefs.changed", """{"keys":["ui.railShortcuts"]}""")
         "{}"
       }
@@ -156,13 +165,20 @@ class ChatControllerSessionActionsTest {
           },
         )
       controller.outboxPresentationRestored.first { it }
-      val pin = ChatSessionPatch(key = "thread", ownerAgentId = "main", expectedSessionId = "thread-id", pinned = true)
-      // Without the push, the acknowledgement still refreshes the roster.
-      for ((push, reads) in listOf(true to 1, false to 2)) {
+      // Push read succeeds: one read. Push read fails: the ack reads again. No push: the ack reads.
+      for ((push, failPushRead, reads) in listOf(Triple(true, false, 1), Triple(true, true, 2), Triple(false, false, 1))) {
         pushBeforeAck = push
-        assertTrue(controller.patchSession(pin))
+        failNextRead = failPushRead
+        val before = gateway.callCount("sessions.list")
+        assertTrue(controller.patchSession(ChatSessionPatch(key = "thread", ownerAgentId = "main", expectedSessionId = "thread-id", pinned = !pinned)))
         runCurrent()
-        assertEquals(reads, gateway.callCount("sessions.list"))
+        assertEquals(reads, gateway.callCount("sessions.list") - before)
+        assertEquals(
+          pinned,
+          controller.sessions.value
+            .single()
+            .pinned,
+        )
       }
     }
 
