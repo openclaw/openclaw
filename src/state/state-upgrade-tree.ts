@@ -19,6 +19,7 @@ import {
 } from "../infra/sqlite-wal-filesystem.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { retirePostgresUpgrade } from "../snapshot/database-backup.js";
+import { canReadUpgradeFile, readableCompanionBytes } from "./state-upgrade-readability.js";
 
 export type UpgradeOp = {
   /** Live path to replace, create or retire. */
@@ -263,6 +264,7 @@ export async function copyTree(
     additionalCopyBytes?: number;
   } = {},
 ): Promise<UpgradeCopyScope> {
+  const requiredPaths = new Set(options.targets?.map((target) => target.path));
   const scope: UpgradeCopyScope = {
     directories: new Set(),
     retiredBackups: { count: 0, bytes: 0 },
@@ -346,16 +348,17 @@ export async function copyTree(
         }
         continue;
       }
+      if (!canReadUpgradeFile(source, requiredPaths.has(source), options.log)) {
+        continue;
+      }
       const sqlite = isSqliteFile(source);
-      const fileBytes =
-        stat.size +
-        (sqlite
-          ? ["-wal", "-journal"].reduce(
-              (sum, suffix) =>
-                sum + (fs.statSync(`${source}${suffix}`, { throwIfNoEntry: false })?.size ?? 0),
-              0,
-            )
-          : 0);
+      const companionBytes = sqlite
+        ? readableCompanionBytes(source, requiredPaths.has(source), options.log)
+        : 0;
+      if (companionBytes === undefined) {
+        continue;
+      }
+      const fileBytes = stat.size + companionBytes;
       files.push({ source, target, mode: stat.mode, sqlite });
       // Budget ordinary files too: FICLONE may fall back to a full byte copy.
       bytes += fileBytes;

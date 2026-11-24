@@ -330,6 +330,92 @@ describe("generic rebuild data rules", () => {
 
 describe("copyTree and diffTree", () => {
   it.each([
+    ["agents/main/agent/codex-home/skills/._skill", "EACCES"],
+    ["openclaw.json.before-upgrade", "EPERM"],
+    ["openclaw.json.bak-io-error", "EIO"],
+  ])("handles unreadable optional file %s during inventory (%s)", async (name, code) => {
+    const root = tempDir();
+    const live = path.join(root, "live");
+    const unreadable = path.join(live, name);
+    fs.mkdirSync(path.dirname(unreadable), { recursive: true });
+    fs.writeFileSync(unreadable, "operator data");
+    fs.writeFileSync(path.join(live, "openclaw.json"), "{}");
+    fs.symlinkSync("missing-target", path.join(live, "dangling"));
+    const originalMode = fs.statSync(unreadable).mode;
+    const error = Object.assign(new Error(code), { code });
+    const access = fs.accessSync;
+    vi.spyOn(fs, "accessSync").mockImplementation((file, mode) => {
+      if (file === unreadable) {
+        throw error;
+      }
+      return access(file, mode);
+    });
+    const copies = vi.spyOn(fs, "copyFileSync");
+    const shadow = path.join(root, "shadow");
+    const log = { info: vi.fn(), warn: vi.fn() };
+    if (code === "EIO") {
+      await expect(copyTree(live, shadow, () => false, new Map(), { log })).rejects.toBe(error);
+      expect(fs.existsSync(shadow)).toBe(false);
+      expect(copies).not.toHaveBeenCalled();
+      return;
+    }
+    await copyTree(live, shadow, () => false, new Map(), { log });
+    expect(fs.existsSync(path.join(shadow, name))).toBe(false);
+    expect(copies.mock.calls.some(([source]) => source === unreadable)).toBe(false);
+    expect(log.warn).toHaveBeenCalledWith(expect.stringContaining(unreadable));
+    expect(fs.readFileSync(path.join(shadow, "openclaw.json"), "utf8")).toBe("{}");
+    expect(fs.readlinkSync(path.join(shadow, "dangling"))).toBe("missing-target");
+    expect(fs.readFileSync(unreadable, "utf8")).toBe("operator data");
+    expect(fs.statSync(unreadable).mode).toBe(originalMode);
+  });
+
+  it.each([
+    { suffix: "", required: true },
+    { suffix: "-wal", required: true },
+    { suffix: "-journal", required: true },
+    { suffix: "-wal", required: false },
+  ])(
+    "protects an unreadable SQLite family file $suffix (required=$required)",
+    async ({ suffix, required }) => {
+      const live = tempDir();
+      const database = path.join(live, "required.sqlite");
+      {
+        using db = new DatabaseSync(database);
+        db.exec("CREATE TABLE payload (value TEXT); INSERT INTO payload VALUES ('kept')");
+      }
+      const unreadable = database + suffix;
+      if (suffix) {
+        fs.writeFileSync(unreadable, "retained journal data");
+      }
+      const before = hash(unreadable);
+      const access = fs.accessSync;
+      vi.spyOn(fs, "accessSync").mockImplementation((file, mode) => {
+        if (file === unreadable) {
+          throw Object.assign(new Error("EACCES"), { code: "EACCES" });
+        }
+        return access(file, mode);
+      });
+      const copy = vi.spyOn(fs, "copyFileSync");
+      const transfer = vi.spyOn(fileTransfer, "copyFileHandle");
+      const shadow = path.join(tempDir(), "shadow");
+      if (required) {
+        await expect(
+          copyTree(live, shadow, () => false, new Map(), { targets: [{ path: database }] }),
+        ).rejects.toThrow(
+          `State upgrade refused: required database file ${unreadable} is unreadable. Nothing live was changed. Run openclaw doctor --fix`,
+        );
+        expect(fs.existsSync(shadow)).toBe(false);
+      } else {
+        await copyTree(live, shadow, () => false, new Map());
+        expect(fs.readdirSync(shadow)).toEqual([]);
+      }
+      expect(copy).not.toHaveBeenCalled();
+      expect(transfer).not.toHaveBeenCalled();
+      expect(hash(unreadable)).toBe(before);
+    },
+  );
+
+  it.each([
     ["lost+found", "EACCES"],
     ["private-directory", "EPERM"],
   ])("skips unreadable %s without omitting required databases (%s)", async (name, code) => {
