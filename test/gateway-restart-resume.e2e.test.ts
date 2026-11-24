@@ -153,7 +153,9 @@ async function providerFixture(signal: AbortSignal) {
             }
           };
           const tools = restartToolNames(body);
-          if (JSON.stringify(body).includes("You are a context summarization assistant.")) {
+          // A warm summary reuses the turn's own prompt and history and appends the checkpoint
+          // instruction; the cold summarizer sends the same instruction with its own prompt.
+          if (JSON.stringify(body).includes("Create a structured context checkpoint summary")) {
             const match = /RESTART_CASE_(\d+)_(\w+)/.exec(input);
             const name = CASES.find((candidate) => candidate === match?.[2]);
             assert(name, `Unexpected synthetic summary input: ${input}`);
