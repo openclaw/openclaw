@@ -133,17 +133,16 @@ export function startChatDispatch(params: StartChatDispatchParams): Promise<void
     isAgentRunStarted: () => agentRunStarted,
     isRunCurrent,
     abortSignal: activeRunAbort.controller.signal,
-    onCommandBlock: isInternalTextSlashCommandTurn
-      ? (text) =>
-          broadcastChatDelta({
-            context,
-            runId: clientRunId,
-            sessionKey,
-            agentId,
-            text,
-            isCurrent: isRunCurrent,
-          })
-      : undefined,
+    commandTurn: isInternalTextSlashCommandTurn,
+    onCommandBlock: (text) =>
+      broadcastChatDelta({
+        context,
+        runId: clientRunId,
+        sessionKey,
+        agentId,
+        text,
+        isCurrent: isRunCurrent,
+      }),
     getReplyDispatchRun: () => replyDispatchRun,
     logGateway: context.logGateway,
     session,

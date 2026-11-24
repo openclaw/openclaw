@@ -7,6 +7,7 @@ export {
   isSessionsSubscribeParams,
   isSessionCatalogShareRoute,
   isSessionsCatalogListParams,
+  isSessionsCatalogRouteParams,
   isSessionsCatalogReadParams,
   isSessionsCatalogContinueParams,
   isSessionsCatalogImportParams,

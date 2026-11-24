@@ -4,6 +4,7 @@ import { validateRetiredLineReason } from "./release-version.mjs";
 
 export type ReleasePublishPreflightOptions = {
   repo: string;
+  fastTrackApproval?: string;
   tag: string;
   fullReleaseValidationRunId: string;
   fullReleaseValidationRunAttempt?: string | number;
@@ -44,6 +45,7 @@ export function buildReleasePublishDispatchCommand(
   }
   const fields = {
     tag: options.tag,
+    fast_track_approval: options.fastTrackApproval,
     preflight_run_id: options.preflightRunId ?? options.fullReleaseValidationRunId,
     full_release_validation_run_id: options.fullReleaseValidationRunId,
     full_release_validation_run_attempt: attempt,
@@ -98,6 +100,7 @@ export function formatReleasePublishPreflight(
 export function parsePublishPreflightArgs(argv: string[]) {
   const strings = [
     "repo",
+    "fast-track-approval",
     "tag",
     "full-release-validation-run-id",
     "full-release-run",
@@ -152,6 +155,7 @@ export function parsePublishPreflightArgs(argv: string[]) {
   }
   const options: ReleasePublishPreflightOptions = {
     repo: value("repo", "openclaw/openclaw"),
+    fastTrackApproval: value("fast-track-approval") || undefined,
     tag: value("tag"),
     fullReleaseValidationRunId:
       value("full-release-validation-run-id") || value("full-release-run"),

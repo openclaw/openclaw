@@ -141,15 +141,18 @@ and [Codex runtime behavior](/plugins/codex-harness/runtime-behavior#automatic-d
 
 ### Chat Access control
 
-The chat and new-session model controls provide a single **Daybreak** toggle.
-The selected model and runtime determine whether the toggle uses **Daybreak Blue**
-or **Daybreak Red**, based on the programs advertised for the account. Turning
-Daybreak off selects **Standard**. A model that requires Daybreak keeps the
+The chat and new-session model controls show a single **Daybreak** toggle when
+the selected model and runtime advertise **Daybreak Blue** or **Daybreak Red**
+for the account. Turning Daybreak off selects **Standard**. A model that requires Daybreak keeps the
 toggle on and disables it once its program is selected. If a saved selection
 needs a different Daybreak program, turn on Daybreak to apply the model's program
-in the same chat. When you switch models with Daybreak on, the control uses
-the new model's advertised Daybreak program when available. Saved choices remain
-scoped to the authenticated user and agent.
+in the same chat. Switching models in the Control UI updates the saved choice
+to the destination's advertised Daybreak program or clears it if the destination
+advertises none. Before sending a turn, the Control UI also repairs a saved choice
+when the catalog confirms it no longer applies. When discovery data is missing
+and the model selection stays the same, the toggle is hidden and existing chat
+and draft choices are preserved. Saved preferences remain scoped to the
+authenticated user and agent.
 
 An unset session choice follows the configured model/agent Access default. Without
 a configured default, supported OpenAI routes use Standard, except that a model whose

@@ -1,5 +1,6 @@
 import path from "node:path";
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
+import manifest from "./openclaw.plugin.json" with { type: "json" };
 import { createBeamExecutableResolver } from "./src/executable.js";
 import { createBeamRequestHandler } from "./src/http.js";
 import { registerBeamMirror } from "./src/mirror-service.js";
@@ -12,6 +13,24 @@ export default definePluginEntry({
   name: "Beam",
   description: "Receive redacted coding-session snapshots for review or Team continuation",
   register(api) {
+    const resolveExecutable = createBeamExecutableResolver(api.rootDir ?? path.dirname(api.source));
+    api.registerCli(
+      ({ program }) => {
+        const beam = program.command("beam").description(manifest.cliCommands[0]!.description);
+        beam
+          .command("doctor")
+          .description("Check the installed native Beam cleaner for outbound mirroring")
+          .option("--json", "Print machine-readable cleaner status")
+          .action(async (options: { json?: boolean }) => {
+            const { runBeamDoctor } = await import("./src/doctor.js");
+            await runBeamDoctor(options, resolveExecutable);
+          });
+      },
+      { descriptors: manifest.cliCommands },
+    );
+    if (api.registrationMode === "cli-metadata") {
+      return;
+    }
     const store = createBeamStore(api.runtime);
     api.registerSessionCatalog(createBeamSessionCatalog(store));
     for (const operation of ["list", "read", "resolve", "continue"] as const) {
@@ -34,6 +53,6 @@ export default definePluginEntry({
         resolveControlUiBasePath: () => api.runtime.config.current().gateway?.controlUi?.basePath,
       }),
     });
-    registerBeamMirror(api, createBeamExecutableResolver(api.rootDir ?? path.dirname(api.source)));
+    registerBeamMirror(api, resolveExecutable);
   },
 });
