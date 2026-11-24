@@ -64,6 +64,23 @@ describe("applyMergePatch", () => {
 });
 
 describe("createMergePatch", () => {
+  it("keeps omitted and unchanged fields out of partial model row deltas", () => {
+    const base = {
+      models: [
+        { id: "m", name: "Old", contextTokens: 1, thinkingLevelMap: { off: null, low: "l" } },
+      ],
+    };
+    const target = { models: [{ id: "m", name: "New", thinkingLevelMap: { off: null } }] };
+    const options = { mergeObjectArraysById: true, partialObjectArrayRows: true };
+
+    const patch = createMergePatch(base, target, options);
+
+    expect(patch).toEqual({ models: [{ id: "m", name: "New" }] });
+    expect(applyMergePatch(base, patch, options)).toEqual({
+      models: [{ ...base.models[0], name: "New" }],
+    });
+  });
+
   it("diffs id-keyed rows without dropping unchanged nulls", () => {
     const base = {
       models: [{ id: "m", name: "Old", contextTokens: 1, thinkingLevelMap: { off: null } }],

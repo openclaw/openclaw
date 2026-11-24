@@ -16,7 +16,7 @@ export function createProviderAuthConfigPatch(base: OpenClawConfig, next: OpenCl
   return createMergePatch(
     applyProviderAuthConfigPatch(base, {}),
     applyProviderAuthConfigPatch(next, {}),
-    patchOptions,
+    { ...patchOptions, partialObjectArrayRows: true },
   );
 }
 

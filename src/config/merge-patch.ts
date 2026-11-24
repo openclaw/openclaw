@@ -11,18 +11,34 @@ type MergePatchOptions = {
   path?: string;
 };
 
+type CreateMergePatchOptions = Pick<MergePatchOptions, "mergeObjectArraysById"> & {
+  // Provider auth plugin proposals may specify only changed fields of an existing row.
+  partialObjectArrayRows?: boolean;
+};
+
 /** Builds a merge patch; ID-keyed array mode emits changed fields for upserts. */
 export function createMergePatch(
   base: unknown,
   target: unknown,
-  options: Pick<MergePatchOptions, "mergeObjectArraysById"> = {},
+  options: CreateMergePatchOptions = {},
+): unknown {
+  return diffMergePatch(base, target, options, false);
+}
+
+function diffMergePatch(
+  base: unknown,
+  target: unknown,
+  options: CreateMergePatchOptions,
+  partial: boolean,
 ): unknown {
   if (!isRecord(base) || !isRecord(target)) {
     return structuredClone(target);
   }
 
   const patch: Record<string, unknown> = {};
-  const keys = new Set([...Object.keys(base), ...Object.keys(target)]);
+  const keys = partial
+    ? Object.keys(target)
+    : new Set([...Object.keys(base), ...Object.keys(target)]);
   for (const key of keys) {
     const hasBase = Object.hasOwn(base, key);
     const hasTarget = Object.hasOwn(target, key);
@@ -41,7 +57,13 @@ export function createMergePatch(
       const updates: PlainObject[] = [];
       for (const entry of targetValue) {
         const baseEntry = baseById.get(entry.id);
-        const update = createMergePatch(baseEntry, entry, options);
+        // Diff directly so unchanged authored nulls never become deletion deltas.
+        const update = diffMergePatch(
+          baseEntry,
+          entry,
+          options,
+          options.partialObjectArrayRows === true,
+        );
         if (isRecord(update) && Object.keys(update).length > 0) {
           updates.push({ ...update, id: entry.id });
         }
@@ -52,7 +74,7 @@ export function createMergePatch(
       continue;
     }
     if (isRecord(baseValue) && isRecord(targetValue)) {
-      const childPatch = createMergePatch(baseValue, targetValue, options);
+      const childPatch = diffMergePatch(baseValue, targetValue, options, partial);
       if (isRecord(childPatch) && Object.keys(childPatch).length === 0) {
         continue;
       }
