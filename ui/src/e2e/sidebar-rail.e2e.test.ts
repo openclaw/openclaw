@@ -313,7 +313,7 @@ suite.define(() => {
         const rail = sidebar.locator(".sidebar-rail__pins");
         const source = sidebar.locator(`[data-session-key="${rows[0]!.key}"]`).first();
         await source.waitFor();
-        expect(await rail.locator(".sidebar-rail__pin").count()).toBe(0);
+        await expect.poll(() => rail.locator(".sidebar-rail__pin").count()).toBe(0);
         expect(await rail.getAttribute("class")).not.toContain("--drag-active");
         expect(await gateway.getRequests("sessions.list", { pinned: true })).toEqual([]);
         expect(await railWrites()).toEqual([]);

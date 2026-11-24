@@ -1,16 +1,18 @@
 """Measure private-checkout Git refreshes on an isolated loop-backed Btrfs volume.
 
-Use only a synthetic repository from sandbox-template-commit-measure.ts --divergent.
+Use only a synthetic repository from sandbox-template-commit-measure.ts --divergent or --lock-change.
 Run in a disposable privileged Linux container with networking disabled; mount
 only that fixture read-only. See sandbox-template-commit-measure.md for invocation.
 """
 
 import argparse
+from contextlib import closing
 import json
 import os
 from pathlib import Path
 import resource
 import shutil
+import sqlite3
 import subprocess
 import time
 
@@ -18,6 +20,8 @@ parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument("--fixture", type=Path, required=True)
 parser.add_argument("--root", type=Path, required=True)
 parser.add_argument("--output", type=Path, required=True)
+parser.add_argument("--lock-change", action="store_true")
+parser.add_argument("--database-gib", type=int, default=0)
 args = parser.parse_args()
 fixture = args.fixture.resolve()
 root = args.root.resolve()
@@ -50,7 +54,7 @@ report = {
     "complete": False,
     "metrics": metrics,
     "measurements": measurements,
-    "scope": "Git-only Btrfs probe; no installer, registry, manifest, projection sync, agent DB or Gateway",
+    "scope": "Git-only Btrfs probe; optional synthetic storage database, no installer, registry, manifest, projection sync or Gateway",
 }
 
 
@@ -134,15 +138,20 @@ try:
     source.mkdir()
     shutil.copytree(fixture / ".git", source / ".git")
     base = git_text(source, ["rev-parse", "fixture-initial"])
-    heads = {name: git_text(source, ["rev-parse", f"fixture-source-{name}"]) for name in ("one", "two")}
-    parent = git_text(source, ["rev-parse", f"{base}^"])
-    for head in heads.values():
-        assert head != base and git_text(source, ["rev-parse", f"{head}^"]) == parent, (
-            "Fixture commits must be siblings; regenerate with --divergent in a new directory"
-        )
-        assert git_text(source, ["rev-parse", f"{head}:pnpm-lock.yaml"]) == git_text(
-            source, ["rev-parse", f"{base}:pnpm-lock.yaml"]
-        )
+    if args.lock_change:
+        heads = {"lock": git_text(source, ["rev-parse", "fixture-lock"])}
+        parent = base
+        assert git_text(source, ["rev-parse", f"{heads['lock']}^"]) == base
+    else:
+        heads = {name: git_text(source, ["rev-parse", f"fixture-source-{name}"]) for name in ("one", "two")}
+        parent = git_text(source, ["rev-parse", f"{base}^"])
+        for head in heads.values():
+            assert head != base and git_text(source, ["rev-parse", f"{head}^"]) == parent, (
+                "Fixture commits must be siblings; regenerate with --divergent in a new directory"
+            )
+            assert git_text(source, ["rev-parse", f"{head}:pnpm-lock.yaml"]) == git_text(
+                source, ["rev-parse", f"{base}:pnpm-lock.yaml"]
+            )
     report.update({
         "base": base,
         "heads": heads,
@@ -151,12 +160,20 @@ try:
         "kernel": command(["uname", "-a"]).stdout.decode().strip(),
         "cpuCount": os.cpu_count(),
     })
-    command(["truncate", "-s", "6G", str(image)])
+    command(["truncate", "-s", f"{6 + args.database_gib * 2}G", str(image)])
     loop = command(["losetup", "--find", "--show", str(image)]).stdout.decode().strip()
     command(["mkfs.btrfs", "-f", loop])
     command(["mount", "-t", "btrfs", loop, str(mount)])
     mounted = True
     report["filesystem"] = command(["findmnt", "-n", "-o", "FSTYPE,OPTIONS", str(mount)]).stdout.decode().strip()
+    if args.database_gib:
+        # Independent synthetic storage load, never production data or schema.
+        database = mount / "synthetic-sessions.sqlite"
+        with closing(sqlite3.connect(database)) as db, db:
+            db.execute("CREATE TABLE sessions (id INTEGER PRIMARY KEY, payload BLOB)")
+            for row in range(5000):
+                db.execute("INSERT INTO sessions VALUES (?, zeroblob(?))", (row, args.database_gib * 1024**3 // 5000))
+        report["database"] = {"rows": 5000, "bytes": database.stat().st_size, "allocatedBytes": database.stat().st_blocks * 512}
     seed = mount / "seed"
     command(["btrfs", "subvolume", "create", str(seed)])
     seed_pack = root / "seed.pack"
@@ -171,15 +188,20 @@ try:
     (seed / "node_modules").mkdir()
     dependency = "synthetic retained dependency\n"
     (seed / "node_modules/retained").write_text(dependency)
+    if args.lock_change:
+        for number in range(5000):
+            (seed / "node_modules" / f"dependency-{number}.bin").write_bytes(number.to_bytes(8) + b"d" * (16384 - 8))
     assert git_text(seed, ["status", "--porcelain"]) == ""
     unchanged = "src/group-100/file-10000.txt"
-    obsolete = git_text(seed, ["rev-parse", f"{base}:source.txt"])
+    changed_file = "vendor/dependency/index.js" if args.lock_change else "source.txt"
+    obsolete = git_text(seed, ["rev-parse", f"{base}:{changed_file}"])
+    sizes = (("lock", "lock"),) if args.lock_change else (("small", "one"), ("large", "two"))
     arms = []
     for control in range(1, 3):
-        for size, tag in (("small", "one"), ("large", "two")):
+        for size, tag in sizes:
             arms.append((f"{size}-control{control}-baseline", tag, False))
     for pair in range(1, 6):
-        for size, tag in (("small", "one"), ("large", "two")):
+        for size, tag in sizes:
             for candidate in ((False, True) if pair % 2 else (True, False)):
                 variant = "candidate" if candidate else "baseline"
                 arms.append((f"{size}-pair{pair}-{variant}", tag, candidate))
@@ -191,23 +213,35 @@ try:
         pack_file = root / f"{arm}.pack"
         load_before = Path("/proc/loadavg").read_text().strip()
         started = time.perf_counter()
-        measure(arm, "snapshot", lambda: command([
-            "btrfs", "subvolume", "snapshot", str(seed), str(target),
-        ]))
-        identity = {"source": file_identity(seed, unchanged), "snapshot": file_identity(target, unchanged)}
-        measure(arm, "pack", lambda: pack(source, commit, base, pack_file))
+        retained = not args.lock_change or candidate
+        if retained:
+            measure(arm, "snapshot", lambda: command([
+                "btrfs", "subvolume", "snapshot", str(seed), str(target),
+            ]))
+        else:
+            command(["btrfs", "subvolume", "create", str(target)])
+            git(target, ["init", "--quiet", "--template="])
+        identity = {"source": file_identity(seed, unchanged), "snapshot": file_identity(target, unchanged) if retained else None}
+        measure(arm, "pack", lambda: pack(source, commit, base if retained else None, pack_file))
         measure(arm, "indexPack", lambda: index_pack(target, pack_file))
         with (target / ".git/shallow").open("a") as stream:
             stream.write(commit + "\n")
-        measure(arm, "checkout", lambda: git(
-            target, ["checkout", "--quiet", "-B", "openclaw-template", commit],
-            trace=output / f"{arm}-checkout.trace2.jsonl",
-        ))
-        measure(arm, "reflogExpire", lambda: git(target, ["reflog", "expire", "--expire=all", "--all"]))
-        measure(arm, "repack", lambda: git(
-            target, ["repack", "-ad", *(["--window=0"] if candidate else [])],
-            trace=output / f"{arm}-repack.trace2.jsonl",
-        ))
+        # Read the exited child's counters before reaping; no tracing on a live host.
+        checkout_started = time.perf_counter()
+        pid = os.fork()
+        if pid == 0:
+            os.execvpe("git", ["git", "-C", str(target), "checkout", "--quiet", "-B" if retained else "-b", "openclaw-template", commit], env | {"GIT_TRACE2_EVENT": str(output / f"{arm}-checkout.trace2.jsonl")})
+        os.waitid(os.P_PID, pid, os.WEXITED | os.WNOWAIT)
+        io = {key: int(value) for key, value in (line.split(": ") for line in Path(f"/proc/{pid}/io").read_text().splitlines())}
+        _, exit_status, usage = os.wait4(pid, 0)
+        assert os.waitstatus_to_exitcode(exit_status) == 0
+        metrics.append({"arm": arm, "phase": "checkout", "wallMs": (time.perf_counter() - checkout_started) * 1000, "userCpuMs": usage.ru_utime * 1000, "systemCpuMs": usage.ru_stime * 1000, "io": io})
+        if retained:
+            measure(arm, "reflogExpire", lambda: git(target, ["reflog", "expire", "--expire=all", "--all"]))
+            measure(arm, "repack", lambda: git(
+                target, ["repack", "-ad", *(["--window=0"] if candidate or args.lock_change else [])],
+                trace=output / f"{arm}-repack.trace2.jsonl",
+            ))
         (target / ".git/shallow").write_text(commit + "\n")
         critical_ms = (time.perf_counter() - started) * 1000
         assert git_text(target, ["rev-parse", "HEAD"]) == commit
@@ -221,16 +255,24 @@ try:
             assert git(target, ["cat-file", "-e", oid], check=False).returncode != 0, (
                 "Obsolete object survived", oid
             )
-        assert (target / "node_modules/retained").read_text() == dependency
-        assert file_identity(target, unchanged) == identity["snapshot"]
+        if retained:
+            assert (target / "node_modules/retained").read_text() == dependency
+            assert file_identity(target, unchanged) == identity["snapshot"]
+        assert git_text(seed, ["rev-parse", "HEAD"]) == base
+        assert git_text(seed, ["status", "--porcelain"]) == ""
         assert (target / "source.txt").read_bytes() == git(source, ["show", f"{commit}:source.txt"]).stdout
         scans = []
         for trace in output.glob(f"{arm}-*.trace2.jsonl"):
             for line in trace.read_text().splitlines():
                 event = json.loads(line)
-                if "refresh/sum_" in event.get("key", ""):
+                if "refresh/sum_" in event.get("key", "") or "writeout" in event.get("key", ""):
                     scans.append({"file": trace.name, "key": event["key"], "value": event["value"]})
+        dependency_sharing = None
+        if retained and args.lock_change:
+            command(["btrfs", "filesystem", "sync", str(mount)])
+            dependency_sharing = command(["btrfs", "filesystem", "du", "--raw", "-s", str(seed / "node_modules"), str(target / "node_modules")]).stdout.decode()
         row = {
+            "dependencySharing": dependency_sharing,
             "arm": arm,
             "commit": commit,
             "changedPaths": len(git_text(source, [

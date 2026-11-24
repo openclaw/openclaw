@@ -134,7 +134,7 @@ export function resolveAutoFallbackPrimaryProbe(params: {
     | undefined;
   sessionKey?: string | null;
   primaryProvider: string;
-  primaryModel: string;
+  primaryModel: string | undefined;
   probeState?: Map<string, number>;
 }): AutoFallbackPrimaryProbe | undefined {
   const entry = params.entry;

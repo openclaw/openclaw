@@ -13,7 +13,6 @@ import type { AgentWorkerOperationContext } from "../../state/openclaw-agent-ope
 import {
   ensureSessionInputCompletionsSchema,
   ensureSessionPendingInputsSchema,
-  hasSessionPendingInputsSchema,
   SESSION_INPUT_COMPLETIONS_TABLE,
 } from "../../state/openclaw-agent-pending-inputs-schema.js";
 import { tableExists } from "../../state/openclaw-state-db-schema-helpers.js";
@@ -45,8 +44,8 @@ import type {
 import { readPendingInputSourceInDatabase } from "./session-pending-input-source.kernel.js";
 import {
   isFinalInputCompletion,
-  markSessionPendingInputCancelledByUser,
   parseSessionPendingInputMessage,
+  restagePendingInputMessageJson,
 } from "./session-pending-input-value.js";
 
 function readPendingInputStage(
@@ -180,9 +179,7 @@ export function mutatePendingInput(
         }
         withoutSqliteDatabaseWriteScope(current.db, () => admit("transaction", grant));
         if (input.kind === "stage") {
-          if (!hasSessionPendingInputsSchema(current.db)) {
-            ensureSessionPendingInputsSchema(current.db);
-          }
+          ensureSessionPendingInputsSchema(current.db);
           if (input.trackCompletion && !tableExists(current.db, SESSION_INPUT_COMPLETIONS_TABLE)) {
             ensureSessionInputCompletionsSchema(current.db);
           }
@@ -192,10 +189,14 @@ export function mutatePendingInput(
               getSessionKysely(current.db)
                 .updateTable("session_pending_inputs")
                 // Same-run restages keep run_id; a reclaimed channel source turn rebinds it.
+                // An ordinary restage keeps its bytes; an adopted owed row takes its turn's bytes.
                 .set({
                   state: "queued",
+                  message_json: restagePendingInputMessageJson(row.message_json, input.messageJson),
                   run_id: input.runId,
                   lifecycle_generation: input.lifecycleGeneration,
+                  end_cause: null,
+                  origin_source_json: row.origin_source_json ?? input.originSourceJson ?? null,
                 })
                 .where("input_id", "=", row.input_id)
                 .returningAll(),
@@ -216,6 +217,7 @@ export function mutatePendingInput(
                   lifecycle_generation: input.lifecycleGeneration,
                   state: "queued",
                   accepted_at: Date.now(),
+                  origin_source_json: input.originSourceJson ?? null,
                 })
                 .returningAll(),
             );
@@ -229,17 +231,35 @@ export function mutatePendingInput(
             actor.pendingInputs = writableSessionActorMap(actor.pendingInputs);
             actor.pendingInputs.set(input.idempotencyKey, receipt.stagedInput);
           }
+          const absorbed = input.absorbedIdempotencyKeys ?? [];
+          if (absorbed.length > 0) {
+            executeSqliteQuerySync(
+              current.db,
+              getSessionKysely(current.db)
+                .deleteFrom("session_pending_inputs")
+                .where("session_id", "=", input.sessionId)
+                .where("idempotency_key", "in", [...absorbed])
+                .where("state", "=", "queued")
+                .where("consumed_event_id", "is", null),
+            );
+            if (actor) {
+              actor.pendingInputs = writableSessionActorMap(actor.pendingInputs);
+              for (const key of absorbed) {
+                actor.pendingInputs.delete(key);
+              }
+            }
+          }
         } else if (input.kind === "complete") {
           if (!tableExists(current.db, SESSION_INPUT_COMPLETIONS_TABLE)) {
             ensureSessionInputCompletionsSchema(current.db);
           }
           receipt.outcome = writeSessionInputCompletion(current, input, input.outcome);
         } else if (row) {
+          ensureSessionPendingInputsSchema(current.db);
           const changes = {
             state: input.disposition,
-            ...(input.cancelledByUser
-              ? { message_json: markSessionPendingInputCancelledByUser(row.message_json) }
-              : {}),
+            end_cause: input.endCause,
+            origin_source_json: null,
           };
           const result = executeSqliteQuerySync(
             current.db,

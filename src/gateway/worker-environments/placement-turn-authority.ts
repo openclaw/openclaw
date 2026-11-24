@@ -203,7 +203,7 @@ function capturePlacementObservation(pathname: string, sessionId?: string) {
   const changedMessage =
     sessionId === undefined
       ? "Worker placement inventory changed"
-      : `Session ${sessionId} placement authority changed`;
+      : `Session ${sessionId} placement changed. Retry.`;
   const changed = () => {
     const error = new Error(changedMessage);
     return attachErrorDiagnostic(error, formatErrorStackWithMessage(error));
@@ -507,7 +507,7 @@ export async function preparePlacementWorkspaceResultAuthority(
       !pendingResult ||
       !matchesWorkspaceResultClaim(placement, pendingResult, claim)
     ) {
-      throw new Error(`Session ${claim.sessionId} workspace result authority changed`);
+      throw new Error(`Session ${claim.sessionId} workspace result changed. Retry.`);
     }
   } finally {
     observation.release();
@@ -722,7 +722,7 @@ export async function preparePlacementTurnClaimAuthority(
     retained.facts ??= projection.placements.get(claim.sessionId);
     const facts = retained.facts;
     if (!facts || !isCurrent()) {
-      throw new Error(`Session ${claim.sessionId} turn claim authority changed`);
+      throw new Error(`Session ${claim.sessionId} turn ended. Start a new turn.`);
     }
     return {
       claim,

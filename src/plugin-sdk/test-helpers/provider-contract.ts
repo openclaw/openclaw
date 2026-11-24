@@ -5,14 +5,6 @@ import { resolveProviderContractEntriesForPluginId } from "../../plugins/contrac
 import type { ProviderPlugin } from "../provider-model-shared.js";
 import { installProviderPluginContractSuite } from "./provider-contract-suites.js";
 
-function providerMatchesManifestId(provider: ProviderPlugin, providerId: string): boolean {
-  return (
-    provider.id === providerId ||
-    (provider.aliases ?? []).includes(providerId) ||
-    (provider.hookAliases ?? []).includes(providerId)
-  );
-}
-
 export function describeProviderContracts(pluginId: string) {
   let providers: ProviderPlugin[] = [];
   let loadError: Error | undefined;
@@ -29,17 +21,9 @@ export function describeProviderContracts(pluginId: string) {
     });
   });
 
-  for (const { id: providerId } of providers) {
-    describe(`${pluginId}:${providerId} provider contract`, () => {
-      installProviderPluginContractSuite({
-        provider: () => {
-          const provider = providers.find((entry) => providerMatchesManifestId(entry, providerId));
-          if (!provider) {
-            throw new Error(`provider contract entry missing for ${pluginId}:${providerId}`);
-          }
-          return provider;
-        },
-      });
+  for (const provider of providers) {
+    describe(`${pluginId}:${provider.id} provider contract`, () => {
+      installProviderPluginContractSuite({ provider });
     });
   }
 }

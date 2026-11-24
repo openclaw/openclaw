@@ -12,6 +12,9 @@ it.each([
   ["/btw why?\n  first frame\n\n    second frame", "/btw why?\n  first frame\n\n    second frame"],
   ["/loop 5m check\n  deploy status", "/loop 5m check\n  deploy status"],
   ["/btw   progress?", "/btw progress?"],
+  ["Send /model to choose another model.", "Send /model to choose another model."],
+  ["Please explain /think high /status /help.", "Please explain /think high /status /help."],
+  [" \t/think high", "/think high"],
 ])(
   "preserves the argument text of mention-prefixed %j at command admission",
   async (command, expected) => {
@@ -38,6 +41,7 @@ it.each([
     expect(result?.ctxPayload).toMatchObject({
       CommandBody: expected,
       BodyForCommands: expected,
+      commandText: expected,
     });
   },
 );

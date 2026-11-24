@@ -42,7 +42,14 @@ function transactionFixture() {
 }
 
 function transportFixture(
-  initialMode: "normal" | "spurious" | "mismatched" | "missing" | "timeout" | "service-death",
+  initialMode:
+    | "normal"
+    | "spurious"
+    | "mismatched"
+    | "missing"
+    | "timeout"
+    | "service-death"
+    | "delayed",
 ) {
   let mode = initialMode;
   let command: string | undefined;
@@ -59,6 +66,8 @@ function transportFixture(
   const sent = vi.spyOn(port1, "postMessage");
   const waits: Array<{ observed: number | bigint; timeout: number | undefined }> = [];
   let now = 0;
+  let wallNow = 0;
+  vi.spyOn(Date, "now").mockImplementation(() => wallNow);
   let wakes = 0;
   let pending: BridgeRequest | undefined;
   vi.spyOn(performance, "now").mockImplementation(() => now);
@@ -77,6 +86,11 @@ function transportFixture(
     const query = pending.operation === "query" ? pending : undefined;
     if (query) {
       waits.push({ observed, timeout });
+      if (mode === "delayed") {
+        mode = "normal";
+        now += 121_000;
+        return "timed-out";
+      }
       if (mode === "spurious" && wakes++ === 0) {
         Atomics.notify(control, index);
         now += 1;
@@ -134,9 +148,14 @@ function transportFixture(
     db,
     sent,
     waits,
-    elapse: (ms: number) => (now += ms),
+    elapse: (ms: number) => {
+      now += ms;
+      wallNow += ms;
+    },
+    suspend: (ms: number) => (wallNow += ms),
     normal: () => (mode = "normal"),
     dropReplies: () => (mode = "missing"),
+    delayNextReply: () => (mode = "delayed"),
     command: (value: string) => (command = value),
     rejectQuery: (error: PostgresErrorData) => (queryError = error),
   };
@@ -183,14 +202,65 @@ it.each([0, 999, 1000, 1001])("validates reuse after %d idle ms", (idleMs) => {
         reconnectIfIdle: true,
         ...(idleMs >= 1000 ? { validateIfIdle: true } : {}),
         id: 3,
+        deadlineMs: 120_000,
       },
-      { operation: "query", schema: "schema_b", sql: "SELECT 7 AS value", parameters: [], id: 4 },
+      {
+        operation: "query",
+        schema: "schema_b",
+        sql: "SELECT 7 AS value",
+        parameters: [],
+        reconnectIfIdle: true,
+        id: 4,
+        deadlineMs: 120_000,
+      },
     ]);
   } finally {
     next?.close();
     vi.advanceTimersByTime(3 * 60_000);
     vi.useRealTimers();
   }
+});
+
+it("lets maintenance finish beyond the runtime deadline, then restores runtime liveness", () => {
+  const fixture = transportFixture("normal");
+  fixture.command("COMMIT");
+  const result = fixture.db.runTransaction(
+    () => {
+      fixture.delayNextReply();
+      return fixture.db.prepare("SELECT 7 AS value").get();
+    },
+    { maintenance: true },
+  );
+  expect(result).toEqual({ value: 7 });
+  expect(fixture.db.isTransaction).toBe(false);
+  fixture.delayNextReply();
+  expect(() => fixture.db.exec("SELECT 7")).toThrow("PostgreSQL connection lost");
+  expect(fixture.db.isOpen).toBe(false);
+});
+
+it("validates retained idle connections after suspended wall time, never inside a transaction", () => {
+  const fixture = transportFixture("normal");
+  fixture.db.exec("SELECT 7");
+  fixture.suspend(2 * 60 * 60_000);
+  fixture.db.exec("BEGIN");
+  fixture.suspend(2 * 60 * 60_000);
+  fixture.db.exec("SELECT 8");
+  fixture.command("COMMIT");
+  fixture.db.exec("COMMIT");
+  fixture.db.exec("SELECT 9");
+  expect(
+    fixture.sent.mock.calls.map(([request]) => ({
+      sql: request.sql,
+      reconnect: request.reconnectIfIdle === true,
+      validate: request.validateIfIdle === true,
+    })),
+  ).toEqual([
+    { sql: "SELECT 7", reconnect: false, validate: false },
+    { sql: "BEGIN", reconnect: true, validate: true },
+    { sql: "SELECT 8", reconnect: false, validate: false },
+    { sql: "COMMIT", reconnect: false, validate: false },
+    { sql: "SELECT 9", reconnect: true, validate: false },
+  ]);
 });
 
 it("checks transport status after a query error instead of reusing an earlier idle reply", () => {
@@ -206,7 +276,7 @@ it("checks transport status after a query error instead of reusing an earlier id
     fixture.sent.mockClear();
     fixture.db.releaseIdleTransport();
     expect(fixture.sent.mock.calls.map(([request]) => request)).toEqual([
-      { operation: "release", id: 4 },
+      { operation: "release", id: 4, deadlineMs: 120_000 },
     ]);
   } finally {
     vi.advanceTimersByTime(3 * 60_000);

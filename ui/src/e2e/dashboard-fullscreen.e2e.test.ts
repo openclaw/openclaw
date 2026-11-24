@@ -91,7 +91,9 @@ const scrollRemaining = (board: Locator) =>
 async function expectWidgetReady(board: Locator, frame: Locator) {
   await expect.poll(() => frame.getAttribute("inert")).toBeNull();
   expect(await frame.evaluate((element) => getComputedStyle(element).opacity)).toBe("1");
-  expect(await board.getByRole("status", { name: "Loading…", exact: true }).count()).toBe(0);
+  await expect
+    .poll(() => board.getByRole("status", { name: "Loading…", exact: true }).count())
+    .toBe(0);
 }
 
 async function rememberMainTab(page: Page): Promise<void> {
@@ -232,6 +234,66 @@ suite.define(() => {
       await gateway.emitGatewayEvent("board.changed", { sessionKey });
       await document.getByText("No widgets yet.", { exact: true }).waitFor();
     });
+  });
+
+  it("keeps widget and tab menus separate from document dismissal on touch screens", async () => {
+    await suite.withPage(
+      { hasTouch: true, isMobile: true, viewport: { width: 390, height: 844 } },
+      async ({ page }) => {
+        const cards = Array.from({ length: 4 }, (_, index) => ({
+          ...makeWidget(`card-${index}`, `Card ${index + 1}`, index),
+          sizeW: 12,
+          sizeH: 6,
+        }));
+        const snapshot = { ...boardSnapshot, tabs: boardSnapshot.tabs.slice(0, 1), widgets: cards };
+        const gateway = await installBoard(page, { methodResponses: { "board.get": snapshot } });
+        await openFocusFromDashboards(page, initialFocusPath);
+        const document = page.locator("openclaw-board-document");
+        const close = document.getByRole("button", { name: "Close dashboard", exact: true });
+        const options = document.locator(".board-widget__menu-trigger");
+        await options.first().tap();
+        await page.locator('[role="menu"][data-state="open"]').waitFor();
+        await page.keyboard.press("Escape");
+        const last = options.last();
+        await last.scrollIntoViewIfNeeded();
+        await last.tap();
+        await page.locator('[role="menu"][data-state="open"]').waitFor();
+        await page.keyboard.press("Escape");
+        expect(
+          await close.evaluate((button) => {
+            const box = button.getBoundingClientRect();
+            return button.contains(
+              button.ownerDocument.elementFromPoint(box.x + box.width / 2, box.y + box.height / 2),
+            );
+          }),
+        ).toBe(true);
+        await gateway.setMethodResponse("board.get", {
+          ...snapshot,
+          revision: 2,
+          tabs: [
+            ...snapshot.tabs,
+            ...Array.from({ length: 7 }, (_, index) => ({
+              tabId: `tab-${index + 1}`,
+              title: `Tab ${index + 1}`,
+              position: index + 1,
+              chatDock: "right",
+            })),
+          ],
+        });
+        await gateway.emitGatewayEvent("board.changed", { sessionKey });
+        const overflow = document.locator(".board-tabs__overflow-trigger");
+        await overflow.tap();
+        await document
+          .locator('.board-tabs__overflow-panel[data-state="open"]')
+          .getByRole("menuitem", { name: "Tab 7", exact: true })
+          .tap();
+        await document.getByText("No widgets yet.", { exact: true }).waitFor();
+        expect(await gateway.getRequests("board.update")).toHaveLength(0);
+        await close.focus();
+        await close.press("Enter");
+        await page.waitForURL(suite.server.baseUrl + "dashboards");
+      },
+    );
   });
 
   it("leaves dashboard dismissal to the native navigation host", async () => {

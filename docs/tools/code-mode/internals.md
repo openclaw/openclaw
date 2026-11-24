@@ -10,14 +10,14 @@ read_when:
 
 ## Runtime status
 
-| Aspect              | Value                                                                                       |
-| ------------------- | ------------------------------------------------------------------------------------------- |
-| Executors           | Node (`node:vm`, default), QuickJS-WASI (bundled plugin)                                    |
-| Default state       | disabled                                                                                    |
-| Stability           | experimental OpenClaw surface (Codex Code Mode is a separate, stable Codex harness surface) |
-| Target surface      | generic OpenClaw agent runs                                                                 |
-| Security posture    | Node is trusted host execution; QuickJS provides hardened guest isolation                   |
-| User-facing promise | enabling code mode never silently falls back to broad direct tool exposure                  |
+| Aspect              | Value                                                                            |
+| ------------------- | -------------------------------------------------------------------------------- |
+| Executors           | Node (`node:vm`, default), QuickJS-WASI (bundled plugin)                         |
+| Default state       | Auto for catalog-preferred models; explicit agent/model settings take precedence |
+| Stability           | Graduated from Labs; Codex Code Mode is a separate harness surface               |
+| Target surface      | generic OpenClaw agent runs                                                      |
+| Security posture    | Node is trusted host execution; QuickJS provides hardened guest isolation        |
+| User-facing promise | enabling code mode never silently falls back to broad direct tool exposure       |
 
 ## Scope
 
@@ -68,6 +68,24 @@ In-process catalog calls bind the run's watchdog owner even when a tool already
 has a hook wrapper. The reply watchdog honors the deadline published by the
 tool's execution owner, so a silent command can reach its own exec timeout and
 return its error to guest code without losing the reply at the quiet-tool window.
+Local and sandbox exec publish an allowance before process preparation, then
+replace it with the supervisor's enforced deadline after spawn. A preparation
+that hangs can therefore remain pending until the exec timeout plus the
+900-second quiet window. Commands without a timeout retain the 900-second window.
+
+When the reply watchdog stops a turn during a bridge wait, the Code Mode
+`exec` or `wait` entry in `pendingTools` includes `awaiting`: at most three
+outstanding bridge operations, each with `kind: "bridge"`, the fixed bridge
+`method`, `deadlineAtMs` (or `null` when unpublished), and `elapsedMs`.
+Every pending tool also reports `explicitDeadline`, indicating whether its
+execution owner published a deadline. Nested local and sandbox exec entries
+include an `awaiting` item with `kind: "exec"`, `phase: "preparing"` (before
+spawn, including approval and sandbox preparation) or `"running"` (after spawn),
+and `deadlineSource`: `"default"`, `"explicit"`, or `"none"`. The last value
+identifies disabled timeouts or services without a configured timeout.
+This diagnostic reads the cell's existing pending frontier and execution-owner
+deadlines. It records no arguments, results, paths, or guest content and does
+not change watchdog timing.
 
 Completed nested calls persist as bounded display-only activity, retaining
 their original parent and invocation ids across history reloads. Provider replay

@@ -1,6 +1,7 @@
 import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 import { expect, it } from "vitest";
 import { withTempDir } from "../test-utils/temp-dir.js";
@@ -10,7 +11,12 @@ const run = promisify(execFile);
 const git = (cwd: string, args: string[], input?: string) =>
   new Promise<string>((resolve, reject) => {
     const identity = ["user.name=Fixture", "user.email=fixture@example.invalid"];
-    const config = [...identity, "commit.gpgSign=false", "protocol.file.allow=always"];
+    const config = [
+      ...identity,
+      "commit.gpgSign=false",
+      "core.longpaths=true",
+      "protocol.file.allow=always",
+    ];
     const child = execFile(
       "git",
       [...config.flatMap((entry) => ["-c", entry]), "-C", cwd, ...args],
@@ -47,7 +53,7 @@ const partialClone = (sourcePath: string) => [
   "--depth=1",
   "--filter=blob:none",
   "--no-local",
-  `file://${sourcePath}`,
+  pathToFileURL(sourcePath).href,
 ];
 const layouts = [
   { format: "sha1", clone: (sourcePath: string) => ["--", sourcePath] },
@@ -58,7 +64,15 @@ it.each(layouts)("exports $format worker history from a standalone checkout", as
   const { format, clone } = layout;
   await withTempDir("openclaw-git-history-", async (dir) => {
     const base = await source(dir, format);
-    const worker = path.join(dir, "worker");
+    const worker =
+      process.platform === "win32" && format === "sha1"
+        ? path.join(
+            dir,
+            ...Array.from({ length: 6 }, (_, index) => `long-${index}-${"x".repeat(44)}`),
+            "worker",
+          )
+        : path.join(dir, "worker");
+    await fs.mkdir(path.dirname(worker), { recursive: true });
     await git(dir, ["clone", "--quiet", ...clone(base.root), worker]);
     await fs.writeFile(path.join(worker, "file.txt"), "worker");
     await git(worker, ["commit", "--quiet", "-am", "worker"]);

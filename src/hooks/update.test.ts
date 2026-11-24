@@ -6,6 +6,7 @@ import {
   copyPackageDirInstallTransactionRequest,
   installPackageDir,
 } from "../infra/install-package-dir.js";
+import { resolveNpmIntegrityDriftWithDefaultMessage } from "../infra/npm-integrity.js";
 import {
   requestDeferredPluginInstall,
   settlePluginInstallTransactions,
@@ -118,40 +119,57 @@ describe("updateNpmInstalledHookPacks", () => {
     expect(result.outcomes).toEqual([]);
   });
 
-  it("aborts exact pinned hook pack updates on integrity drift by default", async () => {
+  it.each([
+    ["1.0.0", true],
+    ["1.0.0-01", true],
+    ["1.0.0-beta..1", false],
+    ["latest", false],
+  ])("enforces integrity only for npm version selectors (%s)", async (selector, pinned) => {
     const warn = vi.fn();
-    const error = "aborted: npm package integrity drift detected for @openclaw/demo-hooks@1.0.0";
+    const spec = `@openclaw/demo-hooks@${selector}`;
+    const resolution = {
+      integrity: "sha512-new",
+      resolvedSpec: "@openclaw/demo-hooks@1.0.0",
+      version: "1.0.0",
+    };
     installNpm.mockImplementation(async (params: Parameters<typeof installHooksFromNpmSpec>[0]) => {
-      const proceed = await params.onIntegrityDrift?.({
+      const drift = await resolveNpmIntegrityDriftWithDefaultMessage({
         spec: params.spec,
-        expectedIntegrity: "sha512-old",
-        actualIntegrity: "sha512-new",
-        resolution: {
-          integrity: "sha512-new",
-          resolvedSpec: "@openclaw/demo-hooks@1.0.0",
-          version: "1.0.0",
-        },
+        expectedIntegrity: params.expectedIntegrity,
+        onIntegrityDrift: params.onIntegrityDrift,
+        resolution,
       });
-      return proceed === false ? { ok: false, error } : installedPack("1.0.0");
+      return drift.error
+        ? { ok: false, error: drift.error }
+        : { ...installedPack("1.0.0"), npmResolution: resolution };
     });
 
-    const config = configFor({
-      spec: "@openclaw/demo-hooks@1.0.0",
-      integrity: "sha512-old",
-    });
+    const config = configFor({ spec, integrity: "sha512-old" });
+    const previous = readHookInstalls();
     const result = await update({ config, hookIds: ["demo-hooks"], logger: { warn } });
 
-    expect(warn).toHaveBeenCalledWith(
-      'Integrity drift for hook pack "demo-hooks" (@openclaw/demo-hooks@1.0.0): expected sha512-old, got sha512-new',
-    );
-    expect(result.changed).toBe(false);
-    expect(result.outcomes).toEqual([
-      {
-        hookId: "demo-hooks",
-        status: "error",
-        message: `Failed to update hook pack "demo-hooks": ${error}`,
-      },
-    ]);
+    expect(result.changed).toBe(!pinned);
+    if (pinned) {
+      expect(warn).toHaveBeenCalledWith(
+        `Integrity drift for hook pack "demo-hooks" (${resolution.resolvedSpec}): expected sha512-old, got sha512-new`,
+      );
+      expect(result.outcomes).toEqual([
+        {
+          hookId: "demo-hooks",
+          status: "error",
+          message: `Failed to update hook pack "demo-hooks": aborted: npm package integrity drift detected for ${resolution.resolvedSpec}`,
+        },
+      ]);
+      expect(readHookInstalls()).toEqual(previous);
+    } else {
+      expect(result.outcomes[0]?.status).toBe("updated");
+      expect(warn).not.toHaveBeenCalled();
+      expect(readHookInstalls()["demo-hooks"]).toMatchObject({
+        spec,
+        version: "1.0.0",
+        integrity: "sha512-new",
+      });
+    }
   });
 
   it.each([

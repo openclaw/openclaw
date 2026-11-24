@@ -49,7 +49,6 @@ import {
   createSharingState,
   seedSharingSession as seed,
 } from "./sessions-sharing-state.test-support.js";
-import { sessionSharingHandlers } from "./sessions-sharing.js";
 import {
   callSessionSharingHandler as call,
   identifiedClient,
@@ -136,6 +135,10 @@ it("admits current profiles and non-human creators, rejecting orphan human prove
     expect
       .soft((await readSessionMembersInWorker({ agentId: "main", sessionKey })).members)
       .toEqual([]);
+    // Stored access levels are not enforced yet, so a leveled invite must not grant membership.
+    expect(
+      (await invoke("session.members.add", { identityId: member.id, access: "read" }))[0]?.[0],
+    ).toBe(false);
     for (const identityId of [owner.id, member.id, "agent", "system"]) {
       expect(await invoke("session.members.add", { identityId })).toEqual([
         [true, { ok: true, sessionKey, identityId }, undefined],
@@ -472,7 +475,6 @@ it("refuses revoked managers and dirty membership at the worker commit grant", (
     const guest = ensureProfileForEmail("sharing-guest@example.test");
     await seedOwned("agent:main:sharing-guest", guest.id);
     for (const [method, change] of [
-      ["session.members.add", "caller"],
       ["session.members.remove", "role"],
       ["session.members.add", "dirty"],
     ] as const) {
@@ -491,9 +493,7 @@ it("refuses revoked managers and dirty membership at the worker commit grant", (
       const gate = sqliteWorkerOwnerProbe.admission(admission, (request, grant, admit) => {
         if (request.stage === "commit") {
           reachedCommit = true;
-          if (change === "caller") {
-            manager.invalidated = true;
-          } else if (change === "role") {
+          if (change === "role") {
             manager.connect.scopes = ["operator.read", "operator.write"];
           } else {
             sessionChanges.emit({ all: true, scope: "stores" });
@@ -561,54 +561,6 @@ it("keeps the original session bound while membership preparation yields", () =>
     expect(requestContext.broadcast).not.toHaveBeenCalled();
   }));
 
-it.each(["session.members.list", "session.members.add"] as const)(
-  "rechecks the current manager after projection preparation for %s",
-  (method) =>
-    withState(async () => {
-      const sessionKey = "agent:main:profile-enumeration-authority";
-      const owner = ensureProfileForEmail("owner-enumeration@example.test");
-      const foreign = ensureProfileForEmail("foreign-enumeration@example.test");
-      const member = ensureProfileForEmail("member-enumeration@example.test");
-      await seedOwned(sessionKey, owner.id);
-      const client = identifiedClient(owner.id);
-      const { requestContext, projection } = await sharingSession(sessionKey, client);
-      const prepare = projection.prepareSelection.bind(projection);
-      const ready = createDeferredCore();
-      const release = createDeferredCore();
-      const read = vi
-        .spyOn(projection, "prepareSelection")
-        .mockImplementationOnce(async (...args) => {
-          await prepare(...args);
-          ready.resolve();
-          await release.promise;
-        });
-      const respond = vi.fn();
-      const pending = sessionSharingHandlers[method]!({
-        params: {
-          sessionKey,
-          ...(method === "session.members.add" ? { identityId: member.id } : {}),
-        },
-        context: requestContext,
-        client,
-        respond,
-      } as never);
-      const rejected = expect(pending).rejects.toThrow(/session .* before sharing/);
-      try {
-        await ready.promise;
-        client.authenticatedUserProfile = identifiedClient(foreign.id).authenticatedUserProfile;
-        release.resolve();
-        await rejected;
-        expect(respond).not.toHaveBeenCalled();
-        expect((await readSessionMembersInWorker({ agentId: "main", sessionKey })).members).toEqual(
-          [],
-        );
-      } finally {
-        release.resolve();
-        await Promise.allSettled([pending]);
-        read.mockRestore();
-      }
-    }),
-);
 it("authorizes board mutations against the signed agent", () =>
   withState(async () => {
     const cfg: OpenClawConfig = {

@@ -19,6 +19,7 @@ import {
   finalizeRequesterFinalAttachment,
   promoteRequesterFinalAttachment,
   registerRequesterFinalAttachment,
+  transferRequesterFinalAttachment,
 } from "./requester-final-attachment.js";
 
 const base = {
@@ -69,6 +70,26 @@ describe("requester final attachment", () => {
     finalize({ batchRunIds: ["run-a", "run-b"], finalAssistantVisibleText: "replay" });
     expect(append).toHaveBeenCalledExactlyOnceWith("final");
   });
+
+  it.each([false, true])(
+    "retains a successful partition when a sibling fails first=%s",
+    (failedFirst) => {
+      promote({ batchRunIds: ["run-a", "run-b", "run-c"] });
+      if (failedFirst) {
+        finalize({ batchRunIds: ["run-b"], delivered: false });
+      }
+      expect(
+        transferRequesterFinalAttachment({ ...deliveredFinal, requesterTurnRunId: "successor" }),
+      ).toBe(true);
+      finalize();
+      finalize({ finalAssistantVisibleText: "replay" });
+      if (!failedFirst) {
+        finalize({ batchRunIds: ["run-b"], delivered: false });
+      }
+      finalize({ batchRunIds: ["run-c"], finalAssistantVisibleText: "another final" });
+      expect(append.mock.calls).toEqual([["final"], ["another final"]]);
+    },
+  );
 
   it("rejects the wrong session or batch without consuming the owner", () => {
     promote({ rearmGeneration: 2 });

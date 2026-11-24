@@ -55,6 +55,15 @@ export async function settleUnreachableYieldedSubagentRun(params: {
         requester.lastRunId === requesterCompletion.runId);
   }
   const retired = subagentRuns.isCompletionAuthorityRetired(entry);
+  if (requesterEnded && !retired && isYieldedSubagentRun(entry) && entry.waitForMessage) {
+    // The parent may finish before its retained send replays after a plugin reload.
+    // Both lifecycle events and periodic sweeps consume that handoff owner's live fact.
+    const { hasRetainedSessionSendForSubagent } =
+      await import("../../tools/sessions-send-self-hold.js");
+    if (hasRetainedSessionSendForSubagent(entry)) {
+      return false;
+    }
+  }
   let continuation = isYieldedSubagentRun(entry)
     ? resolveYieldedRunContinuation(entry, requesterEnded)
     : undefined;
@@ -149,7 +158,8 @@ export async function settleRestartInterruptedSubagentRun(params: {
   if (
     hasSubagentRunEnded(entry) ||
     isYieldedSubagentRun(entry) ||
-    !subagentRuns.isCompletionAuthorityRetired(entry) ||
+    // Fresh requester custody owns the notice; the retired process cannot send it.
+    (subagentRuns.isCompletionAuthorityRetired(entry) && entry.expectsCompletionMessage === true) ||
     // Only an earlier process could have owned this execution; this process never did.
     !(entry.createdAt < processStartedAt) ||
     isSubagentRunLive(entry) ||

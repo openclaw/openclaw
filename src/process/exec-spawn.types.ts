@@ -1,3 +1,4 @@
+import type { CommandStdinFile } from "./command-stdin-file.js";
 import type { ProcessExecutionIntent } from "./linux-exec-cgroup.js";
 import type { CommandSpawnOptions } from "./spawn-broker/execa-types.js";
 
@@ -9,6 +10,7 @@ export type CommandProcessInvocationPolicy = (input: {
 }) => { argv: string[]; env: NodeJS.ProcessEnv };
 
 export type SpawnCommandOptions = CommandSpawnOptions & {
+  stdinFile?: CommandStdinFile;
   executionIntent?: ProcessExecutionIntent;
   executionScopeKey?: string;
   baseEnv?: NodeJS.ProcessEnv;

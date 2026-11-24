@@ -35,6 +35,7 @@ import { agentProcessTestEntrypoints } from "../process-runtime.test-support.js"
 import { sessionManagerOpenTranscriptCohort } from "./session-manager-core.js";
 import { sessionManagerReadInitialContext } from "./session-manager-current-turn.js";
 import { sessionScope, withSessionState } from "./session-manager-fixtures.test-support.js";
+import { sessionManagerReadTranscriptBranch } from "./session-manager-view-types.js";
 
 function canonicalTarget(
   state: OpenClawTestState,
@@ -86,6 +87,7 @@ it("shares physical text strings with active history across reloads without shar
       import { closeOpenClawAgentDatabaseByPathAsync } from ${JSON.stringify(resolveRuntimeWorkerUrl(stateNativeProcessEntrypoints.agentDatabase).href)};
       import { SessionManager } from ${JSON.stringify(resolveRuntimeWorkerUrl(agentProcessTestEntrypoints.sessionManager).href)};
       const sessionManagerReadInitialContext = Symbol.for(${JSON.stringify(Symbol.keyFor(sessionManagerReadInitialContext))});
+      const readBranch = Symbol.for(${JSON.stringify(Symbol.keyFor(sessionManagerReadTranscriptBranch))});
       setFlagsFromString("--allow-natives-syntax");
       const same = new Function("a", "b", "return %IsSameHeapObject(a, b)");
       const control = Buffer.alloc(65536, 120).toString();
@@ -96,6 +98,10 @@ it("shares physical text strings with active history across reloads without shar
       const target = ${JSON.stringify(target)};
       const ids = ${JSON.stringify(ids)};
       const manager = await SessionManager.openAsync(target, undefined, { maxBytes: 1024 * 1024, maxEvents: 20 });
+      const sealed = manager[readBranch]().find((entry) => entry.id === ids[0]).message;
+      await manager.reloadPersistedTranscriptAsync();
+      assert.equal(manager[readBranch]().find((entry) => entry.id === ids[0]).message, sealed,
+        "reload detached unchanged sealed history before any SDK exposure");
       const context = await manager[sessionManagerReadInitialContext]();
       const active = context.messages.find((message) => message.role === "toolResult");
       assert(active);

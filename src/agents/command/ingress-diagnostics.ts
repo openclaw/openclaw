@@ -1,9 +1,7 @@
 import { getRuntimeConfig } from "../../config/io.js";
 import { isDiagnosticsEnabled, emitTrustedDiagnosticEvent } from "../../infra/diagnostic-events.js";
-import {
-  estimateAggregateUsageCostAsync,
-  resolveModelCostConfig,
-} from "../../utils/usage-format.js";
+import { resolveModelCostConfig } from "../../model-catalog/usage-pricing.js";
+import { estimateAggregateUsageCostAsync } from "../../utils/usage-format.js";
 import type { EmbeddedAgentMeta, EmbeddedAgentRunMeta } from "../embedded-agent-runner/types.js";
 import { hasBillableUsage, toDiagnosticUsage } from "../usage.js";
 import type { AgentCommandIngressOpts } from "./types.js";

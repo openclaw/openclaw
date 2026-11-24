@@ -64,16 +64,12 @@ function resolveWorkshopAgent(
 }
 
 /**
- * The caller's Gateway authority, captured at admission and rechecked by the library before
- * each final file effect: a closed transport, revoked device or changed requester refuses.
+ * Keep final file effects inside the request lifetime and session mutation fence.
  */
 function captureRequesterAuthority(invocation: GatewayRequestHandlerOptions): () => void {
-  const { client, signal, hasCurrentClientAuthority, sessionMutationCommitGuard } = invocation;
+  const { signal, sessionMutationCommitGuard } = invocation;
   return () => {
     signal?.throwIfAborted();
-    if (client?.invalidated || hasCurrentClientAuthority?.() === false) {
-      throw new Error("Gateway requester authority changed");
-    }
     sessionMutationCommitGuard?.();
   };
 }

@@ -40,6 +40,38 @@ const checkPlan = planResult.accepts;
 const rejectPlan = planResult.rejects;
 
 describe("Templates Gateway contract", () => {
+  it("bounds browser archive sources to Add only", () => {
+    const source = { kind: "upload", archiveBase64: "A".repeat(1398104) };
+    addPlan.accepts({ source });
+    addApply.accepts({ source, planIntegrity: "sha256:reviewed" });
+    addPlan.rejects({ source: { ...source, archiveBase64: "A".repeat(1398105) } });
+    addApply.rejects({ source: { ...source, path: "/private" } });
+    detail.rejects(source);
+    updateApply.rejects({ agentId: "demo", source, planIntegrity: "sha256:reviewed" });
+  });
+  it("accepts local project Add without expanding catalog or update sources", () => {
+    const source = { kind: "local", path: "/operator/template-project" };
+    addPlan.accepts({ source });
+    addApply.accepts({ source, planIntegrity: "sha256:reviewed" });
+    addApply.rejects({ source: { ...source, archive: "untrusted.tgz" } });
+    detail.rejects(source);
+    updateApply.rejects({ agentId: "demo", source, planIntegrity: "sha256:reviewed" });
+  });
+
+  it("admits optional category entries as catalog entries, not arbitrary registry records", () => {
+    search.accepts({ overview: true, includeCategoryEntries: true });
+    search.rejects({ overview: true, includeCategoryEntries: "true" });
+    const result = (additionalEntries: unknown[]) => ({
+      entries: [],
+      overview: {
+        featured: [],
+        sections: [{ category: "research", entries: [], additionalEntries }],
+      },
+    });
+    searchResult.accepts(result([]), result([catalogEntry]));
+    searchResult.rejects(result([{ name: coordinate.packageName }]));
+  });
+
   it("allows the public catalog and exact publisher Add coordinates", () => {
     search.accepts({}, { query: "workflow", limit: 30 }, { overview: true, limit: 8 });
     search.rejects({ sourceRoot: "/private/template" });

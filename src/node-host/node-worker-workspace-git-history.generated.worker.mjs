@@ -57,7 +57,7 @@ function createWorkerGitView(root, baseCommit, viewParent, origin) {
       path.join(view, "config"),
       "[core]\n\trepositoryformatversion = " +
         (sha256 || reftable || origin ? 1 : 0) +
-        "\n\tbare = false\n\thooksPath = " +
+        "\n\tbare = false\n\tlongpaths = true\n\thooksPath = " +
         JSON.stringify(nil) +
         "\n\tfsmonitor = false\n[gc]\n\tauto = 0\n[maintenance]\n\tauto = false\n[protocol]\n\tallow = never\n[credential]\n\thelper =\n[http]\n\tfollowRedirects = false\n[extensions]\n" +
         (sha256 ? "\tobjectFormat = sha256\n" : "") +

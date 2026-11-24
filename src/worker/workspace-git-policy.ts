@@ -32,7 +32,7 @@ function createWorkerGitView(root, baseCommit, viewParent, origin) {
       if (kind(name) === "file") fs.copyFileSync(path.join(gitDir, name), path.join(view, name));
     }
     fs.writeFileSync(path.join(view, "config"), "[core]\n\trepositoryformatversion = " + (sha256 || reftable || origin ? 1 : 0) +
-      "\n\tbare = false\n\thooksPath = " + JSON.stringify(nil) + "\n\tfsmonitor = false\n[gc]\n\tauto = 0\n[maintenance]\n\tauto = false\n[protocol]\n\tallow = never\n[credential]\n\thelper =\n[http]\n\tfollowRedirects = false\n[extensions]\n" +
+      "\n\tbare = false\n\tlongpaths = true\n\thooksPath = " + JSON.stringify(nil) + "\n\tfsmonitor = false\n[gc]\n\tauto = 0\n[maintenance]\n\tauto = false\n[protocol]\n\tallow = never\n[credential]\n\thelper =\n[http]\n\tfollowRedirects = false\n[extensions]\n" +
       (sha256 ? "\tobjectFormat = sha256\n" : "") + (reftable ? "\trefStorage = reftable\n" : "") +
       (origin ? "\tpartialClone = origin\n[remote \"origin\"]\n\turl = " + JSON.stringify(origin) + "\n\tpromisor = true\n\tpartialclonefilter = blob:none\n" : ""));
     const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.toUpperCase().startsWith("GIT_")));

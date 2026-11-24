@@ -8,7 +8,7 @@ import {
   createControlUiE2eContextOptions,
   createControlUiE2eSuite,
 } from "./control-ui-e2e-suite.test-support.ts";
-import { cronList, cronRuns } from "./cron-fixtures.test-support.ts";
+import { chooseScheduleKind, cronList, cronRuns } from "./cron-fixtures.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Automation event source readiness",
@@ -34,7 +34,7 @@ suite.define(() => {
         },
       });
       await page.goto(new URL("/cron?new", suite.server.baseUrl).toString());
-      await page.locator('[data-test-id="cron-schedule-kind-event"]').getByRole("radio").click();
+      await chooseScheduleKind(page, "event");
       await gateway.waitForRequest("config.get");
       await page
         .getByText("No enabled MCP servers yet. Add one in Settings → MCP.", { exact: true })
@@ -57,7 +57,7 @@ suite.define(() => {
         },
       });
       await page.goto(new URL("/cron?new", suite.server.baseUrl).toString());
-      await page.locator('[data-test-id="cron-schedule-kind-event"]').getByRole("radio").click();
+      await chooseScheduleKind(page, "event");
       await gateway.waitForRequest("config.get");
       const refresh = page.locator('[data-test-id="cron-events-refresh"]');
       await refresh.waitFor();

@@ -1,4 +1,4 @@
-import { createMemo, createSignal, onSettled, Show } from "solid-js";
+import { createMemo, createSignal, onSettled, Show, useContext } from "solid-js";
 import { formatUiError } from "../lib/format-error.ts";
 import { projectGateway } from "../lib/reactive/application.ts";
 import { readSessionMethodAccess } from "../lib/session-method-access.ts";
@@ -7,6 +7,7 @@ import { showToast } from "../lib/toast.ts";
 import { SessionRenameInput } from "../pages/chat/components/chat-pane-header-identity.tsx";
 import type { SessionListHost } from "./app-sidebar-session-render-types.ts";
 import type { SidebarRecentSession } from "./app-sidebar-session-types.ts";
+import { SidebarRenameScope } from "./sidebar-rename-order.ts";
 
 export default function SidebarSessionRename(props: {
   host: SessionListHost;
@@ -24,8 +25,13 @@ export default function SidebarSessionRename(props: {
   let settled = false;
   let pending = false;
   const [saving, setSaving] = createSignal(false);
-  onSettled(() => () => {
-    settled = true;
+  const order = useContext(SidebarRenameScope);
+  onSettled(() => {
+    const release = order?.hold();
+    return () => {
+      settled = true;
+      release?.();
+    };
   });
   const access = createMemo(() =>
     readSessionMethodAccess(gateway?.read().snapshot ?? null, {

@@ -17,6 +17,7 @@ import { isSessionHistoryReadOperation } from "./session-history-read-operation-
 import { encodeSessionTranscriptRequestError } from "./session-history-worker-errors.js";
 import { withSessionTranscriptProjectionReceipt } from "./session-transcript-projection-facts-scope.js";
 import {
+  closeHistoryDatabaseScopes,
   withHistoryDatabase,
   pruneClosedHistoryDatabaseScopes,
 } from "./session-transcript-worker-scopes.js";
@@ -38,7 +39,7 @@ let releaseReadValidation:
   | undefined;
 const memoryPressure = diagnosticsChannel("openclaw.memory.critical");
 
-serveOwnedWorkerTasks(
+export const startHostedWorker = serveOwnedWorkerTasks(
   async (input, channel, control): Promise<TranscriptReply | UsageCostWorkerReply> => {
     // Pressure stays inside this isolate and drops decoded caches before the next snapshot.
     // Bun's compatibility probe walks the heap instead of describing a V8 allocation limit.
@@ -616,7 +617,7 @@ serveOwnedWorkerTasks(
           if (request.kind === "compaction-preparation") {
             const { readPreparedSessionCompaction } =
               await import("./session-compaction-prepared.worker.js");
-            return readPreparedSessionCompaction(request, control, channel);
+            return readPreparedSessionCompaction(request, control);
           }
           if (
             request.kind === "transcript-hydration" ||
@@ -660,6 +661,9 @@ serveOwnedWorkerTasks(
             request.validation,
             request.kind === "transcript-match" ? request.request.diagnostics : undefined,
             request.readCustody,
+            request.creationClaim
+              ? { witness: request.creationClaim, assertCurrent: () => control.throwIfCancelled() }
+              : undefined,
           )
         : { ok: true, value: await readRequest() };
     } catch (error) {
@@ -702,5 +706,6 @@ serveOwnedWorkerTasks(
       );
       pruneClosedHistoryDatabaseScopes();
     },
+    releaseRetainedResources: closeHistoryDatabaseScopes,
   },
 );

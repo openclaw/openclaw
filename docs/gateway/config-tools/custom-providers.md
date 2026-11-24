@@ -66,7 +66,7 @@ Configuring a custom/local provider `baseUrl` is also the narrow network trust d
 Set `models.providers.<id>.name` and `icon` to customize how a provider appears
 in model pickers and provider settings. These fields are presentation only: the
 provider ID, model references, credentials, routing, and existing sessions stay
-unchanged. Omit them to keep the existing appearance.
+unchanged. Omit `name` to use the label that the provider plugin declares.
 
 ```json5
 {
@@ -172,6 +172,7 @@ migration is needed.
     | `supportsTemperature` | Accepts `temperature` for this model and adapter. |
     | `supportsUsageInStreaming` | Emits usage metadata in streaming responses. |
     | `supportsInstructions` | Responses API only: accepts the system prompt via top-level `instructions` instead of embedded in `input`. Defaults to `true` only for native OpenAI and xAI's main route — the two routes with confirmed contract evidence. Every other route, bundled or custom, defaults to `false`; set explicitly once verified against that endpoint. |
+    | `cachesInstructions` | Responses API only: caches top-level `instructions`. Set `false` to send the system prompt as input so it can be cached. |
     | `supportsTools` | Supports structured tool/function calling. Set `false` to disable tools. |
     | `supportsStrictMode` | Accepts the `strict` tool field. On compatible Completions and Responses routes, `true` permits explicit `strict: false` so optional tool arguments remain optional. |
     | `requiresStringContent` | Requires plain-string Chat Completions message content. |

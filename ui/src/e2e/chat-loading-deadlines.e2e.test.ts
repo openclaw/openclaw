@@ -1,14 +1,19 @@
-import type { Page } from "playwright";
+import { writeFile } from "node:fs/promises";
+import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   controlUiSessionUrl,
   defaultControlUiFeatureMethods,
   installMockGateway,
   pauseVirtualClock,
 } from "../test-helpers/control-ui-e2e.ts";
+import { controlUiE2eBuiltModuleRequest } from "./control-ui-built-module.test-support.ts";
 import {
   createControlUiE2eContextOptions,
   createControlUiE2eSuite,
+  holdModuleResponse,
 } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Chat loading deadlines" });
@@ -35,7 +40,62 @@ async function startPending(page: Page, options: Parameters<typeof installMockGa
 const catalogMethods = [...defaultControlUiFeatureMethods, "sessions.catalog.list"];
 const sidebarErrors = ".callout.danger, .sidebar-session-catalog-error";
 
+const proofDir = createControlUiE2eArtifactDir("chat-loading-history");
+async function capture(page: Page, name: string, content: Locator) {
+  const frame = await takeControlUiScreenshotFrame(page, page.locator("body"), [content], {
+    animations: "disabled",
+  });
+  await writeFile(`${proofDir}/${name}.png`, frame.png);
+}
+
 suite.define(() => {
+  it.each([false, true])(
+    "shows message placeholders only for saved history (hasMessages: %s)",
+    async (hasMessages) => {
+      const key = "agent:main:main";
+      await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
+        const gateway = await installMockGateway(page, {
+          sessionKey: key,
+          sessions: [{ key, kind: "direct", sessionId: "history-session", hasMessages }],
+          historyMessages: hasMessages
+            ? [{ role: "assistant", content: "Saved conversation" }]
+            : [],
+          heldMethods: ["chat.startup"],
+        });
+        const boot = await holdModuleResponse(
+          page,
+          controlUiE2eBuiltModuleRequest("ui/src/main.ts"),
+        );
+        try {
+          await page.goto(`${suite.server.baseUrl}chat/main`, { waitUntil: "commit" });
+          await boot.request;
+          const shell = page.locator("#openclaw-boot-shell");
+          await shell.locator(".loading-skeleton__composer").waitFor();
+          await capture(page, `plain-history-${hasMessages}-boot`, shell);
+          expect(await shell.locator(".loading-skeleton__message:visible").count()).toBe(0);
+        } finally {
+          boot.release();
+        }
+        await gateway.waitForRequest("sessions.messages.subscribe", { match: { key } });
+        const pane = page.locator(".chat-pane-cache__pane--visible");
+        await pane.locator(".chat-thread").waitFor();
+        await capture(page, `plain-history-${hasMessages}-pending`, pane);
+        expect(
+          await pane
+            .locator(
+              ".chat-thread .chat-conversation-loading, .chat-thread .loading-skeleton, .chat-thread openclaw-panel-loading-skeleton",
+            )
+            .count(),
+        ).toBe(hasMessages ? 1 : 0);
+        expect(await pane.getByText("Saved conversation", { exact: true }).count()).toBe(0);
+        await gateway.resolveDeferred("chat.startup");
+        if (hasMessages) {
+          await pane.getByText("Saved conversation", { exact: true }).waitFor();
+        }
+      });
+    },
+  );
+
   it("automatically loads the route and sidebar after prolonged agent startup", async () => {
     await withPage(async (page) => {
       const { gateway, startup, sidebar } = await startPending(page, {

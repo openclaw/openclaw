@@ -24,7 +24,23 @@ type Args = {
   filter?: string;
   /** Publish gate: only the release's own refresh verdict, no row behavior. */
   refreshOnly?: boolean;
+  /** RELEASED_READER_ENTRIES: reader name to its stable dist entry, without extension. */
+  readerEntries: Record<string, string>;
 };
+
+// Node prints an uncaught error with every own property, and a released
+// PluginLoadFailureError carries its whole plugin registry: thousands of lines
+// that push the message out of the log tail the parent reports.
+process.on("uncaughtException", (error) => {
+  const report: unknown[] = [];
+  let cause: unknown = error;
+  while (cause) {
+    report.push(cause instanceof Error ? cause.stack : cause);
+    cause = cause instanceof Error ? cause.cause : undefined;
+  }
+  console.error(report.join("\n[cause] "));
+  process.exit(1);
+});
 
 const args = JSON.parse(process.argv[2] ?? "{}") as Args;
 const configPath = assertSandboxed(args.sandbox);
@@ -69,15 +85,26 @@ function assertSandboxed(sandbox: string): string {
   return insideSandbox("OPENCLAW_CONFIG_PATH");
 }
 
-// Released chunk names are hashed and export aliases minified; function
-// declarations keep source names. Find the chunk that declares and exports one.
+// A release that ships the reader's stable entry runs it from there; a missing export
+// fails. Older releases are searched: chunk names are hashed and export aliases
+// minified, but function declarations keep source names (also in whitespace-minified
+// chunks, since 2026.11.10-beta.1). Find the chunk that declares and exports one.
+// Remove the search once every tagged release ships the stable entries.
 const chunks = fs
   .readdirSync(dist)
   .filter((file) => file.endsWith(".mjs"))
   .map((file) => path.join(dist, file));
 async function releasedExport(name: string, marker?: string): Promise<unknown> {
-  const declaration = new RegExp(`(?:^|\\n)(?:async )?function ${name}\\(`);
-  const exported = new RegExp(`export \\{[^}]*\\b${name}(?: as (\\w+))?\\s*[,}]`);
+  const entry = args.readerEntries[name] && path.join(dist, `${args.readerEntries[name]}.js`);
+  if (entry && fs.existsSync(entry)) {
+    const value = (await import(pathToFileURL(entry).href))[name];
+    if (typeof value !== "function") {
+      throw new Error(`released reader entry point ${entry} does not export ${name}`);
+    }
+    return value;
+  }
+  const declaration = new RegExp(`(?<![\\w$.])function ${name}\\(`);
+  const exported = new RegExp(`export\\s*\\{[^}]*(?<![\\w$])${name}(?: as ([\\w$]+))?\\s*[,}]`);
   for (const file of chunks) {
     const source = fs.readFileSync(file, "utf8");
     if (!declaration.test(source) || (marker && !source.includes(marker))) {
@@ -97,21 +124,30 @@ async function releasedExport(name: string, marker?: string): Promise<unknown> {
   );
 }
 
-// Every socket except this process's own fake upstream goes to the fake upstream:
+// Every TCP socket except this process's own fake upstream goes to the fake upstream:
 // the release builds requests for its real base URLs, nothing leaves the machine,
-// and no local service (such as a running Gateway) is reachable.
+// and no local service (such as a running Gateway) is reachable over TCP.
+// Socket paths pass through: plugin loading dials the release's own native resource
+// broker in the sandbox TMPDIR or, when that path is too long for a socket (as it
+// always is here), a private random /tmp directory. Redirected, the broker read HTTP
+// bytes as a frame length and no plugin loaded. A fixed system socket would be
+// reachable too; no reader this tool drives dials one.
 const captured: CapturedCall[] = [];
 const ports = { http: 0, https: 0 };
 type ConnectOptions = {
   host?: string;
   port?: number | string;
+  path?: string;
   servername?: string;
   socket?: unknown;
 };
+// Node's own rule: a string first argument that is not a port number names a socket path.
 const connectOptions = (input: unknown[]): ConnectOptions =>
   typeof input[0] === "object" && input[0] !== null
     ? (input[0] as ConnectOptions)
-    : { port: input[0] as number, host: typeof input[1] === "string" ? input[1] : undefined };
+    : typeof input[0] === "string" && !(Number(input[0]) >= 0)
+      ? { path: input[0] }
+      : { port: input[0] as number, host: typeof input[1] === "string" ? input[1] : undefined };
 const isFakeUpstream = ({ host, port }: ConnectOptions) =>
   host === "127.0.0.1" && (Number(port) === ports.http || Number(port) === ports.https);
 // Redirected TLS trusts only the fake upstream's self-signed certificate, pinned by
@@ -120,10 +156,12 @@ const fakeUpstreamCert = fs.readFileSync(args.cert);
 const fakeUpstreamFingerprint = new crypto.X509Certificate(fakeUpstreamCert).fingerprint256;
 const realNetConnect = net.connect;
 const realTlsConnect = tls.connect;
-const redirectNet = (...input: unknown[]) =>
-  isFakeUpstream(connectOptions(input))
+const redirectNet = (...input: unknown[]) => {
+  const options = connectOptions(input);
+  return options.path || isFakeUpstream(options)
     ? Reflect.apply(realNetConnect, net, input)
     : realNetConnect({ host: "127.0.0.1", port: ports.http });
+};
 net.connect = redirectNet as typeof net.connect;
 net.createConnection = redirectNet as typeof net.createConnection;
 tls.connect = ((...input: unknown[]) => {

@@ -42,6 +42,7 @@ export type WorkspaceManifestValueInputs = {
     root: string;
     baseCommit: string;
     buildCacheInputs: string[];
+    captureFingerprints?: boolean;
     previous?: { rawManifest: string; manifestRef: string; changedPaths: string[] };
   };
   "workspace.manifest.capture": {
@@ -118,10 +119,13 @@ export type WorkspaceStageInput<Raw = Uint8Array<ArrayBuffer>> = WorkspaceStageI
   buildCacheInputs?: string[];
   gitHistory?: WorkerWorkspaceGitHistory;
   parentCommit?: string;
+  blobsOnly?: true;
 };
 
 export type WorkspaceManifestValueOutputs = {
-  "workspace.manifest.template": Omit<WorkspaceManifestSnapshot, "manifest">;
+  "workspace.manifest.template": Omit<WorkspaceManifestSnapshot, "manifest"> & {
+    projectionFingerprints?: Uint8Array | null;
+  };
   "workspace.manifest.capture": WorkspaceComputationHashResult<WorkspaceManifestCapture>;
   "workspace.manifest.snapshot": WorkspaceComputationHashResult<WorkspaceManifestSnapshot>;
   "workspace.manifest.document": WorkspaceComputationHashResult<

@@ -7,11 +7,13 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { DevicePairErrorDetailCodes } from "../../../packages/gateway-protocol/src/index.js";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { registerDevicesCli } from "../../cli/devices-cli.js";
 import * as gatewayRpc from "../../cli/gateway-rpc.js";
 import * as devicePairingJoinCode from "../../infra/device-pairing-join-code.js";
 import type * as updateCheckLifecycle from "../../infra/update-check-lifecycle.js";
+import { PAIRING_GATEWAY_LOOPBACK_ERROR } from "../../pairing/setup-code.js";
 import { defaultRuntime } from "../../runtime.js";
 import { useMockHttp } from "../../test-utils/mock-http.js";
 import type * as versionModule from "../../version.js";
@@ -276,12 +278,10 @@ describe("device.pair.setupCode", () => {
     });
   });
 
-  it("retains the original requester authority while resolving a join setup", async () => {
+  it("does not register a join code after pairing configuration changes", async () => {
     const entered = createDeferred();
     const release = createDeferred();
-    let current = true;
     const { options, respond } = createOptions({ includeQr: false, joinUrl: true });
-    options.hasCurrentClientAuthority = () => current;
     mocks.resolvePairingSetupFromConfig.mockImplementationOnce(async () => {
       entered.resolve();
       await release.promise;
@@ -298,8 +298,7 @@ describe("device.pair.setupCode", () => {
     );
     try {
       await awaitGateBeforeSettlement(entered.promise, pending, "setup resolution was not reached");
-      current = false;
-      options.hasCurrentClientAuthority = () => true;
+      vi.mocked(options.context.getRuntimeConfig).mockReturnValue({ gateway: { mode: "remote" } });
     } finally {
       release.resolve();
       await pending;
@@ -309,7 +308,9 @@ describe("device.pair.setupCode", () => {
     expect(respond).toHaveBeenCalledWith(
       false,
       undefined,
-      expect.objectContaining({ message: expect.stringContaining("requester authority changed") }),
+      expect.objectContaining({
+        message: expect.stringContaining("Device pairing setup configuration changed"),
+      }),
     );
   });
 
@@ -479,7 +480,24 @@ describe("device.pair.setupCode", () => {
     expect(ok).toBe(false);
     expect(payload).toBeUndefined();
     expect(error?.message).toContain("Gateway auth is not configured");
+    expect(error?.details).toBeUndefined();
     expect(mocks.encodePairingSetupCode).not.toHaveBeenCalled();
+  });
+
+  it("marks a loopback-only refusal so the dashboard can offer secure access", async () => {
+    mocks.resolvePairingSetupFromConfig.mockResolvedValue({
+      ok: false,
+      error: PAIRING_GATEWAY_LOOPBACK_ERROR,
+    });
+
+    const respond = await runSetupCode({});
+
+    const [ok, , error] = expectDefined(respond.mock.calls[0], "loopback refusal response");
+    expect(ok).toBe(false);
+    expect(error?.message).toBe(PAIRING_GATEWAY_LOOPBACK_ERROR);
+    expect(error?.details).toEqual({
+      code: DevicePairErrorDetailCodes.GATEWAY_LOOPBACK_ONLY,
+    });
   });
 
   it("rejects unknown params before touching pairing helpers", async () => {

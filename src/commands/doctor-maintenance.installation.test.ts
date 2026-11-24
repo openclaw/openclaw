@@ -620,8 +620,8 @@ async function runInstallationCase(params: {
       const maintenance = await admission;
       if (params.inspectionScenario) {
         vi.spyOn(performance, "now").mockImplementation(() => inspectionClock);
-        // Charge both fresh byte validation and fallback snapshots: reusing decoded
-        // rows does not remove the fresh read at each native authority boundary.
+        // Charge every update-ledger read (fresh byte validation and fallback
+        // snapshots) made while native inspection runs.
         const readVersion = sqliteSnapshotSource.readSqliteSourceContentVersionSync;
         vi.spyOn(sqliteSnapshotSource, "readSqliteSourceContentVersionSync").mockImplementation(
           (pathname) => {
@@ -805,11 +805,10 @@ async function runInstallationCase(params: {
           return;
         }
         if (params.inspectionScenario === "slow-admission") {
+          // Slow update-ledger reads stay out of native inspection: admission is
+          // reread before each native mutation, not at every inspection boundary.
           expect(installationInspectionElapsedMs.length).toBeGreaterThan(0);
-          for (const elapsed of installationInspectionElapsedMs) {
-            expect(elapsed).toBeGreaterThan(0);
-            expect(elapsed).toBeLessThan(5000);
-          }
+          expect(installationInspectionElapsedMs.every((elapsed) => elapsed === 0)).toBe(true);
         }
         if (initiallyStopped) {
           expectInstallation(["repair-state"]);

@@ -1,7 +1,12 @@
 import { isDeepStrictEqual } from "node:util";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import {
+  sessionCreatorProfileId,
+  sessionIsolationProfileId,
+} from "../../config/sessions/session-entry-provenance.js";
 import { resolveCronJobEffectiveAgentId } from "../agent-id.js";
 import { assertCronBindApplies } from "../bind-parent.js";
+import { cronDeclarationOwnedBy } from "../declaration-owner.js";
 import { retireTransferredCronAuthority } from "../human-owner.js";
 import {
   decodePluginCommandSchedule,
@@ -99,16 +104,32 @@ export function planCronJobMutation(
           : decodePluginCommandSchedule(options.pluginCommand);
       const key = normalizeOptionalString(mutation.input.declarationKey);
       const matches = key
-        ? previous.jobs.filter(
-            (job) =>
-              job.declarationKey === key &&
-              (!mutation.matchingJobIds || mutation.matchingJobIds.includes(job.id)),
-          )
+        ? previous.jobs.filter((job) => {
+            if (
+              job.declarationKey !== key ||
+              (options.keepDeclarationFor &&
+                !cronDeclarationOwnedBy(job, options.keepDeclarationFor))
+            ) {
+              return false;
+            }
+            const visible = !mutation.matchingJobIds || mutation.matchingJobIds.includes(job.id);
+            if (options.keepDeclarationFor && !visible) {
+              // Includes a concurrent creation after admission. Never expose it or create a duplicate.
+              throw new Error("cron declarationKey is unavailable in the current scope; retry");
+            }
+            return visible;
+          })
         : [];
       if (matches.length > 1) {
         throw new Error(`cron declarationKey is ambiguous within caller scope: ${key}`);
       }
       previousJob = matches[0];
+      if (previousJob && options.keepDeclarationFor) {
+        plan.job = previousJob;
+        plan.created = false;
+        plan.updated = false;
+        return plan;
+      }
       if (previousJob && (previousJob.pluginCommand !== undefined || pluginCommand !== undefined)) {
         const existingCommandJob = previousJob;
         // A declaration retry is never fresh authority or a fresh run budget.
@@ -218,8 +239,12 @@ export function planCronJobMutation(
         }
         if (options.createdActor) {
           nextJob.createdActor = options.createdActor;
-          if (options.createdActor.type === "human" && options.createdActor.source === "profile") {
-            nextJob.ownerProfileId = options.createdActor.id;
+          // Human-requested work follows the initiator; autonomous jobs keep their existing default.
+          const ownerProfileId =
+            sessionCreatorProfileId(options.createdActor) ??
+            sessionIsolationProfileId(options.createdActor);
+          if (ownerProfileId) {
+            nextJob.ownerProfileId = ownerProfileId;
           }
         }
         if (options.sourceConversation) {

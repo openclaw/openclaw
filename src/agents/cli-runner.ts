@@ -1,4 +1,3 @@
-import { runWithCliHistoryWriter } from "../config/sessions/cli-history-boundary.js";
 import { acquireCronRootTranscriptLease } from "../config/sessions/transcript-lease.js";
 import { assertAgentRunLifecycleGenerationCurrent } from "../infra/agent-events.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -54,6 +53,7 @@ import {
 import { createCliFailoverError, readCliStreamRefusalOutput } from "./cli-runner/exit-error.js";
 import { loadCliPromptImages } from "./cli-runner/helpers.js";
 import { cliBackendLog } from "./cli-runner/log.js";
+import { createCliRunModelRequestGate } from "./cli-runner/model-request-hook.js";
 import type { ClaudeCliRunDiagnosticLifecycle } from "./cli-runner/run-diagnostics.js";
 import { loadCliSessionHistoryMessages } from "./cli-runner/session-history.js";
 import { prepareCliRunTerminalReply } from "./cli-runner/terminal-reply.js";
@@ -79,6 +79,18 @@ import {
 } from "./tools/gateway-caller-context.js";
 
 const log = createSubsystemLogger("agents/cli-runner");
+
+// A turn that ends without a final answer cannot authorize replaying the tool effects it completed.
+function stopFallbackAfterToolEffects(
+  error: unknown,
+  output: Pick<CliOutput, "toolSummary" | "acceptedSessionSpawns">,
+): void {
+  const completedToolEffects =
+    (output.toolSummary?.calls ?? 0) > 0 || hasAcceptedSessionSpawn(output.acceptedSessionSpawns);
+  if (completedToolEffects && error instanceof Error) {
+    recordModelFallbackStop(error);
+  }
+}
 
 /** Checks whether a Claude CLI session binding has reached its transcript file. */
 export async function isCliBindingFlushed(
@@ -211,9 +223,7 @@ export async function runPreparedCliAgent(
     },
     () =>
       settlePreparedCliRunWithTrajectory(context, diagnosticLifecycle, (complete) =>
-        runWithCliHistoryWriter(context.cliHistoryWriter, () =>
-          runPreparedCliAgentOwned(context, complete, diagnosticLifecycle),
-        ),
+        runPreparedCliAgentOwned(context, complete, diagnosticLifecycle),
       ),
   );
 }
@@ -277,6 +287,15 @@ async function runPreparedCliAgentOwned(
     ...buildAgentHookContextChannelFields(params),
     ...buildAgentHookContextIdentityFields(params),
   } as const;
+
+  context.beforeModelRequest = createCliRunModelRequestGate({
+    hookRunner,
+    hookContext: buildAgentHookContext(hookContext),
+    run: params,
+    model: context.modelId,
+    prompt: promptForHooks,
+    history: () => historyMessages,
+  });
 
   const buildAgentEndMessages = (lastAssistant?: unknown): unknown[] =>
     buildAgentHookConversationMessages({
@@ -410,6 +429,7 @@ async function runPreparedCliAgentOwned(
     ).catch(async (error: unknown) => {
       const refused = readCliStreamRefusalOutput(error);
       if (refused) {
+        stopFallbackAfterToolEffects(error, refused);
         await persistStoppedFirstCliSession(error, refused, cliSessionIdToUse);
       }
       throw error;
@@ -464,13 +484,7 @@ async function runPreparedCliAgentOwned(
         "empty_response",
         cliFailoverContext,
       );
-      if (
-        (output.toolSummary?.calls ?? 0) > 0 ||
-        hasAcceptedSessionSpawn(output.acceptedSessionSpawns)
-      ) {
-        // Missing a final answer cannot authorize replaying completed tool effects.
-        recordModelFallbackStop(error);
-      }
+      stopFallbackAfterToolEffects(error, output);
       throw attachCliMessagingDeliveryEvidence(error, output);
     }
     const assistantTexts = assistantText ? [assistantText] : [];
@@ -514,7 +528,9 @@ async function runPreparedCliAgentOwned(
 
   const executeRun = async (): Promise<EmbeddedAgentRunResult> => {
     ({ executePreparedCliRun } = await import("./cli-runner/execute.runtime.js"));
-    historyMessages = needsHookHistory ? await loadCliSessionHistoryMessages(params) : [];
+    if (needsHookHistory || context.beforeModelRequest) {
+      historyMessages = await loadCliSessionHistoryMessages(params);
+    }
     if (turnSideEffectsDisabled) {
       const reusableCliSessionId = isolatedCompletion
         ? undefined

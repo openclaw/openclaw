@@ -14,8 +14,8 @@ import type {
   TranscriptSessionDescriptor,
   TranscriptSourceLocator,
   TranscriptUtterance,
-} from "./provider-types.js";
-import type { TranscriptsSummary } from "./summary.js";
+  TranscriptsSummary,
+} from "./types.js";
 
 type MeetingTranscriptsDatabase = Pick<
   OpenClawStateKyselyDatabase,

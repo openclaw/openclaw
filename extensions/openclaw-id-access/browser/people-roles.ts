@@ -23,6 +23,16 @@ export function definedRoles(roles: Role[]) {
   return sortedRoles(roles).filter((role) => isMemberRole(role.name));
 }
 
+/** Roles that cannot be granted until their sandbox can start. */
+export function unreadySandboxRoles(roles: Role[]) {
+  return definedRoles(roles).filter((role) => role.sandbox?.ready === false);
+}
+
+/** Roles an owner can invite someone to or move a member to right now. */
+export function grantableRoles(roles: Role[]) {
+  return definedRoles(roles).filter((role) => role.sandbox?.ready !== false);
+}
+
 export function administratorWarning(role: string | undefined, locale: string) {
   return roleText(locale, "adminConfirm", { role: roleName(role ?? "") });
 }
@@ -30,7 +40,7 @@ export function administratorWarning(role: string | undefined, locale: string) {
 export function roleOptions(roles: Role[], locale: string) {
   return sortedRoles(roles).map((role) => ({
     value: role.name,
-    disabled: !isMemberRole(role.name),
+    disabled: !isMemberRole(role.name) || role.sandbox?.ready === false,
     label: role.admin
       ? `${roleName(role.name)} · ${roleText(locale, "administrator")}`
       : roleName(role.name),
@@ -38,7 +48,14 @@ export function roleOptions(roles: Role[], locale: string) {
       ? roleText(locale, "invalidRoleName")
       : [
           roleText(locale, `sessions.${role.sessions}`),
-          roleText(locale, role.requiresSandbox ? "sandboxRequired" : "sandboxInherited"),
+          roleText(
+            locale,
+            role.sandbox?.ready === false
+              ? "sandboxNotReady"
+              : role.requiresSandbox
+                ? "sandboxRequired"
+                : "sandboxInherited",
+          ),
           roleText(locale, role.admin ? "administrator" : "noAdministrator"),
         ].join(" · "),
   }));

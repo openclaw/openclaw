@@ -97,12 +97,14 @@ export async function resolveReplyDirectives(params: {
   resetTriggered: boolean;
   commandAuthorized: boolean;
   defaultProvider: string;
-  defaultModel: string;
+  /** Undefined when the agent has no configured model. */
+  defaultModel: string | undefined;
   primaryProvider?: string;
-  primaryModel?: string;
+  primaryModel?: string | undefined;
   aliasIndex: ModelAliasIndex;
   provider: string;
-  model: string;
+  /** Undefined when nothing configured or selected a model; only inference needs one. */
+  model: string | undefined;
   hasResolvedTurnModelOverride?: boolean;
   typing: TypingController;
   opts?: InternalGetReplyOptions;
@@ -141,6 +143,11 @@ export async function resolveReplyDirectives(params: {
   const targetSessionEntry = sessionStore[sessionKey] ?? sessionEntry;
 
   const commandText = sessionCtx.commandText;
+  // Admit slash syntax once from the sender text, before stripping directives.
+  // Keep that decision when projecting raw channel text or parsing chained directives.
+  const startsWithSlash = (isGroup ? stripMentions(commandText, ctx, cfg, agentId) : commandText)
+    .trimStart()
+    .startsWith("/");
   const commandContext = {
     ctx,
     cfg,
@@ -234,7 +241,8 @@ export async function resolveReplyDirectives(params: {
     };
   }
   const hasExplicitSkillInvocation = Boolean(explicitSkillReferences?.skills.length);
-  const canInterpretMessageDirectives = canInterpretTextDirectives && !hasExplicitSkillInvocation;
+  const canInterpretMessageDirectives =
+    startsWithSlash && canInterpretTextDirectives && !hasExplicitSkillInvocation;
 
   const configuredAliases = rawAliases.filter(
     (alias) => !reservedCommands.has(normalizeLowercaseStringOrEmpty(alias)),
@@ -268,12 +276,14 @@ export async function resolveReplyDirectives(params: {
   let preparedModelCatalog = params.preparedModelCatalog;
   let isKnownInlineModel: ((raw: string) => boolean) | undefined;
   const parseDirectives = (text: string) =>
-    parseInlineSessionDirectives(text, {
-      modelAliases: configuredAliases,
-      isKnownInlineModel,
-      allowStatusDirective: canInterpretMessageDirectives,
-      command: routingCommand,
-    });
+    startsWithSlash
+      ? parseInlineSessionDirectives(text, {
+          modelAliases: configuredAliases,
+          isKnownInlineModel,
+          allowStatusDirective: canInterpretMessageDirectives,
+          command: routingCommand,
+        })
+      : clearInlineDirectives(text);
   const cleanStatus = (text: string) =>
     canInterpretMessageDirectives ? stripInlineStatus(text).cleaned : text;
   let directives = parseDirectives(directiveCommandText);
@@ -628,14 +638,16 @@ export async function resolveReplyDirectives(params: {
     return { kind: "reply" as const, reply: markCommandReplyForDelivery(applyResult.reply) };
   }
   ({ directives, provider, model, contextTokens } = applyResult);
-  const thinkingRuntime = resolveEffectiveAgentRuntime({
-    cfg,
-    provider,
-    modelId: model,
-    agentId,
-    sessionKey: resolveRuntimePolicySessionKey({ agentId, cfg, ctx, sessionKey }),
-    sessionEntry: targetSessionEntry,
-  });
+  const thinkingRuntime = model
+    ? resolveEffectiveAgentRuntime({
+        cfg,
+        provider,
+        modelId: model,
+        agentId,
+        sessionKey: resolveRuntimePolicySessionKey({ agentId, cfg, ctx, sessionKey }),
+        sessionEntry: targetSessionEntry,
+      })
+    : undefined;
   const thinkingExplicitlySet =
     thinkingLevelOverride !== undefined ||
     directives.thinkLevel !== undefined ||

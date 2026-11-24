@@ -38,7 +38,7 @@ require the `node` role.
 | `operator.cron`           | Manage owned automations in the Control UI; create conversation-owned automations through an authenticated agent turn. Included in `operator.write`; not global administration. |
 | `operator.admin`          | Administrative access. Satisfies every `operator.*` scope. Required for config mutation, updates, native hooks, reserved namespaces, and high-risk approvals.                   |
 | `operator.pairing`        | Device and node pairing management: list, approve, reject, remove, rotate, revoke.                                                                                              |
-| `operator.approvals`      | Exec and plugin approval APIs.                                                                                                                                                  |
+| `operator.approvals`      | Approval APIs, with an own-request restriction for invited session access.                                                                                                      |
 | `operator.questions`      | Listing, reading, answering, and resolving interactive questions.                                                                                                               |
 | `operator.talk`           | Creating, steering, and closing Talk sessions without general Gateway write access. `operator.write` also satisfies this scope.                                                 |
 | `operator.talk.secrets`   | Reading Talk configuration with secrets included.                                                                                                                               |
@@ -106,8 +106,11 @@ and session access are checked on every request. Publication always resolves the
 current Git remote again. Unavailable targets do not hide existing shared receipts.
 Reopen the chat or reconnect after the managed workspace changes to refresh its
 options. Personal account discovery and personal receipts still
-require `operator.read` and the authenticated owner. Identity, role, access grant,
-connection, and session visibility are rechecked before returning awaited reads.
+require `operator.read` and the authenticated owner. The request fixes that profile
+and its role and scope ceiling at admission. A reconnect or permission change does
+not revoke an admitted read; the next request uses the new authority. Personal reads
+never follow a profile merge into another person's credentials. Credential-generation,
+session lifecycle, and workspace identity fences still protect the selected target.
 
 With `operator.sessions.write`, a requester can publish ordinary changes from
 sessions they created through the shared GitHub account. Workflow definition
@@ -302,6 +305,8 @@ ceiling. A committed change still retires the previous access if returning the
 result fails. An authorized self-downgrade receives its response before its
 connection closes.
 
+When the full `gateway` tool is available in chat, use `users.getRole` with an exact email alias or profile ID to inspect the assigned role, effective role, and source. An administrator can then use `users.setRole` with that profile ID and a configured role name, or an explicit `null` to clear the assignment and return to the mapped or default role. These actions use the requesting operator on the current Gateway, not a remote URL or token. A maintenance-only tool profile does not expose them.
+
 The Control UI distinguishes a role ceiling from limited browser pairing. When
 the authenticated role does not allow administrator access, its limited-access
 notice explains that device approval cannot grant it and does not offer
@@ -327,16 +332,20 @@ with `role: null` exposes the configured mapping or default again.
 `users.list` keeps `role` as the explicit assignment and reports `effectiveRole`
 with `roleSource` (`"assigned"`, `"githubLogin"`, or `"default"`).
 `gateway.roles.default` is optional and must name an existing definition when set.
-Without a default, `definitions` is a role catalog only: sign-in, authorization,
-profile requirements, and session access behave as if `gateway.roles` were absent.
-Stored explicit assignments do not apply, and `users.list` reports no effective
-role. Assigning a named role requires a default; clearing an assignment remains
-available. Existing configurations with a default keep their behavior unchanged.
-
-Definitions alone do not disable device-token or setup-code sign-in, browser-code
-pairing, or owner ingress. They do not cap trusted-proxy or Tailscale users; existing
-identity scopes and pairing grants still apply. OpenClaw ID tunnel members retain
-their membership policy regardless of whether named-role enforcement is enabled.
+A default enables role enforcement for all identified profiles. Without a default,
+the catalog governs only current OpenClaw ID members through their canonical linked
+profile, including that same person's ordinary trusted-proxy, HTTP, channel, and
+background access. A stored identity link alone is not membership. Other people keep
+the same authentication, scopes, attribution, and session access as a Gateway without
+`roles`; named `users.setRole` assignments for them require a default, while clearing
+an assignment remains allowed.
+An enforced person with no resolvable role, or a role that grants no scopes, cannot
+connect. An otherwise permitted connection with an empty device or header scope
+ceiling may still connect for health and scope-upgrade recovery. The Control UI
+explains the `OPERATOR_ACCESS_DENIED` detail. Clearing an assignment exposes any
+configured GitHub mapping or default; it suspends access only when no such fallback
+grants it. Owner devices retain owner authority. Device pairing still authenticates
+the device; it does not override the person's role ceiling.
 
 Set a role's optional `accessPolicyPlugin` to the exact plugin ID when that plugin
 must confirm the person's current access. For example, the Visitor Access plugin
@@ -356,7 +365,7 @@ With live configuration reload enabled, edits to `gateway.roles` (including
 GitHub login assignments) and
 `gateway.auth.identityScopes` apply without restarting the Gateway. Existing
 Gateway clients reconnect to receive the current scope ceiling, except for changes
-confined to model policies as described below and identity-scope edits that leave
+confined to model policies as described below, project grants, and identity-scope edits that leave
 an operator WebSocket login’s resolved grant set unchanged. Editing another login
 or reordering the same scopes preserves that connection, its accepted runs, and
 queued inputs. Changing its own resolved grants revokes retained and delegated
@@ -404,6 +413,15 @@ administrative session access.
 
 Connection scopes and draft/incognito restrictions remain in force.
 
+A collaborator whose role has `sessions.others: "invited"` and who holds a
+session membership may only tighten that session's permission mode
+(`read-only` < `guarded` < `workspace` < `full`). They cannot clear an explicit
+override to Default; from an unset default, only `read-only` is provably tighter.
+This restriction does not apply to the creator, administrators, or teammates
+with role-wide `view`, `suggest`, or `write` access, even if they are also members.
+Existing scope checks still apply: `full` and `sandboxMode` changes require
+`operator.admin`. See [Session permission modes](/gateway/permission-modes).
+
 To enable invitation-only discovery, set the guest role's `sessions.others` to
 `"invited"` after upgrading. Existing role definitions keep their current behavior.
 Assign the intended profiles to that role, then reconnect them. The creator or an
@@ -426,15 +444,78 @@ separate session-read policy still governs which sessions the caller can read.
 The Control UI waits for a live agent roster after loading or reconnecting, so
 an older browser roster cannot restore agents excluded by the current role.
 
+<a id="project-grants" />
+
+Set a role's optional `projects` to registry project IDs, or `"*"` for every
+registered project, to share private repositories with a role that lacks
+`operator.write`. Granted projects are added to the public-repository access
+described under [Method scope is only the first gate](#method-scope-is-only-the-first-gate);
+omitting the field keeps that behavior unchanged, and callers with
+`operator.write` already reach every project. A granted project appears in
+`projects.list` and can be opened with `sessions.create`, native background
+spawns, and inherited child checkouts. When the grant is the only reason a
+caller can use a project, the Gateway always creates an isolated managed
+worktree, even if the request asks for the current checkout. Grants do not
+extend folder browsing, `cwd`, `projectGitUrl`, or `projects.searchRemote`.
+Unknown or removed project IDs are ignored. Grant edits apply to the next
+request without reconnecting clients or stopping runs: background runs read the
+driving person's current grant when they spawn or inherit a checkout. Removing a
+grant denies new sessions, spawns, and inherited checkouts; existing checkouts
+are kept.
+Agent-workspace projects remain governed by `agents`.
+
+```json5
+{
+  gateway: {
+    roles: {
+      definitions: {
+        guest: {
+          sessions: { others: "invited" },
+          agents: ["roboclaw"],
+          scopes: ["operator.sessions.read", "operator.sessions.write"],
+          projects: ["handbook"], // or "*" for every registered project
+        },
+      },
+    },
+  },
+}
+```
+
+### Session approvals
+
+When access comes from a session invitation (`sessions.others: "invited"` plus
+membership), a noncreator collaborator can list, inspect, and resolve only
+approvals raised by their own authenticated profile. The same restriction covers
+approval events and notifications. Unattributed approvals do not qualify as
+that invitee's own requests.
+
+This is an additional restriction, not an approval grant. Existing approval
+scopes and reviewer/device bindings remain required. Creators, administrators,
+role-wide teammates, and legacy device-based approvers keep their existing
+behavior; session membership alone does not activate the restriction. The
+resolved Gateway profile role determines invitation access, independently of
+sign-in transport.
+
 ### OpenClaw ID member roles
 
-OpenClaw ID member connections resolve the membership role directly from
-`gateway.roles.definitions`, even without `gateway.roles.default`. The membership
-role takes precedence over any profile assignment; other connection types retain
-their own authorization rules. Its `accessPolicyPlugin`, when set, is required
-even without named-role enforcement. `users.setRole` refuses assigning a named role to
-an OpenClaw ID member's profile and directs the owner to **Access**. Clearing a
-profile assignment with `role: null` remains allowed.
+OpenClaw ID identifies the member's linked Gateway profile. That profile's effective
+role is the single authority across OpenClaw ID, trusted proxy, Tailscale, and other
+identified sign-in routes. Invite approval assigns the invite's role to the profile.
+An owner or an `operator.admin` administrator can change it with `users.setRole`.
+**Access → Change role** uses an owner-signed membership change to request the same
+profile assignment. The membership role is a display label: Discovery and Access
+publish the current profile role, not a separate permission ceiling.
+
+On upgrade, the Gateway imports each existing member's membership role into an
+unassigned profile once. Existing explicit assignments are preserved. The import
+also updates saved automation and recovery sources whose captured membership policy
+matches the imported definition, without widening their captured grants. A persisted
+per-member migration marker prevents later starts or admissions from restoring a
+cleared assignment. Removing and inviting a member again assigns the new invite's
+role. Role changes immediately disconnect the person's connections, including
+tunnels, and revoke their active runs, queued input, child runs, and resumed runs.
+An individual request already admitted may finish. Automations and other fresh
+starts recheck their saved source before running. Owner-device authority is unchanged.
 
 Enabling OpenClaw ID, or starting a Gateway with it enabled, installs missing
 `operator`, `viewer`, and `guest` presets. Existing definitions, defaults, and assignments
@@ -457,8 +538,7 @@ A member granted `operator.admin` is a Gateway administrator, not the shared Gat
 owner. Through that member connection they can edit Gateway config, role definitions,
 and the OpenClaw ID enable/disable switch; manage profiles, model accounts, devices,
 nodes, plugins, secrets, approvals, automations, sessions, and environments; and use
-the administrator update and restart APIs. A separate named-role profile assignment
-is not required. Their own profile remains the actor, and the Control UI does not
+the administrator update and restart APIs. The assigned profile role supplies that authority. Their own profile remains the actor, and the Control UI does not
 show a limited-access notice for an administrator grant. Existing per-feature
 requirements, including agent and sandbox restrictions, still apply.
 
@@ -473,7 +553,7 @@ Queued GitHub publication retains the initiating member device's attested member
 source and checks it again before later writes, including after recovery. Removal,
 role changes, or a definition that no longer permits the request stop later writes;
 a new access-policy requirement cannot replace the original grant. Every member uses
-the membership role before the profile or default role, including nonadministrator members.
+the same profile-role resolution, including nonadministrator members.
 
 After upgrading, historical publication requests with neither a recorded membership
 principal nor an authentication source are refused if the requester's profile has
@@ -484,9 +564,8 @@ request publication again. A recorded membership principal attests the request e
 without an authentication source. Retries retain the accepted principal and source
 rather than adopting the later invocation's authority.
 
-A member's sandbox requirement comes from the membership definition, even when
-`gateway.roles.default` is absent or their profile has a different named role
-through another sign-in. New sessions record that requirement before execution;
+A member's sandbox requirement comes from their profile role definition, even when
+`gateway.roles.default` is absent. New sessions record that requirement before execution;
 forks, checkpoint branches, delegated children, and authorized cron and recovery
 work retain that requirement. Their sessions' exec and file tools run in a
 per-person sandbox. **Access** warns when an invite's role requires sandboxing
@@ -501,6 +580,14 @@ preset does not grant `operator.write` or `operator.admin`.
 Missing role definitions deny member admission across WebSocket, HTTP, the tunnel
 API, and retained/recovered work. Definition changes apply through config reload;
 removed permissions cannot survive in a connected member or its retained work.
+With OpenClaw ID enabled and a role catalog present, `openclaw doctor` checks the
+local claw record even when the Gateway is stopped. It reports missing member
+definitions, missing presets, and unavailable Docker or Podman backends needed
+by members or the named default. Its preset repair requires confirmation (or
+`--fix`/`--yes`), preserves existing definitions, and never sets a default or
+assignments. Doctor also warns when stored profile assignments have no effect
+because the named default is absent.
+
 Owner-device and node authority is independent of member definitions. See
 [OpenClaw ID remote access](/concepts/experimental-features#member-roles).
 
@@ -646,6 +733,17 @@ workspace from becoming a writable bridge between guests. Maintainer sessions
 and other sessions without a role-required sandbox keep their configured scope
 and workspace access.
 
+A role may require a sandbox before sandboxing is set up, but the Gateway refuses
+to grant it until that sandbox can start. Creating an OpenClaw ID invite for the
+role, or changing a member to it, fails with `sandbox_unavailable` unless every
+agent the role can use has a reachable Docker or Podman backend and its sandbox
+image. The **Access** page runs the same check when it loads: unready roles are
+disabled in the role pickers, and **Ask OpenClaw to set it up** starts a chat
+beside the page where your default agent sets up the sandbox it reports
+missing. Choose **Check again** when it is done. Backends the Gateway cannot check, such as SSH or plugin backends, do not
+block. Existing members keep their role; `openclaw doctor` reports a missing
+engine or image for them and offers to build the default image.
+
 The Gateway records the authenticated creator and their sandbox requirement
 together before a new session first runs, including chat, the OpenAI-compatible
 HTTP endpoints, Talk, recovery, forks, checkpoint branches, cron, outbound
@@ -681,7 +779,8 @@ credential boundary and backend requirements.
 
 <a id="sandbox-exclusions" />
 
-A required sandbox contains the session's exec and file tools. It does not
+A required sandbox contains the session's exec and file tools, not the whole
+Gateway host. It does not
 contain these paths, so configure them before admitting people you do not trust
 with the Gateway host:
 
@@ -741,7 +840,7 @@ reusable device token, and device scope upgrades cannot widen its grant ceiling.
 An administrator-attested [channel identity link](/concepts/user-model#channel-identity-links)
 also lets a sender inherit channel-owner authority from their effective role's
 `operator.admin` scope. This does not require an additional identity-scope grant.
-When roles are absent, channel ownership uses a matching administrative
+When named-role enforcement is off, channel ownership uses a matching administrative
 identity-scope grant instead. Connection scope grants and ceilings are unchanged.
 
 Named roles apply to authenticated durable profiles and their attested channel
@@ -830,10 +929,12 @@ dispatch so authorization failures have one standard structured response:
   `projectGitUrl` (clone or reuse a repository by URL with the Gateway's GitHub
   identity) requires `operator.write`.
 - Callers without `operator.write` (for example the `guest` and `contributor`
-  roles) only see and open agent-workspace projects and registry projects whose
-  origin is a public GitHub repository on the configured host. GitHub
-  `private` and Enterprise `internal` repositories, non-GitHub origins, and
-  failed or rate-limited visibility lookups are hidden. This applies to
+  roles) only see and open agent-workspace projects, registry projects whose
+  origin is a public GitHub repository on the configured host, and registry
+  projects granted by their current role's `projects` field (see
+  [Project grants](#project-grants)). Other GitHub `private` and Enterprise
+  `internal` repositories, non-GitHub origins, and failed or rate-limited
+  visibility lookups are hidden. This applies to
   `projects.list` (projects, recents; the default repository is write-only),
   `projects.checkoutOptions`, project skills in `commands.list`,
   `sessions.create` with `projectId`, native background spawns with
@@ -898,6 +999,7 @@ Project RPCs use these scopes:
 | `projects.list`                        | `operator.sessions.read` or broader read access receives project names and optional read-safe `repositoryIdentity` (`org/repo`); only callers satisfying `operator.write` receive `repoRoot` and `originUrl`. |
 | `projects.add`                         | `operator.write` and the `controlPlaneWrite` method flag.                                                                                                                                                     |
 | `projects.register`, `projects.remove` | `operator.admin`.                                                                                                                                                                                             |
+| `projects.rename`                      | `operator.admin`. Renames a registered or cloned project; agent-workspace projects are rejected.                                                                                                              |
 | `projects.searchRemote`                | `operator.read`.                                                                                                                                                                                              |
 
 `repositoryIdentity` describes only an already discoverable project, not a clone

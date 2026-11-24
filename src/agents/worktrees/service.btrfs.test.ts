@@ -34,6 +34,33 @@ beforeEach(async () => {
 const create = (name: string) => service.create({ repoRoot: repo, name, baseRef: "HEAD" });
 const read = (target: string, file: string) => fs.readFile(path.join(target, file), "utf8");
 
+it("refills one prepared-checkout slot across retained source generations", async () => {
+  const requests: WorktreeWarmPoolRequest[] = [];
+  const unsubscribe = service.onWarmPoolNeeded((request) => requests.push(request));
+  try {
+    const base = await git(repo, "rev-parse", "HEAD");
+    await create("seed-a");
+    await service.prewarm(requests.at(-1)!, {});
+    await fs.writeFile(path.join(repo, "README.md"), "next\n");
+    await git(repo, "commit", "-am", "next base");
+    await create("seed-b");
+    await service.prewarm(requests.at(-1)!, {});
+    await service.create({ repoRoot: repo, name: "return-a", baseRef: base });
+    await service.prewarm(requests.at(-1)!, {});
+    expect(
+      (await listTemplatesAsync(env)).filter(
+        (row) => row.status === "ready" && row.cacheKey.startsWith("warm:"),
+      ),
+    ).toHaveLength(1);
+    vi.mocked(backend.cloneTemplate).mockClear();
+    const warm = await service.create({ repoRoot: repo, name: "warm-a", baseRef: base });
+    expect(await read(warm.path, "README.md")).toBe("base\n");
+    expect(backend.cloneTemplate).not.toHaveBeenCalled();
+  } finally {
+    unsubscribe();
+  }
+});
+
 it("takes a ready worktree without paying injected 20-second template latency", async () => {
   const requests: WorktreeWarmPoolRequest[] = [];
   const unsubscribe = service.onWarmPoolNeeded((request) => requests.push(request));

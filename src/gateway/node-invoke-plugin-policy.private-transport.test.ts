@@ -92,15 +92,13 @@ describe("private node policy transport", () => {
     expect(invoke).not.toHaveBeenCalled();
   });
 
-  it.each(["owner", "capability", "pairing", "approval", "runtime"] as const)(
+  it.each(["owner", "capability", "pairing", "approval"] as const)(
     "rejects private dispatch when %s changes during policy work",
     async (change) => {
       const node = createNodeSession({ commands: [] });
-      let runtimeCurrent = true;
       let approvalCurrent = true;
       const { context, invoke } = createContext({
         nodeSession: node,
-        validateAgentRuntimeApprovalAuthority: () => runtimeCurrent,
       });
       const privateTransport = createPrivateTransport();
       setDangerousDemoCommandRegistry([
@@ -118,9 +116,6 @@ describe("private node policy transport", () => {
               break;
             case "approval":
               approvalCurrent = false;
-              break;
-            case "runtime":
-              runtimeCurrent = false;
               break;
           }
           return await ctx.invokeNode();

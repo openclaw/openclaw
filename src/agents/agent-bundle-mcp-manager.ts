@@ -506,7 +506,7 @@ export function createSessionMcpRuntimeManager(opts: SessionMcpRuntimeManagerOpt
         pluginGeneration:
           (store.configReload?.pluginGeneration ?? 0) + (reload.reloadPlugins ? 1 : 0),
       };
-      catalogs.clear();
+      catalogs.clear("sessions");
       lifecycle.pruneSessionBookkeeping();
       for (const runtime of store.runtimesBySessionId.values()) {
         const slot = store.runtimeSlots.get(runtime);

@@ -19,7 +19,7 @@ import {
   setMockSkillsHomeEnv,
 } from "../skills/test-support/home-env.test-support.js";
 import { loadBundledPluginFacade } from "../test-utils/bundled-plugin-public-surface.js";
-import { createAdmittedRunOperatorAuthority } from "./admitted-run-context.js";
+import { createTestOperatorAuthority } from "./admitted-run-context.test-support.js";
 import { resolveSandboxSkillRuntimeInputs } from "./embedded-agent-runner/sandbox-skills.js";
 import { preparePluginToolExecutionCapabilities } from "./plugin-tool-execution.js";
 import { createAgentToolsSandboxContext } from "./test-helpers/agent-tools-sandbox-context.js";
@@ -99,10 +99,9 @@ it.each(
       },
       loadSkills: async (request) => readWorkspaceSkillSources(request),
     });
-    const authority = createAdmittedRunOperatorAuthority({
+    const authority = createTestOperatorAuthority({
       profileId: "caller",
       scopes: [],
-      assertCurrent() {},
     });
     const bind = async () => {
       const snapshot = await buildSkillSnapshot(workspace, options);

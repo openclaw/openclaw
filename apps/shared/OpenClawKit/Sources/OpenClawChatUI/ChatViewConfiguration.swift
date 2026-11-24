@@ -4,30 +4,6 @@ extension EnvironmentValues {
     @Entry public var openClawChatIsObscured: Bool = false
 }
 
-/// Applies coverage by another surface, such as the iPhone sidebar drawer, to the model.
-/// Only this modifier reads `openClawChatIsObscured`, so covering or revealing the chat
-/// does not re-evaluate the transcript and composer.
-struct ChatObscuredPresentation: ViewModifier {
-    @Environment(\.openClawChatIsObscured) private var isObscured
-    let viewModel: OpenClawChatViewModel
-    let isVisible: Bool
-
-    func body(content: Content) -> some View {
-        content
-            .onChange(of: ObjectIdentifier(self.viewModel)) { _, _ in
-                self.viewModel.streamPacing.interval = self.isObscured ? 0.5 : 0.15
-                self.viewModel.setComposerPresentationActive(self.isVisible && !self.isObscured)
-            }
-            // A rejected message returns to the composer only while the user can see it.
-            .onChange(of: self.isVisible && !self.isObscured, initial: true) { _, active in
-                self.viewModel.setComposerPresentationActive(active)
-            }
-            .onChange(of: self.isObscured, initial: true) { _, obscured in
-                self.viewModel.streamPacing.interval = obscured ? 0.5 : 0.15
-            }
-    }
-}
-
 public struct OpenClawChatDisplayOptions: OptionSet, Sendable {
     public let rawValue: UInt8
 

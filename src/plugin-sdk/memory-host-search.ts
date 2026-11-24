@@ -42,6 +42,8 @@ export type {
   MemoryCitation,
   MemorySearchHit,
   MemoryHealth,
+  MemoryStoreRequest,
+  MemoryStoreResult,
 } from "../plugins/memory-provider-runtime-types.js";
 export type {
   ActiveMemoryProviderResult,

@@ -11,6 +11,7 @@ import {
 import { persistCompactionBoundaryWithSessionEntryAsync } from "../../config/sessions/session-accessor.sqlite-compaction-runtime.js";
 import * as hostTranscriptWriter from "../../config/sessions/session-accessor.sqlite-transcript-write.kernel.js";
 import { replaceTranscriptEvents } from "../../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
+import { readPreparedSessionCompactionInWorker } from "../../config/sessions/session-compaction-prepared.js";
 import { readAgentToolUsageStatus } from "../../config/sessions/tool-usage.js";
 import {
   getOwnedSessionTranscriptActor,
@@ -26,7 +27,6 @@ import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createRunToolUsageRecorder } from "../tool-usage-recorder.js";
 import { withSessionCompactionPersistenceAsync } from "./session-compaction-persistence.js";
 import * as actorAppend from "./session-manager-actor-append.js";
-import { sessionManagerOpenCompaction } from "./session-manager-core.js";
 import { sessionScope } from "./session-manager-fixtures.test-support.js";
 import * as persistenceReceipt from "./session-manager-persistence-error.js";
 import { withSelectedTranscriptReader } from "./session-manager-reader.test-support.js";
@@ -387,9 +387,9 @@ it("propagates queued write revocation and user/custom commit failures without p
   });
 });
 
-it("prepares current compaction metadata and retained history in one worker read", async () => {
-  await withFixture("compaction-preparation", async ({ target, manager, seed: retained }) => {
-    const opaque = await manager.appendCustomEntryAsync("retained-plugin-data", { value: 42 });
+it("prepares current compaction facts in one native extraction after source custody probes", async () => {
+  await withFixture("compaction-preparation", async ({ target, manager }) => {
+    await manager.appendCustomEntryAsync("retained-plugin-data", { value: 42 });
     await replaceSessionEntry(target, {
       sessionId: target.sessionId,
       updatedAt: 2,
@@ -412,9 +412,13 @@ it("prepares current compaction metadata and retained history in one worker read
     );
     const sql = observeHostDataSql();
     try {
-      const prepared = await SessionManager[sessionManagerOpenCompaction](target);
+      const prepared = await readPreparedSessionCompactionInWorker(target, { kind: "preflight" });
+      if (prepared.status !== "preflight") {
+        throw new Error("expected preflight facts");
+      }
       await waitForDiagnosticEventsDrained();
-      expect(requests).toEqual(["task"]);
+      expect(requests).toEqual(["execute", "execute", "task"]);
+      expect(prepared.reads.extractedRows).toBe(prepared.eventCount + 1); // Includes the session header.
       expect(sql.queries).toEqual([]);
       expect(prepared.sessionTarget).toEqual(target);
       expect(prepared.entry).toMatchObject({
@@ -423,10 +427,8 @@ it("prepares current compaction metadata and retained history in one worker read
         compactionCount: 3,
       });
       expect(prepared.runtimeEntry).toEqual(prepared.entry);
-      expect(prepared.sessionManager.getEntries()).toMatchObject([
-        { id: retained, type: "message", message: { content: "Seed" } },
-        { id: opaque, type: "custom", data: { value: 42 } },
-      ]);
+      expect(prepared).not.toHaveProperty("sessionManager");
+      expect(prepared.eventCount).toBeGreaterThan(0);
     } finally {
       sql.restore();
       unsubscribe();
@@ -451,15 +453,15 @@ it("keeps the requested entry separate from the persisted compaction window owne
     const target = sessionScope(requested.storePath, requested.sessionId);
     await replaceSessionEntry(target, { sessionId: target.sessionId, updatedAt: 1 });
     const manager = await SessionManager.openAsync(target, state.workspaceDir);
-    const retained = await manager.appendMessageAsync(makeUserMessage("Window-owned content", 1));
-    const prepared = await SessionManager[sessionManagerOpenCompaction](requested);
+    await manager.appendMessageAsync(makeUserMessage("Window-owned content", 1));
+    const prepared = await readPreparedSessionCompactionInWorker(requested, { kind: "preflight" });
+    if (prepared.status !== "preflight") {
+      throw new Error("expected preflight facts");
+    }
     expect(prepared.sessionTarget).toEqual(target);
     expect(prepared.entry).toMatchObject({ label: "Alias metadata" });
     expect(prepared.runtimeEntry?.label).toBeUndefined();
-    expect(prepared.sessionManager.getEntry(retained!)).toMatchObject({
-      type: "message",
-      message: { content: "Window-owned content" },
-    });
+    expect(prepared).not.toHaveProperty("sessionManager");
   });
 });
 
