@@ -81,12 +81,6 @@ export function libraryAuthority(
       ],
       (assertSources) => {
         assertSources();
-        if (ownerDevice && currentOwnerDevicePrincipal(client) === undefined) {
-          throw new SkillLibraryError(
-            "AUTHORITY_EXPIRED",
-            "Skill library authority changed. Refresh and retry.",
-          );
-        }
         // Synthetic agents must carry host-bound operator authority; identityless agents cannot publish.
         if (client?.internal?.syntheticClient) {
           throw new SkillLibraryError(

@@ -10,10 +10,7 @@ import { createDeferredCore } from "../../shared/deferred.js";
 import { resolveGlobalMap } from "../../shared/global-singleton.js";
 import { log } from "../embedded-agent-runner/logger.js";
 import { reserveMcpFormQuestion } from "../mcp-form-resource-context.js";
-import {
-  getGatewayToolCallerIdentity,
-  captureGatewayToolCallerAssertion,
-} from "../tools/gateway-caller-context.js";
+import { getGatewayToolCallerIdentity } from "../tools/gateway-caller-context.js";
 import {
   createQuestionPromptLifetime,
   isTerminalQuestionResolveError,
@@ -557,7 +554,6 @@ async function runScopedAgentHarnessQuestion(
   const questionId = params.questionId ?? `ask_${randomBytes(16).toString("hex")}`;
   const questions = buildAgentQuestionRequestQuestions(params.questions);
   const watchdogAttempt = getGatewayToolCallerIdentity()?.watchdogAttempt;
-  const assertCurrent = captureGatewayToolCallerAssertion();
   let watchdogWait: ReturnType<NonNullable<typeof watchdogAttempt>["beginWait"]> | undefined;
   params.signal?.throwIfAborted();
   using prompt = createQuestionPromptLifetime(params.signal);
@@ -642,7 +638,6 @@ async function runScopedAgentHarnessQuestion(
       deadlineAtMs: request.expiresAtMs,
       isCurrent: () => {
         params.signal?.throwIfAborted();
-        assertCurrent?.();
         return !claim.isCancellationRequested();
       },
     });

@@ -17,6 +17,10 @@ import { PluginCatalogInstallActionSchema } from "./plugin-catalog-install.js";
 import { PluginSdkDeprecationNoticeSchema } from "./plugin-compatibility.js";
 import { PluginCredentialDescriptorSchema } from "./plugin-credentials.js";
 import {
+  PluginDiscoveryCategorySchema,
+  PluginDiscoveryIconKeySchema,
+} from "./plugin-discovery-category.js";
+import {
   PluginDecisionProviderStatusSchema,
   PluginDeclaredSurfaceSchema,
   PluginHookGrantSchema,
@@ -37,6 +41,7 @@ export {
   PluginCatalogInstallActionSchema,
 } from "./plugin-catalog-install.js";
 
+export { PluginDiscoveryCategorySchema } from "./plugin-discovery-category.js";
 export { PluginJsonValueSchema } from "./plugin-json-value.js";
 
 export {
@@ -378,21 +383,6 @@ const PluginDiscoveryIntentSchema = stringLiteralUnion([
   "featured",
 ]);
 
-const PluginDiscoveryIconKeySchema = Type.String({
-  minLength: 1,
-  maxLength: 64,
-  pattern: "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$",
-});
-
-export const PluginDiscoveryCategorySchema = closedObject({
-  slug: NonEmptyString,
-  label: NonEmptyString,
-  description: NonEmptyString,
-  icon: PluginDiscoveryIconKeySchema,
-  order: Type.Integer({ minimum: 0 }),
-  pinnedPackages: Type.Optional(Type.Array(NonEmptyString, { uniqueItems: true })),
-});
-
 export const PluginDiscoveryCatalogFactsSchema = closedObject({
   name: NonEmptyString,
   packageName: Type.Optional(NonEmptyString),
@@ -551,6 +541,8 @@ const PluginOverviewCapabilitiesSchema = closedObject({
 /** Consent snapshot plus the installed-version presentation projection used by Control UI. */
 export const PluginsInspectResultSchema = closedObject({
   ok: Type.Literal(true),
+  /** The installed plugin offers a guided provider sign-in in Models. */
+  providerSignIn: Type.Optional(Type.Literal(true)),
   overview: Type.Optional(
     closedObject({
       /** Selected inspected manifest declares native browser code, independently of UI capabilities. */

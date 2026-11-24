@@ -1,12 +1,23 @@
+import type { AdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
 import {
   getSubagentRunsForRequesterSession,
   subagentRuns,
 } from "../agents/subagents/registry/subagent-registry-memory.js";
 import { resumeSubagentRun } from "../agents/subagents/registry/subagent-registry.js";
-import { owesRequesterCompletion } from "../agents/subagents/registry/subagent-requester-settle-identity.js";
+import type { SubagentRunRecord } from "../agents/subagents/registry/subagent-registry.types.js";
+import {
+  isRequesterSettleWakeForRun,
+  owesRequesterCompletion,
+} from "../agents/subagents/registry/subagent-requester-settle-identity.js";
+import {
+  copySubagentRunRuntimeOwner,
+  isSameSubagentRunOwner,
+} from "../agents/subagents/registry/subagent-run-generation.js";
 import { isYieldedSubagentRun } from "../agents/subagents/registry/subagent-run-liveness.js";
 import { readSessionSubmittedInput } from "../config/sessions/session-pending-input-source.js";
 import type { PendingInputScope } from "../config/sessions/session-pending-input-store.js";
+import { parseSessionPendingInputMessage } from "../config/sessions/session-pending-input-value.js";
+import type { SessionPendingInputRow } from "../config/sessions/session-pending-input.types.js";
 import { isRestartResumeEntryOutOfScope } from "../config/sessions/session-restart-resume-scope.js";
 import {
   acquireTranscriptLease,
@@ -23,6 +34,7 @@ import {
 } from "../process/gateway-work-admission.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { chatRef } from "../sessions/chat-ref.js";
+import { restoreGatewayQueuedOperatorRecovery } from "./operator-run-recovery.js";
 import { WRITE_SCOPE } from "./operator-scopes.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 import {
@@ -58,7 +70,11 @@ export async function hasInterruptedCommittedRequesterSettleInput(
 export async function prepareRestartCompletionCustody(
   { context, signal, log }: RestartResumeParams,
   { target, entries }: Pick<PreparedRestartStore, "target" | "entries">,
-): Promise<{ assertCurrent: () => void; resume: () => void }> {
+): Promise<{
+  assertCurrent: () => void;
+  ownsInput: (row: SessionPendingInputRow, agentId: string) => boolean;
+  resume: () => void;
+}> {
   const assertCurrent = () => {
     signal.throwIfAborted();
     if (isGatewayRestartDraining()) {
@@ -66,7 +82,7 @@ export async function prepareRestartCompletionCustody(
     }
   };
   assertCurrent();
-  const recovered: string[] = [];
+  const recovered: SubagentRunRecord[] = [];
   for (const { sessionKey, entry } of entries) {
     // A completion wakes parent work; work from another restart resume scope never regains it.
     if (isRestartResumeEntryOutOfScope(entry)) {
@@ -81,6 +97,7 @@ export async function prepareRestartCompletionCustody(
           entry,
           agentId: parseAgentSessionKey(sessionKey)?.agentId ?? target.agentId,
           assertCurrent,
+          log,
         })),
       );
     } catch (error) {
@@ -90,11 +107,44 @@ export async function prepareRestartCompletionCustody(
   }
   return {
     assertCurrent,
+    ownsInput: (row, agentId) => {
+      assertCurrent();
+      const message = parseSessionPendingInputMessage(row.message_json);
+      if (
+        message.provenance?.kind !== "inter_session" ||
+        message.provenance.sourceTool !== "subagent_settle" ||
+        row.idempotency_key !== `${row.run_id}:user`
+      ) {
+        return false;
+      }
+      const runs = [...getSubagentRunsForRequesterSession(row.session_key)];
+      const runsById = new Map(runs.map((entry) => [entry.runId, entry]));
+      // The queue reader already excludes replaced transcripts. Only a freshly
+      // recovered cohort retains its input; orphaned or refused sources still fail.
+      return runs.some(
+        (entry) =>
+          recovered.some((owner) => isSameSubagentRunOwner(entry, owner)) &&
+          !subagentRuns.isCompletionAuthorityRetired(entry) &&
+          entry.requesterSettleWake?.batchRunIds?.some(
+            (runId) =>
+              runsById.get(runId)?.childSessionKey === message.provenance?.sourceSessionKey,
+          ) === true &&
+          isRequesterSettleWakeForRun({
+            entry,
+            runId: row.run_id,
+            requesterSessionKey: row.session_key,
+            requesterAgentId: agentId,
+            runsById,
+          }),
+      );
+    },
     resume: () => {
       signal.throwIfAborted();
       if (!isGatewayRestartDraining()) {
-        for (const runId of recovered) {
-          resumeSubagentRun(runId);
+        for (const owner of recovered) {
+          if (isSameSubagentRunOwner(subagentRuns.get(owner.runId), owner)) {
+            resumeSubagentRun(owner.runId);
+          }
         }
       }
     },
@@ -110,8 +160,9 @@ async function recoverRequesterCompletionCustody(params: {
   env?: NodeJS.ProcessEnv;
   entry: Pick<InternalSessionEntry, "sessionId" | "lifecycleRevision" | "archivedAt">;
   assertCurrent: () => void;
-}): Promise<string[]> {
-  const { context, entry, agentId, sessionKey, storePath, assertCurrent } = params;
+  log: RestartResumeParams["log"];
+}): Promise<SubagentRunRecord[]> {
+  const { context, entry, agentId, sessionKey, storePath, assertCurrent, log } = params;
   if (entry.archivedAt !== undefined) {
     return [];
   }
@@ -128,15 +179,7 @@ async function recoverRequesterCompletionCustody(params: {
   if (!pending.length) {
     return [];
   }
-  const authority = await prepareSessionSystemTurnAuthority({
-    context,
-    agentId,
-    sessionKey,
-    storePath,
-    sessionId: entry.sessionId,
-    preserveRecordedSource: true,
-    assertCurrent,
-  });
+  const recovered: SubagentRunRecord[] = [];
   let target: TranscriptLease | undefined;
   try {
     target = await acquireTranscriptLease(
@@ -145,39 +188,65 @@ async function recoverRequesterCompletionCustody(params: {
       { env: params.env },
     );
     const requester = target;
-    await withPluginRuntimeGatewayContextResolver(context.resolveGatewayContext, () =>
-      withOperatorToolGatewayAuthority(
-        {
-          operatorRunAuthority: authority?.authority,
-          operatorRoleActor: { kind: "system" },
-          scopes: authority?.authority.scopes ?? [WRITE_SCOPE],
-          assertCurrent,
-        },
-        async () => {
-          for (const child of pending) {
-            const custody = await captureOperatorToolGatewayContinuationContext({
+    for (const child of pending) {
+      let authority: { authority: AdmittedRunOperatorAuthority; release: () => void } | undefined;
+      try {
+        // Re-admit the spawning requester's saved source; the woken turn checks session access
+        // when it starts. Older rows use the session principal, else the System write baseline.
+        const source = child.requesterOperatorSource;
+        authority = source
+          ? await restoreGatewayQueuedOperatorRecovery({ agentId, source, context, assertCurrent })
+          : await prepareSessionSystemTurnAuthority({
+              context,
               agentId,
               sessionKey,
+              storePath,
+              sessionId: entry.sessionId,
+              preserveRecordedSource: true,
+              assertCurrent,
             });
-            if (!custody) {
-              throw new Error("Restart completion has no current Gateway authority");
-            }
-            try {
-              assertCurrent();
-              requester.assertCurrent();
-              bindGatewayContextResolver(child, context.resolveGatewayContext);
-              subagentRuns.bindCompletionAuthority(child, custody);
-            } catch (error) {
-              custody.release();
-              throw error;
-            }
-          }
-        },
-      ),
-    );
+        await withPluginRuntimeGatewayContextResolver(context.resolveGatewayContext, () =>
+          withOperatorToolGatewayAuthority(
+            {
+              operatorRunAuthority: authority?.authority,
+              operatorRoleActor: { kind: "system" },
+              scopes: authority?.authority.scopes ?? [WRITE_SCOPE],
+              assertCurrent,
+            },
+            async () => {
+              const custody = await captureOperatorToolGatewayContinuationContext({
+                agentId,
+                sessionKey,
+              });
+              if (!custody) {
+                throw new Error("Restart completion has no current Gateway authority");
+              }
+              try {
+                assertCurrent();
+                requester.assertCurrent();
+                bindGatewayContextResolver(child, context.resolveGatewayContext);
+                subagentRuns.bindCompletionAuthority(child, custody);
+              } catch (error) {
+                custody.release();
+                throw error;
+              }
+            },
+          ),
+        );
+        recovered.push(copySubagentRunRuntimeOwner(child, { ...child }));
+      } catch (error) {
+        // Shutdown or a changed requester chat stops every child; one refused source stops one.
+        assertCurrent();
+        requester.assertCurrent();
+        log.warn(
+          `Restart completion recovery failed for ${child.runId} in ${sessionKey}: ${String(error)}`,
+        );
+      } finally {
+        authority?.release();
+      }
+    }
   } finally {
     target?.release();
-    authority?.release();
   }
-  return pending.map((child) => child.runId);
+  return recovered;
 }

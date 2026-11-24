@@ -1,4 +1,7 @@
-import type { SessionCatalog } from "../../../packages/gateway-protocol/src/index.ts";
+import type {
+  SessionCatalog,
+  SessionCatalogProfileRelation,
+} from "../../../packages/gateway-protocol/src/index.ts";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { GatewaySessionRow, SessionsListResult } from "../api/types.ts";
 import { isSessionRouteId } from "../app-route-paths.ts";
@@ -27,6 +30,7 @@ import {
 import type { SidebarSessionMutationScope } from "./app-sidebar-session-types.ts";
 import { createPanelRefreshStatus, type PanelRefreshStatus } from "./panel-refresh-status-state.ts";
 import {
+  selectSessionCatalogProfileRelation,
   applySessionCatalogContinuation,
   archiveSessionCatalog as archiveSessionCatalogData,
   importSessionCatalog as importSessionCatalogData,
@@ -92,6 +96,14 @@ export class SessionDataOwner implements SessionCatalogDataOwner {
   private presentationScope: readonly unknown[];
   readonly sessionCatalogLive = new SessionCatalogLiveState();
   sessionScopeGeneration = 0;
+  private catalogRelationKey: string | undefined;
+  get sessionCatalogProfileRelation(): SessionCatalogProfileRelation | undefined {
+    return selectSessionCatalogProfileRelation(
+      this.sessionCatalogs,
+      this.inputs.sidebarSessionOwnerFilter(),
+      this.context.gateway.snapshot.selfUser?.id,
+    );
+  }
   sessionCatalogAgentId: string | null = null;
   sessionCatalogRevision = 0;
   readonly sessionCatalogPageDepths = new Map<string, number>();
@@ -368,7 +380,10 @@ export class SessionDataOwner implements SessionCatalogDataOwner {
     const nextCatalogAgentId =
       resolveSessionCatalogAgentId(this) ??
       (context.gateway.snapshot.phase !== "connected" ? this.sessionCatalogAgentId : null);
+    const relationKey = JSON.stringify(this.sessionCatalogProfileRelation);
+    const relationChanged = relationKey !== this.catalogRelationKey;
     if (
+      !relationChanged &&
       nextAgentId === this.sessionScopeAgentId &&
       nextCatalogAgentId === this.sessionCatalogAgentId
     ) {
@@ -389,15 +404,21 @@ export class SessionDataOwner implements SessionCatalogDataOwner {
       normalizeAgentId(this.sessionsAgentId) === nextAgentId &&
       this.sessionsResult === context.sessions.presentation.result;
 
+    this.catalogRelationKey = relationKey;
     this.sessionScopeAgentId = nextAgentId;
     this.sessionCatalogAgentId = nextCatalogAgentId;
     retireSessionCatalogData(this);
     this.sessionCatalogRevision += 1;
     this.sessionCatalogRefreshStatus = createPanelRefreshStatus();
 
-    if (agentChanged || catalogAgentChanged) {
+    if (agentChanged || catalogAgentChanged || relationChanged) {
       // Catalog cursors and rows belong to the selected agent, not just its host.
-      this.sessionCatalogs = [];
+      this.sessionCatalogs =
+        relationChanged && !agentChanged && !catalogAgentChanged
+          ? this.sessionCatalogs.map((catalog) =>
+              catalog.capabilities.profileRelation ? { ...catalog, hosts: [] } : catalog,
+            )
+          : [];
       this.sessionCatalogPageDepths.clear();
     }
     if (agentChanged && !ownsCurrentCanonicalList) {

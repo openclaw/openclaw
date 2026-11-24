@@ -6,16 +6,12 @@ import {
   type ExecApprovalRequestPayload,
 } from "../../infra/exec-approvals.js";
 import type { PluginApprovalRequestPayload } from "../../infra/plugin-approvals.js";
-import { withSqliteWorkerCleanupFailure } from "../../infra/sqlite-worker-broker-reply.js";
 import { SqliteWorkerError } from "../../infra/sqlite-worker-contract.js";
-import * as workerAdmission from "../../infra/sqlite-worker-operation-admission.js";
-import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
 import { closeOpenClawStateDatabaseByPathAsync } from "../../state/openclaw-state-db-cache.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { invalidateGatewayDeviceRevocation } from "../device-revocation.js";
-import { ApprovalMutationRefusedError } from "../exec-approval-authority.js";
 import { ExecApprovalManager } from "../exec-approval-manager.js";
 import { installTestApprovalClock } from "../exec-approval-manager.test-support.js";
 import * as approvalRecovery from "../exec-approval-recovery.js";
@@ -31,8 +27,6 @@ import {
 const resultDelivery = vi.hoisted(() => ({
   loseResult: undefined as "worker" | undefined,
   hideReceipt: false,
-  wrapRefusal: false,
-  wrappedRefusal: undefined as Error | undefined,
 }));
 vi.mock("../../infra/sqlite-worker-operation-admission.js", async (importOriginal) => {
   const actual =
@@ -69,24 +63,7 @@ vi.mock("../../state/openclaw-state-worker-store.js", async (importOriginal) => 
         (scope) =>
           operation({
             execute: async (command, executeOptions) => {
-              const result = await scope
-                .execute(command, executeOptions)
-                .catch((error: unknown) => {
-                  if (
-                    resultDelivery.wrapRefusal &&
-                    (command.type === "operatorApprovals.resolve" ||
-                      command.type === "operatorApprovals.deny") &&
-                    error instanceof Error
-                  ) {
-                    resultDelivery.wrapRefusal = false;
-                    resultDelivery.wrappedRefusal = error;
-                    throw withSqliteWorkerCleanupFailure(
-                      error,
-                      new Error("synthetic cleanup failure"),
-                    );
-                  }
-                  throw error;
-                });
+              const result = await scope.execute(command, executeOptions);
               if (
                 command.type === "operatorApprovals.resolve" &&
                 resultDelivery.loseResult === "worker"
@@ -114,8 +91,6 @@ afterEach(() => {
   Object.assign(resultDelivery, {
     loseResult: undefined,
     hideReceipt: false,
-    wrapRefusal: false,
-    wrappedRefusal: undefined,
   });
   vi.restoreAllMocks();
 });
@@ -244,37 +219,6 @@ async function replaceDatabase(databasePath: string) {
   await rename(replacement, databasePath);
   expect((await stat(databasePath)).ino).not.toBe(original.ino);
 }
-
-it.each(["resolve", "deny"] as const)(
-  "preserves %s refusal inside cleanup aggregates",
-  async (operation) => {
-    await using fixture = await createFixture("aggregate-refusal", true);
-    const { record, settlement, deviceId } = fixture;
-    const before = fixture.read();
-    const connection = new AbortController();
-    const invocation = fixture.resolveInvocation(operation, connection.signal);
-    let transactions = 0;
-    probe.admission(workerAdmission, (request, grant, admit) => {
-      if (request.stage === "transaction") {
-        transactions += 1;
-        if (transactions === 1) {
-          connection.abort();
-        }
-      } else if (request.stage === "commit" && transactions === 2) {
-        invalidateGatewayDeviceRevocation(invocation.context, deviceId, "operator");
-      }
-      return admit(request, grant);
-    });
-    resultDelivery.wrapRefusal = true;
-    expect(await invocation.invoke()).toMatchObject({ ok: false });
-    expect(transactions).toBe(2);
-    expect(resultDelivery.wrappedRefusal).toBeInstanceOf(ApprovalMutationRefusedError);
-    expect(fixture.read()).toEqual(before);
-    expect(settlement.done).toBe(false);
-    expect(record.resolvedAtMs).toBeUndefined();
-    expect(invocation.context.approvalEvents?.publishResolved).not.toHaveBeenCalled();
-  },
-);
 
 it.each([false, true])("keeps missing-row owner (replaced: %s)", async (replace) => {
   await using fixture = await createFixture("missing-owner");

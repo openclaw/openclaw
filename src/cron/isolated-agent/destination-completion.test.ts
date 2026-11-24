@@ -118,6 +118,8 @@ it("keeps the destination session for a reply to a delivered cron question", () 
     const entry = latest(destination);
     expect(entry).toMatchObject(generation);
     expect(entry?.lastInteractionAt).toBeGreaterThanOrEqual(deliveryStartedAt);
+    // The delivered result is visible content, so it marks the destination unread.
+    expect(entry?.lastActivityAt).toBe(entry?.lastInteractionAt);
 
     expect(await dispatchCronDelivery(params)).toMatchObject({ delivered: true });
     expect(sendText).toHaveBeenCalledOnce();

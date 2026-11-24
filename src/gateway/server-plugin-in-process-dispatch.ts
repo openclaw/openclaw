@@ -1,9 +1,6 @@
 import type { AgentWaitParams } from "../../packages/gateway-protocol/src/index.js";
 import { readQuestionDispatchCapability } from "../agents/harness/host-private-capabilities.js";
-import {
-  captureGatewayToolCallerAssertion,
-  withoutGatewayToolCallerIdentity,
-} from "../agents/tools/gateway-caller-context.js";
+import { withoutGatewayToolCallerIdentity } from "../agents/tools/gateway-caller-context.js";
 import {
   captureExternalSessionCommitGuard,
   composeSessionSourceAssertion,
@@ -75,7 +72,6 @@ export async function prepareInProcessAgentExecution(input: PrepareInProcessAgen
   const assertLifetime = () => {
     resolved.assertContextCurrent();
     resolved.assertInvocationCurrent();
-    operatorSource?.authority.assertCurrent();
   };
   const assertCurrent = () => {
     assertLifetime();
@@ -166,21 +162,10 @@ export async function withInProcessGatewayDispatch<T>(
     releaseOperatorAuthority = captured?.release;
     resolved.assertContextCurrent();
     resolved.assertInvocationCurrent();
-    captured?.authority.assertCurrent();
     if (captured) {
       resolved.client = mergePluginRuntimeClientInternal(resolved.client, {
         operatorRunAuthority: captured.authority,
       });
-      const withCapturedAuthority = (assertCurrent: () => void) =>
-        composeSessionSourceAssertion([assertCurrent, captured.authority.assertCurrent]);
-      resolved.assertContextCurrent = withCapturedAuthority(resolved.assertContextCurrent);
-      resolved.assertSourceCurrent = withCapturedAuthority(resolved.assertSourceCurrent);
-      const assertCreatedInputSourceCurrent = resolved.assertCreatedInputSourceCurrent;
-      if (assertCreatedInputSourceCurrent) {
-        resolved.assertCreatedInputSourceCurrent = withCapturedAuthority(
-          assertCreatedInputSourceCurrent,
-        );
-      }
     }
     // Only preparation refusals prove method work was never entered. Errors
     // from the callback may follow effects and must retain their original form.
@@ -293,7 +278,6 @@ export async function runWithInProcessGatewaySessionMutation<T>(
   ) => Promise<T> | T,
 ): Promise<T> {
   const method = "sessions.send";
-  const assertCallerCurrent = captureGatewayToolCallerAssertion();
   const requestParams = { key: params.sessionKey, agentId: params.agentId };
   return await withInProcessGatewayDispatch(
     method,
@@ -312,7 +296,6 @@ export async function runWithInProcessGatewaySessionMutation<T>(
           import("./server-methods.js"),
         ]);
       const assertInvocationCurrent = () => {
-        assertCallerCurrent?.(method);
         resolved.assertContextCurrent();
         resolved.assertInvocationCurrent();
       };

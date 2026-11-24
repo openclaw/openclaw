@@ -139,7 +139,6 @@ export async function runActiveReplySteer(
   const assertReadCurrent = () => {
     resolveFollowupAbortSignal(followupRun)?.throwIfAborted();
     params.opts?.abortSignal?.throwIfAborted();
-    followupRun.operatorAuthority?.assertCurrent();
   };
   let delivery: ReturnType<typeof prepareSteeringDelivery> | undefined;
   let releaseToolAuthority: (() => void) | undefined;
@@ -360,14 +359,7 @@ export async function runActiveReplySteer(
         throw new Error("Automatic model fallback changed during steering admission");
       }
     };
-    const assertPolicy = (fingerprint: string) => {
-      assertSourceCurrent();
-      if (fingerprint !== steeringAuthority.toolAuthorityFingerprint) {
-        throw new Error("Steering tool authority changed");
-      }
-    };
     const text = followupRun.prompt;
-    const assertLegacyPolicyCurrent = () => assertPolicy(steeringAuthority.toolAuthority.read());
     const injectionAttempt = await beginReplyMessageInjectionTarget(injectionTarget, text, {
       currentInboundContext: followupRun.currentInboundContext,
       inboundAudio: followupRun.currentInboundAudio === true,
@@ -376,10 +368,9 @@ export async function runActiveReplySteer(
         bindWorkerToolPreparation({
           authorityKind: "source-bound" as const,
           assertCurrent: assertSourceCurrent,
-          compatAssertCurrent: assertLegacyPolicyCurrent,
+          compatAssertCurrent: assertSourceCurrent,
           prepareCurrent: async () => {
             await steeringAuthority.prepareCurrent();
-            assertPolicy(steeringAuthority.toolAuthority.read());
             await steeringDelivery.prepareCurrent();
             assertSourceCurrent();
           },

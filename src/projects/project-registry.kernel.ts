@@ -161,6 +161,25 @@ export function removeProjectRegistryInDatabase(
   );
 }
 
+export function renameProjectRegistryInDatabase(
+  database: EngineConnection,
+  project: ProjectRegistryIdentity & { displayName: string },
+): ProjectRegistryRecord | undefined {
+  const current = readMatchingProjectRow(database, project);
+  if (!current) {
+    return undefined;
+  }
+  const renamed = { ...current, display_name: project.displayName, updated_at_ms: Date.now() };
+  executeSqliteQuerySync(
+    database,
+    getNodeSqliteKysely<ProjectsDatabase>(database)
+      .updateTable("projects")
+      .set({ display_name: renamed.display_name, updated_at_ms: renamed.updated_at_ms })
+      .where("id", "=", project.id),
+  );
+  return rowToProject(renamed);
+}
+
 export function removeProjectCheckoutReferenceInDatabase(
   database: EngineConnection,
   project: Pick<ProjectRegistryIdentity, "id" | "repoRoot">,

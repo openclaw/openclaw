@@ -131,6 +131,9 @@ it.for(cases)(
         const sessionId = `cache-${route}`;
         const sessionKey = `agent:main:telegram:direct:${sessionId}`;
         const config = cacheRunnerConfig({
+          // Room for the full journey below the compaction trigger: this proof covers prefix
+          // stability. agent-runner-compaction-fallback.test.ts owns the warm summary shape.
+          contextWindow: 131_072,
           api,
           provider,
           model,

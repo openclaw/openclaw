@@ -5,7 +5,11 @@ import { expect, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
-import { installMockGateway, waitForControlUiRoute } from "../test-helpers/control-ui-e2e.ts";
+import {
+  controlUiBundledSettingsStorageKey,
+  installMockGateway,
+  waitForControlUiRoute,
+} from "../test-helpers/control-ui-e2e.ts";
 import { observeLayoutShifts } from "../test-helpers/control-ui-layout-shift.ts";
 import { createControlUiSessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -164,53 +168,78 @@ suite.define(() => {
       );
     },
   );
-  it("shows the full Actual desktop size on a phone", async () => {
-    await suite.withPage(
-      { viewport: { width: 390, height: 844 }, hasTouch: true },
-      async ({ page }) => {
-        const gateway = await installSystemsGateway(page, 0, {
-          "environments.list": {
-            environments: [
-              { id: "gateway", type: "local", label: "Gateway machine", status: "available" },
-              {
-                id: "worker-one",
-                type: "worker",
-                label: "Cloud worker",
-                status: "available",
-                desktop: true,
-              },
-            ],
-          },
-          "desktop.observe": observe("sizing"),
-        });
-        await page.goto(new URL("systems", suite.server.baseUrl).href);
-        const picker = page.locator(".systems-mobile-picker");
-        await picker.waitFor();
-        await installScriptedRfbServer(page);
-        await picker.selectOption("worker-one");
-        expect((await gateway.waitForRequest("desktop.observe")).params).toMatchObject({
-          control: false,
-        });
-        await page.getByText("View only", { exact: true }).waitFor();
-        const sizing = page.getByRole("combobox", { name: "Desktop size" });
-        await sizing.selectOption("actual");
-        const remaining = await sizing.evaluate(async (select: HTMLSelectElement) => {
-          await document.fonts.ready;
-          const style = getComputedStyle(select);
-          const context = document.createElement("canvas").getContext("2d")!;
-          context.font = style.font;
-          const label = context.measureText(select.selectedOptions[0]!.label).width;
-          return (
-            select.clientWidth -
-            Number.parseFloat(style.paddingLeft) -
-            Number.parseFloat(style.paddingRight) -
-            label
+  it.each([
+    { width: 390, locale: "en", textScale: 100, actual: "Actual" },
+    { width: 390, locale: "en", textScale: 140, actual: "Actual" },
+    { width: 820, locale: "en", textScale: 100, actual: "Actual" },
+    { width: 390, locale: "de", textScale: 100, actual: "Tatsächliche Größe" },
+  ])(
+    "keeps the complete desktop size label visible at $width px in $locale ($textScale%)",
+    async ({ width, locale, textScale, actual }) => {
+      await suite.withPage(
+        { viewport: { width, height: 844 }, hasTouch: true },
+        async ({ page }) => {
+          const gateway = await installSystemsGateway(page, 0, {
+            "environments.list": {
+              environments: [
+                {
+                  id: "gateway",
+                  type: "local",
+                  label: "Gateway machine",
+                  status: "available",
+                  desktop: true,
+                },
+              ],
+            },
+            "desktop.observe": observe("sizing"),
+          });
+          await page.addInitScript(
+            ({ key, locale: selectedLocale, textScale: selectedScale }) => {
+              localStorage.setItem("openclaw.i18n.locale", selectedLocale);
+              localStorage.setItem(key, JSON.stringify({ textScale: selectedScale }));
+            },
+            { key: controlUiBundledSettingsStorageKey(suite.server.baseUrl), locale, textScale },
           );
-        });
-        expect(remaining, "selected label fits before the chevron").toBeGreaterThanOrEqual(0);
-      },
-    );
-  });
+          await page.goto(suite.server.baseUrl + "new");
+          await installScriptedRfbServer(page);
+          await page.evaluate(() => window.openclawControlUi!.navigate("systems"));
+          expect((await gateway.waitForRequest("desktop.observe")).params).toEqual({
+            source: { kind: "host" },
+            control: false,
+          });
+          const sizing = page.locator(".systems-desktop select.desktop-sizing");
+          await sizing.waitFor();
+          await page.evaluate(() => document.fonts.ready.then(() => {}));
+          const fitWidth = await sizing.evaluate((select) => select.clientWidth);
+          await sizing.selectOption("actual");
+          const measurement = await sizing.evaluate((select: HTMLSelectElement) => {
+            const style = getComputedStyle(select);
+            const context = document.createElement("canvas").getContext("2d")!;
+            context.font = style.font;
+            const label = select.selectedOptions[0]!.label;
+            return {
+              label,
+              width: select.clientWidth,
+              remaining:
+                select.getBoundingClientRect().width -
+                Number.parseFloat(style.borderLeftWidth) -
+                Number.parseFloat(style.borderRightWidth) -
+                Number.parseFloat(style.paddingLeft) -
+                Number.parseFloat(style.paddingRight) -
+                context.measureText(label).width,
+            };
+          });
+          expect(measurement.label).toBe(actual);
+          expect(measurement.remaining, "the label fits before the chevron").toBeGreaterThanOrEqual(
+            0,
+          );
+          expect(measurement.width, "changing size must not move neighboring actions").toBe(
+            fitWidth,
+          );
+        },
+      );
+    },
+  );
 
   it.each([390, 1280])(
     "keeps one useful Systems recovery message while reconnecting at %ipx",

@@ -1,17 +1,135 @@
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { expectDefined } from "@openclaw/normalization-core";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
+import { listNodeTestConfigFiles } from "../../scripts/lib/ci-node-test-inventory.mts";
 import {
   ciTestShardRuntimes,
   filterCiTestRuntimeSelections,
   resolveCiTestRuntimeSelections,
+  resolveCiTestRuntimeInventory,
 } from "../../scripts/lib/ci-test-runtime.mts";
+import * as testProjects from "../../scripts/test-projects.test-support.mts";
+import { createAgentsSupportVitestConfig } from "../vitest/vitest.agents-support.config.ts";
+import { createUnitFastFakeTimersVitestConfig } from "../vitest/vitest.unit-fast-fake-timers.config.ts";
+import { listMatchedTestFiles } from "./ci-node-test-plan.test-support.js";
 
 const nodeOnly = "src/cli/cli-process-diagnostics.test.ts";
 const bothHosts = "src/infra/sqlite-schema-facts.physical-cache.test.ts";
 const bunEligible = "src/agents/sandbox/docker.execDockerRaw.enoent.test.ts";
 const config = "test/vitest/vitest.unit-fast.config.ts";
+const timerConfig = "test/vitest/vitest.unit-fast-fake-timers.config.ts";
+const supportConfig = "test/vitest/vitest.agents-support.config.ts";
 
 describe("CI runtime job inventory", () => {
+  it.each([timerConfig, supportConfig])(
+    "reuses complete %s ownership for accounting without per-exception planning",
+    (ownerConfig) => {
+      const inventory =
+        ownerConfig === timerConfig
+          ? listMatchedTestFiles(createUnitFastFakeTimersVitestConfig({}, { argv: [] }))
+          : listMatchedTestFiles(createAgentsSupportVitestConfig({}));
+      expect(inventory.length).toBeGreaterThan(0);
+      const planner = vi.spyOn(testProjects, "buildVitestRunPlans");
+      onTestFinished(() => planner.mockRestore());
+      const execution = { configs: [ownerConfig] };
+      const before = expectDefined(
+        resolveCiTestRuntimeInventory(ownerConfig, inventory, {}, "bun-all", execution),
+        "whole-config accounting",
+      ).map((row) => expectDefined(row, "whole-config runtime row"));
+      expect(planner.mock.calls.length).toBeGreaterThan(0);
+      planner.mockClear();
+      expect(
+        resolveCiTestRuntimeInventory(ownerConfig, inventory, {}, "bun-all", execution, inventory),
+      ).toEqual(before);
+
+      // Project only the measurement; retain each original runtime, engine and argument envelope.
+      const projected = inventory.slice(0, 1);
+      expect(
+        resolveCiTestRuntimeInventory(ownerConfig, projected, {}, "bun-all", execution, inventory),
+      ).toEqual(
+        before.map((row) => ({
+          ...row,
+          files: row.files.filter((file) => projected.includes(file)),
+        })),
+      );
+      const fullNode = { runtime: "node", engine: "vitest", args: [], files: inventory };
+      expect(
+        resolveCiTestRuntimeInventory(ownerConfig, inventory, {}, "node", execution, inventory),
+      ).toEqual([fullNode]);
+      expect(
+        resolveCiTestRuntimeInventory(ownerConfig, projected, {}, "node", execution, inventory),
+      ).toEqual([{ ...fullNode, files: projected }]);
+      expect(
+        resolveCiTestRuntimeInventory(ownerConfig, inventory, {}, "dual-all", execution, inventory),
+      ).toEqual([fullNode, ...before.filter((row) => row.runtime === "bun")]);
+      expect(planner).not.toHaveBeenCalled();
+    },
+  );
+
+  it("retains fallback for an unresolved sibling of a qualified accounting owner", () => {
+    const inventory = listMatchedTestFiles(createUnitFastFakeTimersVitestConfig({}, { argv: [] }));
+    const execution = { configs: [timerConfig, supportConfig] };
+    const planner = vi.spyOn(testProjects, "buildVitestRunPlans");
+    onTestFinished(() => planner.mockRestore());
+    const before = resolveCiTestRuntimeInventory(timerConfig, inventory, {}, "bun-all", execution);
+    expect(planner.mock.calls.length).toBeGreaterThan(0);
+    planner.mockClear();
+    expect(
+      resolveCiTestRuntimeInventory(timerConfig, inventory, {}, "bun-all", execution, inventory),
+    ).toEqual(before);
+    expect(planner.mock.calls.length).toBeGreaterThan(0);
+  });
+
+  it("keeps canonical and explicit membership ahead of accounting hints", () => {
+    const planner = vi.spyOn(testProjects, "buildVitestRunPlans");
+    onTestFinished(() => planner.mockRestore());
+    const canonicalConfig = "test/vitest/vitest.gateway-database-workers.config.ts";
+    const canonical = expectDefined(
+      listNodeTestConfigFiles(canonicalConfig),
+      "canonical inventory",
+    );
+    expect(canonical.length).toBeGreaterThan(0);
+    const cases = [
+      { owner: canonicalConfig, files: canonical, execution: { configs: [canonicalConfig] } },
+      {
+        owner: "unknown.config.ts",
+        files: [nodeOnly, bothHosts, bunEligible],
+        execution: { configs: ["unknown.config.ts"] },
+      },
+      {
+        owner: timerConfig,
+        files: [nodeOnly, bothHosts, bunEligible],
+        execution: { configs: [timerConfig], includePatterns: [nodeOnly, bothHosts, bunEligible] },
+      },
+    ];
+    for (const { owner, files, execution } of cases) {
+      const before = resolveCiTestRuntimeInventory(owner, files, {}, "bun-all", execution);
+      expect(resolveCiTestRuntimeInventory(owner, files, {}, "bun-all", execution, [])).toEqual(
+        before,
+      );
+    }
+    expect(planner).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { OPENCLAW_VITEST_INCLUDE_FILE: "opaque-includes.json" },
+    { OPENCLAW_VITEST_POST_SHARD_INCLUDE_FILE: "opaque-post-includes.json" },
+    { OPENCLAW_NODE_TEST_VITEST_ARGS_JSON: '["--config","unknown.config.ts"]' },
+  ])("keeps opaque accounting unknown despite a complete inventory: %j", (env) => {
+    const execution = { configs: [timerConfig] };
+    const planner = vi.spyOn(testProjects, "buildVitestRunPlans");
+    onTestFinished(() => planner.mockRestore());
+    expect(
+      resolveCiTestRuntimeInventory(timerConfig, [bunEligible], env, "bun-all", execution),
+    ).toBeUndefined();
+    expect(
+      resolveCiTestRuntimeInventory(timerConfig, [bunEligible], env, "bun-all", execution, [
+        bunEligible,
+      ]),
+    ).toBeUndefined();
+    expect(planner).not.toHaveBeenCalled();
+  });
+
   it.each([bothHosts, "test/scripts/vitest-pair-benchmark.test.ts"])(
     "keeps Node exceptions and both-host %s coverage in a mixed bun-all group",
     (bothHost) => {

@@ -24,6 +24,8 @@ export type SessionsYieldClaimResult =
   | { schedulerOwned: true }
   // The run's owner resumes it in its current operation after awaited commands exit.
   | { resumesInPlace: true }
+  // The claim armed background commands whose exit resumes this session.
+  | { execWakeArmed: true }
   | { messageWaitRegistered: boolean }
   | { error: string };
 export type SessionsYieldIntent = { waitFor?: "message"; acknowledgment?: string };
@@ -36,6 +38,8 @@ export type SessionsYieldCallback = (
     terminal?: import("../agent-tools.abort.js").ToolTurnHandoff;
     /** End the turn but keep the reply operation open for the run's in-place resume. */
     resumesInPlace?: true;
+    /** This yield armed background commands whose exit resumes the session. */
+    execWakeArmed?: true;
   },
 ) => Promise<void> | void;
 
@@ -203,8 +207,15 @@ export function createSessionsYieldTool(opts?: {
         typeof claim === "object" && "messageWaitRegistered" in claim
           ? claim.messageWaitRegistered
           : undefined;
-      await (typeof claim === "object" && "resumesInPlace" in claim
-        ? opts.onYield(message, acknowledgment, messageWaitRegistered, { resumesInPlace: true })
+      const resumesInPlace = typeof claim === "object" && "resumesInPlace" in claim;
+      const requesterExecWake = typeof claim === "object" && "execWakeArmed" in claim;
+      // Both claims arm background commands whose exit resumes this session.
+      const execWakeArmed = resumesInPlace || requesterExecWake;
+      await (execWakeArmed
+        ? opts.onYield(message, acknowledgment, messageWaitRegistered, {
+            ...(resumesInPlace ? { resumesInPlace: true as const } : {}),
+            execWakeArmed: true,
+          })
         : opts.onYield(message, acknowledgment, messageWaitRegistered));
       return jsonResult({
         status: "yielded",
@@ -214,7 +225,7 @@ export function createSessionsYieldTool(opts?: {
           ? {
               note: "Turn ended. The scheduler delivers child output under the job's delivery policy.",
             }
-          : waitFor === "message" && claim === true
+          : waitFor === "message" && (claim === true || requesterExecWake)
             ? { note: WAIT_FOR_NOT_APPLIED_NOTE }
             : {}),
       });

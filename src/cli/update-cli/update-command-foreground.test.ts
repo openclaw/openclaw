@@ -29,7 +29,6 @@ import { withUpdateCommandExecutor } from "./update-command-executor.js";
 import * as managedContext from "./update-command-managed-context.js";
 import { finishAlreadyCurrentUpdate } from "./update-command-noop.js";
 import type { RefuseUpdate } from "./update-command-result.js";
-import * as commandRun from "./update-command-run.js";
 import { prepareUpdateCommand } from "./update-command-run.js";
 import { preflightUpdateCommandSchemas } from "./update-command-schema.js";
 import type { PreManagedServiceStop } from "./update-command-service-context-types.js";
@@ -161,56 +160,6 @@ it("keeps post-core continuation separate from foreground request admission", as
   expect(prepared.servicePlan).toBeUndefined();
   expectNotCalled(handoff.inspect, nativePlan);
 });
-
-it.each(["preparation", "environment", "state preflight"] as const)(
-  "refuses a foreground claim lost after successful %s before ledger admission",
-  async (boundary) => {
-    const root = dirs.make("foreground-interleave-");
-    mockPackageRoot(root);
-    const before = createUpdateRun({ runId: foregroundRunId, trigger: "api" });
-    const { nativePlan, nativeOwner, create, adopt } = admissionSpies();
-    nativePlan.mockResolvedValue({ rootRedirect: null });
-    let admitting = false;
-    let expired = false;
-    const expire = async () => {
-      await fs.rm(claimPath);
-      expired = true;
-    };
-    const expireAfter = async <T>(operation: Promise<T>, at: typeof boundary) => {
-      const result = await operation;
-      if (boundary === at) {
-        await expire();
-      }
-      return result;
-    };
-    const prepare = commandRun.prepareUpdateCommand;
-    vi.spyOn(commandRun, "prepareUpdateCommand").mockImplementation((opts) =>
-      expireAfter(prepare(opts), "preparation"),
-    );
-    const resolveEnv = commandRun.resolveUpdateCommandAdmissionEnv;
-    vi.spyOn(commandRun, "resolveUpdateCommandAdmissionEnv").mockImplementation((params) =>
-      expireAfter(resolveEnv(params), "environment"),
-    );
-    const admit = commandRun.admitUpdateCommandRun;
-    vi.spyOn(commandRun, "admitUpdateCommandRun").mockImplementation(async (params) => {
-      admitting = true;
-      return await admit(params);
-    });
-    vi.spyOn(stateOwnership, "assertOpenClawStateWriteAllowedAtPath").mockImplementation(
-      async () => {
-        if (admitting && boundary === "state preflight") {
-          await expire();
-        }
-      },
-    );
-
-    await expectRefusal(updateCommand({ json: true }).then(() => "admitted"));
-    expect(expired).toBe(true);
-    expect(handoff.inspect).toHaveBeenCalled();
-    expectNotCalled(nativePlan, nativeOwner, create, adopt);
-    expect(updateRunLedger.getUpdateRun(before.runId)).toEqual(before);
-  },
-);
 
 it.each(["schema", "execution", "already current"] as const)(
   "preserves admitted foreground intent at initial %s inspection",

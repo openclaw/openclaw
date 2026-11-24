@@ -510,6 +510,13 @@
   background: var(--bg);
 }
 
+.dashboard-preview .board-document__state {
+  padding: var(--space-3);
+  font-size: var(--control-ui-text-md);
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
 .dashboard-preview .board-document__content > openclaw-board-view {
   padding: 0;
   overflow: hidden;
@@ -871,6 +878,8 @@
       "title"
       "actions";
     align-items: center;
+    /* The trailing action sits on the header edge; let its focus ring paint outside. */
+    overflow: visible;
 
     .hub-page-header__actions {
       justify-self: stretch;

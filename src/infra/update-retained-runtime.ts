@@ -279,7 +279,17 @@ async function runWithRetainedUpdateRuntime<T>(
           bind(resolve);
           // Workers and the parent must use the same generation after activation
           // replaces dist; preserving URLs also preserves already-loaded singletons.
-          retainUpdateRuntimeImports(relocations.rules, files);
+          // Inventory uses physical paths; imports retain the running updater spelling.
+          const importIdentities = prepareRuntimeRelocations([
+            { sourceRoot, destinationRoot: root },
+          ]);
+          retainUpdateRuntimeImports(
+            relocations.rules,
+            files.map((sourcePath) => ({
+              sourcePath,
+              identityPath: relocateRuntimePath(sourcePath, importIdentities),
+            })),
+          );
           prepared = true;
           return metrics;
         })().catch((error: unknown) => {
@@ -301,7 +311,7 @@ async function runWithRetainedUpdateRuntime<T>(
         if (prepared) {
           reportRetainedUpdateRuntime(
             directory,
-            "worker generation settled; cleanup deferred to the next eligible update or openclaw doctor --fix",
+            "worker generation settled; the next eligible openclaw update or openclaw doctor --fix retries its cleanup",
           );
         } else {
           await removeTemporaryArtifacts(directory, "Updater runtime");

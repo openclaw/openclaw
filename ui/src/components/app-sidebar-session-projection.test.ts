@@ -47,6 +47,7 @@ function projectionInput(
     knownGroups: [],
     collapsedSections: new Set(),
     emptyGroupsMode: "filtering",
+    showEmptyOther: false,
     ownerFilter: null,
     visibleSessionLimits: new Map(),
     sortMode: "created",
@@ -148,6 +149,29 @@ it("hides empty filtered native groups and preserves other section owners", () =
   expect(unfiltered.sections.map(({ id }) => id)).toContain("category:Empty");
   expect(unfiltered.sections[0]).toMatchObject({ totalRowCount: 1, visibleRowCount: 0 });
   expect(sectionIds(rows, { ...input, emptyGroupsMode: "never" })).toContain("category:Empty");
+});
+
+it("continues native Other on scroll only with grouping set to none", () => {
+  const rows = Array.from({ length: 20 }, (_, index) => sessionRow(`row-${index}`));
+  const alpha = rows.map((row) => ({ ...row, category: "Alpha" }));
+  const continues = (sessions: SidebarRecentSession[], overrides: Partial<ProjectionInput>) =>
+    project(sessions, overrides).sections.map(({ id, continuesOnScroll }) => [
+      id,
+      continuesOnScroll,
+    ]);
+  expect(continues(rows, { grouping: "none" })).toEqual([["ungrouped", true]]);
+  expect(continues(rows, {})).toEqual([["ungrouped", false]]);
+  expect(continues(alpha, { knownGroups: ["Alpha"] })).toEqual([["category:Alpha", false]]);
+  expect(continues(rows, { grouping: "none", catalogIds: ["external"] })).toEqual([
+    ["ungrouped", true],
+    ["catalog:external", false],
+  ]);
+  expect(
+    continues(alpha, { knownGroups: ["Alpha"], showEmptyOther: true, statusFilter: "all" }),
+  ).toEqual([
+    ["category:Alpha", false],
+    ["ungrouped", false],
+  ]);
 });
 
 it("retains unloaded group destinations until the session list establishes their contents", () => {

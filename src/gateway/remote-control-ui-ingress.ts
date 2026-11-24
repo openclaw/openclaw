@@ -259,7 +259,7 @@ export function createGatewayControlUiIngressFactory(params: {
             ? error
             : new GatewayControlUiIngressError(
                 "forbidden",
-                "Remote ingress principal authority changed; reopen the binding under current authority.",
+                "Remote ingress principal binding changed. Reopen the binding and try again.",
               );
         invalidated.abort(denial);
         prepared.release();

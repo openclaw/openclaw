@@ -79,7 +79,7 @@ function requirePublicationWorktreeOwner(
       (pullRequest?.head.branch ?? worktree.branch) !== expected.branch)
   ) {
     throw new GitHubPublicationWorkspaceChangedError(
-      "GitHub publication workspace authority changed.",
+      "GitHub publication workspace moved. Retry the publication.",
     );
   }
   return { loaded, worktree, publicationBranch: pullRequest?.head.branch ?? worktree.branch };

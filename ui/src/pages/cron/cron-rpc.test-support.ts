@@ -41,7 +41,7 @@ export function cronRpc(
 
 export function emitEvent(
   gateway: Pick<ReturnType<typeof createGateway>, "emitRetiredEvent">,
-  event = "cron",
+  event = "cron.inventory.changed",
   payload: unknown = {},
   count = 1,
 ) {

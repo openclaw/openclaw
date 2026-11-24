@@ -3,7 +3,6 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { collectNestedErrorCandidates } from "@openclaw/normalization-core/error-coercion";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, vi } from "vitest";
 import {
   awaitGateBeforeSettlement,
@@ -19,27 +18,17 @@ import {
   bindLocalSandboxWorkspace,
   prepareLocalSandboxWorkspace,
 } from "../../agents/sandbox/local-workspace.js";
-import { createLocalRemoteShellScriptRunner } from "../../agents/sandbox/remote-fs-bridge.test-helpers.js";
 import { createSandboxTestContext } from "../../agents/sandbox/test-fixtures.js";
 import { insertRegistryWorktree } from "../../agents/worktrees/registry.js";
-import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
-import { buildSessionCreationStamp } from "../../config/sessions/session-entry-provenance.js";
-import type { GatewayOperatorRoleDefinition } from "../../config/types.gateway.js";
+import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import { readGatewayLockProcessNamespace } from "../../infra/gateway-lock-payload.js";
-import { GatewayOperatorRecoveryAuthorizationError } from "../../infra/restart-recovery-errors.js";
-import type {
-  SqliteWorkerOperations,
-  SqliteWorkerStore,
-} from "../../infra/sqlite-worker-contract.js";
-import { captureGatewayOperatorContinuation } from "../operator-run-recovery.js";
-import { createSyntheticPluginRuntimeClient } from "../server-plugin-runtime-client.js";
 import * as workspaceStore from "./local-workspace-store.js";
 import { withLocalWorkspaceStore } from "./local-workspace-store.js";
 import type { LocalWorkspaceOwner } from "./local-workspace-types.js";
 
 const command = () => ({ command: "true", env: {}, usePty: false });
 const failedOutcome = { status: "failed" as const, exitCode: 0, timedOut: false };
-const authorityChanged = "Local sandbox workspace authority changed";
+const workspaceChanged = /Local sandbox workspace (changed|was released)/;
 const writeSource = (dir: string, data: string) => fs.writeFile(path.join(dir, "source.txt"), data);
 const expectSource = async (dir: string, data: string) =>
   expect(await fs.readFile(path.join(dir, "source.txt"), "utf8")).toBe(data);
@@ -59,7 +48,7 @@ function createBackend(runtimeId: string): SandboxBackendHandle {
   };
 }
 
-async function registerWorkspace(owner: LocalWorkspaceOwner, guestProfileId?: string) {
+async function registerWorkspace(owner: LocalWorkspaceOwner) {
   await insertRegistryWorktree(process.env, owner.worktree);
   const scope = { agentId: owner.agentId, sessionKey: owner.sessionKey };
   const { id, branch, repoRoot } = owner.worktree;
@@ -67,14 +56,6 @@ async function registerWorkspace(owner: LocalWorkspaceOwner, guestProfileId?: st
     sessionId: owner.sessionId,
     updatedAt: 1,
     worktree: { id, branch, repoRoot },
-    ...(guestProfileId
-      ? buildSessionCreationStamp({
-          via: "operator",
-          actor: { type: "human", source: "profile", id: guestProfileId },
-          sandbox: "required",
-          now: 1,
-        })
-      : {}),
   };
   await replaceSessionEntry(scope, entry);
   return { scope, entry };
@@ -189,7 +170,7 @@ export async function proveStoppedLocalWorkspaceCheckpoint(
     await writeSource(projection.workspaceDir, "last stopped guest edit\n");
     await finish(backend, laterSpec.finalizeToken);
     await expectSource(owner.worktree.path, "last stopped guest edit\n");
-    await expect(projection.checkpoint()).rejects.toThrow(authorityChanged);
+    await expect(projection.checkpoint()).rejects.toThrow(workspaceChanged);
     return;
   }
   hostCurrent = false;
@@ -201,33 +182,25 @@ export async function proveStoppedLocalWorkspaceCheckpoint(
   await writeSource(owner.worktree.path, "stopped guest edit\n");
   await projection.checkpoint();
   await replaceSessionEntry(scope, { ...entry, sessionId: randomUUID(), updatedAt: 2 });
-  await expect(projection.checkpoint()).rejects.toThrow(authorityChanged);
+  await expect(projection.checkpoint()).rejects.toThrow(workspaceChanged);
 }
 
 export async function proveStoppedSandboxAuthority(
   owner: LocalWorkspaceOwner,
-  revoke:
-    | "operator"
-    | "gateway"
-    | "guest-involvement"
-    | "guest-role-involvement"
-    | "prepare-release"
-    | "prepare-cancel",
+  revoke: "gateway" | "prepare-release" | "prepare-cancel",
   testSignal?: AbortSignal,
 ) {
-  const [state, lease, paths, users, roles, auth, server, cfg, workspaces, backends] =
-    await Promise.all([
-      import("../../test-utils/openclaw-test-state.js"),
-      import("../../infra/gateway-state-owner.js"),
-      import("../../state/openclaw-state-db.paths.js"),
-      import("../../state/user-profile-writes.js"),
-      import("../operator-role-policy.js"),
-      import("../operator-run-authority.js"),
-      import("../server-plugin-in-process-dispatch.test-support.js"),
-      import("../../config/runtime-snapshot.js"),
-      import("../../agents/workspace-sandbox.js"),
-      import("../../agents/sandbox/backend.js"),
-    ]);
+  const [state, lease, paths, users, auth, server, cfg, workspaces, backends] = await Promise.all([
+    import("../../test-utils/openclaw-test-state.js"),
+    import("../../infra/gateway-state-owner.js"),
+    import("../../state/openclaw-state-db.paths.js"),
+    import("../../state/user-profile-writes.js"),
+    import("../operator-run-authority.js"),
+    import("../server-plugin-in-process-dispatch.test-support.js"),
+    import("../../config/runtime-snapshot.js"),
+    import("../../agents/workspace-sandbox.js"),
+    import("../../agents/sandbox/backend.js"),
+  ]);
   await state.withOpenClawTestState({ scenario: "minimal" }, async ({ configPath }) => {
     const gateway = lease.acquireGatewayStateOwner({
       databasePath: paths.resolveOpenClawStateSqlitePath(),
@@ -240,21 +213,6 @@ export async function proveStoppedSandboxAuthority(
       },
     });
     try {
-      const guestInvolvement =
-        revoke === "guest-involvement" ||
-        revoke === "guest-role-involvement" ||
-        revoke === "prepare-release" ||
-        revoke === "prepare-cancel";
-      const guestScopes: GatewayOperatorRoleDefinition["scopes"] = [
-        "operator.sessions.read",
-        "operator.sessions.write",
-      ];
-      const guestRole: GatewayOperatorRoleDefinition = {
-        scopes: guestScopes,
-        agents: "*",
-        sessions: { others: "none" },
-        sandbox: "required",
-      };
       const config: import("../../config/types.openclaw.js").OpenClawConfig = {
         worktreeAcceleration: false,
         agents: {
@@ -274,37 +232,30 @@ export async function proveStoppedSandboxAuthority(
         skills: { load: { watch: false } },
         gateway: {
           roles: {
-            default: guestInvolvement ? "guest" : "writer",
+            default: "writer",
             definitions: {
-              ...(guestInvolvement ? { guest: guestRole } : {}),
               writer: {
                 scopes: ["operator.read", "operator.write"],
                 agents: "*",
                 sessions: { others: "none" },
               },
-              denied: { scopes: [], agents: [], sessions: { others: "none" } },
             },
           },
         },
       };
       cfg.setRuntimeConfigSnapshot(config);
       const profile = await users.ensureCanonicalUserProfileForEmail(
-        guestInvolvement ? "checkpoint-guest@example.test" : "checkpoint-operator@example.test",
+        "checkpoint-operator@example.test",
       );
-      await users.setCanonicalUserProfileRole(profile.id, guestInvolvement ? "guest" : "writer");
+      await users.setCanonicalUserProfileRole(profile.id, "writer");
       const context = server.createContext();
       context.getRuntimeConfig = () => config;
-      const source = new AbortController();
       const captured = await auth.prepareGatewayOperatorRunAuthority({
         client: server.createOperatorClient({
           profileId: profile.id,
-          scopes: guestInvolvement ? guestScopes : ["operator.write"],
+          scopes: ["operator.write"],
         }),
         context,
-        invocationAuthority: {
-          assertCurrent: () => source.signal.throwIfAborted(),
-          signal: source.signal,
-        },
       });
       assert(captured, "Expected admitted operator request");
       assert(captured.authority.retain, "Expected retained operator authority");
@@ -318,8 +269,6 @@ export async function proveStoppedSandboxAuthority(
         captured.authority,
       );
       const backend = createBackend("authority-command");
-      const shell = guestInvolvement ? vi.spyOn(backend, "runShellCommand") : undefined;
-      shell?.mockImplementation(createLocalRemoteShellScriptRunner());
       // Substitute container execution only; the authority and checkpoint owners stay real.
       const provision = vi
         .spyOn(backends, "createSandboxBackend")
@@ -328,7 +277,7 @@ export async function proveStoppedSandboxAuthority(
           return backend;
         });
       try {
-        const { scope } = await registerWorkspace(owner, guestInvolvement ? profile.id : undefined);
+        await registerWorkspace(owner);
         if (revoke === "prepare-release" || revoke === "prepare-cancel") {
           assert(testSignal, "Expected preparation proof lifetime");
           await proveAttemptPreparationWhileLeaseHeld(
@@ -366,184 +315,8 @@ export async function proveStoppedSandboxAuthority(
         const sandbox = workspace.sandbox;
         assert(sandbox?.backend && sandbox.fsBridge, "Expected managed sandbox");
         expect(sandbox.workspaceSource).toBe("managed-worktree");
-        if (guestInvolvement) {
-          assert(testSignal && shell, "Expected guest receipt proof lifetime");
-          expect(captured.authority.scopes).toEqual(guestScopes);
-          expect(captured.authority.rolePolicy?.sandboxRequired).toBe(true);
-          expect(loadSessionEntry(scope)).toMatchObject({
-            createdActor: { type: "human", source: "profile", id: profile.id },
-            sandbox: "required",
-          });
-          const accepted = await backend.buildExecSpec(command());
-          await writeSource(sandbox.workspaceDir, "accepted guest edit\n");
-          await finish(backend, accepted.finalizeToken);
-          await expectSource(owner.worktree.path, "accepted guest edit\n");
-
-          expect(captured.authority.assertCurrent).not.toThrow();
-          await sandbox.fsBridge.writeFile({
-            filePath: "source.txt",
-            data: "admitted guest edit\n",
-          });
-          await expectSource(owner.worktree.path, "admitted guest edit\n");
-          shell.mockClear();
-
-          const [receipts, agentWorkers, involvement] = await Promise.all([
-            import("../../infra/sqlite-worker-operation-admission.js"),
-            import("../../state/openclaw-agent-worker-store.js"),
-            import("../../config/sessions/session-involvement-store.js"),
-          ]);
-          const receiptReached = createDeferred();
-          const resultReached = createDeferred();
-          const releaseResult = createDeferred();
-          let deliver: (() => void) | undefined;
-          let closing = false;
-          let receiptCount = 0;
-          let dispatches = 0;
-          const deliverReceipt = () => {
-            const publish = deliver;
-            deliver = undefined;
-            publish?.();
-          };
-          const observe = receipts.observeSqliteWorkerCommittedFacts;
-          const observeReceipt = vi
-            .spyOn(receipts, "observeSqliteWorkerCommittedFacts")
-            .mockImplementation((native, publish) =>
-              observe(native, (receipt) => {
-                if (
-                  !closing &&
-                  isRecord(receipt.facts) &&
-                  receipt.facts.kind === "session-collaboration-committed" &&
-                  receipt.facts.type === "involvement"
-                ) {
-                  receiptCount++;
-                  // Delay only delivery; native COMMIT and its receipt remain untouched.
-                  deliver = () => publish(receipt);
-                  receiptReached.resolve();
-                } else {
-                  publish(receipt);
-                }
-              }),
-            );
-          const original = agentWorkers.openOpenClawAgentSqliteWorkerStore;
-          const open = vi
-            .spyOn(agentWorkers, "openOpenClawAgentSqliteWorkerStore")
-            .mockImplementation(
-              async <Operations extends SqliteWorkerOperations>(
-                ...args: Parameters<typeof original>
-              ) => {
-                const worker = await original<Operations>(...args);
-                return {
-                  ...worker,
-                  run<T>(
-                    consume: (
-                      operation: Pick<SqliteWorkerStore<Operations>, "execute">,
-                    ) => Promise<T>,
-                    assertCurrent: () => void,
-                  ) {
-                    return worker.run(
-                      (operation) =>
-                        consume({
-                          async execute(workerCommand, options) {
-                            if (workerCommand.type === "involvement") {
-                              dispatches++;
-                            }
-                            const result = await operation.execute(workerCommand, options);
-                            if (workerCommand.type === "involvement") {
-                              resultReached.resolve();
-                              await releaseResult.promise;
-                            }
-                            return result;
-                          },
-                        }),
-                      assertCurrent,
-                    );
-                  },
-                };
-              },
-            );
-          const mutation = involvement.updateSessionProfileInvolvementAsync(scope, {
-            expectedSessionId: owner.sessionId,
-            profileIds: [profile.id],
-            change: { kind: "visibility", hidden: true },
-            assertCurrent: captured.authority.assertCurrent,
-          });
-          try {
-            await withinTest(
-              awaitGateBeforeSettlement(
-                Promise.all([receiptReached.promise, resultReached.promise]),
-                mutation,
-                "Involvement settled before its native receipt was delayed",
-              ),
-              testSignal,
-            );
-            captured.authority.assertCurrent();
-            if (revoke === "guest-role-involvement") {
-              await users.setCanonicalUserProfileRole(profile.id, "denied", {
-                onCommitted: roles.invalidateOperatorRolePolicy,
-              });
-              expect(captured.authority.assertCurrent).not.toThrow();
-            } else {
-              source.abort(new Error("operator source execution authority cancelled"));
-            }
-            deliverReceipt();
-            releaseResult.resolve();
-            await expect(mutation).resolves.toBe(true);
-            expect(receiptCount).toBe(1);
-            expect(dispatches).toBe(1);
-            expect(loadSessionEntry(scope)?.profileInvolvement?.profiles[profile.id]?.hidden).toBe(
-              true,
-            );
-            expect(controller.signal.aborted).toBe(false);
-            if (revoke === "guest-role-involvement") {
-              await sandbox.fsBridge.writeFile({
-                filePath: "source.txt",
-                data: "finished guest edit\n",
-              });
-              await expectSource(owner.worktree.path, "finished guest edit\n");
-              await expect(
-                captureGatewayOperatorContinuation({
-                  context,
-                  client: createSyntheticPluginRuntimeClient({
-                    operatorRunAuthority: captured.authority,
-                    scopes: [...captured.authority.scopes],
-                  }),
-                }).then((next) => next?.release()),
-              ).rejects.toThrow(GatewayOperatorRecoveryAuthorizationError);
-            } else {
-              // A late receipt cannot revive explicitly cancelled source authority.
-              await expect(
-                sandbox.fsBridge.writeFile({ filePath: "revoked.txt", data: "must not write" }),
-              ).rejects.toMatchObject({
-                message: "admitted run authority is no longer active",
-                cause: expect.objectContaining({
-                  message: expect.stringMatching(/operator|source execution authority/),
-                }),
-              });
-              expect(shell).not.toHaveBeenCalled();
-              for (const directory of [sandbox.workspaceDir, owner.worktree.path]) {
-                await expect(fs.stat(path.join(directory, "revoked.txt"))).rejects.toMatchObject({
-                  code: "ENOENT",
-                });
-              }
-              await expectSource(owner.worktree.path, "admitted guest edit\n");
-            }
-          } finally {
-            closing = true;
-            try {
-              deliverReceipt();
-            } finally {
-              releaseResult.resolve();
-              await mutation.catch(() => {});
-              open.mockRestore();
-              observeReceipt.mockRestore();
-            }
-          }
-          return;
-        }
         const accepted = await backend.buildExecSpec(command());
         const pending = await backend.buildExecSpec(command());
-        const cancelled =
-          revoke === "operator" ? await backend.buildExecSpec(command()) : undefined;
         await writeSource(sandbox.workspaceDir, "accepted guest edit\n");
         const reason = createAgentRunDirectAbortError();
         controller.abort(reason);
@@ -554,29 +327,12 @@ export async function proveStoppedSandboxAuthority(
         await expectSource(owner.worktree.path, "accepted guest edit\n");
         await expect(backend.buildExecSpec(command())).rejects.toBe(reason);
         await writeSource(sandbox.workspaceDir, "revoked guest edit\n");
-        if (revoke === "operator") {
-          await users.setCanonicalUserProfileRole(profile.id, "denied", {
-            onCommitted: roles.invalidateOperatorRolePolicy,
-          });
-          expect(captured.authority.assertCurrent).not.toThrow();
-          await finish(backend, pending.finalizeToken);
-          await expectSource(owner.worktree.path, "revoked guest edit\n");
-          await writeSource(sandbox.workspaceDir, "cancelled guest edit\n");
-          source.abort(new Error("operator source execution authority cancelled"));
-          expect(captured.authority.assertCurrent).toThrow();
-          await expect(finish(backend, cancelled!.finalizeToken)).rejects.toThrow(
-            /operator|source execution authority/,
-          );
-          await expectSource(owner.worktree.path, "revoked guest edit\n");
-        } else {
-          gateway.release();
-          await expect(finish(backend, pending.finalizeToken)).rejects.toMatchObject({
-            code: "GATEWAY_STATE_OWNER_REQUIRED",
-          });
-          await expectSource(owner.worktree.path, "accepted guest edit\n");
-        }
+        gateway.release();
+        await expect(finish(backend, pending.finalizeToken)).rejects.toMatchObject({
+          code: "GATEWAY_STATE_OWNER_REQUIRED",
+        });
+        await expectSource(owner.worktree.path, "accepted guest edit\n");
       } finally {
-        shell?.mockRestore();
         provision.mockRestore();
         admission.close();
         captured.release();

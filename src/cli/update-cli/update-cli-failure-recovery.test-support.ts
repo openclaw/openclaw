@@ -8,40 +8,6 @@ import type { TempHomeEnv } from "../../test-utils/temp-home.js";
 import type { updateFinalizeCommand as UpdateFinalizeCommand } from "./update-command-finalize.js";
 import type { updateCommand as UpdateCommand } from "./update-command.js";
 
-export async function mockUnbuiltRecoveryFixture(): Promise<void> {
-  // These fixtures must not inherit build identity from the checkout's generated dist.
-  vi.spyOn(
-    await import("../../infra/update-git-runtime.js"),
-    "readBuiltGatewayBuildId",
-  ).mockResolvedValue(null);
-}
-
-export const recoveryObservationStep = (cwd = process.cwd()) => ({
-  name: "gateway recovery observation",
-  command: "gateway verification",
-  cwd,
-  durationMs: expect.any(Number),
-  exitCode: 0,
-  diagnostics: [
-    expect.stringMatching(
-      /^(?:No recovery needed; .+ No service was stopped or started\.|Gateway readiness was not checked: no Gateway service or listener was present before maintenance\.)$/,
-    ),
-  ],
-});
-export const recoveryCleanupStep = () => ({
-  name: "recovery-artifact-cleanup",
-  command: "openclaw update cleanup",
-  cwd: "",
-  durationMs: expect.any(Number),
-  exitCode: 0,
-  // The summary comes first; one line per removed or kept item follows.
-  diagnostics: expect.arrayContaining([
-    expect.stringMatching(
-      /^Update backup cleanup removed [1-9]\d* items? \([1-9]\d* logical bytes, .+\)\./,
-    ),
-  ]),
-});
-
 export function registerFailureSelectorTests(deps: {
   updateCommand: typeof UpdateCommand;
   updateFinalizeCommand: typeof UpdateFinalizeCommand;

@@ -220,8 +220,9 @@ Update-time Doctor runs startup-required repairs before optional inspections.
 When the installed updater supports post-restart inspections, Doctor moves
 lint-backed, inspection-only checks out of the stopped Gateway window. The
 updater runs them after restart and saves their findings in the
-`post-activation doctor inspections` result step. Findings or an incomplete
-inspection remain advisory and do not fail an otherwise successful update.
+`post-activation doctor inspections` result step. Planned deferrals are progress,
+not warning findings. Findings or an incomplete inspection remain advisory and
+do not fail an otherwise successful update.
 Repairs, migrations, readiness gates, and checks without equivalent lint
 coverage keep their existing ordering. Older installed updaters keep the
 inspections in their original Doctor pass.

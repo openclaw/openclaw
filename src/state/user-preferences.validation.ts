@@ -3,6 +3,7 @@ import {
   normalizeBackgroundPreference,
   USER_BACKGROUND_PREFERENCE_KEY,
 } from "../../packages/gateway-protocol/src/schema/background-preferences.js";
+import { CRON_FAILURE_DISMISSALS_KEY } from "../../packages/gateway-protocol/src/schema/cron-failure-dismissals.js";
 import {
   normalizeGitCoauthorOrganizationIdentity,
   GIT_COAUTHOR_ORGANIZATION_PREFERENCE_KEY,
@@ -72,8 +73,14 @@ function prepareEntries(
 export function prepareUserPreferenceUpdate(
   entries: Record<string, unknown>,
   expectedEntries: Record<string, unknown> = {},
-  options: { trustedProxyGitCoauthor?: true; organizationPolicy?: string | null } = {},
+  options: {
+    trustedProxyGitCoauthor?: true;
+    organizationPolicy?: string | null;
+  } = {},
 ): Result<PreparedUserPreferenceUpdate, UserPreferenceError> {
+  if (Object.hasOwn(entries, CRON_FAILURE_DISMISSALS_KEY)) {
+    return err({ code: "invalid-key", key: CRON_FAILURE_DISMISSALS_KEY });
+  }
   const prepared = prepareEntries(entries, options.trustedProxyGitCoauthor);
   if (!prepared.ok) {
     return prepared;

@@ -1,6 +1,16 @@
 /** Owns captured destinations and cancellation for background exec completion notifications. */
 import { enqueueBatchedSessionEventForHost as enqueueSessionEvent } from "../auto-reply/reply/session-event-batch.js";
+import type {
+  SessionEventOptions,
+  SessionEventOutcome,
+} from "../auto-reply/reply/session-event-contract.js";
 import { captureSessionEventTargetForHost as captureSessionEventTarget } from "../auto-reply/reply/session-event-handoff.js";
+import {
+  readSessionEventTargetCommandOwner,
+  readSessionEventTargetOperatorAuthority,
+  readSessionEventTargetRequesterOwner,
+} from "../auto-reply/reply/session-event-target.js";
+import { runWithoutSessionActorStorage } from "../config/sessions/session-actor-storage-binding.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { resolveEventSessionKeyForPolicy } from "../infra/event-session-routing.js";
 import { readExecRequestOwners, withExecRequestOwners } from "../infra/exec-request-context.js";
@@ -11,8 +21,12 @@ import {
   SystemEventQueueFullError,
 } from "../infra/system-events.js";
 import { logWarn } from "../logger.js";
-import { parseAgentSessionKey } from "../routing/session-key.js";
+import { isGatewayRestartDraining } from "../process/gateway-work-admission.js";
+import { isIncognitoSessionKey, parseAgentSessionKey } from "../routing/session-key.js";
+import { chatRef } from "../sessions/chat-ref.js";
+import { owe, readPendingOwed, withhold, type Owed } from "../sessions/owed.js";
 import { isOneShotRunSessionKey, isSubagentSessionKey } from "../sessions/session-key-utils.js";
+import { runOutsideAsyncWorkScope } from "../shared/async-work-scope.js";
 import {
   listFinishedSessions,
   listRunningSessions,
@@ -27,26 +41,6 @@ import {
   renderExecOutputFile,
 } from "./bash-tools.exec-output.js";
 import { getGatewayToolCallerIdentity } from "./tools/gateway-caller-context.js";
-
-function enqueueExecExitNotification(
-  text: string,
-  target: NonNullable<ProcessSession["notifySessionTarget"]>,
-  id: string,
-  options: Omit<
-    Parameters<typeof enqueueSessionEvent>[1],
-    "agentId" | "sessionKey" | "source"
-  > = {},
-) {
-  return enqueueSessionEvent(text, {
-    ...options,
-    agentId: target.agentId!,
-    sessionKey: target.sessionKey!,
-    source: "exec",
-    contextKey: options.contextKey ?? `exec:${id}`,
-    sourceTurnId: `exec:${id}`,
-    expectedTarget: target,
-  });
-}
 
 /** Capture the original session before spawning work that may outlive its turn. */
 export function prepareExecExitNotification(
@@ -89,7 +83,7 @@ export function prepareExecExitNotification(
         session.notifyOnExit = false;
       }
       logWarn(
-        `exec: automatic completion has no destination (${formatErrorMessage(error)}); use process poll.`,
+        `exec: automatic completion has no destination (${sessionKind(session.sessionKey)} session; ${formatErrorMessage(error)}); use process poll.`,
       );
     },
   );
@@ -101,9 +95,10 @@ const execYieldResumes = new Map<string, ExecYieldResume>();
 
 /** A chat is its agent plus session key; a raw key such as `global` is shared across agents. */
 type ExecChat = { agentId: string; sessionKey: string };
-// Completion admission can outlive process retention and its start-time routing fields.
-const pendingExitWakes = new Set<ExecChat>();
 const execChatKey = (chat: ExecChat) => `${chat.agentId}\0${chat.sessionKey}`;
+/** Failure logs name the session kind, never the session key or id. */
+const sessionKind = (sessionKey: string | undefined) =>
+  isIncognitoSessionKey(sessionKey) ? "incognito" : "normal";
 const processChat = (session: ProcessSession) =>
   session.sessionKey && session.agentId
     ? execChatKey({ agentId: session.agentId, sessionKey: session.sessionKey })
@@ -128,15 +123,10 @@ export function listYieldAwaitableExecs(chat: ExecChat | undefined): ProcessSess
   );
 }
 
-/** The notification owner keeps a wake alive through finalization and receipt settlement. */
+/** The notification owner keeps a wake alive through finalization; the owed row covers the rest. */
 export function hasExecYieldWake(chat: ExecChat): boolean {
   if (listYieldAwaitableExecs(chat).length > 0) {
     return true;
-  }
-  for (const wake of pendingExitWakes) {
-    if (wake.agentId === chat.agentId && wake.sessionKey === chat.sessionKey) {
-      return true;
-    }
   }
   const key = execChatKey(chat);
   return listFinishedSessions().some(
@@ -261,6 +251,77 @@ function prepareExecExitWake(
   return appendExecTimeoutRetryGuidance(summary, session.exitReason);
 }
 
+/**
+ * The one exec wake: it delivers a stored exec result through session-event admission. A live
+ * wake passes the producer's captured target; restart recovery passes none, so admission
+ * captures the chat's current target. Its settlement reads the stored row; `retries` stored
+ * wakes follow a failed one.
+ */
+export function wakeOwedExec(
+  owed: Owed,
+  options: Omit<SessionEventOptions, "agentId" | "sessionKey" | "source"> = {},
+  onWake?: (cancel: () => boolean) => void,
+  retries = 0,
+): void {
+  const wakeAgain =
+    retries > 0 ? (stored: Owed) => wakeOwedExec(stored, options, onWake, retries - 1) : undefined;
+  let receipt: ReturnType<typeof enqueueSessionEvent>;
+  try {
+    receipt = enqueueSessionEvent(owed.text, {
+      ...options,
+      agentId: owed.to.agentId,
+      sessionKey: owed.to.sessionKey,
+      source: "exec",
+      contextKey: owed.id,
+      sourceTurnId: owed.id,
+    });
+  } catch (error) {
+    // A refused enqueue (for example a full wake pool) settles like a wake that never started.
+    const failed = { status: "failed", executionStarted: false, delivered: false } as const;
+    void settleOwedExecWake(owed, { ...failed, error: formatErrorMessage(error) }, wakeAgain);
+    return;
+  }
+  onWake?.(receipt.cancel);
+  void receipt.settled.then((outcome) => settleOwedExecWake(owed, outcome, wakeAgain));
+}
+
+/**
+ * Settles a wake by the stored row, not by its outcome; a row its turn appended or a fold
+ * consumed needs nothing. A completed wake that left the row pending answered it inside a shared
+ * turn's input (its fold failed); the row is hidden. A failed wake with a retry left wakes the
+ * chat again from the stored row, whose text a fold may have joined. A stop, or a failure with
+ * no retry left, withholds the result with that cause. Restart drains leave the row owed for
+ * restart recovery.
+ */
+async function settleOwedExecWake(
+  owed: Owed,
+  outcome: SessionEventOutcome,
+  wakeAgain?: (stored: Owed) => void,
+) {
+  if (outcome.status === "failed") {
+    logWarn(
+      `exec: completion delivery failed (${sessionKind(owed.to.sessionKey)} session; ${outcome.error}); inspect the process result.`,
+    );
+  }
+  try {
+    const stored = isGatewayRestartDraining() ? undefined : await readPendingOwed(owed);
+    if (!stored) {
+      return;
+    }
+    if (outcome.status === "completed") {
+      await withhold(owed, "failed", "interrupted");
+    } else if (outcome.status === "failed" && wakeAgain) {
+      wakeAgain(stored);
+    } else {
+      await withhold(owed, outcome.status === "cancelled" ? "user-stop" : "failed");
+    }
+  } catch (error) {
+    logWarn(
+      `exec: completion ${owed.id} stays owed (${sessionKind(owed.to.sessionKey)} session; ${formatErrorMessage(error)}).`,
+    );
+  }
+}
+
 async function notifyOnExit(
   session: ProcessSession,
   status: "completed" | "failed",
@@ -285,34 +346,56 @@ async function notifyOnExit(
   // A yielded hidden subagent resumes through an ordinary wake turn; otherwise it gets a passive notice.
   if (session.resumesYieldedRun || (!subagentSession && !isSubagentSessionKey(sessionKey))) {
     const agentId = session.agentId ?? parseAgentSessionKey(eventSessionKey)?.agentId;
-    if (!agentId || !session.notifySessionTarget) {
+    const target = session.notifySessionTarget;
+    if (!agentId || !target?.storePath) {
       logWarn(
-        `exec: completion ${session.id} has no admitted session destination; inspect its process result.`,
+        `exec: completion ${session.id} has no admitted session destination (${sessionKind(eventSessionKey)} session); inspect its process result.`,
       );
       return;
     }
     try {
-      // Admission resolves the chat by key: a deleted chat refuses the wake.
-      const receipt = enqueueExecExitNotification(
-        eventText,
-        session.notifySessionTarget,
-        processSessionInstanceId(session),
-        { ...eventOptions, sourceRunId: session.startedByRunId },
-      );
-      recordNotifyOnExitRemoval(session, receipt.cancel);
-      const wake = { agentId, sessionKey: eventSessionKey };
-      pendingExitWakes.add(wake);
-      void receipt.settled.then((outcome) => {
-        pendingExitWakes.delete(wake);
-        if (outcome.status === "failed") {
-          logWarn(
-            `exec: completion delivery failed (${outcome.error}); inspect the process result.`,
+      const commandOwner = readSessionEventTargetCommandOwner(target)?.requester;
+      const operatorProfileId = readSessionEventTargetOperatorAuthority(target)?.profileId;
+      // The result is stored before any delivery: a Goal check or restart sees it from here on.
+      const owed: Owed = {
+        id: `exec:${processSessionInstanceId(session)}`,
+        to: chatRef({ agentId, storePath: target.storePath, sessionKey: eventSessionKey }),
+        kind: "exec",
+        text: eventText,
+        originFacts: {
+          requester: readSessionEventTargetRequesterOwner(target)?.requester,
+          ...(commandOwner ? { commandOwner } : {}),
+          ...(operatorProfileId ? { operatorProfileId } : {}),
+        },
+      };
+      // The completion outlives the turn that started the command, so it stores and wakes under
+      // its own session actor and work scope: an incognito turn's actor and signal end with it.
+      await runOutsideAsyncWorkScope(() =>
+        runWithoutSessionActorStorage(async () => {
+          // A store failure must not drop the result: it is delivered live once, without a
+          // stored row to retry from or to replay after a restart.
+          const stored = await owe(owed).then(
+            () => true,
+            (error: unknown) => {
+              logWarn(
+                `exec: completion ${session.id} was not stored (${sessionKind(eventSessionKey)} session; ${formatErrorMessage(error)}); delivering it without restart recovery.`,
+              );
+              return false;
+            },
           );
-        }
-      });
+          // Admission resolves the chat by key: a deleted chat refuses the wake. The captured
+          // target and request owners carry the requester's authority into the one retry too.
+          wakeOwedExec(
+            owed,
+            { ...eventOptions, sourceRunId: session.startedByRunId, expectedTarget: target },
+            (cancel) => recordNotifyOnExitRemoval(session, cancel),
+            stored ? 1 : 0,
+          );
+        }),
+      );
     } catch (error) {
       logWarn(
-        `exec: completion was not admitted (${formatErrorMessage(error)}); inspect the result with process log.`,
+        `exec: completion was not admitted (${sessionKind(eventSessionKey)} session; ${formatErrorMessage(error)}); inspect the result with process log.`,
       );
     }
     return;
@@ -331,6 +414,8 @@ async function notifyOnExit(
     if (!(error instanceof SystemEventQueueFullError)) {
       throw error;
     }
-    logWarn(`exec: completion ${session.id} was not queued (${error.message}); use process poll.`);
+    logWarn(
+      `exec: completion ${session.id} was not queued (${sessionKind(sessionKey)} session; ${error.message}); use process poll.`,
+    );
   }
 }

@@ -46,7 +46,7 @@ export type ElementInteractionOptions = GuardedInteractionOptions & {
 
 export class BrowserInteractionAuthorityError extends Error {
   constructor(error: unknown) {
-    const cause = toErrorObject(error, "Browser interaction authority changed");
+    const cause = toErrorObject(error, "Browser interaction ended. Retry the action.");
     super(cause.message, { cause });
     this.name = "BrowserInteractionAuthorityError";
   }
