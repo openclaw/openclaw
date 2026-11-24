@@ -269,6 +269,8 @@ it("restores full mention names after narrowing and reconnecting the composer", 
   expect(editor.scrollWidth).toBeLessThanOrEqual(editor.clientWidth + 1);
   // The editor's theme mirrors the textarea's queued and scrollbar-gutter rules.
   const textarea = container.querySelector("textarea")!;
+  // The mounted editor collapses its hidden native port inline; compare stylesheet rules.
+  textarea.style.removeProperty("padding");
   textarea.toggleAttribute("data-composer-scrollable", true);
   editor.toggleAttribute("data-composer-overflow", true);
   container.querySelector(".agent-chat__input")!.classList.add("agent-chat__input--submit-queued");
