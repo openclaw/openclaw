@@ -362,3 +362,68 @@ it("reports a first blocked checkpoint when the retained WAL exceeds its ceiling
     database.close();
   }
 });
+
+it("repeats a bounded sustained block hourly but reports WAL growth and new streaks at once", () => {
+  let now = 1n;
+  vi.spyOn(process.hrtime, "bigint").mockImplementation(() => now);
+  const advanceMinutes = (minutes: bigint) => {
+    now += minutes * 60n * 1_000_000_000n;
+  };
+  const databasePath = resources.file();
+  const database = open(databasePath);
+  database.exec("PRAGMA journal_mode=WAL; CREATE TABLE events(value TEXT)");
+  const reader = open(databasePath);
+  const onCheckpointError = vi.fn();
+  const owner = createSqliteWalCheckpoint(
+    database,
+    { databaseLabel: "fixture-db", databasePath, onCheckpointError },
+    64 * 1024 * 1024,
+  );
+  const blockedReport = expect.objectContaining({
+    message: "fixture-db WAL checkpoint PASSIVE blocked by a reader",
+  });
+  try {
+    expect(owner.checkpoint("PASSIVE")).toBe(true);
+    // A replication reader pins one snapshot while the WAL stays bounded.
+    reader.exec("BEGIN");
+    reader.prepare("SELECT value FROM events").all();
+    database.exec("INSERT INTO events VALUES ('pinned')");
+    expect(owner.checkpoint("PASSIVE")).toBe(false);
+    expect(owner.checkpoint("PASSIVE")).toBe(false);
+    expect(onCheckpointError).toHaveBeenCalledExactlyOnceWith(blockedReport);
+
+    advanceMinutes(59n);
+    expect(owner.checkpoint("PASSIVE")).toBe(false);
+    expect(owner.health).toMatchObject({ consecutiveBlocked: 3, warning: true });
+    expect(onCheckpointError).toHaveBeenCalledTimes(1);
+    advanceMinutes(1n);
+    expect(owner.checkpoint("PASSIVE")).toBe(false);
+    expect(onCheckpointError).toHaveBeenCalledTimes(2);
+
+    // A growing WAL is the operator signal and reports without waiting.
+    const walBytes = fs.statSync(`${databasePath}-wal`).size;
+    database.exec("INSERT INTO events VALUES (hex(zeroblob(65536)))");
+    expect(fs.statSync(`${databasePath}-wal`).size).toBeGreaterThan(walBytes);
+    expect(owner.checkpoint("PASSIVE")).toBe(false);
+    expect(onCheckpointError).toHaveBeenCalledTimes(3);
+
+    // A completed checkpoint ends the streak; the next sustained block reports again.
+    reader.exec("ROLLBACK");
+    expect(owner.checkpoint("PASSIVE")).toBe(true);
+    const grownWalBytes = fs.statSync(`${databasePath}-wal`).size;
+    reader.exec("BEGIN");
+    reader.prepare("SELECT value FROM events").all();
+    database.exec("INSERT INTO events VALUES ('pinned-again')");
+    expect(fs.statSync(`${databasePath}-wal`).size).toBe(grownWalBytes);
+    expect(owner.checkpoint("PASSIVE")).toBe(false);
+    expect(owner.checkpoint("PASSIVE")).toBe(false);
+    expect(onCheckpointError).toHaveBeenCalledTimes(4);
+    expect(onCheckpointError).toHaveBeenLastCalledWith(blockedReport);
+  } finally {
+    if (reader.isTransaction) {
+      reader.exec("ROLLBACK");
+    }
+    reader.close();
+    database.close();
+  }
+});
