@@ -312,6 +312,26 @@ describe("Pi session catalog", () => {
     }
   });
 
+  it("pins the selected Pi file and refuses renamed stores or duplicate native IDs", async () => {
+    const directory = await createPiStore();
+    const source = (await listLocalPiSessionPage({}, true)).sessions[0]?.sourceHomeId;
+    expect(source).toMatch(/^[0-9a-f]{64}$/);
+    await expect(readLocalPiTranscriptPage(transcriptRequest, source)).resolves.toMatchObject({
+      threadId: "pi-session",
+    });
+    const expire = usePiCandidateCacheClock();
+    await fs.copyFile(
+      path.join(directory, "session.jsonl"),
+      path.join(directory, "duplicate.jsonl"),
+    );
+    expire();
+    await expect(readLocalPiTranscriptPage(transcriptRequest, source)).rejects.toThrow("ambiguous");
+    await createPiStore();
+    await expect(readLocalPiTranscriptPage(transcriptRequest, source)).rejects.toThrow(
+      "selection changed",
+    );
+  });
+
   it("opens validated local Pi sessions with the upstream terminal resume contract", async () => {
     await createPiStore();
     const binDirectory = await installFakePi();
@@ -322,7 +342,7 @@ describe("Pi session catalog", () => {
       containingSessions({
         threadId: "pi-session",
         canOpenTerminal: true,
-        exportPolicy: { origin: "native-local", automatic: true },
+        exportPolicy: { origin: "native-local", automatic: true, stableHostThreadIdentity: true },
       }),
     );
     await expect(provider!.openTerminal!(localRequest)).resolves.toEqual({

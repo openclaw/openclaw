@@ -579,6 +579,9 @@ const repositoryScriptEntries = [
   // docs/reference/fast-track-release-approval.md runs this manual-only Vitest config by path.
   "test/manual-release-approval.config.ts",
   "test/manual-release-approval.checks.ts",
+  "test/manual-fast-track-button.checks.ts",
+  "test/manual-fast-track-publication.checks.ts",
+  "test/manual-fast-track-receipt.checks.ts",
   "scripts/secrets/openclaw-bws-resolver.mjs!",
   // Security Review stages these entrypoints from isolated checkout attempts.
   "scripts/github/security-review-event.mjs!",

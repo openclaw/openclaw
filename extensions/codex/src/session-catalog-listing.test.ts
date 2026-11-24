@@ -563,7 +563,7 @@ it.each([
         ),
       ).toBe(true);
       expect(hosts.map((host) => host.sessions[0]?.exportPolicy)).toEqual(
-        Array(3).fill(automatic ? { origin: "native-local", automatic: true } : undefined),
+        hosts.map(() => (automatic ? { origin: "native-local", automatic: true } : undefined)),
       );
       expect(forRequest.mock.calls.every(([agentId]) => agentId === "beta")).toBe(true);
       expect(forRequest.mock.calls.every(([, source]) => source?.agentDir === betaAgentDir)).toBe(
