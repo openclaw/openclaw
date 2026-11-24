@@ -33,7 +33,7 @@ import {
  * Remove with `update-candidate-check-early-release.ts`.
  */
 
-export const EARLY_RELEASE_RECOVERY_FLAG = "--early-release-recovery";
+const EARLY_RELEASE_RECOVERY_FLAG = "--early-release-recovery";
 /** Measured: a rebuild under a migrating Gateway peaked near 2.3 GiB across checkout and state. */
 const MIN_FREE_BYTES = 4 * 1024 ** 3;
 const DRIVER_EXIT_TIMEOUT_MS = 30 * 60_000;
@@ -79,14 +79,14 @@ export type RecoveryPlan = {
   driver: { pid: number; start: string };
 };
 
-export type CommandResult = { code: number | null; output: string };
+type CommandResult = { code: number | null; output: string };
 export type RunCommand = (
   argv: string[],
   options?: { cwd?: string; stream?: boolean; timeoutMs?: number },
 ) => Promise<CommandResult>;
 
 /** Runs a command; `stream` copies its output to this process's (the journal's) output. */
-export const runCommand: RunCommand = (argv, options = {}) =>
+const runCommand: RunCommand = (argv, options = {}) =>
   new Promise((resolve) => {
     const child = spawn(argv[0]!, argv.slice(1), {
       cwd: options.cwd,
@@ -423,7 +423,7 @@ export type RunnerDeps = {
 };
 
 export type FinishFacts = { downtimeMs: number };
-export type RecoveryOutcome = {
+type RecoveryOutcome = {
   plan: RecoveryPlan;
   status: "succeeded" | "failed";
   reason: string;
@@ -440,7 +440,7 @@ const REBUILD = "pnpm install --frozen-lockfile && pnpm build";
  */
 export async function runEarlyGitReleaseRecovery(
   plan: RecoveryPlan,
-  deps: RunnerDeps,
+  deps: RunnerDeps = defaultRunnerDeps(),
 ): Promise<boolean> {
   const { run, log } = deps;
   const cli = (root: string, ...args: string[]) =>
@@ -578,7 +578,7 @@ export async function runEarlyGitReleaseRecovery(
 export async function finishEarlyGitReleaseRecovery(
   plan: RecoveryPlan,
   facts: FinishFacts,
-  deps: Pick<RunnerDeps, "run" | "log" | "record">,
+  deps: Pick<RunnerDeps, "run" | "log" | "record"> = defaultRunnerDeps(),
 ) {
   const removed: string[] = [];
   const kept: string[] = [];
@@ -694,31 +694,28 @@ async function recordOutcome(outcome: RecoveryOutcome) {
   });
 }
 
-/** Entry for `update-migrated-finalize.worker --early-release-recovery <plan> [finish <facts>]`. */
-export async function runEarlyGitReleaseRecoveryEntry(argv: readonly string[]) {
-  // SAFETY: the plan and facts are written by this same build (`--check` or the runner).
+/** `update-migrated-finalize.worker --early-release-recovery <plan> [finish <facts>]`. */
+export function readEarlyGitReleaseRecoveryArgs(argv: readonly string[]) {
+  // SAFETY: the plan is written by this same build (`--check` or the runner).
   const plan = JSON.parse(argv[0] ?? "") as RecoveryPlan;
-  const log = (line: string) => process.stdout.write(`[openclaw update recovery] ${line}\n`);
-  const record = async (outcome: RecoveryOutcome) => {
-    try {
-      await recordOutcome(outcome);
-    } catch (error) {
-      log(`the outcome could not be recorded for \`openclaw update status\`: ${String(error)}`);
-    }
+  const facts = safeParseJsonRecord(argv[2] ?? "");
+  return {
+    plan,
+    finish: argv[1] === "finish" ? { downtimeMs: Number(facts?.downtimeMs) || 0 } : null,
   };
-  if (argv[1] === "finish") {
-    await finishEarlyGitReleaseRecovery(
-      plan,
-      { downtimeMs: Number(safeParseJsonRecord(argv[2] ?? "")?.downtimeMs) || 0 },
-      {
-        run: runCommand,
-        log,
-        record,
-      },
-    );
-    return false;
+}
+
+const log = (line: string) => process.stdout.write(`[openclaw update recovery] ${line}\n`);
+const record = async (outcome: RecoveryOutcome) => {
+  try {
+    await recordOutcome(outcome);
+  } catch (error) {
+    log(`the outcome could not be recorded for \`openclaw update status\`: ${String(error)}`);
   }
-  return runEarlyGitReleaseRecovery(plan, {
+};
+
+function defaultRunnerDeps(): RunnerDeps {
+  return {
     run: runCommand,
     log,
     driverAlive: (driver) => processStart(driver.pid) === driver.start,
@@ -768,5 +765,5 @@ export async function runEarlyGitReleaseRecoveryEntry(argv: readonly string[]) {
     },
     now: Date.now,
     sleep: (ms) => delay(ms),
-  });
+  };
 }

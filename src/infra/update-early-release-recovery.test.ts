@@ -4,7 +4,9 @@ import path from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
 import * as recovery from "./update-early-release-recovery.js";
-import type { RecoveryOutcome, RunCommand, StartDeps } from "./update-early-release-recovery.js";
+import type { RunCommand, RunnerDeps, StartDeps } from "./update-early-release-recovery.js";
+
+type RecoveryOutcome = Parameters<RunnerDeps["record"]>[0];
 
 const roots: string[] = [];
 afterEach(() => cleanupTempDirs(roots));
@@ -46,7 +48,8 @@ function install() {
     pnpm: 0,
     run: async (argv, options) => {
       if (argv[0] === "git" || argv[0] === cli) {
-        return recovery.runCommand(argv, options);
+        const result = spawnSync(argv[0]!, argv.slice(1), { cwd: options?.cwd, encoding: "utf8" });
+        return { code: result.status, output: `${result.stdout}${result.stderr}` };
       }
       systemd.push(argv);
       const code = { "systemd-run": deps.systemdRun, pnpm: deps.pnpm }[argv[0]!] ?? 0;
@@ -179,7 +182,10 @@ function runner(fail: Record<string, number>, resumed = false, restarts = 0) {
   const deps = {
     run,
     log: () => {},
-    driverAlive: () => (calls.push("driver alive"), alive-- > 0),
+    driverAlive: () => {
+      calls.push("driver alive");
+      return alive-- > 0;
+    },
     restarts: async () => restarts,
     migrated: () => true,
     ready: async (port: number | null) => {
