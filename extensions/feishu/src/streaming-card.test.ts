@@ -609,6 +609,39 @@ describe("FeishuStreamingSession", () => {
     });
   });
 
+  it("reopens a timed-out streaming window on the same card and retries the write", async () => {
+    const requests: string[] = [];
+    let streaming = false;
+    const deps = createMemoryFetch((url, body) => {
+      if (url.pathname.includes("/auth/")) {
+        return jsonResponse({ code: 0, tenant_access_token: "token", expire: 7200 });
+      }
+      const { sequence, settings, content } = JSON.parse(body);
+      const mode = settings && JSON.parse(settings).config.streaming_mode;
+      requests.push(`${sequence} ${settings ? `streaming_mode=${mode}` : content}`);
+      if (settings) {
+        streaming = mode;
+      } else if (!streaming) {
+        return jsonResponse({ code: 200_850, msg: "card streaming timeout" }, 400);
+      }
+      return jsonResponse({ code: 0, msg: "ok" });
+    });
+    const session = createActiveSession(deps, {
+      cardId: "card_window",
+      messageId: "om_window",
+      text: "part one",
+    });
+
+    await session.update("part one\npart two\n");
+
+    expect(requests).toEqual([
+      "2 part one\npart two\n",
+      "3 streaming_mode=false",
+      "4 streaming_mode=true",
+      "5 part one\npart two\n",
+    ]);
+  });
+
   it("retries the same throttled snapshot after a CardKit body error", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(1_500);
