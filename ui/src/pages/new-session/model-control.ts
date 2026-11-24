@@ -450,7 +450,7 @@ export class NewSessionModelControl extends NewSessionModelSelection {
 
   accessProgramForSubmission(): CyberAccessProgram | undefined {
     if (!this.ownsMetadata() || this.metadataState.status !== "ready") {
-      return this.cyberAccessProgram;
+      return this.cyberAccessProgram === "standard" ? "standard" : undefined;
     }
     return resolveDraftAccessProgram({
       model: this.effectiveModel,

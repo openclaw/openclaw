@@ -729,7 +729,13 @@ describe("runtime choices", () => {
 });
 
 it("preserves an explicit Access choice across model and catalog changes", async () => {
-  const { context, control, changed, request } = setup([luna, sol]);
+  const availableAccessPrograms: ModelCatalogEntry["availableAccessPrograms"] = {
+    cyber: ["standard", "daybreak_blue", "daybreak_red"],
+  };
+  const { context, control, changed, request } = setup([
+    { ...luna, availableAccessPrograms },
+    { ...sol, availableAccessPrograms },
+  ]);
   const preference = { cyberAccessProgram: "daybreak_blue" as const };
   control.load(context, "main", true, { preference });
   await waitForFast(() => expect(control.isRestoringPreference()).toBe(false));
@@ -788,6 +794,24 @@ const daybreakCyber: ModelCatalogEntry = {
   availableAccessPrograms: { cyber: ["daybreak_red"] },
   cyberAccessProgramDefault: "standard",
 };
+
+it("drops a saved Daybreak choice from a draft for a Standard-only model", async () => {
+  const model: ModelCatalogEntry = {
+    ...sol,
+    availableAccessPrograms: { cyber: ["standard"] },
+    cyberAccessProgramDefault: "standard",
+  };
+  const { context, control } = setup([daybreakMainline, model]);
+  const agent = { id: "main", model: { primary: `openai/${model.id}` } };
+  control.load(context, "main", true, {
+    agent,
+    preference: { cyberAccessProgram: "daybreak_blue" },
+  });
+  await control.metadataRead;
+  expect(control.accessProgramForSubmission()).toBeUndefined();
+  control.selectModel(`openai/${daybreakMainline.id}`);
+  expect(control.draftSelection("main")?.cyberAccessProgram).toBeUndefined();
+});
 
 it("saves one model selection with mandatory Daybreak, then follows the new model back", async () => {
   const { context, control, changed } = setup([daybreakMainline, daybreakCyber]);
