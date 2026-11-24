@@ -33,6 +33,7 @@ import {
   segmentActivityGroup,
   collectActivityGroup,
   type ActivityGroupData,
+  type ProjectedActivity,
 } from "./chat-activity-projection.ts";
 import { ChatCompactionActivity } from "./chat-compaction-activity.tsx";
 import {
@@ -61,7 +62,7 @@ function prepareActivityGroup(
     toolCardOverrides: ReadonlyMap<ToolCard, ActivityOperationProps | null>;
     currentRunActivity: ReadonlySet<ReturnType<typeof readPreparedActivity>[number]>;
     activeGroup: boolean;
-    visibleActivity: ReadonlySet<ReturnType<typeof readPreparedActivity>[number]>;
+    visibleActivity: ReadonlySet<ProjectedActivity>;
     key: string;
   },
 ) {
@@ -112,7 +113,7 @@ function prepareActivityGroup(
   const ownLaunches = ownSessionLaunchCalls(cards);
   const summaryByCard = new Map(preparedByCard);
   // Older/raw-only pages still have canonical call and result facts, but no prepared labels.
-  const hasPreparedTools = visibleActivity.some((item) => !data.compactions.has(item));
+  const hasPreparedTools = visibleActivity.some((item) => !item.compaction);
   const rawSummaryActivity = hasPreparedTools
     ? []
     : cardGroups.map(({ card }) => {
@@ -168,7 +169,7 @@ function prepareActivityGroup(
       ]),
     );
     const rank = (item: (typeof currentActivity)[number]) =>
-      (data.compactions.has(item) ? orderBySource.get(item.itemId) : rawOrder.get(item)) ?? -1;
+      (item.compaction ? orderBySource.get(item.itemId) : rawOrder.get(item)) ?? -1;
     headlineActivity.sort((left, right) => rank(left) - rank(right));
   }
   const headline = selectActivityHeadline(
@@ -283,9 +284,7 @@ function prepareActivityGroup(
     stepCall && resolveToolCallInput(stepCall.name, asNullableRecord(stepCall.args));
   const visibleCalls = new Set(visibleActivity.map((item) => item.toolCallId ?? item.itemId));
   const soleStep =
-    (visibleActivity.length === 1 &&
-      data.compactions.has(visibleActivity[0]!) &&
-      entries.length === 0) ||
+    (visibleActivity.length === 1 && visibleActivity[0]?.compaction && entries.length === 0) ||
     (!activeGroup &&
       !headline &&
       !reviewOutcome &&
@@ -300,7 +299,6 @@ function prepareActivityGroup(
 
   return {
     data,
-    compactions: data.compactions,
     actionOrder: data.actionOrder,
     firstGroup,
     toolContexts,
@@ -531,7 +529,7 @@ function ActivityOperationSegments(props: ActivityGroupContentProps & { state: A
                         <Show when={entry().activity}>
                           {(activity) => (
                             <Show
-                              when={props.state.data.compactions.get(activity())}
+                              when={activity().compaction}
                               fallback={
                                 <PreparedActivityRow
                                   activity={activity()}

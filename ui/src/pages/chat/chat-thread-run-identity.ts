@@ -31,17 +31,13 @@ export function createCompactionRunLookup(
   messages: readonly unknown[],
   activeRunId?: string | null,
 ) {
-  const runs = new Set(
-    messages.flatMap((message) => {
-      const role = asRecord(message)?.role;
-      return typeof role === "string" &&
-        ["assistant", "tool"].includes(normalizeRoleForGrouping(role))
-        ? [transcriptRunId(message)]
-        : [];
-    }),
-  );
-  if (activeRunId) {
-    runs.add(activeRunId);
+  const runs = new Set([activeRunId]);
+  for (const message of messages) {
+    const rawRole = asRecord(message)?.role;
+    const role = typeof rawRole === "string" ? normalizeRoleForGrouping(rawRole) : undefined;
+    if (role === "assistant" || role === "tool") {
+      runs.add(transcriptRunId(message));
+    }
   }
   return (candidate: unknown) => {
     const runId = normalizeOptionalString(candidate);

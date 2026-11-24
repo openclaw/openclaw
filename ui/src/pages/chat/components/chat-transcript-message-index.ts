@@ -682,10 +682,12 @@ export function projectCompactActivitySpacing(rows: readonly TranscriptRow<ChatR
   if (cached) {
     return cached;
   }
-  const compactActivityGaps = new Set<string>();
-  for (const [index, row] of rows.entries()) {
-    const next = rows[index + 1];
-    if (row.kind !== "item" || next?.kind !== "item") {
+  const gaps = new Set<string>();
+  let spacedRows: TranscriptRow<ChatRenderItem>[] | undefined;
+  for (let index = 1; index < rows.length; index++) {
+    const row = rows[index - 1];
+    const next = rows[index];
+    if (row?.kind !== "item" || next?.kind !== "item") {
       continue;
     }
     const item = row.item;
@@ -701,18 +703,17 @@ export function projectCompactActivitySpacing(rows: readonly TranscriptRow<ChatR
             (item.outcome.kind === "completed" && !item.outcome.actionOwner)) &&
           item.parts.every((part) => part.kind === "activity-run")))
     ) {
-      compactActivityGaps.add(item.key);
+      gaps.add(item.key);
+      // Do not restore a height measured with roomier chrome.
+      if (row.revision) {
+        (spacedRows ??= [...rows])[index - 1] = {
+          ...row,
+          revision: row.revision + ":compact-activity",
+        };
+      }
     }
   }
-  // Keep the row key, but do not restore a height measured with roomier chrome.
-  const spacedRows = compactActivityGaps.size
-    ? rows.map((row) =>
-        row.kind === "item" && compactActivityGaps.has(row.item.key) && row.revision
-          ? { ...row, revision: row.revision + ":compact-activity" }
-          : row,
-      )
-    : rows;
-  const result = { gaps: compactActivityGaps, rows: spacedRows };
+  const result = { gaps, rows: spacedRows ?? rows };
   activitySpacing.set(rows, result);
   return result;
 }

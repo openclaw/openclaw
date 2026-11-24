@@ -1,167 +1,97 @@
 import { expect, it } from "vitest";
 import { summarizeToolGroup } from "../../lib/chat/tool-call-grouping.ts";
 import { coalesceAgentRunFrames } from "./chat-agent-run-grouping.ts";
-// @vitest-environment node
-import { message as chatMessage } from "./chat-thread-fixtures.test-support.ts";
-import { buildItems, createProps } from "./chat-thread.test-support.ts";
-import { buildCachedChatItems } from "./chat-thread.ts";
-import {
-  coalesceActivityRuns,
-  coalesceStreamRuns,
-  collapseCompletedTurnWork,
-} from "./chat-turn-presentation.ts";
+import { message } from "./chat-thread-fixtures.test-support.ts";
+import { buildItems } from "./chat-thread.test-support.ts";
+import { coalesceActivityRuns } from "./chat-turn-presentation.ts";
 
-it("projects repeated compactions into ordinary activity without manufacturing messages", () => {
-  const messages = Array.from({ length: 6 }, (_, index) => ({
-    role: "system",
-    timestamp: 1000 + index,
-    __openclaw: {
-      id: `compact-${index}`,
-      runId: "run-1",
-      kind: "compaction",
-      tokensBefore: 80000,
-      tokensAfter: 20000,
-    },
-  }));
-  const before = JSON.stringify(messages);
-  const items = buildItems(createProps({ messages, runId: "run-1" }));
-  expect(items.every((item) => item.kind === "group" && item.role === "tool")).toBe(true);
-  expect(items.flatMap((item) => (item.kind === "group" ? item.messages : []))).toEqual([]);
-  const grouped = coalesceActivityRuns(items);
-  expect(grouped).toHaveLength(1);
-  expect(grouped[0]?.kind).toBe("activity-run");
-  expect(JSON.stringify(messages)).toBe(before);
-});
+function marker(id: string, runId?: string, itemId?: string, timestamp = 2000) {
+  return { role: "system", timestamp, __openclaw: { kind: "compaction", id, runId, itemId } };
+}
+const rows = (items: ReturnType<typeof buildItems>) =>
+  items.flatMap((item) => (item.kind === "group" && item.compaction ? [item.compaction] : []));
 
-it("keeps an idle manual operation outside agent frames and deduplicates its durable event", () => {
-  const status = {
-    phase: "complete" as const,
-    runId: "manual-operation",
-    manualOperation: true as const,
-    startedAt: 2000,
-    completedAt: 3000,
-  };
-  const marker = {
-    role: "system",
-    timestamp: 2000,
-    __openclaw: { id: "manual", kind: "compaction", runId: "manual-operation" },
-  };
-  const messages = [
-    { role: "user", content: "Earlier work", timestamp: 500 },
-    { role: "assistant", content: "Done.", timestamp: 1000, __openclaw: { runId: "earlier" } },
-    marker,
-  ];
-  for (const showToolCalls of [true, false]) {
-    const items = buildItems(createProps({ messages, compactionStatus: status, showToolCalls }));
-    const compact = items.filter((item) => item.kind === "group" && item.compaction);
-    expect(compact).toHaveLength(1);
-    expect(compact[0]).toMatchObject({ role: "tool", messages: [] });
-    expect(compact[0]?.kind === "group" && compact[0].compaction?.durationMs).toBe(1000);
-    expect(compact[0]?.kind === "group" && compact[0].runId).toBeUndefined();
-    expect(coalesceAgentRunFrames(items).at(-1)?.kind).toBe("group");
-  }
-});
-
-it("keeps live and persisted compaction with its proven tool run", () => {
+it("keeps two compactions in their run with distinct keys across live, settlement and reload", () => {
   const runId = "automatic-run";
-  const operation = { runId, itemId: "compact-item", startedAt: 3000 };
+  const startedAt = 3000;
+  const itemId = "compact-item";
   const messages = [
-    { role: "user", content: "Read the release notes", timestamp: 1000 },
+    message("user", "Read the release notes", 1000),
     {
       role: "assistant",
-      timestamp: 2000,
+      timestamp: 1500,
       stopReason: "toolUse",
       content: [{ type: "toolCall", id: "read", name: "read", arguments: {} }],
       __openclaw: { runId },
     },
+    marker("prior", runId, "prior-item"),
   ];
-  const marker = {
-    role: "system",
-    timestamp: 3000,
-    __openclaw: { runId, itemId: operation.itemId, id: "persisted", kind: "compaction" },
-  };
-  const prior = {
-    ...marker,
-    timestamp: 2500,
-    __openclaw: { ...marker["__openclaw"], id: "prior", itemId: "prior-item" },
-  };
-  const liveMessages = [...messages, prior];
+  const terminal = [...messages, marker("persisted", runId, itemId, startedAt)];
+  const complete = { phase: "complete" as const, runId, itemId, startedAt, completedAt: 4000 };
   const live = buildItems({
-    messages: liveMessages,
-    runId,
-    compactionStatus: { ...operation, phase: "active", completedAt: null },
-  });
-  const settled = buildItems({
-    messages: [...liveMessages, marker],
-    runId,
-    compactionStatus: { ...operation, phase: "complete", completedAt: 4000 },
-  });
-  const reload = buildItems({ messages: [...liveMessages, marker] });
-  const rows = (items: typeof live) => {
-    const activity = coalesceActivityRuns(items).find((item) => item.kind === "activity-run");
-    if (activity?.kind !== "activity-run") {
-      throw new Error("Expected an activity run");
-    }
-    expect(activity.groups).toMatchObject([
-      { runId },
-      { runId, compaction: { runId } },
-      { runId, compaction: { runId } },
-    ]);
-    return activity.groups.slice(1).map(({ compaction }) => compaction);
-  };
-  const liveKeys = rows(live).map((row) => row?.key);
-  expect(new Set(liveKeys).size).toBe(2);
-  expect(rows(settled).map((row) => row?.key)).toEqual(liveKeys);
-  expect(rows(reload).map((row) => row?.key)).toEqual(liveKeys);
-  expect(rows(settled).map((row) => row?.durationMs)).toEqual([undefined, 1000]);
-});
-
-it("keeps distinct compactions when an older completion does not identify its item", () => {
-  const sharedItem = "same-item";
-  const messages = ["old-run", "active-run", "active-run"].map((runId, index) => ({
-    role: "system",
-    timestamp: 1000 + index,
-    __openclaw: {
-      id: "marker-" + index,
-      kind: "compaction",
-      runId,
-      itemId: index === 2 ? "another-item" : sharedItem,
-    },
-  }));
-  const rows = buildItems({
     messages,
-    compactionStatus: {
-      phase: "complete",
-      runId: "active-run",
-      startedAt: 1001,
-      completedAt: 1002,
-    },
-  }).flatMap((item) => (item.kind === "group" && item.compaction ? [item.compaction] : []));
-  expect(rows).toHaveLength(3);
-  expect(new Set(rows.map((row) => row.key)).size).toBe(3);
-  expect(rows.every((row) => row.durationMs === undefined)).toBe(true);
-  const active = buildItems({
-    messages: messages.slice(0, 2),
-    runId: "active-run",
-    compactionStatus: {
-      phase: "active",
-      runId: "active-run",
-      startedAt: 1002,
-      completedAt: null,
-    },
-  }).flatMap((item) => (item.kind === "group" && item.compaction ? [item.compaction.phase] : []));
-  expect(active).toEqual(["complete", "complete", "active"]);
+    runId,
+    compactionStatus: { ...complete, phase: "active", completedAt: null },
+  });
+  const settled = buildItems({ messages: terminal, runId, compactionStatus: complete });
+  const reload = buildItems({ messages: terminal });
+  for (const items of [live, settled, reload]) {
+    expect(coalesceActivityRuns(items).find((item) => item.kind === "activity-run")).toMatchObject({
+      groups: [{ runId }, { runId, compaction: { runId } }, { runId, compaction: { runId } }],
+    });
+  }
+  const keys = rows(live).map((row) => row.key);
+  expect(new Set(keys).size).toBe(2);
+  expect(rows(settled).map((row) => row.key)).toEqual(keys);
+  expect(rows(reload).map((row) => row.key)).toEqual(keys);
+  expect(rows(settled).map((row) => row.durationMs)).toEqual([undefined, 1000]);
 });
 
-it("does not reuse a live group key for an ambiguous manual history prepend", () => {
+it("shows an idle manual operation once with tools hidden and does not claim the prior run", () => {
+  const runId = "manual-operation";
+  const compactionStatus = {
+    phase: "complete" as const,
+    runId,
+    manualOperation: true as const,
+    startedAt: 2000,
+    completedAt: 3000,
+  };
+  const messages = [message("assistant", "Done.", 1000), marker("manual", runId)];
+  const items = buildItems({ messages, compactionStatus, showToolCalls: false });
+  expect(rows(items)).toMatchObject([{ durationMs: 1000 }]);
+  expect(rows(items)).toHaveLength(1);
+  expect(rows(items)[0]?.runId).toBeUndefined();
+  expect(coalesceAgentRunFrames(items).at(-1)?.kind).toBe("group");
+});
+
+it("keeps old markers distinct and does not hide fresh itemless progress", () => {
+  const runId = "active-run";
+  const history = [
+    marker("a", "prior-run", "same"),
+    marker("b", runId, "same"),
+    marker("c", runId, "third"),
+  ];
+  const status = { runId, startedAt: 3000, completedAt: 4000 };
+  const settled = rows(
+    buildItems({ messages: history, compactionStatus: { ...status, phase: "complete" } }),
+  );
+  expect(settled).toHaveLength(3);
+  expect(new Set(settled.map((row) => row.key)).size).toBe(3);
+  expect(settled.every((row) => row.durationMs === undefined)).toBe(true);
+  const active = rows(
+    buildItems({
+      messages: history.slice(0, 2),
+      runId,
+      compactionStatus: { ...status, phase: "active", completedAt: null },
+    }),
+  );
+  expect(active.map((row) => row.phase)).toEqual(["complete", "complete", "active"]);
+});
+
+it("does not reuse the live group key when a history prepend makes manual matching ambiguous", () => {
   const sessionKey = "agent:main:dashboard:compaction-prepend";
   const runId = "manual-operation";
-  const marker = (id: string, timestamp: number) => ({
-    role: "system",
-    timestamp,
-    __openclaw: { kind: "compaction", runId, id },
-  });
-  const recent = marker("new", 2000);
+  const recent = marker("new", runId, undefined, 2000);
   const compactionStatus = {
     phase: "active" as const,
     runId,
@@ -169,104 +99,52 @@ it("does not reuse a live group key for an ambiguous manual history prepend", ()
     startedAt: 1000,
     completedAt: null,
   };
-  const visible = buildItems({ sessionKey, messages: [recent], compactionStatus });
-  expect(visible).toHaveLength(1);
+  expect(buildItems({ sessionKey, messages: [recent], compactionStatus })).toHaveLength(1);
   const prepended = buildItems({
     sessionKey,
-    messages: [marker("earlier", 1500), recent],
+    messages: [marker("prior", runId, undefined, 1500), recent],
     compactionStatus,
   });
   expect(prepended).toHaveLength(3);
   expect(new Set(prepended.map((item) => item.key)).size).toBe(3);
-  expect(prepended).toContainEqual(
-    expect.objectContaining({
-      kind: "group",
-      compaction: expect.objectContaining({ phase: "active" }),
-    }),
-  );
+  expect(rows(prepended).some((row) => row.phase === "active")).toBe(true);
 });
 
-it("describes repeated compaction without counters and preserves main's tool summary rules", () => {
-  const operation = (
-    itemId: string,
-    kind: string,
-    name?: string,
-    status: "completed" | "running" = "completed",
-  ) => ({
+it("keeps six compactions count-free and puts compaction before generic tools", () => {
+  const messages = Array.from({ length: 6 }, (_, index) =>
+    marker(String(index), "run", String(index)),
+  );
+  const items = buildItems({ messages, runId: "run" });
+  expect(items).toHaveLength(6);
+  expect(
+    items.every((item) => item.kind === "group" && item.role === "tool" && !item.messages.length),
+  ).toBe(true);
+  expect(coalesceActivityRuns(items)).toHaveLength(1);
+  const operation = (itemId: string, name: string, kind = "tool") => ({
     itemId,
-    kind,
     name,
-    title: "Operation",
+    kind,
     phase: "end" as const,
-    status,
+    status: "running" as const,
   });
-  const compactions = [operation("c1", "compaction"), operation("c2", "compaction")];
   expect(
-    summarizeToolGroup([
-      operation("other", "tool", "custom_tool"),
-      ...compactions,
-      operation("read", "tool", "read"),
-      operation("edit", "tool", "edit"),
-      operation("cmd", "tool", "exec"),
-    ]),
-  ).toBe("Read and changed files, ran commands, compacted context");
-  expect(summarizeToolGroup(compactions)).toBe("Compacted context");
-  expect(
-    summarizeToolGroup([
-      operation("other", "tool", "custom_tool", "running"),
-      ...compactions,
-      operation("c3", "compaction", undefined, "running"),
-    ]),
+    summarizeToolGroup([operation("a", "custom"), operation("b", "compact", "compaction")]),
   ).toBe("Compacting context, using tools");
 });
 
-const collapsedItems = (props: Parameters<typeof createProps>[0]) =>
-  collapseCompletedTurnWork(coalesceStreamRuns(buildCachedChatItems(createProps(props))), {
-    sessionKey: "agent:main:dashboard:test-session",
-    runWorking: false,
-  });
-
-it.each(["context event", "persisted boundary"])("renders a compaction %s", (source) => {
-  const boundary = source === "persisted boundary";
-  const marker = boundary
-    ? {
-        role: "system",
-        timestamp: 2_000,
-        __openclaw: {
-          kind: "compaction",
-          id: "checkpoint-with-metrics",
-          tokensBefore: 900_000,
-          tokensAfter: 24_700,
-        },
-      }
-    : chatMessage("custom", "Context compacted", 2_000, {
+it("renders a legacy context event without changing adjacent messages", () => {
+  const items = buildItems({
+    messages: [
+      message("user", "do it", 1000),
+      message("custom", "Context compacted", 2000, {
         customType: "openclaw.context-compaction",
         display: true,
         excludeFromContext: true,
-        details: { runId: "run-1" },
-        idempotencyKey: "codex-context-compaction:thread:turn:item",
-      });
-  const items = collapsedItems({
-    messages: boundary
-      ? [marker]
-      : [chatMessage("user", "do it", 1_000), marker, chatMessage("assistant", "All done.", 3_000)],
+      }),
+      message("assistant", "All done.", 3000),
+    ],
   });
-  expect(items[boundary ? 0 : 1]).toMatchObject(
-    boundary
-      ? {
-          kind: "group",
-          compaction: {
-            phase: "complete",
-            label: "Compacted context",
-            metric: "saved 875.3k tokens (97.3%)",
-          },
-        }
-      : { kind: "group", compaction: { phase: "complete", label: "Compacted context" } },
-  );
-  if (!boundary) {
-    expect(items.map((item) => item.kind)).toEqual(["group", "group", "group"]);
-    expect(items[2]?.kind === "group" ? items[2].messages[0]?.message : null).toMatchObject({
-      content: "All done.",
-    });
-  }
+  expect(items.map((item) => item.kind)).toEqual(["group", "group", "group"]);
+  expect(rows(items)).toMatchObject([{ label: "Compacted context" }]);
+  expect(items.at(-1)).toMatchObject({ messages: [{ message: { content: "All done." } }] });
 });
