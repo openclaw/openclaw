@@ -191,6 +191,14 @@ unchanged. Store size is not an update-admission rule.
 Source access grants and schema-specific default privileges are copied and
 verified in the same transaction, so existing reporting and backup roles keep
 their permissions in the new namespace.
+The startup copy checks readability before budgeting or copying files. It skips
+unreadable optional files (such as old config backups or macOS `._*` metadata)
+and subdirectories (such as an ext4 volume's `lost+found`) with a warning, without
+changing their contents or permissions. An unreadable state root, other filesystem
+errors, or an uncopied required database still stops the upgrade. Unreadable
+required database files, including their WAL and rollback journals, are refused
+before copying; an optional SQLite family is skipped together rather than copied
+without its unreadable journal.
 
 A failed private preparation uses the existing configuration refusal (exit 78).
 There is no portable-export or in-place trial fallback; restore missing copy

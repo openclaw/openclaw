@@ -97,6 +97,7 @@ export function createAdmittedRunOperatorAuthority(
           modelPolicy: source.channelRecoverySource.modelPolicy,
         })
       : undefined,
+    channelOwner: source.channelOwner && Object.freeze({ ...source.channelOwner }),
     scopes: Object.freeze([...source.scopes]),
     requesterOwner: source.requesterOwner,
     grant: source.grant,

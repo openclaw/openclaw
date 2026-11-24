@@ -780,6 +780,22 @@ function publicationKnownBudget(record, evidenceReuse, reusedManifest) {
     resolveTargetResult: "success",
     evidenceReuse: evidenceReuse?.requested === true,
   };
+  // Build-only plans require the admitted coverage the sealed plan will carry.
+  if (context.rerunGroup === "build-only") {
+    const event = readArtifact(
+      requiredString(process.env.GITHUB_EVENT_PATH, "workflow event path"),
+      "workflow event",
+    );
+    inputs.qualificationInputs = event.inputs;
+    inputs.qualificationCoverage = verifyQualificationAdmission({
+      descriptor: source.qualificationAdmission,
+      repository: source.repository,
+      candidateSha: source.candidateSha,
+      qualificationSha: source.workflow.sha,
+      workflowRef: context.workflowRef,
+      inputs: event.inputs,
+    }).coverage;
+  }
   const built = buildReleaseExecutionPlan(inputs);
   const plan = buildReleaseExecutionPlanArtifact({
     ...record,
