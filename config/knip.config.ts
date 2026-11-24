@@ -1588,6 +1588,10 @@ const config = {
       "test/fixtures/codex-app-server.mjs!",
     ]),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/azure-speech`]: bundledPluginWorkspace(),
+    [`${BUNDLED_PLUGIN_ROOT_DIR}/beam`]: bundledPluginWorkspace([
+      // Invoked by the plugin's release packaging hook.
+      "scripts/package-cleaners.mjs!",
+    ]),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/browser`]: bundledPluginWorkspace([
       // Core and plugin-SDK facades resolve these shipped Browser surfaces by basename.
       "browser-control-auth.ts!",

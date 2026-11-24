@@ -19,7 +19,7 @@ Receive coding-session snapshots for viewing and Team handoff.
 
 ## Surface
 
-This plugin declares no channels, providers, commands, or contracts.
+- CLI commands: `openclaw beam`
 
 ## Related docs
 

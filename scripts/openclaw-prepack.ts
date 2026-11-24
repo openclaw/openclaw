@@ -12,6 +12,7 @@ import { restorePrepackArtifacts } from "./openclaw-postpack.mjs";
 import { preparePackageChangelog } from "./package-changelog.mjs";
 import { preparePackageDocsMap } from "./package-docs-map.mjs";
 import { preparePackageManifest } from "./package-manifest.mjs";
+import { preparePackagedPluginAssets } from "./package-plugin-assets.mts";
 import { preparePackagedWorkerBundle } from "./package-worker-bundle.mts";
 import { createPnpmRunnerSpawnSpec } from "./pnpm-runner.mts";
 const requiredPreparedPathGroups = [
@@ -263,6 +264,7 @@ export async function preparePrepackArtifacts(env: NodeJS.ProcessEnv = process.e
   await preparePackageDocsMap(process.cwd());
   try {
     await preparePackagedWorkerBundle(process.cwd());
+    await preparePackagedPluginAssets(process.cwd());
     await writePackageDistInventoryForPublish(process.cwd());
     await preparePackageManifest(process.cwd());
     await preparePackageChangelog(process.cwd(), {
