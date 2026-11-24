@@ -69,6 +69,11 @@ const MIRROR_KEYS = new Set([
   "activeWindowMinutes",
 ]);
 
+function resolveMirrorAgentId(config: ReturnType<PluginRuntime["config"]["current"]>): string {
+  // Selection only reads the live snapshot. Both discovery and dispatch must resolve the same owner.
+  return resolveSessionAgentIdsStrict({ config: config as OpenClawConfig }).defaultAgentId;
+}
+
 /** Returns the mirror config, undefined when mirroring is not configured, or an error string. */
 export function parseBeamMirrorConfig(config: ReturnType<PluginRuntime["config"]["current"]>) {
   const mirror = config.plugins?.entries?.beam?.config?.mirror;
@@ -292,8 +297,7 @@ export function createBeamMirrorRunner(params: {
       current.token === null ||
       current.endpoint !== endpoint ||
       !current.catalogs.includes(candidate.catalogId) ||
-      resolveSessionAgentIdsStrict({ config: config as OpenClawConfig }).defaultAgentId !==
-        candidate.agentId
+      resolveMirrorAgentId(config) !== candidate.agentId
     ) {
       return false;
     }
@@ -531,7 +535,7 @@ export function createBeamMirrorRunner(params: {
       }
       let agentId: string;
       try {
-        agentId = resolveSessionAgentIdsStrict({ config: config as OpenClawConfig }).defaultAgentId;
+        agentId = resolveMirrorAgentId(config);
       } catch (error) {
         warnThrottled(`beam mirror disabled: ${String(error)}`);
         return;
