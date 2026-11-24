@@ -491,7 +491,7 @@ export async function verifyOriginalReceiptQualification(requestValue, dependenc
         policyTargetVersion: binding.package.version,
       },
       // Recovery must enumerate every historical attempt, including long rerun chains.
-      { deadlineMs: Date.now() + 10 * 60_000, ...(policyQualification && { waiverPolicy }) },
+      { deadlineMs: Date.now() + 10 * 60_000, waiverPolicy },
     );
     const coverage = admission.coverage.children.find((child) => child.key === role);
     const child = {

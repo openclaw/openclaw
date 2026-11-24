@@ -200,8 +200,8 @@ separate **not run** records.
 
 ## Receipt-backed aggregate recovery
 
-After a reviewed tooling-only repair, recover the original qualification receipts without
-rerunning tests or rebuilding publication artifacts:
+Use receipt recovery to reseal a drained qualification. It reads the original receipts
+without rerunning jobs or rebuilding publication artifacts:
 
 ```bash
 pnpm frv recover --run <original-parent-run-id> --workflow-sha <exact-trusted-main-P> --request-file <private-request-path>
@@ -212,9 +212,9 @@ The new aggregate authenticates the original admission, C/Q, complete child rece
 and unchanged npm/SDK/plugin/Docker bytes under current P policy. It never changes the
 original parent result. Qualification retains attempt 1; the request separately pins
 the latest terminal parent attempt. Missing evidence, changed attempts, or lost authority
-fail closed. Keep the private request: reconciliation never redispatches an uncertain
-request. Recovery supports the originally admitted beta, stable, full, or extended-stable
-publication selection; ordinary qualification remains unchanged.
+fail closed: recovery never dispatches qualification jobs as a fallback. Keep the private
+request: reconciliation never redispatches an uncertain request. Recovery preserves the
+original publication selection. Fresh qualification is a separate, explicit operation.
 
 ### Recover with a later waiver ledger
 

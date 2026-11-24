@@ -14,6 +14,7 @@ import {
   validateReceiptRecoveryRequest,
   verifyOriginalReceiptQualification,
 } from "../../scripts/full-release-receipt-recovery.mjs";
+import { isRecord } from "../../scripts/lib/record-shared.mjs";
 import {
   RECEIPT_RECOVERY_WORKFLOW,
   retainedPublicationArtifactSource,
@@ -80,7 +81,7 @@ describe("receipt-backed aggregate recovery", () => {
     );
     await expect(
       verifyOriginalReceiptQualification(test.recovery, { client: test.client }),
-    ).rejects.toThrow("original child failed release policy");
+    ).rejects.toThrow("Full release child evidence workload does not pass recovery release policy");
   });
 
   it("rechecks a separately admitted ledger against the original failed receipts at publication", async () => {
@@ -117,7 +118,7 @@ describe("receipt-backed aggregate recovery", () => {
       getCommit: async () => commit,
       getRun: (id: string) => (id === "41" ? Promise.resolve(newPolicy.run) : f.client.getRun(id)),
       verifyQualificationAdmission: (params: Parameters<typeof verifyQualificationAdmission>[0]) =>
-        params.descriptor.runId === 41
+        isRecord(params.descriptor) && params.descriptor.runId === 41
           ? verifyQualificationAdmission({
               ...params,
               runGh: newPolicy.runGh,
@@ -127,7 +128,7 @@ describe("receipt-backed aggregate recovery", () => {
       revalidateQualificationAdmissionAuthority: (
         params: Parameters<typeof revalidateQualificationAdmissionAuthority>[0],
       ) =>
-        params.descriptor.runId === 41
+        isRecord(params.descriptor) && params.descriptor.runId === 41
           ? revalidateQualificationAdmissionAuthority({ ...params, runGh: newPolicy.runGh })
           : f.client.revalidateQualificationAdmissionAuthority(params),
     };
