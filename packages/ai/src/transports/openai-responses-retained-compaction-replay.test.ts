@@ -69,6 +69,32 @@ const convert = (context: Context, replayMode: OpenAIResponsesReplayMode = "chec
   });
 
 describe("Responses retained-user compaction replay", () => {
+  it("preserves the stored fingerprint format across cold input and checkpoint reuse", () => {
+    const expected = "2e4c46d232e604f48c543bb8c527980a035aaa79a5e00094144cbe0d94c073f4";
+    expect(responsesContinuationPrefixFingerprint([])).toBe(
+      "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+    );
+    expect(
+      responsesContinuationPrefixFingerprint([null, undefined, 0, false, "plain", Number.NaN]),
+    ).toBe("2f18b00a59863ec24aa78d3715349dd579df524507515581673536b46166f0aa");
+    const owner = freezeJsonSnapshot(
+      createAssistant([], compactionState("openai-responses-compaction")),
+    );
+    const frozen = freezeJsonSnapshot(fixtures.inputMessage("frozen input"));
+    const output = [fixtures.outputMessage("reply", "msg_provider")];
+    runWithAiTransportHost(
+      createAiTransportHost({ immutableData: { freezeJsonSnapshot, isDeeplyFrozenPlainData } }),
+      () => {
+        for (let round = 0; round < 2; round++) {
+          const plan = buildOpenAIResponsesCompactionReplayPlan([owner], model, replayIdentity);
+          assert(plan.compaction);
+          const { input } = sanitizeResponsesImagePayload({ input: [plan.compaction, frozen] });
+          expect(responsesContinuationPrefixFingerprint(input, output)).toBe(expected);
+        }
+      },
+    );
+  });
+
   it("resolves immutable publication from the active host", () => {
     const replay = freezeJsonSnapshot(compactionState("openai-responses-compaction"));
     const owner = createAssistant("", replay);

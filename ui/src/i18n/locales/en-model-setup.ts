@@ -154,6 +154,7 @@ const enModelSetup = {
       prepareStarting: "Starting local model setup…",
       checking: "Checking your model setup…",
       working: "Working…",
+      controlsLoadFailed: "Couldn’t load this step. Reload the page to start over.",
       continue: "Continue",
       submit: "Submit",
       openSignIn: "Open sign-in",

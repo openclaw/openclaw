@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { broadcastPluginRegistryChanged, GATEWAY_EVENT_CATALOG_ROUTES_CHANGED } from "./events.js";
 import { createGatewayBroadcaster } from "./server-broadcast.js";
 import { makeClient } from "./server-broadcast.test-helpers.js";
 import { GatewayClientRegistry } from "./server/client-registry.js";
@@ -69,4 +70,34 @@ describe("model metadata invalidation broadcasts", () => {
     expect(pairing.frames()).toEqual([]);
     expect(node.frames()).toEqual([]);
   });
+});
+
+it("notifies scoped catalog readers without sending the global plugin update", () => {
+  const visitor = clientWithScopes(["operator.sessions.write"]);
+  const pairing = clientWithScopes(["operator.pairing"]);
+  const staff = clientWithScopes(["operator.read"]);
+  const { broadcast } = createGatewayBroadcaster({
+    clients: new GatewayClientRegistry([visitor.client, pairing.client, staff.client]),
+  });
+  broadcastPluginRegistryChanged(broadcast, 4);
+  expect(visitor.frames()).toEqual([
+    {
+      type: "event",
+      event: GATEWAY_EVENT_CATALOG_ROUTES_CHANGED,
+      seq: 1,
+      payload: { generation: 4 },
+    },
+  ]);
+  expect(pairing.frames()).toEqual([]);
+  expect(staff.frames()).toHaveLength(2);
+  broadcast(GATEWAY_EVENT_CATALOG_ROUTES_CHANGED, { generation: 5, plugins: ["private"] });
+  expect(visitor.frames()).toHaveLength(1);
+  broadcastPluginRegistryChanged(broadcast, undefined);
+  expect(visitor.frames().at(-1)).toEqual({
+    type: "event",
+    event: GATEWAY_EVENT_CATALOG_ROUTES_CHANGED,
+    seq: 2,
+    payload: {},
+  });
+  expect(pairing.frames()).toEqual([]);
 });

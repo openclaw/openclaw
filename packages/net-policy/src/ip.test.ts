@@ -38,7 +38,15 @@ it.each([
       "64:ff9b:1:808:808:808:a9fe:a9fe",
       ...blockedIpv6MulticastLiterals,
     ],
-    ["2001:4860:4860::8888"],
+    [
+      "2001:4860:4860::8888",
+      "2001:3::1",
+      "2001:4:112::1",
+      "2001:10::1",
+      "2001:30::1",
+      "5f00::1",
+      "2620:4f:8000::1",
+    ],
   ],
   [
     "link-local",
@@ -162,7 +170,19 @@ it("blocks IPv6 unique-local addresses by default and exempts them on opt-in (#7
 });
 
 it("opt-in unique-local exemption does NOT bleed into other special-use IPv6 ranges (#74351)", () => {
-  for (const literal of ["::1", "ff02::1", "fec0::1", "64:ff9b:1:808:808:808:a9fe:a9fe"]) {
+  for (const literal of [
+    "::1",
+    "ff02::1",
+    "fec0::1",
+    "64:ff9b:1:808:808:808:a9fe:a9fe",
+    // ipaddr.js 2.5 names these ranges ahead of `reserved`; default-deny keeps them blocked.
+    "2001:3::1",
+    "2001:4:112::1",
+    "2001:10::1",
+    "2001:30::1",
+    "5f00::1",
+    "2620:4f:8000::1",
+  ]) {
     for (const options of [{}, { allowUniqueLocalRange: true }] as const) {
       expect(ip.isBlockedSpecialUseIpv6Address(ipv6(literal), options), literal).toBe(true);
     }

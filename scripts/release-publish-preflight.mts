@@ -308,7 +308,7 @@ export async function runReleasePublishPreflight(
         );
         if (
           selectedRun.status !== "completed" ||
-          selectedRun.conclusion !== "success" ||
+          (!options.fastTrackApproval && selectedRun.conclusion !== "success") ||
           !POSITIVE_ID.test(String(selectedRun.run_attempt))
         ) {
           throw new Error("Validation run is not completed/success with an exact attempt.");
@@ -355,8 +355,9 @@ export async function runReleasePublishPreflight(
           pluginSdkApiAcknowledgement: sealedInputs.pluginSdkApiAcknowledgement,
         };
       }
+      let authenticated;
       if (run && sourceSha && SHA.test(toolingSha)) {
-        await check(
+        authenticated = await check(
           "validation.provenance",
           "Full Release Validation provenance and publication selection authenticated.",
           "Use evidence admitted for this exact release source, tooling lineage, publication route and package selection.",
@@ -389,6 +390,7 @@ export async function runReleasePublishPreflight(
             }
             const validationOptions = {
               run,
+              fastTrackApproval: options.fastTrackApproval,
               manifest: fullManifest,
               expectedRepository: options.repo,
               expectedRunId: options.fullReleaseValidationRunId,
@@ -426,6 +428,7 @@ export async function runReleasePublishPreflight(
         rows.push(
           ...evaluateReleasePublishGates({
             manifest,
+            fastTrack: authenticated?.evidence.fastTrack,
             readWorkflowSource: (sha, path) => client.getWorkflowSource(sha, path),
             consumer: consumer as "publisher" | "core-npm" | "stable-closeout",
             releaseTag: options.tag,
@@ -548,6 +551,7 @@ export async function runReleasePublishPreflight(
                 fullReleaseValidationRunId: options.fullReleaseValidationRunId,
                 fullReleaseValidationRunAttempt: attempt,
                 fullManifest: manifest,
+                fastTrackApproval: options.fastTrackApproval,
                 pluginSdkApiAcknowledgement: options.pluginSdkApiAcknowledgement ?? "",
                 currentSelectorRef: `v${version}`,
                 currentSelectorSha: resolvePreflightTag(runGh, options.repo, `v${version}`),
@@ -685,7 +689,7 @@ export async function runReleasePublishPreflightCommand(args = process.argv.slic
         payload: serializeFastTrackRequest(request),
         state: "awaiting-explicit-maintainer-approval",
         instructions:
-          "Share this exact request and digest in the release-managers group. Obtain explicit approval from another human release manager before taking any fast-track action. Agents must never approve using available tokens. Preserve the approval permalink with release evidence and use the normal npm-release environment approval and existing release receipt.",
+          "Share this exact request and digest in the release-managers group. Obtain explicit approval from a human release manager, which may be the requester, before taking any fast-track action. Agents must never approve using available tokens. Preserve the approval permalink with release evidence and use the normal npm-release environment approval and existing release receipt.",
         publicationAuthorized: false,
       })}\n`,
     );
@@ -694,6 +698,9 @@ export async function runReleasePublishPreflightCommand(args = process.argv.slic
   const parsed = parsePublishPreflightArgs(args);
   if (!parsed) {
     return;
+  }
+  if (parsed.options.fastTrackApproval) {
+    parsed.options.fastTrackApproval = readFileSync(parsed.options.fastTrackApproval, "utf8");
   }
   const report = await runReleasePublishPreflight(parsed.options);
   console.log(

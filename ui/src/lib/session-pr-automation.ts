@@ -41,7 +41,8 @@ export async function loadCiAutomationJobs(
         limit: 200,
         offset,
       },
-      { signal },
+      // Reopening and post-write reconciliation require fresh authority; sibling reads still join.
+      { signal, refresh: offset === 0 },
     );
     const page = readCanonicalCronListPage<CronJob>(response, 200);
     resolveCronListPageNextOffset(page, offset);

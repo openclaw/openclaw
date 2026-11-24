@@ -28,7 +28,6 @@ import {
 } from "../../infra/deferred-plugin-migrations.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { readGatewayLastInstallationReplacementAsync } from "../../infra/gateway-boot-lifecycle.js";
-import { readPackageActivationReceipt } from "../../infra/package-update-activation.js";
 import { withSqliteDatabaseAdmissionWait } from "../../infra/sqlite-worker-database-admission-relay.js";
 import {
   normalizeUpdateChannel,
@@ -39,7 +38,6 @@ import {
   formatGitInstallLabel,
   type UpdateCheckResult,
 } from "../../infra/update-check.js";
-import { resolveUpdateInstallRoot } from "../../infra/update-install-root.js";
 import { projectUpdateRunHistory } from "../../infra/update-run-history-projection.js";
 import { formatUpdateOwedStep, listUpdateOwedSteps } from "../../infra/update-run-owed-step.js";
 import { readUpdateRunReportHealth } from "../../infra/update-run-report-health.js";
@@ -54,6 +52,7 @@ import { VERSION } from "../../version.js";
 import { formatCliCommand } from "../command-format.js";
 import { parseUpdateTimeoutMs, resolveUpdateRoot, type UpdateStatusOptions } from "./shared.js";
 import { readUpdateRecoverySetStatus } from "./status-recovery.js";
+import { inspectUpdateReleaseStatus } from "./status-releases.js";
 import { readUpdateChannelConfig } from "./update-command-config.js";
 import { withUpdateDatabaseEngine } from "./update-command-database-engine.js";
 import { resolveRefusedRestartRecovery } from "./update-refused-restart-recovery.js";
@@ -418,26 +417,8 @@ async function inspectUpdateStatus(
     ...sessionWarnings,
   ].map(safeMessage);
   const migrationWarningsError = migrationWarningErrors.filter(Boolean).join("\n");
-  let packageActivation;
-  let packageActivationError: string | undefined;
-  try {
-    if (root) {
-      packageActivation = readPackageActivationReceipt(resolveUpdateInstallRoot(root));
-    }
-  } catch (error) {
-    packageActivationError = safeMessage(formatErrorMessage(error));
-  }
-
-  const packageReleases = root
-    ? await inspect(
-        "package releases",
-        async () => {
-          const { listPackageReleases } = await import("../../infra/package-release-retention.js");
-          return await listPackageReleases(root);
-        },
-        [],
-      )
-    : [];
+  const { releaseStatus, packageActivation, packageActivationError, packageReleases, releaseRows } =
+    await inspectUpdateReleaseStatus({ root, config, update, inspect, remainingMs, safeMessage });
 
   if (opts.json) {
     defaultRuntime.writeJson({
@@ -449,6 +430,7 @@ async function inspectUpdateStatus(
         config: configChannel,
       },
       availability: updateAvailability,
+      ...(releaseStatus ? { releaseStatus } : {}),
       ...(immutableCoverage ? { immutableCoverage } : {}),
       ...(update.immutable && !immutableCoverage
         ? { immutableCoverageError: immutableCoverageLines[0] }
@@ -480,7 +462,11 @@ async function inspectUpdateStatus(
         )
       : undefined;
   const gitLabel = formatGitInstallLabel(update);
-  const updateLine = formatUpdateOneLiner(update).replace(/^Update:\s*/i, "");
+  const updateLine =
+    releaseStatus?.notice ??
+    (releaseStatus?.trial && ["pending", "trial", "restoring"].includes(releaseStatus.trial.phase)
+      ? `release ${releaseStatus.trial.version} · ${releaseStatus.trial.phase}`
+      : formatUpdateOneLiner(update).replace(/^Update:\s*/i, ""));
   const tableWidth = getTerminalTableWidth();
   const installLabel =
     update.installKind === "host"
@@ -500,6 +486,7 @@ async function inspectUpdateStatus(
   const rows = [
     { Item: "Install", Value: installLabel },
     { Item: "Channel", Value: channelLabel },
+    ...releaseRows,
     ...(immutable
       ? [
           {
@@ -527,29 +514,11 @@ async function inspectUpdateStatus(
     ...(verifiedGateway
       ? [
           {
-            Item: "Last verified Gateway",
+            Item: "Last verified Gateway (historical)",
             Value: `version ${verifiedGateway.version} · build ${verifiedGateway.buildId} · PID ${verifiedGateway.pid} · boot ${verifiedGateway.bootId}`,
           },
         ]
       : []),
-    ...(packageActivation
-      ? [
-          {
-            Item: "Package recovery",
-            Value: `${packageActivation.phase} (${packageActivation.operationId})`,
-          },
-        ]
-      : []),
-    ...(packageActivation?.recoveryCommand
-      ? [{ Item: "Recovery command (external Node)", Value: packageActivation.recoveryCommand }]
-      : []),
-    ...(packageActivationError
-      ? [{ Item: "Package recovery", Value: packageActivationError }]
-      : []),
-    ...packageReleases.map((release) => ({
-      Item: release.selected ? "Active release" : "Retained release",
-      Value: `${release.id} · version ${release.version ?? "unknown"} · build ${release.build ?? "unknown"}${release.leased ? " · in use" : ""}`,
-    })),
     ...(gitLabel ? [{ Item: "Git", Value: gitLabel }] : []),
     {
       Item: "Update",
@@ -557,7 +526,7 @@ async function inspectUpdateStatus(
         ? updateInProgress
           ? `in progress · ${activeRun.phase}`
           : "needs attention · see run details below"
-        : updateAvailability.available
+        : updateAvailability.available && !releaseStatus?.notice && !releaseStatus?.trial
           ? theme.warn(`available · ${updateLine}`)
           : updateLine,
     },
@@ -644,7 +613,9 @@ async function inspectUpdateStatus(
     }
     if (run) {
       if (!activeRun) {
-        defaultRuntime.log(`Last recorded update (${new Date(run.createdAtMs).toISOString()}):`);
+        defaultRuntime.log(
+          `Last recorded update (${new Date(run.createdAtMs).toISOString()}, historical):`,
+        );
       }
       if (staleRun) {
         defaultRuntime.log(`Update ${run.runId}: ${staleRun.guidance}`);
@@ -714,7 +685,7 @@ async function inspectUpdateStatus(
     }
   }
 
-  const updateHint = activeRun ? null : formatUpdateAvailableHint(update);
+  const updateHint = activeRun || releaseStatus?.notice ? null : formatUpdateAvailableHint(update);
   if (updateHint) {
     printWarning(updateHint);
   }

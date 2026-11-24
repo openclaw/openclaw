@@ -3,8 +3,10 @@ import process from "node:process";
 import { setTimeout as sleep } from "node:timers/promises";
 import {
   composeReleaseChildAttemptEvidence,
+  resolveReleaseAttemptJobs,
   evidenceReadRetryDelay,
   isReleaseGhServerError,
+  matchesReleaseChildAttemptEvidence,
   readReleaseJobListing,
   releaseChildSpec,
   releaseCompositeJobsSha256,
@@ -24,9 +26,8 @@ import { execGhRead, execGhReadAsync } from "./plain-gh.mjs";
 import { isRecord } from "./record-shared.mjs";
 import {
   decodeReleaseValidationSource,
-  evaluateReleaseChildPolicy,
+  isWaived,
   readReleaseValidationWaiversAsync,
-  validateReleaseWaiverAggregates,
 } from "./release-validation-waivers.mjs";
 
 const MAX_RUNS = 100;
@@ -152,24 +153,6 @@ function dependencies(repository, deps) {
   return {
     github,
     immutableReads: deps.immutableReads,
-    getJobLog:
-      deps.getJobLog ??
-      (async (id) => {
-        const args = ["api", `repos/${repository}/actions/jobs/${id}/logs`];
-        const read = (extra) =>
-          execGhReadAsync([...args, ...extra], {
-            timeout: Math.min(60_000, remaining("aggregate job log")),
-            maxBuffer: 32 * 1024 * 1024,
-          });
-        try {
-          return await read(["--allow-escape-sequences"]);
-        } catch (error) {
-          if (!String(error?.stderr).includes("unknown flag: --allow-escape-sequences")) {
-            throw error;
-          }
-          return read([]);
-        }
-      }),
     downloadArchive:
       deps.downloadArchive ??
       (async (params) => {
@@ -252,7 +235,7 @@ function validateRun(run, selection, request) {
       run.run_attempt <= MAX_ATTEMPTS &&
       run.status === "completed" &&
       (run.conclusion === "success" ||
-        (request.policyTargetVersion && run.conclusion === "failure")) &&
+        (request.policyTargetVersion && typeof run.conclusion === "string" && run.conclusion)) &&
       run.head_repository?.full_name === request.repository,
     "child is not the current successful attempt",
   );
@@ -280,8 +263,7 @@ async function readAttemptJobs(deps, run, runAttempt) {
             (job) =>
               String(job.run_id) === String(run.id) &&
               job.run_attempt === runAttempt &&
-              job.head_sha === run.head_sha &&
-              job.status === "completed",
+              job.head_sha === run.head_sha,
           ),
         "job inventory is incomplete or belongs to another attempt",
       );
@@ -289,6 +271,10 @@ async function readAttemptJobs(deps, run, runAttempt) {
       if (jobs.length >= total) {
         requireEvidence(jobs.length === total, "job inventory count changed");
         deps.immutableReads?.selectJobPageSize(path, perPage);
+        requireEvidence(
+          resolveReleaseAttemptJobs(jobs, runAttempt).every((job) => job.status === "completed"),
+          "job inventory contains unfinished executions",
+        );
         return jobs;
       }
     }
@@ -297,7 +283,9 @@ async function readAttemptJobs(deps, run, runAttempt) {
 }
 
 function validatePublisher(jobs, receipt) {
-  const publishers = jobs.filter((job) => job.name === PUBLISHER_JOB);
+  const publishers = resolveReleaseAttemptJobs(jobs, receipt.effectiveRunAttempt).filter(
+    (job) => job.name === PUBLISHER_JOB,
+  );
   requireEvidence(
     publishers.length === 1 &&
       String(publishers[0].id) === receipt.publisher?.jobId &&
@@ -444,6 +432,7 @@ async function validateEvidence(selection, request, deps) {
     attempts,
     expected: expectedRun(selection, request),
     run,
+    recordedJobs: receipt.jobs,
   });
   composite.jobs = composite.jobs.filter((job) => job.name !== PUBLISHER_JOB);
   composite.compositeJobsSha256 = releaseCompositeJobsSha256(composite);
@@ -451,9 +440,7 @@ async function validateEvidence(selection, request, deps) {
     composite.jobs.length > 0 &&
       (request.policyTargetVersion ||
         composite.jobs.every((job) => ["success", "neutral"].includes(job.conclusion))) &&
-      Object.entries(composite).every(
-        ([key, value]) => canonical(receipt[key]) === canonical(value),
-      ),
+      matchesReleaseChildAttemptEvidence(receipt, composite),
     "receipt does not match the complete live composite workload",
   );
   // P evaluates raw executions against the current admitted candidate and Q grants.
@@ -472,24 +459,10 @@ async function validateEvidence(selection, request, deps) {
         request.policyTargetVersion,
         request.targetSha,
         request.waiverPolicy,
+        request.requiredJobs,
       ),
       "workload does not pass recovery release policy",
     );
-    const policy = evaluateReleaseChildPolicy({
-      child,
-      targetVersion: request.policyTargetVersion,
-      targetSha: request.targetSha,
-      waiverPolicy: request.waiverPolicy,
-    });
-    await validateReleaseWaiverAggregates({
-      policy,
-      jobs: composite.jobs.map((job) =>
-        attempts
-          .find((attempt) => attempt.runAttempt === job.acceptedRunAttempt)
-          .jobs.find((raw) => raw.name === job.name),
-      ),
-      getJobLog: deps.getJobLog,
-    });
   }
   // The source parent is the pinned dispatch origin, not a live evidence producer.
   // Its later reruns do not supersede the independently checked child attempt.
@@ -512,7 +485,13 @@ async function validateEvidence(selection, request, deps) {
   // A rerun begun during verification invalidates the previously sealed attempt.
   const currentRun = await deps.github(`actions/runs/${selection.runId}`);
   validateRun(currentRun, selection, request);
-  return { selection: { ...selection, receiptSha256: sha256 }, receipt, run: currentRun, jobs };
+  return {
+    selection: { ...selection, receiptSha256: sha256 },
+    receipt,
+    run: currentRun,
+    jobs,
+    compositeJobs: composite.jobs,
+  };
 }
 
 export async function validateReusableReleaseChild(selection, request, deps = {}) {
@@ -529,6 +508,17 @@ export async function validateReusableReleaseChild(selection, request, deps = {}
         ),
       ));
   }
+  requireEvidence(
+    !isWaived(
+      {
+        targetVersion: request.policyTargetVersion,
+        targetSha: request.targetSha,
+        childRole: request.role,
+      },
+      normalized.waiverPolicy,
+    ),
+    "waived child does not require a reuse receipt",
+  );
   requireEvidence(/^[a-f0-9]{64}$/u.test(selection?.receiptSha256), "selection omitted its digest");
   return validateEvidence(selection, normalized, resolved);
 }
@@ -543,6 +533,18 @@ export async function discoverReusableReleaseChild(request, deps = {}) {
         sourcePath,
       ),
     );
+  }
+  if (
+    isWaived(
+      {
+        targetVersion: request.policyTargetVersion,
+        targetSha: request.targetSha,
+        childRole: request.role,
+      },
+      normalized.waiverPolicy,
+    )
+  ) {
+    return null;
   }
   const report = deps.report ?? console.error;
   const inventory = await resolved.github(
@@ -564,8 +566,7 @@ export async function discoverReusableReleaseChild(request, deps = {}) {
     scanned += 1;
     if (
       run.status !== "completed" ||
-      (run.conclusion !== "success" &&
-        !(normalized.policyTargetVersion && run.conclusion === "failure"))
+      (run.conclusion !== "success" && !normalized.policyTargetVersion)
     ) {
       skip("not-green");
       continue;
