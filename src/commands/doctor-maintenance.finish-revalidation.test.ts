@@ -547,7 +547,12 @@ async function runDoctorFinishForStoppedUnit(
         expect(restart).not.toHaveBeenCalled();
       }
       if (legacyCatalog) {
-        expect(() => maintenance?.run(() => listUpdateRuns())).toThrow();
+        // After backup, the admitted maintenance reader can query the ledger without
+        // copying or repairing the unrelated legacy index. Unscoped reads still fail.
+        expect(maintenance?.run(() => listUpdateRuns())).toEqual([]);
+        expect(() => listUpdateRuns()).toThrow(
+          /without an active schema lease or maintenance scope/,
+        );
       }
       if (continuation === "terminal-dead-before-restart") {
         if (runId) {
