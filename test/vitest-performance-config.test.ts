@@ -138,6 +138,44 @@ assert.equal(fs.existsSync(path.join(root, ".cache", "vitest")), false);
     );
   });
 
+  it("honors benchmark CLI opt-outs when the config enables both caches", () => {
+    const { root, write, read } = prepareCacheFixture("cli-disabled");
+    write("fixture.test.js", 'test("runs without caches", () => expect(42).toBe(42));');
+    write(
+      "vitest.config.mjs",
+      `export default ${JSON.stringify({
+        root,
+        test: {
+          globals: true,
+          include: ["fixture.test.js"],
+          maxWorkers: 1,
+          cache: true,
+          fsModuleCache: true,
+          fsModuleCachePath: path.join(root, "transforms"),
+        },
+      })};`,
+    );
+    runNode(
+      root,
+      root,
+      vitestArgs(root, [
+        "--no-cache",
+        "--no-fsModuleCache",
+        "--reporter=json",
+        "--outputFile",
+        path.join(root, "result.json"),
+      ]),
+    );
+    expect(JSON.parse(read("result.json"))).toMatchObject({
+      success: true,
+      numTotalTests: 1,
+      numPassedTests: 1,
+    });
+    for (const directory of ["node_modules/.vite/vitest", "node_modules/.vitest-cache", "transforms"]) {
+      expect(fs.existsSync(path.join(root, directory)), directory).toBe(false);
+    }
+  });
+
   it("preserves each project's optimized dependency identity when reusing shared transforms", () => {
     const { root } = prepareCacheFixture("optimizer-identity");
     const cacheOwner = new URL("./vitest/vitest.performance-config.ts", import.meta.url).href;
