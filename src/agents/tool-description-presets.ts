@@ -184,10 +184,10 @@ export function describeSessionStatusTool(): string {
 
 export function describeRequiredHumanActionTool(callableName: string): string {
   return [
-    `Use ${callableName} with requiredAction only for an observed external prerequisite, such as browser sign-in, that the human can complete while this run waits.`,
+    `Use ${callableName} with requiredAction for an observed external prerequisite only the human can satisfy while this run waits, such as browser sign-in. For a setup failure, try supported recovery within current permissions before asking. Finish work that does not depend on the missing prerequisite first.`,
     "Do not invent approval or manual prerequisites for already authorized work. An inactive Goal stops automatic pursuit, not the current user-requested turn; continue executable work within its actual permissions without requiring Goal Resume. Never wait in ask_user for a native session control that requires this run to end; if that control is genuinely needed, explain it and finish the turn first.",
     "Give the specific observed blocker and supported instructions; an optional verified URL opens separately from the completion answer. Reuse existing approval or native permission cards when available; never add another approval prompt, invent a remediation, request credentials in chat, or hide an incorrect denial.",
-    "requiredAction parks the original task and returns ready_to_verify, not success or authorization: re-observe the original target and continue from recorded progress only after the actual prerequisite is satisfied. action_unresolved means stop dependent work, report the blocker, and wait for a new user instruction; never use best-judgment fallback or repeat the handoff.",
+    "ready_to_verify is not success or authorization: recheck the original target and resume from recorded progress only if the prerequisite is satisfied. action_unresolved never satisfies it: follow the result's nextAction without bypassing the step or repeating the handoff.",
   ].join(" ");
 }
 

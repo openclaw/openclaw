@@ -866,6 +866,13 @@ it.each([
     expect(result.terminate).toBe(outcome === "ready" && supported ? true : undefined);
     if (outcome === "ready") {
       expect(JSON.stringify(result)).toContain("not proof");
+    } else {
+      // Code Mode returns details, not the tool's display text.
+      expect(result.details).toMatchObject({
+        nextAction: expect.stringContaining(
+          outcome === "declined" ? "Stop this task" : "continue independent authorized work",
+        ),
+      });
     }
   },
 );

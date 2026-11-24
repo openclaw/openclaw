@@ -101,6 +101,11 @@ available, even when full tool descriptions are deferred. The agent should use
 the handoff for these external steps instead of ending the task with manual
 sign-in instructions.
 
+A tool failing to start does not by itself require a human. First try supported
+recovery within the task's permissions and finish work that does not depend on
+that tool. For example, if a reviewer cannot start, check its supported setup
+without weakening its sandbox or treating the missing review as a pass.
+
 Do not invent an approval or manual prerequisite for work the user has already
 authorized. An inactive [Goal](/tools/goal) stops automatic pursuit, not the
 current user-requested turn: executable work can continue within its actual
@@ -117,10 +122,12 @@ continues from the conversation's recorded progress only when the prerequisite
 is actually satisfied, without repeating completed or uncertain side effects.
 
 **Stop this task**, **Skip**, and expiry return `status: "action_unresolved"`
-with `declined`, `cancelled`, or `expired`. Dependent work stays blocked; the
-agent reports the outcome instead of using a best-judgment fallback or repeatedly
-requesting the same handoff. Free-text answers are disabled for this fixed manual
-step. A failed recheck must remain a blocker, not a successful recovery.
+with `declined`, `cancelled`, or `expired`. **Stop this task** stops the task. **Skip**
+or expiry leaves the prerequisite unresolved, but the agent can finish other
+authorized work on a still-active request. The result includes `nextAction` so
+direct and Code Mode callers get the same distinction. Neither may bypass the
+step, repeat the prompt, or claim dependent work succeeded. Free-text answers
+are disabled for this fixed manual step.
 
 Reuse existing approval and native permission cards when they already own the
 interruption; this is not another approval prompt. An incorrect denial must be

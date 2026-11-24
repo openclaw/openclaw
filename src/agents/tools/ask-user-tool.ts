@@ -30,7 +30,7 @@ import {
   type NormalizedAskUserParams,
   normalizeAskUserParams,
 } from "./ask-user-tool-normalization.js";
-import { type AnyAgentTool, ToolInputError, textResult } from "./common.js";
+import { type AnyAgentTool, ToolInputError, jsonResult, textResult } from "./common.js";
 import {
   createGatewayQuestionCanceller,
   createQuestionPromptLifetime,
@@ -368,14 +368,14 @@ function answeredResult(
 }
 
 function unresolvedActionResult(reason: "cancelled" | "expired" | "declined") {
-  const payload = { status: "action_unresolved" as const, reason };
-  return textResult(
-    "The required manual step was " +
-      reason +
-      ". The dependent task remains blocked; do not continue its dependent actions, retry this handoff, or claim success. Preserve completed progress and report this outcome. Wait for a new user instruction before trying this step again.\n\n" +
-      JSON.stringify(payload),
-    payload,
-  );
+  return jsonResult({
+    status: "action_unresolved" as const,
+    reason,
+    nextAction:
+      reason === "declined"
+        ? "Stop this task as requested. Preserve completed progress and report what remains undone. Do not retry the handoff."
+        : "If this request is still active, continue independent authorized work. Keep dependent actions blocked. Report the missing prerequisite without bypassing it, repeating the handoff, or claiming it was satisfied.",
+  });
 }
 
 function noAnswerResult(
