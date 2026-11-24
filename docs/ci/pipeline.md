@@ -528,8 +528,9 @@ the producer's artifact by its output ID and verify the selected checkout SHA be
 execution. Failed-job reruns retain the successful producer's artifact output.
 The aggregate CI gate still requires the Linux checks and both native phases.
 
-Full nonpublishing manual validation also stages the exact candidate runtime and runs
-ordinary bundled recovery and relaunch through two fresh `.app` test-host processes.
+Full nonpublishing manual validation also builds and stages the exact candidate
+runtime without repeating the SDK declaration checks owned by `build-artifacts`.
+It runs bundled recovery and relaunch through two fresh `.app` test-host processes.
 The existing launcher owns their private home, Keychain, selected service, and process
 settlement. Both phase event streams are retained in `macos-bundled-recovery-proof`.
 Only this full-tier test phase has a 75-minute budget for the runtime build, staging,

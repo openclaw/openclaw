@@ -2,6 +2,17 @@ import { describe, expect, it } from "vitest";
 import { detectChangedScope, shouldRunNativeI18n } from "../../scripts/ci-changed-scope.mjs";
 import { isNativeGeneratedOnlyChange } from "../../scripts/lib/ci-native-generated-scope.mjs";
 import { runCiManifestFixture } from "./ci-workflow-manifest.test-support.js";
+import { readCiWorkflow, requiredWorkflowStep } from "./ci-workflow.test-support.js";
+
+it("builds only the runtime for macOS recovery and keeps the primary SDK gate", () => {
+  const { jobs } = readCiWorkflow();
+  expect(
+    requiredWorkflowStep(jobs["macos-swift"].steps, "Build bundled recovery runtime").run,
+  ).toBe("pnpm build:runtime");
+  expect(
+    jobs["build-artifacts"].steps.find((step: { id?: string }) => step.id === "dist_build")?.run,
+  ).toContain("pnpm build:ci-artifacts");
+});
 
 describe("native protocol generation scope", () => {
   it.each(["packages/gateway-protocol/src/schema/frames.ts", "scripts/protocol-gen-swift.ts"])(
