@@ -12,6 +12,7 @@ import {
 import { isProcessAlive } from "../../test/helpers/process-wait.js";
 import { withinTest } from "../../test/helpers/promise.js";
 import { withRuntimePreload } from "../../test/helpers/runtime-preload.js";
+import { CommandProcessCleanupError } from "../process/exec-result.js";
 import * as commands from "../process/exec.js";
 import { runCommandBuffered, runUtf8CommandWithTimeout } from "../process/exec.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -19,8 +20,11 @@ import { hasErrnoCode } from "./errno.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { runtimeProcessEntrypoints } from "./runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
+import { removeTempDirectory } from "./sqlite-readonly-location-cleanup.js";
+import { createSqliteSnapshotStagingDirectorySync } from "./sqlite-snapshot-staging.js";
 import { prepareUpdateCandidateStateSnapshot } from "./update-candidate-snapshot.js";
 import { readUpdateStateSchemaVersions } from "./update-candidate-state.js";
+import { withStateInspectionCleanup } from "./update-candidate-state.process.js";
 import {
   inventoryUpdateCandidateStateWorker,
   materializeUpdateCandidateStateWorker,
@@ -111,6 +115,10 @@ it.each([
       config: {},
     };
     const stagingRoot = mode === "snapshot" ? input.targetStateDir : path.join(cache, "openclaw");
+    if (mode === "versions") {
+      // Exercise the worker against a caller-owned root, not its platform cache fallback.
+      await fs.mkdir(stagingRoot, { mode: 0o700 });
+    }
     const admitted =
       mode === "snapshot" ? await inventoryUpdateCandidateStateWorker(input) : undefined;
     if (scenario.readError && mode === "snapshot") {
@@ -187,6 +195,7 @@ it.each([
           mode,
           ...input,
           ...admitted,
+          ...(mode === "versions" ? { stagingRoot } : {}),
         }),
         env: { XDG_CACHE_HOME: cache },
         timeoutMs: 30_000,
@@ -197,7 +206,10 @@ it.each([
     expect(await fs.readFile(source)).toEqual(sourceBytes);
     expect(await fs.readdir(path.dirname(source))).toEqual(sourceEntries);
     expect(await fs.readFile(sentinel, "utf8")).toBe("unrelated preserved");
-    const attempts = (await fs.readFile(attemptsPath, "utf8"))
+    const attemptLog = await fs.readFile(attemptsPath, "utf8").catch((cause: unknown) => {
+      throw new Error("Expected worker cleanup attempts: " + result.stderr.toString(), { cause });
+    });
+    const attempts = attemptLog
       .trim()
       .split("\n")
       .map(
@@ -597,6 +609,43 @@ it.for(["cancel", "deadline", "disk-full", "cooperative-cancel"] as const)(
     } finally {
       controller.abort();
       await outcome;
+    }
+  },
+);
+
+it.each(["joined-empty", "payload", "unsettled"] as const)(
+  "cleans up interrupted inspection staging only after settlement and without payload (%s)",
+  async (scenario) => {
+    const staging = createSqliteSnapshotStagingDirectorySync(root);
+    const nested = await fs.mkdtemp(path.join(staging, "openclaw-sqlite-readonly-v2-"));
+    const payload = path.join(nested, "database.sqlite");
+    if (scenario === "payload") {
+      await fs.writeFile(payload, "unowned payload");
+    }
+    const cleanup = withStateInspectionCleanup(staging, async () => {
+      if (scenario === "unsettled") {
+        throw new CommandProcessCleanupError();
+      }
+      return "inspected";
+    });
+    try {
+      if (scenario === "joined-empty") {
+        await expect(cleanup).resolves.toBe("inspected");
+        await expect(fs.access(staging)).rejects.toMatchObject({ code: "ENOENT" });
+      } else {
+        await expect(cleanup).rejects.toThrow(
+          scenario === "payload"
+            ? "snapshot cleanup failed"
+            : "Confirm that update workers have stopped",
+        );
+        expect(await fs.readdir(nested)).toEqual(scenario === "payload" ? ["database.sqlite"] : []);
+        if (scenario === "payload") {
+          expect(await fs.readFile(payload, "utf8")).toBe("unowned payload");
+        }
+      }
+    } finally {
+      await fs.rm(nested, { recursive: true, force: true });
+      removeTempDirectory(staging);
     }
   },
 );

@@ -1,11 +1,15 @@
+import fs from "node:fs";
+import path from "node:path";
 import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import { withCommandProcessScope } from "../process/exec-spawn.js";
+import { hasErrnoCode } from "./errno.js";
 import { formatErrorMessageWithCode } from "./errors.js";
 import {
   releaseSnapshotTempDirectory,
   removeTempDirectory,
   retainSnapshotWork,
 } from "./sqlite-readonly-location-cleanup.js";
+import { isSqliteSnapshotStagingName } from "./sqlite-snapshot-retirement.js";
 
 /** A bounded command result does not release snapshot ownership before late process cleanup. */
 export function withUpdateStateInspectionWork<T>(
@@ -18,6 +22,27 @@ export function withUpdateStateInspectionWork<T>(
     return run();
   }, signal);
   return retainSnapshotWork(work, () => stop());
+}
+
+function removeInterruptedInspectionDirectories(directory: string): void {
+  for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+    if (!entry.isDirectory()) {
+      continue;
+    }
+    const child = path.join(directory, entry.name);
+    removeInterruptedInspectionDirectories(child);
+    if (isSqliteSnapshotStagingName(entry.name)) {
+      try {
+        // A joined worker can die between mkdir and token creation. rmdir
+        // does not consume payload, ownership tokens, or symlink targets.
+        fs.rmdirSync(child);
+      } catch (error) {
+        if (!hasErrnoCode(error, "ENOTEMPTY") && !hasErrnoCode(error, "EEXIST")) {
+          throw error;
+        }
+      }
+    }
+  }
 }
 
 export async function withStateInspectionCleanup<T>(
@@ -39,9 +64,21 @@ export async function withStateInspectionCleanup<T>(
       { cause: outcome.cause },
     );
   }
-  if (!removeTempDirectory(stagingRoot)) {
+  let cleanupFailure: unknown;
+  let removed = false;
+  try {
+    if (fs.existsSync(stagingRoot)) {
+      removeInterruptedInspectionDirectories(stagingRoot);
+    }
+    removed = removeTempDirectory(stagingRoot, (error) => {
+      cleanupFailure = error;
+    });
+  } catch (error) {
+    cleanupFailure = error;
+  }
+  if (!removed) {
     throw new Error(`State schema inspection snapshot cleanup failed: ${stagingRoot}`, {
-      cause: "cause" in outcome ? outcome.cause : undefined,
+      cause: "cause" in outcome ? outcome.cause : cleanupFailure,
     });
   }
   if ("cause" in outcome) {

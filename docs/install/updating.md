@@ -33,6 +33,11 @@ backup.
 
 ## Update implementation contract
 
+Candidate Doctor removes empty snapshot directories left by cancellation between
+private directory creation and native-token acquisition, after its inspection
+workers have settled. Unconfirmed worker cleanup and unowned snapshot payloads
+remain retained. This does not change the snapshot format or worker protocol.
+
 A newer CLI refuses to forward-migrate an existing shared-state database when a
 provably older installed Gateway service uses that same database. This protects
 services left on another Node or npm prefix after a manual package install. Use
