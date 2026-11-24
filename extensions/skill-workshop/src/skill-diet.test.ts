@@ -3,8 +3,9 @@ import path from "node:path";
 import { setRuntimeConfigSnapshot } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { listWorkshopChanges } from "openclaw/plugin-sdk/skill-workshop-host-runtime";
 import { createOpenClawTestState, type OpenClawTestState } from "openclaw/plugin-sdk/test-state";
-import { afterEach, beforeEach, expect, it } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import * as libraryModule from "./library.js";
+import { getWorkshopRuntime } from "./runtime.js";
 import * as dietModule from "./skill-diet.js";
 import type { SkillDietComplete } from "./skill-diet.js";
 import * as skillsRootModule from "./skills-root.js";
@@ -13,7 +14,7 @@ import { useWorkshopPluginScope } from "./test-support.js";
 const workshopPluginConfig = (settings: Record<string, unknown>) => ({
   plugins: { entries: { "skill-workshop": { config: settings } } },
 });
-const { scoped } = useWorkshopPluginScope();
+const { run, scoped } = useWorkshopPluginScope();
 const { restoreWorkshopSkill, viewWorkshopSkill } = scoped(libraryModule);
 const { runWorkshopSkillDiet } = scoped(dietModule);
 const { resolveWorkshopSkillsDir } = scoped(skillsRootModule);
@@ -115,6 +116,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   await state.cleanup();
 });
 
@@ -210,6 +212,31 @@ it("refuses a move that breaks an existing reference's link into SKILL.md", asyn
   expect(calls).toEqual(["plan"]);
   expect((await live()).content).toBe(LIVE);
 });
+
+it.each(["notes.md", "docs/guide.md"])(
+  "skips a skill with Markdown outside the support directories: %s",
+  async (file) => {
+    await seed();
+    await fs.mkdir(path.dirname(skillPath("deploy", file)), { recursive: true });
+    await fs.writeFile(skillPath("deploy", file), "# Notes\n");
+    const at = new Date(NOW_MS - 2 * DAY_MS);
+    await fs.utimes(skillPath("deploy", file), at, at);
+    const info = vi.fn();
+    const logger = { info, warn: vi.fn(), error: vi.fn() };
+    vi.spyOn(run(getWorkshopRuntime).logging, "getChildLogger").mockReturnValue(logger);
+    const { complete, calls } = scripted({ audits: [] });
+    expect(await diet(complete)).toBeUndefined();
+    expect(calls).toEqual([]);
+    expect(info).toHaveBeenCalledExactlyOnceWith(
+      `skill diet skipped: skill=deploy ${file}: Support file paths must be under one of: assets, examples, references, scripts, templates.`,
+    );
+    expect(await live()).toMatchObject({
+      content: LIVE,
+      files: ["SKILL.md", file, "references/checks.md"],
+    });
+    expect(await listWorkshopChanges("main", { limit: 10 })).toEqual([]);
+  },
+);
 
 it("refuses to move a section with in-page links", async () => {
   await seed(LIVE.replace("## Rollback\n", "## Rollback\n\nSee [the steps](#procedure).\n"));
