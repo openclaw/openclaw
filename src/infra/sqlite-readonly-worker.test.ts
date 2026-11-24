@@ -16,6 +16,7 @@ import {
   createScopedSqliteReadOnlyWorker,
   resolveAggregateSqliteInspectionTimeoutMs,
   runSqliteReadOnlyWorker,
+  runSqliteReadOnlyWorkerOnce,
   runSqliteReadOnlyWorkerSync,
   withSqliteReadOnlyWorkerScope,
 } from "./sqlite-readonly-worker.js";
@@ -508,6 +509,31 @@ it.each(
   expect(witness).toEqual({ value: "preserved" });
   expect(fs.readFileSync(source)).toEqual(before);
 });
+
+it.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
+  "starts the one-shot worker when the invoking cwd is not enterable",
+  async () => {
+    const root = tempDirs.make("openclaw-sqlite-inaccessible-cwd-oneshot-");
+    const source = createDatabase(witnessSql("preserved"));
+    const stagingRoot = path.join(root, "staging");
+    fs.mkdirSync(stagingRoot);
+    const inaccessibleCwd = path.join(root, "inaccessible-cwd");
+    fs.mkdirSync(inaccessibleCwd, { mode: 0o000 });
+    const cwd = vi.spyOn(process, "cwd").mockReturnValue(inaccessibleCwd);
+    let witness: unknown;
+    try {
+      const location = await runSqliteReadOnlyWorkerOnce(source, { mode: "sync", stagingRoot });
+      if (typeof location !== "string") {
+        throw new Error("Snapshot worker did not return its absolute location");
+      }
+      [witness] = readQueries(location, "SELECT value FROM witness");
+    } finally {
+      cwd.mockRestore();
+      fs.chmodSync(inaccessibleCwd, 0o700);
+    }
+    expect(witness).toEqual({ value: "preserved" });
+  },
+);
 
 it.each(["source", "allocation", "staging"] as const)(
   "refuses unresolved relative %s paths instead of rebasing them after cwd loss",
