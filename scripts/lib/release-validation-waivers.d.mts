@@ -35,6 +35,9 @@ export interface ReleaseValidationWaiver {
   childRole: string;
   jobName: string;
   reason: string;
+  state?: "cancelled" | "missing";
+  approvedBy?: string;
+  disposition?: "waived-cancelled" | "waived-missing";
   cancelledStep?: string;
   testFailures?: {
     stepName: string;
@@ -61,13 +64,25 @@ export interface ReleaseChildPolicy {
     logSha256?: string;
   }[];
   waivedJobNames: Set<string>;
+  missingRequiredJobs: string[];
   blockingJobs: ReleasePolicyJob[];
   advisoryJobs: ReleasePolicyJob[];
   advisoryFailureAllowed: boolean;
 }
 export function isFailedReleaseJob(job: ReleasePolicyJob): boolean;
 export function evaluateReleaseChildPolicy(input: {
-  child: { key: string; jobs: ReleasePolicyJob[]; runId?: string; runAttempt?: number };
+  child: {
+    key: string;
+    jobs: ReleasePolicyJob[];
+    runId?: string;
+    runAttempt?: number | null;
+    required?: boolean;
+    selected?: boolean;
+    source?: string;
+    result?: string;
+    status?: string;
+  };
+  requiredJobs?: string[];
   targetVersion?: string;
   targetSha?: string;
   waiverPolicy?: ReleaseValidationWaiver[];

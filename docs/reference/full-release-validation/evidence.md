@@ -142,12 +142,23 @@ The verifier reads the original leaf log and requires completed invocation
 evidence before accepting it. Changed or additional errors, incomplete logs, and
 setup failures remain blocking; aggregate causes are also checked exactly.
 
-An explicitly approved cancellation uses `cancelledStep` instead of
+An exact-step cancellation uses `cancelledStep` instead of
 `testFailures`. It matches only a completed job whose raw conclusion is
 `cancelled`; its only unsuccessful step must have that exact name and also be
 cancelled. It does not accept a different cancelled step, another failed step,
 a timed-out job, or a cancelled workflow. Ordinary failure grants never accept
 cancellation. The original job conclusion remains visible as cancelled, not passed.
+
+For a whole job, set `state: "cancelled"` and name the exact job; only a completed
+job with that raw conclusion matches. Set `state: "missing"` to waive an absent required
+job in a completed child's authenticated inventory. For a required child with no
+run, use `state: "missing"` and `jobName: "<workflow>"`, with the exact child role. This last
+form requires the dispatch slot to complete normally with no run ID or attempt;
+it cannot replace a partial tuple, a reuse selection, or a failed verifier. Use
+an empty `aggregates` array and omit `evidence` for a child with no run. Both new states
+require an `approvedBy` identifier and a short reason. Include `targetSha` only if the
+approval is candidate-bound. Results show `waived-cancelled` or `waived-missing`, never a
+test pass. A required job that exists but was skipped is not missing.
 
 Plain-output native extension batches in CI retain separate invocation streams and emit a
 completion receipt only after every planned invocation and its descendants settle.
@@ -164,16 +175,17 @@ inputs, artifact digests, and raw conclusions. A prior accepted verdict is not a
 substitute for reevaluation: removing or narrowing a grant can make retained
 failures blocking again.
 
-Accepted receipts return before another child is dispatched; the required initial
-run cannot be skipped. Failed parents without final manifests can supply eligible
+Accepted receipts return before another child is dispatched. A missing-child waiver
+does not suppress an initial dispatch, create a receipt, or turn an old failed parent
+green. Failed parents without final manifests can supply eligible
 child receipts, not be relabeled successful. The new parent must complete
 admission, collection, and final verification. Missing, expired, or incompatible
 evidence requires fresh work. A P-only change does not replace Q’s grants.
 
-State, manifests, and summaries retain raw failures and reasons. Grants neither
-skip tests nor mark passes; failed aggregates must contain only granted causes.
-Missing, cancelled, timed-out, incomplete, or mismatched required evidence and
-ungranted failures block. Package, dispatch, seal, and provenance integrity remain
+State, manifests, and summaries retain raw outcomes and reasons. Failed aggregates
+must contain only granted causes. Unwaived missing, cancelled, or failed required
+coverage blocks, as do timed-out, incomplete, or mismatched evidence. Package,
+dispatch, seal, and provenance integrity remain
 mandatory. Publication still requires a successful FRV parent under its admitted
 Q/P tuple; a publisher cannot add grants or swap Q after qualification.
 

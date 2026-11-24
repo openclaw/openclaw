@@ -58,6 +58,18 @@ export function parseReleaseValidationWaivers(source) {
           waiver.cancelledStep.length === 0 ||
           waiver.testFailures !== undefined)) ||
       !Array.isArray(waiver.aggregates) ||
+      (waiver.state !== undefined &&
+        (!["cancelled", "missing"].includes(waiver.state) ||
+          typeof waiver.approvedBy !== "string" ||
+          !waiver.approvedBy.trim() ||
+          !waiver.reason.trim() ||
+          waiver.cancelledStep !== undefined ||
+          waiver.testFailures !== undefined ||
+          waiver.qualificationExemption !== undefined ||
+          (waiver.jobName === "<workflow>" &&
+            (waiver.state !== "missing" ||
+              waiver.evidence !== undefined ||
+              waiver.aggregates.length !== 0)))) ||
       waiver.aggregates.some(
         (aggregate) =>
           !aggregate ||
@@ -187,6 +199,32 @@ export function releaseChildAdvisories(child) {
     .toSorted((left, right) => compareAscii(left.job, right.job));
 }
 
+function matchesWaiverState(waiver, child, requiredJobs) {
+  if (waiver.state === "missing") {
+    if (waiver.jobName === "<workflow>") {
+      // A failed dispatch verifier, partial tuple, or reuse is not absence.
+      return (
+        child.required &&
+        child.selected &&
+        child.source === "fresh" &&
+        child.result === "success" &&
+        child.runId === "" &&
+        child.runAttempt === null &&
+        child.status === "missing" &&
+        child.jobs.length === 0
+      );
+    }
+    return (
+      child.status === "completed" &&
+      requiredJobs.includes(waiver.jobName) &&
+      !child.jobs.some((job) => job.name === waiver.jobName)
+    );
+  }
+  const conclusion = waiver.state === "cancelled" || waiver.cancelledStep ? "cancelled" : "failure";
+  const jobs = child.jobs.filter((job) => job.name === waiver.jobName);
+  return jobs.length === 1 && jobs[0].status === "completed" && jobs[0].conclusion === conclusion;
+}
+
 // Raw leaf and workflow conclusions are never rewritten. The caller owns the
 // aggregate validation verdict and must also authenticate failed aggregate logs.
 export function evaluateReleaseChildPolicy({
@@ -194,6 +232,7 @@ export function evaluateReleaseChildPolicy({
   targetVersion,
   targetSha,
   waiverPolicy = RELEASE_VALIDATION_WAIVERS,
+  requiredJobs = [],
 }) {
   const matches = waiverPolicy.filter(
     (waiver) =>
@@ -203,12 +242,7 @@ export function evaluateReleaseChildPolicy({
       // A reviewed historical failure never grants leniency to a new execution.
       (!waiver.evidence ||
         releaseWaiverEvidenceMatches(waiver.evidence, child.runId, child.runAttempt)) &&
-      child.jobs.some(
-        (job) =>
-          job.name === waiver.jobName &&
-          job.status === "completed" &&
-          job.conclusion === (waiver.cancelledStep ? "cancelled" : "failure"),
-      ),
+      matchesWaiverState(waiver, child, requiredJobs),
   );
   const aggregates = new Map();
   for (const waiver of matches) {
@@ -224,7 +258,9 @@ export function evaluateReleaseChildPolicy({
   }
   // Preserve the established manifest shape; aggregate declarations are Q policy,
   // not a replacement for authenticated original aggregate logs.
-  const waivers = matches.map(({ aggregates: _aggregates, ...waiver }) => waiver);
+  const waivers = matches.map(({ aggregates: _aggregates, ...waiver }) =>
+    waiver.state ? Object.assign(waiver, { disposition: "waived-" + waiver.state }) : waiver,
+  );
   const waivedJobNames = new Set([
     ...waivers.map((row) => row.jobName),
     ...child.jobs
@@ -251,6 +287,12 @@ export function evaluateReleaseChildPolicy({
     waivers,
     aggregates: [...aggregates.values()],
     waivedJobNames,
+    missingRequiredJobs:
+      child.status === "completed"
+        ? requiredJobs.filter(
+            (name) => !waivedJobNames.has(name) && !child.jobs.some((job) => job.name === name),
+          )
+        : [],
     advisoryJobs,
     advisoryFailureAllowed,
     blockingJobs: child.jobs.filter(

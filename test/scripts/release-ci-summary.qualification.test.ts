@@ -10,6 +10,7 @@ import {
 import {
   buildReleaseExecutionPlanArtifact,
   composeReleaseAttemptJobs,
+  releaseExecutionPlanSha256,
   validateReleaseExecutionPlanArtifact,
 } from "../../scripts/full-release-validation-policy.mjs";
 import { evaluateReleaseChildPolicy } from "../../scripts/lib/release-validation-waivers.mjs";
@@ -204,6 +205,127 @@ describe("candidate-owned publish consumer chain", () => {
       "does not pass release policy",
     );
   });
+  it("authenticates a missing required dispatch only with an exact pinned-Q waiver", async () => {
+    const version = "2099.1.1-beta.1";
+    const f = candidatePublicationFixture({ candidateVersion: version });
+    const childRole = "normalCi";
+    const planned = f.plan.children.find((child) => child.key === childRole);
+    assert(planned);
+    Object.assign(planned, { runId: "", runAttempt: null, url: "" });
+    f.plan.sha256 = releaseExecutionPlanSha256(f.plan);
+    f.manifest.executionPlanSha256 = f.plan.sha256;
+    f.manifest.childRuns.normalCi = "";
+    Reflect.deleteProperty(f.manifest.childEvidence, childRole);
+    const grant = {
+      targetVersion: version,
+      targetSha: f.c,
+      childRole,
+      jobName: "<workflow>",
+      state: "missing",
+      approvedBy: "synthetic-approver",
+      reason: "Synthetic missing dispatch",
+    };
+    let waivers = [{ ...grant, aggregates: [] }];
+    const recorded = { ...grant, disposition: "waived-missing", runId: "", runAttempt: null };
+    Object.assign(f.manifest, { waivers: [recorded] });
+    const client = {
+      ...f.client,
+      getRunAttemptJobs: async (id: string) => {
+        const jobs = await f.client.getRunAttemptJobs(id);
+        if (id !== f.runId) {
+          return jobs;
+        }
+        const dispatch = (await f.client.getParentJobs(id)).find(
+          ({ name }) => name === "Run normal full CI",
+        );
+        assert(dispatch);
+        return [...jobs, dispatch];
+      },
+      getWorkflowSource: (sha: string, path?: string) =>
+        path === "scripts/lib/release-validation-waivers.json"
+          ? JSON.stringify({ schema: "openclaw.release-validation-waivers/v1", waivers })
+          : f.client.getWorkflowSource(sha, path),
+    };
+    const result = await validateReleaseRunEvidence(verifier(f), client);
+    expect(result).toMatchObject({
+      conclusions: { children: { normalCi: "missing" } },
+      waivers: [recorded],
+    });
+    expect(result.children.map(({ role }) => role)).not.toContain(childRole);
+    waivers = [];
+    await expect(validateReleaseRunEvidence(verifier(f), client)).rejects.toThrow(
+      "execution plan omits required child",
+    );
+  });
+
+  it.each(["cancelled", "missing"] as const)(
+    "reports a required %s job as waived, not successful",
+    async (state) => {
+      const version = "2099.1.1-beta.1";
+      const f = candidatePublicationFixture({ candidateVersion: version });
+      const childRole = "pluginPrereleaseCandidate";
+      const selected = f.plan.children.find((child) => child.key === childRole);
+      assert(selected);
+      const jobName = "plugin-prerelease-suite";
+      const originalJobs = await f.client.getRunAttemptJobs(selected.runId);
+      assert(originalJobs.some(({ name }) => name === jobName));
+      const jobs = originalJobs.flatMap((job) =>
+        job.name !== jobName
+          ? [job]
+          : state === "missing"
+            ? []
+            : [{ ...job, conclusion: "cancelled" }],
+      );
+      const composite = composeReleaseAttemptJobs([{ jobs, runAttempt: 1 }], {
+        effectiveRunAttempt: 1,
+        plannedRunAttempt: 1,
+      });
+      Object.assign(f.manifest.childEvidence[childRole]!, {
+        jobs: composite.jobs,
+        compositeJobsSha256: composite.sha256,
+      });
+      const grant = {
+        targetVersion: version,
+        childRole,
+        jobName,
+        state,
+        approvedBy: "synthetic-approver",
+        reason: "Synthetic leaf exception",
+      };
+      let waivers = [{ ...grant, aggregates: [] }];
+      const recorded = {
+        ...grant,
+        disposition: "waived-" + state,
+        runId: selected.runId,
+        runAttempt: 1,
+      };
+      Object.assign(f.manifest, { waivers: [recorded] });
+      const client = {
+        ...f.client,
+        getWorkflowSource: (sha: string, path?: string) =>
+          path === "scripts/lib/release-validation-waivers.json"
+            ? JSON.stringify({ schema: "openclaw.release-validation-waivers/v1", waivers })
+            : f.client.getWorkflowSource(sha, path),
+        getRunAttemptJobs: async (id: string) =>
+          id === selected.runId ? jobs : f.client.getRunAttemptJobs(id),
+        getRun: async (id: string) => ({
+          ...(await f.client.getRun(id)),
+          ...(state === "cancelled" && id === selected.runId ? { conclusion: "cancelled" } : {}),
+        }),
+      };
+      await expect(validateReleaseRunEvidence(verifier(f), client)).resolves.toMatchObject({
+        conclusions: { children: { [childRole]: state === "cancelled" ? "cancelled" : "success" } },
+        waivers: [recorded],
+      });
+      waivers = [];
+      await expect(validateReleaseRunEvidence(verifier(f), client)).rejects.toThrow(
+        state === "cancelled"
+          ? "does not pass release policy"
+          : "required job did not succeed exactly once",
+      );
+    },
+  );
+
   it("verifies independent Q through the immutable plan, npm and Docker consumers", async () => {
     const f = candidatePublicationFixture({ qualificationSha: "c".repeat(40) });
     const evidence = await validateReleaseRunEvidence(verifier(f), f.client);

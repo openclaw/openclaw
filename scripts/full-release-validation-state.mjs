@@ -337,6 +337,7 @@ export async function readChild(child, previous, signal, options = {}) {
         child: snapshot,
         targetVersion: options.targetVersion,
         targetSha: options.targetSha,
+        requiredJobs: options.requiredJobs,
       });
       const jobs = evidence.jobs.map((job) =>
         attempts
@@ -1429,6 +1430,7 @@ async function collectMode(mode) {
   const abortController = new AbortController();
   let decisionReuse = { blockers: [], children: plan, errors: [] };
   let transport = { status: "certain" };
+  const qualificationCoverage = executionPlan.qualificationCoverage;
 
   const writePayload = (decision, cancellation = {}) => {
     const payload = buildReleaseStateArtifact({
@@ -1465,6 +1467,7 @@ async function collectMode(mode) {
         },
       ],
       localFailures: gateFailures,
+      qualificationCoverage,
       targetVersion: executionPlan.targetVersion,
       targetSha: executionPlan.targetSha,
     });
@@ -1526,6 +1529,8 @@ async function collectMode(mode) {
       plan.map((child, index) =>
         readChild(child, snapshots[index], abortController.signal, {
           reuseSelection: executionPlan.childReuse?.[child.key],
+          requiredJobs: qualificationCoverage?.children.find(({ key }) => key === child.key)
+            ?.requiredJobs,
           targetVersion: executionPlan.targetVersion,
           targetSha: executionPlan.targetSha,
         }),
@@ -1539,6 +1544,7 @@ async function collectMode(mode) {
       extraBlockers: [...executionPlan.blockers, ...decisionReuse.blockers],
       extraErrors,
       localFailures: gateFailures,
+      qualificationCoverage,
       targetVersion: executionPlan.targetVersion,
       targetSha: executionPlan.targetSha,
     });
@@ -1568,6 +1574,7 @@ async function collectMode(mode) {
             ...cancellationErrors,
           ],
           localFailures: gateFailures,
+          qualificationCoverage,
           targetVersion: executionPlan.targetVersion,
           targetSha: executionPlan.targetSha,
         });

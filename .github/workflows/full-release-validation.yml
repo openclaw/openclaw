@@ -1453,6 +1453,7 @@ jobs:
             fi
 
             run_id=""
+            match_count=""
             dispatch_run_ids="$(
               sed -nE "s#^https://github[.]com/${GITHUB_REPOSITORY}/actions/runs/([0-9]+)\$#\1#p" \
                 <<< "$dispatch_output" | sort -u
@@ -1464,6 +1465,7 @@ jobs:
               run_id="$dispatch_run_ids"
             else
               for _ in $(seq 1 60); do
+                match_count=""
                 if matches_json="$(
                   DISPATCH_RUN_NAME="$dispatch_run_name" CHILD_WORKFLOW_REF="$CHILD_WORKFLOW_REF" \
                     gh_with_retry api -X GET "repos/${GITHUB_REPOSITORY}/actions/workflows/${workflow}/runs" \
@@ -1485,6 +1487,12 @@ jobs:
               done
             fi
             if [[ -z "$run_id" ]]; then
+              if [[ "$match_count" == 0 && "$CHILD_WORKFLOW_KIND" =~ ^(ci|plugin-prerelease|release-checks|npm-telegram|performance)$ ]]; then
+                # A confirmed empty lookup is a coverage result, not a successful test.
+                # Decision/Drain will block unless frozen Q explicitly waives this missing child.
+                echo "::warning::No run found for $dispatch_run_name; dispatch status $dispatch_status. Recording missing coverage without retrying dispatch." >&2
+                return 0
+              fi
               echo "::error::Could not find exact dispatched run ${dispatch_run_name}; dispatch status ${dispatch_status}. The dispatch was not retried to avoid creating a duplicate child." >&2
               exit 1
             fi

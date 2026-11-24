@@ -158,6 +158,7 @@ export function terminalPolicyPass(
   targetVersion?: string,
   targetSha?: string,
   waiverPolicy?: import("./lib/release-validation-waivers.mjs").ReleaseValidationWaiver[],
+  requiredJobs?: string[],
 ): boolean;
 
 export function classifyReleaseSnapshot(input: ReleaseRecord): ReleaseStateArtifact;

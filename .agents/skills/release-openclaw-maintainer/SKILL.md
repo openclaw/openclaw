@@ -115,6 +115,12 @@ Preserve any narrower scope the operator explicitly requested. Diagnostic run
 IDs belong in the PR/handoff, not in matching restrictions merely because they
 identify the original failure. See the [attempt-binding correction in #201694](https://github.com/openclaw/openclaw/pull/201694)
 and the [operator-directed release-wide default in #201769](https://github.com/openclaw/openclaw/pull/201769).
+For an approved whole-job cancellation or missing required job, set the exact
+observed state (`cancelled` or `missing`) and record `approvedBy` and the short reason.
+Use `jobName: "<workflow>"` only for a missing required child, with its exact role and
+no run/attempt binding. Preserve `waived-missing`/`waived-cancelled` separately from passes;
+never treat skipped jobs, incomplete dispatch identities, or missing receipts for
+known runs as absent work.
 For grant-only edits, reuse the policy tests; add cases only for new matching or
 validation behavior. Keep new reasons to one sentence and authorization details
 in the release handoff, not public Q data or published docs ([#199776](https://github.com/openclaw/openclaw/pull/199776)).
@@ -128,7 +134,7 @@ required lanes must succeed: Windows
 and macOS Node and other normal CI jobs, install smoke, survivor
 lanes, `update-first-hop-compat*`, pack/npm qualification, package integrity,
 and Linux/Windows/macOS Gateway checks, including Windows packaged
-install/upgrade checks in Release Checks. A cancelled run still blocks. Preserve
+install/upgrade checks in Release Checks. A cancelled FRV parent still blocks. Preserve
 first failures and classify each one as below before recovery. Stable
 publication requires stable/full evidence, soak, and blocking performance.
 Beta-profile evidence cannot authorize stable publication. Hard gates and soak

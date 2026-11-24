@@ -229,6 +229,32 @@ it("accepts an explicitly waived cancelled step without accepting other incomple
   }
 });
 
+it("requires explicit authorization metadata for new waiver states", () => {
+  const approved = { ...grant, state: "cancelled", approvedBy: "synthetic-approver" };
+  const parse = (waiver: Record<string, unknown>) =>
+    parseReleaseValidationWaivers(
+      JSON.stringify({
+        schema: "openclaw.release-validation-waivers/v1",
+        waivers: [waiver],
+      }),
+    );
+  expect(parse(approved)).toEqual([approved]);
+  for (const mutation of [
+    { approvedBy: undefined },
+    { state: "skipped" },
+    { cancelledStep: "Setup" },
+    { jobName: "<workflow>" },
+    {
+      state: "missing",
+      jobName: "<workflow>",
+      aggregates: [],
+      evidence: { runId: 42, runAttempt: 1 },
+    },
+  ]) {
+    expect(() => parse({ ...approved, ...mutation })).toThrow("Invalid release waiver entry");
+  }
+});
+
 it("requires complete aggregate evidence with only granted causes and the approved failing step", async () => {
   const policy = evaluateReleaseChildPolicy({ child, targetVersion, waiverPolicy: [grant] });
   const validate = (log = "##[error]test failed", jobs = child.jobs) =>

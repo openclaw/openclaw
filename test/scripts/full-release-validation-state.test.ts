@@ -66,29 +66,33 @@ import {
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-function runSyntheticWaiverState(source: string, fixture: Record<string, unknown>) {
+function runSyntheticWaiverState(
+  source: string,
+  fixture: Record<string, unknown>,
+  waivers: Record<string, unknown>[] = [
+    {
+      targetVersion: "2099.1.1",
+      targetSha: "c".repeat(40),
+      childRole: "normalCi",
+      jobName: "synthetic-lane",
+      reason: "Synthetic state policy fixture",
+      aggregates: [
+        {
+          jobName: "openclaw/ci-gate",
+          stepName: "Verify selected CI lanes",
+          causes: ["synthetic-lane finished with failure (selected=true)"],
+          exactCauses: true,
+        },
+      ],
+    },
+  ],
+) {
   const policyPath = join(tempDirs.make("frv-synthetic-waiver-"), "waivers.json");
   writeFileSync(
     policyPath,
     JSON.stringify({
       schema: "openclaw.release-validation-waivers/v1",
-      waivers: [
-        {
-          targetVersion: "2099.1.1",
-          targetSha: "c".repeat(40),
-          childRole: "normalCi",
-          jobName: "synthetic-lane",
-          reason: "Synthetic state policy fixture",
-          aggregates: [
-            {
-              jobName: "openclaw/ci-gate",
-              stepName: "Verify selected CI lanes",
-              causes: ["synthetic-lane finished with failure (selected=true)"],
-              exactCauses: true,
-            },
-          ],
-        },
-      ],
+      waivers,
     }),
   );
   const result = spawnSync(process.execPath, ["--input-type=module", "-e", source], {
@@ -858,6 +862,44 @@ syncBuiltinESMExports();
       blockers: [expect.objectContaining({ kind: "dispatch_missing" })],
       state: "blocked_complete",
     });
+  });
+
+  it("records a waived missing dispatch without fabricating child evidence", () => {
+    const sealedPlan = executionPlan(
+      { children: { normalCi: { result: "success" } }, rerunGroup: "ci" },
+      { targetVersion: "2099.1.1" },
+    );
+    const grant = {
+      targetVersion: sealedPlan.targetVersion,
+      childRole: "normalCi",
+      jobName: "<workflow>",
+      state: "missing",
+      approvedBy: "synthetic-approver",
+      reason: "Synthetic dispatch absence",
+      aggregates: [],
+    };
+    const observed = runSyntheticWaiverState(
+      `import { buildReleaseStateArtifact, classifyReleaseSnapshot, formatReleaseStateOutcome, verifyReleaseStateArtifacts } from "./scripts/full-release-validation-policy.mjs";
+       const executionPlan = JSON.parse(process.env.STATE_FIXTURE);
+       const { parentRunAttempt, parentRunId, releaseProfile, rerunGroup, targetVersion, targetSha, workflowRef, workflowSha } = executionPlan;
+       const expected = { parentRunAttempt, parentRunId, targetSha, workflowRef, workflowSha };
+       const children = executionPlan.children.map((child) => ({ ...child, jobs: [], status: "missing" }));
+       const decision = classifyReleaseSnapshot({ children, targetVersion, targetSha });
+       const artifact = (mode) => buildReleaseStateArtifact({ children, decision, executionPlan, expected, mode, releaseProfile, rerunGroup });
+       const { drain } = verifyReleaseStateArtifacts(executionPlan, artifact("decision"), artifact("drain"), expected);
+       console.log(JSON.stringify({ ...drain, summary: formatReleaseStateOutcome(drain) }));`,
+      sealedPlan,
+      [grant],
+    );
+    expect(observed).toMatchObject({
+      blockers: [],
+      state: "passed",
+      waivers: [
+        { jobName: grant.jobName, disposition: "waived-missing", runId: "", runAttempt: null },
+      ],
+    });
+    expect(Object.keys(observed.children)).toEqual([]);
+    expect(observed.summary).toContain("waived-missing (not a test pass)");
   });
 
   it("routes candidate acquisition for fresh qualified packages but not reused evidence", () => {

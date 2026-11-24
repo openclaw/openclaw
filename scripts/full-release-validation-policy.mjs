@@ -1666,14 +1666,22 @@ function blockerIndex(issues) {
   return issues.map((issue) => jsonSha256(blockerEvidence(issue))).toSorted();
 }
 
-export function terminalPolicyPass(child, targetVersion, targetSha, waiverPolicy) {
-  const policy = evaluateReleaseChildPolicy({ child, targetVersion, targetSha, waiverPolicy });
+export function terminalPolicyPass(child, targetVersion, targetSha, waiverPolicy, requiredJobs) {
+  return terminalChildPass(
+    child,
+    evaluateReleaseChildPolicy({ child, targetVersion, targetSha, waiverPolicy, requiredJobs }),
+  );
+}
+
+function terminalChildPass(child, policy) {
   return (
     child.status === "completed" &&
     child.jobs.every((job) => job.status === "completed") &&
     (child.conclusion === "success" ||
       (child.conclusion === "failure" &&
-        (policy.waivers.length > 0 || policy.advisoryJobs.some(isFailedJob)))) &&
+        (policy.waivers.length > 0 || policy.advisoryJobs.some(isFailedJob))) ||
+      (child.conclusion === "cancelled" &&
+        policy.waivers.some((waiver) => waiver.state === "cancelled"))) &&
     policy.advisoryFailureAllowed &&
     policy.blockingJobs.length === 0
   );
@@ -1762,9 +1770,9 @@ function releaseState(cancelled, activeRunIds, blockers, errors) {
   );
 }
 
-function releaseChildBlockers(selected, targetVersion, targetSha) {
+function releaseChildBlockers(selected, policies) {
   const childJobBlockers = selected.flatMap((child) =>
-    evaluateReleaseChildPolicy({ child, targetVersion, targetSha }).blockingJobs.map((job) => ({
+    policies.get(child.key).blockingJobs.map((job) => ({
       child: child.key,
       conclusion: job.conclusion,
       job: job.name,
@@ -1786,7 +1794,7 @@ function releaseChildBlockers(selected, targetVersion, targetSha) {
         child.runId &&
         child.runAttempt &&
         child.status === "completed" &&
-        !terminalPolicyPass(child, targetVersion, targetSha) &&
+        !terminalChildPass(child, policies.get(child.key)) &&
         !childJobBlockerKeys.has(`${child.key}:${child.runId}`),
     )
     .map((child) => ({
@@ -1802,6 +1810,23 @@ function releaseChildBlockers(selected, targetVersion, targetSha) {
   return [...childJobBlockers, ...terminalBlockers];
 }
 
+function releaseSnapshotPolicies(children, { targetVersion, targetSha, qualificationCoverage }) {
+  const requiredJobsByChild = new Map(
+    qualificationCoverage?.children.map(({ key, requiredJobs }) => [key, requiredJobs]),
+  );
+  return new Map(
+    children.map((child) => [
+      child.key,
+      evaluateReleaseChildPolicy({
+        child,
+        targetVersion,
+        targetSha,
+        requiredJobs: requiredJobsByChild.get(child.key),
+      }),
+    ]),
+  );
+}
+
 export function classifyReleaseSnapshot({
   cancelled = false,
   children,
@@ -1810,19 +1835,40 @@ export function classifyReleaseSnapshot({
   localFailures = [],
   targetVersion,
   targetSha,
+  qualificationCoverage,
 }) {
   const selected = children.filter((child) => child.selected);
+  const policies = releaseSnapshotPolicies(selected, {
+    targetVersion,
+    targetSha,
+    qualificationCoverage,
+  });
   const active = selected.filter(
     (child) => child.runId && child.runAttempt && child.status !== "completed",
   );
   const childErrors = selected.flatMap((child) =>
     (child.errors ?? []).filter((error) => error.kind !== "dispatch_missing"),
   );
-  const childBlockers = releaseChildBlockers(selected, targetVersion, targetSha);
+  const childBlockers = releaseChildBlockers(selected, policies);
   const rawBlockers = [
     ...localFailures,
     ...extraBlockers,
-    ...dispatchBlockers(selected),
+    ...dispatchBlockers(selected).filter(
+      (issue) =>
+        issue.kind !== "dispatch_missing" ||
+        !policies.get(issue.child).waivedJobNames.has("<workflow>"),
+    ),
+    ...selected.flatMap((child) =>
+      policies.get(child.key).missingRequiredJobs.map((name) => ({
+        child: child.key,
+        conclusion: "missing",
+        job: name,
+        kind: "job_missing",
+        message: "Required release job is missing: " + name,
+        runId: child.runId,
+        url: child.url,
+      })),
+    ),
     ...childBlockers,
   ];
   const blockers = normalizeIssues(rawBlockers, "release_blocker");
@@ -1836,9 +1882,11 @@ export function classifyReleaseSnapshot({
     activeRunIds,
     advisoryJobs: selected.flatMap(releaseChildAdvisories),
     waivers: selected.flatMap((child) =>
-      evaluateReleaseChildPolicy({ child, targetVersion, targetSha }).waivers.map((waiver) =>
-        Object.assign({}, waiver, { runId: child.runId, runAttempt: child.runAttempt }),
-      ),
+      policies
+        .get(child.key)
+        .waivers.map((waiver) =>
+          Object.assign({}, waiver, { runId: child.runId, runAttempt: child.runAttempt }),
+        ),
     ),
     blockerCount: rawBlockers.length,
     blockerIndex: blockerIndex(rawBlockers),
@@ -2470,13 +2518,17 @@ function effectiveStateGates(executionPlan, expected) {
 
 function verifyStateStructure(state, executionPlan, label, effectiveGates) {
   const selected = executionPlan.children.filter((entry) => entry.selected);
-  const expectedKeys = selected.map((child) => child.key).toSorted();
+  const expectedKeys = selected
+    .filter((child) => child.runId && child.runAttempt)
+    .map((child) => child.key)
+    .toSorted();
   if (JSON.stringify(Object.keys(state.children).toSorted()) !== JSON.stringify(expectedKeys)) {
     throw new Error(`${label} child set differs from the immutable execution plan`);
   }
   const snapshots = selected.map((child) => {
     if (!child.runId || !child.runAttempt) {
-      throw new Error(`selected release child omitted exact identity: ${child.key}`);
+      // No child evidence exists; re-evaluate the sealed dispatch slot.
+      return Object.assign({}, child, { jobs: [], status: "missing" });
     }
     const snapshot = state.children[child.key];
     if (
@@ -2566,6 +2618,7 @@ function verifyStateStructure(state, executionPlan, label, effectiveGates) {
     localFailures: releasePlanGateFailures(effectiveGates),
     targetVersion: executionPlan.targetVersion,
     targetSha: executionPlan.targetSha,
+    qualificationCoverage: executionPlan.qualificationCoverage,
   });
   if (!isDeepStrictEqual(state.waivers, baseline.waivers)) {
     throw new Error(`${label} waivers differ from checked-in release tooling policy`);
@@ -2639,16 +2692,17 @@ function verifyStateTransition(decision, drain, executionPlan) {
   if (decision.state.startsWith("blocked_") && drain.state === "blocked_complete") {
     // Display rows are capped and can shift as earlier-sorted jobs finish. The
     // complete index owns retention; child evidence owns permitted replacements.
-    const transitionBlockers = (state) => [
-      ...state.blockers,
-      ...releaseChildBlockers(
-        Object.entries(state.children).map(([key, child]) =>
-          Object.assign({}, child, { key, jobs: child.timing.jobs }),
+    const transitionBlockers = (state) => {
+      const children = Object.entries(state.children).map(([key, child]) =>
+        Object.assign({}, child, { key, jobs: child.timing.jobs }),
+      );
+      return [
+        ...state.blockers,
+        ...releaseChildBlockers(children, releaseSnapshotPolicies(children, executionPlan)).map(
+          (issue) => normalizeIssue(issue, "release_blocker"),
         ),
-        executionPlan.targetVersion,
-        executionPlan.targetSha,
-      ).map((issue) => normalizeIssue(issue, "release_blocker")),
-    ];
+      ];
+    };
     const previous = new Map(
       transitionBlockers(decision).map((blocker) => [blockerIndex([blocker])[0], blocker]),
     );
@@ -2723,7 +2777,9 @@ export function verifyReleaseStateArtifacts(plan, decision, drain, expected = {}
     const outcome = verified.drain.state === "passed" ? verified.decision : verified.drain;
     throw new Error(formatReleaseStateOutcome(outcome));
   }
-  for (const child of verified.executionPlan.children.filter((entry) => entry.selected)) {
+  for (const child of verified.executionPlan.children.filter(
+    (entry) => entry.selected && entry.runId && entry.runAttempt,
+  )) {
     if (
       JSON.stringify(releaseStateChildEvidence(verified.decision.children[child.key])) !==
       JSON.stringify(releaseStateChildEvidence(verified.drain.children[child.key]))
@@ -2806,7 +2862,7 @@ function releaseStateDetailLines(payload, maxItems = MAX_SUMMARY_ISSUES) {
   }
   for (const waiver of payload.waivers ?? []) {
     lines.push(
-      `- Waived (not a test pass): ${waiver.childRole} / ${waiver.jobName}; ${waiver.reason}`,
+      `- ${waiver.disposition ?? "Waived"} (not a test pass): ${waiver.childRole} / ${waiver.jobName}; ${waiver.reason}`,
     );
   }
   const omitted =
