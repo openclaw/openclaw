@@ -602,7 +602,9 @@ wait_for_run() {
     CREATED_AT="${created_at}" UPDATED_AT="${updated_at}" node --input-type=module -e '
       const created = Date.parse(process.env.CREATED_AT ?? "");
       const updated = Date.parse(process.env.UPDATED_AT ?? "");
-      console.log(Number.isFinite(created) && Number.isFinite(updated) ? Math.max(0, Math.round((updated - created) / 1000)) : "");
+      const seconds = Number.isFinite(created) && Number.isFinite(updated)
+        ? Math.max(0, Math.round((updated - created) / 1000)) : "";
+      process.stdout.write(String(seconds) + "\n");
     '
   )"
   if [[ -n "${duration_seconds}" ]]; then

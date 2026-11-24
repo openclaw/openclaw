@@ -449,7 +449,7 @@ it.each(["json", "human", "check"] as const)(
   },
 );
 
-it("refuses an early Git release updater's schema change from --check before any change", async () => {
+it("refuses an early Git release updater's schema change from --check and starts its recovery", async () => {
   const stateDir = makeTempDir(tempRoots, "openclaw-worker-early-release-");
   const prefix = path.join(stateDir, "git-install");
   const root = path.join(prefix, "releases", "git-b", "build");
@@ -469,18 +469,23 @@ it("refuses an early Git release updater's schema change from --check before any
     ...(await importOriginal<typeof import("./openclaw-root.js")>()),
     resolveOpenClawPackageRootSync: () => root,
   }));
+  const start = vi.fn(async () => ({ started: true, unit: "u", target: "a".repeat(40) }));
+  // mock-isolation: Starting the recovery needs Git, systemd and a service; its tests own that.
+  vi.doMock("./update-early-release-recovery-start.js", () => ({
+    startEarlyGitReleaseRecovery: start,
+  }));
   try {
     await runWorker({}, "--check");
   } finally {
     vi.doUnmock("./openclaw-root.js");
+    vi.doUnmock("./update-early-release-recovery-start.js");
     vi.unstubAllEnvs();
   }
 
+  expect(start).toHaveBeenCalledWith(expect.objectContaining({ root, pending: expect.anything() }));
   expect(stdout.join("")).toBe("");
   expect(process.exitCode).toBe(1);
-  expect(stderr.join("")).toContain(
-    "The update stopped before switching releases; the Gateway was not touched.",
-  );
+  expect(stderr.join("")).toContain("the new release finishes the update in the background");
 });
 
 it.each([false, true])(

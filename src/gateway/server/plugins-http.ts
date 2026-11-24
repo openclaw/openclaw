@@ -5,6 +5,7 @@ import {
   GATEWAY_CLIENT_MODES,
 } from "../../../packages/gateway-protocol/src/client-info.js";
 import { PROTOCOL_VERSION } from "../../../packages/gateway-protocol/src/index.js";
+import { GatewayRequestAuthorityExpiredError } from "../../infra/operator-authority-error.js";
 import type { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
   getWebhookLegacyListener,
@@ -150,7 +151,7 @@ async function withPluginRouteRuntimeScope<T>(
             personProfileId: auth.personProfileId,
             assertCurrent() {
               if (!isOpen()) {
-                throw new Error("Gateway HTTP request closed");
+                throw new GatewayRequestAuthorityExpiredError();
               }
               assertRemoteControlUiIngressCurrent(client?.remoteControlUiIngress);
             },

@@ -113,6 +113,7 @@ export function createPiSessionCatalogRuntime(api: OpenClawPluginApi) {
               cursor: query.cursors?.[PI_LOCAL_SESSION_HOST_ID],
             },
             true,
+            query.exportSource,
           );
           return {
             ...page,

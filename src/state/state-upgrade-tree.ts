@@ -146,7 +146,7 @@ export function withRecoveredSource<T>(pathname: string, read: (readable: string
   }
 }
 
-function skipEntry(name: string): boolean {
+export function skipEntry(name: string): boolean {
   return GENERATION_NAME.test(name) || RETIRED_BACKUP_NAME.test(name) || COMPANION_NAME.test(name);
 }
 
@@ -156,9 +156,6 @@ function fileStamp(pathname: string): string | undefined {
   return stat && `${stat.ino}:${stat.size}:${stat.mtimeNs}:${stat.ctimeNs}`;
 }
 
-// Small ancillary stores remain migration inputs; large current stores and operator
-// images are not worth copying for a chain that does not own their schema.
-const ANCILLARY_SQLITE_MAX_BYTES = 64 * 1024 * 1024;
 const LARGE_COPY_BYTES = 256 * 1024 * 1024;
 
 function checkCopySpace(volumePath: string, bytes: number): void {
@@ -261,7 +258,7 @@ export async function copyTree(
   skip: (absolute: string) => boolean,
   baseline: Map<string, string | undefined>,
   options: {
-    requiredSqlite?: ReadonlySet<string>;
+    targets?: readonly { path: string }[];
     log?: { info: (message: string) => void };
     additionalCopyBytes?: number;
   } = {},
@@ -347,20 +344,13 @@ export async function copyTree(
               0,
             )
           : 0);
-      if (
-        sqlite &&
-        fileBytes > ANCILLARY_SQLITE_MAX_BYTES &&
-        !options.requiredSqlite?.has(source)
-      ) {
-        continue;
-      }
       files.push({ source, target, mode: stat.mode, sqlite });
       // Budget ordinary files too: FICLONE may fall back to a full byte copy.
       bytes += fileBytes;
     }
   };
   walk(live, new Set([fs.realpathSync(live)]));
-  for (const required of options.requiredSqlite ?? []) {
+  for (const { path: required } of options.targets ?? []) {
     if (fs.existsSync(required) && !files.some((file) => file.source === required)) {
       throw new Error(
         `State upgrade refused: database ${required} is outside the copy scope. Nothing live was changed. Run openclaw doctor --fix under offline maintenance, then start the Gateway again.`,

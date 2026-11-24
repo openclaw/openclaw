@@ -14,6 +14,7 @@ import { materializeDatabasePort } from "../infra/database-engine/port.worker.js
 import { statePortProvider } from "../infra/database-engine/state-port.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { ROLLBACK_SOURCE } from "../update/rollback-source.js";
+import { createTrialPending, resolvePrefix } from "../update/store.js";
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "./openclaw-agent-schema.js";
 import {
   OPENCLAW_AGENT_SCHEMA_VERSION,
@@ -92,8 +93,13 @@ describe.skipIf(!connection)("PostgreSQL startup copy and swap", () => {
       );
       const originalAnchor = fs.readFileSync(statePath);
       let privateNamespace: string | undefined;
+      const env = { ...process.env, OPENCLAW_STATE_DIR: root, OPENCLAW_CONFIG_PATH: configPath };
+      await createTrialPending(
+        { runId: randomUUID(), target: root, previous: root, version: "synthetic" },
+        resolvePrefix(env),
+      );
       const result = await upgradeStateDirectory({
-        env: { ...process.env, OPENCLAW_STATE_DIR: root, OPENCLAW_CONFIG_PATH: configPath },
+        env,
         log: { info() {}, warn() {} },
         runChain: async ({ stateDir }) => {
           const shadow = readBackupEngine(path.join(stateDir, "state", "openclaw.sqlite"));
@@ -236,8 +242,13 @@ describe.skipIf(!connection)("PostgreSQL startup copy and swap", () => {
       }),
     );
     const originalAnchor = fs.readFileSync(agentPath);
+    const env = { ...process.env, OPENCLAW_STATE_DIR: root, OPENCLAW_CONFIG_PATH: configPath };
+    await createTrialPending(
+      { runId: randomUUID(), target: root, previous: root, version: "synthetic" },
+      resolvePrefix(env),
+    );
     const result = await upgradeStateDirectory({
-      env: { ...process.env, OPENCLAW_STATE_DIR: root, OPENCLAW_CONFIG_PATH: configPath },
+      env,
       log: { info() {}, warn() {} },
       runChain: async ({ stateDir }) => {
         const privatePath = path.join(stateDir, "custom", "main", "openclaw-agent.sqlite");

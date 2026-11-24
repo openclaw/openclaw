@@ -9,7 +9,7 @@ const controlUiHtml = "<!doctype html><title>fixture</title>\n";
 
 function usage() {
   console.error(
-    "usage: assertions.mjs <prepare-git-fixture|write-control-ui|assert-update|assert-main-refusal|assert-dry-run|assert-config-channel|assert-status-kind|assert-installed-version|assert-runtime-staging-clean|assert-dirty-exit|assert-dirty-update> [...]",
+    "usage: assertions.mjs <prepare-git-fixture|write-control-ui|assert-update|assert-main-refusal|assert-dry-run|assert-config-channel|assert-status-kind|assert-installed-version|assert-runtime-staging-clean|assert-dirty-exit|assert-dirty-update|assert-detached-switch> [...]",
   );
   process.exit(2);
 }
@@ -163,8 +163,19 @@ function prepareGitFixture(root) {
   writeControlUi(root);
 }
 
-function assertUpdate(channel) {
+function assertUpdate(channel, expectedVersion) {
   const payload = JSON.parse(process.env.UPDATE_JSON ?? "");
+  if (channel === "beta" && Object.hasOwn(payload, "phase")) {
+    // The fixture already runs the candidate, so switching to beta changes only the channel.
+    assert.equal(payload.phase, "finished");
+    assert.equal(payload.reason, "already-current");
+    assert.equal(payload.target?.version, expectedVersion);
+    assert(
+      payload.steps.every((step) => step.status !== "failed"),
+      "beta channel switch failed",
+    );
+    return;
+  }
   if (payload.status !== "ok") {
     throw new Error(`expected ${channel} update status ok, got ${payload.status}`);
   }
@@ -228,6 +239,34 @@ function assertConfigChannel(channel) {
   );
 }
 
+function assertDetachedSwitch(source, slot, expectedHead) {
+  const git = (root, ...gitArgs) =>
+    execFileSync("git", ["-C", root, ...gitArgs], { encoding: "utf8" }).trim();
+  const edits = ["--", "operator-update-tracked.txt", "operator-update-notes.tmp"];
+  // The switch must leave the operator's checkout alone and install only committed content.
+  assert.equal(git(source, "rev-parse", "HEAD"), expectedHead, "source checkout HEAD changed");
+  for (const [name, content] of [
+    ["operator-update-tracked.txt", "retain tracked edit\n"],
+    ["operator-update-notes.tmp", "retain user notes\n"],
+  ]) {
+    assert.equal(
+      fs.readFileSync(path.join(source, name), "utf8"),
+      content,
+      `source ${name} changed`,
+    );
+  }
+  assert.equal(
+    git(slot, "rev-parse", "HEAD"),
+    expectedHead,
+    "release did not select the fixture commit",
+  );
+  assert.equal(
+    git(slot, "status", "--porcelain", ...edits),
+    "",
+    "local input leaked into the release",
+  );
+}
+
 function assertDryRun(kind, channel) {
   const preview = JSON.parse(process.env.UPDATE_JSON ?? "");
   assert.equal(preview.dryRun, true);
@@ -272,6 +311,7 @@ const commands = {
   "assert-runtime-staging-clean": assertRuntimeStagingClean,
   "assert-dirty-update": assertDirtyUpdate,
   "assert-dirty-exit": assertDirtyExit,
+  "assert-detached-switch": assertDetachedSwitch,
   "assert-config-channel": assertConfigChannel,
   "assert-dry-run": assertDryRun,
   "assert-status-kind": assertStatusKind,

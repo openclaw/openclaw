@@ -793,6 +793,19 @@ jobs:
             exit 1
           fi
 
+      # npm writes its own stack for "Exit handler never called!" only to its debug log,
+      # which stays on the runner (#204375). Keep it with the lane report.
+      - name: Keep npm debug logs with the Kova report
+        if: ${{ always() && steps.lane.outputs.run == 'true' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          logs="$HOME/.npm/_logs"
+          if compgen -G "$logs/*-debug-0.log" > /dev/null; then
+            mkdir -p "$REPORT_DIR/npm-logs"
+            cp "$logs"/*-debug-0.log "$REPORT_DIR/npm-logs/"
+          fi
+
       - name: Upload Kova artifacts
         id: upload_kova_artifacts
         if: ${{ always() && steps.lane.outputs.run == 'true' }}
