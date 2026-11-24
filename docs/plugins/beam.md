@@ -184,7 +184,7 @@ Beam publication is not remote control.
 
 ## Mirroring
 
-Beam can also act as the sender: an opt-in mirror that continuously publishes this machine's active local coding sessions (Claude Code, Codex, and other registered session catalogs) to a remote Beam receiver, such as a shared team Gateway. Teammates then watch near-live session transcripts in the remote Control UI without any access to the source machine.
+Beam can also act as the sender: an opt-in mirror that continuously publishes this machine's active local coding sessions (including Claude Code and Pi sessions with a verified local source) to a remote Beam receiver, such as a shared team Gateway. Teammates then watch near-live session transcripts in the remote Control UI without any access to the source machine.
 
 ```json5
 {

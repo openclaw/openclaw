@@ -461,6 +461,23 @@ export async function readPiSessionFileBaseline(
   }
 }
 
+// One authoritative candidate snapshot serves every selected thread in this poll.
+// Discarding the native discovery generation also retires its file-origin mapping.
+const exportFilesByDiscovery = new WeakMap<
+  PiFileCandidate[],
+  Promise<Map<string, string | null>>
+>();
+async function scanExportFiles(candidates: PiFileCandidate[]) {
+  if (candidates.length >= MAX_DISCOVERY_FILES) {
+    throw new Error("Pi session discovery is incomplete");
+  }
+  const files = new Map<string, string | null>();
+  for await (const summary of scanPiSummaries(candidates)) {
+    files.set(summary.threadId, files.has(summary.threadId) ? null : summary.file);
+  }
+  return files;
+}
+
 export async function readPiSessionById(
   threadId: string,
   env: NodeJS.ProcessEnv,
@@ -474,18 +491,16 @@ export async function readPiSessionById(
     // Legacy publication IDs omit the backing file. Refuse duplicate IDs and
     // store changes even when the normal interactive cache has selected a winner.
     const candidates = await piFileCandidates(env);
-    if (candidates.length >= MAX_DISCOVERY_FILES) {
-      throw new Error("Pi session discovery is incomplete");
+    let files = exportFilesByDiscovery.get(candidates);
+    if (!files) {
+      files = scanExportFiles(candidates);
+      exportFilesByDiscovery.set(candidates, files);
     }
-    for await (const summary of scanPiSummaries(candidates)) {
-      if (summary.threadId !== threadId) {
-        continue;
-      }
-      if (file || sha256Hex(summary.file) !== sourceHomeId) {
-        throw new Error("Pi source selection changed or is ambiguous");
-      }
-      file = summary.file;
+    const selected = (await files).get(threadId);
+    if (!selected || sha256Hex(selected) !== sourceHomeId) {
+      throw new Error("Pi source selection changed or is ambiguous");
     }
+    file = selected;
   }
   if (!file) {
     throw new Error("Pi session was not found");
