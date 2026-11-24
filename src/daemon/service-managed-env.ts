@@ -161,6 +161,8 @@ export function collectInlineManagedServiceEnvKeys(
   for (const key of normalizeServiceEnvKeys(expectedManagedKeys ?? [])) {
     managedKeys.add(key);
   }
+  // glibc needs its allocator setting before runtime config/dotenv loading.
+  managedKeys.delete("MALLOC_ARENA_MAX");
   return collectInlineServiceEnvKeys(command, managedKeys);
 }
 

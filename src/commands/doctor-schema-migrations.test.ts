@@ -313,8 +313,8 @@ it.each([
               .prepare("SELECT value_json FROM cache_entries WHERE scope = 'retained'")
               .get(),
           ).toEqual({ value_json: '"preserved"' });
-          expect(liveFullChecks()).toBe(1);
-          expect(readSqliteDatabaseIntegrityVerification(pathname)).toBeDefined();
+          expect(liveFullChecks()).toBe(verifiedLiveSource ? 1 : 0);
+          expect(readSqliteDatabaseIntegrityVerification(pathname)).toEqual(verification);
         });
       } finally {
         vi.restoreAllMocks();
@@ -373,7 +373,11 @@ it("bounds the version phase and restores a committed member when a later migrat
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const pathname = state.statePath("agents", "main", "agent", "openclaw-agent.sqlite");
     using database = openLegacyDatabase(pathname);
+    // Before optional pending-input first use, every present migration table
+    // supports scoped recovery; present AUTOINCREMENT storage needs a full image.
+    expect(database.prepare("SELECT * FROM session_pending_inputs").all()).toEqual([]);
     database.exec(`
+      DROP TABLE session_pending_inputs;
       INSERT INTO context_engine_turn_outbox
         (rowid, advancement_key, engine_id, session_id, payload_json, created_at)
       VALUES (40, 'z-first', 'test', 'history', '{"state":"ready"}', 1),
@@ -411,9 +415,11 @@ it("bounds the version phase and restores a committed member when a later migrat
     };
     {
       using broken = openLegacyDatabase(failedMigration.path, 26, "broken");
+      expect(broken.prepare("SELECT * FROM session_pending_inputs").all()).toEqual([]);
       // Valid SQLite, but an unsupported outbox shape makes the real version
       // runner fail after the first member has committed.
       broken.exec(`
+        DROP TABLE session_pending_inputs;
         ALTER TABLE context_engine_turn_outbox DROP COLUMN last_error;
       `);
     }
@@ -435,6 +441,11 @@ it("bounds the version phase and restores a committed member when a later migrat
     expect(database.prepare("PRAGMA user_version").get()?.user_version).toBe(
       OPENCLAW_AGENT_SCHEMA_VERSION,
     );
+    expect(
+      database
+        .prepare("SELECT name FROM sqlite_schema WHERE name = 'session_pending_inputs'")
+        .all(),
+    ).toEqual([]);
     {
       using broken = new DatabaseSync(failedMigration.path, { readOnly: true });
       expect(broken.prepare("PRAGMA user_version").get()?.user_version).toBe(26);
@@ -506,6 +517,10 @@ it("preserves orphan history before admitting a group of scoped version migratio
     }));
     for (const migration of migrations) {
       using database = openLegacyDatabase(migration.path, 26, migration.agentId);
+      // Exercise current-target scoped migrations before optional pending-input
+      // first use, without discarding any accepted input or seeded history.
+      expect(database.prepare("SELECT * FROM session_pending_inputs").all()).toEqual([]);
+      database.exec("DROP TABLE session_pending_inputs");
       database.exec("PRAGMA foreign_keys = OFF;");
       database.exec(`
         INSERT INTO context_engine_turn_outbox
@@ -548,6 +563,11 @@ it("preserves orphan history before admitting a group of scoped version migratio
         OPENCLAW_AGENT_SCHEMA_VERSION,
       );
       expect(database.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
+      expect(
+        database
+          .prepare("SELECT name FROM sqlite_schema WHERE name = 'session_pending_inputs'")
+          .all(),
+      ).toEqual([]);
       expect(fs.readdirSync(path.dirname(migration.path))).toEqual(
         expect.arrayContaining([expect.stringMatching(/\.scoped\.bak$/)]),
       );

@@ -1,7 +1,7 @@
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import * as boundaryPath from "../infra/boundary-path.js";
+import * as pathExistence from "../infra/path-existence.js";
 import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
 import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
 import {
@@ -28,7 +28,7 @@ vi.mock("node:path", async (importOriginal) => {
 beforeEach(() => {
   mockProcessPlatform("win32");
   // These locators are synthetic; canonical-root cases supply their own observed root.
-  vi.spyOn(boundaryPath, "resolveIdentityPathViaExistingAncestorSync").mockImplementation(
+  vi.spyOn(pathExistence, "resolveIdentityPathViaExistingAncestorSync").mockImplementation(
     (root) => root,
   );
 });
@@ -46,7 +46,7 @@ it.each([
     String.raw`\\?\Volume{00000000-0000-0000-0000-000000000001}\agent.sqlite`,
   ],
 ])("retains raw locator identity under %s for %s", (stateDir, agentPath) => {
-  vi.spyOn(boundaryPath, "resolveIdentityPathViaExistingAncestorSync").mockImplementation(
+  vi.spyOn(pathExistence, "resolveIdentityPathViaExistingAncestorSync").mockImplementation(
     (root) => {
       expect(root, "only the trusted state root may be probed").toBe(stateDir);
       return stateDir;
@@ -62,7 +62,7 @@ it("relativizes an admitted path under its canonical root", () => {
   const canonicalRoot = String.raw`D:\Canonical`;
   const relative = String.raw`linked\..\agent.sqlite`;
   const registry = String.raw`C:\Alias\state\openclaw.sqlite`;
-  const resolveRoot = vi.spyOn(boundaryPath, "resolveIdentityPathViaExistingAncestorSync");
+  const resolveRoot = vi.spyOn(pathExistence, "resolveIdentityPathViaExistingAncestorSync");
   for (const root of [canonicalRoot, path.toNamespacedPath(canonicalRoot)]) {
     resolveRoot.mockReturnValue(root);
     for (const sourceRoot of [canonicalRoot, path.toNamespacedPath(canonicalRoot)]) {

@@ -1,6 +1,5 @@
 /* @vitest-environment jsdom */
 
-import { flush } from "solid-js";
 import { afterAll, afterEach, expect, it, vi } from "vitest";
 import { createDeferred as deferred } from "../../../../../test/helpers/promise.js";
 import { cleanupSolid } from "../../../test-helpers/mount-solid.ts";
@@ -17,34 +16,32 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-it.each([".dreams-diary__header .btn", ".dreams-diary__empty-actions .btn"])(
-  "shows config opening from %s until the owner completes",
-  async (selector) => {
-    const page = await createPage();
-    const pending = deferred();
-    vi.mocked(page.context.runtimeConfig.openFile).mockReturnValueOnce(pending.promise);
-    page.dreaming.onViewStateChange((draft) => {
-      draft.activeSubTab = "diary";
-      draft.activeDiarySubTab = "wiki";
-    });
-    flush();
-    const button = page.container.querySelector<HTMLButtonElement>(selector)!;
-    const originalLabel = button.textContent;
-    button.click();
-    await waitForSolid(() => {
-      expect(button.disabled).toBe(true);
-      expect(button.getAttribute("aria-busy")).toBe("true");
-      expect(button.textContent).toBe("Loading…");
-    });
-    expect(page.context.runtimeConfig.openFile).toHaveBeenCalledOnce();
-    pending.resolve();
-    await waitForSolid(() => {
-      expect(button.disabled).toBe(false);
-      expect(button.hasAttribute("aria-busy")).toBe(false);
-      expect(button.textContent).toBe(originalLabel);
-    });
-  },
-);
+function openConfigButton(container: Element) {
+  return [...container.querySelectorAll<HTMLButtonElement>("button")].find((button) =>
+    ["Open config", "Loading…"].includes(button.textContent?.trim() ?? ""),
+  )!;
+}
+
+it("shows config opening until the owner completes", async () => {
+  const page = await createPage();
+  const pending = deferred();
+  vi.mocked(page.context.runtimeConfig.openFile).mockReturnValueOnce(pending.promise);
+  const button = openConfigButton(page.container);
+  const originalLabel = button.textContent;
+  button.click();
+  await waitForSolid(() => {
+    expect(button.disabled).toBe(true);
+    expect(button.getAttribute("aria-busy")).toBe("true");
+    expect(button.textContent).toBe("Loading…");
+  });
+  expect(page.context.runtimeConfig.openFile).toHaveBeenCalledOnce();
+  pending.resolve();
+  await waitForSolid(() => {
+    expect(button.disabled).toBe(false);
+    expect(button.hasAttribute("aria-busy")).toBe(false);
+    expect(button.textContent).toBe(originalLabel);
+  });
+});
 
 it("retires config opening on agent changes and shows a current failure before retry", async () => {
   const page = await createPage();
@@ -54,14 +51,7 @@ it("retires config opening on agent changes and shows a current failure before r
   const pending = deferred();
   const openFile = vi.mocked(page.context.runtimeConfig.openFile);
   openFile.mockReturnValueOnce(pending.promise);
-  page.dreaming.onViewStateChange((draft) => {
-    draft.activeSubTab = "diary";
-    draft.activeDiarySubTab = "wiki";
-  });
-  flush();
-  const button = page.container.querySelector<HTMLButtonElement>(
-    ".dreams-diary__empty-actions .btn",
-  )!;
+  const button = openConfigButton(page.container);
   button.click();
   await waitForSolid(() => expect(button.disabled).toBe(true));
   page.setAgentId("other");
@@ -70,9 +60,7 @@ it("retires config opening on agent changes and shows a current failure before r
   await Promise.allSettled([pending.promise]);
   await waitForSolid(() => expect(host.textContent).not.toContain("Retired config opening"));
 
-  const currentButton = page.container.querySelector<HTMLButtonElement>(
-    ".dreams-diary__empty-actions .btn",
-  )!;
+  const currentButton = openConfigButton(page.container);
   openFile.mockRejectedValueOnce(new Error("Cannot open configuration"));
   currentButton.click();
   await waitForSolid(() => {

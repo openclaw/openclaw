@@ -159,8 +159,8 @@ suite.define(() => {
         sessionStorage.removeItem(currentKey);
         return key;
       }, inputs);
-      await page.goto(controlUiSessionUrl(suite.server.baseUrl, topic.sessionKey));
       await gateway.setOnline(true);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, topic.sessionKey));
       await waitForControlUiGatewayReady(page);
       await expect
         .poll(() => page.evaluate((key) => sessionStorage.getItem(key), legacyKey))
@@ -177,7 +177,7 @@ suite.define(() => {
       const globalRow = pane.locator(".chat-queue__item", { hasText: global.text });
       await topicRow.getByText("Needs review", { exact: true }).waitFor();
       await navigateToControlUiSession(page, global.sessionKey);
-      await restoreInput(page, gateway, global.text, /Add this saved copy to “Main Session”/);
+      await restoreInput(page, gateway, global.text, /Add this saved copy to “Main session”/);
       await globalRow.getByText("Failed", { exact: true }).waitFor();
       await page.reload();
       await globalRow.getByText("Failed", { exact: true }).waitFor();

@@ -1,6 +1,6 @@
 import type { ProgressCard } from "@openclaw/gateway-protocol";
 import type { JSX } from "@solidjs/web";
-import type { Signal, StoreSetter } from "solid-js";
+import type { Accessor, Signal, StoreSetter } from "solid-js";
 import type { GatewayBrowserClient } from "../../../api/gateway.ts";
 import type {
   GatewaySessionRow,
@@ -22,6 +22,7 @@ import type {
   HumanMention,
 } from "../../../lib/chat/chat-types.ts";
 import type { ComposerDraftSource } from "../../../lib/chat/composer-draft-changes.ts";
+import type { ComposerTasks } from "../../../lib/chat/composer-tasks.runtime.ts";
 import type { ControlUiFollowUpMode } from "../../../lib/chat/follow-up-mode.ts";
 import type { HumanMentionInput } from "../../../lib/chat/human-mentions.ts";
 import type { PresentationBinding } from "../../../lib/presentation.ts";
@@ -49,6 +50,7 @@ import type { ChatComposerCapabilityMenuSource } from "./chat-composer-plus-menu
 import type { SkillMenu } from "./chat-composer-skill-menu-state.ts";
 import type { SlashMenu } from "./chat-composer-slash-menu-state.ts";
 import type { ChatPermissionPickerProps } from "./chat-permission-picker.tsx";
+import type { createReplyPreviewResolver } from "./chat-reply-preview.ts";
 
 type ChatQueuedEditProps = {
   editingId: string | null;
@@ -107,6 +109,8 @@ export type ChatSessionProgressProps = import("../chat-spawned-subagent.ts").Sub
   onClearSavedProgressCard?: (card: ProgressCard) => void;
   messages: unknown[];
 };
+
+type ReplyAuthorProps = Parameters<typeof createReplyPreviewResolver>[1];
 
 export type ChatComposerProps = ChatAttachmentControlsProps & {
   paneId: string;
@@ -175,6 +179,8 @@ export type ChatComposerProps = ChatAttachmentControlsProps & {
   sessions: SessionsListResult | null;
   /** The pane resolves aliases and agent ownership; absence must not reuse an unowned row. */
   selectedSession?: GatewaySessionRow;
+  /** Owners pass the same Incognito decision as the header; the edge turns dashed. */
+  incognito?: boolean;
   contextUsage?: ChatSessionStateSnapshot["contextUsage"];
   toolOverrides?: SessionToolOverrides;
   capabilityMenu?: ChatComposerCapabilityMenuSource;
@@ -192,6 +198,14 @@ export type ChatComposerProps = ChatAttachmentControlsProps & {
   attachmentReadRevision?: number;
   getPendingAttachmentReads?: () => number;
   replyTarget?: ChatReplyTarget | null;
+  /** Thread facts that name a reply target's author, as its transcript line does. */
+  userId?: ReplyAuthorProps["userId"];
+  userName?: ReplyAuthorProps["userName"];
+  assistantAvatar?: ReplyAuthorProps["assistantAvatar"];
+  assistantAvatarUrl?: ReplyAuthorProps["assistantAvatarUrl"];
+  assistantAvatarSource?: ReplyAuthorProps["assistantAvatarSource"];
+  senderAgentAvatars?: ReplyAuthorProps["senderAgentAvatars"];
+  mediaReadAllowed?: boolean;
   gatewayClient?: GatewayBrowserClient | null;
   chatMessageMaxWidth?: string | null;
   onComposerWidthChange?: (value: string | undefined) => void;
@@ -206,6 +220,8 @@ export type ChatComposerProps = ChatAttachmentControlsProps & {
     component: typeof ChatPaneModelControl;
   };
   footerContent?: JSX.Element;
+  /** False while the pane is retained but hidden; plugin composer actions retire then. */
+  pluginActionsPresented?: boolean;
   composerRecovery?:
     | (Parameters<typeof PaneOutboxRecovery>[0] & {
         component: typeof PaneOutboxRecovery;
@@ -232,6 +248,10 @@ export type ChatComposerProps = ChatAttachmentControlsProps & {
   onQueueRetry?: (id: string) => void;
   onQueueSteer?: (id: string) => void;
   onQueueMove?: (id: string, targetId: string) => void;
+  /** Stop parked the queue; automatic sends wait for Resume. */
+  queuePaused?: boolean;
+  onQueueResume?: () => void;
+  onQueueClear?: () => void;
   displayQueue?: ChatQueueDisplayItem[];
   queuedEdit?: ChatQueuedEditProps;
   onClearReply?: () => void;
@@ -271,7 +291,7 @@ export type ChatComposerState = {
     queuedSubmit: string | null;
   };
   updatePresentation: StoreSetter<ChatComposerState["presentation"]>;
-  questionTakeoverActive: boolean;
+  questionFocusActive: boolean;
   restoreComposerFocus: boolean;
   composerInput: HTMLElement | null;
   composerTextarea: HTMLTextAreaElement | null;
@@ -280,7 +300,16 @@ export type ChatComposerState = {
   // Stable refs keep layout observers attached across frame updates.
   composerInputRef: ((element?: Element) => void) | null;
   textareaRef: ((element?: Element) => void) | null;
+  // The mounted composer's Escape stop policy, for Escape pressed outside the composer.
+  stopRunFromEscape: (() => boolean) | null;
+  // The mounted composer's send, as Enter; false when it cannot send now.
+  sendDraft: (() => boolean) | null;
   dictation: ComposerDictationOwner | null;
   composerDraftScope: { key: string } | null;
   dictationSelection: { start: number; end: number; value: string } | null;
+  /** Plugin composer tasks and proposals; null until the first plugin composer action loads it. */
+  tasks: Accessor<ComposerTasks | null>;
+  loadTasks: () => Promise<ComposerTasks>;
+  /** Mounted built-in composers; a replacement composer mounts none and so cannot run tasks. */
+  taskPresenters: number;
 };

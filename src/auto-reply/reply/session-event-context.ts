@@ -2,9 +2,12 @@ import { resolveConfiguredAgentId } from "../../agents/agent-scope-config.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import type { SessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { readCronOperatorSnapshot } from "../../cron/operator-source-snapshot.js";
 import { createCronExecutionId } from "../../cron/run-id.js";
 import { resolveCreatorSandbox } from "../../gateway/operator-role-policy.js";
+import { cronRunAcceptance } from "../../infra/agent-run-registry.automation.js";
 import {
+  execRequestAbortSignal,
   readExecRequestOwners,
   withExecRequestOwners,
   type ExecRequestOwner,
@@ -21,11 +24,14 @@ import { channelRouteTargetsMatchExact } from "../../plugin-sdk/channel-route.js
 import { normalizeAccountId } from "../../routing/account-id.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { CRON_EXECUTION_SOURCE_TOOL } from "../../sessions/input-provenance.js";
+import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.types.js";
+import { operatorScopeSatisfied } from "../../shared/operator-scope-compat.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
 import { bindCommandOwnerAuthority } from "../command-owner-authority.js";
 import type { MsgContext } from "../templating.js";
 import type { SessionEventOptions, SessionEventTarget } from "./session-event-contract.js";
+import { captureSessionEventConfigPolicy } from "./session-event-policy.js";
 import {
   getSessionEventRuntimeConfig,
   readSessionEventTargetCommandOwner,
@@ -42,7 +48,6 @@ export function prepareSessionEventInput(text: string, options: SessionEventOpti
   const operatorAuthority = options.expectedTarget
     ? readSessionEventTargetOperatorAuthority(options.expectedTarget)
     : undefined;
-  operatorAuthority?.assertCurrent();
   const cfg = getSessionEventRuntimeConfig();
   const agentId = normalizeAgentId(options.agentId);
   resolveConfiguredAgentId(cfg, agentId);
@@ -67,6 +72,78 @@ export function prepareSessionEventInput(text: string, options: SessionEventOpti
     );
   }
   return { cfg, agentId, sessionKey, env, storePath, operatorAuthority };
+}
+
+/** Prepare cancellation and claim custody together before a receipt starts asynchronous work. */
+export function prepareSessionEventOccurrence(text: string, options: SessionEventOptions) {
+  options.assertCurrent?.();
+  options.expectedTarget?.assertCurrent?.();
+  const context = prepareSessionEventInput(text, options);
+  const acceptanceAssertion = cronRunAcceptance(
+    context.sessionKey,
+    options.assertAcceptanceCurrent,
+  );
+  const controller = new AbortController();
+  const execRequestOwners = resolveSessionEventExecRequestOwners(options);
+  const requestSignal = execRequestAbortSignal(execRequestOwners, options.abortSignal);
+  const signal = AbortSignal.any(
+    [requestSignal, controller.signal, context.operatorAuthority?.signal].filter(
+      (value): value is AbortSignal => Boolean(value),
+    ),
+  );
+  signal.throwIfAborted();
+  const route = structuredClone(options.deliveryContext ?? options.expectedTarget?.deliveryContext);
+  const claim = claimSessionEventOccurrenceInput({
+    text,
+    options,
+    sessionKey: context.sessionKey,
+    agentId: context.agentId,
+    route,
+    execRequestOwners,
+    cancel: () => controller.abort(),
+  });
+  let releaseOperatorAuthority: (() => void) | undefined;
+  try {
+    releaseOperatorAuthority = context.operatorAuthority?.retain?.();
+  } catch (error) {
+    claim.ownership.cancel();
+    throw error;
+  }
+  return {
+    context,
+    acceptanceAssertion,
+    controller,
+    execRequestOwners,
+    signal,
+    route,
+    claim,
+    releaseOperatorAuthority,
+    configPolicy: captureSessionEventConfigPolicy(
+      context.cfg,
+      context.agentId,
+      options.scheduledAutomation?.job,
+    ),
+  };
+}
+
+/** Durably stage the admitted occurrence before the reply owner starts it. */
+export async function stageSessionEventInput(
+  recorder: UserTurnTranscriptRecorder,
+  runId: string,
+  assertCurrent: SessionSourceAssertion,
+  readmissionAttempt: number,
+): Promise<void> {
+  if (
+    !recorder.stageApproved ||
+    !(await recorder.stageApproved({
+      runId,
+      assertCurrent,
+      // Only this live admission retry can reclaim its cancelled attempt.
+      retryCancelled: readmissionAttempt > 0,
+    }))
+  ) {
+    throw new Error("Session event input was not durably admitted");
+  }
 }
 
 /** Validate and claim producer input; execution consumes this occurrence custody. */
@@ -134,9 +211,7 @@ export function claimSessionEventOccurrenceInput(params: {
   return { occurrence, occurrences, occurrenceId, eventText, ownership };
 }
 
-export function resolveSessionEventExecRequestOwners(
-  options: Pick<SessionEventOptions, "occurrences">,
-) {
+function resolveSessionEventExecRequestOwners(options: Pick<SessionEventOptions, "occurrences">) {
   return options.occurrences
     ? [
         ...new Set(
@@ -156,7 +231,7 @@ export function buildSessionEventContext(params: {
   text: string;
   options: Pick<
     SessionEventOptions,
-    "source" | "sourceTurnId" | "sourceRunId" | "scheduledAutomation"
+    "source" | "sourceTurnId" | "sourceRunId" | "completedToolCall" | "scheduledAutomation"
   >;
   readmissionAttempt?: number;
   occurrenceId: string;
@@ -166,6 +241,12 @@ export function buildSessionEventContext(params: {
 }): MsgContext {
   const { agentId, sessionKey, text, options, occurrenceId, deliveryContext, target } = params;
   const automation = options.scheduledAutomation;
+  // An internal session stores no route; its own WebChat route keeps replies in this conversation.
+  const sessionRoute =
+    channelRouteTargetsMatchExact({ left: deliveryContext, right: target.deliveryContext }) ||
+    (!target.deliveryContext &&
+      deliveryContext?.channel === INTERNAL_MESSAGE_CHANNEL &&
+      deliveryContext.to === sessionKey);
   const ctx: MsgContext = {
     AgentId: agentId,
     SessionKey: sessionKey,
@@ -179,6 +260,9 @@ export function buildSessionEventContext(params: {
     InputProvenance: {
       kind: "internal_system",
       sourceTool: automation ? CRON_EXECUTION_SOURCE_TOOL : options.source,
+      ...(!automation && options.source === "tool_handoff" && options.completedToolCall
+        ? { completedToolCall: options.completedToolCall }
+        : {}),
       ...(automation && automation.job.state.runningAtMs !== undefined
         ? {
             jobId: automation.job.id,
@@ -189,12 +273,7 @@ export function buildSessionEventContext(params: {
           ? { runId: options.sourceRunId }
           : {}),
     },
-    ChatType: channelRouteTargetsMatchExact({
-      left: deliveryContext,
-      right: target.deliveryContext,
-    })
-      ? target.chatType
-      : undefined,
+    ChatType: sessionRoute ? target.chatType : undefined,
     Surface: deliveryContext?.channel ?? INTERNAL_MESSAGE_CHANNEL,
     Provider: deliveryContext?.channel ?? INTERNAL_MESSAGE_CHANNEL,
     OriginatingChannel: deliveryContext?.channel,
@@ -211,11 +290,14 @@ export function buildSessionEventContext(params: {
     ctx.SessionCreation = {
       via: "cron",
       actor: automation.job.createdActor ?? { type: "system" },
-      sandbox: resolveCreatorSandbox(params.cfg, { actor: automation.job.createdActor }),
+      sandbox: resolveCreatorSandbox(params.cfg, {
+        actor: automation.job.createdActor,
+        openclawIdPrincipal: readCronOperatorSnapshot(automation.job)?.openclawIdPrincipal,
+      }),
       skillLibrarySelections: automation.job.skillLibrarySelections,
     };
   }
-  const operatorAuthority = automation?.controlUiAdmin
+  const operatorAuthority = automation?.automationAdmin
     ? automation.operatorAuthority
     : options.source === "plugin" ||
         options.source === "tool_handoff" ||
@@ -224,47 +306,51 @@ export function buildSessionEventContext(params: {
         (!automation && (options.source === "cron" || options.source === "cron_failure_repair"))
       ? readSessionEventTargetOperatorAuthority(target)
       : undefined;
-  const requesterOwnerCheck = readSessionEventTargetRequesterOwner(target)?.assertCurrent;
+  const requesterOwner = readSessionEventTargetRequesterOwner(target);
+  const requesterPrincipal =
+    requesterOwner?.requester.kind === "channel"
+      ? {
+          channelId: requesterOwner.requester.requester.channel,
+          accountId: normalizeAccountId(requesterOwner.requester.requester.accountId),
+          senderId: requesterOwner.requester.requester.senderId,
+        }
+      : undefined;
   if (
     operatorAuthority &&
-    (automation?.controlUiAdmin ||
+    (automation?.automationAdmin ||
       (options.source === "restart"
         ? operatorAuthority.scopes.includes("operator.admin")
-        : readSessionEventTargetOwnerContinuation(target)))
+        : readSessionEventTargetOwnerContinuation(target) &&
+          operatorScopeSatisfied("operator.admin", operatorAuthority.scopes)))
   ) {
     // A tool handoff resumes the yielded turn: it continues that turn's own owner decision
     // under the same live operator source, retaining internal provenance and the event
     // text's existing command authorization. Non-owner and system turns never gain it.
     bindCommandOwnerAuthority(ctx, {
       operatorAuthority,
-      sourceAssertion: params.assertCurrent,
       isCurrent: () => {
         params.assertCurrent();
         return true;
       },
-      // Work that outlives this occurrence keeps only the live operator source.
+      // Work that outlives this occurrence keeps the operator source admitted at its start.
       successor: {
         operatorAuthority,
-        sourceAssertion: operatorAuthority.assertCurrent,
-        isCurrent: () => {
-          operatorAuthority.assertCurrent();
-          return true;
-        },
+        isCurrent: () => true,
       },
     });
-  } else if (requesterOwnerCheck) {
-    // Work the scheduler started for a job keeps its requester's owner tools only while
-    // the requester is still an owner, rechecked before each owner-only effect.
+  } else if (requesterOwner?.owner) {
     bindCommandOwnerAuthority(ctx, {
-      sourceAssertion: params.assertCurrent,
+      channelPrincipal: requesterPrincipal,
+      recoveryReference: requesterOwner.recoveryReference,
       isCurrent: () => {
         params.assertCurrent();
-        requesterOwnerCheck();
         return true;
       },
       successor: {
+        channelPrincipal: requesterPrincipal,
+        recoveryReference: requesterOwner.recoveryReference,
         isCurrent: () => {
-          requesterOwnerCheck();
+          params.assertCurrent();
           return true;
         },
       },
@@ -273,19 +359,26 @@ export function buildSessionEventContext(params: {
     const commandOwner = readSessionEventTargetCommandOwner(target);
     if (commandOwner) {
       const { authority, requester } = commandOwner;
-      // A continuation of the requester's own work keeps their owner tools only while
-      // they are still an owner under the current config.
+      const channelPrincipal = {
+        channelId: requester.channel,
+        accountId: normalizeAccountId(requester.accountId),
+        senderId: requester.senderId,
+      };
+      // Target preparation admitted this native requester for this event.
       bindCommandOwnerAuthority(ctx, {
+        channelPrincipal,
         recoveryReference: authority.recoveryReference,
-        sourceAssertion: params.assertCurrent,
         isCurrent: () => {
           params.assertCurrent();
-          return authority.isCurrent(getSessionEventRuntimeConfig());
+          return true;
         },
-        // Work that outlives this occurrence keeps only the requester's live owner check.
         successor: {
+          channelPrincipal,
           recoveryReference: authority.recoveryReference,
-          isCurrent: () => authority.isCurrent(getSessionEventRuntimeConfig()),
+          isCurrent: () => {
+            params.assertCurrent();
+            return true;
+          },
         },
       });
       // Owner-checked effects (for example Gateway maintenance) recheck this sender at

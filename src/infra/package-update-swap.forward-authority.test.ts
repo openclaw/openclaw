@@ -7,15 +7,18 @@ import {
   captureSwap,
   expectInstallation,
   expectVersion,
+  publishWithoutPathExchange,
   readText,
 } from "./package-update-swap.assertions.test-support.js";
 import { createPackageSwapFixture } from "./package-update-swap.test-support.js";
+import { supportsPathExchange } from "./path-exchange.js";
 import { prepareNativePackageStage } from "./update-native-package-stage.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => vi.restoreAllMocks());
 
 it("stops fallback publication after local override work loses forward authority", async () => {
+  publishWithoutPathExchange();
   const base = dirs.make("swap-override-authority-");
   const f = await createPackageSwapFixture(base);
   await fs.writeFile(path.join(f.packageRoot, "dist/index.js"), "operator edit\n");
@@ -44,6 +47,40 @@ it("stops fallback publication after local override work loses forward authority
   await expectInstallation(f.packageRoot, f.launcher);
   expect(await readText(f.packageRoot, "dist/index.js")).toBe("operator edit\n");
 });
+
+it.runIf(supportsPathExchange())(
+  "moves nothing when local override work loses forward authority before an exchange",
+  async () => {
+    const base = dirs.make("swap-override-authority-");
+    const f = await createPackageSwapFixture(base);
+    await fs.writeFile(path.join(f.packageRoot, "dist/index.js"), "operator edit\n");
+    let current = true;
+    const { result, transaction } = await captureSwap({
+      ...f.params,
+      assertCurrent: () => {
+        if (!current) {
+          throw new Error("forward authority lost during override work");
+        }
+      },
+      localOverrides: {
+        reapply: false,
+        env: { HOME: base, OPENCLAW_STATE_DIR: path.join(base, "state") },
+      },
+      onLocalOverrides: () => {
+        current = false;
+      },
+    });
+    expect(current).toBe(false);
+    // The override work ran against the package still at its path; no backup was taken.
+    expect(result).toMatchObject({ status: "failed", activePackageRoot: f.packageRoot });
+    await expectInstallation(f.packageRoot, f.launcher);
+    expect(await readText(f.packageRoot, "dist/index.js")).toBe("operator edit\n");
+    await expectVersion(f.params.stage.packageRoot, "2.0.0");
+    await expect(fs.lstat(transaction.backupRoot)).rejects.toMatchObject({ code: "ENOENT" });
+    expect(await transaction.rollback(() => {})).toMatchObject({ exitCode: 0 });
+    await expectInstallation(f.packageRoot, f.launcher);
+  },
+);
 
 it("stops subsequent launcher publication while independent rollback remains authorized", async () => {
   const f = await createPackageSwapFixture(dirs.make("swap-launcher-authority-"));
@@ -82,7 +119,8 @@ it.runIf(process.platform !== "win32")(
     let current = true;
     let copied = false;
     vi.spyOn(fs, "rename").mockImplementation(async (from, to) => {
-      if (String(from) === f.params.stage.packageRoot && String(to) === f.packageRoot) {
+      // No rename leaves the stage's device, so the exchange is unavailable too.
+      if (String(from) === f.params.stage.packageRoot) {
         throw Object.assign(new Error("cross-device stage"), { code: "EXDEV" });
       }
       await rename(from, to);
@@ -112,6 +150,7 @@ it.runIf(process.platform !== "win32")(
 it.runIf(process.platform !== "win32")(
   "registers a published native backup even when its copy cleanup loses authority",
   async () => {
+    publishWithoutPathExchange();
     const base = dirs.make("swap-native-backup-authority-");
     const project = path.join(base, "global");
     const globalRoot = path.join(project, "v11");

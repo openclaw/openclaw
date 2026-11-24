@@ -234,9 +234,7 @@ async function readCredential(params: {
       tokenEndpoint: TOKEN_ENDPOINT,
       grantedScope: scope,
       authFlow: sharing ? TOKEN_SHARING_AUTH_FLOW : IDENTITY_AUTH_FLOW,
-      displayName: sharing
-        ? "Sign in with ChatGPT (Beta)"
-        : "Sign in with ChatGPT (Beta, identity only)",
+      displayName: sharing ? "Sign in with ChatGPT" : "Sign in with ChatGPT (identity only)",
     },
   };
 }
@@ -338,28 +336,32 @@ export async function loginTokenSharing(ctx: ProviderAuthContext): Promise<Provi
   const { verifier, challenge } = await generatePKCE();
   const state = generateOAuthState();
   const nonce = generateOAuthState();
-  const url = new URL(`${TOKEN_SHARING_ISSUER}/api/accounts/authorize`);
-  url.search = new URLSearchParams({
-    response_type: "code",
-    client_id: clientId,
-    redirect_uri: TOKEN_SHARING_REDIRECT_URI,
-    resource: TOKEN_SHARING_RESOURCE,
-    scope: authorizationScope,
-    code_challenge: challenge,
-    code_challenge_method: "S256",
-    state,
-    nonce,
-    ...(registering ? { agent_name_hint: "OpenClaw" } : {}),
-  }).toString();
   const callback = await startProviderOAuthLoopbackCallbackServer({
     redirectUrl: TOKEN_SHARING_REDIRECT_URI,
     expectedState: state,
     signal: owner.signal,
-    // SSH forwards target IPv4 loopback; keep the registered localhost redirect unchanged.
+    // SSH forwards target IPv4 loopback; the redirect still names localhost.
     bindOnlyHostname: "127.0.0.1",
     deferResponse: true,
   });
   try {
+    // A free port per attempt, so an app on any fixed port cannot block sign-in. Loopback
+    // redirects may vary their port (RFC 8252 section 7.3); exchange must repeat the exact URI.
+    const redirectUri = callback.redirectUrl;
+    const { port } = new URL(redirectUri);
+    const url = new URL(`${TOKEN_SHARING_ISSUER}/api/accounts/authorize`);
+    url.search = new URLSearchParams({
+      response_type: "code",
+      client_id: clientId,
+      redirect_uri: redirectUri,
+      resource: TOKEN_SHARING_RESOURCE,
+      scope: authorizationScope,
+      code_challenge: challenge,
+      code_challenge_method: "S256",
+      state,
+      nonce,
+      ...(registering ? { agent_name_hint: "OpenClaw" } : {}),
+    }).toString();
     owner.assertCurrent?.();
     // Gateway wizards attach the browser URL to the next note they publish.
     await withOAuthLoginAbort(ctx.openUrl(url.toString()), owner.signal);
@@ -369,7 +371,7 @@ export async function loginTokenSharing(ctx: ProviderAuthContext): Promise<Provi
     await withOAuthLoginAbort(
       ctx.prompter.note(
         [
-          "Authorize eligible Responses API calls using your Codex allowance. Token sharing does not grant access to conversations, Codex history, or connected apps.",
+          "Choose whether OpenClaw can use your ChatGPT plan for eligible Responses API requests. Token sharing does not grant access to conversations, Codex history, or connected apps.",
           ...(registering
             ? []
             : [
@@ -377,12 +379,12 @@ export async function loginTokenSharing(ctx: ProviderAuthContext): Promise<Provi
               ]),
           ...(ctx.isRemote
             ? [
-                "Open the sign-in link in your browser. Its localhost:8080 callback must reach this OpenClaw process. For an SSH host, forward the port with: ssh -N -L 8080:127.0.0.1:8080 user@gateway-host",
+                `Open the sign-in link in your browser. Its localhost:${port} callback must reach this OpenClaw process, and the port changes on every sign-in. For an SSH host, forward it before opening the link: ssh -N -L ${port}:127.0.0.1:${port} user@gateway-host`,
               ]
             : []),
           ...(ctx.prompter.openUrl ? [] : [`Sign-in URL: ${url.toString()}`]),
         ].join("\n\n"),
-        "Sign in with ChatGPT (Beta)",
+        "Sign in with ChatGPT",
       ),
       owner.signal,
     );
@@ -417,7 +419,7 @@ export async function loginTokenSharing(ctx: ProviderAuthContext): Promise<Provi
         clientId: authorizedClientId,
         code: authorization.code,
         verifier,
-        redirectUri: TOKEN_SHARING_REDIRECT_URI,
+        redirectUri,
         resource: TOKEN_SHARING_RESOURCE,
       }),
     );
@@ -467,7 +469,7 @@ export async function loginTokenSharing(ctx: ProviderAuthContext): Promise<Provi
       ...(sharing ? {} : { configPatch: {} }),
       notes: [
         sharing
-          ? "ChatGPT token sharing is connected. Eligible Responses requests use your Codex allowance."
+          ? "Account connected. Eligible Responses API requests with this account use your ChatGPT plan."
           : "ChatGPT sign-in succeeded, but token sharing is disabled. Sign in again and enable sharing, or explicitly choose another inference credential.",
       ],
     });

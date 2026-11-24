@@ -1,10 +1,12 @@
 import { expect, it } from "vitest";
 import { createDueIsolatedJob } from "../../../test/helpers/cron/service-regression-fixtures.js";
+import { resolveCronRunAdmissionSource } from "../run-authority.js";
+import { resolveCronRunToolsAllow } from "../tools-allow.js";
 import type { CronStoredJob, CronToolsAllowExecTarget } from "../types.js";
 import {
   cronJobMessageActionAuthorityInputsEqual,
+  reconcileCronChannelRequesterAuthority,
   reconcileToolsAllowAuthority,
-  resolveCronJobMessageToolAuthorityInputs,
 } from "./jobs-tool-policy.js";
 
 function toolJob(toolsAllow: readonly string[] | undefined): CronStoredJob {
@@ -13,6 +15,46 @@ function toolJob(toolsAllow: readonly string[] | undefined): CronStoredJob {
     payload: { kind: "script", script: "return {}", toolsAllow: toolsAllow?.slice() },
   };
 }
+
+it.each(["operator", "owned", "external-content", "unknown", "external"])(
+  "preserves only existing operator admission during reconciliation: %s",
+  (scenario) => {
+    const previous: CronStoredJob = {
+      ...toolJob(["read"]),
+      payload: { kind: "agentTurn", message: "work", toolsAllow: ["read"] },
+      scheduledToolPolicy: { version: 1, mode: "trusted" },
+      toolsAllowProvenance: {
+        version: 1,
+        source: "final-executable-surface",
+        callerOrigin:
+          scenario === "unknown"
+            ? { kind: "unknown" }
+            : scenario === "external"
+              ? { kind: "external", channel: "discord" }
+              : { kind: "local" },
+      },
+    };
+    const job = structuredClone(previous);
+    job.displayName = "Renamed";
+    if (scenario === "owned") {
+      job.owner = { sessionKey: "agent:main:owner", accountId: "work" };
+    }
+    if (job.payload.kind === "agentTurn") {
+      job.payload.model = "provider/model-b";
+      if (scenario === "external-content") {
+        job.payload.externalContentSource = "gmail";
+      }
+    }
+    reconcileCronChannelRequesterAuthority({ job, previousJob: previous });
+    expect(resolveCronRunAdmissionSource(job)).toBe(
+      scenario === "operator" ? "operator-schedule" : "requester-schedule",
+    );
+    expect(job.toolsAllowProvenance?.channelRequester).toBeUndefined();
+    if (scenario === "operator") {
+      expect(job.toolsAllowProvenance?.callerOrigin).toEqual({ kind: "local" });
+    }
+  },
+);
 
 const gateway = { version: 1, host: "gateway" } satisfies CronToolsAllowExecTarget;
 const pinned = { ...gateway, ask: "always" } satisfies CronToolsAllowExecTarget;
@@ -77,15 +119,13 @@ it("binds a recorded caller origin to executable inputs but not display metadata
     }),
   ).toBe(false);
 });
-it("admits message access for an automatic snapshot that runs with its owner's tools", () => {
+it("uses its owner's tools instead of a stale automatic tool snapshot", () => {
   const job = toolJob(["read"]);
   job.payload = { kind: "agentTurn", message: "post", toolsAllow: ["read"] };
   job.scheduledToolPolicy = { version: 1, mode: "trusted" };
-  expect(resolveCronJobMessageToolAuthorityInputs(job)).toBeUndefined();
+  expect(resolveCronRunToolsAllow(job)).toEqual(["read"]);
 
   // Older builds saved this snapshot without `message`; the run gets `*`.
   Object.assign(job.payload, { toolsAllowIsDefault: true });
-  expect(resolveCronJobMessageToolAuthorityInputs(job)).toEqual({
-    policy: { version: 1, mode: "trusted" },
-  });
+  expect(resolveCronRunToolsAllow(job)).toEqual(["*"]);
 });

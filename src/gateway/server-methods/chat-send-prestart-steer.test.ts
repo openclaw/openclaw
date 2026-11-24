@@ -11,11 +11,14 @@ import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { steerActiveSessionWithOptionalDeliveryWait } from "../../agents/embedded-agent-runner/run/attempt-queue-message.js";
 import {
+  createAssistant,
+  createAssistantResultStream,
   createTestSession,
   holdAssistantResponse,
   registerAgentSessionLoopTestLifecycle,
   streamMocks,
 } from "../../agents/sessions/agent-session-loop-correctness.test-support.js";
+import { createStubTool } from "../../agents/test-helpers/agent-tool-stubs.js";
 import { managedWorktrees, ManagedWorktreeService } from "../../agents/worktrees/service.js";
 import type { dispatchInboundMessage } from "../../auto-reply/dispatch.js";
 import type { executeAgentTurn } from "../../auto-reply/reply/agent-runner-execution.js";
@@ -26,6 +29,7 @@ import {
   loadTranscriptEventsSync,
 } from "../../config/sessions/session-accessor.js";
 import { assertNoRetainedSessionSharingReads } from "../../config/sessions/session-accessor.sqlite-diagnostics.test-support.js";
+import { diagnosticLogger } from "../../logging/diagnostic-runtime.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
   getSessionControllerOperation,
@@ -120,9 +124,10 @@ function resetFixture(clients: Set<GatewayClient & { connId: string }>) {
   runtime.execute.mockReset();
 }
 
-test.for(["accepted", "unavailable", "rejected", "withdrawn"] as const)(
-  "preserves a prestart steer through workspace preparation when late injection is %s",
+test.for(["accepted", "unavailable", "rejected", "withdrawn", "long-tool"] as const)(
+  "preserves steering through preparation and active tools when injection is %s",
   async (injection, { signal }) => {
+    using warning = vi.spyOn(diagnosticLogger, "warn").mockImplementation(() => {});
     const realDispatch = await loadRealChatDispatch();
     const workspace = await initializeRepository(tempDirs.make("openclaw-prestart-steer-"), "repo");
     testState.agentConfig = { workspace };
@@ -155,9 +160,28 @@ test.for(["accepted", "unavailable", "rejected", "withdrawn"] as const)(
     let steerSource: RpcSourceRef | undefined;
     let deadline: (() => void) | undefined;
     let backingRun: Promise<void> | undefined;
+    const longTool = injection === "long-tool";
+    const toolStarted = createDeferred();
     const provider = holdAssistantResponse("Original work completed.");
     const nativeSession =
-      injection === "withdrawn" ? (await createTestSession()).session : undefined;
+      injection === "withdrawn" || longTool
+        ? (
+            await createTestSession({
+              customTools: longTool
+                ? [
+                    {
+                      ...createStubTool("hold"),
+                      execute: async () => {
+                        toolStarted.resolve();
+                        await releaseSteerCommit.promise;
+                        return { content: [{ type: "text", text: "Tool complete" }], details: {} };
+                      },
+                    },
+                  ]
+                : undefined,
+            })
+          ).session
+        : undefined;
     const originalSetTimeout = globalThis.setTimeout;
     const timerSpy =
       injection === "withdrawn"
@@ -247,9 +271,37 @@ test.for(["accepted", "unavailable", "rejected", "withdrawn"] as const)(
       if (!operation) {
         operation = expectDefined(replyOperation, "initial reply admission");
         if (nativeSession) {
-          streamMocks.streamSimple.mockImplementation(() => provider.response);
+          if (longTool) {
+            streamMocks.streamSimple
+              .mockImplementationOnce((model) =>
+                createAssistantResultStream(
+                  createAssistant(
+                    model,
+                    [{ type: "toolCall", id: "held", name: "hold", arguments: {} }],
+                    "toolUse",
+                  ),
+                ),
+              )
+              .mockImplementation((model) =>
+                createAssistantResultStream(createAssistant(model, "Done")),
+              );
+            nativeSession.subscribe((event) => {
+              if (event.type === "message_end" && event.message.role === "user") {
+                const text = extractTextFromChatContent(event.message.content);
+                if (text?.includes(steerText)) {
+                  consumed.push({ runId, text });
+                }
+              }
+            });
+          } else {
+            streamMocks.streamSimple.mockImplementation(() => provider.response);
+          }
           backingRun = nativeSession.prompt("Continue the original backing work.");
-          await vi.waitFor(() => expect(streamMocks.streamSimple).toHaveBeenCalledOnce());
+          if (longTool) {
+            await toolStarted.promise;
+          } else {
+            await vi.waitFor(() => expect(streamMocks.streamSimple).toHaveBeenCalledOnce());
+          }
         }
         runtimeStarted.resolve();
         await attachBackend.promise;
@@ -276,6 +328,7 @@ test.for(["accepted", "unavailable", "rejected", "withdrawn"] as const)(
                   text,
                   {
                     ...options,
+                    ...(injection === "withdrawn" ? { deliveryTimeoutMs: 120_000 } : {}),
                     onQueueAccepted: (accepted) => {
                       options?.onQueueAccepted?.(accepted);
                       if (accepted) {
@@ -361,6 +414,12 @@ test.for(["accepted", "unavailable", "rejected", "withdrawn"] as const)(
         loadSessionEntry({ agentId: "main", sessionKey, storePath })?.pendingWorktree,
       ).toBeDefined();
       expect(getSessionControllerOperation(sessionKey)).toBeUndefined();
+      if (longTool) {
+        releaseWorkspace.resolve();
+        attachBackend.resolve();
+        await withinTest(runtimeStarted.promise, signal);
+      }
+      const sentAt = process.hrtime.bigint();
       const sent = await directSessionReq<{ runId: string; status: string }>(
         "chat.send",
         {
@@ -373,6 +432,7 @@ test.for(["accepted", "unavailable", "rejected", "withdrawn"] as const)(
         request,
       );
       expect(sent).toMatchObject({ ok: true, payload: { runId: steerRunId, status: "started" } });
+      const ackMs = Number(process.hrtime.bigint() - sentAt) / 1e6;
       const steerEntry = expectDefined(
         rpcSourceTesting.get(steerRunId),
         "steer source registration",
@@ -380,12 +440,22 @@ test.for(["accepted", "unavailable", "rejected", "withdrawn"] as const)(
       steerSource = steerEntry;
       expect(earlyTerminals).toEqual([]);
       // The source is reserved, but workspace preparation has not deferred it to the queue.
-      expect(steerEntry.input.custody.enqueued).not.toBe(true);
+      if (!longTool) {
+        expect(steerEntry.input.custody.enqueued).not.toBe(true);
+      }
       const staged = await pendingCustody();
       expect(staged.input).toMatchObject({ state: "queued", runId: steerRunId });
+      if (longTool) {
+        console.info("steer visibility", {
+          ackMs,
+          pendingReceiptMs: Number(process.hrtime.bigint() - sentAt) / 1e6,
+        });
+      }
       clock = 15_800;
       releaseWorkspace.resolve();
-      await withinTest(inputQueued.promise, signal);
+      if (!longTool) {
+        await withinTest(inputQueued.promise, signal);
+      }
       // Steering can park before reply preparation reaches the runtime.
       await withinTest(runtimeStarted.promise, signal);
       expect(isRpcSourceQueued(rpcSourceTesting.get(steerRunId))).toBe(true);
@@ -400,7 +470,10 @@ test.for(["accepted", "unavailable", "rejected", "withdrawn"] as const)(
       expectUnconsumed();
       expect(rpcSourceTesting.get(steerRunId)).toBe(steerEntry);
       expect(isRpcSourceQueued(steerEntry)).toBe(true);
-      if (injection === "accepted") {
+      if (injection === "accepted" || longTool) {
+        if (longTool) {
+          expect(nativeSession?.getSteeringMessages()).toHaveLength(1);
+        }
         // Accepted steering retains cancellation custody but is not a follow-up queue item.
         await pendingCustody(false, true);
         releaseSteerCommit.resolve();
@@ -423,6 +496,12 @@ test.for(["accepted", "unavailable", "rejected", "withdrawn"] as const)(
           expect(nativeSession.getSteeringMessages()).toEqual([]);
           expect(isRpcSourceQueued(rpcSourceTesting.get(steerRunId))).toBe(true);
           await withinTest(steeringDispatchFinished.promise, signal);
+          expect(warning).toHaveBeenCalledWith(
+            "steering rejected; applying follow-up policy",
+            expect.objectContaining({
+              error: "queued steering message was not committed to the transcript before timeout",
+            }),
+          );
         }
         // The real dispatch finalizer publishes this change before the parent can reply.
         await withinTest(dispatchSettled.promise, signal);
@@ -452,13 +531,15 @@ test.for(["accepted", "unavailable", "rejected", "withdrawn"] as const)(
       }
       expect(getFollowupQueueDepth(sessionKey)).toBe(0);
       // Independent requests can finish in either order; each keeps its own disposition.
-      expect(
-        logGateway.info.mock.calls
-          .filter(([message]) => message.startsWith("slow chat send"))
-          .map(([message]) => message.match(/stage=(\w+)/)?.[1])
-          .toSorted((left, right) => (left ?? "").localeCompare(right ?? "")),
-      ).toEqual(injection === "accepted" ? ["steer"] : ["queued", "startup"]);
-      if (nativeSession) {
+      await vi.waitFor(() =>
+        expect(
+          logGateway.info.mock.calls
+            .filter(([message]) => message.startsWith("slow chat send"))
+            .map(([message]) => message.match(/stage=(\w+)/)?.[1])
+            .toSorted((left, right) => (left ?? "").localeCompare(right ?? "")),
+        ).toEqual(injection === "accepted" || longTool ? ["steer"] : ["queued", "startup"]),
+      );
+      if (injection === "withdrawn") {
         const { sessionId } = expectDefined(
           loadSessionEntry({ agentId: "main", sessionKey, storePath }),
           "withdrawn input session",
@@ -467,7 +548,7 @@ test.for(["accepted", "unavailable", "rejected", "withdrawn"] as const)(
           expect.stringContaining(`stage=queued sessionId=${sessionId} runId=${steerRunId}`),
         );
       }
-      expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(2);
+      expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(longTool ? 1 : 2);
       expectSingleUserInput(storePath, sessionKey, steerText);
     } finally {
       if (steerSource) {

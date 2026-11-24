@@ -1,6 +1,8 @@
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
+import { defaultControlUiFeatureMethods } from "../test-helpers/control-ui-e2e-defaults.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { deviceSystemInfo } from "../test-helpers/devices-fixtures.ts";
 import { pageRunner } from "./config-composer-fixtures.test-support.ts";
 import {
   createControlUiE2eContextOptions,
@@ -32,10 +34,57 @@ function settingsSection(page: Page, title: string): Locator {
 }
 
 suite.define(() => {
+  it("keeps host details in place when a pending ping fails", async () => {
+    await withPage(async ({ page }) => {
+      const gateway = await installMockGateway(page, {
+        deferredMethods: ["last-heartbeat"],
+        featureMethods: [...defaultControlUiFeatureMethods, "last-heartbeat"],
+      });
+      await page.goto(`${suite.server.baseUrl}settings/connection`);
+      await gateway.waitForRequest("last-heartbeat");
+      const host = page.locator("#settings-connection-host");
+      await host.waitFor();
+      const top = await host.evaluate((element) => element.getBoundingClientRect().top);
+      await gateway.rejectDeferred("last-heartbeat", { message: "Ping failed" });
+      await page.getByRole("status").filter({ hasText: "Last ping failed." }).waitFor();
+      expect(await host.evaluate((element) => element.getBoundingClientRect().top)).toBe(top);
+    });
+  });
+
+  it("keeps uptime beside the machine name and lets host facts use the entire phone row", async () => {
+    await withPage(async ({ page }) => {
+      await page.setViewportSize({ width: 390, height: 844 });
+      const machineName = "regional-engineering-relay-west-01";
+      await installMockGateway(page, {
+        methodResponses: {
+          "system.info": { ...deviceSystemInfo, machineName, lanAddress: "2001:db8:1234:5678::1" },
+        },
+      });
+      await page.goto(`${suite.server.baseUrl}settings/connection`);
+      const host = page.locator("#settings-connection-host .settings-row");
+      await host.getByText(machineName, { exact: true }).waitFor();
+      const middle = (element: Element) => {
+        const rect = element.getBoundingClientRect();
+        return rect.top + rect.height / 2;
+      };
+      const uptime = host.locator(".settings-row__control");
+      expect(
+        Math.abs(
+          (await host.locator(".settings-row__title").evaluate(middle)) -
+            (await uptime.evaluate(middle)),
+        ),
+      ).toBeLessThan(1);
+      const end = (element: Element) => element.getBoundingClientRect().right;
+      expect(await host.locator(".connection-facts").evaluate(end)).toBe(
+        await uptime.evaluate(end),
+      );
+    });
+  });
+
   it("persists the default session without applying a connection draft", async () => {
     await withPage(async ({ page }) => {
       const { gateway, connection } = await openConnection(page, "trusted-proxy");
-      const session = settingsSection(page, "Session");
+      const session = settingsSection(page, "Browser");
       const socketCount = await gateway.getSocketCount();
       const url = field(connection, "Gateway URL");
       const originalUrl = await url.inputValue();

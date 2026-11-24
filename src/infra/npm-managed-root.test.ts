@@ -93,14 +93,26 @@ describe("managed npm root", () => {
 
   it.each([
     { installedState: "invalid package manifest", expectedMissing: true },
+    { installedState: "absent native executable (ENOENT)", expectedMissing: true },
+    { installedState: "directory in place of native executable", expectedMissing: true },
     {
       installedState: "non-executable native executable",
       expectedMissing: process.platform !== "win32",
     },
     { installedState: "installed native executable", expectedMissing: false },
+    { installedState: "X_OK denied with EPERM", expectedMissing: false },
+    { installedState: "Windows exe without Unix executable bits", expectedMissing: false },
+    { installedState: "incomplete target before complete target", expectedMissing: false },
+    { installedState: "stat EACCES", expectedMissing: false },
+    { installedState: "stat EPERM", expectedMissing: false },
+    { installedState: "non-native package", expectedMissing: false },
+    { installedState: "vendor package without native bin declaration", expectedMissing: false },
   ])(
     "validates current-platform package contents: $installedState",
     async ({ installedState, expectedMissing }) => {
+      if (installedState === "Windows exe without Unix executable bits") {
+        vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+      }
       const npmRoot = await makeTempRoot();
       const platformPackage = "@vendor/tool-platform";
       const canonicalPackage = "@vendor/tool";
@@ -109,7 +121,10 @@ describe("managed npm root", () => {
       await writeLock(npmRoot, {
         "": {},
         [`node_modules/${canonicalPackage}`]: {
-          bin: { tool: "bin/tool.js" },
+          bin:
+            installedState === "vendor package without native bin declaration"
+              ? {}
+              : { tool: "bin/tool.js" },
         },
         [`node_modules/${platformPackage}`]: {
           name: canonicalPackage,
@@ -119,27 +134,68 @@ describe("managed npm root", () => {
         },
       });
 
+      let executablePath = "";
       if (installedState === "invalid package manifest") {
         await fs.writeFile(path.join(packagePath, "package.json"), "{", "utf8");
       } else {
         await writeFixtureJson(path.join(packagePath, "package.json"), {
           name: canonicalPackage,
           version: "1.0.0-platform",
-          files: ["vendor"],
+          files: installedState === "non-native package" ? [] : ["vendor"],
         });
         const nativeBinDir = path.join(packagePath, "vendor", "current-platform", "bin");
         await fs.mkdir(nativeBinDir, { recursive: true });
         await fs.writeFile(path.join(nativeBinDir, "tool-helper"), "helper", "utf8");
         const executableName = process.platform === "win32" ? "tool.exe" : "tool";
-        await fs.writeFile(path.join(nativeBinDir, executableName), "native executable", {
-          encoding: "utf8",
-          mode: installedState === "installed native executable" ? 0o755 : 0o644,
+        executablePath = path.join(nativeBinDir, executableName);
+        if (installedState === "directory in place of native executable") {
+          await fs.mkdir(executablePath);
+        } else if (
+          installedState !== "absent native executable (ENOENT)" &&
+          installedState !== "non-native package" &&
+          installedState !== "vendor package without native bin declaration"
+        ) {
+          await fs.writeFile(executablePath, "native executable", {
+            encoding: "utf8",
+            mode:
+              installedState === "non-executable native executable" ||
+              installedState === "Windows exe without Unix executable bits"
+                ? 0o644
+                : 0o755,
+          });
+        }
+        if (installedState === "incomplete target before complete target") {
+          await fs.mkdir(path.join(packagePath, "vendor", "a-incomplete", "bin", executableName), {
+            recursive: true,
+          });
+        }
+      }
+      const access = fs.access;
+      const accessSpy = vi.spyOn(fs, "access").mockImplementation(async (file, mode) => {
+        if (mode === syncFs.constants.X_OK) {
+          throw Object.assign(new Error("mocked stage execution denial"), { code: "EPERM" });
+        }
+        return access(file, mode);
+      });
+      const statErrorCode = installedState.startsWith("stat ")
+        ? installedState.slice(5)
+        : undefined;
+      if (statErrorCode) {
+        const error = Object.assign(new Error("native metadata unavailable"), {
+          code: statErrorCode,
         });
+        const statSpy = vi.spyOn(fs, "stat").mockRejectedValue(error);
+        await expect(
+          listMissingRequiredPlatformPackages({ npmRoot, requiredPackageNames: [platformPackage] }),
+        ).rejects.toBe(error);
+        expect(statSpy).toHaveBeenCalledWith(executablePath);
+        return;
       }
 
       await expect(
         listMissingRequiredPlatformPackages({ npmRoot, requiredPackageNames: [platformPackage] }),
       ).resolves.toEqual(expectedMissing ? [{ name: platformPackage, packagePath }] : []);
+      expect(accessSpy.mock.calls.filter(([, mode]) => mode === syncFs.constants.X_OK)).toEqual([]);
     },
   );
 

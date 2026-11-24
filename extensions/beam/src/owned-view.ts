@@ -1,3 +1,4 @@
+import { getGatewayRequestAuthorityV1 } from "openclaw/plugin-sdk/gateway-request-authority";
 import type { GatewayRequestHandlerOptions } from "openclaw/plugin-sdk/gateway-runtime";
 import type {
   SessionCatalogListProviderParams,
@@ -8,6 +9,7 @@ import type {
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { BeamTranscriptCursorError, createBeamSessionCatalog } from "./session-catalog.js";
 import type { BeamStore } from "./store.js";
+import { BeamSourceOwnershipError } from "./store.js";
 
 class BeamOwnedViewForbiddenError extends Error {}
 
@@ -21,11 +23,16 @@ function limit(value: unknown): number | undefined {
   return value;
 }
 
-function parseRequest(params: Record<string, unknown>, operation: "list" | "read") {
+function parseRequest(
+  params: Record<string, unknown>,
+  operation: "list" | "read" | "resolve" | "continue",
+) {
   const allowed =
     operation === "list"
       ? ["agentId", "catalogId", "search", "hostIds", "limitPerHost", "cursors"]
-      : ["agentId", "catalogId", "hostId", "threadId", "limit", "cursor"];
+      : operation === "read"
+        ? ["agentId", "catalogId", "hostId", "threadId", "limit", "cursor"]
+        : ["agentId", "catalogId", "hostId", "threadId"];
   if (
     Object.keys(params).some((key) => !allowed.includes(key)) ||
     (params.catalogId !== undefined && params.catalogId !== "beam") ||
@@ -33,7 +40,7 @@ function parseRequest(params: Record<string, unknown>, operation: "list" | "read
   ) {
     throw new Error("invalid target");
   }
-  if (operation === "read") {
+  if (operation !== "list") {
     if (
       params.hostId !== "gateway" ||
       typeof params.threadId !== "string" ||
@@ -42,6 +49,17 @@ function parseRequest(params: Record<string, unknown>, operation: "list" | "read
         (typeof params.cursor !== "string" || params.cursor.length > 256))
     ) {
       throw new Error("invalid read");
+    }
+    if (operation === "continue" || operation === "resolve") {
+      return {
+        kind: "continue" as const,
+        request: {
+          catalogId: "beam",
+          hostId: "gateway",
+          threadId: params.threadId,
+          ...(typeof params.agentId === "string" ? { agentId: params.agentId } : {}),
+        },
+      };
     }
     return {
       kind: "read" as const,
@@ -86,47 +104,39 @@ function parseRequest(params: Record<string, unknown>, operation: "list" | "read
 }
 
 // Separate from the shared operator catalog: no operator.read grant or generic catalog admission.
-export function createBeamOwnedViewHandler(store: BeamStore, operation: "list" | "read") {
-  return async ({
-    params,
-    client,
-    respond,
-    signal,
-    hasCurrentClientAuthority,
-    sessionMutationAuthorization,
-  }: Pick<
-    GatewayRequestHandlerOptions,
-    | "params"
-    | "client"
-    | "respond"
-    | "signal"
-    | "hasCurrentClientAuthority"
-    | "sessionMutationAuthorization"
-  >) => {
-    const authority = client?.internal?.operatorAccessAuthority;
-    const profileId = client?.authenticatedUserProfile?.profileId;
-    const assertCurrent = () => {
-      if (
-        !sessionMutationAuthorization ||
-        !profileId ||
-        !client?.connect.scopes?.includes("operator.sessions.write") ||
-        authority?.requiredPolicyPlugin !== "visitor-access" ||
-        authority.gatewayAccessGrant?.pluginId !== "visitor-access" ||
-        signal?.aborted ||
-        hasCurrentClientAuthority?.() === false
-      ) {
-        throw new BeamOwnedViewForbiddenError("Beam requires an active verified Visitor publisher");
-      }
-      // The dispatcher composes current named-role, identity, and request lifetime here,
-      // including for sessionless plugin methods. The Visitor check retains the original grant.
-      try {
-        sessionMutationAuthorization.assertCurrent();
-        authority.assertCurrent();
-      } catch {
-        throw new BeamOwnedViewForbiddenError("Beam publisher authority expired");
-      }
+export function createBeamOwnedViewHandler(
+  store: BeamStore,
+  operation: "list" | "read" | "resolve" | "continue",
+  resolveAuthority = getGatewayRequestAuthorityV1,
+) {
+  return async (
+    options: Pick<
+      GatewayRequestHandlerOptions,
+      "params" | "respond" | "sessionMutationAuthorization" | "copySessionCatalogToGateway"
+    >,
+  ) => {
+    const { params, respond, sessionMutationAuthorization } = options;
+    const authority = resolveAuthority();
+    const profileId = authority?.personProfileId;
+    const forbidden = {
+      code: "FORBIDDEN",
+      message:
+        "Beam is not available to this publisher; sign in with the current publishing Visitor account",
     };
+    if (
+      !authority ||
+      !profileId ||
+      !sessionMutationAuthorization ||
+      !authority.scopes.includes("operator.sessions.write") ||
+      authority.requiredGrantPluginId !== "visitor-access"
+    ) {
+      respond(false, undefined, forbidden);
+      return;
+    }
+    const requiredGrant = authority.requiredGrantPluginId;
+    const assertCurrent = () => authority.assertCurrent(requiredGrant);
     try {
+      await authority.revalidate(requiredGrant);
       assertCurrent();
       let parsed: ReturnType<typeof parseRequest>;
       try {
@@ -140,8 +150,14 @@ export function createBeamOwnedViewHandler(store: BeamStore, operation: "list" |
       }
       const catalog = createBeamSessionCatalog({
         ...store,
-        async list() {
-          const rows = await store.list();
+        async reserveContinuation(session, agentId, guard) {
+          assertCurrent();
+          const reserved = await store.reserveContinuation(session, agentId, guard);
+          const { uploaderProfileId: _uploaderProfileId, ...ownedSession } = reserved.session;
+          return { ...reserved, session: ownedSession };
+        },
+        async list(handoffPrefix) {
+          const rows = await store.list(handoffPrefix);
           assertCurrent();
           return rows.filter((row) => row.publisherProfileId === profileId);
         },
@@ -151,16 +167,29 @@ export function createBeamOwnedViewHandler(store: BeamStore, operation: "list" |
           if (!row || row.publisherProfileId !== profileId) {
             throw new BeamOwnedViewForbiddenError("Beam is not available to this publisher");
           }
-          return row;
+          // Attribution may name staff; neither owned viewing nor adoption grants profile visibility.
+          const { uploaderProfileId: _uploaderProfileId, ...ownedRow } = row;
+          return ownedRow;
         },
       });
+      if (parsed.kind === "continue") {
+        if (!options.copySessionCatalogToGateway) {
+          throw new Error("Gateway catalog adoption is unavailable");
+        }
+        await options.copySessionCatalogToGateway({
+          provider: catalog,
+          request: parsed.request,
+          assertCurrent,
+          ...(operation === "resolve" ? { resolveOnly: true } : {}),
+        });
+        return;
+      }
       let result: SessionsCatalogListResult | SessionsCatalogReadResult;
       if (parsed.kind === "list") {
         const hosts = await catalog.list(parsed.request);
         // Catalog rows are fresh request-owned projections, not the retained inventory.
         for (const host of hosts) {
           for (const row of host.sessions) {
-            row.canContinue = false;
             row.canArchive = false;
           }
         }
@@ -169,7 +198,7 @@ export function createBeamOwnedViewHandler(store: BeamStore, operation: "list" |
             {
               id: catalog.id,
               label: catalog.label,
-              capabilities: { continueSession: false, archive: false },
+              capabilities: { continueSession: true, archive: false },
               shareRoute: catalog.shareRoute,
               hosts,
             },
@@ -178,34 +207,29 @@ export function createBeamOwnedViewHandler(store: BeamStore, operation: "list" |
       } else {
         result = await catalog.read(parsed.request);
       }
+      await authority.revalidate(requiredGrant);
       assertCurrent();
-      // Uploader attribution may now name staff: do not expand profile visibility on this route.
-      if ("items" in result) {
-        result.items = result.items.map(({ sender: _sender, ...item }) => item);
-      }
       respond(true, result);
     } catch (error) {
-      let failure = {
-        code: "FORBIDDEN",
-        message:
-          "Beam is not available to this publisher; sign in with the current publishing Visitor account",
-      };
+      let failure = forbidden;
       try {
         assertCurrent();
         if (!(error instanceof BeamOwnedViewForbiddenError)) {
           failure =
-            error instanceof BeamTranscriptCursorError
-              ? {
-                  code: "INVALID_REQUEST",
-                  message:
-                    error.kind === "stale"
-                      ? "This Beam changed while you were reading it. Reload the snapshot to continue."
-                      : "Invalid Beam page cursor. Reload the snapshot to continue.",
-                }
-              : {
-                  code: "UNAVAILABLE",
-                  message: "Could not load this Beam. Refresh and try again.",
-                };
+            error instanceof BeamSourceOwnershipError
+              ? { code: "INVALID_REQUEST", message: error.message }
+              : error instanceof BeamTranscriptCursorError
+                ? {
+                    code: "INVALID_REQUEST",
+                    message:
+                      error.kind === "stale"
+                        ? "This Beam changed while you were reading it. Reload the snapshot to continue."
+                        : "Invalid Beam page cursor. Reload the snapshot to continue.",
+                  }
+                : {
+                    code: "UNAVAILABLE",
+                    message: "Could not load this Beam. Refresh and try again.",
+                  };
         }
       } catch {
         // Error replies must not disclose a known cursor state after authority ends.

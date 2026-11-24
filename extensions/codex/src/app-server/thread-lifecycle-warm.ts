@@ -3,7 +3,7 @@ import {
   embeddedAgentLog,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { isIncognitoSessionKey } from "openclaw/plugin-sdk/session-key-runtime";
-import { racePromiseWithAbortSignal } from "openclaw/plugin-sdk/time-runtime";
+import { racePromiseWithAbortSignal, raceWithTimeout } from "openclaw/plugin-sdk/time-runtime";
 import {
   CODEX_APP_SERVER_INTERRUPT_TIMEOUT_MS,
   CODEX_APP_SERVER_UNSUBSCRIBE_TIMEOUT_MS,
@@ -11,6 +11,7 @@ import {
   CodexAppServerUnsafeSubscriptionError,
   unsubscribeCodexThreadBestEffort,
 } from "./attempt-client-cleanup.js";
+import { CodexAppServerStartupError } from "./attempt-timeouts.js";
 import {
   consumeCodexAppServerLiveThread,
   isCodexAppServerClientRuntimeLive,
@@ -21,7 +22,10 @@ import {
   readCodexLiveThreadEphemeralPolicy,
   waitForCodexAppServerThreadBackgroundCleanup,
 } from "./client-runtime.js";
-import { wasCodexAppServerThreadClosed } from "./client-thread-closure.js";
+import {
+  CODEX_THREAD_UNLOAD_CONFIRMATION_TIMEOUT_MS,
+  wasCodexAppServerThreadClosed,
+} from "./client-thread-closure.js";
 import { createCodexEphemeralThreadPolicy } from "./client-thread-owner.js";
 import type { CodexAppServerClient } from "./client.js";
 import {
@@ -61,6 +65,7 @@ import {
   CodexIncognitoPolicyChangeError,
   refreshCodexThreadInstructions,
 } from "./thread-policy.js";
+import { buildCodexThreadGenericInstructions } from "./thread-requests.js";
 
 type CodexWarmThreadReuseParams = CodexThreadRequestContext & {
   params: CodexStartOrResumeThreadParams;
@@ -172,7 +177,7 @@ export async function releaseCodexBoundLiveThread(
     ownerClientId?: string;
     /** Cold resume may join asynchronous Stop cleanup, never force its release. */
     waitForBackgroundCleanup?: boolean;
-    /** Runs synchronously when `signal` ends a wait for the previous owner's exit. */
+    /** Runs synchronously if cancellation or timeout ends the wait for the previous owner's exit. */
     onExitWaitCancelled?: () => void;
   },
 ): Promise<boolean> {
@@ -193,6 +198,7 @@ export async function releaseCodexBoundLiveThread(
   }
   const client = previous?.client ?? options.client;
   let threadClosed: Promise<void> | undefined;
+  let released = false;
   let stopWatching: (() => void) | undefined;
   let stopReading: (() => void) | undefined;
   if (previous) {
@@ -257,7 +263,7 @@ export async function releaseCodexBoundLiveThread(
           : `Codex thread ${options.threadId} is claimed by active work; stop it first.`,
       );
     }
-    return await releaseCodexRetainedLiveThread({
+    released = await releaseCodexRetainedLiveThread({
       ...options,
       client,
       abandonClient: previous ? undefined : options.abandonClient,
@@ -271,6 +277,7 @@ export async function releaseCodexBoundLiveThread(
           }
         : undefined,
     });
+    return released;
   } finally {
     try {
       // Rejection must free the lane so the claimed run can still be stopped.
@@ -308,10 +315,41 @@ export async function releaseCodexBoundLiveThread(
               ),
           );
         }
-        // Siblings may keep the old process alive after this exact thread stops.
+        // A sibling can keep this process alive. Timing out leaves the old writer in place.
         await options.lifecycleTiming.measure("retired-thread-runtime-release", () =>
-          racePromiseWithAbortSignal(Promise.race(stopped), options.signal, exitWaitAbortError),
+          raceWithTimeout(
+            Promise.race(stopped),
+            CODEX_THREAD_UNLOAD_CONFIRMATION_TIMEOUT_MS,
+            () => {
+              options.onExitWaitCancelled?.();
+              throw new CodexAppServerStartupError(
+                "timed_out",
+                "The previous Codex thread did not confirm shutdown before the handoff timed out. Try sending your message again in a few seconds. If the conversation still cannot resume, start a new chat.",
+              );
+            },
+            {
+              signal: options.signal,
+              onAbort: (signal) => {
+                throw exitWaitAbortError(signal);
+              },
+            },
+          ),
         );
+      } else if (released && threadClosed) {
+        // A live previous owner keeps the per-home writer lock until it unloads the thread
+        // (codex rollout/src/writer_lock.rs); managed clients unload on unsubscribe. A
+        // missed close stays visible as the resume's active-writer error.
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        await racePromiseWithAbortSignal(
+          Promise.race([
+            threadClosed,
+            new Promise<void>((resolve) => {
+              timer = setTimeout(resolve, CODEX_APP_SERVER_UNSUBSCRIBE_TIMEOUT_MS);
+            }),
+          ]),
+          options.signal,
+          exitWaitAbortError,
+        ).finally(() => clearTimeout(timer));
       }
     } finally {
       stopReading?.();
@@ -373,7 +411,16 @@ export async function tryReuseCodexLiveThread(
       await prepareCodexThreadFinalConfigPatch(params, options.nativeModelInputTools, binding);
       throwIfAborted();
       params.assertCurrent?.();
-      return { kind: "ready", binding: { ...binding, lifecycle: { action: "resumed" } } };
+      return {
+        kind: "ready",
+        binding: {
+          ...binding,
+          // Nothing is sent to this live thread, so report the base it got at creation,
+          // never a render of current inputs.
+          preparedOpenClawBaseInstructions: creationPolicy?.baseInstructions,
+          lifecycle: { action: "resumed" },
+        },
+      };
     }
     return { kind: "rotate" };
   }
@@ -495,6 +542,11 @@ export async function tryReuseCodexLiveThread(
         return { kind: "resume" };
       }
     }
+    // A native switch moves supervision past the stored model; render and fingerprint the
+    // prompt for Codex's current one, as cold resume does, so a changed base resumes cold.
+    const nativeModel =
+      binding.connectionScope === "supervision" ? nativeThread?.model?.trim() : undefined;
+    const promptBinding = nativeModel ? { ...binding, model: nativeModel } : binding;
     const pluginThreadConfig = await options.buildLoadedPluginThreadConfig(binding);
     assertWarmOwner();
     if (pluginThreadConfig && pluginThreadConfig.fingerprint !== binding.pluginAppsFingerprint) {
@@ -527,7 +579,7 @@ export async function tryReuseCodexLiveThread(
       prebuiltFinalConfigPatch.configPatch,
     );
     const resumeParams = await lifecycleTiming.measure("warm-thread-resume-params", () =>
-      options.buildResumeParams(binding, resumeAuthProfileId, resumeConfig),
+      options.buildResumeParams(promptBinding, resumeAuthProfileId, resumeConfig),
     );
     options.assertInferenceConfig(
       resumeParams.config,
@@ -540,7 +592,13 @@ export async function tryReuseCodexLiveThread(
     if (
       incognito &&
       (!ephemeralPolicy ||
-        ephemeralPolicy.developerInstructions !== params.developerInstructions ||
+        ephemeralPolicy.developerInstructions !==
+          buildCodexThreadGenericInstructions(params.params, {
+            ...params,
+            config: resumeParams.config,
+          }) ||
+        ephemeralPolicy.baseInstructions !==
+          options.resolveOpenClawBaseInstructions(promptBinding) ||
         getCodexInferenceThread(params.client, binding.threadId) !== params.inferenceRoute ||
         [...(params.inferenceProviderRoutes?.keys() ?? [])].some(
           (provider) =>
@@ -696,6 +754,7 @@ export async function tryReuseCodexLiveThread(
         liveThreadConfigFingerprint,
         liveThreadEphemeralPolicy,
         liveThreadOwnership: retainedThread,
+        preparedOpenClawBaseInstructions: options.resolveOpenClawBaseInstructions(promptBinding),
         ...(!incognito && retainedThread.serviceTier && resumeParams.serviceTier === undefined
           ? { clearInheritedServiceTier: true }
           : {}),

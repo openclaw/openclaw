@@ -73,6 +73,26 @@ export function prepareCronStreamMutationAdmission(params: {
         context.admission.databasePath,
         ...(authority.sessionEntryCurrent ? [authority.sessionEntryCurrent.source.path] : []),
       ],
+      undefined,
+      approval?.revalidateExecution
+        ? async (nativeRequest) => {
+            const request = assertSessionEntryCurrentAdmission(
+              nativeRequest,
+              authority.sessionEntryCurrent,
+            );
+            if (
+              isRecord(request.facts) &&
+              isRecord(request.facts.mutation) &&
+              !request.facts.unchangedDeclaration &&
+              approval.binding ===
+                // SAFETY: the private native request is produced only by the cron job mutation owner.
+                cronStreamExecApprovalBinding(request.facts.mutation as CronStreamExecMutation)
+            ) {
+              approval.consumption.assertCurrent();
+              await approval.revalidateExecution?.();
+            }
+          }
+        : undefined,
     )(operation);
     const publication = operatorApprovalPublication.begin({
       identity: context.admission.identity.key,

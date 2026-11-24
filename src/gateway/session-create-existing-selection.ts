@@ -9,6 +9,7 @@ import {
 import type { AdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
 import { resolveAgentConfig, resolveAgentDir } from "../agents/agent-scope.js";
 import { prepareAuthProfileProvider } from "../agents/auth-profiles/store-runtime.js";
+import { DEFAULT_PROVIDER } from "../agents/defaults.js";
 import type { ModelCatalogSnapshot } from "../agents/model-catalog.types.js";
 import {
   resolveDefaultModelForAgent,
@@ -20,6 +21,7 @@ import { isSubagentSessionKey } from "../routing/session-key.js";
 import { shouldPreserveSessionAuthProfileOverride } from "../sessions/auth-profile-preservation.js";
 import { ADMIN_SCOPE } from "./operator-scopes.js";
 import { resolveSessionPatchModelSelection } from "./server-methods/sessions-patch-model-selection.js";
+import { resolveAttendedSessionPermissionDefault } from "./session-create-permission-default.js";
 import type { CreateGatewaySessionParams } from "./session-create-service.types.js";
 import { SessionMutationAuthorizationChangedError } from "./session-mutation-authorization-error.js";
 
@@ -86,7 +88,7 @@ async function existingSessionSelectionWouldChange(params: {
   agentId: string;
   cfg: OpenClawConfig;
   catalogModel?: string;
-  defaultModel: string;
+  defaultModel: string | undefined;
   defaultProvider: string;
   existingEntry: SessionEntry;
   loadGatewayModelCatalogSnapshot?: () => Promise<ModelCatalogSnapshot>;
@@ -234,11 +236,11 @@ export function prepareSessionCreatePermissionSelection(
   ) {
     return { ok: true, mode: request.permissionMode };
   }
-  const mode = resolveAgentConfig(request.cfg, target.agentId)?.newSessionPermissionMode;
+  const configuredMode = resolveAgentConfig(request.cfg, target.agentId)?.newSessionPermissionMode;
+  const mode = resolveAttendedSessionPermissionDefault(configuredMode, authority.scopes);
   if (!mode) {
     return { ok: true };
   }
-  authority.assertCurrent();
   if (mode === "full" && !authority.scopes.includes(ADMIN_SCOPE)) {
     return {
       ok: false,
@@ -246,10 +248,9 @@ export function prepareSessionCreatePermissionSelection(
     };
   }
   const assertCurrent = () => {
-    authority.assertCurrent();
     if (
       resolveAgentConfig(request.getCurrentConfig?.() ?? request.cfg, target.agentId)
-        ?.newSessionPermissionMode !== mode
+        ?.newSessionPermissionMode !== configuredMode
     ) {
       throw new SessionMutationAuthorizationChangedError(
         errorShape(
@@ -274,8 +275,8 @@ export async function validateExistingSessionCreateSelection(
     agentId: target.agentId,
     cfg: request.cfg,
     catalogModel: normalizeOptionalString(request.catalogTarget?.model),
-    defaultModel: defaults.model,
-    defaultProvider: defaults.provider,
+    defaultModel: defaults?.model,
+    defaultProvider: defaults?.provider ?? DEFAULT_PROVIDER,
     existingEntry: target.existingEntry,
     loadGatewayModelCatalogSnapshot: request.loadGatewayModelCatalogSnapshot,
     requestedModel: request.model,

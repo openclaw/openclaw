@@ -9,10 +9,9 @@ const suite = createControlUiE2eSuite({
 });
 async function assertDeviceCodeCopy(page: Page, userCode: string) {
   const deviceCode = page.getByText(userCode, { exact: true });
-  const authorizationHint = page.getByText(
-    "Open GitHub yourself, then enter the one-time code shown here.",
-    { exact: true },
-  );
+  const authorizationHint = page.getByText("Open GitHub, then enter this one-time code.", {
+    exact: true,
+  });
   await authorizationHint.dblclick();
   expect(await page.evaluate(() => globalThis.getSelection()?.toString())).not.toBe("");
   await deviceCode.click();
@@ -27,7 +26,7 @@ async function assertDeviceCodeCopy(page: Page, userCode: string) {
   await page.context().grantPermissions(["clipboard-read", "clipboard-write"]);
   await copyCode.click();
   expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(userCode);
-  await expect(page.getByRole("button", { name: "Copied!", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Copied", exact: true })).toBeVisible();
 }
 const disconnected = {
   state: "disconnected",
@@ -57,6 +56,46 @@ const device = {
   pollAfterMs: 1_000,
 };
 suite.define(() => {
+  it("opens the GitHub accounts section from Settings search without manual scrolling", async () => {
+    await suite.withPage(
+      { locale: "en-US", viewport: { width: 1280, height: 700 } },
+      async ({ page }) => {
+        const gateway = await installMockGateway(page, {
+          methodDelays: { "users.listModelAccounts": 300 },
+        });
+        await page.goto(suite.server.baseUrl + "settings/appearance");
+        await page.locator(".settings-sidebar__search-input").fill("GitHub accounts");
+        await page.locator('a[href$="#settings-profile-github-connections"]').click();
+        await expect(page).toHaveURL(/\/settings\/profile#settings-profile-github-connections$/);
+        const heading = page
+          .locator("#settings-profile-github-connections")
+          .getByRole("heading")
+          .first();
+        await expect(heading).toBeInViewport({ ratio: 1 });
+        await expect
+          .poll(() =>
+            heading.evaluate((node) =>
+              Math.round(
+                node.getBoundingClientRect().top -
+                  node.closest("main")!.getBoundingClientRect().top,
+              ),
+            ),
+          )
+          .toBe(16);
+        const hero = page.locator(".profile-hero");
+        await hero.scrollIntoViewIfNeeded();
+        const identityReads = (await gateway.getRequests("users.self")).length;
+        await gateway.setOnline(false);
+        await gateway.setOnline(true);
+        await expect
+          .poll(async () => (await gateway.getRequests("users.self")).length)
+          .toBeGreaterThan(identityReads);
+        await heading.waitFor();
+        await expect(hero).toBeInViewport();
+      },
+    );
+  });
+
   it("copies the personal device code and connects only the signed-in reader's GitHub", async () => {
     await suite.withPage(
       {
@@ -75,17 +114,25 @@ suite.define(() => {
         });
         await page.goto(`${suite.server.baseUrl}settings/profile`);
         const section = page.locator("#settings-profile-github-connections");
+        // Longer explanations stay one click away.
+        const helpButton = section.locator(".settings-section__help-button");
+        await helpButton.click();
+        const help = page.locator(".settings-section__help-panel");
+        await expect(help).toContainText("My GitHub is used only when");
+        await expect(help).toContainText("Your account when you choose it to publish a PR.");
+        await helpButton.click();
+        await expect(help).toHaveCount(0);
         const button = (name: string) => section.getByRole("button", { name, exact: true });
         const connection = (scope: string) =>
           section.locator(`[data-github-connection="${scope}"]`);
         await expect(connection("system")).toContainText("@system-octocat");
-        await expect(button("Change System GitHub")).toHaveCount(0);
+        await expect(button("Change shared agent account")).toHaveCount(0);
         await expect(connection("agent")).toHaveCount(0);
         const configReads = (await gateway.getRequests("config.get")).length;
         const configWrites = (await gateway.getRequests("config.set")).length;
         await button("Connect My GitHub").click();
-        await expect(section.getByText("For me", { exact: true })).toBeVisible();
-        await expect(section.getByText("For the system", { exact: true })).toHaveCount(0);
+        await expect(connection("personal").locator("[data-github-setup]")).toBeVisible();
+        await expect(connection("system").locator("[data-github-setup]")).toHaveCount(0);
         await expect(button("Use a PAT instead")).toHaveCount(0);
         await gateway.deferNext("users.github.authorize.start");
         await button("Continue with GitHub").click();
@@ -114,9 +161,10 @@ suite.define(() => {
         await expect(section.locator("[data-github-setup]")).toHaveCount(0);
         await expect(button("Continue with GitHub")).toHaveCount(0);
         await gateway.setMethodResponse("users.github.status", status);
-        await button("Disconnect My GitHub").click();
+        await button("Change My GitHub").click();
+        await button("Disconnect").click();
         expect((await gateway.waitForRequest("users.github.disconnect")).params).toEqual({});
-        await expect(connection("personal")).toContainText("Not connected");
+        await expect(connection("personal")).toContainText("Disconnected");
         await expect(section).not.toContainText("@personal-octocat");
         expect(await gateway.getRequests("config.get")).toHaveLength(configReads);
         expect(await gateway.getRequests("config.set")).toHaveLength(configWrites);

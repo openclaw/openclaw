@@ -18,11 +18,11 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const truthy = (config: unknown, key: string) => isConfigPathTruthyWithDefaults(config, key, {});
 const prepared = async (bin = "fixture-tool") =>
   (await prepareBinaryAvailability([bin])).hasBinary(bin);
-function setup(platform?: "linux" | "win32") {
+function setup(platform?: "linux" | "win32", tempRoot?: string) {
   if (platform) {
     mockProcessPlatform(platform);
   }
-  const root = tempDirs.make("openclaw-binary-");
+  const root = tempDirs.make("openclaw-binary-", tempRoot);
   vi.stubEnv("PATH", root);
   vi.stubEnv("PATHEXT", ".EXE;.CMD");
   return root;
@@ -41,7 +41,6 @@ describe.each([
     const root = setup();
     const [first, second] = [path.join(root, "first"), path.join(root, "second")];
     fs.mkdirSync(path.join(first, "fixture-tool"), { recursive: true });
-    fs.mkdirSync(second);
     vi.stubEnv("PATH", [first, second].join(path.delimiter));
     expect(await probe("fixture-tool")).toBe(false);
     install(path.join(second, `fixture-tool${process.platform === "win32" ? ".CMD" : ""}`));
@@ -109,9 +108,10 @@ it.each(["linux", "win32"] as const)("rechecks misses on unchanged %s PATH", (pl
   expect(hasBinary("fixture-tool")).toBe(true);
 });
 
-it("prepared facts observe installation and removal independently of cached hits", async () => {
-  const root = setup("linux");
-  vi.stubEnv("PATH", [path.join(root, "missing"), root].join(path.delimiter));
+it.each([false, true])("refreshes binary facts with relative PATH: %s", async (relative) => {
+  const root = setup("linux", process.cwd());
+  const dir = relative ? path.relative(process.cwd(), root) : root;
+  vi.stubEnv("PATH", [path.join(dir, "missing"), dir].join(path.delimiter));
   const executable = path.join(root, "fixture-tool");
   expect(await prepared()).toBe(false);
   install(executable);
@@ -120,14 +120,15 @@ it("prepared facts observe installation and removal independently of cached hits
   fs.unlinkSync(executable);
   expect(await prepared()).toBe(false);
   expect(hasBinary("fixture-tool")).toBe(true);
+  vi.spyOn(process, "cwd").mockReturnValue(path.join(root, "changed"));
+  expect(hasBinary("fixture-tool")).toBe(!relative);
   vi.stubEnv("PATH", path.join(root, "other"));
   expect(hasBinary("fixture-tool")).toBe(false);
 });
 
 it("preserves nested binary names", async () => {
-  const root = setup();
   const bin = path.join("nested", "fixture-tool");
-  install(path.join(root, bin));
+  install(path.join(setup(), bin));
   expect(await prepared(bin)).toBe(true);
   expect(hasBinary(bin)).toBe(true);
 });
@@ -141,10 +142,7 @@ it("bounds environment reads across PATH and PATHEXT candidates", async () => {
   vi.stubEnv("PATHEXT", ".EXE;.CMD;.BAT;.COM");
   const cwd = vi.spyOn(process, "cwd");
   const facts = await prepareBinaryAvailability(["missing-tool-a", "missing-tool-b"]);
-  expect([facts.hasBinary("missing-tool-a"), facts.hasBinary("missing-tool-b")]).toEqual([
-    false,
-    false,
-  ]);
+  expect(["missing-tool-a", "missing-tool-b"].filter(facts.hasBinary)).toEqual([]);
   expect(cwd.mock.calls.length).toBeLessThan(20);
 });
 

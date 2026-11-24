@@ -57,6 +57,11 @@ else
   export DISCORD_BOT_TOKEN="upgrade-survivor-discord-token"
   export TELEGRAM_BOT_TOKEN="123456:upgrade-survivor-telegram-token"
 fi
+if [ "$SCENARIO" = "legacy-operator-state" ]; then
+  # The local mock needs a key without enabling public provider discovery.
+  unset OPENAI_API_KEY ANTHROPIC_API_KEY GEMINI_API_KEY
+  export OPENCLAW_UPGRADE_SURVIVOR_API_KEY="sk-openclaw-upgrade-survivor"
+fi
 if [ "$SCENARIO" = "feishu-channel" ]; then
   export FEISHU_APP_SECRET="upgrade-survivor-feishu-secret"
 fi
@@ -694,13 +699,39 @@ wait_for_fixture_port() {
 configure_clawhub_fixture() {
   unset OPENCLAW_CLAWHUB_URL CLAWHUB_URL
   [ -z "${OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR:-}" ] && return 0
-  local fixture_root="$ARTIFACT_ROOT/clawhub-fixture" port_file log_file
+  local stage="${1:-candidate}" manifest="$OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR/prepublish-plugin-registry.json"
+  local fixture_root="$ARTIFACT_ROOT/clawhub-fixture" port_file log_file port=0
   port_file="$fixture_root/port"
-  log_file="$fixture_root/server.log"
+  log_file="$fixture_root/$stage-server.log"
+  if [ -n "$clawhub_fixture_pid" ]; then
+    # Recorded ClawHub sources retain this URL across the baseline/candidate handoff.
+    port="$(cat "$port_file")"
+    node --input-type=module - "http://127.0.0.1:$port" "$fixture_root/requests-baseline.json" <<'NODE'
+import fs from "node:fs";
+const response = await fetch(new URL("/__fixture__/requests", process.argv[2]));
+if (!response.ok) throw new Error(`ClawHub fixture ledger HTTP ${response.status}`);
+fs.writeFileSync(process.argv[3], `${JSON.stringify(await response.json(), null, 2)}\n`);
+NODE
+    openclaw_e2e_stop_process "$clawhub_fixture_pid"
+  fi
+  if [ "$stage" = "baseline" ]; then
+    [ -n "$baseline_plugin_tarball" ] || return 0
+    manifest="$(dirname "$baseline_plugin_tarball")/clawhub-baseline.json"
+    node --input-type=module - "$baseline_plugin_tarball" "$baseline_plugin_version" "$manifest" <<'NODE'
+import { createHash } from "node:crypto";
+import fs from "node:fs";
+import path from "node:path";
+const [archive, version, manifest] = process.argv.slice(2);
+fs.writeFileSync(manifest, `${JSON.stringify({ packages: [{
+  name: "@openclaw/discord", version, tarball: path.basename(archive),
+  sha256: createHash("sha256").update(fs.readFileSync(archive)).digest("hex"),
+}] }, null, 2)}\n`);
+NODE
+  fi
   mkdir -p "$fixture_root" && rm -f "$port_file"
   node "${OPENCLAW_UPGRADE_SURVIVOR_CLAWHUB_FIXTURE_SERVER:-scripts/e2e/lib/clawhub-fixture-server.cjs}" \
     prepublish-artifacts "$port_file" \
-    "$OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR/prepublish-plugin-registry.json" >"$log_file" 2>&1 &
+    "$manifest" "$port" >"$log_file" 2>&1 &
   clawhub_fixture_pid="$!"
   wait_for_fixture_port "$clawhub_fixture_pid" "$port_file" "$log_file" "ClawHub fixture"
   export OPENCLAW_CLAWHUB_URL="http://127.0.0.1:$(cat "$port_file")"
@@ -878,6 +909,9 @@ NODE
     plugin_registry_pid \
     ${registry_args[@]+"${registry_args[@]}"} || return "$?"
   candidate_selector_registry="$selector_registry"
+  if [ "$SCENARIO" = "legacy-operator-state" ]; then
+    configure_clawhub_fixture "$stage"
+  fi
 }
 
 seed_legacy_runtime_deps_symlink() {
@@ -1007,7 +1041,7 @@ initialize_state() {
   else
     openclaw_test_state_create "$STATE_HOME_ROOT" minimal
   fi
-  if [ "$UPDATE_RESTART_MODE" = "auto-auth" ]; then
+  if [ "$UPDATE_RESTART_MODE" = "auto-auth" ] || [ "$SCENARIO" = "git-release" ]; then
     account_home="$(getent passwd "$(id -u)" | cut -d: -f6)"
     if [ -z "$account_home" ]; then
       echo "Could not resolve the current account home" >&2
@@ -1153,6 +1187,12 @@ assert_legacy_operator_update_noop() {
     # Retain the inferred monthly channel and opt into its loopback selector.
     update_env+=(OPENCLAW_UPDATE_PACKAGE_SPEC=openclaw)
   else
+    # Keep the exact-version resolver, but use the registry serving this candidate.
+    update_env+=(
+      "OPENCLAW_UPGRADE_SURVIVOR_NPM_REGISTRY=${NPM_CONFIG_REGISTRY:?candidate registry required}"
+      OPENCLAW_UPGRADE_SURVIVOR_NPM_REGISTRY_CORE=1
+      "NODE_OPTIONS=${NODE_OPTIONS:+$NODE_OPTIONS }--import=$PWD/scripts/e2e/lib/upgrade-survivor/plugin-registry-redirect.mjs"
+    )
     update_args+=(--tag "$candidate_version")
   fi
   openclaw_e2e_maybe_timeout "$COMMAND_TIMEOUT" "${update_env[@]}" openclaw "${update_args[@]}" \
@@ -1164,36 +1204,53 @@ const text = fs.readFileSync(process.argv[2], "utf8");
 const result = JSON.parse(text.slice(text.indexOf("{")));
 assert.equal(result.status, "skipped", "second update was not a clean no-op");
 assert.equal(result.reason, "already-current", "second update was not already current");
-// The isolated state directory records a service refusal without running the suggested command.
-assert(Array.isArray(result.steps), "second update did not report its steps");
-// Already-current updates still retire verified recovery artifacts, never packages.
-const cleanups = result.steps.filter((step) => step.name === "recovery-artifact-cleanup");
-assert(cleanups.length <= 1, "second update repeated recovery cleanup");
-for (const { durationMs, diagnostics, ...step } of cleanups) {
-  assert(Number.isFinite(durationMs) && durationMs >= 0, "invalid recovery cleanup duration");
-  assert.deepEqual(step, {
-    name: "recovery-artifact-cleanup", command: "openclaw update cleanup", cwd: "", exitCode: 0,
-  }, "second update recovery cleanup did not finish cleanly");
-  assert(Array.isArray(diagnostics) && diagnostics.length === 1 &&
-    typeof diagnostics[0] === "string" &&
-    /^Recovery cleanup removed \d+ files \(\d+ logical bytes\); protected recovery artifacts were retained\.$/.test(diagnostics[0]),
-    "second update omitted its verified recovery cleanup outcome");
+// Current release updaters return their lifecycle record; historical candidates
+// still return command receipts, which retain their checks below.
+if (Object.hasOwn(result, "phase")) {
+  assert.equal(result.phase, "finished", "second update did not finish");
+  assert.deepEqual(result.steps.map(({ step, status }) => ({ step, status })), [
+    { step: "requested", status: "completed" },
+    { step: "staging", status: "skipped" },
+    { step: "plugins", status: "completed" },
+  ], "second update executed mutations or did not finish plugin maintenance");
+  assert.deepEqual(result.repair, [], "second update ran a repair");
+  assert(!result.origin.nextAction, "second update requested repair");
+} else {
+  // The isolated state directory records a service refusal without running the suggested command.
+  assert(Array.isArray(result.steps), "second update did not report its steps");
+  // Already-current updates still retire verified recovery artifacts, never packages.
+  const cleanups = result.steps.filter((step) => step.name === "recovery-artifact-cleanup");
+  assert(cleanups.length <= 1, "second update repeated recovery cleanup");
+  for (const { durationMs, diagnostics, ...step } of cleanups) {
+    assert(Number.isFinite(durationMs) && durationMs >= 0, "invalid recovery cleanup duration");
+    assert.deepEqual(step, {
+      name: "recovery-artifact-cleanup", command: "openclaw update cleanup", cwd: "", exitCode: 0,
+    }, "second update recovery cleanup did not finish cleanly");
+    // The summary comes first; one line per removed or kept item may follow.
+    // Earlier releases reported one fixed sentence.
+    assert(Array.isArray(diagnostics) && diagnostics.length >= 1 &&
+      diagnostics.every((line) => typeof line === "string") &&
+      (/^Update backup cleanup removed \d+ items? \(\d+ logical bytes, [^)]+\)\./.test(diagnostics[0]) ||
+        (diagnostics.length === 1 &&
+          /^Recovery cleanup removed \d+ files \(\d+ logical bytes\); protected recovery artifacts were retained\.$/.test(diagnostics[0]))),
+      "second update omitted its verified recovery cleanup outcome");
+  }
+  // Advisory guidance is product prose that releases reword; require one, not its text.
+  const steps = result.steps.filter((step) => step.name !== "recovery-artifact-cleanup")
+    .map(({ advisory, ...step }) => advisory ? {
+    ...step,
+    advisory: { kind: advisory.kind, explained: typeof advisory.message === "string" && advisory.message.trim() !== "" },
+  } : step);
+  const expectedSteps = steps.length === 0 ? [] : [{
+    name: "managed-service-reconciliation",
+    command: "openclaw gateway install --force",
+    cwd: result.root ?? "",
+    durationMs: 0,
+    exitCode: 0,
+    advisory: { kind: "recoverable-maintenance", explained: true },
+  }];
+  assert.deepEqual(steps, expectedSteps, "second update executed mutations or unexpected maintenance");
 }
-// Advisory guidance is product prose that releases reword; require one, not its text.
-const steps = result.steps.filter((step) => step.name !== "recovery-artifact-cleanup")
-  .map(({ advisory, ...step }) => advisory ? {
-  ...step,
-  advisory: { kind: advisory.kind, explained: typeof advisory.message === "string" && advisory.message.trim() !== "" },
-} : step);
-const expectedSteps = steps.length === 0 ? [] : [{
-  name: "managed-service-reconciliation",
-  command: "openclaw gateway install --force",
-  cwd: result.root ?? "",
-  durationMs: 0,
-  exitCode: 0,
-  advisory: { kind: "recoverable-maintenance", explained: true },
-}];
-assert.deepEqual(steps, expectedSteps, "second update executed mutations or unexpected maintenance");
 assert(!result.nextAction, "second update requested repair");
 console.log("Second update: already-current, no package mutations or repair required.");
 NODE
@@ -1388,12 +1445,15 @@ write_update_restart_service_env() {
   local dotenv_path="$OPENCLAW_STATE_DIR/.env"
   local tmp_path="$dotenv_path.tmp.$$"
   if [ -f "$dotenv_path" ]; then
-    grep -Ev '^(GATEWAY_AUTH_TOKEN_REF|OPENCLAW_CLAWHUB_URL)=' "$dotenv_path" >"$tmp_path" || true
+    grep -Ev '^(GATEWAY_AUTH_TOKEN_REF|OPENCLAW_CLAWHUB_URL|OPENCLAW_UPGRADE_SURVIVOR_API_KEY)=' "$dotenv_path" >"$tmp_path" || true
   else
     : >"$tmp_path"
   fi
   # Managed restarts resolve auth and fixture routing from service-owned durable env.
   printf 'GATEWAY_AUTH_TOKEN_REF=%s\n' "$GATEWAY_AUTH_TOKEN_REF" >>"$tmp_path"
+  if [ "$SCENARIO" = "legacy-operator-state" ]; then
+    printf 'OPENCLAW_UPGRADE_SURVIVOR_API_KEY=%s\n' "$OPENCLAW_UPGRADE_SURVIVOR_API_KEY" >>"$tmp_path"
+  fi
   if [ -n "${OPENCLAW_CLAWHUB_URL:-}" ]; then
     printf 'OPENCLAW_CLAWHUB_URL=%s\n' "$OPENCLAW_CLAWHUB_URL" >>"$tmp_path"
   fi
@@ -2446,6 +2506,12 @@ phase storage-preflight storage_preflight
 phase validate-update-restart-mode validate_update_restart_mode
 phase validate-worker-cell validate_worker_cell
 phase reset-run-state reset_run_state
+if [ "$SCENARIO" = "git-release" ]; then
+  source scripts/e2e/lib/upgrade-survivor/git-release.sh
+  run_git_release_survivor
+  run_completed="1"
+  exit 0
+fi
 phase install-baseline install_baseline
 phase initialize-state initialize_state
 if [ "$SCENARIO" = "session-share" ]; then
@@ -2767,6 +2833,7 @@ if [ "$SCENARIO" = "missing-configured-plugin-migration" ]; then
   exit 0
 fi
 if companion_survivor_scenario || [ "$SCENARIO" = "legacy-operator-state" ]; then
+  # Legacy binds ClawHub after acquiring the independent published companion.
   unset OPENCLAW_CLAWHUB_URL CLAWHUB_URL
 else
   phase configure-clawhub-fixture configure_clawhub_fixture

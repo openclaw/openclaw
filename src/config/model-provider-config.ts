@@ -120,13 +120,14 @@ function hasRequestCompatOverrides(compat: ModelDefinitionConfig["compat"]): boo
       return value !== true;
     }
     if (key === "supportedReasoningEfforts") {
+      // Codex lists `none` beside its other efforts; a list of only `none` disables reasoning.
       return !(
         Array.isArray(value) &&
-        value.length > 0 &&
+        value.some((effort) => effort !== "none") &&
         value.every(
           (effort) =>
             typeof effort === "string" &&
-            /^(minimal|low|medium|high|xhigh|max|ultra)$/u.test(effort),
+            /^(none|minimal|low|medium|high|xhigh|max|ultra)$/u.test(effort),
         )
       );
     }

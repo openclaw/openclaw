@@ -195,9 +195,18 @@ export const QuestionResolvedEventSchema = withSince(
       id: NonEmptyString,
       status: Type.Literal("answered"),
       answers: QuestionAnswersSchema,
+      resolvedBy: Type.Optional(NonEmptyString),
     }),
-    closedObject({ id: NonEmptyString, status: Type.Literal("cancelled") }),
-    closedObject({ id: NonEmptyString, status: Type.Literal("expired") }),
+    closedObject({
+      id: NonEmptyString,
+      status: Type.Literal("cancelled"),
+      resolvedBy: Type.Optional(NonEmptyString),
+    }),
+    closedObject({
+      id: NonEmptyString,
+      status: Type.Literal("expired"),
+      resolvedBy: Type.Optional(NonEmptyString),
+    }),
   ]),
 );
 

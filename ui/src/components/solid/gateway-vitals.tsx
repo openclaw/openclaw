@@ -30,7 +30,8 @@ function formatMemory(bytes: number): string {
 }
 
 function formatDelay(value: number): string {
-  return formatDurationCompact(value) ?? t("common.na");
+  // A sub-millisecond reading is a real measurement, not a missing one.
+  return formatDurationCompact(value) ?? "0ms";
 }
 
 function formatCpuReading(value: number | undefined): string {
@@ -166,29 +167,33 @@ export function GatewayMemoryVital(props: GatewayVitalsProps) {
   );
 }
 
-export function GatewayVitals(props: GatewayVitalsProps) {
-  const delaySamples = createMemo(() =>
+export function GatewayDelayVital(props: GatewayVitalsProps) {
+  const samples = createMemo(() =>
     collectGatewayStatusSamples(props.history, (sample) => sample.eventLoop?.delayP99Ms),
   );
+  return (
+    <openclaw-sparkline
+      class="gateway-vital gateway-vital--delay"
+      data-degraded={props.status.eventLoop?.reasons?.includes("event_loop_delay") ? "" : undefined}
+      prop:label={t("debug.overlay.delayP99")}
+      prop:sub={
+        typeof props.status.eventLoop?.delayMaxMs === "number"
+          ? t("debug.overlay.maxShort", { value: formatDelay(props.status.eventLoop.delayMaxMs) })
+          : ""
+      }
+      prop:samples={samples()}
+      prop:format={formatDelay}
+      prop:floorMax={20}
+    />
+  );
+}
+
+export function GatewayVitals(props: GatewayVitalsProps) {
   return (
     <div class="gateway-vitals">
       <GatewayCpuVital status={props.status} history={props.history} />
       <GatewayMemoryVital status={props.status} history={props.history} />
-      <openclaw-sparkline
-        class="gateway-vital gateway-vital--delay"
-        data-degraded={
-          props.status.eventLoop?.reasons?.includes("event_loop_delay") ? "" : undefined
-        }
-        prop:label={t("debug.overlay.delayP99")}
-        prop:sub={
-          typeof props.status.eventLoop?.delayMaxMs === "number"
-            ? t("debug.overlay.maxShort", { value: formatDelay(props.status.eventLoop.delayMaxMs) })
-            : ""
-        }
-        prop:samples={delaySamples()}
-        prop:format={formatDelay}
-        prop:floorMax={20}
-      />
+      <GatewayDelayVital status={props.status} history={props.history} />
     </div>
   );
 }

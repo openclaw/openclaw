@@ -1,3 +1,4 @@
+import type { ArtifactsListResult } from "../../../../../packages/gateway-protocol/src/schema/artifacts.js";
 import type { GatewayBrowserClient, GatewayHelloOk } from "../../../api/gateway.ts";
 import type { SessionWorkspaceListResult } from "../../../api/types.ts";
 import type { PanelUnavailableReason } from "../../../app/panel-availability.ts";
@@ -15,6 +16,7 @@ import type {
 } from "./chat-sidebar-content-types.ts";
 
 export type SessionWorkspaceArtifacts = {
+  attachments?: NonNullable<ArtifactsListResult["attachments"]> & { atRequest: WeakSet<object> };
   /** Completion of the owner's admitted read; presentation observes without issuing another RPC. */
   readResult?: Promise<void>;
   items: NonNullable<SessionWorkspaceListResult["artifacts"]>;
@@ -27,6 +29,7 @@ export type SessionWorkspaceArtifacts = {
 };
 
 export type SessionWorkspaceState = {
+  fileLinksRevision?: number;
   readResult?: Promise<void>;
   catalogNavigation?: SessionWorkspaceNavigation;
   pendingPreview?: { id: string; disposition: "pinned" | "preview" };
@@ -59,6 +62,7 @@ export type SessionWorkspaceState = {
 // Re-renders must preserve the document identity or the mounted diff panel
 // treats its loader as new and requests sessions.diff again.
 export type SessionWorkspaceHost = {
+  chatMessages?: readonly unknown[];
   sessionKey: string;
   readonly sessionWorkspaceReadDisabledReason?: string | null;
   sessions: SessionCapability;

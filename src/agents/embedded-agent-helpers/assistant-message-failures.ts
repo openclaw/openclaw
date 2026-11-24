@@ -1,4 +1,4 @@
-import type { AssistantMessage } from "../../llm/types.js";
+import type { AssistantHistoryMessage } from "../../llm/types.js";
 import { isTerminalAssistantError } from "../../llm/utils/retry.js";
 import { extractErrorHttpStatus } from "../../shared/assistant-error-format.js";
 import { failoverReasonFromClassification } from "../failover/classification-rules.js";
@@ -13,7 +13,7 @@ import { resolveRetryAfterMs } from "../failover/retry-evidence.js";
 import { extractFailoverSignalDetails } from "../failover/signal-details.js";
 import type { FailoverReason, FailoverSignal } from "../failover/signal.js";
 export function buildAssistantFailoverSignal(
-  msg: AssistantMessage,
+  msg: AssistantHistoryMessage,
   opts?: { provider?: string },
 ): FailoverSignal {
   const textRetryAfterMs = resolveRetryAfterMs(msg.errorMessage, Date.now(), msg.errorBody);
@@ -34,7 +34,7 @@ export function buildAssistantFailoverSignal(
   };
 }
 export function classifyAssistantFailoverReason(
-  msg: AssistantMessage | undefined,
+  msg: AssistantHistoryMessage | undefined,
   opts?: { provider?: string; providerOwner?: PreparedProviderFailoverOwner | null },
 ): FailoverReason | null {
   if (!msg || msg.stopReason !== "error" || isTerminalAssistantError(msg)) {
@@ -49,15 +49,15 @@ export function classifyAssistantFailoverReason(
   );
   return failoverReasonFromClassification(classification);
 }
-export function isRateLimitAssistantError(msg: AssistantMessage | undefined): boolean {
+export function isRateLimitAssistantError(msg: AssistantHistoryMessage | undefined): boolean {
   return msg?.stopReason === "error" && isRateLimitErrorMessage(msg.errorMessage ?? "");
 }
-export function isBillingAssistantError(msg: AssistantMessage | undefined): boolean {
+export function isBillingAssistantError(msg: AssistantHistoryMessage | undefined): boolean {
   return msg?.stopReason === "error" && isBillingErrorMessage(msg.errorMessage ?? "");
 }
-export function isAuthAssistantError(msg: AssistantMessage | undefined): boolean {
+export function isAuthAssistantError(msg: AssistantHistoryMessage | undefined): boolean {
   return msg?.stopReason === "error" && isAuthErrorMessage(msg.errorMessage ?? "");
 }
-export function isFailoverAssistantError(msg: AssistantMessage | undefined): boolean {
+export function isFailoverAssistantError(msg: AssistantHistoryMessage | undefined): boolean {
   return classifyAssistantFailoverReason(msg) !== null;
 }

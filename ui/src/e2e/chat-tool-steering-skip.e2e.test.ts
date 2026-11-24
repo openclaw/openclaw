@@ -55,6 +55,7 @@ suite.define(() => {
       await emit(1, "tool", { ...tool, phase: "start", args });
       await emit(2, "tool", result);
       await emit(3, "item", projectAgentToolActivity({ ...result, args }));
+      await page.locator('.chat-activity-group__summary[aria-expanded="false"]').click();
       const row = page.locator(".chat-tool-msg-summary").filter({ hasText: "operation.json" });
       await row.waitFor();
       await row.click({ position: { x: 4, y: 4 } });

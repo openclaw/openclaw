@@ -81,7 +81,7 @@ export async function proveAcceptedDirectoryRetention(
 
   let source = "original\n";
   if (mode === "interrupted eviction") {
-    const { withWorktreeAllocationLease } = await import("../../agents/worktrees/allocation.js");
+    const { withWorktreeMutationLease } = await import("../../agents/worktrees/allocation.js");
     const { evictManagedWorktree } = await import("../../agents/worktrees/eviction.js");
     const { hasWorkerWorkspaceResultRef, workerWorkspaceResultStaging } =
       await import("./workspace-result-staging.js");
@@ -90,7 +90,7 @@ export async function proveAcceptedDirectoryRetention(
       .mockRejectedValueOnce(new Error("archive staging interrupted"));
     try {
       await expect(
-        withWorktreeAllocationLease({ env: process.env }, (guard) =>
+        withWorktreeMutationLease({ env: process.env, id: owner.worktree.id }, (guard) =>
           evictManagedWorktree({
             env: process.env,
             record: owner.worktree,
@@ -99,7 +99,7 @@ export async function proveAcceptedDirectoryRetention(
             getConfig: () => ({}),
           }),
         ),
-      ).resolves.toBe("dirty-purged");
+      ).rejects.toThrow("archive staging interrupted");
     } finally {
       staging.mockRestore();
     }
@@ -110,13 +110,14 @@ export async function proveAcceptedDirectoryRetention(
     ).toBe(false);
     source = "newer projection bytes after interrupted staging\n";
     await writeText(projection, "source.txt", source);
-  } else {
-    const removed = await service.remove({
-      id: owner.worktree.id,
-      reason: "directory-retention",
-    });
-    expect(removed.removed).toBe(true);
+    expect(getRegistryWorktree(process.env, owner.worktree.id)?.removedAt).toBeUndefined();
+    await expectText(canonical, "authored/.env.local", "authored ignored bytes\n");
   }
+  const removed = await service.remove({
+    id: owner.worktree.id,
+    reason: "directory-retention",
+  });
+  expect(removed.removed).toBe(true);
   await expectMissing(canonical);
   await closeOpenClawStateDatabaseAsync();
   await service.restore({ id: owner.worktree.id });
@@ -140,10 +141,10 @@ export async function prepareLegacyArchiveRetention(params: {
 }) {
   const { owner, receipt, originalInput } = params;
   const repo = owner.worktree.repoRoot;
-  const { readStagedWorkerWorkspaceResult } = await import("./workspace-result-staging.js");
+  const { loadStagedWorkspaceManifest } = await import("./workspace-manifest-worker.js");
   const { serializeWorkerWorkspaceManifest } = await import("./workspace-manifest.js");
   const { expireLocalWorkspaceProjection } = await import("./local-workspace-projection.js");
-  const archived = await readStagedWorkerWorkspaceResult(repo, receipt, [originalInput]);
+  const archived = await loadStagedWorkspaceManifest(repo, receipt, undefined, [originalInput]);
   const replaceBaseline = async (rawManifest: string) => {
     await withLocalWorkspaceStore({ worktreeId: owner.worktree.id }, async (store) => {
       await store.update(store.get()!, {}, undefined, {
@@ -172,4 +173,57 @@ export async function prepareLegacyArchiveRetention(params: {
   expect(retireSnapshot).not.toHaveBeenCalled();
   // Earlier writers reserved archive receipts against their reduced Git base.
   await replaceBaseline(archived.baseManifestRaw);
+}
+
+export async function proveArchivedInputRetention(
+  owner: LocalWorkspaceOwner,
+  service: ManagedWorktreeService,
+) {
+  const canonical = owner.worktree.path;
+  const gitOwner = await import("../../agents/worktrees/git.js");
+  const projection = await prepare(owner);
+  const originalAdmission = (await readLocalWorkspaceProjection(owner.worktree.id))!
+    .source_paths_json;
+  const input = ".artifacts/build-cache-inputs/node_modules/late-original.json";
+  expect(JSON.parse(originalAdmission)).not.toContain(input);
+  await writeText(canonical, ".gitignore", ".env.local\n.artifacts/\n");
+  await fs.mkdir(path.dirname(path.join(canonical, input)), { recursive: true });
+  await writeText(canonical, input, "host-admitted input\n");
+  await gitOwner.requireGit(canonical, ["add", "--force", "--", input]);
+  await prepare(owner);
+  await expectText(projection, input, "host-admitted input\n");
+  const removed = await service.remove({ id: owner.worktree.id, reason: "legacy-admission-probe" });
+  expect(removed.removed).toBe(true);
+  expect(
+    await gitOwner.requireGit(owner.worktree.repoRoot, [
+      "ls-tree",
+      "-r",
+      "--name-only",
+      removed.snapshotRef!,
+    ]),
+  ).toContain(input);
+  // Before this policy, host-index admission did not update source_paths_json.
+  await withLocalWorkspaceStore({ worktreeId: owner.worktree.id }, async (store) => {
+    await store.update(store.get()!, { source_paths_json: originalAdmission });
+  });
+  await closeOpenClawStateDatabaseAsync();
+  owner.worktree = await service.restore({ id: owner.worktree.id });
+  expect(owner.worktree.snapshotRef).toBeTruthy();
+  await prepare(owner);
+  await expectText(projection, input, "host-admitted input\n");
+  expect(await gitOwner.requireGit(canonical, ["ls-files"])).not.toContain(input);
+  const generated = ".artifacts/build-cache-inputs/generated-after-restore.json";
+  await writeText(projection, generated, "new disposable cache\n");
+  if (process.platform !== "win32" && process.getuid?.() !== 0) {
+    await fs.chmod(path.join(projection, generated), 0);
+  }
+  await writeText(projection, input, "restored authored edit\n");
+  const inventory = vi.spyOn(gitOwner, "requireGitBuffer");
+  await synchronize(owner);
+  expect(
+    inventory.mock.calls.filter(([, args]) => ["ls-files", "ls-tree"].includes(args[0]!)),
+  ).toEqual([]);
+  inventory.mockRestore();
+  await expectText(canonical, input, "restored authored edit\n");
+  await expectMissing(canonical, generated);
 }

@@ -339,10 +339,16 @@ it.each([
       await sidebar.updateComplete;
       expect(data.childSessionRowsByParent[parentKey]?.map((row) => row.key)).toEqual(childKeys);
       expect.soft(rowElement(sidebar, child.key)?.textContent).toContain(fresh.label);
-      expect.soft(sidebar.findSidebarHovercardRowByKey(child.key)).toMatchObject(fresh);
+      expect.soft(sidebar.findSidebarHovercardRowByKey(child.key)).toMatchObject({
+        key: fresh.key,
+        label: fresh.label,
+        status: fresh.status,
+        hasActiveRun: fresh.hasActiveRun,
+        updatedAt: fresh.updatedAt,
+      });
       expect(
-        childToggle(sidebar)?.classList.contains("sidebar-child-session-toggle--running"),
-      ).toBe(true);
+        rowElement(sidebar, child.key)?.querySelector(".session-glyph--running"),
+      ).not.toBeNull();
       expect(sessions.state.result).toBe(primary);
     } finally {
       unsubscribe();

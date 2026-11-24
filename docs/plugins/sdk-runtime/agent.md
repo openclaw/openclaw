@@ -69,9 +69,12 @@ loads the selected active branch, and `openDetachedBoundedAsync` returns the sam
 selection without persistence. File-backed SQLite reads run on the history worker.
 The synchronous getters consume the prepared view without reading storage.
 
-Hydrated entry and message envelopes remain mutable local views. Their nested
-payloads are frozen after migration and can be shared across rewrite snapshots.
-Replace a payload with a new value instead of editing its nested objects or arrays.
+Public SessionManager getters preserve local entry and message mutation behavior:
+they detach selected hydrated entries before exposing them; already-admitted immutable
+append payloads retain their existing sharing contract. Internal hydration,
+actor reads, and initial model-context preparation share immutable transcript
+payloads. Extension context hooks still receive writable message copies. Neither
+editing a getter's local view nor editing hook messages changes retained actor history.
 
 Full reads transfer bounded chunks from one committed SQLite snapshot without
 truncating the transcript to fit the worker. The caller still holds the complete
@@ -191,7 +194,8 @@ compaction or reset boundary. It preserves
 tool-result ownership and rejects a limit that cannot retain the newest complete
 frame or required boundary. Stored transcripts stay unchanged. Omitting `limits`
 keeps the full selected context. Async reads retain admission, anchor, and
-cancellation checks.
+cancellation checks. Background model views should pass bounded limits, because an
+unbounded read of a very large session can exhaust the transcript worker.
 
 For a temporary model-only view, callers may explicitly add
 `toolResultOverflow: "omit"` to `limits`. Under byte pressure, the reader replaces
@@ -287,6 +291,43 @@ compaction rows, keep it valid, so a steady-state read costs time proportional
 to new messages. Reset rows keep default cursors valid; reset-window cursors
 handle them as described under [Reset-window start](#reset-window-start). Defaults are 1,000 messages and 1,000,000 bytes;
 caps are 10,000 messages and 64 MiB.
+
+### Canonical replay groups
+
+Context engines can retain raw messages longer than the host's bounded hydration
+window. Use `readSessionTranscriptReplayGroups(...)` from the same
+`openclaw/plugin-sdk/context-engine-transcript-runtime` subpath to recover the
+canonical user metadata and runtime context for retained transcript entry IDs:
+
+```ts
+const groups = await readSessionTranscriptReplayGroups({
+  agentId,
+  sessionKey,
+  sessionId,
+  entryIds: retainedUserEntryIds,
+  maxBytes: 8 * 1024 * 1024,
+});
+```
+
+Each group contains `entryId`, the canonical `message`, and its adjacent
+runtime-context and system-update `carriers` in model history. Thinking/model
+changes, custom bookkeeping, labels, and session information do not interrupt
+the group. Other messages, background-result placements, compaction, reset, and
+branch-summary boundaries do. Prompt-update carriers retired by a later system-prefix
+restart, compaction, or reset are omitted; retained runtime-context facts remain available.
+Results follow requested ID order, with duplicates returned once. Missing,
+inactive-branch, non-user, and admission-fenced IDs are omitted. Carriers never
+come from another branch or turn. This is an identity-based read, not a text
+search or permission to restore compacted messages.
+
+The read uses the existing transcript owner, including memory-only sessions,
+and preserves current-turn admission and database-lifetime checks. Durable reads
+run in the existing history worker or the inherited write lock's ordered worker.
+There are no direct transcript-file reads. The cumulative uncompressed source
+budget includes users and carriers; overflow rejects the entire read rather than
+returning partial context. The default is 8 MiB, capped at 64 MiB, with at most
+10,000 requested IDs. Unavailable storage and stale admission throw instead of
+being reported as an empty successful read.
 
 ### Reset reasons
 
@@ -428,6 +469,8 @@ Each `SessionTranscriptMessageEntry` contains:
 
     `runEmbeddedAgent(...)` is the neutral helper for starting a normal OpenClaw agent turn from plugin code. It uses the same provider/model resolution and agent-harness selection as channel-triggered replies.
 
+    Each call owns a detached execution lifetime, so deferred turns can continue after the triggering request completes. During reversible suspension, calls from an admitted request can continue; other calls wait for admission to reopen. Pass `abortSignal` to cancel that wait or the turn.
+
     The caller owns `terminalReplyExpectation`: `"required"` for a normally requested response, `"optional"` for optional work, or `"result-required"` for internal work that must return a result. External turns may explicitly finish with an entire final that trims to uppercase `NO_REPLY` under either default reply expectation. The terminal producer prepares the full payload once and publishes `meta.terminalReply`; delivery consumes that fact without reparsing text. Producer preparation strips one literal leading `NO_REPLY\n`, preserving the remaining bytes as visible text. Otherwise, a standalone `NO_REPLY` on the last non-empty line is removed and the preceding answer is delivered; whitespace around that final line is allowed. Lowercase, punctuation, quoted or JSON forms, and inline or mid-text mentions are ordinary visible text. Internal result-required turns need a completed current-source final result, not a silent payload or progress update. `NO_REPLY` discards anything written this turn that was not sent, so send confirmations before ending silently. Empty output is not silence: recovery after settled tools uses a tool-free finalization pass rather than repeating completed actions.
 
     For stored assistant text without an authoritative display or final-result fact, `openclaw/plugin-sdk/reply-runtime` exports `isSilentReplyText(text?: string)`, which checks only `text?.trim() === "NO_REPLY"`. It has no custom-token parameter. `reply-chunking` no longer exports silence helpers, and the memory-host runtime no longer re-exports them. There are no compatibility aliases; live delivery must use producer-prepared output rather than this stored-text helper.
@@ -544,7 +587,7 @@ Each `SessionTranscriptMessageEntry` contains:
 
     Maintenance and repair plugins may use `deleteSessionEntry(...)` for one scoped session entry, `cleanupSessionLifecycleArtifacts(...)` for lifecycle-owned scratch sessions, and `deleteSessionEntry({ ..., backupDir })` to complete a recovery snapshot before deletion. When repairing several entries in one store, pass `backupDir` on the first deletion only. The backup uses the verified SQLite snapshot owner, embeds retained cold transcripts, and publishes a standalone database without WAL or SHM sidecars alongside any legacy session index. Use a fresh backup directory; existing target files are never overwritten. `resolveSessionStoreBackupPaths(...)` remains an artifact inventory, not a safe file-copy protocol. Pass `expectedSessionId` and `expectedUpdatedAt` when deletion must not race a concurrent session update; use `expectedSessionId: null` when the earlier snapshot had no session id. These helpers are narrow repair/lifecycle surfaces, not a general store deletion API.
 
-    For person-filtered disclosure, use `api.runtime.agent.session.withSessionEntriesAsync({ stores: [{ agentId, storePath, sessionKeys }], involvingProfileId, env }, consume)`. The optional `involvingProfileId` selects an exact source-local profile ID or merge alias, matching canonical effective human owners or direct profile participants; a trusted creator is the effective owner only when no owner is assigned. Mentions alone do not match. This filter is distinct from Activity filters. Personal hide/show state does not change this selection. Missing profiles, names, logins, and shortened display references match nothing. Identity resolution respects the optional `env` scope. Omit `involvingProfileId` for an unfiltered selection; an empty value matches nothing.
+    For person-filtered disclosure, use `api.runtime.agent.session.withSessionEntriesAsync({ stores: [{ agentId, storePath, sessionKeys }], involvingProfileId, profileRelation, env }, consume)`. The optional `involvingProfileId` selects an exact source-local profile ID or merge alias, matching canonical effective human owners or direct profile participants; a trusted creator is the effective owner only when no owner is assigned. Mentions alone do not match `involvingProfileId`. The optional `profileRelation` takes a numeric GitHub account target and an `owned` or `involving` relationship; the latter also matches recorded mentions. Both selectors intersect when supplied together. These filters are distinct from Activity filters. Personal hide/show state does not change this selection. Missing profiles, names, logins, and shortened display references match nothing. Identity resolution respects the optional `env` scope. Omit `involvingProfileId` for an unfiltered selection; an empty value matches nothing.
 
     The host prepares selected stores off-thread and retains their physical sources through the synchronous `consume(entries)` callback. After the selected stores are prepared, the shared-state worker reads a fresh canonical profile snapshot without reusing resident catalogs or inherited inspection snapshots. Local identity changes invalidate that prepared selection. Final native reads select current session metadata after the last await. Profile and session reads are separate snapshots; an external profile commit after the profile snapshot is not covered by the local identity guard. After awaited preparation, revalidate current configuration, selected groups, exact session IDs, source/currentness checks, and other caller-owned policy inside that callback, then serialize without awaiting. Returning a Promise is rejected; returned metadata carries no authority after the callback. Person selection does not grant viewer access or replace the publishing plugin's explicit filters and safety exclusions. Neither the deprecated `listSessionEntries` nor the metadata-only `listSessionEntriesAsync` provides this person-filtered disclosure contract. See [session store entrypoints](/plugins/sdk-entrypoints#session-persistence).
 
@@ -674,3 +717,16 @@ Catalog list publishers await `prepareSessionCatalogSourceActorProjector({ plugi
 
   </Accordion>
 </AccordionGroup>
+
+Session Share keeps the legacy list/read contracts unchanged. Optional node
+catalog commands are `openclaw.sessions.catalog.list.v1` and
+`openclaw.sessions.catalog.read.v1`, explicitly allowed on the receiver and
+advertised/approved on the source. Node list accepts `profileRelation` and
+`includeOriginalPath`; read accepts `profileRelation`. The only source target is
+`{ type: "github-account", id: "123" }`, with relationship `owned` or `involving`.
+The outbound Gateway pair is `session-share.catalog.list/read`, advertised in
+`features.methods`. Its list accepts `profileRelation`, but never `includeOriginalPath`;
+Gateway sources cannot supply original links. Receivers use the advertised catalog
+pair for every list/read, and the legacy pair only when the catalog pair is absent.
+These selectors narrow publication, not reader authority.
+See [Session Share](/plugins/session-share) for numbered setup and disclosure.

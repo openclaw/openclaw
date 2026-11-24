@@ -203,13 +203,11 @@ describe("shared question panel", () => {
     drawGateway(prompt, { onSubmit });
     await panelIn(container);
 
-    expect(
-      container.querySelector('[role="radio"] .chat-question-panel__option-marker'),
-    ).not.toBeNull();
+    expect(container.querySelector('[role="radio"] .oc-radio')).not.toBeNull();
     expect(container.querySelector('[role="radio"] kbd')).not.toBeNull();
     expect(
       container.querySelector(
-        ".chat-question-panel__option--other .chat-question-panel__option-marker",
+        ".chat-question-panel__option--other :is(.chat-question-panel__option-marker, .oc-radio)",
       ),
     ).not.toBeNull();
     expect(container.querySelector(".chat-question-panel__option--other kbd")).not.toBeNull();
@@ -240,6 +238,11 @@ describe("shared question panel", () => {
     other.value = "Metrics";
     other.dispatchEvent(new InputEvent("input", { bubbles: true }));
     flush();
+    expect(
+      container.querySelector(
+        ".chat-question-panel__option--other .chat-question-panel__option-marker",
+      )?.textContent,
+    ).toBe("✓");
     container.querySelector<HTMLButtonElement>(".chat-question-panel__advance")?.click();
 
     expect(onSubmit).toHaveBeenCalledWith({

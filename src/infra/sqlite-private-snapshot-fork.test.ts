@@ -128,17 +128,20 @@ it.each([
   },
 );
 
+it("forks after a root reader's native open bumps only the WAL's ctime", async () => {
+  // Same-mode chmod stands in for the fchown SQLite issues on every open as root.
+  fs.chmodSync(`${image.source}-wal`, fs.statSync(`${image.source}-wal`).mode);
+  expect(fs.existsSync(`${await image.fork()}-wal`)).toBe(true);
+});
+
 it("refuses retained WAL removal during copy without retrying live capture", async () => {
   let changed = false;
-  const removeWal = () => {
-    fs.unlinkSync(`${image.source}-wal`);
-    changed = true;
-  };
   const fsync = fs.fsyncSync.bind(fs);
   vi.spyOn(fs, "fsyncSync").mockImplementation((descriptor) => {
     fsync(descriptor);
     if (!changed && fs.fstatSync(descriptor).size === 65573) {
-      removeWal();
+      fs.unlinkSync(`${image.source}-wal`);
+      changed = true;
     }
   });
   await expect(image.fork()).rejects.toThrow();

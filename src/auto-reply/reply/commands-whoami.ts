@@ -5,7 +5,6 @@ export const handleWhoamiCommand: CommandHandler = defineAuthorizedTextCommand(
   {
     label: "/whoami",
     match: (body) => (body === "/whoami" ? true : null),
-    silentUnauthorized: true,
   },
   (params) => {
     const senderId = params.ctx.SenderId ?? "";

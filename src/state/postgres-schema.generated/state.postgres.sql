@@ -687,6 +687,7 @@ CREATE TABLE "operator_approvals" (
   "resolver_id" text COLLATE "C",
   "consumed_at_ms" bigint,
   "consumed_by" text COLLATE "C",
+  "requested_by_profile_id" text COLLATE "C",
   PRIMARY KEY ("approval_id"),
   CHECK ((char_length("approval_id") > 0) AND ("approval_id" NOT IN ('.', '..'))),
   CHECK ((char_length("resolution_ref") = 43) AND ("resolution_ref" COLLATE "C" !~ '\A.*[^A-Za-z0-9_-].*\Z')),
@@ -1119,6 +1120,7 @@ CREATE TABLE "worker_environments" (
   "shared_host" bigint,
   "resource_receipt_json" text COLLATE "C",
   "retention_json" text COLLATE "C",
+  "provision_source_json" text COLLATE "C",
   PRIMARY KEY ("environment_id"),
   CHECK (("preparation_key" IS NULL AND "preparation_demand_at_ms" IS NULL AND "preparation_expires_at_ms" IS NULL AND "preparation_consumed_at_ms" IS NULL) OR ("preparation_key" IS NOT NULL AND (char_length("preparation_key") = 64) AND ("preparation_key" COLLATE "C" !~ '\A.*[^0-9a-f].*\Z') AND "preparation_demand_at_ms" IS NOT NULL AND ("preparation_demand_at_ms" BETWEEN 0 AND 9007199254740991) AND "preparation_expires_at_ms" IS NOT NULL AND ("preparation_expires_at_ms" > "preparation_demand_at_ms") AND ("preparation_expires_at_ms" <= 9007199254740991) AND ("preparation_consumed_at_ms" IS NULL OR (("preparation_consumed_at_ms" >= "preparation_demand_at_ms") AND ("preparation_consumed_at_ms" < "preparation_expires_at_ms"))))),
   CHECK ("ssh_port" IS NULL OR (("ssh_port" >= 1) AND ("ssh_port" <= 65535))),
@@ -1309,6 +1311,7 @@ CREATE TABLE "workspace_setup_state" (
   "updated_at" bigint,
   "attested_at_ms" bigint,
   "attestation_updated_at_ms" bigint,
+  "bootstrap_deferred" bigint,
   PRIMARY KEY ("workspace_key"),
   CHECK ("version" IS NULL OR "workspace_path" IS NOT NULL)
 );

@@ -1,7 +1,7 @@
 import type { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createKeywordSearch } from "./manager-keyword-fixture.test-support.js";
-import { searchKeywordWithFallback } from "./manager-search.js";
+import { searchKeywordWithFallback } from "./manager-search-keyword.js";
 import { createMemorySearchDb, insertKeywordFixture } from "./manager-search.test-support.js";
 import { applyTemporalDecayToHybridResults } from "./temporal-decay.js";
 

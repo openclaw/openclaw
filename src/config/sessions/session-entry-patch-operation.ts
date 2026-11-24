@@ -78,6 +78,8 @@ type SessionEntryPatchStep = (
       sessionKey: string;
       source: SessionEntry;
       continuation: NonNullable<SessionEntry["cronRunContinuation"]>;
+      /** The occurrence's admitted parent; absence clears a row's earlier receipt. */
+      scheduledMemoryParent?: SessionEntry["scheduledMemoryParent"];
       create: boolean;
       creation: ReturnType<typeof buildSessionCreationStamp>;
       thinkingLevel?: string;
@@ -290,6 +292,8 @@ export function reduceSessionEntryPatch(
         claudeCliSessionId: source.claudeCliSessionId,
         ...(!existingEntry ? operation.creation : {}),
         ...(operation.thinkingLevel ? { thinkingLevel: operation.thinkingLevel } : {}),
+        // Only this cron-owned write sets the receipt; the copied source row never carries one.
+        scheduledMemoryParent: operation.scheduledMemoryParent,
         cronRunContinuation: continuation,
       };
     }

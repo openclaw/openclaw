@@ -149,8 +149,11 @@ throw new Error("JSON inventory must not execute setup");`,
 );
 
 afterAll(() => {
-  fs.rmSync(tempRoot, { recursive: true, force: true });
-  vi.unstubAllEnvs();
+  try {
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  } finally {
+    vi.unstubAllEnvs();
+  }
 });
 
 it("resolves catalog-row repair hints without rebuilding the manifest registry", async () => {

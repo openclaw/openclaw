@@ -107,6 +107,8 @@ export type SessionListFilterParams = {
     target: NonNullable<ReturnType<SessionListTargetLookup>>,
   ) => boolean;
   restrictProfileReferences?: boolean;
+  /** Includes the caller in person-link resolution even without visible session associations. */
+  viewerProfileId?: string;
   involvingActorId?: string;
   ownerFirstActorId?: string;
   projectActiveRun?: SessionListActiveRunProjector;
@@ -224,6 +226,9 @@ export function filterSessionEntries(
   const allowedProfileIds =
     opts.involvingProfileId && params.restrictProfileReferences ? new Set<string>() : undefined;
   if (allowedProfileIds) {
+    if (params.viewerProfileId) {
+      allowedProfileIds.add(resolveSessionProfileId(params.viewerProfileId, identities));
+    }
     for (const [, entry] of visibleEntries) {
       const owner = projectOwner(entry, identities, cfg, configuredAgentIds)?.actor;
       for (const person of projectPeople(entry, identities, owner)) {
@@ -288,6 +293,18 @@ export function filterSessionEntries(
         target: NonNullable<ReturnType<SessionListTargetLookup>>,
       ): boolean => {
         const storeKey = target.storeKey ?? key;
+        if (opts.searchTitlesOnly) {
+          return [
+            entry.label,
+            entry.subject,
+            resolveSessionListSearchDisplayName(storeKey, entry),
+            resolveGatewaySessionDisplayName(storeKey, entry),
+          ].some(
+            (title) =>
+              normalizeSessionSearchLiteral(title).includes(search) ||
+              Boolean(titleSearch && normalizeSessionSearchText(title).includes(titleSearch)),
+          );
+        }
         let fields = staticSearchFields.get(entry);
         if (!fields || fields.key !== storeKey) {
           const titles = [
@@ -403,12 +420,14 @@ export function filterSessionEntries(
           const modelKey = JSON.stringify([
             "prepared",
             agentId,
-            source.selectedModel.provider,
-            source.selectedModel.model,
+            source.selectedModel?.provider,
+            source.selectedModel?.model,
             source.rowModelIdentity.provider,
             source.rowModelIdentity.model,
           ]);
-          if (matchesModelRefs(modelKey, () => [source.selectedModel, source.rowModelIdentity])) {
+          if (
+            matchesModelRefs(modelKey, () => [source.selectedModel ?? {}, source.rowModelIdentity])
+          ) {
             return true;
           }
         }
@@ -453,9 +472,6 @@ export function filterSessionEntries(
       continue;
     }
     const target = expectDefined(params.getTarget(key), "selection row owner");
-    if (!opts.involvingProfileId && params.entryFilter?.(key, entry, target) === false) {
-      continue;
-    }
     const { selection } = target;
     const storeKey = target.storeKey ?? key;
     if (
@@ -469,13 +485,13 @@ export function filterSessionEntries(
     ) {
       continue;
     }
-    if (agentFilter && storeKey !== "global") {
-      const ownerAgentId = normalizeAgentId(target.agentId);
-      if (ownerAgentId !== agentFilter) {
-        continue;
-      }
+    if (agentFilter && storeKey !== "global" && target.agentId !== agentFilter) {
+      continue;
     }
     if (selection.isPhantom) {
+      continue;
+    }
+    if (!opts.involvingProfileId && params.entryFilter?.(key, entry, target) === false) {
       continue;
     }
     if (spawnedBy) {
@@ -531,6 +547,7 @@ export function filterSessionEntries(
     if (profileRelation?.relationship === "involving" && !relationKeys?.has(key)) {
       continue;
     }
+    // Facets and selectors describe readable sessions, not private profile activity.
     if (effectiveOwner) {
       addSessionOwnerFacetIdentity(ownerFacet, effectiveOwner);
     }

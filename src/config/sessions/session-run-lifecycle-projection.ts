@@ -6,8 +6,17 @@ import {
   classifyAgentRunTerminalOutcome,
   type AgentRunTerminalOutcome,
 } from "../../agents/agent-run-terminal-outcome.js";
+import {
+  isAcpSessionKey,
+  isCronSessionKey,
+  isSubagentSessionKey,
+} from "../../routing/session-key.js";
 import type { ProviderReviewTerminalFact } from "../../sessions/provider-review-terminal.js";
 import { buildUpdatedSessionGoalStatus } from "./goals-transitions.js";
+import {
+  createRestartResumeMarker,
+  resolveRestartResumeScope,
+} from "./session-restart-resume-scope.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
 
 export type SessionLifecycleProviderReview = Pick<
@@ -22,7 +31,10 @@ export type SessionLifecyclePatchInput = {
   canonicalKey: string;
   lifecycleRevision?: string;
   exactCronRun: boolean;
+  gatewayShutdown?: true;
   providerReview?: SessionLifecycleProviderReview;
+  /** When the newest visible assistant row in the transcript arrived; drives unread at run end. */
+  visibleActivityAt?: number;
   expectedWriter?: {
     allowUnstartedFailure?: true;
     requireYielded?: true;
@@ -39,13 +51,15 @@ export type SessionLifecyclePatchEffects = {
     errorKind?: "state_contention";
     suppressErrorNotice?: boolean;
     notice?: string;
+    desktopNotice?: string;
+    /** The run's provider error observation; the failure recorder bounds what it keeps. */
+    errorObservation?: unknown;
   };
 };
 
 export type LifecyclePhase = "start" | "end" | "error";
 
 export type LifecycleEventLike = { ts: number; sessionId?: string } & {
-  controlUiVisible?: boolean;
   contextClaimId?: string;
   runId?: string;
   clientRunId?: string;
@@ -61,6 +75,9 @@ export type LifecycleEventLike = { ts: number; sessionId?: string } & {
     suppressErrorNotice?: unknown;
     /** Host-authored failure copy the requester already saw; recorded verbatim. */
     errorNotice?: unknown;
+    /** Desktop-only presentation; shared transcript copy stays unchanged. */
+    desktopErrorNotice?: unknown;
+    errorObservation?: unknown;
     executionStarted?: unknown;
     livenessState?: unknown;
     timeoutPhase?: unknown;
@@ -85,12 +102,32 @@ type LifecycleSessionShape = Pick<
 
 type PersistedLifecycleSessionShape = Pick<
   SessionEntry,
-  keyof LifecycleSessionShape | "status" | "lifecycleRunId"
+  keyof LifecycleSessionShape | "status" | "lifecycleRunId" | "lifecycleRestartScope"
 >;
 
 type GatewaySessionLifecycleSnapshot = Partial<
   Pick<SessionEntry, keyof LifecycleSessionShape | "status">
 >;
+
+export function restartResumeSkipReason(
+  sessionKey: string,
+  entry?: SessionEntry,
+  directChat = entry?.resumeAfterRestart?.directChat === true,
+) {
+  if (isCronSessionKey(sessionKey)) {
+    return "cron";
+  }
+  if (isAcpSessionKey(sessionKey) || entry?.acp || entry?.modelSelectionLocked) {
+    return "external-owner";
+  }
+  if (isSubagentSessionKey(sessionKey) || (entry?.createdVia === "spawn" && !directChat)) {
+    return "subagent";
+  }
+  if (entry?.archivedAt !== undefined) {
+    return "archived";
+  }
+  return entry?.incognito ? "incognito" : undefined;
+}
 
 function isFiniteTimestamp(value: unknown): value is number {
   return typeof value === "number" && Number.isFinite(value) && value > 0;
@@ -217,12 +254,6 @@ export function deriveSessionLifecycleSnapshot(params: {
     startedAt,
     endedAt,
     runtimeMs: resolveRuntimeMs({ startedAt, endedAt, existingRuntimeMs: existing?.runtimeMs }),
-    ...(terminal &&
-    !stoppedForRestart &&
-    params.event.controlUiVisible === true &&
-    endedAt !== undefined
-      ? { lastActivityAt: Math.max(existing?.lastActivityAt ?? 0, endedAt) }
-      : {}),
     abortedLastRun: status === "killed",
   };
 }
@@ -253,7 +284,11 @@ export function derivePersistedSessionLifecyclePatch(params: {
   return {
     ...snapshot,
     ...(phase === "start"
-      ? { lifecycleRunId: runId, lastRunId: undefined }
+      ? {
+          lifecycleRunId: runId,
+          lifecycleRestartScope: resolveRestartResumeScope(),
+          lastRunId: undefined,
+        }
       : snapshot.status && resolveSettledLifecycleTerminalOutcome(params.event)
         ? { lifecycleRunId: undefined, lastRunId: clientRunId }
         : {}),
@@ -396,17 +431,32 @@ export function projectSessionLifecyclePatch(
     return { patch: null };
   }
   const patch: Partial<PersistedLifecycleSessionShape> &
-    Pick<SessionEntry, "providerReview" | "goal"> = derivePersistedSessionLifecyclePatch({
-    entry,
-    event: params.event,
-    currentLifecycleGeneration: params.currentLifecycleGeneration,
-    lastRunError: params.lastRunError,
-  });
+    Pick<SessionEntry, "providerReview" | "goal" | "resumeAfterRestart"> =
+    derivePersistedSessionLifecyclePatch({
+      entry,
+      event: params.event,
+      currentLifecycleGeneration: params.currentLifecycleGeneration,
+      lastRunError: params.lastRunError,
+    });
   if (providerReview && Object.keys(patch).length > 0) {
     patch.providerReview = providerReview.review;
   }
   const endedAt = patch.endedAt ?? params.event.ts;
   const terminal = resolveSettledLifecycleTerminalOutcome(params.event);
+  if (terminal && (params.visibleActivityAt ?? 0) > (entry.lastActivityAt ?? 0)) {
+    // Unread follows the chat: a run that appended no visible reply leaves activity alone.
+    patch.lastActivityAt = params.visibleActivityAt;
+  }
+  if (
+    params.gatewayShutdown &&
+    patch.status === "killed" &&
+    terminal?.reason === "cancelled" &&
+    terminal.stopReason === "restart" &&
+    !restartResumeSkipReason(params.canonicalKey, entry)
+  ) {
+    // A timed-out shutdown marker must not turn cancellation into a lost continuation.
+    patch.resumeAfterRestart = entry.resumeAfterRestart ?? createRestartResumeMarker({});
+  }
   const stopped =
     patch.status === "killed" &&
     (terminal?.reason === "aborted" ||
@@ -416,7 +466,7 @@ export function projectSessionLifecyclePatch(
     entry.goal?.status === "active" &&
     entry.goal.updatedAt <= endedAt
   ) {
-    // Commit a definitive failure or Stop with its goal pause and frozen timer.
+    // Commit a definitive failure or interruption with its goal pause and frozen timer.
     // Restart, supersession, and yielded work retain their continuation custody.
     // A delayed terminal must not undo a newer resume or replacement goal.
     patch.goal = buildUpdatedSessionGoalStatus(
@@ -424,7 +474,7 @@ export function projectSessionLifecyclePatch(
       {
         status: "paused",
         note: stopped
-          ? "Paused after Stop. Resume to continue."
+          ? "Paused after an interruption. Resume to continue."
           : `Paused after an error. Resume to continue. ${patch.lastRunError ?? (patch.status === "timeout" ? "Run timed out." : "Run failed.")}`,
       },
       endedAt,
@@ -437,6 +487,7 @@ export function projectSessionLifecyclePatch(
   ) {
     effects.failedRun = {
       runId: eventRunId,
+      errorObservation: params.event.data?.errorObservation,
       suppressErrorNotice: params.event.data?.suppressErrorNotice === true,
       errorKind:
         params.event.data?.errorKind === "state_contention" ? "state_contention" : undefined,
@@ -445,6 +496,9 @@ export function projectSessionLifecyclePatch(
         (patch.status === "timeout" ? "Run timed out" : undefined),
       ...(typeof params.event.data?.errorNotice === "string"
         ? { notice: params.event.data.errorNotice }
+        : {}),
+      ...(typeof params.event.data?.desktopErrorNotice === "string"
+        ? { desktopNotice: params.event.data.desktopErrorNotice }
         : {}),
     };
   }

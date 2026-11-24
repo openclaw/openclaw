@@ -91,7 +91,7 @@ export function protectChatOutboxFromReload<T extends { item: ChatQueueItem }>(o
       }
       const removed = options.discard({ entry, item });
       if (!removed) {
-        showToast({ message: t("chat.queue.memoryOnlyChanged") });
+        showToast({ severity: "error", message: t("chat.queue.memoryOnlyChanged") });
         return;
       }
       const attachments = removed.attachments ?? [];
@@ -106,7 +106,7 @@ export function protectChatOutboxFromReload<T extends { item: ChatQueueItem }>(o
       await retryStaleChunkReloadWhenReachable({ timeoutMs: 0, ...reload });
     } catch {
       if (current()) {
-        showToast({ message: t("chat.queue.memoryOnlyUnavailable") });
+        showToast({ severity: "error", message: t("chat.queue.memoryOnlyUnavailable") });
       }
     } finally {
       if (active?.controller === controller) {
@@ -118,6 +118,8 @@ export function protectChatOutboxFromReload<T extends { item: ChatQueueItem }>(o
     () => options.inputs.size === 0,
     () =>
       showToast({
+        severity: "error",
+        actionPrimary: true,
         message: t("chat.queue.memoryOnlyReloadBlocked"),
         actionLabel: t("chat.queue.memoryOnlyReview"),
         onAction: () => void review(),

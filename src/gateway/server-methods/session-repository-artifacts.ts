@@ -7,7 +7,7 @@ import type {
 } from "../../../packages/gateway-protocol/src/index.js";
 import { gitEnvironment } from "../../agents/worktrees/git.js";
 import { gitCommandArgv, gitReadOnlyEnvironment } from "../../infra/git-exec.js";
-import { spawnCommand } from "../../process/exec-spawn.js";
+import { spawnCommand, waitForCommandSpawn } from "../../process/exec-spawn.js";
 import { foldSearchCase } from "../../shared/search-case.js";
 import { readSessionRepositoryArtifacts } from "../worker-environments/session-repository-checkpoints.js";
 import type { resolveRepositoryWorkspaceAccess } from "./session-repository-workspace-access.js";
@@ -187,6 +187,9 @@ export async function* streamRepositoryArtifact(
     (error: unknown) => error,
   );
   try {
+    await waitForCommandSpawn(child);
+    signal.throwIfAborted();
+    access.assertCurrent();
     let offset = 0;
     for await (const chunk of child.stdout!) {
       const bytes: Buffer = chunk;

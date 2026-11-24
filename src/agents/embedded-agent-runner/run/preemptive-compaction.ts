@@ -6,10 +6,11 @@ import {
 } from "@openclaw/normalization-core/cjk-chars";
 import type { SessionContextBudgetStatus } from "../../../config/sessions.js";
 import { resolveEffectiveCompactionReserveTokens } from "../../agent-compaction-constants.js";
-import { SAFETY_MARGIN } from "../../compaction-planning.js";
+import type { ContextPressure } from "../../context-pressure.js";
 import type { AgentMessage, StreamFn } from "../../runtime/index.js";
 import { calculateContextTokens, IMAGE_BLOCK_TOKENS } from "../../runtime/index.js";
 import {
+  SAFETY_MARGIN,
   createFreshLlmBoundaryTokenEstimator,
   estimateJsonPayloadTokenPressure,
   estimateMessageTokenPressure,
@@ -23,6 +24,16 @@ import type { PreemptiveCompactionRoute } from "./preemptive-compaction.types.js
 
 export const PREEMPTIVE_OVERFLOW_ERROR_TEXT =
   "Context overflow: prompt too large for the model (precheck).";
+
+/** Local control flow for soft pressure; never a provider or overflow failure. */
+export const CONTEXT_MAINTENANCE_SIGNAL_TEXT =
+  "Context maintenance scheduled before the next model request.";
+
+export function contextPressureSignal(pressure: ContextPressure): Error {
+  return new Error(
+    pressure === "overflow" ? PREEMPTIVE_OVERFLOW_ERROR_TEXT : CONTEXT_MAINTENANCE_SIGNAL_TEXT,
+  );
+}
 
 const TRUNCATION_ROUTE_BUFFER_TOKENS = 512;
 
@@ -45,7 +56,6 @@ export type PreemptiveCompactionDecision = CompactionPressureDecision & {
 export type CompactionReplayPressureContext = {
   model: Model;
   sessionId?: string;
-  authProfileId?: string;
   enabled?: boolean;
 };
 
@@ -103,9 +113,7 @@ export function estimateToolSchemaTokenPressure(
 }
 
 function estimateTranscriptBoundaryTokenPressure(
-  params: Parameters<typeof estimateLlmBoundaryTokenPressure>[0] & {
-    llmBoundaryTokenPressure?: LlmBoundaryTokenPressure | (() => LlmBoundaryTokenPressure);
-  },
+  params: Parameters<typeof estimateLlmBoundaryTokenPressure>[0],
 ): TranscriptBoundaryTokenPressure {
   const replay = params.replay
     ? resolveCompactionReplayPressure(
@@ -141,10 +149,7 @@ function estimateTranscriptBoundaryTokenPressure(
   const messagesForPressure = boundary ? messages.slice(boundary.index + 1) : messages;
   const locallyEstimatedTokens = messagesForPressure.reduce(
     (sum, message) => sum + estimateMessageTokenPressure(message),
-    (params.fixedTokenPressure
-      ? params.fixedTokenPressure.systemTokens +
-        estimateRenderedPromptTokens({ prompt: params.prompt })
-      : estimateRenderedPromptTokens(params)) +
+    estimateRenderedPromptTokens(params) +
       (boundary ? 0 : (replay?.prefixTokens ?? 0) - (replay?.measuredTokens ?? 0)),
   );
   const toolSchemaTokens = Math.max(
@@ -177,6 +182,7 @@ function estimateTranscriptBoundaryTokenPressure(
 
 export function estimateLlmBoundaryTokenPressure(params: {
   messages: AgentMessage[];
+  llmBoundaryTokenPressure?: LlmBoundaryTokenPressure | (() => LlmBoundaryTokenPressure);
   systemPrompt?: string;
   prompt: string;
   replay?: CompactionReplayPressureContext;
@@ -191,6 +197,7 @@ export function estimateLlmBoundaryTokenPressure(params: {
 export function estimateRenderedLlmBoundaryTokenPressure(params: {
   systemPrompt?: string;
   prompt: string;
+  fixedTokenPressure?: FixedRequestTokenPressure;
 }): number {
   return Math.max(0, Math.ceil(estimateRenderedPromptTokens(params) * SAFETY_MARGIN));
 }
@@ -221,6 +228,7 @@ export function shouldPreemptivelyCompactBeforePrompt(params: {
   contextTokenBudget: number;
   reserveTokens: number;
   toolResultMaxChars?: number;
+  estimateRecoverableToolResultChars?: () => number;
   toolSchemaTokens?: number;
   llmBoundaryTokenPressure?: LlmBoundaryTokenPressure | (() => LlmBoundaryTokenPressure);
   replay?: CompactionReplayPressureContext;
@@ -316,6 +324,7 @@ export function resolveProjectedRequestPressure(params: {
   contextTokenBudget: number;
   reserveTokens: number;
   toolResultMaxChars?: number;
+  estimateRecoverableToolResultChars?: () => number;
   replay?: CompactionReplayPressureContext;
 }) {
   const { context, previousRequest } = params;
@@ -337,7 +346,12 @@ function resolveCompactionPressureDecision(
   pressure: Pick<TranscriptBoundaryTokenPressure, "messages" | "estimatedPromptTokens"> & {
     source: string;
   },
-  params: { contextTokenBudget: number; reserveTokens: number; toolResultMaxChars?: number },
+  params: {
+    contextTokenBudget: number;
+    reserveTokens: number;
+    toolResultMaxChars?: number;
+    estimateRecoverableToolResultChars?: () => number;
+  },
 ): CompactionPressureDecision {
   const { estimatedPromptTokens } = pressure;
   const contextTokenBudget = Math.max(1, Math.floor(params.contextTokenBudget));
@@ -349,11 +363,13 @@ function resolveCompactionPressureDecision(
   const overflowTokens = Math.max(0, estimatedPromptTokens - promptBudgetBeforeReserve);
   const toolResultReducibleChars =
     overflowTokens > 0
-      ? estimateToolResultReductionPotential({
+      ? (params.estimateRecoverableToolResultChars?.() ??
+        estimateToolResultReductionPotential({
           messages: pressure.messages,
           contextWindowTokens: params.contextTokenBudget,
           maxCharsOverride: params.toolResultMaxChars,
-        }).maxReducibleChars
+          preserveSentToolResults: true,
+        }).maxReducibleChars)
       : 0;
   const overflowChars = overflowTokens * CHARS_PER_TOKEN_ESTIMATE;
   const truncationBufferChars = TRUNCATION_ROUTE_BUFFER_TOKENS * CHARS_PER_TOKEN_ESTIMATE;

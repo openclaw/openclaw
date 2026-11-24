@@ -33,7 +33,7 @@ const openaiLogin = `${login} openai --profile-id 'openai:default'`;
 const claudeProfileLogin = `${claudeLogin} --profile-id 'anthropic:claude-cli'`;
 const anthropicLogin = `${login} anthropic --profile-id 'anthropic:api-key'`;
 const geminiRecovery =
-  "Gemini CLI OAuth cannot be repaired by OpenClaw. Connect Google with an AI Studio API key using `openclaw models auth login --provider google`, then select that Google profile for the Gemini CLI runtime.";
+  "Gemini CLI OAuth cannot be repaired by OpenClaw. Connect Google with a Gemini API key using `openclaw models auth login --provider google`, then select that Google profile for the Gemini CLI runtime.";
 const refreshMessage = (message: string) => `OAuth token refresh failed for openai: ${message}`;
 const oauthMessageCase = (message: string, reason: string, command?: string) =>
   [refreshMessage(message), { provider: "openai", reason }, command] as const;

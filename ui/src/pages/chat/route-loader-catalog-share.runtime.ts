@@ -2,23 +2,63 @@ import {
   buildControlUiCatalogSharePath,
   isControlUiCatalogShareId,
 } from "@openclaw/session-url-contract/share-build";
-import type { SessionsCatalogListResult } from "../../../../packages/gateway-protocol/src/index.js";
+import type { RouteLocation } from "@openclaw/uirouter";
+import type {
+  SessionsCatalogListResult,
+  SessionsCatalogResolveResult,
+} from "../../../../packages/gateway-protocol/src/index.js";
+import { pathForSession } from "../../app-session-path-builder.ts";
 import { waitForGatewayClient } from "../../app/gateway-readiness.ts";
 import { t } from "../../i18n/index.ts";
 import { registerSessionNavigationEnglish } from "../../i18n/locales/en-session-navigation.ts";
+import type { BoardFace } from "../../lib/board/settings.ts";
 import { formatUiError } from "../../lib/format-error.ts";
-import { buildCatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
-import { catalogReadMethod } from "../../lib/sessions/catalog-read-method.ts";
-import { resolveUiDefaultAgentId } from "../../lib/sessions/session-key.ts";
+import { buildCatalogSessionKey, type CatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
+import { readCatalogRoute } from "../../lib/sessions/catalog-read-method.ts";
+import {
+  consumeSessionNavigationHandoff,
+  prepareSessionNavigationHandoff,
+} from "../../lib/sessions/navigation-handoff.ts";
+import { resolveSessionPreferredFace } from "../../lib/sessions/route-navigation.ts";
+import {
+  buildAgentMainSessionKey,
+  parseAgentSessionKey,
+  resolveUiDefaultAgentId,
+} from "../../lib/sessions/session-key.ts";
+import { sessionRouteHints } from "./route-draft.ts";
 import type { ResolvedCatalogShareRoute } from "./route-loader-catalog-share.ts";
 import type { SessionRouteContext as ApplicationContext } from "./route-loader-context.ts";
-import { missingSessionRouteData } from "./route-loader-session-reference.ts";
+import {
+  missingSessionRouteData,
+  querySessionReference,
+} from "./route-loader-session-reference.ts";
 import type { ChatRouteData } from "./session-route-data.ts";
 
 registerSessionNavigationEnglish();
 
 function routeError(message: string): Extract<ChatRouteData, { kind: "route-error" }> {
   return { kind: "route-error", message, face: "chat" };
+}
+
+function captureCatalogConnection(
+  context: ApplicationContext,
+  client: Awaited<ReturnType<typeof waitForGatewayClient>>,
+  signal: AbortSignal,
+) {
+  const { hello } = context.gateway.snapshot;
+  return {
+    hello,
+    assertCurrent() {
+      signal.throwIfAborted();
+      if (
+        context.gateway.snapshot.phase !== "connected" ||
+        context.gateway.snapshot.client !== client ||
+        context.gateway.snapshot.hello !== hello
+      ) {
+        throw new Error("The Gateway connection changed while resolving the conversation.");
+      }
+    },
+  };
 }
 
 export async function loadResolvedCatalogShareRoute(
@@ -29,24 +69,40 @@ export async function loadResolvedCatalogShareRoute(
   const { target, location: sourceLocation } = resolved;
   try {
     const client = await waitForGatewayClient(context.gateway, signal);
-    signal.throwIfAborted();
+    const connection = captureCatalogConnection(context, client, signal);
+    connection.assertCurrent();
     const agentId = resolveUiDefaultAgentId({
       agentsList: context.agents.state.agentsList,
-      hello: context.gateway.snapshot.hello,
+      hello: connection.hello,
     });
-    const listed = await client.request<SessionsCatalogListResult>(
-      catalogReadMethod(context.gateway.snapshot, target.routeSegment, "list"),
-      {
-        agentId,
-        search: target.shortId,
-        limitPerHost: 2,
-      },
+    const route = await readCatalogRoute(
+      client,
+      connection,
+      { routeSegment: target.routeSegment },
+      signal,
     );
-    signal.throwIfAborted();
+    connection.assertCurrent();
+    if (!route?.methods.list) {
+      return routeError(t("chat.sessionRoute.catalogShareUnavailable"));
+    }
+    const listed = await client.request<SessionsCatalogListResult>(route.methods.list, {
+      agentId,
+      ...(route.catalogId ? { catalogId: route.catalogId } : {}),
+      search: target.shortId,
+      limitPerHost: 2,
+    });
+    connection.assertCurrent();
     const matchingCatalogs = listed.catalogs.filter(
-      (candidate) => candidate.shareRoute?.routeSegment === target.routeSegment,
+      (candidate) =>
+        (!route.catalogId || candidate.id === route.catalogId) &&
+        candidate.shareRoute?.routeSegment === target.routeSegment,
     );
     const catalog = matchingCatalogs.length === 1 ? matchingCatalogs[0] : undefined;
+    if (catalog?.pending) {
+      return routeError(
+        "Shared catalog is still loading. Retry this route when the source refresh completes.",
+      );
+    }
     if (!catalog?.shareRoute) {
       return routeError(t("chat.sessionRoute.catalogShareUnavailable"));
     }
@@ -111,13 +167,25 @@ export async function loadResolvedCatalogShareRoute(
     if (!pathname) {
       return routeError(t("chat.sessionRoute.catalogShareUnavailable"));
     }
+    const continued = session.sessionKey
+      ? await resolveBoundCatalogConversation(
+          client,
+          { catalogId: catalog.id, hostId: shareRoute.hostId, threadId: session.threadId },
+          agentId,
+          signal,
+          connection,
+          route.methods.resolve,
+        )
+      : undefined;
     return {
       kind: "session",
-      sessionKey: buildCatalogSessionKey(
-        { catalogId: catalog.id, hostId: shareRoute.hostId, threadId: session.threadId },
-        agentId,
-      ),
-      agentId,
+      sessionKey:
+        continued?.sessionKey ??
+        buildCatalogSessionKey(
+          { catalogId: catalog.id, hostId: shareRoute.hostId, threadId: session.threadId },
+          agentId,
+        ),
+      agentId: continued?.agentId ?? agentId,
       draft: undefined,
       face: "chat",
       // Names can change on later uploads; the id resolves the same transcript.
@@ -132,4 +200,133 @@ export async function loadResolvedCatalogShareRoute(
     signal.throwIfAborted();
     return routeError(formatUiError(error, t("chat.sessionRoute.catalogShareUnavailable")));
   }
+}
+
+async function resolveBoundCatalogConversation(
+  client: Awaited<ReturnType<typeof waitForGatewayClient>>,
+  key: CatalogSessionKey,
+  agentId: string,
+  signal: AbortSignal,
+  connection: ReturnType<typeof captureCatalogConnection>,
+  method: string | undefined,
+) {
+  if (!method) {
+    return undefined;
+  }
+  // A catalog pointer is discovery. Reconcile origin and destination ACLs before
+  // a deleted destination could be mistaken for a new ordinary conversation.
+  connection.assertCurrent();
+  const result = await client.request<SessionsCatalogResolveResult>(
+    method,
+    { ...key, agentId },
+    { signal },
+  );
+  connection.assertCurrent();
+  if (!result) {
+    return undefined;
+  }
+  return {
+    sessionKey: result.sessionKey,
+    agentId: parseAgentSessionKey(result.sessionKey)?.agentId ?? agentId,
+  };
+}
+
+async function resolveCatalogContinuation(
+  context: ApplicationContext,
+  key: CatalogSessionKey,
+  agentId: string,
+  signal: AbortSignal,
+) {
+  const client = await waitForGatewayClient(context.gateway, signal);
+  const connection = captureCatalogConnection(context, client, signal);
+  // Resolve owns source visibility and destination authorization; a preliminary
+  // listing adds a round-trip and can lose a retained binding outside its page.
+  const route = await readCatalogRoute(client, connection, { catalogId: key.catalogId }, signal);
+  connection.assertCurrent();
+  return resolveBoundCatalogConversation(
+    client,
+    key,
+    agentId,
+    signal,
+    connection,
+    route?.methods.resolve,
+  );
+}
+
+/** Catalog-specific routing stays behind the existing catalog runtime import. */
+export async function loadCatalogSessionRoute(
+  params: {
+    context: ApplicationContext;
+    key: CatalogSessionKey;
+    agentId: string;
+    signal: AbortSignal;
+    location: RouteLocation;
+    face: BoardFace;
+    preferenceDerived: boolean;
+    isResolutionSourceCurrent: () => boolean;
+    revalidation?: {
+      sessionKey?: string;
+      catalogProfileRelation?: Extract<
+        ChatRouteData,
+        { kind: "session" }
+      >["catalogProfileRelation"];
+    };
+  },
+  getMainKey: (context: ApplicationContext) => string,
+  normalizeLocation: (location: RouteLocation) => RouteLocation,
+): Promise<ChatRouteData> {
+  const { context, key, agentId, signal, location, revalidation } = params;
+  const continued = await resolveCatalogContinuation(context, key, agentId, signal);
+  if (continued) {
+    return { kind: "session", ...continued, ...sessionRouteHints(location), face: params.face };
+  }
+  const routedSessionKey = buildCatalogSessionKey(key, agentId);
+  const handoff = consumeSessionNavigationHandoff(
+    context.gateway,
+    location.pathname,
+    routedSessionKey,
+  );
+  const catalogProfileRelation = (
+    handoff ?? (revalidation?.sessionKey === routedSessionKey ? revalidation : undefined)
+  )?.catalogProfileRelation;
+  let canonicalLocation = params.preferenceDerived ? normalizeLocation(location) : null;
+  let face = params.face;
+  if (params.preferenceDerived) {
+    const resolution = await querySessionReference(
+      context,
+      { key: buildCatalogSessionKey(key), agentId },
+      signal,
+    );
+    if (resolution?.kind === "unique") {
+      face = resolveSessionPreferredFace(resolution.session);
+      const mainKey = getMainKey(context);
+      const pathname = pathForSession(
+        face,
+        agentId,
+        buildAgentMainSessionKey({ agentId, mainKey }),
+        context.basePath,
+        { mainKey },
+      );
+      if (pathname && canonicalLocation) {
+        canonicalLocation = { ...canonicalLocation, pathname };
+      }
+    }
+  }
+  if (canonicalLocation && catalogProfileRelation && params.isResolutionSourceCurrent()) {
+    prepareSessionNavigationHandoff(
+      context.gateway,
+      canonicalLocation.pathname,
+      routedSessionKey,
+      catalogProfileRelation,
+    );
+  }
+  return {
+    kind: "session",
+    sessionKey: routedSessionKey,
+    ...(catalogProfileRelation ? { catalogProfileRelation } : {}),
+    agentId,
+    ...sessionRouteHints(location),
+    face,
+    ...(canonicalLocation ? { canonicalLocation, canonicalLocationSource: location } : {}),
+  };
 }

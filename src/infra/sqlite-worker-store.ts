@@ -1,5 +1,6 @@
 import { isMainThread } from "node:worker_threads";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { hydrateOpenClawStateWorkerError } from "../state/openclaw-state-worker-error.js";
 import { SqliteWorkerBroker } from "./sqlite-worker-broker.js";
 import type {
@@ -69,6 +70,15 @@ export function runSqliteWorkerStoreOperation<Operations extends SqliteWorkerOpe
   );
 }
 
+const loadStateDatabaseCache = createLazyRuntimeModule(
+  () => import("../state/openclaw-state-db-cache.js"),
+);
+
+/** Gateway startup loads broker close's state owner before an update can replace its chunk. */
+export function prepareSqliteWorkerBrokerClose(): Promise<unknown> {
+  return loadStateDatabaseCache();
+}
+
 function resolveSqliteWorkerBroker() {
   return resolveGlobalSingleton(
     Symbol.for("openclaw.sqliteWorkerBroker"),
@@ -76,8 +86,7 @@ function resolveSqliteWorkerBroker() {
     (broker) =>
       withCallerErrors(
         broker.close(async () => {
-          const { closeOpenClawStateDatabaseAsync } =
-            await import("../state/openclaw-state-db-cache.js");
+          const { closeOpenClawStateDatabaseAsync } = await loadStateDatabaseCache();
           await closeOpenClawStateDatabaseAsync();
         }),
       ),
@@ -119,28 +128,34 @@ export function createSqliteWorkerWriteAdmission(
   assertCurrent: (request: SqliteWorkerAdmissionRequest) => void,
   nativeLocations: readonly string[],
   attachment?: unknown,
+  prepare?: (request: SqliteWorkerAdmissionRequest) => Promise<void>,
 ): SqliteWorkerAdmissionFactory {
   return () => {
     let phase: "waiting" | "transaction" | "commit" = "waiting";
     return {
       nativeLocations,
-      admission: createSqliteWorkerOperationAdmission((request, grant) => {
-        if (
-          !(
-            ((phase === "waiting" || phase === "transaction") && request.stage === "transaction") ||
-            (phase === "transaction" && request.stage === "commit")
-          )
-        ) {
-          throw new Error("SQLite worker write authority requested out of order");
-        }
-        assertCurrent(request);
-        if (!grant()) {
-          throw new Error("SQLite worker write authority expired");
-        }
-        // A rolled-back attempt can reacquire its initial grant. A successful
-        // commit grant remains terminal for this command's admission owner.
-        phase = request.stage === "transaction" ? "transaction" : "commit";
-      }, attachment),
+      admission: createSqliteWorkerOperationAdmission(
+        (request, grant) => {
+          if (
+            !(
+              ((phase === "waiting" || phase === "transaction") &&
+                request.stage === "transaction") ||
+              (phase === "transaction" && request.stage === "commit")
+            )
+          ) {
+            throw new Error("SQLite worker write authority requested out of order");
+          }
+          assertCurrent(request);
+          if (!grant()) {
+            throw new Error("SQLite worker write authority expired");
+          }
+          // A rolled-back attempt can reacquire its initial grant. A successful
+          // commit grant remains terminal for this command's admission owner.
+          phase = request.stage === "transaction" ? "transaction" : "commit";
+        },
+        attachment,
+        prepare,
+      ),
     };
   };
 }

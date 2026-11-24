@@ -96,7 +96,7 @@ suite.define(() => {
       await cancel.click();
       await page.locator(".custodian__wizard-cancel").waitFor();
 
-      await page.setViewportSize({ width: 620, height: 844 });
+      await page.setViewportSize({ width: 641, height: 844 });
       await page.locator(".custodian__header .custodian__history-toggle").waitFor();
       expect(await page.locator(".topbar .custodian__history-toggle").count()).toBe(0);
       await page.setViewportSize({ width: 390, height: 844 });
@@ -105,6 +105,51 @@ suite.define(() => {
       await page.setViewportSize({ width: 1280, height: 800 });
       await page.locator(".custodian__header .custodian__history-toggle").waitFor();
       expect(await page.locator(".topbar .custodian__history-toggle").count()).toBe(0);
+    });
+  });
+
+  it("keeps long change paths and Send inside the phone column", async () => {
+    await suite.withPage(phone, async ({ page }) => {
+      const path =
+        "channels.discord.accounts.production.guilds.123456789012345678.channels.234567890123456789.requireMention";
+      await install(page, {
+        methodResponses: {
+          "openclaw.chat": { sessionId: "atlas-history", reply: "Ready.", action: "none" },
+          "openclaw.changes.list": {
+            entries: [
+              {
+                id: "config-audit:long-path",
+                at: 1_700_000_000_000,
+                kind: "config-write",
+                source: "config-rpc",
+                summary: "Configuration updated: " + path,
+                changedPaths: [path],
+              },
+            ],
+          },
+        },
+      });
+      await page.goto(`${suite.server.baseUrl}custodian`);
+      const composer = page.locator(".custodian-surface textarea");
+      await composer.fill("Unsent draft");
+      const send = page.locator(".custodian-surface .chat-send-btn");
+      const history = page.getByRole("button", { name: "History", exact: true });
+      await history.click();
+      const panel = page.getByRole("region", { name: "Recent changes" });
+      await panel.locator("summary").click();
+      const code = panel.locator("code");
+      await expectInViewport(page, panel);
+      await expectInViewport(page, code);
+      expect(await code.textContent()).toBe(path);
+      const gutters = await send.evaluate((button) => {
+        const field = button.closest(".agent-chat__input")!.getBoundingClientRect();
+        const action = button.getBoundingClientRect();
+        return [field.right - action.right, field.bottom - action.bottom];
+      });
+      expect(gutters[0]).toBe(gutters[1]);
+      await expectInViewport(page, send);
+      await history.click();
+      expect(await composer.inputValue()).toBe("Unsent draft");
     });
   });
 

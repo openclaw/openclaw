@@ -8,6 +8,7 @@ import { createOperatorApprovalsGatewayClient } from "../gateway/operator-approv
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { createPendingApprovalRegistry } from "../shared/pending-approval-registry.js";
+import { waitForAbortSignal } from "./abort-signal.js";
 import { getGatewayNativeApprovalRuntime } from "./approval-gateway-runtime-context.js";
 import {
   isGatewayNativeApprovalMethod,
@@ -147,6 +148,7 @@ export function createExecApprovalChannelRuntime<
   let started = false;
   let shouldRun = false;
   let startPromise: Promise<void> | null = null;
+  let startAbortController: AbortController | null = null;
   let replayPromise: Promise<void> | null = null;
 
   const spawn = (label: string, promise: Promise<void>): void => {
@@ -321,6 +323,8 @@ export function createExecApprovalChannelRuntime<
       }
 
       shouldRun = true;
+      const abortController = new AbortController();
+      startAbortController = abortController;
       startPromise = (async () => {
         if (!(await adapter.isConfigured())) {
           log.debug("disabled");
@@ -408,15 +412,19 @@ export function createExecApprovalChannelRuntime<
         try {
           const readiness = await startGatewayClientWhenEventLoopReady(client, {
             clientOptions: {},
+            signal: abortController.signal,
           });
           if (!readiness.ready) {
+            if (stopClientIfInactive(client)) {
+              return;
+            }
             throw new Error(
               readiness.aborted
                 ? "gateway approval runtime start aborted before readiness"
                 : "gateway readiness unavailable before exec approval runtime start",
             );
           }
-          await ready.promise;
+          await waitForAbortSignal(abortController.signal, ready.promise);
           if (stopClientIfInactive(client)) {
             return;
           }
@@ -430,6 +438,7 @@ export function createExecApprovalChannelRuntime<
         }
       })().finally(() => {
         startPromise = null;
+        startAbortController = null;
       });
 
       await startPromise;
@@ -437,6 +446,7 @@ export function createExecApprovalChannelRuntime<
 
     async stop(): Promise<void> {
       shouldRun = false;
+      startAbortController?.abort();
       if (startPromise) {
         await startPromise.catch(() => {});
       }

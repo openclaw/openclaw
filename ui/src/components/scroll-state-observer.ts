@@ -93,7 +93,7 @@ export function observeScrollState(
       // The initial frame covers loaded fonts without forcing style through fonts.ready.
       group.stopFonts = observeFontLoading(fonts, () => schedule(element));
     }
-    if (!resizeObserver && typeof ResizeObserver !== "undefined") {
+    if (!resizeObserver) {
       resizeObserver = new ResizeObserver((resized) => {
         for (const { target } of resized) {
           if (target instanceof HTMLElement) {
@@ -102,7 +102,7 @@ export function observeScrollState(
         }
       });
     }
-    resizeObserver?.observe(element);
+    resizeObserver.observe(element);
   }
   const { entries, stopScroll } = group;
   const entry = { horizontal, trackScroll, publish };

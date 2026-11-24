@@ -3,6 +3,7 @@ import { createDeferred } from "../../../test/helpers/promise.js";
 import { sanitizeAgentRunTerminalReply } from "../../agents/agent-run-terminal-reply.js";
 import type { AgentCommandDeliveryResult } from "../../agents/command/delivery-result.js";
 import type { AgentCommandOpts } from "../../agents/command/types.js";
+import { ReplaySafeRunAbortError } from "../../agents/embedded-agent-runner/transcript-conflict.js";
 import { createAgentRunRestartAbortError } from "../../agents/run-termination.js";
 import { SessionFollowupCompletion } from "../../agents/subagents/completion/session-followup-completion.js";
 import type { SubagentRunRecord } from "../../agents/subagents/registry/subagent-registry.types.js";
@@ -340,7 +341,7 @@ describe("Gateway dispatch run ownership", () => {
     expect(emitFinal).toHaveBeenCalledOnce();
   });
 
-  it.each(["success", "failure", "cancelled", "restart"] as const)(
+  it.each(["success", "failure", "cancelled", "safe-cancelled", "restart"] as const)(
     "joins continuation and input settlement before publishing final or replay for %s",
     async (outcome) => {
       const { runId, entry, params } = createDispatch();
@@ -356,9 +357,10 @@ describe("Gateway dispatch run ownership", () => {
           testRpcSourceController(entry).abort(reason);
           throw reason;
         }
-        if (outcome === "cancelled") {
+        if (outcome === "cancelled" || outcome === "safe-cancelled") {
           testRpcSourceController(entry).abort();
-          throw entry.input.abortSignal.reason;
+          const reason = entry.input.abortSignal.reason;
+          throw outcome === "safe-cancelled" ? new ReplaySafeRunAbortError(reason) : reason;
         }
         return commandResult();
       });
@@ -382,6 +384,9 @@ describe("Gateway dispatch run ownership", () => {
       cleanup.resolve();
       await completion;
       expectCalls(1, setGatewayDedupeEntries, cleanupAbortController);
+      expect(emitFinal.mock.calls[0]?.[0][1]?.replaySafe).toBe(
+        outcome === "safe-cancelled" ? true : undefined,
+      );
       expect(emitFinal).toHaveBeenCalledExactlyOnceWith(
         [
           outcome !== "failure",

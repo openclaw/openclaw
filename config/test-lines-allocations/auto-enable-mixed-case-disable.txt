@@ -1,2 +1,0 @@
-# Mixed-case plugin disable, deny and enable are read under the canonical lowercase policy key by auto-enable.
-22

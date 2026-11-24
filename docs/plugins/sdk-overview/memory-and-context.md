@@ -8,6 +8,7 @@ read_when:
   - You are exposing memory embedding or public-artifact adapters
   - You need to authorize provider memory by owner or conversation audience
   - You are implementing provider-owned pre-compaction persistence
+  - You are combining several memory plugins behind one memory slot owner
 ---
 
 The registrars that allow only one active implementation at a time, and the
@@ -190,24 +191,26 @@ api.registerMemoryCapability({ providerRuntime });
 `service.openMemoryReader` is provider-owned code. It returns a caller-bound
 `MemoryProviderHandle` with these members:
 
-| Member                | Contract                                                                                                                                                                                                                                                 |
-| --------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `capabilities`        | Required declaration of supported sources, pagination, candidate kinds, and project filtering.                                                                                                                                                           |
-| `search(request)`     | Returns hits and optional pagination, coverage, and warning fields. Each hit has a provider-scoped `reference` and an `excerpt`; scores and citations are optional. Every provider must honor `minScore`. `lexicalOnly` is a hint a provider may ignore. |
-| `get(request)`        | Resolves a provider-scoped reference with optional revision and read bounds. Returns explicit `ok` or `not_found`; denial and failure must not become empty success.                                                                                     |
-| `health()`            | Returns `ready`, `degraded`, or `unavailable` without revealing partition content. It must work for every authenticated caller, including host authority opened with purpose `status`; search and get may still deny that caller.                        |
-| `close()`             | Releases this caller's lease without shutting down another caller's shared service.                                                                                                                                                                      |
-| `candidates(request)` | Present exactly when `capabilities.candidates` is non-empty. Eligible results include provider-owned project or trigger metadata; search support alone does not enable automatic injection.                                                              |
-| `refresh()`           | Optional provider-owned refresh. This is not a generic dreaming, repair, or deletion API.                                                                                                                                                                |
+| Member                | Contract                                                                                                                                                                                                                                                                                |
+| --------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `capabilities`        | Required declaration of supported sources, pagination, candidate kinds, and project filtering.                                                                                                                                                                                          |
+| `search(request)`     | Returns hits and optional pagination, coverage, and warning fields. Each hit has a provider-scoped `reference` and an `excerpt`; scores and citations are optional. Every provider must honor `minScore`. `lexicalOnly` is a hint a provider may ignore.                                |
+| `get(request)`        | Resolves a provider-scoped reference with optional revision and read bounds. Returns explicit `ok` or `not_found`; denial and failure must not become empty success.                                                                                                                    |
+| `health()`            | Returns `ready`, `degraded`, or `unavailable` without revealing partition content. It must work for every authenticated caller, including host authority opened with purpose `status`; search and get may still deny that caller.                                                       |
+| `close()`             | Releases this caller's lease without shutting down another caller's shared service.                                                                                                                                                                                                     |
+| `candidates(request)` | Present exactly when `capabilities.candidates` is non-empty. Eligible results include provider-owned project or trigger metadata; search support alone does not enable automatic injection.                                                                                             |
+| `refresh()`           | Optional provider-owned refresh. This is not a generic dreaming, repair, or deletion API.                                                                                                                                                                                               |
+| `store(request)`      | Present exactly when `capabilities.store` is true. Persists `{ text, title?, tags?, origin? }` and returns `stored` with a provider-scoped reference, or `rejected` with a reason. The host rejects empty text, text over 64 KiB, and any call on a lease opened with purpose `status`. |
 
 Capabilities are enforced before provider code runs:
 
-| Capability        | Declaration                                                         | Rejected request                                                          |
-| ----------------- | ------------------------------------------------------------------- | ------------------------------------------------------------------------- |
-| Search sources    | non-empty `sources` array containing `"memory"` and/or `"sessions"` | `sources` contains an undeclared corpus                                   |
-| Pagination        | `pagination: boolean`                                               | `cursor` is present when pagination is false                              |
-| Automatic recall  | `candidates` array containing `"trigger"` and/or `"project"`        | `candidates({ kind })` names an undeclared kind                           |
-| Project filtering | `projectFilter: boolean`                                            | non-empty `activeProjectKeys` is supplied when project filtering is false |
+| Capability        | Declaration                                                         | Rejected request                                                                             |
+| ----------------- | ------------------------------------------------------------------- | -------------------------------------------------------------------------------------------- |
+| Search sources    | non-empty `sources` array containing `"memory"` and/or `"sessions"` | `sources` contains an undeclared corpus                                                      |
+| Pagination        | `pagination: boolean`                                               | `cursor` is present when pagination is false                                                 |
+| Automatic recall  | `candidates` array containing `"trigger"` and/or `"project"`        | `candidates({ kind })` names an undeclared kind                                              |
+| Project filtering | `projectFilter: boolean`                                            | non-empty `activeProjectKeys` is supplied when project filtering is false                    |
+| Writes            | optional `store: boolean`                                           | `store()` on a status lease; a declaration without the method, or the reverse, fails at open |
 
 The selected memory slot owner can also join `/learn` with
 `api.registerLearnContribution({ medium: "memory", ... })`; see
@@ -355,6 +358,101 @@ until it settles, then revokes the audience. Audience revocation does not abort
 This is the shared read runtime. Memory Core tools and CLI, file-index diagnostics,
 startup workspace files, pre-compaction saving, reset capture, and maintenance keep
 their existing ownership. Native provider workflows continue alongside it.
+
+### Memory backends
+
+One memory slot owner, such as a plugin that fuses results from several stores,
+can query other memory plugins that load only as passive backends.
+
+A fusion owner usually requests backends in its manifest, so selecting it is
+the only step:
+
+```json
+{
+  "id": "memory-fusion",
+  "kind": "memory",
+  "memoryBackends": true
+}
+```
+
+While that plugin owns `plugins.slots.memory`, every other memory plugin that
+normal plugin policy enables loads as a backend. Set
+`plugins.entries.<id>.memoryBackend: false` to keep one out. Without an owner
+that requests backends, an operator can still opt a single plugin in:
+
+```json5
+{
+  plugins: {
+    slots: { memory: "memory-fusion" },
+    entries: {
+      "memory-fusion": { enabled: true },
+      "memory-lancedb": { enabled: true, memoryBackend: true },
+    },
+  },
+}
+```
+
+Without a backend request from the owner manifest or `memoryBackend: true`, a
+memory plugin that does not own the slot stays disabled before its `register()`
+runs, as before. As a backend, the plugin must
+still be enabled by normal plugin policy, and:
+
+- `register()` runs with `api.registrationMode === "memory-backend"`. Only
+  `registerMemoryCapability` is live, and only its `providerRuntime` is kept.
+  Tools, hooks, services, CLI commands, channels, prompt and corpus
+  supplements, flush resolvers, recall tool names, and `/learn` contributions
+  are ignored, so the backend never runs on its own. Its services never start:
+  open the store lazily, as the provider runtime already must for non-activating
+  CLI loads.
+- The backend never joins slot resolution, so host consumers (`memory.search`,
+  Active Memory, Memory Wiki, voice fast context) see only the slot owner.
+- Backend code still runs in-process like any enabled plugin. The mode limits
+  what it registers with the host, not what its code can do; opt in only
+  plugins you trust.
+
+The host gives backend access only to the selected slot owner, as
+`params.backends` on its `providerRuntime.open(params)`. It is present only
+when at least one backend loaded:
+
+```ts
+const providerRuntime: MemoryProviderRuntime = {
+  async open(params) {
+    const backends = await Promise.all(
+      (params.backends?.list() ?? []).map(({ id }) => params.backends!.open(id)),
+    );
+    return { provider: createFusionHandle(params, backends) };
+  },
+};
+```
+
+- `backends.open(id)` opens the backend with the caller authority, agent, and
+  purpose of that `open()` call. It runs the same checks as the owner's own
+  open: caller currency before and after open, handle-shape validation, and the
+  caller-bound lease. The owner never supplies or changes authority; a
+  `status`-purpose open stays `status` for every backend.
+- Backend references keep the backend's `providerId`. The owner's handle must
+  return references with its own `providerId`, so translate backend references
+  into owner references and back.
+- When the owner's lease closes, backend access ends and the host closes any
+  backend lease the owner left open.
+- A backend may register `providerRuntime` or a legacy file-shaped `runtime`.
+  The host serves a legacy runtime through the same adapter it uses when such a
+  plugin owns the slot (`adapter: "legacy"` on the opened result), so bundled
+  `memory-core` and `memory-lancedb` can be backends. Legacy backends are
+  read-only.
+- A backend that declares `store` lets the owner write through
+  `backend.provider.store(...)` under the same caller authority.
+- Backends load beside the owner in the Gateway registry and in standalone CLI
+  lookups. A configuration change hot-reloads the plugin runtime like any other
+  `plugins.entries` change; a retired backend's open leases fail on their next
+  call.
+- `memoryBackend` has no effect on the slot owner, while `plugins.slots.memory`
+  is `"none"`, or on a plugin that is not a memory plugin; config validation
+  warns in each case. A dual-kind plugin that lost the memory slot already loads
+  for its other role; with the opt-in, its `providerRuntime` is also published
+  as a backend. The dreaming sidecar keeps its existing consolidation role and
+  does not become a backend. `openclaw plugins enable <id>` still selects the
+  memory slot and does not set `memoryBackend`.
 
 ### Dreaming remains separate
 

@@ -9,6 +9,7 @@ import {
   WORKER_EXEC_APPROVAL_PROTOCOL_FEATURE,
 } from "./worker-exec-approval-schemas.js";
 import {
+  WORKER_GATEWAY_MCP_GUEST_RESULT_PROTOCOL_FEATURE,
   WORKER_GATEWAY_TOOLS_PROTOCOL_FEATURE,
   WORKER_GATEWAY_TOOL_METHODS,
   WorkerToolSurfaceSchema,
@@ -74,10 +75,13 @@ export const WORKER_NATIVE_PROCESS_OWNER_PROTOCOL_FEATURE = "worker-native-proce
 export const WORKER_NATIVE_PROCESS_OWNER_V2_PROTOCOL_FEATURE = "worker-native-process-owner-v2";
 export const NODE_WORKER_IDLE_RETENTION_PROTOCOL_FEATURE = "node-worker-idle-retention-v1";
 export const NODE_WORKER_PROCESS_CHANGES_PROTOCOL_FEATURE = "node-worker-process-changes-v1";
+// v1 launch parsers reject the optional per-tool question grant.
+export const WORKER_LOCAL_MCP_PROTOCOL_FEATURE = "worker-local-mcp-v2";
 export const WORKER_LOCAL_INFERENCE_PROTOCOL_FEATURE = "worker-local-inference-v1";
 export const WORKER_PROTOCOL_FEATURES = [
   WORKER_TURN_ADMISSION_PROTOCOL_FEATURE,
   WORKER_LOCAL_INFERENCE_PROTOCOL_FEATURE,
+  WORKER_LOCAL_MCP_PROTOCOL_FEATURE,
   "skill-resources-v1",
   "worker-heartbeat-v1",
   WORKER_GITHUB_REFRESH_PROTOCOL_FEATURE,
@@ -95,6 +99,7 @@ export const WORKER_PROTOCOL_FEATURES = [
   WORKER_COMPUTER_PROTOCOL_FEATURE,
   WORKER_EXEC_APPROVAL_PROTOCOL_FEATURE,
   WORKER_GATEWAY_TOOLS_PROTOCOL_FEATURE,
+  WORKER_GATEWAY_MCP_GUEST_RESULT_PROTOCOL_FEATURE,
   "worker-inference-v1",
 ] as const;
 export const WORKER_PROTOCOL_MAX_METHOD_LENGTH = 64;

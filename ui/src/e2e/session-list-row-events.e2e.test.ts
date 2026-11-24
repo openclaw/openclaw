@@ -81,9 +81,13 @@ suite.define(() => {
         if (route === "dashboards") {
           await expect.poll(() => foreground.count()).toBe(2);
         }
+        // Dashboards shows only the rail, so its gallery is the one list on the page.
+        const sidebarShown = route !== "dashboards";
         const sidebarRow = page.locator(`openclaw-app-sidebar [data-session-key="${key}"]`).first();
-        await expect.poll(() => sidebarRow.textContent()).toContain("Initial roster title");
-        await gateway.waitForRequest("sessions.list", { match: { spawnedBy: mainKey } });
+        if (sidebarShown) {
+          await expect.poll(() => sidebarRow.textContent()).toContain("Initial roster title");
+          await gateway.waitForRequest("sessions.list", { match: { spawnedBy: mainKey } });
+        }
         if (route === "chat") {
           await gateway.waitForRequest("sessions.list", { match: { spawnedBy: key } });
         }
@@ -110,7 +114,9 @@ suite.define(() => {
           ancestorSessions: [{ ...main, snapshotAt: now }],
         });
         await page.clock.runFor(500);
-        await expect.poll(() => sidebarRow.textContent()).toContain("Updated by certified event");
+        if (sidebarShown) {
+          await expect.poll(() => sidebarRow.textContent()).toContain("Updated by certified event");
+        }
         if (route !== "chat") {
           await expect
             .poll(() => foreground.first().textContent())
@@ -129,7 +135,9 @@ suite.define(() => {
           ],
         });
         await page.clock.runFor(59_499);
-        await expect.poll(() => sidebarRow.textContent()).toContain("Updated with held ancestor");
+        await expect
+          .poll(() => (sidebarShown ? sidebarRow : foreground.first()).textContent())
+          .toContain("Updated with held ancestor");
         expect(await gateway.getRequests("sessions.list")).toEqual(before);
       });
     },

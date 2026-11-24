@@ -22,7 +22,7 @@ import {
 } from "../../src/infra/exec-approvals-store.js";
 import { onWorkerRequestMetrics } from "../../src/infra/worker-request-diagnostics.js";
 import { closeOpenClawStateDatabaseAsync } from "../../src/state/openclaw-state-db.js";
-import { sumSampledHeapBytes } from "../lib/heap-sampling.ts";
+import { startCollectedHeapSampling, sumSampledHeapBytes } from "../lib/heap-sampling.ts";
 
 const { values } = parseArgs({
   options: {
@@ -66,12 +66,7 @@ try {
   }
   requests = 0;
   if (values.mode === "allocation") {
-    inspector.connect();
-    await inspector.post("HeapProfiler.startSampling", {
-      samplingInterval: 32768,
-      includeObjectsCollectedByMajorGC: true,
-      includeObjectsCollectedByMinorGC: true,
-    });
+    await startCollectedHeapSampling(inspector, 32768);
   }
   const cpu = process.threadCpuUsage();
   const started = performance.now();

@@ -37,6 +37,13 @@ and launch options. The separate runtime changes program files, not the node's
 state directory. Activation requires the candidate to reconnect successfully;
 if startup fails, the launcher falls back to the previous runtime.
 
+With Node.js on macOS and Linux, packages that advertise `byte-pipe-v1` use a private,
+length-prefixed JSON stream between the launcher and node. This channel carries
+bootstrap, readiness, and restart messages without transferring file descriptors.
+Each message is limited to 1 MiB; queued writes are limited to 256 messages and
+4 MiB. An invalid frame closes the channel, and loss of the launcher stops the
+node. Bun, Windows, and installed packages without this capability keep native IPC.
+
 If the node shares its state directory with a Gateway installed before node
 automatic updates were introduced, update that Gateway once first. Older
 Gateways reject a local node whose version differs from their own. Updated
@@ -51,6 +58,13 @@ repair is deferred with instructions to use the normal
 state without running shared Doctor or startup repairs. The normal update
 workflow owns those repairs, migration, and rollback, including coordination
 with a Gateway sharing the state directory.
+
+If shared state or client credentials later need repair, for example after a
+restored state database, the managed node refuses to start and names the
+installation that owns the state. Run `openclaw doctor --fix` with that
+installation; the managed node retries automatically. An optional credential
+metadata upgrade does not block the managed node; the owning installation
+applies it the next time it starts or runs Doctor.
 
 Native app nodes and private worker processes continue to use their existing
 update owners. Source checkouts and `dev` installs also remain owner-managed.
@@ -87,9 +101,11 @@ through the old entrypoint logs a warning when automatic updates are enabled.
 
 Look in the foreground node's stderr or its service logs for update preparation,
 busy deferral, activation, and fallback messages. If an update is deferred for
-schema migration or repair, run `openclaw update` on the node machine. Then
-restart its service with `openclaw node restart`, or relaunch the foreground
-`openclaw node run` command.
+schema migration or repair, stop the node with `openclaw node stop` (or end
+the foreground `openclaw node run` command), run `openclaw update` on the node
+machine, then start it again with `openclaw node start` or relaunch
+`openclaw node run`. A running node keeps the state database open, so
+`openclaw update` refuses while its service runs.
 
 If the launcher reports a stale `node-runtime/activation.lock`, confirm that no
 node update is running before removing the exact lock path from the message.
@@ -143,6 +159,39 @@ unattended updates.
 | `beta`            | Checks on a built-in interval and announces an update campaign as soon as a newer release is available.                                                             |
 | `dev`             | With `auto.enabled`, git installs check hourly. When upstream commits are available, the Gateway announces an update campaign pinned to the exact announced commit. |
 
+### Choose an automatic-update schedule
+
+In **Settings → Updates → Update schedule**, choose **Hourly (default)**,
+**Daily**, **Weekly**, or **Custom cron**. Daily lets you choose an hour and
+minute; weekly also lets you choose the day of the week. Times use the
+**Gateway host's timezone**, not the browser's timezone.
+
+Only one optional config field is stored. For example, to start automatic
+updates at 03:30 every Monday:
+
+```json5
+{ update: { auto: { enabled: true, schedule: "30 3 * * 1" } } }
+```
+
+Omit `update.auto.schedule` to keep the existing hourly cadence, including
+startup discovery. A configured cron expression opens a one-minute start
+window. Startup, restart, and **Check for updates** do not catch up missed
+windows. Changes take effect without restarting the Gateway. Invalid cron
+expressions are rejected, keeping the saved schedule unchanged.
+
+The schedule controls campaign starts, not completion time. Stable rollout
+delay and jitter still apply; if a release is not eligible in one window, it
+waits for a later one. Once announced, the idle/countdown policy below can
+finish outside that minute. **Hold 1 h** and manual **Update Gateway** retain
+their explicit override behavior. Changing the schedule cancels a pending
+campaign, but does not interrupt an update already applying.
+
+Cron timing uses the same owner as automations: nonexistent local times at
+the spring daylight-saving transition are skipped, and repeated local times
+run at their first occurrence. Missed windows after downtime or a forward
+clock jump are skipped. This setting does not change headless-node updates,
+manual updates, or extended-stable's read-only behavior.
+
 ### Update campaigns
 
 When an automatic update is due, the campaign waits for active work to finish,
@@ -154,14 +203,56 @@ apply. The Gateway restart ends these process-local PTYs, and terminal sessions
 are not recovered afterward.
 
 An admin can use **Hold 1 h** once to postpone the campaign and shift its hard
-deadline, or choose **Update now** from the sidebar update card or
-**Settings → Updates**. For a `dev` git install, the campaign installs the exact
+deadline, or choose **Update Gateway** from the sidebar update card or
+**Update Gateway…** in **Settings → Updates**. For a `dev` git install, the campaign installs the exact
 commit it announced. The displayed list previews up to five commits from that
 fixed target and does not move if upstream `main` advances during the countdown.
+
+### Owed plugin steps
+
+An update can finish while it still owes
+[plugin convergence](/cli/update/how-updates-run#owed-steps), for example when
+plugin sync threw before it changed any plugin. With automatic updates on, the
+Gateway retries that step for you. At the first eligible hourly check, or the
+first eligible window of a configured schedule, when the registry's current
+release for the channel is the installed version, the Gateway announces a
+campaign for that same version.
+The campaign uses the same idle wait, countdown, hard deadline, and **Hold 1 h**
+as a normal update. A held retry resumes when the hold ends, even outside the
+schedule window. It runs `openclaw update` for the installed version, which
+converges plugins again and settles the step when convergence completes. The
+core is not reinstalled.
+
+This applies only to `stable` and `beta` package installs with a managed
+Gateway service. It waits at least an hour after the recorded start of the
+automatic update that installed the version, counted in elapsed time even when
+schedule windows are closer together, and while any update is running. Just before it applies,
+the Gateway checks again that the step is still owed and that no update is
+running. If you settle the step first, for example with `openclaw update repair`,
+the campaign ends without an update. A newer release replaces a pending or held
+retry.
+
+Each owed step gets one automatic retry per version. If the retry fails or still
+owes the step, the Gateway does not retry it again; `openclaw update status`
+keeps the warning. The next release, `openclaw update`, or
+`openclaw update repair` can settle it. An owed post-plugin Doctor step does not
+start a retry, because an update settles it only after changing plugins.
+
+During the campaign, the Control UI shows the countdown without a target
+version, since no newer version is available. To turn this off, turn off
+automatic updates, or use either opt-out below.
 
 Every failed apply ends the campaign so the UI does not remain on
 **Updating…**. Failures after a managed-service handoff starts are also recorded
 in the restart sentinel and surface after the Gateway returns.
+
+When automatic runs for the same target keep failing the same way, the Gateway
+backs off instead of retrying every hour. Two identical activation failures
+(Doctor, post-update verification, or Gateway startup on the new version) pause
+automatic updates for that target. Other identical failures, such as a refusal
+before anything changed, retry after 1 hour, then 2, 4, 8, and 16 hours, and then
+once a day. The Gateway log names the next attempt time. A new release, a
+successful update, or a manual `openclaw update` resets the backoff.
 
 `update.checkOnStart: false` disables all automatic update checks, feature
 statistics, and update notices, even when `update.auto.enabled` is `true`.
@@ -222,9 +313,10 @@ this `update.run` flow directly. This covers browser-hosted Control UI, remote
 Gateways, and manually managed local Gateways.
 
 Manual updates started from the Control UI always ask first. The first click on
-the sidebar update card or on **Settings → Updates → Update now** opens a
-confirmation naming the target, the installed and available versions when known,
-and the restart impact; it sends nothing until you choose **Update and restart**.
+the sidebar update card or on **Settings → Updates → Update Gateway…** opens a
+confirmation titled **Update and restart?**, naming the target, the installed and
+available versions when known, and the restart impact. It sends nothing until you
+choose **Update and restart**.
 Cancel, Escape, and dismissing the dialog leave the Gateway untouched. Automatic
 campaigns, the CLI, and `update.run` API clients are unaffected.
 

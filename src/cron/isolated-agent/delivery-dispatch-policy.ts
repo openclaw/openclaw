@@ -15,6 +15,7 @@ import { normalizeTargetForProvider } from "../../infra/outbound/target-normaliz
 import { retryAsync } from "../../infra/retry.js";
 import { stringifyRouteThreadId } from "../../plugin-sdk/channel-route.js";
 import { toAgentStoreSessionKey } from "../../routing/session-key.js";
+import { chatRef } from "../../sessions/chat-ref.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { shouldAttemptTtsPayload } from "../../tts/tts-config.js";
 import { prepareTtsPreferences } from "../../tts/tts-preferences.js";
@@ -81,15 +82,13 @@ export function resolveDirectCronDeliveryGeneration(
     params.sourceSessionKey &&
     params.sourceSessionGeneration &&
     !hasExplicitCronDeliveryTarget(params.deliveryPlan)
-    ? {
+    ? chatRef({
         agentId: params.agentId,
         storePath: resolveSessionStorePathCore(params.cfgWithAgentDefaults.session?.store, {
           agentId: params.agentId,
         }),
         sessionKey: params.sourceSessionKey,
-        sessionId: params.sourceSessionGeneration.sessionId,
-        lifecycleRevision: params.sourceSessionGeneration.lifecycleRevision ?? null,
-      }
+      })
     : undefined;
 }
 

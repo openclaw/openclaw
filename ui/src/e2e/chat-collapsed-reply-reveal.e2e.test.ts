@@ -6,6 +6,7 @@ import {
   installMockGateway,
   requireRecord,
   requireString,
+  openAiAuthor,
 } from "./chat-flow.test-support.ts";
 import { polledAttribute, polledCount, polledText } from "./chat-presentation.test-support.ts";
 import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
@@ -30,7 +31,7 @@ suite.define(() => {
           ? Array.from({ length: 32 }, (_, index) => ({
               role: index % 2 === 0 ? "assistant" : "toolResult",
               ...(index % 2 === 0
-                ? {}
+                ? openAiAuthor
                 : { toolName: "read", toolCallId: `inventory-read-${index}` }),
               content: `Inspecting museum room ${index + 1}.`,
               timestamp: 1_800_000_000_001 + index,
@@ -56,6 +57,7 @@ suite.define(() => {
             {
               role: "assistant",
               ...(!deepWork ? { runId: settledRunId } : {}),
+              ...openAiAuthor,
               content: earlierText,
               timestamp: 1_800_000_000_001 + earlierWork.length,
               __openclaw: { id: "inventory-earlier", seq: 2 + earlierWork.length },
@@ -65,6 +67,7 @@ suite.define(() => {
               phase: "final_answer",
               stopReason: "stop",
               ...(!deepWork ? { runId: settledRunId } : {}),
+              ...openAiAuthor,
               content: finalText,
               timestamp: 1_800_000_000_002 + earlierWork.length,
               __openclaw: { id: "inventory-final_answer", seq: 3 + earlierWork.length },
@@ -85,7 +88,7 @@ suite.define(() => {
           /Mac|iPhone|iPad|iPod/.test(navigator.platform) ? "Meta+f" : "Control+f",
         );
         await page.keyboard.press(shortcut);
-        const search = pane.getByRole("textbox", { name: "Search messages", exact: true });
+        const search = pane.getByRole("textbox", { name: "Search loaded messages", exact: true });
         await search.fill(sourceText);
         await polledCount(pane.locator('.chat-bubble[data-entry-id="inventory-prompt"]')).toBe(0);
         await source.waitFor({ state: "visible" });

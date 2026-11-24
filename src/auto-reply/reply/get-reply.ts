@@ -6,21 +6,16 @@ import {
   resolveAgentWorkspaceDir,
   resolveAgentSkillsFilter,
 } from "../../agents/agent-scope.js";
-import { findModelInCatalog } from "../../agents/model-catalog-lookup.js";
 import type { ModelCatalogSnapshot } from "../../agents/model-catalog.types.js";
+import { NO_MODEL_CONFIGURED_MESSAGE } from "../../agents/model-selection-config.js";
 import { resolveModelRefFromString } from "../../agents/model-selection.js";
 import { publishedModelCatalogOwnerMatchesAgent } from "../../agents/prepared-model-catalog-owner.js";
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
-import {
-  WorkspaceAliasRepointedError,
-  WorkspaceVanishedError,
-} from "../../agents/workspace-state-identity.js";
 import { DEFAULT_AGENT_WORKSPACE_DIR } from "../../agents/workspace.js";
 import { resolveChannelModelOverride } from "../../channels/model-overrides.js";
 import { type OpenClawConfig, getRuntimeConfig } from "../../config/config.js";
 import { isSessionWorkStartInvalidatedError } from "../../config/sessions/lifecycle.js";
 import { resolveSessionModelOverrideSource } from "../../config/sessions/model-override-provenance.js";
-import { logVerbose } from "../../globals.js";
 import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import { measureDiagnosticsTimelineSpan } from "../../infra/diagnostics-timeline.js";
 import { isFastTestRuntimeEnv } from "../../infra/env.js";
@@ -39,10 +34,7 @@ import {
   sessionDeliveryChannel,
   sessionDeliveryOrigin,
 } from "../../utils/delivery-context.read.js";
-import {
-  markReplyPayloadForSourceSuppressionDelivery,
-  type ReplyPayload,
-} from "../reply-payload.js";
+import type { ReplyPayload } from "../reply-payload.js";
 import type { RuntimeMsgContext as MsgContext } from "../templating.js";
 import { normalizeThinkLevel } from "../thinking.js";
 import { finishCommandTurn } from "./command-turn-completion.js";
@@ -60,22 +52,18 @@ import {
   applyLinkUnderstandingIfNeeded,
   canReadReplyAttachmentPaths,
   applyMediaUnderstandingIfNeeded,
-  hasExplicitAudioUnderstandingConfig,
   hasLinkCandidate,
   resolveReplyAgentScope,
 } from "./get-reply-preprocessing.js";
 import { runPreparedReply } from "./get-reply-run.js";
+import { resolveActiveMediaModel } from "./get-reply-turn-model.js";
 import {
   prepareInternalGetReplyOptions,
   withExtractedFileImages,
   type InternalGetReplyOptions,
 } from "./get-reply.types.js";
 import { finalizeInboundContext } from "./inbound-context.js";
-import {
-  hasInboundAudio,
-  hasInboundMedia,
-  hasInboundMediaForUnderstanding,
-} from "./inbound-media.js";
+import { hasInboundMedia, hasInboundMediaForUnderstanding } from "./inbound-media.js";
 import { emitPreAgentMessageHooks } from "./message-preprocess-hooks.js";
 import { createModelSelectionState, resolveTurnModelSelection } from "./model-selection.js";
 import { getPreparedReplyDispatchRuntime } from "./prepared-reply-dispatch-context.js";
@@ -89,7 +77,7 @@ import {
 import { assertReplyPreprocessingActive } from "./reply-preprocessing-abort.js";
 import { prepareReplySourceInput, retireUnadoptedReplySource } from "./reply-source-binding.js";
 import { createReplyTimingTracker, isReplyProfilerEnabled } from "./reply-timing-tracker.js";
-import { prepareReplyWorkspace } from "./reply-workspace.js";
+import { prepareReplyWorkspace, replyForUnavailableWorkspace } from "./reply-workspace.js";
 import { withReplySessionDiffBaseline, type ReplyDiffBaseline } from "./session-diff-baseline.js";
 import { resolveScheduledSessionModelSelection } from "./session-event-model-selection.js";
 import { resolveReplySessionInitializationOptions } from "./session-initialization-admission.js";
@@ -167,7 +155,6 @@ async function resolveReplyFromConfig(
       resolveReplyAgentScope({ cfg, ctx: finalized, signal: opts?.abortSignal }),
     );
     assertReplyPreprocessingActive(opts?.abortSignal);
-    opts?.operatorAuthority?.assertCurrent();
     opts?.internalEventExecution?.assertCurrent?.();
     const refusal = readAgentDatabaseAdmissionRefusal(initialAgentScope.agentId);
     if (refusal) {
@@ -346,28 +333,20 @@ async function resolveReplyFromConfig(
         prepareReplyWorkspace({
           dir: workspaceDirRaw,
           ensureBootstrapFiles: !agentCfg?.skipBootstrap && !isFastTestEnv,
+          deferWorkspaceBootstrap: optsWithSkillFilter?.deferWorkspaceBootstrap,
           skipOptionalBootstrapFiles: agentCfg?.skipOptionalBootstrapFiles,
           useFastTestBootstrap,
           provisioningInput: acpWorkspaceProvisioningInput,
           abortSignal: optsWithSkillFilter?.abortSignal,
-          operatorAuthority: optsWithSkillFilter?.operatorAuthority,
         }),
       );
     } catch (error) {
-      if (
-        !(error instanceof WorkspaceAliasRepointedError || error instanceof WorkspaceVanishedError)
-      ) {
+      const reply = replyForUnavailableWorkspace(error);
+      if (!reply) {
         throw error;
       }
-      // Permanent failures must finish ingress even in tool-only conversations.
-      // Keep host paths in operator logs.
       typing.cleanup();
-      logVerbose(`workspace unavailable; replying with repair notice: ${error.message}`);
-      const text =
-        error instanceof WorkspaceAliasRepointedError
-          ? "⚠️ This agent's workspace state needs repair: the configured workspace path no longer matches its stored identity. Ask the gateway operator to run `openclaw doctor --fix` and confirm the move only if the same workspace moved."
-          : "⚠️ This agent's workspace is missing on the gateway host. Ask the operator to restore the workspace from backup and run `openclaw doctor`.";
-      return markReplyPayloadForSourceSuppressionDelivery({ text });
+      return reply;
     }
     const workspaceDir = preparedWorkspaceDir ?? workspace.dir;
     const workspaceContext = { cfg, agentId, agentDir, workspaceDir };
@@ -436,23 +415,14 @@ async function resolveReplyFromConfig(
       const mediaResult = await traceGetReplyPhase("reply.apply_media_understanding", () =>
         applyMediaUnderstandingIfNeeded({
           ctx: finalized,
+          recordAudioApiKeyFailures:
+            optsWithSkillFilter?.userTurnTranscriptRecorder?.recordAudioApiKeyFailures,
           ...workspaceContext,
-          activeModel: {
-            provider,
-            model,
-            api: findModelInCatalog(preparedModelCatalog?.entries ?? [], provider, model)?.api,
-          },
+          activeModel: resolveActiveMediaModel(provider, model, preparedModelCatalog?.entries),
           // Cache and classify now; the final provider and owner policy are
           // resolved later, immediately before the embedded turn starts.
           selfServeLocalPaths: false,
-          ...(utilityModelSelectionLocked
-            ? {
-                processingMode:
-                  hasInboundAudio(finalized) && hasExplicitAudioUnderstandingConfig(cfg)
-                    ? ("audio-and-files" as const)
-                    : ("files-only" as const),
-              }
-            : {}),
+          restrictToConfiguredAudio: utilityModelSelectionLocked,
         }),
       );
       extractedFileImages = mediaResult?.extractedFileImages;
@@ -753,8 +723,6 @@ async function resolveReplyFromConfig(
       const action = resetMatch[1]?.toLowerCase() === "reset" ? "reset" : "new";
       await resolvedOpts?.awaitSessionDiffBaseline?.();
       assertReplyPreprocessingActive(resolvedOpts?.abortSignal);
-      resolvedOpts?.operatorAuthority?.assertCurrent();
-      command.assertOwnerCurrent?.();
       await emitResetCommandHooks({
         action,
         agentId,
@@ -823,6 +791,10 @@ async function resolveReplyFromConfig(
     const queueModeOverride = inlineActionResult.queueModeOverride;
     const preparedReplyOpts = withExtractedFileImages(resolvedOpts, extractedFileImages);
     abortedLastRun = inlineActionResult.abortedLastRun ?? abortedLastRun;
+    // Commands and directives ran above without a model; an agent turn is the first step that needs one.
+    if (!model) {
+      return rejectSessionPreparation(new Error(NO_MODEL_CONFIGURED_MESSAGE));
+    }
     const runAutoFallbackPrimaryProbe =
       directives.hasModelDirective ||
       (autoFallbackPrimaryProbe &&
@@ -866,7 +838,7 @@ async function resolveReplyFromConfig(
         }
         throw error;
       }
-      if (runModelState.operatorModelOverride) {
+      if (runModelState.operatorModelOverride && runModelState.model) {
         runProvider = runModelState.provider;
         runModel = runModelState.model;
       }
@@ -970,7 +942,8 @@ async function resolveReplyFromConfig(
           : requestedRouteResolution,
         typing,
         opts: queueModeOverride ? { ...preparedReplyOpts, queueModeOverride } : preparedReplyOpts,
-        defaultModel,
+        // The runner falls back to this model id; without a configured model the run's own applies.
+        defaultModel: defaultModel ?? runModel,
         timeoutMs,
         isNewSession,
         resetTriggered,

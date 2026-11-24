@@ -95,7 +95,7 @@ it("prepares recents only for their owner and scope, parks display facts, and re
   expect(second.listeners.size).toBe(0);
 });
 
-it("lists recent user chats instead of suggestions when any exist", () => {
+it("lists recent sessions instead of suggestions when any exist", () => {
   const opened: string[] = [];
   const owner = roster([
     row("current", "Current chat", 50),
@@ -116,6 +116,7 @@ it("lists recent user chats instead of suggestions when any exist", () => {
       }}
     />
   ));
+  expect(view.container.textContent).toContain("Recent sessions");
   expect(view.container.querySelector(".agent-chat__suggestion")).toBeNull();
   const rows = [...view.container.querySelectorAll<HTMLButtonElement>(".agent-chat__recent")];
   expect(
@@ -123,4 +124,27 @@ it("lists recent user chats instead of suggestions when any exist", () => {
   ).toEqual(["Newer chat", "Older chat"]);
   rows[0]!.click();
   expect(opened).toEqual(["agent:main:dashboard:newer"]);
+});
+
+it("inserts the displayed tour suggestion into the draft", () => {
+  const drafts: string[] = [];
+  const view = mountSolid(() => (
+    <DraftWelcome
+      sessions={roster([])}
+      options={{
+        assistantName: "Val",
+        assistantAvatar: null,
+        sessionKey: "agent:main:dashboard:current",
+        operatorAuth: { role: "operator", scopes: ["operator.read"] },
+        onDraftChange: (draft) => drafts.push(draft),
+        onSend: () => {},
+      }}
+    />
+  ));
+  const tour = [...view.container.querySelectorAll<HTMLButtonElement>("button")].find((button) =>
+    button.textContent?.includes("Tour OpenClaw’s code and docs"),
+  );
+  expect(tour).toBeDefined();
+  tour!.click();
+  expect(drafts).toEqual(["Tour OpenClaw’s code and docs"]);
 });

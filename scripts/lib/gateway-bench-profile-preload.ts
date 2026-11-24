@@ -122,9 +122,10 @@ if (isMainThread) {
     }
     const owner = new URL("../../src/gateway/server-broadcast.ts", import.meta.url).href;
     const workerOwners = new Map(
-      ["worker-message-metrics.ts", "sqlite-worker-operation-admission.ts", "worker-cpu.ts"].map(
-        (file) => [new URL(`../../src/infra/${file}`, import.meta.url).href, file],
-      ),
+      ["worker-message-metrics.ts", "worker-cpu.ts"].map((file) => [
+        new URL(`../../src/infra/${file}`, import.meta.url).href,
+        file,
+      ]),
     );
     workerOwners.set(
       new URL("../../packages/worker-runtime/src/worker-task-pool-core.ts", import.meta.url).href,

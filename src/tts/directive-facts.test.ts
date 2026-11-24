@@ -11,9 +11,7 @@ it("loads and cleans streamed text without provider discovery", async () => {
     vi.doMock("./provider-registry.js", () => {
       throw new Error("streamed directive text loaded provider discovery");
     });
-    const { createTtsDirectiveTextStreamCleaner: createCleaner } =
-      await import("./directive-facts.js");
-    const cleaner = createCleaner();
+    const cleaner = (await import("./directive-facts.js")).createTtsDirectiveTextStreamCleaner();
     expect(
       cleaner.push("Visible [[tts:provider=missing voice=example]]text") + cleaner.flush(),
     ).toBe("Visible text");
@@ -51,7 +49,6 @@ describe("extractTtsDirectiveFacts", () => {
 });
 
 describe("createTtsDirectiveTextStreamCleaner", () => {
-  const hidden = "[[tts:text]]Press the ` key.[[/tts:text]]";
   it.each([
     [
       ["Hello [[tts:voice=al", "loy]]world[[/tt", "s]]"],
@@ -68,22 +65,25 @@ describe("createTtsDirectiveTextStreamCleaner", () => {
   });
 
   it.each([
-    [["Some [[tts:hello there]] note"], "Some hello there note"],
-    [["Go [[tts:", "answered aloud]] back"], "Go answered aloud back"],
-    [["Done. [[tts:first line\nsecond line]] more"], "Done. first line\nsecond line more"],
-    [["Go [[tts:\nhello]] now"], "Go hello now"],
-    [["[[tts]]read", " this[[/tts]] now"], "read this now"],
-    [["See [[note"], "See [[note"],
-    [[`${hidden} Visible. [[tts:text]]Audio only.[[/tts:text]]`], " Visible. "],
-    [[hidden, " Visible. [[tts:text]]Audio only.[[/tts:text]]"], " Visible. "],
-  ] as const)("preserves visible reply text across chunks: %j", (chunks, expected) => {
-    const cleaner = createTtsDirectiveTextStreamCleaner();
-    expect(chunks.map((chunk) => cleaner.push(chunk)).join("") + cleaner.flush()).toBe(expected);
+    "Some [[tts:hello there]] note [[tts]]read this[[/tts]] now",
+    "Done. [[tts:first line\nsecond line]] more. See [[note",
+    "[[tts:text]]Press the ` key.[[/tts:text]] Visible. [[tts:text]]Audio only.[[/tts:text]]",
+    "Before \\`literal [[tts:text]]SPEECH_ONLY[[/tts:text]] after",
+    "Use \\\\`[[tts:text]]literal[[/tts:text]]` here.",
+  ])("matches final parsing at every two-chunk cut: %j", (input) => {
+    const expected = extractTtsDirectiveFacts(input).cleanedText;
+    for (let cut = 0; cut <= input.length; cut += 1) {
+      const cleaner = createTtsDirectiveTextStreamCleaner();
+      const streamed = cleaner.push(input.slice(0, cut)) + cleaner.push(input.slice(cut));
+      expect(streamed + cleaner.flush(), `cut ${cut}`).toBe(expected);
+    }
   });
 
   it.each([
     ["```\n", "[[tts:literal", " speech]]\n", "```\n"],
     ["Use `", "[[tts:literal", " speech]]", "` here."],
+    ["Use `", "`[[tts:literal", " speech]]", "`` here."],
+    ["Use ``", "[[tts:literal speech]]`` here."],
     ["~~~\n~~~ [[note]]\n[[tts:Literal speech]]\n~~~"],
     ["~~~\n~~~ [[tts:voice=alloy]]\n[[tts:Literal speech]]\n~~~"],
   ])("preserves code literals across chunks: %j", (...chunks) => {

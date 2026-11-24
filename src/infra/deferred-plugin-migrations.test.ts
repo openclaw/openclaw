@@ -463,6 +463,33 @@ describe("deferred configured-plugin migrations", () => {
     expect(error.message).not.toContain("/private/");
   });
 
+  it.each(["added", "removed"] as const)(
+    "names an owner %s beyond the displayed ID prefix when refusing publication",
+    (change) => {
+      const { env, stateDir } = fixture();
+      const common = ["alpha", "bravo", "charlie", "delta"].map((pluginId) => ({
+        pluginId,
+        reason: pending.reason,
+        command: pending.command,
+      }));
+      const extra = { ...pending, pluginId: "zulu" };
+      const expected = change === "added" ? common : [...common, extra];
+      const current = change === "added" ? [...common, extra] : common;
+      for (const entry of current) {
+        writePending(env, entry);
+      }
+      const outputPath = path.join(path.dirname(stateDir), "published.txt");
+
+      expect(() =>
+        withDeferredPluginMigrationsCurrent({ env, expectedPending: expected }, () => {
+          fs.writeFileSync(outputPath, "published");
+        }),
+      ).toThrow(`changed=[zulu:${change}]`);
+      expect(fs.existsSync(outputPath)).toBe(false);
+      expect(readDeferredPluginMigrations({ env })).toEqual(current);
+    },
+  );
+
   it("removes historical completion facts when work is deferred without changing other metadata", async () => {
     const { env } = fixture();
     const { db } = openOpenClawStateDatabase({ env });

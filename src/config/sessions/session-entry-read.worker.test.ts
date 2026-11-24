@@ -8,6 +8,7 @@ import {
 import * as boardStore from "../../boards/sqlite-board-store.kernel.js";
 import { openNodeSqliteDatabase, requireNodeSqlite } from "../../infra/node-sqlite.js";
 import { runSqliteImmediateTransactionSync } from "../../infra/sqlite-transaction.js";
+import { chatRef } from "../../sessions/chat-ref.js";
 import { runSessionMutation } from "../../sessions/session-controller.lifecycle.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { closeOpenClawAgentDatabaseByPathAsync } from "../../state/openclaw-agent-db-lifecycle.js";
@@ -36,7 +37,7 @@ import {
   captureCanonicalSessionReaderContinuation,
   markCanonicalSessionValidationPending,
 } from "./session-canonical-key.js";
-import { prepareSessionDeliveryGeneration } from "./session-delivery-generation.js";
+import { prepareChatDeliveryLease } from "./session-delivery-generation.js";
 import {
   readSessionEntriesFromStoreInWorker,
   readSessionEntrySummariesInWorker,
@@ -730,7 +731,7 @@ it("keeps durable delivery generations live only through same-generation writes"
       code: "SESSION_DELIVERY_GENERATION_UNAVAILABLE",
     });
     const revoked = expect.objectContaining({ code: "SESSION_DELIVERY_GENERATION_REVOKED" });
-    const authority = await prepareSessionDeliveryGeneration(descriptor);
+    const authority = await prepareChatDeliveryLease(chatRef(descriptor));
     try {
       await runSessionMutation({
         scope: database.path,
@@ -770,17 +771,25 @@ it("keeps durable delivery generations live only through same-generation writes"
       } finally {
         queries.restore();
       }
-      await expect(
-        prepareSessionDeliveryGeneration({ ...descriptor, storePath: other.path }),
-      ).rejects.toThrow(revoked);
+      // A revisionless descriptor links the chat by key: each store resolves its own entry.
+      const otherStore = await prepareChatDeliveryLease(
+        chatRef({
+          ...descriptor,
+          storePath: other.path,
+        }),
+      );
+      otherStore.assertCurrent();
+      otherStore.release();
       authority.assertCurrent();
       replaceSessionEntrySync(scope, { ...entry, lifecycleRevision: "reset-generation" });
       expect(authority.assertCurrent).toThrow(revoked);
-      await expect(prepareSessionDeliveryGeneration(descriptor)).rejects.toThrow(revoked);
-      const replay = await prepareSessionDeliveryGeneration({
-        ...descriptor,
-        lifecycleRevision: "reset-generation",
-      });
+      // A revisionless descriptor is key-linked, so a fresh lease follows the reset chat.
+      (await prepareChatDeliveryLease(chatRef(descriptor))).release();
+      const replay = await prepareChatDeliveryLease(
+        chatRef({
+          ...descriptor,
+        }),
+      );
       try {
         replay.assertCurrent();
         runOpenClawAgentWriteTransaction(
@@ -791,11 +800,12 @@ it("keeps durable delivery generations live only through same-generation writes"
           toDatabaseOptions(resolveSqliteScope(scope)),
         );
         expect(replay.assertCurrent).toThrow(revoked);
-        await expect(prepareSessionDeliveryGeneration(descriptor)).rejects.toThrow(revoked);
-        const replacement = await prepareSessionDeliveryGeneration({
-          ...descriptor,
-          sessionId: "replacement",
-        });
+        (await prepareChatDeliveryLease(chatRef(descriptor))).release();
+        const replacement = await prepareChatDeliveryLease(
+          chatRef({
+            ...descriptor,
+          }),
+        );
         replacement.assertCurrent();
         replacement.release();
         expect(replacement.assertCurrent).toThrow(unavailable);

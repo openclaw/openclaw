@@ -56,6 +56,7 @@ Ambient messages remain queued and pass through normal preflight and history rec
     - `batched`: attaches it only when the inbound event was a debounced batch of multiple messages — useful when you want native replies mainly for ambiguous bursty chats, not every single-message turn
 
     Message IDs are surfaced in context/history so agents can target specific messages. Replies to bot messages, including automation alerts, retain the referenced text as untrusted context when context visibility allows it. The bot's own inbound events are still ignored, and referenced self-authored media is not downloaded again.
+    Reply anchors use native Discord message IDs (snowflakes). Internal IDs, such as those of session-event turns, are not reply anchors; those replies post without a native reply reference.
     Native replies in bound threads use the bot identity and require the bot to have permission to send there. Ordinary bound-thread messages without a native reply retain the webhook persona. Chunked native reply receipts retain the reply target selected for each chunk.
 
   </Accordion>

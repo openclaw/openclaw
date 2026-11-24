@@ -42,6 +42,7 @@ export function baseProps(
     error: null,
     remoteError: null,
     categoriesError: null,
+    continuablePreviews: [],
     onRetryCategories: vi.fn(),
     categories: [
       {

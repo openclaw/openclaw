@@ -172,6 +172,7 @@ export function setPwToolsCoreCurrentPage(page: Record<string, unknown> | null) 
     page.off ??= vi.fn();
     page.url ??= vi.fn(() => "about:blank");
     page.viewportSize ??= vi.fn(() => null);
+    page.bringToFront ??= vi.fn(async () => {});
   }
   currentPage = page;
 }

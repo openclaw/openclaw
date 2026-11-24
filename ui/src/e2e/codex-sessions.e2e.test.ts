@@ -112,6 +112,9 @@ suite.define(() => {
             makeCatalog("claude", "Claude Code", [makeHost("gateway:claude", "Local Claude", [])], {
               capabilities: { continueSession: true, archive: false },
             }),
+            makeCatalog("fixture", "Fixture", [
+              makeHost("gateway:fixture", "Fixture", [makeNativeSession("ready", "Catalog ready")]),
+            ]),
           ],
         },
       },
@@ -119,6 +122,7 @@ suite.define(() => {
 
     await page.goto(`${suite.server.baseUrl}chat`);
     await gateway.waitForRequest("sessions.catalog.list");
+    await browserExpect(page.getByText("Catalog ready", { exact: true })).toBeVisible();
     expect(await page.locator('[data-session-section="catalog:codex"]').count()).toBe(0);
     expect(await page.locator('[data-session-section="catalog:claude"]').count()).toBe(0);
     await page.close();
@@ -571,7 +575,9 @@ suite.define(() => {
         "failed",
         "Completed",
       ]);
-      await browserExpect(pane.locator(".chat-tool-term__cmd").nth(1)).toHaveText(`$${command}`);
+      await browserExpect(
+        pane.locator(".chat-tool-term__cmd").filter({ hasText: command }),
+      ).toHaveText(`$${command}`);
       await browserExpect(pane.locator(".chat-diff")).toHaveCount(1);
       expect((await pane.textContent())?.match(/\[Output truncated\]/g)).toHaveLength(1);
       await browserExpect(

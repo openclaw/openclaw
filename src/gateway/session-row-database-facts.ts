@@ -4,7 +4,7 @@ import {
   SessionRuntimeOwnershipChanged,
 } from "../agents/harness/session-runtime-ownership.js";
 import { readSessionActorRowFacts } from "../config/sessions/session-actor-replica.js";
-import { projectionLane } from "../config/sessions/session-transcript-worker-resources.js";
+import { sessionStoreLane } from "../config/sessions/session-transcript-worker-resources.js";
 import { withSessionHistoryWorkerDatabases } from "../config/sessions/session-transcript-worker-runtime.js";
 import { MAX_SESSION_ROW_FACTS_KEYS } from "../config/sessions/session-transcript-worker.types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -108,9 +108,11 @@ export async function withSessionRowDatabaseFacts(
         path: group.database.path,
         sessionKey: row.key,
       });
-      if (facts) {
+      if (facts?.transcriptHasMessages !== undefined) {
         actorFacts.set(identity(row), facts);
       } else {
+        // Entry-only actor receipts do not cover history presence. Prepare that
+        // required row fact here rather than publishing it later as enrichment.
         group.rows.push(row);
       }
     }
@@ -161,7 +163,7 @@ export async function withSessionRowDatabaseFacts(
         }
         const sharedRead = prepareSessionRowSharedFacts({ rows, facts, env, shared });
         if (sharedRead) {
-          sharedRead.accept(await sharedRead.reply);
+          await sharedRead.accept(await sharedRead.reply);
         }
         for (const row of rows) {
           const prepared = facts.get(identity(row));
@@ -219,7 +221,7 @@ export async function withSessionRowDatabaseFacts(
           consume.accept(currentIds, preparedFacts);
         }
       },
-      projectionLane,
+      sessionStoreLane,
     );
   } finally {
     for (const ownership of ownershipReads.values()) {

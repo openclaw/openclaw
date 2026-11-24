@@ -87,6 +87,8 @@ export async function auditFullSuiteTestFileOwnership(): Promise<{
         !file.startsWith("test/fixtures/") &&
         // Browser retention probes belong to their opt-in census config.
         !file.startsWith("scripts/control-ui-retention/") &&
+        // The iroh binding's node:test suites run in its own iroh-node workflow.
+        !file.startsWith("crates/openclaw-iroh-node/") &&
         file !== "src/gateway/gateway.test.ts",
     )
     .toSorted((left, right) => left.localeCompare(right));

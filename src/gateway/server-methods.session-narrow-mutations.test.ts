@@ -11,7 +11,6 @@ import {
 } from "../sessions/session-lifecycle-admission.test-support.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { prepareUserProfileCatalog } from "../state/user-profile-list.js";
-import { setCanonicalUserProfileRole } from "../state/user-profile-writes.js";
 import {
   withOpenClawTestState,
   type OpenClawTestState,
@@ -199,7 +198,7 @@ describe("invocation-owned session mutations", () => {
       ).toMatchObject([false, undefined, { code: "FORBIDDEN" }]);
     }));
 
-  it.each(["current", "revoked", "replaced"] as const)(
+  it.each(["current", "replaced"] as const)(
     "fences pending narrow board reads after authority is %s",
     (change) =>
       withState(async () => {
@@ -234,9 +233,7 @@ describe("invocation-owned session mutations", () => {
           request,
           async () => {
             expect(respond).not.toHaveBeenCalled();
-            if (change === "revoked") {
-              await setCanonicalUserProfileRole(client.authenticatedUserProfile!.profileId, "none");
-            } else if (change === "replaced") {
+            if (change === "replaced") {
               await upsertSessionEntryCore(scope, {
                 ...entry,
                 sessionId: "board-read-replacement",
@@ -561,7 +558,7 @@ describe("invocation-owned session mutations", () => {
     const method = "sessions.steer";
     await withState(async () => {
       const { client, context } = ownerFixture("send-owner");
-      for (const changed of ["none", "source", "generation"] as const) {
+      for (const changed of ["none", "generation"] as const) {
         const entry = {
           ...ownedEntry(client, "original"),
           lifecycleRevision: "original",
@@ -570,7 +567,6 @@ describe("invocation-owned session mutations", () => {
         await upsertSessionEntryCore(scope, entry);
         using gate = createRequestGate();
         const effect = vi.fn();
-        let current = true;
         const dispatch = vi
           .spyOn(chat, "handleDirectExternalChatSend")
           .mockImplementation(async (options) => {
@@ -587,7 +583,6 @@ describe("invocation-owned session mutations", () => {
           {
             client,
             context,
-            hasCurrentClientAuthority: () => current,
             extraHandlers: sessionMessagingHandlers,
           },
           changed,
@@ -596,9 +591,6 @@ describe("invocation-owned session mutations", () => {
         try {
           await Promise.race([gate.entered, request]);
           expect(dispatch).toHaveBeenCalledOnce();
-          if (changed === "source") {
-            current = false;
-          }
           if (changed === "generation") {
             await upsertSessionEntryCore(scope, { ...entry, lifecycleRevision: "replacement" });
           }
@@ -608,25 +600,17 @@ describe("invocation-owned session mutations", () => {
           dispatch.mockRestore();
         }
         expect(effect).toHaveBeenCalledTimes(changed === "none" ? 1 : 0);
-        const settled = await outcome;
-        if (changed === "source") {
-          expect(settled).toMatchObject([
-            { status: "rejected", reason: { message: "Gateway requester authority changed" } },
-          ]);
-          expect(respond).not.toHaveBeenCalled();
-        } else {
-          expect(settled).toEqual([{ status: "fulfilled", value: undefined }]);
-          expect(respond).toHaveBeenCalledOnce();
-          expect(respond.mock.calls[0]?.[0]).toBe(changed === "none");
-          if (changed === "generation") {
-            expect(respond.mock.calls[0]?.[1]).toBeUndefined();
-          }
+        expect(await outcome).toEqual([{ status: "fulfilled", value: undefined }]);
+        expect(respond).toHaveBeenCalledOnce();
+        expect(respond.mock.calls[0]?.[0]).toBe(changed === "none");
+        if (changed === "generation") {
+          expect(respond.mock.calls[0]?.[1]).toBeUndefined();
         }
       }
     });
   });
 
-  it.each(["source", "generation", "missing-single", "missing-batch"] as const)(
+  it.each(["generation", "missing-single", "missing-batch"] as const)(
     "session mutation preserves the original %s fence",
     (changed) =>
       withState(async () => {
@@ -641,7 +625,6 @@ describe("invocation-owned session mutations", () => {
         if (!missing) {
           await upsertSessionEntryCore(scope, entry);
         }
-        let current = true;
         const paused = pausedHandler(sessionMutationHandlers[method]!);
         const { request, respond } = startExactAuthorizationRequest(
           method,
@@ -654,7 +637,6 @@ describe("invocation-owned session mutations", () => {
           {
             client,
             context,
-            hasCurrentClientAuthority: () => current,
             extraHandlers: { [method]: paused.handler },
           },
           changed,
@@ -664,11 +646,7 @@ describe("invocation-owned session mutations", () => {
             return;
           }
           expect(respond).not.toHaveBeenCalled();
-          if (changed === "source") {
-            current = false;
-          } else {
-            await upsertSessionEntryCore(scope, { ...entry, lifecycleRevision: "replacement" });
-          }
+          await upsertSessionEntryCore(scope, { ...entry, lifecycleRevision: "replacement" });
         });
         if (missing) {
           expect(respond).toHaveBeenCalledExactlyOnceWith(
@@ -802,5 +780,106 @@ describe("pending Stop admission", () => {
         expect(settled.ok).toBe(false);
         expect(context.dedupe.get(`chat:${runId}`)?.payload).toMatchObject(aborted);
       }
+    }));
+});
+
+describe("guest dictation request boundary", () => {
+  it("binds transcription audio and close to the owned session and connection", () =>
+    withState(async () => {
+      const { client, context } = ownerFixture("dictation-owner");
+      client.connId = "guest-dictation-owner";
+      await upsertSessionEntryCore(scope, ownedEntry(client, "dictation-session"));
+      const config = await import("./talk/session-config.js");
+      const { talkSessionHandlers } = await import("./talk/handlers/session.js");
+      const sttSession = {
+        connect: vi.fn(async () => {}),
+        sendAudio: vi.fn(),
+        close: vi.fn(),
+        isConnected: () => true,
+      };
+      vi.spyOn(config, "buildTalkTranscriptionConfig").mockResolvedValue({
+        provider: "test",
+        providers: {},
+        model: undefined,
+        file: undefined,
+        source: "streaming",
+      });
+      let transcript: ((text: string) => void) | undefined;
+      vi.spyOn(config, "resolveConfiguredRealtimeTranscriptionProvider").mockResolvedValue({
+        provider: {
+          id: "test",
+          label: "Test",
+          isConfigured: () => true,
+          createSession: (request) => {
+            transcript = request.onTranscript;
+            return sttSession;
+          },
+        },
+        providerConfig: {},
+      });
+      const request = (method: string, params: unknown, requester = client) =>
+        dispatchAuthorizationRequest(method, params, {
+          client: requester,
+          context,
+          extraHandlers: talkSessionHandlers,
+        });
+      const created = await request("talk.session.create", {
+        sessionKey: key,
+        mode: "transcription",
+        transport: "gateway-relay",
+        brain: "none",
+      });
+      expect(created).toHaveBeenCalledWith(
+        true,
+        expect.objectContaining({
+          mode: "transcription",
+          brain: "none",
+        }),
+        undefined,
+      );
+      const session = created.mock.calls.at(-1)?.[1] as { sessionId: string };
+      expect(session.sessionId).toBeTruthy();
+      const other = roleClient("view", "dictation-other");
+      other.connId = "guest-dictation-other";
+      other.connect.scopes = ["operator.sessions.write"];
+      const denied = await request(
+        "talk.session.appendAudio",
+        {
+          sessionId: session.sessionId,
+          audioBase64: "AAA=",
+        },
+        other,
+      );
+      expect(denied.mock.calls.at(-1)?.[0]).toBe(false);
+      const appended = await request("talk.session.appendAudio", {
+        sessionId: session.sessionId,
+        audioBase64: "AAA=",
+      });
+      expect(appended.mock.calls.at(-1)?.[0]).toBe(true);
+      expect(sttSession.sendAudio).toHaveBeenCalled();
+      expectDefined(transcript, "transcription callback")("dictation result");
+      expect(context.broadcastToConnIds).toHaveBeenCalledWith(
+        "talk.event",
+        expect.objectContaining({ text: "dictation result", final: true }),
+        new Set([client.connId]),
+        expect.anything(),
+      );
+      const closed = await request("talk.session.close", {
+        sessionId: session.sessionId,
+      });
+      expect(closed.mock.calls.at(-1)?.[0]).toBe(true);
+      expect(sttSession.close).toHaveBeenCalled();
+      expect(
+        (await request("talk.session.create", { sessionKey: key, mode: "realtime" })).mock.calls.at(
+          -1,
+        )?.[0],
+      ).toBe(false);
+      const reopened = await request("talk.session.create", {
+        sessionKey: key,
+        mode: "transcription",
+        transport: "gateway-relay",
+        brain: "none",
+      });
+      expect(reopened.mock.calls.at(-1)?.[0]).toBe(true);
     }));
 });

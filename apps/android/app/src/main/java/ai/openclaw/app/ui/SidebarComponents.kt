@@ -159,15 +159,19 @@ internal fun SidebarCollapsibleHeader(
   iconContent: (@Composable () -> Unit)? = null,
   trailingContent: (@Composable () -> Unit)? = null,
   attention: SidebarAttention? = null,
+  /** Work in children this collapsed section hides; announced with the expansion state. */
+  hiddenActivity: SidebarSessionActivity? = null,
 ) {
+  val expansionState = if (expanded) nativeString("Expanded") else nativeString("Collapsed")
+  val activityState = hiddenActivity?.let { sidebarSessionActivityLabel(it) }
   Row(
     modifier =
       modifier
         .fillMaxWidth()
-        .heightIn(min = 44.dp)
+        .heightIn(min = 48.dp)
         .clip(RoundedCornerShape(10.dp))
         .clickable(role = Role.Button, onClick = onClick)
-        .semantics { stateDescription = if (expanded) nativeString("Expanded") else nativeString("Collapsed") }
+        .semantics { stateDescription = listOfNotNull(expansionState, activityState).joinToString(", ") }
         .padding(horizontal = 8.dp),
     verticalAlignment = Alignment.CenterVertically,
     horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -183,6 +187,7 @@ internal fun SidebarCollapsibleHeader(
       overflow = TextOverflow.Ellipsis,
     )
     attention?.let { SidebarAttentionIndicator(it, palette) }
+    hiddenActivity?.let { SidebarSessionActivityIndicator(activity = it, palette = palette) }
     trailingContent?.invoke()
   }
 }
@@ -315,6 +320,14 @@ internal fun sidebarSessionActivity(
   }
 }
 
+internal fun sidebarSessionActivityLabel(activity: SidebarSessionActivity): String =
+  when (activity) {
+    SidebarSessionActivity.Failed -> nativeString("Run failed")
+    SidebarSessionActivity.Queued -> nativeString("Queued")
+    SidebarSessionActivity.Running -> nativeString("Working")
+    SidebarSessionActivity.Unread -> nativeString("Needs attention")
+  }
+
 @Composable
 internal fun SidebarSessionActivityIndicator(
   activity: SidebarSessionActivity,
@@ -354,6 +367,17 @@ internal fun SidebarSessionActivityIndicator(
   }
 }
 
+/** Disclosure for a session row that owns nested child sessions. */
+internal data class SidebarSessionChildren(
+  val count: Int,
+  val expanded: Boolean,
+  /** Work hidden inside a collapsed parent, so it stays visible without expanding. */
+  val collapsedActivity: SidebarSessionActivity?,
+  val onToggle: () -> Unit,
+)
+
+private val sidebarChildIndent = 16.dp
+
 @Composable
 internal fun SidebarSessionRow(
   session: ChatSessionEntry,
@@ -363,6 +387,8 @@ internal fun SidebarSessionRow(
   onDragCommit: ((Int) -> Unit)? = null,
   onDragActiveChange: (Boolean) -> Unit = {},
   attention: SidebarAttention? = null,
+  depth: Int = 0,
+  children: SidebarSessionChildren? = null,
 ) {
   val activity =
     sidebarSessionActivity(
@@ -372,13 +398,7 @@ internal fun SidebarSessionRow(
       unread = session.unread == true,
     )
   val sessionStateDescription =
-    attention?.status ?: when (activity) {
-      SidebarSessionActivity.Failed -> nativeString("Run failed")
-      SidebarSessionActivity.Queued -> nativeString("Queued")
-      SidebarSessionActivity.Running -> nativeString("Working")
-      SidebarSessionActivity.Unread -> nativeString("Needs attention")
-      null -> nativeString("Selected").takeIf { selected }
-    }
+    attention?.status ?: activity?.let { sidebarSessionActivityLabel(it) } ?: nativeString("Selected").takeIf { selected }
   SidebarRowSurface(
     selected = selected,
     stateDescription = sessionStateDescription,
@@ -388,6 +408,7 @@ internal fun SidebarSessionRow(
     dragKey = session.key,
     onDragCommit = onDragCommit,
     onDragActiveChange = onDragActiveChange,
+    contentPadding = PaddingValues(start = 12.dp + sidebarChildIndent * depth, end = 12.dp, top = 8.dp, bottom = 8.dp),
   ) {
     Column(modifier = Modifier.weight(1f)) {
       Text(
@@ -418,6 +439,42 @@ internal fun SidebarSessionRow(
         tint = palette.muted,
       )
     }
+    children?.let { SidebarSessionChildrenToggle(it, palette) }
+  }
+}
+
+@Composable
+private fun SidebarSessionChildrenToggle(
+  children: SidebarSessionChildren,
+  palette: SidebarPalette,
+) {
+  // The toggle merges the count and chevron into one control, read as "3, Expand child sessions".
+  Row(
+    modifier =
+      Modifier
+        .heightIn(min = 48.dp)
+        .clip(RoundedCornerShape(10.dp))
+        .clickable(role = Role.Button, onClick = children.onToggle)
+        .testTag("sidebar-session-children-toggle")
+        .padding(horizontal = 6.dp),
+    verticalAlignment = Alignment.CenterVertically,
+    horizontalArrangement = Arrangement.spacedBy(4.dp),
+  ) {
+    if (!children.expanded) {
+      children.collapsedActivity?.let { SidebarSessionActivityIndicator(activity = it, palette = palette) }
+    }
+    Text(text = children.count.toString(), style = ClawTheme.type.caption, color = palette.muted)
+    Icon(
+      imageVector = if (children.expanded) Icons.Default.KeyboardArrowDown else Icons.AutoMirrored.Filled.KeyboardArrowRight,
+      contentDescription =
+        if (children.expanded) {
+          nativeString("Collapse child sessions")
+        } else {
+          nativeString("Expand child sessions")
+        },
+      tint = palette.muted,
+      modifier = Modifier.size(18.dp),
+    )
   }
 }
 

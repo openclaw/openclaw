@@ -299,21 +299,21 @@ describe("searchMemoryWiki", () => {
     ]);
   });
 
-  it("matches non-ASCII query terms without an exact phrase", async () => {
+  it("matches non-ASCII and sentence-final query terms without an exact phrase", async () => {
     const { searchPaths, writeNote } = await createQueryVault();
     const pages = [
-      ["ru", "Альфа — это новый внутренний проект."],
-      ["ja", "会議は来週東京で開きます。"],
-      ["de", "Die Straße gehört Herrn Müller."],
-      ["controller", "The controller strategy is documented here."],
+      ["ru", "Альфа — это новый внутренний проект.", "проект альфа"],
+      ["ja", "会議は来週東京で開きます。", "東京 会議"],
+      ["de", "Die Straße gehört Herrn Müller.", "Müller Straße"],
+      ["controller", "The controller strategy is in config.yaml.", "config.yaml strategy."],
     ] as const;
     for (const [slug, body] of pages) {
       await writeNote(`entities/${slug}.md`, `Notes ${slug}`, body);
     }
 
-    expect(await searchPaths("проект альфа")).toEqual(["entities/ru.md"]);
-    expect(await searchPaths("東京 会議")).toEqual(["entities/ja.md"]);
-    expect(await searchPaths("Müller Straße")).toEqual(["entities/de.md"]);
+    for (const [slug, , query] of pages) {
+      expect(await searchPaths(query)).toEqual([`entities/${slug}.md`]);
+    }
   });
 
   it("routes people through cards and compiled relationships and exposes claim evidence", async () => {

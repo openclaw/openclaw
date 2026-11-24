@@ -50,6 +50,8 @@ export type TelegramSendOpts = {
   replyToMode?: ReplyToMode;
   /** Quote text for Telegram reply_parameters. */
   quoteText?: string;
+  /** Bot API message_effect_id for the first sent message; private chats only. */
+  messageEffectId?: string;
   /** Forum topic thread ID (for forum supergroups) */
   messageThreadId?: number;
   /** Channel Direct Messages topic ID. */
@@ -94,6 +96,7 @@ export type TelegramLocationSendOpts = TelegramThreadedSendOpts &
     TelegramSendOpts,
     | "buttons"
     | "quoteText"
+    | "messageEffectId"
     | "promptContextProjectionPlan"
     | "silent"
     | "onDeliveryResult"

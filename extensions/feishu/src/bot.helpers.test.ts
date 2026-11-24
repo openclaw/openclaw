@@ -1,9 +1,9 @@
 import { expect, it } from "vitest";
 import { buildFeishuAgentBody } from "./bot-agent-body.js";
 import { resolveBroadcastAgents } from "./bot-broadcast.js";
-import { parseFeishuMessageEvent, type FeishuMessageEvent } from "./bot.js";
 import { createFeishuTestEvent } from "./bot.test-support.js";
-import { parseMergeForwardContent } from "./message-content.js";
+import type { FeishuMessageEvent } from "./event-types.js";
+import { parseFeishuMessageEvent, parseMergeForwardContent } from "./message-content.js";
 
 it("quotes and bounds untrusted mention names in agent context", () => {
   const body = buildFeishuAgentBody({

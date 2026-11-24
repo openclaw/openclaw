@@ -5,10 +5,8 @@ import { withPersonalToolTurn } from "../../auto-reply/reply/personal-tool-turn.
 import * as relayRuntime from "../../plugin-sdk/native-hook-relay-runtime.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { loadBundledPluginFacade } from "../../test-utils/bundled-plugin-public-surface.js";
-import {
-  createAdmittedRunOperatorAuthority,
-  prepareSystemAgentRunAdmission,
-} from "../admitted-run-context.js";
+import { prepareSystemAgentRunAdmission } from "../admitted-run-context.js";
+import { createTestOperatorAuthority } from "../admitted-run-context.test-support.js";
 import { prepareOperatorModelPolicy } from "../operator-model-policy.js";
 import { getGatewayToolCallerIdentity } from "../tools/gateway-caller-context.js";
 import type { AgentHarnessHostCapabilities } from "./host-capability-types.js";
@@ -61,12 +59,11 @@ it("keeps collaborative native spawn under the incumbent and refuses an ended pa
       });
     },
   );
-  const operatorAuthority = createAdmittedRunOperatorAuthority({
+  const operatorAuthority = createTestOperatorAuthority({
     profileId: "alice",
     scopes: ["operator.read", "operator.write"],
     gatewayAccessGrant: null,
     modelPolicy: prepareOperatorModelPolicy({ cfg: {}, policy: {} }),
-    assertCurrent() {},
   });
   const admission = prepareSystemAgentRunAdmission(
     {},
@@ -102,6 +99,7 @@ it("keeps collaborative native spawn under the incumbent and refuses an ended pa
             hostCapabilities: host.capabilities,
             namespace: "crew",
           });
+          relay.bindForegroundTurn("parent-thread", "parent-turn");
           const invoke = (toolName: string, callId: string) =>
             invokeNativeHookRelay({
               provider: "codex",

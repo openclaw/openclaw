@@ -108,7 +108,7 @@ const managerConfig = (overrides: Parameters<typeof fixture.createConfig>[0]) =>
     ...overrides,
   });
 const sessionsManager = (minScore?: number) =>
-  fixture.getFreshManager(managerConfig({ minScore }), "cli");
+  fixture.getFreshManager(managerConfig({ minScore }), "default");
 
 async function pollutedIndex(mode: RetrievalMode) {
   const sessionsDir = resolveSessionTranscriptsDirForAgent("main");
@@ -139,7 +139,7 @@ async function pollutedIndex(mode: RetrievalMode) {
     vectorEnabled: mode === "hybrid KNN",
     minScore: 0,
   });
-  const manager = await fixture.getFreshManager(cfg, "cli");
+  const manager = await fixture.getFreshManager(cfg, "default");
   await manager.sync({ reason: "prepare-valid-index", force: true });
   expect(manager.status().fts?.available).toBe(true);
   const writer = memoryIndexFixtureWriter(manager);

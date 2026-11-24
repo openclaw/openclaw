@@ -119,9 +119,18 @@ In direct OpenClaw chat, persistent operations require conversational approval (
 
 Changes delegated by a regular agent, including requests from messaging channels,
 follow the requesting run's effective [session permission policy](/gateway/permission-modes).
-Full Access applies the exact proposed operation automatically, including when
-Full Access comes from the configured default rather than an explicit session
-mode. Restricted runs from messaging channels ask for approval in the chat that
+Inferred and explicit Full Access apply permitted proposals automatically by
+default. Inference accounts for effective tool access and policy; settings for a
+disabled `exec` tool cannot grant authority. Configure
+[`tools.openclaw.autoApproveChanges`](/gateway/config-tools/built-in-tools#tools.openclaw)
+globally or per agent: `false` requires human approval even in Full Access;
+`true` grants standing delegated administration. That grant, or an explicit Full
+Access selection, can authorize changes that enable host code execution even when
+direct execution or editing tools are denied. Broadening the grant requires
+direct operator administration or exact human approval.
+
+Restricted defaults without independent authority require human approval. Runs
+from messaging channels ask for approval in the chat that
 made the request: channels with native approval cards show **Allow once** and
 **Deny** buttons, and other messaging chats receive the change summary with a
 `/approve <id> allow-once|deny` reply. Webchat and terminal runs decide in the
@@ -130,8 +139,8 @@ Replying "yes" in the delegated chat cannot authorize a change; the button or
 `/approve` command does.
 Channels with their own approver settings decide who may approve; elsewhere only
 a current owner (`commands.ownerAllowFrom`) can approve an OpenClaw change.
-Independent filesystem and sandbox boundaries,
-tool policy, and the operation restrictions below still apply. The host also checks
+Independent filesystem and sandbox boundaries, inherited authority,
+access to the `openclaw` tool, and the operation restrictions below still apply. The host also checks
 that the requesting run and verified inference route remain valid. Interactive
 setup and agent handoffs still require a direct operator session; delegated chat
 cannot start a wizard, even when a model proposes it.
@@ -192,7 +201,19 @@ only once nothing uses it. For environment storage, use
 `config set-ref <path> env <ENV_VAR>`.
 `set default model <provider/model>` still live-tests the route before saving it.
 
-Plugin installation keeps its source restrictions. Plugin uninstall refuses a
+Plugin installation accepts ClawHub, npm, bundled/official, and remote `git:`
+sources. A regular agent can complete the request from Telegram or another
+messaging channel without enabling `/plugins` or opening a terminal. Non-ClawHub
+sources require explicit source acknowledgement in the requesting chat. If the
+plugin needs capability consent, OpenClaw presents the declared capabilities
+as a separate exact approval before installing and applying the runtime. Source
+approval does not accept capabilities. Approving capabilities grants conversation
+access only when the plugin declares `contracts.conversationAccess`; otherwise it
+remains a separate `plugins.entries.<id>.hooks.allowConversationAccess` config
+change. Local files and marketplace sources are not accepted by
+`plugin_install`; task-authored archives use `plugin_activate_artifact`.
+
+Plugin uninstall refuses a
 plugin that backs the active inference route; exit OpenClaw and run
 `openclaw plugins uninstall <id>` from a terminal.
 
@@ -201,10 +222,19 @@ Approval is given in your own words: unambiguous replies ("yes", "sure", "go ahe
 ### Change history
 
 The Ask OpenClaw page can show recent applied system-agent operations, Doctor
-migrations, Settings and CLI config writes, and manual edits to
-`openclaw.json`. The config journal detects external edits while the Gateway
-is watching, during an OpenClaw-owned write, or at the next startup after an
-offline edit.
+migrations, Settings and CLI config writes, manual edits to `openclaw.json`,
+and role assignments. The config journal detects external edits while the
+Gateway is watching, during an OpenClaw-owned write, or at the next startup
+after an offline edit.
+
+A committed `users.setRole` change is listed as an operation with source
+`config-rpc` (shown as "settings"). Its summary names the target profile, the
+previous and new role (or that the role was cleared), and the requester's
+profile, or its device when it has no profile. Refused requests and requests
+that leave the role unchanged are not recorded. Recording is best effort: if
+the history write fails after the role committed, the role change still
+succeeds and the Gateway logs a warning, so a missing entry does not prove the
+role is unchanged. Check `users.list` for the current role.
 
 History is stored in the `diagnostic_events` table of the shared
 `~/.openclaw/state/openclaw.sqlite` database, under the `system-agent-audit`
@@ -288,6 +318,12 @@ never changes config; the app automatically walks down the ladder and finally
 offers a manual key/token step populated from the Gateway's active
 text-inference provider plugins. The selected provider owns its starter model
 and config, and the credential is verified the same way before it is saved.
+While detection still probes local tools and services, the app and the Control
+UI list the provider sign-in and key/token choices that
+`openclaw.setup.options` reads from config and plugin manifests, so you can
+start one right away. Results that arrive later add detected candidates without
+moving focus, changing your selection, or interrupting a sign-in or test you
+already started.
 
 Codex supervision and other optional plugin features stay outside this
 inference activation transaction. Configure them only after inference is
@@ -356,8 +392,8 @@ contract.
 
 Gemini CLI remains available as an explicitly configured runtime for normal
 agents, but Gemini CLI and Antigravity are not inference-gate setup routes.
-Use AI Studio API-key or Vertex AI for the inference gate. The optional Gemini
-CLI runtime specifically requires an AI Studio API-key profile.
+Use a Gemini API key or Vertex AI for the inference gate. The optional Gemini
+CLI runtime specifically requires a Gemini API key profile.
 
 ## Switching to an agent
 

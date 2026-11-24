@@ -1,3 +1,4 @@
+import { isOpenAIResponsesApi } from "@openclaw/ai/internal/openai-responses-payload-policy";
 import {
   isStrictOpenAIJsonSchemaCompatible,
   normalizeOpenAIStrictToolParameters,
@@ -222,7 +223,7 @@ export function finalizeAgentTools(options: FinalizeAgentToolsOptions): AnyAgent
       if (!published || published.prewarmed.has(key)) {
         continue;
       }
-      if (!modelApi || modelApi === "openai-responses" || modelApi === "openai-completions") {
+      if (!modelApi || isOpenAIResponsesApi(modelApi) || modelApi === "openai-completions") {
         prewarmOpenAISchema(published.parameters, modelCompat);
       } else if (modelApi === "anthropic-messages") {
         prepareAnthropicInputSchema(published.parameters);

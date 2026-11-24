@@ -267,7 +267,9 @@ it.skipIf(process.platform === "win32").each([
       } else {
         expect(result.stdout).toContain("signal command unwound");
       }
-      expect(result.stderr).toContain("worker generation settled; cleanup deferred");
+      expect(result.stderr).toContain(
+        "worker generation settled; the next eligible openclaw update",
+      );
       const physicalRoot = await fs.realpath(root);
       const volume = path.parse(physicalRoot).root;
       const projection = path.join(
@@ -284,12 +286,14 @@ it.skipIf(process.platform === "win32").each([
       expect(result.stderr).toContain("termination is still pending after settlement");
       if (scenario === "failed-settlement") {
         expect(result.stderr).toContain("workers did not settle");
-        expect(result.stderr).not.toContain("worker generation settled; cleanup deferred");
+        expect(result.stderr).not.toContain(
+          "worker generation settled; the next eligible openclaw update",
+        );
       } else {
         expect(result.stderr).toContain(
           scenario.startsWith("failed-close")
             ? "termination failed after settlement"
-            : "worker generation settled; cleanup deferred",
+            : "worker generation settled; the next eligible openclaw update",
         );
       }
       if (scenario === "accepted-write") {

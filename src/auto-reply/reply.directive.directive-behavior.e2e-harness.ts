@@ -1,4 +1,4 @@
-/** E2E harness for reply directive behavior tests. */
+/** Lifecycle setup for direct directive-handler tests. */
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { afterEach, beforeEach, vi } from "vitest";
 import { clearRuntimeAuthProfileStoreSnapshots } from "../agents/auth-profiles.js";
@@ -15,9 +15,7 @@ import {
   loadModelCatalogMock,
   resolveCommandSecretRefsViaGatewayMock,
   resolveSessionAuthSelectionMock,
-  runDirectiveBehaviorReplyAgent,
   runEmbeddedAgentMock,
-  runDirectiveBehaviorPreparedReply,
   runPreparedReplyMock,
   runReplyAgentMock,
 } from "./reply.directive.directive-behavior.e2e-mocks.js";
@@ -126,9 +124,7 @@ export function installDirectiveBehaviorE2EHooks() {
     resolveSessionAuthSelectionMock.mockReset();
     resolveSessionAuthSelectionMock.mockResolvedValue(undefined);
     runReplyAgentMock.mockReset();
-    runReplyAgentMock.mockImplementation(runDirectiveBehaviorReplyAgent);
     runPreparedReplyMock.mockReset();
-    runPreparedReplyMock.mockImplementation(runDirectiveBehaviorPreparedReply);
   });
 
   afterEach(async () => {

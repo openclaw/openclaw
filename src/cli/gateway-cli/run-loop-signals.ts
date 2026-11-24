@@ -42,6 +42,7 @@ export function createGatewayRunSignals(params: {
   isRuntimeResetPending: () => boolean;
   isShuttingDown: () => boolean;
   getExternalRestartOwner: () => GatewaySuspendHandoffOwner | undefined;
+  publishExternalRestartReceipt: () => Promise<void>;
   getTerminalHostedStop: () => ReturnType<typeof createGatewayHostLifecycle> | undefined;
   updateSuccessor: Pick<GatewayUpdateSuccessor, "stop" | "stopRequested">;
   request: (
@@ -313,7 +314,18 @@ export function createGatewayRunSignals(params: {
             return;
           }
           eagerLifecycleRuntime.abortPendingChannelReloads();
-          eagerLifecycleRuntime.scheduleGatewayRestart({ delayMs: 0, reason: "SIGUSR2" });
+          const scheduled = eagerLifecycleRuntime.scheduleGatewayRestart({
+            delayMs: 0,
+            reason: "SIGUSR2",
+          });
+          if (scheduled.ok) {
+            // A receipt changes only an observer's wait. Never delay or undo the reserved restart.
+            void params.publishExternalRestartReceipt().catch((error: unknown) => {
+              gatewayLog.warn(
+                `Could not acknowledge scheduled external restart: ${formatErrorMessage(error)}`,
+              );
+            });
+          }
           return;
         }
         eagerLifecycleRuntime.abortPendingChannelReloads();

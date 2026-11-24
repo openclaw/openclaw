@@ -1,10 +1,10 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { formatByteSize } from "@openclaw/normalization-core";
-import { quotePowerShellArg } from "../cli/quote-cli-arg.js";
 import type { HealthFinding } from "../flows/health-checks.js";
 import { hasErrnoCode } from "../infra/errno.js";
 import { resolveOpenClawPackageRoot } from "../infra/openclaw-root.js";
+import { formatUpdateCleanupCommand } from "../infra/update-maintenance.js";
 import { resolveNpmGlobalPrefixLayoutFromGlobalRoot } from "../infra/update-npm-prefix.js";
 import { isUpdateDoctorLintPass } from "./doctor/shared/update-phase.js";
 
@@ -114,11 +114,7 @@ export async function collectUpdateSnapshotHealthFindings(
     separator: " ",
     fractionDigits: 1,
   });
-  const commands = directories.map((directory) =>
-    process.platform === "win32"
-      ? `Remove-Item -LiteralPath ${quotePowerShellArg(directory)} -Recurse -Force`
-      : `rm -rf -- '${directory.replaceAll("'", "'\\''")}'`,
-  );
+  const commands = directories.map(formatUpdateCleanupCommand);
   return [
     {
       checkId: "core/doctor/update-snapshots",
