@@ -10,4 +10,5 @@ export function validateQualificationJobs(
   jobs: unknown,
   requiredNames: string[],
   label?: string,
+  waivedJobNames?: Set<string>,
 ): void;

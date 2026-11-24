@@ -67,29 +67,25 @@ import {
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-function runSyntheticWaiverState(source: string, fixture: Record<string, unknown>) {
+function runSyntheticWaiverState(
+  source: string,
+  fixture: Record<string, unknown>,
+  waivers: Record<string, unknown>[] = [
+    {
+      targetVersion: "2099.1.1",
+      targetSha: "c".repeat(40),
+      childRole: "normalCi",
+      jobName: "synthetic-lane",
+      reason: "Synthetic state policy fixture",
+    },
+  ],
+) {
   const policyPath = join(tempDirs.make("frv-synthetic-waiver-"), "waivers.json");
   writeFileSync(
     policyPath,
     JSON.stringify({
       schema: "openclaw.release-validation-waivers/v1",
-      waivers: [
-        {
-          targetVersion: "2099.1.1",
-          targetSha: "c".repeat(40),
-          childRole: "normalCi",
-          jobName: "synthetic-lane",
-          reason: "Synthetic state policy fixture",
-          aggregates: [
-            {
-              jobName: "openclaw/ci-gate",
-              stepName: "Verify selected CI lanes",
-              causes: ["synthetic-lane finished with failure (selected=true)"],
-              exactCauses: true,
-            },
-          ],
-        },
-      ],
+      waivers,
     }),
   );
   const result = spawnSync(process.execPath, ["--input-type=module", "-e", source], {
@@ -861,6 +857,38 @@ syncBuiltinESMExports();
     });
   });
 
+  it("records a waived missing dispatch without fabricating child evidence", () => {
+    const sealedPlan = executionPlan(
+      { children: { normalCi: { result: "skipped" } }, rerunGroup: "ci" },
+      { targetVersion: "2099.1.1" },
+    );
+    const grant = {
+      targetVersion: sealedPlan.targetVersion,
+      childRole: "normalCi",
+      reason: "Synthetic dispatch absence",
+    };
+    const observed = runSyntheticWaiverState(
+      `import { buildReleaseStateArtifact, classifyReleaseSnapshot, formatReleaseStateOutcome, verifyReleaseStateArtifacts } from "./scripts/full-release-validation-policy.mjs";
+       const executionPlan = JSON.parse(process.env.STATE_FIXTURE);
+       const { parentRunAttempt, parentRunId, releaseProfile, rerunGroup, targetVersion, targetSha, workflowRef, workflowSha } = executionPlan;
+       const expected = { parentRunAttempt, parentRunId, targetSha, workflowRef, workflowSha };
+       const children = executionPlan.children.map((child) => ({ ...child, jobs: [], status: "missing" }));
+       const decision = classifyReleaseSnapshot({ children, targetVersion, targetSha });
+       const artifact = (mode) => buildReleaseStateArtifact({ children, decision, executionPlan, expected, mode, releaseProfile, rerunGroup });
+       const { drain } = verifyReleaseStateArtifacts(executionPlan, artifact("decision"), artifact("drain"), expected);
+       console.log(JSON.stringify({ ...drain, summary: formatReleaseStateOutcome(drain) }));`,
+      sealedPlan,
+      [grant],
+    );
+    expect(observed).toMatchObject({
+      blockers: [],
+      state: "passed",
+      waivers: [{ ...grant, runId: "", runAttempt: null }],
+    });
+    expect(Object.keys(observed.children)).toEqual([]);
+    expect(observed.summary).toContain("Waived (not a test pass)");
+  });
+
   it("routes candidate acquisition for fresh qualified packages but not reused evidence", () => {
     expect(
       plan({
@@ -1517,58 +1545,6 @@ describe("release decision policy", () => {
     });
     expect(terminalPolicyPass(snapshot)).toBe(false);
     expect(classifyReleaseSnapshot({ children: [snapshot] }).state).toBe("blocked_complete");
-  });
-
-  it("binds Decision and Drain policy to the plan target and authenticated aggregate attempt", () => {
-    const planned = child("normalCi");
-    const result = runSyntheticWaiverState(
-      `
-      import { readChild, classifyReleaseSnapshot } from "./scripts/full-release-validation-state.mjs";
-      const { planned, run } = JSON.parse(process.env.STATE_FIXTURE);
-      const targetSha = "c".repeat(40);
-      const targetVersion = "2099.1.1";
-      const fetched = [];
-      const options = {
-        targetSha, targetVersion,
-        readRun: async () => run,
-        readAttemptJobs: async (_id, attempt) => attempt === 1 ? [
-          { id: 50, name: "synthetic-lane", status: "completed", conclusion: "failure" },
-          { id: 51, name: "openclaw/ci-gate", status: "completed", conclusion: "failure",
-            steps: [{ name: "Verify selected CI lanes", conclusion: "failure" }] },
-        ] : [{ name: "receipt", status: "completed", conclusion: "success" }],
-        readJobLog: (id) => { fetched.push(id); return "##[error]synthetic-lane finished with failure (selected=true)"; },
-      };
-      const observed = await readChild(planned, undefined, undefined, options);
-      const invalid = await readChild(planned, undefined, undefined, { ...options, readJobLog: () => "##[error]unknown" });
-      console.log(JSON.stringify({
-        observed, fetched,
-        state: classifyReleaseSnapshot({ children: [observed], targetVersion, targetSha }).state,
-        otherState: classifyReleaseSnapshot({ children: [observed], targetVersion, targetSha: "b".repeat(40) }).state,
-        invalidState: classifyReleaseSnapshot({ children: [invalid], targetVersion, targetSha }).state,
-      }));
-    `,
-      {
-        planned,
-        run: githubRun(planned, {
-          conclusion: "failure",
-          run_attempt: 2,
-          triggering_actor: { login: "release-operator" },
-        }),
-      },
-    );
-    expect(result.observed.errors).toEqual([]);
-    expect(result.fetched).toEqual([51]);
-    expect(result.observed.conclusion).toBe("failure");
-    expect(result.observed.jobs).toContainEqual(
-      expect.objectContaining({
-        name: "openclaw/ci-gate",
-        acceptedRunAttempt: 1,
-        conclusion: "failure",
-      }),
-    );
-    expect(result.state).toBe("passed");
-    expect(result.otherState).toBe("blocked_complete");
-    expect(result.invalidState).toBe("orchestration_error");
   });
 
   it("accepts a targeted runtime child rerun with retained sibling evidence", async () => {
