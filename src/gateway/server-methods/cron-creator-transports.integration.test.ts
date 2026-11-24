@@ -443,7 +443,6 @@ it.each([
             hasExplicitOrigin: false,
             hasRestoredCronContinuation: false,
             isIncognitoEntry: false,
-            isReconnectResume: false,
             isSystemGenerated: true,
             turnKind: "main",
           })
@@ -456,7 +455,6 @@ it.each([
               hasExplicitOrigin: false,
               hasRestoredCronContinuation: false,
               isIncognito: false,
-              isReconnectResume: false,
               isSystemGenerated: false,
               turnKind: "main",
               isDirectExternalUser: true,
@@ -613,7 +611,6 @@ it.each(["admin", "caller", "non-admin"] as const)(
       hasExplicitOrigin: false,
       hasRestoredCronContinuation: false,
       isIncognito: false,
-      isReconnectResume: false,
       isSystemGenerated: false,
       turnKind: "main",
       isDirectExternalUser: true,

@@ -213,7 +213,6 @@ type GatewayChatUserTurn = {
   hasExplicitOrigin: boolean;
   hasRestoredCronContinuation: boolean;
   isIncognito: boolean;
-  isReconnectResume: boolean;
   isSystemGenerated: boolean;
   turnKind: "btw" | "main";
   isDirectExternalUser: boolean;
@@ -224,8 +223,7 @@ function directChatUserSource(params: GatewayChatUserTurn): DirectOperatorAuthor
   const freshDashboardFollowup =
     params.isUncontrolledDashboardChild &&
     params.client?.internal?.authenticatedControlUi === true &&
-    !params.isIncognito &&
-    !params.isReconnectResume;
+    !params.isIncognito;
   return {
     ...params,
     spawnedBy: freshDashboardFollowup ? undefined : params.spawnedBy,
@@ -251,7 +249,7 @@ export function resolveGatewayChatCronCreatorAuthorityAdmission(
   return resolveDirectOperatorAuthority(
     {
       ...source,
-      disallowed: params.isIncognito || params.isReconnectResume || source.disallowed,
+      disallowed: params.isIncognito || source.disallowed,
     },
     // Restoring direct input never gives a handed-off chat global cron management.
     params.isUncontrolledDashboardChild === true,
@@ -278,7 +276,6 @@ export function resolveGatewayTemplateSetupCronAuthorityAdmission(
     inputProvenance: undefined,
     disallowed:
       params.isIncognitoEntry ||
-      params.isReconnectResume ||
       params.hasExplicitOrigin ||
       params.hasRestoredCronContinuation ||
       params.turnKind !== "main",

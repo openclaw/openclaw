@@ -13,7 +13,6 @@ type ChatSendExternalAdmissionParams = {
   hasExplicitOrigin: boolean;
   hasRestoredCronContinuation: boolean;
   isIncognitoEntry: boolean;
-  isReconnectResume: boolean;
   isSystemGenerated: boolean;
   turnKind: "btw" | "main";
 };
