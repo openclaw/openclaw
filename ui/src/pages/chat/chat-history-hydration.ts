@@ -39,7 +39,11 @@ import {
   applyHistoryRun,
 } from "./chat-history-stream.ts";
 import { loadChatLiveTools } from "./chat-live-tools.ts";
-import { applyChatPendingInputs, loadOwnCancelledInputs } from "./chat-pending-inputs.ts";
+import {
+  applyChatPendingInputs,
+  loadOwnCancelledInputs,
+  mayRestoreOwnCancelledInputs,
+} from "./chat-pending-inputs.ts";
 import { isChatRunRecoveryStatus, reconcileChatRunStartup } from "./chat-run-startup.ts";
 import type { ChatHistoryHost, ChatHistorySessions, ChatState } from "./chat-state-contract.ts";
 import {
@@ -149,7 +153,9 @@ export async function hydrateChatHistory(
       }
       if (admission === requests.subscriptionReady) {
         if (!ready) {
-          await loadOwnCancelledInputs(state, isCurrent);
+          if (mayRestoreOwnCancelledInputs(state)) {
+            await loadOwnCancelledInputs(state, isCurrent);
+          }
           if (!isCurrent()) {
             return undefined;
           }
@@ -497,7 +503,9 @@ export async function hydrateChatHistory(
       state.sessionKey === sessionKey &&
       state.client === client &&
       state.connectionEpoch === connectionEpoch;
-    await loadOwnCancelledInputs(state, ownsFailure);
+    if (mayRestoreOwnCancelledInputs(state)) {
+      await loadOwnCancelledInputs(state, ownsFailure);
+    }
     if (!ownsFailure()) {
       return undefined;
     }
