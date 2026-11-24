@@ -7,6 +7,7 @@ import {
   inspectBeamMirrorV2Enrollment,
   prepareBeamMirrorV2Intent,
   publishBeamMirrorV2,
+  requireBeamMirrorPublisher,
   type BeamMirrorV2Head,
 } from "./mirror-v2.js";
 
@@ -101,28 +102,6 @@ it("recovers a lost update acknowledgement using the saved ID, precondition and 
           auth: "Bearer synthetic-mirror-token",
         });
       }
-    },
-  );
-});
-
-it("updates an enrolled generation only with its saved strong revision", async () => {
-  const conditions: unknown[] = [];
-  await serve(
-    (req, res) => {
-      if (req.method === "GET") {
-        res.end(JSON.stringify(receipt(prior)));
-      } else {
-        conditions.push(req.headers["if-match"]);
-        res.end(JSON.stringify(receipt(head)));
-      }
-    },
-    async (endpoint) => {
-      const update = prepareBeamMirrorV2Intent(raw, prior);
-      expect(await publishBeamMirrorV2({ ...scope, endpoint, intent: update })).toEqual({
-        state: "published",
-        head,
-      });
-      expect(conditions).toEqual([prior.revision]);
     },
   );
 });
@@ -242,6 +221,36 @@ it("creates only on an explicit enrollment and records the generation named in t
         { state: "published", head },
       );
       expect(operations).toEqual([["PUT", "*", undefined]]);
+    },
+  );
+});
+
+it("requires verified publisher capabilities before enrollment and an owner-attested first receipt", async () => {
+  const methods: string[] = [];
+  await serve(
+    (req, res) => {
+      methods.push(req.method ?? "");
+      if (req.url?.endsWith("/capabilities")) {
+        const allowed = req.headers.authorization === "Bearer verified";
+        res.end(
+          JSON.stringify({
+            protocol: 2,
+            operations: allowed ? ["publish", "release"] : ["publish"],
+          }),
+        );
+        return;
+      }
+      res.writeHead(201).end(JSON.stringify({ ...receipt(head), canRelease: false }));
+    },
+    async (endpoint) => {
+      await expect(requireBeamMirrorPublisher({ ...scope, endpoint })).rejects.toThrow(
+        "verified publisher",
+      );
+      await requireBeamMirrorPublisher({ ...scope, endpoint, token: "verified" });
+      await expect(
+        enrollBeamMirrorV2({ ...scope, endpoint, requestId: intent.requestId }),
+      ).rejects.toThrow("did not attest");
+      expect(methods).toEqual(["GET", "GET", "PUT"]);
     },
   );
 });

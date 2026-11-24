@@ -50,10 +50,9 @@ export function prepareBeamMirrorV2Intent(
   };
 }
 
-function snapshotUrl(endpoint: string, beamId: string): URL {
+function receiverUrl(endpoint: string): URL {
   const url = URL.parse(endpoint);
   if (
-    !/^[a-f0-9]{32}$/.test(beamId) ||
     !url ||
     url.username ||
     url.password ||
@@ -64,8 +63,15 @@ function snapshotUrl(endpoint: string, beamId: string): URL {
   ) {
     throw new Error("Configure the final Beam v2 HTTPS endpoint or a loopback HTTP endpoint");
   }
-  url.pathname = url.pathname.replace(/\/$/, "") + "/snapshots/" + beamId;
+  url.pathname = url.pathname.replace(/\/$/, "") + "/";
   return url;
+}
+
+function snapshotUrl(endpoint: string, beamId: string): URL {
+  if (!/^[a-f0-9]{32}$/.test(beamId)) {
+    throw new Error("Invalid Beam mirror identifier");
+  }
+  return new URL("snapshots/" + beamId, receiverUrl(endpoint));
 }
 
 function receipt(value: unknown, beamId: string): BeamMirrorV2Head {
@@ -86,7 +92,7 @@ function receipt(value: unknown, beamId: string): BeamMirrorV2Head {
 
 // Only the enrolled receiver origin can acknowledge an operation. Recheck live
 // consent after DNS preparation, immediately before the guarded request is sent.
-async function request(p: Destination, url: string, init: RequestInit) {
+async function request(p: Omit<Destination, "beamId">, url: string, init: RequestInit) {
   const headers = new Headers(init.headers);
   if (p.token) {
     headers.set("Authorization", "Bearer " + p.token);
@@ -155,6 +161,24 @@ function savedPacket(p: Source) {
     throw new Error("Beam mirror packet does not belong to the selected source");
   }
   return raw;
+}
+
+// An explicit enrollment must remain recoverable by the same publisher after credential rotation.
+export async function requireBeamMirrorPublisher(p: Omit<Destination, "beamId">): Promise<void> {
+  const url = new URL("capabilities", receiverUrl(p.endpoint));
+  const { status, body } = await request(p, url.href, { method: "GET" });
+  if (
+    status !== 200 ||
+    !isRecord(body) ||
+    body.protocol !== 2 ||
+    !Array.isArray(body.operations) ||
+    !body.operations.includes("publish") ||
+    !body.operations.includes("release")
+  ) {
+    throw new Error(
+      "Beam enrollment requires a v2 receiver and verified publisher with publish and release authority",
+    );
+  }
 }
 
 /** The operator's explicit first share is the only create-capable call. A missing
@@ -304,6 +328,11 @@ async function write(
     );
   }
   const head = receipt(sent.body, p.beamId);
+  if (!prior && (!isRecord(sent.body) || sent.body.canRelease !== true)) {
+    throw new Error(
+      "Beam receiver did not attest ownership of the created publication; inspect it before confirming",
+    );
+  }
   if (prior && head.publicationId !== prior.publicationId) {
     return { state: "conflict" };
   }

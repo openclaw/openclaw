@@ -5,6 +5,7 @@ import {
   inspectBeamMirrorV2Enrollment,
   prepareBeamMirrorV2Intent,
   publishBeamMirrorV2,
+  requireBeamMirrorPublisher,
   type BeamMirrorV2Head,
   type BeamMirrorV2Intent,
 } from "./mirror-v2.js";
@@ -61,29 +62,44 @@ export async function openBeamMirrorEnrollment(params: {
       ]),
     )
     .digest("hex");
-  let row = await store.observe(key);
-  if (!row.value && params.confirmGeneration) {
-    throw new Error("No enrollment exists for this receiver and native source");
-  }
-  if (!row.value && params.explicit) {
-    params.assertCurrent();
-    const sourceSalt = randomUUID();
-    await store.registerIfAbsent(key, {
-      sourceSalt,
-      credential: credentialScope(sourceSalt, params.token),
-    });
-    row = await store.observe(key);
-  }
-  if (!row.value) {
-    return undefined;
-  }
-  params.assertCurrent();
   const options = {
     endpoint,
     token: params.token,
     signal: params.signal,
     assertCurrent: params.assertCurrent,
   };
+  let row = await store.observe(key);
+  if (!row.value && params.confirmGeneration) {
+    throw new Error("No enrollment exists for this receiver and native source");
+  }
+  if (
+    params.explicit &&
+    !params.confirmGeneration &&
+    !row.value?.initial &&
+    !row.value?.head &&
+    !row.value?.fenced
+  ) {
+    await requireBeamMirrorPublisher(options);
+    params.assertCurrent();
+    const sourceSalt = row.value?.sourceSalt ?? randomUUID();
+    const credential = credentialScope(sourceSalt, params.token);
+    if (!row.value) {
+      await store.registerIfAbsent(key, { sourceSalt, credential });
+    } else if (row.value.credential !== credential) {
+      // With no first-write intent there can be no remote publication to adopt.
+      // A stopped clean may leave exactly this local reservation across credential rotation.
+      await store.compareAndApply(key, row.comparison, {
+        operation: "update",
+        action: "set",
+        value: { sourceSalt, credential },
+      });
+    }
+    row = await store.observe(key);
+  }
+  if (!row.value) {
+    return undefined;
+  }
+  params.assertCurrent();
   const credential = credentialScope(row.value.sourceSalt, params.token);
   if (row.value.credential !== credential) {
     const previous = row.value;

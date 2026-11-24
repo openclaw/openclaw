@@ -15,6 +15,7 @@ import * as transport from "./mirror-v2.js";
 vi.mock("./mirror-v2.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./mirror-v2.js")>()),
   enrollBeamMirrorV2: vi.fn(),
+  requireBeamMirrorPublisher: vi.fn(),
   inspectBeamMirrorV2Enrollment: vi.fn(),
   publishBeamMirrorV2: vi.fn(),
 }));
@@ -160,4 +161,18 @@ it("rotates a publisher credential only after read-only confirmation of the same
   await expect(open()).rejects.toThrow("credential");
   expect(transport.enrollBeamMirrorV2).toHaveBeenCalledOnce();
   expect(transport.publishBeamMirrorV2).not.toHaveBeenCalled();
+});
+
+it("checks receiver release authority before reserving the first local enrollment", async () => {
+  vi.mocked(transport.requireBeamMirrorPublisher).mockRejectedValueOnce(
+    new Error("verified publisher required"),
+  );
+  await expect(open(true)).rejects.toThrow("verified publisher required");
+  await expect(open(false)).resolves.toBeUndefined();
+  expect(transport.enrollBeamMirrorV2).not.toHaveBeenCalled();
+  const reserved = await open(true, "verified-publisher");
+  const next = await open(true, "rotated-before-first-write");
+  expect(next?.sourceSalt).toBe(reserved?.sourceSalt);
+  await expect(open(false, "verified-publisher")).rejects.toThrow("credential");
+  expect(transport.enrollBeamMirrorV2).not.toHaveBeenCalled();
 });
