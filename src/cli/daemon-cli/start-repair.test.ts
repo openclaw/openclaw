@@ -43,6 +43,7 @@ const buildGatewayInstallPlanMock = vi.hoisted(() =>
 );
 const resolveGatewayInstallTokenMock = vi.hoisted(() => vi.fn());
 const readConfigFileSnapshotForWriteMock = vi.hoisted(() => vi.fn());
+const readBestEffortConfigMock = vi.hoisted(() => vi.fn());
 const resolveGatewayPortMock = vi.hoisted(() =>
   vi.fn(
     (config: { gateway?: { port?: number } } | undefined, env: NodeJS.ProcessEnv = process.env) => {
@@ -83,6 +84,7 @@ vi.mock("../../commands/gateway-install-token.js", () => ({
 
 vi.mock("../../config/io.js", () => ({
   readConfigFileSnapshotForWrite: readConfigFileSnapshotForWriteMock,
+  createConfigIO: () => ({ readBestEffortConfig: readBestEffortConfigMock }),
 }));
 
 vi.mock("../../config/paths.js", () => ({
@@ -167,12 +169,46 @@ describe("repairLoadedGatewayServiceForStart", () => {
       snapshot: { exists: true, valid: true, sourceConfig: {}, config: {} },
       writeOptions: { expectedConfigPath: "/tmp/openclaw.json" },
     });
+    readBestEffortConfigMock.mockReset().mockResolvedValue({});
     resolveOpenClawWrapperPathMock.mockReset().mockResolvedValue("/usr/bin/openclaw");
     formatGatewayServiceStartRepairIssuesMock.mockReset().mockReturnValue("stale service port");
     assertGatewayServiceMutationAllowedMock.mockReset();
     resolveBunRuntimeInfoMock.mockReset().mockResolvedValue({ status: "supported" });
   });
   afterEach(() => vi.unstubAllEnvs());
+
+  it.each(["start", "restart"] as const)(
+    "publishes planned command and newly generated auth before %s activation",
+    async (action) => {
+      const { service, params } = repairFixture();
+      const config = { gateway: { auth: { token: "fresh-repair-token" } } };
+      resolveGatewayInstallTokenMock.mockImplementation(async () => {
+        readBestEffortConfigMock.mockResolvedValue(config);
+        return { warnings: [] };
+      });
+      service.install.mockImplementation(async () => {
+        readBestEffortConfigMock.mockRejectedValue(new Error("Config custody was handed off."));
+        readConfigFileSnapshotForWriteMock.mockRejectedValue(
+          new Error("Source config custody was handed off."),
+        );
+      });
+
+      const result =
+        action === "restart"
+          ? await repairLoadedGatewayServiceForStart({ ...params, action })
+          : await repairLoadedGatewayServiceForStart(params);
+
+      expect(result.lifecycle.config).toBe(config);
+      expect(result.lifecycle).toMatchObject({
+        command: {
+          programArguments: ["/usr/bin/openclaw", "gateway", "run"],
+          workingDirectory: "/tmp/openclaw",
+          environment: { TELEGRAM_DEFAULT_BOTTOKEN: "placeholder-overwritten-token" },
+        },
+        env: { HOME: "/home/openclaw" },
+      });
+    },
+  );
 
   it("leaves the service untouched when runtime-pin migration is pending", async () => {
     const failure = new Error("Runtime pin migration pending; run openclaw doctor.");
@@ -254,9 +290,16 @@ describe("repairLoadedGatewayServiceForStart", () => {
         environment: existingEnvironment,
         environmentValueSources: existingEnvironmentValueSources,
       },
-      managedOverrides: { environment: { keys: ["NODE_OPTIONS"] } },
+      managedOverrides: {
+        environment: { keys: ["NODE_OPTIONS", "TELEGRAM_DEFAULT_BOTTOKEN"] },
+      },
     });
-    await repairLoadedGatewayServiceForStart(params);
+    const result = await repairLoadedGatewayServiceForStart(params);
+    expect(result.lifecycle.command?.environment).toMatchObject({
+      NODE_OPTIONS: "--max-old-space-size=512",
+      TELEGRAM_DEFAULT_BOTTOKEN: "operator-drop-in-token",
+    });
+    expect(result.lifecycle.env.TELEGRAM_DEFAULT_BOTTOKEN).toBe("operator-drop-in-token");
     const plan = installPlan();
     expect(plan.existingCommand).toBe(state.command);
     expect(plan.existingEnvironment).toBe(existingEnvironment);

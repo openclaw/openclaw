@@ -57,7 +57,11 @@ import {
   appendGatewayLifecycleAudit,
   createGatewayLifecycleMutationAudit,
 } from "./lifecycle-audit.js";
-import { resolveGatewayConfigPorts, resolveGatewayLifecycleContext } from "./lifecycle-context.js";
+import {
+  createGatewayLifecycleContext,
+  resolveGatewayConfigPorts,
+  resolveGatewayLifecycleContext,
+} from "./lifecycle-context.js";
 import {
   runServiceRestart,
   runServiceStart,
@@ -290,8 +294,7 @@ export async function runDaemonStart(opts: DaemonLifecycleOptions = {}) {
         issues,
       });
       if (result) {
-        // Repair does not publish its replacement command/config, so refresh here.
-        context = await resolveGatewayLifecycleContext(service);
+        context = createGatewayLifecycleContext(service, result.lifecycle);
       }
       return result;
     },
@@ -448,7 +451,8 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
   let restartedWithoutServiceManager = false;
   let unmanagedPreviousLockIdentity: GatewayLockIdentity | undefined;
   const restartIntent = resolveGatewayRestartIntentOptions(opts);
-  let configPorts = await resolveGatewayConfigPorts();
+  const configPorts = await resolveGatewayConfigPorts();
+  let callerConfig = configPorts.config;
   const { explicit: configuredPort } = configPorts;
   let restartContext = await resolveGatewayLifecycleContext(service, preserveDefinition);
   const preparedRunId = await tryAdoptManagedGatewayPackage(service, "restart", jsonOutput);
@@ -476,7 +480,7 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
       ...opts,
       ...(restartIntent ? { restartIntent } : {}),
     },
-    readDriftContext: () => ({ config: configPorts.config ?? {}, command: restartContext.command }),
+    readDriftContext: () => ({ config: callerConfig ?? {}, command: restartContext.command }),
     expectedPort: configuredPort,
     beforeServiceMutation: () => {
       assertGatewayServiceActionAllowed("restart", "restart the gateway");
@@ -538,10 +542,10 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
             state,
             issues,
           });
-          // Repair invalidates the prepared service definition and caller config.
+          // Repair publishes its replacement definition and auth before native activation.
           if (result) {
-            restartContext = await resolveGatewayLifecycleContext(service);
-            configPorts = await resolveGatewayConfigPorts();
+            restartContext = createGatewayLifecycleContext(service, result.lifecycle);
+            callerConfig = result.lifecycle.config;
             managedRestartPort = configuredPort ?? restartContext.port;
           }
           return result;

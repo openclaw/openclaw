@@ -3,7 +3,7 @@ import path from "node:path";
 import { buildGatewayInstallPlan } from "../../commands/daemon-install-helpers.js";
 import { resolveGatewayDaemonRuntime } from "../../commands/daemon-runtime.js";
 import { resolveGatewayInstallToken } from "../../commands/gateway-install-token.js";
-import { readConfigFileSnapshotForWrite } from "../../config/io.js";
+import { createConfigIO, readConfigFileSnapshotForWrite } from "../../config/io.js";
 import {
   resolveConfigPathCandidate,
   resolveGatewayPort,
@@ -18,14 +18,17 @@ import {
   withDaemonRuntimePinMigration,
   readDaemonRuntimePin,
 } from "../../daemon/runtime-pin-state.js";
+import { mergeGatewayServiceEnv } from "../../daemon/service-env-merge.js";
 import {
   assertServiceDefinitionWritable,
   hasGatewayServiceEnvironmentDifference,
+  hasGatewayServiceEnvironmentOverride,
   hasGatewayServiceLauncherOverride,
   resolveManagedGatewayServiceCommand,
 } from "../../daemon/service-types.js";
 import type {
   GatewayService,
+  GatewayServiceCommandConfig,
   GatewayServiceStartRepairIssue,
   GatewayServiceState,
 } from "../../daemon/service.js";
@@ -34,6 +37,7 @@ import { assertGatewayServiceMutationAllowed } from "../../infra/gateway-supervi
 import { parseTcpPortFromArgs } from "../../infra/tcp-port.js";
 import { defaultRuntime } from "../../runtime.js";
 import { mergeInstallInvocationEnv } from "./install.js";
+import type { GatewayLifecycleFacts } from "./lifecycle-context.js";
 
 type GatewayServiceRepairParams = {
   service: Pick<GatewayService, "install" | "isLoaded" | "readDefinitionMutationCapability">;
@@ -49,6 +53,7 @@ type GatewayServiceRepairResult<TResult extends "restarted" | "started"> = {
   message: string;
   warnings?: string[];
   loaded: boolean;
+  lifecycle: GatewayLifecycleFacts;
 };
 
 const GATEWAY_TARGET_ENV_KEYS = [
@@ -265,6 +270,53 @@ export async function repairLoadedGatewayServiceForStart(
       },
     });
 
+  const plannedCommand = {
+    programArguments,
+    workingDirectory,
+    environment,
+    environmentValueSources,
+  };
+  let command: GatewayServiceCommandConfig = plannedCommand;
+  const previousCommand = params.state.command;
+  if (previousCommand?.managedOverrides?.environment) {
+    const effectiveEnvironment = { ...environment };
+    const effectiveSources = { ...environmentValueSources };
+    for (const key of new Set([
+      ...Object.keys(environment ?? {}),
+      ...Object.keys(previousCommand.environment ?? {}),
+    ])) {
+      if (!hasGatewayServiceEnvironmentOverride(previousCommand, [key])) {
+        continue;
+      }
+      const value = previousCommand.environment?.[key];
+      if (value === undefined) {
+        delete effectiveEnvironment[key];
+        delete effectiveSources[key];
+      } else {
+        effectiveEnvironment[key] = value;
+        effectiveSources[key] = previousCommand.environmentValueSources?.[key] ?? "inline";
+      }
+    }
+    command = {
+      ...plannedCommand,
+      environment: effectiveEnvironment,
+      environmentValueSources: effectiveSources,
+      managedDefinition: plannedCommand,
+      managedOverrides: previousCommand.managedOverrides,
+    };
+  }
+  const env = mergeGatewayServiceEnv(installEnv, command);
+  // Token preparation can persist fresh auth; capture it before install activates the Gateway.
+  const config = await createConfigIO({
+    env,
+    observe: false,
+    pluginValidation: "skip",
+    suppressFutureVersionWarning: true,
+  })
+    .readBestEffortConfig()
+    .catch(() => undefined);
+  const lifecycle: GatewayLifecycleFacts = { command, env, config };
+
   await params.service.install({
     runtimePinUpdate: { expected: pinSnapshot, pin: pinSnapshot.pin },
     env: installEnv,
@@ -289,5 +341,6 @@ export async function repairLoadedGatewayServiceForStart(
         : "Gateway service definition repaired and started. Reopen the Control UI with `openclaw dashboard` or copy a fresh auth URL with `openclaw dashboard --no-open`.",
     warnings: warnings.length ? warnings : undefined,
     loaded,
+    lifecycle,
   };
 }

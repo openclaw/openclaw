@@ -125,7 +125,7 @@ it.each<[string, Partial<typeof native>]>([
   ["other-task", { ownerTask: "Another Gateway" }],
   ["other-command", {}],
   ["unowned", { ownerAlive: false }],
-])("binds env-only port to exact owner: %s", async (kind, owner) => {
+])("binds env-only process observation to its file owner: %s", async (kind, owner) => {
   environmentPort();
   Object.assign(native, { ownerAlive: true }, owner);
   const actual =
@@ -135,7 +135,8 @@ it.each<[string, Partial<typeof native>]>([
   const argv = kind === "supervised" ? [...actual, supervisorChild(65536)] : actual;
   native.processes = [processEntry(42, argv)];
   const runtime = await readRuntime({});
-  const matches = kind === "direct" || kind === "supervised";
+  // File PID, port, and captured argv identify a process, not its Scheduler supervisor.
+  const matches = kind === "direct" || kind === "supervised" || kind === "other-task";
   expect([runtime.status, runtime.pid]).toEqual(matches ? ["running", 42] : ["unknown", undefined]);
 });
 
