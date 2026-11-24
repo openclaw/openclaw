@@ -265,6 +265,43 @@ describe("info command handlers", () => {
     expect(result?.reply?.text).toContain("AllowFrom: +15551234567");
   });
 
+  it.each<{ channel: string; source: MsgContext["CommandSource"]; reply: string | undefined }>([
+    {
+      channel: "webchat",
+      source: "text",
+      reply:
+        "You are not authorized to use this command. Ask your Gateway administrator for command access.",
+    },
+    { channel: "whatsapp", source: "text", reply: undefined },
+    { channel: "whatsapp", source: "native", reply: undefined },
+    { channel: "webchat", source: "native", reply: "You are not authorized to use this command." },
+  ])(
+    "reports denied /status appropriately for $channel $source commands",
+    async ({ channel, source, reply }) => {
+      const params = buildInfoParams(
+        "/status",
+        { commands: { text: true, allowFrom: { "*": ["verified-user"] } } },
+        {
+          Provider: channel,
+          Surface: channel,
+          CommandSource: source,
+          GatewayClientScopes: ["operator.admin"],
+        },
+      );
+      params.command.channel = channel;
+      params.command.isAuthorizedSender = false;
+      params.command.senderId = undefined;
+
+      const result = await handleStatusCommand(params, true);
+
+      expect(result).toEqual({
+        shouldContinue: false,
+        ...(reply ? { reply: { text: reply } } : {}),
+      });
+      expect(buildStatusReply).not.toHaveBeenCalled();
+    },
+  );
+
   it("preserves the shared session store path when routing /status", async () => {
     const params = buildInfoParams("/status", {
       commands: { text: true },
