@@ -218,6 +218,36 @@ describe("createBeamMirrorRunner", () => {
     },
   );
 
+  it("pauses poll grants while an operator enrollment is resolving its native source", async () => {
+    const gate = beamTestBarrier();
+    const catalog = createBeamTestCatalog({ onList: gate.run, sessions: [] });
+    const listCatalogs = vi.fn(() => [catalog]);
+    const runner = createBeamTestRunner({
+      endpoint: "https://team.example/api/v2/beam",
+      listCatalogs,
+      getPublicationStore: () => {
+        throw new Error("missing source reached storage");
+      },
+    });
+    const source = {
+      catalogId: "claude",
+      hostId: "gateway:local",
+      threadId: "selected",
+      agentId: "main",
+      sourceHomeId: "home",
+    };
+    const authority = { assertCurrent() {}, async revalidate() {} };
+    const enrolled = runner.enroll(source, authority);
+    await gate.started;
+    await runner.tick();
+    await expect(runner.enroll(source, authority)).rejects.toThrow("in progress");
+    expect(listCatalogs).toHaveBeenCalledOnce();
+    gate.release();
+    await expect(enrolled).rejects.toThrow("Select a listed native source");
+    await runner.tick();
+    expect(listCatalogs).toHaveBeenCalledTimes(2);
+  });
+
   it("uses the cleaner result for every v1 text field and sends nothing on cleaner failure", async () => {
     const session = { threadId: "one", recencyAt: beamTestNow, name: "unfiltered title" };
     const catalog = {

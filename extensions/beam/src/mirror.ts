@@ -697,7 +697,7 @@ export function createBeamMirrorRunner(params: {
             const hosts = await raceCatalog(
               catalog.list({
                 agentId: entry.candidate.agentId,
-                source: { hostId: entry.candidate.hostId, threadId: entry.candidate.threadId },
+                source: entry.candidate,
                 limitPerHost: MIRROR_LIST_LIMIT,
               }),
             );
@@ -805,7 +805,24 @@ export function createBeamMirrorRunner(params: {
     await authority.revalidate();
     return binding.enroll(cleaned.packet.beamId, cleaned.raw, confirmGeneration);
   };
-  return { tick: scan, enroll };
+  // Each catalog enumeration retires earlier grants. An operator enrollment may
+  // supersede a poll, but a later timer must not revoke that same enrollment.
+  let enrolling = false;
+  return {
+    async tick() {
+      if (!enrolling) await scan();
+    },
+    async enroll(...args: Parameters<typeof enroll>) {
+      if (enrolling)
+        throw new Error("A Beam source enrollment is in progress. Retry after it completes.");
+      enrolling = true;
+      try {
+        return await enroll(...args);
+      } finally {
+        enrolling = false;
+      }
+    },
+  };
 }
 
 export function createBeamMirrorService(params: {
