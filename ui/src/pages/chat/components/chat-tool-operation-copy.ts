@@ -1,5 +1,8 @@
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
-import { unwrapToolCallForDisplay } from "../../../../../src/agents/tool-display-call.js";
+import {
+  unwrapToolCallForDisplay,
+  unwrapToolResultTextForDisplay,
+} from "../../../../../src/agents/tool-display-call.js";
 import type { IconName } from "../../../components/icon-data.ts";
 import { registerChatToolOperationsEnglish } from "../../../i18n/locales/en-chat-tool-operations.ts";
 import type { ToolCard, ToolCardOutcome } from "../../../lib/chat/chat-types.ts";
@@ -91,6 +94,21 @@ function browserOperation(args: Record<string, unknown> | null, labels: object):
   return Object.hasOwn(labels, key) ? key : "act";
 }
 
+function hasGeneratedMedia(card: ToolCard): boolean {
+  const details = asNullableRecord(card.details);
+  const receipt = asNullableRecord(asNullableRecord(details?.result)?.details) ?? details;
+  if (receipt?.async === true) {
+    return false;
+  }
+  if (Array.isArray(receipt?.attachments)) {
+    return receipt.attachments.length > 0;
+  }
+  // History and live dispatch can omit details but keep the count reported by the media tool.
+  return /^Generated [1-9]\d* (?:image|track|video)s? with /u.test(
+    unwrapToolResultTextForDisplay(card.outputText ?? ""),
+  );
+}
+
 export function catalogToolLabel(
   card: ToolCard,
   outcome: ToolCardOutcome,
@@ -99,6 +117,8 @@ export function catalogToolLabel(
   const call = unwrapToolCallForDisplay(card);
   const name = call.name.trim().toLowerCase();
   const args = asNullableRecord(call.args);
+  const mediaGenerator =
+    name === "image_generate" || name === "music_generate" || name === "video_generate";
   if (name === "toolsearch" || name === "tool_search") {
     const selecting =
       name === "toolsearch" &&
@@ -134,17 +154,22 @@ export function catalogToolLabel(
         ? browserOperation(args, labels)
         : name === "local_image" && args?.task === "ocr"
           ? "task_ocr"
-          : action?.replaceAll(".", "_");
+          : mediaGenerator && args
+            ? action?.trim().toLowerCase() || "generate"
+            : action?.replaceAll(".", "_");
   const operation = key && Object.hasOwn(labels, key) ? key : "default";
   if (!Object.hasOwn(labels, operation)) {
     return undefined;
   }
-  const phase =
+  let phase =
     outcome === "running"
       ? "running"
       : outcome === "succeeded" && !(name === "message" && args?.dryRun === true)
         ? "done"
         : "action";
+  if (mediaGenerator && operation === "generate" && phase === "done" && !hasGeneratedMedia(card)) {
+    phase = "requested";
+  }
   const label = t(`chat.toolCards.operationLabels.${name}.${operation}.${phase}`);
   const actionLabel = addressed?.name
     ? t("chat.toolCards.namedOperation", { action: label, name: addressed.name })

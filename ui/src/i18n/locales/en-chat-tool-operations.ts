@@ -23,6 +23,7 @@ const enChatToolOperations = {
             action: "Generate image",
             running: "Generating image",
             done: "Generated image",
+            requested: "Requested image generation",
           },
           list: {
             action: "List image models",
@@ -55,6 +56,7 @@ const enChatToolOperations = {
             action: "Generate music",
             running: "Generating music",
             done: "Generated music",
+            requested: "Requested music generation",
           },
           list: {
             action: "List music models",
@@ -72,6 +74,7 @@ const enChatToolOperations = {
             action: "Generate video",
             running: "Generating video",
             done: "Generated video",
+            requested: "Requested video generation",
           },
           list: {
             action: "List video models",
