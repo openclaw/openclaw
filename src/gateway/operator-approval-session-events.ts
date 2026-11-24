@@ -26,7 +26,10 @@ import {
   canAccessOperatorApproval,
   canReviewOperatorApproval,
 } from "./operator-approval-authorization.js";
-import { matchesOperatorApprovalReviewerBinding } from "./operator-approval-reviewer-binding.js";
+import {
+  matchesOperatorApprovalReviewerBinding,
+  type OperatorApprovalExecSelection,
+} from "./operator-approval-reviewer-binding.js";
 import { projectOperatorApprovalSnapshot } from "./operator-approval-snapshot.js";
 import {
   listPendingOperatorApprovals,
@@ -52,7 +55,7 @@ type ApprovalReplaySnapshot = Omit<PreparedSessionApprovalReplay, "release"> & {
 type ApprovalReplayScope = {
   sessionKey: string;
   reviewerDeviceId: string | undefined;
-  execApprovalIds?: readonly string[];
+  execApprovalSelection?: OperatorApprovalExecSelection;
   kind?: "exec";
   references: number;
   revision: number;
@@ -87,17 +90,24 @@ export function createOperatorApprovalSessionEventRuntime(params: {
   reconcileTerminal?: (record: OperatorApprovalRecord) => boolean | Promise<boolean>;
   getLiveManager?: (
     kind: OperatorApprovalRecord["kind"],
-  ) =>
-    | Pick<
-        ExecApprovalManager<unknown>,
-        "runtimeEpoch" | "getLiveSnapshot" | "listLocalPendingRecords"
-      >
-    | undefined;
+  ) => Pick<ExecApprovalManager<unknown>, "runtimeEpoch" | "getLiveSnapshot"> | undefined;
   isCurrent?: () => boolean;
 }): OperatorApprovalSessionEventRuntime {
   const controlUiBasePath = normalizeControlUiBasePath(params.controlUiBasePath);
   const replayScopes = new Map<string, ApprovalReplayScope>();
   const idleScopes = new Map<string, ApprovalReplayScope>();
+  // Pending participation exec approvals by audience session; ordinary sessions stay empty.
+  const participationApprovals = new Map<string, Set<string>>();
+  const trackParticipationApproval = (record: OperatorApprovalRecord, bound: boolean) => {
+    for (const sessionKey of record.audienceSessionKeys) {
+      const ids = participationApprovals.get(sessionKey);
+      if (bound) {
+        participationApprovals.set(sessionKey, (ids ?? new Set()).add(record.id));
+      } else if (ids?.delete(record.id) && ids.size === 0) {
+        participationApprovals.delete(sessionKey);
+      }
+    }
+  };
 
   const approvalRecipient = (record: OperatorApprovalRecord) => {
     const manager = params.getLiveManager?.(record.kind);
@@ -182,7 +192,8 @@ export function createOperatorApprovalSessionEventRuntime(params: {
     for (const [key, scope] of replayScopes) {
       if (
         event.record.audienceSessionKeys.includes(scope.sessionKey) &&
-        (scope.execApprovalIds?.includes(event.record.id) ||
+        (scope.execApprovalSelection?.include.includes(event.record.id) ||
+          scope.execApprovalSelection?.exclude.includes(event.record.id) ||
           scope.reviewerDeviceId === undefined ||
           matchesOperatorApprovalReviewerBinding(event.record, scope.reviewerDeviceId))
       ) {
@@ -228,6 +239,9 @@ export function createOperatorApprovalSessionEventRuntime(params: {
     }
     const snapshot = projectOperatorApprovalSnapshot(event.record, controlUiBasePath);
     const boundRecord = manager?.getLiveSnapshot(event.record.id);
+    if (event.record.kind === "exec") {
+      trackParticipationApproval(event.record, pending && boundRecord?.participation !== undefined);
+    }
     const turnActor = participationApprovalTurnActor(boundRecord);
     const approval = snapshot && {
       ...snapshot,
@@ -296,7 +310,7 @@ export function createOperatorApprovalSessionEventRuntime(params: {
       audienceSessionKey: sessionKey,
       reviewerDeviceId,
       kind: scope.kind,
-      execApprovalIds: scope.execApprovalIds,
+      execApprovalSelection: scope.execApprovalSelection,
       limit: MAX_SESSION_APPROVAL_REPLAY + 1,
       nowMs: snapshotAtMs,
     };
@@ -363,23 +377,30 @@ export function createOperatorApprovalSessionEventRuntime(params: {
       const deviceId = client?.connect.device?.id;
       const reviewerDeviceId = admin ? undefined : deviceId?.trim();
       const ordinaryReviewer = canReviewOperatorApproval(client);
-      // Select live-authorized exec IDs before the store applies its bounded replay limit.
-      const execApprovalIds = params.getLiveManager
-        ? (params.getLiveManager("exec")?.listLocalPendingRecords() ?? [])
-            .filter(
-              (record) =>
-                canObserveParticipationExecApproval(record, client) ||
-                (canResolveParticipationExecApproval(record, client) ??
-                  canAccessOperatorApproval({
-                    client,
-                    binding: { reviewerDeviceIds: record.approvalReviewerDeviceIds },
-                  })),
-            )
-            .map((record) => record.id)
-            .toSorted()
-        : ordinaryReviewer
-          ? undefined
-          : [];
+      // Resolve this session's live participation approvals before the store applies its
+      // bounded replay limit; ordinary approvals keep the store's reviewer selection.
+      const liveManager = params.getLiveManager?.("exec");
+      const include: string[] = [];
+      const exclude: string[] = [];
+      for (const id of [...(participationApprovals.get(sessionKey) ?? [])].toSorted()) {
+        const record = liveManager?.getLiveSnapshot(id);
+        if (!record?.participation || record.resolvedAtMs !== undefined) {
+          continue;
+        }
+        if (
+          canObserveParticipationExecApproval(record, client) ||
+          canResolveParticipationExecApproval(record, client) === true
+        ) {
+          include.push(id);
+        } else {
+          exclude.push(id);
+        }
+      }
+      const execApprovalSelection: OperatorApprovalExecSelection | undefined = !ordinaryReviewer
+        ? { include, exclude: [], ordinary: false }
+        : include.length || exclude.length
+          ? { include, exclude, ordinary: true }
+          : undefined;
       const kind = ordinaryReviewer ? undefined : "exec";
       const assertCurrent = () => {
         if (
@@ -393,14 +414,14 @@ export function createOperatorApprovalSessionEventRuntime(params: {
       assertCurrent();
       // Completed replay is reusable only while the durable owner confirms its
       // selection and deadline, independently of runtime lifecycle publications.
-      const key = JSON.stringify([sessionKey, reviewerDeviceId, kind, execApprovalIds]);
+      const key = JSON.stringify([sessionKey, reviewerDeviceId, kind, execApprovalSelection]);
       let scope = replayScopes.get(key);
       if (!scope) {
         scope = {
           sessionKey,
           reviewerDeviceId,
           kind,
-          execApprovalIds,
+          execApprovalSelection,
           references: 0,
           revision: 0,
         };

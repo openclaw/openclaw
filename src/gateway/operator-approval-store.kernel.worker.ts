@@ -15,7 +15,10 @@ import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db-co
 import { ensureStatePostgresFragment } from "../state/openclaw-state-db-engine.js";
 import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
-import { matchesOperatorApprovalReviewerBinding } from "./operator-approval-reviewer-binding.js";
+import {
+  matchesOperatorApprovalSelection,
+  type OperatorApprovalExecSelection,
+} from "./operator-approval-reviewer-binding.js";
 import { operatorApprovalPublication } from "./operator-approval-store.publication.js";
 import {
   OPERATOR_APPROVAL_TERMINAL_RETENTION_MS,
@@ -255,7 +258,7 @@ type PendingApprovalInput = {
   sourceSessionKey?: string;
   audienceSessionKey?: string;
   reviewerDeviceId?: string;
-  execApprovalIds?: readonly string[];
+  execApprovalSelection?: OperatorApprovalExecSelection;
   limit?: number;
   nowMs?: number;
 };
@@ -302,11 +305,10 @@ export function readPendingOperatorApprovalsInDatabase(
     params.audienceSessionKey === undefined
       ? undefined
       : requireString(params.audienceSessionKey, "operator approval audience session key");
-  const execApprovalIds = params.execApprovalIds && new Set(params.execApprovalIds);
   const requiresPostFilter =
     audienceSessionKey !== undefined ||
     params.reviewerDeviceId !== undefined ||
-    execApprovalIds !== undefined;
+    params.execApprovalSelection !== undefined;
   const records: OperatorApprovalRecord[] = [];
   let query = stateDb
     .selectFrom("operator_approvals")
@@ -334,11 +336,11 @@ export function readPendingOperatorApprovalsInDatabase(
     }
     const matchesAudience =
       !audienceSessionKey || record.audienceSessionKeys.includes(audienceSessionKey);
-    const matchesReviewer =
-      record.kind === "exec" && execApprovalIds
-        ? execApprovalIds.has(record.id)
-        : params.reviewerDeviceId === undefined ||
-          matchesOperatorApprovalReviewerBinding(record, params.reviewerDeviceId);
+    const matchesReviewer = matchesOperatorApprovalSelection(
+      record,
+      params.reviewerDeviceId,
+      params.execApprovalSelection,
+    );
     if (matchesAudience && matchesReviewer) {
       records.push(record);
       if (records.length === resultLimit) {

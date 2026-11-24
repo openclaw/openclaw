@@ -246,7 +246,7 @@ export async function startGatewayCoreRuntime(input: {
     string,
     Pick<
       ExecApprovalManager<unknown>,
-      "reconcileDurableTerminal" | "getLiveSnapshot" | "listLocalPendingRecords" | "runtimeEpoch"
+      "reconcileDurableTerminal" | "getLiveSnapshot" | "runtimeEpoch"
     >
   >();
   const approvalSessionEvents = createOperatorApprovalSessionEventRuntime({

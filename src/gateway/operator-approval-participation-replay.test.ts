@@ -1,5 +1,6 @@
 import { expect, it } from "vitest";
 import { createPreparedTestApprovalManager } from "./exec-approval-manager.test-support.js";
+import type { OperatorApprovalExecSelection } from "./operator-approval-reviewer-binding.js";
 import {
   insertOperatorApproval,
   listPendingOperatorApprovals,
@@ -8,28 +9,33 @@ import {
 import { listPendingOperatorApprovalsInDatabase } from "./operator-approval-store.kernel.worker.js";
 import { createOperatorApproval } from "./operator-approval-store.test-support.js";
 
-it("applies live exec selection before limiting both worker and receipt-maintained replay", async (test) => {
+it("applies session participation selection before limiting both worker and receipt-maintained replay", async (test) => {
   const fixture = await createPreparedTestApprovalManager(test);
   await fixture.run(async () => {
     const { databaseOptions } = fixture;
-    for (const [id, createdAtMs, kind] of [
-      ["unrelated", 1_000, "exec"],
-      ["creator", 2_000, "exec"],
-      ["ordinary-plugin", 3_000, "plugin"],
+    for (const [id, createdAtMs, kind, reviewer] of [
+      ["unrelated", 1_000, "exec", "reviewer"],
+      ["creator", 2_000, "exec", "participant"],
+      ["ordinary-plugin", 3_000, "plugin", "reviewer"],
     ] as const) {
       await insertOperatorApproval({
         databaseOptions,
         approval: createOperatorApproval(id, {
           kind,
           createdAtMs,
-          reviewerDeviceIds: ["reviewer"],
+          reviewerDeviceIds: [reviewer],
         }),
       });
     }
+    const execApprovalSelection: OperatorApprovalExecSelection | undefined = {
+      include: ["creator"],
+      exclude: [],
+      ordinary: false,
+    };
     const selection = {
       databaseOptions,
       reviewerDeviceId: "reviewer",
-      execApprovalIds: ["creator"],
+      execApprovalSelection,
       nowMs: 4_000,
       limit: 1,
     };
@@ -41,12 +47,21 @@ it("applies live exec selection before limiting both worker and receipt-maintain
       async (input: typeof selection) => (await prepareOperatorApprovalReplay(input)).records,
     ]) {
       expect((await read(selection)).map((record) => record.id)).toEqual(["creator"]);
+      const only = (execApprovalSelection: (typeof selection)["execApprovalSelection"]) =>
+        read({ ...selection, execApprovalSelection });
+      // An empty participant-only selection still returns non-exec approvals.
       expect(
-        (await read({ ...selection, execApprovalIds: [] })).map((record) => record.id),
+        (await only({ include: [], exclude: [], ordinary: false })).map((record) => record.id),
       ).toEqual(["ordinary-plugin"]);
+      // Ordinary reviewers keep reviewer selection outside the named participation approvals.
+      expect(
+        (await only({ include: ["creator"], exclude: ["unrelated"], ordinary: true })).map(
+          (record) => record.id,
+        ),
+      ).toEqual(["creator"]);
     }
     expect(
-      (await listPendingOperatorApprovals({ ...selection, execApprovalIds: undefined })).map(
+      (await listPendingOperatorApprovals({ ...selection, execApprovalSelection: undefined })).map(
         (record) => record.id,
       ),
     ).toEqual(["unrelated"]);
