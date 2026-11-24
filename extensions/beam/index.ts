@@ -1,6 +1,8 @@
+import path from "node:path";
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
+import { createBeamExecutableResolver } from "./src/executable.js";
 import { createBeamRequestHandler } from "./src/http.js";
-import { createBeamMirrorService } from "./src/mirror.js";
+import { registerBeamMirror } from "./src/mirror.js";
 import { createBeamOwnedViewHandler } from "./src/owned-view.js";
 import { createBeamSessionCatalog } from "./src/session-catalog.js";
 import { createBeamStore } from "./src/store.js";
@@ -32,6 +34,6 @@ export default definePluginEntry({
         resolveControlUiBasePath: () => api.runtime.config.current().gateway?.controlUi?.basePath,
       }),
     });
-    api.registerService(createBeamMirrorService({ runtime: api.runtime }));
+    registerBeamMirror(api, createBeamExecutableResolver(api.rootDir ?? path.dirname(api.source)));
   },
 });
