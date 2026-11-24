@@ -24,10 +24,18 @@ export function capCompactionSummary(
 }
 
 /**
+ * The foreground token budget is the room the compacted request leaves before the output
+ * reserve, which is where automatic compaction triggers. An artifact that fills it puts the next
+ * turn over again, so summaries target half of it.
+ */
+export function compactionSummaryTargetTokens(tokenBudget: number | undefined) {
+  return tokenBudget === undefined ? undefined : Math.floor(tokenBudget / 2);
+}
+
+/**
  * Let each summary owner preserve its structure before checking the foreground token budget.
- * The budget is the room the compacted request leaves before the output reserve, which is where
- * automatic compaction triggers. A summary that fills it puts the next turn over again, so the
- * summary targets half of it and uses the rest only when its required parts cannot fit in half.
+ * The summary uses the second half of the budget only when its required parts cannot fit in the
+ * target.
  */
 export function fitCompactionSummary<T extends { summary: string }>(
   tokenBudget: number | undefined,
@@ -35,10 +43,8 @@ export function fitCompactionSummary<T extends { summary: string }>(
   maxChars = MAX_COMPACTION_SUMMARY_CHARS,
 ): Result<T, CompactionError> {
   const fitted =
-    tokenBudget === undefined
-      ? largestFittingSummary(undefined, render, maxChars)
-      : (largestFittingSummary(Math.floor(tokenBudget / 2), render, maxChars) ??
-        largestFittingSummary(tokenBudget, render, maxChars));
+    largestFittingSummary(compactionSummaryTargetTokens(tokenBudget), render, maxChars) ??
+    (tokenBudget === undefined ? undefined : largestFittingSummary(tokenBudget, render, maxChars));
   return fitted
     ? ok(fitted)
     : err(
@@ -49,7 +55,8 @@ export function fitCompactionSummary<T extends { summary: string }>(
       );
 }
 
-function largestFittingSummary<T extends { summary: string }>(
+/** The largest rendering within the token budget, or undefined when none fits. */
+export function largestFittingSummary<T extends { summary: string }>(
   tokenBudget: number | undefined,
   render: (maxChars: number) => T | undefined,
   maxChars: number,
