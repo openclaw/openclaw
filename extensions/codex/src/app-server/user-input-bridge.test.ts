@@ -234,4 +234,39 @@ describe("Codex app-server user input bridge", () => {
     await vi.advanceTimersByTimeAsync(1);
     await expect(response).resolves.toEqual({ answers: {} });
   });
+
+  it("preserves newlines and URLs in text-fallback question prompts", async () => {
+    const controller = new AbortController();
+    const { params, gateway, request } = setup({ signal: controller.signal });
+    const url = "https://chatgpt.com/apps/google-drive/connector_5f3c8c41a1e54ad7a76272c89e2554fa";
+    const response = request(
+      "input-url",
+      requestParams({
+        questions: [
+          {
+            id: "browser_step",
+            header: "Browser step",
+            question: `Reconnect *Google_Drive* on ChatGPT:\n\n${url}\n\nOpen the link and complete the step.`,
+            isOther: false,
+            isSecret: false,
+            options: [
+              { label: "I've completed this step", description: null },
+              { label: "Decline", description: null },
+            ],
+          },
+        ],
+      }),
+    );
+    await vi.waitFor(() => expect(params.onBlockReply).toHaveBeenCalledOnce());
+
+    const payload = vi.mocked(params.onBlockReply!).mock.calls[0]![0];
+    expect(payload.text).toContain(`\n\n${url}\n\n`);
+    expect(payload.text).not.toContain("??https://");
+    expect(payload.text).not.toContain("connector\uff3f");
+    expect(payload.text).toContain("Reconnect \u2217Google\uff3fDrive\u2217 on ChatGPT:");
+
+    controller.abort();
+    await response;
+    expectCancelled(gateway);
+  });
 });

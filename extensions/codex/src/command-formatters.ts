@@ -243,6 +243,8 @@ function escapeCodexChatTextPreservingAt(value: string): string {
   return escapeCodexChatText(value).replaceAll("\uff20", "@");
 }
 
+const CODEX_USER_INPUT_URL_PATTERN = /(https?:\/\/[^\s<>()[\]`"']+)/gu;
+
 export function formatCodexAccountLine(value: string): string {
   if (value === "") {
     return "";
@@ -257,6 +259,24 @@ export function formatCodexAccountLine(value: string): string {
       index % 2 === 1 ? escapeCodexChatTextPreservingAt(part) : escapeCodexChatText(part),
     )
     .join("");
+}
+
+/** Formats Codex user-input text for chat delivery while preserving line breaks and URLs. */
+export function formatCodexUserInputText(value: string): string {
+  return value
+    .replace(/\r\n?/gu, "\n")
+    .split("\n")
+    .map((line) =>
+      line
+        .split(CODEX_USER_INPUT_URL_PATTERN)
+        .map((part, index) =>
+          index % 2 === 1
+            ? sanitizeCodexTextForDisplay(part)
+            : escapeCodexChatText(sanitizeCodexTextForDisplay(part)),
+        )
+        .join(""),
+    )
+    .join("\n");
 }
 
 export const CODEX_REVIEW_USAGE =

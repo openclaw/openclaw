@@ -8,7 +8,7 @@ import {
   type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
-import { formatCodexDisplayText } from "../command-formatters.js";
+import { formatCodexUserInputText } from "../command-formatters.js";
 import { createCodexElicitationResponse } from "./elicitation-response.js";
 import type { JsonObject, JsonValue } from "./protocol.js";
 import { CodexServerRequestResolvedError } from "./server-requests.js";
@@ -108,7 +108,7 @@ export function createCodexUserInputBridge(params: {
       delivery: params.paramsForRun,
       signal,
       promptOptions: {
-        formatText: formatCodexDisplayText,
+        formatText: formatCodexUserInputText,
         unsupportedIntro: "Codex input request could not be shown:",
         urlIntro: "Codex needs confirmation:",
       },
