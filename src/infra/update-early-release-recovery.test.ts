@@ -38,17 +38,18 @@ function install() {
   fs.writeFileSync(cli!, `#!/bin/sh\necho "OpenClaw 1 (${before.slice(0, 7)})"\n`, { mode: 0o755 });
   const home = path.join(base, "home");
   const systemd: string[][] = [];
-  const deps: StartDeps & { active: string; systemdRun: number } = {
+  const deps: StartDeps & { active: string; systemdRun: number; pnpm: number } = {
     platform: "linux",
     env: { HOME: home, PATH: path.dirname(cli!), OPENCLAW_STATE_DIR: stateDir },
     active: "inactive",
     systemdRun: 0,
+    pnpm: 0,
     run: async (argv, options) => {
       if (argv[0] === "git" || argv[0] === cli) {
         return recovery.runCommand(argv, options);
       }
       systemd.push(argv);
-      const code = argv[0] === "systemd-run" ? deps.systemdRun : 0;
+      const code = { "systemd-run": deps.systemdRun, pnpm: deps.pnpm }[argv[0]!] ?? 0;
       return { code, output: argv.includes("is-active") ? deps.active : "" };
     },
     freeBytes: () => 64 * 1024 ** 3,
@@ -118,6 +119,15 @@ const refusals: Array<[string, (fx: Fx) => unknown]> = [
     (fx) => fs.writeFileSync(fx.cli, "#!/bin/sh\necho 'OpenClaw (fedcba9)'"),
   ],
   ["systemd-run failed", (fx) => (fx.deps.systemdRun = 1)],
+  ["pnpm is not on PATH", (fx) => (fx.deps.pnpm = 1)],
+  ["updater process could not be identified", (fx) => (fx.deps.findDriver = () => undefined)],
+  [
+    "service runs another installation",
+    (fx) => {
+      const read = fx.deps.readService;
+      fx.deps.readService = async (env) => ({ ...(await read(env)), entry: "/opt/openclaw/x.js" });
+    },
+  ],
 ];
 
 posix.each(refusals)("changes nothing and says why: %s", async (reason, arrange) => {
@@ -141,7 +151,7 @@ posix("starts nothing while another recovery runs", async () => {
 });
 
 /** The runner's world: a service definition, the kept release, and scripted command outcomes. */
-function runner(fail: Record<string, number>, resumed = false) {
+function runner(fail: Record<string, number>, resumed = false, restarts = 0) {
   const base = makeTempDir(roots, "openclaw-early-runner-");
   const prefix = path.join(base, "git-install");
   const release = path.join(prefix, "recovery", "openclaw");
@@ -169,8 +179,8 @@ function runner(fail: Record<string, number>, resumed = false) {
   const deps = {
     run,
     log: () => {},
-    driverAlive: () => alive-- > 0,
-    restarts: async () => 0,
+    driverAlive: () => (calls.push("driver alive"), alive-- > 0),
+    restarts: async () => restarts,
     migrated: () => true,
     ready: async (port: number | null) => {
       const role = fs.readFileSync(serviceFile, "utf8").includes(release) ? "release" : "checkout";
@@ -178,7 +188,11 @@ function runner(fail: Record<string, number>, resumed = false) {
       return !fail[`${role} ready`];
     },
     record: async (outcome: RecoveryOutcome) => void records.push(outcome),
-    finish: async () => ({ code: 0, output: "" }),
+    finish: async (_plan: unknown, facts: { downtimeMs: number }) => {
+      calls.push(`finish ${facts.downtimeMs > 0}`);
+      fs.rmSync(path.dirname(release), { recursive: true });
+      return { code: 0, output: "" };
+    },
     now: () => calls.length * 1000,
     sleep: async () => {},
   };
@@ -192,9 +206,10 @@ const BUILD = ["pnpm install", "pnpm build"];
 const TO_CHECKOUT = ["checkout gateway install", "checkout ready 1"];
 const MERGE = `git merge ${"b".repeat(40)}`;
 
+const DONE = [...TO_CHECKOUT, "finish true"];
 it.each([
-  ["serves the release while the checkout builds", {}, [...TO_RELEASE, ...BUILD, ...TO_CHECKOUT]],
-  ["resumes at the build once the release serves", {}, [...BUILD, ...TO_CHECKOUT], true],
+  ["serves the release while the checkout builds", {}, [...TO_RELEASE, ...BUILD, ...DONE]],
+  ["resumes at the build once the release serves", {}, [...BUILD, ...DONE], true],
   ["changes nothing when the fast-forward fails", { [MERGE]: 1 }, []],
   [
     "changes nothing when the service cannot be moved to the release",
@@ -216,25 +231,29 @@ it.each([
     { "checkout ready": 1 },
     [...TO_RELEASE, ...BUILD, ...TO_CHECKOUT, ...TO_RELEASE],
   ],
-] as Array<[string, Record<string, number>, string[], boolean?]>)(
+  ["stops restarting after repeated interruptions, keeping the release", {}, [], true, 3],
+] as Array<[string, Record<string, number>, string[], boolean?, number?]>)(
   "%s",
-  async (_name, fail, expected, resumed = false) => {
-    const fx = runner(fail, resumed);
-    expect(await recovery.runEarlyGitReleaseRecovery(fx.plan, fx.deps)).toBe(false);
+  async (_name, fail, expected, resumed = false, restarts = 0) => {
+    const fx = runner(fail, resumed, restarts);
+    const done = expected.includes("finish true");
+    expect(await recovery.runEarlyGitReleaseRecovery(fx.plan, fx.deps)).toBe(done);
 
-    expect(fx.calls.filter((call) => /gateway|pnpm|ready/u.test(call))).toEqual(expected);
-    expect(fx.calls.includes(MERGE)).toBe(!resumed);
+    expect(fx.calls.filter((call) => /gateway|pnpm|ready|finish/u.test(call))).toEqual(expected);
+    // Nothing moves before the updater that started the runner has exited.
+    const merged = fx.calls.indexOf(MERGE);
+    expect(merged === -1 ? resumed : merged > fx.calls.lastIndexOf("driver alive")).toBe(true);
     // Once the service starts the release a failure is recorded with its next step; before
     // that nothing changed and the next update retries.
-    const failed = ["release ready", "pnpm build", "checkout ready"].some((name) => fail[name]);
+    const failed =
+      restarts > 0 || ["release ready", "pnpm build", "checkout ready"].some((name) => fail[name]);
     expect(fx.records.map((record) => record.nextAction?.includes("install --force"))).toEqual(
       failed ? [true] : [],
     );
-    // The kept release stays only while the Gateway may serve from it.
-    expect(fs.existsSync(fx.release)).toBe(!fail[MERGE] && !fail["release gateway install"]);
-    if (fail["release gateway install"]) {
-      expect(fs.readFileSync(fx.serviceFile, "utf8")).toBe(fx.original);
-    }
+    // The kept release stays while the Gateway may serve from it, until the finishing step.
+    expect(fs.existsSync(fx.release)).toBe(
+      !done && !fail[MERGE] && !fail["release gateway install"],
+    );
   },
 );
 

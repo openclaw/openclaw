@@ -144,7 +144,9 @@ it("stops a concurrent early updater while an automatic recovery's release exist
   const change = inspect(root, env);
   expect(change?.pending).toBeNull();
   const running = { started: false, running: "openclaw-update-recovery" } as const;
-  expect(formatEarlyGitReleaseRefusal(change!, running)).toContain("is finishing that update");
+  expect(formatEarlyGitReleaseRefusal(change!, running)).toContain(
+    "That recovery is still running and finishes the update",
+  );
 });
 
 it("never refuses another updater, which can finish a schema change", () => {

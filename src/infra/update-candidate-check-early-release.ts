@@ -153,15 +153,15 @@ export function formatEarlyGitReleaseRefusal(
         "The updater in this checkout (a main build from 2026-11-17 to 2026-11-19) cannot finish that: after the migration, neither it nor the checkout's `openclaw` command can open the migrated data.",
       ]
     : [
-        "An automatic recovery that an earlier update started has migrated your databases and is finishing that update; the updater in this checkout cannot run another one meanwhile.",
+        "An automatic recovery that an earlier update started has migrated your databases; the updater in this checkout cannot run another update.",
       ];
   const unit = recovery.started ? recovery.unit : recovery.running;
   if (unit) {
     return [
       ...lines,
       recovery.started
-        ? `So it stops here and reports this update as failed, and the new release finishes the update in the background. In about 5 to 10 minutes it moves the checkout to ${recovery.target.slice(0, 11)}, restarts the Gateway on the new release (which migrates your databases at startup), rebuilds the checkout, and restarts the Gateway on the rebuilt checkout. Each restart takes a few seconds.`
-        : "So it stops here. The automatic recovery an earlier update started is still running and finishes this update; nothing else was changed.",
+        ? `So it stops here and reports this update as failed, and the new release finishes the update in the background. In about 5 to 10 minutes it moves the checkout to ${recovery.target.slice(0, 11)}, restarts the Gateway on the new release (which migrates your databases at startup), rebuilds the checkout, and restarts the Gateway on the rebuilt checkout. The first restart lasts as long as the migration; the second takes a few seconds. If it cannot finish, its log says why and the next \`openclaw update\` tries again.`
+        : "So it stops here. That recovery is still running and finishes the update; nothing else was changed.",
       "Until the rebuild finishes, the checkout's `openclaw` command refuses the migrated data; that is expected.",
       `Follow progress: systemctl --user status ${unit} (log: journalctl --user -u ${unit})`,
     ].join("\n");

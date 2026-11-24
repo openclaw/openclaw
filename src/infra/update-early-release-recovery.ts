@@ -55,6 +55,15 @@ const PASSED_ENV = [
   "OPENCLAW_CONFIG_PATH",
   "OPENCLAW_PROFILE",
   "OPENCLAW_AGENT_DIR",
+  "PI_CODING_AGENT_DIR",
+  "COREPACK_HOME",
+  "NODE_EXTRA_CA_CERTS",
+  "HTTP_PROXY",
+  "HTTPS_PROXY",
+  "NO_PROXY",
+  "http_proxy",
+  "https_proxy",
+  "no_proxy",
 ];
 
 export type RecoveryPlan = {
@@ -355,7 +364,12 @@ export async function startEarlyGitReleaseRecovery(
     removeTree(path.dirname(plan.release));
     await git(run, plan.checkout, "worktree", "prune");
   }
-  fs.mkdirSync(path.dirname(plan.release), { recursive: true });
+  try {
+    // Exclusive: a concurrent check that got this far reports the running recovery instead.
+    fs.mkdirSync(path.dirname(plan.release));
+  } catch {
+    return { started: false, running: plan.unit };
+  }
   const moved = await git(run, plan.checkout, "worktree", "move", change.root, plan.release);
   if (!ok(moved)) {
     fs.rmSync(path.dirname(plan.release), { recursive: true, force: true });
@@ -382,8 +396,10 @@ export async function startEarlyGitReleaseRecovery(
     JSON.stringify(plan),
   ]);
   if (!ok(started)) {
-    await git(run, plan.checkout, "worktree", "move", plan.release, change.root);
-    fs.rmSync(path.dirname(plan.release), { recursive: true, force: true });
+    // Keep the release where the updater's cleanup finds it; never delete it unmoved.
+    if (ok(await git(run, plan.checkout, "worktree", "move", plan.release, change.root))) {
+      fs.rmSync(path.dirname(plan.release), { recursive: true, force: true });
+    }
     return { started: false, reason: `systemd-run failed (${tail(started)})` };
   }
   return { started: true, unit: plan.unit, target: plan.target };
@@ -458,8 +474,9 @@ export async function runEarlyGitReleaseRecovery(
     return false;
   };
 
+  const servesRelease = () => fs.readFileSync(plan.serviceFile, "utf8").includes(plan.release);
   if ((await deps.restarts(plan.unit)) > MAX_RESTARTS) {
-    return deps.migrated()
+    return servesRelease() || deps.migrated()
       ? fail(
           "early-release-recovery-interrupted",
           `The recovery was interrupted ${MAX_RESTARTS + 1} times; the Gateway serves the new release.`,
@@ -489,6 +506,11 @@ export async function runEarlyGitReleaseRecovery(
       return abandon(`the fast-forward failed (${tail(merged)})`);
     }
   }
+  // Killed after the final switch: only the finishing step is left.
+  if (!servesRelease() && buildCommit(plan.checkout) === plan.target && deps.migrated()) {
+    await deps.finish(plan, { downtimeMs: 0 });
+    return !fs.existsSync(plan.release);
+  }
   let downtimeMs = 0;
   const switched = async (root: string) => {
     const started = deps.now();
@@ -497,7 +519,7 @@ export async function runEarlyGitReleaseRecovery(
     return result;
   };
   // A resumed run finds the service already on the release and continues from the build.
-  if (!fs.readFileSync(plan.serviceFile, "utf8").includes(plan.release)) {
+  if (!servesRelease()) {
     log("restarting the Gateway on the new release; it migrates state at startup");
     const served = await switched(plan.release);
     if (!served.switched) {
@@ -539,7 +561,7 @@ export async function runEarlyGitReleaseRecovery(
     return fail(
       "early-release-recovery-switch-failed",
       `The rebuilt checkout did not become ready (${final.detail}); the Gateway ${back.ready ? "serves the new release again" : "could not be put back on the new release"}.`,
-      "from the checkout, run `openclaw gateway install --force`",
+      `see \`journalctl --user -u ${plan.unit}\`, then from the checkout run \`${REBUILD} && openclaw gateway install --force\``,
     );
   }
   const finished = await deps.finish(plan, { downtimeMs });
@@ -605,8 +627,9 @@ export async function finishEarlyGitReleaseRecovery(
     path.dirname(plan.release),
   ];
   for (const dir of doomed.filter((candidate) => fs.existsSync(candidate))) {
-    // The runner that started this step still runs from the kept release and exits next.
-    if (live.some(({ pid, argv }) => Number(pid) !== process.ppid && argv.includes(dir))) {
+    // This step and the runner that started it carry the plan in argv; the runner exits next.
+    const others = live.filter(({ pid }) => ![process.pid, process.ppid].includes(Number(pid)));
+    if (others.some(({ argv }) => argv.includes(dir))) {
       kept.push(dir);
       continue;
     }
@@ -707,20 +730,23 @@ export async function runEarlyGitReleaseRecoveryEntry(argv: readonly string[]) {
       ) || 0,
     // Unreadable state counts as migrated: the old build is never put back on data it may not open.
     migrated: () => readPendingSchemaChange() === null,
+    // The same loopback probe `openclaw gateway start` waits on, including TLS pinning.
     ready: async (port) => {
-      for (const until = Date.now() + READY_TIMEOUT_MS; port && Date.now() < until;) {
-        const status = await fetch(`http://127.0.0.1:${port}/readyz`, {
-          signal: AbortSignal.timeout(2000),
-        }).then(
-          (response) => response.status,
-          () => 0,
-        );
-        if (status === 200) {
-          return true;
-        }
-        await delay(1000);
+      if (!port) {
+        return false;
       }
-      return false;
+      const [{ readSourceConfigBestEffort }, { waitForGatewayHttpReadiness }] = await Promise.all([
+        import("../config/io.runtime.js"),
+        import("../cli/daemon-cli/restart-health-probe.js"),
+      ]);
+      const readiness = await waitForGatewayHttpReadiness({
+        config: await readSourceConfigBestEffort().catch(() => ({})),
+        port,
+        attempts: READY_TIMEOUT_MS / 1000,
+        deadlineAt: performance.now() + READY_TIMEOUT_MS,
+        delayMs: 1000,
+      });
+      return readiness.readyz === 200;
     },
     record,
     finish: (current, facts) => {
