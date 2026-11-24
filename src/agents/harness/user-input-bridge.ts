@@ -61,7 +61,7 @@ export function formatAgentHarnessUserInputPrompt(
     lines.push(
       "",
       `${prefix}${formatText(question.header)}`,
-      formatQuestionText(question, options.formatText),
+      formatQuestionText(question, formatText),
     );
     if (question.isSecret) {
       lines.push(
@@ -83,29 +83,18 @@ export function formatAgentHarnessUserInputPrompt(
 }
 
 /**
- * Display formatters escape one line of untrusted text. Apply them around line
- * breaks and the browser link, which text-only channels must receive unchanged
- * because the question text is their only copy of it. A link carrying markup
- * or mention characters stays escaped like the rest of the text.
+ * Display formatters escape one line of untrusted text. Text-only channels get
+ * the browser link only from this text, so the line holding exactly the
+ * question's own URL stays literal unless it carries markup or mention characters.
  */
 function formatQuestionText(
   question: AgentHarnessUserInputQuestion,
-  formatText: ((text: string) => string) | undefined,
+  formatText: (text: string) => string,
 ): string {
-  if (!formatText) {
-    return question.question;
-  }
-  const formatPart = (part: string) => {
-    const text = part.trim();
-    return text ? part.replace(text, () => formatText(text)) : part;
-  };
-  const literalUrl =
-    question.url && !/[\s<>@`[\]()*~|]/u.test(question.url) ? question.url : undefined;
+  const literalUrl = /[\s<>@`[\]()*~|]/u.test(question.url ?? " ") ? undefined : question.url;
   return question.question
-    .split(/\r?\n/u)
-    .map((line) =>
-      literalUrl ? line.split(literalUrl).map(formatPart).join(literalUrl) : formatPart(line),
-    )
+    .split("\n")
+    .map((line) => (line.trim() && line !== literalUrl ? formatText(line) : line))
     .join("\n");
 }
 
@@ -153,7 +142,7 @@ function buildAgentHarnessQuestionPresentation(params: {
   ].join("\n");
   return {
     blocks: [
-      { type: "text", text: formatQuestionText(question, params.formatText) },
+      { type: "text", text: formatQuestionText(question, formatText) },
       { type: "text", text: optionGuidance },
       {
         type: "buttons",
