@@ -116,7 +116,7 @@ describe("registered decision capability", () => {
       );
       expect(fetch).toHaveBeenCalledTimes(withdraw ? 0 : 1);
       expect(retained).toBeTypeOf("function");
-      expect(() => retained?.()).toThrow("no longer active");
+      expect(() => retained?.()).toThrow("The guarded request ended.");
       expect(host.registry.decisionProviders[0]?.host.inspect(config).callable).toBe(true);
     },
   );
