@@ -45,13 +45,12 @@ export async function measureColdArchiveBytes(
     // Never create WAL sidecars in a source that must be copied for inspection.
     const names =
       tryInspectSqliteReadOnlyInProcess(file, readColdArchiveNames)?.value ??
-      (await withPreparedSqliteSnapshot(
+      (await withPreparedSqliteSnapshot<string[]>(
         await prepareSqliteReadOnlyLocationInProcess(file, stagingRoot),
         (location) => {
           using database = openNodeSqliteDatabase(location, { readOnly: true });
           return readColdArchiveNames(database);
         },
-        { cleanupFailure: "warn" },
       ));
     for (const name of names) {
       const payload = resolveSessionColdArchivePath(file, name);
