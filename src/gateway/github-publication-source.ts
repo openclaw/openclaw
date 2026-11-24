@@ -9,6 +9,7 @@ import {
   type SqliteSourceFenceOwner,
 } from "../infra/sqlite-source-fence-admission.js";
 import type { SqliteSourceFenceIdentity } from "../infra/sqlite-source-fence-contract.js";
+import { readSqliteWorkerMonotonicNs } from "../infra/sqlite-worker-contract.js";
 import {
   assertExistingDatabaseIdentity,
   readDatabasePathIdentitySync,
@@ -107,7 +108,7 @@ export function bindGitHubPublicationSource(capability: GitHubPublicationSourceC
         destination: binding.destination,
         sources: [binding.source],
         signal: binding.signal,
-        deadlineNs: process.hrtime.bigint() + 120_000_000_000n,
+        deadlineNs: readSqliteWorkerMonotonicNs() + 120_000_000_000n,
       })(operation);
     }) satisfies SqliteWorkerAdmissionFactory,
   };

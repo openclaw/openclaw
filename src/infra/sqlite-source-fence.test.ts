@@ -4,7 +4,7 @@ import { existsSync, symlinkSync } from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { getEnvironmentData, setEnvironmentData } from "node:worker_threads";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
@@ -19,7 +19,7 @@ import {
   type FenceFixtureOperations,
 } from "./sqlite-source-fence.test-support.js";
 import { SqliteWorkerBroker } from "./sqlite-worker-broker.js";
-import type { SqliteWorkerStore } from "./sqlite-worker-contract.js";
+import { readSqliteWorkerMonotonicNs, type SqliteWorkerStore } from "./sqlite-worker-contract.js";
 import { readDatabasePathIdentitySync } from "./sqlite-worker-identity.js";
 import { observeSqliteWorkerCommittedFacts } from "./sqlite-worker-operation-admission.js";
 import type { SqliteWorkerOperationSettlement } from "./sqlite-worker-operation-settlement.js";
@@ -152,7 +152,7 @@ function persist(
     destination: destination.value,
     sources: [source.value, ...(command.alias ? [source.value] : [])],
     signal: controller.signal,
-    deadlineNs: options.deadlineNs ?? process.hrtime.bigint() + 30_000_000_000n,
+    deadlineNs: options.deadlineNs ?? readSqliteWorkerMonotonicNs() + 30_000_000_000n,
   });
   const result = fixture.broker.runOperation(
     fixture.store,
@@ -181,6 +181,20 @@ function rows(database: DatabaseSync, id: string) {
 }
 
 describe("durable source fence through the real SQLite broker", () => {
+  it("keeps a real fence writable when the host clock origin is replaced", async () => {
+    const clock = vi.spyOn(process, "hrtime").mockReturnValue([0, 0]);
+    Object.assign(process.hrtime, { bigint: () => 0n });
+    try {
+      await expect(
+        persist(forward, { id: "replaced-clock", expectedRevision: 1 }).result,
+      ).resolves.toEqual({
+        id: "replaced-clock",
+        revision: 1,
+      });
+    } finally {
+      clock.mockRestore();
+    }
+  });
   it("retains source exclusion after acceptance and settles independently of a synchronous MAIN waiter", async ({
     signal,
   }) => {

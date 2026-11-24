@@ -30,5 +30,5 @@ export type SqliteSourceFenceGrant = {
   decision: SharedArrayBuffer;
   destination: SqliteSourceFenceIdentity;
   sources: readonly SqliteSourceFenceIdentity[];
-  deadlineNs: bigint;
+  remainingNs: SharedArrayBuffer;
 };
