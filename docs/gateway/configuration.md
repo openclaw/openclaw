@@ -117,6 +117,14 @@ allows destructive changes. Mode checks resolve `$include` and environment refer
 first. Missing `meta` is recorded as a write anomaly. Promotion to last-known-good is
 skipped when a candidate contains a redacted secret placeholder such as `***` or `[redacted]`.
 
+Explicit Doctor repair can restore a suspicious reduction even when the remaining
+file still validates and the anomaly was already reported. It prefers an eligible
+intact `.bak` over the trusted, hash-verified `.last-good` copy, and saves the exact
+replaced bytes as `.clobbered.*`. A backup that is itself truncated is not used
+to repair that loss. When a healthy baseline is recorded, Doctor uses only backup
+bytes it previously recorded as healthy. Other backup bytes remain
+available for manual recovery. Startup and hot-reload recovery policy is unchanged.
+
 ## Configuration pages
 
 This page is an index. The longer reference sections live on four pages. Open

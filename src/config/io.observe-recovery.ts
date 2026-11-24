@@ -66,6 +66,8 @@ type ConfigReadRecoveryParams = {
   ) => Promise<ConfigRecoveryCandidatePreparation>;
   assertCurrent?: () => void;
   allowBackupRecovery?: () => Promise<boolean>;
+  /** Doctor may revisit reported loss and use the validated promotion. */
+  intent?: "doctor-repair";
 };
 
 type ConfigReadRecoveryResult = Pick<ConfigRecoveryCandidate, "raw" | "parsed">;
@@ -249,9 +251,11 @@ function* planSuspiciousConfigRead(
   if (resolveIsConfigReadOnly(deps.env)) {
     return null;
   }
-  const backupPath = `${configPath}.bak`;
-  // Missing backups cannot recover config; avoid opening the health worker just to confirm that.
-  if (yield createConfigBackupMissingEffect(deps, backupPath)) {
+  const rotatingBackupPath = `${configPath}.bak`;
+  const doctorRepair = params.intent === "doctor-repair";
+  // Passive recovery without a backup need not open the health worker. Doctor may use a promotion.
+  const backupMissing = yield createConfigBackupMissingEffect(deps, rotatingBackupPath);
+  if (backupMissing && !doctorRepair) {
     return null;
   }
   // Explicit preparation will recheck these identities before publishing a replacement.
@@ -276,16 +280,16 @@ function* planSuspiciousConfigRead(
     return null;
   }
   const entry = readConfigHealthEntry(healthSnapshot.state, configPath);
-  let backupRaw: string | null = null;
-  if (!entry.lastKnownGood) {
-    backupRaw = (yield createConfigBackupReadEffect(deps, backupPath)) as string | null;
+  let baselineRaw: string | null = null;
+  if (!entry.lastKnownGood && !backupMissing) {
+    baselineRaw = (yield createConfigBackupReadEffect(deps, rotatingBackupPath)) as string | null;
   }
   const backupBaseline =
     entry.lastKnownGood ??
-    (backupRaw
+    (baselineRaw
       ? createConfigHealthFingerprint({
-          raw: backupRaw,
-          parsed: parseBackupConfigRaw(deps, backupRaw)?.parsed ?? {},
+          raw: baselineRaw,
+          parsed: parseBackupConfigRaw(deps, baselineRaw)?.parsed ?? {},
           stat: null,
         })
       : undefined);
@@ -296,29 +300,60 @@ function* planSuspiciousConfigRead(
     lastKnownGood: backupBaseline,
   });
   const suspiciousSignature = `${current.hash}:${suspicious.join(",")}`;
-  if (suspicious.length === 0 || entry.lastObservedSuspiciousSignature === suspiciousSignature) {
+  if (
+    suspicious.length === 0 ||
+    (!doctorRepair && entry.lastObservedSuspiciousSignature === suspiciousSignature)
+  ) {
     return null;
   }
-  backupRaw ??= (yield createConfigBackupReadEffect(deps, backupPath)) as string | null;
-  if (!backupRaw) {
+  const lastGoodPath = `${configPath}.last-good`;
+  const candidates = [
+    ...(!backupMissing ? [rotatingBackupPath] : []),
+    ...(doctorRepair && entry.lastPromotedGood?.hash ? [lastGoodPath] : []),
+  ];
+  let selected:
+    | { path: string; original: ConfigRecoveryCandidate; prepared: ConfigRecoveryCandidate }
+    | undefined;
+  // Prefer the rotating backup: it may contain healthy settings newer than the promotion.
+  for (const candidatePath of candidates) {
+    const candidateRaw =
+      (candidatePath === rotatingBackupPath ? baselineRaw : null) ??
+      ((yield createConfigBackupReadEffect(deps, candidatePath)) as string | null);
+    const candidateParse = candidateRaw ? parseBackupConfigRaw(deps, candidateRaw) : null;
+    if (!candidateRaw || !candidateParse) {
+      continue;
+    }
+    const candidateHash = hashConfigRaw(candidateRaw);
+    const knownHealthy =
+      candidateHash === entry.lastKnownGood?.hash || candidateHash === entry.lastPromotedGood?.hash;
+    const promotedFallback = candidatePath === lastGoodPath;
+    // An observed healthy baseline requires matching bytes, not metadata or size guesses.
+    const eligible = promotedFallback
+      ? candidateHash === entry.lastPromotedGood?.hash
+      : resolveGatewayMode(candidateParse.parsed) &&
+        (!doctorRepair || !entry.lastKnownGood || knownHealthy);
+    if (!eligible) {
+      continue;
+    }
+    const original = { raw: candidateRaw, parsed: candidateParse.parsed };
+    const prepared = (yield {
+      sync: () => params.prepareBackup(original),
+      async: () => params.prepareBackupAsync?.(original) ?? params.prepareBackup(original),
+    }) as ConfigRecoveryCandidatePreparation;
+    if (
+      !prepared.ok ||
+      (promotedFallback && collectPollutedSecretPlaceholders(prepared.candidate.parsed).length > 0)
+    ) {
+      continue;
+    }
+    selected = { path: candidatePath, original, prepared: prepared.candidate };
+    break;
+  }
+  if (!selected) {
     return null;
   }
-  const backupParse = parseBackupConfigRaw(deps, backupRaw);
-  // Reject ineligible backup bytes before migration and validation; a stale healthy
-  // fingerprint cannot make them recoverable.
-  if (!backupParse || !resolveGatewayMode(backupParse.parsed)) {
-    return null;
-  }
-  const backupCandidate = { raw: backupRaw, parsed: backupParse.parsed };
-  const prepared = (yield {
-    sync: () => params.prepareBackup(backupCandidate),
-    async: () =>
-      params.prepareBackupAsync?.(backupCandidate) ?? params.prepareBackup(backupCandidate),
-  }) as ConfigRecoveryCandidatePreparation;
-  if (!prepared.ok) {
-    return null;
-  }
-  const preparedCandidate = prepared.candidate;
+  const { path: backupPath, original, prepared: preparedCandidate } = selected;
+  const backupRaw = original.raw;
   const backupStat = (yield createConfigRecoveryStatEffect(
     deps,
     backupPath,
@@ -326,9 +361,13 @@ function* planSuspiciousConfigRead(
   )) as fs.Stats | null;
   const backup = createConfigHealthFingerprint({
     raw: backupRaw,
-    parsed: backupParse.parsed,
+    parsed: original.parsed,
     stat: backupStat,
   });
+  const restoredHealth =
+    backupPath === lastGoodPath
+      ? { lastKnownGood: entry.lastPromotedGood, lastObservedSuspiciousSignature: null }
+      : { lastObservedSuspiciousSignature: suspiciousSignature };
   const currentObservation: ConfigRecoveryEffect<boolean> = {
     sync: () => true,
     async: (health) => health.isCurrent(),
@@ -451,17 +490,8 @@ function* planSuspiciousConfigRead(
       };
       if (restoredFromBackup) {
         yield {
-          sync: () =>
-            patchConfigHealthEntryToStore(deps, configPath, {
-              lastObservedSuspiciousSignature: suspiciousSignature,
-            }),
-          async: (health) =>
-            health.updateAfterFileCommit(
-              {
-                lastObservedSuspiciousSignature: suspiciousSignature,
-              },
-              healthSnapshot,
-            ),
+          sync: () => patchConfigHealthEntryToStore(deps, configPath, restoredHealth),
+          async: (health) => health.updateAfterFileCommit(restoredHealth, healthSnapshot),
         };
       }
       return { restored: restoredFromBackup, error: restoreError };

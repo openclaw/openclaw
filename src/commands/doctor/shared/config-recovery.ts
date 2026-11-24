@@ -48,6 +48,7 @@ export function prepareDoctorConfigRecoverySnapshot(
   return prepareConfigRecoveryFromContext(
     createConfigIoContext(options, transformDoctorRecoveryCandidate),
     snapshot,
+    "doctor-repair",
   );
 }
 

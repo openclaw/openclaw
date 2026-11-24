@@ -25,6 +25,45 @@ afterEach(() => {
   closeOpenClawStateDatabaseForTest();
 });
 
+it.each(["rotating backup", "promoted fallback"])(
+  "Doctor restores a previously reported valid truncation from the %s",
+  async (candidate) => {
+    await withDoctorConfigPreflightHome(async (home) => {
+      const stateDir = path.join(home, ".openclaw");
+      const configPath = path.join(stateDir, "openclaw.json");
+      await fs.mkdir(stateDir, { recursive: true });
+      const healthy = JSON.stringify({
+        gateway: {
+          mode: "local",
+          trustedProxies: Array.from({ length: 80 }, (_, index) => `192.0.2.${index}`),
+        },
+        plugins: { enabled: false },
+      });
+      await fs.writeFile(configPath, healthy);
+      const io = createConfigIO({ configPath });
+      const baseline = await io.readConfigFileSnapshot();
+      expect(await io.promoteConfigSnapshotToLastKnownGood(baseline)).toBe(true);
+      if (candidate === "rotating backup") {
+        await fs.writeFile(`${configPath}.bak`, healthy);
+      }
+      const truncated = '{"gateway":{"mode":"local","port":19202}}\n';
+      await fs.writeFile(configPath, truncated);
+      const observed = await io.readConfigFileSnapshot();
+      expect(observed.valid).toBe(true);
+      expect(await io.prepareConfigRecovery(observed)).toBeNull();
+      await expect(fs.readFile(configPath, "utf8")).resolves.toBe(truncated);
+      const repaired = await runDoctorConfigPreflight(repairOptions);
+      expect(repaired.snapshot.valid).toBe(true);
+      await expect(fs.readFile(configPath, "utf8")).resolves.toBe(healthy);
+      const artifacts = (await fs.readdir(stateDir)).filter((name) => name.includes(".clobbered."));
+      expect(artifacts).toHaveLength(1);
+      await expect(fs.readFile(path.join(stateDir, artifacts[0]!), "utf8")).resolves.toBe(
+        truncated,
+      );
+    });
+  },
+);
+
 it("Doctor repairs authored OTel grpc before restoring a suspicious config from backup", async () => {
   const legacy = {
     gateway: { mode: "local" },
