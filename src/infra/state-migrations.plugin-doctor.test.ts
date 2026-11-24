@@ -1,12 +1,18 @@
+import { spawn } from "node:child_process";
+import { once } from "node:events";
 import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { listPluginDoctorStateMigrationEntries } from "../plugins/doctor-contract-registry.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { createOpenClawStateLeaseLostError } from "../state/openclaw-state-lease-error.js";
+import { STATE_LEASE_WRITE_BACKOFF } from "../state/openclaw-state-lease-storage.js";
 import { createTrackedTempDirs } from "../test-utils/tracked-temp-dirs.js";
+import * as leaseBackoff from "./backoff.js";
 import {
   autoMigrateLegacyPluginDoctorState,
   runPostSessionPluginDoctorStateRepairs,
@@ -332,4 +338,80 @@ describe("plugin Doctor migrations", () => {
     expect(detected).toEqual(["after-session-repair", "after-session-repair", "default"]);
     expect(certified.completedPluginIds).toEqual(["owner"]);
   });
+});
+
+it("waits out a lifecycle lease that a stopped pre-2026.11.5 Gateway left behind", async () => {
+  const root = await tempDirs.make("openclaw-plugin-doctor-abandoned-lease-");
+  const env = {
+    ...process.env,
+    HOME: root,
+    OPENCLAW_STATE_DIR: root,
+    OPENCLAW_CONFIG_PATH: path.join(root, "openclaw.json"),
+  };
+  controls.entries = [
+    {
+      pluginId: "owner",
+      channelIds: [],
+      trustedForDurableStores: false,
+      migration: {
+        id: "action",
+        label: "Action",
+        phase: "after-session-repair",
+        detectLegacyState: () => null,
+        migrateLegacyState: () => ({ changes: [], warnings: [] }),
+      },
+    },
+  ];
+  const params = {
+    config: {},
+    env,
+    maintenanceAuthority: { assertCurrent() {} },
+    beforeCompletion: async () => {},
+  };
+  await expect(runPostSessionPluginDoctorStateRepairs(params)).resolves.toMatchObject({
+    warnings: [],
+  });
+  const databasePath = resolveOpenClawStateSqlitePath(env);
+  {
+    using db = new DatabaseSync(databasePath);
+    // With no trustworthy process binding, the old lease can only expire.
+    const now = Date.now();
+    db.prepare(
+      `INSERT INTO state_leases (scope, lease_key, owner, expires_at, heartbeat_at, payload_json, created_at, updated_at)
+       VALUES ('core:plugin-lifecycle', 'global', 'stopped-gateway', ?, ?, ?, ?, ?)`,
+    ).run(now + 300_000, now, null, now, now);
+  }
+  // Advance the deadline clock only when acquisition really meets the abandoned lease.
+  const secondRetry = createDeferredCore<void>();
+  const clock = vi.spyOn(performance, "now").mockReturnValue(0);
+  const computeBackoff = leaseBackoff.computeBackoff;
+  const backoff = vi.spyOn(leaseBackoff, "computeBackoff").mockImplementation((policy, attempt) => {
+    if (policy !== STATE_LEASE_WRITE_BACKOFF) {
+      return computeBackoff(policy, attempt);
+    }
+    if (attempt === 1) {
+      clock.mockReturnValue(6_000);
+    } else {
+      secondRetry.resolve();
+    }
+    return 5;
+  });
+  const repair = runPostSessionPluginDoctorStateRepairs(params);
+  const settledWhileHeld = await Promise.race([
+    repair.then(() => true),
+    secondRetry.promise.then(() => false),
+  ]);
+  backoff.mockRestore();
+  clock.mockRestore();
+  // End the abandoned term from another process; a synchronous write here would
+  // block the event loop that admits the waiting Doctor's own lease transactions.
+  const expire = spawn(process.execPath, [
+    "-e",
+    `new (require("node:sqlite").DatabaseSync)(process.argv[1], { timeout: 30000 })
+       .prepare("DELETE FROM state_leases WHERE owner = 'stopped-gateway'").run();`,
+    databasePath,
+  ]);
+  expect(await once(expire, "exit")).toEqual([0, null]);
+  expect(settledWhileHeld).toBe(false);
+  await expect(repair).resolves.toMatchObject({ completedPluginIds: ["owner"], warnings: [] });
 });
