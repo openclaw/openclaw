@@ -1,7 +1,6 @@
 import type { ChannelIngressContextBinding } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
-import { resolveDiscordConversationIdentity } from "../conversation-identity.js";
 import type { User } from "../internal/discord.js";
 import { resolveDiscordDmCommandAccess, type DiscordDmPolicy } from "./dm-command-auth.js";
 import { handleDiscordDmCommandDecision } from "./dm-command-decision.js";
@@ -31,20 +30,6 @@ export async function resolveDiscordDmPreflightAccess(params: {
     return null;
   }
 
-  const directBindingConversationId =
-    resolveDiscordConversationIdentity({
-      isDirectMessage: true,
-      userId: params.author.id,
-    }) ?? `user:${params.author.id}`;
-  const directBindingRecord = await (
-    await loadConversationRuntime()
-  )
-    .getSessionBindingService()
-    .resolveByConversationAsync({
-      channel: "discord",
-      accountId: params.preflight.accountId,
-      conversationId: directBindingConversationId,
-    });
   const resolveChannelIngress = async (
     contextBinding?: ChannelIngressContextBinding,
     conversation?: { parentId?: string; threadId?: string },
@@ -73,19 +58,11 @@ export async function resolveDiscordDmPreflightAccess(params: {
   if (params.preflight.isPolicyCurrent?.() === false) {
     return null;
   }
-  const commandAuthorized =
-    (dmAccess.senderAccess.allowed && dmAccess.commandAccess.authorized) ||
-    directBindingRecord != null;
+  // Session bindings route admitted DMs; current ingress policy owns access.
+  const commandAuthorized = dmAccess.senderAccess.allowed && dmAccess.commandAccess.authorized;
   if (dmAccess.senderAccess.decision === "allow") {
     return { commandAuthorized, resolveChannelIngress };
   }
-  if (directBindingRecord) {
-    logVerbose(
-      `discord: allow bound DM conversation ${directBindingConversationId} despite dmPolicy=${params.dmPolicy}`,
-    );
-    return { commandAuthorized, resolveChannelIngress };
-  }
-
   await handleDiscordDmCommandDecision({
     senderAccess: dmAccess.senderAccess,
     accountId: params.resolvedAccountId,
