@@ -188,9 +188,10 @@ describe("session target resolution", () => {
   ])("rejects inconsistent resolved ownership %s/%s", async (key, agentId) => {
     callGatewayMock.mockResolvedValue({ ok: true, key, agentId });
 
-    await expect(resolveSessionTarget({ raw: "agent:ops:main" })).rejects.toThrow(
-      "Gateway returned a session without a consistent agent identity",
-    );
+    await expect(resolveSessionTarget({ raw: "agent:ops:main" })).rejects.toMatchObject({
+      name: "ExpectedCliError",
+      message: "Gateway returned a session without a consistent agent identity.",
+    });
   });
 
   it("retains a Gateway-resolved legacy main owner without reinterpreting the request", async () => {

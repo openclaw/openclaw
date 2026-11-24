@@ -197,7 +197,7 @@ export async function resolveSessionTarget(params: {
     const keyOwner = parseAgentSessionKey(result.key)?.agentId;
     const owner = normalizeAgentIdStrict(result.agentId ?? keyOwner);
     if (!owner.ok || (keyOwner && keyOwner !== owner.value)) {
-      throw new Error("Gateway returned a session without a consistent agent identity.");
+      throwExpectedCliError("Gateway returned a session without a consistent agent identity.");
     }
     return { gateway, sessionKey: result.key, agentId: owner.value };
   }
