@@ -173,6 +173,7 @@ const sourceFiles = [
   "en-chat-system-notice.ts",
   "en-chat-tool-content.ts",
   "en-chat-tool-labels.ts",
+  "en-chat-tool-operations.ts",
   "en-chat-tool-widgets.ts",
   "en-chat-welcome.ts",
   "en-templates.ts",
