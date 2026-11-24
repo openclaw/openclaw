@@ -101,6 +101,9 @@ function buildFetchGuard() {
 describe("ClawRouter provider catalog", () => {
   beforeEach(() => {
     clearLiveCatalogCacheForTests();
+    // These fixtures check catalog mapping and cache identity, not discovery timing.
+    // Keep the monotonic budget independent of runner stalls; cache TTL uses Date.now().
+    vi.spyOn(performance, "now").mockReturnValue(0);
   });
   afterEach(() => vi.restoreAllMocks());
 
