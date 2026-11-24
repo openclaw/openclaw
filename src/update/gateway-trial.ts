@@ -292,14 +292,18 @@ export async function announceReady(buildId: string | null): Promise<void> {
     await settleRunFromTrial(confirmed ?? (await readTrial()));
     if (confirmed?.phase === "committed") {
       try {
-        const { cleanupStateUpgradeRestore } = await import("../state/state-upgrade-restore.js");
-        for (const warning of cleanupStateUpgradeRestore(confirmed.runId, process.env)) {
-          log.warn(warning);
-          await recordUpdateRunStepAsync(confirmed.runId, {
-            step: "warning:restore-cleanup",
-            status: "completed",
-            detail: redactSensitiveText(warning, { mode: "tools" }).slice(0, 2000),
-          });
+        const { takeStateUpgradeRestoreCleanup } =
+          await import("../state/state-upgrade-restore.js");
+        const cleanup = takeStateUpgradeRestoreCleanup();
+        if (cleanup) {
+          for (const warning of cleanup()) {
+            log.warn(warning);
+            await recordUpdateRunStepAsync(confirmed.runId, {
+              step: "warning:restore-cleanup",
+              status: "completed",
+              detail: redactSensitiveText(warning, { mode: "tools" }).slice(0, 2000),
+            });
+          }
         }
       } catch (error) {
         log.warn(
