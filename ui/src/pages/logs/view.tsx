@@ -267,18 +267,30 @@ export function LogsView(props: LogsProps) {
     cancelLayout(readerInputFrame);
     armReaderIdleTimer();
   };
-  const beginReaderScroll = () => {
+  const beginReaderScroll = (event?: Event) => {
+    const distance = stream.scrollHeight - stream.scrollTop - stream.clientHeight;
     // Native offsets can precede/coalesce scroll events while an incoming batch renders.
     // A return gesture starting above the tail must not depend on that earlier event.
-    readerLeftEnd ||= stream.scrollHeight - stream.scrollTop - stream.clientHeight >= 2;
+    readerLeftEnd ||= distance >= 2;
     cancelLayout(scrollRequest);
     readerScrollPending = true;
     virtualizer.cancelScroll();
     updateSizeAdjustment(virtualizer, true);
-    // Keep input intent through its first frame even if a busy task delays scrolling.
-    // Once the browser can apply the input, the normal idle window bounds it.
     readerIntent = true;
     clearTimeout(readerIntentTimer);
+    cancelLayout(readerInputFrame);
+    // WebKit scrolls a wheel off the main thread and can deliver its scroll event many frames
+    // later. A vertical wheel with room to travel keeps intent until its first scroll event,
+    // which starts the idle window.
+    if (
+      event instanceof WheelEvent &&
+      Math.abs(event.deltaY) > Math.abs(event.deltaX) &&
+      (event.deltaY > 0 ? distance >= 2 : stream.scrollTop > 0)
+    ) {
+      return;
+    }
+    // Keep input intent through its first frame even if a busy task delays scrolling.
+    // Once the browser can apply the input, the normal idle window bounds it.
     scheduleLayout(readerInputFrame, armReaderIdleTimer);
   };
   let stopPointerListeners: (() => void) | undefined;

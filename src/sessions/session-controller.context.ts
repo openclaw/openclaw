@@ -112,11 +112,11 @@ export function sourceSettlements(
   );
 }
 
-/** Includes direct producers and accepted unbound sources, not only reply payloads. */
-export function hasSessionControllerQueuedWork(
+function hasQueuedInput(
   scope: string,
   identities: Iterable<string | undefined>,
-  agentId?: string,
+  agentId: string | undefined,
+  counts: (input: SessionControllerInput) => boolean,
 ): boolean {
   return matchingEntries(targetFrom({ scope, identities, agentId })).some((entry) => {
     const mailbox = entry.mailbox;
@@ -124,10 +124,39 @@ export function hasSessionControllerQueuedWork(
       mailbox &&
       (mailbox.droppedCount > 0 ||
         mailbox.entries.some(
-          (input) => input.phase !== "consumed" && !isCurrentSessionControllerTurnInput(input),
+          (input) =>
+            input.phase !== "consumed" &&
+            counts(input) &&
+            !isCurrentSessionControllerTurnInput(input),
         )),
     );
   });
+}
+
+/** Includes direct producers and accepted unbound sources, not only reply payloads. */
+export function hasSessionControllerQueuedWork(
+  scope: string,
+  identities: Iterable<string | undefined>,
+  agentId?: string,
+): boolean {
+  return hasQueuedInput(scope, identities, agentId, () => true);
+}
+
+/**
+ * Queued work that becomes a reply turn: a bound reply source or a reserved one still preparing.
+ * A native task with no reply source (for example post-turn session maintenance) is not a turn.
+ */
+export function hasSessionControllerQueuedTurn(
+  scope: string,
+  identities: Iterable<string | undefined>,
+  agentId?: string,
+): boolean {
+  return hasQueuedInput(
+    scope,
+    identities,
+    agentId,
+    (input) => input.source !== undefined || input.task === undefined,
+  );
 }
 export function isCompetingSessionControllerWorkActive(
   scope: string,

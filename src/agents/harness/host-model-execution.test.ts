@@ -50,22 +50,13 @@ function createAuthority(
   rolePolicy?: RolePolicy,
   scopes = ["operator.write"],
 ) {
-  const state = { modelPolicy, holds: 0, listeners: new Set<() => void>() };
+  const state = { holds: 0 };
   const source = createTestOperatorAuthority({
     profileId: "model-policy-fixture",
     scopes,
     rolePolicy,
     signal,
-    assertCurrent() {},
-    get modelPolicy() {
-      return state.modelPolicy;
-    },
-    onModelPolicyChanged(listener) {
-      state.listeners.add(listener);
-      return () => {
-        state.listeners.delete(listener);
-      };
-    },
+    modelPolicy,
     retain() {
       state.holds++;
       return () => {
@@ -76,12 +67,6 @@ function createAuthority(
   return {
     source,
     state,
-    update(this: void, next: ModelPolicy | undefined) {
-      state.modelPolicy = next;
-      for (const listener of state.listeners) {
-        listener();
-      }
-    },
   };
 }
 
@@ -110,7 +95,7 @@ async function createHarness(
   onTestFinished(() => {
     admission.close();
     restoreActivePluginRegistrySnapshot(registrySnapshot);
-    expect([state.holds, state.listeners.size]).toEqual([0, 0]);
+    expect(state.holds).toBe(0);
   });
   setActivePluginRegistry(createEmptyPluginRegistry());
   registerAgentHarness(
@@ -201,7 +186,7 @@ it.each<{ grants: AccessGrants; required: boolean }>([
   { grants: ["daybreak_red"], required: true },
   { grants: ["daybreak_blue", "daybreak_red"], required: false },
 ])("retains Access-only dispatch enforcement for $grants", async ({ grants, required }) => {
-  const { source, update, state } = createAuthority(undefined, undefined, accessRole(grants));
+  const { source, state } = createAuthority(undefined, undefined, accessRole(grants));
   const admission = prepareSystemAgentRunAdmission(
     cfg,
     "access-only",
@@ -224,14 +209,10 @@ it.each<{ grants: AccessGrants; required: boolean }>([
     retained.release();
     host.close();
     admission.close();
-    expect([state.holds, state.listeners.size]).toEqual([0, 0]);
+    expect(state.holds).toBe(0);
   });
   host.close();
   admission.close();
-  expect(retained.modelPolicyRequired).toBe(required);
-  update(policy);
-  expect(retained.modelPolicyRequired).toBe(required);
-  update(undefined);
   expect(retained.modelPolicyRequired).toBe(required);
   const bind = expectDefined(retained.bindModelExecution, "native dispatch binder");
   for (const cyberAccessProgram of ["standard", "daybreak_blue", "daybreak_red"] as const) {
@@ -246,7 +227,7 @@ it.each<{ grants: AccessGrants; required: boolean }>([
   }
 });
 
-it("keeps explicit Access independent of alias changes and revokes it with the source", () => {
+it("stops explicit Access bindings with the source", () => {
   const initial = prepareOperatorModelPolicy({
     cfg,
     policy: { allow: ["fixture/a", "openai/gpt-daybreak-blue-latest"] },
@@ -262,14 +243,13 @@ it("keeps explicit Access independent of alias changes and revokes it with the s
     cyberAccessProgram: "standard",
   })!;
   try {
-    authority.update(policy);
     expect(blue.signal.aborted).toBe(false);
     expect(blue.assertCurrent).not.toThrow();
     expect(standard.signal.aborted).toBe(false);
     expect(standard.assertCurrent).not.toThrow();
-    controller.abort(new Error("Access role changed"));
+    controller.abort(new Error("source stopped"));
     expect(blue.signal.aborted).toBe(true);
-    expect(blue.assertCurrent).toThrow("Access role changed");
+    expect(blue.assertCurrent).toThrow("source stopped");
   } finally {
     blue.release();
     standard.release();
@@ -325,7 +305,7 @@ it.each(admissionCases)(
       expect((await execute()).assistantTexts).toEqual(["done"]);
       expect(runAttempt).toHaveBeenCalledTimes(1);
       if (!restricted) {
-        expect([state.holds, state.listeners.size]).toEqual([1, 0]);
+        expect(state.holds).toBe(1);
       }
     }
   },
@@ -343,14 +323,14 @@ it.each([
       agents: { defaults: { model: { primary: "fixture/a", fallbacks: ["fixture/b"] } } },
     };
     const sourceAbort = new AbortController();
-    const makePolicy = (deny?: string[]) =>
-      prepareOperatorModelPolicy({
-        cfg: nativeConfig,
-        policy: deny ? { deny } : {},
-        manifestPlugins: [],
-      });
-    const { source, state, update } = createAuthority(
-      initialPolicy ? makePolicy() : undefined,
+    const { source, state } = createAuthority(
+      initialPolicy
+        ? prepareOperatorModelPolicy({
+            cfg: nativeConfig,
+            policy: {},
+            manifestPlugins: [],
+          })
+        : undefined,
       sourceAbort.signal,
     );
     const admission = prepareSystemAgentRunAdmission(
@@ -421,31 +401,6 @@ it.each([
     }
     expect(() => bindFromHost({ provider: "fixture", model: "b" })).toThrow(inactive);
 
-    update(makePolicy());
-    if (outsideDefaults) {
-      expect(outsideDefaults.signal.aborted).toBe(false);
-      expect(outsideDefaults.assertCurrent).not.toThrow();
-    }
-    if (retained) {
-      expect(retained.modelPolicyRequired).toBe(initialPolicy);
-    }
-    expect(a.assertCurrent).not.toThrow();
-    expect(b.assertCurrent).not.toThrow();
-
-    update(makePolicy(["fixture/a"]));
-    expect(a.signal.aborted).toBe(false);
-    expect(a.assertCurrent).not.toThrow();
-    expect(b.signal.aborted).toBe(false);
-    expect(b.assertCurrent).not.toThrow();
-    expect(sourceAbort.signal.aborted).toBe(false);
-    expect(source.assertCurrent).not.toThrow();
-    if (retained) {
-      acquire("a").release();
-    }
-
-    update(undefined);
-    expect(a.assertCurrent).not.toThrow();
-    expect(b.assertCurrent).not.toThrow();
     a.release();
     b.release();
     outsideDefaults?.release();
@@ -466,13 +421,13 @@ it.each([
       current.release();
     }
     const active = sibling ?? current;
-    sourceAbort.abort(new Error("operator source revoked"));
+    sourceAbort.abort(new Error("source stopped"));
     expect(active.signal.aborted).toBe(true);
-    expect(active.assertCurrent).toThrow("operator source revoked");
+    expect(active.assertCurrent).toThrow("source stopped");
     active.release();
     expect(active.assertCurrent).toThrow(inactive);
     retained?.release();
     siblingSource?.release();
-    expect([state.listeners.size, state.holds]).toEqual([0, 0]);
+    expect(state.holds).toBe(0);
   },
 );

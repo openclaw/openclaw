@@ -169,7 +169,6 @@ export const cronBindHandler: GatewayRequestHandler = defineValidatedGatewayHand
       sessionMutationCommitGuard: () => {
         sessionMutationCommitGuard?.();
         creator.assertCurrent();
-        capture.assertOperatorSourceCurrent?.();
       },
       hasCurrentClientAuthority,
     });

@@ -117,7 +117,7 @@ describe.skipIf(!mixedAgentConnection).each(mixedAgentPairs)(
         try {
           await upsertSessionEntryCore(target, { archivedAt: 2000 });
           await expect(insertRepositoryGitHubPublicationAsync(row, stale)).rejects.toThrow(
-            /changed|expired/,
+            /changed|expired|ended/,
           );
           expect(
             withEngineStoreAdmission(() =>

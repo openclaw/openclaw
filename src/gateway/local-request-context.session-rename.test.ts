@@ -63,7 +63,6 @@ describe("guest session rename through the agent catalog", () => {
         scopes: ["operator.sessions.write"],
         signal: controller.signal,
         readCurrentRoleFacts: () => ({ assignedRole: "view" }),
-        assertCurrent: () => {},
       });
       await withPersonalToolTurn(
         {
@@ -151,10 +150,10 @@ describe("guest session rename through the agent catalog", () => {
               expectedSessionId: "replacement-session",
             }),
           ).rejects.toThrow("current durable session identity");
-          controller.abort(new Error("guest access revoked"));
+          controller.abort(new Error("guest run stopped"));
           await expect(
-            tool.execute("revoked", { action: "patch", label: "Revoked rename" }),
-          ).rejects.toThrow("guest access revoked");
+            tool.execute("stopped", { action: "patch", label: "Stopped rename" }),
+          ).rejects.toThrow("guest run stopped");
           expect(sessionToolsEntry(sessionKey)?.label).toBe("Research plan");
         },
       );
@@ -190,7 +189,6 @@ describe("guest session rename through the agent catalog", () => {
           scopes,
           signal: new AbortController().signal,
           readCurrentRoleFacts: () => ({ assignedRole: "view" }),
-          assertCurrent: () => {},
         });
         await withPersonalToolTurn(
           {

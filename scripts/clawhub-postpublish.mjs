@@ -449,6 +449,10 @@ export async function verifyClawHubPostpublish({
     "normalClawHubRunId",
     "normalClawHubRunAttempt",
   ];
+  // The shared publication receipt also records npm bootstrap closeout work.
+  if (Object.hasOwn(dispatch ?? {}, "npmRunId")) {
+    dispatchFields.push("npmRunId");
+  }
   if (Object.hasOwn(dispatch ?? {}, "clawHubDeferred")) {
     dispatchFields.push("clawHubDeferred");
   }
@@ -943,7 +947,6 @@ async function authenticateClawHubParentRequest({
     fetchImpl,
     archiveDir: join(outputDir, "archives"),
     runJobs: new Map(),
-    ...(originalPacked ? { retryAttempts: 1 } : {}),
   };
   const current = await githubJson(`actions/runs/${inputs.release_publish_run_id}`, context);
   requireRun(
@@ -1045,7 +1048,6 @@ async function authenticateClawHubParentRequest({
     throw new Error("ClawHub recovery request upload is not from the active approved parent job.");
   }
   const { archiveBytes } = await downloadExactActionsArtifactArchive({
-    ...(originalPacked ? { retryAttempts: 1 } : {}),
     token: env.GH_TOKEN,
     fetchImpl,
     maxArchiveBytes: MAX_RECEIPT_BYTES + 4096,

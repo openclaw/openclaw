@@ -351,7 +351,6 @@ export async function prepareReplyRunContext(params: RunPreparedReplyParams) {
     cwd: sessionEntry?.spawnedCwd,
   });
   if (opts?.scheduledAutomation) {
-    opts.operatorAuthority?.assertCurrent();
     opts.abortSignal?.throwIfAborted();
     opts.queuedFollowupAbortSignal?.throwIfAborted();
     opts.replyOperation?.abortSignal.throwIfAborted();

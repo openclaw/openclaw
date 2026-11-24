@@ -64,27 +64,7 @@ const operatorAuthorityIssuers = resolveGlobalSingleton(
 export function createAdmittedRunOperatorAuthority(
   source: AdmittedRunOperatorAuthority,
 ): AdmittedRunOperatorAuthority {
-  const check = source.assertCurrent;
-  const revocation = new AbortController();
-  const signal = source.signal
-    ? AbortSignal.any([source.signal, revocation.signal])
-    : revocation.signal;
-  const assertCurrent = composeSessionSourceAssertion(
-    [check],
-    scopeOperatorAccessDecisions((assertSource: () => void) => {
-      signal.throwIfAborted();
-      try {
-        assertSource();
-      } catch (error) {
-        if (!isOperatorAuthorityUnavailable(error)) {
-          revocation.abort(error);
-        }
-        throw error;
-      }
-    }),
-    { synchronousCheck: true },
-  );
-  const readRoleFacts = source.readCurrentRoleFacts;
+  const readCurrentRoleFacts = source.readCurrentRoleFacts;
   const authority = Object.freeze({
     profileId: source.profileId,
     canonicalIdentity:
@@ -124,19 +104,12 @@ export function createAdmittedRunOperatorAuthority(
       : source.gatewayAccessGrant,
     source: source.source ?? {},
     invocation: source.invocation,
-    signal,
+    signal: source.signal,
     retain: source.retain,
-    onModelPolicyChanged: source.onModelPolicyChanged,
     get modelPolicy() {
       return source.modelPolicy;
     },
-    assertCurrent,
-    readCurrentRoleFacts: readRoleFacts
-      ? () => {
-          assertCurrent();
-          return readRoleFacts();
-        }
-      : undefined,
+    readCurrentRoleFacts,
     rolePolicy: source.rolePolicy
       ? Object.freeze({
           ...source.rolePolicy,
@@ -176,17 +149,16 @@ export function assertOperatorModelAllowed(
   createOperatorModelSelectionAssertion(authority, model)();
 }
 
-/** Carry the operator's source checks into writes without rereading its store on the host. */
+/** Applies the admitted model policy to a selection as a write guard. */
 export function createOperatorModelSelectionAssertion(
   authority: AdmittedRunOperatorAuthority | undefined,
   model: OperatorModelSelection | undefined,
 ): SessionSourceAssertion {
-  return composeSessionSourceAssertion([authority?.assertCurrent], (assertSource) => {
+  return composeSessionSourceAssertion([], () => {
     if (!authority) {
       return;
     }
     assertAdmittedRunOperatorAuthority(authority);
-    assertSource();
     const policy = authority.modelPolicy;
     if (policy && (!model || !policy.allows(model))) {
       throw new Error(
@@ -206,7 +178,6 @@ export function assertOperatorAccessProgramAllowed(
     return;
   }
   assertAdmittedRunOperatorAuthority(authority);
-  authority.assertCurrent();
   if (!isOperatorAccessProgramAllowed(authority, program)) {
     throw new Error(
       "Your operator role cannot use this Access level. Choose Standard or ask a gateway administrator to grant this Access level to your role.",
@@ -214,7 +185,7 @@ export function assertOperatorAccessProgramAllowed(
   }
 }
 
-/** Keeps one selected model current without revoking other work from the same source. */
+/** Keeps one selected model bound to the admitted policy until release or Stop. */
 export function bindOperatorModelExecution(
   authority: AdmittedRunOperatorAuthority | undefined,
   model: OperatorModelSelection | undefined,
@@ -241,34 +212,15 @@ export function bindOperatorModelExecution(
       throw mapError(new Error("This agent run is no longer active. Start a new turn to retry."));
     }
     revoked.signal.throwIfAborted();
-    try {
-      assertModelAllowed();
-    } catch (error) {
-      const failure = mapError(error);
-      if (!isOperatorAuthorityUnavailable(error)) {
-        revoked.abort(failure);
-      }
-      throw failure;
-    }
-  };
-  const recheck = () => {
-    try {
-      assertCurrent();
-    } catch {
-      // The latched signal owns cancellation; notification must reach other executions.
-    }
   };
   const onSourceAbort = () => revoked.abort(mapError(authority.signal?.reason));
   authority.signal?.addEventListener("abort", onSourceAbort, { once: true });
-  const unsubscribe = authority.onModelPolicyChanged?.(recheck);
-  recheck();
   return {
     signal: revoked.signal,
     assertCurrent,
     release: () => {
       if (!released) {
         released = true;
-        unsubscribe?.();
         authority.signal?.removeEventListener("abort", onSourceAbort);
         releaseAuthority?.();
       }
@@ -414,9 +366,7 @@ export function getAdmittedRunOperatorProfileId(
   if (!context || getAdmittedRunDelegatedAuthority(context) !== authority) {
     return undefined;
   }
-  const operator = readAdmittedRunOperatorAuthority(context);
-  operator?.assertCurrent();
-  return operator?.profileId;
+  return readAdmittedRunOperatorAuthority(context)?.profileId;
 }
 
 /** Stop, run occurrence and the run's registry session source, for work that crosses an await. */
@@ -631,7 +581,6 @@ export function prepareAgentRunAdmission(params: {
       if (operatorAuthority && closed) {
         throw new Error("This agent run is no longer active. Start a new turn to retry.");
       }
-      operatorAuthority?.assertCurrent();
       return operatorAuthority;
     },
     close: () => {

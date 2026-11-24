@@ -7,7 +7,7 @@ import type { SessionEntryCohortReader } from "../../config/sessions/session-ent
 import type { SessionEntry } from "../../config/sessions/types.js";
 import { getInProcessGatewayRequestContext } from "../../plugins/runtime/gateway-request-scope.js";
 import {
-  hasSessionControllerQueuedWork,
+  hasSessionControllerQueuedTurn,
   withSessionControllerSource,
 } from "../../sessions/session-controller.context.js";
 import {
@@ -164,7 +164,8 @@ export async function enqueueGoalContinuation(params: GoalContinuationParams): P
     params.operation.result?.kind !== "failed" &&
     params.operation.result?.kind !== "aborted" &&
     !isFollowupRunAborted(params.base) &&
-    !hasSessionControllerQueuedWork(
+    // A queued reply turn continues the Goal at its own end; post-turn upkeep does not.
+    !hasSessionControllerQueuedTurn(
       params.storePath,
       [params.sessionKey, params.expectedSession.sessionId],
       params.base.run.agentId,
@@ -186,7 +187,6 @@ export async function enqueueGoalContinuation(params: GoalContinuationParams): P
     undefined,
     params.reader,
   );
-  params.base.operatorAuthority?.assertCurrent();
   if (!eligible() || !entry?.goal) {
     return false;
   }
@@ -205,7 +205,6 @@ export async function enqueueGoalContinuation(params: GoalContinuationParams): P
   ) {
     return false;
   }
-  params.base.operatorAuthority?.assertCurrent();
   if (!eligible()) {
     return false;
   }

@@ -93,7 +93,6 @@ export async function withOperatorToolGatewayAuthority<T>(
       : undefined;
   try {
     authority.assertCurrent?.();
-    captured?.authority.assertCurrent();
     return await runWithOperatorToolGatewayAuthority(
       {
         ...authority,
@@ -165,7 +164,6 @@ export function captureOperatorToolGatewayContinuationContextInternal(
     hasCurrentClientAuthority: resolved.hasCurrentClientAuthority,
   }).then((captured) => {
     try {
-      captured?.authority.assertCurrent();
       resolved.assertContextCurrent();
       resolved.assertInvocationCurrent();
       for (const signal of caller?.approvalSignals ?? []) {
@@ -200,7 +198,7 @@ export function captureOperatorToolGatewayContinuationContextInternal(
         if (lifetime.signal.aborted) {
           return;
         }
-        lifetime.abort(new Error("Gateway continuation authority is no longer active"));
+        lifetime.abort(new Error("Gateway continuation ended. Start a new request."));
         for (const signal of signals) {
           signal.removeEventListener("abort", release);
         }
@@ -214,7 +212,6 @@ export function captureOperatorToolGatewayContinuationContextInternal(
       }
       const assertCurrent = () => {
         lifetime.signal.throwIfAborted();
-        captured?.authority.assertCurrent();
         if (captured) {
           resolved.assertGatewayCurrent();
         } else {
@@ -357,9 +354,7 @@ export function resolveInProcessGatewayDispatch(
   const isHostOwnedAgentRun =
     method === "agent" && Boolean(options?.agentRunTracking || assertSettleWakeCurrent);
   const assertTransferredSettleWakeCurrent =
-    assertSettleWakeCurrent && operatorRunAuthority
-      ? composeSessionSourceAssertion([assertSettleWakeCurrent, operatorRunAuthority.assertCurrent])
-      : undefined;
+    assertSettleWakeCurrent && operatorRunAuthority ? assertSettleWakeCurrent : undefined;
   assertTransferredSettleWakeCurrent?.();
   const assertCallerCurrent = composePreparedOnlySessionSource(caller);
   const transfersCreatedInput =
@@ -388,7 +383,6 @@ export function resolveInProcessGatewayDispatch(
           },
         )
       : undefined,
-    operatorRunAuthority?.assertCurrent,
   ]);
   assertInvocationCurrent();
   if (!isHostOwnedAgentRun) {
@@ -682,10 +676,7 @@ export function resolveInProcessGatewayDispatch(
       );
     }
   };
-  const assertSourceCurrent = composeSessionSourceAssertion([
-    operatorRunAuthority?.assertCurrent,
-    assertGatewayCurrent,
-  ]);
+  const assertSourceCurrent = assertGatewayCurrent;
   return {
     assertGatewayCurrent,
     assertSourceCurrent,

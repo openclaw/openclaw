@@ -28,7 +28,6 @@ const authority = () =>
   createTestOperatorAuthority({
     profileId: "person",
     scopes: [],
-    assertCurrent() {},
   });
 function prepareDispatch() {
   const dispatch = createPluginCommandRuntime()
@@ -81,7 +80,7 @@ it("omits model authority when requester or exact session authority is missing a
   expect(() =>
     createPluginRequesterModels({
       ...requester(),
-      authority: { canonicalIdentity: null, profileId: "forged", scopes: [], assertCurrent() {} },
+      authority: { canonicalIdentity: null, profileId: "forged", scopes: [] },
     }),
   ).toThrow("must be issued by the host");
 });

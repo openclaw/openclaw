@@ -1,6 +1,6 @@
 // A linked owner device (OCF-510) is the Gateway owner attributed to a person. Retained work,
 // resumed access grants and personal skill-library permissions derive from its owner
-// certificate, not the person's named role, and only while that certificate is current.
+// certificate admitted for that request, not a later change to that person's named role.
 // Stored-role changes and session skill seeding need the host database broker; they are
 // covered in server-methods/linked-owner-authority.test.ts.
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -51,7 +51,6 @@ function dispatchClient(principal?: OpenClawIdTunnelPrincipal) {
     profileId: "person",
     ...(principal ? { openclawIdPrincipal: principal } : {}),
     scopes: ["operator.admin"],
-    assertCurrent: () => {},
     readCurrentRoleFacts: () => ({ assignedRole: null }),
   });
   // The same synthetic operator client tool dispatch builds from an admitted run.
@@ -66,10 +65,6 @@ describe("linked owner device authority", () => {
   it("dispatches a linked owner's run without the person's role", () => {
     expect(resolveOperatorRolePolicy(dispatchClient(OWNER), cfg)).toBeUndefined();
     expect(resolveOperatorRolePolicy(dispatchClient(), cfg)?.scopes).toEqual(["operator.talk"]);
-    ownerCurrent = false;
-    expect(() => resolveOperatorRolePolicy(dispatchClient(OWNER), cfg)).toThrow(
-      "OpenClaw ID membership authority changed",
-    );
   });
 
   it("lifts the skill-library role ceiling only for the owner device's own profile", () => {

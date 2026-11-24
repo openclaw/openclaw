@@ -89,12 +89,12 @@ it.each(["before dispatch", "after commit"] as const)(
         const options = { captureRuntimeAuthority, commitGuard: capture.assertCurrent };
         const update = cron.update(job.id, { name }, options);
         if (revocation === "before dispatch") {
-          await expect(update).rejects.toThrow("no longer active");
+          await expect(update).rejects.toThrow("access has ended");
         } else {
           await expect(update).resolves.toMatchObject({ name });
         }
         expect(observedCommit).toBe(revocation === "after commit");
-        expect(capture.assertCurrent).toThrow("no longer active");
+        expect(capture.assertCurrent).toThrow("access has ended");
         const persisted = (await loadCronStore(storePath)).jobs.find((j) => j.id === job.id);
         expect(persisted?.name).toBe(revocation === "before dispatch" ? job.name : name);
       } finally {
@@ -148,7 +148,7 @@ it.each([
       const scope = createCronCreatorAuthorityRunScope(
         identity.operationalRunInstance.runId,
         turnOrigin,
-        { source: "channel-owner", isCurrent: () => true },
+        { source: "channel-owner" },
       );
       try {
         const grant = mintCronCreatorAuthorityGrant(scope, undefined, undefined, {
