@@ -390,16 +390,23 @@ public struct ChatSessionsSheet: View {
     }
 
     private func pinButton(_ session: OpenClawChatSessionEntry) -> some View {
-        Button {
+        #if os(macOS)
+        let saved = self.windowCommands?.sessionMenuActions.isPinnedForAction(
+            session,
+            at: self.viewModel.sidebarRosterClock.gatewayDate()) ?? session.isPinned
+        #else
+        let saved = session.isPinned
+        #endif
+        return Button {
             self.viewModel.setSessionPinned(
                 key: session.key,
-                pinned: !session.isPinned,
+                pinned: !saved,
                 agentID: session.agentId)
             self.refreshScopedSessionsSoon()
         } label: {
             chatActionLabel(
-                session.isPinned ? "Unpin" : "Pin",
-                systemImage: session.isPinned ? "pin.slash" : "pin")
+                saved ? "Unpin" : "Pin",
+                systemImage: saved ? "pin.slash" : "pin")
         }
     }
 

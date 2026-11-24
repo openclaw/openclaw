@@ -124,7 +124,8 @@ struct ChatSessionSidebarMenuTests {
         }
     }
 
-    enum PinAccess: CaseIterable { case legacy, verified, groupWriter, sleeping, awake, missing, unavailable, readOnly,
+    enum PinAccess: CaseIterable { case legacy, verified, groupWriter, sleeping, savedSleeping, awake, missing,
+                                        unavailable, readOnly,
                                         reconnected
     }
 
@@ -136,7 +137,8 @@ struct ChatSessionSidebarMenuTests {
         defer { fixture.close() }
         let commands = OpenClawChatWindowCommands()
         var current = true
-        let granted = Data(#"{"status":"ok","entries":{}}"#.utf8)
+        let slot = access == .savedSleeping ? "session:" : "session-rail:"
+        let granted = Data(#"{"status":"ok","entries":{"ui.railShortcuts":["\#(slot)agent:research:work"]}}"#.utf8)
         if access == .reconnected {
             try commands.setSessionMenuConnection(sidebarMenuConnection(
                 current: { current },
@@ -152,7 +154,8 @@ struct ChatSessionSidebarMenuTests {
             #expect(!retired.canEditPins)
         }
         var dropWrites = [OpenClawChatGatewayRequest]()
-        let hasSharedWrite = [.groupWriter, .sleeping, .awake].contains(access)
+        let sleeping = access == .sleeping || access == .savedSleeping
+        let hasSharedWrite = access == .groupWriter || sleeping || access == .awake
         let scope = access == .readOnly ? "operator.read" :
             (hasSharedWrite ? "operator.write" : "operator.sessions.write")
         try commands.setSessionMenuConnection(sidebarMenuConnection(
@@ -183,12 +186,12 @@ struct ChatSessionSidebarMenuTests {
             menuActions: commands.sessionMenuActions)
         #expect(pages.interactionSections().contains { $0.id == "pinned" } == hasSharedWrite)
         var row = fixture.row
-        if access == .sleeping || access == .awake {
+        if sleeping || access == .awake {
             row.pinned = false
             row.pinnedAt = nil
             // The host clock and Gateway disagree about whether the deadline has passed.
             let local = Date.now
-            let skew: TimeInterval = access == .sleeping ? -3600 : 3600
+            let skew: TimeInterval = sleeping ? -3600 : 3600
             fixture.model.rosterClock = .init(
                 timestamp: local.addingTimeInterval(skew).timeIntervalSince1970 * 1000,
                 receivedAt: local)
@@ -224,15 +227,14 @@ struct ChatSessionSidebarMenuTests {
             menu.update()
             return (row, menu)
         }
-        let pinTitle = row.isPinned ? "Unpin" : "Pin"
+        let pinTitle = row.isPinned || access == .savedSleeping ? "Unpin" : "Pin"
         let (index, menu) = try #require(menus.first { $0.1.item(withTitle: pinTitle) != nil })
-        let canEdit = access == .verified || access == .groupWriter || access == .awake
+        let canEdit = access == .verified || access == .groupWriter || access == .awake || access == .savedSleeping
         #expect(menu.item(withTitle: pinTitle)?.isEnabled == canEdit)
         let sidebarMenu = NSHostingMenu(rootView: pages.contextMenu(for: row, isChild: false))
         sidebarMenu.update()
         #expect(sidebarMenu.item(withTitle: pinTitle)?.isEnabled == canEdit)
-        if access ==
-            .sleeping { #expect(sidebarMenu.items.first { $0.title.hasPrefix("Wake session · ") }?.isEnabled == true) }
+        if sleeping { #expect(sidebarMenu.items.first { $0.title.hasPrefix("Wake session · ") }?.isEnabled == true) }
         let leading = table.delegate?.tableView?(table, rowActionsForRow: index, edge: .leading)
         #expect(leading?.map(\.title) == (canEdit ? [pinTitle] : []))
         if access != .readOnly { #expect(menu.item(withTitle: "Archive")?.isEnabled == true) }

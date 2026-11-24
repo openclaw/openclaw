@@ -312,7 +312,15 @@ struct ChatSessionInspectorSheet: View {
 
     private var pinnedBinding: Binding<Bool> {
         Binding(
-            get: { self.displayedSession.isPinned },
+            get: {
+                #if os(macOS)
+                self.windowCommands?.sessionMenuActions.isPinnedForAction(
+                    self.displayedSession,
+                    at: self.viewModel.sidebarRosterClock.gatewayDate()) ?? self.displayedSession.isPinned
+                #else
+                self.displayedSession.isPinned
+                #endif
+            },
             set: { pinned in
                 guard self.canonicalSession != nil else { return }
                 self.displayedSession.pinned = pinned

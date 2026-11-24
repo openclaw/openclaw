@@ -413,17 +413,20 @@ public struct OpenClawChatWindowShell: View {
                     systemImage: "arrow.triangle.branch")
             }
 
+            let savedPin = self.activeSessionEntry.map { self.windowCommands.sessionMenuActions.isPinnedForAction(
+                $0,
+                at: self.viewModel.sidebarRosterClock.gatewayDate()) } ?? false
             Button {
                 self.viewModel.setSessionPinned(
                     key: self.activeSessionKey,
-                    pinned: self.activeSessionEntry?.pinned != true,
+                    pinned: !savedPin,
                     agentID: self.viewModel.currentSessionTarget.agentID)
             } label: {
                 chatWindowActionLabel(
-                    LocalizedStringKey(self.activeSessionEntry?.pinned == true
+                    LocalizedStringKey(savedPin
                         ? String(localized: "Unpin")
                         : String(localized: "Pin")),
-                    systemImage: self.activeSessionEntry?.pinned == true ? "pin.slash" : "pin")
+                    systemImage: savedPin ? "pin.slash" : "pin")
             }
             .disabled(self.activeSessionEntry.map { self.windowCommands.sessionMenuActions.canTogglePin(
                 $0,

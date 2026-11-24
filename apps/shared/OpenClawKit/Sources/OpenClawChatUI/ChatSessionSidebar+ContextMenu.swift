@@ -69,14 +69,15 @@ private struct ChatSessionSidebarRowMenu: View {
                         unitsStyle: .abbreviated))))
             }
             if ChatSessionSidebarEligibility.canPin(self.session, isChild: self.isChild) {
+                let saved = self.actions.isPinnedForAction(self.session, at: self.now)
                 self.button(
-                    self.session.pinned == true ? String(localized: "Unpin") : String(localized: "Pin"),
+                    saved ? String(localized: "Unpin") : String(localized: "Pin"),
                     "pin",
                     key: "p")
                 {
                     self.viewModel.setSessionPinned(
                         key: self.session.key,
-                        pinned: self.session.pinned != true,
+                        pinned: !saved,
                         agentID: self.session.agentId)
                 }
                 .disabled(!self.actions.canTogglePin(self.session, at: self.now))

@@ -719,9 +719,9 @@ internal fun OpenClawSidebar(
       palette = palette,
       onClick = { onSelectSession(session) },
       onDragCommit =
-        if (pinAccess.canToggleSessionPin(session, sessionNowMs) && dragSource != null) {
+        if (dragSource != null && pinAccess.nextSessionPin(session, sessionNowMs) != null) {
           { direction ->
-            sidebarSessionPinnedAfterDrag(dragSource, direction)?.let { pinned ->
+            sidebarSessionPinnedAfterDrag(dragSource, direction)?.takeIf { it == pinAccess.nextSessionPin(session, sessionNowMs) }?.let { pinned ->
               setSessionPinned(session.key, session.ownerAgentId, pinned)
             }
           }
@@ -1476,7 +1476,8 @@ private fun SidebarSessionCatalog(
                   palette = palette,
                   onClick = { onSelectSession(session) },
                   canMutateSessions = canMutateSessions,
-                  onPinSession = onPinSession.takeIf { liveSession != null && pinAccess.canToggleSessionPin(liveSession, nowMs) },
+                  nextPinned = liveSession?.let { pinAccess.nextSessionPin(it, nowMs) },
+                  onPinSession = onPinSession,
                   onDragActiveChange = onDragActiveChange,
                 )
               }
@@ -1516,13 +1517,14 @@ private fun SidebarCatalogSessionRow(
   palette: SidebarPalette,
   onClick: () -> Unit,
   canMutateSessions: Boolean,
-  onPinSession: ((String, String?, Boolean) -> Unit)?,
+  nextPinned: Boolean?,
+  onPinSession: (String, String?, Boolean) -> Unit,
   onDragActiveChange: (Boolean) -> Unit,
 ) {
   val enabled = sidebarCatalogSessionSelectionEnabled(session, canMutateSessions)
   val nativeTitle = session.name?.takeIf(String::isNotBlank) ?: session.threadId
   val pinned = liveSession?.pinned == true
-  val draggableSession = liveSession?.takeIf { onPinSession != null }
+  val draggableSession = liveSession?.takeIf { nextPinned != null }
   val activity =
     sidebarSessionActivity(
       // Adopted rows use Gateway state; unadopted catalogs also call their running state "active".
@@ -1550,8 +1552,8 @@ private fun SidebarCatalogSessionRow(
     onDragCommit =
       draggableSession?.let { live ->
         { direction: Int ->
-          sidebarSessionPinnedAfterDrag(SidebarSessionDragSource.Catalog, direction, pinned)?.let { nextPinned ->
-            onPinSession?.invoke(live.key, live.ownerAgentId, nextPinned)
+          sidebarSessionPinnedAfterDrag(SidebarSessionDragSource.Catalog, direction, currentlyPinned = nextPinned == false)?.let { requested ->
+            onPinSession(live.key, live.ownerAgentId, requested)
           }
         }
       },

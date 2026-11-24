@@ -857,18 +857,19 @@ private fun SessionRow(
             }
           }
         } else {
-          val canEditPin = pinAccess.canEdit(session.sharingRole)
+          val nextPinned = pinAccess.nextSessionPin(session, nowMs)
           val pinLabel =
             when {
               pinAccess == PersonalSessionPinAccess.Unsupported -> nativeString("Update the Gateway to change personal session pins.")
-              !canEditPin -> nativeString("Personal pins are read-only here.")
-              session.pinned == true -> nativeString("Unpin")
+              !pinAccess.canEdit(session.sharingRole) -> nativeString("Personal pins are read-only here.")
+              nextPinned == false -> nativeString("Unpin")
               else -> nativeString("Pin")
             }
-          SessionMenuItem(pinLabel, enabled = pinAccess.canToggleSessionPin(session, nowMs)) {
+          SessionMenuItem(pinLabel, enabled = nextPinned != null) {
+            if (nextPinned == null) return@SessionMenuItem
             menuExpanded = false
             coroutineScope.launch {
-              viewModel.patchChatSession(ChatSessionPatch(key = session.key, ownerAgentId = session.ownerAgentId, pinned = session.pinned != true))
+              viewModel.patchChatSession(ChatSessionPatch(key = session.key, ownerAgentId = session.ownerAgentId, pinned = nextPinned))
             }
           }
           if (canSnoozeSession(session)) {
@@ -1130,10 +1131,17 @@ internal fun isSessionVisibleInNavigation(
   nowMs: Long = System.currentTimeMillis(),
 ): Boolean = !session.isSnoozed(nowMs) && (session.key == currentSessionKey || (session.archived != true && !isAutomationSession(session)))
 
-internal fun PersonalSessionPinAccess.canToggleSessionPin(
+/** Snooze hides a saved pin from the roster rank; it does not remove the preference. */
+internal fun PersonalSessionPinAccess.nextSessionPin(
   session: ChatSessionEntry,
   nowMs: Long,
-): Boolean = canEdit(session.sharingRole) && (session.pinned == true || !session.isSnoozed(nowMs))
+): Boolean? =
+  when {
+    this !is PersonalSessionPinAccess.Verified || !canEdit(session.sharingRole) -> null
+    !session.isSnoozed(nowMs) -> session.pinned != true
+    session.key in savedKeys -> false
+    else -> null
+  }
 
 internal fun canSnoozeSession(session: ChatSessionEntry): Boolean {
   val key = session.key.trim().lowercase()

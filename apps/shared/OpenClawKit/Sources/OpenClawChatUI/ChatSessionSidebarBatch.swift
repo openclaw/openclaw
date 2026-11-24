@@ -26,7 +26,12 @@ struct ChatSidebarSelection {
 
 @MainActor @Observable
 final class ChatSidebarPinProfile {
-    private(set) var verified = false
+    private(set) var savedKeys: Set<String>?
+    var verified: Bool {
+        self.savedKeys != nil
+    }
+
+    private var readRevision = 0
     static let pinKey = "ui.railShortcuts"
     private struct PinSnapshot: Decodable {
         let status: String
@@ -37,16 +42,19 @@ final class ChatSidebarPinProfile {
         _ connection: OpenClawSessionMenuConnection,
         forDisplay: Bool = false) async throws -> [AnyCodable]
     {
-        var verified = false
-        defer { self.verified = verified }
+        self.readRevision += 1
+        let revision = self.readRevision
+        var savedKeys: Set<String>?
+        defer { if self.readRevision == revision { self.savedKeys = savedKeys } }
         let reply: PinSnapshot = try await connection.read("users.prefs.get", ["keys": .init([Self.pinKey])])
         if reply.status == "no_durable_identity" {
             guard forDisplay else { throw URLError(.userAuthenticationRequired) }
             return []
         }
         guard reply.status == "ok", let entries = reply.entries else { throw CocoaError(.coderReadCorrupt) }
-        verified = true
-        return entries[Self.pinKey] ?? ["route:cron", "route:plugins", "route:usage"].map(AnyCodable.init)
+        let layout = entries[Self.pinKey] ?? ["route:cron", "route:plugins", "route:usage"].map(AnyCodable.init)
+        savedKeys = Set(layout.compactMap { ChatSessionSidebarBatch.sessionPinKey($0.value as? String) })
+        return layout
     }
 }
 
@@ -143,7 +151,7 @@ final class ChatSessionSidebarBatch {
         self.sidebarEntries = entries
     }
 
-    private static func sessionPinKey(_ text: String?) -> String? {
+    fileprivate static func sessionPinKey(_ text: String?) -> String? {
         guard let text, text.hasPrefix("session:") else { return nil }
         let key = text.dropFirst(8).trimmingCharacters(in: .whitespacesAndNewlines)
         return key.isEmpty ? nil : key

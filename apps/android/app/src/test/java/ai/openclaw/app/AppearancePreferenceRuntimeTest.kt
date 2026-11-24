@@ -1,9 +1,12 @@
 package ai.openclaw.app
 
+import ai.openclaw.app.chat.ChatSessionEntry
+import ai.openclaw.app.chat.ChatSessionPatch
 import ai.openclaw.app.gateway.GatewayEndpoint
 import ai.openclaw.app.gateway.GatewayRequestRejected
 import ai.openclaw.app.gateway.GatewaySession
 import ai.openclaw.app.node.ConnectionManager
+import ai.openclaw.app.ui.nextSessionPin
 import android.content.Context
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModelStore
@@ -101,7 +104,7 @@ class AppearancePreferenceRuntimeTest {
     }
 
   @Test
-  fun profileRefreshRecoversPinEditingOnTheSameSocketWithoutAWrite() =
+  fun profileRefreshRecoversSavedPinEditingWithoutWakingTheThread() =
     runBlocking {
       withAppearanceGateway {
         respond = { request ->
@@ -111,12 +114,30 @@ class AppearancePreferenceRuntimeTest {
         connect(methods = setOf("sessions.patch", "users.prefs.get", "users.self"), capabilities = setOf("personal-session-pins"))
         assertEquals(PersonalSessionPinAccess.ReadOnly, runtime.personalSessionPinAccess.value)
         val connection = requests.last { it.method == "users.prefs.get" }.connection
+        val row = ChatSessionEntry(key = "agent:main:sleep", updatedAtMs = 0, pinned = false, snoozedUntil = 2000)
+        setProfilePreferences("profile-a", """{"ui.railShortcuts":["session:agent:main:sleep","session-rail:agent:main:other"]}""")
         respond = { request ->
-          if (request.method == "config.get") throw GatewayRequestRejected(GatewaySession.ErrorShape("FORBIDDEN", "No config access"))
-          null
+          when (request.method) {
+            "config.get" -> throw GatewayRequestRejected(GatewaySession.ErrorShape("FORBIDDEN", "No config access"))
+            "sessions.patch" -> """{"ok":true,"key":"agent:main:sleep","entry":{"updatedAt":1}}"""
+            else -> null
+          }
         }
         emitOperatorEvent("users.prefs.changed", "{}")
-        withTimeout(APPEARANCE_CONNECTION_TIMEOUT_MS) { runtime.personalSessionPinAccess.first { it.canEdit("member") } }
+        val verified = withTimeout(APPEARANCE_CONNECTION_TIMEOUT_MS) { runtime.personalSessionPinAccess.first { it.canEdit("member") } }
+        val requestedKeys = requests.last { it.method == "users.prefs.get" }.params["keys"] as JsonArray
+        assertTrue(JsonPrimitive("ui.railShortcuts") in requestedKeys)
+        assertEquals(null, verified.nextSessionPin(row.copy(key = "agent:main:other"), 1000))
+        val edit = verified.nextSessionPin(row, 1000)
+        assertEquals(false, edit)
+        assertTrue(requests.none { it.method == "sessions.patch" })
+        assertTrue(runtime.chat.patchSession(ChatSessionPatch(key = row.key, pinned = edit)))
+        val fields = requests.single { it.method == "sessions.patch" }.params
+        assertEquals(JsonPrimitive(false), fields["pinned"])
+        assertFalse("snoozedUntil" in fields)
+        setProfilePreferences("profile-a", """{"ui.railShortcuts":[]}""")
+        emitOperatorEvent("users.prefs.changed", "{}")
+        withTimeout(APPEARANCE_CONNECTION_TIMEOUT_MS) { runtime.personalSessionPinAccess.first { it.canEdit("member") && it.nextSessionPin(row, 1000) == null } }
         respond = { request -> if (request.method == "users.prefs.get") """{"status":"no_durable_identity"}""" else null }
         emitOperatorEvent("users.prefs.changed", "{}")
         withTimeout(APPEARANCE_CONNECTION_TIMEOUT_MS) { runtime.personalSessionPinAccess.first { it == PersonalSessionPinAccess.ReadOnly } }

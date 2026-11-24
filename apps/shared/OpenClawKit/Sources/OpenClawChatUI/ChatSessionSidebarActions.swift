@@ -33,8 +33,14 @@ final class ChatSessionSidebarActions {
             scope: "operator.sessions.write")
     }
 
+    /// A sleeping row loses its visible rank, not its saved personal membership.
+    func isPinnedForAction(_ session: OpenClawChatSessionEntry, at now: Date) -> Bool {
+        guard self.canEditPins, session.isSnoozed(at: now) else { return session.isPinned }
+        return self.connection?.pinProfile.savedKeys?.contains(session.key) == true
+    }
+
     func canTogglePin(_ session: OpenClawChatSessionEntry, at now: Date) -> Bool {
-        self.canEditPins && (session.isPinned || !session.isSnoozed(at: now))
+        self.canEditPins && (!session.isSnoozed(at: now) || self.isPinnedForAction(session, at: now))
     }
 
     /// Pages starts root drags only with group-write authority; do not advertise an unusable drop zone.
