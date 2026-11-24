@@ -3,6 +3,7 @@ import process from "node:process";
 import { setTimeout as sleep } from "node:timers/promises";
 import {
   composeReleaseChildAttemptEvidence,
+  resolveReleaseAttemptJobs,
   evidenceReadRetryDelay,
   isReleaseGhServerError,
   matchesReleaseChildAttemptEvidence,
@@ -262,8 +263,7 @@ async function readAttemptJobs(deps, run, runAttempt) {
             (job) =>
               String(job.run_id) === String(run.id) &&
               job.run_attempt === runAttempt &&
-              job.head_sha === run.head_sha &&
-              job.status === "completed",
+              job.head_sha === run.head_sha,
           ),
         "job inventory is incomplete or belongs to another attempt",
       );
@@ -271,6 +271,10 @@ async function readAttemptJobs(deps, run, runAttempt) {
       if (jobs.length >= total) {
         requireEvidence(jobs.length === total, "job inventory count changed");
         deps.immutableReads?.selectJobPageSize(path, perPage);
+        requireEvidence(
+          resolveReleaseAttemptJobs(jobs, runAttempt).every((job) => job.status === "completed"),
+          "job inventory contains unfinished executions",
+        );
         return jobs;
       }
     }
@@ -279,7 +283,9 @@ async function readAttemptJobs(deps, run, runAttempt) {
 }
 
 function validatePublisher(jobs, receipt) {
-  const publishers = jobs.filter((job) => job.name === PUBLISHER_JOB);
+  const publishers = resolveReleaseAttemptJobs(jobs, receipt.effectiveRunAttempt).filter(
+    (job) => job.name === PUBLISHER_JOB,
+  );
   requireEvidence(
     publishers.length === 1 &&
       String(publishers[0].id) === receipt.publisher?.jobId &&
@@ -426,6 +432,7 @@ async function validateEvidence(selection, request, deps) {
     attempts,
     expected: expectedRun(selection, request),
     run,
+    recordedJobs: receipt.jobs,
   });
   composite.jobs = composite.jobs.filter((job) => job.name !== PUBLISHER_JOB);
   composite.compositeJobsSha256 = releaseCompositeJobsSha256(composite);
