@@ -156,13 +156,21 @@ describe.skipIf(!connection)("PostgreSQL startup copy and swap", () => {
           { fs, path, stateDir: root, suffix, generation: suffix.slice(".pre-".length) },
         );
         expect(fs.readFileSync(statePath)).toEqual(originalAnchor);
-        await pruneGenerations(root, "next-generation", new Set(), new Set([statePath]), {
-          config: { database: { engine: "postgres", postgres: { connection } } },
-          activeAnchors: [statePath],
-          warn: (message) => {
-            throw new Error(message);
+        const configPath = path.join(root, "state", "openclaw.json");
+        fs.writeFileSync(`${configPath}.pre-next-generation`, "{}");
+        await pruneGenerations(
+          root,
+          "next-generation",
+          new Set(),
+          new Set([statePath, configPath]),
+          {
+            config: { database: { engine: "postgres", postgres: { connection } } },
+            activeAnchors: [statePath],
+            warn: (message) => {
+              throw new Error(message);
+            },
           },
-        });
+        );
         expect(
           (await client.query("SELECT to_regnamespace($1) IS NULL AS removed", [privateNamespace]))
             .rows,

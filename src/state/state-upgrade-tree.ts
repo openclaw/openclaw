@@ -644,12 +644,9 @@ export async function pruneGenerations(
   const retainedAnchors = [
     ...postgres.activeAnchors,
     ...generations.filter((entry) => entry.retained).map((entry) => entry.absolute),
-  ];
+  ].filter(isSqliteFile);
   const protectedNamespaces = new Set(
     retainedAnchors.flatMap((file) => {
-      if (!isSqliteFile(file)) {
-        return [];
-      }
       const engine = readBackupEngine(file);
       return engine.engine === "postgres" ? [engine.namespace] : [];
     }),
