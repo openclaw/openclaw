@@ -194,7 +194,9 @@ verify their original admitted qualification identity (or historical trusted-mai
 workflow SHA) and current attempt. The sealed
 manifest supplies the SDK evidence digest and npm publication decisions; it
 never acknowledges SDK API changes, so supply
-`plugin_sdk_api_acknowledgement` whenever the SDK report contains changes. The
+`plugin_sdk_api_acknowledgement` whenever the SDK report contains changes.
+Review the diff and acknowledge it yourself; stop for the operator only if a
+change looks harmful. The
 publisher accepts only successful FRV and cannot grant a waiver. Explicit
 publisher inputs select publication scope; the candidate helper still validates its explicit
 SDK acknowledgement when needed.
@@ -317,16 +319,3 @@ or main closeout.
 Selected Windows Node, Linux/Windows/macOS Gateway, and native-app CI failures
 block release validation. Platform publishers retain their own artifact
 and updater contracts; report pending platforms and proof gaps accurately.
-
-### Review Plugin SDK API changes
-
-The release agent reviews the Plugin SDK API diff and supplies its
-acknowledgement digest itself. The checklist's acknowledgement requirement is
-a prompt for that review, not an operator approval gate: do not stop, hand off,
-or report the release as blocked solely to have the operator acknowledge the
-digest. Check each change against its source PR or commit: intended additions,
-compatible signature changes, and documented deprecations are acceptable.
-Stop and ask the operator only when a change looks harmful, such as an
-unintended removal or breaking change, leaked internal, or contract change
-without its migration. Record the reviewed digest and a one-line verdict in the
-release ledger.
