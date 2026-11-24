@@ -23,7 +23,47 @@ import { isFailedUpdateStep } from "../../infra/update-run-step.js";
 import type { UpdateRunResult, UpdateStepProgress } from "../../infra/update-runner-types.js";
 import type { UpdateStepResult } from "../../infra/update-step-result.js";
 import { defaultRuntime } from "../../runtime.js";
-import type { UpdateCommandOptions } from "./shared.js";
+import { resolveNodeRunner, type UpdateCommandOptions } from "./shared.js";
+import type { ManagedServiceRootRedirect } from "./update-command-service-context-types.js";
+
+/** Describe the selected plan without changing roots, runtime, or service authority. */
+export function printManagedServicePackageUpdatePlan(params: {
+  rootRedirect: ManagedServiceRootRedirect | null;
+  serviceRoot?: string;
+  nodeRunner?: string;
+}): void {
+  const { rootRedirect, nodeRunner } = params;
+  if (rootRedirect) {
+    defaultRuntime.log(
+      theme.muted(`Targeting managed gateway service package root: ${rootRedirect.root}`),
+    );
+    defaultRuntime.log(
+      theme.warn(
+        `Shell OpenClaw root differs from the managed gateway service root: ${rootRedirect.previousRoot}`,
+      ),
+    );
+    if (nodeRunner) {
+      defaultRuntime.log(theme.muted(`Managed gateway service runtime: ${nodeRunner}`));
+    }
+  } else if (params.serviceRoot) {
+    defaultRuntime.log(
+      theme.muted(
+        `Updating this installation and rebinding the managed Gateway from ${params.serviceRoot} after ownership and runtime verification.`,
+      ),
+    );
+  } else if (nodeRunner) {
+    defaultRuntime.log(
+      theme.warn(
+        `Current runtime (${resolveNodeRunner()}) differs from the managed gateway service runtime (${nodeRunner}).`,
+      ),
+    );
+    defaultRuntime.log(
+      theme.muted(
+        "Using the managed service runtime for this update so the gateway can start after the upgrade.",
+      ),
+    );
+  }
+}
 
 // One command owns each observer. The final report flushes it before printing so
 // a fast final transition cannot appear after the report or leave a spinner active.

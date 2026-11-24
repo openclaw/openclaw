@@ -1480,6 +1480,17 @@ also rejected before activation. Staged source-checkout exposure currently
 requires an npm-owned package symlink; package-to-package updates remain
 supported through the owning manager.
 
+The reverse switch is refused the same way when `openclaw` is a pnpm or Bun
+global link to the Git checkout (for example after
+`pnpm add -g openclaw@link:<checkout>`). Replacing that link changes what the
+Gateway's installation path means, so the updater refuses before stopping or
+changing anything; the CLI and Gateway keep running the checkout. To stay on the
+checkout and follow the channel through its release tags, set `update.channel`
+and run `openclaw update` without `--channel`. To switch anyway, run
+`openclaw triage` or ask the instance's agent, which can check database, runtime
+and Gateway service compatibility before moving the install. This check belongs
+to the installed updater; an older updater can still start the switch.
+
 When an npm package link points to a built Git checkout, rollback verifies that
 same checkout and build before restoring the link and launchers. Local source
 edits are preserved. Replacing the checkout or rebuilding it during the update
