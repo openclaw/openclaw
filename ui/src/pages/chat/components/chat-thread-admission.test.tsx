@@ -6,7 +6,6 @@ import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import type { ChatThreadProps } from "./chat-thread-interactions.ts";
 import { mountChatThread } from "./chat-thread.test-support.ts";
 import { createChatTranscript } from "./chat-transcript-controller.ts";
-import * as projection from "./chat-transcript-projection.ts";
 import {
   installTranscriptDomMocks,
   resetTranscriptTestDom,
@@ -19,17 +18,9 @@ afterEach(() => {
   resetTranscriptTestDom();
 });
 
-function admissionFixture(initial: Partial<ChatThreadProps>, cost = 20) {
-  let now = 0;
-  const project = projection.projectChatTranscript;
-  vi.spyOn(performance, "now").mockImplementation(() => now);
-  vi.spyOn(projection, "projectChatTranscript").mockImplementation((...args) => {
-    const result = project(...args);
-    if (result.hasRows) {
-      now += cost;
-    }
-    return result;
-  });
+function admissionFixture(initial: Partial<ChatThreadProps>) {
+  // Cheap preparation must not skip the boundary before constructing real rows.
+  vi.spyOn(performance, "now").mockReturnValue(0);
   const pending = Promise.withResolvers<void>();
   const yieldTask = vi.fn(() => pending.promise);
   vi.stubGlobal("scheduler", { yield: yieldTask });
@@ -120,15 +111,12 @@ it.each(["mount", "dispose", "replace"])(
   },
 );
 
-it.each(["cheap", "restored", "submitted"])("mounts %s first rows immediately", (mode) => {
-  const view = admissionFixture(
-    {
-      messages: history("Immediate history"),
-      restoring: mode === "restored",
-      initialSubmission: mode === "submitted",
-    },
-    mode === "cheap" ? 1 : 20,
-  );
+it.each(["restored", "submitted"])("mounts %s first rows immediately", (mode) => {
+  const view = admissionFixture({
+    messages: history("Immediate history"),
+    restoring: mode === "restored",
+    initialSubmission: mode === "submitted",
+  });
   expect(view.yieldTask).not.toHaveBeenCalled();
   expect(view.container.textContent).toContain("Immediate history");
 });

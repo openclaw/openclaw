@@ -328,7 +328,6 @@ function ChatThreadContent(
     projection: ReturnType<typeof projectChatTranscript>;
     rowAdmission: true | Promise<true> | undefined;
   }>((previous) => {
-    const started = splitColdRows && !previous?.rowAdmission ? performance.now() : 0;
     const searchState = search().read();
     const { session } = presentation();
     const projection = projectChatTranscript(
@@ -345,17 +344,15 @@ function ChatThreadContent(
         input.props.announceTranscript !== false && !projection.searchOpen && !input.props.loading,
       );
     }
-    // Empty startup projections must not consume the first-row split. Retain
-    // its receipt across updates so a pending yield mounts the latest rows once.
+    // Projection cost excludes row construction and its layout effects. Split
+    // the first populated cold render, retaining admission for the latest rows.
     const rowAdmission =
       previous?.rowAdmission ??
       (!splitColdRows
         ? true
         : !projection.hasRows
           ? undefined
-          : performance.now() - started <= 15
-            ? true
-            : yieldChatTask().then(() => true as const));
+          : yieldChatTask().then(() => true as const));
     return { session, projection, rowAdmission };
   });
   // Only row admission may lag; history and pane chrome remain live while it yields.
