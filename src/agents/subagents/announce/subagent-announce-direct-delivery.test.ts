@@ -50,7 +50,7 @@ const queued = {
 const sessionKey = "agent:main:requester-settle";
 const sourceRunId = "announce-requester-settle";
 
-function setup(sourceTool = "subagent_settle") {
+function setup(sourceTool = "subagent_settle", requesterKey = sessionKey) {
   const controller = new AbortController();
   let ownedDelivery: ReturnType<typeof deliverSubagentAnnouncement> | undefined;
   const dispatchEntered = createDeferredCore();
@@ -65,7 +65,7 @@ function setup(sourceTool = "subagent_settle") {
   const cfg: OpenClawConfig = { session: { store: storePath } };
   const target = captureSessionTarget({
     storeScope: storePath,
-    sessionKey,
+    sessionKey: requesterKey,
     agentId: "main",
     incarnation: initialEntry.sessionId,
   });
@@ -106,9 +106,9 @@ function setup(sourceTool = "subagent_settle") {
     sendMessage: send,
   });
   const params: Parameters<typeof deliverSubagentAnnouncement>[0] = {
-    requesterSessionKey: sessionKey,
+    requesterSessionKey: requesterKey,
     requesterAgentId: "main",
-    targetRequesterSessionKey: sessionKey,
+    targetRequesterSessionKey: requesterKey,
     triggerMessage: "All children settled",
     directOrigin: { channel: "slack", to: "channel:C123", accountId: "acct-1" },
     sourceTool,
@@ -427,6 +427,50 @@ it("keeps the same completion input when timeout recovery ends without a backend
     }
     await Promise.allSettled([recovery, delivery, input?.settlement.promise]);
     abandonment.mockRestore();
+  }
+});
+
+it("hands off a child result while its cron requester holds the turn without a backend", async ({
+  signal,
+}) => {
+  const cronSessionKey = "agent:main:cron:job:run:run-1";
+  const fixture = setup("subagent_announce", cronSessionKey);
+  const entered = createDeferredCore();
+  const release = createDeferredCore();
+  const parent = withSessionTurn(
+    {
+      target: fixture.target,
+      sessionKey: cronSessionKey,
+      sessionId: fixture.state.entry.sessionId,
+    },
+    async (operation) => {
+      assert(operation);
+      operation.setPhase("preflight_compacting");
+      entered.resolve();
+      await release.promise;
+    },
+  );
+  let input: ReturnType<typeof reserveSessionControllerSource> | undefined;
+  let delivery: ReturnType<typeof fixture.startDelivery> | undefined;
+  try {
+    await withinTest(entered.promise, signal);
+    input = reserveSessionControllerSource(cronSessionKey, {
+      target: fixture.target,
+      policy: { mode: "followup" },
+    });
+    fixture.params.controllerInput = input;
+    delivery = fixture.startDelivery();
+    expect(await withinTest(delivery, signal)).toMatchObject({
+      delivered: false,
+      reason: "completion_handoff_pending",
+    });
+    expectNoReplay(fixture, 0);
+  } finally {
+    release.resolve();
+    if (input) {
+      retireSessionControllerInput(input);
+    }
+    await Promise.allSettled([parent, delivery, input?.settlement.promise]);
   }
 });
 

@@ -281,7 +281,14 @@ async function sendSubagentAnnounceDirectlyBound(
         // Recovery owns the turn before its backend is ready. Queuing behind it can
         // deadlock a parent waiting for this result; steering resolves its live owner below.
         const requesterOperation = params.controllerInput.mailbox.owner.active;
-        if (requesterOperation) {
+        // A finalizing cron run holds the turn to read its child's settled result.
+        // It will not attach a new backend; let the existing cron handoff run below.
+        const cronAwaitingCompletionHandoff =
+          !agentMediatedCompletion &&
+          isCronRunSessionKey(canonicalRequesterSessionKey) &&
+          (!requesterActivity.sessionId ||
+            !isEmbeddedAgentRunHandleActive(requesterActivity.sessionId));
+        if (requesterOperation && !cronAwaitingCompletionHandoff) {
           await waitForReplyOperationBackend(
             requesterOperation,
             params.signal
