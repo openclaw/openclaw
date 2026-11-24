@@ -1,5 +1,8 @@
 import { createHash } from "node:crypto";
-import type { PluginStateOperationHandler } from "openclaw/plugin-sdk/plugin-state-runtime";
+import type {
+  PluginStateOperationHandler,
+  PluginStateOperationTransaction,
+} from "openclaw/plugin-sdk/plugin-state-runtime";
 import { packetDigest, snapshotBytes, snapshotRevision } from "./src/packet-state.js";
 import {
   BEAM_MAX_GUEST_RECEIPTS,
@@ -20,7 +23,10 @@ export type BeamPublishInput = {
   publisher: BeamPublisher;
 };
 
-export type BeamPublishHead = Pick<BeamStoredSession, "beamId" | "revision" | "title"> & {
+export type BeamPublishHead = Pick<
+  BeamStoredSession,
+  "beamId" | "revision" | "title" | "publisherProfileId"
+> & {
   publicationId: string;
   digest: string;
   disposition: "applied" | "unchanged";
@@ -32,6 +38,19 @@ export type BeamWriteRefusal =
   | "released"
   | "rate_limited";
 
+export type BeamReleaseInput = {
+  beamId: string;
+  publicationGeneration: string;
+  profileId: string;
+  requestId: string;
+  revision: string;
+  digest: string;
+};
+export type BeamReleaseResult = Pick<
+  BeamHandoff,
+  "beamId" | "title" | "publicationId" | "revision" | "handoffId" | "publisherProfileId"
+> & { digest: string };
+
 export type BeamPublicationOperations = {
   publish: {
     input: BeamPublishInput;
@@ -40,6 +59,7 @@ export type BeamPublicationOperations = {
       | BeamWriteRefusal
       | { refusal: "receipt_capacity"; retryAfterSeconds: number };
   };
+  release: { input: BeamReleaseInput; output: BeamReleaseResult | BeamWriteRefusal | "expired" };
 };
 
 type PublishReceipt = { fingerprint: string; result: BeamPublishHead };
@@ -50,6 +70,9 @@ export const executeBeamPublication: PluginStateOperationHandler<BeamPublication
   command,
   tx,
 ) => {
+  if (command.type === "release") {
+    return releasePublication(command.input, tx);
+  }
   const input = command.input;
   const { upload, requestId, publisher, ifMatch, digest } = input;
   const receiptKey = createHash("sha256")
@@ -74,7 +97,15 @@ export const executeBeamPublication: PluginStateOperationHandler<BeamPublication
     if (prior.result.publicationId !== existing?.publicationId) {
       return "unavailable";
     }
-    return prior.result;
+    return {
+      ...prior.result,
+      // The bytes and revision in the original receipt remain stable. A stale receipt
+      // cannot advertise permission to release a newer revision or an already released row.
+      publisherProfileId:
+        !existing?.handoffId && existing?.revision === prior.result.revision
+          ? existing?.publisherProfileId
+          : undefined,
+    };
   }
   if (handoff?.handoffId || row?.handoffId) {
     return "released";
@@ -124,6 +155,7 @@ export const executeBeamPublication: PluginStateOperationHandler<BeamPublication
     publicationId: current.publicationId,
     ...(current.revision ? { revision: current.revision } : {}),
     title: current.title,
+    ...(current.publisherProfileId ? { publisherProfileId: current.publisherProfileId } : {}),
     digest,
     disposition: unchanged ? "unchanged" : "applied",
   };
@@ -136,3 +168,66 @@ export const executeBeamPublication: PluginStateOperationHandler<BeamPublication
   } satisfies PublishReceipt);
   return result;
 };
+
+function releasePublication(
+  input: BeamReleaseInput,
+  tx: PluginStateOperationTransaction,
+): BeamPublicationOperations["release"]["output"] {
+  const retained = tx.lookupMany<BeamHandoff>([{ store: 1, key: input.beamId }])[0];
+  const current = tx.lookupMany<BeamStoredSession>([{ store: 0, key: input.beamId }])[0];
+  const row = retained ?? current;
+  if (
+    !row ||
+    row.publicationId !== input.publicationGeneration ||
+    row.publisherProfileId !== input.profileId
+  ) {
+    return "unavailable";
+  }
+  const result = {
+    beamId: row.beamId,
+    title: row.title,
+    publicationId: input.publicationGeneration,
+    revision: row.revision,
+    handoffId: input.publicationGeneration,
+    digest: input.digest,
+  };
+  if (row.releaseReceipt?.requestId === input.requestId) {
+    return row.releaseReceipt.revision === input.revision &&
+      row.releaseReceipt.digest === input.digest
+      ? result
+      : "request_identity_conflict";
+  }
+  if (row.handoffId) {
+    return "released";
+  }
+  if (!current) {
+    return "expired";
+  }
+  const digest = packetDigest(snapshotBytes(current));
+  if (input.digest !== digest || input.revision !== snapshotRevision(row, digest)) {
+    return "revision_changed";
+  }
+  // The current transaction API exposes expiry only with entries(). Read that metadata
+  // after keyed admission so a refused or replayed release never loads other transcripts.
+  const snapshot = tx.entries<BeamStoredSession>(0).find((entry) => entry.key === input.beamId);
+  if (!snapshot) {
+    return "expired";
+  }
+  const released = {
+    ...current,
+    handoffId: input.publicationGeneration,
+    releaseReceipt: { requestId: input.requestId, revision: input.revision, digest },
+  };
+  // Both API versions must see one release, but only the snapshot store retains transcript bytes.
+  const { items: _items, packetText: _packet, ...ownership } = released;
+  tx.set(1, input.beamId, ownership);
+  tx.set(
+    0,
+    input.beamId,
+    released,
+    snapshot.expiresAt === undefined
+      ? undefined
+      : { ttlMs: Math.max(1, snapshot.expiresAt - Date.now()) },
+  );
+  return result;
+}

@@ -22,16 +22,23 @@ export function snapshotBytes(
       version: 2,
       beamId: row.beamId,
       source: row.source,
-      title: row.title,
+      // V1 accepted unpaired UTF-16 surrogates from JSON escapes. Portable v2
+      // requires Unicode scalars, including on reads of previously stored rows.
+      title: row.title.toWellFormed(),
       updatedAt: row.updatedAt,
       completed: row.completed,
       ...(row.truncated ? { truncated: true } : {}),
       ...(row.sourceModel
-        ? { sourceModel: { provider: row.sourceModel.provider, model: row.sourceModel.model } }
+        ? {
+            sourceModel: {
+              provider: row.sourceModel.provider,
+              model: row.sourceModel.model.toWellFormed(),
+            },
+          }
         : {}),
       items: row.items.map(({ type, text, speaker }) => ({
         type,
-        text,
+        text: text.toWellFormed(),
         ...(speaker ? { speaker } : {}),
       })),
     })
@@ -46,13 +53,10 @@ export function snapshotRevision(
   row: Pick<BeamHandoff, "revision" | "publicationId">,
   digest: string,
 ): string {
-  // Existing rows have no revision until their next accepted write. The tag still
-  // names their exact representation and, where available, their original generation.
-  return `"${
-    row.revision ??
-    createHash("sha256")
-      .update(row.publicationId ?? "legacy")
-      .update(digest)
-      .digest("hex")
-  }"`;
+  // A condition on one enrolled publication must never update another, even if a
+  // restored receiver supplies identical packet bytes and the same stored write revision.
+  const tag = createHash("sha256")
+    .update(JSON.stringify([row.publicationId ?? null, row.revision ?? null, digest]))
+    .digest("hex");
+  return `"${tag}"`;
 }

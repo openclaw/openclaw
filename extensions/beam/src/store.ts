@@ -2,7 +2,11 @@ import { randomUUID } from "node:crypto";
 import type { OpenClawPluginServiceV2 } from "openclaw/plugin-sdk/plugin-entry";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import { preparePluginStateGuard } from "openclaw/plugin-sdk/plugin-state-runtime";
-import type { BeamPublicationOperations, BeamPublishInput } from "../publication-operation-api.js";
+import type {
+  BeamPublicationOperations,
+  BeamPublishInput,
+  BeamReleaseInput,
+} from "../publication-operation-api.js";
 import type {
   BeamPublisher,
   BeamUploadOperations,
@@ -66,6 +70,10 @@ export type BeamPublication = { snapshot?: BeamStoredSession; ownership?: BeamHa
 
 export function createBeamStore(runtime: PluginRuntime): BeamStore & {
   readPublication: (beamId: string) => Promise<BeamPublication>;
+  releasePublication: (
+    input: BeamReleaseInput,
+    assertCurrent: () => void,
+  ) => Promise<BeamPublicationOperations["release"]["output"]>;
   putSnapshot: (
     input: BeamPublishInput,
     assertCurrent: () => void,
@@ -197,6 +205,24 @@ export function createBeamStore(runtime: PluginRuntime): BeamStore & {
           return "rate_limited";
         }
         throw error;
+      } finally {
+        invalidate();
+      }
+    },
+    async releasePublication(input, assertCurrent) {
+      if (!store.createOperation) {
+        throw new Error("Beam requires worker-owned plugin state operations");
+      }
+      const operation = store.createOperation<BeamPublicationOperations>(
+        [store, handoffs],
+        {
+          moduleName: "publication-operation-api.js",
+          exportName: "executeBeamPublication",
+        },
+        { assertCurrent },
+      );
+      try {
+        return (await operation.execute({ type: "release", input }, { writeStores: [0, 1] })).value;
       } finally {
         invalidate();
       }
