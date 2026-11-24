@@ -6,7 +6,6 @@ import { createDeferred } from "../../../test/helpers/promise.js";
 import { buildBrowserGatewayConnectPlan } from "../api/gateway-connect-plan.ts";
 import { loadCommandPaletteCatalogItems } from "../components/command-palette-catalog-search.ts";
 import { t } from "../i18n/index.ts";
-import { usesCronInventoryEvents } from "../lib/cron/inventory-connection.ts";
 import { readCronInventory } from "../lib/cron/inventory.ts";
 import { isGatewayConnectionAttemptPending } from "../lib/gateway-status.ts";
 import { setAvatarGatewayOrigin } from "../lib/identity-avatar-context.ts";
@@ -89,7 +88,6 @@ describe("createApplicationGateway connection ownership", () => {
     profile.resolve({ profile: { id: "hydrated-reader", emails: [] } });
     await profile.promise;
     expect(gateway.snapshot.selfUser?.id).toBe("hydrated-reader");
-    expect(usesCronInventoryEvents(client)).toBe(true);
     await readCronInventory(client, { compact: true });
     await readCronInventory(client, { compact: true });
     expect(client.request.mock.calls.filter(([method]) => method === "cron.list")).toHaveLength(2);
@@ -718,7 +716,13 @@ describe("createApplicationGateway connection ownership", () => {
     connect();
     const client = gateway.snapshot.client!;
     current().request.mockImplementation(async (method) =>
-      method === "cron.list" ? { jobs: [{ id: "job", name: "Automation" }] } : { models: [] },
+      method === "cron.list"
+        ? {
+            ...cronJobsListResponse(),
+            jobs: [{ id: "job", name: "Automation", enabled: true }],
+            total: 1,
+          }
+        : { models: [] },
     );
     const load = () =>
       loadCommandPaletteCatalogItems({
@@ -733,7 +737,7 @@ describe("createApplicationGateway connection ownership", () => {
     expect(first).toEqual(shared);
     expect(first).toContainEqual(expect.objectContaining({ label: "Automation" }));
     expect(count()).toBe(1);
-    for (const event of ["cron", "config.changed"]) {
+    for (const event of ["cron.inventory.changed", "config.changed"]) {
       let pending: ReturnType<typeof load> | undefined;
       const unsubscribe = gateway.subscribeEvents(() => {
         pending = load();

@@ -2920,7 +2920,6 @@ function createReleasePublishFixture(
     full_release_validation_run_id: overrides.FULL_RELEASE_VALIDATION_RUN_ID ?? "66",
     full_release_validation_run_attempt: overrides.FULL_RELEASE_VALIDATION_RUN_ATTEMPT ?? "3",
     publish_openclaw_npm: overrides.PUBLISH_OPENCLAW_NPM ?? "true",
-    wait_for_clawhub: overrides.WAIT_FOR_CLAWHUB ?? "true",
     prepared_plugins: overrides.PREPARED_PLUGINS ?? "{}",
     plugin_sdk_api_acknowledgement: overrides.PLUGIN_SDK_API_ACKNOWLEDGEMENT ?? "",
   };
@@ -3041,7 +3040,6 @@ ${functions}
           PLUGIN_SDK_API_ACKNOWLEDGEMENT: "",
           PUBLISH_OPENCLAW_NPM: inputs.publish_openclaw_npm,
           CLAWHUB_ONLY: "false",
-          WAIT_FOR_CLAWHUB: inputs.wait_for_clawhub,
           PLUGINS: "",
           NPM_TELEGRAM_RUN_ID: "",
           CHILD_PLUGIN_NPM_RUN_ID: "101",
@@ -4263,6 +4261,7 @@ function runReleasePublishInputValidation(overrides: Record<string, string>) {
   const githubOutput = resolve(tempDirs.make("release-publish-inputs-"), "github-output");
   const result = runBash(script, {
     env: {
+      FAST_TRACK_APPROVAL_JSON: "",
       CLAWHUB_ONLY: "false",
       FINALIZE_RELEASE_BEFORE_DOCKER: "false",
       FULL_RELEASE_VALIDATION_RUN_ATTEMPT: "1",
@@ -6801,7 +6800,6 @@ render_github_release_notes() { cp "$2" "$1"; printf '%s\\n' '{"verificationIncl
           publish_docker_only: "false",
           finalize_release_before_docker: "false",
           openclaw_npm_resume_run_id: "",
-          wait_for_clawhub: "true",
           full_release_validation_run_attempt: "3",
           prepared_plugins: prepared,
           plugin_sdk_api_acknowledgement: acknowledgement,
@@ -6894,7 +6892,6 @@ render_github_release_notes() { cp "$2" "$1"; printf '%s\\n' '{"verificationIncl
 
   it.each([false, true])("preserves detached ClawHub and npm resume=%s", (resume) => {
     const fixture = createReleasePublishFixture({
-      WAIT_FOR_CLAWHUB: "false",
       CHILD_OPENCLAW_NPM_ALREADY_PUBLISHED: String(resume),
       CHILD_OPENCLAW_NPM_EXPECTED_WORKFLOW_REF: "refs/tags/release-publish/aaaaaaaaaaaa-42",
       CHILD_OPENCLAW_NPM_RUN_ATTEMPT: resume ? "1" : "",
@@ -8003,9 +8000,64 @@ NODE
       'String(run.run_attempt ?? "") !== process.env.FULL_RELEASE_VALIDATION_RUN_ATTEMPT',
       'manifest_asset="openclaw-${evidence_version}-release-manifest.json"',
       'gh_with_retry release download "$EVIDENCE_TAG"',
-      ".runId == $run_id",
-      ".runAttempt == $run_attempt",
     ]);
+    const identityPredicate = evidenceStep.run?.match(
+      /--arg run_attempt "\$FULL_RELEASE_VALIDATION_RUN_ATTEMPT" '\n([\s\S]*?)\n\s*' "\$manifest_dir\/\$manifest_asset"/u,
+    )?.[1];
+    if (!identityPredicate) {
+      throw new Error("Missing closeout manifest identity predicate");
+    }
+    const originalIdentity = { runId: "123", runAttempt: "2" };
+    const retainedProducer = { runId: 123, runAttempt: 2 };
+    const recoveredManifest = {
+      runId: "999",
+      runAttempt: "1",
+      recovery: { producer: retainedProducer },
+    };
+    const targetSha = "a".repeat(40);
+    for (const [label, manifest, status] of [
+      ["ordinary manifest", originalIdentity, 0],
+      ["recovered manifest", recoveredManifest, 0],
+      ["numeric ordinary identity", retainedProducer, 1],
+      [
+        "matching outer identity but wrong producer run",
+        { ...originalIdentity, recovery: { producer: { ...retainedProducer, runId: 999 } } },
+        1,
+      ],
+      [
+        "wrong retained attempt",
+        { ...recoveredManifest, recovery: { producer: { ...retainedProducer, runAttempt: 1 } } },
+        1,
+      ],
+      ["wrong target SHA", { ...recoveredManifest, targetSha: "b".repeat(40) }, 1],
+    ] as const) {
+      const result = spawnSync(
+        "jq",
+        [
+          "-e",
+          "--arg",
+          "tag_sha",
+          targetSha,
+          "--arg",
+          "run_id",
+          "123",
+          "--arg",
+          "run_attempt",
+          "2",
+          identityPredicate,
+        ],
+        {
+          encoding: "utf8",
+          input: JSON.stringify({
+            workflowName: "Full Release Validation",
+            targetSha,
+            ...manifest,
+          }),
+        },
+      );
+      expect(result.error, label).toBeUndefined();
+      expect(result.status, label + ": " + result.stderr).toBe(status);
+    }
     expect(workflow).toContain(
       '--full-release-validation-run-attempt "$FULL_RELEASE_VALIDATION_RUN_ATTEMPT"',
     );
@@ -9199,7 +9251,9 @@ test "$package_manager" = "pnpm@12.1.0"
         for (const [attempt, reused, dispatched] of [
           [1, "false", true],
           [2, "false", false],
-          [1, "true", child.kind === "artifact-candidate"],
+          // Retained evidence already binds the candidate; none of the producers redispatch.
+          [1, "true", false],
+          [2, "true", false],
         ] as const) {
           expect(
             runInNewContext(step.if ?? "true", {
@@ -15302,7 +15356,7 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
       "node scripts/openclaw-npm-extended-stable-release.mjs verify-manifest",
     );
     expect(npmCheckout.with?.["fetch-depth"]).toBe(
-      "${{ inputs.release_evidence_mode == 'authorized-beta-focused-v1' && 0 || (inputs.preflight_run_id != '' && 1 || 0) }}",
+      "${{ (inputs.fast_track_approval != '' || inputs.release_evidence_mode == 'authorized-beta-focused-v1') && '0' || (inputs.preflight_run_id != '' && '1' || '0') }}",
     );
 
     const publishSteps = publishJob.steps ?? [];

@@ -413,8 +413,8 @@ immutable child artifacts on recovery; never rebuild or republish successful
 versions. Each lane's own parent approval receipt lets its children skip their
 human gates; the detached ClawHub lane never reuses the core parent's receipt.
 Find that run in the core summary or `clawhub-detached-dispatch-<run>-<attempt>`
-artifact, then approve and monitor its own gate independently. The legacy
-`wait_for_clawhub` input never rejoins ClawHub to the core path.
+artifact, then approve and monitor its own gate independently. Core publication
+never waits for ClawHub.
 The npm children publish in `npm-publish` from the same protected tooling tag
 and require the parent attempt to remain live. Direct human npm recovery still
 requires its own `npm-release` approval. ClawHub children must never be approved

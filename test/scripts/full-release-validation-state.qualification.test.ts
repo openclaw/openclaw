@@ -194,14 +194,14 @@ console.log(response);
         DIAGNOSTIC_DRAIN_PATH: drainPath,
         RELEASE_VALIDATION_MANIFEST_PATH: manifestPath,
       };
-      const validated = runCollector("validate-manifest", manifestEnv);
+      const validated = runCollector("validate-manifest-evidence", manifestEnv);
       expect(validated.status, validated.stderr).toBe(0);
       expect(JSON.parse(readFileSync(manifestPath, "utf8")).evidenceReuse.publication).toEqual(
         manifest.evidenceReuse.publication,
       );
       delete manifest.evidenceReuse.publication;
       writeFileSync(manifestPath, JSON.stringify(manifest));
-      const missingRoot = runCollector("validate-manifest", manifestEnv);
+      const missingRoot = runCollector("validate-manifest-evidence", manifestEnv);
       expect(missingRoot.status).not.toBe(0);
       expect(missingRoot.stderr).toContain("differs from the immutable execution plan");
     },

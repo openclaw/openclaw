@@ -1578,7 +1578,6 @@ export function buildPrepareCommand(
     ["plugin_publish_scope", options.pluginPublishScope],
     ["publish_openclaw_npm", "true"],
     ["release_profile", "from-validation"],
-    ["wait_for_clawhub", "false"],
   ];
   if (options.npmTelegramRunId) {
     fields.push(["npm_telegram_run_id", options.npmTelegramRunId]);
