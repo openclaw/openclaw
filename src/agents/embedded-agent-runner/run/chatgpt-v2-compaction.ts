@@ -107,9 +107,13 @@ export function createChatGPTV2CompactionBoundary(params: {
         sessionId: requestOptions.sessionId,
       },
     };
-    // A matching measured predecessor prices the unchanged prefix once, as the
-    // mid-turn precheck this boundary replaces does. Without one, keep the
-    // conservative preflight estimate, which honors persisted session usage.
+    // Price hard admission from the projected request, not maintenance headroom.
+    const outgoing = resolveProjectedRequestPressure({
+      ...budget,
+      context,
+      previousRequest: requestAnchor,
+    });
+    // Saved usage and preflight's margin can still request early maintenance.
     const preflight = requestAnchor
       ? undefined
       : shouldPreemptivelyCompactBeforePrompt({
@@ -121,9 +125,7 @@ export function createChatGPTV2CompactionBoundary(params: {
             ? Math.ceil(fixedTokenPressure.toolTokens * SAFETY_MARGIN)
             : estimateToolSchemaTokenPressure(context.tools),
         });
-    const outgoing = preflight
-      ? (preflight.compactionReplay ?? preflight)
-      : resolveProjectedRequestPressure({ ...budget, context, previousRequest: requestAnchor });
+    const maintenance = preflight ? (preflight.compactionReplay ?? preflight) : outgoing;
     // V2 must send the complete window plus its trigger. Leave room for the
     // next tool result instead of waiting for the client's reserve-based limit.
     const contextTokens = Math.min(
@@ -134,7 +136,10 @@ export function createChatGPTV2CompactionBoundary(params: {
       outgoing.promptBudgetBeforeReserve,
       Math.max(1, Math.floor(contextTokens * 0.9)),
     );
-    if (outgoing.estimatedPromptTokens < softTriggerTokens) {
+    if (
+      Math.max(outgoing.estimatedPromptTokens, maintenance.estimatedPromptTokens) <
+      softTriggerTokens
+    ) {
       return undefined;
     }
     const fallback = (reason: string) => {
@@ -143,8 +148,8 @@ export function createChatGPTV2CompactionBoundary(params: {
       const pressure = decideContextPressure({
         estimatedPromptTokens: outgoing.estimatedPromptTokens,
         windowTokens: model.contextWindow ?? params.contextTokenBudget,
-        maintenanceDue: outgoing.route !== "fits",
-        boundarySafe: outgoing.route !== "fits" && (params.isToolBoundarySafe?.() ?? false),
+        maintenanceDue: maintenance.route !== "fits",
+        boundarySafe: maintenance.route !== "fits" && (params.isToolBoundarySafe?.() ?? false),
         runId: params.runId,
       });
       if (!pressure) {
