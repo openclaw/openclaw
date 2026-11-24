@@ -168,6 +168,12 @@ export const ProjectsRemoveParamsSchema = closedObject({
 });
 export const ProjectsRemoveResultSchema = closedObject({ removed: Type.Boolean() });
 
+export const ProjectsRenameParamsSchema = closedObject({
+  projectId: StoredProjectIdSchema,
+  name: Type.String({ minLength: 1, maxLength: 128, pattern: "\\S" }),
+});
+export const ProjectsRenameResultSchema = ProjectRecordSchema;
+
 export type ProjectRecord = Static<typeof ProjectRecordSchema>;
 export type ProjectRecent = Static<typeof ProjectRecentSchema>;
 export type ProjectCheckout = Static<typeof ProjectCheckoutSchema>;
@@ -184,3 +190,5 @@ export type ProjectsSearchRemoteParams = Static<typeof ProjectsSearchRemoteParam
 export type ProjectsSearchRemoteResult = Static<typeof ProjectsSearchRemoteResultSchema>;
 export type ProjectsRemoveParams = Static<typeof ProjectsRemoveParamsSchema>;
 export type ProjectsRemoveResult = Static<typeof ProjectsRemoveResultSchema>;
+export type ProjectsRenameParams = Static<typeof ProjectsRenameParamsSchema>;
+export type ProjectsRenameResult = Static<typeof ProjectsRenameResultSchema>;

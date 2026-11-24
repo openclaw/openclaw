@@ -389,6 +389,8 @@ export function candidatePublicationFixture(
     },
     compareCommitLineage: denied,
     compareCommits: denied,
+    getCommit: denied,
+    resolveQualificationAdmissionDescriptor: denied,
     verifyQualificationAdmission: (
       verification: Parameters<typeof verifyQualificationAdmission>[0],
     ) =>

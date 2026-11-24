@@ -58,7 +58,6 @@ function authority(profileId: string, retain?: AdmittedRunOperatorAuthority["ret
     scopes: ["operator.read", "operator.write"],
     gatewayAccessGrant: null,
     modelPolicy: prepareOperatorModelPolicy({ cfg: {}, policy: {} }),
-    assertCurrent() {},
   });
 }
 

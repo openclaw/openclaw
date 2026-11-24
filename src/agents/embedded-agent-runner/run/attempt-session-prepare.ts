@@ -36,8 +36,7 @@ import { runContextEngineMaintenance } from "../context-engine-maintenance.js";
 import { buildEmbeddedExtensionFactories } from "../extensions.js";
 import { log } from "../logger.js";
 import { projectCompletedProjectMoves } from "../project-move-replay.js";
-import { declarePromptHistoryRewrite } from "../prompt-cache-observability.js";
-import { recordRuntimeContextProjection } from "../session-prompt-state.js";
+import { recordRuntimeContextProjection } from "../prompt-cache-observability.js";
 import { resolveEmbeddedAgentApiKey } from "../stream-resolution.js";
 import { prepareEmbeddedAttemptClientTools } from "./attempt-client-tools.js";
 import { createAttemptCompactionThinkingResolver } from "./attempt-compaction-thinking.js";
@@ -435,11 +434,8 @@ export async function prepareEmbeddedAttemptSessionBoundary(
       replayCompletedMoves ? projectCompletedProjectMoves(history) : history,
     );
     applyRuntimeContextCarrierRetention(converted, input.appendOnlyRuntimeContext);
-    if (
-      !input.appendOnlyRuntimeContext &&
-      recordRuntimeContextProjection(attempt.sessionId, removedRuntimeContext, converted)
-    ) {
-      declarePromptHistoryRewrite({ ...attempt, reason: "runtimeContextCarrier" });
+    if (!input.appendOnlyRuntimeContext) {
+      recordRuntimeContextProjection(removedRuntimeContext, converted);
     }
     return converted;
   };

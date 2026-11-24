@@ -479,7 +479,6 @@ describe("Codex native configuration lifecycle", () => {
       const closeHost = await bindProductionHarnessHostCapabilitiesForTest(params, {
         profileId: "operator-parent",
         scopes: ["operator.write"],
-        assertCurrent: () => {},
       });
       try {
         const pending = startOrResumeThread({
@@ -595,7 +594,6 @@ describe("Codex native configuration lifecycle", () => {
           : await bindProductionHarnessHostCapabilitiesForTest(params, {
               profileId: "restricted-caller",
               scopes: ["operator.write"],
-              assertCurrent: () => {},
               modelPolicy: { models: [], allows: () => false },
             });
       if (restriction === "missing issuer") {

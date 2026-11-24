@@ -405,6 +405,8 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
     sessionId,
     sessionKey: resolvedSessionKey,
     toolUsageRankingSeed: entry?.toolUsageRankingSeed,
+    // A fork reads another session's row; its caller passes that session's prewarm.
+    promptCacheKeepWarm: params.promptCacheKeepWarm ?? entry?.promptCacheKeepWarm,
     memoryAudience,
     conversationRecall: params.conversationRecall,
     promptCacheKey: params.promptCacheKey,

@@ -45,13 +45,10 @@ export function prepareGatewayOperatorSessionRun(params: {
       throw createSessionWorkStartChangedError(params.sessionKey);
     },
   );
-  const assertCurrent = composeSessionSourceAssertion(
-    [source, params.authority.assertCurrent],
-    (assertSources) => {
-      params.currentSource().abortSignal?.throwIfAborted();
-      assertSources();
-    },
-  );
+  const assertCurrent = composeSessionSourceAssertion([source], (assertSources) => {
+    params.currentSource().abortSignal?.throwIfAborted();
+    assertSources();
+  });
   assertCurrent();
   const client = createSyntheticPluginRuntimeClient({
     operatorRoleActor: { kind: "operator", profileId: params.authority.profileId },

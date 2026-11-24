@@ -135,7 +135,7 @@ export async function enqueueReplySourceAdmission(params: {
   const assertCurrent = () => {
     input.abortSignal.throwIfAborted();
     params.assertCurrent();
-    input.sourceAdapter?.authority?.assertCurrent();
+    input.sourceAdapter?.authority?.assertCurrent?.();
   };
   let staged = false;
   if (recorder && !recorder.getPendingInputMessage?.() && !recorder.hasPersisted()) {
@@ -198,10 +198,7 @@ export async function prepareReplySystemPrincipalAuthority(params: {
     run.senderName = undefined;
     bindCommandOwnerAuthority(run, {
       operatorAuthority: authority,
-      isCurrent: () => {
-        authority.assertCurrent();
-        return true;
-      },
+      isCurrent: () => true,
     });
   }
   return principal;

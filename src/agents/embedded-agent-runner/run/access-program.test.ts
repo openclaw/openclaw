@@ -1,4 +1,5 @@
 import { beforeAll, expect, it, vi } from "vitest";
+import type { CyberAccessProgram } from "../../../../packages/gateway-protocol/src/schema/sessions-row.js";
 import { fetchWithSsrFGuard } from "../../../infra/net/fetch-guard.js";
 import { withGuardedFetchBeforeRequest } from "../../../infra/net/fetch-request-authority.js";
 import type { ProviderPlugin } from "../../../plugins/types.js";
@@ -50,7 +51,10 @@ const discovered: OAuthCredential = {
   email: "user@example.test",
 };
 
-function attemptWith(credential: OAuthCredential) {
+function attemptWith(
+  credential: OAuthCredential,
+  cyber: CyberAccessProgram[] = ["standard", "daybreak_blue"],
+) {
   const snapshot: ModelCatalogSnapshot = {
     entries: [],
     routeVariants: [],
@@ -64,7 +68,7 @@ function attemptWith(credential: OAuthCredential) {
             modelId: "synthetic-model",
             runtimeId: "openclaw",
             ...route,
-            cyber: ["standard", "daybreak_blue"],
+            cyber,
           },
         ],
       },
@@ -117,8 +121,20 @@ it("never reuses discovered programs for a different account under the same prof
   ]) {
     await expect(prepareEmbeddedAccessProgramGuard(attemptWith(credential))).rejects.toMatchObject({
       code: "OPENAI_ACCESS_PROGRAM_UNAVAILABLE",
+      message:
+        "This Daybreak program is not advertised for the current account, model, and runtime. Turn Daybreak off for this chat or refresh account capabilities.",
     });
   }
+});
+
+it("explains how to recover when the model requires a different Daybreak program", async () => {
+  await expect(
+    prepareEmbeddedAccessProgramGuard(attemptWith(discovered, ["daybreak_red"])),
+  ).rejects.toMatchObject({
+    code: "OPENAI_ACCESS_PROGRAM_UNAVAILABLE",
+    message:
+      "synthetic-model supports Daybreak Red only. This chat requested Daybreak Blue. Turn on Daybreak for this chat to use Daybreak Red.",
+  });
 });
 
 it.each(["current", "revoked", "reassigned"])(
@@ -166,7 +182,6 @@ it("enforces restricted-role grants for defaults without overriding explicit Sta
     profileId: "access-default-fixture",
     scopes: ["operator.write"],
     rolePolicy: { sessionAccessCap: "none", sandboxRequired: false, agents: "*" },
-    assertCurrent() {},
   });
   const admission = prepareSystemAgentRunAdmission(
     {},

@@ -136,7 +136,6 @@ it.for(["success", "child error", "owner revoked", "owner reassigned", "new user
         (entry.delivery?.status === "delivered" ||
           entry.delivery?.status === "suspended" ||
           entry.delivery?.status === "discarded" ||
-          entry.delivery?.disposition === "permanent_failure" ||
           entry.cleanupCompletedAt !== undefined)
       ) {
         completionSettled.resolve();

@@ -1,7 +1,7 @@
 import http from "node:http";
+import { resolveCompactionThreshold } from "@openclaw/ai/internal/shared";
 import type { Context, Model, SimpleStreamOptions } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it } from "vitest";
-import { resolveCompactionThreshold } from "../../../packages/agent-core/src/harness/compaction/compaction-threshold.js";
 import { streamAnthropic } from "../../../packages/ai/src/providers/anthropic.js";
 import type { AssistantHistoryMessage } from "../../llm/types.js";
 import {

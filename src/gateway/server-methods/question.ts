@@ -182,8 +182,6 @@ export function createQuestionHandlers(
         requester && validateAuthority
           ? () => {
               try {
-                producer?.authority.assertCurrent();
-                operatorAuthority?.assertCurrent();
                 sessionAccess?.assertSourceCurrent();
                 return validateAuthority(requester);
               } catch {
@@ -256,7 +254,6 @@ export function createQuestionHandlers(
               })
             : undefined;
         const create = (prepared?: PreparedQuestionSession) => {
-          producer?.authority.assertCurrent();
           if (sessionKey && requiresSharing()) {
             const authorizationError = prepared?.authorizeMutation(client);
             if (!prepared?.target || authorizationError) {

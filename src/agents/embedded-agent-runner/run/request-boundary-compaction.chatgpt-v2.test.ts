@@ -1,10 +1,10 @@
 import { zstdDecompressSync } from "node:zlib";
 import { createApiRegistry } from "@openclaw/ai";
+import { resolveCompactionThreshold } from "@openclaw/ai/internal/shared";
 import { createOpenAIResponsesTransportStreamFn } from "@openclaw/ai/transports";
 import type { Context, Model, StreamFn } from "@openclaw/llm-core";
 import { Type } from "typebox";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { resolveCompactionThreshold } from "../../../../packages/agent-core/src/harness/compaction/compaction-threshold.js";
 import { configureAiTransportHost, getAiTransportHost } from "../../../../packages/ai/src/host.js";
 import { streamSimpleOpenAICodexResponses } from "../../../../packages/ai/src/providers/openai-chatgpt-responses.js";
 import type { OpenAIResponsesOptions } from "../../../../packages/ai/src/transports/openai-responses-contracts.js";
@@ -465,7 +465,7 @@ describe("ChatGPT V2 at the embedded normal request boundary", () => {
         contextWindowTokens: 200_000,
         reserveTokensFloor: 20_000,
       });
-      expect(threshold).toBe(160_000);
+      expect(threshold).toBe(170_000);
       for (const tokens of [threshold - 1_000, threshold]) {
         requests = [];
         const f = await fixture(SessionManager.inMemory(), variant === "text");

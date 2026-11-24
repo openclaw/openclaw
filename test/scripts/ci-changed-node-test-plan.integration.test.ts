@@ -15,6 +15,7 @@ import {
   listPrExemptRuntimeTestFiles,
   PR_PROTECTED_RUNTIME_TEST_FILES,
 } from "../../scripts/lib/ci-proof-test-inventory.mts";
+import { resolveAffectedTestsFromImportGraph } from "../../scripts/test-projects.test-support.mts";
 import { fallbackGroups, selectedFiles } from "./ci-changed-node-test-plan.test-support.js";
 
 afterEach(() => vi.unstubAllEnvs());
@@ -255,4 +256,48 @@ it("keeps new-plugin, core, and manifest changes within the complete PR matrix c
   expect(
     shards.some((shard) => shard.configs.includes("test/vitest/vitest.boundary.config.ts")),
   ).toBe(true);
+});
+
+// #204111 and #204180 changed these owners with green PR CI. Their prompt-cache and compaction
+// behavior tests sit 3-10 imports away and first failed on scheduled main (#204252).
+it.each([
+  "src/agents/embedded-agent-runner/run/request-boundary-compaction.ts",
+  "src/agents/embedded-agent-runner/run/attempt-prompt-submit.ts",
+  "src/agents/compaction.ts",
+  "src/agents/sessions/agent-session-compaction.ts",
+  "src/auto-reply/reply/agent-runner-memory.ts",
+  "packages/agent-core/src/harness/compaction/summarization-completion.ts",
+  "packages/ai/src/transports/anthropic-messages.ts",
+])("selects the declared behavior tests and same-directory importers when %s changes", (source) => {
+  // PR CI excludes PR-exempt files; the declared set opts its matches in regardless.
+  const declared = new Set(
+    resolveChangedNodeTestTargets([source], {
+      selectionMode: "aggressive",
+      includePrExemptRuntimeTests: false,
+      includeReleaseOnlyRuntimeTests: false,
+    }),
+  );
+  for (const test of [
+    "src/agents/embedded-agent-runner.prompt-cache.test.ts",
+    "src/auto-reply/reply/agent-runner-required-maintenance.pending-input.test.ts",
+    "src/auto-reply/reply/agent-runner-compaction-fallback.test.ts",
+    "src/cron/session-context-accounting.gateway.integration.test.ts",
+    "src/agents/command/cli-compaction.test.ts",
+  ]) {
+    expect(declared.has(test), test).toBe(true);
+  }
+  const selected = new Set(
+    resolveChangedNodeTestTargets([source], { selectionMode: "aggressive" }),
+  );
+  const directory = source.replace(/[^/]+$/u, "");
+  const importers = resolveAffectedTestsFromImportGraph(source, process.cwd(), {
+    tooling: true,
+    forceFull: true,
+    resolveAliases: true,
+    runtimeOnly: true,
+  }).filter(
+    (file) =>
+      file.startsWith(directory) && !/^(?:src|packages)\/[^/]+(?:\/src)?\/$/u.test(directory),
+  );
+  expect(importers.filter((file) => !selected.has(file))).toEqual([]);
 });
