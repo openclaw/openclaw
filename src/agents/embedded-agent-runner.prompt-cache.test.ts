@@ -56,6 +56,10 @@ const cases = [
 const PNG = createSolidPngBuffer(1, 1, { r: 12, g: 34, b: 56 }).toString("base64");
 // Just over the 32,000-character live cap at this fixture's context size.
 const OVERSIZED_TOOL_RESULT_REPEATS = 1_600;
+// On a contended CPU, the first admitted turn took 80s (cold runtime and
+// five tool calls); the remaining ten turns took 15s together.
+const FIRST_TURN_TIMEOUT_MS = 120_000;
+const PROMPT_CACHE_TEST_TIMEOUT_MS = 180_000;
 const FAILED_ASSISTANT_TEXT = "partial assistant output before provider error";
 const FAILED_ASSISTANT_REPLAY_TEXT =
   "[This turn failed before it completed. Do not redo its work without confirming with the user first.]";
@@ -101,7 +105,7 @@ function rateLimitResponse(api: WireApi) {
 
 it.for(cases)(
   "preserves %j prefixes across tool loops, hooks, images, errors, rate-limit retries, refresh and reopen",
-  { timeout: 120_000 },
+  { timeout: PROMPT_CACHE_TEST_TIMEOUT_MS },
   async ([api, provider, model, route], { signal, onTestFinished }) => {
     const responses = api === "openai-responses";
     const journey = withOpenClawTestState({ label: `prompt-cache-${route}` }, async (state) => {
@@ -437,8 +441,7 @@ it.for(cases)(
                 thinkLevel: "off",
                 toolsAllow: ["cache_probe", "cache_fixture__probe", "message"],
                 runId,
-                // The first admitted turn lazily loads the provider/plugin runtime.
-                timeoutMs: turn === 1 ? 60_000 : 20_000,
+                timeoutMs: turn === 1 ? FIRST_TURN_TIMEOUT_MS : 20_000,
                 prompt: provenance
                   ? transcriptPrompt
                   : turn % 2 === 0
