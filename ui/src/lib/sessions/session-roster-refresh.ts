@@ -20,12 +20,12 @@ import {
   sessionListReadNeedsEventRefresh,
   type ManagedSessionList,
   type SessionRefreshAttempt,
+  type SessionListRead,
 } from "./session-list-query.ts";
 import {
   createSessionManagedListRefresh,
   getManagedSessionList,
   publishManagedList,
-  type SessionListRead,
 } from "./session-managed-list-refresh.ts";
 import { createSessionPrimaryWindows } from "./session-primary-windows.ts";
 import type { SessionRosterRefreshHost } from "./session-refresh-types.ts";

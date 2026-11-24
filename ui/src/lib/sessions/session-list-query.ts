@@ -1,4 +1,5 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import type { createDeferredCore } from "../../../../src/shared/deferred.js";
 import { sessionActivityTimestamp } from "../../../../src/shared/session-activity-timestamp.js";
 import { SESSIONS_LIST_OWNER_LIMIT } from "../../../../src/shared/session-list-limits.js";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
@@ -10,7 +11,6 @@ import {
   isSubagentSessionKey,
   parseAgentSessionKey,
 } from "./session-key.ts";
-import type { SessionListRead } from "./session-managed-list-refresh.ts";
 import {
   buildSessionListParams,
   DEFAULT_SESSION_LIST_QUERY,
@@ -25,6 +25,7 @@ import {
 } from "./session-row-reconcile.ts";
 import type {
   SessionGateway,
+  SessionConnectionScope,
   SessionListOptions,
   SessionListScope,
   SessionListSnapshot,
@@ -456,6 +457,36 @@ export type ManagedSessionListRefresh = {
   offset?: number;
   invalidated?: true;
   background?: true;
+};
+
+export type PrimarySessionListPresentation = {
+  isCurrent: () => boolean;
+  accept: (
+    read: SessionListRead,
+    result: SessionsListResult | null,
+    failure?: { error: unknown },
+  ) => SessionRefreshAttempt | null;
+};
+export type PrimarySessionListRead = {
+  options: SessionRefreshOptions;
+  completion: ReturnType<typeof createDeferredCore<SessionRefreshAttempt | null>>;
+  queued: QueuedSessionRefresh | null;
+  snapshot: SessionGateway["snapshot"];
+  presentation?: PrimarySessionListPresentation;
+};
+type ManagedRead = {
+  refresh: ManagedSessionListRefresh;
+  completion: ReturnType<typeof createDeferredCore<void>>;
+};
+/** One admitted transport attempt, independent of either consumer's publication lifetime. */
+export type SessionListRead = {
+  entry: ManagedSessionList;
+  params: Readonly<ReturnType<typeof buildSessionListParams> & { pageSize?: number }>;
+  scope: SessionConnectionScope;
+  revision: number;
+  generation: number;
+  managed?: ManagedRead;
+  primary: Set<PrimarySessionListRead>;
 };
 
 export type ObservedSessionList = {

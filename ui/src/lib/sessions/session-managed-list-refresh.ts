@@ -22,6 +22,9 @@ import {
   type ObservedSessionList,
   type QueuedSessionRefresh,
   type SessionRefreshAttempt,
+  type SessionListRead,
+  type PrimarySessionListRead,
+  type PrimarySessionListPresentation,
 } from "./session-list-query.ts";
 import type { SessionListRefreshHost } from "./session-refresh-types.ts";
 import {
@@ -33,41 +36,10 @@ import {
 } from "./session-requests.ts";
 import type { createSessionRosterObservations } from "./session-roster-observations.ts";
 import type {
-  SessionConnectionScope,
   SessionListScope,
   SessionListSnapshot,
   SessionRefreshOptions,
 } from "./session-types.ts";
-
-type PrimaryPresentation = {
-  isCurrent: () => boolean;
-  accept: (
-    read: SessionListRead,
-    result: SessionsListResult | null,
-    failure?: { error: unknown },
-  ) => SessionRefreshAttempt | null;
-};
-type PrimaryRead = {
-  options: SessionRefreshOptions;
-  completion: ReturnType<typeof createDeferredCore<SessionRefreshAttempt | null>>;
-  queued: QueuedSessionRefresh | null;
-  snapshot: ReturnType<SessionListRefreshHost["snapshot"]>;
-  presentation?: PrimaryPresentation;
-};
-type ManagedRead = {
-  refresh: ManagedSessionListRefresh;
-  completion: ReturnType<typeof createDeferredCore<void>>;
-};
-/** One admitted transport attempt, independent of either consumer's publication lifetime. */
-export type SessionListRead = {
-  entry: ManagedSessionList;
-  params: Readonly<ReturnType<typeof buildSessionListParams> & { pageSize?: number }>;
-  scope: SessionConnectionScope;
-  revision: number;
-  generation: number;
-  managed?: ManagedRead;
-  primary: Set<PrimaryRead>;
-};
 
 export function getManagedSessionList(
   lists: Map<string, ManagedSessionList>,
@@ -147,7 +119,7 @@ export function createSessionManagedListRefresh(
         options: SessionRefreshOptions,
         bootstrap: boolean,
         isErrorCurrent: (() => boolean) | undefined,
-      ) => PrimaryPresentation;
+      ) => PrimarySessionListPresentation;
       retirePublication: () => void;
       absorb: () => void;
       retry: (delayMs: number) => void;
@@ -155,7 +127,7 @@ export function createSessionManagedListRefresh(
     };
   },
 ) {
-  let primaryRead: PrimaryRead | null = null;
+  let primaryRead: PrimarySessionListRead | null = null;
   let queuedPrimary: QueuedSessionRefresh | null = null;
   let primaryRetryAttempt = 0;
   const readIsCurrent = (read: SessionListRead) =>
@@ -376,7 +348,7 @@ export function createSessionManagedListRefresh(
     entry: ManagedSessionList,
     refresh?: ManagedSessionListRefresh,
     completion?: ReturnType<typeof createDeferredCore<void>>,
-    consumer?: PrimaryRead,
+    consumer?: PrimarySessionListRead,
     bootstrap = false,
     isErrorCurrent?: () => boolean,
   ): SessionListRead | null => {
@@ -475,7 +447,7 @@ export function createSessionManagedListRefresh(
       primary.absorb();
     }
     const prepared = prepareSessionRefreshOptions(options, snapshot);
-    const consumer: PrimaryRead = {
+    const consumer: PrimarySessionListRead = {
       options: prepared,
       completion: createDeferredCore(),
       queued,
