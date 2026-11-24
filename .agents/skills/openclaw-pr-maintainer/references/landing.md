@@ -2,6 +2,12 @@
 
 - Scoped publication/landing authority only. Root approval, source-trust, contributor-credit, exact-head gates remain. Ordinary ship ≠ release publication.
 
+## Select the execution route
+
+- **Managed sandbox:** use the bound `autoreview` tool for review and `github_publish` for supported GitHub operations when the Gateway offers them and the session is authorized. Follow their current schemas and receipts; tool availability alone grants no authority. This avoids the shell-helper temporary-directory and missing-`gh` failures in [#204850](https://github.com/openclaw/openclaw/issues/204850).
+- **Qualified local maintainer host:** keep the existing `scripts/pr` and `gh` workflow below, including landing. The shell prerequisites, workspace preflight, and native artifacts below belong to that route; do not install host tooling or copy credentials into a managed sandbox to imitate it.
+- Both routes retain the same review, exact-head CI, security, merge authority, and outcome-verification requirements. If an operation is unavailable or refused, report the specific blocker; never bypass it. A landing that requires native wrapper evidence or an exception flow still uses that workflow on a qualified local maintainer host unless the offered Gateway operation supports those requirements.
+
 ## Checkout and source
 
 - **Reuse the existing base and assigned task worktree; do not clone again for main, review, or landing history.** Before the first `review-init`, run `scripts/pr workspace <pr>`. Check its physical `canonicalRoot`, `worktree`, and `artifactDirectory` against the actual file-tool read/write scope, not just shell permissions or the current task cwd. `review-init` provisions its own PR worktree sharing the base's objects. Linked task worktrees still use the canonical repository’s `.worktrees`; `OPENCLAW_PR_TOOLING_ROOT` selects dependencies only. The preflight reports paths without GitHub calls, PR locks, workflow admission, dependency installation, or checkout creation; it does not grant access.
@@ -59,7 +65,7 @@ gh api --method PATCH \
 
 ## Review, prepare, merge
 
-Main-targeted PRs: ordinary native sequence below. For attributed failed CI with land scope, select the [exception route](#authorized-pre-existing-failures) before submission; do not submit an ordinary request just to provoke a rejection.
+On qualified local maintainer hosts, main-targeted PRs use the ordinary native sequence below. For attributed failed CI with land scope, select the [exception route](#authorized-pre-existing-failures) before submission; do not submit an ordinary request just to provoke a rejection.
 
 ```bash
 scripts/pr review-init <pr>

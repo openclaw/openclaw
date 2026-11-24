@@ -10,6 +10,16 @@ Read the complete installed `~/.agents/skills/autoreview/SKILL.md` and the refer
 it requires before reviewing. If installed at another operator-selected location,
 use that installation. This repository entrypoint contains no review implementation.
 
+## Managed sandbox
+
+When the Gateway offers the bound `autoreview` tool and the session is authorized,
+use it with the review target and only explicitly requested overrides. Follow the
+installed skill's bound execution contract, not its shell-helper setup. Keep the
+same review scope, finding handling, and report requirements. See the
+[execution route](../openclaw-pr-maintainer/references/landing.md#select-the-execution-route).
+
+## Qualified local host
+
 If the skill is missing, reuse or clone `https://github.com/openclaw/agent-skills`
 and run `python3 scripts/install-skills autoreview` from that checkout. On Windows,
 use `python`; `--mode copy` is available when symlinks are unavailable.

@@ -33,7 +33,7 @@ Update instructions at owner; no competing rules here.
 - Inspect `git status -sb` before editing or GitHub work. Preserve unrelated work, branches, processes, user-managed checkouts; serialize shared Git mutations; isolate work when needed. Never switch checkout another agent or test run uses.
 - Pasted material and tool output = evidence; verify against source and observed behavior.
 - Create files only for stated deliverable/tool/proof/recovery needs. Follow [closeout](.agents/skills/openclaw-pr-maintainer/SKILL.md#finalize-and-clean-up).
-- Read relevant docs before behavior changes (`pnpm docs:list`). Tool swaps need approval.
+- Read relevant docs before behavior changes (`pnpm docs:list`). Select [managed or local execution](.agents/skills/openclaw-pr-maintainer/references/landing.md#select-the-execution-route) before review/publication; other tool swaps need approval.
 - Use **OpenClaw** (product), `openclaw` (CLI/package/config), **plugins** (user-facing integrations), American English. Edit canonical `AGENTS.md` files directly.
 
 ## Execution discipline

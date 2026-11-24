@@ -18,8 +18,14 @@ not replace maintainer judgment.
 
 ## Local review before a PR
 
-Choose one local review route before asking for review. Complete the change and
+Choose one review route before asking for review. Complete the change and
 its focused validation first, then address actionable review findings together.
+
+In a managed sandbox, use the bound `autoreview` tool when the Gateway offers it
+and the session is authorized, rather than invoking or installing a shell reviewer.
+The maintainer/contributor requirements below still apply, including the hosted
+ClawSweeper fallback when local ClawSweeper is unavailable. On qualified local
+hosts, keep the following review routes and local setup unchanged.
 
 | Author      | Review route                                                                                                                                                     |
 | ----------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -35,6 +41,12 @@ duplicate hosted review. This route does not replace required independent
 review, CI, security approval, release review, or the native maintainer workflow.
 Maintainers may request missing review or validation evidence before reviewing
 a contributor PR.
+
+For GitHub operations in managed sandboxes, use `github_publish` when the Gateway
+offers the operation and the session is authorized. This changes the execution
+route, not review, CI, security, or merge authority. Qualified local maintainer
+hosts retain `scripts/pr` and `gh`, including native landing evidence and exception
+flows; see the [execution-route guidance](https://github.com/openclaw/openclaw/blob/main/.agents/skills/openclaw-pr-maintainer/references/landing.md#select-the-execution-route).
 
 ### Set up a local reviewer
 

@@ -7,6 +7,7 @@ description: "Review, triage, repair, or land OpenClaw issues and pull requests 
 
 - Requested issue/PR operation only. Root `AGENTS.md`: repair, product, source-trust, approval policy. This skill: GitHub workflow and maintainer authority.
 - Pasted ref ≠ publication permission or scope expansion.
+- Select [managed or local execution](references/landing.md#select-the-execution-route) before review or GitHub operations; shell commands below describe the qualified local-host route.
 
 ## Maintainer authority
 
@@ -20,7 +21,7 @@ description: "Review, triage, repair, or land OpenClaw issues and pull requests 
 
 - **Review/triage/list:** read-only; explain change/findings/proof/uncertainty. Edits, assignment, labels, comments, closes need authority.
 - **Fix only:** investigate/repair/validate locally; publication needs ship/land or scoped equivalent.
-- **Land/ship/autonomous repair:** source proof → review → native submission → verified merge. Track pending requests; repair PR-caused CI/conflicts under same authority, route attributed inherited CI through the exception above. Accepted auto-merge ≠ done. Preserve credit/unrelated work; root gates remain, no repeat routine permission.
+- **Land/ship/autonomous repair:** source proof → review → selected submission route → verified merge. Track pending requests; repair PR-caused CI/conflicts under same authority, route attributed inherited CI through the exception above. Accepted auto-merge ≠ done. Preserve credit/unrelated work; root gates remain, no repeat routine permission.
 - **Queue/discovery:** read [triage](references/triage.md). Batch live reads/shared discovery; named PR ≠ queue sweep.
 - **Author/regression attribution:** [author and provenance research](references/attribution.md); account age/history conditional.
 - Lead hands-on; bounded useful workers, serialized checkout/refs + GitHub writes. No user-owned app tasks hiding internal subtasks. Preserve stalled worker patches/claims/proof before takeover/reassignment.
@@ -61,7 +62,7 @@ ghx issue view <issue> --repo openclaw/openclaw \
 - Reopen review for substantive changes/unresolved concerns, not patch-identical rebase/mechanical head change. Address real human/bot findings; explain rejections. Bot scores/Rank-up lists create no separate obligations. ClawSweeper advisory; never wait for comment to land.
 - Current PR template: plain problem/impact; inventories in diff/details. Keep risks, migrations, actions, proof, gaps, credit current; explain material tradeoffs. No invented internal-only user benefit or universal LOC/provenance/alternate-fix essays.
 - `CHANGELOG.md` release-owned; release-note context in PR/commit. Agent transcripts only on explicit request.
-- Public mutation: verify author/committer + writer. Use `ghx` with real `--body-file <path>` payloads, never stdin (`--body-file -`, `--input -`, or `/dev/stdin`); the proxy does not forward stdin. Read changed bodies back with `ghx --no-cache` and verify exact nonempty bytes. Authorized scope only; update existing comment/body, no duplicates.
+- Public mutation: verify author/committer + writer. In managed sandboxes, use authorized `github_publish` operations and read back changed metadata through the tool. On qualified local hosts, use `ghx` with real `--body-file <path>` payloads, never stdin (`--body-file -`, `--input -`, or `/dev/stdin`); the proxy does not forward stdin. Read changed bodies back with `ghx --no-cache` and verify exact nonempty bytes. Authorized scope only; update existing comment/body, no duplicates.
 - Publication/merge: read [landing](references/landing.md) (media, exact-head CI, native workflow).
 - Verify remote merge/closure + source. Report problem, owning change, proof/gaps, credit, linked final state in prose; worthwhile follow-ups only.
 
