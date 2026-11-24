@@ -47,6 +47,10 @@ export const validateSessionsCatalogListParams = createProtocolValidator(
   S.SessionsCatalogListParamsSchema,
   Checks.isSessionsCatalogListParams,
 );
+export const validateSessionsCatalogRouteParams = createProtocolValidator(
+  S.SessionsCatalogRouteParamsSchema,
+  Checks.isSessionsCatalogRouteParams,
+);
 export const validateSessionsCatalogReadParams = createProtocolValidator(
   S.SessionsCatalogReadParamsSchema,
   Checks.isSessionsCatalogReadParams,

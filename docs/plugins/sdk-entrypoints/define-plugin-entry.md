@@ -219,6 +219,23 @@ export default definePluginEntry({
   one result with no next page; multiple rows or `nextCursor` are explicitly
   ambiguous and never select the first row.
 
+  Call `sessions.catalog.route` with either `{ routeSegment }` from a share link
+  or `{ catalogId }` from a canonical session link. It returns
+  `{ catalogId, routeSegment, methods }` for an available route and `null`
+  otherwise. The query requires `operator.sessions.read` and returns only the
+  operations the caller can attempt. Use the returned catalog ID for listing.
+  Resolve again when the connection or plugin registration changes.
+
+  A provider can declare `ownedRoute.methods` for `list`, `read`, `resolve`, and
+  `continue`. Register each named method on the same plugin with a required
+  profile and a session-scoped permission. Set `ownedRoute.requiredGrantPluginId`
+  when these operations require admission by a particular policy plugin. Each
+  operation still checks the caller's authority for the requested transcript.
+  The Gateway returns a route when the caller has both list and read access.
+  It chooses the shared or owned method independently for each operation, so a
+  caller can have shared read and publisher-only continuation. An owned
+  continuation requires `operator.sessions.write`.
+
   Named share links use `/<routeSegment>/<title-slug>-<id-prefix>` with the same
   bounded slug as regular session links. Return the title in the catalog row's
   `name`; the Control UI uses it to refresh the decorative slug. Only the id
